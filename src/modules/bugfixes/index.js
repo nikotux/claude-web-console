@@ -61,9 +61,11 @@ async function pushPr(entry) {
     // Copiar SOLO los archivos del fix desde el árbol real al worktree.
     const copied = [];
     for (const rel of entry.files) {
-      const src = path.join(TOLKIEN, rel);
-      const dst = path.join(wt, rel);
-      if (!dst.startsWith(wt + path.sep)) continue; // anti traversal
+      const src = path.resolve(TOLKIEN, rel);
+      const dst = path.resolve(wt, rel);
+      // EXCLUSIVO de ~/tolkien: ni origen ni destino pueden salirse (aunque
+      // el registro se haya editado a mano con ../).
+      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) continue;
       if (!fss.existsSync(src)) continue;           // borrado después del chat
       fss.mkdirSync(path.dirname(dst), { recursive: true });
       fss.copyFileSync(src, dst);

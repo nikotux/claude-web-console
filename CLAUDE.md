@@ -85,7 +85,9 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             (patrón completo en docs/frontend-modules.md)
 public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
                             Salud — la pestaña Salud incluye Bugfixes→PR) ·
-                            tolkien · tickets · explorer · mobile/auxbar
+                            tolkien (con botón Enviar PR admin: actualiza el repo y sube
+                            los fixes pendientes del registro; EXCLUSIVO de ~/tolkien) ·
+                            tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
