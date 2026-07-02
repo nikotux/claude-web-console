@@ -52,7 +52,7 @@ function addTab(session, { type = 'pty' } = {}) {
 
   const tabButton = document.createElement('div');
   tabButton.className = 'rail-tab';
-  tabButton.dataset.type = type; // pty | chat (futuro): estilo distinguible
+  tabButton.dataset.type = type; // pty | chat: estilo distinguible
   tabButton.title = session.title || 'terminal';
   const chip = document.createElement('button');
   chip.className = 'rail-chip';
@@ -65,17 +65,115 @@ function addTab(session, { type = 'pty' } = {}) {
   tabButton.append(chip, close, flag);
   tabsEl.appendChild(tabButton);
 
-  const tab = type === 'chat'
-    ? new ChatTab({ id: session.id, title: session.title, container: pane })
-    : new TerminalTab({ id: session.id, title: session.title, container: pane });
-  tab.connect();
+  const entry = { tab: null, tabButton, pane, flag, session, type };
+  tabs.set(session.id, entry);
+
+  if (type === 'chat') {
+    // Una CONVERSACIÓN: la pestaña es estable (keyed por chat.id) y su panel
+    // alterna entre vista Chat (SDK) y Terminal (TUI) sobre la misma sesión.
+    entry.viewMode = session.viewMode === 'tui' ? 'tui' : 'chat';
+    buildConversationInner(entry, session);
+  } else {
+    entry.tab = new TerminalTab({ id: session.id, title: session.title, container: pane });
+    entry.tab.connect();
+  }
 
   chip.addEventListener('click', () => setActive(session.id));
   close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(session.id); });
 
-  tabs.set(session.id, { tab, tabButton, pane, flag, session });
   setActive(session.id);
   updateModelFlag(session.id);
+}
+
+// ===== Conversación: vista Chat <-> TUI (nunca ambas a la vez) =====
+// Construye (o reconstruye) el CONTENIDO del panel de una conversación según
+// su viewMode. La pestaña del rail no se toca: solo cambia el inner view.
+function buildConversationInner(entry, info) {
+  entry.pane.innerHTML = '';
+  entry.pane.className = 'terminal-pane';
+  if (entry.viewMode === 'tui' && info.terminalId) {
+    entry.pane.classList.add('conv-tui-host');
+    const bar = document.createElement('div');
+    bar.className = 'conv-tui-bar';
+    const ttl = document.createElement('span');
+    ttl.className = 'conv-tui-title';
+    ttl.textContent = `${info.title || 'claude'} · TUI`;
+    const back = document.createElement('button');
+    back.className = 'btn-ghost btn--sm conv-toback';
+    back.title = 'Volver a Chat';
+    back.innerHTML = `${icon('sparkle', { size: 14 })}<span>Chat</span>`;
+    back.addEventListener('click', () => toggleConversation(entry.session.id));
+    bar.append(ttl, back);
+    const host = document.createElement('div');
+    host.className = 'conv-tui-term';
+    entry.pane.append(bar, host);
+    entry.tab = new TerminalTab({ id: info.terminalId, title: info.title, container: host });
+  } else {
+    entry.viewMode = 'chat';
+    entry.tab = new ChatTab({
+      id: entry.session.id,
+      title: info.title,
+      container: entry.pane,
+      onToggleMode: () => toggleConversation(entry.session.id),
+      onViewMode: (m) => onServerViewMode(entry, m),
+    });
+  }
+  entry.tab.connect();
+  updateConvChipMode(entry);
+}
+
+function updateConvChipMode(entry) {
+  entry.tabButton.dataset.view = entry.viewMode; // chat | tui (estilo del chip)
+  const base = entry.session.title || 'chat';
+  entry.tabButton.title = entry.viewMode === 'tui' ? `${base} · TUI` : base;
+}
+
+// El usuario pidió alternar Chat<->TUI. Secuencial y verificado en el server:
+// respondemos según el estado REAL que devuelve /api/chat/mode.
+async function toggleConversation(convId) {
+  const entry = tabs.get(convId);
+  if (!entry || entry.type !== 'chat' || entry.switching) return;
+  const target = entry.viewMode === 'tui' ? 'chat' : 'tui';
+  entry.switching = true;
+  try {
+    const res = await fetch('/api/chat/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: convId, mode: target }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'No se pudo cambiar de modo.');
+    entry.switching = false;
+    applyConversationMode(entry, data.chat);
+    bus.dispatchEvent(new Event('sessions-changed'));
+  } catch (err) {
+    entry.switching = false;
+    if (entry.tab?.toggleBtn) entry.tab.toggleBtn.disabled = false;
+    alertDialog({ title: 'Cambio de modo', message: err.message });
+  }
+}
+
+// Aplica el modo efectivo (idempotente): si ya coincide, no hace nada.
+function applyConversationMode(entry, info) {
+  if (!info) return;
+  const target = info.viewMode === 'tui' ? 'tui' : 'chat';
+  entry.session = { ...entry.session, ...info };
+  if (entry.viewMode === target) { updateConvChipMode(entry); return; }
+  entry.viewMode = target;
+  const wasActive = activeId === entry.session.id;
+  try { entry.tab?.dispose(); } catch { /* noop */ }
+  buildConversationInner(entry, entry.session);
+  if (wasActive) entry.tab.focus();
+}
+
+// El server anunció (por WS) un cambio de modo (p.ej. desde otro dispositivo).
+function onServerViewMode(entry, m) {
+  if (m.viewMode !== 'tui' && m.viewMode !== 'chat') return; // ignoramos 'switching'
+  applyConversationMode(entry, {
+    viewMode: m.viewMode,
+    terminalId: m.terminalId ?? entry.session.terminalId,
+    title: entry.session.title,
+  });
 }
 
 function closeTab(id) {

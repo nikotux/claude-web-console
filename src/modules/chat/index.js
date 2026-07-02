@@ -24,6 +24,7 @@ import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
+import { sessionManager } from '../terminal/sessions.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -31,6 +32,11 @@ const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
 const IDLE_CLOSE_MS = 45 * 60 * 1000;        // conversación inactiva => cerrar subproceso
 const HISTORY_MAX = 600;
+
+// Traspaso Chat <-> TUI (una misma conversación, un solo modo a la vez).
+const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
+const SWITCH_CTRLC_MS = 8000; // T2: esperar a que `claude` salga tras Ctrl-C x2
+const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 
 function safeCwd(requested) {
   if (!requested) return config.home;
@@ -146,13 +152,18 @@ class Chat {
     this.title = path.basename(cwd) || '~';
     this.resume = resume;
     this.sessionId = resume || null;
-    this.alive = true;
+    this.alive = true;        // motor de chat (query SDK) corriendo
+    this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
+    this.viewMode = 'chat';   // chat | switching | tui
+    this.terminalId = null;   // id de la sesión TUI (bare pty) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
     this.lastActivity = Date.now();
     this.history = [];       // eventos de UI para replay al re-adjuntar
     this.clients = new Set();
     this.pendingPerms = new Map(); // permId -> { resolve, timer }
     this._permSeq = 0;
+    this._engineStopping = false; // true mientras cerramos el motor para un traspaso (no emitir 'closed')
+    this._engineWaiters = [];     // callbacks que se resuelven cuando el _pump muere
     this.input = makeInput();
   }
 
@@ -160,34 +171,138 @@ class Chat {
     // Al retomar: el SDK restaura el contexto; la UI muestra lo anterior
     // reconstruyéndolo desde el transcript.
     if (this.resume) this.history = loadTranscriptEvents(this.cwd, this.resume);
+    this._startChatEngine();
+    return this;
+  }
+
+  // Crea (o recrea) la query() del SDK. Reutilizable para el traspaso TUI->Chat:
+  // arranca una nueva query con `resume` sobre la MISMA sesión.
+  _startChatEngine() {
+    // Si retomamos una sesión existente, resume; si no, sesión nueva.
+    const resumeId = this.sessionId || this.resume;
+    this.input = makeInput();
+    this.alive = true;
+    this._engineStopping = false;
     this.q = query({
       prompt: this.input.gen(),
       options: {
         cwd: this.cwd,
         ...(this.model ? { model: this.model } : {}),
-        ...(this.resume ? { resume: this.resume } : {}),
+        ...(resumeId ? { resume: resumeId } : {}),
         permissionMode: this.permissionMode,
         includePartialMessages: true,
         canUseTool: (toolName, input, ctx) => this._askPermission(toolName, input, ctx),
       },
     });
     this._pump();
-    return this;
   }
 
   async _pump() {
     try {
       for await (const m of this.q) this._onMessage(m);
     } catch (err) {
-      this._push({ type: 'error', message: String(err?.message || err).slice(0, 400) });
+      if (!this._engineStopping) {
+        this._push({ type: 'error', message: String(err?.message || err).slice(0, 400) });
+      }
     } finally {
       this.alive = false;
-      this._setStatus('waiting');
-      this._push({ type: 'closed' });
       // Denegar permisos colgados.
       for (const [, p] of this.pendingPerms) p.resolve({ behavior: 'deny', message: 'Conversación cerrada.' });
       this.pendingPerms.clear();
+      // Despertar a quien esté esperando la muerte del motor (traspaso a TUI).
+      const waiters = this._engineWaiters;
+      this._engineWaiters = [];
+      for (const w of waiters) { try { w(); } catch { /* noop */ } }
+      // Si el motor murió por un traspaso, NO anunciamos 'closed' (la
+      // conversación sigue viva en modo TUI).
+      if (!this._engineStopping) {
+        this._setStatus('waiting');
+        this._push({ type: 'closed' });
+      }
     }
+  }
+
+  // Espera a que el motor de chat (query SDK) muera; true si murió, false si timeout.
+  _waitEngineDown(timeoutMs) {
+    if (!this.alive) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this._engineWaiters.push(() => finish(true));
+    });
+  }
+
+  // ===== Traspaso Chat <-> TUI (regla dura: nunca ambos a la vez) =====
+  async switchMode(target) {
+    if (target === this.viewMode) return { ok: true, viewMode: this.viewMode, terminalId: this.terminalId };
+    if (this.viewMode === 'switching') return { ok: false, error: 'Hay un cambio de modo en curso.' };
+    if (target === 'tui') return this._toTui();
+    if (target === 'chat') return this._toChat();
+    return { ok: false, error: 'Modo inválido.' };
+  }
+
+  async _toTui() {
+    if (!this.sessionId) {
+      return { ok: false, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de pasar a TUI.' };
+    }
+    this.viewMode = 'switching';
+    this._broadcast({ type: 'viewmode', viewMode: 'switching' });
+    // 1. Cerrar el motor de chat y ESPERAR su muerte (verificado).
+    this._engineStopping = true;
+    this.input.end();
+    try { await this.q?.close?.(); } catch { /* noop */ }
+    const died = await this._waitEngineDown(SWITCH_CLOSE_MS);
+    if (!died) {
+      // No pudimos cerrar el chat: NO abrimos la TUI (nunca ambos activos).
+      this.viewMode = 'chat';
+      this._engineStopping = false;
+      this._broadcast({ type: 'viewmode', viewMode: 'chat', error: 'No se pudo cerrar el chat; sigue en modo Chat.' });
+      return { ok: false, error: 'No se pudo cerrar el motor de chat a tiempo.' };
+    }
+    // 2. Abrir la TUI (bare pty) retomando la MISMA sesión.
+    const term = sessionManager.createBare({
+      cwd: this.cwd,
+      command: { file: 'claude', args: ['--resume', this.sessionId] },
+      title: this.title,
+    });
+    this.terminalId = term.id;
+    this.viewMode = 'tui';
+    this._broadcast({ type: 'viewmode', viewMode: 'tui', terminalId: this.terminalId });
+    return { ok: true, viewMode: 'tui', terminalId: this.terminalId };
+  }
+
+  async _toChat() {
+    this.viewMode = 'switching';
+    this._broadcast({ type: 'viewmode', viewMode: 'switching' });
+    const term = this.terminalId ? sessionManager.get(this.terminalId) : null;
+    if (term && term.alive) {
+      // Salir de `claude` limpio: Ctrl-C x2. Esperamos la salida verificada.
+      term.write('\x03');
+      term.write('\x03');
+      let exited = await term.waitForExit(SWITCH_CTRLC_MS);
+      if (!exited) { term.kill(); exited = await term.waitForExit(SWITCH_KILL_MS); }
+      if (!exited) {
+        // No pudimos cerrar la TUI: NO abrimos el chat (nunca ambos activos).
+        this.viewMode = 'tui';
+        this._broadcast({ type: 'viewmode', viewMode: 'tui', terminalId: this.terminalId, error: 'No se pudo cerrar la TUI; sigue en modo Terminal.' });
+        return { ok: false, error: 'No se pudo cerrar la sesión TUI a tiempo.' };
+      }
+    }
+    if (this.terminalId) { sessionManager.remove(this.terminalId); this.terminalId = null; }
+    // Recargar la conversación desde el transcript (la TUI pudo agregar turnos)
+    // y reabrir el motor de chat sobre la misma sesión.
+    if (this.sessionId) this.history = loadTranscriptEvents(this.cwd, this.sessionId);
+    this._startChatEngine();
+    this.viewMode = 'chat';
+    // Reenviar el history recargado + anunciar el nuevo modo.
+    for (const ws of this.clients) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status }));
+      }
+    }
+    this._broadcast({ type: 'viewmode', viewMode: 'chat' });
+    return { ok: true, viewMode: 'chat' };
   }
 
   _onMessage(m) {
@@ -310,6 +425,14 @@ class Chat {
   }
 
   close() {
+    this.closed = true;
+    // Si estaba en TUI, matar la sesión bare para no dejar el proceso huérfano.
+    if (this.terminalId) {
+      const t = sessionManager.get(this.terminalId);
+      if (t) t.kill();
+      sessionManager.remove(this.terminalId);
+      this.terminalId = null;
+    }
     this.input.end();
     try { this.q?.close?.(); } catch { /* noop */ }
     this.alive = false;
@@ -338,7 +461,10 @@ class Chat {
 
   attach(ws) {
     this.clients.add(ws);
-    ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status }));
+    ws.send(JSON.stringify({
+      type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
+      viewMode: this.viewMode, terminalId: this.terminalId,
+    }));
   }
 
   detach(ws) { this.clients.delete(ws); }
@@ -347,7 +473,7 @@ class Chat {
     return {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model,
       mode: this.permissionMode, status: this.status, alive: this.alive,
-      sessionId: this.sessionId,
+      sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
     };
   }
 }
@@ -360,8 +486,10 @@ class ChatManager {
     setInterval(() => {
       const now = Date.now();
       for (const [id, c] of this.chats) {
-        if (c.alive && now - c.lastActivity > IDLE_CLOSE_MS) c.close();
-        if (!c.alive && now - c.lastActivity > IDLE_CLOSE_MS * 2) this.chats.delete(id);
+        // Solo el motor de chat inactivo se cierra por RAM; una TUI viva se
+        // respeta (su proceso lo maneja el usuario en la terminal).
+        if (c.viewMode === 'chat' && c.alive && now - c.lastActivity > IDLE_CLOSE_MS) c.close();
+        if (c.closed && now - c.lastActivity > IDLE_CLOSE_MS * 2) this.chats.delete(id);
       }
     }, 60 * 1000).unref();
   }
@@ -374,11 +502,13 @@ class ChatManager {
   }
 
   liveSessionIds() {
-    return new Set([...this.chats.values()].filter((c) => c.alive && c.sessionId).map((c) => c.sessionId));
+    // Una conversación en TUI (alive=false) también "ocupa" su sesión: no debe
+    // ofrecerse para retomar en el lanzador.
+    return new Set([...this.chats.values()].filter((c) => !c.closed && c.sessionId).map((c) => c.sessionId));
   }
 
   get(id) { return this.chats.get(id); }
-  list() { return [...this.chats.values()].filter((c) => c.alive).map((c) => c.info()); }
+  list() { return [...this.chats.values()].filter((c) => !c.closed).map((c) => c.info()); }
 }
 
 const manager = new ChatManager();
@@ -454,6 +584,19 @@ export default {
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       chat.close();
       res.json({ ok: true });
+    });
+
+    // Traspaso Chat <-> TUI de UNA conversación (secuencial y verificado).
+    r.post('/mode', async (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const target = req.body?.mode;
+      if (target !== 'chat' && target !== 'tui') {
+        return res.status(400).json({ error: 'Modo inválido (chat|tui).' });
+      }
+      const result = await chat.switchMode(target);
+      if (!result.ok) return res.status(409).json({ error: result.error });
+      res.json({ ok: true, chat: chat.info() });
     });
 
     router.use('/chat', r);

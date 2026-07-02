@@ -113,12 +113,14 @@ export default {
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
 
       const dotCls = c.status === 'working' ? 'st-working' : 'st-waiting';
+      const isTui = c.viewMode === 'tui';
       const main = document.createElement('button');
       main.className = 'sess-main';
       main.innerHTML = `
         <span class="sess-dot ${dotCls}"></span>
-        <span class="sess-type-ic">${icon('sparkle', { size: 12 })}</span>
+        <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
         <span class="sess-name">${c.title}</span>
+        <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
         <span class="sess-model">${c.model || ''}</span>`;
       main.addEventListener('click', () => openChatView(c));
 
@@ -277,6 +279,11 @@ export default {
             const c = chatMap.get(key);
             const dotEl = cardEl.querySelector('.sess-dot');
             dotEl.className = `sess-dot ${c.status === 'working' ? 'st-working' : 'st-waiting'}`;
+            const isTui = c.viewMode === 'tui';
+            const icEl = cardEl.querySelector('.sess-type-ic');
+            if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
+            const modeEl = cardEl.querySelector('.sess-mode');
+            if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'; }
             continue;
           }
           const s = map.get(key);

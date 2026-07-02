@@ -15,10 +15,12 @@ const MODES = [
 ];
 
 export class ChatTab {
-  constructor({ id, title, container }) {
+  constructor({ id, title, container, onToggleMode, onViewMode }) {
     this.id = id;
     this.title = title || 'chat';
     this.container = container;
+    this.onToggleMode = onToggleMode; // pasar a TUI (lo maneja el shell)
+    this.onViewMode = onViewMode;     // el server anunció un cambio de modo
     this.ws = null;
     this.reconnectTimer = null;
     this.closedByUser = false;
@@ -33,6 +35,7 @@ export class ChatTab {
           <select class="chat-mode" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
+          <button class="btn-ghost btn--icon chat-toggle" title="Abrir como Terminal (TUI)">${icon('terminal', { size: 16 })}</button>
           <span class="chat-cost" title="Costo estimado de esta conversación">$0.00</span>
         </header>
         <div class="chat-msgs"></div>
@@ -50,9 +53,11 @@ export class ChatTab {
     this.stopBtn = container.querySelector('.chat-stop');
     this.modeEl = container.querySelector('.chat-mode');
     this.costEl = container.querySelector('.chat-cost');
+    this.toggleBtn = container.querySelector('.chat-toggle');
 
     this.sendBtn.addEventListener('click', () => this._submit());
     this.stopBtn.addEventListener('click', () => this._send({ type: 'interrupt' }));
+    this.toggleBtn.addEventListener('click', () => this.onToggleMode?.());
     this.modeEl.addEventListener('change', () => this._send({ type: 'set_mode', mode: this.modeEl.value }));
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -117,6 +122,17 @@ export class ChatTab {
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
       case 'mode': this.modeEl.value = m.mode; break;
+      case 'viewmode':
+        if (m.viewMode === 'switching') {
+          this._line('chat-switch-note', 'Cambiando a Terminal (TUI)…');
+          if (this.toggleBtn) this.toggleBtn.disabled = true;
+        } else if (m.error) {
+          this._line('chat-error', m.error);
+          if (this.toggleBtn) this.toggleBtn.disabled = false;
+        }
+        // El shell reconstruye la vista si el modo efectivo cambió.
+        this.onViewMode?.(m);
+        break;
       case 'error': this._line('chat-error', `Error: ${m.message}`); break;
       case 'closed':
         this._line('chat-closed-note', 'Conversación cerrada en el servidor.');

@@ -84,6 +84,8 @@ html, body {
 /* Tipo de pestaña: pty (terminal) vs chat (SDK, futuro). Hook visual reservado:
    el chip de chat llevará esquina asimétrica de burbuja. */
 .rail-tab[data-type="chat"] .rail-chip { border-radius: var(--cwc-radius-md) var(--cwc-radius-md) 2px var(--cwc-radius-md); }
+/* Conversación mostrándose como TUI: chip cuadrado (como una terminal). */
+.rail-tab[data-type="chat"][data-view="tui"] .rail-chip { border-radius: var(--cwc-radius-sm); }
 .rail-close {
   display: none; position: absolute; top: -5px; right: -5px;
   width: 16px; height: 16px; border-radius: 50%; padding: 0;
@@ -137,6 +139,11 @@ html, body {
   font-size: var(--cwc-fs-md); font-weight: 600;
 }
 .sess-model { flex: none; font-size: var(--cwc-fs-xs); font-weight: 600; }
+.sess-mode:not(:empty) {
+  flex: none; font-size: var(--cwc-fs-xs); font-weight: 700; letter-spacing: .03em;
+  color: var(--cwc-accent); background: var(--cwc-accent-bg);
+  border-radius: var(--cwc-radius-sm); padding: 0 .3rem;
+}
 .sess-menu { align-self: center; }
 
 /* Punto de estado */
@@ -442,6 +449,22 @@ html, body {
 .md-copy:hover { opacity: 1; border-color: var(--cwc-accent); color: var(--cwc-accent); }
 .chat-error { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
 .chat-closed-note { text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .4rem; }
+.chat-switch-note { text-align: center; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); padding: .4rem; }
+.chat-toggle { flex: none; }
+
+/* ===== Conversación en modo TUI (Terminal dentro de una conversación) ===== */
+.terminal-pane.conv-tui-host { display: flex; flex-direction: column; }
+.conv-tui-bar {
+  display: flex; align-items: center; gap: .6rem; flex: none;
+  padding: .35rem .6rem; background: var(--cwc-bg-panel);
+  border-bottom: 1px solid var(--cwc-border);
+}
+.conv-tui-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); font-weight: 600;
+}
+.conv-toback { display: inline-flex; align-items: center; gap: .3rem; flex: none; }
+.conv-tui-term { flex: 1; min-height: 0; position: relative; }
 
 .chat-composer {
   display: flex; gap: .4rem; align-items: flex-end;

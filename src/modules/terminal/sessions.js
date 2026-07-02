@@ -24,7 +24,7 @@ function tmuxArgs(...rest) {
 }
 
 class Session {
-  constructor({ id, cwd, title, attach = null }) {
+  constructor({ id, cwd, title, attach = null, bare = false, command = null }) {
     this.id = id;
     this.tmuxName = PREFIX + id;
     this.cwd = cwd || config.home;
@@ -34,6 +34,10 @@ class Session {
     // socket. No lleva prefijo cwc y NO se rehidrata al reiniciar Node.
     // (Ojo: NO usar `this.attach`, que es el método de adjuntar WebSockets.)
     this.attachSpec = attach;
+    // Sesión "bare" = pty directo (sin tmux), p.ej. la vista TUI de una
+    // conversación (`claude --resume`). No persiste, no se lista ni rehidrata.
+    this.bare = bare;
+    this.command = command; // { file, args } cuando bare
     this.cols = 80;
     this.rows = 24;
     this.buffer = []; // ring buffer de chunks de salida
@@ -41,36 +45,38 @@ class Session {
     this.clients = new Set(); // WebSockets adjuntos
     this.proc = null;
     this.alive = false;
+    this._exitWaiters = [];
   }
 
   spawn({ runClaude = false, model = null } = {}) {
-    let args;
-    if (this.attachSpec) {
-      // attach-session -d: nos adjuntamos como ÚNICO cliente (desadjunta a
-      // otros), evitando la guerra de redimensionado entre clientes de tmux.
-      args = ['-S', this.attachSpec.socket, 'attach-session', '-d', '-t', this.attachSpec.session];
-    } else {
-      // new-session -A: adjunta si existe, crea si no (idempotente = rehidratación).
-      args = tmuxArgs(
-        'new-session', '-A',
-        '-s', this.tmuxName,
-        '-x', String(this.cols),
-        '-y', String(this.rows),
-        '-c', this.cwd,
-      );
-    }
-    // Limpiamos TMUX/TMUX_PANE del hijo para no anidar tmux (el server puede
-    // haber sido lanzado desde dentro de una sesión tmux).
     const env = { ...process.env, TERM: 'xterm-256color' };
     delete env.TMUX;
     delete env.TMUX_PANE;
-    this.proc = pty.spawn('tmux', args, {
-      name: 'xterm-256color',
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.cwd,
-      env,
-    });
+
+    if (this.bare) {
+      this.proc = pty.spawn(this.command.file, this.command.args, {
+        name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
+      });
+    } else {
+      let args;
+      if (this.attachSpec) {
+        // attach-session -d: nos adjuntamos como ÚNICO cliente (desadjunta a
+        // otros), evitando la guerra de redimensionado entre clientes de tmux.
+        args = ['-S', this.attachSpec.socket, 'attach-session', '-d', '-t', this.attachSpec.session];
+      } else {
+        // new-session -A: adjunta si existe, crea si no (idempotente = rehidratación).
+        args = tmuxArgs(
+          'new-session', '-A',
+          '-s', this.tmuxName,
+          '-x', String(this.cols),
+          '-y', String(this.rows),
+          '-c', this.cwd,
+        );
+      }
+      this.proc = pty.spawn('tmux', args, {
+        name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
+      });
+    }
     this.alive = true;
 
     this.proc.onData((data) => this._onData(data));
@@ -81,14 +87,38 @@ class Session {
         try { ws.close(); } catch { /* noop */ }
       }
       this.clients.clear();
+      const waiters = this._exitWaiters;
+      this._exitWaiters = [];
+      for (const w of waiters) { try { w(); } catch { /* noop */ } }
     });
 
-    if (runClaude) {
+    if (!this.bare && runClaude) {
       // Lanza Claude Code en la sesión; el modelo va como flag del CLI
       // (validado upstream contra VALID_MODELS — nunca texto arbitrario).
       this.proc.write(model ? `claude --model ${model}\r` : 'claude\r');
     }
     return this;
+  }
+
+  // Espera a que el pty muera; resuelve true si murió, false si expiró el timeout.
+  waitForExit(timeoutMs) {
+    if (!this.alive) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this._exitWaiters.push(() => finish(true));
+    });
+  }
+
+  // Mata la sesión de verdad (tmux kill-session + pty, o solo pty si bare).
+  kill() {
+    if (!this.bare) {
+      try { execFileSync('tmux', tmuxArgs('kill-session', '-t', this.tmuxName), { stdio: 'ignore' }); }
+      catch { /* la sesión puede ya no existir */ }
+    }
+    try { this.proc?.kill(); } catch { /* noop */ }
+    this.alive = false;
   }
 
   _onData(data) {
@@ -136,7 +166,7 @@ class Session {
   }
 
   info() {
-    return { id: this.id, title: this.title, cwd: this.cwd, alive: this.alive };
+    return { id: this.id, title: this.title, cwd: this.cwd, alive: this.alive, bare: this.bare };
   }
 }
 
@@ -196,12 +226,23 @@ class SessionManager {
     return session;
   }
 
+  // Sesión "bare" (pty directo, sin tmux): la usa el modo TUI del chat para
+  // correr `claude --resume <sessionId>`.
+  createBare({ cwd, command, title } = {}) {
+    const id = this._nextId();
+    const session = new Session({ id, cwd, title, bare: true, command }).spawn();
+    this.sessions.set(id, session);
+    return session;
+  }
+
   get(id) {
     return this.sessions.get(id);
   }
 
+  // Las sesiones "bare" (vistas TUI de conversaciones) NO se listan: se
+  // reconstruyen desde /api/chat/list, no como pestañas PTY sueltas.
   list() {
-    return [...this.sessions.values()].map((s) => s.info());
+    return [...this.sessions.values()].filter((s) => !s.bare).map((s) => s.info());
   }
 
   remove(id) {
