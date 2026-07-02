@@ -13,10 +13,11 @@
 // WS  /ws/chat?id=<id>
 //   c->s: {type:'user', text} · {type:'permission_response', id, allow}
 //         {type:'interrupt'} · {type:'set_mode', mode}
-//   s->c: {type:'history', events} · {type:'user', text} · {type:'delta', text}
+//   s->c: {type:'history', events, slashCommands} · {type:'user', text} · {type:'delta', text}
 //         {type:'tool_use', name, summary} · {type:'result', costUsd, usage, ms}
 //         {type:'permission_request', id, tool, input} · {type:'status', state}
 //         {type:'mode', mode} · {type:'error', message} · {type:'closed'}
+//         {type:'meta', slashCommands} (Fase 8: comandos disponibles del init)
 import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
@@ -131,6 +132,7 @@ class Chat {
     this.status = 'waiting'; // waiting | working
     this.lastActivity = Date.now();
     this.history = [];       // eventos de UI para replay al re-adjuntar
+    this.slashCommands = []; // comandos slash del init del SDK (depende del cwd)
     this.clients = new Set();
     this.link = null;        // RunnerLink al runner (motor desacoplado)
     this._engineP = null;     // promesa del arranque en curso (dedup)
@@ -206,6 +208,12 @@ class Chat {
       }
       case 'delta':
         this._broadcast(e); // deltas NO van al history
+        return;
+      case 'meta':
+        // Comandos slash disponibles (Fase 8). No va al history: los clientes
+        // nuevos lo reciben en el payload del attach.
+        this.slashCommands = Array.isArray(e.slashCommands) ? e.slashCommands : [];
+        this._broadcast(e);
         return;
       case 'status':
         this._setStatus(e.state);
@@ -330,7 +338,7 @@ class Chat {
     // Reenviar el history recargado + anunciar el nuevo modo.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status }));
+        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this.slashCommands }));
       }
     }
     this._broadcast({ type: 'viewmode', viewMode: 'chat' });
@@ -410,7 +418,7 @@ class Chat {
     this.clients.add(ws);
     ws.send(JSON.stringify({
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
-      viewMode: this.viewMode, terminalId: this.terminalId,
+      viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this.slashCommands,
     }));
   }
 
@@ -518,6 +526,7 @@ class ChatManager {
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null);
           chat.history = [...base, ...(hello.events || [])].slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
+          if (Array.isArray(hello.slashCommands)) chat.slashCommands = hello.slashCommands;
           chat._adoptLink(link);
           console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
         } else {

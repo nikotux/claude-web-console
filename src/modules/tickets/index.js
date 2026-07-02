@@ -26,6 +26,7 @@ import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
+import { settingSourcesFor } from '../../core/sdk-settings.js';
 
 // OJO: NO usar ~/.cwc-state — claude-state.js poda cualquier .json de ahí cuyo
 // `ts` sea viejo (y este archivo no tiene `ts`), así que lo borraba al instante.
@@ -122,10 +123,8 @@ async function runTriage() {
     prompt: PROMPT,
     options: {
       cwd: config.projectDir,
-      // 'project' carga .mcp.json + skill; 'local' habilita el server MCP
-      // (enabledMcpjsonServers). SIN 'user': los settings del usuario no
-      // aportan nada acá y pueden traer allowlists ajenas al blindaje.
-      settingSources: ['project', 'local'],
+      // Fuente única (core/sdk-settings.js): 'project'+'local', sin 'user'.
+      settingSources: settingSourcesFor('headless'),
       skills: ['bug-triage'],
       permissionMode: 'default',
       maxTurns: MAX_TURNS,

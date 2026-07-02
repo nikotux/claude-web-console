@@ -31,6 +31,12 @@ function run() {
   let j = {};
   try { j = JSON.parse(raw); } catch { /* stdin no-JSON */ }
 
+  // Sesiones del CHAT web (runner del SDK, Fase 8): NO tocar ~/.cwc-state.
+  // Ese estado es exclusivo de TUIs — sessionIdForCwd() alimenta la adopción
+  // TUI->Chat y se confundiría con la sesión del propio chat; el chat ya
+  // reporta working/waiting por el socket de su runner.
+  if (process.env.CWC_CHAT_RUNNER) return;
+
   const sid = j.session_id || null;
   const dir = path.join(os.homedir(), '.cwc-state');
   try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* noop */ }

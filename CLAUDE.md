@@ -60,12 +60,16 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             zerotier · tmux(validación) · trash · recents ·
                             paths(resolveWithinHome/clampToHome — TODA validación de
                             rutas del cliente pasa por acá; nunca startsWith crudo) ·
+                            sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
+                            'chat'=user+project / 'headless'=project+local sin user) ·
                             claude-model(VALID_MODELS/encodeCwd) · claude-state(observador)
 src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(router, ctx), registerWs(wss, ctx) }
                             → se registra agregándolo al array de src/core/registry.js
   terminal/                 sesiones tmux (PREFIX cwc-) + bare/TUI (BARE_PREFIX cwct-) + rehidratación
   chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
                             runner-link.js (spawn/connect) — el motor real es bin/cwc-chat-runner.js
+                            README.md documenta la config que hereda el chat (Fase 8:
+                            settingSources user+project, comandos slash, observador)
   files/ stats/ tokens/ tmux/ admin/ tolkien/ backup/ tickets/ health/
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
@@ -74,7 +78,7 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             tolkien · tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup)
-public/js/chat-tab.js       vista chat · public/js/terminal-tab.js  vista terminal
+public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden]
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)

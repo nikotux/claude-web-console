@@ -9,8 +9,10 @@
 //   server->runner: {t:'hello'} · {t:'user',text} · {t:'perm',id,allow}
 //                   {t:'interrupt'} · {t:'set_mode',mode} · {t:'sleep'} · {t:'close'}
 //   runner->server: {t:'hello', id, sessionId, model, mode, status, startedAt,
-//                    events:[...historial de ESTA vida del motor]}   (respuesta)
+//                    slashCommands, events:[...historial de ESTA vida]} (respuesta)
 //                   {t:'event', event:{...}}                          (en vivo)
+//                   (evento nuevo Fase 8: {type:'meta', slashCommands:[...]}
+//                    con la lista de comandos slash del system/init del SDK)
 //
 // Vida = una vida del motor: nace con spawn del server, se AUTO-DUERME a los
 // 45 min sin actividad (sale limpio; el próximo mensaje lo relanza con resume)
@@ -24,6 +26,7 @@ import {
   PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX,
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
+import { settingSourcesFor } from '../src/core/sdk-settings.js';
 
 // ---- argv ----
 const args = {};
@@ -43,9 +46,18 @@ if (!ID || !CWD || !SOCK) {
 }
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
+// Marca heredable: el claude del SDK (y sus hooks, ahora que settingSources
+// carga la config del usuario) corren con esta env. El observador
+// (cwc-observe.js) la usa para NO escribir estado de sesiones de chat en
+// ~/.cwc-state: ese estado es SOLO de TUIs (sessionIdForCwd alimenta el
+// traspaso TUI->Chat y no debe ver la sesión del propio chat); el chat ya
+// reporta su estado por el socket del runner.
+process.env.CWC_CHAT_RUNNER = '1';
+
 // ---- estado ----
 const startedAt = Date.now();
 let sessionId = RESUME;
+let slashCommands = []; // lista del system/init (depende del cwd; Fase 8)
 let status = 'waiting';
 let lastActivity = Date.now();
 let closedByUser = false;
@@ -89,6 +101,11 @@ function startEngine() {
       ...(RESUME ? { resume: RESUME } : {}),
       permissionMode: mode,
       includePartialMessages: true,
+      // Fase 8: cargar skills + comandos slash + CLAUDE.md del usuario y del
+      // proyecto del cwd (fuente única en core/sdk-settings.js), y habilitar
+      // la invocación autónoma de skills (además de la manual con /).
+      settingSources: settingSourcesFor('chat'),
+      allowedTools: ['Skill'],
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     },
   });
@@ -98,7 +115,11 @@ function onMessage(m) {
   lastActivity = Date.now();
   if (m.type === 'system' && m.subtype === 'init') {
     sessionId = m.session_id || sessionId;
+    // Los comandos slash disponibles (built-ins + skills + custom del cwd)
+    // vienen SOLO en el init: la lista del init es la fuente de verdad.
+    if (Array.isArray(m.slash_commands)) slashCommands = m.slash_commands;
     emit({ type: 'init', chatId: ID, sessionId, model: m.model || MODEL, cwd: CWD, mode }, { record: false });
+    emit({ type: 'meta', slashCommands }, { record: false });
     return;
   }
   if (m.type === 'stream_event') {
@@ -200,7 +221,7 @@ function shutdown(code) {
 // ---- comandos del server ----
 function handleCommand(c, msg) {
   if (msg.t === 'hello') {
-    writeTo(c, { t: 'hello', id: ID, sessionId, model: MODEL, mode, status, startedAt, events: history });
+    writeTo(c, { t: 'hello', id: ID, sessionId, model: MODEL, mode, status, startedAt, slashCommands, events: history });
     return;
   }
   if (msg.t === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
