@@ -1,47 +1,68 @@
-/* tokens.css — variables de diseño ÚNICAS para toda la app (consola, Gestor de
-   Archivos, admin, login). Un solo lenguaje visual: acento terracota "Claude
-   orange" (ya usado en login/consola/admin), fondos oscuros en la misma
-   escala, mismos radios y tipografías. Cargar ANTES de style.css/fm.css. */
+/* tokens.css — variables de diseño ÚNICAS para toda la app (consola, Explorador,
+   admin, login). Un solo lenguaje visual: acento terracota "Claude orange",
+   fondos oscuros en una única escala, radios y tipografías compartidas.
+   Cargar ANTES de ui.css/style.css/fm.css. */
 :root {
-  /* Fondos (escala única, de más oscuro a más claro) */
+  /* ===== Fondos (escala única, de más oscuro a más claro) ===== */
   --cwc-bg: #0b0e14;
   --cwc-bg-panel: #0d1119;
   --cwc-bg-elevated: #11151f;
   --cwc-bg-hover: #141a26;
   --cwc-bg-input: #0b0e14;
+  --cwc-bg-chip: #1c2130;        /* fondo de chips, controles y botones fantasma */
 
-  /* Bordes */
+  /* ===== Bordes y divisores ===== */
   --cwc-border: #1e2431;
   --cwc-border-soft: #232b3a;
   --cwc-border-strong: #2a3040;
+  --cwc-divider: #161c28;        /* separadores internos de listas/secciones */
 
-  /* Texto */
+  /* ===== Texto ===== */
   --cwc-text: #c5c8c6;
   --cwc-text-secondary: #9aa4b2;
   --cwc-text-dim: #7c8494;
   --cwc-text-dimmer: #566072;
 
-  /* Acento de marca (único en toda la app) + variante de fondo */
+  /* ===== Acento de marca (único en toda la app) ===== */
   --cwc-accent: #d97757;
   --cwc-accent-bg: #2a2018;
-  --cwc-accent-ink: #1a1000; /* texto sobre botones sólidos de acento */
+  --cwc-accent-ink: #1a1000;     /* texto sobre superficies sólidas de acento */
 
-  /* Estados semánticos */
+  /* ===== Estados semánticos ===== */
   --cwc-ok: #6c9e6e;
   --cwc-warn: #c9a94e;
+  /* Sistema danger de DOS niveles (único en la app):
+     - danger:        interactivo (bordes/hover/botones de riesgo)
+     - danger-strong: énfasis (texto de error, acciones irreversibles) */
   --cwc-danger: #cd5c5c;
   --cwc-danger-strong: #ff453a;
 
-  /* Radios (escala única) */
+  /* ===== Colores de identidad de modelo de IA (definidos UNA sola vez;
+         el backend envía solo la key semántica: opus|sonnet|haiku|fable) ===== */
+  --cwc-model-opus: #b57edc;
+  --cwc-model-sonnet: #4e8fd1;
+  --cwc-model-haiku: #6cb06c;
+  --cwc-model-fable: #d9925a;
+  --cwc-model-unknown: #8a8a8a;
+
+  /* ===== Escala tipográfica ÚNICA (5 tamaños; nada fuera de esta escala
+         salvo texto decorativo dentro de íconos) ===== */
+  --cwc-fs-xs: .7rem;    /* metadatos, subtítulos de fila, pies */
+  --cwc-fs-sm: .78rem;   /* texto secundario, filas de lista, botones chicos */
+  --cwc-fs-md: .85rem;   /* texto base de la UI, botones */
+  --cwc-fs-lg: 1rem;     /* inputs, énfasis, títulos de tarjeta */
+  --cwc-fs-xl: 1.2rem;   /* títulos de página/modal */
+
+  /* ===== Radios (escala única de 3) ===== */
   --cwc-radius-sm: 5px;
   --cwc-radius-md: 8px;
   --cwc-radius-lg: 12px;
 
-  /* Tipografías */
+  /* ===== Tipografías ===== */
   --cwc-font-ui: -apple-system, "SF Pro Text", BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
   --cwc-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Íconos (public/js/ui/icons.js) */
+  /* ===== Íconos (public/js/ui/icons.js) ===== */
   --cwc-icon-size: 18px;
   --cwc-icon-stroke: 1.8;
 }
