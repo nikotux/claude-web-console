@@ -73,7 +73,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             runner-link.js (spawn/connect) — el motor real es bin/cwc-chat-runner.js
                             README.md documenta la config que hereda el chat (Fase 8:
                             settingSources user+project, comandos slash, observador)
-  files/ stats/ tokens/ tmux/ admin/ tolkien/ backup/ tickets/ health/
+  files/ stats/ tokens/ tmux/ admin/ tolkien/ tickets/ health/
+  backup/                   tar.gz completo (server-side, con secretos) + push del CÓDIGO al
+                            remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing,
+                            solo archivos ya trackeados). Cada push exitoso ADEMÁS: (1) agrega
+                            una entrada EN INGLÉS a la sección "## Changelog" de README.md
+                            (marcadores <!-- cwc:changelog:start/end -->, función
+                            updateReadmeChangelog — commits locales sin pushear + archivos
+                            recién stageados; si no hay nada nuevo, no toca el README) y
+                            (2) reafirma la descripción del repo en GitHub (inglés, resume
+                            consola+módulos) vía `gh repo edit` (best-effort: si falta gh/auth
+                            no rompe el push, ver campo `description` de la respuesta).
   bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol
