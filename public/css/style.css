@@ -235,7 +235,7 @@ html, body {
 
 /* ===== Lanzador (Nueva sesión) ===== */
 .ln-types { display: flex; gap: .4rem; margin-bottom: .8rem; }
-.ln-types .btn-ghost { flex: 1; }
+.ln-types .btn-ghost { flex: 1; padding-inline: .4rem; font-size: var(--cwc-fs-sm); white-space: nowrap; }
 .ln-types .btn-ghost.active { border-color: var(--cwc-accent); color: var(--cwc-accent); background: var(--cwc-accent-bg); }
 .ln-sec-title {
   display: block; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
