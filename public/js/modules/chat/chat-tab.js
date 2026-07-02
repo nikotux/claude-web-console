@@ -370,9 +370,13 @@ export class ChatTab {
     det.className = 'chat-toolcard';
     if (m.id) det.dataset.toolId = m.id;
     det.innerHTML = `
-      <summary>${icon('terminal', { size: 13 })}<span class="ct-name">${m.name}</span><span class="ct-sum"></span></summary>
+      <summary>${icon('terminal', { size: 14 })}<span class="ct-name">${m.name}</span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span></summary>
       <div class="ct-body"></div>`;
-    det.querySelector('.ct-sum').textContent = m.summary || '';
+    // Chip compacto: el resumen se trunca a ~40 caracteres (el detalle completo
+    // vive en el cuerpo expandible; para Bash el resumen es el inicio REAL del
+    // comando, nunca una paráfrasis).
+    const sum = String(m.summary || '');
+    det.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
     const body = det.querySelector('.ct-body');
     const d = m.detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));

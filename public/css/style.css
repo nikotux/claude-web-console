@@ -489,22 +489,27 @@ html, body {
 }
 @keyframes chat-caret { 50% { opacity: 0; } }
 
-/* Tool calls: <details> colapsado con resumen de una línea */
+/* Tool calls: chips compactos de ancho natural (fit-content); el detalle
+   expandido abre a lo ancho. Tipografía un paso abajo del texto del mensaje. */
 .chat-toolcard {
-  align-self: flex-start; max-width: 92%; min-width: 40%;
-  background: var(--cwc-bg-panel); border: 1px dashed var(--cwc-border-soft);
-  border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-xs);
+  align-self: flex-start; max-width: 100%; width: fit-content;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
+  color: var(--cwc-text-secondary);
 }
+.chat-toolcard[open] { width: 100%; }
 .chat-toolcard summary {
   display: flex; align-items: center; gap: .4rem; cursor: pointer;
-  padding: .3rem .5rem; color: var(--cwc-text-dim); user-select: none;
-  list-style: none;
+  min-height: 30px; padding: 0 .55rem; color: var(--cwc-text-secondary);
+  user-select: none; list-style: none;
 }
 .chat-toolcard summary::-webkit-details-marker { display: none; }
 .chat-toolcard summary.done { border-left: 2px solid var(--cwc-ok); }
 .chat-toolcard summary.fail { border-left: 2px solid var(--cwc-danger); }
 .ct-name { font-weight: 600; color: var(--cwc-text-secondary); flex: none; }
 .ct-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--cwc-font-mono); }
+.ct-chev { display: inline-flex; flex: none; color: var(--cwc-text-dim); transition: transform .15s ease; }
+.chat-toolcard[open] .ct-chev { transform: rotate(180deg); }
 .ct-body { padding: .1rem .5rem .45rem; display: flex; flex-direction: column; gap: .35rem; }
 .ct-cmd, .ct-out {
   margin: 0; padding: .4rem .5rem; overflow: auto; max-height: 220px;
