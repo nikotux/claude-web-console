@@ -25,9 +25,11 @@ código.
 5. **Seguridad de push:** el código solo se empuja al remote git `personal`;
    URLs que contengan `Mordor-Staffing` están bloqueadas (guard en backup).
    Nunca versionar/pushear `.env`, `users.json`, `sessions.json`, `certs/`.
-6. **Corridas headless del SDK (tickets, salud) son READ-ONLY blindadas:**
-   `canUseTool` como allowlist de lecturas; toda mutación se deniega. No
-   relajar eso.
+6. **Corridas headless del SDK (tickets, salud) son READ-ONLY blindadas por
+   DOS capas:** hook `PreToolUse` (deniega ANTES de la evaluación de permisos;
+   inmune a reglas `allow` pre-aprobadas en settings) + `canUseTool` como
+   allowlist de lecturas. Nunca cargar `settingSources: ['user']` en esas
+   corridas ni quitar ninguna de las dos capas.
 7. **La carpeta del proyecto es SIEMPRE `/home/nmosquera/claude-web-console`.**
    No moverla ni duplicarla; las sesiones de Claude Code se abren desde acá.
 8. **Hoja de ruta siempre completa:** en CADA modificación se actualizan los
@@ -56,6 +58,8 @@ código.
 src/server.js               bootstrap: ZeroTier wait → HTTPS bind → auth → módulos
 src/core/                   config(.env) · auth · users · wss · registry · tls ·
                             zerotier · tmux(validación) · trash · recents ·
+                            paths(resolveWithinHome/clampToHome — TODA validación de
+                            rutas del cliente pasa por acá; nunca startsWith crudo) ·
                             claude-model(VALID_MODELS/encodeCwd) · claude-state(observador)
 src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(router, ctx), registerWs(wss, ctx) }
                             → se registra agregándolo al array de src/core/registry.js
@@ -83,7 +87,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
 ## Convenciones (esto es lo que SE DEBE hacer)
 
 - **Colores/espaciado:** solo variables de `tokens.css` (o `color-mix` sobre
-  ellas). Acento único terracota `--cwc-accent`.
+  ellas). Acento único terracota `--cwc-accent`. Para sombras/velos existen
+  `--cwc-shadow-sm/md/lg`, `--cwc-shadow-ink` y `--cwc-scrim`; blanco puro es
+  `--cwc-white`; las categorías del Explorador son `--cwc-cat-*`/`--cwc-folder*`.
+  En JS (p.ej. el theme de xterm) los tokens se leen con `getComputedStyle`,
+  no se duplican los hex.
 - **Botones/diálogos/popups:** `.btn`/`.btn-ghost` + modificadores; modales con
   `ui/dialog.js` (`openModal/confirmDialog/promptDialog/alertDialog`); menús
   flotantes con `ui/popup.js`. Nunca `alert()/confirm()/prompt()` nativos.
@@ -118,6 +126,10 @@ docs/                       frontend-modules.md · brief-original.txt · context
   saliente se ESPERA verificado antes de abrir el otro.
 - Tras un reboot, repetir `systemctl --user import-environment SSH_AUTH_SOCK`
   para que el git de Tolkien funcione desde el server.
+- Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
+  (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
+  usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;
+  revisarlo antes de dar acceso a usuarios de menor confianza.
 
 ## Proceso de cambio (seguirlo SIEMPRE)
 
