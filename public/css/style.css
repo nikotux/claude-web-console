@@ -457,23 +457,32 @@ html, body {
 }
 .chat-cost { font-size: var(--cwc-fs-sm); color: var(--cwc-ok); font-variant-numeric: tabular-nums; }
 
+/* Ritmo de diálogo: aire chico entre elementos del mismo turno (gap) y aire
+   grande al abrir turno nuevo (margen extra sobre cada mensaje del usuario). */
 .chat-msgs {
   flex: 1; overflow-y: auto; padding: .9rem .9rem .5rem;
-  display: flex; flex-direction: column; gap: .5rem;
+  display: flex; flex-direction: column; gap: .75rem;
 }
 .chat-msg {
-  max-width: 78%; padding: .55rem .75rem; border-radius: var(--cwc-radius-lg);
+  padding: .55rem .75rem; border-radius: var(--cwc-radius-lg);
   font-size: var(--cwc-fs-md); line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   animation: msg-in .18s ease;
 }
 @keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .chat-user {
-  align-self: flex-end; background: var(--cwc-accent-bg); color: var(--cwc-text);
-  border: 1px solid var(--cwc-border-soft); border-bottom-right-radius: var(--cwc-radius-sm);
+  align-self: flex-end; max-width: 75%; margin-top: 1.25rem;
+  background: var(--cwc-accent-bg-soft); color: var(--cwc-text);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent) 16%, var(--cwc-border));
+  border-bottom-right-radius: var(--cwc-radius-sm);
 }
+.chat-user:first-child { margin-top: 0; }
+/* El asistente no lleva caja: texto sobre el fondo con barra fría al margen
+   (identidad propia, distinta del acento terracota del usuario). */
 .chat-assistant {
-  align-self: flex-start; background: var(--cwc-bg-elevated);
-  border: 1px solid var(--cwc-border); border-bottom-left-radius: var(--cwc-radius-sm);
+  align-self: flex-start; max-width: 90%;
+  background: none; border: 0; border-radius: 0;
+  border-left: 2px solid color-mix(in srgb, var(--cwc-accent-cool) 55%, transparent);
+  padding: .1rem 0 .1rem .8rem;
 }
 .chat-assistant.streaming::after {
   content: '▍'; color: var(--cwc-accent); animation: chat-caret 1s steps(2) infinite;

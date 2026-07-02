@@ -26,7 +26,12 @@
   /* ===== Acento de marca (único en toda la app) ===== */
   --cwc-accent: #d97757;
   --cwc-accent-bg: #2a2018;
+  --cwc-accent-bg-soft: #211a14;   /* tinte de acento más sutil (burbuja del usuario en el chat) */
   --cwc-accent-ink: #1a1000;     /* texto sobre superficies sólidas de acento */
+
+  /* ===== Tono frío de apoyo (identidad del asistente en el chat; NO es un
+         segundo acento de marca — solo barra/detalles del hablante IA) ===== */
+  --cwc-accent-cool: #5b8fc7;
 
   /* ===== Estados semánticos ===== */
   --cwc-ok: #6c9e6e;
