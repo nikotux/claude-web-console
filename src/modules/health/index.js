@@ -258,6 +258,22 @@ async function runReview() {
       cwd: ROOT,
       permissionMode: 'default',
       maxTurns: MAX_TURNS,
+      // Doble capa como en tickets: el hook PreToolUse deniega ANTES de la
+      // evaluación de permisos (inmune a reglas `allow` de settings, aunque
+      // acá no se cargan settingSources); canUseTool cubre el resto.
+      hooks: {
+        PreToolUse: [{
+          hooks: [async (input) => (toolAllowed(input.tool_name)
+            ? {}
+            : {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Revisión de salud read-only: herramienta no permitida.',
+              },
+            })],
+        }],
+      },
       canUseTool: async (name, input) => (toolAllowed(name)
         ? { behavior: 'allow', updatedInput: input }
         : { behavior: 'deny', message: 'Revisión de salud read-only: herramienta no permitida.' }),

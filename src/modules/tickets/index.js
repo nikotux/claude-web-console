@@ -5,9 +5,15 @@
 // skill lee los tickets [Tolkien Bug] de Zoho Desk (MCP tolkien-mordor, que
 // además corre con MORDOR_MCP_READONLY=true), los clasifica y arma una tabla.
 //
-// SEGURIDAD: la corrida es READ-ONLY BLINDADA. canUseTool actúa como allowlist
-// (solo lecturas: Read/Grep/Glob/Skill + herramientas MCP *list/get/search*);
-// cualquier mutación (crear TASK en Pad, desk_update_ticket, Write/Edit/Bash)
+// SEGURIDAD: la corrida es READ-ONLY BLINDADA por DOS capas con la misma
+// allowlist (solo lecturas: Read/Grep/Glob/Skill + herramientas MCP
+// *list/get/search*):
+//   1. hook PreToolUse: corre ANTES de la evaluación de permisos, así que su
+//      deny gana incluso sobre reglas `allow` pre-aprobadas en los settings
+//      del proyecto (hallazgo de la revisión de salud: settings.local.json de
+//      Tolkien pre-aprueba tools mutantes como graph_drive_write_binary).
+//   2. canUseTool: allowlist para todo lo que llegue a pedir permiso.
+// Cualquier mutación (crear TASK en Pad, desk_update_ticket, Write/Edit/Bash)
 // se DENIEGA. Un run headless nunca puede tocar Desk ni Pad.
 //
 // HTTP:
@@ -116,10 +122,30 @@ async function runTriage() {
     prompt: PROMPT,
     options: {
       cwd: config.projectDir,
-      settingSources: ['user', 'project', 'local'], // carga .mcp.json + skill + allowlist
+      // 'project' carga .mcp.json + skill; 'local' habilita el server MCP
+      // (enabledMcpjsonServers). SIN 'user': los settings del usuario no
+      // aportan nada acá y pueden traer allowlists ajenas al blindaje.
+      settingSources: ['project', 'local'],
       skills: ['bug-triage'],
       permissionMode: 'default',
       maxTurns: MAX_TURNS,
+      // Capa 1: PreToolUse deniega mutaciones ANTES de los permisos (las
+      // reglas `allow` de settings no pueden saltearlo, canUseTool sí sería
+      // salteable). Devolver {} deja seguir el flujo normal hacia canUseTool.
+      hooks: {
+        PreToolUse: [{
+          hooks: [async (input) => (toolAllowed(input.tool_name)
+            ? {}
+            : {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Triage read-only: herramienta no permitida.',
+              },
+            })],
+        }],
+      },
+      // Capa 2: allowlist para todo lo que llegue a pedir permiso.
       canUseTool: async (name, input) => (toolAllowed(name)
         ? { behavior: 'allow', updatedInput: input }
         : { behavior: 'deny', message: 'Triage read-only: herramienta no permitida.' }),
