@@ -15,6 +15,15 @@ ExecStart=/usr/bin/node src/server.js
 Restart=on-failure
 RestartSec=5
 
+# --- Resiliencia: el trabajo en curso NO muere con el server ---
+# KillMode=process: al parar/reiniciar/crashear la unidad, systemd mata SOLO el
+# proceso principal (node src/server.js). Sin esto (default control-group)
+# arrasaría el cgroup entero: el servidor tmux del socket cwc (todas las
+# terminales) y los runners de chat (bin/cwc-chat-runner.js), que deben
+# sobrevivir para que las operaciones sigan aunque la web interface caiga.
+KillMode=process
+TimeoutStopSec=10
+
 # --- SSH para el módulo Tolkien (git pull por SSH) ---
 # systemd --user NO hereda tu SSH_AUTH_SOCK por defecto. Si querés que el botón
 # "Actualizar" de Tolkien funcione, exponé el agente. Opción simple (con la

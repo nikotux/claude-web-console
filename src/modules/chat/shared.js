@@ -1,0 +1,67 @@
+// modules/chat/shared.js — piezas compartidas entre el SERVER (index.js) y el
+// RUNNER desacoplado (bin/cwc-chat-runner.js): constantes, rutas del socket
+// Unix por conversación y la traducción de tool calls a eventos de UI.
+import os from 'node:os';
+import path from 'node:path';
+
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
+export const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
+export const SLEEP_MS = 45 * 60 * 1000; // inactiva => el runner se auto-duerme
+export const HISTORY_MAX = 600;
+
+// Cada conversación tiene su runner con socket Unix + log propios acá.
+export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+export const CHATS_DIR = path.join(DATA_DIR, 'chats');
+export const sockPath = (id) => path.join(CHATS_DIR, `${id}.sock`);
+export const logPath = (id) => path.join(CHATS_DIR, `${id}.log`);
+
+export const trim = (s, n = 4000) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
+
+export function toolSummary(name, input) {
+  try {
+    if (name === 'Bash') return String(input?.command || '').slice(0, 120);
+    if (name === 'Read') return String(input?.file_path || '');
+    if (name === 'Write' || name === 'Edit') return String(input?.file_path || '');
+    const s = JSON.stringify(input);
+    return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+  } catch { return ''; }
+}
+
+// Detalle del input para la UI (diffs en Edit/Write, comando en Bash).
+export function toolDetail(name, input) {
+  try {
+    if (name === 'Edit') return { file: input?.file_path, old: trim(input?.old_string), new: trim(input?.new_string) };
+    if (name === 'Write') return { file: input?.file_path, new: trim(input?.content) };
+    if (name === 'Bash') return { command: trim(input?.command, 1000) };
+    return null;
+  } catch { return null; }
+}
+
+// Texto plano del tool_result (string o bloques de texto).
+export function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  }
+  return '';
+}
+
+// Cola de mensajes del usuario -> AsyncIterable para el streaming input mode.
+export function makeInput() {
+  const queue = [];
+  let notify = null;
+  let done = false;
+  return {
+    push(msg) { queue.push(msg); notify?.(); },
+    end() { done = true; notify?.(); },
+    async *gen() {
+      for (;;) {
+        while (queue.length) yield queue.shift();
+        if (done) return;
+        await new Promise((r) => { notify = r; });
+        notify = null;
+      }
+    },
+  };
+}

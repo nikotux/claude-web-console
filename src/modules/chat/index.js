@@ -1,10 +1,10 @@
 // modules/chat/index.js — chat nativo con Claude vía Agent SDK (Fase 4a).
 //
-// Cada conversación = UNA query() del SDK en streaming input mode: un
-// subproceso vivo que recibe mensajes del usuario por un generador async y
-// emite eventos (deltas, tool calls, resultado con costo) que traducimos a
-// JSON por WebSocket. Auth: hereda la suscripción del CLI (verificado por
-// spike — sin API key, sin facturación aparte).
+// RESILIENCIA: el motor de cada conversación (query() del SDK) ya NO vive en
+// este proceso. Corre en un RUNNER independiente (bin/cwc-chat-runner.js,
+// detached, socket Unix en ~/.cwc-data/chats/<id>.sock). Este módulo solo
+// lanza runners, se conecta y traduce: si el server crashea a mitad de un
+// turno, el runner sigue trabajando y al volver nos reconectamos.
 //
 // HTTP:
 //   POST /api/chat/create {cwd?, model?, permissionMode?} -> { chat }
@@ -22,19 +22,17 @@ import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
+import {
+  UUID_RE, PERMISSION_MODES, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
+  trim, toolSummary, toolDetail, resultText,
+} from './shared.js';
+import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
-const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
-const SLEEP_MS = 45 * 60 * 1000;   // inactiva => DORMIR el motor (no cerrar: el próximo mensaje la retoma)
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
-const HISTORY_MAX = 600;
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
@@ -62,59 +60,13 @@ function paneCommand(tmuxName) {
 const SHELL_RE = /^(bash|zsh|sh|fish|dash)$/;
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Cola de mensajes del usuario -> AsyncIterable para el streaming input mode.
-function makeInput() {
-  const queue = [];
-  let notify = null;
-  let done = false;
-  return {
-    push(msg) { queue.push(msg); notify?.(); },
-    end() { done = true; notify?.(); },
-    async *gen() {
-      for (;;) {
-        while (queue.length) yield queue.shift();
-        if (done) return;
-        await new Promise((r) => { notify = r; });
-        notify = null;
-      }
-    },
-  };
-}
-
-function toolSummary(name, input) {
-  try {
-    if (name === 'Bash') return String(input?.command || '').slice(0, 120);
-    if (name === 'Read') return String(input?.file_path || '');
-    if (name === 'Write' || name === 'Edit') return String(input?.file_path || '');
-    const s = JSON.stringify(input);
-    return s.length > 120 ? `${s.slice(0, 120)}…` : s;
-  } catch { return ''; }
-}
-
-// Detalle del input para la UI (diffs en Edit/Write, comando en Bash).
-const trim = (s, n = 4000) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
-function toolDetail(name, input) {
-  try {
-    if (name === 'Edit') return { file: input?.file_path, old: trim(input?.old_string), new: trim(input?.new_string) };
-    if (name === 'Write') return { file: input?.file_path, new: trim(input?.content) };
-    if (name === 'Bash') return { command: trim(input?.command, 1000) };
-    return null;
-  } catch { return null; }
-}
-
-// Texto plano del tool_result (string o bloques de texto).
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-  }
-  return '';
-}
-
 // Reconstruye eventos de UI desde el transcript de una sesión (para que al
 // RETOMAR se vea la conversación anterior). Dedup por message.id/uuid: cada
 // mensaje aparece repetido en el jsonl (misma lección que el módulo tokens).
-function loadTranscriptEvents(cwd, sessionId) {
+// `untilMs`: corte superior (excluyente) por timestamp de línea — se usa al
+// reconectar con un runner vivo: lo anterior a su arranque sale del
+// transcript, lo posterior lo aporta el runner (sin duplicados).
+function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
   const file = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
   let txt;
   try { txt = fss.readFileSync(file, 'utf8'); } catch { return []; }
@@ -126,6 +78,10 @@ function loadTranscriptEvents(cwd, sessionId) {
     try { o = JSON.parse(line); } catch { continue; }
     const msg = o.message;
     if (!msg) continue;
+    if (untilMs && o.timestamp) {
+      const ts = Date.parse(o.timestamp);
+      if (Number.isFinite(ts) && ts >= untilMs) continue;
+    }
     // Dedup: el mismo msg.id aparece en VARIAS líneas con distinto contenido
     // (p.ej. una con thinking y otra con text), y además cada mensaje se
     // repite entero. Clave = id + firma del contenido.
@@ -170,88 +126,137 @@ class Chat {
     this.title = path.basename(cwd) || '~';
     this.resume = resume;
     this.sessionId = resume || null;
-    this.alive = true;        // motor de chat (query SDK) corriendo
+    this.alive = false;       // motor (runner) conectado y corriendo
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
     this.viewMode = 'chat';   // chat | switching | tui
-    this.terminalId = null;   // id de la sesión TUI (bare pty) cuando viewMode==='tui'
+    this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
     this.lastActivity = Date.now();
     this.history = [];       // eventos de UI para replay al re-adjuntar
     this.clients = new Set();
-    this.pendingPerms = new Map(); // permId -> { resolve, timer }
-    this._permSeq = 0;
-    this._engineStopping = false; // true mientras cerramos el motor para un traspaso (no emitir 'closed')
-    this._engineWaiters = [];     // callbacks que se resuelven cuando el _pump muere
-    this.input = makeInput();
+    this.link = null;        // RunnerLink al runner (motor desacoplado)
+    this._engineP = null;     // promesa del arranque en curso (dedup)
+    this._engineStopping = false; // cierre esperado (traspaso/sueño pedido): no anunciar 'closed'
+    this._engineWaiters = [];     // callbacks al morir el motor (traspaso a TUI)
+    this._downAnnounced = true;   // ya anunciamos la muerte de la vida actual del motor
   }
 
   start() {
     // Al retomar: el SDK restaura el contexto; la UI muestra lo anterior
     // reconstruyéndolo desde el transcript.
     if (this.resume) this.history = loadTranscriptEvents(this.cwd, this.resume);
-    this._startChatEngine();
+    this._ensureEngine();
     return this;
   }
 
-  // Crea (o recrea) la query() del SDK. Reutilizable para el traspaso TUI->Chat:
-  // arranca una nueva query con `resume` sobre la MISMA sesión.
-  _startChatEngine() {
-    // Si retomamos una sesión existente, resume; si no, sesión nueva.
-    const resumeId = this.sessionId || this.resume;
-    this.input = makeInput();
-    this.alive = true;
-    this._engineStopping = false;
-    this.q = query({
-      prompt: this.input.gen(),
-      options: {
-        cwd: this.cwd,
-        ...(this.model ? { model: this.model } : {}),
-        ...(resumeId ? { resume: resumeId } : {}),
-        permissionMode: this.permissionMode,
-        includePartialMessages: true,
-        canUseTool: (toolName, input, ctx) => this._askPermission(toolName, input, ctx),
-      },
-    });
-    this._pump();
+  // Garantiza UN runner corriendo y conectado (dedup de arranques en paralelo).
+  _ensureEngine() {
+    if (this.link) return Promise.resolve(true);
+    if (!this._engineP) {
+      this._engineP = this._startEngine().finally(() => { this._engineP = null; });
+    }
+    return this._engineP;
   }
 
-  async _pump() {
+  // Lanza el runner (proceso independiente) y se conecta. Si ya había un
+  // runner vivo para este id (p.ej. carrera), el nuevo proceso se suicida y
+  // acá simplemente nos conectamos al que quedó.
+  async _startEngine() {
+    const resumeId = this.sessionId || this.resume;
     try {
-      for await (const m of this.q) this._onMessage(m);
+      spawnRunner({
+        id: this.id, cwd: this.cwd, model: this.model,
+        mode: this.permissionMode, resume: resumeId,
+      });
     } catch (err) {
-      if (!this._engineStopping) {
-        this._push({ type: 'error', message: String(err?.message || err).slice(0, 400) });
+      this._push({ type: 'error', message: `No pude lanzar el motor: ${String(err?.message || err).slice(0, 200)}` });
+      return false;
+    }
+    const link = await connectRunner(this.id);
+    if (!link) {
+      this._push({ type: 'error', message: 'El motor de chat no arrancó (mirá ~/.cwc-data/chats/*.log).' });
+      return false;
+    }
+    this._adoptLink(link);
+    return true;
+  }
+
+  // Cablea un link (recién lanzado o reconectado tras un reinicio del server).
+  _adoptLink(link) {
+    this.link = link;
+    this.alive = true;
+    this._engineStopping = false;
+    this._downAnnounced = false;
+    link.onEvent = (e) => this._onRunnerEvent(e);
+    link.onClose = () => {
+      if (this.link !== link) return;
+      this.link = null;
+      // Si el runner murió sin mandar 'closed' (kill duro), anunciamos acá.
+      this._engineDown(!this.closed && !!this.sessionId);
+    };
+  }
+
+  _onRunnerEvent(e) {
+    this.lastActivity = Date.now();
+    switch (e.type) {
+      case 'init': {
+        const hadSession = !!this.sessionId;
+        this.sessionId = e.sessionId || this.sessionId;
+        if (!hadSession && this.sessionId) this.onUpdate?.(); // recién ahora es persistible
+        this._push({ ...e, chatId: this.id }, { record: false });
+        return;
       }
-    } finally {
-      this.alive = false;
-      // Denegar permisos colgados.
-      for (const [, p] of this.pendingPerms) p.resolve({ behavior: 'deny', message: 'Conversación cerrada.' });
-      this.pendingPerms.clear();
-      // Despertar a quien esté esperando la muerte del motor (traspaso a TUI).
-      const waiters = this._engineWaiters;
-      this._engineWaiters = [];
-      for (const w of waiters) { try { w(); } catch { /* noop */ } }
-      // Si el motor murió por un traspaso, NO anunciamos 'closed' (la
-      // conversación sigue viva en modo TUI).
-      if (!this._engineStopping) {
+      case 'delta':
+        this._broadcast(e); // deltas NO van al history
+        return;
+      case 'status':
+        this._setStatus(e.state);
+        return;
+      case 'mode':
+        this.permissionMode = e.mode;
+        this._push(e);
+        return;
+      case 'result': {
+        const hadSession = !!this.sessionId;
+        this.sessionId = e.sessionId || this.sessionId;
+        if (!hadSession && this.sessionId) this.onUpdate?.();
         this._setStatus('waiting');
-        // resumable: el motor murió (sueño por inactividad, crash) pero la
-        // conversación NO — el próximo mensaje la revive con resume.
-        const resumable = !this.closed && !!this.sessionId;
-        this._push({ type: 'closed', resumable }, { record: false });
+        this._push(e);
+        return;
       }
+      case 'closed':
+        this._engineDown(e.resumable);
+        return;
+      default:
+        // assistant / tool_use / tool_result / permission_* / error / user
+        this._push(e);
     }
   }
 
-  // Duerme el motor por inactividad: libera el subproceso (RAM) SIN cerrar la
-  // conversación. La tarjeta persiste y sendUser() la revive con resume.
-  sleep() {
-    if (!this.alive || this.viewMode !== 'chat') return;
-    this.input.end();
-    try { this.q?.close?.(); } catch { /* noop */ }
+  // El motor murió (evento 'closed' del runner, o socket cortado sin aviso).
+  _engineDown(resumable) {
+    if (this._downAnnounced) return;
+    this._downAnnounced = true;
+    this.alive = false;
+    const waiters = this._engineWaiters;
+    this._engineWaiters = [];
+    for (const w of waiters) { try { w(); } catch { /* noop */ } }
+    if (!this._engineStopping) {
+      this._setStatus('waiting');
+      // resumable: el motor murió (sueño, crash) pero la conversación NO — el
+      // próximo mensaje la revive con resume.
+      this._push({ type: 'closed', resumable: !!resumable && !this.closed && !!this.sessionId }, { record: false });
+    }
   }
 
-  // Espera a que el motor de chat (query SDK) muera; true si murió, false si timeout.
+  // Duerme el motor por inactividad: el runner sale limpio SIN cerrar la
+  // conversación. (El runner además se auto-duerme aunque el server no esté.)
+  sleep() {
+    if (!this.alive || this.viewMode !== 'chat') return;
+    this.link?.send({ t: 'sleep' });
+  }
+
+  // Espera a que el motor muera; true si murió, false si timeout.
   _waitEngineDown(timeoutMs) {
     if (!this.alive) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -277,10 +282,10 @@ class Chat {
     }
     this.viewMode = 'switching';
     this._broadcast({ type: 'viewmode', viewMode: 'switching' });
-    // 1. Cerrar el motor de chat y ESPERAR su muerte (verificado).
+    // 1. Dormir el motor (runner sale con resume disponible) y ESPERAR su
+    //    muerte verificada. 'sleep' y no 'close': la conversación sigue viva.
     this._engineStopping = true;
-    this.input.end();
-    try { await this.q?.close?.(); } catch { /* noop */ }
+    this.link?.send({ t: 'sleep' });
     const died = await this._waitEngineDown(SWITCH_CLOSE_MS);
     if (!died) {
       // No pudimos cerrar el chat: NO abrimos la TUI (nunca ambos activos).
@@ -289,7 +294,7 @@ class Chat {
       this._broadcast({ type: 'viewmode', viewMode: 'chat', error: 'No se pudo cerrar el chat; sigue en modo Chat.' });
       return { ok: false, error: 'No se pudo cerrar el motor de chat a tiempo.' };
     }
-    // 2. Abrir la TUI (bare pty) retomando la MISMA sesión.
+    // 2. Abrir la TUI (tmux oculta cwct-) retomando la MISMA sesión.
     const term = sessionManager.createBare({
       cwd: this.cwd,
       command: { file: 'claude', args: ['--resume', this.sessionId] },
@@ -320,10 +325,10 @@ class Chat {
     }
     if (this.terminalId) { sessionManager.remove(this.terminalId); this.terminalId = null; }
     // Recargar la conversación desde el transcript (la TUI pudo agregar turnos)
-    // y reabrir el motor de chat sobre la misma sesión.
+    // y reabrir el motor sobre la misma sesión.
     if (this.sessionId) this.history = loadTranscriptEvents(this.cwd, this.sessionId);
-    this._startChatEngine();
     this.viewMode = 'chat';
+    await this._ensureEngine();
     // Reenviar el history recargado + anunciar el nuevo modo.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
@@ -334,145 +339,50 @@ class Chat {
     return { ok: true, viewMode: 'chat' };
   }
 
-  _onMessage(m) {
-    this.lastActivity = Date.now();
-    if (m.type === 'system' && m.subtype === 'init') {
-      const hadSession = !!this.sessionId;
-      this.sessionId = m.session_id || this.sessionId;
-      if (!hadSession && this.sessionId) this.onUpdate?.(); // recién ahora es persistible
-      this._push({ type: 'init', chatId: this.id, sessionId: this.sessionId, model: m.model || this.model, cwd: this.cwd, mode: this.permissionMode }, { record: false });
-      return;
-    }
-    if (m.type === 'stream_event') {
-      const ev = m.event;
-      if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
-        this._broadcast({ type: 'delta', text: ev.delta.text }); // deltas NO van al history
-      }
-      return;
-    }
-    if (m.type === 'assistant') {
-      // Mensaje completo: el texto final TAMBIÉN va en vivo (el cliente
-      // reemplaza la burbuja de streaming por la versión markdown).
-      const blocks = m.message?.content || [];
-      for (const b of blocks) {
-        if (b.type === 'text' && b.text) this._push({ type: 'assistant', text: b.text });
-        if (b.type === 'tool_use') {
-          this._push({
-            type: 'tool_use', id: b.id, name: b.name,
-            summary: toolSummary(b.name, b.input),
-            detail: toolDetail(b.name, b.input),
-          });
-        }
-      }
-      return;
-    }
-    if (m.type === 'user') {
-      // Resultados de herramientas (los mensajes user del SDK traen tool_result).
-      const blocks = m.message?.content;
-      if (Array.isArray(blocks)) {
-        for (const b of blocks) {
-          if (b.type === 'tool_result') {
-            this._push({
-              type: 'tool_result', id: b.tool_use_id,
-              ok: !b.is_error,
-              output: trim(resultText(b.content), 2000),
-            });
-          }
-        }
-      }
-      return;
-    }
-    if (m.type === 'result') {
-      const hadSession = !!this.sessionId;
-      this.sessionId = m.session_id || this.sessionId;
-      if (!hadSession && this.sessionId) this.onUpdate?.();
-      this._setStatus('waiting');
-      this._push({
-        type: 'result',
-        subtype: m.subtype,
-        costUsd: m.total_cost_usd ?? null,
-        usage: m.usage ? { input: m.usage.input_tokens, output: m.usage.output_tokens } : null,
-        ms: m.duration_ms ?? null,
-      });
-    }
-  }
-
-  _askPermission(toolName, input, ctx) {
-    return new Promise((resolve) => {
-      const id = `p${++this._permSeq}`;
-      const timer = setTimeout(() => {
-        this.pendingPerms.delete(id);
-        resolve({ behavior: 'deny', message: 'Sin respuesta del usuario (timeout).' });
-        this._push({ type: 'permission_closed', id, allow: false, reason: 'timeout' });
-      }, PERMISSION_TIMEOUT_MS);
-      ctx?.signal?.addEventListener?.('abort', () => {
-        clearTimeout(timer);
-        this.pendingPerms.delete(id);
-        resolve({ behavior: 'deny', message: 'Cancelado.' });
-      });
-      this.pendingPerms.set(id, { resolve, timer, input });
-      this._push({
-        type: 'permission_request', id, tool: toolName,
-        summary: toolSummary(toolName, input),
-        detail: toolDetail(toolName, input),
-      });
-    });
-  }
-
   answerPermission(id, allow) {
-    const p = this.pendingPerms.get(id);
-    if (!p) return;
-    clearTimeout(p.timer);
-    this.pendingPerms.delete(id);
-    p.resolve(allow
-      ? { behavior: 'allow', updatedInput: p.input }
-      : { behavior: 'deny', message: 'Denegado por el usuario.' });
-    this._push({ type: 'permission_closed', id, allow });
+    this.link?.send({ t: 'perm', id, allow: !!allow });
   }
 
   sendUser(text) {
     if (this.closed) return;
-    // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
-    if (!this.alive) {
-      if (this.viewMode !== 'chat') return;
-      this._startChatEngine();
-    }
+    if (!this.alive && this.viewMode !== 'chat') return;
     this.lastActivity = Date.now();
     this._setStatus('working');
     this._push({ type: 'user', text });
-    this.input.push({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-      session_id: this.sessionId || '',
+    // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
+    this._ensureEngine().then((ok) => {
+      if (ok !== false) this.link?.send({ t: 'user', text });
     });
   }
 
-  async interrupt() {
-    try { await this.q?.interrupt?.(); } catch { /* noop */ }
+  interrupt() {
+    this.link?.send({ t: 'interrupt' });
     this._setStatus('waiting');
   }
 
-  async setMode(mode) {
+  setMode(mode) {
     if (!PERMISSION_MODES.has(mode)) return;
-    try {
-      await this.q?.setPermissionMode?.(mode);
+    if (this.link) {
+      // El cambio real lo confirma el runner con su evento 'mode'.
+      this.link.send({ t: 'set_mode', mode });
+    } else {
+      // Motor dormido: queda para el próximo arranque (--mode).
       this.permissionMode = mode;
       this._push({ type: 'mode', mode });
-    } catch { /* noop */ }
+    }
   }
 
   close() {
     this.closed = true;
-    // Si estaba en TUI, matar la sesión bare para no dejar el proceso huérfano.
+    // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);
       if (t) t.kill();
       sessionManager.remove(this.terminalId);
       this.terminalId = null;
     }
-    this.input.end();
-    try { this.q?.close?.(); } catch { /* noop */ }
+    this._engineStopping = true;
+    this.link?.send({ t: 'close' });
     this.alive = false;
   }
 
@@ -525,8 +435,8 @@ class ChatManager {
       const now = Date.now();
       let dirty = false;
       for (const [id, c] of this.chats) {
-        // Inactiva => DORMIR el motor (libera RAM, la conversación persiste;
-        // el próximo mensaje la revive). Una TUI viva se respeta.
+        // Inactiva => DORMIR el motor (el runner también se auto-duerme solo;
+        // esto lo apura si el server sí está). Una TUI viva se respeta.
         if (c.viewMode === 'chat' && c.alive && now - c.lastActivity > SLEEP_MS) c.sleep();
         // Cerradas explícitamente: se descartan a los 90 min.
         if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
@@ -570,11 +480,12 @@ class ChatManager {
     } catch { /* best-effort */ }
   }
 
-  // Al arrancar: reconstruye las conversaciones como DORMIDAS (sin motor).
-  // El history se rearma del transcript; el primer mensaje revive el motor
-  // con resume. Una TUI previa (tmux oculta cwct-) SOBREVIVE al server: si
-  // sigue viva se re-adjunta y la conversación vuelve en modo TUI.
-  rehydrate() {
+  // Al arrancar: reconstruye las conversaciones guardadas. El motor pudo
+  // SOBREVIVIR al server (runner desacoplado): si su socket contesta nos
+  // RECONECTAMOS con historial mixto transcript(hasta que arrancó el runner) +
+  // vida del runner. Si no contesta, queda DORMIDA (el próximo mensaje la
+  // revive con resume). Una TUI previa (tmux cwct- viva) se re-adjunta.
+  async rehydrate() {
     let saved = [];
     try { saved = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8')); } catch { saved = []; }
     let count = 0;
@@ -586,9 +497,7 @@ class ChatManager {
         resume: s.sessionId,
       });
       chat.onUpdate = () => this.persist();
-      chat.alive = false; // dormida: sin start(), sin subproceso
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
-      chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
       chat.lastActivity = s.lastActivity || Date.now();
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
         // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
@@ -600,17 +509,52 @@ class ChatManager {
         });
         chat.terminalId = term.id;
         chat.viewMode = 'tui';
+        chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
+      } else {
+        // ¿El runner sobrevivió? (crash del server con turno en curso)
+        const link = await tryConnectRunner(chat.id);
+        const hello = link ? await link.hello() : null;
+        if (link && hello) {
+          chat.sessionId = (UUID_RE.test(hello.sessionId || '') && hello.sessionId) || chat.sessionId;
+          if (PERMISSION_MODES.has(hello.mode)) chat.permissionMode = hello.mode;
+          const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null);
+          chat.history = [...base, ...(hello.events || [])].slice(-HISTORY_MAX);
+          chat.status = hello.status === 'working' ? 'working' : 'waiting';
+          chat._adoptLink(link);
+          console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
+        } else {
+          link?.close();
+          chat.history = loadTranscriptEvents(chat.cwd, s.sessionId); // dormida
+        }
       }
       this.chats.set(s.id, chat);
       count += 1;
     }
-    // Tmux ocultas cwct- sin conversación dueña (p.ej. la tarjeta se descartó
-    // mientras el server no corría): matarlas para no dejar claudes huérfanos.
-    const owned = new Set([...this.chats.values()].map((c) => c.terminalId).filter(Boolean));
-    for (const tid of listBareTmuxIds()) {
-      if (!owned.has(tid)) killBareTmux(tid);
-    }
+    this._cleanupOrphans();
     return count;
+  }
+
+  // Motores/TUIs sin conversación dueña (p.ej. la tarjeta se descartó mientras
+  // el server no corría): cerrarlos para no dejar procesos huérfanos.
+  async _cleanupOrphans() {
+    const ownedTerms = new Set([...this.chats.values()].map((c) => c.terminalId).filter(Boolean));
+    for (const tid of listBareTmuxIds()) {
+      if (!ownedTerms.has(tid)) killBareTmux(tid);
+    }
+    let socks = [];
+    try { socks = fss.readdirSync(CHATS_DIR).filter((f) => f.endsWith('.sock')); } catch { return; }
+    for (const f of socks) {
+      const id = f.slice(0, -'.sock'.length);
+      if (this.chats.has(id)) continue;
+      const link = await tryConnectRunner(id);
+      if (link) {
+        console.log(`[chat] runner huérfano ${id}: cerrando`);
+        link.send({ t: 'close' });
+        setTimeout(() => link.close(), 2000).unref?.();
+      } else {
+        try { fss.unlinkSync(path.join(CHATS_DIR, f)); } catch { /* noop */ }
+      }
+    }
   }
 
   liveSessionIds() {
@@ -629,8 +573,9 @@ export default {
   name: 'chat',
 
   init() {
-    const n = manager.rehydrate();
-    if (n) console.log(`[chat] ${n} conversación(es) rehidratada(s) (dormidas; el próximo mensaje las revive)`);
+    manager.rehydrate().then((n) => {
+      if (n) console.log(`[chat] ${n} conversación(es) rehidratada(s)`);
+    }).catch((err) => console.error('[chat] rehidratación falló:', err));
   },
 
   registerHttp(router) {
