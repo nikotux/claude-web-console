@@ -5,6 +5,7 @@
 // y detener. El input es un TEXTAREA normal: el dictado por voz del teléfono
 // funciona nativo (el motivo de esta migración). Markdown/diffs llegan en 4b.
 import { icon } from '../../ui/icons.js';
+import { renderMarkdown } from '../../ui/markdown.js';
 
 const MODES = [
   ['default', 'Preguntar'],
@@ -106,7 +107,7 @@ export class ChatTab {
         this._setWorking(m.status === 'working');
         break;
       case 'user': this._closeStream(); this._bubble('user', m.text); break;
-      case 'assistant': this._closeStream(); this._bubble('assistant', m.text); break;
+      case 'assistant': this._assistantFinal(m.text); break;
       case 'delta': this._stream(m.text); break;
       case 'tool_use': this._closeStream(); this._toolLine(m); break;
       case 'permission_request': this._permCard(m); break;
@@ -136,6 +137,23 @@ export class ChatTab {
   _stream(text) {
     if (!this.streamEl) this.streamEl = this._bubble('assistant streaming', '');
     this.streamEl.textContent += text;
+    this._scroll();
+  }
+
+  // Texto final del asistente: reemplaza la burbuja de streaming (texto plano)
+  // por la versión renderizada en markdown.
+  _assistantFinal(text) {
+    const md = renderMarkdown(text);
+    if (this.streamEl) {
+      this.streamEl.classList.remove('streaming');
+      this.streamEl.replaceChildren(md);
+      this.streamEl = null;
+    } else {
+      const el = document.createElement('div');
+      el.className = 'chat-msg chat-assistant';
+      el.appendChild(md);
+      this.msgsEl.appendChild(el);
+    }
     this._scroll();
   }
 

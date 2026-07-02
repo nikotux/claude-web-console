@@ -126,10 +126,11 @@ class Chat {
       return;
     }
     if (m.type === 'assistant') {
-      // Mensaje completo: reconciliamos el texto final y las tool calls.
+      // Mensaje completo: el texto final TAMBIÉN va en vivo (el cliente
+      // reemplaza la burbuja de streaming por la versión markdown).
       const blocks = m.message?.content || [];
       for (const b of blocks) {
-        if (b.type === 'text' && b.text) this._push({ type: 'assistant', text: b.text }, { broadcast: false });
+        if (b.type === 'text' && b.text) this._push({ type: 'assistant', text: b.text });
         if (b.type === 'tool_use') this._push({ type: 'tool_use', name: b.name, summary: toolSummary(b.name, b.input) });
       }
       return;

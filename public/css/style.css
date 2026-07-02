@@ -372,6 +372,39 @@ html, body {
 .chat-perm-badge.no { color: var(--cwc-danger); }
 
 .chat-turn-cost { align-self: flex-start; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); padding-left: .2rem; }
+
+/* Markdown dentro de burbujas del asistente */
+.chat-md { white-space: normal; }
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md p { margin: .35rem 0; }
+.chat-md ul, .chat-md ol { margin: .35rem 0; padding-left: 1.3rem; }
+.chat-md li { margin: .15rem 0; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4 { margin: .7rem 0 .3rem; font-size: var(--cwc-fs-lg); }
+.chat-md a { color: var(--cwc-accent); }
+.chat-md blockquote {
+  margin: .4rem 0; padding: .1rem .7rem; border-left: 3px solid var(--cwc-border-strong);
+  color: var(--cwc-text-secondary);
+}
+.chat-md code {
+  font-family: var(--cwc-font-mono); font-size: .92em;
+  background: var(--cwc-bg); border-radius: 4px; padding: .08em .35em;
+}
+.chat-md pre {
+  margin: 0; padding: .6rem .7rem; overflow-x: auto;
+  background: var(--cwc-bg); border-radius: var(--cwc-radius-md);
+}
+.chat-md pre code { background: none; padding: 0; font-size: var(--cwc-fs-sm); }
+.chat-md table { border-collapse: collapse; margin: .4rem 0; font-size: var(--cwc-fs-sm); }
+.chat-md th, .chat-md td { border: 1px solid var(--cwc-border-soft); padding: .25rem .5rem; }
+.md-codewrap { position: relative; margin: .45rem 0; }
+.md-copy {
+  position: absolute; top: .35rem; right: .35rem;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-strong);
+  color: var(--cwc-text-secondary); border-radius: var(--cwc-radius-sm);
+  padding: .2rem .35rem; cursor: pointer; opacity: .7; display: inline-flex;
+}
+.md-copy:hover { opacity: 1; border-color: var(--cwc-accent); color: var(--cwc-accent); }
 .chat-error { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
 .chat-closed-note { text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .4rem; }
 
