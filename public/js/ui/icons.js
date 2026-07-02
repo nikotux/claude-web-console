@@ -39,6 +39,8 @@ const PATHS = {
   eye: `<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>`,
   logout: `<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"/><polyline points="15,16 20,12 15,8"/><line x1="20" y1="12" x2="9" y2="12"/>`,
   archive: `<rect x="3" y="8" width="18" height="12" rx="1.5"/><path d="M3 8V5.5A1.5 1.5 0 0 1 4.5 4h15A1.5 1.5 0 0 1 21 5.5V8"/><line x1="10" y1="12" x2="14" y2="12"/>`,
+  more: `<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>`,
+  edit: `<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14.5 7.5l3 3"/>`,
 };
 
 // Devuelve markup <svg>…</svg> para el nombre dado. Si no existe, un círculo

@@ -117,38 +117,56 @@ html, body {
   font-size: var(--cwc-fs-xs); padding: 0 .4rem; min-width: 1.2em; text-align: center;
 }
 
-/* ===== Sesiones (lista; tarjetas ricas en la fase siguiente) ===== */
-.sess-list { padding: 0 .4rem; }
-.tmux-grp-h { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); padding: .3rem .3rem .1rem; }
-.tmux-row {
-  display: flex; flex-direction: column; gap: .25rem;
-  padding: .3rem .35rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
+/* ===== Sesiones: tarjetas ===== */
+.sess-list { padding: 0 .45rem; display: flex; flex-direction: column; gap: .3rem; }
+.sess-card {
+  display: flex; align-items: stretch; gap: .25rem;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md); padding: .3rem;
 }
-.tmux-row:hover { background: var(--cwc-bg-hover); }
-.tmux-line { display: flex; align-items: center; gap: .3rem; }
-.tmux-row.owned .tmux-name { color: var(--cwc-accent); }
-.tmux-info { display: flex; align-items: center; gap: .3rem; flex: 1; overflow: hidden; }
-.tmux-dot { color: var(--cwc-text-dimmer); }
-.tmux-dot.on { color: var(--cwc-ok); }
-.tmux-name { overflow: hidden; text-overflow: ellipsis; }
-.tmux-cwd { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
-.tmux-actions { display: flex; gap: .3rem; }
-.tmux-actions .btn-ghost { flex: 1; }
-.tmux-curmodel {
-  display: flex; align-items: center; gap: .35rem;
-  font-size: var(--cwc-fs-sm); font-weight: 600; padding: 0 .1rem;
+.sess-card:hover { border-color: var(--cwc-border-strong); }
+.sess-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: .5rem;
+  background: none; border: 0; color: var(--cwc-text); cursor: pointer;
+  padding: .3rem .35rem; border-radius: var(--cwc-radius-sm); text-align: left;
+  min-height: 40px;
 }
-.tmux-flag { width: 18px; height: 4px; border-radius: 2px; flex: none; box-shadow: 0 0 3px rgba(0,0,0,.4); }
-.tmux-flag.off { background: var(--cwc-border-strong); box-shadow: none; }
-.tmux-nomodel { color: var(--cwc-text-dimmer); font-weight: 400; }
-.tmux-model {
-  width: 100%; background: var(--cwc-bg-panel); color: var(--cwc-text-secondary);
-  border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm);
-  font-size: var(--cwc-fs-xs); padding: .18rem .3rem;
+.sess-main:hover { background: var(--cwc-bg-hover); }
+.sess-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--cwc-fs-md); font-weight: 600;
 }
-.tmux-model:hover { border-color: var(--cwc-border-strong); }
-.tmux-msg { padding: .4rem .6rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); }
-.tmux-msg.tmux-err { color: var(--cwc-danger-strong); }
+.sess-model { flex: none; font-size: var(--cwc-fs-xs); font-weight: 600; }
+.sess-menu { align-self: center; }
+
+/* Punto de estado */
+.sess-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--cwc-border-strong); }
+.sess-dot.st-shell { background: var(--cwc-border-strong); }
+.sess-dot.st-idle { background: var(--cwc-ok); opacity: .45; }
+.sess-dot.st-waiting { background: var(--cwc-ok); }
+.sess-dot.st-stale { background: var(--cwc-warn); opacity: .45; }
+.sess-dot.st-working { background: var(--cwc-warn); animation: sess-pulse 1.2s ease-in-out infinite; }
+@keyframes sess-pulse { 50% { opacity: .3; } }
+
+/* Otras sesiones tmux (colapsado por defecto) */
+.sess-others { margin-top: .35rem; }
+.sess-others summary {
+  cursor: pointer; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
+  text-transform: uppercase; letter-spacing: .04em; padding: .3rem .35rem;
+  display: flex; align-items: center; gap: .4rem; user-select: none;
+}
+.sess-others[open] summary { margin-bottom: .3rem; }
+.sess-others .sess-card { margin-bottom: .3rem; }
+
+/* Menú ⋯ de tarjeta */
+.sess-menu-list { display: flex; flex-direction: column; gap: .35rem; }
+.sess-menu-item { justify-content: flex-start; }
+.sess-plumbing {
+  margin: .7rem 0 0; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer);
+  font-family: var(--cwc-font-mono); word-break: break-all;
+}
+.sess-msg { padding: .4rem .6rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); }
+.sess-msg.sess-err { color: var(--cwc-danger-strong); }
 
 /* ===== Tarjeta Tolkien ===== */
 .tk-chip { font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .3rem; display: inline-flex; align-items: center; }

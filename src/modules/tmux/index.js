@@ -8,10 +8,30 @@
 // HTTP:
 //   GET  /api/tmux/sessions            -> sesiones de todos los sockets
 //   POST /api/tmux/kill  { socket, session }  -> mata una sesión
+//   POST /api/tmux/set-model { socket, session, model }
+//   POST /api/tmux/title { socket, session, title } -> nombre humano custom
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
+
+// ===== Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux,
+// que es plomería y sostiene la rehidratación). Persisten en titles.json. =====
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TITLES_FILE = path.join(__dirname, '..', '..', '..', 'titles.json');
+
+function loadTitles() {
+  try { return JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8')).titles || {}; }
+  catch { return {}; }
+}
+function saveTitles(titles) {
+  try { fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2)); }
+  catch { /* noop */ }
+}
+const titleKey = (socketName, name) => `${socketName}/${name}`;
 
 // Formato tabulado para parsear sin ambigüedad.
 const FMT = [
@@ -54,11 +74,34 @@ export default {
     r.get('/sessions', (req, res) => {
       const all = [];
       for (const sock of listSockets()) all.push(...listSessionsForSocket(sock));
-      // Adjuntas primero, luego por socket y nombre.
       all.sort((a, b) =>
         a.socketName === b.socketName ? a.name.localeCompare(b.name) : a.socketName.localeCompare(b.socketName),
       );
+      // Títulos custom + poda de huérfanos (sesiones que ya no existen).
+      const titles = loadTitles();
+      const valid = new Set(all.map((s) => titleKey(s.socketName, s.name)));
+      let dirty = false;
+      for (const k of Object.keys(titles)) {
+        if (!valid.has(k)) { delete titles[k]; dirty = true; }
+      }
+      if (dirty) saveTitles(titles);
+      for (const s of all) s.customTitle = titles[titleKey(s.socketName, s.name)] || null;
       res.json({ sessions: all });
+    });
+
+    // Nombre humano de una tarjeta (vacío = volver al nombre por defecto).
+    r.post('/title', (req, res) => {
+      const { socket, session, title } = req.body || {};
+      const socketPath = validateSocketPath(socket);
+      if (!socketPath) return res.status(400).json({ error: 'Socket inválido.' });
+      if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
+      const clean = String(title || '').trim().slice(0, 60);
+      const titles = loadTitles();
+      const key = titleKey(path.basename(socketPath), session);
+      if (clean) titles[key] = clean;
+      else delete titles[key];
+      saveTitles(titles);
+      res.json({ ok: true, title: clean || null });
     });
 
     // Fija el modelo de una sesión de Claude Code inyectando `/model <x>` por

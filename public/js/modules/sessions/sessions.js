@@ -1,17 +1,26 @@
 // modules/sessions/sessions.js — "Sesiones": retomar trabajo.
 //
-// Sección principal del sidebar, SIEMPRE visible (sin acordeón). Lista las
-// sesiones tmux de todos los sockets; adjuntar = abrir pestaña; matar y el
-// selector de modelo van con diálogos propios. Las tarjetas ricas (estado
-// real, nombre editable) llegan en la Fase 3 — este es el port del panel
-// anterior al patrón de módulos.
+// TARJETAS: nombre humano grande (custom o basename del cwd), punto de estado
+// (● trabajando / ○ esperando / gris shell), modelo con su color de identidad.
+// Tap en la tarjeta = adjuntar (o enfocar si ya está abierta). Lo demás vive
+// en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
+// La plomería (nombre tmux, socket, ruta) va al tooltip.
+// Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
 import { modelColor } from '../../ui/models.js';
+
+const MODEL_OPTIONS = [
+  ['opusplan', 'Auto (Opus plan / Sonnet)'],
+  ['opus', 'Opus'],
+  ['sonnet', 'Sonnet'],
+  ['haiku', 'Haiku'],
+  ['default', 'Default de la cuenta'],
+];
 
 export default {
   name: 'sessions',
 
   mount(el, ctx) {
-    const { icon, dialog, bus, openSession } = ctx;
+    const { icon, dialog, bus, openSession, focusSession } = ctx;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -26,119 +35,158 @@ export default {
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
     bus.addEventListener('sessions-changed', refresh);
 
-    const shortCwd = (p) => {
+    const baseName = (p) => {
       const parts = (p || '').split('/').filter(Boolean);
-      return parts.length ? parts[parts.length - 1] : p || '';
+      return parts.length ? parts[parts.length - 1] : '~';
     };
+    const displayName = (s) => s.customTitle || (s.cwd ? baseName(s.cwd) : s.name);
+    const plumbing = (s) => `tmux: ${s.name} · socket ${s.socketName}${s.cwd ? ` · ${s.cwd}` : ''}`;
+
+    function fmtAgo(ms) {
+      if (!ms) return '';
+      const s = Math.floor((Date.now() - ms) / 1000);
+      if (s < 60) return 'hace instantes';
+      if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+      return `hace ${Math.floor(s / 86400)} d`;
+    }
+
+    // Estado → clase y texto del punto. Sin datos de estado: modelo detectado
+    // implica Claude presente (esperando genérico); sin modelo = shell.
+    function dotInfo(s) {
+      const st = s.state?.status;
+      if (st === 'working') return { cls: 'st-working', label: `trabajando · ${fmtAgo(s.state.ts)}` };
+      if (st === 'waiting') return { cls: 'st-waiting', label: `esperando input · ${fmtAgo(s.state.ts)}` };
+      if (st === 'stale') return { cls: 'st-stale', label: `sin señales · ${fmtAgo(s.state.ts)}` };
+      if (s.model) return { cls: 'st-idle', label: 'Claude presente' };
+      return { cls: 'st-shell', label: 'shell (sin Claude)' };
+    }
+
+    async function fetchSessions() {
+      const res = await fetch('/api/tmux/sessions');
+      if (!res.ok) throw new Error();
+      return (await res.json()).sessions;
+    }
 
     async function refresh() {
       listEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
       try {
-        const res = await fetch('/api/tmux/sessions');
-        if (!res.ok) throw new Error();
-        const { sessions } = await res.json();
-        render(sessions);
+        render(await fetchSessions());
       } catch {
-        listEl.innerHTML = '<div class="tmux-msg tmux-err">No se pudieron listar las sesiones.</div>';
+        listEl.innerHTML = '<div class="sess-msg sess-err">No se pudieron listar las sesiones.</div>';
       }
     }
 
     function render(sessions) {
       countEl.textContent = sessions.length ? String(sessions.length) : '';
-      if (!sessions.length) {
-        listEl.innerHTML = '<div class="tmux-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
+      const owned = sessions.filter((s) => s.owned);
+      const others = sessions.filter((s) => !s.owned);
+
+      listEl.innerHTML = '';
+      if (!owned.length && !others.length) {
+        listEl.innerHTML = '<div class="sess-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
         return;
       }
-      const bySocket = new Map();
-      for (const s of sessions) {
-        if (!bySocket.has(s.socketName)) bySocket.set(s.socketName, []);
-        bySocket.get(s.socketName).push(s);
-      }
-      listEl.innerHTML = '';
-      for (const [sockName, list] of bySocket) {
-        const grp = document.createElement('div');
-        grp.className = 'tmux-grp';
-        grp.innerHTML = `<div class="tmux-grp-h">socket: ${sockName}</div>`;
-        for (const s of list) grp.appendChild(row(s));
-        listEl.appendChild(grp);
+      for (const s of owned) listEl.appendChild(card(s));
+
+      if (others.length) {
+        const det = document.createElement('details');
+        det.className = 'sess-others';
+        det.innerHTML = `<summary>Otras sesiones tmux <span class="side-count">${others.length}</span></summary>`;
+        for (const s of others) det.appendChild(card(s));
+        listEl.appendChild(det);
       }
     }
 
-    function setCurModel(elm, model) {
-      if (!elm) return;
-      if (model) {
-        const color = modelColor(model.key);
-        elm.innerHTML = `<span class="tmux-flag" style="background:${color}"></span>${model.name}`;
-        elm.style.color = color;
-        elm.title = `Modelo en uso: ${model.name} (${model.id})`;
-      } else {
-        elm.innerHTML = '<span class="tmux-flag off"></span><span class="tmux-nomodel">sin Claude</span>';
-        elm.style.color = '';
-        elm.title = 'No se detectó una sesión de Claude en uso';
+    function card(s) {
+      const elCard = document.createElement('div');
+      elCard.className = 'sess-card';
+      elCard.dataset.key = `${s.socket}\n${s.name}`;
+      elCard.title = plumbing(s);
+
+      const dot = dotInfo(s);
+      const main = document.createElement('button');
+      main.className = 'sess-main';
+      main.innerHTML = `
+        <span class="sess-dot ${dot.cls}" title="${dot.label}"></span>
+        <span class="sess-name">${displayName(s)}</span>
+        <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? s.model.name : ''}</span>`;
+      main.addEventListener('click', () => openCard(s));
+
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
+      menuBtn.innerHTML = icon('more', { size: 15 });
+      menuBtn.title = 'Opciones';
+      menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(s); });
+
+      elCard.append(main, menuBtn);
+      return elCard;
+    }
+
+    // Tap = LA acción: enfocar la pestaña si ya está abierta, si no adjuntar.
+    function openCard(s) {
+      if (s.owned) {
+        const tabId = s.name.replace(/^cwc-/, '');
+        if (focusSession(tabId)) return;
       }
+      openSession({ attach: { socket: s.socket, session: s.name }, title: displayName(s) });
     }
 
-    function row(s) {
-      const elm = document.createElement('div');
-      elm.className = 'tmux-row' + (s.owned ? ' owned' : '');
-      elm.dataset.key = `${s.socket}\n${s.name}`;
-
-      const line = document.createElement('div');
-      line.className = 'tmux-line';
-      const info = document.createElement('div');
-      info.className = 'tmux-info';
-      info.innerHTML = `
-        <span class="tmux-dot ${s.attached ? 'on' : ''}">${s.attached ? '●' : '○'}</span>
-        <span class="tmux-name">${s.name}</span>
-        <span class="tmux-cwd">${shortCwd(s.cwd)}</span>`;
-      line.append(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'tmux-actions';
-      const attachBtn = document.createElement('button');
-      attachBtn.className = 'btn-ghost btn--sm';
-      attachBtn.innerHTML = `${icon('play', { size: 13 })}<span>Adjuntar</span>`;
-      attachBtn.addEventListener('click', () => openSession({ attach: { socket: s.socket, session: s.name }, title: shortCwd(s.cwd) || s.name }));
-      const killBtn = document.createElement('button');
-      killBtn.className = 'btn-ghost btn--sm btn--danger';
-      killBtn.innerHTML = `${icon('trash', { size: 13 })}<span>Matar</span>`;
-      killBtn.addEventListener('click', () => kill(s));
-      actions.append(attachBtn, killBtn);
-
-      const cur = document.createElement('div');
-      cur.className = 'tmux-curmodel';
-      setCurModel(cur, s.model);
-
-      const sel = document.createElement('select');
-      sel.className = 'tmux-model';
-      sel.title = 'Modelo de Claude para esta sesión';
-      sel.innerHTML = `
-        <option value="" disabled selected>modelo…</option>
-        <option value="opusplan">Auto (Opus plan / Sonnet)</option>
-        <option value="opus">Opus</option>
-        <option value="sonnet">Sonnet</option>
-        <option value="haiku">Haiku</option>
-        <option value="default">Default</option>`;
-      sel.addEventListener('change', () => setModel(s, sel.value));
-
-      elm.append(line, actions, cur, sel);
-      return elm;
+    // Menú ⋯: renombrar / cambiar modelo / matar.
+    function openMenu(s) {
+      const m = dialog.openModal({ title: displayName(s), width: 320 });
+      m.body.innerHTML = `
+        <div class="sess-menu-list">
+          <button class="btn-ghost sess-menu-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
+          <button class="btn-ghost sess-menu-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
+          <button class="btn-ghost btn--danger sess-menu-item" data-act="kill">${icon('trash', { size: 15 })}<span>Matar sesión</span></button>
+        </div>
+        <p class="sess-plumbing">${plumbing(s)}</p>`;
+      m.body.querySelector('[data-act="rename"]').addEventListener('click', () => { m.close(); rename(s); });
+      m.body.querySelector('[data-act="model"]').addEventListener('click', () => { m.close(); pickModel(s); });
+      m.body.querySelector('[data-act="kill"]').addEventListener('click', () => { m.close(); kill(s); });
     }
 
-    async function setModel(s, model) {
-      if (!model) return;
-      try {
-        const res = await fetch('/api/tmux/set-model', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ socket: s.socket, session: s.name, model }),
+    async function rename(s) {
+      const name = await dialog.promptDialog({
+        title: 'Renombrar sesión',
+        message: 'Nombre para mostrar (vacío = volver al nombre de la carpeta).',
+        value: s.customTitle || '',
+        placeholder: displayName(s),
+      });
+      if (name === null) return;
+      await fetch('/api/tmux/title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ socket: s.socket, session: s.name, title: name }),
+      }).catch(() => {});
+      refresh();
+    }
+
+    function pickModel(s) {
+      const m = dialog.openModal({ title: 'Modelo de esta sesión', width: 320 });
+      m.body.innerHTML = `
+        <div class="sess-menu-list">
+          ${MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
+        </div>
+        <p class="sess-plumbing">Se envía /model a la sesión (solo tiene efecto si corre Claude Code).</p>`;
+      for (const b of m.body.querySelectorAll('[data-model]')) {
+        b.addEventListener('click', async () => {
+          m.close();
+          try {
+            const res = await fetch('/api/tmux/set-model', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ socket: s.socket, session: s.name, model: b.dataset.model }),
+            });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              dialog.alertDialog({ title: 'Modelo', message: d.error || 'No se pudo cambiar el modelo.' });
+            }
+          } catch {
+            dialog.alertDialog({ title: 'Modelo', message: 'No se pudo cambiar el modelo.' });
+          }
         });
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({}));
-          dialog.alertDialog({ title: 'Modelo', message: d.error || 'No se pudo cambiar el modelo.' });
-        }
-      } catch {
-        dialog.alertDialog({ title: 'Modelo', message: 'No se pudo cambiar el modelo.' });
       }
     }
 
@@ -146,8 +194,8 @@ export default {
       const ok = await dialog.confirmDialog({
         title: 'Matar sesión',
         message: s.owned
-          ? `Se cerrará definitivamente "${s.name}" y todo lo que corra adentro.`
-          : `"${s.name}" es una sesión externa (socket ${s.socketName}). Matarla puede interrumpir algo que estés usando por fuera.`,
+          ? `Se cierra definitivamente "${displayName(s)}" y todo lo que corra adentro.`
+          : `"${displayName(s)}" es una sesión externa (${plumbing(s)}). Matarla puede interrumpir algo que estés usando por fuera.`,
         confirmLabel: 'Matar',
         danger: true,
       });
@@ -167,19 +215,29 @@ export default {
       }
     }
 
-    // Mantiene vivas las etiquetas de modelo sin reconstruir la lista.
-    async function updateModelsInPlace() {
+    // Actualización EN SU LUGAR (cada 8 s): punto de estado, modelo y nombre,
+    // sin reconstruir la lista (no interrumpe menús abiertos).
+    async function updateInPlace() {
       if (document.hidden) return;
       try {
-        const { sessions } = await (await fetch('/api/tmux/sessions')).json();
-        const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s.model]));
-        for (const rowEl of listEl.querySelectorAll('.tmux-row')) {
-          if (map.has(rowEl.dataset.key)) setCurModel(rowEl.querySelector('.tmux-curmodel'), map.get(rowEl.dataset.key));
+        const sessions = await fetchSessions();
+        const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s]));
+        for (const cardEl of listEl.querySelectorAll('.sess-card')) {
+          const s = map.get(cardEl.dataset.key);
+          if (!s) continue;
+          const dot = dotInfo(s);
+          const dotEl = cardEl.querySelector('.sess-dot');
+          dotEl.className = `sess-dot ${dot.cls}`;
+          dotEl.title = dot.label;
+          cardEl.querySelector('.sess-name').textContent = displayName(s);
+          const modelEl = cardEl.querySelector('.sess-model');
+          modelEl.textContent = s.model ? s.model.name : '';
+          modelEl.style.color = s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)';
         }
       } catch { /* noop */ }
     }
-    setInterval(updateModelsInPlace, 8000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) updateModelsInPlace(); });
+    setInterval(updateInPlace, 8000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) updateInPlace(); });
 
     refresh();
   },
