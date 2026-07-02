@@ -347,6 +347,22 @@ html, body {
 .bk-actions { display: flex; gap: .3rem; align-items: center; }
 .bk-empty { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .4rem .1rem; }
 
+/* Backup del código a GitHub */
+.bk-git { margin-top: .9rem; padding-top: .7rem; border-top: 1px solid var(--cwc-border-strong); }
+.bk-git-title { display: flex; align-items: center; gap: .4rem; font-weight: 600; font-size: var(--cwc-fs-md); margin-bottom: .5rem; }
+.bk-git-title .cwc-icon { color: var(--cwc-accent); }
+.bk-git-hint { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .2rem 0 .4rem; line-height: 1.45; }
+.bk-git-cmds {
+  margin: 0 0 .5rem; padding: .5rem .6rem; background: var(--cwc-bg); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-sm); font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text); white-space: pre-wrap; word-break: break-all; overflow-x: auto;
+}
+.bk-git-remote { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .2rem 0; }
+.bk-git-remote code, .bk-git-out code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text); }
+.bk-git-out { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .2rem 0; }
+.bk-git-secrets { color: var(--cwc-warn); font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
+.bk-git .btn--block { margin-top: .5rem; }
+
 /* ===== Terminales ===== */
 #terminals { flex: 1; position: relative; min-width: 0; }
 .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; }

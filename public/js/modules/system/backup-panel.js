@@ -38,7 +38,12 @@ export function mountBackupPanel(el, ctx) {
   el.innerHTML = `
     <button class="btn btn--block" data-ref="create">${icon('archive', { size: 15 })}<span>Crear backup ahora</span></button>
     <p class="bk-msg" data-ref="msg" hidden></p>
-    <div class="bk-list" data-ref="list"></div>`;
+    <div class="bk-list" data-ref="list"></div>
+
+    <div class="bk-git">
+      <div class="bk-git-title">${icon('gitBranch', { size: 14 })}<span>Backup del código a GitHub</span></div>
+      <div class="bk-git-body" data-ref="git">cargando…</div>
+    </div>`;
 
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
@@ -140,6 +145,78 @@ export function mountBackupPanel(el, ctx) {
     }
   }
 
+  // ===== Backup del código a GitHub personal =====
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  async function loadGit() {
+    let info;
+    try { info = await (await fetch(`${API}/git-info`)).json(); }
+    catch { refs.git.innerHTML = '<div class="bk-empty">No se pudo leer el estado de git.</div>'; return; }
+
+    if (!info.isRepo) {
+      refs.git.innerHTML = '<div class="bk-empty">El proyecto no es un repositorio git.</div>';
+      return;
+    }
+
+    const excluded = (info.excluded || []).join(' · ') || '(ninguno en disco)';
+
+    // Sin remote `personal`: mostrar los comandos exactos para que los corra el usuario.
+    if (!info.remote) {
+      refs.git.innerHTML = `
+        <p class="bk-git-hint">No hay remote <b>personal</b>. Creá un repo <b>privado</b> vacío en GitHub y agregá el remote (los comandos son tuyos, la app no lo configura):</p>
+        <pre class="bk-git-cmds">${esc((info.setupCommands || []).join('\n'))}</pre>
+        <p class="bk-git-out">Queda FUERA del push (ignorado): <span class="bk-git-secrets">${esc(excluded)}</span></p>`;
+      return;
+    }
+
+    if (info.remote.forbidden) {
+      refs.git.innerHTML = `
+        <p class="bk-msg err">El remote <b>personal</b> apunta a <b>Mordor-Staffing</b> (${esc(info.remote.url)}). Push BLOQUEADO por seguridad.</p>`;
+      return;
+    }
+
+    refs.git.innerHTML = `
+      <p class="bk-git-remote">→ <code>${esc(info.remote.url)}</code> · rama <b>${esc(info.branch)}</b></p>
+      <p class="bk-git-out">Queda FUERA (ignorado): <span class="bk-git-secrets">${esc(excluded)}</span></p>
+      ${info.untracked?.length ? `<p class="bk-git-out">No se subirán ${info.untracked.length} archivo(s) sin trackear (agregalos a git a mano si querés incluirlos).</p>` : ''}
+      <p class="bk-git-out">${info.dirtyCount ? `${info.dirtyCount} cambio(s) trackeado(s) pendientes` : 'Sin cambios pendientes'}${info.lastCommit ? ` · último: <code>${esc(info.lastCommit)}</code>` : ''}</p>
+      <button class="btn btn--block" data-ref="push">${icon('upload', { size: 15 })}<span>Push a GitHub ahora</span></button>
+      <p class="bk-msg" data-ref="gmsg" hidden></p>`;
+
+    const pushBtn = refs.git.querySelector('[data-ref="push"]');
+    const gmsg = refs.git.querySelector('[data-ref="gmsg"]');
+    const setGMsg = (t, kind = 'info') => { gmsg.textContent = t; gmsg.className = `bk-msg ${kind}`; gmsg.hidden = !t; };
+
+    pushBtn.addEventListener('click', async () => {
+      if (busy) return;
+      const ok = await dialog.confirmDialog({
+        title: 'Push del código a GitHub',
+        message: `Se commitean los cambios trackeados y se empuja SOLO al remote personal:\n${info.remote.url}\n\nNunca se suben .env, users.json, sessions.json, certs/ ni otros ignorados.`,
+        confirmLabel: 'Push',
+      });
+      if (!ok) return;
+      setBusy(true); pushBtn.disabled = true; setGMsg('Empujando a GitHub…');
+      try {
+        const res = await fetch(`${API}/push`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Falló el push.');
+        const parts = [];
+        if (data.committed) parts.push(`commit ${data.committed}`);
+        parts.push('push OK');
+        if (data.untrackedSkipped?.length) parts.push(`${data.untrackedSkipped.length} sin trackear omitidos`);
+        setGMsg(parts.join(' · '), 'ok');
+        loadGit();
+      } catch (e) {
+        setGMsg(e.message, 'err');
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
+
   refs.create.addEventListener('click', create);
   loadList();
+  loadGit();
 }

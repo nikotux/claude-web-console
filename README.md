@@ -167,7 +167,13 @@ la configuración de usuario de Claude Code (`~/.claude/settings.json`):
   resaltado, y "Claude aquí / Terminal aquí" por carpeta.
 - **Móvil** — barra de teclas auxiliares (Esc/Tab/⇧Tab/Ctrl/flechas), dictado,
   pegar; copiar = seleccionar (OSC52), pegar = click derecho en desktop.
-- **Backups** — snapshot completo, restaurar reinicia el servicio solo.
+- **Backups** — snapshot completo (`.tar.gz`, con secretos, **se queda en el
+  servidor**), restaurar reinicia el servicio solo. Aparte, **backup del código
+  a GitHub**: `git push` al remote **`personal`** (repo privado tuyo) con guardas
+  duras — nunca sube `.env`/`users.json`/`sessions.json`/`certs/`, bloquea
+  cualquier URL con `Mordor-Staffing` y solo commitea archivos ya trackeados
+  (jamás agrega untracked). El remote lo configurás vos:
+  `git remote add personal git@github.com:<usuario>/<repo>.git`.
 
 ---
 
