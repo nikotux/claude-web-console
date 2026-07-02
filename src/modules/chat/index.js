@@ -102,7 +102,13 @@ function loadTranscriptEvents(cwd, sessionId) {
     try { o = JSON.parse(line); } catch { continue; }
     const msg = o.message;
     if (!msg) continue;
-    const dedupKey = msg.id || o.uuid;
+    // Dedup: el mismo msg.id aparece en VARIAS líneas con distinto contenido
+    // (p.ej. una con thinking y otra con text), y además cada mensaje se
+    // repite entero. Clave = id + firma del contenido.
+    const sig = Array.isArray(msg.content)
+      ? msg.content.map((b) => `${b.type}:${(b.text || b.id || '').length}`).join(',')
+      : typeof msg.content === 'string' ? `s:${msg.content.length}` : '';
+    const dedupKey = msg.id ? `${msg.id}|${sig}` : o.uuid;
     if (dedupKey) {
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
