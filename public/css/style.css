@@ -313,7 +313,8 @@ html, body {
 /* ===== Terminales ===== */
 #terminals { flex: 1; position: relative; min-width: 0; }
 .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; }
-.terminal-pane.active { display: block; }
+.terminal-pane.active { display: block; animation: pane-in .15s ease; }
+@keyframes pane-in { from { opacity: .4; } to { opacity: 1; } }
 
 /* ===== Chat nativo (Agent SDK) ===== */
 .chat-pane-host { padding: 0 !important; }
@@ -338,7 +339,9 @@ html, body {
 .chat-msg {
   max-width: 78%; padding: .55rem .75rem; border-radius: var(--cwc-radius-lg);
   font-size: var(--cwc-fs-md); line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  animation: msg-in .18s ease;
 }
+@keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .chat-user {
   align-self: flex-end; background: var(--cwc-accent-bg); color: var(--cwc-text);
   border: 1px solid var(--cwc-border-soft); border-bottom-right-radius: var(--cwc-radius-sm);
@@ -383,9 +386,9 @@ html, body {
 .cwc-diff-block { border-radius: var(--cwc-radius-sm); overflow: auto; max-height: 200px; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
 .cwc-diff-line { padding: .05rem .5rem; white-space: pre-wrap; word-break: break-word; }
 .df-del { background: rgba(205, 92, 92, .12); }
-.df-del .cwc-diff-line { color: #e29a9a; }
+.df-del .cwc-diff-line { color: color-mix(in srgb, var(--cwc-danger) 65%, #fff); }
 .df-add { background: rgba(108, 158, 110, .12); }
-.df-add .cwc-diff-line { color: #9ec89f; }
+.df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, #fff); }
 
 .chat-perm {
   align-self: stretch; background: var(--cwc-bg-elevated);

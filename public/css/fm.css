@@ -115,6 +115,7 @@ html, body { margin: 0; height: 100%; }
 
 /* ===== Previsualización ===== */
 .fm-pv {
+  animation: dlg-in .15s ease;
   position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 3vh;
   background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
 }
@@ -145,6 +146,7 @@ html, body { margin: 0; height: 100%; }
 
 /* ===== Menú contextual ===== */
 .fm-ctx {
+  animation: dlg-card-in .15s ease;
   position: fixed; z-index: 100; min-width: 160px; padding: 5px;
   background: var(--cwc-bg-elevated);
   border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);

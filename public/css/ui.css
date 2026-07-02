@@ -88,6 +88,15 @@
   padding: .8rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
 }
 
+/* ===== Accesibilidad: sin animaciones si el sistema lo pide ===== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
 /* ===== Focus visible para teclado (GLOBAL: todo elemento interactivo) ===== */
 :where(button, a, select, textarea, input, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--cwc-accent); outline-offset: 1px;
