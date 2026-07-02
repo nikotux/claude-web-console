@@ -21,10 +21,12 @@ import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
-import { sessionManager } from '../terminal/sessions.js';
+import { sessionIdForCwd } from '../../core/claude-state.js';
+import { sessionManager, tmuxArgs } from '../terminal/sessions.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -48,6 +50,17 @@ function safeCwd(requested) {
   const resolved = path.resolve(config.home, String(requested));
   return resolved.startsWith(config.home) ? resolved : config.home;
 }
+
+// ===== Adopción TUI(tmux) -> Chat =====
+// Comando en primer plano del pane de una sesión tmux nuestra.
+function paneCommand(tmuxName) {
+  return new Promise((resolve) => {
+    execFile('tmux', tmuxArgs('display-message', '-p', '-t', tmuxName, '#{pane_current_command}'),
+      { timeout: 5000 }, (err, out) => resolve(err ? null : (out || '').trim()));
+  });
+}
+const SHELL_RE = /^(bash|zsh|sh|fish|dash)$/;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Cola de mensajes del usuario -> AsyncIterable para el streaming input mode.
 function makeInput() {
@@ -666,6 +679,44 @@ export default {
       chat.close();
       manager.persist();
       res.json({ ok: true });
+    });
+
+    // Adopta una sesión de Claude que corre en una TERMINAL tmux nuestra y la
+    // convierte en conversación Chat (mismo transcript, vía session_id del
+    // observador). Cierre secuencial y VERIFICADO: Ctrl-C x2 y se espera a que
+    // el pane vuelva al shell; si no vuelve, error y NO se abre el chat.
+    r.post('/adopt', async (req, res) => {
+      const term = sessionManager.get(String(req.body?.terminalId || ''));
+      if (!term || !term.alive || term.bare) {
+        return res.status(404).json({ error: 'Sesión de terminal inexistente.' });
+      }
+      const sessionId = sessionIdForCwd(term.cwd);
+      if (!sessionId || !UUID_RE.test(sessionId)) {
+        return res.status(409).json({ error: 'No detecto una sesión de Claude activa en esa carpeta (el observador no reporta).' });
+      }
+      if (manager.liveSessionIds().has(sessionId)) {
+        return res.status(409).json({ error: 'Esa sesión ya tiene una conversación abierta.' });
+      }
+      // Salir de claude en el pane: Ctrl-C x2, esperar a que vuelva el shell.
+      const initial = await paneCommand(term.tmuxName);
+      term.write('\x03');
+      term.write('\x03');
+      let backToShell = false;
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        await sleepMs(350);
+        const cmd = await paneCommand(term.tmuxName);
+        if (cmd && (SHELL_RE.test(cmd) || (initial && cmd !== initial && !/claude|node/.test(cmd)))) {
+          backToShell = true;
+          break;
+        }
+      }
+      if (!backToShell) {
+        return res.status(409).json({ error: 'No pude cerrar Claude en la terminal (sigue corriendo). No se abre el chat: cerralo a mano y reintentá.' });
+      }
+      // La TUI murió verificada: abrir la conversación sobre la MISMA sesión.
+      const chat = manager.create({ cwd: term.cwd, model: null, permissionMode: 'default', resume: sessionId });
+      res.json({ ok: true, chat: chat.info() });
     });
 
     // Traspaso Chat <-> TUI de UNA conversación (secuencial y verificado).

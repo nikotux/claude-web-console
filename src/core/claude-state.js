@@ -40,6 +40,15 @@ function scan() {
   return byCwd;
 }
 
+// session_id de la sesión de Claude ACTIVA (no ended) en esa carpeta, o null.
+// Lo usa el traspaso TUI(tmux) -> Chat: es el puente al mismo transcript.
+export function sessionIdForCwd(absCwd) {
+  if (!absCwd) return null;
+  const now = Date.now();
+  if (now - cache.t > CACHE_MS) cache = { t: now, byCwd: scan() };
+  return cache.byCwd.get(absCwd)?.sessionId || null;
+}
+
 // Devuelve { status: 'working'|'waiting'|'stale', ts, model } o null.
 export function stateForCwd(absCwd) {
   if (!absCwd) return null;

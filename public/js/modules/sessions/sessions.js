@@ -188,9 +188,13 @@ export default {
     // contextual del Explorador: cierra ante pointerdown fuera / Esc / scroll /
     // blur / al elegir una acción).
     function openMenu(s, anchor) {
+      // "Pasar a Chat": solo sesiones nuestras con Claude corriendo adentro
+      // (adopta la sesión como conversación: mismo transcript, misma memoria).
+      const canAdopt = s.owned && !!s.model;
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
+        ${canAdopt ? `<button class="cwc-popup-item" data-act="adopt">${icon('sparkle', { size: 15 })}<span>Pasar a Chat</span></button>` : ''}
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
         <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
         <button class="cwc-popup-item danger" data-act="kill">${icon('trash', { size: 15 })}<span>Matar sesión</span></button>`;
@@ -198,9 +202,34 @@ export default {
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
       const act = (fn) => { dismiss(); fn(); };
+      menu.querySelector('[data-act="adopt"]')?.addEventListener('click', () => act(() => adoptToChat(s)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => rename(s)));
       menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModel(s)));
       menu.querySelector('[data-act="kill"]').addEventListener('click', () => act(() => kill(s)));
+    }
+
+    // TUI(tmux) -> Chat: cierra el claude de la terminal (verificado en el
+    // server) y abre la conversación sobre la MISMA sesión.
+    async function adoptToChat(s) {
+      const ok = await dialog.confirmDialog({
+        title: 'Pasar a Chat',
+        message: `Se cierra el Claude que corre en la terminal "${displayName(s)}" (Ctrl-C×2, verificado) y la conversación continúa como Chat con toda su memoria. La terminal queda como shell.`,
+        confirmLabel: 'Pasar a Chat',
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/chat/adopt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ terminalId: s.name.replace(/^cwc-/, '') }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo pasar a Chat.');
+        openChatView(data.chat);
+        refresh();
+      } catch (e) {
+        dialog.alertDialog({ title: 'Pasar a Chat', message: e.message });
+      }
     }
 
     // Ancla un popup al botón, alineado a su borde derecho y clamped al viewport.
