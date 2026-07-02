@@ -134,6 +134,7 @@ export default {
           <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
           <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios que no quedaron registrados">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
           <button class="btn-ghost btn--sm" data-ref="ghsync" title="Trae de GitHub el estado actual: PRs del registro + PRs tuyos no registrados">${icon('refresh', { size: 13 })}<span>Actualizar</span></button>
+          <button class="btn-ghost btn--sm" data-ref="context" title="Contexto de trabajo que se inyecta en cada 'Trabajar en Chat' de un ticket (editable)">${icon('edit', { size: 13 })}<span>Contexto</span></button>
           <span class="bfm-ghstate" data-ref="ghstate"></span>
         </div>
         <div class="bfm-box">
@@ -306,6 +307,39 @@ export default {
       });
 
       mr.ghsync.addEventListener('click', () => ghSync(false));
+
+      // Editor del contexto de trabajo: el texto que guía cada chat de ticket
+      // (verificación previa, proceso de resolución, formato del cierre que
+      // alimenta las notas del PR, prohibición de enviar el PR desde el chat).
+      mr.context.addEventListener('click', async () => {
+        let data = { context: '' };
+        try { data = await (await fetch('/api/bugfixes/context')).json(); }
+        catch { return dialog.alertDialog({ title: 'Contexto', message: 'No se pudo leer el contexto.' }); }
+        const cm = dialog.openModal({ title: 'Contexto de trabajo de bugfixes', width: 640 });
+        const box = document.createElement('div');
+        box.innerHTML = `
+          <p class="bfm-ctx-hint">Se inyecta en cada "Trabajar en Chat" de un ticket. Editalo cuando el proceso cambie${data.isDefault ? ' (estás viendo el default)' : ''}.</p>
+          <textarea class="bfm-ctx-text" spellcheck="false"></textarea>
+          <div class="dlg-actions">
+            <button class="btn-ghost btn--sm" data-ref="cancel">Cancelar</button>
+            <button class="btn btn--sm" data-ref="save">Guardar</button>
+          </div>`;
+        box.querySelector('.bfm-ctx-text').value = data.context;
+        cm.body.appendChild(box);
+        box.querySelector('[data-ref="cancel"]').addEventListener('click', () => cm.close());
+        box.querySelector('[data-ref="save"]').addEventListener('click', async () => {
+          const text = box.querySelector('.bfm-ctx-text').value;
+          try {
+            const res = await fetch('/api/bugfixes/context', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ context: text }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(out.error || 'No se pudo guardar.');
+            cm.close();
+          } catch (err) { dialog.alertDialog({ title: 'Contexto', message: err.message }); }
+        });
+      });
 
       // Al abrir: primero el cuadro con nuestro registro (instantáneo) y
       // enseguida la consulta a GitHub que lo completa.

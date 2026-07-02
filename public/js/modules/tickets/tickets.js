@@ -160,7 +160,12 @@ export default {
       d.querySelector('[data-ref="work"]').addEventListener('click', () => { m.close(); openTicketChat(t); });
     }
 
-    function openTicketChat(t) {
+    async function openTicketChat(t) {
+      // Contexto de trabajo EDITABLE (botón Contexto del modal de PRs): trae
+      // la verificación previa, el proceso de resolución y el formato del
+      // cierre. Si no se puede leer, el chat sale igual sin él.
+      let workContext = '';
+      try { workContext = (await (await fetch('/api/bugfixes/context')).json()).context || ''; } catch { /* noop */ }
       const prompt = [
         `Trabajemos el bug del ticket Desk #${t.ticketNumber}.`,
         '',
@@ -170,6 +175,7 @@ export default {
         t.reporter ? `Reportó: ${t.reporter}` : '',
         t.webUrl ? `Ticket: ${t.webUrl}` : '',
         t.context ? `\nContexto del triage:\n${t.context}` : '',
+        workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
         '',
         'Estás en modo PLAN: investigá el código relevante y proponé un plan de arreglo antes de tocar nada.',
       ].filter(Boolean).join('\n');

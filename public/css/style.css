@@ -691,6 +691,15 @@ html, body {
   .bfm-title { max-width: 130px; }
   .bfm-table th:nth-child(6), .bfm-table td:nth-child(6) { display: none; }
 }
+.bfm-ctx-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .5rem; }
+.bfm-ctx-text {
+  width: 100%; min-height: 46vh; resize: vertical;
+  background: var(--cwc-bg-input); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm); line-height: 1.45;
+  padding: .55rem .65rem;
+}
+.bfm-ctx-text:focus { outline: none; border-color: var(--cwc-accent); }
 
 .chat-composer {
   display: flex; gap: .4rem; align-items: flex-end;

@@ -5,6 +5,8 @@
 //   POST /api/bugfixes/scan     -> registra chats de tickets viejos sin registro (admin)
 //   POST /api/bugfixes/pr {id}  -> branch + commit + push + PR a origin de Tolkien (admin)
 //   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
+//   GET  /api/bugfixes/context     -> contexto de trabajo editable (autenticados)
+//   POST /api/bugfixes/context     -> guarda el contexto (admin)
 //   POST /api/bugfixes/delete {id} -> descarta un registro (admin)
 //
 // GIT/PR — decisiones duras:
@@ -24,7 +26,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
-import { listBugfixes, saveBugfixes, scanUnregistered } from './store.js';
+import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXT } from './store.js';
 
 const WT_BASE = path.join(os.homedir(), '.cwc-data', 'bugfix-wt');
 const inFlight = new Set(); // sessionIds con PR en curso (anti doble click)
@@ -36,6 +38,32 @@ function run(cmd, args, opts = {}) {
       else resolve(String(stdout).trim());
     });
   });
+}
+
+// Notas del PR: arrancan SIEMPRE con las respuestas formales a "cuál fue el
+// problema", "qué hice" y "¿concuerda con la mejor solución?". El cierre del
+// chat trae esos marcadores (los pide el contexto de trabajo editable); si el
+// resumen no los tiene, se cae a lo que haya registrado.
+export function formatPrBody(entry) {
+  const s = String(entry.summary || '');
+  const grab = (label) => {
+    const re = new RegExp(`^\\**${label}\\**\\s*:\\s*([\\s\\S]*?)(?=^\\**(?:Problema|Qu[eé] hice|Mejor soluci[oó]n)\\**\\s*:|\\s*$)`, 'im');
+    return (s.match(re) || [])[1]?.trim() || null;
+  };
+  const problema = grab('Problema') || (entry.title || '').replace(/^TKT #[\w.-]+ ?[—-]? ?/, '') || '(no registrado)';
+  const queHice = grab('Qu[eé] hice') || (s && !grab('Problema') ? s : '(no registrado en el cierre del chat)');
+  const mejor = grab('Mejor soluci[oó]n') || '(no evaluado en el cierre del chat)';
+  return [
+    `**Problema:** ${problema}`,
+    '',
+    `**Qué se hizo:** ${queHice}`,
+    '',
+    `**¿Es la mejor solución?:** ${mejor}`,
+    '',
+    entry.ticketUrl ? `Ticket Desk #${entry.ticketNumber}: ${entry.ticketUrl}` : (entry.ticketNumber ? `Ticket Desk #${entry.ticketNumber}` : ''),
+    '',
+    '_PR generado desde Claude Web Console (fix trabajado en una sesión de chat registrada)._',
+  ].filter((l, i, a) => l || a[i - 1]).join('\n');
 }
 
 // URL de compare como fallback si gh no puede crear el PR.
@@ -79,13 +107,7 @@ async function pushPr(entry) {
     if (!dirty) throw new Error('Sin diferencias contra origin/main (¿el fix ya está mergeado?).');
 
     const title = `Fix TKT #${entry.ticketNumber || '?'}: ${(entry.title || '').replace(/^TKT #[\w.-]+ ?[—-]? ?/, '').slice(0, 70) || 'bugfix'}`;
-    const body = [
-      entry.summary || '(sin resumen registrado)',
-      '',
-      entry.ticketUrl ? `Ticket Desk #${entry.ticketNumber}: ${entry.ticketUrl}` : (entry.ticketNumber ? `Ticket Desk #${entry.ticketNumber}` : ''),
-      '',
-      '_PR generado desde Claude Web Console (fix trabajado en una sesión de chat registrada)._',
-    ].filter((l, i, a) => l || a[i - 1]).join('\n');
+    const body = formatPrBody(entry);
 
     await run('git', ['commit', '-m', `${title}\n\n${body}`], { cwd: wt });
     await run('git', ['push', '-u', 'origin', branch], { cwd: wt });
@@ -211,6 +233,20 @@ export default {
         errors.push(`gh pr list: ${String(err?.message || err).slice(0, 120)}`);
       }
       res.json({ bugfixes: all, github, errors });
+    });
+
+    // Contexto de trabajo editable (se inyecta en cada "Trabajar en Chat").
+    r.get('/context', (req, res) => {
+      const context = getContext();
+      res.json({ context, isDefault: context === DEFAULT_CONTEXT });
+    });
+
+    r.post('/context', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const text = String(req.body?.context ?? '');
+      if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío (borralo a mano si de verdad querés eso).' });
+      saveContext(text);
+      res.json({ ok: true, context: getContext() });
     });
 
     r.post('/delete', (req, res) => {

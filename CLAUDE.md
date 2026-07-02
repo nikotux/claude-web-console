@@ -77,9 +77,16 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
   bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol
-                            real — commit de los archivos del fix, push, gh pr create).
+                            real — commit de los archivos del fix, push, gh pr create con
+                            reviewer cswenor). Notas del PR SIEMPRE formales: Problema /
+                            Qué se hizo / ¿Mejor solución? (parseadas del cierre del chat).
+                            CONTEXTO DE TRABAJO editable (~/.cwc-data/bugfix-context.md,
+                            GET/POST /context): se inyecta en cada "Trabajar en Chat" y pide
+                            verificación previa del ticket/PRs de Chris, proceso explícito,
+                            formato del cierre y NO enviar el PR desde el chat.
                             El chat registra al CERRAR una conversación con ticket (diferido
-                            2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud.
+                            2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud y
+                            modal "Enviar PR" de la sección Tolkien (cuadro registro+GitHub).
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)

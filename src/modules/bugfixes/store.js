@@ -15,6 +15,44 @@ import { encodeCwd } from '../../core/claude-model.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const FILE = path.join(DATA_DIR, 'bugfixes.json');
+const CONTEXT_FILE = path.join(DATA_DIR, 'bugfix-context.md');
+
+// Contexto de trabajo EDITABLE que se inyecta en cada "Trabajar en Chat" de un
+// ticket (botón Contexto en el modal de PRs). El default pide la verificación
+// previa, el formato del cierre (alimenta las notas del PR) y prohíbe enviar
+// el PR desde el chat.
+export const DEFAULT_CONTEXT = [
+  'ANTES de tocar nada — verificación exhaustiva:',
+  '1. Estado del ticket: ¿sigue abierto? ¿cambió su status o alguien ya lo',
+  '   cerró? Revisá el ticket y su hilo en Desk (desk_get_ticket).',
+  '2. ¿Chris (cswenor) ya está trabajando en esto? Puede NO actualizar el',
+  '   ticket: buscá PRs abiertos y branches/commits recientes relacionados',
+  '   (gh pr list --state all, git log) antes de duplicar trabajo.',
+  '',
+  'Proceso de resolución — mostrámelo explícito en la conversación:',
+  '- CUÁL ES EL PROBLEMA: explicalo en criollo, con la causa raíz.',
+  '- QUÉ PODEMOS HACER: las opciones de arreglo.',
+  '- ANTES de implementar: evaluá si la opción elegida es LA MEJOR solución',
+  '  posible o si hay una alternativa superior; decímelo y esperá mi OK.',
+  '',
+  'Al FINALIZAR, tu ÚLTIMO mensaje debe tener EXACTAMENTE este formato (son',
+  'las notas del PR):',
+  'Problema: <una o dos líneas>',
+  'Qué hice: <qué se cambió y dónde>',
+  'Mejor solución: <por qué esto es lo mejor, o qué alternativa se descartó y por qué>',
+  '',
+  'NUNCA envíes el PR desde esta conversación (nada de git push ni gh pr',
+  'create): el PR se sube después desde el módulo "Enviar PR" de la consola.',
+].join('\n');
+
+export function getContext() {
+  try { return fss.readFileSync(CONTEXT_FILE, 'utf8'); } catch { return DEFAULT_CONTEXT; }
+}
+
+export function saveContext(text) {
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  fss.writeFileSync(CONTEXT_FILE, String(text).slice(0, 20000), { mode: 0o600 });
+}
 
 // Prompt de tickets.js: "Trabajemos el bug del ticket Desk #<n>." — sin '.'
 // en la captura: el punto final de la oración no es parte del número.
