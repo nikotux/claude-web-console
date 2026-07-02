@@ -1,0 +1,94 @@
+/* ui.css — componentes COMPARTIDOS por todas las páginas (consola, Explorador,
+   admin, login). Requiere tokens.css cargado antes.
+   Contiene: sistema de botones (2 clases), diálogos/modales propios, spinner
+   de carga único e íconos base. */
+
+/* ===== Íconos (ui/icons.js) ===== */
+.cwc-icon { display: inline-block; vertical-align: middle; flex: none; }
+
+/* ===== Sistema de botones: SOLO dos clases + modificadores =====
+   .btn        → primario (acción prominente; una por vista)
+   .btn-ghost  → todo lo demás
+   Modificadores: .btn--sm (denso) · .btn--danger · .btn--block · .btn--icon */
+.btn, .btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  border-radius: var(--cwc-radius-md); cursor: pointer;
+  font-family: var(--cwc-font-ui); font-size: var(--cwc-fs-md); line-height: 1.1;
+  padding: .55rem .95rem; min-height: 42px;
+  transition: border-color .15s ease, background .15s ease, color .15s ease, opacity .15s ease;
+}
+.btn {
+  background: var(--cwc-accent); color: var(--cwc-accent-ink);
+  border: 1px solid transparent; font-weight: 600;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn:active { filter: brightness(.95); }
+.btn-ghost {
+  background: var(--cwc-bg-chip); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border-strong);
+}
+.btn-ghost:hover { border-color: var(--cwc-accent); color: var(--cwc-accent); }
+.btn:disabled, .btn-ghost:disabled { opacity: .5; cursor: default; filter: none; }
+
+.btn--sm { padding: .28rem .55rem; min-height: 30px; font-size: var(--cwc-fs-sm); border-radius: var(--cwc-radius-sm); }
+.btn--danger.btn { background: var(--cwc-danger); color: #fff; }
+.btn--danger.btn-ghost:hover { border-color: var(--cwc-danger); color: var(--cwc-danger); }
+.btn--block { width: 100%; }
+.btn--icon { padding: .28rem; min-width: 30px; }
+.btn .cwc-icon, .btn-ghost .cwc-icon { width: 16px; height: 16px; }
+.btn--sm .cwc-icon { width: 14px; height: 14px; }
+
+/* Targets táctiles ≥44px en punteros gruesos (principio móvil-primero). */
+@media (pointer: coarse) {
+  .btn, .btn-ghost { min-height: 44px; }
+  .btn--sm { min-height: 38px; padding: .4rem .6rem; }
+}
+
+/* ===== Diálogos y modales propios (ui/dialog.js) =====
+   Reemplazan confirm()/prompt()/alert() nativos en TODA la app. */
+.dlg-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, .6); display: grid; place-items: center; padding: 4vh 1rem;
+  animation: dlg-in .15s ease;
+}
+@keyframes dlg-in { from { opacity: 0; } to { opacity: 1; } }
+.dlg-card {
+  background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-lg); width: 100%;
+  max-height: 88vh; display: flex; flex-direction: column;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, .55);
+  animation: dlg-card-in .15s ease;
+}
+@keyframes dlg-card-in { from { transform: translateY(6px); opacity: .6; } to { transform: none; opacity: 1; } }
+.dlg-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  padding: .7rem .9rem .5rem;
+}
+.dlg-title { font-size: var(--cwc-fs-lg); font-weight: 600; color: var(--cwc-text); }
+.dlg-body { padding: 0 .9rem .8rem; overflow: auto; min-height: 0; color: var(--cwc-text); font-size: var(--cwc-fs-md); }
+.dlg-msg { margin: 0 0 .4rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; white-space: pre-line; }
+.dlg-input {
+  width: 100%; padding: .55rem .65rem; margin-top: .3rem;
+  background: var(--cwc-bg-input); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
+  font-size: var(--cwc-fs-lg); font-family: var(--cwc-font-ui);
+}
+.dlg-input:focus { outline: none; border-color: var(--cwc-accent); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
+
+/* ===== Estado de carga único ===== */
+.cwc-spinner {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 2px solid var(--cwc-border-strong); border-top-color: var(--cwc-accent);
+  animation: cwc-spin .7s linear infinite;
+}
+@keyframes cwc-spin { to { transform: rotate(360deg); } }
+.cwc-loading {
+  display: flex; align-items: center; gap: .5rem; justify-content: center;
+  padding: .8rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
+}
+
+/* ===== Focus visible para teclado ===== */
+.btn:focus-visible, .btn-ghost:focus-visible, .dlg-input:focus-visible {
+  outline: 2px solid var(--cwc-accent); outline-offset: 1px;
+}
