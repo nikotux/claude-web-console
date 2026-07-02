@@ -1,0 +1,65 @@
+// ui/icons.js — sistema de íconos ÚNICO para toda la app.
+//
+// Un solo lenguaje visual para acciones/navegación: SVG de trazo (stroke),
+// mismo viewBox y grosor, color heredado (currentColor) para que combine con
+// cualquier texto/estado. NO reemplaza los íconos de TIPO DE ARCHIVO del
+// Gestor de Archivos (esos son deliberadamente distintos: coloridos y
+// codificados por extensión, como en Finder/VS Code).
+//
+// Uso: icon('refresh')  ó  icon('refresh', { size: 16, className: 'foo' })
+
+const VB = '0 0 24 24';
+const SW = 'var(--cwc-icon-stroke, 1.8)';
+const COMMON = `fill="none" stroke="currentColor" stroke-width="${SW}" stroke-linecap="round" stroke-linejoin="round"`;
+
+// Contenido interno (sin <svg> wrapper) por nombre de ícono.
+const PATHS = {
+  menu: `<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>`,
+  plus: `<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>`,
+  close: `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>`,
+  chevronRight: `<polyline points="9,5 16,12 9,19"/>`,
+  chevronDown: `<polyline points="5,9 12,16 19,9"/>`,
+  chevronLeft: `<polyline points="15,5 8,12 15,19"/>`,
+  refresh: `<path d="M20 11a8 8 0 0 0-14.6-4.6M4 13a8 8 0 0 0 14.6 4.6"/><polyline points="19,4 19,9 14,9"/><polyline points="5,20 5,15 10,15"/>`,
+  terminal: `<rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 11,12.5 7,16"/><line x1="12" y1="16" x2="16" y2="16"/>`,
+  sparkle: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>`,
+  home: `<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h4v-6h2v6h4a1 1 0 0 0 1-1v-9"/>`,
+  gitBranch: `<circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4V15.6"/><path d="M6 15.6c0-3.6 3-4.8 6-4.8h4.7"/><path d="M18 6.4V6.8"/>`,
+  check: `<polyline points="4,13 9,18 20,6"/>`,
+  play: `<polygon points="6,4 20,12 6,20"/>`,
+  trash: `<polyline points="4,7 20,7"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>`,
+  folder: `<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>`,
+  upload: `<line x1="12" y1="20" x2="12" y2="6"/><polyline points="6,11 12,5 18,11"/><line x1="5" y1="20" x2="19" y2="20"/>`,
+  download: `<line x1="12" y1="4" x2="12" y2="14"/><polyline points="6,9 12,15 18,9"/><line x1="5" y1="20" x2="19" y2="20"/>`,
+  grid: `<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>`,
+  list: `<line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>`,
+  gear: `<circle cx="12" cy="12" r="3"/><path d="M12 3v2.4M12 18.6V21M21 12h-2.4M5.4 12H3M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7M18.4 18.4l-1.7-1.7M7.3 7.3 5.6 5.6"/>`,
+  keyboard: `<rect x="2.5" y="6" width="19" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10.01"/><line x1="9.5" y1="10" x2="9.5" y2="10.01"/><line x1="13" y1="10" x2="13" y2="10.01"/><line x1="16.5" y1="10" x2="16.5" y2="10.01"/><line x1="7" y1="14.5" x2="17" y2="14.5"/>`,
+  clipboard: `<rect x="6" y="4" width="12" height="17" rx="2"/><rect x="9" y="2.2" width="6" height="3.6" rx="1"/>`,
+  eye: `<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>`,
+  logout: `<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"/><polyline points="15,16 20,12 15,8"/><line x1="20" y1="12" x2="9" y2="12"/>`,
+  archive: `<rect x="3" y="8" width="18" height="12" rx="1.5"/><path d="M3 8V5.5A1.5 1.5 0 0 1 4.5 4h15A1.5 1.5 0 0 1 21 5.5V8"/><line x1="10" y1="12" x2="14" y2="12"/>`,
+};
+
+// Devuelve markup <svg>…</svg> para el nombre dado. Si no existe, un círculo
+// discreto (evita romper el layout con un ícono ausente).
+export function icon(name, { size, className = '' } = {}) {
+  const body = PATHS[name] || `<circle cx="12" cy="12" r="8"/>`;
+  const px = size || 'var(--cwc-icon-size, 18px)';
+  const cls = className ? ` class="cwc-icon ${className}"` : ' class="cwc-icon"';
+  return `<svg${cls} viewBox="${VB}" width="${px}" height="${px}" ${COMMON} aria-hidden="true">${body}</svg>`;
+}
+
+export const ICON_NAMES = Object.keys(PATHS);
+
+// Rellena todo elemento con [data-icon="nombre"] con su SVG. Permite escribir
+// los íconos declarativamente en el HTML estático (data-icon="menu") sin perder
+// el sistema único. Idempotente: no re-inyecta si ya tiene el ícono.
+export function hydrateIcons(root = document) {
+  for (const el of root.querySelectorAll('[data-icon]')) {
+    if (el.dataset.iconDone) continue;
+    el.insertAdjacentHTML('afterbegin', icon(el.dataset.icon));
+    el.dataset.iconDone = '1';
+  }
+}
+

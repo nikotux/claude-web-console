@@ -1,0 +1,47 @@
+/* tokens.css — variables de diseño ÚNICAS para toda la app (consola, Gestor de
+   Archivos, admin, login). Un solo lenguaje visual: acento terracota "Claude
+   orange" (ya usado en login/consola/admin), fondos oscuros en la misma
+   escala, mismos radios y tipografías. Cargar ANTES de style.css/fm.css. */
+:root {
+  /* Fondos (escala única, de más oscuro a más claro) */
+  --cwc-bg: #0b0e14;
+  --cwc-bg-panel: #0d1119;
+  --cwc-bg-elevated: #11151f;
+  --cwc-bg-hover: #141a26;
+  --cwc-bg-input: #0b0e14;
+
+  /* Bordes */
+  --cwc-border: #1e2431;
+  --cwc-border-soft: #232b3a;
+  --cwc-border-strong: #2a3040;
+
+  /* Texto */
+  --cwc-text: #c5c8c6;
+  --cwc-text-secondary: #9aa4b2;
+  --cwc-text-dim: #7c8494;
+  --cwc-text-dimmer: #566072;
+
+  /* Acento de marca (único en toda la app) + variante de fondo */
+  --cwc-accent: #d97757;
+  --cwc-accent-bg: #2a2018;
+  --cwc-accent-ink: #1a1000; /* texto sobre botones sólidos de acento */
+
+  /* Estados semánticos */
+  --cwc-ok: #6c9e6e;
+  --cwc-warn: #c9a94e;
+  --cwc-danger: #cd5c5c;
+  --cwc-danger-strong: #ff453a;
+
+  /* Radios (escala única) */
+  --cwc-radius-sm: 5px;
+  --cwc-radius-md: 8px;
+  --cwc-radius-lg: 12px;
+
+  /* Tipografías */
+  --cwc-font-ui: -apple-system, "SF Pro Text", BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
+  --cwc-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Íconos (public/js/ui/icons.js) */
+  --cwc-icon-size: 18px;
+  --cwc-icon-stroke: 1.8;
+}

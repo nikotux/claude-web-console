@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Archivos — Claude Web Console</title>
+  <link rel="stylesheet" href="/vendor/hljs/theme.css" />
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/fm.css" />
+  <!-- highlight.js para el resaltado del preview de texto/código -->
+  <script src="/vendor/hljs/hljs.min.js"></script>
+</head>
+<body class="fm-body">
+  <div id="fm">
+    <!-- Barra de herramientas -->
+    <header class="fm-toolbar">
+      <div class="fm-tb-left">
+        <button id="fm-back" class="fm-btn fm-icon" data-icon="chevronLeft" title="Atrás"></button>
+        <nav id="fm-crumbs" class="fm-crumbs"></nav>
+      </div>
+      <div class="fm-tb-right">
+        <div class="fm-viewtoggle">
+          <button id="fm-view-grid" class="fm-btn fm-icon active" data-icon="grid" title="Iconos"></button>
+          <button id="fm-view-list" class="fm-btn fm-icon" data-icon="list" title="Lista"></button>
+        </div>
+        <button id="fm-upload" class="fm-btn" data-icon="upload" title="Subir archivos"><span>Subir</span></button>
+        <button id="fm-mkdir" class="fm-btn" data-icon="folder" title="Nueva carpeta"><span>Carpeta</span></button>
+        <button id="fm-refresh" class="fm-btn fm-icon" data-icon="refresh" title="Refrescar"></button>
+        <a href="/" class="fm-btn fm-home" data-icon="home" title="Volver a la consola"></a>
+      </div>
+    </header>
+
+    <div class="fm-body-row">
+      <!-- Sidebar de ubicaciones -->
+      <aside class="fm-sidebar">
+        <div class="fm-side-title">Favoritos</div>
+        <button class="fm-place" data-place="home" data-icon="home"><span>Home</span></button>
+        <button class="fm-place" data-place="project" data-icon="gitBranch"><span id="fm-project-name">Proyecto</span></button>
+        <div class="fm-side-title">Sistema</div>
+        <button class="fm-place" data-place="trash" data-icon="trash"><span>Papelera</span> <span id="fm-trash-count" class="fm-badge"></span></button>
+      </aside>
+
+      <!-- Área principal -->
+      <main id="fm-main" class="fm-main">
+        <div id="fm-items" class="fm-grid"></div>
+        <div id="fm-drop" class="fm-drop-hint">Soltá los archivos para subirlos acá</div>
+      </main>
+    </div>
+
+    <!-- Barra de estado -->
+    <footer class="fm-status">
+      <span id="fm-count"></span>
+      <span id="fm-sel"></span>
+    </footer>
+  </div>
+
+  <!-- Previsualización -->
+  <div id="fm-preview" class="fm-pv" hidden>
+    <div class="fm-pv-card">
+      <header class="fm-pv-head">
+        <span id="fm-pv-title" class="fm-pv-title"></span>
+        <span class="fm-pv-actions">
+          <button id="fm-pv-download" class="fm-btn sm">↓ Descargar</button>
+          <button id="fm-pv-close" class="fm-btn sm fm-icon" title="Cerrar">×</button>
+        </span>
+      </header>
+      <div id="fm-pv-body" class="fm-pv-body"></div>
+    </div>
+  </div>
+
+  <!-- Menú contextual -->
+  <div id="fm-ctx" class="fm-ctx" hidden></div>
+  <!-- Input oculto para subir -->
+  <input id="fm-file-input" type="file" multiple hidden />
+
+  <script type="module" src="/js/filemanager/fm.js"></script>
+</body>
+</html>

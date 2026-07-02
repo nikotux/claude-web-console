@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Claude Web Console — Acceso</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="login-body">
+  <form id="login-form" class="login-card">
+    <h1>Claude Web Console</h1>
+    <p class="login-hint">Acceso restringido a la red ZeroTier.</p>
+    <input id="username" type="text" placeholder="Usuario"
+           autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
+    <input id="password" type="password" placeholder="Contraseña" autocomplete="current-password" />
+    <button type="submit">Entrar</button>
+    <p id="error" class="login-error" hidden></p>
+
+    <details class="login-token">
+      <summary>Acceso con token maestro</summary>
+      <input id="token" type="password" placeholder="Token de acceso" autocomplete="off" />
+      <button type="button" id="token-btn">Entrar con token</button>
+    </details>
+  </form>
+  <script src="/js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Claude Web Console — Usuarios</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="admin-body">
+  <div class="admin-wrap">
+    <header class="admin-head">
+      <h1>Administración de usuarios</h1>
+      <a href="/" class="admin-back" data-icon="chevronLeft"><span>volver a la consola</span></a>
+    </header>
+
+    <form id="new-user" class="admin-new">
+      <input id="nu-user" placeholder="Usuario" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <input id="nu-pass" type="password" placeholder="Contraseña" />
+      <label class="admin-chk"><input id="nu-admin" type="checkbox" /> admin</label>
+      <button type="submit">Crear usuario</button>
+    </form>
+
+    <p id="admin-msg" class="admin-msg" hidden></p>
+    <div id="user-list"></div>
+  </div>
+  <script type="module" src="/js/admin.js"></script>
+</body>
+</html>

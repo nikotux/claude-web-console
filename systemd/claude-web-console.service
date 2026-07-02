@@ -1,0 +1,26 @@
+[Unit]
+Description=Claude Web Console (consola web personal vía ZeroTier)
+Documentation=file:%h/claude-web-console/README.md
+# Esperamos a la red; la app ADEMÁS espera internamente la interfaz ZeroTier
+# (waitForZeroTier), así que no crashea si zerotier-one todavía no levantó.
+After=network-online.target
+Wants=network-online.target
+# Reinicio infinito (por si ZeroTier tarda mucho tras un reboot).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/claude-web-console
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+
+# --- SSH para el módulo Tolkien (git pull por SSH) ---
+# systemd --user NO hereda tu SSH_AUTH_SOCK por defecto. Si querés que el botón
+# "Actualizar" de Tolkien funcione, exponé el agente. Opción simple (con la
+# sesión iniciada):  systemctl --user import-environment SSH_AUTH_SOCK
+# o descomentá y ajustá la línea de abajo apuntando a tu socket persistente:
+# Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Claude Web Console</title>
+  <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="/vendor/hljs/theme.css" />
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <!-- xterm.js y addons (UMD, servidos localmente desde node_modules) -->
+  <script src="/vendor/xterm/lib/xterm.js"></script>
+  <script src="/vendor/addon-fit/lib/addon-fit.js"></script>
+  <script src="/vendor/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="/vendor/addon-clipboard/lib/addon-clipboard.js"></script>
+  <!-- highlight.js (bundle IIFE local -> window.hljs) para el visor de archivos -->
+  <script src="/vendor/hljs/hljs.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div id="body">
+      <!-- Panel izquierdo: menú colapsible (acordeón) + pie fijo de estado -->
+      <aside id="sidebar">
+        <div class="sidebar-scroll">
+          <!-- Sección: Archivos (acciones rápidas; navegar = Gestor de Archivos) -->
+          <section class="side-sec" data-sec="files">
+            <header class="side-head">
+              <span class="side-caret">▸</span>
+              <span class="side-title">Archivos</span>
+            </header>
+            <div class="side-body">
+              <div class="side-actions">
+                <button class="side-act" id="files-term" data-icon="terminal" title="Abrir terminal en el home">Terminal</button>
+                <button class="side-act" id="files-claude" data-icon="sparkle" title="Abrir Claude Code en el home">Claude</button>
+                <a class="side-act" href="/archivos" data-icon="folder" title="Explorar y gestionar archivos">Explorar</a>
+              </div>
+              <div class="side-hint">Navegación y gestión completa en el Gestor de Archivos.</div>
+            </div>
+          </section>
+
+          <!-- Sección: Tolkien (proyecto principal) -->
+          <section class="side-sec" data-sec="tolkien">
+            <header class="side-head">
+              <span class="side-caret">▸</span>
+              <span class="side-title">Tolkien</span>
+              <span id="tk-status" class="tk-chip"></span>
+              <span class="side-tools">
+                <button id="tk-update" class="icon-btn sm" data-icon="download" title="Actualizar desde GitHub (stash→pull→pop)"></button>
+                <button id="tk-refresh" class="icon-btn sm" data-icon="refresh" title="Chequear remoto (fetch)"></button>
+              </span>
+            </header>
+            <div class="side-body">
+              <div class="side-actions">
+                <button class="side-act" id="tk-term" data-icon="terminal" title="Abrir terminal en el proyecto">Terminal</button>
+                <button class="side-act" id="tk-claude" data-icon="sparkle" title="Abrir Claude Code en el proyecto">Claude</button>
+                <a class="side-act" id="tk-explore" href="/archivos?path=tolkien" data-icon="folder" title="Explorar el proyecto en el Gestor de Archivos">Explorar</a>
+              </div>
+            </div>
+          </section>
+
+          <!-- Sección: tmux -->
+          <section class="side-sec" data-sec="tmux">
+            <header class="side-head">
+              <span class="side-caret">▸</span>
+              <span class="side-title">tmux</span>
+              <span id="tmux-count" class="side-count"></span>
+              <span class="side-tools">
+                <button id="tmux-refresh" class="icon-btn sm" data-icon="refresh" title="Refrescar"></button>
+              </span>
+            </header>
+            <div class="side-body"><div id="tmux-list"></div></div>
+          </section>
+
+          <!-- Sección: Tokens por proyecto -->
+          <section class="side-sec" data-sec="tokens">
+            <header class="side-head">
+              <span class="side-caret">▸</span>
+              <span class="side-title">Tokens por proyecto</span>
+              <span class="side-tools">
+                <button id="tokens-refresh" class="icon-btn sm" data-icon="refresh" title="Refrescar"></button>
+              </span>
+            </header>
+            <div class="side-body"><div id="tokens-list"></div></div>
+          </section>
+        </div>
+
+        <!-- Pie FIJO siempre visible: sistema + total de tokens/costo -->
+        <div class="sidebar-footer">
+          <div id="stats-mini" class="mini-block"></div>
+          <div id="tokens-mini" class="mini-block"></div>
+          <div id="tolkien-mini" class="mini-block"></div>
+          <div class="sidebar-acct">
+            <a href="/archivos" class="acct-link" data-icon="folder" title="Gestor de archivos">Archivos</a>
+            <button id="backup-btn" class="acct-btn" data-icon="archive" title="Backups de la consola" hidden>Backup</button>
+            <a id="admin-link" href="/admin" data-icon="gear" hidden>Usuarios</a>
+            <span id="acct-user" class="acct-user"></span>
+            <button id="logout-btn" class="acct-btn" data-icon="logout" title="Cerrar sesión">Salir</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Panel central: terminales -->
+      <main id="terminals"></main>
+
+      <!-- Rail derecho: menú arriba, pestañas como iconos, nueva terminal abajo -->
+      <nav id="rail">
+        <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Mostrar/ocultar panel"></button>
+        <div id="rail-tabs"></div>
+        <button id="new-terminal" class="rail-btn" data-icon="plus" title="Nueva terminal"></button>
+      </nav>
+    </div>
+
+    <!-- Barra de teclas auxiliares + dictado (móvil; fija sobre el teclado).
+         Oculta por defecto: se despliega con el tirador ⌨. -->
+    <div id="auxbar" class="collapsed">
+      <button id="aux-handle" data-icon="keyboard" title="Teclas / dictado"></button>
+      <div id="aux-content">
+      <div id="dictation" hidden>
+        <input id="dictation-input" type="text" enterkeyhint="send"
+               placeholder="Dictar / escribir y enviar…"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <button id="dictation-enter" class="aux-key toggle active" title="Agregar Enter al enviar">⏎</button>
+        <button id="dictation-send" class="aux-send">Enviar</button>
+      </div>
+      <div id="auxkeys">
+        <button class="aux-key" data-seq="esc">Esc</button>
+        <button class="aux-key" data-seq="tab">Tab</button>
+        <button class="aux-key" data-seq="shifttab">⇧Tab</button>
+        <button id="aux-ctrl" class="aux-key">Ctrl</button>
+        <button class="aux-key" data-seq="up">↑</button>
+        <button class="aux-key" data-seq="down">↓</button>
+        <button class="aux-key" data-seq="left">←</button>
+        <button class="aux-key" data-seq="right">→</button>
+        <button class="aux-key" data-seq="ctrlc">^C</button>
+        <button id="aux-paste" class="aux-key" data-icon="clipboard" title="Pegar del portapapeles"></button>
+        <button id="aux-dictate" class="aux-key toggle" title="Modo dictado / texto">abc</button>
+      </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de backups: crear y restaurar snapshots de la consola -->
+  <div id="backup-modal" hidden>
+    <div class="bk-card">
+      <header class="bk-head">
+        <span class="bk-title">Backups</span>
+        <button id="bk-close" class="icon-btn sm" data-icon="close" title="Cerrar"></button>
+      </header>
+      <button id="bk-create" class="bk-create" data-icon="archive"><span>Crear backup ahora</span></button>
+      <p id="bk-msg" class="bk-msg" hidden></p>
+      <div id="bk-list" class="bk-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
