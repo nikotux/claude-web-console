@@ -62,10 +62,12 @@ function addTab(session, { type = 'pty' } = {}) {
   close.textContent = '×';
   const flag = document.createElement('span');
   flag.className = 'rail-flag'; // banderín: modelo de Claude en uso
-  tabButton.append(chip, close, flag);
+  const statusDot = document.createElement('span');
+  statusDot.className = 'rail-status'; // punto de estado (trabajando/esperando)
+  tabButton.append(chip, close, statusDot, flag);
   tabsEl.appendChild(tabButton);
 
-  const entry = { tab: null, tabButton, pane, flag, session, type };
+  const entry = { tab: null, tabButton, pane, flag, statusDot, session, type };
   tabs.set(session.id, entry);
 
   if (type === 'chat') {
@@ -212,8 +214,37 @@ function pollModels() {
   if (document.hidden) return;
   for (const id of tabs.keys()) updateModelFlag(id);
 }
-setInterval(pollModels, 8000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) pollModels(); });
+
+// Punto de estado por pestaña (trabajando/esperando), leído de las mismas
+// fuentes que las tarjetas de Sesiones. Una sola pasada para todas las tabs.
+async function pollTabStatus() {
+  if (document.hidden || !tabs.size) return;
+  try {
+    const [tmux, chats] = await Promise.all([
+      fetch('/api/tmux/sessions').then((r) => r.json()).then((d) => d.sessions || []).catch(() => []),
+      fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+    ]);
+    const byName = new Map(tmux.map((s) => [s.name, s]));
+    const byChat = new Map(chats.map((c) => [c.id, c]));
+    for (const [id, entry] of tabs) {
+      if (!entry.statusDot) continue;
+      let cls = 'st-idle';
+      if (entry.type === 'chat') {
+        const c = byChat.get(id);
+        cls = c ? (c.status === 'working' ? 'st-working' : 'st-waiting') : 'st-idle';
+      } else {
+        const s = byName.get(`cwc-${id}`);
+        const st = s?.state?.status;
+        cls = st === 'working' ? 'st-working' : st === 'waiting' ? 'st-waiting' : s?.model ? 'st-idle' : 'st-shell';
+      }
+      entry.statusDot.className = `rail-status ${cls}`;
+    }
+  } catch { /* noop */ }
+}
+
+function pollAll() { pollModels(); pollTabStatus(); }
+setInterval(pollAll, 8000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollAll(); });
 
 // ===== API de sesiones =====
 async function apiCreateSession(body) {
@@ -323,10 +354,27 @@ for (const mod of MODULES) {
   }
 }
 
-// ===== Shell: rail, sidebar, auxbar, viewport =====
+// ===== Shell: sidebar (colapsable a rail), auxbar, viewport =====
+const sidebarEl = document.getElementById('sidebar');
+const COLLAPSE_KEY = 'cwc.sidebar.collapsed';
+
+// El botón ☰: en desktop contrae/expande el panel a un rail (persistido); en
+// móvil actúa como el overlay de siempre (mostrar/ocultar).
 document.getElementById('toggle-sidebar').addEventListener('click', () => {
-  document.getElementById('sidebar').classList.toggle('hidden');
+  if (isMobile()) { sidebarEl.classList.toggle('hidden'); return; }
+  const collapsed = !sidebarEl.classList.contains('collapsed');
+  sidebarEl.classList.toggle('collapsed', collapsed);
+  localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
 });
+
+// Aplica el estado colapsado guardado (solo desktop; en móvil nunca colapsa).
+function applySidebarState() {
+  if (isMobile()) { sidebarEl.classList.remove('collapsed'); return; }
+  sidebarEl.classList.toggle('collapsed', localStorage.getItem(COLLAPSE_KEY) === '1');
+}
+applySidebarState();
+window.addEventListener('resize', applySidebarState);
+
 // El ＋ del rail abre el mismo lanzador (una sola puerta de entrada).
 document.getElementById('rail-new').addEventListener('click', () => bus.dispatchEvent(new Event('open-launcher')));
 
@@ -363,4 +411,5 @@ if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
   if (focus && tabs.has(focus)) setActive(focus);
   if (focus) history.replaceState(null, '', '/');
   if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
+  pollTabStatus();
 })();

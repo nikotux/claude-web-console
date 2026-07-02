@@ -57,11 +57,10 @@ html, body {
 #app { display: flex; flex-direction: column; height: 100dvh; }
 #body { display: flex; flex: 1; min-height: 0; }
 
-/* ===== Rail derecho ===== */
-#rail {
-  flex: none; width: 46px; background: var(--cwc-bg-panel); border-left: 1px solid var(--cwc-border);
-  display: flex; flex-direction: column; align-items: center; gap: .35rem;
-  padding: .35rem 0;
+/* ===== Cabecera del panel (colapsar + nueva sesión) ===== */
+.sb-head {
+  flex: none; display: flex; align-items: center; gap: .4rem;
+  padding: .4rem .5rem .2rem;
 }
 .rail-btn {
   width: 34px; height: 34px; flex: none;
@@ -71,8 +70,12 @@ html, body {
 }
 .rail-btn:hover { border-color: var(--cwc-border-strong); color: var(--cwc-text); }
 .rail-btn .cwc-icon { width: 18px; height: 18px; }
-#rail-tabs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .35rem; scrollbar-width: none; }
-#rail-tabs::-webkit-scrollbar { display: none; }
+.sb-new { color: var(--cwc-accent); border-color: var(--cwc-accent); }
+
+/* ===== Pestañas abiertas (relocalizadas dentro del panel) ===== */
+/* Expandido: chips en fila que envuelve. Colapsado: columna de iconos. */
+#rail-tabs { flex: none; display: flex; flex-wrap: wrap; gap: .35rem; padding: .2rem .6rem .4rem; }
+#rail-tabs:empty { padding: 0; }
 .rail-tab { position: relative; width: 36px; height: 36px; flex: none; }
 .rail-chip {
   width: 36px; height: 36px; border-radius: var(--cwc-radius-md); cursor: pointer;
@@ -81,8 +84,8 @@ html, body {
   font-family: var(--cwc-font-mono);
 }
 .rail-tab.active .rail-chip { background: var(--cwc-accent-bg); border-color: var(--cwc-accent); color: var(--cwc-accent); }
-/* Tipo de pestaña: pty (terminal) vs chat (SDK, futuro). Hook visual reservado:
-   el chip de chat llevará esquina asimétrica de burbuja. */
+/* Tipo de pestaña: pty (terminal) vs chat (SDK). El chip de chat lleva esquina
+   asimétrica de burbuja. */
 .rail-tab[data-type="chat"] .rail-chip { border-radius: var(--cwc-radius-md) var(--cwc-radius-md) 2px var(--cwc-radius-md); }
 /* Conversación mostrándose como TUI: chip cuadrado (como una terminal). */
 .rail-tab[data-type="chat"][data-view="tui"] .rail-chip { border-radius: var(--cwc-radius-sm); }
@@ -90,9 +93,18 @@ html, body {
   display: none; position: absolute; top: -5px; right: -5px;
   width: 16px; height: 16px; border-radius: 50%; padding: 0;
   background: var(--cwc-danger); border: 0; color: var(--cwc-accent-ink); cursor: pointer;
-  font-size: var(--cwc-fs-xs); line-height: 16px; text-align: center;
+  font-size: var(--cwc-fs-xs); line-height: 16px; text-align: center; z-index: 1;
 }
 .rail-tab.active .rail-close { display: block; }
+/* Punto de estado (trabajando/esperando) en la esquina de la pestaña. */
+.rail-status {
+  position: absolute; top: -3px; left: -3px; width: 9px; height: 9px; border-radius: 50%;
+  border: 2px solid var(--cwc-bg-panel); background: var(--cwc-border-strong); display: none;
+}
+.rail-status.st-idle { background: var(--cwc-ok); opacity: .5; display: block; }
+.rail-status.st-shell { background: var(--cwc-border-strong); display: block; }
+.rail-status.st-waiting { background: var(--cwc-ok); display: block; }
+.rail-status.st-working { background: var(--cwc-warn); display: block; animation: sess-pulse 1.2s ease-in-out infinite; }
 .rail-flag {
   position: absolute; left: 5px; right: 5px; bottom: 2px; height: 3px;
   border-radius: 2px; display: none; pointer-events: none;
@@ -102,11 +114,29 @@ html, body {
 /* ===== Sidebar ===== */
 #sidebar {
   width: 272px; background: var(--cwc-bg-panel); border-right: 1px solid var(--cwc-border);
-  display: flex; flex-direction: column; transition: margin-left .2s ease;
+  display: flex; flex-direction: column; transition: width .18s ease, margin-left .2s ease;
 }
 #sidebar.hidden { margin-left: -272px; }
 .sidebar-top { padding: .6rem .6rem .35rem; }
 .sidebar-scroll { flex: 1; overflow: auto; min-height: 0; }
+
+/* Alternancia de contenido según el estado del panel. */
+.only-collapsed { display: none; }
+#sidebar.collapsed .only-collapsed { display: inline-flex; }
+
+/* ===== Panel colapsado a rail (desktop) ===== */
+#sidebar.collapsed {
+  width: 54px;
+}
+#sidebar.collapsed .only-expanded { display: none; }
+#sidebar.collapsed .sb-head { flex-direction: column; align-items: center; gap: .35rem; padding: .4rem 0 .2rem; }
+#sidebar.collapsed #rail-tabs {
+  flex: 1; min-height: 0; overflow-y: auto; flex-wrap: nowrap; flex-direction: column;
+  align-items: center; padding: .3rem 0; scrollbar-width: none;
+}
+#sidebar.collapsed #rail-tabs::-webkit-scrollbar { display: none; }
+#sidebar.collapsed .sidebar-footer { align-items: center; padding: .45rem 0 .55rem; }
+#sidebar.collapsed .footer-acct { flex-direction: column; gap: .35rem; }
 
 .side-sec { padding: .35rem 0 .5rem; border-bottom: 1px solid var(--cwc-divider); }
 .sec-head { display: flex; align-items: center; gap: .4rem; padding: .25rem .6rem .35rem; }
@@ -523,9 +553,16 @@ html, body {
 
 /* ===== Móvil ===== */
 @media (max-width: 768px) {
-  #sidebar {
+  /* En móvil el panel es overlay (se oculta con .hidden); el modo "rail
+     colapsado" es solo de escritorio, así que forzamos ancho completo. */
+  #sidebar, #sidebar.collapsed {
     position: absolute; z-index: 10; height: 100%;
     width: 82vw; box-shadow: 4px 0 24px rgba(0,0,0,.5);
   }
+  #sidebar.collapsed .only-expanded { display: revert; }
+  #sidebar.collapsed .only-collapsed { display: none; }
+  #sidebar.collapsed .sb-head { flex-direction: row; }
+  #sidebar.collapsed #rail-tabs { flex-direction: row; flex-wrap: wrap; }
+  #sidebar.collapsed .footer-acct { flex-direction: row; }
   #sidebar.hidden { margin-left: -84vw; }
 }

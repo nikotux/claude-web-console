@@ -23,24 +23,37 @@
   <div id="app">
     <div id="body">
       <!-- Panel izquierdo: organizado por INTENCIÓN (empezar / retomar / estado).
+           Colapsable a un rail angosto (persistido en localStorage). En móvil se
+           comporta como overlay (se oculta con .hidden).
            Cada slot [data-module] lo llena su módulo (ver docs/frontend-modules.md). -->
       <aside id="sidebar">
-        <!-- Empezar trabajo: LA acción prominente de la app -->
-        <div class="sidebar-top" data-module="launcher"></div>
+        <!-- Cabecera del panel: colapsar/expandir + nueva sesión (rail colapsado) -->
+        <div class="sb-head">
+          <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Contraer/expandir panel"></button>
+          <button id="rail-new" class="rail-btn sb-new only-collapsed" data-icon="plus" title="Nueva sesión"></button>
+        </div>
 
-        <div class="sidebar-scroll">
+        <!-- Empezar trabajo: LA acción prominente (solo panel expandido) -->
+        <div class="sidebar-top only-expanded" data-module="launcher"></div>
+
+        <!-- Pestañas abiertas (pty | chat): navegación principal. Iconos en el
+             rail colapsado (dot de estado + color de modelo); chips con inicial
+             en el panel expandido. -->
+        <div id="rail-tabs"></div>
+
+        <div class="sidebar-scroll only-expanded">
           <!-- Retomar trabajo: sesiones (siempre visible, sin acordeón) -->
           <section class="side-sec" data-module="sessions"></section>
           <!-- Proyecto principal -->
           <section class="side-sec" data-module="tolkien"></section>
         </div>
 
-        <!-- Ver estado: pie fijo compacto (2 filas) -->
+        <!-- Ver estado: pie fijo compacto -->
         <footer class="sidebar-footer">
-          <div data-module="stats"></div>
+          <div class="only-expanded" data-module="stats"></div>
           <div class="footer-acct">
-            <span data-module="usage"></span>
-            <span id="acct-user" class="acct-user"></span>
+            <span class="only-expanded" data-module="usage"></span>
+            <span id="acct-user" class="acct-user only-expanded"></span>
             <a href="/archivos" class="btn-ghost btn--sm btn--icon" data-icon="folder" title="Explorador"></a>
             <span data-module="system"></span>
           </div>
@@ -49,13 +62,6 @@
 
       <!-- Panel central: terminales -->
       <main id="terminals"></main>
-
-      <!-- Rail derecho: menú, pestañas (con tipo: pty | chat), nueva sesión -->
-      <nav id="rail">
-        <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Mostrar/ocultar panel"></button>
-        <div id="rail-tabs"></div>
-        <button id="rail-new" class="rail-btn" data-icon="plus" title="Nueva sesión"></button>
-      </nav>
     </div>
 
     <!-- Barra de teclas auxiliares + dictado (móvil; fija sobre el teclado). -->
