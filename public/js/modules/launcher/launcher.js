@@ -101,9 +101,44 @@ export default {
         .slice(0, 5)
         .map((r) => dest(r.cwd, baseName(r.cwd), `~/${r.cwd}`, 'folder'))
         .join('');
+      const resume = st.type === 'chat' ? '<div class="ln-resume" data-ref="resume"></div>' : '';
       return `
         <div class="ln-dests">${shortcuts}${recents}</div>
-        <button class="btn-ghost btn--sm ln-browse-open">${icon('folder', { size: 14 })}<span>Elegir otra carpeta…</span></button>`;
+        <button class="btn-ghost btn--sm ln-browse-open">${icon('folder', { size: 14 })}<span>Elegir otra carpeta…</span></button>
+        ${resume}`;
+    }
+
+    function fmtAgo(ms) {
+      const s = Math.floor((Date.now() - ms) / 1000);
+      if (s < 3600) return `hace ${Math.max(1, Math.floor(s / 60))} min`;
+      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+      return `hace ${Math.floor(s / 86400)} d`;
+    }
+
+    // "Retomar conversación": las últimas de la carpeta seleccionada (solo chat).
+    async function loadResume() {
+      const box = modal?.body?.querySelector('[data-ref="resume"]');
+      if (!box) return;
+      const rel = st.dest.rel;
+      try {
+        const { conversations } = await (await fetch(`/api/chat/history?cwd=${encodeURIComponent(rel)}`)).json();
+        if (!modal || st.dest.rel !== rel || !conversations.length) { box.innerHTML = ''; return; }
+        box.innerHTML = `<div class="ln-sec-title">Retomar en ${st.dest.label}</div>` +
+          conversations.map((c) => `
+            <button class="btn-ghost btn--sm ln-resume-item" data-sid="${c.sessionId}">
+              <span class="ln-resume-snip"></span><span class="ln-sub">${fmtAgo(c.ts)}</span>
+            </button>`).join('');
+        conversations.forEach((c, i) => {
+          const b = box.querySelectorAll('.ln-resume-item')[i];
+          b.querySelector('.ln-resume-snip').textContent = c.snippet;
+          b.addEventListener('click', async () => {
+            localStorage.setItem(LAST_MODEL_KEY, st.model);
+            const dest = st.dest;
+            modal.close();
+            await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default', resume: c.sessionId });
+          });
+        });
+      } catch { box.innerHTML = ''; }
     }
 
     function browseHTML() {
@@ -128,6 +163,7 @@ export default {
       });
       body.querySelector('.ln-back')?.addEventListener('click', () => { st.view = 'list'; render(); });
       if (st.view === 'browse') browse(st.browseRel);
+      if (st.view === 'list' && st.type === 'chat') loadResume();
     }
 
     // Navegador de carpetas: navegar implica seleccionar la carpeta actual.

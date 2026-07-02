@@ -13,7 +13,7 @@ const CACHE_TTL = 3000;
 const cache = new Map(); // absCwd -> { t, v }
 
 // Claude codifica el cwd absoluto reemplazando lo no alfanumérico por '-'.
-function encodeCwd(absCwd) {
+export function encodeCwd(absCwd) {
   return absCwd.replace(/[^A-Za-z0-9]/g, '-');
 }
 

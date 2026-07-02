@@ -18,10 +18,14 @@
 //         {type:'permission_request', id, tool, input} · {type:'status', state}
 //         {type:'mode', mode} · {type:'error', message} · {type:'closed'}
 import express from 'express';
+import fss from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
-import { VALID_MODELS } from '../../core/claude-model.js';
+import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
@@ -83,14 +87,59 @@ function resultText(content) {
   return '';
 }
 
+// Reconstruye eventos de UI desde el transcript de una sesión (para que al
+// RETOMAR se vea la conversación anterior). Dedup por message.id/uuid: cada
+// mensaje aparece repetido en el jsonl (misma lección que el módulo tokens).
+function loadTranscriptEvents(cwd, sessionId) {
+  const file = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
+  let txt;
+  try { txt = fss.readFileSync(file, 'utf8'); } catch { return []; }
+  const seen = new Set();
+  const events = [];
+  for (const line of txt.split('\n')) {
+    if (!line) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const msg = o.message;
+    if (!msg) continue;
+    const dedupKey = msg.id || o.uuid;
+    if (dedupKey) {
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+    }
+    if (o.type === 'user' && msg.role === 'user') {
+      const c = msg.content;
+      if (typeof c === 'string') {
+        if (c.trim()) events.push({ type: 'user', text: c });
+      } else if (Array.isArray(c)) {
+        for (const b of c) {
+          if (b.type === 'text' && b.text?.trim()) events.push({ type: 'user', text: b.text });
+          if (b.type === 'tool_result') {
+            events.push({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000) });
+          }
+        }
+      }
+    } else if (o.type === 'assistant' && Array.isArray(msg.content)) {
+      for (const b of msg.content) {
+        if (b.type === 'text' && b.text) events.push({ type: 'assistant', text: b.text });
+        if (b.type === 'tool_use') {
+          events.push({ type: 'tool_use', id: b.id, name: b.name, summary: toolSummary(b.name, b.input), detail: toolDetail(b.name, b.input) });
+        }
+      }
+    }
+  }
+  return events.slice(-400);
+}
+
 class Chat {
-  constructor({ id, cwd, model, permissionMode }) {
+  constructor({ id, cwd, model, permissionMode, resume = null }) {
     this.id = id;
     this.cwd = cwd;
     this.model = model || null;
     this.permissionMode = permissionMode || 'default';
     this.title = path.basename(cwd) || '~';
-    this.sessionId = null;
+    this.resume = resume;
+    this.sessionId = resume || null;
     this.alive = true;
     this.status = 'waiting'; // waiting | working
     this.lastActivity = Date.now();
@@ -102,11 +151,15 @@ class Chat {
   }
 
   start() {
+    // Al retomar: el SDK restaura el contexto; la UI muestra lo anterior
+    // reconstruyéndolo desde el transcript.
+    if (this.resume) this.history = loadTranscriptEvents(this.cwd, this.resume);
     this.q = query({
       prompt: this.input.gen(),
       options: {
         cwd: this.cwd,
         ...(this.model ? { model: this.model } : {}),
+        ...(this.resume ? { resume: this.resume } : {}),
         permissionMode: this.permissionMode,
         includePartialMessages: true,
         canUseTool: (toolName, input, ctx) => this._askPermission(toolName, input, ctx),
@@ -307,11 +360,15 @@ class ChatManager {
     }, 60 * 1000).unref();
   }
 
-  create({ cwd, model, permissionMode }) {
+  create({ cwd, model, permissionMode, resume = null }) {
     const id = `c${process.pid}-${++this._seq}`;
-    const chat = new Chat({ id, cwd, model, permissionMode }).start();
+    const chat = new Chat({ id, cwd, model, permissionMode, resume }).start();
     this.chats.set(id, chat);
     return chat;
+  }
+
+  liveSessionIds() {
+    return new Set([...this.chats.values()].filter((c) => c.alive && c.sessionId).map((c) => c.sessionId));
   }
 
   get(id) { return this.chats.get(id); }
@@ -327,22 +384,64 @@ export default {
     const r = express.Router();
 
     r.post('/create', (req, res) => {
-      const { cwd, model, permissionMode } = req.body || {};
+      const { cwd, model, permissionMode, resume } = req.body || {};
       if (model != null && !VALID_MODELS.has(model)) {
         return res.status(400).json({ error: 'Modelo inválido.' });
       }
       if (permissionMode != null && !PERMISSION_MODES.has(permissionMode)) {
         return res.status(400).json({ error: 'Modo de permisos inválido.' });
       }
+      if (resume != null && !UUID_RE.test(resume)) {
+        return res.status(400).json({ error: 'Sesión a retomar inválida.' });
+      }
       const chat = manager.create({
         cwd: safeCwd(cwd),
         model: model || null,
         permissionMode: permissionMode || 'default',
+        resume: resume || null,
       });
       res.json({ chat: chat.info() });
     });
 
     r.get('/list', (req, res) => res.json({ chats: manager.list() }));
+
+    // Conversaciones PASADAS de una carpeta (para "Retomar" del lanzador).
+    r.get('/history', (req, res) => {
+      const cwdAbs = safeCwd(req.query.cwd || '');
+      const dir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwdAbs));
+      let files = [];
+      try {
+        files = fss.readdirSync(dir)
+          .filter((f) => f.endsWith('.jsonl'))
+          .map((f) => ({ f, mtime: fss.statSync(path.join(dir, f)).mtimeMs }))
+          .sort((a, b) => b.mtime - a.mtime)
+          .slice(0, 10);
+      } catch { return res.json({ conversations: [] }); }
+
+      const live = manager.liveSessionIds();
+      const out = [];
+      for (const { f, mtime } of files) {
+        const sessionId = f.replace(/\.jsonl$/, '');
+        if (!UUID_RE.test(sessionId) || live.has(sessionId)) continue;
+        // Snippet: primer mensaje de texto del usuario (primeras ~200 líneas).
+        let snippet = '';
+        try {
+          const lines = fss.readFileSync(path.join(dir, f), 'utf8').split('\n').slice(0, 200);
+          for (const line of lines) {
+            let o;
+            try { o = JSON.parse(line); } catch { continue; }
+            if (o.type !== 'user' || o.message?.role !== 'user') continue;
+            const c = o.message.content;
+            const text = typeof c === 'string' ? c
+              : Array.isArray(c) ? (c.find((b) => b.type === 'text')?.text || '') : '';
+            if (text.trim() && !text.startsWith('<')) { snippet = text.trim().slice(0, 90); break; }
+          }
+        } catch { /* noop */ }
+        if (snippet) out.push({ sessionId, ts: mtime, snippet });
+        if (out.length >= 5) break;
+      }
+      res.json({ conversations: out });
+    });
 
     r.post('/close', (req, res) => {
       const chat = manager.get(req.body?.id);

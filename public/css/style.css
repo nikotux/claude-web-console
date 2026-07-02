@@ -278,6 +278,12 @@ html, body {
 }
 .ln-dir:hover { background: var(--cwc-bg-hover); color: var(--cwc-text); }
 .ln-start { margin-top: .8rem; }
+.ln-resume { margin-top: .7rem; display: flex; flex-direction: column; gap: .3rem; }
+.ln-resume-item { justify-content: flex-start; max-width: 100%; }
+.ln-resume-snip {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: left; color: var(--cwc-text-secondary);
+}
 .ln-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin: .5rem 0 0; padding: .3rem; }
 
 /* ===== Menú Sistema ===== */
