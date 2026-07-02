@@ -126,66 +126,123 @@ export default {
     }
 
     function openPrModal() {
-      const m = dialog.openModal({ title: 'PRs de bugfixes — Tolkien', width: 600 });
+      const m = dialog.openModal({ title: 'PRs de bugfixes — Tolkien', width: 680 });
       const wrap = document.createElement('div');
       wrap.className = 'bfm';
       wrap.innerHTML = `
         <div class="bfm-actions">
           <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
           <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios que no quedaron registrados">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
-          <button class="btn-ghost btn--sm" data-ref="ghsync" title="Trae de GitHub el estado actual de los PRs enviados (abierto / mergeado)">${icon('refresh', { size: 13 })}<span>Actualizar</span></button>
+          <button class="btn-ghost btn--sm" data-ref="ghsync" title="Trae de GitHub el estado actual: PRs del registro + PRs tuyos no registrados">${icon('refresh', { size: 13 })}<span>Actualizar</span></button>
+          <span class="bfm-ghstate" data-ref="ghstate"></span>
         </div>
-        <div class="bfm-list"><span class="cwc-spinner"></span></div>`;
+        <div class="bfm-box">
+          <table class="bfm-table">
+            <thead><tr><th></th><th>TKT</th><th>Título</th><th>Enviado</th><th>Estado</th><th>Merge</th></tr></thead>
+            <tbody data-ref="tbody"><tr><td colspan="6"><span class="cwc-spinner"></span></td></tr></tbody>
+          </table>
+        </div>`;
       m.body.appendChild(wrap);
       const mr = {};
       for (const r of wrap.querySelectorAll('[data-ref]')) mr[r.dataset.ref] = r;
-      const listEl = wrap.querySelector('.bfm-list');
-      let entries = [];
+      let entries = []; // nuestro registro
+      let ghRows = [];  // PRs míos en GitHub que NO están en el registro
 
-      function renderList() {
+      // Fila expandible: la fila de detalle vive a continuación (colspan 6).
+      function detailHtml(b) {
+        return `
+          <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
+          ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
+          : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
+          <p class="bfm-links">
+            ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
+            ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
+            ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
+          </p>`;
+      }
+
+      function renderTable() {
         const pendientes = entries.filter((b) => b.status === 'pendiente' && b.files?.length);
         mr.send.disabled = !pendientes.length;
         mr.send.querySelector('span').textContent = pendientes.length ? `Enviar pendientes (${pendientes.length})` : 'Enviar pendientes';
-        if (!entries.length) {
-          listEl.innerHTML = '<p class="hp-empty">Sin fixes registrados: cerrá una conversación abierta desde un ticket o corré "Buscar bugfixes".</p>';
+        if (!entries.length && !ghRows.length) {
+          mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">Sin fixes registrados ni PRs tuyos en GitHub.</td></tr>';
           return;
         }
-        // Arriba lo accionable: pendientes con archivos (listos para enviar),
-        // después pendientes en plan, después el historial de enviados.
+        // Arriba lo accionable: pendientes con archivos, después pendientes en
+        // plan, después enviados; al final los PRs que están SOLO en GitHub.
         const rank = (b) => (b.status === 'pendiente' ? (b.files?.length ? 0 : 1) : 2);
         const orden = [...entries].sort((a, b) => rank(a) - rank(b)
           || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
-        listEl.innerHTML = orden.map((b) => {
+        const rows = [];
+        for (const b of orden) {
           const est = prEstado(b);
-          return `
-          <details class="hp-finding hp-bf">
-            <summary>
-              <span class="hp-dot hp-dot--${est.dot}"></span>
-              <b>${esc(b.title)}</b>
-              <span class="hp-sev">${esc(est.label)}</span>
-            </summary>
-            <div class="bfm-meta">
-              ${b.sentAt ? `<span>enviado: <b>${fmtDate(b.sentAt)}</b></span>` : `<span>registrado: <b>${fmtDate(b.createdAt)}</b></span>`}
-              ${b.mergedAt ? `<span>mergeado: <b>${fmtDate(b.mergedAt)}</b></span>` : ''}
-              ${b.prNumber ? `<span>PR <b>#${esc(b.prNumber)}</b></span>` : ''}
-            </div>
-            <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
-            ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
-            : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
-            <p class="bfm-links">
-              ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
-              ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR ↗</a>` : ''}
-            </p>
-          </details>`;
-        }).join('');
+          rows.push(`
+            <tr class="bfm-row" data-sid="${esc(b.sessionId)}">
+              <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
+              <td class="bfm-tkt">${b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—'}</td>
+              <td class="bfm-title">${esc(b.title)}</td>
+              <td class="bfm-date">${b.sentAt ? fmtDate(b.sentAt) : '—'}</td>
+              <td class="bfm-state">${esc(est.label)}</td>
+              <td class="bfm-date">${b.mergedAt ? `${esc(b.mergedBy || '?')} · ${fmtDate(b.mergedAt)}` : '—'}</td>
+            </tr>
+            <tr class="bfm-detail" hidden><td colspan="6">${detailHtml(b)}</td></tr>`);
+        }
+        for (const pr of ghRows) {
+          const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
+          rows.push(`
+            <tr class="bfm-row bfm-row--gh">
+              <td><span class="hp-dot hp-dot--${dot}"></span></td>
+              <td class="bfm-tkt" title="PR tuyo en GitHub sin registro de bugfix">GitHub</td>
+              <td class="bfm-title"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${esc(pr.number)} ${esc(pr.title)}</a></td>
+              <td class="bfm-date">${pr.createdAt ? fmtDate(pr.createdAt) : '—'}</td>
+              <td class="bfm-state">${pr.state === 'merged' ? 'mergeado' : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
+              <td class="bfm-date">${pr.mergedAt ? `${esc(pr.mergedBy || '?')} · ${fmtDate(pr.mergedAt)}` : '—'}</td>
+            </tr>`);
+        }
+        mr.tbody.innerHTML = rows.join('');
       }
+
+      // Click en una fila del registro: despliega/pliega su detalle.
+      mr.tbody.addEventListener('click', (e) => {
+        if (e.target.closest('a')) return; // los links navegan, no despliegan
+        const row = e.target.closest('.bfm-row');
+        if (!row || row.classList.contains('bfm-row--gh')) return;
+        const det = row.nextElementSibling;
+        if (det?.classList.contains('bfm-detail')) det.hidden = !det.hidden;
+      });
 
       async function reload() {
         try {
           const { bugfixes } = await (await fetch('/api/bugfixes')).json();
           entries = bugfixes || [];
-          renderList();
-        } catch { listEl.innerHTML = '<p class="hp-empty">No se pudo leer el registro.</p>'; }
+          renderTable();
+        } catch { mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">No se pudo leer el registro.</td></tr>'; }
+      }
+
+      // Sincronización con GitHub (al ABRIR el modal y con [Actualizar]):
+      // refresca el estado de los PRs del registro y trae los PRs míos que no
+      // están registrados. `silent` = apertura automática, sin alerts.
+      async function ghSync(silent) {
+        mr.ghsync.disabled = true;
+        mr.ghstate.innerHTML = '<span class="cwc-spinner"></span> consultando GitHub…';
+        try {
+          const res = await fetch('/api/bugfixes/refresh-prs', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Falló la consulta a GitHub.');
+          entries = data.bugfixes || entries;
+          ghRows = data.github || [];
+          renderTable();
+          mr.ghstate.textContent = `GitHub · ${fmtDate(Date.now())}`;
+          if (data.errors?.length && !silent) {
+            await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: `Algunos PRs no se pudieron consultar:\n${data.errors.join('\n')}` });
+          }
+        } catch (err) {
+          mr.ghstate.textContent = 'GitHub no disponible';
+          if (!silent) await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: err.message });
+        } finally {
+          mr.ghsync.disabled = false;
+        }
       }
 
       // Enviar pendientes: actualizar el repo primero; si falla, no subir nada.
@@ -226,6 +283,7 @@ export default {
         } finally {
           mr.send.innerHTML = `${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span>`;
           await reload();
+          ghSync(true); // reflejar en el cuadro el estado real de lo recién subido
           loadStatus();
         }
       });
@@ -237,7 +295,7 @@ export default {
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || 'Falló la búsqueda.');
           entries = data.bugfixes || [];
-          renderList();
+          renderTable();
           await dialog.alertDialog({
             title: 'Buscar bugfixes',
             message: data.added ? `Se registraron ${data.added} fix(es) nuevos (${data.scanned} transcripts revisados).`
@@ -247,22 +305,11 @@ export default {
         finally { mr.scan.disabled = false; }
       });
 
-      mr.ghsync.addEventListener('click', async () => {
-        mr.ghsync.disabled = true;
-        try {
-          const res = await fetch('/api/bugfixes/refresh-prs', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'Falló la actualización.');
-          entries = data.bugfixes || [];
-          renderList();
-          if (data.errors?.length) {
-            await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: `Algunos PRs no se pudieron consultar:\n${data.errors.join('\n')}` });
-          }
-        } catch (err) { await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: err.message }); }
-        finally { mr.ghsync.disabled = false; }
-      });
+      mr.ghsync.addEventListener('click', () => ghSync(false));
 
-      reload();
+      // Al abrir: primero el cuadro con nuestro registro (instantáneo) y
+      // enseguida la consulta a GitHub que lo completa.
+      reload().then(() => ghSync(true));
     }
 
     refs.refresh.addEventListener('click', checkRemote);

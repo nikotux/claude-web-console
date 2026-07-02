@@ -159,9 +159,11 @@ export default {
       }
     });
 
-    // Refresca desde GitHub el estado real de cada PR subido (¿lo mergeó
-    // Chris?). Corre gh en el repo de Tolkien; errores por-PR no cortan el
-    // resto (quedan en `errors`).
+    // Refresca desde GitHub: (1) el estado real de cada PR subido del registro
+    // (¿lo mergeó Chris?) y (2) TODOS los PRs de Tolkien que autoreó el usuario
+    // (gh pr list --author @me) — los que no están en el registro vuelven como
+    // filas "solo GitHub" para que el cuadro muestre el panorama completo.
+    // Errores por-PR no cortan el resto (quedan en `errors`).
     r.post('/refresh-prs', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const all = listBugfixes();
@@ -185,7 +187,30 @@ export default {
         }
       }
       saveBugfixes(all);
-      res.json({ bugfixes: all, errors });
+
+      let github = [];
+      try {
+        const out = await run('gh', [
+          'pr', 'list', '--author', '@me', '--state', 'all', '--limit', '50',
+          '--json', 'number,title,state,mergedAt,mergedBy,url,createdAt,headRefName',
+        ], { cwd: config.projectDir });
+        const registrados = new Set(all.map((b) => b.prNumber).filter(Boolean));
+        github = JSON.parse(out)
+          .filter((pr) => !registrados.has(pr.number))
+          .map((pr) => ({
+            number: pr.number,
+            title: String(pr.title || '').slice(0, 160),
+            state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
+            createdAt: pr.createdAt ? Date.parse(pr.createdAt) : null,
+            mergedAt: pr.mergedAt ? Date.parse(pr.mergedAt) : null,
+            mergedBy: pr.mergedBy?.login || null,
+            url: pr.url,
+            branch: pr.headRefName || null,
+          }));
+      } catch (err) {
+        errors.push(`gh pr list: ${String(err?.message || err).slice(0, 120)}`);
+      }
+      res.json({ bugfixes: all, github, errors });
     });
 
     r.post('/delete', (req, res) => {

@@ -662,12 +662,35 @@ html, body {
 .hp-bf-files--none { color: var(--cwc-warn); font-size: var(--cwc-fs-xs); }
 .hp-bf-actions { margin-top: .4rem; }
 
-/* Modal PRs de bugfixes (sección Tolkien) */
-.bfm-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
-.bfm-list { display: flex; flex-direction: column; gap: .15rem; max-height: 60vh; overflow-y: auto; }
-.bfm-meta { display: flex; gap: .8rem; flex-wrap: wrap; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin: .1rem 0 .2rem 1.1rem; }
-.bfm-links { display: flex; gap: .8rem; }
+/* Modal PRs de bugfixes (sección Tolkien) — cuadro registro + GitHub */
+.bfm-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
+.bfm-ghstate { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .35rem; }
+.bfm-box { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); max-height: 62vh; overflow: auto; }
+.bfm-table { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
+.bfm-table th {
+  text-align: left; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-weight: 600;
+  padding: .4rem .5rem; border-bottom: 1px solid var(--cwc-border-soft);
+  position: sticky; top: 0; background: var(--cwc-bg-elevated); z-index: 1;
+}
+.bfm-table td { padding: .38rem .5rem; border-bottom: 1px solid var(--cwc-divider); vertical-align: middle; }
+.bfm-row { cursor: pointer; }
+.bfm-row:hover { background: var(--cwc-bg-hover); }
+.bfm-row--gh { cursor: default; }
+.bfm-row--gh .bfm-tkt { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.bfm-tkt { font-family: var(--cwc-font-mono); white-space: nowrap; }
+.bfm-title { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bfm-title a { color: var(--cwc-text); }
+.bfm-title a:hover { color: var(--cwc-accent); }
+.bfm-date { white-space: nowrap; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.bfm-state { white-space: nowrap; font-size: var(--cwc-fs-xs); }
+.bfm-detail td { background: var(--cwc-bg-panel); padding: .5rem .8rem; }
+.bfm-links { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
 .bfm-links a { color: var(--cwc-accent); }
+.bfm-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+@media (max-width: 640px) {
+  .bfm-title { max-width: 130px; }
+  .bfm-table th:nth-child(6), .bfm-table td:nth-child(6) { display: none; }
+}
 
 .chat-composer {
   display: flex; gap: .4rem; align-items: flex-end;
