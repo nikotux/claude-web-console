@@ -4,8 +4,13 @@ import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
 
 const API = '/api/files';
 
+// ¿Estamos embebidos como ventana flotante dentro de la consola?
+const EMBEDDED = window.parent !== window;
+
 // Crea una sesión (Claude o terminal) en una carpeta y vuelve a la consola
 // con esa pestaña enfocada. Resuelve el flujo "abrir Claude en carpeta nueva".
+// Embebido: avisamos al shell por postMessage (cierra la ventana y enfoca la
+// sesión). Página directa: navegamos con /?focus=<id> como siempre.
 async function sessionHere(rel, runClaude) {
   try {
     const res = await fetch('/api/terminal/sessions', {
@@ -15,7 +20,8 @@ async function sessionHere(rel, runClaude) {
     });
     if (!res.ok) throw new Error('No se pudo crear la sesión.');
     const { session } = await res.json();
-    location.href = `/?focus=${encodeURIComponent(session.id)}`;
+    if (EMBEDDED) window.parent.postMessage({ type: 'cwc-session', id: session.id }, location.origin);
+    else location.href = `/?focus=${encodeURIComponent(session.id)}`;
   } catch (e) {
     alertDialog({ title: 'Nueva sesión', message: e.message });
   }
@@ -487,7 +493,15 @@ $('fm-preview').addEventListener('click', (e) => { if (e.target.id === 'fm-previ
 
 // Atajos de teclado.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { hideCtx(); if (!$('fm-preview').hidden) closePreview(); return; }
+  if (e.key === 'Escape') {
+    const hadCtx = !ctxEl.hidden;
+    const hadPreview = !$('fm-preview').hidden;
+    hideCtx();
+    if (hadPreview) closePreview();
+    // Embebido y sin nada abierto: Esc cierra la ventana flotante del shell.
+    if (EMBEDDED && !hadCtx && !hadPreview) window.parent.postMessage({ type: 'cwc-explorer-close' }, location.origin);
+    return;
+  }
   if (e.target.tagName === 'INPUT') return;
   if (state.mode !== 'files') return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection.size) { e.preventDefault(); trashSelected(); }

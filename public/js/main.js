@@ -321,6 +321,59 @@ function openChatView(chatInfo) {
   hideSidebarOnMobile();
 }
 
+// Enfoca la pestaña de una sesión ya existente; si no está abierta, la adjunta.
+// (La usa el Explorador flotante tras crear una sesión "aquí".)
+async function focusOrOpenSession(id) {
+  if (focusSession(id)) return;
+  const s = (await apiListSessions()).find((x) => x.id === id);
+  if (s) { addTab(s); hideSidebarOnMobile(); bus.dispatchEvent(new Event('sessions-changed')); }
+}
+
+// ===== Explorador como ventana flotante =====
+// Reutilizamos /archivos VERBATIM dentro de un <iframe>: fm.js es una app de
+// página completa (posee document, listeners globales, drag&drop, su propio
+// fm.css). Montarla como módulo exigiría refactor y arriesgaría colisiones de
+// CSS con la consola; el iframe la aísla por completo y ya la servimos. El
+// único puente es postMessage: al "abrir terminal/Claude aquí", el iframe avisa
+// y el shell cierra la ventana y enfoca la sesión nueva.
+let explorerModal = null;
+function openExplorer(path = '') {
+  if (explorerModal) explorerModal.close();
+  const src = path ? `/archivos?path=${encodeURIComponent(path)}` : '/archivos';
+  const m = openModal({ title: 'Explorador', width: '92vw', onClose: () => { explorerModal = null; } });
+  m.card.classList.add('dlg-card--explorer');
+  const frame = document.createElement('iframe');
+  frame.className = 'explorer-frame';
+  frame.src = src;
+  frame.title = 'Explorador';
+  m.body.appendChild(frame);
+  explorerModal = m;
+}
+
+// El iframe del Explorador pide enfocar una sesión recién creada "aquí".
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  const d = e.data;
+  if (!d) return;
+  if (d.type === 'cwc-session' && d.id) {
+    if (explorerModal) explorerModal.close();
+    focusOrOpenSession(d.id);
+  } else if (d.type === 'cwc-explorer-close') {
+    if (explorerModal) explorerModal.close();
+  }
+});
+
+// Cualquier enlace a /archivos abre la ventana flotante (salvo click con
+// modificador o botón central: eso abre la página directa, útil para deep-links).
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a[href^="/archivos"]');
+  if (!a) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  const path = new URL(a.href, location.origin).searchParams.get('path') || '';
+  openExplorer(path);
+});
+
 // Busca una pestaña abierta cuyo cwd termine en la ruta relativa dada.
 function findSessionByCwd(rel) {
   const suffix = '/' + String(rel).replace(/^\/+|\/+$/g, '');
@@ -339,6 +392,7 @@ const ctx = {
   openSession,
   openChat,
   openChatView,
+  openExplorer,
   focusSession,
   findSessionByCwd,
   isMobile,

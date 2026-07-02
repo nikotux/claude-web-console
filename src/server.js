@@ -62,7 +62,10 @@ async function main() {
   // Cabeceras de seguridad básicas (defensa en profundidad).
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
+    // SAMEORIGIN (no DENY): el Explorador flotante embebe /archivos en un
+    // <iframe> del MISMO origen. Sigue bloqueando el embebido por terceros.
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer');
     next();
   });
