@@ -87,6 +87,10 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (bugfix-pr-context.md, botón Contexto del modal Enviar PR — cómo
                             se REDACTAN las notas del PR: formato Problema:/Qué hice:/Mejor
                             solución: del cierre). Editor genérico: textEditorDialog (ui/dialog.js).
+                            Cancelar PR (POST /cancel-pr, admin): cierra el PR en GitHub +
+                            borra el branch remoto y el registro vuelve LIMPIO a 'pendiente'
+                            (sin campos de PR) para rehacer el fix de cero; un PR MERGEADO
+                            nunca se cancela (se verifica el estado real con gh antes).
                             El chat registra al CERRAR una conversación con ticket (diferido
                             2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud y
                             modal "Enviar PR" de la sección Tolkien (cuadro registro+GitHub).
@@ -101,7 +105,9 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             para pendientes, tamaño del PR para subidos), enviar pendientes
                             con update previo, re-scan, y "Trabajar en esto" (chat
                             'PR en progreso · TKT #n' en tolkien para refinar a mano;
-                            recordBugfix MERGEA por ticket los pendientes — no duplica);
+                            recordBugfix MERGEA por ticket los pendientes — no duplica) y
+                            "Cancelar PR" en el detalle de un fix subido no mergeado
+                            (confirm rojo → /cancel-pr → vuelve a pendiente);
                             EXCLUSIVO de ~/tolkien) ·
                             tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·

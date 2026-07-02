@@ -7,6 +7,8 @@
 //   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
 //   GET  /api/bugfixes/context?kind=work|pr -> contexto editable (autenticados)
 //   POST /api/bugfixes/context {kind, context} -> guarda el contexto (admin)
+//   POST /api/bugfixes/cancel-pr {id} -> cierra el PR + borra el branch remoto
+//        y el registro vuelve a 'pendiente' para rehacer el fix (admin)
 //   POST /api/bugfixes/delete {id} -> descarta un registro (admin)
 //
 // GIT/PR — decisiones duras:
@@ -130,6 +132,56 @@ async function pushPr(entry) {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {}); // el remoto ya lo tiene
   }
+}
+
+// Cancela un PR subido para rehacer el fix de cero: cierra el PR en GitHub y
+// borra el branch remoto (borrar el branch cierra el PR igual si gh falló).
+// Un PR MERGEADO nunca se cancela — el fix ya está en main: se verifica el
+// estado REAL con gh antes de tocar nada; sin gh, vale el estado registrado.
+// Devuelve la lista de pasos efectivamente ejecutados (para mostrarla en la UI).
+async function cancelPr(entry) {
+  const TOLKIEN = config.projectDir;
+  let state = entry.prState;
+  if (entry.prNumber) {
+    try {
+      const s = JSON.parse(await run('gh', ['pr', 'view', String(entry.prNumber), '--json', 'state'], { cwd: TOLKIEN })).state;
+      state = s === 'MERGED' ? 'merged' : s === 'CLOSED' ? 'closed' : 'open';
+    } catch { /* sin gh o PR inaccesible: se usa el estado registrado */ }
+  }
+  if (state === 'merged') {
+    throw new Error('El PR ya fue mergeado a main; no se puede cancelar (el fix ya está en el repo).');
+  }
+  const steps = [];
+  let prCerrado = state === 'closed';
+  if (entry.prNumber && !prCerrado) {
+    try {
+      await run('gh', ['pr', 'close', String(entry.prNumber), '--comment',
+        'Cancelado desde la consola: el fix se rehace y se sube en un PR nuevo.'], { cwd: TOLKIEN });
+      steps.push(`PR #${entry.prNumber} cerrado en GitHub (sin mergear)`);
+      prCerrado = true;
+    } catch (err) {
+      steps.push(`no se pudo cerrar el PR vía gh: ${String(err.message).slice(0, 80)}`);
+    }
+  } else if (prCerrado && entry.prNumber) {
+    steps.push(`el PR #${entry.prNumber} ya estaba cerrado`);
+  }
+  if (entry.branch) {
+    try {
+      await run('git', ['push', 'origin', '--delete', entry.branch], { cwd: TOLKIEN });
+      steps.push(`branch remoto ${entry.branch} borrado`);
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (/remote ref does not exist/i.test(msg)) {
+        steps.push(`el branch ${entry.branch} ya no existía en el remoto`);
+      } else if (!prCerrado) {
+        // Ni el PR se cerró ni el branch se pudo borrar: el PR sigue vivo.
+        throw new Error(`No se pudo cancelar: el PR sigue abierto y el branch no se pudo borrar (${msg.slice(0, 150)}).`);
+      } else {
+        steps.push(`no se pudo borrar el branch remoto: ${msg.slice(0, 80)}`);
+      }
+    }
+  }
+  return steps;
 }
 
 export default {
@@ -272,6 +324,39 @@ export default {
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío (borralo a mano si de verdad querés eso).' });
       saveContext(kind, text);
       res.json({ ok: true, kind, context: getContext(kind) });
+    });
+
+    // Cancela el PR de un fix subido y LIMPIA el registro a 'pendiente' (sin
+    // rastros del PR) para volver a trabajar/subir el bugfix de cero. El
+    // próximo pushPr regenera branch y PR nuevos. Un PR mergeado no se toca.
+    r.post('/cancel-pr', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const all = listBugfixes();
+      const entry = all.find((b) => b.sessionId === id);
+      if (!entry) return res.status(404).json({ error: 'Registro inexistente.' });
+      if (entry.status !== 'subido') return res.status(409).json({ error: 'Este fix no tiene PR subido; no hay nada que cancelar.' });
+      if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una operación en curso para este fix.' });
+      inFlight.add(id);
+      try {
+        const steps = await cancelPr(entry);
+        entry.status = 'pendiente';
+        entry.branch = null;
+        entry.prUrl = null;
+        entry.prNumber = null;
+        entry.prState = null;
+        entry.sentAt = null;
+        entry.mergedAt = null;
+        entry.mergedBy = null;
+        entry.stats = null;
+        entry.updatedAt = Date.now();
+        saveBugfixes(all);
+        res.json({ ok: true, steps, entry });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
+      } finally {
+        inFlight.delete(id);
+      }
     });
 
     r.post('/delete', (req, res) => {

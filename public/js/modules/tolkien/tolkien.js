@@ -168,6 +168,9 @@ export default {
             ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
             ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
             <button class="btn btn--sm bfm-work" data-act="work" title="Abre una conversación en ~/tolkien para refinar este fix a mano antes de subir (o modificar) el PR">${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
+            ${b.status === 'subido' && b.prState !== 'merged'
+    ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr" title="Cierra el PR en GitHub, borra el branch remoto y devuelve el fix a pendiente para rehacerlo de cero">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>`
+    : ''}
           </p>`;
       }
 
@@ -228,6 +231,14 @@ export default {
           if (b) { m.close(); await doWorkOn(b); }
           return;
         }
+        const cancelBtn = e.target.closest('[data-act="cancelpr"]');
+        if (cancelBtn) {
+          const det = cancelBtn.closest('.bfm-detail');
+          const sid = det?.previousElementSibling?.dataset?.sid;
+          const b = entries.find((x) => x.sessionId === sid);
+          if (b) await doCancelPr(b, cancelBtn);
+          return;
+        }
         if (e.target.closest('a')) return; // los links navegan, no despliegan
         const row = e.target.closest('.bfm-row');
         if (!row || row.classList.contains('bfm-row--gh')) return;
@@ -267,6 +278,37 @@ export default {
           title: `PR en progreso · TKT #${b.ticketNumber}`.slice(0, 60),
           ticket: { number: b.ticketNumber, url: b.ticketUrl || null },
         });
+      }
+
+      // Cancela el PR de un fix subido: lo cierra en GitHub (sin mergear),
+      // borra el branch remoto y el registro vuelve a PENDIENTE, limpio, para
+      // volver a trabajar el bugfix y re-crear el PR de cero.
+      async function doCancelPr(b, btn) {
+        const ok = await dialog.confirmDialog({
+          title: `Cancelar PR — TKT #${b.ticketNumber || '?'}`,
+          message: `Se cierra el PR${b.prNumber ? ` #${b.prNumber}` : ''} en GitHub (sin mergear), se borra el branch remoto${b.branch ? ` (${b.branch})` : ''} y el fix vuelve a PENDIENTE para trabajarlo y subirlo de nuevo desde cero.\n\nNo se toca tu árbol de trabajo ni los archivos del fix.`,
+          confirmLabel: 'Cancelar PR',
+          danger: true,
+        });
+        if (!ok) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/bugfixes/cancel-pr', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: b.sessionId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'No se pudo cancelar el PR.');
+          await dialog.alertDialog({
+            title: 'PR cancelado',
+            message: `${(data.steps || []).map((s) => `• ${s}`).join('\n') || '• Listo.'}\n\nEl fix volvió a pendiente: podés retrabajarlo con "Trabajar en esto" y re-enviarlo.`,
+          });
+        } catch (err) {
+          await dialog.alertDialog({ title: 'Cancelar PR', message: err.message });
+        } finally {
+          await reload();      // el registro pudo cambiar incluso con error parcial
+          ghSync(true);
+        }
       }
 
       async function reload() {
