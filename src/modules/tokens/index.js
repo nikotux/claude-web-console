@@ -15,6 +15,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { keyOf } from '../../core/claude-model.js';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -150,7 +151,7 @@ async function buildSummary() {
     // Se descartan entradas sin tokens (p.ej. "<synthetic>", mensajes internos
     // de Claude Code sin uso real).
     const models = Object.entries(modelStats)
-      .map(([model, v]) => ({ model, tokens: v.tokens, cost: v.cost }))
+      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost }))
       .filter((m) => m.tokens > 0)
       .sort((a, b) => b.cost - a.cost);
     projects.push({

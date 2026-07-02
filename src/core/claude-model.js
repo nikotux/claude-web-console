@@ -38,14 +38,21 @@ function tailModel(file) {
   }
 }
 
-// Mapea un id de modelo a { id, name, color } para el banderín.
+// Key semántica del modelo. El COLOR ya no viaja desde el backend: se define
+// una sola vez en public/css/tokens.css (--cwc-model-<key>) y el frontend lo
+// resuelve vía CSS. Esto elimina la duplicación de paletas.
+const MODEL_KEYS = ['opus', 'sonnet', 'haiku', 'fable'];
+export function keyOf(id) {
+  const low = (id || '').toLowerCase();
+  for (const k of MODEL_KEYS) if (low.includes(k)) return k;
+  return 'unknown';
+}
+
+// Mapea un id de modelo a { id, key, name } para el banderín.
 function describe(id) {
-  const low = id.toLowerCase();
-  if (low.includes('opus')) return { id, name: 'Opus', color: '#b57edc' };
-  if (low.includes('sonnet')) return { id, name: 'Sonnet', color: '#4e8fd1' };
-  if (low.includes('haiku')) return { id, name: 'Haiku', color: '#6cb06c' };
-  if (low.includes('fable')) return { id, name: 'Fable', color: '#d9925a' };
-  return { id, name: id, color: '#8a8a8a' };
+  const key = keyOf(id);
+  const name = key === 'unknown' ? id : key[0].toUpperCase() + key.slice(1);
+  return { id, key, name };
 }
 
 function compute(absCwd) {

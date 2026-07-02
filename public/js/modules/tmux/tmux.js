@@ -3,6 +3,7 @@
 //   - Adjuntar: abre una terminal nueva envolviendo esa sesión.
 //   - Matar: con confirmación (control total => cuidado con las ajenas).
 import { icon } from '../../ui/icons.js';
+import { modelColor } from '../../ui/models.js';
 
 let listEl = null;
 let countEl = null;
@@ -54,8 +55,9 @@ function render(sessions) {
 function setCurModel(el, model) {
   if (!el) return;
   if (model) {
-    el.innerHTML = `<span class="tmux-flag" style="background:${model.color}"></span>${model.name}`;
-    el.style.color = model.color;
+    const color = modelColor(model.key);
+    el.innerHTML = `<span class="tmux-flag" style="background:${color}"></span>${model.name}`;
+    el.style.color = color;
     el.title = `Modelo en uso: ${model.name} (${model.id})`;
   } else {
     el.innerHTML = '<span class="tmux-flag off"></span><span class="tmux-nomodel">sin Claude</span>';

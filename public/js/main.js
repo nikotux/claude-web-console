@@ -2,6 +2,7 @@
 // nueva terminal, árbol de archivos, visor, stats, tokens y tmux.
 import { TerminalTab } from './modules/terminal/terminal.js';
 import { hydrateIcons } from './ui/icons.js';
+import { modelColor } from './ui/models.js';
 import { initStats } from './modules/stats/stats.js';
 import { initTokens } from './modules/tokens/tokens.js';
 import { initTmux, refreshTmux } from './modules/tmux/tmux.js';
@@ -92,7 +93,7 @@ async function updateModelFlag(id) {
   try {
     const { model } = await (await fetch(`/api/terminal/model?id=${encodeURIComponent(id)}`)).json();
     if (model) {
-      entry.flag.style.background = model.color;
+      entry.flag.style.background = modelColor(model.key);
       entry.flag.style.display = 'block';
       entry.tabButton.title = `${entry.session.title || 'terminal'} · ${model.name}`;
     } else {

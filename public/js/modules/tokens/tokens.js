@@ -2,6 +2,8 @@
 //   - Pie fijo (#tokens-mini): total global de tokens y costo + costo de hoy.
 //   - Sección acordeón (#tokens-list): desglose por proyecto.
 // Un único fetch a /api/tokens/summary alimenta ambos; poll cada 15s.
+import { modelColor, modelName } from '../../ui/models.js';
+
 const POLL_MS = 15000;
 
 let footerEl = null;
@@ -28,23 +30,7 @@ function fmtRelative(ms) {
   return new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' });
 }
 
-// Mismos colores que el banderín de modelo del rail/tmux (identidad visual única).
-function modelColor(id) {
-  const low = (id || '').toLowerCase();
-  if (low.includes('opus')) return '#b57edc';
-  if (low.includes('sonnet')) return '#4e8fd1';
-  if (low.includes('haiku')) return '#6cb06c';
-  if (low.includes('fable')) return '#d9925a';
-  return '#8a8a8a';
-}
-function modelShort(id) {
-  const low = (id || '').toLowerCase();
-  if (low.includes('opus')) return 'Opus';
-  if (low.includes('sonnet')) return 'Sonnet';
-  if (low.includes('haiku')) return 'Haiku';
-  if (low.includes('fable')) return 'Fable';
-  return id || '?';
-}
+// Identidad de modelo compartida (colores en tokens.css, key del backend).
 
 function renderFooter(sum) {
   if (!footerEl) return;
@@ -64,8 +50,8 @@ function segsFor(p) {
   return models
     .map((m) => {
       const share = p.cost ? (m.cost / p.cost) * 100 : 100 / models.length;
-      const name = modelShort(m.model);
-      return `<span class="tok-seg" style="width:${share}%;background:${modelColor(m.model)}" title="${name}: ${fmtTokens(m.tokens)} tok · ${fmtCost(m.cost)}"></span>`;
+      const name = modelName(m.key, m.model);
+      return `<span class="tok-seg" style="width:${share}%;background:${modelColor(m.key)}" title="${name}: ${fmtTokens(m.tokens)} tok · ${fmtCost(m.cost)}"></span>`;
     })
     .join('');
 }
@@ -74,8 +60,8 @@ function detailFor(p) {
   const rows = (p.models || [])
     .map((m) => `
       <div class="tok-detail-row">
-        <span class="tok-dot" style="background:${modelColor(m.model)}"></span>
-        <span class="tok-detail-name">${modelShort(m.model)}</span>
+        <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
+        <span class="tok-detail-name">${modelName(m.key, m.model)}</span>
         <span class="tok-detail-tok">${fmtTokens(m.tokens)}</span>
         <span class="tok-detail-cost">${fmtCost(m.cost)}</span>
       </div>`)
