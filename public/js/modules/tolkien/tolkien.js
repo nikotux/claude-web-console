@@ -1,112 +1,122 @@
-// modules/tolkien/tolkien.js — panel del proyecto principal (git).
-//   - Sección del sidebar: estado (SHA + al día/N detrás) + acciones rápidas
-//     (terminal / Claude Code / explorar en el Gestor de Archivos).
-//   - Pie fijo: versión (SHA), si está actualizada, y botón actualizar.
+// modules/tolkien/tolkien.js — tarjeta del proyecto principal (git).
+//
+// Estado git (chip ✓/↓N, #SHA, cambios locales) + acciones:
+//   [Continuar aquí] → enfoca la pestaña del proyecto o crea sesión Claude ahí
+//   [Explorar]       → Explorador posicionado en el proyecto
+//   [Actualizar]     → stash → pull --ff-only → stash pop (no destructivo)
+// Chequeo automático contra el remoto cada 5 minutos.
+export default {
+  name: 'tolkien',
 
-let els = {};
-let current = null;      // último status
-let busy = false;
+  mount(el, ctx) {
+    const { icon, dialog, openSession, focusSession, findSessionByCwd } = ctx;
+    let current = null;
+    let busy = false;
 
-function upToDate(st) { return !!st && st.behind === 0; }
-
-function stateText(st) {
-  if (!st) return '…';
-  let s;
-  if (st.behind > 0) s = `${st.behind} detrás`;
-  else if (st.ahead > 0) s = `${st.ahead} adelante`;
-  else s = 'al día';
-  if (st.dirty) s += ` · ${st.dirtyCount} cambios`;
-  return s;
-}
-
-function render() {
-  const st = current;
-  const head = st ? `#${st.head}` : '#—';
-  const cls = upToDate(st) ? 'ok' : 'behind';
-
-  if (els.chip) {
-    els.chip.className = `tk-chip ${cls}`;
-    els.chip.textContent = st ? (upToDate(st) ? '✓' : `↓${st.behind}`) : '';
-  }
-
-  if (els.footer) {
-    els.footer.innerHTML = `
-      <div class="tk-foot-row">
-        <span class="tk-name">${st?.name || 'tolkien'}</span>
-        <span class="tk-head">${head}</span>
-      </div>
-      <div class="tk-foot-row">
-        <span class="tk-state ${cls}">${stateText(st)}</span>
-        <button class="tk-update" id="tk-foot-update"${busy ? ' disabled' : ''}>${busy ? '…' : 'Actualizar'}</button>
+    el.innerHTML = `
+      <header class="sec-head">
+        <span class="sec-title">Tolkien</span>
+        <span class="tk-chip" data-ref="chip"></span>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Chequear remoto (fetch)">${icon('refresh', { size: 14 })}</button>
+      </header>
+      <div class="tk-card">
+        <div class="tk-state-line" data-ref="state">cargando…</div>
+        <div class="tk-actions">
+          <button class="btn-ghost btn--sm" data-ref="continue">${icon('sparkle', { size: 13 })}<span>Continuar aquí</span></button>
+          <a class="btn-ghost btn--sm" data-ref="explore" href="/archivos?path=tolkien">${icon('folder', { size: 13 })}<span>Explorar</span></a>
+          <button class="btn-ghost btn--sm" data-ref="update">${icon('download', { size: 13 })}<span>Actualizar</span></button>
+        </div>
       </div>`;
-    els.footer.querySelector('#tk-foot-update')?.addEventListener('click', doUpdate);
-  }
 
-  // Botones de la sección
-  for (const b of document.querySelectorAll('#tk-update, #tk-refresh')) b.disabled = busy;
-}
+    const refs = {};
+    for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
-async function loadStatus() {
-  try { current = await (await fetch('/api/tolkien/status')).json(); render(); }
-  catch { /* noop */ }
-}
-
-export async function refreshTolkien() {
-  if (busy) return;
-  busy = true; render();
-  try {
-    const data = await (await fetch('/api/tolkien/fetch', { method: 'POST' })).json();
-    if (data.status) current = data.status;
-    if (data.error) console.warn('[tolkien] fetch:', data.error);
-  } catch { /* noop */ } finally { busy = false; render(); }
-}
-
-async function doUpdate() {
-  if (busy) return;
-  if (!confirm('¿Actualizar tolkien desde GitHub?\n\nstash → pull (ff-only) → stash pop.\nTus cambios locales quedan a salvo en el stash si algo falla.')) return;
-  busy = true; render();
-  try {
-    const data = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
-    if (data.status) current = data.status;
-    if (data.error) {
-      alert('No se pudo actualizar:\n' + data.error + '\n\n' + fmtLog(data.log));
-    } else if (data.popConflict) {
-      alert('Se actualizó, pero hubo CONFLICTO al reaplicar tus cambios.\nQuedaron guardados en el stash (git stash list) para que los resuelvas a mano.\n\n' + fmtLog(data.log));
-    } else {
-      alert('Repositorio actualizado.' + (data.stashed ? '\nTus cambios locales fueron reaplicados.' : '') + '\n\n' + fmtLog(data.log));
+    const upToDate = (st) => !!st && st.behind === 0;
+    function stateText(st) {
+      if (!st) return '…';
+      let s;
+      if (st.behind > 0) s = `${st.behind} detrás`;
+      else if (st.ahead > 0) s = `${st.ahead} adelante`;
+      else s = 'al día';
+      if (st.dirty) s += ` · ${st.dirtyCount} cambios`;
+      return s;
     }
-  } catch {
-    alert('No se pudo actualizar (error de red o del servidor).');
-  } finally {
-    busy = false; render();
-  }
-}
 
-function fmtLog(log) {
-  if (!Array.isArray(log)) return '';
-  return log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || '(ok)'}`).join('\n');
-}
+    function render() {
+      const st = current;
+      const cls = upToDate(st) ? 'ok' : 'behind';
+      refs.chip.className = `tk-chip ${cls}`;
+      refs.chip.innerHTML = st ? (upToDate(st) ? icon('check', { size: 12 }) : `↓${st.behind}`) : '';
+      refs.state.innerHTML = st
+        ? `<span class="tk-head">#${st.head}</span> · <span class="tk-state ${cls}">${stateText(st)}</span>`
+        : busy ? '<span class="cwc-spinner"></span>' : '…';
+      refs.update.disabled = busy;
+      refs.refresh.disabled = busy;
+    }
 
-export async function initTolkien({ openTerminal }) {
-  els.chip = document.getElementById('tk-status');
-  els.footer = document.getElementById('tolkien-mini');
+    async function loadStatus() {
+      try { current = await (await fetch('/api/tolkien/status')).json(); render(); }
+      catch { /* noop */ }
+    }
 
-  document.getElementById('tk-update')?.addEventListener('click', (e) => { e.stopPropagation(); doUpdate(); });
-  document.getElementById('tk-refresh')?.addEventListener('click', (e) => { e.stopPropagation(); refreshTolkien(); });
+    async function checkRemote() {
+      if (busy) return;
+      busy = true; render();
+      try {
+        const data = await (await fetch('/api/tolkien/fetch', { method: 'POST' })).json();
+        if (data.status) current = data.status;
+      } catch { /* noop */ } finally { busy = false; render(); }
+    }
 
-  await loadStatus(); // versión local inmediata (para el pie)
-  const rel = current?.rel || 'tolkien';
+    const fmtLog = (log) => Array.isArray(log)
+      ? log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || '(ok)'}`).join('\n')
+      : '';
 
-  // Acciones rápidas del proyecto: terminal / Claude Code / explorar archivos.
-  document.getElementById('tk-term')?.addEventListener('click', () => openTerminal?.({ cwd: rel }));
-  document.getElementById('tk-claude')?.addEventListener('click', () => openTerminal?.({ cwd: rel, runClaude: true }));
-  const explore = document.getElementById('tk-explore');
-  if (explore) explore.href = `/archivos?path=${encodeURIComponent(rel)}`;
+    async function doUpdate() {
+      if (busy) return;
+      const ok = await dialog.confirmDialog({
+        title: 'Actualizar Tolkien',
+        message: 'Se trae lo último de GitHub (stash → pull → stash pop).\nTus cambios locales quedan a salvo si algo falla.',
+        confirmLabel: 'Actualizar',
+      });
+      if (!ok) return;
+      busy = true; render();
+      try {
+        const data = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
+        if (data.status) current = data.status;
+        if (data.error) {
+          await dialog.alertDialog({ title: 'No se pudo actualizar', message: `${data.error}\n\n${fmtLog(data.log)}` });
+        } else if (data.popConflict) {
+          await dialog.alertDialog({
+            title: 'Actualizado, con conflicto',
+            message: `Hubo conflicto al reaplicar tus cambios: quedaron en el stash (git stash list).\n\n${fmtLog(data.log)}`,
+          });
+        }
+      } catch {
+        await dialog.alertDialog({ title: 'Tolkien', message: 'No se pudo actualizar (error de red o del servidor).' });
+      } finally {
+        busy = false; render();
+      }
+    }
 
-  refreshTolkien(); // compara con remoto (para saber si está actualizada)
+    refs.refresh.addEventListener('click', checkRemote);
+    refs.update.addEventListener('click', doUpdate);
+    refs.continue.addEventListener('click', () => {
+      const rel = current?.rel || 'tolkien';
+      const existing = findSessionByCwd(rel);
+      if (existing) focusSession(existing);
+      else openSession({ cwd: rel, runClaude: true });
+    });
 
-  // Chequeo periódico cada 5 min (pausado con la pestaña en segundo plano).
-  const CHECK_MS = 5 * 60 * 1000;
-  setInterval(() => { if (!document.hidden) refreshTolkien(); }, CHECK_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTolkien(); });
-}
+    (async () => {
+      await loadStatus();
+      const rel = current?.rel || 'tolkien';
+      refs.explore.href = `/archivos?path=${encodeURIComponent(rel)}`;
+      checkRemote();
+    })();
+
+    const CHECK_MS = 5 * 60 * 1000;
+    setInterval(() => { if (!document.hidden) checkRemote(); }, CHECK_MS);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRemote(); });
+  },
+};

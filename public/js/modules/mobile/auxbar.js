@@ -5,6 +5,8 @@
 // - Pegar: navigator.clipboard.readText() -> PTY.
 // - Dictado: campo de texto (con IME/composición) + Enviar. El teclado móvil
 //   dicta mucho mejor sobre un input normal que inyectando en xterm.
+import { alertDialog } from '../../ui/dialog.js';
+
 const SEQ = {
   esc: '\x1b', tab: '\t', shifttab: '\x1b[Z',
   up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D',
@@ -66,7 +68,7 @@ export function initAuxBar({ getActiveTab }) {
       const text = await navigator.clipboard.readText();
       if (text) (getActiveTab()?.pasteText ? getActiveTab().pasteText(text) : send(text));
     } catch {
-      alert('No se pudo leer el portapapeles (permiso denegado o no disponible).');
+      alertDialog({ title: 'Portapapeles', message: 'No se pudo leer el portapapeles (permiso denegado o no disponible).' });
     }
     refocus();
   });

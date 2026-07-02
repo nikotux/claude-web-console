@@ -14,16 +14,7 @@
       <h1>Administración de usuarios</h1>
       <a href="/" class="admin-back" data-icon="chevronLeft"><span>volver a la consola</span></a>
     </header>
-
-    <form id="new-user" class="admin-new">
-      <input id="nu-user" placeholder="Usuario" autocapitalize="off" autocorrect="off" spellcheck="false" />
-      <input id="nu-pass" type="password" placeholder="Contraseña" />
-      <label class="admin-chk"><input id="nu-admin" type="checkbox" /> admin</label>
-      <button type="submit">Crear usuario</button>
-    </form>
-
-    <p id="admin-msg" class="admin-msg" hidden></p>
-    <div id="user-list"></div>
+    <div id="users-root"></div>
   </div>
   <script type="module" src="/js/admin.js"></script>
 </body>
