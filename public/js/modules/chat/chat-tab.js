@@ -67,6 +67,7 @@ export class ChatTab {
     container.innerHTML = `
       <div class="chat-view">
         <header class="chat-head">
+          <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
           <select class="chat-mode" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
@@ -91,6 +92,11 @@ export class ChatTab {
     this.costEl = container.querySelector('.chat-cost');
     this.toggleBtn = container.querySelector('.chat-toggle');
 
+    // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
+    // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
+    container.querySelector('.chat-menu').addEventListener('click', () => {
+      window.dispatchEvent(new Event('cwc:open-sidebar'));
+    });
     this.sendBtn.addEventListener('click', () => this._submit());
     this.stopBtn.addEventListener('click', () => this._send({ type: 'interrupt' }));
     this.toggleBtn.addEventListener('click', () => this.onToggleMode?.());

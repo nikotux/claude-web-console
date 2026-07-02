@@ -828,8 +828,13 @@ html, body {
   #auxbar { display: flex; }
 }
 
+/* Botón ☰ de los headers (chat / barra TUI): existe solo en móvil, donde el
+   panel lateral es overlay y su propio ☰ queda inaccesible al ocultarse. */
+.mobile-menu-btn { display: none; flex: none; }
+
 /* ===== Móvil ===== */
 @media (max-width: 768px) {
+  .mobile-menu-btn { display: inline-flex; }
   /* En móvil el panel es overlay (se oculta con .hidden); el modo "rail
      colapsado" es solo de escritorio, así que forzamos ancho completo. */
   #sidebar, #sidebar.collapsed {

@@ -37,6 +37,12 @@ export function initAuxBar({ getActiveTab }) {
   keys.querySelectorAll('button').forEach(keepFocus);
   [enterToggle, sendBtn, handle].forEach(keepFocus);
 
+  // ☰: abre el panel lateral (única salida desde una terminal pura en móvil,
+  // donde no hay header con botón de menú). Lo atiende el shell (main.js).
+  document.getElementById('aux-menu').addEventListener('click', () => {
+    window.dispatchEvent(new Event('cwc:open-sidebar'));
+  });
+
   // Tirador ⌨: despliega/oculta las teclas (oculta por defecto).
   handle.addEventListener('click', () => {
     auxbar.classList.toggle('collapsed');

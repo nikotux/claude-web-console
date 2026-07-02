@@ -123,7 +123,13 @@ function buildConversationInner(entry, info, initialPrompt = null) {
     back.title = 'Volver a Chat';
     back.innerHTML = `${icon('sparkle', { size: 14 })}<span>Chat</span>`;
     back.addEventListener('click', () => toggleConversation(entry.session.id));
-    bar.append(ttl, back);
+    // ☰ móvil: mismo acceso al panel lateral que el header del chat.
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'btn-ghost btn--icon mobile-menu-btn';
+    menuBtn.title = 'Abrir panel lateral';
+    menuBtn.innerHTML = icon('menu', { size: 16 });
+    menuBtn.addEventListener('click', () => window.dispatchEvent(new Event('cwc:open-sidebar')));
+    bar.append(menuBtn, ttl, back);
     const host = document.createElement('div');
     host.className = 'conv-tui-term';
     entry.pane.append(bar, host);
@@ -453,6 +459,14 @@ document.getElementById('toggle-sidebar').addEventListener('click', () => {
   const collapsed = !sidebarEl.classList.contains('collapsed');
   sidebarEl.classList.toggle('collapsed', collapsed);
   localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
+});
+
+// Cualquier vista puede pedir el panel lateral (☰ móvil de los headers de
+// chat/TUI y tecla ☰ de la auxbar): en móvil el panel es overlay y su propio
+// ☰ queda fuera de pantalla al ocultarse.
+window.addEventListener('cwc:open-sidebar', () => {
+  sidebarEl.classList.remove('hidden');
+  if (isMobile()) sidebarEl.classList.remove('collapsed');
 });
 
 // Aplica el estado colapsado guardado (solo desktop; en móvil nunca colapsa).
