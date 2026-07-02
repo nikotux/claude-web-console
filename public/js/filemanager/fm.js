@@ -341,7 +341,7 @@ function preview(entry) {
   if (ext === 'pdf') { body.innerHTML = `<iframe class="fm-pv-frame" src="${raw}"></iframe>`; return; }
 
   // Resto: intentamos como texto, con resaltado de sintaxis (highlight.js).
-  body.innerHTML = '<div class="fm-pv-msg">cargando…</div>';
+  body.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
   fetch(`${API}/read?path=${encodeURIComponent(rel)}`)
     .then((r) => r.json())
     .then((data) => {
@@ -389,8 +389,8 @@ async function loadTrash() {
           <span>${fmtDate(it.deletedAt)}</span>
           <span>${it.daysLeft} día${it.daysLeft === 1 ? '' : 's'}</span>
           <span class="fm-trash-actions">
-            <button class="fm-btn sm" data-restore="${it.id}">Restaurar</button>
-            <button class="fm-btn sm danger" data-purge="${it.id}">Eliminar</button>
+            <button class="btn-ghost btn--sm" data-restore="${it.id}">Restaurar</button>
+            <button class="btn-ghost btn--sm btn--danger" data-purge="${it.id}">Eliminar</button>
           </span>
         </div>`).join('');
     for (const b of itemsEl.querySelectorAll('[data-restore]')) b.addEventListener('click', () => restore(b.dataset.restore));

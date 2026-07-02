@@ -5,7 +5,6 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 .cwc-icon { display: block; flex: none; }
-.fm-btn .cwc-icon, .fm-place .cwc-icon, .fm-crumb .cwc-icon { width: 16px; height: 16px; }
 .fm-body {
   background: var(--cwc-bg-elevated); color: var(--cwc-text);
   font-family: var(--cwc-font-ui);
@@ -21,23 +20,11 @@ html, body { margin: 0; height: 100%; }
 }
 .fm-tb-left { display: flex; align-items: center; gap: .5rem; min-width: 0; flex: 1; }
 .fm-tb-right { display: flex; align-items: center; gap: .4rem; }
-.fm-btn {
-  background: var(--cwc-bg-chip); color: var(--cwc-text); border: 1px solid var(--cwc-border-strong);
-  border-radius: var(--cwc-radius-sm); padding: .32rem .6rem; font-size: var(--cwc-fs-sm); cursor: pointer;
-  white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; gap: .3rem;
-}
-.fm-btn:hover { border-color: var(--cwc-accent); color: var(--cwc-accent); }
-.fm-btn:active { background: var(--cwc-bg-hover); }
-.fm-btn.sm { padding: .18rem .45rem; font-size: var(--cwc-fs-sm); }
-.fm-btn.danger:hover { border-color: var(--cwc-danger-strong); color: var(--cwc-danger-strong); }
-.fm-btn .cwc-icon { width: 15px; height: 15px; }
-.fm-icon { min-width: 32px; justify-content: center; padding: .25rem .5rem; }
 .fm-home { background: transparent; border-color: transparent; }
 .fm-home:hover { background: var(--cwc-bg-chip); }
 .fm-viewtoggle { display: flex; background: var(--cwc-bg); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: 2px; gap: 2px; }
-.fm-viewtoggle .fm-btn { background: transparent; border: 0; padding: .22rem .5rem; }
-.fm-viewtoggle .fm-btn:hover { color: var(--cwc-accent); }
-.fm-viewtoggle .fm-btn.active { background: var(--cwc-accent-bg); color: var(--cwc-accent); }
+.fm-viewtoggle .btn-ghost { background: transparent; border: 0; min-height: 26px; }
+.fm-viewtoggle .btn-ghost.active { background: var(--cwc-accent-bg); color: var(--cwc-accent); }
 
 /* Breadcrumbs */
 .fm-crumbs { display: flex; align-items: center; gap: .1rem; overflow-x: auto; scrollbar-width: none; min-width: 0; }
@@ -174,9 +161,8 @@ html, body { margin: 0; height: 100%; }
 /* ===== Móvil ===== */
 @media (max-width: 640px) {
   .fm-sidebar { width: 150px; }
-  .fm-btn { padding: .3rem .5rem; }
-  /* En pantallas chicas, los botones de la toolbar quedan solo con el ícono. */
-  .fm-tb-right .fm-btn:not(.fm-icon):not(.fm-home) > span { display: none; }
+    /* En pantallas chicas, los botones de la toolbar quedan solo con el ícono. */
+  .fm-tb-right .btn-ghost:not(.btn--icon) > span { display: none; }
   .fm-lrow { grid-template-columns: 2fr 1fr; }
   .fm-lrow span:nth-child(3), .fm-lrow span:nth-child(4) { display: none; }
 }

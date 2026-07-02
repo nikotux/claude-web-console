@@ -88,7 +88,7 @@
   padding: .8rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
 }
 
-/* ===== Focus visible para teclado ===== */
-.btn:focus-visible, .btn-ghost:focus-visible, .dlg-input:focus-visible {
+/* ===== Focus visible para teclado (GLOBAL: todo elemento interactivo) ===== */
+:where(button, a, select, textarea, input, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--cwc-accent); outline-offset: 1px;
 }
