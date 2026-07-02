@@ -120,6 +120,24 @@ Abrí `https://<ip-zerotier>:8092` (p. ej. `https://10.213.222.62:8092`). La pri
 
 ---
 
+## Observador de estado (statusline + hooks de Claude Code)
+
+Las tarjetas de "Sesiones" muestran el estado real de Claude (● trabajando /
+○ esperando) y el modelo en tiempo real gracias a un observador instalado en
+la configuración de usuario de Claude Code (`~/.claude/settings.json`):
+
+- **Qué instala** (`node bin/install-observer.js`): una `statusLine` (muestra
+  "Modelo · ~carpeta" en todas tus sesiones de Claude Code, también por SSH) y
+  hooks `UserPromptSubmit`/`Stop`/`SessionEnd`, todos apuntando a
+  `bin/cwc-observe.js`, que escribe el estado en `~/.cwc-state/` (modo 700).
+- **Aditivo**: no pisa una statusline ajena ni hooks de otros; guarda backup
+  del original en `settings.json.bak` la primera vez.
+- **Desinstalar**: `node bin/uninstall-observer.js` (quita exactamente lo
+  instalado; lo demás queda intacto).
+- Las sesiones de Claude ya abiertas empiezan a reportar al reiniciarse.
+- Limitación: el estado se mapea a las sesiones tmux **por carpeta**; dos
+  sesiones de Claude en el mismo directorio comparten estado.
+
 ## Qué incluye
 
 - **Terminal** real (PTY) con `tmux` en socket aislado: sobrevive a desconexiones del navegador **y** a reinicios del server (rehidratación). Pestañas como iconos en el rail derecho.

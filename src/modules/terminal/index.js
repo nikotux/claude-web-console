@@ -17,6 +17,7 @@ import { sessionManager } from './sessions.js';
 import { config } from '../../core/config.js';
 import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
+import { stateForCwd } from '../../core/claude-state.js';
 import { recordRecent, listRecents } from '../../core/recents.js';
 
 // Aplica al server tmux cwc YA en marcha las opciones de clipboard (la config
@@ -59,10 +60,12 @@ export default {
     });
 
     // Modelo de Claude en uso por esta sesión (para el banderín del rail).
+    // Preferimos el observador (tiempo real); transcript como fallback.
     r.get('/model', (req, res) => {
       const session = sessionManager.get(req.query.id);
       if (!session) return res.status(404).json({ error: 'Sesión inexistente.' });
-      res.json({ model: modelForCwd(session.cwd) });
+      const st = stateForCwd(session.cwd);
+      res.json({ model: st?.model || modelForCwd(session.cwd) });
     });
 
     r.post('/sessions', (req, res) => {

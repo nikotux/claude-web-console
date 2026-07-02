@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
+import { stateForCwd } from '../../core/claude-state.js';
 
 // ===== Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux,
 // que es plomería y sostiene la rehidratación). Persisten en titles.json. =====
@@ -48,6 +49,8 @@ function listSessionsForSocket(sock) {
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
     const [name, windows, attached, created, cwd] = line.split('\t');
+    // Estado real (observador statusline/hooks); transcript como fallback.
+    const st = cwd ? stateForCwd(cwd) : null;
     sessions.push({
       socket: sock.path,
       socketName: sock.name,
@@ -58,8 +61,9 @@ function listSessionsForSocket(sock) {
       cwd: cwd || '',
       // "owned" = sesiones creadas por esta consola (socket cwc + prefijo cwc-).
       owned: sock.name === config.tmuxSocket && name.startsWith('cwc-'),
-      // Modelo de Claude en uso (leído del transcript según el cwd), o null.
-      model: cwd ? modelForCwd(cwd) : null,
+      // Modelo: en tiempo real vía observador; si no, inferido del transcript.
+      model: st?.model || (cwd ? modelForCwd(cwd) : null),
+      state: st ? { status: st.status, ts: st.ts } : null,
     });
   }
   return sessions;

@@ -53,11 +53,12 @@ export function keyOf(id) {
 }
 
 // Mapea un id de modelo a { id, key, name } para el banderín.
-function describe(id) {
+export function describeId(id) {
   const key = keyOf(id);
   const name = key === 'unknown' ? id : key[0].toUpperCase() + key.slice(1);
   return { id, key, name };
 }
+const describe = describeId;
 
 function compute(absCwd) {
   const dir = path.join(PROJECTS, encodeCwd(absCwd));
