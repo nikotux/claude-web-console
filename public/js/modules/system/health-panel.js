@@ -1,11 +1,14 @@
 // modules/system/health-panel.js — pestaña "Salud" del menú Sistema.
 //
 // Arriba: chequeos rápidos en vivo (GET /api/health/checks, gratis).
-// Abajo: última revisión profunda con Claude (caché) + botón para correrla
+// Medio: última revisión profunda con Claude (caché) + botón para correrla
 // (POST /api/health/review — admin, consume tokens, con confirm previo).
+// Abajo: Bugfixes → PR (registro de fixes de tickets trabajados en chat;
+// subir PR a Chris y scan retroactivo de chats sin registro — /api/bugfixes).
 import { icon } from '../../ui/icons.js';
 
 const API = '/api/health';
+const BF_API = '/api/bugfixes';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (ms) => {
@@ -29,7 +32,13 @@ export function mountHealthPanel(el, ctx) {
     <div class="hp-head hp-head--review">
       <span class="hp-title">Revisión profunda con Claude</span>
     </div>
-    <div class="hp-review" data-ref="review">cargando…</div>`;
+    <div class="hp-review" data-ref="review">cargando…</div>
+
+    <div class="hp-head hp-head--review">
+      <span class="hp-title">Bugfixes → PR</span>
+      ${ctx.isAdmin ? `<button class="btn-ghost btn--sm" data-ref="scan" title="Busca chats de tickets viejos que no dejaron registro y los registra">${icon('refresh', { size: 13 })}<span>Buscar no registrados</span></button>` : ''}
+    </div>
+    <div class="hp-bugfixes" data-ref="bugfixes">cargando…</div>`;
 
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
@@ -127,7 +136,93 @@ export function mountHealthPanel(el, ctx) {
     }
   }
 
+  // ===== Bugfixes → PR =====
+  function renderBugfixes(list) {
+    if (!list.length) {
+      refs.bugfixes.innerHTML = '<p class="hp-empty">Sin fixes registrados. Cerrá una conversación abierta desde un ticket (o corré la búsqueda) y aparece acá.</p>';
+      return;
+    }
+    refs.bugfixes.innerHTML = list.map((b) => `
+      <details class="hp-finding hp-bf" data-id="${esc(b.sessionId)}">
+        <summary>
+          <span class="hp-dot hp-dot--${b.status === 'subido' ? 'ok' : 'warn'}"></span>
+          <b>${esc(b.title)}</b>
+          <span class="hp-sev">${b.status === 'subido' ? 'PR subido' : 'pendiente'}</span>
+          <span class="hp-when">${fmtDate(b.updatedAt)}</span>
+        </summary>
+        <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
+        ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
+        : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan): trabajá el fix en el chat y volvé a cerrarlo.</p>'}
+        ${b.ticketUrl ? `<p><a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket Desk #${esc(b.ticketNumber)} ↗</a></p>` : ''}
+        ${b.prUrl ? `<p><a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR (${esc(b.branch || 'branch')}) ↗</a></p>` : ''}
+        ${isAdmin ? `<div class="dlg-actions hp-bf-actions">
+          <button class="btn-ghost btn--sm" data-act="del">Descartar</button>
+          ${b.status !== 'subido' ? `<button class="btn btn--sm" data-act="pr" ${b.files?.length ? '' : 'disabled'}>${icon('gitBranch', { size: 13 })}<span>Subir PR</span></button>` : ''}
+        </div>` : ''}
+      </details>`).join('');
+
+    for (const card of refs.bugfixes.querySelectorAll('.hp-bf')) {
+      const id = card.dataset.id;
+      card.querySelector('[data-act="del"]')?.addEventListener('click', async () => {
+        const ok = await dialog.confirmDialog({ title: 'Descartar registro', message: 'Se borra solo el registro local del fix (no toca código ni PRs).', confirmLabel: 'Descartar', danger: true });
+        if (!ok) return;
+        await fetch(`${BF_API}/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+        loadBugfixes();
+      });
+      card.querySelector('[data-act="pr"]')?.addEventListener('click', async (e) => {
+        const ok = await dialog.confirmDialog({
+          title: 'Subir PR a Tolkien',
+          message: 'Se crea un branch desde origin/main con los archivos del fix, se PUSHEA al repo de la empresa y se abre un PR para revisión. Tu árbol de trabajo de Tolkien no se toca.',
+          confirmLabel: 'Subir PR',
+        });
+        if (!ok) return;
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="cwc-spinner"></span><span>Subiendo…</span>';
+        try {
+          const res = await fetch(`${BF_API}/pr`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Falló la subida.');
+          await dialog.alertDialog({ title: 'PR subido', message: `Branch ${data.branch} pusheado.\n${data.prUrl || ''}` });
+        } catch (err) {
+          await dialog.alertDialog({ title: 'Subir PR', message: err.message });
+        }
+        loadBugfixes();
+      });
+    }
+  }
+
+  async function loadBugfixes() {
+    try {
+      const data = await (await fetch(BF_API)).json();
+      if (alive) renderBugfixes(data.bugfixes || []);
+    } catch {
+      if (alive) refs.bugfixes.innerHTML = '<p class="hp-empty">No se pudo leer el registro de bugfixes.</p>';
+    }
+  }
+
+  refs.scan?.addEventListener('click', async () => {
+    refs.scan.disabled = true;
+    try {
+      const res = await fetch(`${BF_API}/scan`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Falló la búsqueda.');
+      await dialog.alertDialog({
+        title: 'Búsqueda de fixes sin registro',
+        message: data.added
+          ? `Se registraron ${data.added} fix(es) de chats anteriores (${data.scanned} transcripts revisados).`
+          : `Nada nuevo: ${data.scanned} transcripts revisados, todos los chats de tickets ya estaban registrados.`,
+      });
+      renderBugfixes(data.bugfixes || []);
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Buscar no registrados', message: err.message });
+    } finally {
+      refs.scan.disabled = false;
+    }
+  });
+
   refs.reload.addEventListener('click', loadChecks);
   loadChecks();
   loadReview();
+  loadBugfixes();
 }

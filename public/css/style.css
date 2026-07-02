@@ -653,6 +653,15 @@ html, body {
   .tickets-table th:nth-child(3) { display: none; }
 }
 
+/* ===== Bugfixes → PR (pestaña Salud) ===== */
+.hp-bugfixes { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .5rem; }
+.hp-bf summary b { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-bf-summary { white-space: pre-wrap; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); max-height: 180px; overflow-y: auto; }
+.hp-bf-files { display: flex; flex-wrap: wrap; gap: .3rem; }
+.hp-bf-files code { font-size: var(--cwc-fs-xs); background: var(--cwc-bg-chip); padding: .1rem .35rem; border-radius: var(--cwc-radius-sm); }
+.hp-bf-files--none { color: var(--cwc-warn); font-size: var(--cwc-fs-xs); }
+.hp-bf-actions { margin-top: .4rem; }
+
 .chat-composer {
   display: flex; gap: .4rem; align-items: flex-end;
   padding: .5rem .7rem calc(.5rem + env(safe-area-inset-bottom, 0px));

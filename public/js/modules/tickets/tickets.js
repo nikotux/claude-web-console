@@ -173,7 +173,15 @@ export default {
         '',
         'Estás en modo PLAN: investigá el código relevante y proponé un plan de arreglo antes de tocar nada.',
       ].filter(Boolean).join('\n');
-      openChat({ cwd: projectRel, mode: 'plan', prompt });
+      // La conversación nace nombrada como el ticket y VINCULADA a él: al
+      // cerrarla, el server registra el fix propuesto (pestaña Salud → PR).
+      openChat({
+        cwd: projectRel,
+        mode: 'plan',
+        prompt,
+        title: `TKT #${t.ticketNumber} — ${t.whatBroke}`.slice(0, 60),
+        ticket: { number: t.ticketNumber, url: t.webUrl || null },
+      });
     }
 
     function escapeHtml(s) {

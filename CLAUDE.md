@@ -22,8 +22,11 @@ código.
    abajo (`~/.cwc-*`, unidad systemd instalada, observer). El observer de
    `~/.claude/settings.json` SOLO se toca con `bin/install-observer.js` /
    `bin/uninstall-observer.js`.
-5. **Seguridad de push:** el código solo se empuja al remote git `personal`;
-   URLs que contengan `Mordor-Staffing` están bloqueadas (guard en backup).
+5. **Seguridad de push:** el código DE LA CONSOLA solo se empuja al remote git
+   `personal`; URLs que contengan `Mordor-Staffing` están bloqueadas (guard en
+   backup). Excepción deliberada: el módulo `bugfixes` empuja branches DE
+   TOLKIEN a su propio origin (el PR a revisión es el flujo del repo de la
+   empresa) — nunca código de la consola, siempre bajo botón admin con confirm.
    Nunca versionar/pushear `.env`, `users.json`, `sessions.json`, `certs/`.
 6. **Corridas headless del SDK (tickets, salud) son READ-ONLY blindadas por
    DOS capas:** hook `PreToolUse` (deniega ANTES de la evaluación de permisos;
@@ -71,10 +74,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             README.md documenta la config que hereda el chat (Fase 8:
                             settingSources user+project, comandos slash, observador)
   files/ stats/ tokens/ tmux/ admin/ tolkien/ backup/ tickets/ health/
+  bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
+                            extracción del transcript, scan retroactivo) + subida de PR a
+                            Tolkien (worktree temporal desde origin/main — NO toca el árbol
+                            real — commit de los archivos del fix, push, gh pr create).
+                            El chat registra al CERRAR una conversación con ticket (diferido
+                            2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)
-public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/Salud) ·
+public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
+                            Salud — la pestaña Salud incluye Bugfixes→PR) ·
                             tolkien · tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup)

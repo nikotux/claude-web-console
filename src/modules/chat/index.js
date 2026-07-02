@@ -34,6 +34,7 @@ import {
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
+import { recordBugfix } from '../bugfixes/store.js';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 
@@ -155,12 +156,13 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
 }
 
 class Chat {
-  constructor({ id, cwd, model, permissionMode, resume = null }) {
+  constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
     this.id = id;
     this.cwd = cwd;
     this.model = model || null;
     this.permissionMode = permissionMode || 'default';
-    this.title = path.basename(cwd) || '~';
+    this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
+    this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
     this.resume = resume;
     this.sessionId = resume || null;
     this.alive = false;       // motor (runner) conectado y corriendo
@@ -420,6 +422,21 @@ class Chat {
 
   close() {
     this.closed = true;
+    // Conversación de un ticket: al finalizar queda el registro de qué hay que
+    // cambiar en el código (resumen + archivos) para el PR posterior a Chris
+    // (pestaña Salud). DIFERIDO 2s: el SDK puede tardar en flushear las últimas
+    // líneas del transcript (verificado E2E: extraer en el instante del close
+    // pierde el resumen). Best-effort: si el server muere en esa ventana, el
+    // scan de la pestaña Salud lo recupera/completa.
+    if (this.ticket && this.sessionId) {
+      const args = { cwd: this.cwd, sessionId: this.sessionId, chatId: this.id, ticket: this.ticket, title: this.title };
+      setTimeout(() => {
+        try {
+          const entry = recordBugfix(args);
+          if (entry) console.log(`[chat] bugfix registrado: TKT #${entry.ticketNumber} (${entry.files.length} archivo(s))`);
+        } catch (err) { console.error('[chat] registro de bugfix falló:', err?.message); }
+      }, 2000).unref();
+    }
     // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);
@@ -504,9 +521,9 @@ class ChatManager {
     }, 60 * 1000).unref();
   }
 
-  create({ cwd, model, permissionMode, resume = null }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
     const id = `c${process.pid}-${++this._seq}`;
-    const chat = new Chat({ id, cwd, model, permissionMode, resume });
+    const chat = new Chat({ id, cwd, model, permissionMode, resume, title, ticket });
     chat.onUpdate = () => this.persist();
     chat.start();
     this.chats.set(id, chat);
@@ -521,6 +538,7 @@ class ChatManager {
       .map((c) => ({
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
+        ticket: c.ticket || null,
         // Modo TUI: la tmux oculta (cwct-) sobrevive reinicios del server, así
         // que persistimos lo necesario para RE-ADJUNTARLA al rehidratar.
         viewMode: c.viewMode === 'tui' ? 'tui' : 'chat',
@@ -550,6 +568,7 @@ class ChatManager {
       });
       chat.onUpdate = () => this.persist();
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
+      if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       chat.lastActivity = s.lastActivity || Date.now();
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
         // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
@@ -638,7 +657,7 @@ export default {
     const r = express.Router();
 
     r.post('/create', (req, res) => {
-      const { cwd, model, permissionMode, resume } = req.body || {};
+      const { cwd, model, permissionMode, resume, title, ticket } = req.body || {};
       if (model != null && !VALID_MODELS.has(model)) {
         return res.status(400).json({ error: 'Modelo inválido.' });
       }
@@ -653,6 +672,12 @@ export default {
         model: model || null,
         permissionMode: permissionMode || 'default',
         resume: resume || null,
+        title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
+        // Vínculo al bug de Desk: al cerrar la conversación deja el registro
+        // del fix propuesto (módulo bugfixes).
+        ticket: ticket?.number
+          ? { number: String(ticket.number).slice(0, 40), url: /^https?:\/\//.test(ticket.url || '') ? String(ticket.url).slice(0, 400) : null }
+          : null,
       });
       res.json({ chat: chat.info() });
     });
