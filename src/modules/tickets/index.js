@@ -20,8 +20,11 @@ import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 
-const STATE_DIR = path.join(os.homedir(), '.cwc-state');
-const CACHE_FILE = path.join(STATE_DIR, 'tickets.json');
+// OJO: NO usar ~/.cwc-state — claude-state.js poda cualquier .json de ahí cuyo
+// `ts` sea viejo (y este archivo no tiene `ts`), así que lo borraba al instante.
+// La caché vive en un directorio propio de datos de la consola.
+const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+const CACHE_FILE = path.join(DATA_DIR, 'tickets.json');
 const RUN_TIMEOUT_MS = 4 * 60 * 1000; // corte duro del triage
 const MAX_TURNS = 60;                  // cota de coste
 
@@ -52,6 +55,11 @@ const PROMPT = [
   '  - recommendation(uno de: fix | needs-info | duplicate | wont-fix)',
   '  - duplicate     (string: link/ref del duplicado si aplica; "" si no)',
   '  - webUrl        (string: el webUrl del ticket de Desk; "" si no lo tenés)',
+  '  - reporter      (string: email de quien reportó; "" si no está)',
+  '  - context       (string, 3-8 líneas: el CONTEXTO del bug — qué estaba',
+  '    haciendo el usuario según el breadcrumb/estado del formulario, el error',
+  '    JS si hay, tu hipótesis de la causa y archivos/componentes sospechosos',
+  '    del repo. Texto plano, sin markdown.)',
   '',
   'Si no hay tickets abiertos, respondé con ```json\n[]\n```. No agregues texto',
   'fuera del bloque json.',
@@ -78,6 +86,8 @@ function parseTickets(text) {
     recommendation: RECOMMENDATION.has(t.recommendation) ? t.recommendation : 'needs-info',
     duplicate: String(t.duplicate ?? '').slice(0, 200),
     webUrl: /^https?:\/\//.test(t.webUrl || '') ? String(t.webUrl).slice(0, 400) : '',
+    reporter: String(t.reporter ?? '').slice(0, 120),
+    context: String(t.context ?? '').slice(0, 2000),
   }));
 }
 
@@ -86,11 +96,9 @@ function readCache() {
   catch { return { updatedAt: null, tickets: [], error: null }; }
 }
 function writeCache(data) {
-  // Reintento único: el triage corre un Claude con el observador instalado, que
-  // puede estar (re)creando ~/.cwc-state a la vez — evitamos una carrera puntual.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      fss.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+      fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
       fss.writeFileSync(CACHE_FILE, JSON.stringify(data), { mode: 0o600 });
       return;
     } catch (err) {

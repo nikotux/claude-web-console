@@ -119,7 +119,7 @@ export default {
             <td class="tk-route">${escapeHtml(t.route || '—')}</td>
             <td><span class="tk-sev tk-sev-${t.severity}">${t.severity}</span></td>
             <td class="tk-rec">${escapeHtml(t.recommendation)}</td>`;
-          tr.addEventListener('click', () => { m.close(); openTicket(t); });
+          tr.addEventListener('click', () => { m.close(); openDetail(t); });
           tbody.appendChild(tr);
         }
         tableEl.appendChild(table);
@@ -129,14 +129,47 @@ export default {
       paint();
     }
 
-    function openTicket(t) {
+    // Vista detallada de UN bug: todos los datos + contexto del triage.
+    // Desde acá se decide abrir la conversación (no directo desde la tabla).
+    function openDetail(t) {
+      const m = dialog.openModal({ title: `Bug · ticket #${t.ticketNumber}`, width: 620 });
+      const d = document.createElement('div');
+      d.className = 'ticket-detail';
+      d.innerHTML = `
+        <div class="ticket-detail-head">
+          <span class="tk-sev tk-sev-${t.severity}">${t.severity}</span>
+          <span class="ticket-detail-rec">${escapeHtml(t.recommendation)}</span>
+          ${t.duplicate ? `<span class="tk-dup">dup: ${escapeHtml(t.duplicate)}</span>` : ''}
+        </div>
+        <p class="ticket-detail-what">${escapeHtml(t.whatBroke)}</p>
+        <div class="ticket-detail-meta">
+          ${t.route ? `<div><span class="tdm-label">Ruta</span><code>${escapeHtml(t.route)}</code></div>` : ''}
+          ${t.reporter ? `<div><span class="tdm-label">Reportó</span>${escapeHtml(t.reporter)}</div>` : ''}
+          ${t.webUrl ? `<div><span class="tdm-label">Ticket</span><a href="${escapeHtml(t.webUrl)}" target="_blank" rel="noopener">abrir en Zoho Desk ↗</a></div>` : ''}
+        </div>
+        <div class="ticket-detail-ctx">
+          <div class="tdm-label">Contexto (según el triage)</div>
+          <p>${t.context ? escapeHtml(t.context) : 'Sin contexto guardado — re-corré el triage para generarlo.'}</p>
+        </div>
+        <div class="dlg-actions">
+          <button class="btn-ghost" data-ref="back">‹ Volver a la lista</button>
+          <button class="btn" data-ref="work">${icon('sparkle', { size: 14 })}<span>Trabajar en Chat (plan)</span></button>
+        </div>`;
+      m.body.appendChild(d);
+      d.querySelector('[data-ref="back"]').addEventListener('click', () => { m.close(); expand(); });
+      d.querySelector('[data-ref="work"]').addEventListener('click', () => { m.close(); openTicketChat(t); });
+    }
+
+    function openTicketChat(t) {
       const prompt = [
         `Trabajemos el bug del ticket Desk #${t.ticketNumber}.`,
         '',
         `Qué se rompió: ${t.whatBroke}`,
         `Ruta: ${t.route || '(sin ruta)'}`,
         `Severidad: ${t.severity} · Recomendación del triage: ${t.recommendation}`,
+        t.reporter ? `Reportó: ${t.reporter}` : '',
         t.webUrl ? `Ticket: ${t.webUrl}` : '',
+        t.context ? `\nContexto del triage:\n${t.context}` : '',
         '',
         'Estás en modo PLAN: investigá el código relevante y proponé un plan de arreglo antes de tocar nada.',
       ].filter(Boolean).join('\n');

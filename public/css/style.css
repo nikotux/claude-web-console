@@ -575,6 +575,21 @@ html, body {
 .tk-dup { color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); }
 .tk-route { color: var(--cwc-text-dim); font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); word-break: break-all; max-width: 220px; }
 .tk-rec { color: var(--cwc-text-secondary); white-space: nowrap; }
+
+/* Detalle de un bug */
+.ticket-detail { display: flex; flex-direction: column; gap: .7rem; }
+.ticket-detail-head { display: flex; align-items: center; gap: .5rem; }
+.ticket-detail-rec { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); text-transform: uppercase; letter-spacing: .03em; }
+.ticket-detail-what { margin: 0; font-size: var(--cwc-fs-lg); line-height: 1.45; color: var(--cwc-text); }
+.ticket-detail-meta { display: flex; flex-direction: column; gap: .25rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.ticket-detail-meta code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text); word-break: break-all; }
+.ticket-detail-meta a { color: var(--cwc-accent); text-decoration: none; }
+.tdm-label {
+  display: inline-block; min-width: 4.5em; margin-right: .4rem;
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em;
+}
+.ticket-detail-ctx { background: var(--cwc-bg); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); padding: .6rem .7rem; }
+.ticket-detail-ctx p { margin: .3rem 0 0; font-size: var(--cwc-fs-md); line-height: 1.5; color: var(--cwc-text-secondary); white-space: pre-line; }
 @media (max-width: 768px) {
   .dlg-overlay:has(.dlg-card--tickets) { padding: 0; }
   .dlg-card--tickets { width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; }
