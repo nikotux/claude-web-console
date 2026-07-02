@@ -1,7 +1,25 @@
-// filemanager/fm.js — gestor de archivos estilo Finder.
+// filemanager/fm.js — Explorador (gestor de archivos estilo Finder).
 import { icon, hydrateIcons } from '../ui/icons.js';
+import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
 
 const API = '/api/files';
+
+// Crea una sesión (Claude o terminal) en una carpeta y vuelve a la consola
+// con esa pestaña enfocada. Resuelve el flujo "abrir Claude en carpeta nueva".
+async function sessionHere(rel, runClaude) {
+  try {
+    const res = await fetch('/api/terminal/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: rel, runClaude }),
+    });
+    if (!res.ok) throw new Error('No se pudo crear la sesión.');
+    const { session } = await res.json();
+    location.href = `/?focus=${encodeURIComponent(session.id)}`;
+  } catch (e) {
+    alertDialog({ title: 'Nueva sesión', message: e.message });
+  }
+}
 
 // Extensión -> lenguaje de highlight.js (para el resaltado del preview de texto).
 const EXT_LANG = {
@@ -218,34 +236,40 @@ function download(entry) {
 }
 
 async function mkdir() {
-  const name = prompt('Nombre de la nueva carpeta:');
+  const name = await promptDialog({ title: 'Nueva carpeta', placeholder: 'Nombre de la carpeta' });
   if (!name) return;
   const res = await fetch(`${API}/mkdir`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: state.cwd, name }),
   });
-  if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'No se pudo crear.');
+  if (!res.ok) alertDialog({ title: 'Nueva carpeta', message: (await res.json().catch(() => ({}))).error || 'No se pudo crear.' });
   load();
 }
 
 async function rename(entry) {
-  const name = prompt('Nuevo nombre:', entry.name);
+  const name = await promptDialog({ title: 'Renombrar', value: entry.name });
   if (!name || name === entry.name) return;
   const res = await fetch(`${API}/rename`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: join(state.cwd, entry.name), newName: name }),
   });
-  if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'No se pudo renombrar.');
+  if (!res.ok) alertDialog({ title: 'Renombrar', message: (await res.json().catch(() => ({}))).error || 'No se pudo renombrar.' });
   load();
 }
 
 async function trash(entry) {
-  if (!confirm(`¿Mover "${entry.name}" a la papelera?\n(Se conserva 30 días y se puede restaurar.)`)) return;
+  const ok = await confirmDialog({
+    title: 'Mover a la papelera',
+    message: `"${entry.name}" se conserva 30 días y se puede restaurar.`,
+    confirmLabel: 'Eliminar',
+    danger: true,
+  });
+  if (!ok) return;
   const res = await fetch(`${API}/trash`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: join(state.cwd, entry.name) }),
   });
-  if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'No se pudo eliminar.');
+  if (!res.ok) alertDialog({ title: 'Papelera', message: (await res.json().catch(() => ({}))).error || 'No se pudo eliminar.' });
   load(); refreshTrashCount();
 }
 
@@ -256,8 +280,8 @@ async function uploadFiles(fileList) {
   itemsEl.classList.add('fm-uploading');
   try {
     const res = await fetch(`${API}/upload?path=${encodeURIComponent(state.cwd)}`, { method: 'POST', body: fd });
-    if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'Falló la subida.');
-  } catch { alert('Falló la subida.'); }
+    if (!res.ok) alertDialog({ title: 'Subida', message: (await res.json().catch(() => ({}))).error || 'Falló la subida.' });
+  } catch { alertDialog({ title: 'Subida', message: 'Falló la subida.' }); }
   itemsEl.classList.remove('fm-uploading');
   load();
 }
@@ -272,20 +296,26 @@ async function downloadSelected() {
     const res = await fetch(`${API}/zip`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths }),
     });
-    if (!res.ok) return alert('No se pudo generar el zip.');
+    if (!res.ok) return alertDialog({ title: 'Descarga', message: 'No se pudo generar el zip.' });
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'archivos.zip';
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-  } catch { alert('No se pudo descargar la selección.'); }
+  } catch { alertDialog({ title: 'Descarga', message: 'No se pudo descargar la selección.' }); }
 }
 
 async function trashSelected() {
   const names = [...state.selection];
   if (!names.length) return;
-  if (!confirm(`¿Mover ${names.length} ítem(s) a la papelera?\n(Se conservan 30 días.)`)) return;
+  const ok = await confirmDialog({
+    title: 'Mover a la papelera',
+    message: `${names.length} ítem(s) se conservan 30 días y se pueden restaurar.`,
+    confirmLabel: 'Eliminar',
+    danger: true,
+  });
+  if (!ok) return;
   for (const n of names) {
     await fetch(`${API}/trash`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: join(state.cwd, n) }),
@@ -372,7 +402,13 @@ async function restore(id) {
   loadTrash(); refreshTrashCount();
 }
 async function purge(id) {
-  if (!confirm('¿Eliminar definitivamente? Esto NO se puede deshacer.')) return;
+  const ok = await confirmDialog({
+    title: 'Eliminar definitivamente',
+    message: 'Esto NO se puede deshacer.',
+    confirmLabel: 'Eliminar',
+    danger: true,
+  });
+  if (!ok) return;
   await fetch(`${API}/trash/purge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
   loadTrash(); refreshTrashCount();
 }
@@ -393,6 +429,8 @@ function showCtx(ev, entry) {
   } else {
     if (entry.type === 'dir') {
       items.push(['Abrir', () => open(entry)]);
+      items.push(['Nueva sesión de Claude aquí', () => sessionHere(join(state.cwd, entry.name), true)]);
+      items.push(['Abrir terminal aquí', () => sessionHere(join(state.cwd, entry.name), false)]);
       items.push(['Descargar .zip', () => download(entry)]);
     } else {
       items.push(['Previsualizar', () => preview(entry)]);
@@ -434,6 +472,9 @@ $('fm-refresh').addEventListener('click', () => load());
 $('fm-view-grid').addEventListener('click', () => setView('grid'));
 $('fm-view-list').addEventListener('click', () => setView('list'));
 $('fm-mkdir').addEventListener('click', mkdir);
+// Sesiones en la carpeta ACTUAL (la que se está viendo). No aplican en papelera.
+$('fm-claude').addEventListener('click', () => { if (state.mode === 'files') sessionHere(state.cwd, true); });
+$('fm-term').addEventListener('click', () => { if (state.mode === 'files') sessionHere(state.cwd, false); });
 $('fm-upload').addEventListener('click', () => $('fm-file-input').click());
 $('fm-file-input').addEventListener('change', (e) => { uploadFiles(e.target.files); e.target.value = ''; });
 for (const b of document.querySelectorAll('.fm-place')) b.addEventListener('click', () => goPlace(b.dataset.place));
