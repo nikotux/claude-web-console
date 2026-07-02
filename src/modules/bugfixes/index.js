@@ -4,6 +4,7 @@
 //   GET  /api/bugfixes          -> { bugfixes } (todos los autenticados)
 //   POST /api/bugfixes/scan     -> registra chats de tickets viejos sin registro (admin)
 //   POST /api/bugfixes/pr {id}  -> branch + commit + push + PR a origin de Tolkien (admin)
+//   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
 //   POST /api/bugfixes/delete {id} -> descarta un registro (admin)
 //
 // GIT/PR — decisiones duras:
@@ -93,12 +94,16 @@ async function pushPr(entry) {
     try {
       prUrl = await run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body], { cwd: wt });
       prUrl = (prUrl.match(/https:\/\/\S+/) || [null])[0];
+      // Reviewer = Chris (mergea los PRs del repo). Best-effort: si falla, el
+      // PR ya existe igual.
+      if (prUrl) await run('gh', ['pr', 'edit', prUrl, '--add-reviewer', 'cswenor'], { cwd: wt }).catch(() => {});
     } catch { /* sin gh o sin permisos de PR: cae al compare */ }
     if (!prUrl) {
       const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: TOLKIEN });
       prUrl = compareUrl(origin, branch);
     }
-    return { branch, prUrl, files: copied };
+    const prNumber = Number((String(prUrl).match(/\/pull\/(\d+)/) || [])[1]) || null;
+    return { branch, prUrl, prNumber, files: copied };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {}); // el remoto ya lo tiene
@@ -137,10 +142,13 @@ export default {
       if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una subida en curso para este fix.' });
       inFlight.add(id);
       try {
-        const { branch, prUrl, files } = await pushPr(entry);
+        const { branch, prUrl, prNumber, files } = await pushPr(entry);
         entry.status = 'subido';
         entry.branch = branch;
         entry.prUrl = prUrl;
+        entry.prNumber = prNumber;
+        entry.prState = prNumber ? 'open' : null; // sin gh no sabemos el estado
+        entry.sentAt = Date.now();
         entry.updatedAt = Date.now();
         saveBugfixes(all);
         res.json({ ok: true, branch, prUrl, files, entry });
@@ -149,6 +157,35 @@ export default {
       } finally {
         inFlight.delete(id);
       }
+    });
+
+    // Refresca desde GitHub el estado real de cada PR subido (¿lo mergeó
+    // Chris?). Corre gh en el repo de Tolkien; errores por-PR no cortan el
+    // resto (quedan en `errors`).
+    r.post('/refresh-prs', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const all = listBugfixes();
+      const errors = [];
+      for (const b of all) {
+        if (b.status !== 'subido' || (!b.prNumber && !b.branch)) continue;
+        try {
+          const out = await run('gh', [
+            'pr', 'view', String(b.prNumber || b.branch),
+            '--json', 'number,state,mergedAt,mergedBy,url',
+          ], { cwd: config.projectDir });
+          const pr = JSON.parse(out);
+          b.prNumber = pr.number || b.prNumber;
+          b.prUrl = pr.url || b.prUrl;
+          b.prState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
+          b.mergedAt = pr.mergedAt ? Date.parse(pr.mergedAt) : null;
+          b.mergedBy = pr.mergedBy?.login || null;
+          b.updatedAt = Date.now();
+        } catch (err) {
+          errors.push(`TKT #${b.ticketNumber}: ${String(err?.message || err).slice(0, 120)}`);
+        }
+      }
+      saveBugfixes(all);
+      res.json({ bugfixes: all, errors });
     });
 
     r.post('/delete', (req, res) => {

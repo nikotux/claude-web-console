@@ -91,6 +91,7 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
   const all = listBugfixes();
   const prev = all.find((b) => b.sessionId === sessionId);
   const entry = {
+    ...(prev || {}), // conserva los campos de PR (prNumber/prState/mergedBy/sentAt…)
     sessionId,
     chatId: chatId || prev?.chatId || null,
     cwd,

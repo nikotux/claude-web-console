@@ -85,8 +85,9 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             (patrón completo en docs/frontend-modules.md)
 public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
                             Salud — la pestaña Salud incluye Bugfixes→PR) ·
-                            tolkien (con botón Enviar PR admin: actualiza el repo y sube
-                            los fixes pendientes del registro; EXCLUSIVO de ~/tolkien) ·
+                            tolkien (botón Enviar PR admin → MODAL de gestión: historial de
+                            PRs con estado de merge desde GitHub, enviar pendientes con
+                            update previo, re-scan de bugfixes; EXCLUSIVO de ~/tolkien) ·
                             tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup)
