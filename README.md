@@ -68,36 +68,37 @@ openssl rand -hex 32   # pegá el resultado en CWC_TOKEN
 
 ## Arranque
 
+**El modo normal es el servicio systemd de usuario, YA INSTALADO y habilitado**
+(sobrevive a reboots gracias a `loginctl enable-linger`):
+
 ```bash
-npm start
+systemctl --user status claude-web-console    # estado
+journalctl --user -u claude-web-console -f    # logs
+systemctl --user restart claude-web-console   # reiniciar
 ```
 
-Al iniciar: espera la interfaz ZeroTier (no crashea si aún no levantó), genera el certificado si falta, y escucha en `https://<ip-zerotier>:<puerto>`.
+Al iniciar: espera la interfaz ZeroTier (no crashea si aún no levantó), genera
+el certificado si falta, y escucha en `https://<ip-zerotier>:<puerto>`. La
+restauración de un backup reinicia el servicio sola (`Restart=on-failure`).
 
-### Como servicio (systemd de usuario, sobrevive reboots)
+> **SSH para "Actualizar" de Tolkien:** bajo systemd el agente SSH no se hereda
+> solo; ya se importó con `systemctl --user import-environment SSH_AUTH_SOCK`.
+> **Tras un reboot** ese socket deja de existir hasta que inicies sesión SSH de
+> nuevo — reconectate y repetí el `import-environment` (o usá una deploy key).
+> Todo lo demás funciona sin el agente.
+
+### Reinstalar el servicio (si hiciera falta)
 
 ```bash
-mkdir -p ~/.config/systemd/user
 cp systemd/claude-web-console.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now claude-web-console
-
-# Para que arranque tras un reboot aunque no inicies sesión gráfica:
+systemctl --user daemon-reload && systemctl --user enable --now claude-web-console
 loginctl enable-linger "$USER"
-
-# Ver logs:
-journalctl --user -u claude-web-console -f
 ```
 
-> **SSH para el botón "Actualizar" de Tolkien:** bajo `systemd --user` el agente SSH
-> no se hereda solo. Con la sesión iniciada corré
-> `systemctl --user import-environment SSH_AUTH_SOCK` (o ajustá `Environment=` en
-> la unidad apuntando a un socket persistente). Sin eso, `status/fetch` puede
-> fallar la parte de red.
-
-### Alternativa: tmux
+### Alternativas: a mano o en tmux
 
 ```bash
+npm start                                              # foreground
 tmux new -s cwc-server 'cd ~/claude-web-console && npm start'
 ```
 
@@ -138,17 +139,35 @@ la configuración de usuario de Claude Code (`~/.claude/settings.json`):
 - Limitación: el estado se mapea a las sesiones tmux **por carpeta**; dos
   sesiones de Claude en el mismo directorio comparten estado.
 
-## Qué incluye
+## La interfaz (organizada por intención)
 
-- **Terminal** real (PTY) con `tmux` en socket aislado: sobrevive a desconexiones del navegador **y** a reinicios del server (rehidratación). Pestañas como iconos en el rail derecho.
-- **Árbol de archivos** (panel *Archivos*) con visor solo-lectura y resaltado (`highlight.js`), acciones "Abrir terminal / Claude Code aquí".
-- **Tokens**: uso y costo de Claude Code por proyecto (pie fijo con total).
-- **Sistema**: CPU/RAM/disco/carga en el pie fijo.
-- **tmux**: control de sesiones de todos los sockets (listar / adjuntar / matar).
-- **Tolkien**: panel del proyecto principal con estado git y botón *Actualizar* (stash → pull → stash pop, no destructivo).
-- **Móvil**: barra de teclas auxiliares (Esc/Tab/Ctrl/flechas/⇧Tab), dictado por campo de texto y pegar.
-- **Copiar/pegar**: seleccionar con el mouse copia al portapapeles del sistema (OSC52); click derecho pega.
-- **Usuarios**: administración en `/admin` (solo admins).
+- **[＋ Nueva sesión]** — el lanzador, la única acción prominente: tipo
+  (**Chat** por defecto / Claude TUI / Terminal), modelo (recuerda el último),
+  destino (Home, Tolkien, carpetas recientes o navegador con breadcrumb) y,
+  con tipo Chat, **"Retomar"** las últimas conversaciones de esa carpeta.
+- **Sesiones** — tarjetas con nombre humano, punto de **estado real**
+  (● trabajando / ○ esperando, vía el observador) y modelo con su color.
+  Tap = adjuntar/enfocar; menú ⋯ = renombrar / cambiar modelo / matar.
+  Las sesiones tmux externas viven en un grupo colapsado.
+- **Chat nativo (Agent SDK)** — conversación con burbujas, markdown y código
+  con botón copiar, tool calls colapsables con resultado, **diffs rojo/verde**
+  (también dentro de la tarjeta de permiso **Permitir/Denegar**), modos de
+  permiso (preguntar / aceptar ediciones / plan), costo por turno, detener, y
+  resume. Usa la **suscripción del CLI** (sin API key ni facturación aparte).
+  El textarea permite **dictado por voz nativo** en el celular.
+- **Terminal PTY** — para la TUI completa de Claude Code, htop, vim: `tmux`
+  en socket aislado; sobrevive a desconexiones y reinicios (rehidratación).
+  El **scrollback histórico vive en tmux** (10.000 líneas, accesible con el
+  scroll táctil/rueda vía copy-mode), por eso no se re-inyecta al recargar.
+- **Pie de estado** — gauges CPU/RAM/disco, **hoy $** (→ modal **Uso** con el
+  detalle por proyecto y por modelo), Explorador, y **⚙ Sistema** (Backup +
+  Usuarios + Salir).
+- **Explorador** (`/archivos`) — gestor de archivos estilo Finder: subir/bajar,
+  zip de carpetas y selecciones, papelera con purga a 30 días, preview con
+  resaltado, y "Claude aquí / Terminal aquí" por carpeta.
+- **Móvil** — barra de teclas auxiliares (Esc/Tab/⇧Tab/Ctrl/flechas), dictado,
+  pegar; copiar = seleccionar (OSC52), pegar = click derecho en desktop.
+- **Backups** — snapshot completo, restaurar reinicia el servicio solo.
 
 ---
 
@@ -172,6 +191,7 @@ Pasos:
 2. Agregalo al array `MODULES` en `src/core/registry.js`.
 3. (Frontend) sumá tu UI en `public/js/modules/<nombre>/` y montala desde `public/js/main.js`.
 
+El frontend tiene su patrón espejo documentado en `docs/frontend-modules.md`.
 Cero cambios en lo existente: es el mismo patrón que usan `terminal`, `files`, `stats`, `tokens`, `tmux`, `admin` y `tolkien`.
 
 ---

@@ -1,3 +1,7 @@
+> **NOTA (2026-07-02):** este documento es la foto PRE-REDISEÑO que sirvió de base
+> al plan. El rediseño de las fases 0–5 ya se ejecutó: la navegación, el sistema de
+> diseño y varios módulos descritos aquí cambiaron. Ver README.md y git log.
+
 # Claude Web Console — Contexto técnico para rediseño de UI
 
 > Documento de contexto para asesoría externa de rediseño de interfaz.
