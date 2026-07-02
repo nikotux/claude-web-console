@@ -80,20 +80,23 @@ html, body {
 .rail-chip {
   width: 36px; height: 36px; border-radius: var(--cwc-radius-md); cursor: pointer;
   background: var(--cwc-bg-hover); border: 1px solid var(--cwc-border-soft); color: var(--cwc-text-secondary);
-  font-size: var(--cwc-fs-xs); font-weight: 700; letter-spacing: .02em;
-  font-family: var(--cwc-font-mono);
+  display: grid; place-items: center; padding: 0;
 }
+.rail-chip .cwc-icon { pointer-events: none; }
 .rail-tab.active .rail-chip { background: var(--cwc-accent-bg); border-color: var(--cwc-accent); color: var(--cwc-accent); }
 /* Tipo de pestaña: pty (terminal) vs chat (SDK). El chip de chat lleva esquina
    asimétrica de burbuja. */
 .rail-tab[data-type="chat"] .rail-chip { border-radius: var(--cwc-radius-md) var(--cwc-radius-md) 2px var(--cwc-radius-md); }
 /* Conversación mostrándose como TUI: chip cuadrado (como una terminal). */
 .rail-tab[data-type="chat"][data-view="tui"] .rail-chip { border-radius: var(--cwc-radius-sm); }
+/* OJO: el × vive DENTRO de los límites del chip. Con offset negativo invadía
+   el chip vecino (gap ~5px) y clickear "el de al lado" CERRABA en vez de
+   cambiar de sesión (bug reportado). */
 .rail-close {
-  display: none; position: absolute; top: -5px; right: -5px;
-  width: 16px; height: 16px; border-radius: 50%; padding: 0;
+  display: none; position: absolute; top: 1px; right: 1px;
+  width: 13px; height: 13px; border-radius: 50%; padding: 0;
   background: var(--cwc-danger); border: 0; color: var(--cwc-accent-ink); cursor: pointer;
-  font-size: var(--cwc-fs-xs); line-height: 16px; text-align: center; z-index: 1;
+  font-size: 9px; line-height: 13px; text-align: center; z-index: 1;
 }
 .rail-tab.active .rail-close { display: block; }
 /* Punto de estado (trabajando/esperando) en la esquina de la pestaña. */
@@ -117,7 +120,7 @@ html, body {
   display: flex; flex-direction: column; transition: width .18s ease, margin-left .2s ease;
 }
 #sidebar.hidden { margin-left: -272px; }
-.sidebar-top { padding: .6rem .6rem .35rem; }
+.sidebar-top { padding: .45rem .5rem .3rem; }
 .sidebar-scroll { flex: 1; overflow: auto; min-height: 0; }
 
 /* Alternancia de contenido según el estado del panel. */
@@ -137,16 +140,18 @@ html, body {
 #sidebar.collapsed #rail-tabs::-webkit-scrollbar { display: none; }
 #sidebar.collapsed .sidebar-footer { align-items: stretch; padding: .45rem .4rem .55rem; }
 #sidebar.collapsed .footer-acct { flex-direction: column; gap: .35rem; align-items: center; }
-/* Gauges compactos en el rail: apilados, solo etiqueta + barra (sin %). */
-#sidebar.collapsed .gauges-row { flex-direction: column; gap: .3rem; }
-#sidebar.collapsed .gauge-mini { flex-direction: column; align-items: stretch; gap: 1px; }
-#sidebar.collapsed .gauge-label { text-align: center; font-size: 9px; }
+/* Gauges compactos en el rail: anillo-ícono dinámico (el % es el relleno). */
+#sidebar.collapsed .gauges-row { flex-direction: column; gap: .35rem; align-items: center; }
+#sidebar.collapsed .gauge-label,
+#sidebar.collapsed .gauge-bar,
 #sidebar.collapsed .gauge-val { display: none; }
-/* Botón de tokens compacto: solo el número. */
+#sidebar.collapsed .gauge-ring { display: grid; }
+/* Botón de tokens compacto: solo el número, en chico (que no desborde el rail). */
 #sidebar.collapsed .usage-lbl { display: none; }
+#sidebar.collapsed .usage-btn { padding: .1rem .2rem; font-size: var(--cwc-fs-xs); min-height: 0; max-width: 50px; overflow: hidden; }
 
-.side-sec { padding: .35rem 0 .5rem; border-bottom: 1px solid var(--cwc-divider); }
-.sec-head { display: flex; align-items: center; gap: .4rem; padding: .25rem .6rem .35rem; }
+.side-sec { padding: .2rem 0 .35rem; border-bottom: 1px solid var(--cwc-divider); }
+.sec-head { display: flex; align-items: center; gap: .4rem; padding: .12rem .55rem .2rem; }
 .sec-title {
   flex: 1; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary);
   text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
@@ -157,18 +162,18 @@ html, body {
 }
 
 /* ===== Sesiones: tarjetas ===== */
-.sess-list { padding: 0 .45rem; display: flex; flex-direction: column; gap: .3rem; }
+.sess-list { padding: 0 .4rem; display: flex; flex-direction: column; gap: .2rem; }
 .sess-card {
-  display: flex; align-items: stretch; gap: .25rem;
+  display: flex; align-items: stretch; gap: .2rem;
   background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
-  border-radius: var(--cwc-radius-md); padding: .3rem;
+  border-radius: var(--cwc-radius-md); padding: .15rem;
 }
 .sess-card:hover { border-color: var(--cwc-border-strong); }
 .sess-main {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: .5rem;
   background: none; border: 0; color: var(--cwc-text); cursor: pointer;
-  padding: .3rem .35rem; border-radius: var(--cwc-radius-sm); text-align: left;
-  min-height: 40px;
+  padding: .2rem .3rem; border-radius: var(--cwc-radius-sm); text-align: left;
+  min-height: 30px;
 }
 .sess-main:hover { background: var(--cwc-bg-hover); }
 .sess-name {
@@ -220,7 +225,7 @@ html, body {
 .tk-chip { font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .3rem; display: inline-flex; align-items: center; }
 .tk-chip.ok { color: var(--cwc-ok); }
 .tk-chip.behind { color: var(--cwc-warn); }
-.tk-card { padding: 0 .6rem; display: flex; flex-direction: column; gap: .45rem; }
+.tk-card { padding: 0 .5rem; display: flex; flex-direction: column; gap: .3rem; }
 .tk-state-line { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
 .tk-head { font-family: var(--cwc-font-mono); color: var(--cwc-text-dim); }
 .tk-state.ok { color: var(--cwc-ok); }
@@ -231,7 +236,7 @@ html, body {
 /* ===== Pie fijo (2 filas) ===== */
 .sidebar-footer {
   flex: none; border-top: 1px solid var(--cwc-border-strong); background: var(--cwc-bg);
-  padding: .45rem .6rem .55rem; display: flex; flex-direction: column; gap: .45rem;
+  padding: .35rem .55rem .45rem; display: flex; flex-direction: column; gap: .35rem;
 }
 .gauges-row { display: flex; gap: .6rem; }
 .gauge-mini { display: flex; align-items: center; gap: .3rem; flex: 1; min-width: 0; }
@@ -242,6 +247,20 @@ html, body {
 .gauge-fill.mid { background: var(--cwc-warn); }
 .gauge-fill.hi { background: var(--cwc-danger); }
 .gauge-val { font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); flex: none; font-variant-numeric: tabular-nums; }
+/* Anillo-ícono dinámico (solo rail colapsado): relleno cónico = % de uso. */
+.gauge-ring {
+  display: none; width: 22px; height: 22px; border-radius: 50%; flex: none;
+  background: conic-gradient(var(--ring, var(--cwc-ok)) calc(var(--pct, 0) * 1%), var(--cwc-bg-chip) 0);
+  place-items: center; position: relative;
+}
+.gauge-ring::before {
+  content: ''; position: absolute; inset: 3px; border-radius: 50%;
+  background: var(--cwc-bg); /* agujero del donut */
+}
+.gauge-ring .cwc-icon { position: relative; color: var(--cwc-text-secondary); }
+.gauge-ring.lo { --ring: var(--cwc-ok); }
+.gauge-ring.mid { --ring: var(--cwc-warn); }
+.gauge-ring.hi { --ring: var(--cwc-danger); }
 
 .footer-acct { display: flex; align-items: center; gap: .4rem; }
 .footer-acct .btn-ghost { text-decoration: none; }
@@ -543,7 +562,7 @@ html, body {
 }
 
 /* ===== Bugs / triage de tickets ===== */
-.tickets-card { gap: .4rem; }
+.tickets-card { gap: .3rem; }
 .tickets-line { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); display: flex; align-items: center; gap: .4rem; }
 .tickets-err { color: var(--cwc-danger-strong); }
 /* Severidad: mismo lenguaje de color que el resto (danger/warn/ok). */

@@ -114,7 +114,11 @@ async function main() {
 
   app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
   app.get('/js/login.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'login.js')));
+  // TODO el CSS que usa login.html debe ser público: si falta uno acá, el 401
+  // devuelve JSON y el navegador lo rechaza por MIME (login sin estilos).
   app.get('/css/style.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'style.css')));
+  app.get('/css/tokens.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'tokens.css')));
+  app.get('/css/ui.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'ui.css')));
 
   // --- A partir de acá, TODO exige token ---
   // Páginas HTML sin token -> redirect a /login. API/otros -> 401.

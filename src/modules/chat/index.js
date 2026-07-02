@@ -582,6 +582,7 @@ class ChatManager {
       });
       chat.onUpdate = () => this.persist();
       chat.alive = false; // dormida: sin start(), sin subproceso
+      if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
       chat.lastActivity = s.lastActivity || Date.now();
       this.chats.set(s.id, chat);
@@ -716,6 +717,16 @@ export default {
       }
       // La TUI murió verificada: abrir la conversación sobre la MISMA sesión.
       const chat = manager.create({ cwd: term.cwd, model: null, permissionMode: 'default', resume: sessionId });
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // Renombrar conversación (para la tarjeta y la cabecera).
+    r.post('/title', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const title = String(req.body?.title ?? '').trim().slice(0, 60);
+      chat.title = title || path.basename(chat.cwd) || '~';
+      manager.persist();
       res.json({ ok: true, chat: chat.info() });
     });
 

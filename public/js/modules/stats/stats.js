@@ -23,30 +23,39 @@ function heat(pct) {
   if (pct >= 60) return 'mid';
   return 'lo';
 }
-function gauge(label, pct) {
+// Cada gauge tiene DOS representaciones (CSS muestra una según el estado del
+// panel): barra con etiqueta y % (expandido) y anillo-ícono dinámico con el
+// porcentaje como relleno cónico (rail colapsado).
+function gauge(iconFn, label, iconName, pct) {
   const p = Math.round(pct);
+  const h = heat(pct);
   return `
-    <span class="gauge-mini">
+    <span class="gauge-mini" title="${label} ${p}%">
       <span class="gauge-label">${label}</span>
-      <span class="gauge-bar"><span class="gauge-fill ${heat(pct)}" style="width:${p}%"></span></span>
+      <span class="gauge-bar"><span class="gauge-fill ${h}" style="width:${p}%"></span></span>
       <span class="gauge-val">${p}%</span>
+      <span class="gauge-ring ${h}" style="--pct:${p}">${iconFn(iconName, { size: 10 })}</span>
     </span>`;
 }
 
 export default {
   name: 'stats',
 
-  mount(el) {
+  mount(el, ctx) {
     // classList.add (no className=): el wrapper puede traer clases del layout
     // (p.ej. only-expanded) que NO hay que pisar.
     el.classList.add('gauges-row');
+    const ic = ctx?.icon || (() => '');
     async function tick() {
       if (document.hidden) return;
       try {
         const res = await fetch('/api/stats');
         if (!res.ok) return;
         const s = await res.json();
-        el.innerHTML = gauge('CPU', s.cpu.pct) + gauge('RAM', s.mem.pct) + gauge('DSK', s.disk.pct);
+        el.innerHTML =
+          gauge(ic, 'CPU', 'cpu', s.cpu.pct) +
+          gauge(ic, 'RAM', 'ram', s.mem.pct) +
+          gauge(ic, 'DSK', 'disk', s.disk.pct);
         el.title = `${s.hostname} · RAM ${fmtBytes(s.mem.used)}/${fmtBytes(s.mem.total)} · carga ${s.load[0].toFixed(2)} · up ${fmtUptime(s.uptime)}`;
       } catch { /* reintenta al próximo tick */ }
     }

@@ -30,10 +30,27 @@ const getActiveTab = () => tabs.get(activeId)?.tab || null;
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 const hideSidebarOnMobile = () => { if (isMobile()) document.getElementById('sidebar').classList.add('hidden'); };
 
-// Iniciales para el chip de la pestaña (1-2 letras del título).
-function chipLabel(title) {
-  const s = (title || '').replace(/[^a-z0-9]/gi, '');
-  return s ? s.slice(0, 2).toUpperCase() : '•';
+// Key semántica de modelo a partir de un nombre tipo 'opusplan'/'fable'.
+function modelKeyOf(m) {
+  const low = (m || '').toLowerCase();
+  for (const k of ['fable', 'opus', 'sonnet', 'haiku']) if (low.includes(k)) return k;
+  return null;
+}
+
+// Pinta el chip de una pestaña: ícono por TIPO (terminal / chat ✦ / TUI) y
+// color por MODELO en uso; terminal sin Claude = fantasma apagado.
+function paintChip(entry, modelKey) {
+  const { chip } = entry;
+  if (entry.type === 'chat') {
+    chip.innerHTML = icon(entry.viewMode === 'tui' ? 'terminal' : 'sparkle', { size: 17 });
+    chip.style.color = modelKey ? modelColor(modelKey) : 'var(--cwc-accent)';
+  } else if (modelKey) {
+    chip.innerHTML = icon('terminal', { size: 17 });
+    chip.style.color = modelColor(modelKey);
+  } else {
+    chip.innerHTML = icon('ghost', { size: 17 });
+    chip.style.color = 'var(--cwc-text-dim)';
+  }
 }
 
 function setActive(id) {
@@ -57,7 +74,6 @@ function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
   tabButton.title = session.title || 'terminal';
   const chip = document.createElement('button');
   chip.className = 'rail-chip';
-  chip.textContent = chipLabel(session.title);
   const close = document.createElement('button');
   close.className = 'rail-close';
   close.textContent = '×';
@@ -68,7 +84,7 @@ function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
   tabButton.append(chip, close, statusDot, flag);
   tabsEl.appendChild(tabButton);
 
-  const entry = { tab: null, tabButton, pane, flag, statusDot, session, type };
+  const entry = { tab: null, tabButton, chip, pane, flag, statusDot, session, type };
   tabs.set(session.id, entry);
 
   if (type === 'chat') {
@@ -77,6 +93,7 @@ function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
     entry.viewMode = session.viewMode === 'tui' ? 'tui' : 'chat';
     buildConversationInner(entry, session, initialPrompt);
   } else {
+    paintChip(entry, null); // fantasma hasta detectar Claude (pollModels)
     entry.tab = new TerminalTab({ id: session.id, title: session.title, container: pane });
     entry.tab.connect();
   }
@@ -129,7 +146,9 @@ function buildConversationInner(entry, info, initialPrompt = null) {
 function updateConvChipMode(entry) {
   entry.tabButton.dataset.view = entry.viewMode; // chat | tui (estilo del chip)
   const base = entry.session.title || 'chat';
-  entry.tabButton.title = entry.viewMode === 'tui' ? `${base} · TUI` : base;
+  const model = entry.session.model ? ` · ${entry.session.model}` : '';
+  entry.tabButton.title = (entry.viewMode === 'tui' ? `${base} · TUI` : base) + model;
+  paintChip(entry, modelKeyOf(entry.session.model));
 }
 
 // El usuario pidió alternar Chat<->TUI. Secuencial y verificado en el server:
@@ -206,9 +225,11 @@ async function updateModelFlag(id) {
       entry.flag.style.background = modelColor(model.key);
       entry.flag.style.display = 'block';
       entry.tabButton.title = `${entry.session.title || 'terminal'} · ${model.name}`;
+      paintChip(entry, model.key);
     } else {
       entry.flag.style.display = 'none';
       entry.tabButton.title = entry.session.title || 'terminal';
+      paintChip(entry, null); // fantasma: terminal sin Claude
     }
   } catch { /* noop */ }
 }
@@ -318,9 +339,19 @@ async function openChat({ cwd, model, mode, resume, prompt } = {}) {
 
 // Reabre la vista de una conversación viva del servidor (replay por history).
 function openChatView(chatInfo) {
-  if (focusSession(chatInfo.id)) return;
+  if (tabs.has(chatInfo.id)) { syncConversation(chatInfo); focusSession(chatInfo.id); return; }
   addTab(chatInfo, { type: 'chat' });
   hideSidebarOnMobile();
+}
+
+// Sincroniza una pestaña de conversación abierta con el estado del server
+// (título renombrado, viewMode cambiado desde la tarjeta, etc.).
+function syncConversation(chatInfo) {
+  const entry = tabs.get(chatInfo.id);
+  if (!entry || entry.type !== 'chat') return;
+  applyConversationMode(entry, chatInfo); // idempotente; rebuilds si cambió el modo
+  const ttl = entry.pane.querySelector('.chat-title');
+  if (ttl && chatInfo.title) ttl.textContent = chatInfo.title;
 }
 
 // Enfoca la pestaña de una sesión ya existente; si no está abierta, la adjunta.
@@ -394,6 +425,7 @@ const ctx = {
   openSession,
   openChat,
   openChatView,
+  syncConversation,
   openExplorer,
   focusSession,
   findSessionByCwd,

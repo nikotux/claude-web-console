@@ -22,7 +22,7 @@ export default {
   name: 'sessions',
 
   mount(el, ctx) {
-    const { icon, dialog, bus, openSession, focusSession, openChatView } = ctx;
+    const { icon, dialog, bus, openSession, focusSession, openChatView, syncConversation } = ctx;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -129,25 +129,83 @@ export default {
       const menuBtn = document.createElement('button');
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
-      menuBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const ok = await dialog.confirmDialog({
-          title: 'Cerrar conversación',
-          message: `Se cierra "${c.title}" (el historial queda en el transcript para retomar en el futuro).`,
-          confirmLabel: 'Cerrar',
-          danger: true,
-        });
-        if (!ok) return;
-        await fetch('/api/chat/close', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: c.id }),
-        }).catch(() => {});
-        refresh();
-      });
+      menuBtn.title = 'Opciones';
+      menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openChatMenu(c, menuBtn); });
 
       elCard.append(main, menuBtn);
       return elCard;
+    }
+
+    // Menú ⋯ de una CONVERSACIÓN: mismo popup descartable que las terminales.
+    function openChatMenu(c, anchor) {
+      const isTui = c.viewMode === 'tui';
+      const menu = document.createElement('div');
+      menu.className = 'cwc-popup-menu';
+      menu.innerHTML = `
+        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>Abrir</span></button>
+        <button class="cwc-popup-item" data-act="mode">${icon(isTui ? 'sparkle' : 'terminal', { size: 15 })}<span>${isTui ? 'Pasar a Chat' : 'Pasar a TUI'}</span></button>
+        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
+        <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
+      document.body.appendChild(menu);
+      positionPopup(menu, anchor);
+      const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+      const act = (fn) => { dismiss(); fn(); };
+      menu.querySelector('[data-act="open"]').addEventListener('click', () => act(() => openChatView(c)));
+      menu.querySelector('[data-act="mode"]').addEventListener('click', () => act(() => switchChatMode(c)));
+      menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
+      menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    async function switchChatMode(c) {
+      try {
+        const res = await fetch('/api/chat/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id, mode: c.viewMode === 'tui' ? 'chat' : 'tui' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo cambiar de modo.');
+        syncConversation(data.chat); // si la pestaña está abierta, reconstruye la vista
+        refresh();
+      } catch (e) {
+        dialog.alertDialog({ title: 'Cambio de modo', message: e.message });
+      }
+    }
+
+    async function renameChat(c) {
+      const name = await dialog.promptDialog({
+        title: 'Renombrar conversación',
+        message: 'Nombre para mostrar (vacío = volver al nombre de la carpeta).',
+        value: c.title || '',
+      });
+      if (name === null) return;
+      try {
+        const res = await fetch('/api/chat/title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id, title: name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) syncConversation(data.chat);
+      } finally {
+        refresh();
+      }
+    }
+
+    async function closeChat(c) {
+      const ok = await dialog.confirmDialog({
+        title: 'Cerrar conversación',
+        message: `Se cierra "${c.title}" (el historial queda en el transcript para retomar en el futuro).`,
+        confirmLabel: 'Cerrar',
+        danger: true,
+      });
+      if (!ok) return;
+      await fetch('/api/chat/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: c.id }),
+      }).catch(() => {});
+      refresh();
     }
 
     function card(s) {
