@@ -20,7 +20,7 @@ export default {
   name: 'sessions',
 
   mount(el, ctx) {
-    const { icon, dialog, bus, openSession, focusSession } = ctx;
+    const { icon, dialog, bus, openSession, focusSession, openChatView } = ctx;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -62,31 +62,38 @@ export default {
       return { cls: 'st-shell', label: 'shell (sin Claude)' };
     }
 
-    async function fetchSessions() {
-      const res = await fetch('/api/tmux/sessions');
-      if (!res.ok) throw new Error();
-      return (await res.json()).sessions;
+    async function fetchAll() {
+      const [tmuxRes, chatRes] = await Promise.all([
+        fetch('/api/tmux/sessions'),
+        fetch('/api/chat/list'),
+      ]);
+      if (!tmuxRes.ok) throw new Error();
+      const sessions = (await tmuxRes.json()).sessions;
+      const chats = chatRes.ok ? (await chatRes.json()).chats || [] : [];
+      return { sessions, chats };
     }
 
     async function refresh() {
       listEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
       try {
-        render(await fetchSessions());
+        render(await fetchAll());
       } catch {
         listEl.innerHTML = '<div class="sess-msg sess-err">No se pudieron listar las sesiones.</div>';
       }
     }
 
-    function render(sessions) {
-      countEl.textContent = sessions.length ? String(sessions.length) : '';
+    function render({ sessions, chats }) {
+      const total = sessions.length + chats.length;
+      countEl.textContent = total ? String(total) : '';
       const owned = sessions.filter((s) => s.owned);
       const others = sessions.filter((s) => !s.owned);
 
       listEl.innerHTML = '';
-      if (!owned.length && !others.length) {
+      if (!total) {
         listEl.innerHTML = '<div class="sess-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
         return;
       }
+      for (const c of chats) listEl.appendChild(chatCard(c));
       for (const s of owned) listEl.appendChild(card(s));
 
       if (others.length) {
@@ -96,6 +103,47 @@ export default {
         for (const s of others) det.appendChild(card(s));
         listEl.appendChild(det);
       }
+    }
+
+    // ===== Tarjeta de conversación (chat SDK) =====
+    function chatCard(c) {
+      const elCard = document.createElement('div');
+      elCard.className = 'sess-card sess-chat';
+      elCard.dataset.key = `chat:${c.id}`;
+      elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
+
+      const dotCls = c.status === 'working' ? 'st-working' : 'st-waiting';
+      const main = document.createElement('button');
+      main.className = 'sess-main';
+      main.innerHTML = `
+        <span class="sess-dot ${dotCls}"></span>
+        <span class="sess-type-ic">${icon('sparkle', { size: 12 })}</span>
+        <span class="sess-name">${c.title}</span>
+        <span class="sess-model">${c.model || ''}</span>`;
+      main.addEventListener('click', () => openChatView(c));
+
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
+      menuBtn.innerHTML = icon('more', { size: 15 });
+      menuBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = await dialog.confirmDialog({
+          title: 'Cerrar conversación',
+          message: `Se cierra "${c.title}" (el historial queda en el transcript para retomar en el futuro).`,
+          confirmLabel: 'Cerrar',
+          danger: true,
+        });
+        if (!ok) return;
+        await fetch('/api/chat/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        }).catch(() => {});
+        refresh();
+      });
+
+      elCard.append(main, menuBtn);
+      return elCard;
     }
 
     function card(s) {
@@ -220,10 +268,18 @@ export default {
     async function updateInPlace() {
       if (document.hidden) return;
       try {
-        const sessions = await fetchSessions();
+        const { sessions, chats } = await fetchAll();
         const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s]));
+        const chatMap = new Map(chats.map((c) => [`chat:${c.id}`, c]));
         for (const cardEl of listEl.querySelectorAll('.sess-card')) {
-          const s = map.get(cardEl.dataset.key);
+          const key = cardEl.dataset.key;
+          if (chatMap.has(key)) {
+            const c = chatMap.get(key);
+            const dotEl = cardEl.querySelector('.sess-dot');
+            dotEl.className = `sess-dot ${c.status === 'working' ? 'st-working' : 'st-waiting'}`;
+            continue;
+          }
+          const s = map.get(key);
           if (!s) continue;
           const dot = dotInfo(s);
           const dotEl = cardEl.querySelector('.sess-dot');

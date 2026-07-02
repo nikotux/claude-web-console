@@ -158,6 +158,10 @@ html, body {
 .sess-others[open] summary { margin-bottom: .3rem; }
 .sess-others .sess-card { margin-bottom: .3rem; }
 
+/* Tarjeta de conversación (chat SDK): distinguible por ícono y borde */
+.sess-chat { border-left: 2px solid var(--cwc-accent); }
+.sess-type-ic { display: inline-flex; color: var(--cwc-accent); flex: none; }
+
 /* Menú ⋯ de tarjeta */
 .sess-menu-list { display: flex; flex-direction: column; gap: .35rem; }
 .sess-menu-item { justify-content: flex-start; }

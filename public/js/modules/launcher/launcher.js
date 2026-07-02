@@ -27,7 +27,7 @@ export default {
 
     let modal = null;
     const st = {
-      type: 'claude',
+      type: 'chat', // chat (SDK, default) | claude (PTY) | terminal
       model: localStorage.getItem(LAST_MODEL_KEY) || 'opusplan',
       dest: { rel: '', label: 'Home' },
       view: 'list',       // list | browse
@@ -64,10 +64,11 @@ export default {
       const body = modal.body;
       body.innerHTML = `
         <div class="ln-types">
-          <button class="btn-ghost ln-type ${st.type === 'claude' ? 'active' : ''}" data-type="claude">${icon('sparkle')}<span>Claude Code</span></button>
+          <button class="btn-ghost ln-type ${st.type === 'chat' ? 'active' : ''}" data-type="chat">${icon('sparkle')}<span>Chat</span></button>
+          <button class="btn-ghost ln-type ${st.type === 'claude' ? 'active' : ''}" data-type="claude">${icon('keyboard')}<span>Claude (TUI)</span></button>
           <button class="btn-ghost ln-type ${st.type === 'terminal' ? 'active' : ''}" data-type="terminal">${icon('terminal')}<span>Terminal</span></button>
         </div>
-        <div class="ln-model-row" ${st.type === 'claude' ? '' : 'hidden'}>
+        <div class="ln-model-row" ${st.type === 'terminal' ? 'hidden' : ''}>
           <label class="ln-sec-title" for="ln-model">Modelo</label>
           <select id="ln-model" class="ln-model">
             ${MODELS.map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
@@ -174,11 +175,15 @@ export default {
     }
 
     async function start() {
-      const runClaude = st.type === 'claude';
-      if (runClaude) localStorage.setItem(LAST_MODEL_KEY, st.model);
       const dest = st.dest;
+      if (st.type !== 'terminal') localStorage.setItem(LAST_MODEL_KEY, st.model);
       modal.close();
-      await openSession({ cwd: dest.rel, runClaude, model: runClaude ? st.model : undefined });
+      if (st.type === 'chat') {
+        await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default' });
+      } else {
+        const runClaude = st.type === 'claude';
+        await openSession({ cwd: dest.rel, runClaude, model: runClaude ? st.model : undefined });
+      }
     }
   },
 };
