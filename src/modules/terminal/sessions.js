@@ -43,7 +43,7 @@ class Session {
     this.alive = false;
   }
 
-  spawn({ runClaude = false } = {}) {
+  spawn({ runClaude = false, model = null } = {}) {
     let args;
     if (this.attachSpec) {
       // attach-session -d: nos adjuntamos como ÚNICO cliente (desadjunta a
@@ -84,8 +84,9 @@ class Session {
     });
 
     if (runClaude) {
-      // Lanza Claude Code dentro de la sesión (para "Abrir Claude Code aquí").
-      this.proc.write('claude\r');
+      // Lanza Claude Code en la sesión; el modelo va como flag del CLI
+      // (validado upstream contra VALID_MODELS — nunca texto arbitrario).
+      this.proc.write(model ? `claude --model ${model}\r` : 'claude\r');
     }
     return this;
   }
@@ -188,9 +189,9 @@ class SessionManager {
     return count;
   }
 
-  create({ cwd, runClaude = false, title, attach = null } = {}) {
+  create({ cwd, runClaude = false, model = null, title, attach = null } = {}) {
     const id = this._nextId();
-    const session = new Session({ id, cwd, title, attach }).spawn({ runClaude });
+    const session = new Session({ id, cwd, title, attach }).spawn({ runClaude, model });
     this.sessions.set(id, session);
     return session;
   }

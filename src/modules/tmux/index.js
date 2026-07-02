@@ -11,10 +11,7 @@
 import express from 'express';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
-import { modelForCwd } from '../../core/claude-model.js';
-
-// Modelos aceptados por `/model` que exponemos en el dropdown (Auto=opusplan).
-const VALID_MODELS = new Set(['opusplan', 'opus', 'sonnet', 'haiku', 'default']);
+import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 
 // Formato tabulado para parsear sin ambigüedad.
 const FMT = [

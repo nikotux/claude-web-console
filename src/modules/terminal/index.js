@@ -16,7 +16,8 @@ import { execFileSync } from 'node:child_process';
 import { sessionManager } from './sessions.js';
 import { config } from '../../core/config.js';
 import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
-import { modelForCwd } from '../../core/claude-model.js';
+import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
+import { recordRecent, listRecents } from '../../core/recents.js';
 
 // Aplica al server tmux cwc YA en marcha las opciones de clipboard (la config
 // del socket solo se lee al iniciar el server tmux; esto cubre el rehidratado).
@@ -65,7 +66,7 @@ export default {
     });
 
     r.post('/sessions', (req, res) => {
-      const { cwd, runClaude, title, attach } = req.body || {};
+      const { cwd, runClaude, title, attach, model } = req.body || {};
 
       // Adjuntado a una sesión tmux existente (de cualquier socket): validamos
       // socket + nombre para no ejecutar tmux con argumentos arbitrarios.
@@ -81,12 +82,26 @@ export default {
         return res.json({ session: session.info() });
       }
 
+      // Modelo inicial opcional (lanzador): se arranca `claude --model <x>`.
+      if (model != null && !VALID_MODELS.has(model)) {
+        return res.status(400).json({ error: 'Modelo inválido.' });
+      }
+
+      const cwdAbs = cwd ? safeCwd(cwd) : config.home;
       const session = sessionManager.create({
-        cwd: cwd ? safeCwd(cwd) : config.home,
+        cwd: cwdAbs,
         runClaude: !!runClaude,
+        model: model || null,
         title,
       });
+      // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
+      recordRecent(path.relative(config.home, cwdAbs));
       res.json({ session: session.info() });
+    });
+
+    // Carpetas recientes donde se crearon sesiones (para el lanzador).
+    r.get('/recents', (req, res) => {
+      res.json({ recents: listRecents() });
     });
 
     router.use('/terminal', r);
