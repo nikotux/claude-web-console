@@ -489,28 +489,42 @@ html, body {
 }
 @keyframes chat-caret { 50% { opacity: 0; } }
 
-/* Tool calls: chips compactos de ancho natural (fit-content); el detalle
-   expandido abre a lo ancho. Tipografía un paso abajo del texto del mensaje. */
-.chat-toolcard {
-  align-self: flex-start; max-width: 100%; width: fit-content;
+/* Tool calls consecutivos: grupo con fila flex-wrap de chips compactos y UN
+   detalle expandible de ancho completo DEBAJO de la fila (fuera del flujo
+   flex). Tipografía un paso abajo del texto del mensaje. */
+.chat-toolgroup { align-self: stretch; display: flex; flex-direction: column; gap: .4rem; }
+.ctg-row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: flex-start; }
+.chat-toolchip {
+  position: relative; display: inline-flex; align-items: center; gap: .4rem;
+  max-width: 100%; min-height: 30px; padding: 0 .55rem;
   background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
-  border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
+  border-radius: var(--cwc-radius-sm); cursor: pointer; text-align: left;
+  font-family: var(--cwc-font-ui); font-size: var(--cwc-fs-sm);
   color: var(--cwc-text-secondary);
 }
-.chat-toolcard[open] { width: 100%; }
-.chat-toolcard summary {
-  display: flex; align-items: center; gap: .4rem; cursor: pointer;
-  min-height: 30px; padding: 0 .55rem; color: var(--cwc-text-secondary);
-  user-select: none; list-style: none;
+.chat-toolchip.done { border-left: 2px solid var(--cwc-ok); }
+.chat-toolchip.fail { border-left: 2px solid var(--cwc-danger); }
+.chat-toolchip.active {
+  background: var(--cwc-bg-hover); border-color: var(--cwc-accent-cool);
+  color: var(--cwc-text);
 }
-.chat-toolcard summary::-webkit-details-marker { display: none; }
-.chat-toolcard summary.done { border-left: 2px solid var(--cwc-ok); }
-.chat-toolcard summary.fail { border-left: 2px solid var(--cwc-danger); }
+.chat-toolchip.active .ct-chev { transform: rotate(180deg); }
 .ct-name { font-weight: 600; color: var(--cwc-text-secondary); flex: none; }
 .ct-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--cwc-font-mono); }
 .ct-chev { display: inline-flex; flex: none; color: var(--cwc-text-dim); transition: transform .15s ease; }
-.chat-toolcard[open] .ct-chev { transform: rotate(180deg); }
-.ct-body { padding: .1rem .5rem .45rem; display: flex; flex-direction: column; gap: .35rem; }
+/* Target táctil ≥44px sin engordar el chip: hit-area extendida + más aire
+   entre filas de chips SOLO en punteros gruesos (para que no se solapen). */
+@media (pointer: coarse) {
+  .chat-toolchip::after { content: ''; position: absolute; inset: -7px 0; }
+  .ctg-row { row-gap: .9rem; }
+}
+.ctg-detail {
+  width: 100%; background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
+  animation: msg-in .18s ease; /* la regla global de reduced-motion la anula */
+}
+.ctg-empty { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.ct-body { padding: .45rem .5rem; display: flex; flex-direction: column; gap: .35rem; font-size: var(--cwc-fs-sm); }
 .ct-cmd, .ct-out {
   margin: 0; padding: .4rem .5rem; overflow: auto; max-height: 220px;
   background: var(--cwc-bg); border-radius: var(--cwc-radius-sm);

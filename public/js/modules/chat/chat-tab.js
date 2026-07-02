@@ -79,6 +79,17 @@ export class ChatTab {
         this._submit();
       }
     });
+    // Esc cierra los detalles de tool calls expandidos (Fase 9 · 3). El Esc
+    // del popup de comandos slash se maneja antes (captura en dismissablePopup).
+    this.container.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      let closed = false;
+      for (const chip of this.msgsEl.querySelectorAll('.chat-toolgroup .chat-toolchip.active')) {
+        this._toolCollapse(chip.closest('.chat-toolgroup'));
+        closed = true;
+      }
+      if (closed) e.stopPropagation();
+    });
     // Autogrow del textarea (hasta ~6 líneas) + autocompletado de comandos.
     this.inputEl.addEventListener('input', () => {
       this.inputEl.style.height = 'auto';
@@ -363,22 +374,48 @@ export class ChatTab {
     }
   }
 
-  // Tool call como <details> colapsado: resumen de una línea; adentro el
-  // input (diff para Edit/Write, comando para Bash) y luego el resultado.
+  // ===== Tool calls: chips agrupados horizontalmente (Fase 9 · 3) =====
+  // Tool calls consecutivos (sin texto/permiso/costo en el medio) comparten un
+  // grupo: fila flex con wrap + UN detalle expandible de ancho completo debajo.
+  // La condición "consecutivos" sale sola del DOM: si el último hijo de la
+  // lista es un grupo, el chip nuevo se suma ahí; cualquier otro elemento
+  // intermedio corta el grupo.
+  _toolGroup() {
+    const last = this.msgsEl.lastElementChild;
+    if (last && last.classList.contains('chat-toolgroup')) return last;
+    const g = document.createElement('div');
+    g.className = 'chat-toolgroup';
+    g.innerHTML = '<div class="ctg-row"></div><div class="ctg-detail" hidden></div>';
+    this.msgsEl.appendChild(g);
+    return g;
+  }
+
+  // Chip compacto: el resumen se trunca a ~40 caracteres (el detalle completo
+  // vive en el bloque expandible; para Bash el resumen es el inicio REAL del
+  // comando, nunca una paráfrasis). El detalle se construye PEREZOSO al abrir.
   _toolCard(m) {
-    const det = document.createElement('details');
-    det.className = 'chat-toolcard';
-    if (m.id) det.dataset.toolId = m.id;
-    det.innerHTML = `
-      <summary>${icon('terminal', { size: 14 })}<span class="ct-name">${m.name}</span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span></summary>
-      <div class="ct-body"></div>`;
-    // Chip compacto: el resumen se trunca a ~40 caracteres (el detalle completo
-    // vive en el cuerpo expandible; para Bash el resumen es el inicio REAL del
-    // comando, nunca una paráfrasis).
+    const group = this._toolGroup();
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chat-toolchip';
+    if (m.id) chip.dataset.toolId = m.id;
+    chip.innerHTML = `${icon('terminal', { size: 14 })}<span class="ct-name"></span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span>`;
+    chip.querySelector('.ct-name').textContent = m.name;
     const sum = String(m.summary || '');
-    det.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
-    const body = det.querySelector('.ct-body');
-    const d = m.detail;
+    chip.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
+    chip._detail = m.detail || null; // datos crudos para el render perezoso
+    chip._output = null;             // {ok, text} cuando llegue el tool_result
+    chip.addEventListener('click', () => this._toolToggle(group, chip));
+    group.querySelector('.ctg-row').appendChild(chip);
+    this._scroll();
+  }
+
+  // Construye el cuerpo del detalle a demanda (lazy, Fase 7): diff para
+  // Edit/Write, comando para Bash, y la salida si ya llegó.
+  _toolDetailBody(chip) {
+    const body = document.createElement('div');
+    body.className = 'ct-body';
+    const d = chip._detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
     else if (d?.command) {
       const pre = document.createElement('pre');
@@ -386,19 +423,52 @@ export class ChatTab {
       pre.textContent = d.command;
       body.appendChild(pre);
     }
-    this.msgsEl.appendChild(det);
-    this._scroll();
+    if (chip._output) {
+      const pre = document.createElement('pre');
+      pre.className = 'ct-out' + (chip._output.ok ? '' : ' err');
+      pre.textContent = chip._output.text || '(sin salida)';
+      body.appendChild(pre);
+    }
+    if (!body.childNodes.length) {
+      const note = document.createElement('div');
+      note.className = 'ctg-empty';
+      note.textContent = '(sin detalle)';
+      body.appendChild(note);
+    }
+    return body;
+  }
+
+  // Un solo chip expandido por grupo: tocar otro cambia el detalle; tocar el
+  // activo (o Esc, ver constructor) lo cierra.
+  _toolToggle(group, chip) {
+    const det = group.querySelector('.ctg-detail');
+    const active = group.querySelector('.chat-toolchip.active');
+    if (active === chip) { this._toolCollapse(group); return; }
+    active?.classList.remove('active');
+    chip.classList.add('active');
+    det.replaceChildren(this._toolDetailBody(chip));
+    det.hidden = false;
+    det.scrollIntoView({ block: 'nearest' });
+  }
+
+  _toolCollapse(group) {
+    group.querySelector('.chat-toolchip.active')?.classList.remove('active');
+    const det = group.querySelector('.ctg-detail');
+    det.hidden = true;
+    det.replaceChildren();
   }
 
   _toolResult(m) {
     if (!m.id) return;
-    const det = this.msgsEl.querySelector(`[data-tool-id="${CSS.escape(m.id)}"]`);
-    if (!det) return;
-    const pre = document.createElement('pre');
-    pre.className = 'ct-out' + (m.ok ? '' : ' err');
-    pre.textContent = m.output || '(sin salida)';
-    det.querySelector('.ct-body').appendChild(pre);
-    det.querySelector('summary').classList.add(m.ok ? 'done' : 'fail');
+    const chip = this.msgsEl.querySelector(`.chat-toolchip[data-tool-id="${CSS.escape(m.id)}"]`);
+    if (!chip) return;
+    chip._output = { ok: !!m.ok, text: m.output || '' };
+    chip.classList.add(m.ok ? 'done' : 'fail');
+    // Si justo está expandido, el detalle se refresca en vivo con la salida.
+    if (chip.classList.contains('active')) {
+      const det = chip.closest('.chat-toolgroup').querySelector('.ctg-detail');
+      det.replaceChildren(this._toolDetailBody(chip));
+    }
   }
 
   _permCard(m) {
