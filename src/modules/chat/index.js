@@ -30,8 +30,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
-const IDLE_CLOSE_MS = 45 * 60 * 1000;        // conversación inactiva => cerrar subproceso
+const SLEEP_MS = 45 * 60 * 1000;   // inactiva => DORMIR el motor (no cerrar: el próximo mensaje la retoma)
+const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 const HISTORY_MAX = 600;
+
+// Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
+const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
 
 // Traspaso Chat <-> TUI (una misma conversación, un solo modo a la vez).
 const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
@@ -217,9 +222,20 @@ class Chat {
       // conversación sigue viva en modo TUI).
       if (!this._engineStopping) {
         this._setStatus('waiting');
-        this._push({ type: 'closed' });
+        // resumable: el motor murió (sueño por inactividad, crash) pero la
+        // conversación NO — el próximo mensaje la revive con resume.
+        const resumable = !this.closed && !!this.sessionId;
+        this._push({ type: 'closed', resumable }, { record: false });
       }
     }
+  }
+
+  // Duerme el motor por inactividad: libera el subproceso (RAM) SIN cerrar la
+  // conversación. La tarjeta persiste y sendUser() la revive con resume.
+  sleep() {
+    if (!this.alive || this.viewMode !== 'chat') return;
+    this.input.end();
+    try { this.q?.close?.(); } catch { /* noop */ }
   }
 
   // Espera a que el motor de chat (query SDK) muera; true si murió, false si timeout.
@@ -308,7 +324,9 @@ class Chat {
   _onMessage(m) {
     this.lastActivity = Date.now();
     if (m.type === 'system' && m.subtype === 'init') {
+      const hadSession = !!this.sessionId;
       this.sessionId = m.session_id || this.sessionId;
+      if (!hadSession && this.sessionId) this.onUpdate?.(); // recién ahora es persistible
       this._push({ type: 'init', chatId: this.id, sessionId: this.sessionId, model: m.model || this.model, cwd: this.cwd, mode: this.permissionMode }, { record: false });
       return;
     }
@@ -352,7 +370,9 @@ class Chat {
       return;
     }
     if (m.type === 'result') {
+      const hadSession = !!this.sessionId;
       this.sessionId = m.session_id || this.sessionId;
+      if (!hadSession && this.sessionId) this.onUpdate?.();
       this._setStatus('waiting');
       this._push({
         type: 'result',
@@ -398,7 +418,12 @@ class Chat {
   }
 
   sendUser(text) {
-    if (!this.alive) return;
+    if (this.closed) return;
+    // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
+    if (!this.alive) {
+      if (this.viewMode !== 'chat') return;
+      this._startChatEngine();
+    }
     this.lastActivity = Date.now();
     this._setStatus('working');
     this._push({ type: 'user', text });
@@ -460,6 +485,7 @@ class Chat {
   }
 
   attach(ws) {
+    this.lastActivity = Date.now(); // abrir la vista cuenta como actividad
     this.clients.add(ws);
     ws.send(JSON.stringify({
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
@@ -482,23 +508,73 @@ class ChatManager {
   constructor() {
     this.chats = new Map();
     this._seq = 0;
-    // Cierre por inactividad: libera el subproceso (RAM) de chats olvidados.
     setInterval(() => {
       const now = Date.now();
+      let dirty = false;
       for (const [id, c] of this.chats) {
-        // Solo el motor de chat inactivo se cierra por RAM; una TUI viva se
-        // respeta (su proceso lo maneja el usuario en la terminal).
-        if (c.viewMode === 'chat' && c.alive && now - c.lastActivity > IDLE_CLOSE_MS) c.close();
-        if (c.closed && now - c.lastActivity > IDLE_CLOSE_MS * 2) this.chats.delete(id);
+        // Inactiva => DORMIR el motor (libera RAM, la conversación persiste;
+        // el próximo mensaje la revive). Una TUI viva se respeta.
+        if (c.viewMode === 'chat' && c.alive && now - c.lastActivity > SLEEP_MS) c.sleep();
+        // Cerradas explícitamente: se descartan a los 90 min.
+        if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
+        // Dormidas sin uso 24 h: recién ahí se descarta la tarjeta (la
+        // conversación sigue retomable desde el lanzador vía transcript).
+        if (!c.closed && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
+          c.close();
+          this.chats.delete(id);
+          dirty = true;
+        }
       }
+      if (dirty) this.persist();
     }, 60 * 1000).unref();
   }
 
   create({ cwd, model, permissionMode, resume = null }) {
     const id = `c${process.pid}-${++this._seq}`;
-    const chat = new Chat({ id, cwd, model, permissionMode, resume }).start();
+    const chat = new Chat({ id, cwd, model, permissionMode, resume });
+    chat.onUpdate = () => this.persist();
+    chat.start();
     this.chats.set(id, chat);
+    this.persist();
     return chat;
+  }
+
+  // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
+  persist() {
+    const open = [...this.chats.values()]
+      .filter((c) => !c.closed && c.sessionId)
+      .map((c) => ({
+        id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
+        sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
+      }));
+    try {
+      fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+      fss.writeFileSync(CHATS_FILE, JSON.stringify(open), { mode: 0o600 });
+    } catch { /* best-effort */ }
+  }
+
+  // Al arrancar: reconstruye las conversaciones como DORMIDAS (sin motor).
+  // El history se rearma del transcript; el primer mensaje revive el motor
+  // con resume. Una TUI previa murió con el server => vuelve como chat.
+  rehydrate() {
+    let saved = [];
+    try { saved = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8')); } catch { return 0; }
+    let count = 0;
+    for (const s of saved) {
+      if (!s?.sessionId || !UUID_RE.test(s.sessionId) || this.chats.has(s.id)) continue;
+      const chat = new Chat({
+        id: s.id, cwd: safeCwd(s.cwd), model: s.model || null,
+        permissionMode: PERMISSION_MODES.has(s.permissionMode) ? s.permissionMode : 'default',
+        resume: s.sessionId,
+      });
+      chat.onUpdate = () => this.persist();
+      chat.alive = false; // dormida: sin start(), sin subproceso
+      chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
+      chat.lastActivity = s.lastActivity || Date.now();
+      this.chats.set(s.id, chat);
+      count += 1;
+    }
+    return count;
   }
 
   liveSessionIds() {
@@ -515,6 +591,11 @@ const manager = new ChatManager();
 
 export default {
   name: 'chat',
+
+  init() {
+    const n = manager.rehydrate();
+    if (n) console.log(`[chat] ${n} conversación(es) rehidratada(s) (dormidas; el próximo mensaje las revive)`);
+  },
 
   registerHttp(router) {
     const r = express.Router();
@@ -583,6 +664,7 @@ export default {
       const chat = manager.get(req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       chat.close();
+      manager.persist();
       res.json({ ok: true });
     });
 
@@ -596,6 +678,7 @@ export default {
       }
       const result = await chat.switchMode(target);
       if (!result.ok) return res.status(409).json({ error: result.error });
+      manager.persist();
       res.json({ ok: true, chat: chat.info() });
     });
 

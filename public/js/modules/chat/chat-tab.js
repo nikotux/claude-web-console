@@ -145,9 +145,15 @@ export class ChatTab {
         break;
       case 'error': this._line('chat-error', `Error: ${m.message}`); break;
       case 'closed':
-        this._line('chat-closed-note', 'Conversación cerrada en el servidor.');
-        this.inputEl.disabled = true;
-        this.sendBtn.disabled = true;
+        if (m.resumable) {
+          // El motor se durmió (inactividad); la conversación sigue viva:
+          // el próximo mensaje la retoma. No se bloquea nada.
+          this._line('chat-closed-note', 'Conversación dormida por inactividad — tu próximo mensaje la retoma.');
+        } else {
+          this._line('chat-closed-note', 'Conversación cerrada en el servidor.');
+          this.inputEl.disabled = true;
+          this.sendBtn.disabled = true;
+        }
         break;
       default: break;
     }
