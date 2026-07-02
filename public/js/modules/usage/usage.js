@@ -100,14 +100,29 @@ export default {
 
   mount(el, ctx) {
     const { dialog } = ctx;
-    el.innerHTML = '<button class="btn-ghost btn--sm usage-btn" title="Uso y costo de tokens">hoy —</button>';
+    // El botón muestra los TOKENS de hoy (el costo va al tooltip y al modal).
+    el.innerHTML = `
+      <button class="btn-ghost btn--sm usage-btn" title="Uso de tokens (hoy)">
+        <span class="usage-lbl">hoy</span><span class="usage-val">—</span>
+      </button>`;
     const btn = el.querySelector('.usage-btn');
+    const valEl = el.querySelector('.usage-val');
+    let lastTokens = null;
 
     async function tick() {
       if (document.hidden) return;
       try {
         const sum = await fetchSummary();
-        btn.textContent = `hoy ${fmtCost(sum.today.cost)}`;
+        const t = sum.today.tokens || 0;
+        valEl.textContent = fmtTokens(t);
+        btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)}`;
+        // Animación cuando el contador SUBE (tokens consumiéndose ahora).
+        if (lastTokens != null && t > lastTokens) {
+          valEl.classList.remove('tick');
+          void valEl.offsetWidth; // reinicia la animación CSS
+          valEl.classList.add('tick');
+        }
+        lastTokens = t;
       } catch { /* reintenta */ }
     }
     tick();

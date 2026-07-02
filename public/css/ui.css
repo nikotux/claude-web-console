@@ -3,6 +3,12 @@
    Contiene: sistema de botones (2 clases), diálogos/modales propios, spinner
    de carga único e íconos base. */
 
+/* El atributo hidden SIEMPRE gana: cualquier regla de autor con `display:`
+   (p.ej. .fm-ctx { display: flex }) le ganaría al [hidden] del navegador y el
+   elemento quedaría visible aunque el JS lo "oculte" — exactamente el bug del
+   menú contextual pegado del Explorador. Este guard mata esa clase de bugs. */
+[hidden] { display: none !important; }
+
 /* ===== Íconos (ui/icons.js) ===== */
 .cwc-icon { display: inline-block; vertical-align: middle; flex: none; }
 

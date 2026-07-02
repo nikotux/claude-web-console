@@ -9,6 +9,7 @@ const LAST_MODEL_KEY = 'cwc:lastModel';
 
 const MODELS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
+  ['fable', 'Fable'],
   ['opus', 'Opus'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],

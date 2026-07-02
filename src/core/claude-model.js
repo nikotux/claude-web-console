@@ -45,7 +45,7 @@ const MODEL_KEYS = ['opus', 'sonnet', 'haiku', 'fable'];
 
 // Valores aceptados por `claude --model` / `/model` que expone la UI
 // (dropdown de sesiones y lanzador). Fuente única para validación.
-export const VALID_MODELS = new Set(['opusplan', 'opus', 'sonnet', 'haiku', 'default']);
+export const VALID_MODELS = new Set(['opusplan', 'fable', 'opus', 'sonnet', 'haiku', 'default']);
 export function keyOf(id) {
   const low = (id || '').toLowerCase();
   for (const k of MODEL_KEYS) if (low.includes(k)) return k;

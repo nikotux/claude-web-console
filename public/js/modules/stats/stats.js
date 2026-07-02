@@ -37,7 +37,9 @@ export default {
   name: 'stats',
 
   mount(el) {
-    el.className = 'gauges-row';
+    // classList.add (no className=): el wrapper puede traer clases del layout
+    // (p.ej. only-expanded) que NO hay que pisar.
+    el.classList.add('gauges-row');
     async function tick() {
       if (document.hidden) return;
       try {

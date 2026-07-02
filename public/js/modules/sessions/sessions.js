@@ -11,6 +11,7 @@ import { dismissablePopup } from '../../ui/popup.js';
 
 const MODEL_OPTIONS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
+  ['fable', 'Fable'],
   ['opus', 'Opus'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],
