@@ -13,7 +13,7 @@ export default {
   name: 'tolkien',
 
   mount(el, ctx) {
-    const { icon, dialog, openSession, focusSession, findSessionByCwd } = ctx;
+    const { icon, dialog, openSession, focusSession, findSessionByCwd, openChat } = ctx;
     let current = null;
     let busy = false;
 
@@ -139,8 +139,8 @@ export default {
         </div>
         <div class="bfm-box">
           <table class="bfm-table">
-            <thead><tr><th></th><th>TKT</th><th>Título</th><th>Enviado</th><th>Estado</th><th>Merge</th></tr></thead>
-            <tbody data-ref="tbody"><tr><td colspan="6"><span class="cwc-spinner"></span></td></tr></tbody>
+            <thead><tr><th></th><th>TKT</th><th>Título</th><th>Cambios</th><th>Enviado</th><th>Estado</th><th>Merge</th></tr></thead>
+            <tbody data-ref="tbody"><tr><td colspan="7"><span class="cwc-spinner"></span></td></tr></tbody>
           </table>
         </div>`;
       m.body.appendChild(wrap);
@@ -149,7 +149,15 @@ export default {
       let entries = []; // nuestro registro
       let ghRows = [];  // PRs míos en GitHub que NO están en el registro
 
-      // Fila expandible: la fila de detalle vive a continuación (colspan 6).
+      // Aporte del fix en números: pendiente = diff local vs origin/main;
+      // subido/GitHub = tamaño del PR. Se calcula en cada Actualizar.
+      function statsHtml(s) {
+        if (!s) return '<span class="bfm-nostats">—</span>';
+        return `<span class="bfm-add">+${s.add}</span> <span class="bfm-del">−${s.del}</span>` +
+          `<span class="bfm-nfiles" title="${s.src === 'local' ? 'diff del árbol vs origin/main' : 'tamaño del PR en GitHub'}"> · ${s.files}a</span>`;
+      }
+
+      // Fila expandible: la fila de detalle vive a continuación (colspan 7).
       function detailHtml(b) {
         return `
           <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
@@ -159,6 +167,7 @@ export default {
             ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
             ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
             ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
+            <button class="btn btn--sm bfm-work" data-act="work" title="Abre una conversación en ~/tolkien para refinar este fix a mano antes de subir (o modificar) el PR">${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
           </p>`;
       }
 
@@ -167,7 +176,7 @@ export default {
         mr.send.disabled = !pendientes.length;
         mr.send.querySelector('span').textContent = pendientes.length ? `Enviar pendientes (${pendientes.length})` : 'Enviar pendientes';
         if (!entries.length && !ghRows.length) {
-          mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">Sin fixes registrados ni PRs tuyos en GitHub.</td></tr>';
+          mr.tbody.innerHTML = '<tr><td colspan="7" class="hp-empty">Sin fixes registrados ni PRs tuyos en GitHub.</td></tr>';
           return;
         }
         // Arriba lo accionable: pendientes con archivos, después pendientes en
@@ -183,11 +192,12 @@ export default {
               <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
               <td class="bfm-tkt">${b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—'}</td>
               <td class="bfm-title">${esc(b.title)}</td>
+              <td class="bfm-stats">${statsHtml(b.stats)}</td>
               <td class="bfm-date">${b.sentAt ? fmtDate(b.sentAt) : '—'}</td>
               <td class="bfm-state">${esc(est.label)}</td>
               <td class="bfm-date">${b.mergedAt ? `${esc(b.mergedBy || '?')} · ${fmtDate(b.mergedAt)}` : '—'}</td>
             </tr>
-            <tr class="bfm-detail" hidden><td colspan="6">${detailHtml(b)}</td></tr>`);
+            <tr class="bfm-detail" hidden><td colspan="7">${detailHtml(b)}</td></tr>`);
         }
         for (const pr of ghRows) {
           const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
@@ -196,6 +206,7 @@ export default {
               <td><span class="hp-dot hp-dot--${dot}"></span></td>
               <td class="bfm-tkt" title="PR tuyo en GitHub sin registro de bugfix">GitHub</td>
               <td class="bfm-title"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${esc(pr.number)} ${esc(pr.title)}</a></td>
+              <td class="bfm-stats">${statsHtml(pr.stats)}</td>
               <td class="bfm-date">${pr.createdAt ? fmtDate(pr.createdAt) : '—'}</td>
               <td class="bfm-state">${pr.state === 'merged' ? 'mergeado' : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
               <td class="bfm-date">${pr.mergedAt ? `${esc(pr.mergedBy || '?')} · ${fmtDate(pr.mergedAt)}` : '—'}</td>
@@ -205,7 +216,18 @@ export default {
       }
 
       // Click en una fila del registro: despliega/pliega su detalle.
-      mr.tbody.addEventListener('click', (e) => {
+      // "Trabajar en esto" (dentro del detalle): chat en ~/tolkien para
+      // refinar el fix a mano; al cerrarlo, el registro del MISMO ticket se
+      // actualiza (merge por ticket en recordBugfix, no duplica).
+      mr.tbody.addEventListener('click', async (e) => {
+        const workBtn = e.target.closest('[data-act="work"]');
+        if (workBtn) {
+          const det = workBtn.closest('.bfm-detail');
+          const sid = det?.previousElementSibling?.dataset?.sid;
+          const b = entries.find((x) => x.sessionId === sid);
+          if (b) { m.close(); await doWorkOn(b); }
+          return;
+        }
         if (e.target.closest('a')) return; // los links navegan, no despliegan
         const row = e.target.closest('.bfm-row');
         if (!row || row.classList.contains('bfm-row--gh')) return;
@@ -213,12 +235,46 @@ export default {
         if (det?.classList.contains('bfm-detail')) det.hidden = !det.hidden;
       });
 
+      // Conversación "PR en progreso" para trabajo manual/detallado sobre un
+      // fix (antes de subir el PR o para modificar uno existente).
+      async function doWorkOn(b) {
+        let workContext = '';
+        let prContext = '';
+        try {
+          [workContext, prContext] = (await Promise.all([
+            fetch('/api/bugfixes/context?kind=work').then((r) => r.json()),
+            fetch('/api/bugfixes/context?kind=pr').then((r) => r.json()),
+          ])).map((d) => d.context || '');
+        } catch { /* el chat sale igual sin contextos */ }
+        const est = prEstado(b);
+        const prompt = [
+          `Retomemos el fix del ticket Desk #${b.ticketNumber} para refinarlo a mano antes de ${b.status === 'subido' ? 'MODIFICAR el PR ya existente' : 'subir el PR'}.`,
+          '',
+          `Estado actual del registro: ${est.label}.`,
+          b.prUrl ? `PR: ${b.prUrl}` : '',
+          b.ticketUrl ? `Ticket: ${b.ticketUrl}` : '',
+          b.files?.length ? `Archivos del fix hasta ahora:\n${b.files.map((f) => `- ${f}`).join('\n')}` : 'Todavía sin archivos editados (quedó en plan).',
+          b.summary ? `\nResumen registrado del fix:\n${b.summary}` : '',
+          workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
+          prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
+          '',
+          'Empezá mostrándome el diff actual de esos archivos contra origin/main y tu evaluación de qué falta o qué mejorarías.',
+        ].filter(Boolean).join('\n');
+        await openChat({
+          cwd: current?.rel || 'tolkien',
+          mode: 'default',
+          prompt,
+          title: `PR en progreso · TKT #${b.ticketNumber}`.slice(0, 60),
+          ticket: { number: b.ticketNumber, url: b.ticketUrl || null },
+        });
+      }
+
       async function reload() {
         try {
           const { bugfixes } = await (await fetch('/api/bugfixes')).json();
           entries = bugfixes || [];
           renderTable();
-        } catch { mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">No se pudo leer el registro.</td></tr>'; }
+        } catch { mr.tbody.innerHTML = '<tr><td colspan="7" class="hp-empty">No se pudo leer el registro.</td></tr>'; }
       }
 
       // Sincronización con GitHub (al ABRIR el modal y con [Actualizar]):

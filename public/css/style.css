@@ -683,13 +683,20 @@ html, body {
 .bfm-title a:hover { color: var(--cwc-accent); }
 .bfm-date { white-space: nowrap; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
 .bfm-state { white-space: nowrap; font-size: var(--cwc-fs-xs); }
+.bfm-stats { white-space: nowrap; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
+.bfm-add { color: var(--cwc-ok); }
+.bfm-del { color: var(--cwc-danger); }
+.bfm-nfiles, .bfm-nostats { color: var(--cwc-text-dimmer); }
+.bfm-work { margin-left: auto; }
 .bfm-detail td { background: var(--cwc-bg-panel); padding: .5rem .8rem; }
 .bfm-links { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
 .bfm-links a { color: var(--cwc-accent); }
 .bfm-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 @media (max-width: 640px) {
-  .bfm-title { max-width: 130px; }
-  .bfm-table th:nth-child(6), .bfm-table td:nth-child(6) { display: none; }
+  .bfm-title { max-width: 110px; }
+  /* En móvil se ocultan Enviado y Merge; Cambios (el aporte) queda visible. */
+  .bfm-table th:nth-child(5), .bfm-table td:nth-child(5),
+  .bfm-table th:nth-child(7), .bfm-table td:nth-child(7) { display: none; }
 }
 
 .chat-composer {

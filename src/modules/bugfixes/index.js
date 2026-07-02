@@ -190,12 +190,31 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const all = listBugfixes();
       const errors = [];
+      // Para medir los pendientes contra el main REAL, primero refrescar la ref.
+      await run('git', ['fetch', 'origin', 'main'], { cwd: config.projectDir }).catch(() => {});
       for (const b of all) {
-        if (b.status !== 'subido' || (!b.prNumber && !b.branch)) continue;
+        if (b.status === 'pendiente') {
+          // Aporte del fix = diff del árbol de trabajo vs origin/main, SOLO en
+          // sus archivos ("cambios que aún no se mergearon a main").
+          if (!b.files?.length || path.resolve(b.cwd) !== config.projectDir) continue;
+          try {
+            const out = await run('git', ['diff', '--numstat', 'origin/main', '--', ...b.files], { cwd: config.projectDir });
+            let add = 0; let del = 0; let files = 0;
+            for (const line of out.split('\n').filter(Boolean)) {
+              const [a, d] = line.split('\t');
+              add += Number(a) || 0; // binarios vienen como '-': cuentan 0
+              del += Number(d) || 0;
+              files += 1;
+            }
+            b.stats = { add, del, files, src: 'local' };
+          } catch { b.stats = null; }
+          continue;
+        }
+        if (!b.prNumber && !b.branch) continue;
         try {
           const out = await run('gh', [
             'pr', 'view', String(b.prNumber || b.branch),
-            '--json', 'number,state,mergedAt,mergedBy,url',
+            '--json', 'number,state,mergedAt,mergedBy,url,additions,deletions,changedFiles',
           ], { cwd: config.projectDir });
           const pr = JSON.parse(out);
           b.prNumber = pr.number || b.prNumber;
@@ -203,6 +222,7 @@ export default {
           b.prState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
           b.mergedAt = pr.mergedAt ? Date.parse(pr.mergedAt) : null;
           b.mergedBy = pr.mergedBy?.login || null;
+          b.stats = { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' };
           b.updatedAt = Date.now();
         } catch (err) {
           errors.push(`TKT #${b.ticketNumber}: ${String(err?.message || err).slice(0, 120)}`);
@@ -214,7 +234,7 @@ export default {
       try {
         const out = await run('gh', [
           'pr', 'list', '--author', '@me', '--state', 'all', '--limit', '50',
-          '--json', 'number,title,state,mergedAt,mergedBy,url,createdAt,headRefName',
+          '--json', 'number,title,state,mergedAt,mergedBy,url,createdAt,headRefName,additions,deletions,changedFiles',
         ], { cwd: config.projectDir });
         const registrados = new Set(all.map((b) => b.prNumber).filter(Boolean));
         github = JSON.parse(out)
@@ -228,6 +248,7 @@ export default {
             mergedBy: pr.mergedBy?.login || null,
             url: pr.url,
             branch: pr.headRefName || null,
+            stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
           }));
       } catch (err) {
         errors.push(`gh pr list: ${String(err?.message || err).slice(0, 120)}`);

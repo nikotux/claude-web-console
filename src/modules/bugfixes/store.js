@@ -140,7 +140,13 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
   const ex = extractFromTranscript(cwd, sessionId);
   if (!ex) return null;
   const all = listBugfixes();
-  const prev = all.find((b) => b.sessionId === sessionId);
+  // Continuidad por ticket: "Trabajar en esto" abre un chat NUEVO para el
+  // mismo fix — si ya hay un registro PENDIENTE de ese ticket, se actualiza
+  // ESE (sessionId pasa a ser el del chat nuevo, archivos en unión) en vez de
+  // duplicar la entrada. Un 'subido' no se pisa: trabajo posterior = fix nuevo.
+  const ticketNum = ticket?.number || ex.ticketNumber || null;
+  const prev = all.find((b) => b.sessionId === sessionId)
+    || (ticketNum ? all.find((b) => b.status === 'pendiente' && b.ticketNumber === ticketNum) : null);
   const entry = {
     ...(prev || {}), // conserva los campos de PR (prNumber/prState/mergedBy/sentAt…)
     sessionId,
@@ -150,14 +156,15 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
     ticketUrl: ticket?.url || prev?.ticketUrl || null,
     title: (title || prev?.title || (ex.whatBroke ? `TKT #${ex.ticketNumber || '?'} — ${ex.whatBroke}` : `Fix ${sessionId.slice(0, 8)}`)).slice(0, 120),
     summary: ex.summary || prev?.summary || '',
-    files: ex.files.length ? ex.files : (prev?.files || []),
+    // Unión: el chat nuevo puede tocar archivos nuevos sin repetir los previos.
+    files: [...new Set([...(prev?.files || []), ...ex.files])],
     status: prev?.status === 'subido' ? 'subido' : 'pendiente',
     branch: prev?.branch || null,
     prUrl: prev?.prUrl || null,
     createdAt: prev?.createdAt || Date.now(),
     updatedAt: Date.now(),
   };
-  const rest = all.filter((b) => b.sessionId !== sessionId);
+  const rest = all.filter((b) => b !== prev && b.sessionId !== sessionId);
   saveBugfixes([entry, ...rest]);
   return entry;
 }
