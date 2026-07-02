@@ -61,7 +61,7 @@ simplemente no se monta (no rompe).
 | `ctx.dialog.confirmDialog({title, message, confirmLabel, danger})` | `Promise<boolean>`. |
 | `ctx.dialog.promptDialog({title, message, value, placeholder})` | `Promise<string\|null>`. |
 | `ctx.dialog.alertDialog({title, message})` | `Promise<void>`. |
-| `ctx.openSession({cwd, runClaude, title, attach})` | Crea una sesión (pestaña) y la enfoca. `cwd` relativo al home; `attach: {socket, session}` envuelve una sesión tmux existente. |
+| `ctx.openSession({cwd, runClaude, model, title, attach})` | Crea una sesión (pestaña) y la enfoca. `cwd` relativo al home; `model` opcional lanza `claude --model <x>`; `attach: {socket, session}` envuelve una sesión tmux existente. |
 | `ctx.focusSession(id)` | Enfoca una pestaña abierta. `false` si no existe. |
 | `ctx.findSessionByCwd(rel)` | Id de la pestaña abierta cuyo cwd termina en esa ruta, o `null`. |
 | `ctx.whoami` | `Promise` con `{type, username, admin}` (o `null`). |

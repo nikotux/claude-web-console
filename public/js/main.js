@@ -137,13 +137,13 @@ const whoami = (async () => {
   try { return await (await fetch('/api/whoami')).json(); } catch { return null; }
 })();
 
-async function openSession({ cwd, runClaude, title, attach } = {}) {
+async function openSession({ cwd, runClaude, model, title, attach } = {}) {
   if (cwd != null && !title) {
     const base = String(cwd).split('/').filter(Boolean).pop();
     title = runClaude ? `claude:${base || '~'}` : base || 'terminal';
   }
   try {
-    const session = await apiCreateSession({ cwd, runClaude, title, attach });
+    const session = await apiCreateSession({ cwd, runClaude, model, title, attach });
     addTab(session);
     hideSidebarOnMobile();
     bus.dispatchEvent(new Event('sessions-changed'));
