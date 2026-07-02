@@ -282,7 +282,7 @@ async function runReview() {
 
   let text = '';
   let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('La revisión tardó demasiado (timeout 5 min).')), REVIEW_TIMEOUT_MS); });
+  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`La revisión tardó demasiado (timeout ${Math.round(REVIEW_TIMEOUT_MS / 60000)} min).`)), REVIEW_TIMEOUT_MS); });
   const pump = (async () => {
     for await (const m of q) {
       if (m.type === 'assistant') {
