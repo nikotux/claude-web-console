@@ -3,6 +3,7 @@
 // inyecta servicios vía `ctx` (patrón espejo del registry backend — ver
 // docs/frontend-modules.md).
 import { TerminalTab } from './modules/terminal/terminal.js';
+import { ChatTab } from './modules/chat/chat-tab.js';
 import { icon, hydrateIcons } from './ui/icons.js';
 import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog } from './ui/dialog.js';
@@ -64,7 +65,9 @@ function addTab(session, { type = 'pty' } = {}) {
   tabButton.append(chip, close, flag);
   tabsEl.appendChild(tabButton);
 
-  const tab = new TerminalTab({ id: session.id, title: session.title, container: pane });
+  const tab = type === 'chat'
+    ? new ChatTab({ id: session.id, title: session.title, container: pane })
+    : new TerminalTab({ id: session.id, title: session.title, container: pane });
   tab.connect();
 
   chip.addEventListener('click', () => setActive(session.id));
@@ -91,9 +94,10 @@ function closeTab(id) {
 }
 
 // Banderín de color con el modelo de Claude en uso (leído del transcript).
+// Solo aplica a pestañas PTY: el chat muestra su modelo en la cabecera.
 async function updateModelFlag(id) {
   const entry = tabs.get(id);
-  if (!entry) return;
+  if (!entry || entry.tabButton.dataset.type === 'chat') return;
   try {
     const { model } = await (await fetch(`/api/terminal/model?id=${encodeURIComponent(id)}`)).json();
     if (model) {
@@ -161,6 +165,33 @@ function focusSession(id) {
   return true;
 }
 
+// ===== Chat (Agent SDK) =====
+async function openChat({ cwd, model, mode } = {}) {
+  try {
+    const res = await fetch('/api/chat/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd, model, permissionMode: mode }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo crear el chat');
+    const { chat } = await res.json();
+    addTab(chat, { type: 'chat' });
+    hideSidebarOnMobile();
+    bus.dispatchEvent(new Event('sessions-changed'));
+    return chat;
+  } catch (err) {
+    alertDialog({ title: 'Chat', message: err.message });
+    return null;
+  }
+}
+
+// Reabre la vista de una conversación viva del servidor (replay por history).
+function openChatView(chatInfo) {
+  if (focusSession(chatInfo.id)) return;
+  addTab(chatInfo, { type: 'chat' });
+  hideSidebarOnMobile();
+}
+
 // Busca una pestaña abierta cuyo cwd termine en la ruta relativa dada.
 function findSessionByCwd(rel) {
   const suffix = '/' + String(rel).replace(/^\/+|\/+$/g, '');
@@ -177,6 +208,8 @@ const ctx = {
   bus,
   whoami,
   openSession,
+  openChat,
+  openChatView,
   focusSession,
   findSessionByCwd,
   isMobile,
@@ -219,13 +252,17 @@ if (window.visualViewport) {
 }
 if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
 
-// ===== Arranque: re-adjunta las sesiones vivas; soporta /?focus=<id> =====
+// ===== Arranque: re-adjunta sesiones PTY y conversaciones vivas; /?focus=<id> =====
 (async () => {
-  const existing = await apiListSessions();
+  const [existing, chats] = await Promise.all([
+    apiListSessions(),
+    fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+  ]);
   const live = existing.filter((s) => s.alive);
   live.forEach((s) => addTab(s));
+  chats.forEach((c) => addTab(c, { type: 'chat' }));
   const focus = new URLSearchParams(location.search).get('focus');
   if (focus && tabs.has(focus)) setActive(focus);
   if (focus) history.replaceState(null, '', '/');
-  if (!live.length) bus.dispatchEvent(new Event('open-launcher'));
+  if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
 })();

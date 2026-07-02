@@ -27,7 +27,8 @@ export function initAuxBar({ getActiveTab }) {
 
   let ctrlArmed = false;
 
-  const send = (data) => data && getActiveTab()?.sendData(data);
+  // sendData solo existe en pestañas PTY; en un chat la barra no aplica.
+  const send = (data) => data && getActiveTab()?.sendData?.(data);
   const refocus = () => getActiveTab()?.focus();
 
   // Los botones NO deben robar el foco del terminal (mantiene el teclado abierto).
@@ -55,7 +56,7 @@ export function initAuxBar({ getActiveTab }) {
     ctrlArmed = on;
     ctrlBtn.classList.toggle('active', on);
     const tab = getActiveTab();
-    if (tab) {
+    if (tab?.setCtrlArmed) {
       tab.setCtrlArmed(on);
       tab.onCtrlAutoClear = () => { ctrlArmed = false; ctrlBtn.classList.remove('active'); };
     }
