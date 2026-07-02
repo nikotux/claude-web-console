@@ -15,12 +15,14 @@ const MODES = [
 ];
 
 export class ChatTab {
-  constructor({ id, title, container, onToggleMode, onViewMode }) {
+  constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
     this.id = id;
     this.title = title || 'chat';
     this.container = container;
     this.onToggleMode = onToggleMode; // pasar a TUI (lo maneja el shell)
     this.onViewMode = onViewMode;     // el server anunció un cambio de modo
+    this.initialPrompt = initialPrompt; // primer mensaje a enviar al conectar
+    this._sentInitial = false;
     this.ws = null;
     this.reconnectTimer = null;
     this.closedByUser = false;
@@ -76,6 +78,14 @@ export class ChatTab {
     const url = `wss://${location.host}/ws/chat?id=${encodeURIComponent(this.id)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
+    ws.onopen = () => {
+      // Prompt precargado (p.ej. desde un ticket): se envía UNA sola vez, no en
+      // las reconexiones.
+      if (this.initialPrompt && !this._sentInitial) {
+        this._sentInitial = true;
+        this._send({ type: 'user', text: this.initialPrompt });
+      }
+    };
     ws.onmessage = (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }

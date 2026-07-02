@@ -12,11 +12,12 @@ import { initAuxBar } from './modules/mobile/auxbar.js';
 import launcher from './modules/launcher/launcher.js';
 import sessions from './modules/sessions/sessions.js';
 import tolkien from './modules/tolkien/tolkien.js';
+import tickets from './modules/tickets/tickets.js';
 import stats from './modules/stats/stats.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
 
-const MODULES = [launcher, sessions, tolkien, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, tickets, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
@@ -45,7 +46,7 @@ function setActive(id) {
   }
 }
 
-function addTab(session, { type = 'pty' } = {}) {
+function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
   const pane = document.createElement('div');
   pane.className = 'terminal-pane';
   terminalsEl.appendChild(pane);
@@ -74,7 +75,7 @@ function addTab(session, { type = 'pty' } = {}) {
     // Una CONVERSACIÓN: la pestaña es estable (keyed por chat.id) y su panel
     // alterna entre vista Chat (SDK) y Terminal (TUI) sobre la misma sesión.
     entry.viewMode = session.viewMode === 'tui' ? 'tui' : 'chat';
-    buildConversationInner(entry, session);
+    buildConversationInner(entry, session, initialPrompt);
   } else {
     entry.tab = new TerminalTab({ id: session.id, title: session.title, container: pane });
     entry.tab.connect();
@@ -90,7 +91,7 @@ function addTab(session, { type = 'pty' } = {}) {
 // ===== Conversación: vista Chat <-> TUI (nunca ambas a la vez) =====
 // Construye (o reconstruye) el CONTENIDO del panel de una conversación según
 // su viewMode. La pestaña del rail no se toca: solo cambia el inner view.
-function buildConversationInner(entry, info) {
+function buildConversationInner(entry, info, initialPrompt = null) {
   entry.pane.innerHTML = '';
   entry.pane.className = 'terminal-pane';
   if (entry.viewMode === 'tui' && info.terminalId) {
@@ -118,6 +119,7 @@ function buildConversationInner(entry, info) {
       container: entry.pane,
       onToggleMode: () => toggleConversation(entry.session.id),
       onViewMode: (m) => onServerViewMode(entry, m),
+      initialPrompt, // solo en la primera construcción (no en toggles/recarga)
     });
   }
   entry.tab.connect();
@@ -295,7 +297,7 @@ function focusSession(id) {
 }
 
 // ===== Chat (Agent SDK) =====
-async function openChat({ cwd, model, mode, resume } = {}) {
+async function openChat({ cwd, model, mode, resume, prompt } = {}) {
   try {
     const res = await fetch('/api/chat/create', {
       method: 'POST',
@@ -304,7 +306,7 @@ async function openChat({ cwd, model, mode, resume } = {}) {
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo crear el chat');
     const { chat } = await res.json();
-    addTab(chat, { type: 'chat' });
+    addTab(chat, { type: 'chat', initialPrompt: prompt || null });
     hideSidebarOnMobile();
     bus.dispatchEvent(new Event('sessions-changed'));
     return chat;

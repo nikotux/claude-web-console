@@ -1,0 +1,158 @@
+// modules/tickets/tickets.js — "Bugs": triage de tickets de Tolkien.
+//
+// Sección compacta bajo Tolkien. Muestra la caché del triage (GET /api/tickets)
+// y permite correrlo BAJO DEMANDA (POST /api/tickets/refresh) — con aviso de
+// que consume tokens reales; NUNCA hay polling automático. "Expandir" abre una
+// ventana flotante con la tabla; un click en un ticket abre una conversación
+// Chat en el proyecto (modo plan) con el contexto del bug precargado.
+export default {
+  name: 'tickets',
+
+  mount(el, ctx) {
+    const { icon, dialog, openChat } = ctx;
+    let cache = { updatedAt: null, tickets: [], error: null, running: false };
+    let projectRel = 'tolkien';
+    let busy = false;
+
+    el.innerHTML = `
+      <header class="sec-head">
+        <span class="sec-title">Bugs</span>
+        <span class="side-count" data-ref="count"></span>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Correr triage (consume tokens)">${icon('refresh', { size: 14 })}</button>
+      </header>
+      <div class="tk-card tickets-card">
+        <div class="tickets-line" data-ref="line">…</div>
+        <div class="tk-actions">
+          <button class="btn-ghost btn--sm" data-ref="expand">${icon('grid', { size: 13 })}<span>Expandir</span></button>
+        </div>
+      </div>`;
+
+    const refs = {};
+    for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
+
+    function fmtAgo(ms) {
+      if (!ms) return 'sin datos';
+      const s = Math.floor((Date.now() - ms) / 1000);
+      if (s < 60) return 'recién';
+      if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+      return `hace ${Math.floor(s / 86400)} d`;
+    }
+
+    function render() {
+      const n = cache.tickets?.length || 0;
+      refs.count.textContent = n ? String(n) : '';
+      refs.refresh.disabled = busy;
+      refs.expand.disabled = busy || !n;
+      if (busy) { refs.line.innerHTML = '<span class="cwc-spinner"></span> triando…'; return; }
+      if (cache.error) {
+        refs.line.innerHTML = `<span class="tickets-err">Error: ${escapeHtml(cache.error)}</span>`;
+        return;
+      }
+      refs.line.textContent = n
+        ? `${n} bug${n === 1 ? '' : 's'} · ${fmtAgo(cache.updatedAt)}`
+        : (cache.updatedAt ? `Sin bugs abiertos · ${fmtAgo(cache.updatedAt)}` : 'Sin datos · corré el triage');
+    }
+
+    async function load() {
+      try { cache = await (await fetch('/api/tickets')).json(); } catch { /* noop */ }
+      render();
+    }
+
+    async function refresh() {
+      if (busy) return;
+      const ok = await dialog.confirmDialog({
+        title: 'Correr triage de bugs',
+        message: 'Ejecuta el triage con Claude sobre los tickets [Tolkien Bug] de Zoho Desk.\nCONSUME TOKENS reales y puede tardar 1–3 minutos. Es de solo lectura (no crea ni cambia nada).',
+        confirmLabel: 'Correr triage',
+      });
+      if (!ok) return;
+      busy = true; render();
+      try {
+        cache = await (await fetch('/api/tickets/refresh', { method: 'POST' })).json();
+      } catch {
+        cache = { ...cache, error: 'No se pudo correr el triage (red o servidor).' };
+      } finally {
+        busy = false; render();
+      }
+    }
+
+    // ===== Ventana flotante con la tabla =====
+    function expand() {
+      const m = dialog.openModal({ title: 'Bugs de Tolkien · triage', width: '90vw' });
+      m.card.classList.add('dlg-card--tickets');
+      const wrap = document.createElement('div');
+      wrap.className = 'tickets-modal';
+      wrap.innerHTML = `
+        <div class="tickets-modal-head">
+          <span class="tickets-modal-sub" data-ref="sub"></span>
+          <button class="btn-ghost btn--sm" data-ref="mrefresh">${icon('refresh', { size: 13 })}<span>Re-triar</span></button>
+        </div>
+        <div class="tickets-table-wrap" data-ref="table"></div>`;
+      m.body.appendChild(wrap);
+      const sub = wrap.querySelector('[data-ref="sub"]');
+      const tableEl = wrap.querySelector('[data-ref="table"]');
+      const mrefresh = wrap.querySelector('[data-ref="mrefresh"]');
+
+      function paint() {
+        sub.textContent = cache.error
+          ? `Error: ${cache.error}`
+          : `${cache.tickets.length} bug(s) · actualizado ${fmtAgo(cache.updatedAt)}`;
+        mrefresh.disabled = busy;
+        tableEl.innerHTML = '';
+        if (busy) { tableEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>triando…</div>'; return; }
+        if (!cache.tickets.length) { tableEl.innerHTML = '<div class="tickets-empty">Sin bugs abiertos.</div>'; return; }
+        const table = document.createElement('table');
+        table.className = 'tickets-table';
+        table.innerHTML = `
+          <thead><tr>
+            <th>#</th><th>Qué se rompió</th><th>Ruta</th><th>Sev.</th><th>Rec.</th>
+          </tr></thead><tbody></tbody>`;
+        const tbody = table.querySelector('tbody');
+        for (const t of cache.tickets) {
+          const tr = document.createElement('tr');
+          tr.className = 'tickets-row';
+          tr.title = 'Abrir una conversación para trabajar este bug';
+          tr.innerHTML = `
+            <td class="tk-num">${escapeHtml(t.ticketNumber)}</td>
+            <td class="tk-what">${escapeHtml(t.whatBroke)}${t.duplicate ? ` <span class="tk-dup">dup: ${escapeHtml(t.duplicate)}</span>` : ''}</td>
+            <td class="tk-route">${escapeHtml(t.route || '—')}</td>
+            <td><span class="tk-sev tk-sev-${t.severity}">${t.severity}</span></td>
+            <td class="tk-rec">${escapeHtml(t.recommendation)}</td>`;
+          tr.addEventListener('click', () => { m.close(); openTicket(t); });
+          tbody.appendChild(tr);
+        }
+        tableEl.appendChild(table);
+      }
+
+      mrefresh.addEventListener('click', async () => { await refresh(); paint(); });
+      paint();
+    }
+
+    function openTicket(t) {
+      const prompt = [
+        `Trabajemos el bug del ticket Desk #${t.ticketNumber}.`,
+        '',
+        `Qué se rompió: ${t.whatBroke}`,
+        `Ruta: ${t.route || '(sin ruta)'}`,
+        `Severidad: ${t.severity} · Recomendación del triage: ${t.recommendation}`,
+        t.webUrl ? `Ticket: ${t.webUrl}` : '',
+        '',
+        'Estás en modo PLAN: investigá el código relevante y proponé un plan de arreglo antes de tocar nada.',
+      ].filter(Boolean).join('\n');
+      openChat({ cwd: projectRel, mode: 'plan', prompt });
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    }
+
+    refs.refresh.addEventListener('click', refresh);
+    refs.expand.addEventListener('click', expand);
+
+    (async () => {
+      try { const st = await (await fetch('/api/tolkien/status')).json(); if (st?.rel) projectRel = st.rel; } catch { /* noop */ }
+      load();
+    })();
+  },
+};

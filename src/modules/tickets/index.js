@@ -1,0 +1,187 @@
+// modules/tickets/index.js — triage de bugs de Tolkien (skill bug-triage).
+//
+// Corre el skill `bug-triage` del proyecto Tolkien vía el Agent SDK, BAJO
+// DEMANDA (nunca polling: consume tokens reales), y cachea el resultado. El
+// skill lee los tickets [Tolkien Bug] de Zoho Desk (MCP tolkien-mordor, que
+// además corre con MORDOR_MCP_READONLY=true), los clasifica y arma una tabla.
+//
+// SEGURIDAD: la corrida es READ-ONLY BLINDADA. canUseTool actúa como allowlist
+// (solo lecturas: Read/Grep/Glob/Skill + herramientas MCP *list/get/search*);
+// cualquier mutación (crear TASK en Pad, desk_update_ticket, Write/Edit/Bash)
+// se DENIEGA. Un run headless nunca puede tocar Desk ni Pad.
+//
+// HTTP:
+//   GET  /api/tickets           -> { updatedAt, tickets, error, running }
+//   POST /api/tickets/refresh   -> corre el triage y devuelve la caché nueva
+import express from 'express';
+import fss from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { config } from '../../core/config.js';
+
+const STATE_DIR = path.join(os.homedir(), '.cwc-state');
+const CACHE_FILE = path.join(STATE_DIR, 'tickets.json');
+const RUN_TIMEOUT_MS = 4 * 60 * 1000; // corte duro del triage
+const MAX_TURNS = 60;                  // cota de coste
+
+const SEVERITY = new Set(['critical', 'high', 'medium', 'low']);
+const RECOMMENDATION = new Set(['fix', 'needs-info', 'duplicate', 'wont-fix']);
+
+// Allowlist de herramientas: SOLO lecturas.
+function toolAllowed(name) {
+  if (['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite'].includes(name)) return true;
+  // Herramientas MCP de lectura (desk_list/get/search, pad_search, graph_list…).
+  if (/^mcp__.*(list|get|search|read|find)/i.test(name)) return true;
+  return false; // todo lo demás (mutaciones, Bash, Write/Edit) -> denegado
+}
+
+const PROMPT = [
+  'Ejecutá el skill bug-triage para revisar los tickets de bug ABIERTOS de Tolkien',
+  '([Tolkien Bug] en Zoho Desk). Es una corrida NO interactiva y de SOLO LECTURA:',
+  'PARÁ en el paso 3 (la tabla de triage). NO crees TASKs en Pad, NO actualices',
+  'ningún ticket de Desk, no modifiques nada.',
+  '',
+  'Cuando termines, respondé ÚNICAMENTE con un bloque de código ```json que',
+  'contenga un array de objetos, uno por ticket abierto, con exactamente estas',
+  'claves:',
+  '  - ticketNumber (string o número, el # del ticket de Desk)',
+  '  - whatBroke     (string, una línea: qué se rompió, en criollo)',
+  '  - route         (string, la ruta/página del contexto capturado; "" si no hay)',
+  '  - severity      (uno de: critical | high | medium | low)',
+  '  - recommendation(uno de: fix | needs-info | duplicate | wont-fix)',
+  '  - duplicate     (string: link/ref del duplicado si aplica; "" si no)',
+  '  - webUrl        (string: el webUrl del ticket de Desk; "" si no lo tenés)',
+  '',
+  'Si no hay tickets abiertos, respondé con ```json\n[]\n```. No agregues texto',
+  'fuera del bloque json.',
+].join('\n');
+
+// Extrae el ÚLTIMO bloque ```json ...``` (o el último array JSON suelto).
+function parseTickets(text) {
+  if (!text) return null;
+  const fences = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
+  let raw = fences.length ? fences[fences.length - 1][1].trim() : null;
+  if (!raw) {
+    const m = text.match(/\[[\s\S]*\]/); // último recurso: primer array del texto
+    raw = m ? m[0] : null;
+  }
+  if (!raw) return null;
+  let arr;
+  try { arr = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(arr)) return null;
+  return arr.map((t) => ({
+    ticketNumber: String(t.ticketNumber ?? t.number ?? '').slice(0, 40),
+    whatBroke: String(t.whatBroke ?? t.title ?? '').slice(0, 400),
+    route: String(t.route ?? '').slice(0, 200),
+    severity: SEVERITY.has(t.severity) ? t.severity : 'medium',
+    recommendation: RECOMMENDATION.has(t.recommendation) ? t.recommendation : 'needs-info',
+    duplicate: String(t.duplicate ?? '').slice(0, 200),
+    webUrl: /^https?:\/\//.test(t.webUrl || '') ? String(t.webUrl).slice(0, 400) : '',
+  }));
+}
+
+function readCache() {
+  try { return JSON.parse(fss.readFileSync(CACHE_FILE, 'utf8')); }
+  catch { return { updatedAt: null, tickets: [], error: null }; }
+}
+function writeCache(data) {
+  // Reintento único: el triage corre un Claude con el observador instalado, que
+  // puede estar (re)creando ~/.cwc-state a la vez — evitamos una carrera puntual.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fss.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+      fss.writeFileSync(CACHE_FILE, JSON.stringify(data), { mode: 0o600 });
+      return;
+    } catch (err) {
+      if (attempt === 1) console.error('[tickets] no se pudo escribir la caché:', CACHE_FILE, err?.message);
+    }
+  }
+}
+
+let inFlight = null; // Promise del triage en curso (un solo refresh a la vez)
+
+async function runTriage() {
+  const q = query({
+    prompt: PROMPT,
+    options: {
+      cwd: config.projectDir,
+      settingSources: ['user', 'project', 'local'], // carga .mcp.json + skill + allowlist
+      skills: ['bug-triage'],
+      permissionMode: 'default',
+      maxTurns: MAX_TURNS,
+      canUseTool: async (name, input) => (toolAllowed(name)
+        ? { behavior: 'allow', updatedInput: input }
+        : { behavior: 'deny', message: 'Triage read-only: herramienta no permitida.' }),
+    },
+  });
+
+  let text = '';
+  let sessionId = null;
+  let timer = null;
+  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El triage tardó demasiado (timeout).')), RUN_TIMEOUT_MS); });
+
+  const pump = (async () => {
+    for await (const m of q) {
+      if (m.type === 'assistant') {
+        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
+      } else if (m.type === 'result') {
+        sessionId = m.session_id || sessionId;
+        break;
+      }
+    }
+  })();
+
+  try {
+    await Promise.race([pump, timeout]);
+  } finally {
+    clearTimeout(timer);
+    try { await q.close?.(); } catch { /* noop */ }
+  }
+
+  const tickets = parseTickets(text);
+  if (!tickets) throw new Error('No se pudo interpretar el resultado del triage.');
+  return { tickets, sessionId };
+}
+
+async function refresh() {
+  if (inFlight) return inFlight; // dedup: adjuntar al que ya corre
+  inFlight = (async () => {
+    try {
+      const { tickets } = await runTriage();
+      const data = { updatedAt: Date.now(), tickets, error: null };
+      writeCache(data);
+      return data;
+    } catch (err) {
+      // Conservamos los tickets viejos; marcamos el error del último intento.
+      const prev = readCache();
+      const data = { updatedAt: prev.updatedAt, tickets: prev.tickets || [], error: String(err?.message || err).slice(0, 300) };
+      writeCache(data);
+      return data;
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+
+export default {
+  name: 'tickets',
+
+  registerHttp(router) {
+    const r = express.Router();
+
+    r.get('/', (req, res) => {
+      const c = readCache();
+      res.json({ ...c, running: !!inFlight });
+    });
+
+    // Corre el triage (LENTO, consume tokens). El front confirma antes.
+    r.post('/refresh', async (req, res) => {
+      const data = await refresh();
+      res.json({ ...data, running: false });
+    });
+
+    router.use('/tickets', r);
+  },
+};
