@@ -428,12 +428,14 @@ export class ChatTab {
     chip.type = 'button';
     chip.className = 'chat-toolchip';
     if (m.id) chip.dataset.toolId = m.id;
-    chip.innerHTML = `${icon('terminal', { size: 14 })}<span class="ct-name"></span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span>`;
+    chip.innerHTML = `${icon('terminal', { size: 14 })}<span class="ct-name"></span>`;
     chip.querySelector('.ct-name').textContent = m.name;
-    const sum = String(m.summary || '');
-    chip.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
-    chip._detail = m.detail || null; // datos crudos para el render perezoso
-    chip._output = null;             // {ok, text} cuando llegue el tool_result
+    // Chip mínimo: icono + nombre. El resumen vive en el tooltip (desktop) y
+    // completo en el detalle expandible.
+    chip.title = String(m.summary || '');
+    chip._detail = m.detail || null;         // datos crudos para el render perezoso
+    chip._summary = String(m.summary || ''); // fallback del detalle (tools sin input propio)
+    chip._output = null;                     // {ok, text} cuando llegue el tool_result
     chip.addEventListener('click', () => this._toolToggle(group, chip));
     group.querySelector('.ctg-row').appendChild(chip);
     this._scroll();
@@ -446,10 +448,12 @@ export class ChatTab {
     body.className = 'ct-body';
     const d = chip._detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
-    else if (d?.command) {
+    else if (d?.command || chip._summary) {
+      // Con el chip mínimo (solo icono+nombre), el resumen del server es la
+      // única pista del input para tools sin detalle propio (Read, etc.).
       const pre = document.createElement('pre');
       pre.className = 'ct-cmd';
-      pre.textContent = d.command;
+      pre.textContent = d?.command || chip._summary;
       body.appendChild(pre);
     }
     if (chip._output) {
@@ -571,11 +575,11 @@ export class ChatTab {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = `chat-toolchip chat-permchip ${m.allow ? 'ok' : 'no'}`;
-    chip.innerHTML = `${icon(m.allow ? 'check' : 'close', { size: 13 })}<span class="ct-name"></span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span>`;
+    chip.innerHTML = `${icon(m.allow ? 'check' : 'close', { size: 13 })}<span class="ct-name"></span>`;
     chip.querySelector('.ct-name').textContent = m.allow ? 'Permitido' : 'Denegado';
-    const sum = `${el._tool || ''} ${el._summary || ''}`.trim();
-    chip.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
+    chip.title = `${el._tool || ''} ${el._summary || ''}`.trim();
     chip._detail = el._detail || (el._summary ? { command: el._summary } : null);
+    chip._summary = el._summary || '';
     chip._output = null;
     const prev = el.previousElementSibling;
     let group;

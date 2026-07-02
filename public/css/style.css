@@ -508,10 +508,7 @@ html, body {
   background: var(--cwc-bg-hover); border-color: var(--cwc-accent-cool);
   color: var(--cwc-text);
 }
-.chat-toolchip.active .ct-chev { transform: rotate(180deg); }
 .ct-name { font-weight: 600; color: var(--cwc-text-secondary); flex: none; }
-.ct-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--cwc-font-mono); }
-.ct-chev { display: inline-flex; flex: none; color: var(--cwc-text-dim); transition: transform .15s ease; }
 /* Target táctil ≥44px sin engordar el chip: hit-area extendida + más aire
    entre filas de chips SOLO en punteros gruesos (para que no se solapen). */
 @media (pointer: coarse) {
