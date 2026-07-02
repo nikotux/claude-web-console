@@ -5,6 +5,7 @@
 // módulos backup/admin, solo cambia dónde viven.
 import { mountBackupPanel } from './backup-panel.js';
 import { mountUsersPanel } from './users.js';
+import { mountHealthPanel } from './health-panel.js';
 
 export default {
   name: 'system',
@@ -18,18 +19,20 @@ export default {
       const isAdmin = !!me?.admin;
       const m = dialog.openModal({ title: 'Sistema', width: 520 });
 
-      const tabs = isAdmin
-        ? [
-            { label: 'Backup', mount: (c) => mountBackupPanel(c, ctx) },
-            { label: 'Usuarios', mount: (c) => mountUsersPanel(c, ctx) },
-          ]
-        : [];
+      // Salud es para todos; Backup/Usuarios solo admins.
+      const tabs = [
+        ...(isAdmin
+          ? [
+              { label: 'Backup', mount: (c) => mountBackupPanel(c, ctx) },
+              { label: 'Usuarios', mount: (c) => mountUsersPanel(c, ctx) },
+            ]
+          : []),
+        { label: 'Salud', mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
+      ];
 
       m.body.innerHTML = `
-        ${tabs.length ? '<div class="sys-tabs" data-ref="tabs"></div>' : ''}
-        <div class="sys-body" data-ref="body">
-          ${tabs.length ? '' : '<p class="dlg-msg">No hay opciones administrativas para tu usuario.</p>'}
-        </div>
+        <div class="sys-tabs" data-ref="tabs"></div>
+        <div class="sys-body" data-ref="body"></div>
         <div class="sys-foot">
           <span class="sys-user">${me?.type === 'user' ? me.username : me?.type === 'token' ? '(token maestro)' : ''}</span>
           <button class="btn-ghost btn--sm btn--danger" data-ref="logout">${icon('logout', { size: 14 })}<span>Salir</span></button>

@@ -161,7 +161,7 @@ la configuración de usuario de Claude Code (`~/.claude/settings.json`):
   scroll táctil/rueda vía copy-mode), por eso no se re-inyecta al recargar.
 - **Pie de estado** — gauges CPU/RAM/disco, **hoy $** (→ modal **Uso** con el
   detalle por proyecto y por modelo), Explorador, y **⚙ Sistema** (Backup +
-  Usuarios + Salir).
+  Usuarios + **Salud** + Salir).
 - **Explorador** (`/archivos`) — gestor de archivos estilo Finder: subir/bajar,
   zip de carpetas y selecciones, papelera con purga a 30 días, preview con
   resaltado, y "Claude aquí / Terminal aquí" por carpeta.
@@ -174,6 +174,12 @@ la configuración de usuario de Claude Code (`~/.claude/settings.json`):
   cualquier URL con `Mordor-Staffing` y solo commitea archivos ya trackeados
   (jamás agrega untracked). El remote lo configurás vos:
   `git remote add personal git@github.com:<usuario>/<repo>.git`.
+- **Salud** (⚙ Sistema → Salud) — chequeos rápidos en vivo (systemd/KillMode,
+  tmux, runners de chat, observador, cert, git, sintaxis de todo el código,
+  disco, datos) y **revisión profunda con Claude**: una corrida headless
+  read-only del SDK que lee `CLAUDE.md` y audita el código (bajo demanda,
+  consume tokens, solo admin). API: `GET /api/health/checks`,
+  `GET|POST /api/health/review`.
 
 ---
 

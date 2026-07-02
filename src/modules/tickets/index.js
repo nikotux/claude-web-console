@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
+import { isAdmin } from '../../core/auth.js';
 
 // OJO: NO usar ~/.cwc-state — claude-state.js poda cualquier .json de ahí cuyo
 // `ts` sea viejo (y este archivo no tiene `ts`), así que lo borraba al instante.
@@ -35,7 +36,8 @@ const RECOMMENDATION = new Set(['fix', 'needs-info', 'duplicate', 'wont-fix']);
 function toolAllowed(name) {
   if (['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite'].includes(name)) return true;
   // Herramientas MCP de lectura (desk_list/get/search, pad_search, graph_list…).
-  if (/^mcp__.*(list|get|search|read|find)/i.test(name)) return true;
+  // Regex ANCLADA al final: get_and_delete NO pasa (hallazgo de la revisión de salud).
+  if (/^mcp__[a-z0-9_-]+__[a-z0-9_]*(list|get|search|read|find)[a-z0-9_]*$/i.test(name) && !/(delete|update|create|write|set|add|remove|send)/i.test(name)) return true;
   return false; // todo lo demás (mutaciones, Bash, Write/Edit) -> denegado
 }
 
@@ -144,7 +146,9 @@ async function runTriage() {
     await Promise.race([pump, timeout]);
   } finally {
     clearTimeout(timer);
-    try { await q.close?.(); } catch { /* noop */ }
+    // close() SIN await: si el subproceso tarda en morir, un await deja
+    // inFlight colgado para siempre (misma lección que el módulo health).
+    try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
   }
 
   const tickets = parseTickets(text);
@@ -185,7 +189,9 @@ export default {
     });
 
     // Corre el triage (LENTO, consume tokens). El front confirma antes.
+    // Admin-gated como health/review: consume tokens reales (hallazgo de salud).
     r.post('/refresh', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const data = await refresh();
       res.json({ ...data, running: false });
     });

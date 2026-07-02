@@ -15,8 +15,9 @@ import tolkien from '../modules/tolkien/index.js';
 import backup from '../modules/backup/index.js';
 import chat from '../modules/chat/index.js';
 import tickets from '../modules/tickets/index.js';
+import health from '../modules/health/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, tickets];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, tickets, health];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

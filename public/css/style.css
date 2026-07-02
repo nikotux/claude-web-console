@@ -368,6 +368,43 @@ html, body {
 }
 .sys-user { color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); }
 
+/* Panel de salud (pestaña) */
+.hp-head { display: flex; align-items: center; justify-content: space-between; margin: .2rem 0 .35rem; }
+.hp-head--review { margin-top: 1rem; border-top: 1px solid var(--cwc-divider); padding-top: .7rem; }
+.hp-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.hp-checks { display: flex; flex-direction: column; }
+.hp-row {
+  display: flex; align-items: baseline; gap: .5rem;
+  padding: .28rem .1rem; border-bottom: 1px solid var(--cwc-divider); font-size: var(--cwc-fs-md);
+}
+.hp-row:last-of-type { border-bottom: 0; }
+.hp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+.hp-dot--ok { background: var(--cwc-ok); }
+.hp-dot--warn { background: var(--cwc-warn); }
+.hp-dot--fail { background: var(--cwc-danger-strong); }
+.hp-label { color: var(--cwc-text); white-space: nowrap; }
+.hp-detail { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-sm); overflow-wrap: anywhere; }
+.hp-sum { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); padding: .35rem .1rem 0; }
+.hp-empty { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .3rem .1rem; }
+.hp-error { font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); margin: .4rem 0 0; }
+.hp-running { display: flex; align-items: center; gap: .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .5rem 0 0; }
+.hp-verdict { display: flex; align-items: baseline; gap: .6rem; font-size: var(--cwc-fs-md); }
+.hp-verdict--ok b { color: var(--cwc-ok); }
+.hp-verdict--atencion b { color: var(--cwc-warn); }
+.hp-verdict--critico b { color: var(--cwc-danger-strong); }
+.hp-when { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.hp-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .35rem 0 .5rem; white-space: pre-wrap; }
+.hp-findings { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .5rem; }
+.hp-finding summary {
+  display: flex; align-items: center; gap: .45rem; cursor: pointer;
+  font-size: var(--cwc-fs-sm); padding: .22rem .1rem; list-style: none;
+}
+.hp-finding summary::-webkit-details-marker { display: none; }
+.hp-finding p { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .15rem 0 .4rem 1.1rem; overflow-wrap: anywhere; }
+.hp-sev { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.hp-finding code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.hp-review .btn--block { margin-top: .5rem; }
+
 /* Panel de backups (pestaña) */
 .bk-msg { font-size: var(--cwc-fs-sm); margin: .5rem 0 0; color: var(--cwc-text-dim); }
 .bk-msg.ok { color: var(--cwc-ok); }
