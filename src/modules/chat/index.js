@@ -63,6 +63,26 @@ function toolSummary(name, input) {
   } catch { return ''; }
 }
 
+// Detalle del input para la UI (diffs en Edit/Write, comando en Bash).
+const trim = (s, n = 4000) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
+function toolDetail(name, input) {
+  try {
+    if (name === 'Edit') return { file: input?.file_path, old: trim(input?.old_string), new: trim(input?.new_string) };
+    if (name === 'Write') return { file: input?.file_path, new: trim(input?.content) };
+    if (name === 'Bash') return { command: trim(input?.command, 1000) };
+    return null;
+  } catch { return null; }
+}
+
+// Texto plano del tool_result (string o bloques de texto).
+function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  }
+  return '';
+}
+
 class Chat {
   constructor({ id, cwd, model, permissionMode }) {
     this.id = id;
@@ -131,7 +151,29 @@ class Chat {
       const blocks = m.message?.content || [];
       for (const b of blocks) {
         if (b.type === 'text' && b.text) this._push({ type: 'assistant', text: b.text });
-        if (b.type === 'tool_use') this._push({ type: 'tool_use', name: b.name, summary: toolSummary(b.name, b.input) });
+        if (b.type === 'tool_use') {
+          this._push({
+            type: 'tool_use', id: b.id, name: b.name,
+            summary: toolSummary(b.name, b.input),
+            detail: toolDetail(b.name, b.input),
+          });
+        }
+      }
+      return;
+    }
+    if (m.type === 'user') {
+      // Resultados de herramientas (los mensajes user del SDK traen tool_result).
+      const blocks = m.message?.content;
+      if (Array.isArray(blocks)) {
+        for (const b of blocks) {
+          if (b.type === 'tool_result') {
+            this._push({
+              type: 'tool_result', id: b.tool_use_id,
+              ok: !b.is_error,
+              output: trim(resultText(b.content), 2000),
+            });
+          }
+        }
       }
       return;
     }
@@ -162,7 +204,11 @@ class Chat {
         resolve({ behavior: 'deny', message: 'Cancelado.' });
       });
       this.pendingPerms.set(id, { resolve, timer, input });
-      this._push({ type: 'permission_request', id, tool: toolName, summary: toolSummary(toolName, input) });
+      this._push({
+        type: 'permission_request', id, tool: toolName,
+        summary: toolSummary(toolName, input),
+        detail: toolDetail(toolName, input),
+      });
     });
   }
 

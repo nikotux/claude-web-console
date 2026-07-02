@@ -6,6 +6,7 @@
 // funciona nativo (el motivo de esta migración). Markdown/diffs llegan en 4b.
 import { icon } from '../../ui/icons.js';
 import { renderMarkdown } from '../../ui/markdown.js';
+import { renderDiff } from '../../ui/diff.js';
 
 const MODES = [
   ['default', 'Preguntar'],
@@ -109,7 +110,8 @@ export class ChatTab {
       case 'user': this._closeStream(); this._bubble('user', m.text); break;
       case 'assistant': this._assistantFinal(m.text); break;
       case 'delta': this._stream(m.text); break;
-      case 'tool_use': this._closeStream(); this._toolLine(m); break;
+      case 'tool_use': this._closeStream(); this._toolCard(m); break;
+      case 'tool_result': this._toolResult(m); break;
       case 'permission_request': this._permCard(m); break;
       case 'permission_closed': this._permClose(m); break;
       case 'result': this._result(m); break;
@@ -164,13 +166,38 @@ export class ChatTab {
     }
   }
 
-  _toolLine(m) {
-    const el = document.createElement('div');
-    el.className = 'chat-tool';
-    el.innerHTML = `${icon('terminal', { size: 13 })}<span class="chat-tool-name">${m.name}</span><span class="chat-tool-sum"></span>`;
-    el.querySelector('.chat-tool-sum').textContent = m.summary || '';
-    this.msgsEl.appendChild(el);
+  // Tool call como <details> colapsado: resumen de una línea; adentro el
+  // input (diff para Edit/Write, comando para Bash) y luego el resultado.
+  _toolCard(m) {
+    const det = document.createElement('details');
+    det.className = 'chat-toolcard';
+    if (m.id) det.dataset.toolId = m.id;
+    det.innerHTML = `
+      <summary>${icon('terminal', { size: 13 })}<span class="ct-name">${m.name}</span><span class="ct-sum"></span></summary>
+      <div class="ct-body"></div>`;
+    det.querySelector('.ct-sum').textContent = m.summary || '';
+    const body = det.querySelector('.ct-body');
+    const d = m.detail;
+    if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
+    else if (d?.command) {
+      const pre = document.createElement('pre');
+      pre.className = 'ct-cmd';
+      pre.textContent = d.command;
+      body.appendChild(pre);
+    }
+    this.msgsEl.appendChild(det);
     this._scroll();
+  }
+
+  _toolResult(m) {
+    if (!m.id) return;
+    const det = this.msgsEl.querySelector(`[data-tool-id="${CSS.escape(m.id)}"]`);
+    if (!det) return;
+    const pre = document.createElement('pre');
+    pre.className = 'ct-out' + (m.ok ? '' : ' err');
+    pre.textContent = m.output || '(sin salida)';
+    det.querySelector('.ct-body').appendChild(pre);
+    det.querySelector('summary').classList.add(m.ok ? 'done' : 'fail');
   }
 
   _permCard(m) {
@@ -185,6 +212,10 @@ export class ChatTab {
         <button class="btn btn--sm" data-allow="1">Permitir</button>
       </div>`;
     el.querySelector('.chat-perm-sum').textContent = m.summary || '';
+    // Si es una edición, mostramos el diff exacto para decidir viendo el cambio.
+    if (m.detail && (m.detail.old != null || m.detail.new != null)) {
+      el.querySelector('.chat-perm-sum').after(renderDiff(m.detail));
+    }
     for (const b of el.querySelectorAll('[data-allow]')) {
       b.addEventListener('click', () => {
         this._send({ type: 'permission_response', id: m.id, allow: b.dataset.allow === '1' });
