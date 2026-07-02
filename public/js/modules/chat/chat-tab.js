@@ -12,6 +12,29 @@ import { dismissablePopup } from '../../ui/popup.js';
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
 
+// REGLA DE SEGURIDAD (Fase 9 · 4): clasificador de comandos destructivos.
+// Un permiso de Bash clasificado acá nace con el detalle EXPANDIDO — el atajo
+// visual de la fila compacta es para lo rutinario, no para lo peligroso.
+// El resumen del chip es SIEMPRE el inicio real del comando (viene así del
+// server), nunca una paráfrasis.
+const DESTRUCTIVE_PATTERNS = [
+  /\bsudo\b/,
+  /\brm\b[^\n|;&]*(\s-\w*[rf]\w*|\s--(force|recursive))/, // rm -r/-f en cualquier orden
+  /\bchmod\b/, /\bchown\b/,
+  /\bgit\s+push\b[^\n|;&]*(\s--force(-with-lease)?\b|\s-\w*f\w*\b|\s\+\S)/,
+  /\bcurl\b/, /\bwget\b/, /\bnc\b/, // salida a red
+  /\bdd\b/, /\bmkfs\w*\b/, /\btruncate\b/,
+  /\bkill(all)?\b/, /\bpkill\b/,
+  /\bshutdown\b/, /\breboot\b/, /\bsystemctl\b[^\n|;&]*\s(stop|disable|mask)\b/,
+];
+function isDestructiveCommand(cmd) {
+  const c = String(cmd || '');
+  return DESTRUCTIVE_PATTERNS.some((re) => re.test(c));
+}
+
+// Ícono representativo por herramienta en la fila de permiso.
+const TOOL_ICONS = { Bash: 'terminal', Edit: 'edit', Write: 'edit', Read: 'eye', WebFetch: 'download' };
+
 const MODES = [
   ['default', 'Preguntar'],
   ['acceptEdits', 'Aceptar ediciones'],
@@ -471,36 +494,96 @@ export class ChatTab {
     }
   }
 
+  // Solicitud de permiso como fila compacta (Fase 9 · 4):
+  // [icono] [tool] [resumen] [chevron] [✕ Denegar] [✓ Permitir].
+  // El chevron abre el detalle íntegro (comando/diff) ANTES de decidir.
   _permCard(m) {
     const el = document.createElement('div');
     el.className = 'chat-perm';
     el.dataset.permId = m.id;
+    // Datos crudos para el detalle perezoso y el chip de registro posterior.
+    el._tool = m.tool;
+    el._summary = String(m.summary || '');
+    el._detail = m.detail || null;
     el.innerHTML = `
-      <div class="chat-perm-head">${icon('gear', { size: 14 })}<span>Claude quiere usar <b>${m.tool}</b></span></div>
-      <div class="chat-perm-sum"></div>
-      <div class="chat-perm-actions">
-        <button class="btn-ghost btn--sm" data-allow="0">Denegar</button>
-        <button class="btn btn--sm" data-allow="1">Permitir</button>
-      </div>`;
-    el.querySelector('.chat-perm-sum').textContent = m.summary || '';
-    // Si es una edición, mostramos el diff exacto para decidir viendo el cambio.
-    if (m.detail && (m.detail.old != null || m.detail.new != null)) {
-      el.querySelector('.chat-perm-sum').after(renderDiff(m.detail));
-    }
+      <div class="chat-perm-row">
+        ${icon(TOOL_ICONS[m.tool] || 'gear', { size: 15 })}
+        <span class="cp-tool"></span>
+        <span class="cp-sum"></span>
+        <button class="btn-ghost btn--icon cp-chev" title="Ver detalle completo">${icon('chevronDown', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm cp-deny" data-allow="0">${icon('close', { size: 13 })} Denegar</button>
+        <button class="btn btn--sm cp-allow" data-allow="1">${icon('check', { size: 13 })} Permitir</button>
+      </div>
+      <div class="chat-perm-detail" hidden></div>`;
+    el.querySelector('.cp-tool').textContent = m.tool;
+    // El resumen NUNCA parafrasea: es el texto del server (para Bash, el inicio
+    // real del comando). El truncado es por CSS (ellipsis) desde el final.
+    const sumEl = el.querySelector('.cp-sum');
+    sumEl.textContent = el._summary;
+    sumEl.title = el._summary;
+    const detEl = el.querySelector('.chat-perm-detail');
+    const toggle = (want = detEl.hidden) => {
+      if (want && !detEl.childNodes.length) detEl.appendChild(this._permDetailBody(el));
+      detEl.hidden = !want;
+      el.classList.toggle('open', want);
+    };
+    el.querySelector('.cp-chev').addEventListener('click', () => toggle());
     for (const b of el.querySelectorAll('[data-allow]')) {
       b.addEventListener('click', () => {
         this._send({ type: 'permission_response', id: m.id, allow: b.dataset.allow === '1' });
       });
     }
+    // Regla de seguridad: los comandos destructivos nacen EXPANDIDOS.
+    if (m.tool === 'Bash' && isDestructiveCommand(m.detail?.command || m.summary)) toggle(true);
     this.msgsEl.appendChild(el);
     this._scroll();
   }
 
+  // Detalle íntegro de un permiso: diff exacto para ediciones, comando completo
+  // para Bash, resumen completo para el resto.
+  _permDetailBody(el) {
+    const body = document.createElement('div');
+    body.className = 'ct-body';
+    const d = el._detail;
+    if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
+    else {
+      const pre = document.createElement('pre');
+      pre.className = 'ct-cmd';
+      pre.textContent = d?.command || el._summary || '(sin detalle)';
+      body.appendChild(pre);
+    }
+    return body;
+  }
+
+  // Al decidir, la tarjeta colapsa a un chip de registro con el veredicto que
+  // se integra al grupo horizontal de tool calls (punto 3): al grupo anterior
+  // si lo hay, o a uno nuevo en su lugar (el tool_use aprobado que llegue
+  // después se suma solo al mismo grupo).
   _permClose(m) {
     const el = this.msgsEl.querySelector(`[data-perm-id="${m.id}"]`);
     if (!el) return;
-    el.querySelector('.chat-perm-actions').innerHTML =
-      `<span class="chat-perm-badge ${m.allow ? 'ok' : 'no'}">${m.allow ? 'Permitido' : 'Denegado'}</span>`;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `chat-toolchip chat-permchip ${m.allow ? 'ok' : 'no'}`;
+    chip.innerHTML = `${icon(m.allow ? 'check' : 'close', { size: 13 })}<span class="ct-name"></span><span class="ct-sum"></span><span class="ct-chev">${icon('chevronDown', { size: 12 })}</span>`;
+    chip.querySelector('.ct-name').textContent = m.allow ? 'Permitido' : 'Denegado';
+    const sum = `${el._tool || ''} ${el._summary || ''}`.trim();
+    chip.querySelector('.ct-sum').textContent = sum.length > 40 ? `${sum.slice(0, 40)}…` : sum;
+    chip._detail = el._detail || (el._summary ? { command: el._summary } : null);
+    chip._output = null;
+    const prev = el.previousElementSibling;
+    let group;
+    if (prev && prev.classList.contains('chat-toolgroup')) {
+      group = prev;
+      el.remove();
+    } else {
+      group = document.createElement('div');
+      group.className = 'chat-toolgroup';
+      group.innerHTML = '<div class="ctg-row"></div><div class="ctg-detail" hidden></div>';
+      el.replaceWith(group);
+    }
+    chip.addEventListener('click', () => this._toolToggle(group, chip));
+    group.querySelector('.ctg-row').appendChild(chip);
   }
 
   _result(m) {

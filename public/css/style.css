@@ -543,21 +543,30 @@ html, body {
 .df-add { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); }
 .df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, var(--cwc-white)); }
 
+/* Solicitud de permiso: fila compacta [icono][tool][resumen][chevron][✕][✓];
+   el detalle íntegro abre debajo ANTES de decidir. Los comandos destructivos
+   nacen expandidos (regla de seguridad en chat-tab.js). */
 .chat-perm {
   align-self: stretch; background: var(--cwc-bg-elevated);
   border: 1px solid var(--cwc-warn); border-radius: var(--cwc-radius-md);
-  padding: .6rem .7rem; display: flex; flex-direction: column; gap: .4rem;
+  padding: .25rem .45rem; display: flex; flex-direction: column; gap: .25rem;
 }
-.chat-perm-head { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-md); color: var(--cwc-text); }
-.chat-perm-sum {
-  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm);
-  color: var(--cwc-text-secondary); word-break: break-all;
-  background: var(--cwc-bg); border-radius: var(--cwc-radius-sm); padding: .35rem .5rem;
+.chat-perm-row { display: flex; align-items: center; gap: .45rem; min-height: 34px; color: var(--cwc-warn); }
+.cp-tool { flex: none; font-weight: 600; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
+.cp-sum {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
 }
-.chat-perm-actions { display: flex; gap: .5rem; justify-content: flex-end; }
-.chat-perm-badge { font-size: var(--cwc-fs-sm); font-weight: 600; }
-.chat-perm-badge.ok { color: var(--cwc-ok); }
-.chat-perm-badge.no { color: var(--cwc-danger); }
+.cp-chev { flex: none; transition: transform .15s ease; }
+.chat-perm.open .cp-chev { transform: rotate(180deg); }
+.cp-deny, .cp-allow { flex: none; min-height: 32px; }
+@media (pointer: coarse) { .cp-deny, .cp-allow, .cp-chev { min-height: 44px; } }
+.chat-perm-detail { border-top: 1px solid var(--cwc-divider); animation: msg-in .18s ease; }
+/* Chip de registro del veredicto (se integra al grupo de tool calls) */
+.chat-permchip.ok { border-left: 2px solid var(--cwc-ok); }
+.chat-permchip.ok .ct-name { color: var(--cwc-ok); }
+.chat-permchip.no { border-left: 2px solid var(--cwc-danger); }
+.chat-permchip.no .ct-name { color: var(--cwc-danger); }
 
 .chat-turn-cost { align-self: flex-start; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); padding-left: .2rem; }
 
