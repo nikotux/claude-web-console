@@ -11,7 +11,7 @@ html, body {
 .login-body { display: grid; place-items: center; height: 100vh; }
 .login-card {
   background: var(--cwc-bg-elevated); padding: 2rem; border-radius: var(--cwc-radius-lg);
-  width: min(92vw, 360px); box-shadow: 0 8px 40px rgba(0,0,0,.4);
+  width: min(92vw, 360px); box-shadow: var(--cwc-shadow-md);
   display: flex; flex-direction: column; gap: .8rem;
 }
 .login-card h1 { font-size: var(--cwc-fs-xl); margin: 0; }
@@ -111,7 +111,7 @@ html, body {
 .rail-flag {
   position: absolute; left: 5px; right: 5px; bottom: 2px; height: 3px;
   border-radius: 2px; display: none; pointer-events: none;
-  box-shadow: 0 0 4px rgba(0,0,0,.4);
+  box-shadow: var(--cwc-shadow-sm);
 }
 
 /* ===== Sidebar ===== */
@@ -510,10 +510,10 @@ html, body {
 .cwc-diff-file { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); padding: .1rem 0; }
 .cwc-diff-block { border-radius: var(--cwc-radius-sm); overflow: auto; max-height: 200px; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
 .cwc-diff-line { padding: .05rem .5rem; white-space: pre-wrap; word-break: break-word; }
-.df-del { background: rgba(205, 92, 92, .12); }
-.df-del .cwc-diff-line { color: color-mix(in srgb, var(--cwc-danger) 65%, #fff); }
-.df-add { background: rgba(108, 158, 110, .12); }
-.df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, #fff); }
+.df-del { background: color-mix(in srgb, var(--cwc-danger) 12%, transparent); }
+.df-del .cwc-diff-line { color: color-mix(in srgb, var(--cwc-danger) 65%, var(--cwc-white)); }
+.df-add { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); }
+.df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, var(--cwc-white)); }
 
 .chat-perm {
   align-self: stretch; background: var(--cwc-bg-elevated);
@@ -714,7 +714,7 @@ html, body {
      colapsado" es solo de escritorio, así que forzamos ancho completo. */
   #sidebar, #sidebar.collapsed {
     position: absolute; z-index: 10; height: 100%;
-    width: 82vw; box-shadow: 4px 0 24px rgba(0,0,0,.5);
+    width: 82vw; box-shadow: 4px 0 24px var(--cwc-shadow-ink);
   }
   #sidebar.collapsed .only-expanded { display: revert; }
   #sidebar.collapsed .only-collapsed { display: none; }

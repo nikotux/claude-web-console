@@ -53,7 +53,7 @@ html, body { margin: 0; height: 100%; }
 .fm-place.active { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
 .fm-place .cwc-icon { width: 16px; height: 16px; }
 .fm-badge { margin-left: auto; background: var(--cwc-border-strong); color: var(--cwc-text); border-radius: var(--cwc-radius-md); padding: 0 .4rem; font-size: var(--cwc-fs-xs); }
-.fm-place.active .fm-badge { background: rgba(255,255,255,.25); }
+.fm-place.active .fm-badge { background: color-mix(in srgb, var(--cwc-white) 25%, transparent); }
 
 .fm-main { flex: 1; min-width: 0; overflow: auto; position: relative; }
 
@@ -66,14 +66,14 @@ html, body { margin: 0; height: 100%; }
   display: flex; flex-direction: column; align-items: center; gap: .35rem;
   padding: .6rem .3rem; border-radius: var(--cwc-radius-md); cursor: default; user-select: none;
 }
-.fm-grid .fm-item:hover { background: rgba(255,255,255,.05); }
-.fm-grid .fm-item.selected { background: rgba(217,119,87,.28); }
+.fm-grid .fm-item:hover { background: var(--cwc-bg-hover); }
+.fm-grid .fm-item.selected { background: color-mix(in srgb, var(--cwc-accent) 28%, transparent); }
 .fm-ic-wrap { position: relative; width: 58px; height: 58px; display: grid; place-items: center; }
-.fm-ic { width: 52px; height: 52px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
+.fm-ic { width: 52px; height: 52px; filter: drop-shadow(0 1px 1px var(--cwc-shadow-ink)); }
 .fm-ic-file .fm-ic { width: 46px; height: 52px; }
 .fm-ext {
   position: absolute; bottom: 12px; left: 0; right: 0; text-align: center;
-  font-size: 8.5px; font-weight: 700; color: #fff; letter-spacing: .02em; pointer-events: none;
+  font-size: 8.5px; font-weight: 700; color: var(--cwc-white); letter-spacing: .02em; pointer-events: none;
 }
 .fm-label {
   font-size: var(--cwc-fs-sm); text-align: center; max-width: 96px; word-break: break-word;
@@ -88,8 +88,8 @@ html, body { margin: 0; height: 100%; }
   gap: .5rem; padding: .32rem .5rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
 }
 .fm-lhead { color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--cwc-border-soft); border-radius: 0; position: sticky; top: 0; background: var(--cwc-bg-elevated); }
-.fm-list .fm-item:hover { background: rgba(255,255,255,.05); }
-.fm-list .fm-item.selected { background: rgba(217,119,87,.28); }
+.fm-list .fm-item:hover { background: var(--cwc-bg-hover); }
+.fm-list .fm-item.selected { background: color-mix(in srgb, var(--cwc-accent) 28%, transparent); }
 .fm-lname { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .fm-lname > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-lname .fm-ic, .fm-lname svg { width: 20px; height: 20px; flex: none; }
@@ -108,7 +108,7 @@ html, body { margin: 0; height: 100%; }
 .fm-drop-hint {
   position: absolute; inset: 12px; border: 2px dashed var(--cwc-accent); border-radius: var(--cwc-radius-lg);
   display: none; place-items: center; color: var(--cwc-accent); font-size: var(--cwc-fs-md); font-weight: 600;
-  background: rgba(217,119,87,.08); pointer-events: none;
+  background: color-mix(in srgb, var(--cwc-accent) 8%, transparent); pointer-events: none;
 }
 .fm-main.fm-dragging .fm-drop-hint { display: grid; }
 .fm-uploading { opacity: .5; }
@@ -117,13 +117,13 @@ html, body { margin: 0; height: 100%; }
 .fm-pv {
   animation: dlg-in .15s ease;
   position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 3vh;
-  background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
+  background: var(--cwc-scrim); backdrop-filter: blur(4px);
 }
 .fm-pv[hidden] { display: none; }
 .fm-pv-card {
   background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-lg);
   width: min(94vw, 1100px); max-height: 94vh; display: flex; flex-direction: column;
-  overflow: hidden; box-shadow: 0 20px 70px rgba(0,0,0,.55);
+  overflow: hidden; box-shadow: var(--cwc-shadow-lg);
 }
 .fm-pv-head {
   display: flex; align-items: center; gap: .8rem; padding: .5rem .7rem;
@@ -150,7 +150,7 @@ html, body { margin: 0; height: 100%; }
   position: fixed; z-index: 100; min-width: 160px; padding: 5px;
   background: var(--cwc-bg-elevated);
   border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
-  box-shadow: 0 10px 40px rgba(0,0,0,.5); display: flex; flex-direction: column;
+  box-shadow: var(--cwc-shadow-md); display: flex; flex-direction: column;
 }
 .fm-ctx button {
   background: none; border: 0; color: var(--cwc-text); text-align: left;

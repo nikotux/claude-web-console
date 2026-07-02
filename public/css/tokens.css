@@ -37,6 +37,29 @@
   --cwc-danger: #cd5c5c;
   --cwc-danger-strong: #ff453a;
 
+  /* ===== Blanco puro (texto sobre superficies sólidas de color) ===== */
+  --cwc-white: #fff;
+
+  /* ===== Sombras y velos (los ÚNICOS rgba/hex de sombra permitidos; fuera
+         de acá, referenciar estos tokens o usar color-mix sobre otros) ===== */
+  --cwc-scrim: rgba(0, 0, 0, .6);              /* fondo de modales/overlays */
+  --cwc-shadow-ink: rgba(0, 0, 0, .4);         /* tinta base p/ sombras custom */
+  --cwc-shadow-sm: 0 0 4px rgba(0, 0, 0, .4);
+  --cwc-shadow-md: 0 8px 40px rgba(0, 0, 0, .45);
+  --cwc-shadow-lg: 0 16px 60px rgba(0, 0, 0, .55);
+
+  /* ===== Explorador: categorías de archivo y carpeta (fm.js/fm.css) ===== */
+  --cwc-cat-image: #34c759;
+  --cwc-cat-video: #af52de;
+  --cwc-cat-audio: #ff2d55;
+  --cwc-cat-archive: #ff9500;
+  --cwc-cat-code: #0a84ff;
+  --cwc-cat-pdf: #ff3b30;
+  --cwc-cat-doc: #8e8e93;
+  --cwc-cat-file: #636366;
+  --cwc-folder: #4a90e2;
+  --cwc-folder-light: #5aa4f2;
+
   /* ===== Colores de identidad de modelo de IA (definidos UNA sola vez;
          el backend envía solo la key semántica: opus|sonnet|haiku|fable) ===== */
   --cwc-model-opus: #b57edc;

@@ -37,7 +37,7 @@
 .btn:disabled, .btn-ghost:disabled { opacity: .5; cursor: default; filter: none; }
 
 .btn--sm { padding: .28rem .55rem; min-height: 30px; font-size: var(--cwc-fs-sm); border-radius: var(--cwc-radius-sm); }
-.btn--danger.btn { background: var(--cwc-danger); color: #fff; }
+.btn--danger.btn { background: var(--cwc-danger); color: var(--cwc-white); }
 .btn--danger.btn-ghost:hover { border-color: var(--cwc-danger); color: var(--cwc-danger); }
 .btn--block { width: 100%; }
 .btn--icon { padding: .28rem; min-width: 30px; }
@@ -54,7 +54,7 @@
    Reemplazan confirm()/prompt()/alert() nativos en TODA la app. */
 .dlg-overlay {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(0, 0, 0, .6); display: grid; place-items: center; padding: 4vh 1rem;
+  background: var(--cwc-scrim); display: grid; place-items: center; padding: 4vh 1rem;
   animation: dlg-in .15s ease;
 }
 @keyframes dlg-in { from { opacity: 0; } to { opacity: 1; } }
@@ -62,7 +62,7 @@
   background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-strong);
   border-radius: var(--cwc-radius-lg); width: 100%;
   max-height: 88vh; display: flex; flex-direction: column;
-  box-shadow: 0 16px 60px rgba(0, 0, 0, .55);
+  box-shadow: var(--cwc-shadow-lg);
   animation: dlg-card-in .15s ease;
 }
 @keyframes dlg-card-in { from { transform: translateY(6px); opacity: .6; } to { transform: none; opacity: 1; } }

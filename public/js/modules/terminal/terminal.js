@@ -18,13 +18,19 @@ export class TerminalTab {
     this.reconnectTimer = null;
     this.closedByUser = false;
 
+    // xterm no resuelve var() en su theme: leemos los tokens ya computados
+    // (--cwc-bg / --cwc-text de tokens.css) para no duplicar hex acá.
+    const css = getComputedStyle(document.documentElement);
     this.term = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       fontSize: 14,
       allowProposedApi: true,
       scrollback: 5000,
-      theme: { background: '#0b0e14', foreground: '#c5c8c6' },
+      theme: {
+        background: css.getPropertyValue('--cwc-bg').trim(),
+        foreground: css.getPropertyValue('--cwc-text').trim(),
+      },
     });
     this.fit = new FitAddonNS.FitAddon();
     this.term.loadAddon(this.fit);

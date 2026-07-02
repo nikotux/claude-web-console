@@ -64,26 +64,30 @@ const ctxEl = $('fm-ctx');
 let ctxDismiss = null; // teardown del menú contextual activo (popup descartable)
 
 // ---------- categorías / iconos ----------
+// Los colores viven en tokens.css (--cwc-cat-*); acá solo la key semántica.
+// Estos dos SVG son miniaturas RELLENAS a dos tonos (carpeta/archivo), no
+// íconos de trazo: por eso no salen de ui/icons.js. Los fills van por
+// `style` con var() (los atributos de presentación SVG no aceptan var()).
 const CATS = {
-  image: { c: '#34c759', ext: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'heic', 'avif'] },
-  video: { c: '#af52de', ext: ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v'] },
-  audio: { c: '#ff2d55', ext: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'] },
-  archive: { c: '#ff9500', ext: ['zip', 'tar', 'gz', 'tgz', 'rar', '7z', 'bz2', 'xz'] },
-  code: { c: '#0a84ff', ext: ['js', 'mjs', 'ts', 'tsx', 'jsx', 'json', 'py', 'go', 'rs', 'c', 'cpp', 'h', 'java', 'rb', 'php', 'sh', 'html', 'css', 'scss', 'yml', 'yaml', 'toml', 'sql'] },
-  pdf: { c: '#ff3b30', ext: ['pdf'] },
-  doc: { c: '#8e8e93', ext: ['txt', 'md', 'doc', 'docx', 'rtf', 'csv', 'xls', 'xlsx', 'ppt', 'pptx'] },
+  image: { ext: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'heic', 'avif'] },
+  video: { ext: ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v'] },
+  audio: { ext: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'] },
+  archive: { ext: ['zip', 'tar', 'gz', 'tgz', 'rar', '7z', 'bz2', 'xz'] },
+  code: { ext: ['js', 'mjs', 'ts', 'tsx', 'jsx', 'json', 'py', 'go', 'rs', 'c', 'cpp', 'h', 'java', 'rb', 'php', 'sh', 'html', 'css', 'scss', 'yml', 'yaml', 'toml', 'sql'] },
+  pdf: { ext: ['pdf'] },
+  doc: { ext: ['txt', 'md', 'doc', 'docx', 'rtf', 'csv', 'xls', 'xlsx', 'ppt', 'pptx'] },
 };
 function catOf(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  for (const [cat, def] of Object.entries(CATS)) if (def.ext.includes(ext)) return { cat, color: def.c, ext };
-  return { cat: 'file', color: '#636366', ext };
+  for (const [cat, def] of Object.entries(CATS)) if (def.ext.includes(ext)) return { cat, color: `var(--cwc-cat-${cat})`, ext };
+  return { cat: 'file', color: 'var(--cwc-cat-file)', ext };
 }
 function folderSVG() {
-  return `<svg viewBox="0 0 48 40" class="fm-ic"><path d="M3 9a4 4 0 0 1 4-4h11l4 4h19a4 4 0 0 1 4 4v20a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z" fill="#4a90e2"/><path d="M3 12h42v21a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z" fill="#5aa4f2"/></svg>`;
+  return `<svg viewBox="0 0 48 40" class="fm-ic"><path d="M3 9a4 4 0 0 1 4-4h11l4 4h19a4 4 0 0 1 4 4v20a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z" style="fill:var(--cwc-folder)"/><path d="M3 12h42v21a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z" style="fill:var(--cwc-folder-light)"/></svg>`;
 }
 function fileSVG(name) {
   const { color, ext } = catOf(name);
-  return `<svg viewBox="0 0 40 48" class="fm-ic"><path d="M6 2h18l14 14v28a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="${color}"/><path d="M24 2l14 14H26a2 2 0 0 1-2-2z" fill="rgba(255,255,255,.3)"/></svg>${ext ? `<span class="fm-ext">${ext.toUpperCase().slice(0, 4)}</span>` : ''}`;
+  return `<svg viewBox="0 0 40 48" class="fm-ic"><path d="M6 2h18l14 14v28a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" style="fill:${color}"/><path d="M24 2l14 14H26a2 2 0 0 1-2-2z" style="fill:color-mix(in srgb, var(--cwc-white) 30%, transparent)"/></svg>${ext ? `<span class="fm-ext">${ext.toUpperCase().slice(0, 4)}</span>` : ''}`;
 }
 function iconFor(entry) {
   return entry.type === 'dir' ? `<div class="fm-ic-wrap">${folderSVG()}</div>` : `<div class="fm-ic-wrap fm-ic-file">${fileSVG(entry.name)}</div>`;
