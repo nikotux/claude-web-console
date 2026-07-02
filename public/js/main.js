@@ -6,7 +6,7 @@ import { TerminalTab } from './modules/terminal/terminal.js';
 import { ChatTab } from './modules/chat/chat-tab.js';
 import { icon, hydrateIcons } from './ui/icons.js';
 import { modelColor } from './ui/models.js';
-import { openModal, confirmDialog, promptDialog, alertDialog } from './ui/dialog.js';
+import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -419,7 +419,7 @@ function findSessionByCwd(rel) {
 
 const ctx = {
   icon,
-  dialog: { openModal, confirmDialog, promptDialog, alertDialog },
+  dialog: { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog },
   bus,
   whoami,
   openSession,

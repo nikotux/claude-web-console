@@ -99,6 +99,18 @@
 .cwc-popup-item.danger:hover { background: var(--cwc-danger-strong); color: var(--cwc-text); }
 .cwc-popup-item .cwc-icon { width: 15px; height: 15px; flex: none; }
 
+/* ===== Editor de texto en modal (textEditorDialog) ===== */
+.dlg-editor-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .5rem; }
+.dlg-editor-text {
+  width: 100%; min-height: 46vh; resize: vertical;
+  background: var(--cwc-bg-input); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm); line-height: 1.45;
+  padding: .55rem .65rem;
+}
+.dlg-editor-text:focus { outline: none; border-color: var(--cwc-accent); }
+.dlg-editor-err { font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); margin-top: .4rem; }
+
 /* ===== Estado de carga único ===== */
 .cwc-spinner {
   width: 16px; height: 16px; flex: none; border-radius: 50%;

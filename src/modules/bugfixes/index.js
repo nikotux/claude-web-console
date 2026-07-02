@@ -5,8 +5,8 @@
 //   POST /api/bugfixes/scan     -> registra chats de tickets viejos sin registro (admin)
 //   POST /api/bugfixes/pr {id}  -> branch + commit + push + PR a origin de Tolkien (admin)
 //   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
-//   GET  /api/bugfixes/context     -> contexto de trabajo editable (autenticados)
-//   POST /api/bugfixes/context     -> guarda el contexto (admin)
+//   GET  /api/bugfixes/context?kind=work|pr -> contexto editable (autenticados)
+//   POST /api/bugfixes/context {kind, context} -> guarda el contexto (admin)
 //   POST /api/bugfixes/delete {id} -> descarta un registro (admin)
 //
 // GIT/PR — decisiones duras:
@@ -26,7 +26,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
-import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXT } from './store.js';
+import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS } from './store.js';
 
 const WT_BASE = path.join(os.homedir(), '.cwc-data', 'bugfix-wt');
 const inFlight = new Set(); // sessionIds con PR en curso (anti doble click)
@@ -235,18 +235,22 @@ export default {
       res.json({ bugfixes: all, github, errors });
     });
 
-    // Contexto de trabajo editable (se inyecta en cada "Trabajar en Chat").
+    // Contextos editables (?kind=work|pr). Ambos se inyectan en cada
+    // "Trabajar en Chat": 'work' = cómo se trabaja el bug (módulo Bugs),
+    // 'pr' = cómo se redactan las notas del PR (modal Enviar PR).
     r.get('/context', (req, res) => {
-      const context = getContext();
-      res.json({ context, isDefault: context === DEFAULT_CONTEXT });
+      const kind = req.query.kind === 'pr' ? 'pr' : 'work';
+      const context = getContext(kind);
+      res.json({ kind, context, isDefault: context === DEFAULT_CONTEXTS[kind] });
     });
 
     r.post('/context', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const kind = req.body?.kind === 'pr' ? 'pr' : 'work';
       const text = String(req.body?.context ?? '');
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío (borralo a mano si de verdad querés eso).' });
-      saveContext(text);
-      res.json({ ok: true, context: getContext() });
+      saveContext(kind, text);
+      res.json({ ok: true, kind, context: getContext(kind) });
     });
 
     r.post('/delete', (req, res) => {

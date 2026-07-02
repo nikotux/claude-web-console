@@ -15,43 +15,56 @@ import { encodeCwd } from '../../core/claude-model.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const FILE = path.join(DATA_DIR, 'bugfixes.json');
-const CONTEXT_FILE = path.join(DATA_DIR, 'bugfix-context.md');
+// Dos contextos EDITABLES, cada uno con su dueño en la UI:
+//  - 'work' (módulo Bugs, botón Contexto de la vista expandida): CÓMO se
+//    trabaja un bug — verificación previa, proceso, no enviar el PR.
+//  - 'pr' (modal Enviar PR, botón Contexto): CÓMO se redactan los cambios
+//    que van a las notas del PR (el formato del cierre del chat, que después
+//    parsea formatPrBody).
+// Ambos se inyectan en el prompt de cada "Trabajar en Chat".
+const CONTEXT_FILES = {
+  work: path.join(DATA_DIR, 'bugfix-context.md'),
+  pr: path.join(DATA_DIR, 'bugfix-pr-context.md'),
+};
 
-// Contexto de trabajo EDITABLE que se inyecta en cada "Trabajar en Chat" de un
-// ticket (botón Contexto en el modal de PRs). El default pide la verificación
-// previa, el formato del cierre (alimenta las notas del PR) y prohíbe enviar
-// el PR desde el chat.
-export const DEFAULT_CONTEXT = [
-  'ANTES de tocar nada — verificación exhaustiva:',
-  '1. Estado del ticket: ¿sigue abierto? ¿cambió su status o alguien ya lo',
-  '   cerró? Revisá el ticket y su hilo en Desk (desk_get_ticket).',
-  '2. ¿Chris (cswenor) ya está trabajando en esto? Puede NO actualizar el',
-  '   ticket: buscá PRs abiertos y branches/commits recientes relacionados',
-  '   (gh pr list --state all, git log) antes de duplicar trabajo.',
-  '',
-  'Proceso de resolución — mostrámelo explícito en la conversación:',
-  '- CUÁL ES EL PROBLEMA: explicalo en criollo, con la causa raíz.',
-  '- QUÉ PODEMOS HACER: las opciones de arreglo.',
-  '- ANTES de implementar: evaluá si la opción elegida es LA MEJOR solución',
-  '  posible o si hay una alternativa superior; decímelo y esperá mi OK.',
-  '',
-  'Al FINALIZAR, tu ÚLTIMO mensaje debe tener EXACTAMENTE este formato (son',
-  'las notas del PR):',
-  'Problema: <una o dos líneas>',
-  'Qué hice: <qué se cambió y dónde>',
-  'Mejor solución: <por qué esto es lo mejor, o qué alternativa se descartó y por qué>',
-  '',
-  'NUNCA envíes el PR desde esta conversación (nada de git push ni gh pr',
-  'create): el PR se sube después desde el módulo "Enviar PR" de la consola.',
-].join('\n');
+export const DEFAULT_CONTEXTS = {
+  work: [
+    'ANTES de tocar nada — verificación exhaustiva:',
+    '1. Estado del ticket: ¿sigue abierto? ¿cambió su status o alguien ya lo',
+    '   cerró? Revisá el ticket y su hilo en Desk (desk_get_ticket).',
+    '2. ¿Chris (cswenor) ya está trabajando en esto? Puede NO actualizar el',
+    '   ticket: buscá PRs abiertos y branches/commits recientes relacionados',
+    '   (gh pr list --state all, git log) antes de duplicar trabajo.',
+    '',
+    'Proceso de resolución — mostrámelo explícito en la conversación:',
+    '- CUÁL ES EL PROBLEMA: explicalo en criollo, con la causa raíz.',
+    '- QUÉ PODEMOS HACER: las opciones de arreglo.',
+    '- ANTES de implementar: evaluá si la opción elegida es LA MEJOR solución',
+    '  posible o si hay una alternativa superior; decímelo y esperá mi OK.',
+    '',
+    'NUNCA envíes el PR desde esta conversación (nada de git push ni gh pr',
+    'create): el PR se sube después desde el módulo "Enviar PR" de la consola.',
+  ].join('\n'),
+  pr: [
+    'Cómo se redactan los cambios que van al PR (las notas que lee Chris):',
+    '- Formales, claras y concisas; sin jerga interna ni referencias a esta',
+    '  consola. Cada afirmación tiene que poder verificarse en el diff.',
+    '- Al FINALIZAR la resolución, tu ÚLTIMO mensaje del chat debe tener',
+    '  EXACTAMENTE este formato (es lo que se convierte en las notas del PR):',
+    'Problema: <una o dos líneas: qué estaba roto y su causa raíz>',
+    'Qué hice: <qué se cambió y en qué archivos, sin rodeos>',
+    'Mejor solución: <por qué esto es la mejor solución posible, o qué alternativa se descartó y por qué>',
+  ].join('\n'),
+};
 
-export function getContext() {
-  try { return fss.readFileSync(CONTEXT_FILE, 'utf8'); } catch { return DEFAULT_CONTEXT; }
+export function getContext(kind = 'work') {
+  try { return fss.readFileSync(CONTEXT_FILES[kind], 'utf8'); } catch { return DEFAULT_CONTEXTS[kind]; }
 }
 
-export function saveContext(text) {
+export function saveContext(kind, text) {
+  if (!CONTEXT_FILES[kind]) throw new Error(`Contexto desconocido: ${kind}`);
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  fss.writeFileSync(CONTEXT_FILE, String(text).slice(0, 20000), { mode: 0o600 });
+  fss.writeFileSync(CONTEXT_FILES[kind], String(text).slice(0, 20000), { mode: 0o600 });
 }
 
 // Prompt de tickets.js: "Trabajemos el bug del ticket Desk #<n>." — sin '.'

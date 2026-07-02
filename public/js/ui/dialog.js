@@ -133,3 +133,44 @@ export function alertDialog({ title = 'Aviso', message = '', okLabel = 'Entendid
     ok.focus();
   });
 }
+
+// Editor de texto plano en modal (p.ej. los contextos editables de bugfixes).
+// `onSave(texto)` puede ser async: si tira, el error se muestra en el propio
+// modal sin cerrarlo; si resuelve, se cierra. Devuelve true si se guardó.
+export function textEditorDialog({ title = 'Editar', hint = '', value = '', width = 640, saveLabel = 'Guardar', onSave } = {}) {
+  return new Promise((resolve) => {
+    let saved = false;
+    const m = openModal({ title, width, onClose: () => resolve(saved) });
+    const box = document.createElement('div');
+    box.innerHTML = `
+      ${hint ? '<p class="dlg-editor-hint"></p>' : ''}
+      <textarea class="dlg-editor-text" spellcheck="false"></textarea>
+      <p class="dlg-editor-err" hidden></p>
+      <div class="dlg-actions">
+        <button class="btn-ghost btn--sm" data-ref="cancel">Cancelar</button>
+        <button class="btn btn--sm" data-ref="save"></button>
+      </div>`;
+    if (hint) box.querySelector('.dlg-editor-hint').textContent = hint;
+    const ta = box.querySelector('.dlg-editor-text');
+    ta.value = value;
+    const err = box.querySelector('.dlg-editor-err');
+    const save = box.querySelector('[data-ref="save"]');
+    save.textContent = saveLabel;
+    m.body.appendChild(box);
+    box.querySelector('[data-ref="cancel"]').addEventListener('click', () => m.close());
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      err.hidden = true;
+      try {
+        await onSave?.(ta.value);
+        saved = true;
+        m.close();
+      } catch (e) {
+        err.textContent = e?.message || 'No se pudo guardar.';
+        err.hidden = false;
+        save.disabled = false;
+      }
+    });
+    ta.focus();
+  });
+}

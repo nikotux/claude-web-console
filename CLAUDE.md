@@ -80,10 +80,13 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             real — commit de los archivos del fix, push, gh pr create con
                             reviewer cswenor). Notas del PR SIEMPRE formales: Problema /
                             Qué se hizo / ¿Mejor solución? (parseadas del cierre del chat).
-                            CONTEXTO DE TRABAJO editable (~/.cwc-data/bugfix-context.md,
-                            GET/POST /context): se inyecta en cada "Trabajar en Chat" y pide
-                            verificación previa del ticket/PRs de Chris, proceso explícito,
-                            formato del cierre y NO enviar el PR desde el chat.
+                            DOS CONTEXTOS editables (GET/POST /context?kind=work|pr), ambos
+                            inyectados en cada "Trabajar en Chat": 'work' (bugfix-context.md,
+                            botón Contexto del EXPANDIR de Bugs — verificación previa del
+                            ticket/PRs de Chris, proceso, NO enviar PR desde el chat) y 'pr'
+                            (bugfix-pr-context.md, botón Contexto del modal Enviar PR — cómo
+                            se REDACTAN las notas del PR: formato Problema:/Qué hice:/Mejor
+                            solución: del cierre). Editor genérico: textEditorDialog (ui/dialog.js).
                             El chat registra al CERRAR una conversación con ticket (diferido
                             2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud y
                             modal "Enviar PR" de la sección Tolkien (cuadro registro+GitHub).
@@ -117,8 +120,9 @@ docs/                       frontend-modules.md · brief-original.txt · context
   En JS (p.ej. el theme de xterm) los tokens se leen con `getComputedStyle`,
   no se duplican los hex.
 - **Botones/diálogos/popups:** `.btn`/`.btn-ghost` + modificadores; modales con
-  `ui/dialog.js` (`openModal/confirmDialog/promptDialog/alertDialog`); menús
-  flotantes con `ui/popup.js`. Nunca `alert()/confirm()/prompt()` nativos.
+  `ui/dialog.js` (`openModal/confirmDialog/promptDialog/alertDialog/`
+  `textEditorDialog`); menús flotantes con `ui/popup.js`. Nunca
+  `alert()/confirm()/prompt()` nativos.
 - **Íconos:** `icon(name)` de `ui/icons.js` (SVG de trazo, currentColor);
   agregar íconos nuevos AHÍ, no SVG inline.
 - **`[hidden]`:** existe un guard global `[hidden]{display:none!important}` en
