@@ -19,3 +19,15 @@ export function resolveWithinHome(rel = '') {
   if (relFromHome.startsWith('..') || path.isAbsolute(relFromHome)) return null;
   return target; // relFromHome === '' => el propio home, que es válido
 }
+
+// Variante para cwd de sesiones/chats: acepta rutas relativas al home O
+// absolutas dentro de él, y ante un escape CAE al home en vez de fallar.
+// Misma comparación por segmentos que resolveWithinHome (un startsWith
+// aceptaría /home/user-malicioso como "dentro" de /home/user).
+export function clampToHome(requested) {
+  if (!requested) return config.home;
+  const resolved = path.resolve(config.home, String(requested));
+  const relFromHome = path.relative(config.home, resolved);
+  if (relFromHome.startsWith('..') || path.isAbsolute(relFromHome)) return config.home;
+  return resolved;
+}

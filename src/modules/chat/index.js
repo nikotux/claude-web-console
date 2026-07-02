@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
+import { clampToHome } from '../../core/paths.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
@@ -43,11 +44,8 @@ const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
 const SWITCH_CTRLC_MS = 8000; // T2: esperar a que `claude` salga tras Ctrl-C x2
 const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 
-function safeCwd(requested) {
-  if (!requested) return config.home;
-  const resolved = path.resolve(config.home, String(requested));
-  return resolved.startsWith(config.home) ? resolved : config.home;
-}
+// Anti traversal: resuelve contra el home y cae a él si escapa (core/paths.js).
+const safeCwd = clampToHome;
 
 // ===== Adopción TUI(tmux) -> Chat =====
 // Comando en primer plano del pane de una sesión tmux nuestra.

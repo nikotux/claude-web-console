@@ -15,6 +15,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sessionManager } from './sessions.js';
 import { config } from '../../core/config.js';
+import { clampToHome } from '../../core/paths.js';
 import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd } from '../../core/claude-state.js';
@@ -33,12 +34,8 @@ function applyClipboardOpts() {
   }
 }
 
-function safeCwd(requested) {
-  if (!requested) return config.home;
-  // Se resuelve y se exige que quede dentro del home permitido (anti traversal).
-  const resolved = path.resolve(config.home, requested.toString());
-  return resolved.startsWith(config.home) ? resolved : config.home;
-}
+// Anti traversal: resuelve contra el home y cae a él si escapa (core/paths.js).
+const safeCwd = clampToHome;
 
 export default {
   name: 'terminal',
