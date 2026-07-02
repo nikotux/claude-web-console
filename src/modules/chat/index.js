@@ -26,7 +26,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
-import { sessionManager, tmuxArgs } from '../terminal/sessions.js';
+import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -559,6 +559,10 @@ class ChatManager {
       .map((c) => ({
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
+        // Modo TUI: la tmux oculta (cwct-) sobrevive reinicios del server, así
+        // que persistimos lo necesario para RE-ADJUNTARLA al rehidratar.
+        viewMode: c.viewMode === 'tui' ? 'tui' : 'chat',
+        terminalId: c.viewMode === 'tui' ? c.terminalId : null,
       }));
     try {
       fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -568,10 +572,11 @@ class ChatManager {
 
   // Al arrancar: reconstruye las conversaciones como DORMIDAS (sin motor).
   // El history se rearma del transcript; el primer mensaje revive el motor
-  // con resume. Una TUI previa murió con el server => vuelve como chat.
+  // con resume. Una TUI previa (tmux oculta cwct-) SOBREVIVE al server: si
+  // sigue viva se re-adjunta y la conversación vuelve en modo TUI.
   rehydrate() {
     let saved = [];
-    try { saved = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8')); } catch { return 0; }
+    try { saved = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8')); } catch { saved = []; }
     let count = 0;
     for (const s of saved) {
       if (!s?.sessionId || !UUID_RE.test(s.sessionId) || this.chats.has(s.id)) continue;
@@ -585,8 +590,25 @@ class ChatManager {
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
       chat.lastActivity = s.lastActivity || Date.now();
+      if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
+        // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
+        const term = sessionManager.createBare({
+          id: s.terminalId,
+          cwd: chat.cwd,
+          command: { file: 'claude', args: ['--resume', s.sessionId] },
+          title: chat.title,
+        });
+        chat.terminalId = term.id;
+        chat.viewMode = 'tui';
+      }
       this.chats.set(s.id, chat);
       count += 1;
+    }
+    // Tmux ocultas cwct- sin conversación dueña (p.ej. la tarjeta se descartó
+    // mientras el server no corría): matarlas para no dejar claudes huérfanos.
+    const owned = new Set([...this.chats.values()].map((c) => c.terminalId).filter(Boolean));
+    for (const tid of listBareTmuxIds()) {
+      if (!owned.has(tid)) killBareTmux(tid);
     }
     return count;
   }

@@ -17,16 +17,42 @@ import { config } from '../../core/config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMUX_CONF = path.join(__dirname, 'tmux.cwc.conf');
 const PREFIX = 'cwc-'; // prefijo de nombres de sesión tmux de este proyecto
+// Prefijo de las sesiones tmux OCULTAS de las vistas TUI de conversaciones
+// (bare). Distinto de PREFIX a propósito: no se listan ni se rehidratan como
+// terminales normales, pero al vivir en tmux SOBREVIVEN un crash del server.
+const BARE_PREFIX = 'cwct-';
 
 // Base para args de tmux sobre nuestro socket + config aislados.
 function tmuxArgs(...rest) {
   return ['-L', config.tmuxSocket, '-f', TMUX_CONF, ...rest];
 }
 
+// ¿Sigue viva la tmux oculta de una vista TUI? (para re-adjuntar tras reinicio)
+export function bareTmuxAlive(id) {
+  try {
+    execFileSync('tmux', tmuxArgs('has-session', '-t', `=${BARE_PREFIX}${id}`), { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+// Ids de TODAS las tmux ocultas cwct-* vivas (para limpiar huérfanas al arrancar).
+export function listBareTmuxIds() {
+  try {
+    const out = execFileSync('tmux', tmuxArgs('list-sessions', '-F', '#{session_name}'),
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\n').filter((n) => n.startsWith(BARE_PREFIX)).map((n) => n.slice(BARE_PREFIX.length));
+  } catch { return []; }
+}
+
+export function killBareTmux(id) {
+  try { execFileSync('tmux', tmuxArgs('kill-session', '-t', `=${BARE_PREFIX}${id}`), { stdio: 'ignore' }); }
+  catch { /* ya no existe */ }
+}
+
 class Session {
   constructor({ id, cwd, title, attach = null, bare = false, command = null }) {
     this.id = id;
-    this.tmuxName = PREFIX + id;
+    this.tmuxName = (bare ? BARE_PREFIX : PREFIX) + id;
     this.cwd = cwd || config.home;
     this.title = title || 'terminal';
     // Si viene `attachSpec` = { socket, session }, esta sesión NO crea una tmux
@@ -34,8 +60,10 @@ class Session {
     // socket. No lleva prefijo cwc y NO se rehidrata al reiniciar Node.
     // (Ojo: NO usar `this.attach`, que es el método de adjuntar WebSockets.)
     this.attachSpec = attach;
-    // Sesión "bare" = pty directo (sin tmux), p.ej. la vista TUI de una
-    // conversación (`claude --resume`). No persiste, no se lista ni rehidrata.
+    // Sesión "bare" = vista TUI de una conversación (`claude --resume`).
+    // Corre DENTRO de una tmux oculta (BARE_PREFIX) para sobrevivir un crash
+    // del server; no se lista como terminal ni se rehidrata acá (la rehidrata
+    // el módulo chat, que es su dueño).
     this.bare = bare;
     this.command = command; // { file, args } cuando bare
     this.cols = 80;
@@ -54,7 +82,19 @@ class Session {
     delete env.TMUX_PANE;
 
     if (this.bare) {
-      this.proc = pty.spawn(this.command.file, this.command.args, {
+      // tmux oculta corriendo el comando DIRECTO (sin shell debajo): cuando
+      // `claude` sale, la sesión tmux muere y el pty también (waitForExit).
+      // new-session -A: si la tmux sobrevivió a un reinicio del server, se
+      // re-adjunta (el comando se ignora) en vez de lanzar otro claude.
+      const args = tmuxArgs(
+        'new-session', '-A',
+        '-s', this.tmuxName,
+        '-x', String(this.cols),
+        '-y', String(this.rows),
+        '-c', this.cwd,
+        this.command.file, ...this.command.args,
+      );
+      this.proc = pty.spawn('tmux', args, {
         name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
       });
     } else {
@@ -111,10 +151,11 @@ class Session {
     });
   }
 
-  // Mata la sesión de verdad (tmux kill-session + pty, o solo pty si bare).
+  // Mata la sesión de verdad (tmux kill-session + pty). Las bare también son
+  // tmux (oculta), así que el kill-session aplica igual; attachSpec no (ajena).
   kill() {
-    if (!this.bare) {
-      try { execFileSync('tmux', tmuxArgs('kill-session', '-t', this.tmuxName), { stdio: 'ignore' }); }
+    if (!this.attachSpec) {
+      try { execFileSync('tmux', tmuxArgs('kill-session', '-t', `=${this.tmuxName}`), { stdio: 'ignore' }); }
       catch { /* la sesión puede ya no existir */ }
     }
     try { this.proc?.kill(); } catch { /* noop */ }
@@ -226,12 +267,13 @@ class SessionManager {
     return session;
   }
 
-  // Sesión "bare" (pty directo, sin tmux): la usa el modo TUI del chat para
-  // correr `claude --resume <sessionId>`.
-  createBare({ cwd, command, title } = {}) {
-    const id = this._nextId();
-    const session = new Session({ id, cwd, title, bare: true, command }).spawn();
-    this.sessions.set(id, session);
+  // Sesión "bare" (tmux oculta cwct-): la usa el modo TUI del chat para correr
+  // `claude --resume <sessionId>`. Acepta `id` explícito para RE-ADJUNTAR una
+  // tmux que sobrevivió a un reinicio del server (new-session -A la retoma).
+  createBare({ cwd, command, title, id = null } = {}) {
+    const sid = id && !this.sessions.has(id) ? id : this._nextId();
+    const session = new Session({ id: sid, cwd, title, bare: true, command }).spawn();
+    this.sessions.set(sid, session);
     return session;
   }
 
@@ -251,4 +293,4 @@ class SessionManager {
 }
 
 export const sessionManager = new SessionManager();
-export { PREFIX, tmuxArgs };
+export { PREFIX, BARE_PREFIX, tmuxArgs };
