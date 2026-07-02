@@ -76,6 +76,23 @@
 .dlg-input:focus { outline: none; border-color: var(--cwc-accent); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
 
+/* ===== Popup descartable (menú ⋯, menús anclados) — ver ui/popup.js ===== */
+.cwc-popup-menu {
+  position: fixed; z-index: 210; min-width: 168px; padding: 5px;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md); box-shadow: 0 10px 40px rgba(0, 0, 0, .5);
+  display: flex; flex-direction: column; gap: 2px; animation: dlg-card-in .12s ease;
+}
+.cwc-popup-item {
+  display: flex; align-items: center; gap: .5rem; text-align: left; width: 100%;
+  background: none; border: 0; color: var(--cwc-text); cursor: pointer;
+  padding: .4rem .55rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-md);
+}
+.cwc-popup-item:hover { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
+.cwc-popup-item.danger { color: var(--cwc-danger-strong); }
+.cwc-popup-item.danger:hover { background: var(--cwc-danger-strong); color: var(--cwc-text); }
+.cwc-popup-item .cwc-icon { width: 15px; height: 15px; flex: none; }
+
 /* ===== Estado de carga único ===== */
 .cwc-spinner {
   width: 16px; height: 16px; flex: none; border-radius: 50%;

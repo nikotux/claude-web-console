@@ -1,6 +1,7 @@
 // filemanager/fm.js — Explorador (gestor de archivos estilo Finder).
 import { icon, hydrateIcons } from '../ui/icons.js';
 import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
+import { dismissablePopup } from '../ui/popup.js';
 
 const API = '/api/files';
 
@@ -60,6 +61,7 @@ const $ = (id) => document.getElementById(id);
 const itemsEl = $('fm-items');
 const crumbsEl = $('fm-crumbs');
 const ctxEl = $('fm-ctx');
+let ctxDismiss = null; // teardown del menú contextual activo (popup descartable)
 
 // ---------- categorías / iconos ----------
 const CATS = {
@@ -449,9 +451,15 @@ function showCtx(ev, entry) {
   [...ctxEl.children].forEach((b, i) => b.addEventListener('click', () => { hideCtx(); items[i][1](); }));
   ctxEl.style.left = `${Math.min(ev.clientX, window.innerWidth - 180)}px`;
   ctxEl.style.top = `${Math.min(ev.clientY, window.innerHeight - 160)}px`;
+  hideCtx(); // cierra un menú previo si lo había
   ctxEl.hidden = false;
+  // Descartable ante pointerdown fuera / Esc / scroll / blur / resize.
+  ctxDismiss = dismissablePopup(ctxEl, { onDismiss: () => { ctxEl.hidden = true; ctxDismiss = null; } });
 }
-function hideCtx() { ctxEl.hidden = true; }
+function hideCtx() {
+  if (ctxDismiss) { const d = ctxDismiss; ctxDismiss = null; d(); }
+  ctxEl.hidden = true;
+}
 
 // ---------- escape ----------
 function escHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -484,7 +492,6 @@ $('fm-term').addEventListener('click', () => { if (state.mode === 'files') sessi
 $('fm-upload').addEventListener('click', () => $('fm-file-input').click());
 $('fm-file-input').addEventListener('change', (e) => { uploadFiles(e.target.files); e.target.value = ''; });
 for (const b of document.querySelectorAll('.fm-place')) b.addEventListener('click', () => goPlace(b.dataset.place));
-document.addEventListener('click', hideCtx);
 
 // Previsualización: cerrar (botón, click en el fondo, Escape) y descargar.
 $('fm-pv-close').addEventListener('click', closePreview);

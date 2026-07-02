@@ -7,6 +7,7 @@
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
 import { modelColor } from '../../ui/models.js';
+import { dismissablePopup } from '../../ui/popup.js';
 
 const MODEL_OPTIONS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
@@ -167,7 +168,7 @@ export default {
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
       menuBtn.title = 'Opciones';
-      menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(s); });
+      menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(s, menuBtn); });
 
       elCard.append(main, menuBtn);
       return elCard;
@@ -182,19 +183,34 @@ export default {
       openSession({ attach: { socket: s.socket, session: s.name }, title: displayName(s) });
     }
 
-    // Menú ⋯: renombrar / cambiar modelo / matar.
-    function openMenu(s) {
-      const m = dialog.openModal({ title: displayName(s), width: 320 });
-      m.body.innerHTML = `
-        <div class="sess-menu-list">
-          <button class="btn-ghost sess-menu-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
-          <button class="btn-ghost sess-menu-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
-          <button class="btn-ghost btn--danger sess-menu-item" data-act="kill">${icon('trash', { size: 15 })}<span>Matar sesión</span></button>
-        </div>
-        <p class="sess-plumbing">${plumbing(s)}</p>`;
-      m.body.querySelector('[data-act="rename"]').addEventListener('click', () => { m.close(); rename(s); });
-      m.body.querySelector('[data-act="model"]').addEventListener('click', () => { m.close(); pickModel(s); });
-      m.body.querySelector('[data-act="kill"]').addEventListener('click', () => { m.close(); kill(s); });
+    // Menú ⋯: popup descartable anclado al botón (mismo helper que el menú
+    // contextual del Explorador: cierra ante pointerdown fuera / Esc / scroll /
+    // blur / al elegir una acción).
+    function openMenu(s, anchor) {
+      const menu = document.createElement('div');
+      menu.className = 'cwc-popup-menu';
+      menu.innerHTML = `
+        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
+        <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
+        <button class="cwc-popup-item danger" data-act="kill">${icon('trash', { size: 15 })}<span>Matar sesión</span></button>`;
+      document.body.appendChild(menu);
+      positionPopup(menu, anchor);
+      const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+      const act = (fn) => { dismiss(); fn(); };
+      menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => rename(s)));
+      menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModel(s)));
+      menu.querySelector('[data-act="kill"]').addEventListener('click', () => act(() => kill(s)));
+    }
+
+    // Ancla un popup al botón, alineado a su borde derecho y clamped al viewport.
+    function positionPopup(menu, anchor) {
+      const r = anchor.getBoundingClientRect();
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      let left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8));
+      let top = r.bottom + 4;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
     }
 
     async function rename(s) {
