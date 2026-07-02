@@ -55,6 +55,14 @@
 .dlg-overlay {
   position: fixed; inset: 0; z-index: 200;
   background: var(--cwc-scrim); display: grid; place-items: center; padding: 4vh 1rem;
+  /* minmax(0, 1fr): sin esto, la única columna implícita del grid se auto-
+     dimensiona al max-content del modal (su max-width, p.ej. 520px en
+     Sistema), IGNORANDO el ancho real del viewport — en mobile el modal
+     terminaba más ancho que la pantalla y el texto quedaba cortado fuera de
+     vista en vez de achicarse. El minmax(0, ...) fuerza al track a respetar
+     el contenedor; el modal entonces se achica al viewport y su contenido
+     (p.ej. .hp-row en Salud) hace wrap normalmente. */
+  grid-template-columns: minmax(0, 1fr);
   animation: dlg-in .15s ease;
 }
 @keyframes dlg-in { from { opacity: 0; } to { opacity: 1; } }

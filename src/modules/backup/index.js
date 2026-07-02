@@ -15,6 +15,17 @@
 //   POST /api/backup/create           -> { ok, backup }
 //   POST /api/backup/restore {id}     -> { ok, restarting: true }
 //   POST /api/backup/delete  {id}     -> { ok }
+//
+// Push a GitHub — ADEMÁS del commit+push, cada push exitoso:
+//   1. Actualiza la sección "## Changelog" de README.md (marcadores
+//      <!-- cwc:changelog:start/end -->) con una entrada EN INGLÉS de lo
+//      cambiado desde la última versión pusheada (commits locales aún no
+//      subidos + los archivos recién stageados). Si no hay nada nuevo que
+//      contar, el README NO se toca (sin entradas vacías).
+//   2. Intenta (best-effort, vía `gh repo edit`) dejar la descripción del
+//      repo en GitHub sincronizada con GITHUB_DESCRIPTION (inglés, resume
+//      toda la consola + sus módulos). Si falta `gh`/auth/red, NO rompe el
+//      push (que ya ocurrió) — solo se informa en la respuesta.
 import express from 'express';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -74,6 +85,91 @@ async function securityGuards() {
     if (ig.code !== 0) return { ok: false, error: `"${p}" existe pero NO está en .gitignore. Push BLOQUEADO.` };
   }
   return { ok: true, url };
+}
+
+// ===== Changelog en inglés (README.md) + descripción del repo en GitHub =====
+const README_PATH = path.join(PROJECT_DIR, 'README.md');
+const CHANGELOG_START = '<!-- cwc:changelog:start -->';
+const CHANGELOG_END = '<!-- cwc:changelog:end -->';
+const MAX_CHANGELOG_ENTRIES = 60; // no-silent-cap: si se recorta, se anota en el propio README
+
+// Resume TODA la consola + sus módulos, en inglés (la reafirmamos en cada
+// push por si alguien la borró/editó a mano desde GitHub).
+const GITHUB_DESCRIPTION = 'Personal web console for driving Claude Code from any browser (incl. phone) over ZeroTier: tmux-backed terminals, native Agent SDK chat, ticket triage, automated bugfix-to-PR workflow, backups, and admin/health dashboards.';
+
+function ghCmd(args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile('gh', args, { timeout: opts.timeout || 20000 }, (err, out, stderr) => {
+      resolve({ code: err ? (err.code ?? 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
+    });
+  });
+}
+
+function ownerRepoFromUrl(url) {
+  const m = String(url || '').match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+// "M\tpath", "A\tpath", "D\tpath", "R100\told\tnew" (salida de --name-status).
+function describeFileStatus(line) {
+  const [code, ...rest] = line.split('\t');
+  const letter = (code || '')[0];
+  const label = { A: 'Added', M: 'Modified', D: 'Deleted', R: 'Renamed', C: 'Copied' }[letter] || 'Changed';
+  if ((letter === 'R' || letter === 'C') && rest.length > 1) return `${label} \`${rest[0]}\` → \`${rest[1]}\``;
+  return `${label} \`${rest[0] || ''}\``;
+}
+
+function changelogTimestamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// Construye UNA entrada de changelog ("### fecha — branch" + bullets). Si no
+// hay nada que contar (nada nuevo desde la última versión pusheada),
+// devuelve null y el README no se toca.
+function buildChangelogEntry({ branch, priorSubjects, fileStatuses, initial }) {
+  const bullets = [];
+  if (initial) bullets.push('Initial published version.');
+  bullets.push(...priorSubjects, ...fileStatuses);
+  if (!bullets.length) return null;
+  return [`### ${changelogTimestamp()} — ${branch}`, ...bullets.map((b) => `- ${b}`)].join('\n');
+}
+
+// Inserta `entryText` como la entrada MÁS NUEVA dentro de los marcadores
+// cwc:changelog en README.md. No falla el push si el README no existe o no
+// tiene los marcadores (proyecto sin ese archivo) — simplemente no actualiza.
+function updateReadmeChangelog(entryText) {
+  if (!entryText || !fs.existsSync(README_PATH)) return false;
+  const src = fs.readFileSync(README_PATH, 'utf8');
+  const si = src.indexOf(CHANGELOG_START);
+  const ei = src.indexOf(CHANGELOG_END);
+  if (si === -1 || ei === -1 || ei < si) return false;
+
+  const before = src.slice(0, si + CHANGELOG_START.length);
+  const after = src.slice(ei);
+  const existing = src.slice(si + CHANGELOG_START.length, ei).trim();
+  const entries = existing ? existing.split(/\n(?=### )/).map((e) => e.trim()).filter(Boolean) : [];
+  entries.unshift(entryText.trim());
+
+  let trimmedNote = '';
+  let kept = entries;
+  if (entries.length > MAX_CHANGELOG_ENTRIES) {
+    kept = entries.slice(0, MAX_CHANGELOG_ENTRIES);
+    trimmedNote = '\n\n_(older entries trimmed — see `git log` for the full history)_';
+  }
+  fs.writeFileSync(README_PATH, `${before}\n\n${kept.join('\n\n')}${trimmedNote}\n\n${after}`);
+  return true;
+}
+
+// Best-effort: deja la descripción del repo en GitHub sincronizada. Nunca
+// bloquea el push (que ya ocurrió cuando se llama esto).
+async function updateGithubDescription(remoteUrl) {
+  const slug = ownerRepoFromUrl(remoteUrl);
+  if (!slug) return { ok: false, skipped: 'no se pudo derivar owner/repo del remote' };
+  const r = await ghCmd(['repo', 'edit', slug, '--description', GITHUB_DESCRIPTION]);
+  if (r.code !== 0) return { ok: false, skipped: r.stderr || r.out || '"gh" no disponible o sin auth' };
+  return { ok: true };
 }
 
 function requireAdmin(req, res, next) {
@@ -222,9 +318,33 @@ export default {
         // Los untracked NO se suben (evita filtrar un secreto nuevo sin ignorar).
         const untrackedSkipped = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
 
+        // "última versión" = lo que el remote YA tiene, ANTES de este push
+        // (si el branch remoto todavía no existe, es el primer push).
+        const beforeRefRes = await git(['rev-parse', `${REMOTE}/${branch}`]);
+        const beforeRef = beforeRefRes.code === 0 ? beforeRefRes.out : null;
+
         // Commit seguro: SOLO archivos ya trackeados (add -u), nunca untracked.
         await git(['add', '-u']);
-        const staged = lines((await git(['diff', '--cached', '--name-only'])).out);
+        let staged = lines((await git(['diff', '--cached', '--name-only'])).out);
+
+        // Changelog EN INGLÉS en README.md: commits locales hechos pero aún
+        // no pusheados + los archivos recién stageados en este push. Si no
+        // hay nada nuevo que contar, el README no se toca (sin entradas vacías).
+        const priorSubjects = beforeRef
+          ? lines((await git(['log', '--reverse', '--format=%s', `${beforeRef}..HEAD`])).out)
+          : [];
+        const fileStatuses = staged.length
+          ? lines((await git(['diff', '--cached', '--name-status'])).out)
+              .filter((l) => !l.endsWith('README.md'))
+              .map(describeFileStatus)
+          : [];
+        const entry = buildChangelogEntry({ branch, priorSubjects, fileStatuses, initial: !beforeRef });
+        const changelogUpdated = entry ? updateReadmeChangelog(entry) : false;
+        if (changelogUpdated) {
+          await git(['add', 'README.md']);
+          staged = lines((await git(['diff', '--cached', '--name-only'])).out);
+        }
+
         let committed = null;
         if (staged.length) {
           const c = await git(['commit', '-m', `cwc backup ${stamp()}`]);
@@ -236,9 +356,14 @@ export default {
         const p = await git(['push', REMOTE, `HEAD:${branch}`], { timeout: 120000 });
         if (p.code !== 0) return res.status(500).json({ error: `Falló el push: ${p.stderr || p.out || 'error de git'}` });
 
+        // Descripción del repo en GitHub: best-effort, NO rompe el push si falla.
+        const description = await updateGithubDescription(g.url);
+
         res.json({
           ok: true, branch, remoteUrl: g.url, committed, staged,
           untrackedSkipped,
+          changelogUpdated,
+          description,
           output: (p.stderr || p.out || '').slice(0, 600),
         });
       } catch {

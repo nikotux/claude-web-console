@@ -206,6 +206,9 @@ export function mountBackupPanel(el, ctx) {
         if (data.committed) parts.push(`commit ${data.committed}`);
         parts.push('push OK');
         if (data.untrackedSkipped?.length) parts.push(`${data.untrackedSkipped.length} sin trackear omitidos`);
+        if (data.changelogUpdated) parts.push('changelog actualizado');
+        if (data.description?.ok) parts.push('descripción de GitHub actualizada');
+        else if (data.description?.skipped) parts.push(`descripción sin actualizar (${data.description.skipped})`);
         setGMsg(parts.join(' · '), 'ok');
         loadGit();
       } catch (e) {

@@ -169,6 +169,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
   usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;
   revisarlo antes de dar acceso a usuarios de menor confianza.
+- `.dlg-overlay` (ui/dialog.js) NECESITA `grid-template-columns: minmax(0, 1fr)`.
+  Sin eso, la columna implícita del grid se auto-dimensiona al max-content del
+  `.dlg-card` (su `max-width` en px, p.ej. 520 en el modal Sistema) IGNORANDO
+  el ancho real del viewport: en mobile el modal terminaba más ancho que la
+  pantalla y el texto (p.ej. `.hp-row` de la pestaña Salud) quedaba cortado
+  fuera de vista en vez de achicarse/wrappear. Bug reportado por el usuario
+  como "en el celular los menús de sistema no se redimensionan y el texto
+  aparece cortado" — verificado y corregido con Playwright móvil (375px).
+  Si se toca `.dlg-overlay`/`.dlg-card` de nuevo, no sacar ese
+  `grid-template-columns` sin volver a probar en un viewport angosto.
+- `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
+  reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
+  de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
 
 ## Proceso de cambio (seguirlo SIEMPRE)
 
