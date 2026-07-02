@@ -135,7 +135,7 @@ html, body { margin: 0; height: 100%; }
 .fm-pv-img { max-width: 100%; max-height: 82vh; object-fit: contain; border-radius: var(--cwc-radius-sm); }
 .fm-pv-media { max-width: 100%; max-height: 82vh; border-radius: var(--cwc-radius-sm); }
 .fm-pv-audio { width: min(90%, 500px); }
-.fm-pv-frame { width: 100%; height: 82vh; border: 0; background: #fff; border-radius: var(--cwc-radius-sm); }
+.fm-pv-frame { width: 100%; height: 82vh; border: 0; background: var(--cwc-white); border-radius: var(--cwc-radius-sm); }
 .fm-pv-text {
   align-self: stretch; margin: 0; white-space: pre; overflow: auto; width: 100%;
   font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm);
@@ -158,7 +158,7 @@ html, body { margin: 0; height: 100%; }
 }
 .fm-ctx button:hover { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
 .fm-ctx button.danger { color: var(--cwc-danger-strong); }
-.fm-ctx button.danger:hover { background: var(--cwc-danger-strong); color: #fff; }
+.fm-ctx button.danger:hover { background: var(--cwc-danger-strong); color: var(--cwc-white); }
 
 /* ===== Móvil ===== */
 @media (max-width: 640px) {

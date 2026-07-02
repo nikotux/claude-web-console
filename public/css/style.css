@@ -657,6 +657,43 @@ html, body {
   display: flex; gap: .4rem; align-items: flex-end;
   padding: .5rem .7rem calc(.5rem + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--cwc-border); background: var(--cwc-bg-panel);
+  position: relative; /* ancla del popup de comandos slash */
+}
+
+/* ===== Autocompletado de comandos slash (Fase 8) ===== */
+/* Anclado sobre el input: #app ya sigue a visualViewport, así que el popup
+   queda arriba del teclado virtual sin cálculo extra. */
+.chat-slash-pop {
+  position: absolute; left: .5rem; right: .5rem; bottom: calc(100% + 6px);
+  z-index: 40; padding: 4px; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md); box-shadow: var(--cwc-shadow-md);
+  display: flex; flex-direction: column; gap: 2px; animation: dlg-card-in .12s ease;
+}
+.chat-slash-item {
+  display: flex; align-items: baseline; gap: .6rem; width: 100%;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  padding: .4rem .55rem; border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text); font-size: var(--cwc-fs-sm);
+}
+.chat-slash-item .csi-name { font-family: var(--cwc-font-mono); white-space: nowrap; flex: none; }
+.chat-slash-item .csi-desc {
+  color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-slash-item:hover { background: var(--cwc-bg-hover); }
+.chat-slash-item.active { background: color-mix(in srgb, var(--cwc-accent) 22%, transparent); }
+.chat-slash-item.active .csi-name { color: var(--cwc-accent); }
+.chat-slash-empty { padding: .5rem .6rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); }
+@media (pointer: coarse) { .chat-slash-item { min-height: 44px; align-items: center; } }
+
+/* Chip del comando en la burbuja enviada (como la línea resaltada de la TUI). */
+.chat-cmd-chip {
+  display: inline-block; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm);
+  color: var(--cwc-accent);
+  background: color-mix(in srgb, var(--cwc-accent) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent) 45%, transparent);
+  border-radius: var(--cwc-radius-sm); padding: 0 .35rem; margin-right: .35rem;
 }
 .chat-input {
   flex: 1; min-width: 0; resize: none; max-height: 140px;

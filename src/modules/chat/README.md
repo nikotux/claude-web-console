@@ -42,6 +42,23 @@ autónoma (aparte de la invocación manual con `/comando`).
 - Un comando se envía como texto normal que empieza con `/` — ningún punto de
   la cadena (input → WS → runner → SDK) filtra ni escapa la barra.
 
+## Autocompletado (frontend, Fase 8 · parte 2)
+
+- `chat-tab.js`: al escribir `/` como primer carácter se abre el popup
+  (`.chat-slash-pop`, `dismissablePopup` de ui/popup.js) anclado sobre el
+  composer — `#app` sigue a `visualViewport`, así que queda sobre el teclado
+  virtual sin cálculo extra. Filtro en vivo (prefijo primero, subcadena
+  después), `↑↓`+`Enter`/`Tab` insertan (`/comando ` con espacio; nunca envía
+  solo), `Esc` cierra sin reabrir hasta que cambie el texto.
+- El server enriquece los nombres del init con el `description:` del
+  frontmatter de los `SKILL.md` (solo lectura) y cachea la lista POR CWD en
+  memoria: un chat nuevo en un cwd ya visto tiene lista antes de su primer
+  init; si no, el popup muestra "cargando comandos…".
+- Mensajes que empiezan con `/comando` se pintan con chip destacado
+  (`.chat-cmd-chip`) — solo presentación, el texto viaja intacto.
+- Móvil: botón `/` en la auxbar (`insertSlash()` en el chat; `/` literal en
+  una terminal); filas ≥44px en punteros gruesos.
+
 ## Contraste con las corridas headless (tickets/salud)
 
 Las corridas headless usan `settingSourcesFor('headless')` =

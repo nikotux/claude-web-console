@@ -18,7 +18,7 @@ export function dismissablePopup(el, { onDismiss } = {}) {
     done = true;
     document.removeEventListener('pointerdown', onPointer, true);
     document.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('scroll', dismiss, true);
+    window.removeEventListener('scroll', onScroll, true);
     window.removeEventListener('blur', dismiss);
     window.removeEventListener('resize', dismiss);
     onDismiss?.();
@@ -26,12 +26,15 @@ export function dismissablePopup(el, { onDismiss } = {}) {
 
   function onPointer(e) { if (!el.contains(e.target)) dismiss(); }
   function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); dismiss(); } }
+  // Scroll DENTRO del popup (una lista larga, p.ej. el autocompletado de
+  // comandos) no es "irme de acá": solo cierra el scroll de afuera.
+  function onScroll(e) { if (!el.contains(e.target)) dismiss(); }
 
   // Diferimos el alta del pointerdown para no capturar el MISMO gesto que abrió
   // el popup (el pointerdown del click/contextmenu que lo disparó).
   setTimeout(() => { if (!done) document.addEventListener('pointerdown', onPointer, true); }, 0);
   document.addEventListener('keydown', onKey, true);        // captura: cierra antes que otros Esc
-  window.addEventListener('scroll', dismiss, true);         // captura: cualquier scroll, no solo el de window
+  window.addEventListener('scroll', onScroll, true);        // captura: cualquier scroll, no solo el de window
   window.addEventListener('blur', dismiss);
   window.addEventListener('resize', dismiss);
 

@@ -18,6 +18,7 @@ export function initAuxBar({ getActiveTab }) {
   const handle = document.getElementById('aux-handle');
   const keys = document.getElementById('auxkeys');
   const ctrlBtn = document.getElementById('aux-ctrl');
+  const slashBtn = document.getElementById('aux-slash');
   const pasteBtn = document.getElementById('aux-paste');
   const dictateBtn = document.getElementById('aux-dictate');
   const dictation = document.getElementById('dictation');
@@ -62,6 +63,14 @@ export function initAuxBar({ getActiveTab }) {
     }
   }
   ctrlBtn.addEventListener('click', () => { setCtrl(!ctrlArmed); refocus(); });
+
+  // "/" (Fase 8): en un chat abre el autocompletado de comandos; en una
+  // terminal simplemente tipea la barra.
+  slashBtn.addEventListener('click', () => {
+    const tab = getActiveTab();
+    if (tab?.insertSlash) tab.insertSlash();
+    else { send('/'); refocus(); }
+  });
 
   // Pegar del portapapeles.
   pasteBtn.addEventListener('click', async () => {

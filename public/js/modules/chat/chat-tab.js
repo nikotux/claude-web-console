@@ -7,6 +7,10 @@
 import { icon } from '../../ui/icons.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
+import { dismissablePopup } from '../../ui/popup.js';
+
+// Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
+const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
 
 const MODES = [
   ['default', 'Preguntar'],
@@ -28,6 +32,13 @@ export class ChatTab {
     this.closedByUser = false;
     this.streamEl = null;   // burbuja del asistente en streaming
     this.totalCost = 0;
+    this.slashCommands = [];      // [{name, description|null}] del meta/attach
+    this._metaSeen = false;       // ¿ya llegó el init de ESTA conversación?
+    this._slashPop = null;        // popup de autocompletado abierto
+    this._slashDismiss = null;    // teardown del dismissablePopup activo
+    this._slashActive = 0;        // índice de la fila activa (↑↓)
+    this._slashItems = [];        // filas visibles tras el filtro
+    this._slashSuppressed = null; // texto con el que se cerró con Esc (no reabrir)
 
     container.classList.add('chat-pane-host');
     container.innerHTML = `
@@ -62,16 +73,150 @@ export class ChatTab {
     this.toggleBtn.addEventListener('click', () => this.onToggleMode?.());
     this.modeEl.addEventListener('change', () => this._send({ type: 'set_mode', mode: this.modeEl.value }));
     this.inputEl.addEventListener('keydown', (e) => {
+      if (this._slashKeydown(e)) return; // el autocompletado consumió la tecla
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this._submit();
       }
     });
-    // Autogrow del textarea (hasta ~6 líneas).
+    // Autogrow del textarea (hasta ~6 líneas) + autocompletado de comandos.
     this.inputEl.addEventListener('input', () => {
       this.inputEl.style.height = 'auto';
       this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`;
+      this._slashUpdate();
     });
+  }
+
+  // ===== Autocompletado de comandos slash (Fase 8) =====
+  // Query activa: el input empieza con '/' y todavía no hay espacio (se está
+  // tipeando el comando). null = el popup no corresponde.
+  _slashQuery() {
+    const v = this.inputEl.value;
+    if (!v.startsWith('/')) { this._slashSuppressed = null; return null; }
+    if (this._slashSuppressed === v) return null; // cerrado con Esc: no reabrir igual
+    const token = v.slice(1);
+    if (/\s/.test(token)) return null; // comando completo + argumentos
+    return token.toLowerCase();
+  }
+
+  _slashUpdate() {
+    const q = this._slashQuery();
+    if (q == null) { this._slashClose(); return; }
+    if (!this._slashPop) this._slashOpen();
+    this._slashRender(q);
+  }
+
+  _slashOpen() {
+    const pop = document.createElement('div');
+    pop.className = 'chat-slash-pop';
+    // Los taps en las filas no deben robar el foco del input (teclado abierto).
+    pop.addEventListener('mousedown', (e) => e.preventDefault());
+    this.container.querySelector('.chat-composer').appendChild(pop);
+    this._slashPop = pop;
+    this._slashDismiss = dismissablePopup(pop, {
+      onDismiss: () => {
+        // Cierre externo (Esc/tap afuera): no reabrir hasta que cambie el texto.
+        if (this._slashPop === pop) {
+          this._slashSuppressed = this.inputEl.value;
+          this._slashPop = null;
+          this._slashDismiss = null;
+        }
+        pop.remove();
+      },
+    });
+    this._slashFit();
+  }
+
+  _slashClose() {
+    if (!this._slashDismiss) return;
+    const dismiss = this._slashDismiss;
+    this._slashPop = null;
+    this._slashDismiss = null;
+    dismiss(); // el onDismiss ve _slashPop !== pop y no marca suppressed
+  }
+
+  // Que la lista nunca tape el header: alto máximo = espacio libre sobre el
+  // composer (el #app ya sigue a visualViewport, así que esto respeta teclado).
+  _slashFit() {
+    if (!this._slashPop) return;
+    const top = this.container.querySelector('.chat-composer').getBoundingClientRect().top;
+    this._slashPop.style.maxHeight = `${Math.max(96, Math.min(320, top - 16))}px`;
+  }
+
+  _slashRender(q) {
+    const pop = this._slashPop;
+    if (!pop) return;
+    const all = this.slashCommands;
+    // Prefijo primero, subcadena después (sin duplicar).
+    const pre = all.filter((c) => c.name.toLowerCase().startsWith(q));
+    const sub = q ? all.filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q)) : [];
+    this._slashItems = [...pre, ...sub];
+    this._slashActive = Math.min(this._slashActive, Math.max(0, this._slashItems.length - 1));
+    pop.replaceChildren();
+    if (!this._slashItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-slash-empty';
+      empty.textContent = !all.length
+        ? (this._metaSeen ? 'Esta conversación no expone comandos.' : 'Cargando comandos… (llegan con el primer mensaje)')
+        : 'Sin coincidencias.';
+      pop.appendChild(empty);
+      return;
+    }
+    this._slashItems.forEach((c, i) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'chat-slash-item' + (i === this._slashActive ? ' active' : '');
+      const name = document.createElement('span');
+      name.className = 'csi-name';
+      name.textContent = `/${c.name}`;
+      row.appendChild(name);
+      if (c.description) {
+        const desc = document.createElement('span');
+        desc.className = 'csi-desc';
+        desc.textContent = c.description;
+        row.appendChild(desc);
+      }
+      row.addEventListener('click', () => this._slashPick(c));
+      pop.appendChild(row);
+    });
+    this._slashFit();
+  }
+
+  _slashPick(c) {
+    this._slashClose();
+    this._slashSuppressed = null;
+    this.inputEl.value = `/${c.name} `;
+    this.inputEl.focus();
+    this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
+  }
+
+  // Teclas mientras el popup está abierto. Devuelve true si la consumió.
+  // (Esc lo maneja dismissablePopup en captura; acá ni llega.)
+  _slashKeydown(e) {
+    if (!this._slashPop || !this._slashItems.length) return false;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const n = this._slashItems.length;
+      this._slashActive = (this._slashActive + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      const rows = this._slashPop.querySelectorAll('.chat-slash-item');
+      rows.forEach((r, i) => r.classList.toggle('active', i === this._slashActive));
+      rows[this._slashActive]?.scrollIntoView({ block: 'nearest' });
+      return true;
+    }
+    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+      e.preventDefault();
+      this._slashPick(this._slashItems[this._slashActive]);
+      return true;
+    }
+    return false;
+  }
+
+  // Botón "/" de la barra auxiliar (móvil): antepone la barra y abre el popup.
+  insertSlash() {
+    if (!this.inputEl.value.startsWith('/')) this.inputEl.value = `/${this.inputEl.value}`;
+    this._slashSuppressed = null;
+    this.inputEl.focus();
+    this._slashUpdate();
   }
 
   connect() {
@@ -101,6 +246,8 @@ export class ChatTab {
   _submit() {
     const text = this.inputEl.value.trim();
     if (!text) return;
+    this._slashClose();
+    this._slashSuppressed = null;
     this._send({ type: 'user', text });
     this.inputEl.value = '';
     this.inputEl.style.height = 'auto';
@@ -118,9 +265,16 @@ export class ChatTab {
         this.msgsEl.innerHTML = '';
         this.streamEl = null;
         this.totalCost = 0;
+        // Puede venir de la caché por cwd del server (init aún pendiente).
+        if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
         for (const ev of m.events) this._onEvent(ev);
         if (m.mode) this.modeEl.value = m.mode;
         this._setWorking(m.status === 'working');
+        break;
+      case 'meta':
+        this.slashCommands = Array.isArray(m.slashCommands) ? m.slashCommands : [];
+        this._metaSeen = true;
+        if (this._slashPop) this._slashUpdate(); // refresco en vivo si está abierto
         break;
       case 'user': this._closeStream(); this._bubble('user', m.text); break;
       case 'assistant': this._assistantFinal(m.text); break;
@@ -162,7 +316,18 @@ export class ChatTab {
   _bubble(kind, text) {
     const el = document.createElement('div');
     el.className = `chat-msg chat-${kind}`;
-    el.textContent = text;
+    // Mensaje que empieza con /comando: chip destacado + resto normal (solo
+    // presentación; el texto viajó intacto al SDK). Aplica también al replay.
+    const cmd = kind === 'user' ? String(text).match(CMD_RE) : null;
+    if (cmd) {
+      const chip = document.createElement('span');
+      chip.className = 'chat-cmd-chip';
+      chip.textContent = cmd[1];
+      el.appendChild(chip);
+      if (cmd[2]) el.appendChild(document.createTextNode(cmd[2]));
+    } else {
+      el.textContent = text;
+    }
     this.msgsEl.appendChild(el);
     this._scroll();
     return el;
@@ -303,6 +468,7 @@ export class ChatTab {
 
   dispose() {
     this.closedByUser = true;
+    this._slashClose();
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }
   }

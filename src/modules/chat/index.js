@@ -17,7 +17,8 @@
 //         {type:'tool_use', name, summary} · {type:'result', costUsd, usage, ms}
 //         {type:'permission_request', id, tool, input} · {type:'status', state}
 //         {type:'mode', mode} · {type:'error', message} · {type:'closed'}
-//         {type:'meta', slashCommands} (Fase 8: comandos disponibles del init)
+//         {type:'meta', slashCommands:[{name,description|null}]} (Fase 8:
+//          comandos del init, enriquecidos con el frontmatter de los SKILL.md)
 import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
@@ -47,6 +48,43 @@ const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 
 // Anti traversal: resuelve contra el home y cae a él si escapa (core/paths.js).
 const safeCwd = clampToHome;
+
+// ===== Comandos slash (Fase 8) =====
+// El system/init del SDK llega recién con el PRIMER mensaje de cada
+// conversación. Esta caché por cwd (en memoria; se repuebla con el primer
+// turno tras un reinicio) permite que un chat nuevo en un cwd ya visto tenga
+// la lista al instante en el attach.
+const slashByCwd = new Map();
+const SKILL_NAME_RE = /^[a-z0-9_-]+$/i; // solo nombres saneados van a disco
+
+// description: del frontmatter de un SKILL.md (una línea plana; los bloques
+// YAML multilínea quedan sin descripción, no vale la pena parsear YAML acá).
+function skillDescription(file) {
+  try {
+    const head = fss.readFileSync(file, 'utf8').slice(0, 2000);
+    const fm = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const m = fm && fm[1].match(/^description:[ \t]*(.+)$/m);
+    if (!m) return null;
+    return m[1].trim().replace(/^["']|["']$/g, '').slice(0, 160) || null;
+  } catch { return null; }
+}
+
+// Nombres crudos del init -> [{name, description|null}]. Lee (SOLO lectura)
+// los SKILL.md del proyecto del cwd y del usuario; los built-ins del CLI no
+// tienen archivo y quedan sin descripción.
+function enrichSlashCommands(cwd, names) {
+  return (Array.isArray(names) ? names : []).slice(0, 200).map((n) => {
+    const name = String(n).slice(0, 80);
+    let description = null;
+    if (SKILL_NAME_RE.test(name)) {
+      for (const base of [path.join(cwd, '.claude', 'skills'), path.join(os.homedir(), '.claude', 'skills')]) {
+        description = skillDescription(path.join(base, name, 'SKILL.md'));
+        if (description) break;
+      }
+    }
+    return { name, description };
+  });
+}
 
 // ===== Adopción TUI(tmux) -> Chat =====
 // Comando en primer plano del pane de una sesión tmux nuestra.
@@ -210,10 +248,12 @@ class Chat {
         this._broadcast(e); // deltas NO van al history
         return;
       case 'meta':
-        // Comandos slash disponibles (Fase 8). No va al history: los clientes
-        // nuevos lo reciben en el payload del attach.
-        this.slashCommands = Array.isArray(e.slashCommands) ? e.slashCommands : [];
-        this._broadcast(e);
+        // Comandos slash disponibles (Fase 8). El runner manda nombres crudos;
+        // acá se enriquecen con descripciones y se cachean por cwd. No va al
+        // history: los clientes nuevos lo reciben en el payload del attach.
+        this.slashCommands = enrichSlashCommands(this.cwd, e.slashCommands);
+        slashByCwd.set(this.cwd, this.slashCommands);
+        this._broadcast({ type: 'meta', slashCommands: this.slashCommands });
         return;
       case 'status':
         this._setStatus(e.state);
@@ -338,7 +378,7 @@ class Chat {
     // Reenviar el history recargado + anunciar el nuevo modo.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this.slashCommands }));
+        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this._slashList() }));
       }
     }
     this._broadcast({ type: 'viewmode', viewMode: 'chat' });
@@ -413,12 +453,18 @@ class Chat {
     }
   }
 
+  // Lista propia si el init ya llegó; si no, la caché del cwd (otro chat en la
+  // misma carpeta ya la pobló). Vacía = el front muestra "cargando comandos…".
+  _slashList() {
+    return this.slashCommands.length ? this.slashCommands : (slashByCwd.get(this.cwd) || []);
+  }
+
   attach(ws) {
     this.lastActivity = Date.now(); // abrir la vista cuenta como actividad
     this.clients.add(ws);
     ws.send(JSON.stringify({
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
-      viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this.slashCommands,
+      viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
     }));
   }
 
@@ -526,7 +572,10 @@ class ChatManager {
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null);
           chat.history = [...base, ...(hello.events || [])].slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
-          if (Array.isArray(hello.slashCommands)) chat.slashCommands = hello.slashCommands;
+          if (Array.isArray(hello.slashCommands) && hello.slashCommands.length) {
+            chat.slashCommands = enrichSlashCommands(chat.cwd, hello.slashCommands);
+            slashByCwd.set(chat.cwd, chat.slashCommands);
+          }
           chat._adoptLink(link);
           console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
         } else {
