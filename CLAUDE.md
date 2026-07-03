@@ -13,9 +13,10 @@ código.
 2. **Resiliencia:** ninguna operación en curso puede quedar atada al ciclo de
    vida del proceso Node. Terminales → tmux (socket `cwc`); vistas TUI de
    conversaciones → tmux oculta (`cwct-`); motores de chat → runner desacoplado
-   (`bin/cwc-chat-runner.js`). La unidad systemd usa `KillMode=process` — no lo
-   quites: con el default (control-group) un crash del Node mataría el tmux y
-   los runners.
+   (`bin/cwc-chat-runner.js`); triage de bugs → runner desacoplado
+   (`bin/cwc-triage-runner.js`). La unidad systemd usa `KillMode=process` — no
+   lo quites: con el default (control-group) un crash del Node mataría el tmux
+   y los runners.
 3. **Todo local:** sin instalaciones npm globales; dependencias solo en
    `package.json` del proyecto.
 4. **No tocar archivos fuera del proyecto** salvo los runtime documentados
@@ -96,7 +97,19 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             chat.model para el próximo spawnRunner. Antes solo existía para
                             sesiones tmux (`/model` tipeado a la TUI) — ahora el menú ⋯ de una
                             conversación en Sesiones también tiene "Cambiar modelo".
-  files/ stats/ tmux/ admin/ tickets/ health/
+  files/ stats/ tmux/ admin/ health/
+  tickets/                  triage de bugs BAJO DEMANDA (consume tokens; admin). La corrida
+                            vive en un RUNNER DETACHED (bin/cwc-triage-runner.js, patrón
+                            chat-runner): un reinicio del server a mitad de triage NO la mata
+                            (ese era el bug de "no se pudo correr el triage" — la consola se
+                            reinicia seguido por deploys/push/pull). Interfaz server<->runner
+                            en shared.js: tickets.json (resultado) + triage.lock (heartbeat
+                            {pid,ts} => `running`; lock viejo = runner muerto, relanzable).
+                            POST /refresh responde INMEDIATO (arrancar+encuestar, patrón
+                            health/review — un POST de 1-3 min se cortaba en red móvil); el
+                            front encuesta GET cada 3 s y si la corrida se pierde re-dispara
+                            solo (hasta 3 intentos con 3 s de espera). La seguridad read-only
+                            de dos capas (regla 6) vive EN el runner.
   tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
                             por mtime+size) + límites del PLAN (GET /api/tokens/limits:
                             % usado y reset de las ventanas de claude.ai — sesión 5 h /
@@ -222,6 +235,7 @@ public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de ac�
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden]
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
+bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos)
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
 docs/                       frontend-modules.md · brief-original.txt · contexto-ui.md (histórico)
@@ -377,6 +391,29 @@ docs/                       frontend-modules.md · brief-original.txt · context
   archivo: un jsonl multi-modelo "refresca" a todos sus modelos); el
   desplegable de cada modelo son los 3 proyectos que lo usaron más
   recientemente, ordenados de mayor a menor uso de ese modelo.
+- Splash de arranque (`#boot-splash`, index.html): overlay con el Pac-Man
+  compartido que cubre desde el primer paint hasta el fin del boot. Tres
+  piezas coordinadas: (1) markup ESTÁTICO en index.html que espeja
+  ui/pacman.js — no puede usar el helper porque existe antes de cargar
+  cualquier módulo JS; si se cambia pacman.js, actualizar también el HTML —
+  con `window.__bootHide` + timeouts (aviso 8 s, forzado 12 s) definidos
+  INLINE como red de seguridad que corre aunque main.js nunca cargue;
+  (2) CSS en style.css (z-index 300, sobre modales 200/popups 210; usa las
+  clases .cwc-pacman de ui.css — seguro al primer paint porque los <link>
+  de CSS son render-blocking); (3) main.js escribe textos de progreso
+  reales en #boot-msg (bootMsg) y desmonta con __bootHide en el `finally`
+  del IIFE de arranque. La barra de progreso (#boot-bar + window.__bootPct)
+  salta por HITOS REALES, no por timer: 10 HTML+CSS pintados · 15 vendors
+  del <head> bajados (script inline) · 35 módulos montados · 60 sesiones
+  listadas · 80 esperando historial del chat activo · 100 al destapar; la
+  transición CSS de width interpola entre hitos. Si se agrega una fase al
+  boot, asignarle su hito acá y en bootMsg(texto, pct). Antes de destapar, si el tab ACTIVO es un chat, el
+  boot espera `tab.ready` (promesa del ChatTab resuelta al terminar de
+  procesar el PRIMER evento `history` del attach — señal real de "historial
+  renderizado", no un timer) con tope de 8 s: sin eso el chat aparecía
+  vacío unos segundos tras caer el splash. No agrega velocidad real: es
+  percepción; la espera del HTML inicial solo la mejora cache/compresión
+  (pendiente).
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.

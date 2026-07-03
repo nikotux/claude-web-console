@@ -56,11 +56,44 @@ export default {
         : (cache.updatedAt ? `Sin bugs abiertos · ${fmtAgo(cache.updatedAt)}` : 'Sin datos · corré el triage');
     }
 
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const POLL_MS = 3000;
+    const MAX_ATTEMPTS = 3;
+
+    async function fetchStatus() {
+      return (await fetch('/api/tickets')).json();
+    }
+
+    // Espera el FIN del triage encuestando el estado cada 3 s. Aguanta cortes
+    // de red (fetch fallido = seguir esperando: la corrida vive en el server,
+    // no en este fetch) y reinicios del server (vuelve a contestar y se sigue).
+    async function waitForRun() {
+      for (;;) {
+        await sleep(POLL_MS);
+        let st;
+        try { st = await fetchStatus(); } catch { continue; } // red caída: reintentar el poll
+        if (!st.running) return st;
+      }
+    }
+
     async function load() {
-      try { cache = await (await fetch('/api/tickets')).json(); } catch { /* noop */ }
+      try { cache = await fetchStatus(); } catch { /* noop */ }
+      // Triage ya corriendo (otro usuario/pestaña, o recarga a mitad de una
+      // corrida): reflejarlo y esperar el resultado en vez de mostrarlo quieto.
+      if (cache.running && !busy) {
+        busy = true; render();
+        cache = await waitForRun();
+        busy = false;
+      }
       render();
     }
 
+    // Corre el triage con ARRANCAR + ENCUESTAR + REINTENTO: el POST responde
+    // al instante y el resultado se espera por polling (un POST de 1–3 min se
+    // cortaba en móvil aunque el triage siguiera corriendo). Si el server se
+    // reinició a mitad de corrida (la corrida vive en el proceso Node y muere
+    // con él), se detecta —dejó de correr SIN datos nuevos ni error— y se
+    // RE-DISPARA solo, hasta 3 intentos con 3 s de espera.
     async function refresh() {
       if (busy) return;
       const ok = await dialog.confirmDialog({
@@ -70,10 +103,33 @@ export default {
       });
       if (!ok) return;
       busy = true; render();
+      const prevUpdatedAt = cache.updatedAt || null;
       try {
-        cache = await (await fetch('/api/tickets/refresh', { method: 'POST' })).json();
-      } catch {
-        cache = { ...cache, error: 'No se pudo correr el triage (red o servidor).' };
+        for (let attempt = 1; ; attempt += 1) {
+          // Disparo. Si este fetch falla (red/reinicio justo ahora) no es
+          // fatal: el poll de abajo averigua la verdad y se reintenta.
+          try {
+            const res = await fetch('/api/tickets/refresh', { method: 'POST' });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error || 'No se pudo iniciar el triage.');
+          } catch (e) {
+            if (String(e.message || '').includes('administrador')) { // 403: reintentar no ayuda
+              cache = { ...cache, error: e.message };
+              return;
+            }
+          }
+          const st = await waitForRun();
+          cache = st;
+          const finished = st.updatedAt !== prevUpdatedAt || st.error;
+          if (finished) return;
+          // Terminó sin datos nuevos NI error: la corrida se perdió (reinicio
+          // del server a mitad de triage). Reintentar con espera.
+          if (attempt >= MAX_ATTEMPTS) {
+            cache = { ...st, error: `El triage se interrumpió ${MAX_ATTEMPTS} veces (¿el servidor se está reiniciando?). Probá de nuevo en un rato.` };
+            return;
+          }
+          await sleep(3000);
+        }
       } finally {
         busy = false; render();
       }

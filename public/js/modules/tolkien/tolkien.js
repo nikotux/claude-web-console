@@ -172,6 +172,7 @@ export default {
             ${b.status === 'subido' && b.prState !== 'merged'
     ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr" title="Cierra el PR en GitHub, borra el branch remoto y devuelve el fix a pendiente para rehacerlo de cero">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>`
     : ''}
+            <button class="btn-ghost btn--sm" data-act="del" title="Borra SOLO el registro local del fix (no toca código, branches ni PRs)">${icon('close', { size: 13 })}<span>Descartar registro</span></button>
           </p>`;
       }
 
@@ -238,6 +239,14 @@ export default {
           const sid = det?.previousElementSibling?.dataset?.sid;
           const b = entries.find((x) => x.sessionId === sid);
           if (b) await doCancelPr(b, cancelBtn);
+          return;
+        }
+        const delBtn = e.target.closest('[data-act="del"]');
+        if (delBtn) {
+          const det = delBtn.closest('.bfm-detail');
+          const sid = det?.previousElementSibling?.dataset?.sid;
+          const b = entries.find((x) => x.sessionId === sid);
+          if (b) await doDiscard(b, delBtn);
           return;
         }
         if (e.target.closest('a')) return; // los links navegan, no despliegan
@@ -309,6 +318,31 @@ export default {
         } finally {
           await reload();      // el registro pudo cambiar incluso con error parcial
           ghSync(true);
+        }
+      }
+
+      // Descarta el REGISTRO local de un fix (venía de la pestaña Salud, que
+      // ya no lista bugfixes): no toca código, branches ni PRs en GitHub.
+      async function doDiscard(b, btn) {
+        const ok = await dialog.confirmDialog({
+          title: `Descartar registro — TKT #${b.ticketNumber || '?'}`,
+          message: 'Se borra SOLO el registro local del fix (no toca código, branches ni PRs en GitHub).',
+          confirmLabel: 'Descartar',
+          danger: true,
+        });
+        if (!ok) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/bugfixes/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: b.sessionId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'No se pudo descartar el registro.');
+        } catch (err) {
+          await dialog.alertDialog({ title: 'Descartar registro', message: err.message });
+        } finally {
+          await reload();
         }
       }
 
