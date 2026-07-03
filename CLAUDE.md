@@ -242,6 +242,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             real — commit de los archivos del fix, push, gh pr create con
                             reviewer cswenor). Notas del PR SIEMPRE formales: Problema /
                             Qué se hizo / ¿Mejor solución? (parseadas del cierre del chat).
+                            TICKET REABIERTO con PR ya montado = ACTUALIZAR, no duplicar:
+                            recordBugfix mergea el trabajo nuevo también en una entrada
+                            'subido' cuyo prState != 'merged' (vuelve a 'pendiente'
+                            CONSERVANDO branch/prNumber — la UI la muestra como "PR #N
+                            abierto · cambios sin subir"); pushPr verifica el estado REAL
+                            del PR con gh EN EL MOMENTO del envío: abierto → updatePr
+                            (worktree desde el branch DEL PR, commit ENCIMA, push
+                            fast-forward sin --force, gh pr edit --body + comentario
+                            avisando al reviewer — best-effort) → el MISMO PR se
+                            actualiza; mergeado/cerrado → camino de PR nuevo de siempre.
+                            Solo un merge cierra el ciclo del ticket.
                             DOS CONTEXTOS editables (GET/POST /context?kind=work|pr), ambos
                             inyectados en cada "Trabajar en Chat": 'work' (bugfix-context.md —
                             verificación previa del ticket/PRs de Chris, proceso, NO enviar PR

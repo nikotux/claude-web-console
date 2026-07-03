@@ -10,6 +10,7 @@ import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman } from '../../ui/pacman.js';
 import { openModal, confirmDialog } from '../../ui/dialog.js';
+import { fillCode, langForPath } from '../../ui/code.js';
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;

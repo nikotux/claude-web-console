@@ -121,7 +121,13 @@ export default {
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
     function prEstado(b) {
-      if (b.status !== 'subido') return { dot: 'warn', label: 'pendiente' };
+      if (b.status !== 'subido') {
+        // Pendiente CON PR: el ticket se retrabajó después de subir — el
+        // envío ACTUALIZA ese PR (mismo número), no crea uno nuevo.
+        return b.prNumber
+          ? { dot: 'warn', label: `PR #${b.prNumber} abierto · cambios sin subir` }
+          : { dot: 'warn', label: 'pendiente' };
+      }
       if (b.prState === 'merged') return { dot: 'ok', label: `mergeado por ${b.mergedBy || '?'}` };
       if (b.prState === 'closed') return { dot: 'fail', label: 'cerrado sin merge' };
       return { dot: 'warn', label: 'PR abierto (sin mergear)' };
@@ -385,7 +391,7 @@ export default {
         if (!pendientes.length) return;
         const ok = await dialog.confirmDialog({
           title: 'Enviar PR a Tolkien',
-          message: `1. Se actualiza el repo (stash → pull → stash pop).\n2. Se sube UN PR por cada fix pendiente (${pendientes.length}):\n${pendientes.map((b) => `   • TKT #${b.ticketNumber} (${b.files.length} archivo/s)`).join('\n')}\n\nSolo se toca ~/tolkien; tu árbol no cambia de branch.`,
+          message: `1. Se actualiza el repo (stash → pull → stash pop).\n2. Por cada fix pendiente (${pendientes.length}):\n${pendientes.map((b) => `   • TKT #${b.ticketNumber} (${b.files.length} archivo/s) — ${b.prNumber ? `ACTUALIZA el PR #${b.prNumber}` : 'PR nuevo'}`).join('\n')}\n\nSolo se toca ~/tolkien; tu árbol no cambia de branch.`,
           confirmLabel: `Actualizar y subir ${pendientes.length} PR(s)`,
         });
         if (!ok) return;
@@ -410,7 +416,9 @@ export default {
                 body: JSON.stringify({ id: b.sessionId }),
               });
               const data = await res.json().catch(() => ({}));
-              results.push(res.ok ? `✓ TKT #${b.ticketNumber}: ${data.prUrl || data.branch}` : `✗ TKT #${b.ticketNumber}: ${data.error || 'falló'}`);
+              results.push(res.ok
+                ? `✓ TKT #${b.ticketNumber}: ${data.updated ? 'PR ACTUALIZADO' : 'PR nuevo'} → ${data.prUrl || data.branch}`
+                : `✗ TKT #${b.ticketNumber}: ${data.error || 'falló'}`);
             } catch { results.push(`✗ TKT #${b.ticketNumber}: error de red`); }
           }
           await dialog.alertDialog({ title: 'Enviar PR — resultado', message: results.join('\n') });

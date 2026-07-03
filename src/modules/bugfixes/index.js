@@ -74,8 +74,31 @@ function compareUrl(originUrl, branch) {
   return m ? `https://github.com/${m[1]}/compare/main...${encodeURIComponent(branch)}?expand=1` : null;
 }
 
+// Estado REAL de un PR en GitHub ('open'|'merged'|'closed'); sin gh o PR
+// inaccesible devuelve el estado registrado (mismo criterio que cancelPr).
+async function realPrState(entry) {
+  let state = entry.prState || 'open';
+  if (entry.prNumber) {
+    try {
+      const s = JSON.parse(await run('gh', ['pr', 'view', String(entry.prNumber), '--json', 'state'], { cwd: config.projectDir })).state;
+      state = s === 'MERGED' ? 'merged' : s === 'CLOSED' ? 'closed' : 'open';
+    } catch { /* estado registrado */ }
+  }
+  return state;
+}
+
 async function pushPr(entry) {
   const TOLKIEN = config.projectDir;
+
+  // ¿La entrada ya tiene un PR montado? Verificar el estado REAL en GitHub
+  // ANTES de decidir: ABIERTO -> ACTUALIZAR ese PR (commit encima de su
+  // branch, sin --force, mismo número de PR — ticket reabierto no duplica
+  // PRs); MERGEADO o CERRADO -> ciclo terminado, sigue el camino de PR nuevo
+  // (branch nuevo: el sessionId del registro ya es el del chat más reciente).
+  if (entry.branch && entry.prNumber && await realPrState(entry) === 'open') {
+    return updatePr(entry);
+  }
+
   const safeNum = String(entry.ticketNumber || 'sn').replace(/[^\w.-]/g, '').slice(0, 20) || 'sn';
   const branch = `bugfix/tkt-${safeNum}-${entry.sessionId.slice(0, 8)}`;
   const wt = path.join(WT_BASE, entry.sessionId);
@@ -131,6 +154,65 @@ async function pushPr(entry) {
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {}); // el remoto ya lo tiene
+  }
+}
+
+// ACTUALIZA un PR existente (abierto): worktree desde el branch DEL PR (no
+// desde main), se copian los archivos del fix y el commit nuevo va ENCIMA
+// del historial existente — push fast-forward, jamás --force (historial
+// limpio para el reviewer). Además refresca el body del PR con las notas del
+// último cierre y deja un comentario avisando (editar el body no notifica;
+// el comentario sí). Best-effort en la parte gh: el push ya actualizó el PR.
+async function updatePr(entry) {
+  const TOLKIEN = config.projectDir;
+  const branch = entry.branch;
+  const wt = path.join(WT_BASE, entry.sessionId);
+
+  await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
+  await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {});
+
+  // Base = el branch del PR tal cual está en GitHub. Si el fetch falla, el
+  // branch remoto ya no existe (borrado a mano): mensaje claro, sin adivinar.
+  try {
+    await run('git', ['fetch', 'origin', branch], { cwd: TOLKIEN });
+  } catch {
+    throw new Error(`El branch del PR (${branch}) ya no existe en GitHub. Cancelá el PR desde el detalle y volvé a enviarlo como PR nuevo.`);
+  }
+  fss.mkdirSync(WT_BASE, { recursive: true, mode: 0o700 });
+  await run('git', ['worktree', 'add', '-B', branch, wt, `origin/${branch}`], { cwd: TOLKIEN });
+
+  try {
+    const copied = [];
+    for (const rel of entry.files) {
+      const src = path.resolve(TOLKIEN, rel);
+      const dst = path.resolve(wt, rel);
+      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) continue;
+      if (!fss.existsSync(src)) continue;
+      fss.mkdirSync(path.dirname(dst), { recursive: true });
+      fss.copyFileSync(src, dst);
+      copied.push(rel);
+    }
+    if (!copied.length) throw new Error('Ninguno de los archivos del fix existe en el árbol de Tolkien.');
+
+    await run('git', ['add', '--', ...copied], { cwd: wt });
+    const dirty = await run('git', ['status', '--porcelain'], { cwd: wt });
+    if (!dirty) throw new Error('Sin cambios nuevos respecto de lo que YA tiene el PR (¿el trabajo nuevo tocó los mismos contenidos?).');
+
+    const title = `Update TKT #${entry.ticketNumber || '?'}: ${(entry.title || '').replace(/^TKT #[\w.-]+ ?[—-]? ?/, '').slice(0, 70) || 'bugfix'}`;
+    const body = formatPrBody(entry);
+    await run('git', ['commit', '-m', `${title}\n\n${body}`], { cwd: wt });
+    // Fast-forward sobre el branch del PR: GitHub actualiza el MISMO PR.
+    await run('git', ['push', 'origin', branch], { cwd: wt });
+
+    // Notas del PR al día + aviso al reviewer (best-effort: el PR ya se actualizó).
+    await run('gh', ['pr', 'edit', String(entry.prNumber), '--body', body], { cwd: wt }).catch(() => {});
+    await run('gh', ['pr', 'comment', String(entry.prNumber), '--body',
+      'PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos (commit adicional en el branch). Notas del PR actualizadas.'], { cwd: wt }).catch(() => {});
+
+    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true };
+  } finally {
+    await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
+    await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {});
   }
 }
 
@@ -216,7 +298,7 @@ export default {
       if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una subida en curso para este fix.' });
       inFlight.add(id);
       try {
-        const { branch, prUrl, prNumber, files } = await pushPr(entry);
+        const { branch, prUrl, prNumber, files, updated } = await pushPr(entry);
         entry.status = 'subido';
         entry.branch = branch;
         entry.prUrl = prUrl;
@@ -225,7 +307,7 @@ export default {
         entry.sentAt = Date.now();
         entry.updatedAt = Date.now();
         saveBugfixes(all);
-        res.json({ ok: true, branch, prUrl, files, entry });
+        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
       } finally {

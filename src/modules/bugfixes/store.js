@@ -143,10 +143,15 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
   // Continuidad por ticket: "Trabajar en esto" abre un chat NUEVO para el
   // mismo fix — si ya hay un registro PENDIENTE de ese ticket, se actualiza
   // ESE (sessionId pasa a ser el del chat nuevo, archivos en unión) en vez de
-  // duplicar la entrada. Un 'subido' no se pisa: trabajo posterior = fix nuevo.
+  // duplicar la entrada. Un 'subido' con PR ABIERTO (prState != 'merged')
+  // también se mergea: vuelve a 'pendiente' CONSERVANDO branch/prNumber para
+  // que la subida ACTUALICE ese PR en vez de crear uno nuevo (ticket
+  // reabierto = mismo PR). Solo un PR MERGEADO cierra el ciclo: trabajo
+  // posterior a un merge = fix nuevo, entrada nueva, PR nuevo.
   const ticketNum = ticket?.number || ex.ticketNumber || null;
   const prev = all.find((b) => b.sessionId === sessionId)
-    || (ticketNum ? all.find((b) => b.status === 'pendiente' && b.ticketNumber === ticketNum) : null);
+    || (ticketNum ? all.find((b) => b.ticketNumber === ticketNum
+      && (b.status === 'pendiente' || (b.status === 'subido' && b.prState !== 'merged'))) : null);
   const entry = {
     ...(prev || {}), // conserva los campos de PR (prNumber/prState/mergedBy/sentAt…)
     sessionId,
@@ -158,7 +163,10 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
     summary: ex.summary || prev?.summary || '',
     // Unión: el chat nuevo puede tocar archivos nuevos sin repetir los previos.
     files: [...new Set([...(prev?.files || []), ...ex.files])],
-    status: prev?.status === 'subido' ? 'subido' : 'pendiente',
+    // 'subido' se conserva SOLO si el PR ya está mergeado (ciclo cerrado);
+    // con PR abierto, el trabajo nuevo lo devuelve a 'pendiente' (de
+    // actualización — la UI lo distingue porque conserva prNumber).
+    status: prev?.status === 'subido' && prev?.prState === 'merged' ? 'subido' : 'pendiente',
     branch: prev?.branch || null,
     prUrl: prev?.prUrl || null,
     createdAt: prev?.createdAt || Date.now(),

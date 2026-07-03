@@ -51,6 +51,14 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 15:52 — main
+- Chat: solicitud de permiso compacta (chip + botones), sin desborde en móvil
+- Modified `CLAUDE.md`
+- Modified `public/js/modules/chat/chat-tab.js`
+- Modified `public/js/modules/tolkien/tolkien.js`
+- Modified `src/modules/bugfixes/index.js`
+- Modified `src/modules/bugfixes/store.js`
+
 ### 2026-07-03 13:27 — main
 - Modified `CLAUDE.md`
 
