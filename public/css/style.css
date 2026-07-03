@@ -726,6 +726,14 @@ html, body {
 .df-del .cwc-diff-line { color: color-mix(in srgb, var(--cwc-danger) 65%, var(--cwc-white)); }
 .df-add { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); }
 .df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, var(--cwc-white)); }
+/* Diff con sintaxis (línea .hl, ui/code.js): el color base pasa a neutro y
+   los tonos los ponen los spans de hljs; el TINTE de fondo +/− sigue marcando
+   qué se quita y qué se agrega (como un editor con diff view). */
+.cwc-diff-line.hl { color: var(--cwc-text-secondary); }
+.cwc-diff-line .df-sign { opacity: .6; }
+/* hljs dentro de detalles/diffs: colores del theme vendor, FONDO el nuestro
+   (el .hljs del theme trae su propio background). */
+.ct-cmd.hljs, .ct-out.hljs { background: var(--cwc-bg); }
 
 /* Solicitud de permiso COMPACTA: [chip consola+tipo+chevron][✕ Denegar]
    [✓ Permitir] — el chip es idéntico al de tool calls (sin texto: el nombre

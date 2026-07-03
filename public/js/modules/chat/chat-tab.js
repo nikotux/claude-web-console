@@ -476,17 +476,24 @@ export class ChatTab {
     const d = chip._detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
     else if (d?.command || chip._summary) {
-      // Con el chip mínimo (solo icono+nombre), el resumen del server es la
-      // única pista del input para tools sin detalle propio (Read, etc.).
+      // Con el chip mínimo (solo íconos), el resumen del server es la única
+      // pista del input para tools sin detalle propio (Read, etc.).
+      // Comandos Bash: resaltados como en un editor (ui/code.js).
       const pre = document.createElement('pre');
       pre.className = 'ct-cmd';
-      pre.textContent = d?.command || chip._summary;
+      fillCode(pre, d?.command || chip._summary, d?.command ? 'bash' : null);
       body.appendChild(pre);
     }
     if (chip._output) {
       const pre = document.createElement('pre');
       pre.className = 'ct-out' + (chip._output.ok ? '' : ' err');
-      pre.textContent = chip._output.text || '(sin salida)';
+      if (chip._output.text) {
+        // Salida con sintaxis SOLO si la extensión del archivo es confiable
+        // (Read/Write de un .js, .css, etc.); logs/errores quedan planos.
+        fillCode(pre, chip._output.text, chip._output.ok ? langForPath(chip._summary) : null);
+      } else {
+        pre.textContent = '(sin salida)';
+      }
       body.appendChild(pre);
     }
     if (!body.childNodes.length) {
