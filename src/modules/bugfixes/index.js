@@ -37,7 +37,7 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
-import { buildTickets, findSimilarSolutions } from './engine.js';
+import { buildTickets, findSimilarSolutions, saveFeedback, ticketOfPr } from './engine.js';
 // Orquestador de concurrencia ADAPTATIVA — el mismo de Salud (genérico y
 // testeado). Acá lo usa refresh-prs para paralelizar las LECTURAS a GitHub
 // (`gh pr view`); los git-writes siguen SERIAL (regla de oro: paralelo lo
@@ -431,7 +431,7 @@ async function prLive(prNumber) {
   if (hit && Date.now() - hit.at < LIVE_TTL_MS) return hit.data;
   const out = await run('gh', [
     'pr', 'view', String(prNumber),
-    '--json', 'number,state,title,url,mergeable,reviewDecision,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviews,comments,commits',
+    '--json', 'number,state,title,url,headRefName,mergeable,reviewDecision,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviews,comments,commits',
   ], { cwd: config.projectDir });
   const pr = JSON.parse(out);
   const data = {
@@ -465,6 +465,14 @@ async function prLive(prNumber) {
     fetchedAt: Date.now(),
   };
   liveCache.set(prNumber, { at: Date.now(), data });
+  // PERSISTIR el feedback de Chris (regla 2): lo que gh trae acá se pierde a los
+  // 60 s / al reiniciar; guardarlo por ticket lo convierte en memoria y base de
+  // conocimiento. Mapear PR→ticket por el registro, el branch o el título.
+  try {
+    const entry = listBugfixes().find((b) => String(b.prNumber) === String(prNumber));
+    const tn = entry?.ticketNumber || ticketOfPr({ number: pr.number, title: pr.title, headRefName: pr.headRefName });
+    if (tn && data.feedback.length) saveFeedback(tn, pr.number, data.feedback);
+  } catch { /* best-effort: el panel funciona igual */ }
   return data;
 }
 

@@ -86,16 +86,47 @@ function attemptOf(b) {
   };
 }
 
-// ===== Sidecar: dimensiones curadas + biblioteca de soluciones =====
+// ===== Sidecar: dimensiones curadas + biblioteca de soluciones + feedback =====
 export function loadSidecar() {
-  try { return JSON.parse(fss.readFileSync(SIDECAR_FILE, 'utf8')); }
-  catch { return { schema: ENGINE_SCHEMA, tickets: {}, solutions: [] }; }
+  try {
+    const sc = JSON.parse(fss.readFileSync(SIDECAR_FILE, 'utf8'));
+    sc.tickets = sc.tickets || {};
+    sc.solutions = sc.solutions || [];
+    sc.feedback = sc.feedback || {}; // ticketNumber -> { prNumber, items[], fetchedAt }
+    return sc;
+  } catch { return { schema: ENGINE_SCHEMA, tickets: {}, solutions: [], feedback: {} }; }
 }
 export function saveSidecar(sc) {
   try {
     fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
     fss.writeFileSync(SIDECAR_FILE, JSON.stringify(sc, null, 1), { mode: 0o600 });
   } catch (err) { console.error('[engine] no pude escribir el sidecar:', err?.message); }
+}
+
+// ===== Feedback de Chris en los PRs (memoria persistente del ticket) =====
+// Lo alimenta el panel vivo del PR (prLive ya trae reviews+comentarios de gh,
+// que si no se persisten se pierden a los 60 s / al reiniciar). Guardamos el
+// timeline por ticket: sobrevive reinicios y sirve de base de conocimiento.
+export function saveFeedback(ticketNumber, prNumber, items) {
+  if (!ticketNumber || !Array.isArray(items)) return;
+  const key = String(ticketNumber);
+  const sc = loadSidecar();
+  const clean = items.map((f) => ({
+    author: String(f.author || '?').slice(0, 60),
+    at: f.at || null,
+    kind: String(f.kind || 'comment').slice(0, 24),
+    body: String(f.body || '').slice(0, 1000),
+  })).filter((f) => f.body);
+  const prev = sc.feedback[key];
+  // Escribir solo si cambió (evita reescrituras inútiles del sidecar).
+  const sig = (arr) => JSON.stringify((arr || []).map((f) => [f.author, f.at, f.body.length]));
+  if (prev && prev.prNumber === prNumber && sig(prev.items) === sig(clean)) return;
+  sc.feedback[key] = { prNumber: prNumber || prev?.prNumber || null, items: clean, fetchedAt: Date.now() };
+  saveSidecar(sc);
+}
+export function loadFeedback(ticketNumber) {
+  const sc = loadSidecar();
+  return sc.feedback[String(ticketNumber)] || null;
 }
 
 // ===== Consolidación: attempts del log -> Tickets (la columna vertebral) =====
@@ -163,17 +194,26 @@ export function buildTickets({ ghRows = [] } = {}) {
     }
   }
 
-  // Cerrar: ordenar attempts/history, derivar estado y resolución.
+  // Cerrar: ordenar attempts/history, derivar estado y resolución. Al vuelo:
+  // adjuntar el feedback persistido de Chris y AUTO-LLENAR la biblioteca de
+  // soluciones cuando un ticket llega a un estado "aprendible" (merged+).
   const tickets = [];
+  let scDirty = false;
   for (const t of byNum.values()) {
     t.attempts.sort((a, b) => (a.at || 0) - (b.at || 0));
     t.history.sort((a, b) => (a.t || 0) - (b.t || 0));
     t.external.desk = t._desk; delete t._desk;
+    // Feedback de Chris persistido (sidecar) → parte del ticket vivo.
+    const fb = t.number ? sc.feedback[String(t.number)] : null;
+    t.external.feedback = fb?.items || [];
     t.state = deriveState(t);
     t.resolution = deriveResolution(t);
+    // Biblioteca de soluciones: destilar (determinístico) y upsert idempotente.
+    if (upsertSolutionInto(sc, deriveSolution(t))) scDirty = true;
     t.schemaVersion = ENGINE_SCHEMA;
     tickets.push(t);
   }
+  if (scDirty) saveSidecar(sc); // una sola escritura por build, y solo si cambió
   // Orden del tablero: lo accionable primero, resueltos al fondo.
   const rank = (t) => (t.resolution === 'complete' ? 3 : t.state === 'pr-merged' || t.state === 'desk-answered' ? 2 : t.attempts.some((a) => a.files?.length) ? 0 : 1);
   tickets.sort((a, b) => rank(a) - rank(b) || (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -187,26 +227,82 @@ export function ticketOfPr(pr) {
   return m ? m[1] : null;
 }
 
-// ===== Biblioteca de soluciones (gancho preparado; matching determinístico) =====
-// Destila una solución de un ticket resuelto (para reusar en tickets futuros).
-// Se llena en una fase próxima; el gancho ya deja la estructura y la búsqueda.
-export function recordSolution({ ticketNumber, rootCause, fix, files = [], area = null, tags = [] }) {
-  const sc = loadSidecar();
+// ===== Biblioteca de soluciones (se llena SOLA al mergear; determinística) =====
+// Parseo del resumen del cierre del chat: los marcadores Problema:/Qué hice:/
+// Mejor solución: (los pide el contexto de trabajo; los usa formatPrBody).
+function parseSummary(summary) {
+  const s = String(summary || '');
+  const grab = (label) => {
+    const re = new RegExp(`^\\**${label}\\**\\s*:\\s*([\\s\\S]*?)(?=^\\**(?:Problema|Qu[eé] hice|Mejor soluci[oó]n)\\**\\s*:|\\s*$)`, 'im');
+    return (s.match(re) || [])[1]?.trim() || null;
+  };
+  return {
+    rootCause: grab('Problema'),
+    fix: grab('Qu[eé] hice') || (s && !grab('Problema') ? s : null),
+    best: grab('Mejor soluci[oó]n'),
+  };
+}
+
+// Destila una solución REUSABLE de un ticket (determinístico, sin LLM). Solo
+// para tickets con PR mergeado (o resueltos): ahí el fix quedó validado. La
+// "lección" es, por ahora, la mejor-solución del cierre; el feedback de Chris
+// se adjunta como conocimiento crudo (una capa IA podría destilarlo mejor).
+// Devuelve null si el ticket todavía no es aprendible.
+export function deriveSolution(t) {
+  if (!t.number) return null;
+  const anyMerged = (t.external?.github || []).some((p) => p.state === 'merged')
+    || t.attempts.some((a) => a.pr?.state === 'merged');
+  if (!anyMerged && t.resolution !== 'complete') return null;
+  const withCode = [...t.attempts].reverse().find((a) => a.summary && (a.files?.length || a.pr));
+  const summary = withCode?.summary || t.attempts.find((a) => a.summary)?.summary || '';
+  const parsed = parseSummary(summary);
+  const files = [...new Set(t.attempts.flatMap((a) => a.files || []))];
+  if (!parsed.rootCause && !parsed.fix && !files.length) return null; // nada útil que guardar
+  const fb = (t.external?.feedback || []).filter((f) => f.author && !/^(github-actions|dependabot)/i.test(f.author));
+  return {
+    id: `sol-${t.number}`,
+    ticketNumber: t.number,
+    title: t.title || '',
+    rootCause: (parsed.rootCause || '').slice(0, 1000),
+    fix: (parsed.fix || '').slice(0, 1000),
+    lesson: (parsed.best || '').slice(0, 600), // "¿es la mejor solución?" del cierre
+    files, area: t.area || null, tags: t.tags || [],
+    prNumber: (t.external?.github || []).find((p) => p.state === 'merged')?.number || null,
+    // Conocimiento de la revisión: los comentarios de Chris que marcaron rumbo.
+    feedback: fb.slice(-4).map((f) => ({ author: f.author, kind: f.kind, body: f.body.slice(0, 400) })),
+    at: t.updatedAt || 0,
+  };
+}
+
+// Upsert idempotente en un sidecar YA cargado (1 solución por ticket). Devuelve
+// true si cambió algo (para que el caller decida si reescribe el sidecar).
+function upsertSolutionInto(sc, sol) {
+  if (!sol) return false;
   sc.solutions = sc.solutions || [];
-  sc.solutions.push({
-    id: `sol-${ticketNumber}-${Date.now()}`,
-    ticketNumber, rootCause: String(rootCause || '').slice(0, 1000),
-    fix: String(fix || '').slice(0, 1000), files, area, tags,
-    at: Date.now(),
-  });
-  saveSidecar(sc);
+  const i = sc.solutions.findIndex((x) => String(x.ticketNumber) === String(sol.ticketNumber));
+  const sig = (x) => JSON.stringify([x.rootCause, x.fix, x.lesson, x.files, x.tags, x.area, x.prNumber, (x.feedback || []).map((f) => [f.author, f.body])]);
+  if (i >= 0) {
+    if (sig(sc.solutions[i]) === sig(sol)) return false; // idéntica: no reescribir
+    sc.solutions[i] = { ...sc.solutions[i], ...sol };
+    return true;
+  }
+  sc.solutions.push(sol);
+  return true;
+}
+
+// API pública: registra/actualiza una solución (persiste al toque). La usan
+// futuras capas (p.ej. la destilación IA opcional) para enriquecer una entrada.
+export function recordSolution(sol) {
+  const sc = loadSidecar();
+  if (upsertSolutionInto(sc, { id: `sol-${sol.ticketNumber}`, at: Date.now(), ...sol })) saveSidecar(sc);
 }
 
 // Busca soluciones pasadas parecidas a un ticket (por archivos/área/tags —
 // determinístico, sin LLM). La sugerencia con IA será una capa opcional.
 export function findSimilarSolutions(ticket, { limit = 3 } = {}) {
   const sc = loadSidecar();
-  const sols = sc.solutions || [];
+  // Excluir la propia solución del ticket (no se sugiere a sí mismo).
+  const sols = (sc.solutions || []).filter((s) => String(s.ticketNumber) !== String(ticket.number));
   if (!sols.length) return [];
   const files = new Set(ticket.attempts.flatMap((a) => a.files || []));
   const tags = new Set(ticket.tags || []);

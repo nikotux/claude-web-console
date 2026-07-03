@@ -266,13 +266,32 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       </div>`).join('')}</div>`;
   }
 
-  // Soluciones pasadas parecidas (biblioteca del motor). Gancho: hoy vacío,
-  // se llena cuando se destilen soluciones de tickets resueltos.
+  // Soluciones pasadas parecidas (biblioteca del motor, se llena sola al
+  // mergear). Muestra rootCause/fix, la lección y el feedback de Chris que la
+  // marcó — conocimiento reusable para este ticket.
   function similarHtml(b) {
     const sim = b.similar || [];
     if (!sim.length) return '';
     return `<div class="bb-similar"><div class="bb-similar-h">💡 Soluciones parecidas de tickets pasados</div>${sim.map((s) => `
-      <div class="bb-similar-item">TKT #${esc(s.ticketNumber)}: ${esc(s.fix || s.rootCause || '')}${s.files?.length ? ` <code>${esc(s.files[0])}</code>` : ''}</div>`).join('')}</div>`;
+      <div class="bb-similar-item">
+        <div class="bb-similar-top"><b>TKT #${esc(s.ticketNumber)}</b>${s.files?.length ? ` <code>${esc(s.files[0])}${s.files.length > 1 ? ` +${s.files.length - 1}` : ''}</code>` : ''}</div>
+        ${s.rootCause ? `<div class="bb-similar-line"><span>Problema:</span> ${esc(s.rootCause.slice(0, 160))}</div>` : ''}
+        ${s.fix ? `<div class="bb-similar-line"><span>Fix:</span> ${esc(s.fix.slice(0, 160))}</div>` : ''}
+        ${s.lesson ? `<div class="bb-similar-line bb-similar-lesson"><span>Lección:</span> ${esc(s.lesson.slice(0, 160))}</div>` : ''}
+        ${(s.feedback || []).length ? `<div class="bb-similar-fb">🗣 ${s.feedback.slice(-2).map((f) => `<span title="${esc(f.author)}">${esc((f.body || '').slice(0, 90))}</span>`).join(' · ')}</div>` : ''}
+      </div>`).join('')}</div>`;
+  }
+
+  // Feedback de Chris persistido en ESTE ticket (memoria del PR, sobrevive
+  // reinicios). Se llena al abrir el panel "GitHub en vivo" del PR.
+  function feedbackHtml(b) {
+    const fb = b.feedback || [];
+    if (!fb.length) return '';
+    return `<div class="bb-fbmem"><div class="bb-fbmem-h">🗣 Feedback de Chris (guardado)</div>${fb.slice(-5).map((f) => `
+      <div class="bb-fb">
+        <span class="bb-fb-head"><b>${esc(f.author)}</b> · ${esc(f.kind)}${f.at ? ` · ${fmtDate(f.at)}` : ''}</span>
+        ${f.body ? `<span class="bb-fb-body">${esc(f.body)}</span>` : ''}
+      </div>`).join('')}</div>`;
   }
 
   function detailHtml(b) {
@@ -291,6 +310,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
       : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
       ${attemptsHtml(b)}
+      ${feedbackHtml(b)}
       ${similarHtml(b)}
       ${timeline}
       ${b.prNumber ? `<div class="bb-live" data-live="${b.prNumber}"><div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div></div>` : ''}
@@ -502,6 +522,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       history: t.history || [], attempts: t.attempts || [], archived: t.archived,
       allSessionIds: t.attempts.map((a) => a.sessionId).filter(Boolean),
       similar: t.similar || [],
+      feedback: t.external?.feedback || [], // comentarios de Chris persistidos
     };
   }
 
@@ -715,7 +736,11 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       b.files?.length ? `Archivos del fix hasta ahora:\n${b.files.map((f) => `- ${f}`).join('\n')}` : 'Todavía sin archivos editados (quedó en plan).',
       b.summary ? `\nResumen registrado del fix:\n${b.summary}` : '',
       `\nHISTORIAL del ciclo de este fix (tenelo presente):\n${historyText(b) || '(sin eventos)'}`,
-      b.prNumber ? `\nSi el PR tiene feedback de Chris, revisalo primero: gh pr view ${b.prNumber} --comments` : '',
+      // Feedback de Chris YA guardado en este ticket (base de conocimiento).
+      (b.feedback || []).length ? `\nFEEDBACK de Chris en el PR (guardado — tenelo MUY presente, marca qué espera):\n${b.feedback.slice(-5).map((f) => `- ${f.author}: ${(f.body || '').slice(0, 300)}`).join('\n')}` : '',
+      // Lecciones de tickets pasados parecidos (biblioteca del motor).
+      (b.similar || []).length ? `\nSOLUCIONES PASADAS PARECIDAS (aprendé de ellas antes de decidir):\n${b.similar.map((s) => `- TKT #${s.ticketNumber}${s.files?.[0] ? ` (${s.files[0]})` : ''}: ${s.fix || s.rootCause || ''}${s.lesson ? ` — lección: ${s.lesson}` : ''}`).join('\n')}` : '',
+      b.prNumber ? `\nSi el PR tiene feedback más nuevo, revisalo: gh pr view ${b.prNumber} --comments` : '',
       workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
       prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
       '',

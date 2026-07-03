@@ -321,9 +321,24 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             pr-merged→desk-answered→resolved), resolution, tags[], meta{},
                             history[] unificado, schemaVersion}. IMPOSIBLE duplicar (dedo
                             resbalado = attempt outcome 'empty'). Sidecar tickets-meta.json =
-                            dimensiones curadas (tags/area) + BIBLIOTECA DE SOLUCIONES
-                            (recordSolution/findSimilarSolutions, matching determinístico por
-                            archivos/tags/área — gancho listo, se llena en fase próxima).
+                            dimensiones curadas (tags/area) + BIBLIOTECA DE SOLUCIONES +
+                            FEEDBACK de Chris persistido. BASE DE CONOCIMIENTO (2026-07-04,
+                            determinística, 0 tokens): (a) FEEDBACK — prLive ya trae los
+                            reviews/comentarios de Chris de gh pero se perdían a los 60 s / al
+                            reiniciar; ahora saveFeedback() los PERSISTE por ticket en el sidecar
+                            (sc.feedback[n]), mapeando PR→ticket por registro/branch/título;
+                            buildTickets los adjunta en external.feedback y el tablero los muestra
+                            (feedbackHtml). (b) SOLUCIONES — la biblioteca se LLENA SOLA: al
+                            derivar un ticket con PR mergeado (o resuelto), deriveSolution()
+                            destila {rootCause, fix, lesson, files, tags, prNumber, feedback de
+                            Chris} del cierre del chat (marcadores Problema:/Qué hice:/Mejor
+                            solución:) y upsertSolutionInto() hace UPSERT idempotente (1 por
+                            ticket, escribe solo si cambió, una vez por build). findSimilarSolutions
+                            matchea por archivos/tags/área y EXCLUYE el propio ticket. (c) REUSO —
+                            el prompt de "Trabajar en esto" (doWorkOn) inyecta el feedback de Chris
+                            guardado + las soluciones pasadas parecidas (similarHtml las muestra en
+                            el detalle). CAPA IA OPCIONAL futura (Fase 4, no hecha): destilar la
+                            "lección" con haiku. recordSolution() sigue exportada para esa capa.
                             GET /api/bugfixes/tickets = tickets consolidados (+ similar[]); el
                             tablero (bug-board.js) lo consume vía ticketToRow (puente
                             motor→helpers): 1 fila por ticket, los intentos en el detalle

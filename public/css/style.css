@@ -1328,6 +1328,14 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bb-attempt-at { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
 .bb-similar { margin: .5rem 0; background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-md); padding: .45rem .6rem; }
 .bb-similar-h { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); font-weight: 600; margin-bottom: .25rem; }
-.bb-similar-item { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); padding: .1rem 0; }
+.bb-similar-item { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); padding: .25rem 0; border-top: 1px solid var(--cwc-border); }
+.bb-similar-item:first-of-type { border-top: 0; }
 .bb-similar-item code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.bb-similar-top { display: flex; align-items: center; gap: .4rem; }
+.bb-similar-line { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.bb-similar-line > span { color: var(--cwc-text-dim); font-weight: 600; }
+.bb-similar-lesson > span { color: var(--cwc-warn); }
+.bb-similar-fb { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-top: .15rem; }
+.bb-fbmem { margin: .5rem 0; display: flex; flex-direction: column; gap: .4rem; background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-md); padding: .45rem .6rem; }
+.bb-fbmem-h { font-size: var(--cwc-fs-xs); color: var(--cwc-accent); font-weight: 600; }
 .bb-fresh { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
