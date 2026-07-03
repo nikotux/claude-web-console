@@ -43,6 +43,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   // Badge de estado en el header: recurrencia + estado de resolución.
   function statusBadge(f) {
     const parts = [];
+    if (f.policy?.risk === 'critical') parts.push(`<span class="hr-badge hr-badge--crit" title="Cambio crítico (${esc(f.policy.reason || '')}) — no se auto-resuelve, solo chat">🔒 crítico</span>`);
     if (f.recurrent) parts.push(`<span class="hr-badge hr-badge--rec" title="Ya se había resuelto antes (${f.recurrent.times}×) y volvió a aparecer — candidato a análisis exhaustivo">🔁 recurrente${f.recurrent.times > 1 ? ` ×${f.recurrent.times}` : ''}</span>`);
     if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
     else if (f.fixStatus === 'resolved') parts.push('<span class="hr-badge hr-badge--ok">✅ resuelto</span>');
@@ -60,9 +61,17 @@ export function openHealthReview(ctx, { isAdmin }) {
     if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman()}<span>resolviendo automáticamente…</span></div>`;
     if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
     const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ Auto-fix falló: ${esc(f.fixError)}</div>` : '';
-    return `${failLine}<div class="hr-f-actions">
+    // GATE de política: los CRÍTICOS bloquean "Automático" (queda solo "En chat").
+    const critical = f.policy?.risk === 'critical';
+    const critNote = critical
+      ? `<div class="hr-f-crit">⚠️ Cambio crítico${f.policy.reason ? ` (${esc(f.policy.reason)})` : ''} — no recomendado auto-resolver; hacelo <b>En chat</b>, supervisado.</div>`
+      : '';
+    const autoBtn = critical
+      ? `<button class="btn btn--sm" data-act="autofix" disabled title="No recomendado auto-resolver: ${esc(f.policy.reason || 'cambio crítico')}. Usá 'En chat'.">${icon('gear', { size: 13 })}<span>Automático 🔒</span></button>`
+      : `<button class="btn btn--sm" data-act="autofix" title="Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? 'Reintentar auto' : 'Automático'}</span></button>`;
+    return `${failLine}${critNote}<div class="hr-f-actions">
       <button class="btn-ghost btn--sm" data-act="chat" title="Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)">${icon('sparkle', { size: 13 })}<span>En chat</span></button>
-      <button class="btn btn--sm" data-act="autofix" title="Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? 'Reintentar auto' : 'Automático'}</span></button>
+      ${autoBtn}
     </div>`;
   }
 

@@ -805,7 +805,18 @@ docs/                       frontend-modules.md · brief-original.txt · context
   "Resolver todo en chat" (resolveAll) sobre los sin resolver.
   (b) "Automático" (autoFix → POST /finding-fix) → RUNNER DESACOPLADO
   bin/cwc-healthfix-runner.js que edita+verifica (node --check) SIN
-  supervisión (excepción de escritura de la regla 6, ver ahí); la tarjeta
+  supervisión (excepción de escritura de la regla 6, ver ahí).
+  GATE DE POLÍTICA (Fase A del orquestador anti-colisión, 2026-07-04):
+  health/policy.js clasifica DETERMINÍSTICAMENTE cada hallazgo por la superficie
+  que toca (classifyFinding → risk safe|shared|critical + domain, sin LLM ni
+  estado → sobrevive a reinicios). enrichReview lo expone en b.policy. Los
+  CRÍTICOS (server/bind, auth, config, tls, sdk-settings, registry, paths,
+  backup-push, blindaje read-only headless de health/bugfixes/bugs, runners) NO
+  se auto-resuelven: el front deshabilita "Automático" (badge 🔒 crítico + nota
+  "hacelo en chat") y POST /finding-fix los RECHAZA (409, guarda REAL de defensa
+  en profundidad). 'shared' (registry/tokens.css/ui/shared.js/CLAUDE.md) y 'safe'
+  sí; la Fase B (worktrees + integración serial) usará domain para el grafo de
+  colisión. la tarjeta
   polea review.json y pasa fixStatus fixing→resolved|failed sola. Éxito ⇒
   registro durable health-solved.json (GET /solved): historial + `count` de
   recurrencia. Los resueltos bajan a la sección "✅ Resueltos" y ya NO

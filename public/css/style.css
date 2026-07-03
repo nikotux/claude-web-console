@@ -1286,9 +1286,13 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-badge--fixing { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 .hr-badge--ok { color: var(--cwc-ok); border-color: var(--cwc-ok); }
 .hr-badge--fail { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+.hr-badge--crit { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); background: color-mix(in srgb, var(--cwc-danger) 12%, transparent); }
 .hr-f-fixing { justify-content: flex-start; align-items: center; gap: .45rem; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); }
 .hr-f-resolved { margin-top: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-ok); }
 .hr-f-fail { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); }
+/* Nota de cambio crítico (auto-resolución bloqueada). */
+.hr-f-crit { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-warn); }
+.hr-f-crit b { color: var(--cwc-text); }
 /* Un hallazgo resuelto se ve apagado (ya no es trabajo pendiente). */
 .hr-resolved-sec .hr-finding { opacity: .72; }
 /* Registro DURABLE de resueltos (histórico + recurrencias). */
