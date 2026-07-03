@@ -188,14 +188,19 @@ html, body {
 }
 .sess-menu { align-self: center; }
 
-/* Punto de estado */
-.sess-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--cwc-border-strong); }
-.sess-dot.st-shell { background: var(--cwc-border-strong); }
-.sess-dot.st-idle { background: var(--cwc-ok); opacity: .45; }
-.sess-dot.st-waiting { background: var(--cwc-ok); }
-.sess-dot.st-stale { background: var(--cwc-warn); opacity: .45; }
-.sess-dot.st-working { background: var(--cwc-warn); animation: sess-pulse 1.2s ease-in-out infinite; }
-@keyframes sess-pulse { 50% { opacity: .3; } }
+/* Estado de la tarjeta: Pac-Man compartido (ui/pacman.js, variante pac-sm).
+   Amarillo masticando bolitas = en uso (trabajando; lo pinta .is-working de
+   ui.css); verde boca cerrada = libre/esperando input; verde tenue = Claude
+   presente sin señales; amarillo tenue quieto = sin señales frescas; gris =
+   shell sin Claude (el "dormido" default del componente). Mismas clases st-*
+   que .rail-status. */
+.sess-pac.st-waiting .pac-man,
+.sess-pac.st-idle .pac-man { border-color: var(--cwc-ok); }
+.sess-pac.st-stale .pac-man { border-color: var(--cwc-warn); }
+.sess-pac.st-idle, .sess-pac.st-stale { opacity: .55; }
+/* El "ojo" cala el fondo real de la tarjeta (elevated, no panel). */
+.sess-pac .pac-man::before { background: var(--cwc-bg-elevated); }
+@keyframes sess-pulse { 50% { opacity: .3; } } /* la usa .rail-status */
 
 /* Otras sesiones tmux (colapsado por defecto) */
 .sess-others { margin-top: .35rem; }
@@ -452,6 +457,21 @@ html, body {
 .bk-git-out { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .2rem 0; }
 .bk-git-secrets { color: var(--cwc-warn); font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
 .bk-git .btn--block { margin-top: .5rem; }
+/* Selección de archivos nuevos (untracked) en el diálogo de push */
+.bk-untracked {
+  display: flex; flex-direction: column; gap: .1rem; margin: .3rem 0 .2rem;
+  max-height: 34vh; overflow: auto;
+  border: 1px solid var(--cwc-divider); border-radius: var(--cwc-radius-md); padding: .3rem;
+}
+.bk-untracked-item {
+  display: flex; align-items: center; gap: .5rem; cursor: pointer;
+  padding: .3rem .35rem; border-radius: var(--cwc-radius-sm); min-height: 34px;
+}
+.bk-untracked-item:hover { background: var(--cwc-bg-hover); }
+.bk-untracked-item code {
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text-secondary); word-break: break-all;
+}
 
 /* ===== Terminales ===== */
 #terminals { flex: 1; position: relative; min-width: 0; }

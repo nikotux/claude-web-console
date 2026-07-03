@@ -185,8 +185,15 @@
 @keyframes pac-dot-travel {
   0% { transform: translateX(0); opacity: 0; }
   8%, 85% { opacity: 1; }
-  100% { transform: translateX(-24px); opacity: 0; } /* llega a la boca: "comida" */
+  /* Llega a la boca: "comida". El recorrido es el ancho del track
+     (ancho total − círculo) — cada variante de tamaño define el suyo. */
+  100% { transform: translateX(var(--pac-travel, -24px)); opacity: 0; }
 }
+/* Variante compacta (0.75×, tarjetas de Sesiones): mismas proporciones. */
+.cwc-pacman.pac-sm { width: 30px; height: 12px; --pac-travel: -18px; }
+.cwc-pacman.pac-sm .pac-man { border-width: 6px; }
+.cwc-pacman.pac-sm .pac-man::before { width: 2.5px; height: 2.5px; top: -4px; left: -1px; }
+.cwc-pacman.pac-sm .pac-track { left: 12px; }
 
 /* ===== Accesibilidad: sin animaciones si el sistema lo pide ===== */
 @media (prefers-reduced-motion: reduce) {

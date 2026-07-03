@@ -1,13 +1,20 @@
 // modules/sessions/sessions.js — "Sesiones": retomar trabajo.
 //
-// TARJETAS: nombre humano grande (custom o basename del cwd), punto de estado
-// (● trabajando / ○ esperando / gris shell), modelo con su color de identidad.
+// TARJETAS: nombre humano grande (custom o basename del cwd), Pac-Man de
+// estado (amarillo masticando = en uso / verde boca cerrada = libre / gris =
+// shell), modelo con su color de identidad.
 // Tap en la tarjeta = adjuntar (o enfocar si ya está abierta). Lo demás vive
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
 import { modelColor } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
+import { pacman } from '../../ui/pacman.js';
+
+// Pac-Man de estado de una tarjeta: la clase st-* pone el color (style.css) y
+// SOLO st-working mastica (is-working). Misma firma que updateInPlace.
+const pacClass = (cls) => `cwc-pacman pac-sm sess-pac ${cls}${cls === 'st-working' ? ' is-working' : ''}`;
+const pacStatus = (cls, label) => pacman({ working: cls === 'st-working', cls: `pac-sm sess-pac ${cls}`, title: label });
 
 const MODEL_OPTIONS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
@@ -119,7 +126,7 @@ export default {
       const main = document.createElement('button');
       main.className = 'sess-main';
       main.innerHTML = `
-        <span class="sess-dot ${dotCls}"></span>
+        ${pacStatus(dotCls, c.status === 'working' ? 'trabajando' : 'esperando input')}
         <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
         <span class="sess-name">${c.title}</span>
         <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
@@ -251,7 +258,7 @@ export default {
       const main = document.createElement('button');
       main.className = 'sess-main';
       main.innerHTML = `
-        <span class="sess-dot ${dot.cls}" title="${dot.label}"></span>
+        ${pacStatus(dot.cls, dot.label)}
         <span class="sess-name">${displayName(s)}</span>
         <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? s.model.name : ''}</span>`;
       main.addEventListener('click', () => openCard(s));
@@ -414,8 +421,9 @@ export default {
           const key = cardEl.dataset.key;
           if (chatMap.has(key)) {
             const c = chatMap.get(key);
-            const dotEl = cardEl.querySelector('.sess-dot');
-            dotEl.className = `sess-dot ${c.status === 'working' ? 'st-working' : 'st-waiting'}`;
+            const dotEl = cardEl.querySelector('.sess-pac');
+            dotEl.className = pacClass(c.status === 'working' ? 'st-working' : 'st-waiting');
+            dotEl.title = c.status === 'working' ? 'trabajando' : 'esperando input';
             const isTui = c.viewMode === 'tui';
             const icEl = cardEl.querySelector('.sess-type-ic');
             if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
@@ -426,8 +434,8 @@ export default {
           const s = map.get(key);
           if (!s) continue;
           const dot = dotInfo(s);
-          const dotEl = cardEl.querySelector('.sess-dot');
-          dotEl.className = `sess-dot ${dot.cls}`;
+          const dotEl = cardEl.querySelector('.sess-pac');
+          dotEl.className = pacClass(dot.cls);
           dotEl.title = dot.label;
           cardEl.querySelector('.sess-name').textContent = displayName(s);
           const modelEl = cardEl.querySelector('.sess-model');

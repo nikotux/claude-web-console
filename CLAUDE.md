@@ -269,11 +269,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   chip. Si se vuelve a tocar, verificar que el rail colapsado de desktop no
   se rompió (ahí `#rail-tabs` es indispensable).
 - Pac-Man (`.cwc-pacman`, ui.css + ui/pacman.js) — loader COMPARTIDO en CSS
-  puro, doble rol: (a) indicador de PROCESO LARGO (> ~5 s: revisión profunda,
+  puro, triple rol: (a) indicador de PROCESO LARGO (> ~5 s: revisión profunda,
   triage de Bugs, subir PR, push/backup, Uso) siempre con `.is-working`; (b)
   ícono "vivo/dormido" del header del chat (mismo componente con cls
   `chat-alive`, SOLO móvil — style.css lo oculta en desktop — y su
-  `.is-working` lo togglea `_setWorking(on)` de chat-tab.js). Anatomía:
+  `.is-working` lo togglea `_setWorking(on)` de chat-tab.js); (c) estado de
+  las tarjetas de Sesiones del sidebar (cls `pac-sm sess-pac st-*`, render y
+  updateInPlace de sessions.js con `pacStatus`/`pacClass`): amarillo
+  masticando = trabajando (`.is-working`), verde boca cerrada = esperando
+  input (`.sess-pac.st-waiting` recolorea el borde a `--cwc-ok` en
+  style.css), verde/amarillo tenue = idle/stale, gris = shell (default
+  dormido). `pac-sm` (ui.css) es la variante 0.75× (30×12, borde 6px) y el
+  ojo de `.sess-pac` cala `--cwc-bg-elevated` (fondo de la tarjeta, no
+  panel). Anatomía:
   `.pac-man` es una caja 0×0 con `border-width` parejo + `border-radius:50%`
   (el truco clásico: el BORDE es el círculo) y el borde derecho anima entre
   sólido (boca cerrada) y `transparent` (boca abierta) — `@keyframes
@@ -289,9 +297,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
   + !important: es indicador de estado funcional, no decoración); no
   borrarla. OJO 2: `.is-working .pac-man` pone los 4 bordes en warn como
   base (fallback estático = boca cerrada dorada, nunca hueco gris
-  congelado). OJO 3: `.pac-dot` usa `left:100%` + `translateX(-24px)` — ese
-  `24px` tiene que coincidir con el ancho de `.pac-track` para que la bolita
-  llegue EXACTO a la boca. La barra TUI (`.conv-tui-bar`) NO tiene el
+  congelado). OJO 3: el recorrido de `.pac-dot` es `translateX(var(--pac-travel,
+  -24px))` y TIENE que coincidir con el ancho de `.pac-track` (ancho total −
+  círculo) para que la bolita llegue EXACTO a la boca — el default -24px es
+  del tamaño normal (40−16); cada variante define el suyo (`pac-sm`:
+  `--pac-travel: -18px`, 30−12). La barra TUI (`.conv-tui-bar`) NO tiene el
   vivo/dormido (su estado viene del observador de hooks, no del stream del
   SDK — plomería distinta, no conectada todavía).
 - Cambio de pestaña y scroll del chat: los paneles se ocultan con
@@ -331,6 +341,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   para que se vea activo) + "Ver más" AL LADO de "Elegir otra carpeta…"
   (fila `.ln-list-actions`, no apilados: el alto vertical del lanzador es
   escaso en móvil); tope de ubicaciones en `core/recents.js` (MAX = 10).
+- Módulo tokens: los TOKENS son exactos (campos `usage` que la API de
+  Anthropic reporta en cada mensaje del transcript, dedup por message.id);
+  el COSTO es un EQUIVALENTE a precios de API, no un gasto real — la
+  suscripción del CLI no factura por token y la Admin Usage & Cost API de
+  Anthropic exige organización + admin key (verificado: "unavailable for
+  individual accounts"), así que NO hay endpoint de gasto consultable con
+  estas credenciales. Precios en pin()/pout() de src/modules/tokens/index.js
+  (fable 10/50 · opus 5/25 · sonnet 3/15 · haiku 1/5; cache w5m ×1.25,
+  w1h ×2, read ×0.1 — verificados 2026-07). GET /api/tokens/summary?fresh=1
+  saltea el TTL de 4s (botón ↻ del modal Uso); el caché por archivo
+  (mtime+size) nunca se saltea porque es exacto por construcción.
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.

@@ -6,9 +6,11 @@
 // triage de bugs, subida de PRs, push a GitHub…) en lugar del spinner
 // genérico — el spinner queda para cargas breves (listar, abrir un modal).
 //
-// `working:false` lo pinta dormido (gris, boca cerrada, sin bolitas): solo
-// lo usa el header del chat, que alterna vivo/dormido; un loader de proceso
-// se muestra siempre working y se REMUEVE al terminar.
+// `working:false` lo pinta dormido (gris, boca cerrada, sin bolitas): lo usan
+// el header del chat (vivo/dormido) y las tarjetas de Sesiones, que además
+// recolorean el círculo por estado con clases st-* (verde = libre, ver
+// .sess-pac en style.css) y achican con la variante `pac-sm` (ui.css). Un
+// loader de proceso se muestra siempre working y se REMUEVE al terminar.
 export function pacman({ working = true, cls = '', title = '' } = {}) {
   return `<span class="cwc-pacman${working ? ' is-working' : ''}${cls ? ` ${cls}` : ''}"${title ? ` title="${title}"` : ''}>` +
     '<span class="pac-man"></span>' +
