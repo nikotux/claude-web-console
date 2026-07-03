@@ -320,6 +320,16 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             preservando detalles expandidos, con clearInterval en onClose)
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup) ·
+                            code.js (resaltado hljs COMPARTIDO para detalles de tool calls y
+                            diffs: SOLO con lenguaje confiable — extensión conocida o bash
+                            explícito, nada de autodetección sobre logs — y con topes de
+                            tamaño; hljs escapa el input así que su .value es innerHTML
+                            seguro; en diffs se resalta LÍNEA a LÍNEA para markup balanceado
+                            y el tinte +/− lo sigue poniendo diff.js. VISTA EDITOR: .ct-cmd/
+                            .ct-out/.cwc-diff-line van con white-space:pre + tab-size:4 +
+                            scroll horizontal — NUNCA wrap, la indentación se conserva como
+                            en VS Code; .cwc-diff-line lleva min-width:max-content para que
+                            el tinte +/− cubra todo el ancho scrolleable) ·
                             pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
                             USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
                             de Bugs, subir PR, push/backup, cálculo de Uso; el spinner queda

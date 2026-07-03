@@ -178,6 +178,7 @@ async function updatePr(entry) {
   } catch {
     throw new Error(`El branch del PR (${branch}) ya no existe en GitHub. Cancelá el PR desde el detalle y volvé a enviarlo como PR nuevo.`);
   }
+  await run('git', ['fetch', 'origin', 'main'], { cwd: TOLKIEN }).catch(() => {});
   fss.mkdirSync(WT_BASE, { recursive: true, mode: 0o700 });
   await run('git', ['worktree', 'add', '-B', branch, wt, `origin/${branch}`], { cwd: TOLKIEN });
 
@@ -201,15 +202,28 @@ async function updatePr(entry) {
     const title = `Update TKT #${entry.ticketNumber || '?'}: ${(entry.title || '').replace(/^TKT #[\w.-]+ ?[—-]? ?/, '').slice(0, 70) || 'bugfix'}`;
     const body = formatPrBody(entry);
     await run('git', ['commit', '-m', `${title}\n\n${body}`], { cwd: wt });
+    const commit = await run('git', ['rev-parse', '--short', 'HEAD'], { cwd: wt });
     // Fast-forward sobre el branch del PR: GitHub actualiza el MISMO PR.
     await run('git', ['push', 'origin', branch], { cwd: wt });
+
+    // VERIFICACIÓN post-push: lo que quedó en GitHub tiene que ser EXACTAMENTE
+    // este commit (garantía "lo subido es un commit encima del PR", como
+    // código y no solo como diseño). Si no coincide, error explícito.
+    await run('git', ['fetch', 'origin', branch], { cwd: wt });
+    const remoteSha = await run('git', ['rev-parse', `origin/${branch}`], { cwd: wt });
+    const localSha = await run('git', ['rev-parse', 'HEAD'], { cwd: wt });
+    if (remoteSha !== localSha) {
+      throw new Error(`El push no quedó consistente: origin/${branch} (${remoteSha.slice(0, 7)}) != commit local (${localSha.slice(0, 7)}). Revisá el PR a mano.`);
+    }
+    // Posición del commit en el branch (2º, 3º…) — informativo para la UI.
+    const commitCount = Number(await run('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: wt }).catch(() => '')) || null;
 
     // Notas del PR al día + aviso al reviewer (best-effort: el PR ya se actualizó).
     await run('gh', ['pr', 'edit', String(entry.prNumber), '--body', body], { cwd: wt }).catch(() => {});
     await run('gh', ['pr', 'comment', String(entry.prNumber), '--body',
-      'PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos (commit adicional en el branch). Notas del PR actualizadas.'], { cwd: wt }).catch(() => {});
+      `PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos en el commit ${commit} (adicional en el branch, historial intacto). Notas del PR actualizadas.`], { cwd: wt }).catch(() => {});
 
-    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true };
+    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true, commit, commitCount };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {});
@@ -298,7 +312,7 @@ export default {
       if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una subida en curso para este fix.' });
       inFlight.add(id);
       try {
-        const { branch, prUrl, prNumber, files, updated } = await pushPr(entry);
+        const { branch, prUrl, prNumber, files, updated, commit, commitCount } = await pushPr(entry);
         entry.status = 'subido';
         entry.branch = branch;
         entry.prUrl = prUrl;
@@ -307,7 +321,7 @@ export default {
         entry.sentAt = Date.now();
         entry.updatedAt = Date.now();
         saveBugfixes(all);
-        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated });
+        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated, commit: commit || null, commitCount: commitCount || null });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
       } finally {

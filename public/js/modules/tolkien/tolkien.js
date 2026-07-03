@@ -417,7 +417,9 @@ export default {
               });
               const data = await res.json().catch(() => ({}));
               results.push(res.ok
-                ? `✓ TKT #${b.ticketNumber}: ${data.updated ? 'PR ACTUALIZADO' : 'PR nuevo'} → ${data.prUrl || data.branch}`
+                ? `✓ TKT #${b.ticketNumber}: ${data.updated
+                  ? `PR ACTUALIZADO · commit ${data.commit || '?'}${data.commitCount ? ` (${data.commitCount}º del branch)` : ''}`
+                  : 'PR nuevo'} → ${data.prUrl || data.branch}`
                 : `✗ TKT #${b.ticketNumber}: ${data.error || 'falló'}`);
             } catch { results.push(`✗ TKT #${b.ticketNumber}: error de red`); }
           }
