@@ -20,7 +20,7 @@ import path from 'node:path';
 import fss from 'node:fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, isBatchRunning,
+  ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, otherBatchAlive,
   fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, findingId, addProposal,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
@@ -33,7 +33,11 @@ const isRateLimit = (err) => /429|rate.?limit|overloaded|too many requests|529|5
 const patchPath = (id) => path.join(WT_BASE, `${id}.patch`);
 const MOCK = process.env.CWC_HEALTHFIX_MOCK === '1'; // test: no llama al SDK
 
-if (isBatchRunning()) { log('ya hay un batch corriendo (lock fresco): salgo.'); process.exit(0); }
+// Solo salgo si hay OTRO orquestador con pid REAL vivo. El lock-placeholder
+// (pid:0) que puso el server es MI reserva → la reclamo escribiendo mi pid.
+// (Antes usaba isBatchRunning y veía su propia reserva pid:0 → auto-deadlock:
+// quedaba "arrancando…" para siempre.)
+if (otherBatchAlive()) { log('ya hay un batch corriendo (pid real vivo): salgo.'); process.exit(0); }
 writeBatchLock(process.pid);
 const heartbeat = setInterval(() => writeBatchLock(process.pid), HEARTBEAT_MS);
 heartbeat.unref?.();

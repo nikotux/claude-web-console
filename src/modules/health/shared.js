@@ -322,6 +322,16 @@ export function isBatchRunning() {
   try { const { ts } = JSON.parse(fss.readFileSync(BATCH_LOCK, 'utf8')); return Date.now() - ts < LOCK_FRESH_MS; }
   catch { return false; }
 }
+// ¿Hay OTRO orquestador realmente corriendo? Igual que isBatchRunning pero EXIGE
+// un pid REAL (≠ 0). El server escribe un lock-placeholder con pid:0 para
+// RESERVAR el turno antes de spawnear; el orquestador que arranca debe poder
+// RECLAMAR ese placeholder (si usara isBatchRunning se auto-deadlockearía: vería
+// su propia reserva y se saldría). isBatchRunning (incluye pid:0) sigue sirviendo
+// al server para bloquear un segundo spawn.
+export function otherBatchAlive() {
+  try { const { pid, ts } = JSON.parse(fss.readFileSync(BATCH_LOCK, 'utf8')); return !!pid && Date.now() - ts < LOCK_FRESH_MS; }
+  catch { return false; }
+}
 
 // Prompt de resolución autónoma de UN hallazgo (compartido con el auto-fix de a
 // uno): edita el fix mínimo, verifica con node --check, y opcionalmente propone

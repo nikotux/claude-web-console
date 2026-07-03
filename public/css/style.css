@@ -1281,7 +1281,10 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-badge {
   font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .35rem; border-radius: var(--cwc-radius-sm);
   border: 1px solid transparent; white-space: nowrap; flex: none;
+  display: inline-flex; align-items: center; gap: .25rem; /* para el Pac-Man por-ítem del batch */
 }
+.hr-badge .cwc-pacman { transform: scale(.7); margin: 0 -3px; } /* Pac-Man compacto dentro del chip */
+.hr-badge--queue { color: var(--cwc-text-dim); border-color: var(--cwc-border-strong); }
 .hr-badge--rec { color: var(--cwc-warn); border-color: var(--cwc-warn); }
 .hr-badge--fixing { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 .hr-badge--ok { color: var(--cwc-ok); border-color: var(--cwc-ok); }

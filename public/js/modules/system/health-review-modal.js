@@ -41,12 +41,41 @@ export function openHealthReview(ctx, { isAdmin }) {
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 
-  // Badge de estado en el header: recurrencia + estado de resolución.
+  // ¿El hallazgo está BLOQUEADO para auto-fix? Superficie crítica (pol.risk:
+  // toca server/auth/registry/…) O severidad crítica del bug (los más delicados
+  // van a chat supervisado). Espeja el gate REAL del backend (health/index.js).
+  const isBlocked = (f) => f.policy?.risk === 'critical' || String(f.severity) === 'critical';
+  const blockReason = (f) => (f.policy?.risk === 'critical' ? (f.policy.reason || 'superficie crítica') : 'severidad crítica del bug');
+  // Item del batch (Fase B) correspondiente a este hallazgo, si hay batch vivo.
+  const batchItemOf = (f) => (batchState?.items || []).find((x) => x.id === f.id);
+
+  // Chip de PROGRESO por hallazgo dentro del batch: Pac-Man masticando =
+  // resolviéndose AHORA (ves cuáles corren a la vez), dormido = en cola, ✅/🔴
+  // terminales. Es lo que pediste para ver el estado de cada uno en vivo.
+  function batchItemBadge(it) {
+    if (!it) return '';
+    switch (it.status) {
+      case 'pending': return `<span class="hr-badge hr-badge--queue" title="En cola para resolver">${pacman({ working: false })}<span>en cola</span></span>`;
+      case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="Resolviendo ahora (en paralelo, en su sandbox aislado)">${pacman()}<span>resolviendo</span></span>`;
+      case 'ready': return `<span class="hr-badge hr-badge--fixing" title="Fix listo en el sandbox — esperando la integración serial al código real">${pacman()}<span>listo p/ integrar</span></span>`;
+      case 'integrated': return '<span class="hr-badge hr-badge--ok">✅ resuelto</span>';
+      case 'conflict': return `<span class="hr-badge hr-badge--fail" title="Conflicto al integrar (quedó sin aplicar): ${esc(it.error || '')}">🔴 conflicto</span>`;
+      case 'check-failed': return `<span class="hr-badge hr-badge--fail" title="No pasó node --check al integrar: ${esc(it.error || '')}">🔴 falló el check</span>`;
+      case 'failed': return `<span class="hr-badge hr-badge--fail" title="${esc(it.error || 'error')}">🔴 error</span>`;
+      default: return '';
+    }
+  }
+
+  // Badge de estado en el header: bloqueo + recurrencia + estado de resolución.
+  // Con batch vivo, el estado por-ítem (Pac-Man) manda sobre el fixStatus grueso.
   function statusBadge(f) {
     const parts = [];
-    if (f.policy?.risk === 'critical') parts.push(`<span class="hr-badge hr-badge--crit" title="Cambio crítico (${esc(f.policy.reason || '')}) — no se auto-resuelve, solo chat">🔒 crítico</span>`);
+    if (isBlocked(f)) parts.push(`<span class="hr-badge hr-badge--crit" title="No se auto-resuelve (${esc(blockReason(f))}) — solo chat supervisado">🔒 ${String(f.severity) === 'critical' ? 'crítico' : 'protegido'}</span>`);
     if (f.recurrent) parts.push(`<span class="hr-badge hr-badge--rec" title="Ya se había resuelto antes (${f.recurrent.times}×) y volvió a aparecer — candidato a análisis exhaustivo">🔁 recurrente${f.recurrent.times > 1 ? ` ×${f.recurrent.times}` : ''}</span>`);
-    if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
+    const it = batchItemOf(f);
+    if (it) {
+      parts.push(batchItemBadge(it)); // estado por-ítem del batch (Pac-Man en vivo)
+    } else if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
     else if (f.fixStatus === 'resolved') parts.push('<span class="hr-badge hr-badge--ok">✅ resuelto</span>');
     else if (f.fixStatus === 'failed') parts.push('<span class="hr-badge hr-badge--fail">⚠ falló</span>');
     return parts.join(' ');
@@ -62,13 +91,14 @@ export function openHealthReview(ctx, { isAdmin }) {
     if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman()}<span>resolviendo automáticamente…</span></div>`;
     if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
     const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ Auto-fix falló: ${esc(f.fixError)}</div>` : '';
-    // GATE de política: los CRÍTICOS bloquean "Automático" (queda solo "En chat").
-    const critical = f.policy?.risk === 'critical';
+    // GATE de política: superficie crítica O severidad crítica bloquean
+    // "Automático" (queda solo "En chat"). Espeja el gate del backend.
+    const critical = isBlocked(f);
     const critNote = critical
-      ? `<div class="hr-f-crit">⚠️ Cambio crítico${f.policy.reason ? ` (${esc(f.policy.reason)})` : ''} — no recomendado auto-resolver; hacelo <b>En chat</b>, supervisado.</div>`
+      ? `<div class="hr-f-crit">⚠️ No se auto-resuelve (${esc(blockReason(f))}) — hacelo <b>En chat</b>, supervisado.</div>`
       : '';
     const autoBtn = critical
-      ? `<button class="btn btn--sm" data-act="autofix" disabled title="No recomendado auto-resolver: ${esc(f.policy.reason || 'cambio crítico')}. Usá 'En chat'.">${icon('gear', { size: 13 })}<span>Automático 🔒</span></button>`
+      ? `<button class="btn btn--sm" data-act="autofix" disabled title="No se auto-resuelve: ${esc(blockReason(f))}. Usá 'En chat'.">${icon('gear', { size: 13 })}<span>Automático 🔒</span></button>`
       : `<button class="btn btn--sm" data-act="autofix" title="Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? 'Reintentar auto' : 'Automático'}</span></button>`;
     return `${failLine}${critNote}<div class="hr-f-actions">
       <button class="btn-ghost btn--sm" data-act="chat" title="Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)">${icon('sparkle', { size: 13 })}<span>En chat</span></button>
@@ -127,8 +157,9 @@ export function openHealthReview(ctx, { isAdmin }) {
       .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
     const nFixing = all.filter((f) => f.fixStatus === 'fixing').length;
     const nOpen = activos.length - nFixing;
-    // Auto-resolubles en batch: abiertos, NO críticos, no en curso.
-    const autoables = activos.filter((f) => f.policy?.risk !== 'critical' && f.fixStatus !== 'fixing');
+    // Auto-resolubles en batch: abiertos, NO bloqueados (ni superficie ni
+    // severidad crítica), no en curso.
+    const autoables = activos.filter((f) => !isBlocked(f) && f.fixStatus !== 'fixing');
     const nAuto = autoables.length;
     const resumen = [
       `${all.length} hallazgo(s)`,

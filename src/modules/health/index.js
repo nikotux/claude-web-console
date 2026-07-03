@@ -328,10 +328,16 @@ export default {
       const target = (state.findings || []).find((f) => findingId(f) === id);
       if (!target) return res.status(404).json({ error: 'Hallazgo inexistente (¿se re-analizó?).' });
       // GATE de política (defensa en profundidad; el front ya deshabilita el
-      // botón, pero acá está la guarda REAL): los CRÍTICOS no se auto-resuelven.
+      // botón, pero acá está la guarda REAL). Bloquea por SUPERFICIE crítica
+      // (pol.risk: toca server/auth/registry/…) O por SEVERIDAD crítica del bug
+      // (decisión del usuario 2026-07-04: un bug crítico es delicado, su fix
+      // probablemente sutil → siempre a chat supervisado, toque el archivo que
+      // toque). Antes solo miraba pol.risk → un severity=critical en archivo
+      // común se auto-resolvía sin supervisión.
       const pol = classifyFinding(target);
-      if (pol.risk === 'critical') {
-        return res.status(409).json({ error: `Cambio crítico (${pol.reason}): no se auto-resuelve. Resolvelo en chat, supervisado.` });
+      if (pol.risk === 'critical' || String(target.severity) === 'critical') {
+        const why = pol.risk === 'critical' ? pol.reason : 'severidad crítica del bug (fix delicado)';
+        return res.status(409).json({ error: `No se auto-resuelve (${why}): resolvelo en chat, supervisado.` });
       }
       try {
         // spawnFix() re-chequea y escribe el lock atómicamente (mismo turno de
@@ -368,8 +374,13 @@ export default {
       for (const id of ids) {
         const f = byId.get(id);
         if (!f) continue;
+        // Mismo gate que el auto-fix de a uno: superficie crítica O severidad
+        // crítica quedan FUERA del batch (no se auto-resuelven).
         const pol = classifyFinding(f);
-        if (pol.risk === 'critical') { rejected.push({ id, area: f.area, reason: pol.reason }); continue; }
+        if (pol.risk === 'critical' || String(f.severity) === 'critical') {
+          rejected.push({ id, area: f.area, reason: pol.risk === 'critical' ? pol.reason : 'severidad crítica del bug' });
+          continue;
+        }
         items.push({
           id, area: f.area, module: f.module, file: f.file, detail: f.detail,
           suggestedFix: f.suggestedFix, severity: f.severity, kind: f.kind,
