@@ -5,6 +5,9 @@
 //   POST /api/bugfixes/scan     -> registra chats de tickets viejos sin registro (admin)
 //   POST /api/bugfixes/pr {id}  -> branch + commit + push + PR a origin de Tolkien (admin)
 //   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
+//   GET  /api/bugfixes/pr-live/:n   -> reviews/checks/commits/feedback (gh, admin)
+//   GET  /api/bugfixes/desk-live/:n -> estado + comentarios del ticket en Zoho
+//        Desk (headless READ-ONLY, consume tokens; admin)
 //   GET  /api/bugfixes/context?kind=work|pr -> contexto editable (autenticados)
 //   POST /api/bugfixes/context {kind, context} -> guarda el contexto (admin)
 //   POST /api/bugfixes/cancel-pr {id} -> cierra el PR + borra el branch remoto
@@ -426,6 +429,112 @@ async function prLive(prNumber) {
   return data;
 }
 
+// ===== Estado EN VIVO de un ticket de Zoho Desk (LECTURA, no persiste) =====
+// Sub-excepción de la regla 6 (más blindada que la escritura de deskUpdateAuto):
+// corrida headless con allowlist ESTRICTA de tools desk_* de LECTURA. La tool
+// debe (a) NO contener ningún verbo de escritura y (b) SÍ un verbo de lectura;
+// Bash/Edit/Write/git y cualquier desk_* de escritura (add/update/reply/…)
+// quedan denegados por las DOS capas. Sirve para ver el estado real del ticket
+// y si el último comentario ya se publicó. Caché en memoria 60 s.
+const deskCache = new Map(); // ticketNumber -> { at, data }
+const DESK_LIVE_TTL_MS = 60000;
+const DESK_WRITE_VERB = /(add|create|update|reply|post|delete|remove|close|set|write|send|move|assign|merge|edit|patch|put)/i;
+const DESK_READ_VERB = /(get|list|search|view|read|find|fetch|detail|show|info|history|thread|conversation)/i;
+const deskReadAllowed = (name) => {
+  const s = String(name);
+  if (s === 'TodoWrite') return true; // estado interno del modelo, no toca nada externo
+  const m = s.match(/^mcp__[a-z0-9_-]+__desk_([a-z0-9_]+)$/i);
+  if (!m) return false;
+  const op = m[1];
+  return !DESK_WRITE_VERB.test(op) && DESK_READ_VERB.test(op); // deny por defecto
+};
+
+async function deskLive(ticketNumber, fresh) {
+  const key = String(ticketNumber);
+  if (!fresh) {
+    const hit = deskCache.get(key);
+    if (hit && Date.now() - hit.at < DESK_LIVE_TTL_MS) return hit.data;
+  }
+  const denyMsg = 'Lectura de Desk: SOLO tools desk_* de lectura.';
+  const denyHook = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg,
+    },
+  };
+  const prompt = [
+    `Necesito el estado ACTUAL del ticket de Zoho Desk #${key}. Es SOLO lectura: no modifiques nada.`,
+    '',
+    'Con las tools desk_* de LECTURA del MCP:',
+    `1. Buscá el ticket #${key} y abrilo.`,
+    '2. Leé su estado actual y sus comentarios/hilos más recientes.',
+    '',
+    'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera de él):',
+    '```json',
+    '{"found":true,"status":"<estado legible, p.ej. On Hold>","subject":"<asunto corto>","comments":[{"author":"<quién>","at":"<fecha ISO o texto>","visibility":"public|private","excerpt":"<~200 chars del comentario>"}]}',
+    '```',
+    'Máximo los 5 comentarios más recientes (el más nuevo primero). Si no encontrás el ticket: {"found":false}.',
+  ].join('\n');
+
+  let out = '';
+  try {
+    const q = query({
+      prompt,
+      options: {
+        cwd: config.projectDir,
+        model: 'sonnet',
+        maxTurns: 12,
+        permissionMode: 'default',
+        settingSources: settingSourcesFor('headless'), // carga el MCP del proyecto, sin settings de user
+        hooks: {
+          PreToolUse: [{ hooks: [async (input) => (deskReadAllowed(input.tool_name) ? {} : denyHook)] }],
+        },
+        canUseTool: async (name, input) => (deskReadAllowed(name)
+          ? { behavior: 'allow', updatedInput: input }
+          : { behavior: 'deny', message: denyMsg }),
+      },
+    });
+    let timer = null;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), DESK_TIMEOUT_MS); });
+    const pump = (async () => {
+      for await (const m of q) {
+        if (m.type === 'assistant') {
+          for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
+        } else if (m.type === 'result') break;
+      }
+    })();
+    try { await Promise.race([pump, timeout]); } finally { clearTimeout(timer); }
+  } catch (err) {
+    return { found: false, error: String(err?.message || err).slice(0, 160), fetchedAt: Date.now() };
+  }
+
+  // Parseo defensivo: último bloque JSON válido de la respuesta.
+  const candidates = [];
+  const fences = out.match(/```(?:json)?\s*([\s\S]*?)```/gi);
+  if (fences) for (const f of fences) candidates.push(f.replace(/```(?:json)?/gi, '').trim());
+  const brace = out.match(/\{[\s\S]*\}/);
+  if (brace) candidates.push(brace[0]);
+  let parsed = null;
+  for (const c of candidates.reverse()) {
+    try { parsed = JSON.parse(c); break; } catch { /* probamos el siguiente */ }
+  }
+  const data = parsed && typeof parsed === 'object'
+    ? {
+      found: parsed.found !== false,
+      status: parsed.status ? String(parsed.status).slice(0, 60) : null,
+      subject: parsed.subject ? String(parsed.subject).slice(0, 120) : null,
+      comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 5).map((c) => ({
+        author: String(c.author || '?').slice(0, 60),
+        at: c.at ? String(c.at).slice(0, 40) : null,
+        visibility: /priv/i.test(String(c.visibility)) ? 'private' : 'public',
+        excerpt: String(c.excerpt || '').slice(0, 300),
+      })) : [],
+      fetchedAt: Date.now(),
+    }
+    : { found: false, error: 'No se pudo interpretar la respuesta de Desk.', fetchedAt: Date.now() };
+  if (data.found) deskCache.set(key, { at: Date.now(), data }); // no cacheamos fallos
+  return data;
+}
+
 export default {
   name: 'bugfixes',
 
@@ -631,6 +740,20 @@ export default {
         res.json({ ok: true, live: await prLive(n) });
       } catch (err) {
         res.status(502).json({ error: `GitHub no disponible: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+
+    // Estado EN VIVO de un ticket de Zoho Desk (headless READ-ONLY; caché 60 s,
+    // ?fresh=1 la saltea). CONSUME TOKENS: el front lo dispara bajo botón, no al
+    // expandir. El número de ticket puede no ser entero (acepta \w.-).
+    r.get('/desk-live/:number', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const raw = String(req.params.number || '').replace(/[^\w.-]/g, '').slice(0, 20);
+      if (!raw) return res.status(400).json({ error: 'Número de ticket inválido.' });
+      try {
+        res.json({ ok: true, desk: await deskLive(raw, !!req.query.fresh) });
+      } catch (err) {
+        res.status(502).json({ error: `Desk no disponible: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
