@@ -425,6 +425,7 @@ public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hid
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos)
+bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
 docs/                       frontend-modules.md · brief-original.txt · contexto-ui.md (histórico)
@@ -653,7 +654,30 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime.
-- **Revisión profunda** (`POST /api/health/review`, admin, CONSUME TOKENS):
-  corrida headless read-only del SDK que lee esta guía + el código y devuelve
-  veredicto con hallazgos. Caché en `~/.cwc-data/health.json`. Solo bajo
-  demanda desde la pestaña Salud.
+- **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
+  barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
+  (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad
+  NO la mata). discoverUnits() (health/shared.js) arma ~16 unidades: core +
+  cada src/modules/* (+ su runner de bin/) + frontend-core + frontend-modules;
+  cada una se audita con HAIKU read-only (doble capa, regla 6) buscando bugs
+  Y violaciones de reglas → findings {area,severity,kind,detail,file,
+  suggestedFix}; al final SONNET sintetiza el veredicto (solo procesa los
+  hallazgos, no re-lee código). Interfaz por archivos: health-review.json
+  (progreso incremental: units[].status, done/total, findings[]) +
+  health-review.lock (heartbeat => running). POST responde INMEDIATO
+  (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA
+  full-screen (health-review-modal.js, .dlg-card--health): barra de progreso
+  + grilla de módulos con estado en vivo + hallazgos por severidad (color),
+  cada uno con "Trabajar en chat" que abre un chat en la raíz de la consola
+  (cwd 'claude-web-console', modo plan) con el hallazgo precargado — la
+  revisión NUNCA modifica código, los fixes se deciden en chat supervisado.
+- **GOTCHA de profundidad (verificado 2026-07-03):** haiku-por-módulo
+  encuentra bugs reales valiosos (fd leaks, race conditions en flags `busy`,
+  stash pop sin verificar merge, límites de tamaño faltantes en endpoints)
+  PERO se queda corto en archivos MUY grandes: en una corrida de prueba NO
+  detectó una asimetría sutil conocida (chat/index.js `case 'mode'` no llama
+  `onUpdate()` mientras su gemelo `case 'model'` sí → el modo de permisos no
+  persiste), porque chat/index.js (~900 líneas) excede lo que haiku procesa
+  con UNIT_MAX_TURNS. Si se quiere cazar bugs sutiles en módulos grandes:
+  subir esos a sonnet, subir UNIT_MAX_TURNS, o partir el archivo. La
+  herramienta es un RASTRILLO amplio, no una garantía de cobertura total.

@@ -7,6 +7,7 @@
 // sección Tolkien (se quitó de acá por redundante).
 import { icon } from '../../ui/icons.js';
 import { pacman } from '../../ui/pacman.js';
+import { openHealthReview } from './health-review-modal.js';
 
 const API = '/api/health';
 
@@ -60,73 +61,41 @@ export function mountHealthPanel(el, ctx) {
     }
   }
 
-  // ===== revisión IA =====
-  function renderReview(data) {
+  // ===== revisión exhaustiva (resumen compacto + botón que abre el modal) =====
+  // El detalle vive en la sub-ventana full-screen (health-review-modal.js):
+  // barra de progreso, módulos y hallazgos accionables. Acá solo el último
+  // veredicto cacheado y el acceso.
+  function renderReview(d) {
     const parts = [];
-    if (data.updatedAt) {
+    if (d.verdict) {
       parts.push(`
-        <div class="hp-verdict hp-verdict--${esc(data.verdict || 'atencion')}">
-          <b>${VERDICT_LABEL[data.verdict] || 'Sin veredicto'}</b>
-          <span class="hp-when">${fmtDate(data.updatedAt)}</span>
-        </div>
-        ${data.summary ? `<p class="hp-summary">${esc(data.summary)}</p>` : ''}`);
-      if (data.findings?.length) {
-        parts.push(`<div class="hp-findings">${data.findings.map((f) => `
-          <details class="hp-finding">
-            <summary><span class="hp-dot hp-dot--${f.severity === 'low' ? 'ok' : f.severity === 'critical' || f.severity === 'high' ? 'fail' : 'warn'}"></span>
-              <b>${esc(f.area)}</b> <span class="hp-sev">${esc(f.severity)}</span></summary>
-            <p>${esc(f.detail)}${f.file ? ` <code>${esc(f.file)}</code>` : ''}</p>
-          </details>`).join('')}</div>`);
-      }
+        <div class="hp-verdict hp-verdict--${esc(d.verdict)}">
+          <b>${VERDICT_LABEL[d.verdict] || 'Sin veredicto'}</b>
+          <span class="hp-when">${d.findings?.length || 0} hallazgo(s)${d.updatedAt ? ` · ${fmtDate(d.updatedAt)}` : ''}</span>
+        </div>`);
     } else {
-      parts.push('<p class="hp-empty">Todavía no se corrió ninguna revisión.</p>');
+      parts.push('<p class="hp-empty">Todavía no se corrió ninguna revisión exhaustiva.</p>');
     }
-    if (data.error) parts.push(`<p class="hp-error">Último intento falló: ${esc(data.error)}</p>`);
-    if (data.running) {
-      parts.push(`<p class="hp-running">${pacman()} Claude está revisando el proyecto… (puede tardar unos minutos)</p>`);
-    } else if (isAdmin) {
-      parts.push(`<button class="btn btn--block" data-ref="run">${icon('gear', { size: 14 })}<span>Revisar ahora con Claude</span></button>`);
+    if (d.running) {
+      parts.push(`<p class="hp-running">${pacman()} Revisión en curso · ${d.done || 0}/${d.total || '?'} módulos…</p>`);
     }
+    parts.push(`<button class="btn btn--block" data-ref="open">${icon('gear', { size: 14 })}<span>${d.running ? 'Ver revisión en curso' : 'Revisión exhaustiva →'}</span></button>`);
     refs.review.innerHTML = parts.join('');
-    refs.review.querySelector('[data-ref="run"]')?.addEventListener('click', runReview);
+    refs.review.querySelector('[data-ref="open"]')?.addEventListener('click', () => {
+      openHealthReview(ctx, { isAdmin });
+      // al cerrar el modal, refrescar el resumen
+      setTimeout(loadReview, 500);
+    });
   }
 
   async function loadReview() {
     try {
-      const data = await (await fetch(`${API}/review`)).json();
+      const d = await (await fetch(`${API}/review`)).json();
       if (!alive) return;
-      renderReview(data);
-      if (data.running) setTimeout(pollReview, 5000);
+      renderReview(d);
+      if (d.running) setTimeout(loadReview, 5000); // mantener el resumen fresco
     } catch {
-      if (alive) refs.review.innerHTML = '<p class="hp-empty">No se pudo leer la última revisión.</p>';
-    }
-  }
-
-  async function pollReview() {
-    if (!alive) return;
-    try {
-      const data = await (await fetch(`${API}/review`)).json();
-      renderReview(data);
-      if (data.running) setTimeout(pollReview, 5000);
-    } catch { /* reintenta el próximo open */ }
-  }
-
-  async function runReview() {
-    const ok = await dialog.confirmDialog({
-      title: 'Revisión profunda con Claude',
-      message: 'Claude Code va a leer la guía del proyecto y auditar el código (solo lectura). Tarda unos minutos y CONSUME TOKENS de tu suscripción.',
-      confirmLabel: 'Revisar',
-    });
-    if (!ok) return;
-    renderReview({ ...(await (await fetch(`${API}/review`)).json().catch(() => ({}))), running: true });
-    try {
-      const res = await fetch(`${API}/review`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!alive) return;
-      if (!res.ok) { renderReview({ ...data, error: data.error || 'Falló la revisión.', running: false }); return; }
-      renderReview({ ...data, running: false });
-    } catch (e) {
-      if (alive) renderReview({ error: e.message, running: false });
+      if (alive) refs.review.innerHTML = '<p class="hp-empty">No se pudo leer la revisión.</p>';
     }
   }
 

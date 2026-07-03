@@ -13,18 +13,15 @@ import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
+import { readReview, isRunning } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const CACHE_FILE = path.join(DATA_DIR, 'health.json');
-const REVIEW_TIMEOUT_MS = 8 * 60 * 1000; // leer un repo entero lleva minutos
-const MAX_TURNS = 80;
 
 const run = (file, args, opts = {}) => new Promise((resolve) => {
   execFile(file, args, { timeout: 15000, ...opts }, (err, out, errOut) => {
@@ -174,155 +171,26 @@ async function runChecks() {
   return { checkedAt: Date.now(), ok: count('ok'), warn: count('warn'), fail: count('fail'), checks };
 }
 
-// ===== revisión profunda con Claude (READ-ONLY blindada) =====
+// ===== revisión EXHAUSTIVA con Claude (runner desacoplado, READ-ONLY) =====
+// La corrida ya NO vive en este proceso: la hace bin/cwc-health-runner.js
+// (barrido módulo por módulo con haiku + síntesis con sonnet, ver
+// health/shared.js). Un reinicio del server a mitad NO la mata (regla 2).
+// Interfaz por archivos: health-review.json (progreso+resultado) +
+// health-review.lock (heartbeat => running). Los endpoints solo lanzan el
+// runner y sirven su estado.
+const HEALTH_RUNNER = path.join(ROOT, 'bin', 'cwc-health-runner.js');
+const HEALTH_LOG = path.join(DATA_DIR, 'health-review.log');
 
-const VERDICTS = new Set(['ok', 'atencion', 'critico']);
-const SEVERITY = new Set(['critical', 'high', 'medium', 'low']);
-
-function toolAllowed(name) {
-  return ['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name); // SOLO lecturas locales
-}
-
-function reviewPrompt(checksSummary) {
-  return [
-    'Sos el AUDITOR DE SALUD de Claude Web Console. Corrida NO interactiva y de',
-    'SOLO LECTURA (no intentes modificar nada ni correr comandos).',
-    '',
-    'Tarea: leé PRIMERO el CLAUDE.md de la raíz (reglas duras, mapa, convenciones)',
-    'y después auditá el código verificando que el proyecto las CUMPLE:',
-    '- que src/core/registry.js registre todos los módulos de src/modules/',
-    '- que el bind del server sea exclusivo a la IP ZeroTier (nunca 0.0.0.0)',
-    '- que la resiliencia se respete (runners desacoplados, tmux para TUIs)',
-    '- que las corridas headless del SDK sigan read-only (canUseTool allowlist)',
-    '- endpoints sensibles admin-gated; validación de entradas en rutas nuevas',
-    '- consistencia frontend (tokens.css, ui/dialog.js, icons.js, guard [hidden])',
-    '- deudas o riesgos evidentes (código muerto, TODOs peligrosos, secretos',
-    '  versionados, dependencias raras)',
-    '',
-    'Resultado de los chequeos rápidos automáticos (contexto, no lo repitas):',
-    '```json',
-    JSON.stringify(checksSummary),
-    '```',
-    '',
-    'Cuando termines respondé ÚNICAMENTE con un bloque ```json con este objeto:',
-    '{',
-    '  "verdict": "ok" | "atencion" | "critico",',
-    '  "summary": "2-4 líneas en criollo sobre el estado general",',
-    '  "findings": [ { "area": "string corto (módulo/tema)",',
-    '                  "severity": "critical|high|medium|low",',
-    '                  "detail": "qué encontraste y por qué importa",',
-    '                  "file": "ruta relativa o \'\'" } ]',
-    '}',
-    'Si está todo bien, verdict "ok" y findings []. Sin texto fuera del bloque.',
-  ].join('\n');
-}
-
-function parseReview(text) {
-  if (!text) return null;
-  const fences = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
-  const raw = fences.length ? fences[fences.length - 1][1].trim() : (text.match(/\{[\s\S]*\}/) || [])[0];
-  if (!raw) return null;
-  let o;
-  try { o = JSON.parse(raw); } catch { return null; }
-  if (!o || typeof o !== 'object') return null;
-  return {
-    verdict: VERDICTS.has(o.verdict) ? o.verdict : 'atencion',
-    summary: String(o.summary ?? '').slice(0, 1000),
-    findings: (Array.isArray(o.findings) ? o.findings : []).slice(0, 40).map((f) => ({
-      area: String(f.area ?? '').slice(0, 80),
-      severity: SEVERITY.has(f.severity) ? f.severity : 'medium',
-      detail: String(f.detail ?? '').slice(0, 800),
-      file: String(f.file ?? '').slice(0, 200),
-    })),
-  };
-}
-
-function readCache() {
-  try { return JSON.parse(fss.readFileSync(CACHE_FILE, 'utf8')); }
-  catch { return { updatedAt: null, verdict: null, summary: null, findings: [], error: null }; }
-}
-function writeCache(data) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(CACHE_FILE, JSON.stringify(data), { mode: 0o600 });
-  } catch (err) { console.error('[health] no pude escribir la caché:', err?.message); }
-}
-
-let inFlight = null;
-
-async function runReview() {
-  const checksSummary = await runChecks();
-  const q = query({
-    prompt: reviewPrompt(checksSummary),
-    options: {
-      cwd: ROOT,
-      permissionMode: 'default',
-      maxTurns: MAX_TURNS,
-      // Doble capa como en tickets: el hook PreToolUse deniega ANTES de la
-      // evaluación de permisos (inmune a reglas `allow` de settings, aunque
-      // acá no se cargan settingSources); canUseTool cubre el resto.
-      hooks: {
-        PreToolUse: [{
-          hooks: [async (input) => (toolAllowed(input.tool_name)
-            ? {}
-            : {
-              hookSpecificOutput: {
-                hookEventName: 'PreToolUse',
-                permissionDecision: 'deny',
-                permissionDecisionReason: 'Revisión de salud read-only: herramienta no permitida.',
-              },
-            })],
-        }],
-      },
-      canUseTool: async (name, input) => (toolAllowed(name)
-        ? { behavior: 'allow', updatedInput: input }
-        : { behavior: 'deny', message: 'Revisión de salud read-only: herramienta no permitida.' }),
-    },
+function spawnReview() {
+  if (isRunning()) return false;
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const logFd = fss.openSync(HEALTH_LOG, 'a');
+  const child = spawn(process.execPath, [HEALTH_RUNNER], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
-
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`La revisión tardó demasiado (timeout ${Math.round(REVIEW_TIMEOUT_MS / 60000)} min).`)), REVIEW_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    // OJO: close() SIN await — si el subproceso no muere al toque, un await
-    // acá deja inFlight colgado para siempre (running:true eterno).
-    try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
-
-  const review = parseReview(text);
-  if (!review) throw new Error('No pude interpretar el resultado de la revisión.');
-  return review;
-}
-
-function refreshReview() {
-  if (inFlight) return inFlight;
-  inFlight = (async () => {
-    try {
-      const review = await runReview();
-      const data = { updatedAt: Date.now(), ...review, error: null };
-      writeCache(data);
-      return data;
-    } catch (err) {
-      const prev = readCache();
-      const data = { ...prev, error: String(err?.message || err).slice(0, 300) };
-      writeCache(data);
-      return data;
-    } finally {
-      inFlight = null;
-    }
-  })();
-  return inFlight;
+  child.unref();
+  fss.closeSync(logFd);
+  return true;
 }
 
 export default {
@@ -337,16 +205,23 @@ export default {
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
 
-    // Última revisión IA (caché) + si hay una corriendo.
+    // Estado de la revisión: progreso + hallazgos (lo escribe el runner) +
+    // si hay una corriendo (lock fresco). El front encuesta esto en vivo.
     r.get('/review', (req, res) => {
-      res.json({ ...readCache(), running: !!inFlight });
+      res.json({ ...readReview(), running: isRunning() });
     });
 
-    // Corre la revisión IA (LENTA, consume tokens). Solo admin; el front confirma.
-    r.post('/review', async (req, res) => {
+    // Lanza la revisión exhaustiva (runner detached, LENTA, consume tokens).
+    // Responde INMEDIATO (arrancar+encuestar); el front encuesta GET /review.
+    // Solo admin; el front confirma antes.
+    r.post('/review', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      const data = await refreshReview();
-      res.json({ ...data, running: false });
+      try {
+        spawnReview();
+        res.json({ ...readReview(), running: true, started: true });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });
+      }
     });
 
     router.use('/health', r);
