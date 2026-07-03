@@ -34,6 +34,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   let alive = true;
   let pollTimer = null;
   let solvedLog = []; // registro durable (GET /solved), refrescado en cada tick
+  let proposals = []; // invariantes propuestos pendientes de aprobación (F5)
   let lastData = null; // último estado renderizado (para parches optimistas)
   const origOnClose = m.close;
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
@@ -145,6 +146,17 @@ export function openHealthReview(ctx, { isAdmin }) {
         : '<div class="hr-empty">Sin hallazgos: el sistema está sano ✅</div>'}
       </div>
       ${resueltos.length ? `<details class="hr-collapsible hr-resolved-sec"><summary>✅ Resueltos en esta revisión (${resueltos.length})</summary>${resueltos.map(findingCard).join('')}</details>` : ''}
+      ${(isAdmin && proposals.length) ? `<details class="hr-collapsible hr-prop-sec" open><summary>🧠 Invariantes propuestos (${proposals.length}) — para aprobar</summary>
+        <div class="hr-prop-list">${proposals.map((pr) => `
+          <div class="hr-prop" data-prop="${esc(pr.id)}">
+            <p class="hr-prop-text">${esc(pr.text)}</p>
+            <div class="hr-prop-meta"><code>${esc(pr.match || '—')}</code>${pr.fromFinding?.module ? ` · de: ${esc(pr.fromFinding.module)}` : ''}</div>
+            <div class="hr-prop-actions">
+              <button class="btn-ghost btn--sm" data-prop-act="reject" title="Descartar la propuesta">${icon('close', { size: 13 })}<span>Descartar</span></button>
+              <button class="btn btn--sm" data-prop-act="approve" title="Sumarlo a los invariantes verificados (invariants-learned.json)">${icon('check', { size: 13 })}<span>Aprobar</span></button>
+            </div>
+          </div>`).join('')}</div>
+      </details>` : ''}
       ${solvedLog.length ? `<details class="hr-collapsible hr-solved-sec"><summary>📓 Registro de resueltos (${solvedLog.length})</summary>
         <div class="hr-solved-list">${solvedLog.map((s) => `
           <div class="hr-solved-item">
@@ -267,14 +279,32 @@ export function openHealthReview(ctx, { isAdmin }) {
     }
   }
 
-  // Trae review + registro de resueltos juntos; refresca solvedLog.
+  // Trae review + registro de resueltos + invariantes propuestos; refresca cachés.
   async function fetchState() {
-    const [rev, sol] = await Promise.all([
+    const [rev, sol, prop] = await Promise.all([
       fetch(`${API}/review`).then((r) => r.json()).catch(() => null),
       fetch(`${API}/solved`).then((r) => r.json()).catch(() => null),
+      fetch(`${API}/invariant-proposals`).then((r) => r.json()).catch(() => null),
     ]);
     if (sol && Array.isArray(sol.solved)) solvedLog = sol.solved;
+    if (prop && Array.isArray(prop.proposals)) proposals = prop.proposals;
     return rev;
+  }
+
+  // Aprobar/descartar un invariante propuesto (F5). Aprobar lo suma a los
+  // invariantes verificados (invariants-learned.json).
+  async function decideProposal(id, action) {
+    try {
+      const res = await fetch(`${API}/invariant-proposals/${encodeURIComponent(id)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo procesar la propuesta.');
+      const d = await fetchState();
+      if (d) render(d);
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Invariante propuesto', message: err.message });
+    }
   }
   // Hay que seguir poleando si corre la revisión O hay un auto-fix en curso.
   const needsPoll = (d) => !!d && (d.running || d.fixing || (d.findings || []).some((f) => f.fixStatus === 'fixing'));

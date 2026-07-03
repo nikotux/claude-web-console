@@ -19,7 +19,9 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readReview, isRunning, isFixing, findingId, findingSig, readSolved,
+  readProposals, writeProposals,
 } from './shared.js';
+import { appendLearnedInvariant } from './invariants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -250,6 +252,31 @@ export default {
     r.get('/solved', (req, res) => {
       const solved = readSolved().sort((a, b) => (b.lastResolvedAt || 0) - (a.lastResolvedAt || 0));
       res.json({ solved });
+    });
+
+    // Invariantes PROPUESTOS por el auto-fix, PENDIENTES de aprobación (Fase 5).
+    r.get('/invariant-proposals', (req, res) => {
+      res.json({ proposals: readProposals().filter((p) => p.status !== 'done') });
+    });
+    // Aprobar (→ invariants-learned.json, se verifica el regex) o descartar.
+    r.post('/invariant-proposals/:id', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.params.id || '');
+      const action = req.body?.action;
+      const list = readProposals();
+      const p = list.find((x) => x.id === id);
+      if (!p) return res.status(404).json({ error: 'Propuesta inexistente.' });
+      if (action === 'approve') {
+        try {
+          appendLearnedInvariant({ match: p.match || (p.fromFinding?.file || '').split(':')[0], text: p.text });
+        } catch (err) {
+          return res.status(400).json({ error: `No se pudo aprobar: ${String(err?.message || err).slice(0, 160)}` });
+        }
+      } else if (action !== 'reject') {
+        return res.status(400).json({ error: 'Acción inválida (approve|reject).' });
+      }
+      writeProposals(list.filter((x) => x.id !== id));
+      res.json({ ok: true });
     });
 
     // Resolución AUTÓNOMA de un hallazgo (runner detached; excepción de

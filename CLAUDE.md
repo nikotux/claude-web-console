@@ -302,9 +302,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             tablero (bug-board.js) lo consume vía ticketToRow (puente
                             motor→helpers): 1 fila por ticket, los intentos en el detalle
                             (attemptsHtml). GET /api/bugfixes (viejo, array plano) queda para
-                            retrocompat. PENDIENTE (fase 2): estado EN VIVO — el estado Desk
-                            sigue viniendo del registro (deskStatus), no refleja respuestas
-                            publicadas fuera de la consola hasta un desk-live manual.
+                            retrocompat. ESTADO EN VIVO (fase 2): GitHub se auto-refresca cada
+                            45 s mientras el tablero está abierto + al volver a la pestaña
+                            (barato, solo gh — los merges de Chris aparecen solos; intervalo
+                            se limpia al cerrar). Desk NUNCA solo (cuesta tokens): botón "🎫
+                            Desk" consulta desk-live de los tickets ACTIVOS (con confirm),
+                            persiste deskReplied/deskResolved y el motor los refleja. Indicador
+                            de frescura "GitHub: hace X · Desk: hace Y/sin consultar" (.bb-fresh).
+                            La columna Desk del tablero distingue 🎫✅ resuelto · 🎫✔ respondido
+                            · 🎫✕ error · 🎫○ consultado sin respuesta · — sin consultar.
                             registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol

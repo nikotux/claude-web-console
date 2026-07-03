@@ -1315,3 +1315,4 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bb-similar-h { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); font-weight: 600; margin-bottom: .25rem; }
 .bb-similar-item { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); padding: .1rem 0; }
 .bb-similar-item code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.bb-fresh { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }

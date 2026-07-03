@@ -302,6 +302,37 @@ export function unitFingerprint(unit) {
   return h.digest('hex').slice(0, 12);
 }
 
+// ===== Invariantes PROPUESTOS (Fase 5: loop que aprende) =====
+// El auto-fix, al resolver un bug de una clase que vale la pena blindar,
+// propone un invariante. Se guarda PENDIENTE acá (no se auto-agrega — decisión
+// del usuario); el modal de salud lo aprueba (→ invariants-learned.json) o lo
+// descarta.
+export const PROPOSALS_FILE = path.join(DATA_DIR, 'health-invariant-proposals.json');
+export function readProposals() {
+  try { const o = JSON.parse(fss.readFileSync(PROPOSALS_FILE, 'utf8')); return Array.isArray(o) ? o : []; }
+  catch { return []; }
+}
+export function writeProposals(list) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(PROPOSALS_FILE, JSON.stringify(list), { mode: 0o600 });
+  } catch (err) { console.error('[health] no pude escribir invariant-proposals:', err?.message); }
+}
+export function addProposal({ text, match, fromFinding }) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  const m = String(match || '').trim();
+  const list = readProposals();
+  const id = crypto.createHash('sha1').update(`${t}|${m}`).digest('hex').slice(0, 12);
+  if (list.some((p) => p.id === id)) return; // dedup
+  list.push({
+    id, text: t.slice(0, 400), match: m.slice(0, 200),
+    fromFinding: fromFinding ? { area: fromFinding.area, module: fromFinding.module, file: fromFinding.file } : null,
+    proposedAt: Date.now(), status: 'pending',
+  });
+  writeProposals(list);
+}
+
 // ===== Lock del runner de auto-fix (uno a la vez) =====
 export function writeFixLock(pid) {
   try {

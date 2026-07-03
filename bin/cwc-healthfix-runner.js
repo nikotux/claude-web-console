@@ -14,7 +14,7 @@
 // `failed` con el motivo. La tarjeta del front polea review.json y se actualiza.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ROOT, readReview, writeReview, recordSolved, findingId,
+  ROOT, readReview, writeReview, recordSolved, findingId, addProposal,
   writeFixLock, clearFixLock, isFixing, isRunning,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed,
 } from '../src/modules/health/shared.js';
@@ -72,7 +72,13 @@ async function main() {
     '2. Si es real, aplicá el fix MÍNIMO editando los archivos necesarios.',
     '3. Verificá CADA archivo .js que edites con `node --check <archivo>` (es la ÚNICA orden de terminal permitida). NO podés correr git, tests, npm, systemctl ni reiniciar nada.',
     '4. Terminá tu ÚLTIMO mensaje con UNA línea exacta: "FIXOK <qué cambiaste, en qué archivos>" si quedó resuelto y verificado, o "FIXFAIL <motivo>" si no pudiste.',
-    'No expliques de más: hacé el trabajo y cerrá con FIXOK/FIXFAIL.',
+    '5. Solo si el fix fue OK y el bug pertenece a una CLASE que conviene blindar',
+    '   para que NO regrese, agregá DESPUÉS del FIXOK una línea:',
+    '   "PROPOSED-INVARIANT <aserción verificable en una frase> | <patrón de',
+    '   archivos donde aplica, p.ej. src/modules/chat/>". Si es un caso único o',
+    '   trivial (typo), poné "NO-INVARIANT". El invariante NO se aplica solo: lo',
+    '   revisa un humano.',
+    'No expliques de más: hacé el trabajo y cerrá con FIXOK/FIXFAIL (+ la línea del invariante si corresponde).',
   ].filter(Boolean).join('\n');
 
   let out = '';
@@ -113,6 +119,14 @@ async function main() {
     patchFinding({ fixStatus: 'resolved', fixSummary: summary, resolvedAt: Date.now(), fixError: null });
     recordSolved(f, summary);
     log(`auto-fix OK: ${f.area} — ${summary}`);
+    // Fase 5: si propuso un invariante, lo guardamos PENDIENTE (no se aplica
+    // solo). Formato: "PROPOSED-INVARIANT <texto> | <match>".
+    const inv = out.match(/PROPOSED-INVARIANT\s+([^\n]+?)\s*\|\s*([^\n]+)/i);
+    if (inv) {
+      const match = inv[2].trim() || (f.file || '').split(':')[0];
+      addProposal({ text: inv[1].trim(), match, fromFinding: f });
+      log(`  invariante propuesto: ${inv[1].trim().slice(0, 80)} | ${match}`);
+    }
   } else {
     const reason = (failMatch?.[1] || 'sin confirmación del modelo').trim().slice(0, 200);
     patchFinding({ fixStatus: 'failed', fixError: reason });

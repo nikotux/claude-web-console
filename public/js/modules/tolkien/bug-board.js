@@ -93,7 +93,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     <div class="bb-actions">
       <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
       <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios sin registrar">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
-      <button class="btn-ghost btn--sm" data-ref="ghsync" title="Refresca desde GitHub el estado de los PRs">${icon('refresh', { size: 13 })}<span>GitHub</span></button>
+      <button class="btn-ghost btn--sm" data-ref="ghsync" title="Refresca desde GitHub el estado de los PRs (automático mientras el tablero está abierto)">${icon('refresh', { size: 13 })}<span>GitHub</span></button>
+      <button class="btn-ghost btn--sm" data-ref="desksync" title="Consulta Zoho Desk el estado REAL de los tickets activos (respuesta publicada, resuelto). CONSUME TOKENS — con confirmación">${icon('download', { size: 13 })}<span>🎫 Desk</span></button>
       <button class="btn-ghost btn--sm btn--icon" data-ref="help" title="¿Cómo leer este tablero? (pipeline, chips, estados)">${icon('help', { size: 15 })}</button>
       <span class="bb-state" data-ref="ghstate"></span>
       <span class="bb-triage" data-ref="triage"></span>
@@ -109,6 +110,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   for (const r of wrap.querySelectorAll('[data-ref]')) mr[r.dataset.ref] = r;
 
   let entries = [];   // registro de bugfixes
+  let lastGhAt = null;    // última sync de GitHub (auto, barato)
+  let lastDeskAt = null;  // última sync de Desk (bajo botón, tokens)
+  function updateFreshness() {
+    const gh = lastGhAt ? `GitHub: ${fmtAgo(lastGhAt)}` : 'GitHub: —';
+    const dk = lastDeskAt ? `Desk: ${fmtAgo(lastDeskAt)}` : 'Desk: sin consultar';
+    if (mr.ghstate) mr.ghstate.innerHTML = `<span class="bb-fresh">${gh} · ${dk}</span>`;
+  }
   let ghRows = [];    // PRs solo-GitHub
   let triage = { updatedAt: null, tickets: [], running: false };
 
@@ -210,20 +218,23 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     return '<span class="bb-icell bb-icell--none" title="Sin PR todavía">—</span>';
   }
 
-  // ¿El ticket ya tiene la respuesta/comentario publicado en Desk? Se sabe
-  // sin gastar tokens: deskStatus 'ok' (deskUpdateAuto publicó) o un evento
-  // ticket_actualizado/ticket_respondido en el historial.
+  // ¿El ticket ya tiene respuesta en Desk? Señales SIN tokens: deskStatus 'ok'
+  // (deskUpdateAuto publicó), deskReplied (el cliente respondió — vía
+  // desk-live), o un evento ticket_actualizado/ticket_respondido en el
+  // historial. deskResolved (cerrado/confirmado) implica respuesta.
   function deskAnswered(b) {
-    if (b.deskStatus === 'ok') return true;
+    if (b.deskStatus === 'ok' || b.deskReplied || b.deskResolved) return true;
     const h = Array.isArray(b.history) ? b.history : [];
     return h.some((e) => (e.type === 'ticket_actualizado' && e.ok !== false) || e.type === 'ticket_respondido');
   }
   function deskCellFor(b) {
     if (!b.ticketNumber) return '<span class="bb-icell bb-icell--none">—</span>';
     if (b.deskStatus === 'updating') return '<span class="bb-icell bb-icell--warn" title="Publicando la respuesta en Desk…">⏳</span>';
-    if (deskAnswered(b)) return '<span class="bb-icell bb-icell--ok" title="Respuesta ya publicada en el ticket de Desk">🎫✔</span>';
+    if (b.deskResolved) return '<span class="bb-icell bb-icell--ok" title="Ticket resuelto/confirmado en Desk">🎫✅</span>';
+    if (deskAnswered(b)) return '<span class="bb-icell bb-icell--ok" title="Respuesta publicada en el ticket de Desk">🎫✔</span>';
     if (b.deskStatus === 'error') return '<span class="bb-icell bb-icell--fail" title="El último intento de actualizar Desk falló">🎫✕</span>';
-    return '<span class="bb-icell bb-icell--none" title="Ticket sin responder en Desk">—</span>';
+    if (b.deskCheckedAt) return '<span class="bb-icell bb-icell--none" title="Consultado en Desk: aún sin respuesta">🎫○</span>';
+    return '<span class="bb-icell bb-icell--none" title="Desk sin consultar (usá 🎫 Desk)">—</span>';
   }
 
   function statsHtml(s) {
@@ -821,12 +832,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       if (!res.ok) throw new Error(data.error || 'Falló la consulta a GitHub.');
       ghRows = data.github || [];
       await reload(); // re-deriva los tickets del motor (ghRows ya enganchados server-side)
-      mr.ghstate.textContent = `GitHub · ${fmtDate(Date.now())}`;
+      lastGhAt = Date.now(); updateFreshness();
       if (data.errors?.length && !silent) {
         await dialog.alertDialog({ title: 'GitHub', message: `Algunos PRs no se pudieron consultar:\n${data.errors.join('\n')}` });
       }
     } catch (err) {
-      mr.ghstate.textContent = 'GitHub no disponible';
+      if (mr.ghstate) mr.ghstate.innerHTML = `<span class="bb-fresh">GitHub no disponible · ${lastDeskAt ? `Desk: ${fmtAgo(lastDeskAt)}` : 'Desk: sin consultar'}</span>`;
       if (!silent) await dialog.alertDialog({ title: 'GitHub', message: err.message });
     } finally { mr.ghsync.disabled = false; }
   }
@@ -956,6 +967,43 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         </div>
       </div>`;
   }
+
+  // Sincronización Desk de los tickets ACTIVOS (no resueltos): CONSUME TOKENS,
+  // por eso con confirm. Cada consulta persiste el snapshot en el registro y
+  // el motor lo refleja (deskReplied/deskResolved) — resuelve el "aparece sin
+  // datos aunque ya tiene respuesta". Desk NUNCA se consulta solo.
+  mr.desksync.addEventListener('click', async () => {
+    const activos = entries.filter((b) => b.ticketNumber && b.resolution !== 'complete');
+    if (!activos.length) return dialog.alertDialog({ title: 'Desk', message: 'No hay tickets activos para consultar.' });
+    const ok = await dialog.confirmDialog({
+      title: 'Sincronizar Desk',
+      message: `Se consulta Zoho Desk el estado real de ${activos.length} ticket(s) activo(s) (respuesta publicada, resuelto).\n\nCONSUME TOKENS (una corrida de lectura por ticket). Los resueltos no se re-consultan.`,
+      confirmLabel: `Consultar ${activos.length}`,
+    });
+    if (!ok) return;
+    mr.desksync.disabled = true;
+    const orig = mr.desksync.innerHTML;
+    let done = 0;
+    for (const b of activos) {
+      mr.desksync.innerHTML = `${pacman()}<span>Desk ${++done}/${activos.length}…</span>`;
+      try { await fetch(`/api/bugfixes/desk-live/${encodeURIComponent(b.ticketNumber)}`); } catch { /* sigue */ }
+    }
+    mr.desksync.disabled = false; mr.desksync.innerHTML = orig;
+    lastDeskAt = Date.now();
+    await reload(); // el motor ya lee los deskReplied/deskResolved recién persistidos
+    updateFreshness();
+  });
+
+  // Auto-refresco de GitHub (BARATO: solo gh, sin tokens) mientras el tablero
+  // está abierto, para que los merges de Chris aparezcan solos. Se limpia al
+  // cerrar y al ocultar la pestaña; se re-dispara al volver.
+  const GH_AUTO_MS = 45000;
+  let ghTimer = setInterval(() => { if (!document.hidden) ghSync(true); }, GH_AUTO_MS);
+  let freshTimer = setInterval(updateFreshness, 20000); // solo re-pinta "hace X"
+  const onVis = () => { if (!document.hidden) ghSync(true); };
+  document.addEventListener('visibilitychange', onVis);
+  const origClose = m.close;
+  m.close = () => { clearInterval(ghTimer); clearInterval(freshTimer); document.removeEventListener('visibilitychange', onVis); origClose(); };
 
   // Al abrir: registro + triage al instante; GitHub completa enseguida.
   reload().then(() => ghSync(true));

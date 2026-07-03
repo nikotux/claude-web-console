@@ -9,7 +9,19 @@
 // Fase 5 (loop que aprende) PROPONE nuevas acá cuando el auto-fix resuelve algo.
 //
 // Cada invariante: { match: RegExp (contra rel path de archivo), text: string }.
-export const INVARIANTS = [
+import fss from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Invariantes APRENDIDOS (Fase 5): propuestos por el auto-fix y APROBADOS por
+// el usuario. Viven en un JSON de datos (match como string) que el server
+// puede escribir con seguridad — nunca se genera código. Se mergean con los
+// seeds hand-authored de abajo.
+const LEARNED_FILE = path.join(__dirname, 'invariants-learned.json');
+
+// Seeds hand-authored (RegExp ricas). Los aprendidos se suman aparte.
+export const SEED_INVARIANTS = [
   {
     match: /src\/modules\/chat\/(index|shared)\.js$/,
     text: 'SIMETRÍA de estado en chat/index.js: todo `case` del switch de eventos que muta estado persistente de la conversación (mode, model, etc.) debe llamar a onUpdate()/persist() IGUAL que sus gemelos. Ej histórico: `case "mode"` debía llamar onUpdate() como `case "model"` — si un camino guarda y su gemelo no, es un bug.',
@@ -40,8 +52,41 @@ export const INVARIANTS = [
   },
 ];
 
+// Carga los aprendidos y compila su `match` (string) a RegExp; un patrón malo
+// se descarta sin romper el auditor (try/catch por entrada).
+function loadLearned() {
+  let arr;
+  try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); } catch { return []; }
+  if (!Array.isArray(arr)) return [];
+  return arr.map((e) => {
+    try { return { match: new RegExp(e.match), text: String(e.text), learned: true }; }
+    catch { return null; }
+  }).filter(Boolean);
+}
+
+// Todos los invariantes: seeds + aprendidos (se relee el JSON cada vez — es
+// chico y así toma en caliente lo recién aprobado).
+export function allInvariants() {
+  return [...SEED_INVARIANTS, ...loadLearned()];
+}
+
 // Invariantes que aplican a una unidad (por sus archivos). Devuelve textos.
 export function invariantsFor(unit) {
   const files = unit?.files || [];
-  return INVARIANTS.filter((inv) => files.some((f) => inv.match.test(f))).map((inv) => inv.text);
+  return allInvariants().filter((inv) => files.some((f) => inv.match.test(f))).map((inv) => inv.text);
+}
+
+// Agrega un invariante APROBADO al JSON de aprendidos (repo). Valida el regex
+// ANTES de persistir; lanza si el match es inválido o falta texto. Es la única
+// escritura "código-adyacente" del flujo, admin-gated y con aprobación humana.
+export function appendLearnedInvariant({ match, text }) {
+  const m = String(match || '').trim();
+  const t = String(text || '').trim();
+  if (!m || !t) throw new Error('Faltan match o texto del invariante.');
+  try { new RegExp(m); } catch { throw new Error('El match no es una expresión regular válida.'); }
+  let arr = [];
+  try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
+  if (arr.some((e) => e.match === m && e.text === t)) return; // dedup
+  arr.push({ match: m.slice(0, 200), text: t.slice(0, 400), addedAt: Date.now() });
+  fss.writeFileSync(LEARNED_FILE, JSON.stringify(arr, null, 2));
 }
