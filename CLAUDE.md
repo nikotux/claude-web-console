@@ -94,7 +94,8 @@ código.
 - `users.json`, `sessions.json` (auth; perms 600), `recents.json`, `titles.json`
 - `.env` (config del usuario: token maestro, puerto, etc. — solo el usuario)
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
-  tickets/salud), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  tickets/salud, `inventory.json`+`inventory.md` generados por core/inventory.js,
+  `health-solved.json` registro de bugs), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
 
@@ -116,7 +117,21 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             (manager.create; rehydrate NO uniquifica) y terminal (si el
                             basename choca, persiste el único como customTitle en
                             titles.json, cuyos helpers loadTitles/saveTitles/titleKey ahora
-                            viven acá, compartidos por los módulos tmux y terminal)
+                            viven acá, compartidos por los módulos tmux y terminal) ·
+                            inventory(INVENTARIO determinístico del proyecto — FASE 1 del
+                            "sistema nervioso": el CLAUDE.md son las REGLAS/receta; el
+                            inventario es el CENSO VIVO "qué existe AHORA". Sin LLM: parsea el
+                            repo con regex e inline. Cataloga módulos backend (archivos ·
+                            registry.js:línea · endpoints), runners de bin/, frontend
+                            {name,mount} y el VOCABULARIO (tokens --cwc-*, env vars,
+                            VALID_MODELS, PERMISSION_MODES) + un FINGERPRINT de contenido por
+                            unidad. Salida: ~/.cwc-data/inventory.json + inventory.md.
+                            generateInventory({force}) es ON-DEMAND: solo re-parsea si cambió
+                            algún mtime/fingerprint. Lo dispara `bin/cwc-inventory.js`. Las
+                            fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
+                            unidades cuyo fingerprint cambió), F3 contexto de chats nuevos,
+                            F4 invariantes, F5 loop que aprende. NADIE lo importa aún —
+                            standalone en F1, cero riesgo al server)
 src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(router, ctx), registerWs(wss, ctx) }
                             → se registra agregándolo al array de src/core/registry.js
   terminal/                 sesiones tmux (PREFIX cwc-) + bare/TUI (BARE_PREFIX cwct-) + rehidratación
@@ -452,6 +467,7 @@ bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x mó
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
+bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
 docs/                       frontend-modules.md · brief-original.txt · contexto-ui.md (histórico)
 ```
