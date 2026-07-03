@@ -50,9 +50,13 @@ código.
    convenciones, gotchas — y docs/ si aplica). El proyecto puede crecer mucho;
    este archivo tiene que alcanzar para que una IA sin contexto previo sepa
    qué puede, qué debe y qué no debe tocar.
-9. **Ejecutar sin frenar:** el usuario ya delegó; no pedirle confirmaciones
-   intermedias (ni por archivos sensibles). Parar SOLO ante un error crítico
-   (posible pérdida de datos o cambio de alcance).
+9. **Plan primero, después ejecutar sin frenar:** ANTES de ejecutar,
+   presentar el PLAN en formato visual (tabla: cambio/archivos/efecto) para
+   decidir juntos — pedido del usuario 2026-07-03; sus preferencias globales
+   viven en ~/.claude/CLAUDE.md (visual primero: tablas, íconos, jerarquía).
+   Tras su OK, ejecutar DE CORRIDO sin confirmaciones intermedias (ni por
+   archivos sensibles). Parar SOLO ante un error crítico (posible pérdida de
+   datos o cambio de alcance). Cerrar con resumen visual de lo hecho.
 
 ## NO MODIFICAR (generado o estado de runtime)
 

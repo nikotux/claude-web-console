@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 13:27 — main
+- Modified `CLAUDE.md`
+
 ### 2026-07-03 07:26 — main
 - Chat: modo 'Todo' (bypassPermissions) + selector de modos compacto por riesgo
 - Auto-título con IA: la sesión se renombra sola (≤20 chars) según lo que hace
