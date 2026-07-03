@@ -275,6 +275,25 @@ html, body {
 }
 
 /* ===== Modal Uso (tokens) ===== */
+/* Límites del PLAN (las ventanas de claude.ai: sesión 5 h / semanales):
+   % usado con color por umbral (ok <70, warn <90, danger 90+), barra y
+   "queda X% · resetea en …". */
+.usage-lims { border-bottom: 1px solid var(--cwc-divider); padding-bottom: .5rem; margin-bottom: .5rem; }
+.lim-head {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: .25rem;
+}
+.lim-row { padding: .2rem 0; }
+.lim-top { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; font-size: var(--cwc-fs-md); }
+.lim-label { color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lim-pct { font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+.lim-bar { display: block; height: 5px; background: var(--cwc-bg-chip); border-radius: 2px; margin: .2rem 0; overflow: hidden; }
+.lim-fill { display: block; height: 100%; border-radius: 2px; }
+.lim-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.lim-err { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .2rem 0; }
+/* Pac-Man "consumiendo ahora" en la fila de un modelo (no roba el ellipsis
+   del nombre: va flex:none entre el nombre y el costo). */
+.tok-row-top .cwc-pacman { flex: none; }
 .usage-totals { border-bottom: 1px solid var(--cwc-divider); padding-bottom: .5rem; margin-bottom: .4rem; }
 /* Botón Actualizar del header del modal: pegado a la × (el space-between del
    dlg-head lo dejaría flotando en el centro sin este margin-left:auto). */

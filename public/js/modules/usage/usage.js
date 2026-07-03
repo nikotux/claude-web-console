@@ -1,9 +1,11 @@
 // modules/usage/usage.js — Uso de tokens.
 //
-// En el pie: SOLO el costo de HOY (botón). Todo el detalle (total global,
-// proyectos con barra apilada por modelo, desglose exacto) vive en el modal
-// "Uso" que abre ese botón. Mismos datos y endpoint de siempre
-// (/api/tokens/summary); nueva presentación.
+// En el pie: SOLO el costo de HOY (botón). Todo el detalle vive en el modal
+// "Uso" que abre ese botón: arriba los LÍMITES DEL PLAN (las ventanas de
+// claude.ai — /api/tokens/limits: % usado, % restante y reset), abajo el uso
+// local por modelo (/api/tokens/summary) con Pac-Man masticando en los
+// modelos que están consumiendo tokens AHORA (transcript tocado < 2 min).
+// El modal se auto-refresca cada 10 s mientras está abierto.
 import { modelColor, modelName } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -35,6 +37,55 @@ async function fetchSummary(fresh = false) {
   if (!res.ok) throw new Error();
   return res.json();
 }
+
+// ===== Límites del PLAN (ventanas de claude.ai) =====
+async function fetchLimits(fresh = false) {
+  const res = await fetch(`/api/tokens/limits${fresh ? '?fresh=1' : ''}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'No se pudieron leer los límites.');
+  return data;
+}
+
+// "resetea en 1 h 40 min (10:00)" — relativo + hora local absoluta (con día
+// si no es hoy, p.ej. las ventanas semanales).
+function fmtReset(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const diff = d - Date.now();
+  if (diff <= 0) return 'reseteando…';
+  const min = Math.ceil(diff / 60000);
+  const rel = min < 60 ? `${min} min`
+    : min < 48 * 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}`
+    : `${Math.floor(min / 1440)} d ${Math.floor((min % 1440) / 60)} h`;
+  const hhmm = d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  const abs = d.toDateString() === new Date().toDateString()
+    ? hhmm : `${d.toLocaleDateString('es', { weekday: 'short' })} ${hhmm}`;
+  return `resetea en ${rel} (${abs})`;
+}
+
+function renderLimits(el, data) {
+  const rows = (data.limits || []).map((l) => {
+    const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
+    const color = pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
+    return `
+      <div class="lim-row">
+        <div class="lim-top"><span class="lim-label"></span><span class="lim-pct" style="color:${color}">${pct}%</span></div>
+        <span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>
+        <div class="lim-sub">queda ${100 - pct}% · ${fmtReset(l.resetsAt)}</div>
+      </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="lim-head">Límites del plan${data.subscription ? ` · ${data.subscription}` : ''}</div>
+    ${rows || '<div class="lim-err">Anthropic no reportó ventanas de límite.</div>'}`;
+  // Etiquetas con textContent (traen nombres de modelo que vienen del server).
+  const labels = el.querySelectorAll('.lim-label');
+  (data.limits || []).forEach((l, i) => { labels[i].textContent = l.label; });
+}
+
+// Un modelo se considera "consumiendo AHORA" si su transcript se tocó hace
+// menos de 2 min (mientras Claude trabaja, el jsonl se escribe seguido).
+const ACTIVE_MS = 120000;
+const isLive = (lastMtime) => !!lastMtime && Date.now() - lastMtime < ACTIVE_MS;
 
 // Pivot proyectos→modelos: la lista principal son los MODELOS (acotada, no
 // crece con los proyectos). El detalle de cada modelo son los 3 proyectos que
@@ -92,15 +143,19 @@ function renderUsage(container, sum) {
     <div class="tok-note">Tokens exactos (reportados por Anthropic en cada respuesta). El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token, así que no existe un gasto real en dólares consultable.</div>` +
     models.map((m) => {
       const w = Math.max(4, Math.round((m.cost / max) * 100));
+      // Pac-Man masticando = este modelo está consumiendo tokens AHORA
+      // (mismo lenguaje que las tarjetas de Sesiones); ausente = quieto.
+      const live = isLive(m.lastMtime);
       return `
-        <div class="tok-row">
+        <div class="tok-row" data-key="${m.key}">
           <div class="tok-row-top">
             <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
             <span class="tok-name">${modelName(m.key, m.model)}</span>
+            ${live ? pacman({ cls: 'pac-sm tok-live', title: 'consumiendo tokens ahora' }) : ''}
             <span class="tok-row-cost">${fmtCost(m.cost)}</span>
           </div>
           <span class="tok-bar"><span class="tok-fill" style="width:${w}%;background:${modelColor(m.key)}"></span></span>
-          <div class="tok-row-sub">${fmtTokens(m.tokens)} tok · ${fmtRelative(m.lastMtime)}</div>
+          <div class="tok-row-sub">${fmtTokens(m.tokens)} tok · ${live ? 'consumiendo ahora' : fmtRelative(m.lastMtime)}</div>
           ${detailFor(m)}
         </div>`;
     }).join('');
@@ -153,29 +208,62 @@ export default {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 
     btn.addEventListener('click', async () => {
-      const m = dialog.openModal({ title: 'Uso de tokens', width: 520 });
+      let timer = null;
+      const m = dialog.openModal({
+        title: 'Uso de tokens',
+        width: 520,
+        onClose: () => clearInterval(timer),
+      });
 
       // Botón Actualizar en el header del modal (junto a la ×): fuerza una
-      // re-lectura fresca en el backend (?fresh=1 saltea el TTL del summary).
+      // re-lectura fresca en el backend (?fresh=1 saltea el TTL del summary
+      // local Y el de los límites remotos).
       const reload = document.createElement('button');
       reload.className = 'btn-ghost btn--sm btn--icon usage-reload';
-      reload.title = 'Actualizar (re-lee los transcripts ahora)';
+      reload.title = 'Actualizar (re-lee transcripts y límites ahora)';
       reload.innerHTML = icon('refresh', { size: 15 });
       m.card.querySelector('.dlg-head').insertBefore(reload, m.card.querySelector('.dlg-x'));
 
+      // Dos secciones estables: límites del PLAN arriba (claude.ai) y el uso
+      // local abajo. Cada una carga/falla por su lado.
+      m.body.innerHTML = `
+        <div class="usage-lims"><div class="cwc-loading">${pacman()}límites del plan…</div></div>
+        <div class="usage-sum"><div class="cwc-loading">${pacman()}calculando…</div></div>`;
+      const limsEl = m.body.querySelector('.usage-lims');
+      const sumEl = m.body.querySelector('.usage-sum');
+
+      async function loadLimits(fresh) {
+        try {
+          renderLimits(limsEl, await fetchLimits(fresh));
+        } catch (e) {
+          limsEl.innerHTML = '<div class="lim-head">Límites del plan</div><div class="lim-err"></div>';
+          limsEl.querySelector('.lim-err').textContent = e.message;
+        }
+      }
+      async function loadSum(fresh) {
+        // Preserva los detalles expandidos a través del auto-refresh.
+        const open = new Set([...sumEl.querySelectorAll('.tok-row')]
+          .filter((r) => r.querySelector('.tok-detail:not([hidden])'))
+          .map((r) => r.dataset.key));
+        try {
+          renderUsage(sumEl, await fetchSummary(fresh));
+          for (const key of open) {
+            sumEl.querySelector(`.tok-row[data-key="${key}"] .tok-detail`)?.removeAttribute('hidden');
+          }
+        } catch {
+          sumEl.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
+        }
+      }
       async function load(fresh) {
         reload.disabled = true;
-        m.body.innerHTML = `<div class="cwc-loading">${pacman()}calculando…</div>`;
-        try {
-          const sum = await fetchSummary(fresh);
-          renderUsage(m.body, sum);
-        } catch {
-          m.body.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
-        }
+        await Promise.all([loadSum(fresh), loadLimits(fresh)]);
         reload.disabled = false;
       }
       reload.addEventListener('click', () => load(true));
       load(false);
+      // Refresco en vivo mientras el modal esté abierto: mantiene al día el
+      // Pac-Man "consumiendo ahora" y la cuenta regresiva de los resets.
+      timer = setInterval(() => { if (!document.hidden) load(false); }, 10000);
     });
   },
 };

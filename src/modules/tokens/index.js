@@ -11,6 +11,9 @@
 //   GET /api/tokens/summary  -> { totals, today, projects[], updatedAt }
 //   Cada proyecto incluye `models[]` (tokens+costo por CADA modelo usado, no
 //   solo el principal) e input/output/cache totales, para el desglose del panel.
+//   GET /api/tokens/limits   -> { limits[], subscription, updatedAt }
+//   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales), vía el
+//   endpoint OAuth de Anthropic con el token del CLI (solo lectura, ver abajo).
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -187,6 +190,87 @@ let summaryCache = null;
 let summaryAt = 0;
 const SUMMARY_TTL_MS = 4000;
 
+// ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
+// Fuente: el endpoint OAuth de uso de Anthropic — el MISMO que consulta el
+// /usage del CLI — con el accessToken de ~/.claude/.credentials.json (la
+// credencial que ya hereda el Agent SDK; acá SOLO se lee, jamás se escribe
+// ni se refresca: si venció, el error lo dice y se arregla abriendo claude).
+// El token nunca sale hacia el cliente: el server hace de proxy.
+const CREDS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+
+const LIMIT_LABELS = {
+  session: 'Sesión (5 h)',
+  weekly_all: 'Semana · todos los modelos',
+};
+
+async function fetchPlanLimits() {
+  let oauth;
+  try {
+    oauth = JSON.parse(await fs.readFile(CREDS_FILE, 'utf8')).claudeAiOauth;
+  } catch {
+    throw new Error('No se pudieron leer las credenciales del CLI (~/.claude/.credentials.json).');
+  }
+  if (!oauth?.accessToken) throw new Error('Sin token OAuth del CLI.');
+  if (oauth.expiresAt && oauth.expiresAt < Date.now()) {
+    throw new Error('El token del CLI está vencido: abrí una sesión de claude para refrescarlo.');
+  }
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 10000);
+  let res;
+  try {
+    res = await fetch(USAGE_URL, {
+      headers: {
+        Authorization: `Bearer ${oauth.accessToken}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Content-Type': 'application/json',
+      },
+      signal: ctl.signal,
+    });
+  } catch {
+    throw new Error('No se pudo consultar a Anthropic (¿sin salida a internet?).');
+  } finally {
+    clearTimeout(t);
+  }
+  if (!res.ok) throw new Error(`Anthropic respondió ${res.status}.`);
+  const data = await res.json();
+
+  // Normalización: preferimos el array `limits` (trae también las ventanas
+  // por modelo, p.ej. "Semana · Fable"); si no vino, caemos a los campos
+  // planos five_hour/seven_day.
+  const limits = (Array.isArray(data.limits) ? data.limits : [])
+    .filter((l) => l && typeof l.percent === 'number')
+    .map((l) => ({
+      kind: l.kind,
+      label: LIMIT_LABELS[l.kind]
+        || (l.scope?.model?.display_name ? `Semana · ${l.scope.model.display_name}` : l.kind),
+      percent: l.percent,
+      severity: l.severity || 'normal',
+      isActive: !!l.is_active,
+      resetsAt: l.resets_at || null,
+    }));
+  if (!limits.length) {
+    for (const [kind, src] of [['session', data.five_hour], ['weekly_all', data.seven_day]]) {
+      if (src && src.utilization != null) {
+        limits.push({
+          kind, label: LIMIT_LABELS[kind], percent: src.utilization,
+          severity: 'normal', isActive: false, resetsAt: src.resets_at || null,
+        });
+      }
+    }
+  }
+  return {
+    limits,
+    subscription: oauth.subscriptionType || null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// Cache de límites: consulta remota, TTL más largo que el summary local.
+let limitsCache = null;
+let limitsAt = 0;
+const LIMITS_TTL_MS = 60000;
+
 export default {
   name: 'tokens',
 
@@ -207,6 +291,22 @@ export default {
         res.json(summaryCache);
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
+      }
+    });
+
+    // Límites del plan (ventanas de claude.ai): % usado y hora de reset.
+    // ?fresh=1 saltea el TTL (botón Actualizar del modal Uso).
+    r.get('/limits', async (req, res) => {
+      const now = Date.now();
+      if (!req.query.fresh && limitsCache && now - limitsAt < LIMITS_TTL_MS) {
+        return res.json(limitsCache);
+      }
+      try {
+        limitsCache = await fetchPlanLimits();
+        limitsAt = now;
+        res.json(limitsCache);
+      } catch (err) {
+        res.status(502).json({ error: err.message || 'No se pudieron leer los límites del plan.' });
       }
     });
 

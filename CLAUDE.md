@@ -96,7 +96,16 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             chat.model para el próximo spawnRunner. Antes solo existía para
                             sesiones tmux (`/model` tipeado a la TUI) — ahora el menú ⋯ de una
                             conversación en Sesiones también tiene "Cambiar modelo".
-  files/ stats/ tokens/ tmux/ admin/ tickets/ health/
+  files/ stats/ tmux/ admin/ tickets/ health/
+  tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
+                            por mtime+size) + límites del PLAN (GET /api/tokens/limits:
+                            % usado y reset de las ventanas de claude.ai — sesión 5 h /
+                            semanales, incluida la del modelo activo — vía el endpoint
+                            OAuth de uso de Anthropic con el accessToken de
+                            ~/.claude/.credentials.json, la misma credencial que hereda el
+                            SDK; el archivo SOLO se lee, el token nunca viaja al cliente,
+                            caché 60 s y ?fresh=1 la saltea; si el token venció el error
+                            dice cómo arreglarlo — jamás refrescarlo desde acá)
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
                             stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
@@ -194,7 +203,13 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             "Cancelar PR" en el detalle de un fix subido no mergeado
                             (confirm rojo → /cancel-pr → vuelve a pendiente);
                             EXCLUSIVO de ~/tolkien) ·
-                            tickets · explorer · mobile/auxbar
+                            tickets · explorer · mobile/auxbar ·
+                            usage (pie: tokens de HOY; su modal "Uso": arriba límites del
+                            plan — /api/tokens/limits, barras % con umbrales ok/warn/danger
+                            y "queda X% · resetea en …" — y abajo el consumo por modelo con
+                            Pac-Man pac-sm masticando en los que consumen AHORA (lastMtime
+                            < 2 min); auto-refresh cada 10 s mientras el modal está abierto,
+                            preservando detalles expandidos, con clearInterval en onClose)
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup) ·
                             pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
@@ -355,7 +370,13 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (fable 10/50 · opus 5/25 · sonnet 3/15 · haiku 1/5; cache w5m ×1.25,
   w1h ×2, read ×0.1 — verificados 2026-07). GET /api/tokens/summary?fresh=1
   saltea el TTL de 4s (botón ↻ del modal Uso); el caché por archivo
-  (mtime+size) nunca se saltea porque es exacto por construcción.
+  (mtime+size) nunca se saltea porque es exacto por construcción. El modal
+  Uso agrupa POR MODELO (lista acotada; agrupar por proyecto crecía sin
+  tope): el pivot vive en buildModelView() de usage.js sobre el mismo
+  /summary (que expone models[].lastMtime por proyecto — granularidad de
+  archivo: un jsonl multi-modelo "refresca" a todos sus modelos); el
+  desplegable de cada modelo son los 3 proyectos que lo usaron más
+  recientemente, ordenados de mayor a menor uso de ese modelo.
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
