@@ -66,14 +66,17 @@
            comporta como overlay (se oculta con .hidden).
            Cada slot [data-module] lo llena su módulo (ver docs/frontend-modules.md). -->
       <aside id="sidebar">
-        <!-- Cabecera del panel: colapsar/expandir + nueva sesión (rail colapsado) -->
+        <!-- Cabecera del panel: ☰ + Nueva sesión EN LA MISMA FILA (expandido:
+             el botón del launcher llena el espacio junto al ☰ — antes esa
+             fila quedaba medio vacía y el launcher gastaba una fila propia;
+             pedido del usuario en móvil, aplica igual en desktop).
+             Colapsado (solo desktop): columna ☰ + "+". -->
         <div class="sb-head">
           <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Contraer/expandir panel"></button>
           <button id="rail-new" class="rail-btn sb-new only-collapsed" data-icon="plus" title="Nueva sesión"></button>
+          <!-- Empezar trabajo: LA acción prominente (solo panel expandido) -->
+          <div class="sidebar-top only-expanded" data-module="launcher"></div>
         </div>
-
-        <!-- Empezar trabajo: LA acción prominente (solo panel expandido) -->
-        <div class="sidebar-top only-expanded" data-module="launcher"></div>
 
         <!-- Pestañas abiertas (pty | chat): navegación principal. Iconos en el
              rail colapsado (dot de estado + color de modelo); chips con inicial

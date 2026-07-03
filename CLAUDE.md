@@ -411,6 +411,13 @@ docs/                       frontend-modules.md · brief-original.txt · context
   no contra el propio ancho del elemento, así que si el ancho vuelve a
   cambiar, `margin-left` quedaría desincronizado; `transform: -100%` siempre
   es exacto porque un % ahí SÍ se resuelve contra el propio elemento.
+- Cabecera del sidebar: el slot del launcher (`.sidebar-top`,
+  `[data-module="launcher"]`) vive DENTRO de `.sb-head`, en la MISMA fila que
+  el ☰ (flex:1 llena el espacio junto al botón — antes esa fila quedaba medio
+  vacía y "Nueva sesión" gastaba una fila propia; pedido del usuario en
+  móvil, aplica igual en desktop expandido). En el rail colapsado de desktop
+  el launcher se oculta (only-expanded) y queda la columna ☰ + "+"
+  (only-collapsed) de siempre.
 - `#rail-tabs` (chips de pestañas ABIERTAS) se oculta con `display:none` SOLO
   en el media query móvil de style.css: en el rail COLAPSADO de escritorio
   sigue siendo la única forma de cambiar de pestaña (la lista "Sesiones" se
