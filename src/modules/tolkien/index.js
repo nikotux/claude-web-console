@@ -30,11 +30,16 @@ function git(args, { timeout = 90000 } = {}) {
   });
 }
 
+// Timestamp del último fetch/pull exitoso (freshness del "N detrás"). En
+// memoria: tras un reinicio queda null hasta que el front auto-fetchea (5 min).
+let lastFetchAt = null;
+
 async function status() {
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || 'HEAD';
   const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout;
-  const last = (await git(['log', '-1', '--format=%cI%x09%s'])).stdout;
-  const [date, subject] = last.split('\t');
+  // Último commit: fecha ISO + autor + asunto (para el "pulso" del repo).
+  const last = (await git(['log', '-1', '--format=%cI%x09%an%x09%s'])).stdout;
+  const [date, author, subject] = last.split('\t');
   const porcelain = (await git(['status', '--porcelain'])).stdout;
   const dirtyCount = porcelain ? porcelain.split('\n').length : 0;
 
@@ -49,8 +54,9 @@ async function status() {
   }
   return {
     name: config.projectName, rel: REL, branch, head,
-    subject: subject || '', date: date || '',
+    subject: subject || '', author: author || '', date: date || '',
     dirty: dirtyCount > 0, dirtyCount, behind, ahead,
+    lastFetch: lastFetchAt,
   };
 }
 
@@ -69,6 +75,7 @@ export default {
 
     r.post('/fetch', async (req, res) => {
       const f = await git(['fetch', '--prune', 'origin']);
+      if (f.code === 0) lastFetchAt = Date.now();
       res.json({ ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() });
     });
 
@@ -88,6 +95,7 @@ export default {
 
         const pull = await git(['pull', '--ff-only', 'origin']);
         log.push({ step: 'pull', code: pull.code, out: pull.stdout || pull.stderr });
+        if (pull.code === 0) lastFetchAt = Date.now(); // pull incluye fetch
 
         let popConflict = false;
         if (stashed) {

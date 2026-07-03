@@ -1,19 +1,20 @@
-// modules/tolkien/tolkien.js — tarjeta del proyecto principal (git).
+// modules/tolkien/tolkien.js — tarjeta INFORMATIVA del proyecto principal (git).
 //
-// Estado git (chip ✓/↓N, #SHA, cambios locales) + acciones:
-//   [Continuar aquí] → enfoca la pestaña del proyecto o crea sesión Claude ahí
-//   [Explorar]       → Explorador posicionado en el proyecto
-//   [Actualizar]     → stash → pull --ff-only → stash pop (no destructivo)
-//   [Bugs & PRs]     → (admin) tablero unificado del ciclo del bug
-//                      (bug-board.js: triage + fixes + PRs con GitHub en vivo).
-// Chequeo automático contra el remoto cada 5 minutos.
-import { openBugBoard } from './bug-board.js';
+// Rediseño (pedido del usuario): la tarjeta muestra el PULSO del repo en vez de
+// botones redundantes. Continuar/Explorar salieron (alcanzables desde el
+// lanzador y el Explorador del pie) y "Bugs & PRs" se mudó a la sección
+// "Bugs & Features". Queda UNA acción: Actualizar (⬇, ícono en el header) =
+// stash → pull --ff-only → stash pop (no destructivo). Info mostrada:
+//   #SHA · branch · al día / N detrás/adelante · N cambios sin commitear
+//   último commit (asunto · autor · hace X)  ← el pulso: ¿Chris mergeó algo?
+//   último fetch (frescura del "N detrás")
+// El auto-fetch cada 5 min (y en visibilitychange) mantiene fresco el "detrás".
 
 export default {
   name: 'tolkien',
 
   mount(el, ctx) {
-    const { icon, dialog, openSession, focusSession, findSessionByCwd, openChat } = ctx;
+    const { icon, dialog } = ctx;
     let current = null;
     let busy = false;
 
@@ -21,29 +22,34 @@ export default {
       <header class="sec-head">
         <span class="sec-title">Tolkien</span>
         <span class="tk-chip" data-ref="chip"></span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Chequear remoto (fetch)">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Actualizar desde GitHub (stash → pull → pop)">${icon('download', { size: 14 })}</button>
       </header>
       <div class="tk-card">
-        <div class="tk-state-line" data-ref="state">cargando…</div>
-        <div class="tk-actions">
-          <button class="btn-ghost btn--sm" data-ref="continue">${icon('sparkle', { size: 13 })}<span>Continuar aquí</span></button>
-          <a class="btn-ghost btn--sm" data-ref="explore" href="/archivos?path=tolkien">${icon('folder', { size: 13 })}<span>Explorar</span></a>
-          <button class="btn-ghost btn--sm" data-ref="update">${icon('download', { size: 13 })}<span>Actualizar</span></button>
-          <button class="btn-ghost btn--sm" data-ref="sendpr" hidden title="Tablero unificado del ciclo del bug: triage, fixes, PRs con datos en vivo de GitHub y ticket en Desk">${icon('gitBranch', { size: 13 })}<span>Bugs & PRs</span></button>
-        </div>
+        <div class="tk-info" data-ref="info">cargando…</div>
       </div>`;
 
     const refs = {};
     for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const upToDate = (st) => !!st && st.behind === 0;
+
+    function fmtAgo(iso) {
+      const ms = iso ? (typeof iso === 'number' ? iso : Date.parse(iso)) : 0;
+      if (!ms) return '';
+      const s = Math.floor((Date.now() - ms) / 1000);
+      if (s < 60) return 'recién';
+      if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+      return `hace ${Math.floor(s / 86400)} d`;
+    }
+
     function stateText(st) {
-      if (!st) return '…';
       let s;
       if (st.behind > 0) s = `${st.behind} detrás`;
       else if (st.ahead > 0) s = `${st.ahead} adelante`;
       else s = 'al día';
-      if (st.dirty) s += ` · ${st.dirtyCount} cambios`;
+      if (st.dirty) s += ` · ${st.dirtyCount} cambio${st.dirtyCount === 1 ? '' : 's'}`;
       return s;
     }
 
@@ -52,12 +58,30 @@ export default {
       const cls = upToDate(st) ? 'ok' : 'behind';
       refs.chip.className = `tk-chip ${cls}`;
       refs.chip.innerHTML = st ? (upToDate(st) ? icon('check', { size: 12 }) : `↓${st.behind}`) : '';
-      refs.state.innerHTML = st
-        ? `<span class="tk-head">#${st.head}</span> · <span class="tk-state ${cls}">${stateText(st)}</span>`
-        : busy ? '<span class="cwc-spinner"></span>' : '…';
       refs.update.disabled = busy;
-      refs.refresh.disabled = busy;
-      refs.sendpr.disabled = busy;
+      // Resaltar la acción cuando hay algo para traer.
+      refs.update.classList.toggle('tk-update--due', !!st && st.behind > 0);
+      refs.update.title = st && st.behind > 0
+        ? `Actualizar: ${st.behind} commit(s) para traer`
+        : 'Actualizar desde GitHub (stash → pull → pop)';
+
+      if (!st) { refs.info.innerHTML = busy ? '<span class="cwc-spinner"></span>' : '…'; return; }
+      const branch = st.branch && st.branch !== 'main'
+        ? `<span class="tk-branch tk-branch--warn" title="No estás en main">⎇ ${esc(st.branch)}</span>`
+        : `<span class="tk-branch">⎇ ${esc(st.branch || 'main')}</span>`;
+      const commit = st.subject
+        ? `<div class="tk-commit" title="${esc(st.subject)}">último: ${esc(st.subject)}</div>
+           <div class="tk-commit-sub">${esc(st.author || '?')} · ${fmtAgo(st.date)}</div>`
+        : '';
+      const fetched = st.lastFetch ? `<div class="tk-fetch">remoto chequeado ${fmtAgo(st.lastFetch)}</div>` : '';
+      refs.info.innerHTML = `
+        <div class="tk-line1">
+          <span class="tk-head">#${esc(st.head)}</span>
+          ${branch}
+          <span class="tk-state ${cls}">${esc(stateText(st))}</span>
+        </div>
+        ${commit}
+        ${fetched}`;
     }
 
     async function loadStatus() {
@@ -105,42 +129,10 @@ export default {
       }
     }
 
-    // "Actualizar repo" que usa el tablero antes de subir PRs: mismo endpoint
-    // que [Actualizar], devolviendo {ok, message} para el flujo de envío.
-    async function updateRepo() {
-      try {
-        const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
-        if (up.status) current = up.status;
-        if (up.error) return { ok: false, message: `${up.error}\n\n${fmtLog(up.log)}\nNo se subió ningún PR.` };
-        if (up.popConflict) return { ok: false, message: 'Conflicto al reaplicar tus cambios locales (quedaron en el stash). Resolvelo antes de subir PRs.' };
-        return { ok: true };
-      } catch {
-        return { ok: false, message: 'No se pudo actualizar el repo (red o servidor). No se subió ningún PR.' };
-      } finally {
-        loadStatus();
-      }
-    }
-
-    refs.refresh.addEventListener('click', checkRemote);
     refs.update.addEventListener('click', doUpdate);
-    refs.sendpr.addEventListener('click', () => openBugBoard({
-      dialog, icon, openChat,
-      projectRel: () => current?.rel || 'tolkien',
-      updateRepo,
-    }));
-    // El botón existe solo para admins (el backend igual lo exige).
-    ctx.whoami?.then?.((me) => { if (me?.admin) refs.sendpr.hidden = false; });
-    refs.continue.addEventListener('click', () => {
-      const rel = current?.rel || 'tolkien';
-      const existing = findSessionByCwd(rel);
-      if (existing) focusSession(existing);
-      else openSession({ cwd: rel, runClaude: true });
-    });
 
     (async () => {
       await loadStatus();
-      const rel = current?.rel || 'tolkien';
-      refs.explore.href = `/archivos?path=${encodeURIComponent(rel)}`;
       checkRemote();
     })();
 

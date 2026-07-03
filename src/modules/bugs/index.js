@@ -1,4 +1,8 @@
-// modules/tickets/index.js — triage de bugs de Tolkien (skill bug-triage).
+// modules/bugs/index.js — triage de bugs de Tolkien (skill bug-triage).
+// Módulo `bugs` (antes `tickets`): backend del hub "Bugs & Features" del
+// sidebar. Los archivos de runtime conservan el nombre `tickets.json`/
+// `triage.lock` a propósito: describen el DATO (tickets [Tolkien Bug] de
+// Zoho Desk), no el módulo. Ruta HTTP: /api/bugs.
 //
 // Corre el skill `bug-triage` del proyecto Tolkien vía el Agent SDK, BAJO
 // DEMANDA (nunca polling: consume tokens reales), y cachea el resultado. El
@@ -14,8 +18,8 @@
 // vive en el runner.
 //
 // HTTP:
-//   GET  /api/tickets           -> { updatedAt, tickets, error, running }
-//   POST /api/tickets/refresh   -> lanza el runner y responde INMEDIATO
+//   GET  /api/bugs           -> { updatedAt, tickets, error, running }
+//   POST /api/bugs/refresh   -> lanza el runner y responde INMEDIATO
 //        (arrancar + encuestar, mismo patrón que health/review: antes el POST
 //        esperaba el triage entero —1 a 3 min— y cualquier corte de red móvil
 //        o reinicio tiraba error aunque la corrida siguiera). El front
@@ -48,7 +52,7 @@ function spawnTriage() {
 }
 
 export default {
-  name: 'tickets',
+  name: 'bugs',
 
   registerHttp(router) {
     const r = express.Router();
@@ -69,6 +73,6 @@ export default {
       }
     });
 
-    router.use('/tickets', r);
+    router.use('/bugs', r);
   },
 };

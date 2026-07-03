@@ -4,7 +4,7 @@
 // trabajo → fix registrado → PR → feedback/iteraciones → merge → ticket.
 // Fuentes por fila (correlación por número de ticket):
 //   - registro de bugfixes (~/.cwc-data/bugfixes.json, con history[])
-//   - triage de Desk (caché /api/tickets: severidad, duplicado, frescura)
+//   - triage de Desk (caché /api/bugs: severidad, duplicado, frescura)
 //   - PRs propios SOLO en GitHub (refresh-prs)
 // DATOS EN VIVO (no persistidos): al expandir una fila con PR se consulta
 // /api/bugfixes/pr-live/:n (gh, caché 60 s) — reviews, comentarios de Chris,
@@ -13,6 +13,17 @@
 import { pacman } from '../../ui/pacman.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Ticket de un PR solo-GitHub: los branches del flujo son `bugfix/tkt-<N>-…` y
+// los títulos `Fix/Update TKT #<N>: …`, así que el número sale del título o del
+// branch sin backend nuevo. null si el PR no sigue la convención.
+function ticketOfPr(pr) {
+  const t = String(pr.title || '').match(/TKT\s*#?\s*([\w.-]+)/i);
+  if (t) return t[1];
+  const b = String(pr.branch || '').match(/(?:tkt|ticket)-([\w.]+?)-[0-9a-f]{6,}$/i)
+    || String(pr.branch || '').match(/(?:tkt|ticket)[-_]?#?([\w.]+)/i);
+  return b ? b[1] : null;
+}
 
 const fmtDate = (ms) => {
   if (!ms) return '—';
@@ -52,8 +63,8 @@ const EV_DOT = {
   pr_mergeado: 'ok', pr_cancelado: 'fail',
 };
 
-export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo }) {
-  const m = dialog.openModal({ title: 'Bugs & PRs — Tolkien', width: '90vw' });
+export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose }) {
+  const m = dialog.openModal({ title: 'Bugs & PRs — Tolkien', width: '90vw', onClose });
   m.card.classList.add('dlg-card--tickets');
   // El maxWidth INLINE de openModal le ganaría al media query fullscreen de
   // .dlg-card--tickets en móvil: se limpia para que mande el CSS.
@@ -65,6 +76,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
       <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
       <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios sin registrar">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
       <button class="btn-ghost btn--sm" data-ref="ghsync" title="Refresca desde GitHub el estado de los PRs">${icon('refresh', { size: 13 })}<span>GitHub</span></button>
+      <button class="btn-ghost btn--sm btn--icon" data-ref="help" title="¿Cómo leer este tablero? (pipeline, chips, estados)">${icon('help', { size: 15 })}</button>
       <span class="bb-state" data-ref="ghstate"></span>
       <span class="bb-triage" data-ref="triage"></span>
     </div>
@@ -184,6 +196,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
       : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
       ${timeline}
       ${b.prNumber ? `<div class="bb-live" data-live="${b.prNumber}"><div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div></div>` : ''}
+      ${b.ticketNumber ? deskSectionHtml(b.ticketNumber) : ''}
       <p class="bfm-links">
         ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
         ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
@@ -195,6 +208,64 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
       ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>` : ''}
         <button class="btn-ghost btn--sm" data-act="del" title="Borra SOLO el registro local (no toca código ni PRs)">${icon('close', { size: 13 })}<span>Descartar registro</span></button>
       </p>`;
+  }
+
+  // Sección "Estado de Desk": bajo botón (consume tokens), no auto al expandir.
+  function deskSectionHtml(ticket) {
+    return `<div class="bb-desk" data-desktkt="${esc(ticket)}">
+      <button class="btn-ghost btn--sm bb-desk-btn" data-deskload="${esc(ticket)}" title="Trae el estado ACTUAL del ticket desde Zoho Desk (consume tokens) — para ver si tu comentario ya quedó publicado">${icon('download', { size: 13 })}<span>🎫 Traer estado de Desk</span></button>
+    </div>`;
+  }
+
+  // Detalle de un PR solo-GitHub (sin registro local): ticket detectado +
+  // panel de commits/reviews en vivo + estado de Desk + acción de actualizar.
+  function ghDetailHtml(pr) {
+    const ticket = ticketOfPr(pr);
+    return `
+      <div class="bb-chips">${ticket
+    ? `<span class="bb-chip bb-chip--info" title="Ticket detectado del título/branch del PR">🎫 pertenece a TKT #${esc(ticket)}</span>`
+    : '<span class="bb-chip bb-chip--warn" title="El título/branch no sigue la convención bugfix/tkt-N">sin ticket detectable</span>'}</div>
+      ${pr.branch ? `<p class="hp-bf-files"><code>${esc(pr.branch)}</code></p>` : ''}
+      <div class="bb-live" data-live="${pr.number}"><div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div></div>
+      ${ticket ? deskSectionHtml(ticket) : ''}
+      <p class="bfm-links">
+        <a href="${esc(pr.url)}" target="_blank" rel="noopener">Ver PR #${esc(pr.number)} en GitHub ↗</a>
+        ${ticket ? `<button class="btn-ghost btn--sm" data-act="ghdeskchat" data-prnum="${pr.number}" title="Abre un chat para redactar y publicar la actualización del ticket en Desk (vos aprobás la escritura)">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
+      </p>`;
+  }
+
+  // Panel EN VIVO de Desk: se llena al tocar el botón (y con ↻ fuerza fresh).
+  async function fillDesk(box, ticket, fresh) {
+    box.innerHTML = `<div class="cwc-loading">${pacman()}consultando Zoho Desk…</div>`;
+    try {
+      const res = await fetch(`/api/bugfixes/desk-live/${encodeURIComponent(ticket)}${fresh ? '?fresh=1' : ''}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Desk no disponible.');
+      const d = data.desk || {};
+      const head = (extra) => `
+        <div class="bb-desk-head">
+          <b>Zoho Desk · #${esc(ticket)}</b>
+          ${extra}
+          <button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Consultar de nuevo (saltea la caché de 60 s)">${icon('refresh', { size: 12 })}</button>
+          <span class="bb-live-at">${fmtAgo(d.fetchedAt)}</span>
+        </div>`;
+      if (!d.found) {
+        box.innerHTML = head(`<span class="bb-chip bb-chip--warn">${esc(d.error || 'ticket no encontrado')}</span>`);
+        return;
+      }
+      box.innerHTML = `
+        ${head(d.status ? `<span class="bb-chip bb-chip--info" title="Estado actual del ticket en Desk">${esc(d.status)}</span>` : '')}
+        ${d.subject ? `<div class="bb-desk-subj">${esc(d.subject)}</div>` : ''}
+        ${d.comments.length ? `<div class="bb-live-fb">${d.comments.map((c) => `
+          <div class="bb-fb">
+            <span class="bb-fb-head"><b>${esc(c.author)}</b> · <span class="bb-vis bb-vis--${c.visibility}">${c.visibility === 'private' ? 'interno' : 'público'}</span>${c.at ? ` · ${esc(c.at)}` : ''}</span>
+            ${c.excerpt ? `<span class="bb-fb-body">${esc(c.excerpt)}</span>` : ''}
+          </div>`).join('')}</div>`
+    : '<div class="bb-live-fb bb-live-empty">El ticket no tiene comentarios visibles.</div>'}`;
+    } catch (err) {
+      box.innerHTML = `<div class="bb-live-err">⚠ ${esc(err.message)} — reintentá con ↻.</div>
+        <div class="bb-desk-head"><button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Reintentar">${icon('refresh', { size: 12 })}</button></div>`;
+    }
   }
 
   // Panel EN VIVO del PR: se llena al expandir (y con ↻ fuerza fresh).
@@ -288,15 +359,25 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
     }
     for (const pr of ghRows) {
       const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
+      const ticket = ticketOfPr(pr);
+      // Pipeline mínimo del PR solo-GitHub: PR (siempre) + merge (si aplica).
+      const pipe = `<span class="bb-pipe">
+        <span class="bb-seg ${ticket ? 'bb-seg--ok' : ''}" title="${ticket ? `Ticket #${esc(ticket)} (detectado del título/branch)` : 'Sin ticket detectable'}"></span>
+        <span class="bb-seg"></span>
+        <span class="bb-seg bb-seg--${pr.state === 'closed' ? 'fail' : 'ok'}" title="PR #${pr.number} (${esc(pr.state)})"></span>
+        <span class="bb-seg ${pr.state === 'merged' ? 'bb-seg--ok' : ''}" title="${pr.state === 'merged' ? 'Mergeado' : 'Sin merge'}"></span>
+        <span class="bb-seg" title="Estado del ticket en Desk: abrí la fila y tocá “Traer estado de Desk”"></span>
+      </span>`;
       rows.push(`
-        <tr class="bfm-row bfm-row--gh">
+        <tr class="bfm-row bfm-row--gh" data-prnum="${pr.number}">
           <td><span class="hp-dot hp-dot--${dot}"></span></td>
-          <td class="bfm-tkt" title="PR tuyo en GitHub sin registro de bugfix">GitHub</td>
-          <td class="bfm-title"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${esc(pr.number)} ${esc(pr.title)}</a></td>
-          <td></td>
+          <td class="bfm-tkt" title="${ticket ? `Ticket #${esc(ticket)} detectado del PR` : 'PR en GitHub sin ticket detectable'}">${ticket ? `#${esc(ticket)}` : 'GitHub'}</td>
+          <td class="bfm-title">#${esc(pr.number)} ${esc(pr.title)}</td>
+          <td>${pipe}</td>
           <td class="bfm-stats">${statsHtml(pr.stats)}</td>
           <td class="bfm-state">${pr.state === 'merged' ? `mergeado${pr.mergedBy ? ` por ${esc(pr.mergedBy)}` : ''}` : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
-        </tr>`);
+        </tr>
+        <tr class="bfm-detail" hidden><td colspan="6">${ghDetailHtml(pr)}</td></tr>`);
     }
     mr.tbody.innerHTML = rows.join('');
   }
@@ -310,8 +391,31 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
       if (box) await fillLive(box, n, true);
       return;
     }
+    // Desk: botón "Traer estado" (primera carga) y ↻ (fresca).
+    const deskLoad = e.target.closest('[data-deskload]');
+    if (deskLoad) {
+      const box = deskLoad.closest('.bb-desk');
+      if (box) await fillDesk(box, deskLoad.dataset.deskload, false);
+      return;
+    }
+    const deskFresh = e.target.closest('[data-deskfresh]');
+    if (deskFresh) {
+      const box = deskFresh.closest('.bb-desk');
+      if (box) await fillDesk(box, deskFresh.dataset.deskfresh, true);
+      return;
+    }
     const act = e.target.closest('[data-act]');
     if (act) {
+      // Acción sobre un PR solo-GitHub (sin registro local).
+      if (act.dataset.act === 'ghdeskchat') {
+        const pr = ghRows.find((p) => String(p.number) === act.dataset.prnum);
+        if (pr) {
+          const ticket = ticketOfPr(pr);
+          m.close();
+          await doDeskChat({ ticketNumber: ticket, prNumber: pr.number, prUrl: pr.url, ticketUrl: null, summary: '', history: [] });
+        }
+        return;
+      }
       const det = act.closest('.bfm-detail');
       const sid = det?.previousElementSibling?.dataset?.sid;
       const b = entries.find((x) => x.sessionId === sid);
@@ -326,7 +430,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
     }
     if (e.target.closest('a')) return;
     const row = e.target.closest('.bfm-row');
-    if (!row || row.classList.contains('bfm-row--gh')) return;
+    if (!row) return; // las filas solo-GitHub ahora TAMBIÉN expanden
     const det = row.nextElementSibling;
     if (!det?.classList.contains('bfm-detail')) return;
     det.hidden = !det.hidden;
@@ -475,7 +579,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
     try {
       const [bf, tk] = await Promise.all([
         fetch('/api/bugfixes').then((r) => r.json()),
-        fetch('/api/tickets').then((r) => r.json()).catch(() => triage),
+        fetch('/api/bugs').then((r) => r.json()).catch(() => triage),
       ]);
       entries = bf.bugfixes || [];
       triage = tk || triage;
@@ -567,6 +671,59 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo })
   });
 
   mr.ghsync.addEventListener('click', () => ghSync(false));
+  mr.help.addEventListener('click', showHelp);
+
+  // Modal "Cómo leer este tablero": explica la nomenclatura del tablero.
+  function showHelp() {
+    const h = dialog.openModal({ title: 'Cómo leer este tablero', width: 460 });
+    h.body.innerHTML = `
+      <div class="bb-help">
+        <div class="bb-help-sec">
+          <b>Pipeline</b> <span class="bb-help-dim">— las 5 barritas del ciclo del bug</span>
+          <div class="bb-help-pipe">
+            <span class="bb-pipe">
+              <span class="bb-seg bb-seg--ok"></span><span class="bb-seg bb-seg--ok"></span>
+              <span class="bb-seg bb-seg--ok"></span><span class="bb-seg"></span><span class="bb-seg"></span>
+            </span>
+          </div>
+          <ol class="bb-help-steps">
+            <li>🎫 <b>Triage</b> — el ticket está en el último triage de Desk</li>
+            <li>🛠 <b>Trabajo</b> — hay archivos editados en el fix</li>
+            <li>⬆ <b>PR</b> — se creó el pull request</li>
+            <li>✅ <b>Merge</b> — Chris lo mergeó a main</li>
+            <li>📩 <b>Ticket</b> — se actualizó el ticket en Zoho Desk</li>
+          </ol>
+          <p class="bb-help-dim">Color de cada barra: <span class="bb-help-c bb-help-c--ok">verde</span> hecho · <span class="bb-help-c bb-help-c--fail">rojo</span> falló/cerrado · <span class="bb-help-c">gris</span> pendiente.</p>
+        </div>
+        <div class="bb-help-sec">
+          <b>Chips</b> <span class="bb-help-dim">(en el detalle de cada fila)</span>
+          <ul class="bb-help-list">
+            <li><span class="bb-chip bb-chip--ok">🎫 abierto en Desk</span> el ticket sigue en el triage</li>
+            <li><span class="bb-chip bb-chip--warn">👥 dup</span> posible duplicado</li>
+            <li><span class="bb-chip bb-chip--info">🔁 reabierto</span> el fix se retrabajó tras el PR</li>
+            <li><span class="bb-chip bb-chip--danger">⚠ doble registro</span> hay 2+ registros del mismo ticket</li>
+            <li><span class="bb-chip bb-chip--ok">🎫 ticket ✓</span> / <span class="bb-chip bb-chip--danger">✗</span> última actualización de Desk OK / falló</li>
+          </ul>
+        </div>
+        <div class="bb-help-sec">
+          <b>Punto de estado</b> <span class="bb-help-dim">(a la izquierda de la fila)</span>
+          <ul class="bb-help-list">
+            <li><span class="hp-dot hp-dot--ok"></span> mergeado / al día</li>
+            <li><span class="hp-dot hp-dot--warn"></span> en curso (pendiente, PR abierto)</li>
+            <li><span class="hp-dot hp-dot--fail"></span> cerrado sin merge</li>
+          </ul>
+        </div>
+        <div class="bb-help-sec">
+          <b>GitHub en vivo</b> — al expandir un PR: review, checks, conflictos, commits y feedback de Chris, en el momento (caché 60 s, ↻ refresca).
+        </div>
+        <div class="bb-help-sec">
+          <b>Desk en vivo</b> — botón <i>🎫 Traer estado de Desk</i>: consulta Zoho Desk y muestra el estado real del ticket y sus últimos comentarios, para ver si tu actualización ya quedó. <span class="bb-help-dim">Consume tokens; por eso es bajo botón.</span>
+        </div>
+        <div class="bb-help-sec">
+          <b>Fila “#N …” (GitHub)</b> — un PR tuyo en GitHub sin registro local. El <b>#N</b> del ticket se detecta del título/branch; expandila para ver commits y actualizar su ticket.
+        </div>
+      </div>`;
+  }
 
   // Al abrir: registro + triage al instante; GitHub completa enseguida.
   reload().then(() => ghSync(true));

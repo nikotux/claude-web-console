@@ -1,4 +1,4 @@
-// modules/tickets/shared.js — lo COMPARTIDO entre el módulo server y el
+// modules/bugs/shared.js — lo COMPARTIDO entre el módulo server y el
 // runner desacoplado del triage (bin/cwc-triage-runner.js): prompt, allowlist
 // de seguridad, parser del resultado, caché y lock de "corriendo".
 //
@@ -16,6 +16,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+// El módulo se llama `bugs`, pero el archivo de caché conserva el nombre
+// `tickets.json` a propósito: describe el DATO (tickets [Tolkien Bug] de Zoho
+// Desk), no el módulo, y renombrarlo perdería la caché actual del triage
+// (que cuesta tokens regenerar).
 export const CACHE_FILE = path.join(DATA_DIR, 'tickets.json');
 export const LOCK_FILE = path.join(DATA_DIR, 'triage.lock');
 export const LOG_FILE = path.join(DATA_DIR, 'triage.log');

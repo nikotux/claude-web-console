@@ -12,12 +12,12 @@ import { initAuxBar } from './modules/mobile/auxbar.js';
 import launcher from './modules/launcher/launcher.js';
 import sessions from './modules/sessions/sessions.js';
 import tolkien from './modules/tolkien/tolkien.js';
-import tickets from './modules/tickets/tickets.js';
+import bugs from './modules/bugs/bugs.js';
 import stats from './modules/stats/stats.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
 
-const MODULES = [launcher, sessions, tolkien, tickets, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, bugs, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');

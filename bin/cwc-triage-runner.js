@@ -20,7 +20,7 @@ import { settingSourcesFor } from '../src/core/sdk-settings.js';
 import {
   PROMPT, toolAllowed, parseTickets, readCache, writeCache,
   writeLock, clearLock, isRunning, RUN_TIMEOUT_MS, MAX_TURNS, HEARTBEAT_MS,
-} from '../src/modules/tickets/shared.js';
+} from '../src/modules/bugs/shared.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 

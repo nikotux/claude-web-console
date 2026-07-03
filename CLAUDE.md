@@ -42,7 +42,23 @@ código.
    DOS capas:** hook `PreToolUse` (deniega ANTES de la evaluación de permisos;
    inmune a reglas `allow` pre-aprobadas en settings) + `canUseTool` como
    allowlist de lecturas. Nunca cargar `settingSources: ['user']` en esas
-   corridas ni quitar ninguna de las dos capas.
+   corridas ni quitar ninguna de las dos capas. EXCEPCIÓN QUIRÚRGICA
+   deliberada (pedido del usuario 2026-07-03): `deskUpdateAuto` de
+   `bugfixes/index.js` — tras el PRIMER envío exitoso de un PR, una corrida
+   headless actualiza el ticket en Zoho Desk (On Hold + nota corta en
+   inglés). Mantiene las DOS capas pero como allowlist de SOLO las tools
+   `desk_*` del MCP (regex `^mcp__..__desk_`); Bash/Edit/Write/git y todo lo
+   demás siguen denegados. Las ITERACIONES del PR (feedback) JAMÁS tocan
+   Desk automáticamente: van por el chat "Actualizar ticket" del tablero,
+   donde el usuario aprueba la escritura en la tarjeta de permiso.
+   SUB-EXCEPCIÓN de LECTURA (pedido del usuario 2026-07-03): `deskLive` de
+   `bugfixes/index.js` (endpoint GET /api/bugfixes/desk-live/:n) trae el
+   estado + comentarios ACTUALES del ticket para ver si la actualización ya
+   quedó. Es MÁS blindada que la de escritura: allowlist de tools `desk_*`
+   que (a) NO contienen verbo de escritura (add/update/reply/…) Y (b) SÍ uno
+   de lectura (get/list/search/view/…) — deny por defecto, en las DOS capas.
+   Consume tokens: el front la dispara BAJO BOTÓN ("Traer estado de Desk"),
+   nunca al expandir; caché 60 s, ?fresh=1 la saltea.
 7. **La carpeta del proyecto es SIEMPRE `/home/nmosquera/claude-web-console`.**
    No moverla ni duplicarla; las sesiones de Claude Code se abren desde acá.
 8. **Hoja de ruta siempre completa:** en CADA modificación se actualizan los
@@ -145,18 +161,21 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             sigue existiendo pero el próximo mensaje puede pisarlo (a
                             pedido: nombres siempre actualizados).
   files/ stats/ tmux/ admin/ health/
-  tickets/                  triage de bugs BAJO DEMANDA (consume tokens; admin). La corrida
-                            vive en un RUNNER DETACHED (bin/cwc-triage-runner.js, patrón
-                            chat-runner): un reinicio del server a mitad de triage NO la mata
-                            (ese era el bug de "no se pudo correr el triage" — la consola se
-                            reinicia seguido por deploys/push/pull). Interfaz server<->runner
-                            en shared.js: tickets.json (resultado) + triage.lock (heartbeat
-                            {pid,ts} => `running`; lock viejo = runner muerto, relanzable).
+  bugs/                     (ANTES `tickets`, renombrado 2026-07-03) backend del hub
+                            "Bugs & Features" del sidebar: triage de bugs BAJO DEMANDA
+                            (consume tokens; admin). Ruta HTTP /api/bugs (GET estado, POST
+                            /refresh). La corrida vive en un RUNNER DETACHED
+                            (bin/cwc-triage-runner.js, patrón chat-runner): un reinicio del
+                            server a mitad de triage NO la mata. Interfaz server<->runner en
+                            shared.js: los archivos de runtime CONSERVAN el nombre
+                            `tickets.json` (resultado) + `triage.lock` a propósito — describen
+                            el DATO (tickets [Tolkien Bug] de Desk), no el módulo, y renombrar
+                            la caché perdería el triage (que cuesta tokens regenerar).
                             POST /refresh responde INMEDIATO (arrancar+encuestar, patrón
-                            health/review — un POST de 1-3 min se cortaba en red móvil); el
-                            front encuesta GET cada 3 s y si la corrida se pierde re-dispara
-                            solo (hasta 3 intentos con 3 s de espera). La seguridad read-only
-                            de dos capas (regla 6) vive EN el runner.
+                            health/review); el front encuesta GET cada 3 s y re-dispara si la
+                            corrida se pierde (3 intentos). Seguridad read-only de dos capas
+                            (regla 6) EN el runner. OJO: `bugs` (triage) ≠ `bugfixes` (motor
+                            de PRs) — dominios distintos, nombres parecidos a propósito.
   tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
                             por mtime+size) + límites del PLAN (GET /api/tokens/limits:
                             % usado y reset de las ventanas de claude.ai — sesión 5 h /
@@ -268,11 +287,37 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (sin campos de PR) para rehacer el fix de cero; un PR MERGEADO
                             nunca se cancela (se verifica el estado real con gh antes).
                             El chat registra al CERRAR una conversación con ticket (diferido
-                            2s: el transcript se flushea tarde). UI ÚNICA: el modal "Enviar
-                            PR" de la sección Tolkien (cuadro registro+GitHub) — la lista que
-                            duplicaba la pestaña Salud se QUITÓ por redundante (Salud es solo
-                            salud); su "Descartar registro" (/delete) se movió al detalle de
-                            ese modal.
+                            2s: el transcript se flushea tarde).
+                            HISTORIAL por fix (history[] en cada registro, addEvent de
+                            store.js, retrocompatible): creado · trabajo_nuevo (reapertura
+                            tras PR) · pr_creado · pr_actualizado (2º+ commit, sha) ·
+                            pr_mergeado (transición detectada en refresh-prs) · pr_cancelado ·
+                            ticket_actualizado (Desk, auto|chat, ok|error). Es el timeline
+                            del tablero.
+                            DESK AUTO (deskUpdateAuto, ver EXCEPCIÓN en regla 6): tras el
+                            PRIMER envío exitoso (esPrimerEnvio = !updated && !sentAt) corre
+                            asíncrona una corrida SDK (sonnet, allowlist SOLO desk_* del MCP,
+                            timeout 4 min) que pone el ticket On Hold + nota corta EN INGLÉS;
+                            deskStatus updating→ok|error + evento al historial. Las
+                            ITERACIONES no tocan Desk: el resultado del envío lo avisa y el
+                            tablero ofrece "Actualizar ticket (chat)".
+                            PR-LIVE (GET /pr-live/:n, admin): datos EN VIVO de un PR vía gh
+                            (reviews, reviewDecision, comentarios, checks, commits,
+                            mergeable) con caché en memoria de 60 s (?fresh=1 la saltea);
+                            NADA se persiste — es el panel "GitHub en vivo" del tablero.
+                            DESK-LIVE (GET /desk-live/:n, admin, CONSUME TOKENS): estado +
+                            comentarios ACTUALES del ticket en Zoho Desk vía corrida headless
+                            READ-ONLY (sub-excepción de la regla 6: allowlist desk_* SOLO
+                            lectura); parsea un bloque JSON de la respuesta del modelo, caché
+                            60 s. Sirve para ver si tu comentario ya se publicó.
+                            UI ÚNICA: el TABLERO "Bugs & PRs" (tolkien/bug-board.js): filas de
+                            registro local + tickets del triage + PRs SOLO-GitHub, estas
+                            últimas ahora EXPANDIBLES (badge #N del ticket detectado del
+                            título/branch con ticketOfPr, panel GitHub en vivo con commits, y
+                            "Actualizar ticket (chat)" si tienen ticket). Cada fila con ticket
+                            trae el botón "Traer estado de Desk" (desk-live, bajo botón). El
+                            botón "?" abre "Cómo leer este tablero" (pipeline, chips, puntos,
+                            GitHub/Desk en vivo).
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)
@@ -292,19 +337,40 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             sección Memorias. Visible a todos (autenticados), edición gateada por
                             isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
                             salud: chequeos rápidos + revisión profunda, sin bugfixes) ·
-                            tolkien (botón Enviar PR admin → MODAL de gestión: cuadro con
-                            historial de PRs + estado de merge desde GitHub + columna
-                            Cambios (aporte en +/−/archivos: numstat local vs origin/main
-                            para pendientes, tamaño del PR para subidos), enviar pendientes
-                            con update previo, re-scan, y "Trabajar en esto" (chat
-                            'PR en progreso · TKT #n' en tolkien para refinar a mano;
-                            recordBugfix MERGEA por ticket los pendientes — no duplica) y
-                            "Cancelar PR" en el detalle de un fix subido no mergeado
-                            (confirm rojo → /cancel-pr → vuelve a pendiente) y "Descartar
-                            registro" en el detalle de cualquier fix (confirm rojo →
-                            /delete: borra SOLO el registro local, ni código ni PRs);
-                            EXCLUSIVO de ~/tolkien) ·
-                            tickets · explorer ·
+                            tolkien (tarjeta git INFORMATIVA, rediseño 2026-07-03: sin
+                            Continuar/Explorar/Bugs&PRs — quedaban redundantes; muestra el
+                            PULSO del repo — #SHA · branch (⚠ si ≠ main) · al día/N detrás ·
+                            N cambios · último commit (asunto·autor·hace X) · último fetch —
+                            y UNA acción: Actualizar (⬇ ícono en el header) = stash→pull→pop,
+                            resaltada .tk-update--due si behind>0. /api/tolkien/status suma
+                            author+lastFetch. El acceso al tablero se movió a "Bugs & Features") ·
+                            bugs (sección "Bugs & Features", modules/bugs/bugs.js, ANTES
+                            `tickets`: ÚNICO acceso al ciclo del bug. INFO RÁPIDA barata (sin
+                            tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y
+                            /api/bugfixes (registro: por enviar, PRs abiertos, y ⚠ ATENCIÓN =
+                            reabierto/doble registro/ticket sin actualizar — los casos del
+                            519). Botón "Abrir tablero" + ↻ triage (tokens, confirm). Al
+                            cerrar el tablero (onClose) refresca las stats) ·
+                            El TABLERO (tolkien/bug-board.js, admin, lo abren "Bugs & Features"
+                            y —histórico— el botón de Tolkien):
+                            UNA fila por ticket para TODO el ciclo — triage → trabajo → PR →
+                            feedback → merge → ticket. Fuentes: registro de bugfixes +
+                            triage de Desk (chips de verificación: severidad, "abierto en
+                            Desk"/"no está en el triage", dup, 🔁 reabierto ×N, ⚠ doble
+                            registro, 🎫 estado Desk, frescura del triage) + PRs solo-GitHub.
+                            Detalle expandible: resumen, archivos, TIMELINE (history[]),
+                            panel "GitHub en vivo" (pr-live: reviewDecision, checks, commits,
+                            comentarios de Chris; ↻ fresh) y acciones: Trabajar en esto
+                            (prompt con HISTORIAL + aviso de feedback), Actualizar ticket
+                            (chat SIN ticket:{} a propósito — no debe re-registrar trabajo
+                            ni devolver el fix a pendiente; redacta la nota EN INGLÉS y
+                            escribe en Desk solo con la aprobación del usuario), Cancelar PR,
+                            Descartar registro; filas solo-triage con "Trabajar en Chat
+                            (plan)". El confirm de "Enviar pendientes" lista las
+                            ADVERTENCIAS de verificación por fix (rojo si hay) y avisa el
+                            auto-update de Desk de los PRs nuevos. Enviar = update repo
+                            previo (callback updateRepo) + POST /pr por fix.
+                            EXCLUSIVO de ~/tolkien) · explorer ·
                             mobile/auxbar (teclas Esc/Tab/flechas/^C + dictado, SOLO para
                             vistas de terminal: con la vista Chat activa la barra ENTERA —
                             botón ⌨ incluido — se oculta por CSS puro con
