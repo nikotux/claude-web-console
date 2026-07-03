@@ -123,6 +123,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             acciones). Los chips de PERMISO (chat-permchip
                             "Permitido/Denegado") conservan su palabra a propósito:
                             registran una decisión, no una ejecución.
+                            SOLICITUD de permiso (chat-perm, _permCard): compacta como los
+                            chips — [chip consola+tipo+chevron, SIN texto] + [✕ Denegar]
+                            [✓ Permitir] (lo único que sobresale; cp-deny con margin-left:
+                            auto). El nombre de función era flex:none y con tools MCP
+                            largos empujaba los botones fuera de pantalla en móvil (bug
+                            reportado por el usuario). Tocar el chip expande el detalle:
+                            cp-detail-tool = nombre COMPLETO de la función (word-break) +
+                            comando/diff íntegro. Destructivos siguen naciendo EXPANDIDOS
+                            (isDestructiveCommand).
                             AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
                             _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
                             READ-ONLY doble capa regla 6 con TODA herramienta denegada) que

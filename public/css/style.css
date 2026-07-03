@@ -727,25 +727,33 @@ html, body {
 .df-add { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); }
 .df-add .cwc-diff-line { color: color-mix(in srgb, var(--cwc-ok) 60%, var(--cwc-white)); }
 
-/* Solicitud de permiso: fila compacta [icono][tool][resumen][chevron][✕][✓];
-   el detalle íntegro abre debajo ANTES de decidir. Los comandos destructivos
-   nacen expandidos (regla de seguridad en chat-tab.js). */
+/* Solicitud de permiso COMPACTA: [chip consola+tipo+chevron][✕ Denegar]
+   [✓ Permitir] — el chip es idéntico al de tool calls (sin texto: el nombre
+   de función largo era flex:none y empujaba los botones fuera de pantalla en
+   móvil) y expande el detalle íntegro (función completa + comando/diff)
+   ANTES de decidir. Los comandos destructivos nacen expandidos (regla de
+   seguridad en chat-tab.js). */
 .chat-perm {
   align-self: stretch; background: var(--cwc-bg-elevated);
   border: 1px solid var(--cwc-warn); border-radius: var(--cwc-radius-md);
   padding: .25rem .45rem; display: flex; flex-direction: column; gap: .25rem;
+  max-width: 100%; min-width: 0;
 }
-.chat-perm-row { display: flex; align-items: center; gap: .45rem; min-height: 34px; color: var(--cwc-warn); }
-.cp-tool { flex: none; font-weight: 600; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
-.cp-sum {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
-}
-.cp-chev { flex: none; transition: transform .15s ease; }
-.chat-perm.open .cp-chev { transform: rotate(180deg); }
+.chat-perm-row { display: flex; align-items: center; gap: .45rem; min-height: 34px; }
+.cp-chip { flex: none; border-color: var(--cwc-warn); }
+.cp-chip .cp-chev { transition: transform .15s ease; }
+.chat-perm.open .cp-chip .cp-chev { transform: rotate(180deg); }
+/* Los botones son lo ÚNICO que sobresale: anclados a la derecha, sin crecer. */
+.cp-deny { margin-left: auto; }
 .cp-deny, .cp-allow { flex: none; min-height: 32px; }
-@media (pointer: coarse) { .cp-deny, .cp-allow, .cp-chev { min-height: 44px; } }
+@media (pointer: coarse) { .cp-deny, .cp-allow, .cp-chip { min-height: 44px; } }
 .chat-perm-detail { border-top: 1px solid var(--cwc-divider); animation: msg-in .18s ease; }
+/* Nombre COMPLETO de la función dentro del detalle: wrappea, jamás desborda
+   (con el chip sin texto es donde se ve "cuál es la función"). */
+.cp-detail-tool {
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); font-weight: 600;
+  color: var(--cwc-warn); word-break: break-all;
+}
 /* Chip de registro del veredicto (se integra al grupo de tool calls) */
 .chat-permchip.ok { border-left: 2px solid var(--cwc-ok); }
 .chat-permchip.ok .ct-name { color: var(--cwc-ok); }

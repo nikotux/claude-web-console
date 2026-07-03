@@ -34,9 +34,6 @@ function isDestructiveCommand(cmd) {
   return DESTRUCTIVE_PATTERNS.some((re) => re.test(c));
 }
 
-// Ícono representativo por herramienta en la fila de permiso.
-const TOOL_ICONS = { Bash: 'terminal', Edit: 'edit', Write: 'edit', Read: 'eye', WebFetch: 'download' };
-
 // Ícono del TIPO de herramienta: es el SEGUNDO ícono del chip de ejecución
 // (el primero es siempre la consola = "Claude usó una herramienta"). El chip
 // ya no lleva texto (era innecesariamente largo); la leyenda de estos íconos
@@ -533,9 +530,12 @@ export class ChatTab {
     }
   }
 
-  // Solicitud de permiso como fila compacta (Fase 9 · 4):
-  // [icono] [tool] [resumen] [chevron] [✕ Denegar] [✓ Permitir].
-  // El chevron abre el detalle íntegro (comando/diff) ANTES de decidir.
+  // Solicitud de permiso COMPACTA (rediseño a pedido: el nombre de la función
+  // era flex:none y con nombres largos —p.ej. tools MCP— empujaba los botones
+  // fuera de la pantalla en móvil): un chip IDÉNTICO al de tool calls (consola
+  // + tipo, sin texto) con chevron, y lo único que sobresale son [✕ Denegar]
+  // [✓ Permitir]. Tocar el chip expande el detalle íntegro (función completa +
+  // comando/diff) ANTES de decidir; en desktop el tooltip ya adelanta todo.
   _permCard(m) {
     const el = document.createElement('div');
     el.className = 'chat-perm';
@@ -546,27 +546,23 @@ export class ChatTab {
     el._detail = m.detail || null;
     el.innerHTML = `
       <div class="chat-perm-row">
-        ${icon(TOOL_ICONS[m.tool] || 'gear', { size: 15 })}
-        <span class="cp-tool"></span>
-        <span class="cp-sum"></span>
-        <button class="btn-ghost btn--icon cp-chev" title="Ver detalle completo">${icon('chevronDown', { size: 14 })}</button>
+        <button type="button" class="chat-toolchip cp-chip">
+          ${icon('terminal', { size: 14 })}${icon(toolTypeIcon(m.tool), { size: 13, className: 'ct-type' })}${icon('chevronDown', { size: 12, className: 'cp-chev' })}
+        </button>
         <button class="btn-ghost btn--sm cp-deny" data-allow="0">${icon('close', { size: 13 })} Denegar</button>
         <button class="btn btn--sm cp-allow" data-allow="1">${icon('check', { size: 13 })} Permitir</button>
       </div>
       <div class="chat-perm-detail" hidden></div>`;
-    el.querySelector('.cp-tool').textContent = m.tool;
-    // El resumen NUNCA parafrasea: es el texto del server (para Bash, el inicio
-    // real del comando). El truncado es por CSS (ellipsis) desde el final.
-    const sumEl = el.querySelector('.cp-sum');
-    sumEl.textContent = el._summary;
-    sumEl.title = el._summary;
+    // El tooltip NUNCA parafrasea: tool + inicio real del comando (server).
+    const chipEl = el.querySelector('.cp-chip');
+    chipEl.title = `${m.tool}${el._summary ? ` — ${el._summary}` : ''}`;
     const detEl = el.querySelector('.chat-perm-detail');
     const toggle = (want = detEl.hidden) => {
       if (want && !detEl.childNodes.length) detEl.appendChild(this._permDetailBody(el));
       detEl.hidden = !want;
       el.classList.toggle('open', want);
     };
-    el.querySelector('.cp-chev').addEventListener('click', () => toggle());
+    chipEl.addEventListener('click', () => toggle());
     for (const b of el.querySelectorAll('[data-allow]')) {
       b.addEventListener('click', () => {
         this._send({ type: 'permission_response', id: m.id, allow: b.dataset.allow === '1' });
@@ -578,11 +574,16 @@ export class ChatTab {
     this._scroll();
   }
 
-  // Detalle íntegro de un permiso: diff exacto para ediciones, comando completo
-  // para Bash, resumen completo para el resto.
+  // Detalle íntegro de un permiso: nombre COMPLETO de la función (con el chip
+  // sin texto es la única forma de verlo en móvil; wrappea, nunca desborda) +
+  // diff exacto para ediciones o comando completo para Bash/resto.
   _permDetailBody(el) {
     const body = document.createElement('div');
     body.className = 'ct-body';
+    const name = document.createElement('div');
+    name.className = 'cp-detail-tool';
+    name.textContent = el._tool || '';
+    body.appendChild(name);
     const d = el._detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
     else {
