@@ -284,7 +284,28 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             npm install ANTES del restart; reinicia SOLO con árbol sano (pop
                             conflictuado o npm roto → avisa y NO reinicia: un server sobre
                             archivos con marcas de conflicto entra en crash-loop).
-  bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
+  bugfixes/                 MOTOR de tickets (engine.js — la columna vertebral): el log
+                            físico sigue en store.js (~/.cwc-data/bugfixes.json, cada registro
+                            = un ATTEMPT/chat que trabajó un ticket, clave sessionId — NO se
+                            tocó, retrocompat total). El motor DERIVA determinísticamente
+                            (como core/inventory.js, sin LLM) los TICKETS consolidados:
+                            buildTickets() agrupa los attempts por número de ticket → 1 ticket
+                            = 1 entidad {number,title,attempts[],external:{github[],desk},
+                            state DERIVADO (deriveState: pipeline triaged→working→pr-open→
+                            pr-merged→desk-answered→resolved), resolution, tags[], meta{},
+                            history[] unificado, schemaVersion}. IMPOSIBLE duplicar (dedo
+                            resbalado = attempt outcome 'empty'). Sidecar tickets-meta.json =
+                            dimensiones curadas (tags/area) + BIBLIOTECA DE SOLUCIONES
+                            (recordSolution/findSimilarSolutions, matching determinístico por
+                            archivos/tags/área — gancho listo, se llena en fase próxima).
+                            GET /api/bugfixes/tickets = tickets consolidados (+ similar[]); el
+                            tablero (bug-board.js) lo consume vía ticketToRow (puente
+                            motor→helpers): 1 fila por ticket, los intentos en el detalle
+                            (attemptsHtml). GET /api/bugfixes (viejo, array plano) queda para
+                            retrocompat. PENDIENTE (fase 2): estado EN VIVO — el estado Desk
+                            sigue viniendo del registro (deskStatus), no refleja respuestas
+                            publicadas fuera de la consola hasta un desk-live manual.
+                            registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol
                             real — commit de los archivos del fix, push, gh pr create con

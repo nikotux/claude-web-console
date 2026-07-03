@@ -34,6 +34,11 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
+import { buildTickets, findSimilarSolutions } from './engine.js';
+
+// Últimos PRs solo-GitHub vistos por refresh-prs (para que el motor los
+// enganche a su ticket sin re-consultar gh en cada carga del tablero).
+let lastGhRows = [];
 
 const WT_BASE = path.join(os.homedir(), '.cwc-data', 'bugfix-wt');
 const inFlight = new Set(); // sessionIds con PR en curso (anti doble click)
@@ -608,6 +613,20 @@ export default {
       res.json({ bugfixes: all, inFlight: [...inFlight] });
     });
 
+    // MOTOR: tickets CONSOLIDADOS (columna vertebral). Un ticket = una entidad
+    // con sus attempts embebidos y estado DERIVADO (nunca duplicados). El
+    // tablero consume esto. `similar` = soluciones pasadas parecidas (gancho).
+    r.get('/tickets', (req, res) => {
+      try {
+        const tickets = buildTickets({ ghRows: lastGhRows }).map((t) => ({
+          ...t, similar: findSimilarSolutions(t),
+        }));
+        res.json({ tickets, ghAt: lastGhRows.length ? Date.now() : null });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 200) });
+      }
+    });
+
     r.post('/scan', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const { scanned, added } = scanUnregistered(config.projectDir);
@@ -737,6 +756,7 @@ export default {
       } catch (err) {
         errors.push(`gh pr list: ${String(err?.message || err).slice(0, 120)}`);
       }
+      lastGhRows = github.map((pr) => ({ ...pr, fetchedAt: Date.now() }));
       res.json({ bugfixes: all, github, errors });
     });
 

@@ -1303,3 +1303,15 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   /* Móvil: acciones apiladas (analizar + resolver todo). */
   .hr-actions-row { flex-direction: column; }
 }
+
+/* ===== Motor de tickets: intentos de resolución + soluciones parecidas ===== */
+.bb-attempts { margin: .5rem 0; border-left: 2px solid var(--cwc-border-strong); padding-left: .6rem; }
+.bb-attempts-h { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em; margin-bottom: .25rem; }
+.bb-attempt { display: flex; align-items: center; gap: .45rem; padding: .15rem 0; font-size: var(--cwc-fs-sm); }
+.bb-attempt--empty .bb-attempt-txt { color: var(--cwc-text-dimmer); }
+.bb-attempt-txt { flex: 1; min-width: 0; color: var(--cwc-text-secondary); }
+.bb-attempt-at { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+.bb-similar { margin: .5rem 0; background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-md); padding: .45rem .6rem; }
+.bb-similar-h { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); font-weight: 600; margin-bottom: .25rem; }
+.bb-similar-item { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); padding: .1rem 0; }
+.bb-similar-item code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }

@@ -233,6 +233,33 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   }
 
   // ===== Detalle expandible =====
+  // Los INTENTOS del ticket (cada chat que lo trabajó): el motor consolidó
+  // el ticket, acá se despliega su historia de resoluciones. Un ✓ = tiene
+  // código/PR; ○ = vacío (dedo resbalado / quedó en plan).
+  const OUTCOME_LABEL = {
+    empty: 'vacío (sin trabajo)', plan: 'quedó en plan', coded: 'con código',
+    'pr-sent': 'PR enviado', merged: 'PR mergeado', abandoned: 'abandonado',
+  };
+  function attemptsHtml(b) {
+    const at = b.attempts || [];
+    if (at.length <= 1) return ''; // un solo intento: no vale la pena la sección
+    return `<div class="bb-attempts"><div class="bb-attempts-h">${at.length} intentos de resolución</div>${at.map((a) => `
+      <div class="bb-attempt bb-attempt--${a.outcome === 'empty' ? 'empty' : 'real'}">
+        <span class="hp-dot hp-dot--${a.outcome === 'merged' ? 'ok' : a.outcome === 'empty' ? 'fail' : 'warn'}"></span>
+        <span class="bb-attempt-txt">${esc(OUTCOME_LABEL[a.outcome] || a.outcome)}${a.files?.length ? ` · ${a.files.length} archivo(s)` : ''}${a.pr ? ` · PR #${a.pr.number}` : ''}</span>
+        <span class="bb-attempt-at">${fmtDate(a.at)}</span>
+      </div>`).join('')}</div>`;
+  }
+
+  // Soluciones pasadas parecidas (biblioteca del motor). Gancho: hoy vacío,
+  // se llena cuando se destilen soluciones de tickets resueltos.
+  function similarHtml(b) {
+    const sim = b.similar || [];
+    if (!sim.length) return '';
+    return `<div class="bb-similar"><div class="bb-similar-h">💡 Soluciones parecidas de tickets pasados</div>${sim.map((s) => `
+      <div class="bb-similar-item">TKT #${esc(s.ticketNumber)}: ${esc(s.fix || s.rootCause || '')}${s.files?.length ? ` <code>${esc(s.files[0])}</code>` : ''}</div>`).join('')}</div>`;
+  }
+
   function detailHtml(b) {
     const tl = timelineOf(b);
     const timeline = tl.length
@@ -248,6 +275,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
       ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
       : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
+      ${attemptsHtml(b)}
+      ${similarHtml(b)}
       ${timeline}
       ${b.prNumber ? `<div class="bb-live" data-live="${b.prNumber}"><div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div></div>` : ''}
       ${b.ticketNumber ? deskSectionHtml(b.ticketNumber) : ''}
@@ -387,6 +416,39 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     }
   }
 
+  // ===== Puente motor→helpers: un Ticket consolidado se aplana a la forma
+  // que esperan los helpers existentes (prEstado, pipelineHtml, prCellFor,
+  // deskCellFor, detailHtml). 1 fila = 1 TICKET (sus chats van en attempts).
+  function ticketToRow(t) {
+    const gh = t.external?.github || [];
+    // "mejor" PR: mergeado > abierto > cerrado (el que define el estado).
+    const best = gh.find((p) => p.state === 'merged') || gh.find((p) => p.state === 'open') || gh[0] || null;
+    const desk = t.external?.desk || {};
+    const mainAttempt = t.attempts.find((a) => a.pr) || t.attempts.find((a) => a.files?.length) || t.attempts[t.attempts.length - 1] || {};
+    const allFiles = [...new Set(t.attempts.flatMap((a) => a.files || []))];
+    const deskStatus = desk.answered ? 'ok' : desk.updating ? 'updating' : desk.error ? 'error' : null;
+    const status = best ? (best.state === 'merged' ? 'subido' : 'pendiente') : (allFiles.length ? 'pendiente' : 'pendiente');
+    return {
+      // identidad + acción (las acciones operan sobre el attempt principal)
+      sessionId: mainAttempt.sessionId || null,
+      ticketNumber: t.number, ticketUrl: t.url, title: t.title,
+      summary: mainAttempt.summary || (t.attempts.find((a) => a.summary)?.summary) || '',
+      files: allFiles, stats: best ? mainAttempt.stats : mainAttempt.stats,
+      branch: mainAttempt.branch || null,
+      // PR consolidado (el "mejor")
+      prNumber: best?.number || null, prUrl: best?.url || null, prState: best?.state || null,
+      mergedBy: best?.mergedBy || null, mergedAt: best?.mergedAt || null,
+      // Desk consolidado
+      deskStatus, deskReplied: desk.replied || null, deskResolved: desk.resolved || null,
+      deskClosed: desk.closed || null, deskStatusText: desk.statusText || null, deskCheckedAt: desk.checkedAt || null,
+      // estado del motor (derivado) + historial unificado + attempts para el detalle
+      status, resolution: t.resolution, engineState: t.state,
+      history: t.history || [], attempts: t.attempts || [], archived: t.archived,
+      allSessionIds: t.attempts.map((a) => a.sessionId).filter(Boolean),
+      similar: t.similar || [],
+    };
+  }
+
   // ===== Render de la tabla =====
   function renderTable() {
     const pendientes = entries.filter((b) => b.status === 'pendiente' && b.files?.length);
@@ -456,9 +518,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           </p>
         </td></tr>`);
     }
+    // Los PRs solo-GitHub cuyo ticket YA está consolidado en una fila del
+    // motor no se repiten (el motor los enganchó a external.github).
+    const ticketsEnTablero = new Set(entries.map((b) => String(b.ticketNumber)).filter(Boolean));
     for (const pr of ghRows) {
       const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
       const ticket = ticketOfPr(pr);
+      if (ticket && ticketsEnTablero.has(String(ticket))) continue;
       // Pipeline mínimo del PR solo-GitHub: PR (siempre) + merge (si aplica).
       const pipe = `<span class="bb-pipe">
         <span class="bb-seg ${ticket ? 'bb-seg--ok' : ''}" title="${ticket ? `Ticket #${esc(ticket)} (detectado del título/branch)` : 'Sin ticket detectable'}"></span>
@@ -691,13 +757,17 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   // Archivar / restaurar: solo organización del tablero (no toca código ni PRs).
   async function doArchive(b, archived, btn) {
     if (btn) btn.disabled = true;
+    // Un ticket puede tener varios intentos: archivar/restaurar TODOS para
+    // que el estado consolidado del motor quede coherente.
+    const ids = b.allSessionIds?.length ? b.allSessionIds : [b.sessionId];
     try {
-      const res = await fetch('/api/bugfixes/archive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: b.sessionId, archived }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo archivar.');
+      for (const id of ids) {
+        const res = await fetch('/api/bugfixes/archive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, archived }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo archivar.');
+      }
     } catch (err) {
       await dialog.alertDialog({ title: 'Archivo', message: err.message });
     } finally { await reload(); }
@@ -711,13 +781,15 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     });
     if (!ok) return;
     btn.disabled = true;
+    const ids = b.allSessionIds?.length ? b.allSessionIds : [b.sessionId];
     try {
-      const res = await fetch('/api/bugfixes/delete', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: b.sessionId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo descartar el registro.');
+      for (const id of ids) {
+        const res = await fetch('/api/bugfixes/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo descartar el registro.');
+      }
     } catch (err) {
       await dialog.alertDialog({ title: 'Descartar registro', message: err.message });
     } finally { await reload(); }
@@ -725,11 +797,14 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
 
   async function reload() {
     try {
+      // FUENTE = el MOTOR: tickets consolidados (1 por número, attempts
+      // embebidos, estado derivado). Se aplanan con ticketToRow para los
+      // helpers. Reemplaza el array plano de registros por-chat de antes.
       const [bf, tk] = await Promise.all([
-        fetch('/api/bugfixes').then((r) => r.json()),
+        fetch('/api/bugfixes/tickets').then((r) => r.json()),
         fetch('/api/bugs').then((r) => r.json()).catch(() => triage),
       ]);
-      entries = bf.bugfixes || [];
+      entries = (bf.tickets || []).map(ticketToRow);
       triage = tk || triage;
       renderTable();
     } catch {
@@ -744,9 +819,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       const res = await fetch('/api/bugfixes/refresh-prs', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Falló la consulta a GitHub.');
-      entries = data.bugfixes || entries;
       ghRows = data.github || [];
-      renderTable();
+      await reload(); // re-deriva los tickets del motor (ghRows ya enganchados server-side)
       mr.ghstate.textContent = `GitHub · ${fmtDate(Date.now())}`;
       if (data.errors?.length && !silent) {
         await dialog.alertDialog({ title: 'GitHub', message: `Algunos PRs no se pudieron consultar:\n${data.errors.join('\n')}` });
@@ -807,8 +881,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       const res = await fetch('/api/bugfixes/scan', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Falló la búsqueda.');
-      entries = data.bugfixes || [];
-      renderTable();
+      await reload(); // re-deriva del motor
       await dialog.alertDialog({
         title: 'Buscar bugfixes',
         message: data.added ? `Se registraron ${data.added} fix(es) nuevos (${data.scanned} transcripts revisados).`
