@@ -36,58 +36,79 @@ async function fetchSummary(fresh = false) {
   return res.json();
 }
 
-function segsFor(p) {
-  const models = p.models || [];
-  if (!models.length) return '';
-  return models.map((m) => {
-    const share = p.cost ? (m.cost / p.cost) * 100 : 100 / models.length;
-    const name = modelName(m.key, m.model);
-    return `<span class="tok-seg" style="width:${share}%;background:${modelColor(m.key)}" title="${name}: ${fmtTokens(m.tokens)} tok · ${fmtCost(m.cost)}"></span>`;
-  }).join('');
+// Pivot proyectos→modelos: la lista principal son los MODELOS (acotada, no
+// crece con los proyectos). El detalle de cada modelo son los 3 proyectos que
+// lo usaron más recientemente, mostrados de mayor a menor uso de ESE modelo.
+function buildModelView(sum) {
+  const byModel = new Map();
+  for (const p of sum.projects) {
+    for (const m of (p.models || [])) {
+      const e = byModel.get(m.key) || { key: m.key, model: m.model, tokens: 0, cost: 0, lastMtime: 0, projects: [] };
+      e.tokens += m.tokens;
+      e.cost += m.cost;
+      const last = m.lastMtime || p.lastMtime || 0;
+      e.lastMtime = Math.max(e.lastMtime, last);
+      e.projects.push({ label: p.label, name: p.name, tokens: m.tokens, cost: m.cost, lastMtime: last });
+      byModel.set(m.key, e);
+    }
+  }
+  const models = [...byModel.values()].sort((a, b) => b.cost - a.cost);
+  for (const e of models) {
+    e.projects = e.projects
+      .sort((a, b) => b.lastMtime - a.lastMtime) // los 3 que lo usaron ÚLTIMO…
+      .slice(0, 3)
+      .sort((a, b) => b.cost - a.cost);          // …de mayor a menor uso
+  }
+  return models;
 }
 
-function detailFor(p) {
-  const rows = (p.models || []).map((m) => `
-    <div class="tok-detail-row">
+function detailFor(m) {
+  const rows = m.projects.map((p) => `
+    <div class="tok-detail-row" title="${p.name}">
       <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
-      <span class="tok-detail-name">${modelName(m.key, m.model)}</span>
-      <span class="tok-detail-tok">${fmtTokens(m.tokens)}</span>
-      <span class="tok-detail-cost">${fmtCost(m.cost)}</span>
+      <span class="tok-detail-name"></span>
+      <span class="tok-detail-tok">${fmtTokens(p.tokens)}</span>
+      <span class="tok-detail-cost">${fmtCost(p.cost)}</span>
     </div>`).join('');
-  const cache = (p.cacheWrite || 0) + (p.cacheRead || 0);
   return `
     <div class="tok-detail" hidden>
       ${rows}
-      <div class="tok-detail-foot">entrada ${fmtTokens(p.input || 0)} · salida ${fmtTokens(p.output || 0)} · caché ${fmtTokens(cache)}</div>
-      <div class="tok-detail-foot">${fmtRelative(p.lastMtime)}</div>
+      <div class="tok-detail-foot">últimos ${m.projects.length} proyecto(s) que usaron este modelo · mayor a menor uso</div>
     </div>`;
 }
 
-function renderProjects(container, sum) {
-  if (!sum.projects.length) {
+function renderUsage(container, sum) {
+  const models = buildModelView(sum);
+  if (!models.length) {
     container.innerHTML = '<div class="tok-empty">sin datos</div>';
     return;
   }
-  const max = sum.projects[0].cost || 1;
+  const max = models[0].cost || 1;
   container.innerHTML = `
     <div class="usage-totals">
       <div class="usage-total-row"><span>Total</span><span class="tok-big">${fmtTokens(sum.totals.tokens)}</span><span class="tok-cost">${fmtCost(sum.totals.cost)}</span></div>
       <div class="usage-total-row"><span>Hoy</span><span>${fmtTokens(sum.today.tokens)}</span><span class="tok-cost">${fmtCost(sum.today.cost)}</span></div>
     </div>
     <div class="tok-note">Tokens exactos (reportados por Anthropic en cada respuesta). El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token, así que no existe un gasto real en dólares consultable.</div>` +
-    sum.projects.map((p) => {
-      const w = Math.max(4, Math.round((p.cost / max) * 100));
+    models.map((m) => {
+      const w = Math.max(4, Math.round((m.cost / max) * 100));
       return `
-        <div class="tok-row" title="${p.name}">
+        <div class="tok-row">
           <div class="tok-row-top">
-            <span class="tok-name">${p.label}</span>
-            <span class="tok-row-cost">${fmtCost(p.cost)}</span>
+            <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
+            <span class="tok-name">${modelName(m.key, m.model)}</span>
+            <span class="tok-row-cost">${fmtCost(m.cost)}</span>
           </div>
-          <span class="tok-bar"><span class="tok-fill" style="width:${w}%">${segsFor(p)}</span></span>
-          <div class="tok-row-sub">${fmtTokens(p.tokens)} tok · ${fmtRelative(p.lastMtime)}</div>
-          ${detailFor(p)}
+          <span class="tok-bar"><span class="tok-fill" style="width:${w}%;background:${modelColor(m.key)}"></span></span>
+          <div class="tok-row-sub">${fmtTokens(m.tokens)} tok · ${fmtRelative(m.lastMtime)}</div>
+          ${detailFor(m)}
         </div>`;
     }).join('');
+
+  // Nombres de proyecto con textContent (nunca HTML).
+  const detailNames = container.querySelectorAll('.tok-detail-name');
+  let i = 0;
+  for (const m of models) for (const p of m.projects) detailNames[i++].textContent = p.label;
 
   for (const row of container.querySelectorAll('.tok-row')) {
     row.querySelector('.tok-row-top').addEventListener('click', () => {
@@ -147,7 +168,7 @@ export default {
         m.body.innerHTML = `<div class="cwc-loading">${pacman()}calculando…</div>`;
         try {
           const sum = await fetchSummary(fresh);
-          renderProjects(m.body, sum);
+          renderUsage(m.body, sum);
         } catch {
           m.body.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
         }

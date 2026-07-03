@@ -292,8 +292,8 @@ html, body {
 .tok-cost { color: var(--cwc-ok); font-weight: 600; }
 .tok-row { padding: .35rem 0; border-bottom: 1px solid var(--cwc-divider); }
 .tok-row:last-child { border-bottom: 0; }
-.tok-row-top { display: flex; justify-content: space-between; font-size: var(--cwc-fs-md); cursor: pointer; }
-.tok-name { color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; }
+.tok-row-top { display: flex; align-items: center; gap: .45rem; font-size: var(--cwc-fs-md); cursor: pointer; }
+.tok-name { color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .tok-row-cost { color: var(--cwc-ok); }
 .tok-bar { display: block; height: 5px; background: var(--cwc-bg-chip); border-radius: 2px; margin: .2rem 0; overflow: hidden; }
 .tok-fill { display: flex; height: 100%; background: var(--cwc-border-strong); }
