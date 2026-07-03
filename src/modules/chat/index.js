@@ -34,6 +34,7 @@ import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
+import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
   UUID_RE, PERMISSION_MODES, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
@@ -633,6 +634,11 @@ class ChatManager {
 
   create({ cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
     const id = `c${process.pid}-${++this._seq}`;
+    // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
+    // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
+    // para que cuando el chat lo consulte (guiado por CLAUDE.md) esté fresco.
+    // Barato (solo re-parsea si cambió algo) y a prueba de fallos.
+    try { if (path.resolve(cwd) === path.resolve(CONSOLE_ROOT)) generateInventory(); } catch { /* nunca bloquea la creación */ }
     // Nombre ÚNICO de tarjeta (cruzado con las sesiones tmux, vía el registro
     // de core/session-names.js): "tolkien" → "tolkien 1" si ya hay otra
     // sesión con ese nombre. Solo en creaciones nuevas — rehydrate() usa

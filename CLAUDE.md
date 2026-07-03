@@ -475,6 +475,16 @@ docs/                       frontend-modules.md · brief-original.txt · context
 
 ## Convenciones (esto es lo que SE DEBE hacer)
 
+- **CENSO VIVO — consultá el inventario ANTES de crear/modificar módulos:**
+  `~/.cwc-data/inventory.md` (generado por `core/inventory.js`; `inventory.json`
+  es la vista máquina) es el mapa SIEMPRE FRESCO del proyecto: módulos backend
+  con su `registry.js:línea` y endpoints, runners de `bin/`, módulos frontend, y
+  el VOCABULARIO real (tokens `--cwc-*`, env vars, `VALID_MODELS`,
+  `PERMISSION_MODES`). Leelo (Read) para ubicarte y NO reinventar (dónde
+  registrar, qué token usar, qué existe). Este CLAUDE.md son las REGLAS/receta;
+  el inventario es "qué existe AHORA" — se regenera solo al abrir un chat de la
+  consola (o a mano con `node bin/cwc-inventory.js`). Es la Fase 3 del "sistema
+  nervioso".
 - **Colores/espaciado:** solo variables de `tokens.css` (o `color-mix` sobre
   ellas). Acento único terracota `--cwc-accent`. Para sombras/velos existen
   `--cwc-shadow-sm/md/lg`, `--cwc-shadow-ink` y `--cwc-scrim`; blanco puro es
@@ -492,7 +502,9 @@ docs/                       frontend-modules.md · brief-original.txt · context
   respetarlo (esa fue la causa raíz del bug del menú contextual pegado).
 - **Módulo nuevo backend:** `src/modules/<n>/index.js` con la interfaz estándar
   y sumarlo al array de `registry.js`. Frontend: objeto `{name, mount}` +
-  `[data-module="<n>"]` en index.html + registrarlo en main.js.
+  `[data-module="<n>"]` en index.html + registrarlo en main.js. (Mirá el
+  inventario `~/.cwc-data/inventory.md` para el estado actual: módulos ya
+  registrados, `registry.js:línea`, endpoints existentes.)
 - **Admin-gating:** endpoints sensibles con `isAdmin(req)` de `core/auth.js`
   (patrón en backup/index.js).
 - **tmux:** siempre a través de helpers con validación (`core/tmux.js`,
