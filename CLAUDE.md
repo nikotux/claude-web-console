@@ -283,6 +283,14 @@ docs/                       frontend-modules.md · brief-original.txt · context
   llegue EXACTO a la boca. La barra TUI (`.conv-tui-bar`) NO tiene el
   vivo/dormido (su estado viene del observador de hooks, no del stream del
   SDK — plomería distinta, no conectada todavía).
+- Cambio de pestaña y scroll del chat: los paneles se ocultan con
+  `display:none` (`.terminal-pane` sin `.active`), y con `display:none` el
+  `scrollTop` de `.chat-msgs` se pierde (scrollHeight=0) — el replay de
+  `history` o los eventos que llegan con la pestaña oculta dejaban la vista
+  arriba de todo al volver a un chat. Fix: `ChatTab.focus()` re-ancla con
+  `_scroll()`; `setActive()` (main.js) lo llama justo DESPUÉS de togglear
+  `.active`, con el layout ya medible. No sacar ese `_scroll()` ni invertir
+  el orden toggle→focus.
 - Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
   (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
   usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;

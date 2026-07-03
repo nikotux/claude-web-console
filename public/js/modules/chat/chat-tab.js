@@ -8,6 +8,7 @@ import { icon } from '../../ui/icons.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
+import { pacman } from '../../ui/pacman.js';
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
@@ -69,6 +70,7 @@ export class ChatTab {
         <header class="chat-head">
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
+          ${pacman({ working: false, cls: 'chat-alive', title: 'Esperando tu mensaje' })}
           <select class="chat-mode" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
@@ -91,6 +93,7 @@ export class ChatTab {
     this.modeEl = container.querySelector('.chat-mode');
     this.costEl = container.querySelector('.chat-cost');
     this.toggleBtn = container.querySelector('.chat-toggle');
+    this.aliveEl = container.querySelector('.chat-alive');
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
@@ -622,6 +625,10 @@ export class ChatTab {
     this.stopBtn.hidden = !on;
     this.sendBtn.hidden = on;
     this.container.querySelector('.chat-view').classList.toggle('working', on);
+    // Ícono "vivo" (móvil): pulsa mientras Claude trabaja, quieto ("dormido")
+    // cuando espera tu mensaje — mismo lenguaje de color que sess-dot/rail-status.
+    this.aliveEl.classList.toggle('is-working', on);
+    this.aliveEl.title = on ? 'Trabajando…' : 'Esperando tu mensaje';
   }
 
   _scroll() {
@@ -629,6 +636,12 @@ export class ChatTab {
   }
 
   focus() {
+    // Re-anclar SIEMPRE al final al activar la pestaña: mientras el panel está
+    // oculto (display:none) scrollTop se pierde (scrollHeight=0), así que el
+    // historial re-renderizado o los eventos llegados en background dejaban la
+    // vista arriba de todo al volver a este chat. setActive() nos llama justo
+    // DESPUÉS de mostrar el panel, con el layout ya medible.
+    this._scroll();
     // En táctil no auto-enfocamos: abriría el teclado sin que lo pidas.
     if (!window.matchMedia('(pointer: coarse)').matches) this.inputEl.focus();
   }
