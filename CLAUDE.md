@@ -61,14 +61,29 @@ código.
    demás siguen denegados. Las ITERACIONES del PR (feedback) JAMÁS tocan
    Desk automáticamente: van por el chat "Actualizar ticket" del tablero,
    donde el usuario aprueba la escritura en la tarjeta de permiso.
-   SUB-EXCEPCIÓN de LECTURA (pedido del usuario 2026-07-03): `deskLive` de
-   `bugfixes/index.js` (endpoint GET /api/bugfixes/desk-live/:n) trae el
-   estado + comentarios ACTUALES del ticket para ver si la actualización ya
-   quedó. Es MÁS blindada que la de escritura: allowlist de tools `desk_*`
-   que (a) NO contienen verbo de escritura (add/update/reply/…) Y (b) SÍ uno
-   de lectura (get/list/search/view/…) — deny por defecto, en las DOS capas.
-   Consume tokens: el front la dispara BAJO BOTÓN ("Traer estado de Desk"),
-   nunca al expandir; caché 60 s, ?fresh=1 la saltea.
+   SUB-EXCEPCIÓN de LECTURA (pedido del usuario 2026-07-03; DESACOPLADA a
+   runner 2026-07-04): la consulta EN VIVO del estado + comentarios ACTUALES de
+   un ticket (para ver si la actualización ya quedó) corre en un RUNNER
+   DESACOPLADO — `bin/cwc-desk-runner.js`, lógica compartida en
+   `bugfixes/desk-shared.js`. Antes corría INLINE dentro del request HTTP
+   (`deskLive` de `bugfixes/index.js`): al cambiar de pestaña en el navegador
+   (sobre todo móvil) el fetch en background se abortaba y la corrida —que
+   consume tokens— se perdía a mitad; un reinicio del server la mataba igual
+   (bug reportado por el usuario). Ahora: POST /api/bugfixes/desk-refresh
+   {tickets:[...]} lanza el runner detached (dedup por lock `desk.lock`) y
+   responde INMEDIATO; el resultado se PERSISTE en
+   `~/.cwc-data/desk-live/<ticket>.json`; GET /api/bugfixes/desk-live/:n SOLO
+   LEE ese disco (no consume tokens) + informa si la corrida sigue viva; el
+   front encuesta (patrón triage/health). Es MÁS blindada que la de escritura:
+   allowlist `deskReadAllowed` de tools `desk_*` que (a) NO contienen verbo de
+   escritura (add/update/reply/…) Y (b) SÍ uno de lectura (get/list/search/
+   view/…) — deny por defecto, en las DOS capas; la allowlist DEBE quedar
+   idéntica en el runner (seguridad). Consume tokens: el front la dispara BAJO
+   BOTÓN ("Traer estado de Desk" por fila · "🎫 Desk" bulk), nunca al expandir;
+   sin fresh reusa el resultado < 60 s (no relanza), ?fresh fuerza. El tablero
+   PAUSA su auto-refresh de GitHub mientras hay un panel de detalle abierto o
+   una consulta Desk encuestándose (`canAutoRefresh`): el re-render total
+   destruiría el panel — ESA era la raíz del bug del cambio de pestaña.
    EXCEPCIÓN de ESCRITURA sobre CÓDIGO (pedido del usuario 2026-07-03):
    `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
    revisión — edita el código de la consola sin supervisión. Es la única
@@ -102,7 +117,8 @@ código.
 - `users.json`, `sessions.json` (auth; perms 600), `recents.json`, `titles.json`
 - `.env` (config del usuario: token maestro, puerto, etc. — solo el usuario)
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
-  tickets/salud, `inventory.json`+`inventory.md` generados por core/inventory.js,
+  tickets/salud, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
+  + `desk.lock` heartbeat del runner desk, `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
@@ -370,15 +386,23 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (reviews, reviewDecision, comentarios, checks, commits,
                             mergeable) con caché en memoria de 60 s (?fresh=1 la saltea);
                             NADA se persiste — es el panel "GitHub en vivo" del tablero.
-                            DESK-LIVE (GET /desk-live/:n, admin, CONSUME TOKENS): estado +
-                            comentarios ACTUALES del ticket en Zoho Desk vía corrida headless
-                            READ-ONLY (sub-excepción de la regla 6: allowlist desk_* SOLO
-                            lectura); parsea un bloque JSON de la respuesta del modelo, caché
-                            60 s. Además del panel, CLASIFICA la resolución: pide al modelo
-                            `closed` (status cerrado/resuelto, con red de seguridad regex) y
-                            `requesterReplied` (el cliente respondió tras la última nota del
-                            equipo). persistDeskSnapshot() vuelca en TODOS los registros del
-                            ticket: deskStatusText/deskClosed/deskReplied/deskResolved +
+                            DESK-LIVE (admin, CONSUME TOKENS, DESACOPLADO a runner 2026-07-04):
+                            estado + comentarios ACTUALES del ticket en Zoho Desk vía corrida
+                            headless READ-ONLY (sub-excepción regla 6: allowlist desk_* SOLO
+                            lectura). Antes corría INLINE en el GET (se perdía al cambiar de
+                            pestaña / reiniciar server); ahora vive en bin/cwc-desk-runner.js
+                            (lógica en desk-shared.js): POST /desk-refresh {tickets:[...]}
+                            lanza el runner detached (dedup lock desk.lock) y responde YA;
+                            resultado persistido en ~/.cwc-data/desk-live/<ticket>.json; GET
+                            /desk-live/:n SOLO lee ese disco (0 tokens) + `running`/`progress`
+                            de la corrida; el front encuesta (fillDesk POST→poll, resiliente al
+                            cambio de pestaña). parseDeskResponse (desk-shared) parsea un bloque
+                            JSON de la respuesta; sin fresh reusa < 60 s (no relanza). CLASIFICA
+                            la resolución: pide al modelo `closed` (status cerrado/resuelto, con
+                            red de seguridad regex) y `requesterReplied` (el cliente respondió
+                            tras la última nota del equipo). persistDeskSnapshot() (desk-shared,
+                            lo llama el runner) vuelca en TODOS los registros del ticket:
+                            deskStatusText/deskClosed/deskReplied/deskResolved +
                             deskCheckedAt, y emite ticket_cerrado|ticket_respondido al
                             historial la 1ª vez. RESOLUCIÓN (resolutionOf, derivado, expuesto
                             en GET /api/bugfixes como b.resolution): 'complete' si deskResolved
@@ -503,6 +527,10 @@ bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
+bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Desk (READ-ONLY
+                            doble capa, allowlist desk_* de lectura; interfaz por archivos:
+                            desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica
+                            compartida con el módulo en bugfixes/desk-shared.js
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)

@@ -6,8 +6,10 @@
 //   POST /api/bugfixes/pr {id}  -> branch + commit + push + PR a origin de Tolkien (admin)
 //   POST /api/bugfixes/refresh-prs -> estado real de los PRs desde GitHub (admin)
 //   GET  /api/bugfixes/pr-live/:n   -> reviews/checks/commits/feedback (gh, admin)
-//   GET  /api/bugfixes/desk-live/:n -> estado + comentarios del ticket en Zoho
-//        Desk (headless READ-ONLY, consume tokens; admin)
+//   POST /api/bugfixes/desk-refresh {tickets:[...]} -> lanza el runner DETACHED
+//        que consulta Zoho Desk (headless READ-ONLY, consume tokens; admin)
+//   GET  /api/bugfixes/desk-live/:n -> resultado persistido + si sigue corriendo
+//        (no consume tokens: solo lee disco; el POST es el que dispara la corrida)
 //   GET  /api/bugfixes/context?kind=work|pr -> contexto editable (autenticados)
 //   POST /api/bugfixes/context {kind, context} -> guarda el contexto (admin)
 //   POST /api/bugfixes/cancel-pr {id} -> cierra el PR + borra el branch remoto
@@ -28,13 +30,24 @@ import express from 'express';
 import fss from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
 import { buildTickets, findSimilarSolutions } from './engine.js';
+// La consulta EN VIVO a Zoho Desk vive en un RUNNER DESACOPLADO
+// (bin/cwc-desk-runner.js): sobrevive al cambio de pestaña y al reinicio del
+// server (regla 2). Acá solo lanzamos el runner y leemos su resultado del disco.
+import {
+  DESK_DIR, readDeskResult, readDeskLock, isDeskRunning, DESK_TTL_MS,
+} from './desk-shared.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DESK_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-desk-runner.js');
+const DESK_LOG = path.join(os.homedir(), '.cwc-data', 'desk.log');
 
 // Últimos PRs solo-GitHub vistos por refresh-prs (para que el motor los
 // enganche a su ticket sin re-consultar gh en cada carga del tablero).
@@ -446,148 +459,44 @@ async function prLive(prNumber) {
   return data;
 }
 
-// ===== Estado EN VIVO de un ticket de Zoho Desk (LECTURA, no persiste) =====
-// Sub-excepción de la regla 6 (más blindada que la escritura de deskUpdateAuto):
-// corrida headless con allowlist ESTRICTA de tools desk_* de LECTURA. La tool
-// debe (a) NO contener ningún verbo de escritura y (b) SÍ un verbo de lectura;
-// Bash/Edit/Write/git y cualquier desk_* de escritura (add/update/reply/…)
-// quedan denegados por las DOS capas. Sirve para ver el estado real del ticket
-// y si el último comentario ya se publicó. Caché en memoria 60 s.
-const deskCache = new Map(); // ticketNumber -> { at, data }
-const DESK_LIVE_TTL_MS = 60000;
-const DESK_WRITE_VERB = /(add|create|update|reply|post|delete|remove|close|set|write|send|move|assign|merge|edit|patch|put)/i;
-const DESK_READ_VERB = /(get|list|search|view|read|find|fetch|detail|show|info|history|thread|conversation)/i;
-const deskReadAllowed = (name) => {
-  const s = String(name);
-  if (s === 'TodoWrite') return true; // estado interno del modelo, no toca nada externo
-  const m = s.match(/^mcp__[a-z0-9_-]+__desk_([a-z0-9_]+)$/i);
-  if (!m) return false;
-  const op = m[1];
-  return !DESK_WRITE_VERB.test(op) && DESK_READ_VERB.test(op); // deny por defecto
-};
+// ===== Estado EN VIVO de un ticket de Zoho Desk (LECTURA, DESACOPLADO) =====
+// La corrida real (headless READ-ONLY, allowlist desk_* de lectura, regla 6)
+// vive en bin/cwc-desk-runner.js — NO acá. Antes corría inline en el request y
+// se perdía al cambiar de pestaña o reiniciar el server; ahora es un runner
+// detached cuyo resultado se persiste (desk-shared.js). Acá solo:
+//   spawnDeskRunner(tickets)  -> lanza el runner (dedup por lock)
+//   deskState(ticket)         -> lee el resultado persistido + si está corriendo
 
-async function deskLive(ticketNumber, fresh) {
-  const key = String(ticketNumber);
-  if (!fresh) {
-    const hit = deskCache.get(key);
-    if (hit && Date.now() - hit.at < DESK_LIVE_TTL_MS) return hit.data;
-  }
-  const denyMsg = 'Lectura de Desk: SOLO tools desk_* de lectura.';
-  const denyHook = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg,
-    },
-  };
-  const prompt = [
-    `Necesito el estado ACTUAL del ticket de Zoho Desk #${key}. Es SOLO lectura: no modifiques nada.`,
-    '',
-    'Con las tools desk_* de LECTURA del MCP:',
-    `1. Buscá el ticket #${key} y abrilo.`,
-    '2. Leé su estado actual y sus comentarios/hilos más recientes.',
-    '',
-    'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera de él):',
-    '```json',
-    '{"found":true,"status":"<estado legible, p.ej. On Hold>","closed":true|false,"requesterReplied":true|false,"subject":"<asunto corto>","comments":[{"author":"<quién>","at":"<fecha ISO o texto>","visibility":"public|private","excerpt":"<~200 chars del comentario>"}]}',
-    '```',
-    'Reglas para esos campos:',
-    '- "closed": true si el estado indica cerrado/resuelto (Closed, Resolved, Cerrado, Completed…), false si sigue abierto/en curso.',
-    '- "requesterReplied": true si el ÚLTIMO comentario visible lo escribió QUIEN REPORTÓ el ticket (el cliente/solicitante) DESPUÉS de la última respuesta del equipo de soporte — es decir, el ticket "tiene respuesta" del cliente. false si el último movimiento fue del equipo o no hay respuesta del cliente.',
-    'Máximo los 5 comentarios más recientes (el más nuevo primero). Si no encontrás el ticket: {"found":false}.',
-  ].join('\n');
-
-  let out = '';
-  try {
-    const q = query({
-      prompt,
-      options: {
-        cwd: config.projectDir,
-        model: 'sonnet',
-        maxTurns: 12,
-        permissionMode: 'default',
-        settingSources: settingSourcesFor('headless'), // carga el MCP del proyecto, sin settings de user
-        hooks: {
-          PreToolUse: [{ hooks: [async (input) => (deskReadAllowed(input.tool_name) ? {} : denyHook)] }],
-        },
-        canUseTool: async (name, input) => (deskReadAllowed(name)
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: denyMsg }),
-      },
-    });
-    let timer = null;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), DESK_TIMEOUT_MS); });
-    const pump = (async () => {
-      for await (const m of q) {
-        if (m.type === 'assistant') {
-          for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
-        } else if (m.type === 'result') break;
-      }
-    })();
-    try { await Promise.race([pump, timeout]); } finally { clearTimeout(timer); }
-  } catch (err) {
-    return { found: false, error: String(err?.message || err).slice(0, 160), fetchedAt: Date.now() };
-  }
-
-  // Parseo defensivo: último bloque JSON válido de la respuesta.
-  const candidates = [];
-  const fences = out.match(/```(?:json)?\s*([\s\S]*?)```/gi);
-  if (fences) for (const f of fences) candidates.push(f.replace(/```(?:json)?/gi, '').trim());
-  const brace = out.match(/\{[\s\S]*\}/);
-  if (brace) candidates.push(brace[0]);
-  let parsed = null;
-  for (const c of candidates.reverse()) {
-    try { parsed = JSON.parse(c); break; } catch { /* probamos el siguiente */ }
-  }
-  // El status legible también se clasifica por regex como red de seguridad
-  // (por si el modelo no completa "closed"): cerrado/resuelto/completado.
-  const statusText = parsed?.status ? String(parsed.status).slice(0, 60) : null;
-  const closedByStatus = /clos|resolv|cerrad|complet|solved/i.test(statusText || '');
-  const closed = parsed?.closed === true || closedByStatus;
-  const replied = parsed?.requesterReplied === true;
-  const data = parsed && typeof parsed === 'object'
-    ? {
-      found: parsed.found !== false,
-      status: statusText,
-      subject: parsed.subject ? String(parsed.subject).slice(0, 120) : null,
-      closed, replied,
-      resolved: closed || replied, // "completo": cerrado O el cliente respondió
-      comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 5).map((c) => ({
-        author: String(c.author || '?').slice(0, 60),
-        at: c.at ? String(c.at).slice(0, 40) : null,
-        visibility: /priv/i.test(String(c.visibility)) ? 'private' : 'public',
-        excerpt: String(c.excerpt || '').slice(0, 300),
-      })) : [],
-      fetchedAt: Date.now(),
-    }
-    : { found: false, error: 'No se pudo interpretar la respuesta de Desk.', fetchedAt: Date.now() };
-  if (data.found) {
-    deskCache.set(key, { at: Date.now(), data }); // no cacheamos fallos
-    persistDeskSnapshot(key, data); // marca resolución en los registros del ticket
-  }
-  return data;
+// Lanza el runner detached para uno o más tickets (sesión POSIX propia + unref:
+// sobrevive al server; systemd usa KillMode=process). Dedup: acá por lock
+// fresco, y el propio runner re-chequea al arrancar (carrera de doble POST).
+function spawnDeskRunner(tickets) {
+  const list = [...new Set((tickets || []).map((t) => String(t).replace(/[^\w.-]/g, '')).filter(Boolean))];
+  if (!list.length) return { started: false, reason: 'sin tickets' };
+  if (isDeskRunning()) return { started: false, reason: 'ya corriendo' };
+  fss.mkdirSync(path.dirname(DESK_LOG), { recursive: true, mode: 0o700 });
+  const log = fss.openSync(DESK_LOG, 'a');
+  const child = spawn(process.execPath, [DESK_RUNNER, ...list], {
+    detached: true, stdio: ['ignore', log, log], env: process.env,
+  });
+  child.unref();
+  fss.closeSync(log);
+  return { started: true, tickets: list };
 }
 
-// Vuelca lo leído de Desk en TODOS los registros de ese ticket: estado,
-// timestamp y si quedó resuelto (cerrado o con respuesta del cliente). Emite
-// un evento al historial la PRIMERA vez que se detecta cada transición.
-function persistDeskSnapshot(ticketKey, data) {
-  const all = listBugfixes();
-  let touched = false;
-  for (const b of all) {
-    if (String(b.ticketNumber) !== ticketKey) continue;
-    touched = true;
-    b.deskStatusText = data.status || null;
-    b.deskCheckedAt = data.fetchedAt;
-    b.deskClosed = data.closed;
-    b.deskReplied = data.replied;
-    const wasResolved = b.deskResolved === true;
-    b.deskResolved = data.resolved;
-    if (data.resolved && !wasResolved) {
-      addEvent(b, data.closed ? 'ticket_cerrado' : 'ticket_respondido',
-        { status: data.status || null });
-    }
-    b.updatedAt = Date.now();
-  }
-  if (touched) saveBugfixes(all);
+// Resultado persistido de un ticket + estado de la corrida (para el front, que
+// encuesta sin bloquear). `stale` = hay resultado pero es más viejo que el TTL.
+function deskState(ticket) {
+  const key = String(ticket).replace(/[^\w.-]/g, '').slice(0, 20);
+  const lock = readDeskLock();
+  const running = !!lock && (lock.tickets || []).map(String).includes(key);
+  const data = readDeskResult(key);
+  const stale = !!data && (Date.now() - (data.fetchedAt || 0) >= DESK_TTL_MS);
+  return {
+    ticket: key, running, desk: data,
+    progress: lock ? { done: lock.done || 0, total: lock.total || 0 } : null,
+    stale,
+  };
 }
 
 // Nivel de resolución de un fix (derivado, NO se persiste):
@@ -825,18 +734,38 @@ export default {
       }
     });
 
-    // Estado EN VIVO de un ticket de Zoho Desk (headless READ-ONLY; caché 60 s,
-    // ?fresh=1 la saltea). CONSUME TOKENS: el front lo dispara bajo botón, no al
-    // expandir. El número de ticket puede no ser entero (acepta \w.-).
-    r.get('/desk-live/:number', async (req, res) => {
+    // Estado EN VIVO de un ticket de Zoho Desk — DESACOPLADO (regla 2). CONSUME
+    // TOKENS: el front lo dispara bajo botón, no al expandir. Dos endpoints:
+    //   POST /desk-refresh {tickets:[...]} -> lanza el runner detached (o reusa
+    //     el que ya corre) y responde INMEDIATO. Si hay resultado fresco (< TTL)
+    //     y no se pide fresh, NO relanza (ahorra tokens).
+    //   GET  /desk-live/:n -> lee el resultado persistido + si la corrida sigue.
+    // El nº de ticket puede no ser entero (acepta \w.-).
+    r.post('/desk-refresh', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const fresh = req.body?.fresh === true || req.query.fresh;
+      const raw = Array.isArray(req.body?.tickets) ? req.body.tickets : [req.body?.ticket];
+      const tickets = [...new Set(raw.map((t) => String(t || '').replace(/[^\w.-]/g, '').slice(0, 20)).filter(Boolean))];
+      if (!tickets.length) return res.status(400).json({ error: 'Faltan tickets.' });
+      // Sin fresh: no relanzar los que ya tienen resultado fresco (< TTL).
+      const pending = fresh ? tickets : tickets.filter((t) => deskState(t).stale !== false);
+      let launch = null;
+      if (pending.length) launch = spawnDeskRunner(pending);
+      res.json({
+        ok: true,
+        running: isDeskRunning(),
+        started: !!launch?.started,
+        requested: tickets,
+        launched: launch?.tickets || [],
+        states: tickets.map((t) => deskState(t)),
+      });
+    });
+
+    r.get('/desk-live/:number', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const raw = String(req.params.number || '').replace(/[^\w.-]/g, '').slice(0, 20);
       if (!raw) return res.status(400).json({ error: 'Número de ticket inválido.' });
-      try {
-        res.json({ ok: true, desk: await deskLive(raw, !!req.query.fresh) });
-      } catch (err) {
-        res.status(502).json({ error: `Desk no disponible: ${String(err?.message || err).slice(0, 200)}` });
-      }
+      res.json({ ok: true, ...deskState(raw) });
     });
 
     // Archivar / restaurar un fix: lo saca de (o devuelve a) la lista activa.

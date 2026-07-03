@@ -112,6 +112,10 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   let entries = [];   // registro de bugfixes
   let lastGhAt = null;    // última sync de GitHub (auto, barato)
   let lastDeskAt = null;  // última sync de Desk (bajo botón, tokens)
+  let deskBusy = 0;   // >0: hay una consulta Desk encuestándose (pausa auto-refresh)
+  // ¿Hay un panel de detalle abierto? El auto-refresh de GitHub re-renderiza
+  // TODO el tbody (reload→renderTable) y destruiría ese panel — lo pausamos.
+  const hasOpenDetail = () => !!mr.tbody?.querySelector('.bfm-detail:not([hidden])');
   function updateFreshness() {
     const gh = lastGhAt ? `GitHub: ${fmtAgo(lastGhAt)}` : 'GitHub: —';
     const dk = lastDeskAt ? `Desk: ${fmtAgo(lastDeskAt)}` : 'Desk: sin consultar';
@@ -331,65 +335,106 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       </p>`;
   }
 
-  // Panel EN VIVO de Desk: se llena al tocar el botón (y con ↻ fuerza fresh).
+  // Lee el resultado PERSISTIDO de un ticket + si la corrida sigue viva.
+  // No consume tokens: solo lee disco del lado del server (el POST dispara).
+  async function deskGet(ticket) {
+    return fetch(`/api/bugfixes/desk-live/${encodeURIComponent(ticket)}`)
+      .then((r) => r.json()).catch(() => null);
+  }
+
+  // Panel EN VIVO de Desk. La consulta REAL corre en un RUNNER DESACOPLADO del
+  // server (bin/cwc-desk-runner.js): acá DISPARAMOS (POST /desk-refresh) y
+  // ENCUESTAMOS el resultado persistido (GET /desk-live). Es resiliente al
+  // cambio de pestaña — la corrida sigue del lado del server y el resultado
+  // queda en disco: si este panel se cierra, al reabrirlo se lee al instante
+  // (ese era el bug: cambiar de pestaña abortaba el fetch inline en curso).
+  // Con ↻ (fresh) siempre re-consulta; sin fresh, reusa caché < 60 s.
   async function fillDesk(box, ticket, fresh) {
     box.innerHTML = `<div class="cwc-loading">${pacman()}consultando Zoho Desk…</div>`;
+    deskBusy += 1; // pausa el auto-refresh de GitHub mientras encuestamos
+    let d = null;
     try {
-      const res = await fetch(`/api/bugfixes/desk-live/${encodeURIComponent(ticket)}${fresh ? '?fresh=1' : ''}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Desk no disponible.');
-      const d = data.desk || {};
-      const head = (extra) => `
-        <div class="bb-desk-head">
-          <b>Zoho Desk · #${esc(ticket)}</b>
-          ${extra}
-          <button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Consultar de nuevo (saltea la caché de 60 s)">${icon('refresh', { size: 12 })}</button>
-          <span class="bb-live-at">${fmtAgo(d.fetchedAt)}</span>
-        </div>`;
-      if (!d.found) {
-        box.innerHTML = head(`<span class="bb-chip bb-chip--warn">${esc(d.error || 'ticket no encontrado')}</span>`);
-        return;
+      // Estado previo persistido (para distinguir un resultado NUEVO del viejo).
+      const prevAt = (await deskGet(ticket))?.desk?.fetchedAt || 0;
+      // Disparar el runner (o reusar caché fresca si no es fresh). Responde YA.
+      const kick = await fetch('/api/bugfixes/desk-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickets: [ticket], fresh: !!fresh }),
+      }).then((r) => r.json()).catch(() => ({}));
+      const expectFresh = !!(kick.launched && kick.launched.length) || !!kick.started;
+      // Encuestar el resultado persistido hasta que la corrida termine.
+      const deadline = Date.now() + 5 * 60000; // tope defensivo (= timeout del runner)
+      for (;;) {
+        if (!box.isConnected) return; // panel cerrado: dejamos de encuestar (el runner sigue)
+        const st = await deskGet(ticket);
+        const running = !!st?.running;
+        d = st?.desk || null;
+        // Listo si hay resultado y ya no corre. Si RELANZAMOS, esperar el nuevo
+        // (fetchedAt más nuevo que el previo): así no mostramos el dato viejo
+        // en el hueco entre el POST y el primer heartbeat del runner.
+        if (d && !running && (!expectFresh || (d.fetchedAt || 0) > prevAt)) break;
+        if (Date.now() > deadline) { d = d || { found: false, error: 'La consulta tardó demasiado.', fetchedAt: Date.now() }; break; }
+        const prog = st?.progress && st.progress.total > 1 ? ` (${st.progress.done}/${st.progress.total})` : '';
+        box.innerHTML = `<div class="cwc-loading">${pacman()}consultando Zoho Desk…${prog}</div>`;
+        await new Promise((r) => setTimeout(r, 2500));
       }
-      // El backend ya persistió deskResolved en los registros del ticket;
-      // reflejamos EN MEMORIA para que la próxima render del tablero lo muestre
-      // sin re-consultar (no re-renderizamos ahora: no perder este panel).
-      for (const en of entries) {
-        if (String(en.ticketNumber) === String(ticket)) {
-          en.deskResolved = d.resolved; en.deskClosed = d.closed;
-          en.deskReplied = d.replied; en.deskStatusText = d.status; en.deskCheckedAt = d.fetchedAt;
-          en.resolution = d.resolved ? 'complete' : (en.prState === 'merged' ? 'partial' : 'active');
-          // Y reflejar IN-PLACE en la fila visible (pipeline, celda Desk y
-          // chip de resolución) sin re-render: un re-render destruiría este
-          // panel abierto. Solo se tocan celdas de la fila resumen, nunca la
-          // fila de detalle donde vive el panel.
-          const row = mr.tbody.querySelector(`.bfm-row[data-sid="${en.sessionId}"]`);
-          if (row && row.children.length >= 8) {
-            const arch = row.classList.contains('bb-arch-row');
-            const est = prEstado(en);
-            const resChip = !arch && RES_CHIP[resolutionOf(en)] ? ` ${RES_CHIP[resolutionOf(en)]}` : '';
-            row.children[3].innerHTML = pipelineHtml(en);
-            row.children[6].innerHTML = deskCellFor(en);
-            row.children[7].innerHTML = `${esc(est.label)}${resChip}`;
-          }
-        }
-      }
-      const verdict = d.resolved
-        ? `<div class="bb-desk-verdict bb-desk-verdict--ok">🟢 Ticket confirmado (${d.closed ? 'cerrado/resuelto' : 'el cliente respondió'}) — este fix está <b>completo</b>. Podés archivarlo.</div>`
-        : `<div class="bb-desk-verdict bb-desk-verdict--wait">🟡 Ticket sin confirmar todavía${d.status ? ` (${esc(d.status)})` : ''} — solución parcial hasta que el cliente responda o se cierre.</div>`;
-      box.innerHTML = `
-        ${head(d.status ? `<span class="bb-chip bb-chip--${d.resolved ? 'ok' : 'info'}" title="Estado actual del ticket en Desk">${esc(d.status)}</span>` : '')}
-        ${verdict}
-        ${d.subject ? `<div class="bb-desk-subj">${esc(d.subject)}</div>` : ''}
-        ${d.comments.length ? `<div class="bb-live-fb">${d.comments.map((c) => `
-          <div class="bb-fb">
-            <span class="bb-fb-head"><b>${esc(c.author)}</b> · <span class="bb-vis bb-vis--${c.visibility}">${c.visibility === 'private' ? 'interno' : 'público'}</span>${c.at ? ` · ${esc(c.at)}` : ''}</span>
-            ${c.excerpt ? `<span class="bb-fb-body">${esc(c.excerpt)}</span>` : ''}
-          </div>`).join('')}</div>`
-    : '<div class="bb-live-fb bb-live-empty">El ticket no tiene comentarios visibles.</div>'}`;
     } catch (err) {
       box.innerHTML = `<div class="bb-live-err">⚠ ${esc(err.message)} — reintentá con ↻.</div>
         <div class="bb-desk-head"><button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Reintentar">${icon('refresh', { size: 12 })}</button></div>`;
+      return;
+    } finally { deskBusy = Math.max(0, deskBusy - 1); }
+    renderDesk(box, ticket, d || { found: false, error: 'sin datos', fetchedAt: Date.now() });
+  }
+
+  // Pinta un resultado de Desk ya obtenido (compartido: primera carga y ↻).
+  function renderDesk(box, ticket, d) {
+    const head = (extra) => `
+      <div class="bb-desk-head">
+        <b>Zoho Desk · #${esc(ticket)}</b>
+        ${extra}
+        <button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Consultar de nuevo (saltea la caché de 60 s)">${icon('refresh', { size: 12 })}</button>
+        <span class="bb-live-at">${fmtAgo(d.fetchedAt)}</span>
+      </div>`;
+    if (!d.found) {
+      box.innerHTML = head(`<span class="bb-chip bb-chip--warn">${esc(d.error || 'ticket no encontrado')}</span>`);
+      return;
     }
+    // El backend ya persistió deskResolved en los registros del ticket;
+    // reflejamos EN MEMORIA para que la próxima render del tablero lo muestre
+    // sin re-consultar (no re-renderizamos ahora: no perder este panel).
+    for (const en of entries) {
+      if (String(en.ticketNumber) === String(ticket)) {
+        en.deskResolved = d.resolved; en.deskClosed = d.closed;
+        en.deskReplied = d.replied; en.deskStatusText = d.status; en.deskCheckedAt = d.fetchedAt;
+        en.resolution = d.resolved ? 'complete' : (en.prState === 'merged' ? 'partial' : 'active');
+        // Y reflejar IN-PLACE en la fila visible (pipeline, celda Desk y
+        // chip de resolución) sin re-render: un re-render destruiría este
+        // panel abierto. Solo se tocan celdas de la fila resumen, nunca la
+        // fila de detalle donde vive el panel.
+        const row = mr.tbody.querySelector(`.bfm-row[data-sid="${en.sessionId}"]`);
+        if (row && row.children.length >= 8) {
+          const arch = row.classList.contains('bb-arch-row');
+          const est = prEstado(en);
+          const resChip = !arch && RES_CHIP[resolutionOf(en)] ? ` ${RES_CHIP[resolutionOf(en)]}` : '';
+          row.children[3].innerHTML = pipelineHtml(en);
+          row.children[6].innerHTML = deskCellFor(en);
+          row.children[7].innerHTML = `${esc(est.label)}${resChip}`;
+        }
+      }
+    }
+    const verdict = d.resolved
+      ? `<div class="bb-desk-verdict bb-desk-verdict--ok">🟢 Ticket confirmado (${d.closed ? 'cerrado/resuelto' : 'el cliente respondió'}) — este fix está <b>completo</b>. Podés archivarlo.</div>`
+      : `<div class="bb-desk-verdict bb-desk-verdict--wait">🟡 Ticket sin confirmar todavía${d.status ? ` (${esc(d.status)})` : ''} — solución parcial hasta que el cliente responda o se cierre.</div>`;
+    box.innerHTML = `
+      ${head(d.status ? `<span class="bb-chip bb-chip--${d.resolved ? 'ok' : 'info'}" title="Estado actual del ticket en Desk">${esc(d.status)}</span>` : '')}
+      ${verdict}
+      ${d.subject ? `<div class="bb-desk-subj">${esc(d.subject)}</div>` : ''}
+      ${(d.comments || []).length ? `<div class="bb-live-fb">${d.comments.map((c) => `
+        <div class="bb-fb">
+          <span class="bb-fb-head"><b>${esc(c.author)}</b> · <span class="bb-vis bb-vis--${c.visibility}">${c.visibility === 'private' ? 'interno' : 'público'}</span>${c.at ? ` · ${esc(c.at)}` : ''}</span>
+          ${c.excerpt ? `<span class="bb-fb-body">${esc(c.excerpt)}</span>` : ''}
+        </div>`).join('')}</div>`
+    : '<div class="bb-live-fb bb-live-empty">El ticket no tiene comentarios visibles.</div>'}`;
   }
 
   // Panel EN VIVO del PR: se llena al expandir (y con ↻ fuerza fresh).
@@ -983,12 +1028,29 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     if (!ok) return;
     mr.desksync.disabled = true;
     const orig = mr.desksync.innerHTML;
-    let done = 0;
-    for (const b of activos) {
-      mr.desksync.innerHTML = `${pacman()}<span>Desk ${++done}/${activos.length}…</span>`;
-      try { await fetch(`/api/bugfixes/desk-live/${encodeURIComponent(b.ticketNumber)}`); } catch { /* sigue */ }
+    deskBusy += 1; // pausa el auto-refresh mientras corre la sync bulk
+    const tickets = [...new Set(activos.map((b) => String(b.ticketNumber)))];
+    try {
+      // UN solo POST lanza el runner desacoplado para TODOS los tickets; luego
+      // encuestamos el lock hasta que la corrida termine (sobrevive al cambio
+      // de pestaña y a un reinicio del server).
+      await fetch('/api/bugfixes/desk-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickets }),
+      }).catch(() => {});
+      const deadline = Date.now() + 6 * 60000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2500));
+        let running = false; let prog = null;
+        const st = await deskGet(tickets[0]);
+        running = !!st?.running; prog = st?.progress;
+        mr.desksync.innerHTML = `${pacman()}<span>Desk${prog && prog.total ? ` ${prog.done}/${prog.total}` : ''}…</span>`;
+        if (!running || Date.now() > deadline) break;
+      }
+    } finally {
+      deskBusy = Math.max(0, deskBusy - 1);
+      mr.desksync.disabled = false; mr.desksync.innerHTML = orig;
     }
-    mr.desksync.disabled = false; mr.desksync.innerHTML = orig;
     lastDeskAt = Date.now();
     await reload(); // el motor ya lee los deskReplied/deskResolved recién persistidos
     updateFreshness();
@@ -997,10 +1059,15 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   // Auto-refresco de GitHub (BARATO: solo gh, sin tokens) mientras el tablero
   // está abierto, para que los merges de Chris aparezcan solos. Se limpia al
   // cerrar y al ocultar la pestaña; se re-dispara al volver.
+  // GUARD: no auto-refrescar (re-render total) si hay un panel de detalle
+  // abierto o una consulta Desk en curso — el re-render los destruiría (ese era
+  // el bug de "cambiar de pestaña interrumpe la consulta a Desk"). El refresco
+  // se reanuda solo al cerrar los paneles.
+  const canAutoRefresh = () => !document.hidden && !hasOpenDetail() && deskBusy === 0;
   const GH_AUTO_MS = 45000;
-  let ghTimer = setInterval(() => { if (!document.hidden) ghSync(true); }, GH_AUTO_MS);
+  let ghTimer = setInterval(() => { if (canAutoRefresh()) ghSync(true); }, GH_AUTO_MS);
   let freshTimer = setInterval(updateFreshness, 20000); // solo re-pinta "hace X"
-  const onVis = () => { if (!document.hidden) ghSync(true); };
+  const onVis = () => { if (canAutoRefresh()) ghSync(true); };
   document.addEventListener('visibilitychange', onVis);
   const origClose = m.close;
   m.close = () => { clearInterval(ghTimer); clearInterval(freshTimer); document.removeEventListener('visibilitychange', onVis); origClose(); };
