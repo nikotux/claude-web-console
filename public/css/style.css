@@ -65,7 +65,19 @@ html, body {
 }
 #boot-splash .cwc-pacman { transform: scale(2.2); } /* tamaño splash sin duplicar medidas */
 #boot-splash.done { opacity: 0; pointer-events: none; }
-#boot-msg { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+/* Barra de progreso: el % salta por hitos reales (window.__bootPct); la
+   transición de width interpola suave entre hito e hito. Dorada como el
+   Pac-Man (--cwc-warn), no terracota: es "proceso corriendo". */
+#boot-bar {
+  width: min(60vw, 240px); height: 6px; border-radius: 3px;
+  background: var(--cwc-bg-chip); overflow: hidden;
+}
+#boot-bar-fill {
+  display: block; width: 10%; height: 100%; border-radius: 3px;
+  background: var(--cwc-warn); transition: width .35s ease;
+}
+.boot-line { display: flex; gap: .5rem; align-items: baseline; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+#boot-pct { font-variant-numeric: tabular-nums; color: var(--cwc-warn); font-weight: 600; }
 
 /* ===== Layout de la app ===== */
 #app { display: flex; flex-direction: column; height: 100dvh; }
@@ -763,14 +775,12 @@ html, body {
   .tickets-table th:nth-child(3) { display: none; }
 }
 
-/* ===== Bugfixes → PR (pestaña Salud) ===== */
-.hp-bugfixes { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .5rem; }
-.hp-bf summary b { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Detalle de un fix (los usa el modal PRs de bugfixes de la sección Tolkien;
+   heredan el prefijo hp-bf de cuando la lista vivía en la pestaña Salud). */
 .hp-bf-summary { white-space: pre-wrap; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); max-height: 180px; overflow-y: auto; }
 .hp-bf-files { display: flex; flex-wrap: wrap; gap: .3rem; }
 .hp-bf-files code { font-size: var(--cwc-fs-xs); background: var(--cwc-bg-chip); padding: .1rem .35rem; border-radius: var(--cwc-radius-sm); }
 .hp-bf-files--none { color: var(--cwc-warn); font-size: var(--cwc-fs-xs); }
-.hp-bf-actions { margin-top: .4rem; }
 
 /* Modal PRs de bugfixes (sección Tolkien) — cuadro registro + GitHub */
 .bfm-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }

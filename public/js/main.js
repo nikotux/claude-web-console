@@ -442,13 +442,14 @@ const ctx = {
 // ===== Splash de arranque (#boot-splash en index.html) =====
 // Textos de progreso REALES del boot. El desmontaje (window.__bootHide) lo
 // define un script inline del HTML: funciona aunque este módulo no cargue.
-const bootMsg = (t) => {
+const bootMsg = (t, pct) => {
   const m = document.getElementById('boot-msg');
   if (m) m.textContent = t;
+  if (pct != null) window.__bootPct?.(pct);
 };
 
 // ===== Montaje de módulos (espejo del registry backend) =====
-bootMsg('montando módulos…');
+bootMsg('montando módulos…', 35);
 for (const mod of MODULES) {
   const el = document.querySelector(`[data-module="${mod.name}"]`);
   if (el) {
@@ -517,7 +518,7 @@ if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
 
 // ===== Arranque: re-adjunta sesiones PTY y conversaciones vivas; /?focus=<id> =====
 (async () => {
-  bootMsg('restaurando sesiones…');
+  bootMsg('restaurando sesiones…', 60);
   try {
     const [existing, chats] = await Promise.all([
       apiListSessions(),
@@ -537,7 +538,7 @@ if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
     // el WS no conecta (la red inline del HTML fuerza a los 12 s igual).
     const act = tabs.get(activeId);
     if (act?.type === 'chat' && act.tab?.ready) {
-      bootMsg('cargando la conversación…');
+      bootMsg('cargando la conversación…', 80);
       await Promise.race([act.tab.ready, new Promise((r) => setTimeout(r, 8000))]);
     }
   } finally {

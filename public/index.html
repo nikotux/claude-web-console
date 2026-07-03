@@ -27,18 +27,31 @@
        al primer paint porque los <link> de CSS son render-blocking. -->
   <div id="boot-splash">
     <span class="cwc-pacman is-working"><span class="pac-man"></span><span class="pac-track"><i class="pac-dot"></i><i class="pac-dot"></i><i class="pac-dot"></i></span></span>
-    <div id="boot-msg">cargando…</div>
+    <div id="boot-bar"><span id="boot-bar-fill"></span></div>
+    <div class="boot-line"><span id="boot-pct">10%</span><span id="boot-msg">cargando…</span></div>
   </div>
   <script>
     // Red de seguridad SIN módulos (corre aunque main.js nunca cargue):
     // __bootHide desmonta el splash con fade; a los 8 s avisa que algo tarda
     // y a los 12 s lo fuerza para no dejar un Pac-Man eterno tapando errores.
+    // __bootPct: barra de progreso por HITOS REALES del boot (no un timer) —
+    // 10 HTML+CSS pintados · 15 vendors JS · 35 módulos montados ·
+    // 60 sesiones listadas · 80 esperando historial del chat · 100 listo.
+    window.__bootPct = (p) => {
+      const f = document.getElementById('boot-bar-fill');
+      const t = document.getElementById('boot-pct');
+      if (f) f.style.width = `${p}%`;
+      if (t) t.textContent = `${p}%`;
+    };
     window.__bootHide = () => {
       const s = document.getElementById('boot-splash');
       if (!s) return;
+      window.__bootPct(100);
       s.classList.add('done');
       setTimeout(() => s.remove(), 300);
     };
+    // Este script corre cuando los vendors síncronos del <head> ya bajaron.
+    window.__bootPct(15);
     setTimeout(() => {
       const s = document.getElementById('boot-splash');
       const m = document.getElementById('boot-msg');
