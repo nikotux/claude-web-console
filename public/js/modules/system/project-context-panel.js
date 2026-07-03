@@ -19,6 +19,8 @@
 // real. Edición gateada por isAdmin (frontend Y backend); textEditorDialog
 // para editar.
 import { icon } from '../../ui/icons.js';
+import { pacman } from '../../ui/pacman.js';
+import { renderDiff } from '../../ui/diff.js';
 
 const PROJECTS_API = '/api/projects';
 const BUGFIX_API = '/api/bugfixes/context';
@@ -145,6 +147,86 @@ export function mountProjectContextPanel(el, ctx) {
   // elegido — un descuido (select-all + borrar) arruina una sección como
   // mucho. El guardado viaja con el hash de lo que abriste: si otra sesión
   // tocó el archivo en el medio, el server responde 409 y no pisa nada.
+  // Modal de REVISIÓN FORZADA del cambio (guardián del CLAUDE.md): analiza
+  // viejo vs nuevo con IA (qué se elimina/agrega/modifica + riesgo) y recién
+  // el botón "Confirmar y guardar" escribe el archivo. Si el análisis IA
+  // falla, cae a un diff local — la revisión consciente sigue siendo
+  // obligatoria, nunca se guarda a ciegas. Devuelve true si el usuario
+  // confirmó.
+  function reviewChange(sec, newText, saveFn) {
+    return new Promise((resolve) => {
+      const m = dialog.openModal({ title: 'Revisión del cambio', width: 560, onClose: () => resolve(false) });
+      m.body.innerHTML = `
+        <p class="dlg-msg">Sección <b>${esc(sec.title)}</b> — ${esc(current.name)}</p>
+        <div class="cr-body" data-ref="body">
+          <p class="hp-running">${pacman()} La IA está analizando el cambio…</p>
+        </div>`;
+      const body = m.body.querySelector('[data-ref="body"]');
+
+      const list = (items, cls, label) => (items.length ? `
+        <div class="cr-group cr-group--${cls}">
+          <div class="cr-label">${label}</div>
+          <ul class="cr-items">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        </div>` : '');
+
+      const buttons = () => {
+        const box = document.createElement('div');
+        box.className = 'dlg-actions';
+        box.innerHTML = `
+          <button class="btn-ghost" data-ref="again">Seguir editando</button>
+          <button class="btn" data-ref="confirm">Confirmar y guardar</button>`;
+        box.querySelector('[data-ref="again"]').addEventListener('click', () => { resolve(false); m.close(); });
+        box.querySelector('[data-ref="confirm"]').addEventListener('click', async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          btn.innerHTML = `${pacman()}<span>Guardando…</span>`;
+          try {
+            await saveFn();
+            resolve(true);
+            m.close();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = 'Confirmar y guardar';
+            const p = document.createElement('p');
+            p.className = 'hp-error';
+            p.textContent = err.message || 'No se pudo guardar.';
+            body.appendChild(p);
+          }
+        });
+        return box;
+      };
+
+      const RISK_LABEL = { ok: 'Sin pérdidas', atencion: 'Requiere atención', critico: 'CRÍTICO' };
+
+      (async () => {
+        try {
+          const res = await fetch(projectApi(`/context/section/${sec.i}/analyze`), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: newText, hash: sec.hash }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Falló el análisis.');
+          const a = data.analysis;
+          body.innerHTML = `
+            <div class="hp-verdict hp-verdict--${esc(a.risk)}"><b>${RISK_LABEL[a.risk] || a.risk}</b></div>
+            ${a.riskWhy ? `<p class="cr-why">${esc(a.riskWhy)}</p>` : ''}
+            ${a.summary ? `<p class="cr-summary">${esc(a.summary)}</p>` : ''}
+            ${list(a.removed, 'del', '− Se elimina')}
+            ${list(a.added, 'add', '+ Se agrega')}
+            ${list(a.modified, 'mod', '~ Se modifica')}
+            ${!a.removed.length && !a.added.length && !a.modified.length ? '<p class="hp-empty">La IA no detectó cambios de contenido.</p>' : ''}`;
+          body.appendChild(buttons());
+        } catch (e) {
+          // Fallback: diff local. La confirmación consciente sigue siendo forzada.
+          body.innerHTML = `
+            <p class="hp-error">No se pudo analizar con IA (${esc(e.message)}). Revisá el diff a mano:</p>`;
+          body.appendChild(renderDiff({ old: sec.text, new: newText }));
+          body.appendChild(buttons());
+        }
+      })();
+    });
+  }
+
   async function editSection(i) {
     let sec;
     try {
@@ -157,17 +239,21 @@ export function mountProjectContextPanel(el, ctx) {
     }
     await dialog.textEditorDialog({
       title: `Sección — ${sec.title}`,
-      hint: `Editás SOLO esta sección del CLAUDE.md de ${current.name} (el resto del archivo no se toca). El cambio es real: lo lee la próxima sesión de Claude ahí.`,
+      hint: `Editás SOLO esta sección del CLAUDE.md de ${current.name} (el resto del archivo no se toca). Al guardar, una revisión con IA te muestra qué se elimina/agrega/modifica ANTES de escribir.`,
       value: sec.text,
       width: 760,
       saveLabel: 'Guardar sección',
       onSave: async (text) => {
-        const res = await fetch(projectApi(`/context/section/${i}`), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: text, hash: sec.hash }),
+        if (text === sec.text) return; // sin cambios: cerrar sin gastar análisis
+        const confirmed = await reviewChange(sec, text, async () => {
+          const res = await fetch(projectApi(`/context/section/${i}`), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: text, hash: sec.hash }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+        if (!confirmed) throw new Error('No se guardó: revisá el cambio y guardá de nuevo cuando estés conforme.');
       },
     });
     loadContext();

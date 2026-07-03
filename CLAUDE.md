@@ -109,6 +109,16 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             puerta modo→UI. OJO: un runner ya vivo de antes del deploy no
                             conoce bypassPermissions (Set importado al spawn) e ignora ese
                             set_mode hasta dormirse/reabrirse.
+                            CHIPS DE EJECUCIÓN (tool calls): SOLO dos íconos, sin texto —
+                            consola (= herramienta ejecutada) + tipo (TOOL_TYPE_ICONS en
+                            chat-tab.js: Bash=play · Edit/Write=edit · Read=eye ·
+                            Grep/Glob=search · Web=download · Todo=list · Task=sparkle ·
+                            resto=gear). Nombre+resumen quedan en el tooltip; el detalle al
+                            tocar. La LEYENDA vive en el modal del "?" del header
+                            (_modeHelp, "Ayuda del chat": sección Modos + sección Íconos de
+                            acciones). Los chips de PERMISO (chat-permchip
+                            "Permitido/Denegado") conservan su palabra a propósito:
+                            registran una decisión, no una ejecución.
                             AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
                             _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
                             READ-ONLY doble capa regla 6 con TODA herramienta denegada) que
@@ -162,7 +172,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             GET/POST /:key/context/section/:i = UN fragmento — el POST exige el
                             `hash` (sha256/16) del texto ABIERTO y si el archivo cambió en el
                             medio (otra sesión de Claude editándolo) responde 409 sin pisar
-                            nada. GET /:key/memory = índice MEMORY.md + notas resueltas contra
+                            nada. GUARDIÁN con IA (POST /:key/context/section/:i/analyze,
+                            admin, valida hash ANTES de gastar tokens): corrida corta del SDK
+                            (haiku, 1 turno, CERO herramientas — las dos capas de la regla 6
+                            acá deniegan TODO) que compara sección vieja vs nueva y devuelve
+                            {removed, added, modified, risk ok|atencion|critico, riskWhy,
+                            summary}; la UI lo muestra en un modal de CONFIRMACIÓN FORZADA
+                            (reviewChange en project-context-panel.js) — solo "Confirmar y
+                            guardar" escribe, "Seguir editando" vuelve al editor sin tocar
+                            nada, y si la IA falla cae a un diff local (renderDiff) con la
+                            misma confirmación forzada: nunca se guarda a ciegas, nunca se
+                            bloquea el trabajo. Guardar sin cambios NO dispara análisis.
+                            GET /:key/memory = índice MEMORY.md + notas resueltas contra
                             disco (orden del índice, huérfanas al final); GET/POST
                             /:key/memory/index = MEMORY.md crudo; GET/POST
                             /:key/memory/note/:file = una nota (whitelist estricta

@@ -51,6 +51,15 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 07:26 — main
+- Chat: modo 'Todo' (bypassPermissions) + selector de modos compacto por riesgo
+- Auto-título con IA: la sesión se renombra sola (≤20 chars) según lo que hace
+- Móvil: la barra auxiliar (botón ⌨ incluido) se oculta en la vista Chat
+- Chat: chips de ejecución solo con íconos + leyenda en el modal de ayuda
+- Modified `CLAUDE.md`
+- Modified `public/js/modules/system/project-context-panel.js`
+- Modified `src/modules/projects/index.js`
+
 ### 2026-07-03 07:07 — main
 - Header del chat: fuera costo y botón TUI; '?' que explica los modos de permisos
 - Modified `CLAUDE.md`
