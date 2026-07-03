@@ -19,6 +19,14 @@ código.
    runner desacoplado (`bin/cwc-healthfix-runner.js`). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
+   REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
+   implementación nueva debe SOBREVIVIR a un reinicio de la interfaz web**
+   (deploys/`systemctl restart` pasan seguido). Si algo corre en el tiempo
+   (resolución, orquestador de fixes en paralelo, batches, worktrees, colas)
+   va en un RUNNER DESACOPLADO con estado en archivos (`~/.cwc-data`),
+   REANUDABLE (heartbeat/lock + progreso incremental, como health/triage) —
+   NUNCA en un `setTimeout`/promesa colgada del proceso del server. El front
+   se re-engancha por polling al estado persistido, no al proceso.
 3. **Todo local:** sin instalaciones npm globales; dependencias solo en
    `package.json` del proyecto.
 4. **No tocar archivos fuera del proyecto** salvo los runtime documentados
