@@ -38,6 +38,11 @@ import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
 import { buildTickets, findSimilarSolutions } from './engine.js';
+// Orquestador de concurrencia ADAPTATIVA — el mismo de Salud (genérico y
+// testeado). Acá lo usa refresh-prs para paralelizar las LECTURAS a GitHub
+// (`gh pr view`); los git-writes siguen SERIAL (regla de oro: paralelo lo
+// que LEE, serial lo que ESCRIBE).
+import { runAdaptivePool } from '../health/pool.js';
 // La consulta EN VIVO a Zoho Desk vive en un RUNNER DESACOPLADO
 // (bin/cwc-desk-runner.js): sobrevive al cambio de pestaña y al reinicio del
 // server (regla 2). Acá solo lanzamos el runner y leemos su resultado del disco.
@@ -64,6 +69,10 @@ function run(cmd, args, opts = {}) {
     });
   });
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// ¿El error de gh es un rate-limit (primario o secundario/abuse)? → back-off.
+const isRateLimited = (msg) => /rate limit|too quickly|secondary|abuse|\b403\b/i.test(String(msg));
 
 // Notas del PR: arrancan SIEMPRE con las respuestas formales a "cuál fue el
 // problema", "qué hice" y "¿concuerda con la mejor solución?". El cierre del
@@ -597,49 +606,69 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const all = listBugfixes();
       const errors = [];
-      // Para medir los pendientes contra el main REAL, primero refrescar la ref.
+      // Para medir los pendientes contra el main REAL, primero refrescar la ref
+      // (una sola op de red que además actualiza refs locales; serial).
       await run('git', ['fetch', 'origin', 'main'], { cwd: config.projectDir }).catch(() => {});
+
+      // FASE 1 — SERIAL (git local): aporte de cada fix PENDIENTE = diff de sus
+      // archivos vs origin/main. `git diff` toca el índice del repo, así que se
+      // deja serial para no pelear locks (regla de oro: serial lo que toca git).
       for (const b of all) {
-        if (b.status === 'pendiente') {
-          // Aporte del fix = diff del árbol de trabajo vs origin/main, SOLO en
-          // sus archivos ("cambios que aún no se mergearon a main").
-          if (!b.files?.length || path.resolve(b.cwd) !== config.projectDir) continue;
-          try {
-            const out = await run('git', ['diff', '--numstat', 'origin/main', '--', ...b.files], { cwd: config.projectDir });
-            let add = 0; let del = 0; let files = 0;
-            for (const line of out.split('\n').filter(Boolean)) {
-              const [a, d] = line.split('\t');
-              add += Number(a) || 0; // binarios vienen como '-': cuentan 0
-              del += Number(d) || 0;
-              files += 1;
-            }
-            b.stats = { add, del, files, src: 'local' };
-          } catch { b.stats = null; }
-          continue;
-        }
-        if (!b.prNumber && !b.branch) continue;
+        if (b.status !== 'pendiente') continue;
+        if (!b.files?.length || path.resolve(b.cwd) !== config.projectDir) { continue; }
         try {
-          const out = await run('gh', [
-            'pr', 'view', String(b.prNumber || b.branch),
-            '--json', 'number,state,mergedAt,mergedBy,url,additions,deletions,changedFiles',
-          ], { cwd: config.projectDir });
-          const pr = JSON.parse(out);
-          b.prNumber = pr.number || b.prNumber;
-          b.prUrl = pr.url || b.prUrl;
-          const nuevoEstado = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
-          // Transición a merged detectada: evento al historial (una sola vez).
-          if (nuevoEstado === 'merged' && b.prState !== 'merged') {
-            addEvent(b, 'pr_mergeado', { pr: pr.number, by: pr.mergedBy?.login || null });
+          const out = await run('git', ['diff', '--numstat', 'origin/main', '--', ...b.files], { cwd: config.projectDir });
+          let add = 0; let del = 0; let files = 0;
+          for (const line of out.split('\n').filter(Boolean)) {
+            const [a, d] = line.split('\t');
+            add += Number(a) || 0; // binarios vienen como '-': cuentan 0
+            del += Number(d) || 0;
+            files += 1;
           }
-          b.prState = nuevoEstado;
-          b.mergedAt = pr.mergedAt ? Date.parse(pr.mergedAt) : null;
-          b.mergedBy = pr.mergedBy?.login || null;
-          b.stats = { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' };
-          b.updatedAt = Date.now();
-        } catch (err) {
-          errors.push(`TKT #${b.ticketNumber}: ${String(err?.message || err).slice(0, 120)}`);
-        }
+          b.stats = { add, del, files, src: 'local' };
+        } catch { b.stats = null; }
       }
+
+      // FASE 2 — PARALELO (solo LECTURA de red): estado real de cada PR subido
+      // vía `gh pr view`, orquestado con runAdaptivePool (referente: Salud).
+      // Concurrencia que rampa con CPU/RAM libres y BACK-OFF ante rate-limit de
+      // GitHub. Node es single-thread: cada worker muta SU registro sin carrera
+      // (solo hay I/O concurrente de procesos gh). Sin git-writes = sin riesgo.
+      const ghItems = all.filter((b) => b.status !== 'pendiente' && (b.prNumber || b.branch));
+      await runAdaptivePool(ghItems, async (b, ctl) => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const out = await run('gh', [
+              'pr', 'view', String(b.prNumber || b.branch),
+              '--json', 'number,state,mergedAt,mergedBy,url,additions,deletions,changedFiles',
+            ], { cwd: config.projectDir });
+            const pr = JSON.parse(out);
+            b.prNumber = pr.number || b.prNumber;
+            b.prUrl = pr.url || b.prUrl;
+            const nuevoEstado = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
+            // Transición a merged detectada: evento al historial (una sola vez).
+            if (nuevoEstado === 'merged' && b.prState !== 'merged') {
+              addEvent(b, 'pr_mergeado', { pr: pr.number, by: pr.mergedBy?.login || null });
+            }
+            b.prState = nuevoEstado;
+            b.mergedAt = pr.mergedAt ? Date.parse(pr.mergedAt) : null;
+            b.mergedBy = pr.mergedBy?.login || null;
+            b.stats = { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' };
+            b.updatedAt = Date.now();
+            return;
+          } catch (err) {
+            const msg = String(err?.message || err);
+            // Rate-limit de GitHub: bajar concurrencia (ctl.backoff) y reintentar.
+            if (attempt < 2 && isRateLimited(msg)) {
+              ctl.backoff();
+              await sleep(2000 * (attempt + 1));
+              continue;
+            }
+            errors.push(`TKT #${b.ticketNumber}: ${msg.slice(0, 120)}`);
+            return;
+          }
+        }
+      }, { start: 4 });
       saveBugfixes(all);
 
       let github = [];
