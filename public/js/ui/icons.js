@@ -24,6 +24,7 @@ const PATHS = {
   terminal: `<rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 11,12.5 7,16"/><line x1="12" y1="16" x2="16" y2="16"/>`,
   sparkle: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>`,
   help: `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.6 2.6 0 1 1 3.8 2.3c-.8.4-1.2 1-1.2 1.9"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>`,
+  search: `<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/>`,
   home: `<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h4v-6h2v6h4a1 1 0 0 0 1-1v-9"/>`,
   gitBranch: `<circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4V15.6"/><path d="M6 15.6c0-3.6 3-4.8 6-4.8h4.7"/><path d="M18 6.4V6.8"/>`,
   check: `<polyline points="4,13 9,18 20,6"/>`,

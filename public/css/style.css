@@ -470,6 +470,19 @@ html, body {
    nivel 0 = preámbulo (contenido antes del primer encabezado). */
 .pj-sec--l2 .hp-detail { padding-left: .8rem; }
 .pj-sec--l3 .hp-detail { padding-left: 1.6rem; }
+/* Revisión forzada del cambio (guardián con IA antes de guardar) */
+.cr-why { margin: .2rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.cr-summary { margin: .3rem 0 .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); font-style: italic; }
+.cr-group { margin: .5rem 0; border-left: 3px solid var(--cwc-border-strong); padding-left: .6rem; }
+.cr-group--del { border-left-color: var(--cwc-danger); }
+.cr-group--add { border-left-color: var(--cwc-ok); }
+.cr-group--mod { border-left-color: var(--cwc-warn); }
+.cr-label { font-size: var(--cwc-fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: .2rem; }
+.cr-group--del .cr-label { color: var(--cwc-danger-strong); }
+.cr-group--add .cr-label { color: var(--cwc-ok); }
+.cr-group--mod .cr-label { color: var(--cwc-warn); }
+.cr-items { margin: 0; padding-left: 1.1rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.cr-items li { margin: .15rem 0; line-height: 1.4; }
 
 /* Panel de salud (pestaña) */
 .hp-head { display: flex; align-items: center; justify-content: space-between; margin: .2rem 0 .35rem; }
@@ -607,12 +620,29 @@ html, body {
   padding: 0 .25rem; box-sizing: border-box;
 }
 
-/* Modal "Modos de permisos" */
+/* Modal "Ayuda del chat": modos de permisos + leyenda de íconos de acciones */
+.mode-help .mh-sec {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase;
+  letter-spacing: .05em; margin: .2rem 0 .5rem;
+}
+.mode-help .mh-sec + .mh-sec, .mode-help .mh-foot + .mh-sec { margin-top: 1rem; }
 .mode-help .mh-item { margin-bottom: .7rem; }
 .mode-help .mh-item b { color: var(--cwc-text); font-size: var(--cwc-fs-md); }
 .mode-help .mh-item b.mh-danger { color: var(--cwc-danger-strong); }
 .mode-help .mh-item p { margin: .2rem 0 0; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; }
-.mode-help .mh-foot { margin: .6rem 0 0; padding-top: .5rem; border-top: 1px solid var(--cwc-divider); color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.mode-help .mh-foot { margin: .6rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--cwc-divider); color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.mode-help .mh-intro { margin: 0 0 .5rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); line-height: 1.45; }
+.mode-help .mh-leg {
+  display: flex; align-items: center; gap: .5rem; padding: .2rem 0;
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
+}
+.mode-help .mh-leg-icons {
+  display: inline-flex; align-items: center; gap: .25rem; flex: none;
+  padding: .15rem .35rem; border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-chip);
+  color: var(--cwc-text-secondary);
+}
+.mode-help .mh-leg b { color: var(--cwc-text); font-weight: 600; flex: none; }
 
 /* Ritmo de diálogo: aire chico entre elementos del mismo turno (gap) y aire
    grande al abrir turno nuevo (margen extra sobre cada mensaje del usuario). */

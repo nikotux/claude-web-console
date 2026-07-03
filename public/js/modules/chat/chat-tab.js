@@ -37,6 +37,22 @@ function isDestructiveCommand(cmd) {
 // Ícono representativo por herramienta en la fila de permiso.
 const TOOL_ICONS = { Bash: 'terminal', Edit: 'edit', Write: 'edit', Read: 'eye', WebFetch: 'download' };
 
+// Ícono del TIPO de herramienta: es el SEGUNDO ícono del chip de ejecución
+// (el primero es siempre la consola = "Claude usó una herramienta"). El chip
+// ya no lleva texto (era innecesariamente largo); la leyenda de estos íconos
+// vive en el modal del "?" del header (_modeHelp) y el nombre completo queda
+// en el tooltip del chip.
+const TOOL_TYPE_ICONS = [
+  [/^Bash/i, 'play'],
+  [/^(Edit|Write|NotebookEdit|MultiEdit)/i, 'edit'],
+  [/^Read/i, 'eye'],
+  [/^(Grep|Glob)/i, 'search'],
+  [/^Web/i, 'download'],
+  [/^Todo/i, 'list'],
+  [/^(Task|Agent)/i, 'sparkle'],
+];
+const toolTypeIcon = (name) => (TOOL_TYPE_ICONS.find(([re]) => re.test(String(name || ''))) || [null, 'gear'])[1];
+
 // [valor SDK, etiqueta de UNA palabra, riesgo]. Etiquetas cortas a propósito:
 // el select colapsado queda mínimo; el "?" de al lado explica cada modo. El
 // riesgo pinta el color del select (ver .chat-mode[data-risk] en style.css):
@@ -88,7 +104,7 @@ export class ChatTab {
           <select class="chat-mode" data-risk="ok" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
-          <button class="btn-ghost btn--icon chat-mode-help" title="¿Qué significan estos modos?">${icon('help', { size: 15 })}</button>
+          <button class="btn-ghost btn--icon chat-mode-help" title="Ayuda: modos de permisos e íconos de acciones">${icon('help', { size: 15 })}</button>
         </header>
         <div class="chat-msgs"></div>
         <div class="chat-composer">
@@ -442,11 +458,10 @@ export class ChatTab {
     chip.type = 'button';
     chip.className = 'chat-toolchip';
     if (m.id) chip.dataset.toolId = m.id;
-    chip.innerHTML = `${icon('terminal', { size: 14 })}<span class="ct-name"></span>`;
-    chip.querySelector('.ct-name').textContent = m.name;
-    // Chip mínimo: icono + nombre. El resumen vive en el tooltip (desktop) y
-    // completo en el detalle expandible.
-    chip.title = String(m.summary || '');
+    // Chip SOLO íconos: consola (= herramienta ejecutada) + tipo (leyenda en
+    // el "?" del header). Nombre y resumen quedan en el tooltip y el detalle.
+    chip.innerHTML = `${icon('terminal', { size: 14 })}${icon(toolTypeIcon(m.name), { size: 13, className: 'ct-type' })}`;
+    chip.title = `${m.name}${m.summary ? ` — ${m.summary}` : ''}`;
     chip._detail = m.detail || null;         // datos crudos para el render perezoso
     chip._summary = String(m.summary || ''); // fallback del detalle (tools sin input propio)
     chip._output = null;                     // {ok, text} cuando llegue el tool_result
@@ -637,10 +652,18 @@ export class ChatTab {
   }
 
   // ¿Qué significan los modos de permisos? Modal explicativo del "?" del header.
+  // Ayuda del chat: modos de permisos + nomenclatura de los chips de
+  // herramientas (los chips son SOLO íconos; esta es su leyenda).
   _modeHelp() {
-    const m = openModal({ title: 'Modos de permisos', width: 460 });
+    const leg = (ic, name, desc) => `
+      <div class="mh-leg">
+        <span class="mh-leg-icons">${icon('terminal', { size: 13 })}${icon(ic, { size: 12 })}</span>
+        <b>${name}</b><span>${desc}</span>
+      </div>`;
+    const m = openModal({ title: 'Ayuda del chat', width: 480 });
     m.body.innerHTML = `
       <div class="mode-help">
+        <div class="mh-sec">Modos de permisos</div>
         <div class="mh-item">
           <b>Preguntar</b>
           <p>El modo estándar. Claude pide permiso antes de CADA acción que toque
@@ -669,6 +692,22 @@ export class ChatTab {
         <p class="mh-foot">Podés cambiar de modo en cualquier momento; aplica
         desde la próxima acción. El color del selector marca el riesgo:
         verde = controlado · amarillo = medio · rojo = acepta todo.</p>
+
+        <div class="mh-sec">Íconos de acciones</div>
+        <p class="mh-intro">Cada acción de Claude aparece en el hilo como un
+        chip de dos íconos: la consola (ejecutó una herramienta) + el tipo.
+        Tocá el chip para ver el detalle completo; el borde marca el
+        resultado (verde ok · rojo error).</p>
+        <div class="mh-legend">
+          ${leg('play', 'Bash', 'corre un comando')}
+          ${leg('edit', 'Edit / Write', 'edita o crea archivos')}
+          ${leg('eye', 'Read', 'lee archivos')}
+          ${leg('search', 'Grep / Glob', 'busca en el proyecto')}
+          ${leg('download', 'Web', 'consulta la web')}
+          ${leg('list', 'Todo', 'lista de tareas del agente')}
+          ${leg('sparkle', 'Task', 'lanza un subagente')}
+          ${leg('gear', 'Otras', 'cualquier otra herramienta')}
+        </div>
       </div>`;
   }
 
