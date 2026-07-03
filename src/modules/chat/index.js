@@ -42,8 +42,70 @@ import {
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
 import { recordBugfix } from '../bugfixes/store.js';
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
+
+// ===== Auto-título con IA (Haiku) =====
+// En cada mensaje del usuario se extrae EN PARALELO (jamás bloquea el turno)
+// un título de máx. 20 caracteres que describe qué se está haciendo, y la
+// tarjeta/cabecera se renombran solas (la UI lo levanta por el poll de 8 s).
+// Guardas de costo: Haiku + un mensaje mínimo + throttle por conversación.
+const AUTOTITLE_MAX_LEN = 20;
+const AUTOTITLE_MIN_INTERVAL_MS = 20000; // máx. una extracción cada 20 s por chat
+const AUTOTITLE_TIMEOUT_MS = 30000;
+
+// Corrida IA mínima y READ-ONLY (doble capa, regla 6 del CLAUDE.md: hook
+// PreToolUse + canUseTool — acá directamente se deniega TODA herramienta:
+// el modelo solo resume texto). Haiku: el más barato, sobra para 20 chars.
+async function extractTitle({ cwd, current, text }) {
+  const q = query({
+    prompt:
+      `Resumí en un título de MÁXIMO ${AUTOTITLE_MAX_LEN} caracteres (español, sin comillas ni punto final) qué se está haciendo en esta sesión de trabajo.\n` +
+      `Proyecto: ${path.basename(cwd) || '~'}\n` +
+      `Título actual: «${current}»\n` +
+      `Último pedido del usuario: «${text.slice(0, 500)}»\n` +
+      `Si el pedido no cambia de tema, respondé el título actual tal cual. Respondé SOLO el título, nada más.`,
+    options: {
+      cwd,
+      model: 'haiku',
+      maxTurns: 1,
+      permissionMode: 'default',
+      hooks: {
+        PreToolUse: [{
+          hooks: [async () => ({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: 'Extracción de título: sin herramientas.',
+            },
+          })],
+        }],
+      },
+      canUseTool: async () => ({ behavior: 'deny', message: 'Extracción de título: sin herramientas.' }),
+    },
+  });
+  let out = '';
+  let timer = null;
+  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), AUTOTITLE_TIMEOUT_MS); });
+  const pump = (async () => {
+    for await (const m of q) {
+      if (m.type === 'assistant') {
+        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
+      } else if (m.type === 'result') break;
+    }
+  })();
+  try {
+    await Promise.race([pump, timeout]);
+  } catch (err) {
+    try { q.interrupt?.(); } catch { /* noop */ }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  // Saneo duro: una línea, sin comillas, tope de caracteres SIEMPRE.
+  return out.replace(/["'«»`]/g, '').split('\n')[0].trim().slice(0, AUTOTITLE_MAX_LEN);
+}
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
@@ -409,10 +471,31 @@ class Chat {
     this.lastActivity = Date.now();
     this._setStatus('working');
     this._push({ type: 'user', text });
+    this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
     // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
     this._ensureEngine().then((ok) => {
       if (ok !== false) this.link?.send({ t: 'user', text });
     });
+  }
+
+  // Auto-título (ver extractTitle arriba). Fire-and-forget: nunca bloquea ni
+  // rompe el turno; si falla, simplemente queda el título anterior.
+  _autoTitle(text) {
+    const t = String(text || '').trim();
+    if (t.startsWith('/') || t.length < 15) return; // comandos y "ok, dale" no re-titulan
+    if (this.ticket) return; // bugfixes: título curado ("PR en progreso · TKT #n"), no pisarlo
+    if (this._titleBusy) return;
+    if (Date.now() - (this._titleAt || 0) < AUTOTITLE_MIN_INTERVAL_MS) return;
+    this._titleBusy = true;
+    this._titleAt = Date.now();
+    extractTitle({ cwd: this.cwd, current: this.title, text: t })
+      .then((title) => {
+        if (!title || this.closed || title === this.title) return;
+        this.title = title;
+        this.onUpdate?.(); // persiste vía el manager (mismo camino que el resto)
+      })
+      .catch(() => { /* mejor conservar el título viejo que molestar el turno */ })
+      .finally(() => { this._titleBusy = false; });
   }
 
   interrupt() {

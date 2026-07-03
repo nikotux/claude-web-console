@@ -255,12 +255,21 @@ async function pollTabStatus() {
     ]);
     const byName = new Map(tmux.map((s) => [s.name, s]));
     const byChat = new Map(chats.map((c) => [c.id, c]));
+    let titleChanged = false;
     for (const [id, entry] of tabs) {
       if (!entry.statusDot) continue;
       let cls = 'st-idle';
       if (entry.type === 'chat') {
         const c = byChat.get(id);
         cls = c ? (c.status === 'working' ? 'st-working' : 'st-waiting') : 'st-idle';
+        // Auto-título (IA) o renombre desde otro dispositivo: reflejarlo en
+        // header + chip; las tarjetas de Sesiones se refrescan al final.
+        if (c && c.title && c.title !== entry.session.title) {
+          entry.session.title = c.title;
+          syncConversation(c);
+          updateConvChipMode(entry);
+          titleChanged = true;
+        }
       } else {
         const s = byName.get(`cwc-${id}`);
         const st = s?.state?.status;
@@ -268,6 +277,7 @@ async function pollTabStatus() {
       }
       entry.statusDot.className = `rail-status ${cls}`;
     }
+    if (titleChanged) bus.dispatchEvent(new Event('sessions-changed'));
   } catch { /* noop */ }
 }
 
