@@ -667,10 +667,20 @@ docs/                       frontend-modules.md · brief-original.txt · context
   health-review.lock (heartbeat => running). POST responde INMEDIATO
   (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA
   full-screen (health-review-modal.js, .dlg-card--health): barra de progreso
-  + grilla de módulos con estado en vivo + hallazgos por severidad (color),
-  cada uno con "Trabajar en chat" que abre un chat en la raíz de la consola
-  (cwd 'claude-web-console', modo plan) con el hallazgo precargado — la
-  revisión NUNCA modifica código, los fixes se deciden en chat supervisado.
+  + grilla de módulos con estado en vivo + hallazgos por severidad (color).
+  RESOLUCIÓN AUTÓNOMA (pedido del usuario 2026-07-03): cada hallazgo tiene UN
+  botón "Resolver" y hay un "Resolver todo (autónomo)" junto a "Volver a
+  analizar" (resolveInChat / resolveAll). Abren un chat en la raíz de la
+  consola (cwd 'claude-web-console') en modo `acceptEdits` con el contexto del
+  hallazgo/hallazgos: edita solo, pero el prompt le exige FRENAR y pedir
+  confirmación en acciones de ALTO RIESGO (bash destructivo/git push/reiniciar
+  servicios) — ahí aparece la tarjeta de permiso (alerta) del chat. La
+  revisión (headless) sigue read-only regla 6; lo que edita es el chat
+  supervisado que ve el usuario. COLAPSABLES (móvil, isMobile por matchMedia):
+  cada hallazgo es una tarjeta con header (severidad·tipo·área·módulo) siempre
+  visible + cuerpo plegable (.hr-collapsed togglea .hr-f-body); módulos y
+  resumen en <details.hr-collapsible> — todo colapsado en móvil, abierto en
+  desktop. Vista general por defecto, detalle a demanda.
 - **GOTCHA de profundidad (verificado 2026-07-03):** haiku-por-módulo
   encuentra bugs reales valiosos (fd leaks, race conditions en flags `busy`,
   stash pop sin verificar merge, límites de tamaño faltantes en endpoints)

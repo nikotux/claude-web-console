@@ -1215,7 +1215,23 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-verdict--ok b { color: var(--cwc-ok); }
 .hr-verdict--atencion b { color: var(--cwc-warn); }
 .hr-verdict--critico b { color: var(--cwc-danger-strong); }
-.hr-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; margin: 0; }
+.hr-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; margin: .3rem 0 0; }
+/* Colapsables nativos (módulos + resumen): vista general por defecto en móvil. */
+.hr-collapsible { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: 0 .5rem; }
+.hr-collapsible > summary {
+  cursor: pointer; user-select: none; padding: .35rem 0; list-style: none;
+  font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text-secondary);
+  display: flex; align-items: center; gap: .4rem;
+}
+.hr-collapsible > summary::-webkit-details-marker { display: none; }
+.hr-collapsible > summary::before { content: '▸'; color: var(--cwc-text-dim); transition: transform .15s ease; }
+.hr-collapsible[open] > summary::before { transform: rotate(90deg); }
+.hr-collapsible[open] > summary { border-bottom: 1px solid var(--cwc-divider); margin-bottom: .4rem; }
+.hr-collapsible .hr-units { padding-bottom: .4rem; }
+/* Fila de acciones (analizar + resolver todo) — apiladas en móvil. */
+.hr-actions-row { display: flex; gap: .5rem; }
+.hr-actions-row .btn { flex: 1; }
+.hr-resolve-all { background: var(--cwc-accent); }
 /* Lista de hallazgos */
 .hr-findings { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; }
 .hr-finding {
@@ -1226,7 +1242,11 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-finding--high { border-left-color: var(--cwc-danger); }
 .hr-finding--medium { border-left-color: var(--cwc-warn); }
 .hr-finding--low { border-left-color: var(--cwc-text-dimmer); }
-.hr-f-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.hr-f-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; cursor: pointer; }
+/* Chevron de la tarjeta colapsable + plegado del cuerpo. */
+.hr-chev { display: inline-flex; color: var(--cwc-text-dim); transition: transform .15s ease; flex: none; }
+.hr-finding.hr-collapsed .hr-chev { transform: rotate(-90deg); }
+.hr-finding.hr-collapsed .hr-f-body { display: none; }
 .hr-sev {
   font-size: var(--cwc-fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
   padding: 0 .35rem; border-radius: var(--cwc-radius-sm);
@@ -1246,4 +1266,6 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 @media (max-width: 768px) {
   .dlg-overlay:has(.dlg-card--health) { padding: 0; }
   .dlg-card--health { width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; }
+  /* Móvil: acciones apiladas (analizar + resolver todo). */
+  .hr-actions-row { flex-direction: column; }
 }

@@ -21,6 +21,9 @@ const KIND_LABEL = { bug: '🐛 bug', regla: '📏 regla', mejora: '✨ mejora' 
 // Abre esta sub-ventana. `ctx` trae dialog + openChat (para trabajar un hallazgo).
 export function openHealthReview(ctx, { isAdmin }) {
   const { dialog, openChat } = ctx;
+  // En pantallas chicas todo nace COLAPSADO (vista general; detalle a demanda);
+  // en desktop, expandido (hay lugar). Se evalúa una vez al abrir.
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
   const m = dialog.openModal({ title: 'Revisión exhaustiva de salud', width: 900 });
   m.card.classList.add('dlg-card--health');
   const wrap = document.createElement('div');
@@ -33,20 +36,27 @@ export function openHealthReview(ctx, { isAdmin }) {
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 
+  // Tarjeta COLAPSABLE: header (severidad · tipo · área · módulo) siempre
+  // visible + chevron; el cuerpo (detalle, archivo, fix, acción) se pliega.
+  // Un único botón "Resolver" abre el chat autónomo (acceptEdits) con el
+  // contexto del hallazgo — las decisiones de alto riesgo alertan ahí.
   function findingCard(f) {
     const sev = f.severity || 'medium';
     return `
-      <div class="hr-finding hr-finding--${esc(sev)}" data-idx="${f._i}">
-        <div class="hr-f-head">
+      <div class="hr-finding hr-finding--${esc(sev)}${isMobile ? ' hr-collapsed' : ''}" data-idx="${f._i}">
+        <div class="hr-f-head" data-toggle="1">
+          <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
           <span class="hr-sev hr-sev--${esc(sev)}">${SEV_LABEL[sev] || sev}</span>
           <span class="hr-kind">${KIND_LABEL[f.kind] || f.kind || ''}</span>
           <span class="hr-f-area">${esc(f.area)}</span>
           <span class="hr-f-mod">${esc(f.module || '')}</span>
         </div>
-        <p class="hr-f-detail">${esc(f.detail)}</p>
-        ${f.file ? `<div class="hr-f-file">📄 ${esc(f.file)}</div>` : ''}
-        ${f.suggestedFix ? `<p class="hr-f-fix">🔧 ${esc(f.suggestedFix)}</p>` : ''}
-        ${isAdmin && openChat ? `<div class="hr-f-actions"><button class="btn btn--sm" data-act="chat">${icon('sparkle', { size: 13 })}<span>Trabajar en chat</span></button></div>` : ''}
+        <div class="hr-f-body">
+          <p class="hr-f-detail">${esc(f.detail)}</p>
+          ${f.file ? `<div class="hr-f-file">📄 ${esc(f.file)}</div>` : ''}
+          ${f.suggestedFix ? `<p class="hr-f-fix">🔧 ${esc(f.suggestedFix)}</p>` : ''}
+          ${isAdmin && openChat ? `<div class="hr-f-actions"><button class="btn btn--sm" data-act="resolve" title="Abre un chat que resuelve este hallazgo de forma autónoma (edita solo; frena y te avisa en decisiones de alto riesgo)">${icon('sparkle', { size: 13 })}<span>Resolver</span></button></div>` : ''}
+        </div>
       </div>`;
   }
 
@@ -77,11 +87,14 @@ export function openHealthReview(ctx, { isAdmin }) {
         <div class="hr-bar"><span class="hr-bar-fill" style="width:${pct}%"></span></div>
         <span class="hr-phase">${running ? `${done}/${total} · ${esc(d.phase || 'analizando…')}` : `${done}/${total} completado`}</span>
       </div>
-      <div class="hr-units">${units}</div>
+      ${units ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Módulos analizados (${d.units?.length || 0})</summary><div class="hr-units">${units}</div></details>` : ''}
       ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${findings.length} hallazgo(s) · ${countLine}</span></div>` : ''}
-      ${d.summary ? `<p class="hr-summary">${esc(d.summary)}</p>` : ''}
+      ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
-      ${!running && isAdmin ? `<button class="btn btn--block" data-ref="start">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Volver a analizar en profundidad' : 'Iniciar análisis profundo'}</span></button>` : ''}
+      ${!running && isAdmin ? `<div class="hr-actions-row">
+        <button class="btn btn--block" data-ref="start">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Volver a analizar' : 'Iniciar análisis profundo'}</span></button>
+        ${findings.length ? `<button class="btn btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat que resuelve todos los hallazgos de forma autónoma (edita solo; frena en decisiones de alto riesgo)">${icon('sparkle', { size: 14 })}<span>Resolver todo (autónomo)</span></button>` : ''}
+      </div>` : ''}
       <div class="hr-findings">
         ${findings.length ? findings.map(findingCard).join('')
     : running ? '<div class="hr-empty">Analizando módulos…</div>'
@@ -89,12 +102,16 @@ export function openHealthReview(ctx, { isAdmin }) {
       </div>`;
 
     for (const card of wrap.querySelectorAll('.hr-finding')) {
-      card.querySelector('[data-act="chat"]')?.addEventListener('click', () => {
+      // Tap en el header = plegar/desplegar el detalle (vista general ↔ detalle).
+      card.querySelector('[data-toggle]')?.addEventListener('click', () => card.classList.toggle('hr-collapsed'));
+      card.querySelector('[data-act="resolve"]')?.addEventListener('click', (e) => {
+        e.stopPropagation();
         const f = findings.find((x) => String(x._i) === card.dataset.idx);
-        if (f) workInChat(f);
+        if (f) resolveInChat(f);
       });
     }
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', startReview);
+    wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(findings));
   }
 
   // Lanza la revisión (el ÚNICO punto que gasta tokens). Confirmación con
@@ -112,12 +129,21 @@ export function openHealthReview(ctx, { isAdmin }) {
     poll();
   }
 
-  // Abre un chat en la RAÍZ de la consola con el hallazgo precargado. El
-  // modo (plan vs aceptar ediciones) lo elige el usuario en el chat; acá se
-  // arranca en 'plan' para investigar/decidir juntos (nunca escribe solo).
-  async function workInChat(f) {
+  // Cómo trabaja la resolución autónoma (mismo texto para un hallazgo o todos):
+  // edita solo (acceptEdits), pero FRENA y pide confirmación en lo de alto
+  // riesgo — ahí aparece la alerta (tarjeta de permiso) en el chat.
+  const RESOLVE_RULES = [
+    'Cómo resolver:',
+    '1. Verificá leyendo el código citado que el hallazgo es REAL (la auditoría puede equivocarse). Si es falso positivo, avisame y no toques nada.',
+    '2. Implementá el fix MÍNIMO. Podés editar archivos directamente (estás en modo Aceptar ediciones).',
+    '3. FRENÁ y pedime confirmación ANTES de cualquier acción de ALTO RIESGO: borrar datos, git push, reiniciar servicios, comandos destructivos (rm, kill, systemctl…). No las ejecutes sin mi OK.',
+    '4. Al terminar, resumí qué cambiaste, en qué archivos y cómo verificarlo.',
+  ].join('\n');
+
+  // Un hallazgo → chat autónomo con SU contexto.
+  async function resolveInChat(f) {
     const prompt = [
-      `Revisión de salud detectó este hallazgo en la consola (Claude Web Console). Analicémoslo juntos y decidamos el fix ANTES de tocar nada.`,
+      'Revisión de salud de la consola (Claude Web Console) detectó este hallazgo. Resolvelo de forma autónoma.',
       '',
       `Módulo: ${f.module || '—'}`,
       `Severidad: ${SEV_LABEL[f.severity] || f.severity} · Tipo: ${f.kind || '—'}`,
@@ -127,10 +153,33 @@ export function openHealthReview(ctx, { isAdmin }) {
       `Detalle: ${f.detail}`,
       f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
       '',
-      'Verificá primero leyendo el código citado que el hallazgo es real (la auditoría puede equivocarse), explicame la causa y proponé el cambio mínimo. No edites nada hasta que aprobemos juntos.',
+      RESOLVE_RULES,
     ].filter((l) => l !== null && l !== undefined).join('\n');
     m.close();
-    await openChat({ cwd: 'claude-web-console', mode: 'plan', prompt, title: `Salud: ${f.area}`.slice(0, 40) });
+    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver: ${f.area}`.slice(0, 40) });
+  }
+
+  // Todos los hallazgos → UN chat autónomo que los trabaja en orden.
+  async function resolveAll(findings) {
+    if (!findings.length) return;
+    const ok = await dialog.confirmDialog({
+      title: 'Resolver todo (autónomo)',
+      message: `Se abre UN chat que va a resolver los ${findings.length} hallazgo(s) uno por uno, editando el código de la consola de forma autónoma (modo Aceptar ediciones). Frenará y te pedirá confirmación en cada decisión de alto riesgo.\n\nLo ves en vivo y podés detenerlo cuando quieras.`,
+      confirmLabel: `Resolver ${findings.length} hallazgo(s)`,
+    });
+    if (!ok) return;
+    const lista = findings.map((f, i) => `${i + 1}. [${SEV_LABEL[f.severity] || f.severity}] ${f.area}${f.module ? ` (${f.module})` : ''}${f.file ? ` — ${f.file}` : ''}\n   ${f.detail}${f.suggestedFix ? `\n   Fix sugerido: ${f.suggestedFix}` : ''}`).join('\n\n');
+    const prompt = [
+      `La revisión de salud de la consola (Claude Web Console) encontró ${findings.length} hallazgo(s). Resolvelos de forma autónoma, UNO POR UNO, en el orden de la lista (severidad de mayor a menor).`,
+      '',
+      lista,
+      '',
+      RESOLVE_RULES,
+      '',
+      'Trabajá secuencial: verificá, arreglá y pasá al siguiente. Avisá al terminar cada uno y hacé un resumen final con todo lo cambiado.',
+    ].join('\n');
+    m.close();
+    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver ${findings.length} hallazgos de salud`.slice(0, 50) });
   }
 
   async function poll() {
