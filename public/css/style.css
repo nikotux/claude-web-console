@@ -675,6 +675,15 @@ html, body {
   content: '▍'; color: var(--cwc-accent); animation: chat-caret 1s steps(2) infinite;
 }
 @keyframes chat-caret { 50% { opacity: 0; } }
+/* Móvil: burbujas a pantalla (casi) completa. Los topes de arriba (90%/75%)
+   son para paneles ANCHOS de desktop — en un teléfono regalaban ~35px a la
+   derecha del asistente (bug reportado). Todo sigue en %/rem, cero píxeles
+   fijos: se adapta al ancho real de cualquier pantalla. */
+@media (max-width: 768px) {
+  .chat-msgs { padding-left: .55rem; padding-right: .55rem; }
+  .chat-assistant { max-width: 100%; }
+  .chat-user { max-width: 88%; }
+}
 
 /* Tool calls consecutivos: grupo con fila flex-wrap de chips compactos y UN
    detalle expandible de ancho completo DEBAJO de la fila (fuera del flujo

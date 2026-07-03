@@ -463,6 +463,12 @@ docs/                       frontend-modules.md · brief-original.txt · context
   `_scroll()`; `setActive()` (main.js) lo llama justo DESPUÉS de togglear
   `.active`, con el layout ya medible. No sacar ese `_scroll()` ni invertir
   el orden toggle→focus.
+- Burbujas del chat en móvil: los topes de desktop (`.chat-assistant`
+  max-width 90%, `.chat-user` 75%) regalaban ~35px a la derecha en un
+  teléfono (reportado por el usuario). El media query móvil (max-width:768px,
+  junto a las reglas de .chat-assistant en style.css) los sube a 100%/88% y
+  achica el padding lateral de `.chat-msgs`. TODO el layout del chat es
+  %/rem — si se agrega un ancho, que sea relativo, nunca px fijos.
 - Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
   (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
   usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;
