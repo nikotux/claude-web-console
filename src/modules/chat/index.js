@@ -10,13 +10,19 @@
 //   POST /api/chat/create {cwd?, model?, permissionMode?} -> { chat }
 //   GET  /api/chat/list                                   -> { chats }
 //   POST /api/chat/close {id}
+//   POST /api/chat/model {id, model}  -> cambia el modelo (en vivo si el
+//        motor está corriendo — q.setModel() del SDK, igual que setMode con
+//        permisos —, o solo actualiza this.model para el próximo arranque si
+//        está dormido). Antes SOLO existía para sesiones tmux (/model
+//        tipeado a la TUI); ahora las conversaciones también lo tienen desde
+//        el menú ⋯ de Sesiones.
 // WS  /ws/chat?id=<id>
 //   c->s: {type:'user', text} · {type:'permission_response', id, allow}
-//         {type:'interrupt'} · {type:'set_mode', mode}
+//         {type:'interrupt'} · {type:'set_mode', mode} · {type:'set_model', model}
 //   s->c: {type:'history', events, slashCommands} · {type:'user', text} · {type:'delta', text}
 //         {type:'tool_use', name, summary} · {type:'result', costUsd, usage, ms}
 //         {type:'permission_request', id, tool, input} · {type:'status', state}
-//         {type:'mode', mode} · {type:'error', message} · {type:'closed'}
+//         {type:'mode', mode} · {type:'model', model} · {type:'error', message} · {type:'closed'}
 //         {type:'meta', slashCommands:[{name,description|null}]} (Fase 8:
 //          comandos del init, enriquecidos con el frontmatter de los SKILL.md)
 import express from 'express';
@@ -35,6 +41,7 @@ import {
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
 import { recordBugfix } from '../bugfixes/store.js';
+import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 
@@ -264,6 +271,11 @@ class Chat {
         this.permissionMode = e.mode;
         this._push(e);
         return;
+      case 'model':
+        this.model = e.model;
+        this._push(e);
+        this.onUpdate?.(); // persistir el modelo confirmado por el runner
+        return;
       case 'result': {
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
@@ -420,6 +432,21 @@ class Chat {
     }
   }
 
+  // Cambia el MODELO de la conversación. Con motor vivo usa q.setModel() del
+  // SDK (en vivo, sin perder contexto); dormido, solo actualiza this.model
+  // (_startEngine ya lo lee para el próximo spawnRunner).
+  setModel(model) {
+    if (!VALID_MODELS.has(model)) return;
+    if (this.link) {
+      // El cambio real lo confirma el runner con su evento 'model'.
+      this.link.send({ t: 'set_model', model });
+    } else {
+      this.model = model;
+      this._push({ type: 'model', model });
+      this.onUpdate?.(); // persistir el nuevo modelo elegido
+    }
+  }
+
   close() {
     this.closed = true;
     // Conversación de un ticket: al finalizar queda el registro de qué hay que
@@ -523,7 +550,12 @@ class ChatManager {
 
   create({ cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
     const id = `c${process.pid}-${++this._seq}`;
-    const chat = new Chat({ id, cwd, model, permissionMode, resume, title, ticket });
+    // Nombre ÚNICO de tarjeta (cruzado con las sesiones tmux, vía el registro
+    // de core/session-names.js): "tolkien" → "tolkien 1" si ya hay otra
+    // sesión con ese nombre. Solo en creaciones nuevas — rehydrate() usa
+    // `new Chat` directo y respeta los títulos ya persistidos.
+    const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
+    const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket });
     chat.onUpdate = () => this.persist();
     chat.start();
     this.chats.set(id, chat);
@@ -644,6 +676,10 @@ class ChatManager {
 
 const manager = new ChatManager();
 
+// Proveedor de nombres para el uniquificador (core/session-names.js): los
+// títulos de las conversaciones ABIERTAS (los cerrados liberan su nombre).
+registerNameProvider(() => [...manager.chats.values()].filter((c) => !c.closed).map((c) => c.title));
+
 export default {
   name: 'chat',
 
@@ -684,7 +720,8 @@ export default {
 
     r.get('/list', (req, res) => res.json({ chats: manager.list() }));
 
-    // Conversaciones PASADAS de una carpeta (para "Retomar" del lanzador).
+    // Conversaciones PASADAS de una carpeta (para "Retomar" del lanzador:
+    // muestra 2 y el resto vive en el modal "Ver más", hasta 10 en total).
     r.get('/history', (req, res) => {
       const cwdAbs = safeCwd(req.query.cwd || '');
       const dir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwdAbs));
@@ -694,7 +731,7 @@ export default {
           .filter((f) => f.endsWith('.jsonl'))
           .map((f) => ({ f, mtime: fss.statSync(path.join(dir, f)).mtimeMs }))
           .sort((a, b) => b.mtime - a.mtime)
-          .slice(0, 10);
+          .slice(0, 25);
       } catch { return res.json({ conversations: [] }); }
 
       const live = manager.liveSessionIds();
@@ -717,7 +754,7 @@ export default {
           }
         } catch { /* noop */ }
         if (snippet) out.push({ sessionId, ts: mtime, snippet });
-        if (out.length >= 5) break;
+        if (out.length >= 10) break;
       }
       res.json({ conversations: out });
     });
@@ -792,6 +829,17 @@ export default {
       res.json({ ok: true, chat: chat.info() });
     });
 
+    // Cambia el modelo de una conversación (en vivo o para el próximo arranque).
+    r.post('/model', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const model = req.body?.model;
+      if (!VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
+      chat.setModel(model);
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
     router.use('/chat', r);
   },
 
@@ -815,6 +863,8 @@ export default {
           chat.interrupt();
         } else if (msg.type === 'set_mode') {
           chat.setMode(msg.mode);
+        } else if (msg.type === 'set_model') {
+          chat.setModel(msg.model);
         }
       });
       ws.on('close', () => chat.detach(ws));

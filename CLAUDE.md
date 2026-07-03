@@ -74,14 +74,28 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             rutas del cliente pasa por acá; nunca startsWith crudo) ·
                             sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
                             'chat'=user+project / 'headless'=project+local sin user) ·
-                            claude-model(VALID_MODELS/encodeCwd) · claude-state(observador)
+                            claude-model(VALID_MODELS/encodeCwd) · claude-state(observador) ·
+                            session-names(nombres ÚNICOS de tarjetas: registro de
+                            registerNameProvider — chat aporta títulos de conversaciones
+                            abiertas, tmux los display names de sus sesiones — +
+                            uniqueName("tolkien"→"tolkien 1") consultado al CREAR chat
+                            (manager.create; rehydrate NO uniquifica) y terminal (si el
+                            basename choca, persiste el único como customTitle en
+                            titles.json, cuyos helpers loadTitles/saveTitles/titleKey ahora
+                            viven acá, compartidos por los módulos tmux y terminal)
 src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(router, ctx), registerWs(wss, ctx) }
                             → se registra agregándolo al array de src/core/registry.js
   terminal/                 sesiones tmux (PREFIX cwc-) + bare/TUI (BARE_PREFIX cwct-) + rehidratación
   chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
                             runner-link.js (spawn/connect) — el motor real es bin/cwc-chat-runner.js
                             README.md documenta la config que hereda el chat (Fase 8:
-                            settingSources user+project, comandos slash, observador)
+                            settingSources user+project, comandos slash, observador). Modelo
+                            EN VIVO (POST /api/chat/model, WS set_model): con motor corriendo
+                            usa q.setModel() del SDK (mismo mecanismo que setMode/
+                            setPermissionMode, sin perder contexto); dormido, solo actualiza
+                            chat.model para el próximo spawnRunner. Antes solo existía para
+                            sesiones tmux (`/model` tipeado a la TUI) — ahora el menú ⋯ de una
+                            conversación en Sesiones también tiene "Cambiar modelo".
   files/ stats/ tokens/ tmux/ admin/ tickets/ health/
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
                             stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
@@ -167,7 +181,12 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             EXCLUSIVO de ~/tolkien) ·
                             tickets · explorer · mobile/auxbar
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
-                            markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup)
+                            markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup) ·
+                            pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
+                            USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
+                            de Bugs, subir PR, push/backup, cálculo de Uso; el spinner queda
+                            para cargas breves. El del header del chat es el mismo componente
+                            con cls 'chat-alive' y estado vivo/dormido)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden]
@@ -230,6 +249,40 @@ docs/                       frontend-modules.md · brief-original.txt · context
   no contra el propio ancho del elemento, así que si el ancho vuelve a
   cambiar, `margin-left` quedaría desincronizado; `transform: -100%` siempre
   es exacto porque un % ahí SÍ se resuelve contra el propio elemento.
+- `#rail-tabs` (chips de pestañas ABIERTAS) se oculta con `display:none` SOLO
+  en el media query móvil de style.css: en el rail COLAPSADO de escritorio
+  sigue siendo la única forma de cambiar de pestaña (la lista "Sesiones" se
+  oculta ahí); en móvil el panel nunca colapsa (`applySidebarState` lo
+  fuerza) así que es redundante con las tarjetas de Sesiones, que ya
+  cambian de pestaña vía `focusSession`/`openChatView` sin depender de este
+  chip. Si se vuelve a tocar, verificar que el rail colapsado de desktop no
+  se rompió (ahí `#rail-tabs` es indispensable).
+- Pac-Man (`.cwc-pacman`, ui.css + ui/pacman.js) — loader COMPARTIDO en CSS
+  puro, doble rol: (a) indicador de PROCESO LARGO (> ~5 s: revisión profunda,
+  triage de Bugs, subir PR, push/backup, Uso) siempre con `.is-working`; (b)
+  ícono "vivo/dormido" del header del chat (mismo componente con cls
+  `chat-alive`, SOLO móvil — style.css lo oculta en desktop — y su
+  `.is-working` lo togglea `_setWorking(on)` de chat-tab.js). Anatomía:
+  `.pac-man` es una caja 0×0 con `border-width` parejo + `border-radius:50%`
+  (el truco clásico: el BORDE es el círculo) y el borde derecho anima entre
+  sólido (boca cerrada) y `transparent` (boca abierta) — `@keyframes
+  pac-chomp`; `.pac-track` con 3 `.pac-dot` viajan con `translateX` de
+  derecha a izquierda y se desvanecen al llegar a la boca
+  (`@keyframes pac-dot-travel`). Ojo = `::before` (el (0,0) de un pseudo
+  absoluto en una caja 0×0 con borde es el CENTRO del círculo); la boca
+  cerrada NO lleva marca (hubo una línea `::after` y se quitó a pedido).
+  Dormido = gris quieto; trabajando = dorado (`--cwc-warn`) masticando.
+  OJO 1: el kill-switch global de `prefers-reduced-motion` (ui.css)
+  congelaba el Pac-Man en teléfonos con "reducir movimiento" del sistema —
+  hay una EXCEPCIÓN deliberada (mismo bloque de ui.css, mayor especificidad
+  + !important: es indicador de estado funcional, no decoración); no
+  borrarla. OJO 2: `.is-working .pac-man` pone los 4 bordes en warn como
+  base (fallback estático = boca cerrada dorada, nunca hueco gris
+  congelado). OJO 3: `.pac-dot` usa `left:100%` + `translateX(-24px)` — ese
+  `24px` tiene que coincidir con el ancho de `.pac-track` para que la bolita
+  llegue EXACTO a la boca. La barra TUI (`.conv-tui-bar`) NO tiene el
+  vivo/dormido (su estado viene del observador de hooks, no del stream del
+  SDK — plomería distinta, no conectada todavía).
 - Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
   (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
   usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;
@@ -244,6 +297,16 @@ docs/                       frontend-modules.md · brief-original.txt · context
   aparece cortado" — verificado y corregido con Playwright móvil (375px).
   Si se toca `.dlg-overlay`/`.dlg-card` de nuevo, no sacar ese
   `grid-template-columns` sin volver a probar en un viewport angosto.
+- `.dlg-card` usa `max-height: 88dvh` (con `88vh` justo antes SOLO como
+  fallback — no borrar ninguna de las dos líneas ni reordenarlas). Con `vh` a
+  secas, en móvil (que mide `vh` con la barra de URL oculta) el modal podía
+  ser más alto que la pantalla visible: el contenido no llegaba a generar
+  scroll interno y el final del modal (p.ej. el botón Iniciar del lanzador)
+  quedaba inalcanzable. Bug reportado como "en el celular no puedo bajar
+  hasta Iniciar en Nueva sesión"; verificado con Playwright móvil (375×667).
+  Relacionado: el lanzador muestra solo las 2 últimas conversaciones en
+  "Retomar" y el resto (hasta 10, tope del endpoint /api/chat/history) vive
+  en el modal "Ver más" para no empujar el botón Iniciar fuera de pantalla.
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.

@@ -351,7 +351,9 @@ html, body {
 .ln-dir:hover { background: var(--cwc-bg-hover); color: var(--cwc-text); }
 .ln-start { margin-top: .8rem; }
 .ln-resume { margin-top: .7rem; display: flex; flex-direction: column; gap: .3rem; }
+.ln-resume--dlg { margin-top: .2rem; } /* lista dentro del modal "Ver más" */
 .ln-resume-item { justify-content: flex-start; max-width: 100%; }
+.ln-resume-more { justify-content: flex-start; color: var(--cwc-text-dim); }
 .ln-resume-snip {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: left; color: var(--cwc-text-secondary);
@@ -454,6 +456,11 @@ html, body {
   background: var(--cwc-bg-panel);
 }
 .chat-title { flex: 1; font-size: var(--cwc-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Ícono "vivo/dormido" del header del chat = el Pac-Man COMPARTIDO
+   (.cwc-pacman, ui.css + ui/pacman.js). Acá solo su visibilidad: existe
+   únicamente en móvil (ver @media abajo). Dormido (sin .is-working) = gris
+   boca cerrada; trabajando = dorado masticando. */
+.chat-alive { display: none; }
 .chat-mode {
   background: var(--cwc-bg-input); color: var(--cwc-text-secondary);
   border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm);
@@ -841,6 +848,7 @@ html, body {
 #sidebar-scrim { display: none; }
 @media (max-width: 768px) {
   .mobile-menu-btn { display: inline-flex; }
+  .chat-alive { display: inline-flex; }
   /* En móvil el panel es overlay (se oculta con .hidden, deslizado fuera de
      pantalla con transform en vez de margin-left: así el desplazamiento
      siempre es exacto sin impotar el ancho, que ahora tiene un tope en px
@@ -857,6 +865,15 @@ html, body {
   #sidebar.collapsed #rail-tabs { flex-direction: row; flex-wrap: wrap; }
   #sidebar.collapsed .footer-acct { flex-direction: row; }
   #sidebar.hidden { transform: translateX(-100%); box-shadow: none; }
+
+  /* La fila de chips de pestañas ABIERTAS (#rail-tabs) es la única forma de
+     cambiar de pestaña en el rail COLAPSADO (desktop) — en móvil el panel
+     nunca colapsa (applySidebarState lo fuerza), así que acá es redundante
+     con las tarjetas de "Sesiones" de abajo (que YA muestran estado/modelo y
+     cuyo tap ya hace foco/adjunta vía focusSession/openChatView, sin pasar
+     por este chip). Se oculta solo en este media query: en el rail
+     colapsado de escritorio sigue siendo necesaria. */
+  #rail-tabs { display: none; }
 
   /* Densidad: un poco más ajustado que en desktop para que el panel se
      sienta liviano incluso ocupando menos ancho. */

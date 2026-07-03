@@ -116,7 +116,40 @@ export default {
       return `hace ${Math.floor(s / 86400)} d`;
     }
 
-    // "Retomar conversación": las últimas de la carpeta seleccionada (solo chat).
+    // Retomar una conversación pasada: guarda el modelo, cierra el lanzador
+    // (y el modal "Ver más" si está abierto) y abre el chat con resume.
+    async function resumeChat(dest, sessionId) {
+      localStorage.setItem(LAST_MODEL_KEY, st.model);
+      modal?.close();
+      await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default', resume: sessionId });
+    }
+
+    // Pinta botones de conversación (snippet vía textContent, nunca HTML).
+    function renderResumeItems(container, conversations, dest, onPick) {
+      container.insertAdjacentHTML('beforeend', conversations.map((c) => `
+        <button class="btn-ghost btn--sm ln-resume-item" data-sid="${c.sessionId}">
+          <span class="ln-resume-snip"></span><span class="ln-sub">${fmtAgo(c.ts)}</span>
+        </button>`).join(''));
+      const btns = container.querySelectorAll('.ln-resume-item');
+      conversations.forEach((c, i) => {
+        const b = btns[btns.length - conversations.length + i];
+        b.querySelector('.ln-resume-snip').textContent = c.snippet;
+        b.addEventListener('click', () => onPick(c));
+      });
+    }
+
+    // "Ver más": modal emergente con el historial completo (hasta 10).
+    function openResumeHistory(conversations, dest) {
+      const m = dialog.openModal({ title: `Retomar en ${dest.label}`, width: 440 });
+      const list = document.createElement('div');
+      list.className = 'ln-resume ln-resume--dlg';
+      m.body.appendChild(list);
+      renderResumeItems(list, conversations, dest, (c) => { m.close(); resumeChat(dest, c.sessionId); });
+    }
+
+    // "Retomar conversación": las 2 últimas de la carpeta seleccionada (solo
+    // chat); el resto queda detrás de "Ver más" para que la lista no empuje
+    // el botón Iniciar fuera de pantalla en móvil.
     async function loadResume() {
       const box = modal?.body?.querySelector('[data-ref="resume"]');
       if (!box) return;
@@ -124,21 +157,16 @@ export default {
       try {
         const { conversations } = await (await fetch(`/api/chat/history?cwd=${encodeURIComponent(rel)}`)).json();
         if (!modal || st.dest.rel !== rel || !conversations.length) { box.innerHTML = ''; return; }
-        box.innerHTML = `<div class="ln-sec-title">Retomar en ${st.dest.label}</div>` +
-          conversations.map((c) => `
-            <button class="btn-ghost btn--sm ln-resume-item" data-sid="${c.sessionId}">
-              <span class="ln-resume-snip"></span><span class="ln-sub">${fmtAgo(c.ts)}</span>
-            </button>`).join('');
-        conversations.forEach((c, i) => {
-          const b = box.querySelectorAll('.ln-resume-item')[i];
-          b.querySelector('.ln-resume-snip').textContent = c.snippet;
-          b.addEventListener('click', async () => {
-            localStorage.setItem(LAST_MODEL_KEY, st.model);
-            const dest = st.dest;
-            modal.close();
-            await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default', resume: c.sessionId });
-          });
-        });
+        const dest = st.dest;
+        box.innerHTML = `<div class="ln-sec-title">Retomar en ${dest.label}</div>`;
+        renderResumeItems(box, conversations.slice(0, 2), dest, (c) => resumeChat(dest, c.sessionId));
+        if (conversations.length > 2) {
+          const more = document.createElement('button');
+          more.className = 'btn-ghost btn--sm ln-resume-more';
+          more.innerHTML = `${icon('chevronRight', { size: 13 })}<span>Ver más (${conversations.length})</span>`;
+          more.addEventListener('click', () => openResumeHistory(conversations, dest));
+          box.appendChild(more);
+        }
       } catch { box.innerHTML = ''; }
     }
 

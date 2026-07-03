@@ -69,7 +69,14 @@
 .dlg-card {
   background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-strong);
   border-radius: var(--cwc-radius-lg); width: 100%;
-  max-height: 88vh; display: flex; flex-direction: column;
+  /* 88dvh, NO vh: en móvil `vh` se mide con la barra de URL del navegador
+     oculta, así que 88vh puede superar la pantalla visible real y el final
+     del modal (p.ej. el botón Iniciar del lanzador) queda inalcanzable sin
+     scroll posible. `dvh` sigue la altura visible dinámica. La línea vh
+     queda solo como fallback para navegadores sin dvh. */
+  max-height: 88vh;
+  max-height: 88dvh;
+  display: flex; flex-direction: column;
   box-shadow: var(--cwc-shadow-lg);
   animation: dlg-card-in .15s ease;
 }
@@ -131,12 +138,75 @@
   padding: .8rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
 }
 
+/* ===== Pac-Man loader (componente compartido — ui/pacman.js) =====
+   Indicador de PROCESO LARGO corriendo (> ~5 s): Pac-Man dorado masticando
+   bolitas que llegan de derecha a izquierda. `is-working` = vivo/comiendo;
+   sin ella = dormido (gris, boca cerrada — solo lo usa el header del chat).
+   Truco del cuerpo: caja 0×0 con border-radius:50% y borde parejo = un
+   círculo hecho de BORDE; el borde derecho anima sólido/transparente para
+   masticar. El ojo es ::before (el (0,0) de un pseudo absoluto en una caja
+   0×0 con borde cae en el CENTRO del círculo). */
+.cwc-pacman {
+  display: inline-flex; align-items: center; position: relative; flex: none;
+  width: 40px; height: 16px; vertical-align: middle;
+}
+.cwc-pacman .pac-man {
+  width: 0; height: 0; flex: none; position: relative; z-index: 1;
+  border-style: solid; border-width: 8px; border-radius: 50%;
+  border-color: var(--cwc-text-dimmer); /* dormido: círculo completo gris */
+  transition: border-color .2s ease;
+}
+.cwc-pacman .pac-man::before { /* ojo */
+  content: ''; position: absolute; width: 3px; height: 3px; border-radius: 50%;
+  background: var(--cwc-bg-panel); top: -5.5px; left: -1.5px;
+}
+.cwc-pacman .pac-track { position: absolute; left: 16px; right: 0; top: 0; height: 100%; overflow: hidden; }
+.cwc-pacman .pac-dot {
+  position: absolute; left: 100%; top: 50%; margin-top: -1.5px;
+  width: 3px; height: 3px; border-radius: 50%;
+  background: var(--cwc-text-dimmer); opacity: 0;
+}
+.cwc-pacman.is-working .pac-man {
+  /* 4 bordes dorados como BASE: si la animación no corre, el fallback es
+     boca cerrada dorada — nunca el hueco gris "congelado a medio morder". */
+  border-color: var(--cwc-warn);
+  animation: pac-chomp .35s steps(1, end) infinite;
+}
+@keyframes pac-chomp {
+  0%, 100% { border-right-color: var(--cwc-warn); } /* boca cerrada */
+  50% { border-right-color: transparent; }           /* boca abierta */
+}
+.cwc-pacman.is-working .pac-dot {
+  background: var(--cwc-warn);
+  animation: pac-dot-travel .9s linear infinite;
+}
+.cwc-pacman .pac-dot:nth-child(2) { animation-delay: .3s; }
+.cwc-pacman .pac-dot:nth-child(3) { animation-delay: .6s; }
+@keyframes pac-dot-travel {
+  0% { transform: translateX(0); opacity: 0; }
+  8%, 85% { opacity: 1; }
+  100% { transform: translateX(-24px); opacity: 0; } /* llega a la boca: "comida" */
+}
+
 /* ===== Accesibilidad: sin animaciones si el sistema lo pide ===== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+  /* EXCEPCIÓN deliberada: el Pac-Man es un INDICADOR DE ESTADO funcional
+     (proceso corriendo / vivo vs dormido), no decoración — congelado daba
+     falsos "colgado" en teléfonos con "reducir movimiento" del sistema. Es
+     chico (16px) y de movimiento suave; se re-habilita con mayor
+     especificidad + !important sobre la regla global `*`. */
+  .cwc-pacman.is-working .pac-man {
+    animation-duration: .35s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .cwc-pacman.is-working .pac-dot {
+    animation-duration: .9s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
