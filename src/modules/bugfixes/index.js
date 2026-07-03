@@ -26,9 +26,11 @@ import fss from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
-import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS } from './store.js';
+import { settingSourcesFor } from '../../core/sdk-settings.js';
+import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
 
 const WT_BASE = path.join(os.homedir(), '.cwc-data', 'bugfix-wt');
 const inFlight = new Set(); // sessionIds con PR en curso (anti doble click)
@@ -280,6 +282,150 @@ async function cancelPr(entry) {
   return steps;
 }
 
+// ===== Actualización automática del ticket en Desk (SOLO el 1er PR) =====
+// Corrida headless del SDK con el MCP de Desk (el mismo que usa el triage).
+// EXCEPCIÓN QUIRÚRGICA a la regla 6 de CLAUDE.md (headless = read-only):
+// esta corrida SÍ puede escribir, pero ÚNICAMENTE vía tools `desk_*` del MCP
+// (allowlist por prefijo en las DOS capas: hook PreToolUse + canUseTool);
+// Bash/Edit/Write/git y cualquier otra tool quedan denegados. Es asíncrona y
+// best-effort: si falla, el PR no se afecta y el tablero muestra el estado
+// (deskStatus + evento ticket_actualizado en el historial, ok o error).
+// Las ITERACIONES del PR (feedback) NUNCA actualizan Desk automáticamente:
+// van por el chat "Actualizar ticket" del tablero, con aprobación del usuario.
+const DESK_TIMEOUT_MS = 4 * 60000;
+const deskToolAllowed = (name) =>
+  /^mcp__[a-z0-9_-]+__desk_[a-z0-9_]+$/i.test(String(name)) || name === 'TodoWrite';
+
+async function deskUpdateAuto(sessionId) {
+  const all = listBugfixes();
+  const entry = all.find((b) => b.sessionId === sessionId);
+  if (!entry || !entry.ticketNumber) return;
+  entry.deskStatus = 'updating';
+  saveBugfixes(all);
+
+  const deny = (why) => ({ behavior: 'deny', message: why });
+  const denyHook = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: 'Actualización de ticket: SOLO tools desk_* del MCP.',
+    },
+  };
+  const prompt = [
+    `Se envió el PR interno #${entry.prNumber} (${entry.prUrl}) con el fix del ticket de Zoho Desk #${entry.ticketNumber}.`,
+    entry.ticketUrl ? `Ticket: ${entry.ticketUrl}` : '',
+    '',
+    'Tu ÚNICA tarea, usando las tools desk_* del MCP:',
+    '1. Buscá el ticket y verificá que sea ese.',
+    '2. Ponelo en estado "On Hold" (o el equivalente que exista).',
+    '3. Publicá una actualización EN INGLÉS, corta y humana (2 a 4 frases), para quien reportó: qué estaba fallando (en simple), que el arreglo ya está implementado y en revisión, y que se desplegará en los próximos días. Sin jerga interna, sin mencionar herramientas ni consolas. Si podés elegir, hacela VISIBLE para el solicitante (respuesta); si no, como comentario.',
+    '',
+    'Referencia de lo arreglado (notas del PR, para tu resumen):',
+    formatPrBody(entry).slice(0, 1500),
+    '',
+    'NO toques nada más (ni otros tickets, ni código). Al terminar respondé SOLO una línea: "DESK-OK <qué aplicaste>" o "DESK-FAIL <motivo>".',
+  ].filter(Boolean).join('\n');
+
+  let out = '';
+  try {
+    const q = query({
+      prompt,
+      options: {
+        cwd: config.projectDir,
+        model: 'sonnet',
+        maxTurns: 15,
+        permissionMode: 'default',
+        settingSources: settingSourcesFor('headless'), // carga el MCP del proyecto, sin settings de user
+        hooks: {
+          PreToolUse: [{
+            hooks: [async (input) => (deskToolAllowed(input.tool_name) ? {} : denyHook)],
+          }],
+        },
+        canUseTool: async (name, input) => (deskToolAllowed(name)
+          ? { behavior: 'allow', updatedInput: input }
+          : deny('Actualización de ticket: SOLO tools desk_* del MCP.')),
+      },
+    });
+    let timer = null;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), DESK_TIMEOUT_MS); });
+    const pump = (async () => {
+      for await (const m of q) {
+        if (m.type === 'assistant') {
+          for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`;
+        } else if (m.type === 'result') break;
+      }
+    })();
+    try {
+      await Promise.race([pump, timeout]);
+    } finally { clearTimeout(timer); }
+  } catch (err) {
+    out += `\nDESK-FAIL ${String(err?.message || err).slice(0, 120)}`;
+  }
+
+  const okMatch = out.match(/DESK-OK\s*(.*)/);
+  const failMatch = out.match(/DESK-FAIL\s*(.*)/);
+  const fresh = listBugfixes();
+  const e2 = fresh.find((b) => b.sessionId === sessionId);
+  if (!e2) return;
+  e2.deskStatus = okMatch ? 'ok' : 'error';
+  addEvent(e2, 'ticket_actualizado', {
+    mode: 'auto',
+    ok: !!okMatch,
+    detail: (okMatch?.[1] || failMatch?.[1] || 'sin confirmación del modelo').trim().slice(0, 200),
+  });
+  e2.updatedAt = Date.now();
+  saveBugfixes(fresh);
+}
+
+// ===== Datos EN VIVO de un PR (no se persisten) =====
+// Proxy de gh con caché en memoria de 60 s: reviews, comentarios, checks y
+// commits para el panel vivo del tablero. Si gh falla, error limpio y el
+// tablero degrada a los datos locales.
+const liveCache = new Map(); // prNumber -> { at, data }
+const LIVE_TTL_MS = 60000;
+
+async function prLive(prNumber) {
+  const hit = liveCache.get(prNumber);
+  if (hit && Date.now() - hit.at < LIVE_TTL_MS) return hit.data;
+  const out = await run('gh', [
+    'pr', 'view', String(prNumber),
+    '--json', 'number,state,title,url,mergeable,reviewDecision,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviews,comments,commits',
+  ], { cwd: config.projectDir });
+  const pr = JSON.parse(out);
+  const data = {
+    number: pr.number,
+    state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
+    url: pr.url,
+    mergeable: pr.mergeable || null,          // MERGEABLE | CONFLICTING | UNKNOWN
+    reviewDecision: pr.reviewDecision || null, // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | null
+    updatedAt: pr.updatedAt ? Date.parse(pr.updatedAt) : null,
+    stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0 },
+    checks: (pr.statusCheckRollup || []).map((c) => ({
+      name: String(c.name || c.context || '?').slice(0, 60),
+      status: String(c.conclusion || c.state || c.status || '?').toLowerCase(),
+    })).slice(0, 20),
+    commits: (pr.commits || []).map((c) => ({
+      sha: String(c.oid || '').slice(0, 7),
+      msg: String(c.messageHeadline || '').slice(0, 100),
+      at: c.committedDate ? Date.parse(c.committedDate) : null,
+    })).slice(-10),
+    // Conversación: reviews con cuerpo + comentarios, cronológico, últimos 8.
+    feedback: [
+      ...(pr.reviews || []).map((r) => ({
+        author: r.author?.login || '?', at: r.submittedAt ? Date.parse(r.submittedAt) : null,
+        kind: String(r.state || 'review').toLowerCase(), body: String(r.body || '').slice(0, 500),
+      })),
+      ...(pr.comments || []).map((c) => ({
+        author: c.author?.login || '?', at: c.createdAt ? Date.parse(c.createdAt) : null,
+        kind: 'comment', body: String(c.body || '').slice(0, 500),
+      })),
+    ].filter((f) => f.body || f.kind !== 'comment').sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-8),
+    fetchedAt: Date.now(),
+  };
+  liveCache.set(prNumber, { at: Date.now(), data });
+  return data;
+}
+
 export default {
   name: 'bugfixes',
 
@@ -313,6 +459,7 @@ export default {
       inFlight.add(id);
       try {
         const { branch, prUrl, prNumber, files, updated, commit, commitCount } = await pushPr(entry);
+        const esPrimerEnvio = !updated && !entry.sentAt; // 1er PR de este fix
         entry.status = 'subido';
         entry.branch = branch;
         entry.prUrl = prUrl;
@@ -320,8 +467,21 @@ export default {
         entry.prState = prNumber ? 'open' : null; // sin gh no sabemos el estado
         entry.sentAt = Date.now();
         entry.updatedAt = Date.now();
+        addEvent(entry, updated ? 'pr_actualizado' : 'pr_creado', {
+          pr: prNumber, ...(updated ? { commit: commit || null, commitN: commitCount || null } : { branch }),
+          files: files.length,
+        });
         saveBugfixes(all);
-        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated, commit: commit || null, commitCount: commitCount || null });
+        // Desk: SOLO el 1er envío actualiza el ticket automáticamente (On Hold
+        // + nota corta en inglés); las iteraciones van por chat con aprobación
+        // del usuario ("Actualizar ticket" del tablero). Asíncrono: el PR ya
+        // está subido, la respuesta no espera a Desk.
+        let deskAuto = false;
+        if (esPrimerEnvio && prNumber && entry.ticketNumber) {
+          deskAuto = true;
+          deskUpdateAuto(entry.sessionId).catch(() => {});
+        }
+        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated, commit: commit || null, commitCount: commitCount || null, deskAuto });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
       } finally {
@@ -367,7 +527,12 @@ export default {
           const pr = JSON.parse(out);
           b.prNumber = pr.number || b.prNumber;
           b.prUrl = pr.url || b.prUrl;
-          b.prState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
+          const nuevoEstado = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
+          // Transición a merged detectada: evento al historial (una sola vez).
+          if (nuevoEstado === 'merged' && b.prState !== 'merged') {
+            addEvent(b, 'pr_mergeado', { pr: pr.number, by: pr.mergedBy?.login || null });
+          }
+          b.prState = nuevoEstado;
           b.mergedAt = pr.mergedAt ? Date.parse(pr.mergedAt) : null;
           b.mergedBy = pr.mergedBy?.login || null;
           b.stats = { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' };
@@ -436,6 +601,7 @@ export default {
       inFlight.add(id);
       try {
         const steps = await cancelPr(entry);
+        addEvent(entry, 'pr_cancelado', { pr: entry.prNumber || null });
         entry.status = 'pendiente';
         entry.branch = null;
         entry.prUrl = null;
@@ -452,6 +618,19 @@ export default {
         res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
       } finally {
         inFlight.delete(id);
+      }
+    });
+
+    // Datos EN VIVO de un PR (gh, caché 60 s; ?fresh=1 la saltea). No persiste.
+    r.get('/pr-live/:number', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const n = Number(req.params.number);
+      if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: 'Número de PR inválido.' });
+      if (req.query.fresh) liveCache.delete(n);
+      try {
+        res.json({ ok: true, live: await prLive(n) });
+      } catch (err) {
+        res.status(502).json({ error: `GitHub no disponible: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 

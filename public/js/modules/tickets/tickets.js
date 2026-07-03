@@ -6,6 +6,7 @@
 // ventana flotante con la tabla; un click en un ticket abre una conversación
 // Chat en el proyecto (modo plan) con el contexto del bug precargado.
 import { pacman } from '../../ui/pacman.js';
+import { openBugBoard } from '../tolkien/bug-board.js';
 
 export default {
   name: 'tickets',
@@ -26,6 +27,7 @@ export default {
         <div class="tickets-line" data-ref="line">…</div>
         <div class="tk-actions">
           <button class="btn-ghost btn--sm" data-ref="expand">${icon('grid', { size: 13 })}<span>Expandir</span></button>
+          <button class="btn-ghost btn--sm" data-ref="board" hidden title="Tablero unificado del ciclo del bug (triage + fixes + PRs en vivo)">${icon('gitBranch', { size: 13 })}<span>Bugs & PRs</span></button>
         </div>
       </div>`;
 
@@ -266,6 +268,21 @@ export default {
 
     refs.refresh.addEventListener('click', refresh);
     refs.expand.addEventListener('click', expand);
+    // Tablero unificado (admin): la MISMA vista que abre el botón de Tolkien.
+    refs.board.addEventListener('click', () => openBugBoard({
+      dialog, icon, openChat,
+      projectRel: () => projectRel,
+      // Desde acá no se maneja git: el tablero actualiza el repo vía endpoint.
+      updateRepo: async () => {
+        try {
+          const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
+          if (up.error) return { ok: false, message: `${up.error}\nNo se subió ningún PR.` };
+          if (up.popConflict) return { ok: false, message: 'Conflicto al reaplicar cambios locales (stash). Resolvelo antes de subir PRs.' };
+          return { ok: true };
+        } catch { return { ok: false, message: 'No se pudo actualizar el repo.' }; }
+      },
+    }));
+    ctx.whoami?.then?.((me) => { if (me?.admin) refs.board.hidden = false; });
 
     (async () => {
       try { const st = await (await fetch('/api/tolkien/status')).json(); if (st?.rel) projectRel = st.rel; } catch { /* noop */ }

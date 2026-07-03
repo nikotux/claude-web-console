@@ -82,6 +82,23 @@ export function listBugfixes() {
   try { return JSON.parse(fss.readFileSync(FILE, 'utf8')); } catch { return []; }
 }
 
+// ===== Historial por fix =====
+// Cada registro acumula eventos {t, type, ...datos} que cuentan el CICLO
+// completo del bug: creado · trabajo_nuevo (se reabrió un chat de trabajo) ·
+// pr_creado · pr_actualizado (2º+ commit) · pr_mergeado · pr_cancelado ·
+// ticket_actualizado (Desk). El tablero Bugs & PRs lo muestra como timeline.
+// Retrocompatible: registros viejos sin history[] siguen funcionando (la UI
+// sintetiza un timeline mínimo desde createdAt/sentAt/mergedAt).
+const HISTORY_MAX_EVENTS = 50;
+export function addEvent(entry, type, data = {}) {
+  if (!entry) return;
+  if (!Array.isArray(entry.history)) entry.history = [];
+  entry.history.push({ t: Date.now(), type, ...data });
+  if (entry.history.length > HISTORY_MAX_EVENTS) {
+    entry.history.splice(0, entry.history.length - HISTORY_MAX_EVENTS);
+  }
+}
+
 export function saveBugfixes(all) {
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   fss.writeFileSync(FILE, JSON.stringify(all, null, 1), { mode: 0o600 });
@@ -177,6 +194,12 @@ export function recordBugfix({ cwd, sessionId, chatId = null, ticket = null, tit
     createdAt: prev?.createdAt || Date.now(),
     updatedAt: Date.now(),
   };
+  // Historial: primera vez = 'creado'; trabajo posterior sobre un fix que ya
+  // tenía PR subido = 'trabajo_nuevo' (el ciclo de feedback queda contado).
+  if (!prev) addEvent(entry, 'creado', { sessionId: sessionId.slice(0, 8) });
+  else if (prev.status === 'subido' && prev.prState !== 'merged') {
+    addEvent(entry, 'trabajo_nuevo', { pr: prev.prNumber || null, sessionId: sessionId.slice(0, 8) });
+  }
   const rest = all.filter((b) => b !== prev && b.sessionId !== sessionId);
   saveBugfixes([entry, ...rest]);
   return entry;

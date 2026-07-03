@@ -950,9 +950,57 @@ html, body {
 .bfm-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 @media (max-width: 640px) {
   .bfm-title { max-width: 110px; }
-  /* En móvil se ocultan Enviado y Merge; Cambios (el aporte) queda visible. */
-  .bfm-table th:nth-child(5), .bfm-table td:nth-child(5),
-  .bfm-table th:nth-child(7), .bfm-table td:nth-child(7) { display: none; }
+  /* En móvil se ocultan Enviado y Merge; Cambios (el aporte) queda visible.
+     OJO: aplica al modal viejo de 7 columnas, NO al tablero (.bb-table). */
+  .bfm-table:not(.bb-table) th:nth-child(5), .bfm-table:not(.bb-table) td:nth-child(5),
+  .bfm-table:not(.bb-table) th:nth-child(7), .bfm-table:not(.bb-table) td:nth-child(7) { display: none; }
+}
+
+/* ===== Tablero unificado "Bugs & PRs" (tolkien/bug-board.js) ===== */
+.bb-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
+.bb-state { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .35rem; }
+.bb-triage { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .3rem; }
+.bb-box { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); max-height: 70vh; max-height: 74dvh; overflow: auto; }
+.bb-row--triage .bfm-title { color: var(--cwc-text-secondary); }
+/* Pipeline: 5 etapas del ciclo (triage → trabajo → PR → merge → ticket). */
+.bb-pipe { display: inline-flex; gap: 3px; align-items: center; }
+.bb-seg { width: 13px; height: 6px; border-radius: 3px; background: var(--cwc-bg-chip); }
+.bb-seg--ok { background: var(--cwc-ok); }
+.bb-seg--fail { background: var(--cwc-danger); }
+/* Chips de verificación (cruce registro × triage × historial). */
+.bb-chips { display: flex; gap: .3rem; flex-wrap: wrap; margin: 0 0 .45rem; }
+.bb-chip {
+  display: inline-flex; align-items: center; gap: .2rem;
+  font-size: var(--cwc-fs-xs); padding: .08rem .4rem; border-radius: var(--cwc-radius-sm);
+  border: 1px solid var(--cwc-border-soft); background: var(--cwc-bg-chip); color: var(--cwc-text-secondary);
+}
+.bb-chip--ok { border-color: var(--cwc-ok); color: var(--cwc-ok); }
+.bb-chip--warn { border-color: var(--cwc-warn); color: var(--cwc-warn); }
+.bb-chip--danger { border-color: var(--cwc-danger-strong); color: var(--cwc-danger-strong); }
+.bb-chip--info { border-color: var(--cwc-border-strong); color: var(--cwc-text-secondary); }
+/* Timeline del fix (history[]). */
+.bb-tl { margin: .45rem 0; display: flex; flex-direction: column; gap: .15rem; }
+.bb-tl-ev { display: flex; align-items: baseline; gap: .45rem; font-size: var(--cwc-fs-xs); }
+.bb-tl-ev .hp-dot { align-self: center; }
+.bb-tl-date { color: var(--cwc-text-dimmer); white-space: nowrap; font-family: var(--cwc-font-mono); }
+.bb-tl-txt { color: var(--cwc-text-secondary); }
+/* Panel EN VIVO de GitHub (no persistido). */
+.bb-live { margin: .45rem 0; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); padding: .45rem .55rem; background: var(--cwc-bg); }
+.bb-live-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
+.bb-live-at { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.bb-live-commits { margin-top: .4rem; display: flex; flex-direction: column; gap: .1rem; }
+.bb-commit { font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.bb-commit code { color: var(--cwc-accent); }
+.bb-live-fb { margin-top: .4rem; display: flex; flex-direction: column; gap: .35rem; }
+.bb-fb { display: flex; flex-direction: column; gap: .1rem; border-left: 2px solid var(--cwc-border-strong); padding-left: .5rem; }
+.bb-fb-head { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.bb-fb-body { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; }
+.bb-live-empty { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.bb-live-err { color: var(--cwc-warn); font-size: var(--cwc-fs-xs); }
+@media (max-width: 640px) {
+  /* Móvil: fuera la columna Cambios; el pipeline y el estado quedan. */
+  .bb-table th:nth-child(5), .bb-table td:nth-child(5) { display: none; }
+  .bb-triage { margin-left: 0; width: 100%; }
 }
 
 .chat-composer {

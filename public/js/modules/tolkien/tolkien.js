@@ -4,12 +4,10 @@
 //   [Continuar aquí] → enfoca la pestaña del proyecto o crea sesión Claude ahí
 //   [Explorar]       → Explorador posicionado en el proyecto
 //   [Actualizar]     → stash → pull --ff-only → stash pop (no destructivo)
-//   [Enviar PR]      → (admin) actualiza el repo y sube un PR por cada fix
-//                      PENDIENTE con archivos del registro de bugfixes.
-//                      EXCLUSIVO de ~/tolkien: no toca nada fuera de esa
-//                      carpeta (guard también en el backend).
+//   [Bugs & PRs]     → (admin) tablero unificado del ciclo del bug
+//                      (bug-board.js: triage + fixes + PRs con GitHub en vivo).
 // Chequeo automático contra el remoto cada 5 minutos.
-import { pacman } from '../../ui/pacman.js';
+import { openBugBoard } from './bug-board.js';
 
 export default {
   name: 'tolkien',
@@ -31,7 +29,7 @@ export default {
           <button class="btn-ghost btn--sm" data-ref="continue">${icon('sparkle', { size: 13 })}<span>Continuar aquí</span></button>
           <a class="btn-ghost btn--sm" data-ref="explore" href="/archivos?path=tolkien">${icon('folder', { size: 13 })}<span>Explorar</span></a>
           <button class="btn-ghost btn--sm" data-ref="update">${icon('download', { size: 13 })}<span>Actualizar</span></button>
-          <button class="btn-ghost btn--sm" data-ref="sendpr" hidden title="Actualiza el repo y sube los fixes pendientes del registro como PRs">${icon('gitBranch', { size: 13 })}<span>Enviar PR</span></button>
+          <button class="btn-ghost btn--sm" data-ref="sendpr" hidden title="Tablero unificado del ciclo del bug: triage, fixes, PRs con datos en vivo de GitHub y ticket en Desk">${icon('gitBranch', { size: 13 })}<span>Bugs & PRs</span></button>
         </div>
       </div>`;
 
@@ -107,362 +105,29 @@ export default {
       }
     }
 
-    // ===== Enviar PR: ventana de gestión de PRs de bugfixes =====
-    // Muestra el historial (qué tenía cada PR, cuándo se envió, si Chris lo
-    // mergeó a main) + acciones: enviar pendientes (actualiza el repo antes),
-    // re-buscar bugfixes en chats viejos y refrescar el estado desde GitHub.
-    // Todo acotado a ~/tolkien (el backend además rechaza otros cwd).
-    const fmtDate = (ms) => {
-      if (!ms) return '—';
-      const d = new Date(ms);
-      return d.toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' · ' +
-        d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
-    };
-    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-    function prEstado(b) {
-      if (b.status !== 'subido') {
-        // Pendiente CON PR: el ticket se retrabajó después de subir — el
-        // envío ACTUALIZA ese PR (mismo número), no crea uno nuevo.
-        return b.prNumber
-          ? { dot: 'warn', label: `PR #${b.prNumber} abierto · cambios sin subir` }
-          : { dot: 'warn', label: 'pendiente' };
+    // "Actualizar repo" que usa el tablero antes de subir PRs: mismo endpoint
+    // que [Actualizar], devolviendo {ok, message} para el flujo de envío.
+    async function updateRepo() {
+      try {
+        const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
+        if (up.status) current = up.status;
+        if (up.error) return { ok: false, message: `${up.error}\n\n${fmtLog(up.log)}\nNo se subió ningún PR.` };
+        if (up.popConflict) return { ok: false, message: 'Conflicto al reaplicar tus cambios locales (quedaron en el stash). Resolvelo antes de subir PRs.' };
+        return { ok: true };
+      } catch {
+        return { ok: false, message: 'No se pudo actualizar el repo (red o servidor). No se subió ningún PR.' };
+      } finally {
+        loadStatus();
       }
-      if (b.prState === 'merged') return { dot: 'ok', label: `mergeado por ${b.mergedBy || '?'}` };
-      if (b.prState === 'closed') return { dot: 'fail', label: 'cerrado sin merge' };
-      return { dot: 'warn', label: 'PR abierto (sin mergear)' };
-    }
-
-    function openPrModal() {
-      const m = dialog.openModal({ title: 'PRs de bugfixes — Tolkien', width: 680 });
-      const wrap = document.createElement('div');
-      wrap.className = 'bfm';
-      wrap.innerHTML = `
-        <div class="bfm-actions">
-          <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
-          <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios que no quedaron registrados">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
-          <button class="btn-ghost btn--sm" data-ref="ghsync" title="Trae de GitHub el estado actual: PRs del registro + PRs tuyos no registrados">${icon('refresh', { size: 13 })}<span>Actualizar</span></button>
-          <span class="bfm-ghstate" data-ref="ghstate"></span>
-        </div>
-        <div class="bfm-box">
-          <table class="bfm-table">
-            <thead><tr><th></th><th>TKT</th><th>Título</th><th>Cambios</th><th>Enviado</th><th>Estado</th><th>Merge</th></tr></thead>
-            <tbody data-ref="tbody"><tr><td colspan="7"><span class="cwc-spinner"></span></td></tr></tbody>
-          </table>
-        </div>`;
-      m.body.appendChild(wrap);
-      const mr = {};
-      for (const r of wrap.querySelectorAll('[data-ref]')) mr[r.dataset.ref] = r;
-      let entries = []; // nuestro registro
-      let ghRows = [];  // PRs míos en GitHub que NO están en el registro
-
-      // Aporte del fix en números: pendiente = diff local vs origin/main;
-      // subido/GitHub = tamaño del PR. Se calcula en cada Actualizar.
-      function statsHtml(s) {
-        if (!s) return '<span class="bfm-nostats">—</span>';
-        return `<span class="bfm-add">+${s.add}</span> <span class="bfm-del">−${s.del}</span>` +
-          `<span class="bfm-nfiles" title="${s.src === 'local' ? 'diff del árbol vs origin/main' : 'tamaño del PR en GitHub'}"> · ${s.files}a</span>`;
-      }
-
-      // Fila expandible: la fila de detalle vive a continuación (colspan 7).
-      function detailHtml(b) {
-        return `
-          <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
-          ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
-          : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
-          <p class="bfm-links">
-            ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
-            ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">Ver PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
-            ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
-            <button class="btn btn--sm bfm-work" data-act="work" title="Abre una conversación en ~/tolkien para refinar este fix a mano antes de subir (o modificar) el PR">${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
-            ${b.status === 'subido' && b.prState !== 'merged'
-    ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr" title="Cierra el PR en GitHub, borra el branch remoto y devuelve el fix a pendiente para rehacerlo de cero">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>`
-    : ''}
-            <button class="btn-ghost btn--sm" data-act="del" title="Borra SOLO el registro local del fix (no toca código, branches ni PRs)">${icon('close', { size: 13 })}<span>Descartar registro</span></button>
-          </p>`;
-      }
-
-      function renderTable() {
-        const pendientes = entries.filter((b) => b.status === 'pendiente' && b.files?.length);
-        mr.send.disabled = !pendientes.length;
-        mr.send.querySelector('span').textContent = pendientes.length ? `Enviar pendientes (${pendientes.length})` : 'Enviar pendientes';
-        if (!entries.length && !ghRows.length) {
-          mr.tbody.innerHTML = '<tr><td colspan="7" class="hp-empty">Sin fixes registrados ni PRs tuyos en GitHub.</td></tr>';
-          return;
-        }
-        // Arriba lo accionable: pendientes con archivos, después pendientes en
-        // plan, después enviados; al final los PRs que están SOLO en GitHub.
-        const rank = (b) => (b.status === 'pendiente' ? (b.files?.length ? 0 : 1) : 2);
-        const orden = [...entries].sort((a, b) => rank(a) - rank(b)
-          || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
-        const rows = [];
-        for (const b of orden) {
-          const est = prEstado(b);
-          rows.push(`
-            <tr class="bfm-row" data-sid="${esc(b.sessionId)}">
-              <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
-              <td class="bfm-tkt">${b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—'}</td>
-              <td class="bfm-title">${esc(b.title)}</td>
-              <td class="bfm-stats">${statsHtml(b.stats)}</td>
-              <td class="bfm-date">${b.sentAt ? fmtDate(b.sentAt) : '—'}</td>
-              <td class="bfm-state">${esc(est.label)}</td>
-              <td class="bfm-date">${b.mergedAt ? `${esc(b.mergedBy || '?')} · ${fmtDate(b.mergedAt)}` : '—'}</td>
-            </tr>
-            <tr class="bfm-detail" hidden><td colspan="7">${detailHtml(b)}</td></tr>`);
-        }
-        for (const pr of ghRows) {
-          const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
-          rows.push(`
-            <tr class="bfm-row bfm-row--gh">
-              <td><span class="hp-dot hp-dot--${dot}"></span></td>
-              <td class="bfm-tkt" title="PR tuyo en GitHub sin registro de bugfix">GitHub</td>
-              <td class="bfm-title"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${esc(pr.number)} ${esc(pr.title)}</a></td>
-              <td class="bfm-stats">${statsHtml(pr.stats)}</td>
-              <td class="bfm-date">${pr.createdAt ? fmtDate(pr.createdAt) : '—'}</td>
-              <td class="bfm-state">${pr.state === 'merged' ? 'mergeado' : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
-              <td class="bfm-date">${pr.mergedAt ? `${esc(pr.mergedBy || '?')} · ${fmtDate(pr.mergedAt)}` : '—'}</td>
-            </tr>`);
-        }
-        mr.tbody.innerHTML = rows.join('');
-      }
-
-      // Click en una fila del registro: despliega/pliega su detalle.
-      // "Trabajar en esto" (dentro del detalle): chat en ~/tolkien para
-      // refinar el fix a mano; al cerrarlo, el registro del MISMO ticket se
-      // actualiza (merge por ticket en recordBugfix, no duplica).
-      mr.tbody.addEventListener('click', async (e) => {
-        const workBtn = e.target.closest('[data-act="work"]');
-        if (workBtn) {
-          const det = workBtn.closest('.bfm-detail');
-          const sid = det?.previousElementSibling?.dataset?.sid;
-          const b = entries.find((x) => x.sessionId === sid);
-          if (b) { m.close(); await doWorkOn(b); }
-          return;
-        }
-        const cancelBtn = e.target.closest('[data-act="cancelpr"]');
-        if (cancelBtn) {
-          const det = cancelBtn.closest('.bfm-detail');
-          const sid = det?.previousElementSibling?.dataset?.sid;
-          const b = entries.find((x) => x.sessionId === sid);
-          if (b) await doCancelPr(b, cancelBtn);
-          return;
-        }
-        const delBtn = e.target.closest('[data-act="del"]');
-        if (delBtn) {
-          const det = delBtn.closest('.bfm-detail');
-          const sid = det?.previousElementSibling?.dataset?.sid;
-          const b = entries.find((x) => x.sessionId === sid);
-          if (b) await doDiscard(b, delBtn);
-          return;
-        }
-        if (e.target.closest('a')) return; // los links navegan, no despliegan
-        const row = e.target.closest('.bfm-row');
-        if (!row || row.classList.contains('bfm-row--gh')) return;
-        const det = row.nextElementSibling;
-        if (det?.classList.contains('bfm-detail')) det.hidden = !det.hidden;
-      });
-
-      // Conversación "PR en progreso" para trabajo manual/detallado sobre un
-      // fix (antes de subir el PR o para modificar uno existente).
-      async function doWorkOn(b) {
-        let workContext = '';
-        let prContext = '';
-        try {
-          [workContext, prContext] = (await Promise.all([
-            fetch('/api/bugfixes/context?kind=work').then((r) => r.json()),
-            fetch('/api/bugfixes/context?kind=pr').then((r) => r.json()),
-          ])).map((d) => d.context || '');
-        } catch { /* el chat sale igual sin contextos */ }
-        const est = prEstado(b);
-        const prompt = [
-          `Retomemos el fix del ticket Desk #${b.ticketNumber} para refinarlo a mano antes de ${b.status === 'subido' ? 'MODIFICAR el PR ya existente' : 'subir el PR'}.`,
-          '',
-          `Estado actual del registro: ${est.label}.`,
-          b.prUrl ? `PR: ${b.prUrl}` : '',
-          b.ticketUrl ? `Ticket: ${b.ticketUrl}` : '',
-          b.files?.length ? `Archivos del fix hasta ahora:\n${b.files.map((f) => `- ${f}`).join('\n')}` : 'Todavía sin archivos editados (quedó en plan).',
-          b.summary ? `\nResumen registrado del fix:\n${b.summary}` : '',
-          workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
-          prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
-          '',
-          'Empezá mostrándome el diff actual de esos archivos contra origin/main y tu evaluación de qué falta o qué mejorarías.',
-        ].filter(Boolean).join('\n');
-        await openChat({
-          cwd: current?.rel || 'tolkien',
-          mode: 'default',
-          prompt,
-          title: `PR en progreso · TKT #${b.ticketNumber}`.slice(0, 60),
-          ticket: { number: b.ticketNumber, url: b.ticketUrl || null },
-        });
-      }
-
-      // Cancela el PR de un fix subido: lo cierra en GitHub (sin mergear),
-      // borra el branch remoto y el registro vuelve a PENDIENTE, limpio, para
-      // volver a trabajar el bugfix y re-crear el PR de cero.
-      async function doCancelPr(b, btn) {
-        const ok = await dialog.confirmDialog({
-          title: `Cancelar PR — TKT #${b.ticketNumber || '?'}`,
-          message: `Se cierra el PR${b.prNumber ? ` #${b.prNumber}` : ''} en GitHub (sin mergear), se borra el branch remoto${b.branch ? ` (${b.branch})` : ''} y el fix vuelve a PENDIENTE para trabajarlo y subirlo de nuevo desde cero.\n\nNo se toca tu árbol de trabajo ni los archivos del fix.`,
-          confirmLabel: 'Cancelar PR',
-          danger: true,
-        });
-        if (!ok) return;
-        btn.disabled = true;
-        try {
-          const res = await fetch('/api/bugfixes/cancel-pr', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: b.sessionId }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'No se pudo cancelar el PR.');
-          await dialog.alertDialog({
-            title: 'PR cancelado',
-            message: `${(data.steps || []).map((s) => `• ${s}`).join('\n') || '• Listo.'}\n\nEl fix volvió a pendiente: podés retrabajarlo con "Trabajar en esto" y re-enviarlo.`,
-          });
-        } catch (err) {
-          await dialog.alertDialog({ title: 'Cancelar PR', message: err.message });
-        } finally {
-          await reload();      // el registro pudo cambiar incluso con error parcial
-          ghSync(true);
-        }
-      }
-
-      // Descarta el REGISTRO local de un fix (venía de la pestaña Salud, que
-      // ya no lista bugfixes): no toca código, branches ni PRs en GitHub.
-      async function doDiscard(b, btn) {
-        const ok = await dialog.confirmDialog({
-          title: `Descartar registro — TKT #${b.ticketNumber || '?'}`,
-          message: 'Se borra SOLO el registro local del fix (no toca código, branches ni PRs en GitHub).',
-          confirmLabel: 'Descartar',
-          danger: true,
-        });
-        if (!ok) return;
-        btn.disabled = true;
-        try {
-          const res = await fetch('/api/bugfixes/delete', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: b.sessionId }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'No se pudo descartar el registro.');
-        } catch (err) {
-          await dialog.alertDialog({ title: 'Descartar registro', message: err.message });
-        } finally {
-          await reload();
-        }
-      }
-
-      async function reload() {
-        try {
-          const { bugfixes } = await (await fetch('/api/bugfixes')).json();
-          entries = bugfixes || [];
-          renderTable();
-        } catch { mr.tbody.innerHTML = '<tr><td colspan="7" class="hp-empty">No se pudo leer el registro.</td></tr>'; }
-      }
-
-      // Sincronización con GitHub (al ABRIR el modal y con [Actualizar]):
-      // refresca el estado de los PRs del registro y trae los PRs míos que no
-      // están registrados. `silent` = apertura automática, sin alerts.
-      async function ghSync(silent) {
-        mr.ghsync.disabled = true;
-        mr.ghstate.innerHTML = `${pacman()} consultando GitHub…`;
-        try {
-          const res = await fetch('/api/bugfixes/refresh-prs', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'Falló la consulta a GitHub.');
-          entries = data.bugfixes || entries;
-          ghRows = data.github || [];
-          renderTable();
-          mr.ghstate.textContent = `GitHub · ${fmtDate(Date.now())}`;
-          if (data.errors?.length && !silent) {
-            await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: `Algunos PRs no se pudieron consultar:\n${data.errors.join('\n')}` });
-          }
-        } catch (err) {
-          mr.ghstate.textContent = 'GitHub no disponible';
-          if (!silent) await dialog.alertDialog({ title: 'Actualizar desde GitHub', message: err.message });
-        } finally {
-          mr.ghsync.disabled = false;
-        }
-      }
-
-      // Enviar pendientes: actualizar el repo primero; si falla, no subir nada.
-      mr.send.addEventListener('click', async () => {
-        const pendientes = entries.filter((b) => b.status === 'pendiente' && b.files?.length);
-        if (!pendientes.length) return;
-        const ok = await dialog.confirmDialog({
-          title: 'Enviar PR a Tolkien',
-          message: `1. Se actualiza el repo (stash → pull → stash pop).\n2. Por cada fix pendiente (${pendientes.length}):\n${pendientes.map((b) => `   • TKT #${b.ticketNumber} (${b.files.length} archivo/s) — ${b.prNumber ? `ACTUALIZA el PR #${b.prNumber}` : 'PR nuevo'}`).join('\n')}\n\nSolo se toca ~/tolkien; tu árbol no cambia de branch.`,
-          confirmLabel: `Actualizar y subir ${pendientes.length} PR(s)`,
-        });
-        if (!ok) return;
-        mr.send.disabled = true;
-        mr.send.innerHTML = `${pacman()}<span>Subiendo…</span>`;
-        try {
-          const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
-          if (up.status) current = up.status;
-          if (up.error || up.popConflict) {
-            return await dialog.alertDialog({
-              title: 'Enviar PR — actualización falló',
-              message: up.error
-                ? `${up.error}\n\n${fmtLog(up.log)}\nNo se subió ningún PR.`
-                : 'Conflicto al reaplicar tus cambios locales (quedaron en el stash). Resolvelo antes de subir PRs.',
-            });
-          }
-          const results = [];
-          for (const b of pendientes) {
-            try {
-              const res = await fetch('/api/bugfixes/pr', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: b.sessionId }),
-              });
-              const data = await res.json().catch(() => ({}));
-              results.push(res.ok
-                ? `✓ TKT #${b.ticketNumber}: ${data.updated
-                  ? `PR ACTUALIZADO · commit ${data.commit || '?'}${data.commitCount ? ` (${data.commitCount}º del branch)` : ''}`
-                  : 'PR nuevo'} → ${data.prUrl || data.branch}`
-                : `✗ TKT #${b.ticketNumber}: ${data.error || 'falló'}`);
-            } catch { results.push(`✗ TKT #${b.ticketNumber}: error de red`); }
-          }
-          await dialog.alertDialog({ title: 'Enviar PR — resultado', message: results.join('\n') });
-        } finally {
-          mr.send.innerHTML = `${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span>`;
-          await reload();
-          ghSync(true); // reflejar en el cuadro el estado real de lo recién subido
-          loadStatus();
-        }
-      });
-
-      mr.scan.addEventListener('click', async () => {
-        mr.scan.disabled = true;
-        try {
-          const res = await fetch('/api/bugfixes/scan', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'Falló la búsqueda.');
-          entries = data.bugfixes || [];
-          renderTable();
-          await dialog.alertDialog({
-            title: 'Buscar bugfixes',
-            message: data.added ? `Se registraron ${data.added} fix(es) nuevos (${data.scanned} transcripts revisados).`
-              : `Nada nuevo (${data.scanned} transcripts revisados).`,
-          });
-        } catch (err) { await dialog.alertDialog({ title: 'Buscar bugfixes', message: err.message }); }
-        finally { mr.scan.disabled = false; }
-      });
-
-      mr.ghsync.addEventListener('click', () => ghSync(false));
-
-      // El contexto de REDACCIÓN del PR (kind=pr) ya no se edita acá: se
-      // mudó a ⚙ Sistema → Proyectos ("Bugfixes: PR"), junto con el resto
-      // de contextos/memorias editables. Esta ventana solo gestiona PRs.
-
-      // Al abrir: primero el cuadro con nuestro registro (instantáneo) y
-      // enseguida la consulta a GitHub que lo completa.
-      reload().then(() => ghSync(true));
     }
 
     refs.refresh.addEventListener('click', checkRemote);
     refs.update.addEventListener('click', doUpdate);
-    refs.sendpr.addEventListener('click', openPrModal);
+    refs.sendpr.addEventListener('click', () => openBugBoard({
+      dialog, icon, openChat,
+      projectRel: () => current?.rel || 'tolkien',
+      updateRepo,
+    }));
     // El botón existe solo para admins (el backend igual lo exige).
     ctx.whoami?.then?.((me) => { if (me?.admin) refs.sendpr.hidden = false; });
     refs.continue.addEventListener('click', () => {
