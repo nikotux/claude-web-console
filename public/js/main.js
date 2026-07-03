@@ -469,6 +469,12 @@ window.addEventListener('cwc:open-sidebar', () => {
   if (isMobile()) sidebarEl.classList.remove('collapsed');
 });
 
+// Velo de fondo (solo visible/clickeable en móvil, vía CSS): tocar afuera
+// del panel lo cierra, como cualquier drawer/overlay estándar.
+document.getElementById('sidebar-scrim').addEventListener('click', () => {
+  if (isMobile()) sidebarEl.classList.add('hidden');
+});
+
 // Aplica el estado colapsado guardado (solo desktop; en móvil nunca colapsa).
 function applySidebarState() {
   if (isMobile()) { sidebarEl.classList.remove('collapsed'); return; }

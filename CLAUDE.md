@@ -21,7 +21,16 @@ código.
 4. **No tocar archivos fuera del proyecto** salvo los runtime documentados
    abajo (`~/.cwc-*`, unidad systemd instalada, observer). El observer de
    `~/.claude/settings.json` SOLO se toca con `bin/install-observer.js` /
-   `bin/uninstall-observer.js`.
+   `bin/uninstall-observer.js`. Excepción deliberada adicional: el módulo
+   `projects` (pestaña "Proyectos" del menú Sistema) lee y ESCRIBE a
+   propósito el `CLAUDE.md` y las memorias (`~/.claude/projects/<dir
+   codificado>/memory/*.md`) de CADA proyecto de su registro — Tolkien
+   (`config.projectDir`, fuera del repo) Y esta misma consola (su propio
+   `CLAUDE.md` y `~/.claude/projects/-home-nmosquera-claude-web-console/`,
+   fuera del repo aunque sea "sobre" el repo). No es un efecto colateral: es
+   el propósito explícito de esa pestaña (editar en vivo el contexto/memoria
+   REAL que lee la próxima sesión de Claude Code en cada proyecto). Nombre
+   de nota siempre validado contra whitelist estricta antes de tocar disco.
 5. **Seguridad de push:** el código DE LA CONSOLA solo se empuja al remote git
    `personal`; URLs que contengan `Mordor-Staffing` están bloqueadas (guard en
    backup). Excepción deliberada: el módulo `bugfixes` empuja branches DE
@@ -73,7 +82,31 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             runner-link.js (spawn/connect) — el motor real es bin/cwc-chat-runner.js
                             README.md documenta la config que hereda el chat (Fase 8:
                             settingSources user+project, comandos slash, observador)
-  files/ stats/ tokens/ tmux/ admin/ tolkien/ tickets/ health/
+  files/ stats/ tokens/ tmux/ admin/ tickets/ health/
+  tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
+                            stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
+                            las memorias editables NO viven acá — ver módulo `projects/`.
+  projects/                 contexto (CLAUDE.md) y memorias EDITABLES de los proyectos
+                            registrados en PROJECTS (index.js): `tolkien` (config.projectDir)
+                            Y `console` (esta misma consola, su propia raíz de repo) — agregar
+                            uno nuevo es sumar una entrada al objeto, todas las funciones de
+                            memory.js toman `projectDir` como parámetro (nada hardcodeado).
+                            GET /api/projects = lista {key,name,dir}; GET/POST /:key/context =
+                            <projectDir>/CLAUDE.md real; GET /:key/memory = índice MEMORY.md +
+                            notas resueltas contra disco (orden del índice, huérfanas al
+                            final); GET/POST /:key/memory/index = MEMORY.md crudo; GET/POST
+                            /:key/memory/note/:file = una nota (whitelist estricta
+                            `^[A-Za-z0-9_-]+\.md$`, sin path traversal; `:key` validado contra
+                            PROJECTS, 404 si no existe). GET abierto a autenticados, POST
+                            admin (mismo patrón que el contexto de bugfixes). La carpeta de
+                            memorias se ubica con encodeCwd(projectDir) (core/claude-model.js)
+                            — MISMA codificación que usa Claude Code para
+                            ~/.claude/projects/. NO son copias: son los archivos reales que
+                            lee la próxima sesión de Claude Code en ESE proyecto — guardar acá
+                            cambia comportamiento real (excepción deliberada a la regla 4, ver
+                            ahí). Ojo recursivo: editar el proyecto `console` significa editar
+                            el CLAUDE.md/memorias que gobiernan las sesiones de Claude Code en
+                            ESTE MISMO repo.
   backup/                   tar.gz completo (server-side, con secretos) + push del CÓDIGO al
                             remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing,
                             solo archivos ya trackeados). Cada push exitoso ADEMÁS: (1) agrega
@@ -91,12 +124,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             reviewer cswenor). Notas del PR SIEMPRE formales: Problema /
                             Qué se hizo / ¿Mejor solución? (parseadas del cierre del chat).
                             DOS CONTEXTOS editables (GET/POST /context?kind=work|pr), ambos
-                            inyectados en cada "Trabajar en Chat": 'work' (bugfix-context.md,
-                            botón Contexto del EXPANDIR de Bugs — verificación previa del
-                            ticket/PRs de Chris, proceso, NO enviar PR desde el chat) y 'pr'
-                            (bugfix-pr-context.md, botón Contexto del modal Enviar PR — cómo
-                            se REDACTAN las notas del PR: formato Problema:/Qué hice:/Mejor
-                            solución: del cierre). Editor genérico: textEditorDialog (ui/dialog.js).
+                            inyectados en cada "Trabajar en Chat": 'work' (bugfix-context.md —
+                            verificación previa del ticket/PRs de Chris, proceso, NO enviar PR
+                            desde el chat) y 'pr' (bugfix-pr-context.md — cómo se REDACTAN las
+                            notas del PR: formato Problema:/Qué hice:/Mejor solución: del
+                            cierre). YA NO se editan con botón "Contexto" propio en el
+                            EXPANDIR de Bugs ni en el modal Enviar PR (se sacaron de ahí): se
+                            editan desde ⚙ Sistema → Proyectos, como "Bugfixes: Trabajo" /
+                            "Bugfixes: PR" (sub-proyectos SIN memorias, junto a Tolkien/Consola
+                            — ver project-context-panel.js). Editor genérico: textEditorDialog (ui/dialog.js).
                             Cancelar PR (POST /cancel-pr, admin): cierra el PR en GitHub +
                             borra el branch remoto y el registro vuelve LIMPIO a 'pendiente'
                             (sin campos de PR) para rehacer el fix de cero; un PR MERGEADO
@@ -108,7 +144,17 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)
 public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
-                            Salud — la pestaña Salud incluye Bugfixes→PR) ·
+                            Proyectos/Salud — la pestaña Proyectos (project-context-panel.js,
+                            backend módulo `projects` + /api/bugfixes/context) es DISTINTA del
+                            módulo tolkien de abajo: selector arriba con TODAS las entradas
+                            editables en un solo lugar — Tolkien / Consola (de GET
+                            /api/projects: contexto CLAUDE.md + memorias) y, agregados como
+                            entradas BUGFIX_ENTRIES del propio panel, "Bugfixes: Trabajo" /
+                            "Bugfixes: PR" (kind=work|pr de /api/bugfixes/context — SOLO
+                            contexto, sin memorias; sección Memorias se oculta con `hidden`
+                            para esas dos). Visible a todos (autenticados), edición gateada por
+                            isAdmin en el frontend Y en el backend; la pestaña Salud incluye
+                            Bugfixes→PR) ·
                             tolkien (botón Enviar PR admin → MODAL de gestión: cuadro con
                             historial de PRs + estado de merge desde GitHub + columna
                             Cambios (aporte en +/−/archivos: numstat local vs origin/main
@@ -175,6 +221,15 @@ docs/                       frontend-modules.md · brief-original.txt · context
   saliente se ESPERA verificado antes de abrir el otro.
 - Tras un reboot, repetir `systemctl --user import-environment SSH_AUTH_SOCK`
   para que el git de Tolkien funcione desde el server.
+- `#sidebar` en móvil (`@media (max-width:768px)` de style.css): overlay con
+  ancho `min(78vw, 300px)` (tope en px para que NO crezca proporcional en
+  teléfonos grandes) + `#sidebar-scrim` (velo, `--cwc-scrim`, ~index.html
+  entre `</aside>` y `<main>`) que lo atenúa y se cierra con un tap (handler
+  en main.js). Ocultar usa `transform: translateX(-100%)`, NO `margin-left`
+  con un vw hardcodeado — un % de `margin` se resuelve contra el CONTENEDOR,
+  no contra el propio ancho del elemento, así que si el ancho vuelve a
+  cambiar, `margin-left` quedaría desincronizado; `transform: -100%` siempre
+  es exacto porque un % ahí SÍ se resuelve contra el propio elemento.
 - Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
   (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
   usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;

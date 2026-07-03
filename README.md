@@ -51,6 +51,17 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 02:22 — main
+- Modified `CLAUDE.md`
+- Modified `public/css/style.css`
+- Modified `public/index.html`
+- Modified `public/js/main.js`
+- Modified `public/js/modules/system/system.js`
+- Modified `public/js/modules/tickets/tickets.js`
+- Modified `public/js/modules/tolkien/tolkien.js`
+- Modified `src/core/registry.js`
+- Modified `src/modules/tolkien/index.js`
+
 ### 2026-07-03 01:09 — main
 - Modified `CLAUDE.md`
 
@@ -247,7 +258,9 @@ config (`~/.claude/settings.json`):
   zip folders and selections, a trash with 30-day purge, preview with
   syntax highlighting, and "Claude here / Terminal here" per folder.
 - **Mobile** — an auxiliary key bar (Esc/Tab/⇧Tab/Ctrl/arrows), dictation,
-  paste; copy = select text (OSC52), paste = right-click on desktop.
+  paste; copy = select text (OSC52), paste = right-click on desktop. The
+  sidebar becomes a compact overlay (capped width, dimmed backdrop, tap
+  outside to dismiss) instead of the fixed desktop panel.
 - **Backups** — a full snapshot (`.tar.gz`, secrets included, **stays on
   the server**), restoring restarts the service on its own. Separately,
   **code backup to GitHub**: `git push` to the **`personal`** remote (your

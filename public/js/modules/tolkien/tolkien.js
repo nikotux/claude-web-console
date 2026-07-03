@@ -134,7 +134,6 @@ export default {
           <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
           <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios que no quedaron registrados">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
           <button class="btn-ghost btn--sm" data-ref="ghsync" title="Trae de GitHub el estado actual: PRs del registro + PRs tuyos no registrados">${icon('refresh', { size: 13 })}<span>Actualizar</span></button>
-          <button class="btn-ghost btn--sm" data-ref="context" title="Cómo se redactan los cambios que van a las notas del PR (editable)">${icon('edit', { size: 13 })}<span>Contexto</span></button>
           <span class="bfm-ghstate" data-ref="ghstate"></span>
         </div>
         <div class="bfm-box">
@@ -406,27 +405,9 @@ export default {
 
       mr.ghsync.addEventListener('click', () => ghSync(false));
 
-      // Contexto de REDACCIÓN del PR (kind=pr): cómo se escriben los cambios
-      // que van a las notas (el formato del cierre del chat que parsea
-      // formatPrBody). El contexto de TRABAJO del bug vive en el módulo Bugs.
-      mr.context.addEventListener('click', async () => {
-        let data = { context: '' };
-        try { data = await (await fetch('/api/bugfixes/context?kind=pr')).json(); }
-        catch { return dialog.alertDialog({ title: 'Contexto', message: 'No se pudo leer el contexto.' }); }
-        dialog.textEditorDialog({
-          title: 'Contexto de redacción del PR',
-          hint: `Define CÓMO se redactan los cambios que van a las notas del PR (el formato del cierre del chat). Se inyecta en cada "Trabajar en Chat"${data.isDefault ? ' — estás viendo el default' : ''}.`,
-          value: data.context,
-          onSave: async (text) => {
-            const res = await fetch('/api/bugfixes/context', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ kind: 'pr', context: text }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(out.error || 'No se pudo guardar.');
-          },
-        });
-      });
+      // El contexto de REDACCIÓN del PR (kind=pr) ya no se edita acá: se
+      // mudó a ⚙ Sistema → Proyectos ("Bugfixes: PR"), junto con el resto
+      // de contextos/memorias editables. Esta ventana solo gestiona PRs.
 
       // Al abrir: primero el cuadro con nuestro registro (instantáneo) y
       // enseguida la consulta a GitHub que lo completa.

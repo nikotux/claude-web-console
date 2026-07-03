@@ -368,6 +368,10 @@ html, body {
 }
 .sys-user { color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); }
 
+/* Selector de proyecto (pestaña "Proyectos", contexto/memorias) */
+.tk-switcher { margin-bottom: .8rem; flex-wrap: wrap; }
+.tk-switcher .btn-ghost.active { border-color: var(--cwc-accent); color: var(--cwc-accent); background: var(--cwc-accent-bg); }
+
 /* Panel de salud (pestaña) */
 .hp-head { display: flex; align-items: center; justify-content: space-between; margin: .2rem 0 .35rem; }
 .hp-head--review { margin-top: 1rem; border-top: 1px solid var(--cwc-divider); padding-top: .7rem; }
@@ -830,18 +834,40 @@ html, body {
 .mobile-menu-btn { display: none; flex: none; }
 
 /* ===== Móvil ===== */
+/* Velo de fondo del panel lateral (overlay únicamente en móvil): invisible
+   en desktop (sin display) y controlado por CSS puro (sin JS) vía el hermano
+   general ~ reaccionando a si #sidebar tiene o no `.hidden` — el click para
+   cerrar sí necesita JS (main.js). */
+#sidebar-scrim { display: none; }
 @media (max-width: 768px) {
   .mobile-menu-btn { display: inline-flex; }
-  /* En móvil el panel es overlay (se oculta con .hidden); el modo "rail
+  /* En móvil el panel es overlay (se oculta con .hidden, deslizado fuera de
+     pantalla con transform en vez de margin-left: así el desplazamiento
+     siempre es exacto sin impotar el ancho, que ahora tiene un tope en px
+     para no ocupar un % tan grande en teléfonos grandes); el modo "rail
      colapsado" es solo de escritorio, así que forzamos ancho completo. */
   #sidebar, #sidebar.collapsed {
     position: absolute; z-index: 10; height: 100%;
-    width: 82vw; box-shadow: 4px 0 24px var(--cwc-shadow-ink);
+    width: min(78vw, 300px); box-shadow: 4px 0 24px var(--cwc-shadow-ink);
+    transition: transform .2s ease;
   }
   #sidebar.collapsed .only-expanded { display: revert; }
   #sidebar.collapsed .only-collapsed { display: none; }
   #sidebar.collapsed .sb-head { flex-direction: row; }
   #sidebar.collapsed #rail-tabs { flex-direction: row; flex-wrap: wrap; }
   #sidebar.collapsed .footer-acct { flex-direction: row; }
-  #sidebar.hidden { margin-left: -84vw; }
+  #sidebar.hidden { transform: translateX(-100%); box-shadow: none; }
+
+  /* Densidad: un poco más ajustado que en desktop para que el panel se
+     sienta liviano incluso ocupando menos ancho. */
+  .sidebar-top { padding: .35rem .45rem .2rem; }
+  .side-sec { padding: .15rem 0 .3rem; }
+  .tk-actions { gap: .25rem; }
+
+  #sidebar-scrim {
+    display: block; position: absolute; inset: 0; z-index: 9;
+    background: var(--cwc-scrim); opacity: 0; pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  #sidebar:not(.hidden) ~ #sidebar-scrim { opacity: 1; pointer-events: auto; }
 }

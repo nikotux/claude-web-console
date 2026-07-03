@@ -1,11 +1,14 @@
 // modules/system/system.js — menú "Sistema": todo lo administrativo compacto.
 //
-// Botón ⚙ en el pie → modal con pestañas: Backup · Usuarios (solo admins) y
-// Salir siempre al pie. Los paneles reutilizan la lógica existente de los
-// módulos backup/admin, solo cambia dónde viven.
+// Botón ⚙ en el pie → modal con pestañas: Backup · Usuarios (solo admins) ·
+// Proyectos (contexto + memorias de Tolkien Y de esta consola, con selector;
+// visible a todos, edición admin) · Salud y Salir siempre al pie. Los
+// paneles reutilizan la lógica existente de los módulos backup/admin, solo
+// cambia dónde viven.
 import { mountBackupPanel } from './backup-panel.js';
 import { mountUsersPanel } from './users.js';
 import { mountHealthPanel } from './health-panel.js';
+import { mountProjectContextPanel } from './project-context-panel.js';
 
 export default {
   name: 'system',
@@ -19,7 +22,8 @@ export default {
       const isAdmin = !!me?.admin;
       const m = dialog.openModal({ title: 'Sistema', width: 520 });
 
-      // Salud es para todos; Backup/Usuarios solo admins.
+      // Salud y Proyectos son para todos (con acciones de edición gateadas
+      // adentro por admin); Backup/Usuarios solo admins.
       const tabs = [
         ...(isAdmin
           ? [
@@ -27,6 +31,7 @@ export default {
               { label: 'Usuarios', mount: (c) => mountUsersPanel(c, ctx) },
             ]
           : []),
+        { label: 'Proyectos', mount: (c) => mountProjectContextPanel(c, { ...ctx, isAdmin }) },
         { label: 'Salud', mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
       ];
 

@@ -86,7 +86,6 @@ export default {
       wrap.innerHTML = `
         <div class="tickets-modal-head">
           <span class="tickets-modal-sub" data-ref="sub"></span>
-          <button class="btn-ghost btn--sm" data-ref="mcontext" title="Cómo se trabaja un bug (verificación previa, proceso); se inyecta en cada 'Trabajar en Chat'">${icon('edit', { size: 13 })}<span>Contexto</span></button>
           <button class="btn-ghost btn--sm" data-ref="mrefresh">${icon('refresh', { size: 13 })}<span>Re-triar</span></button>
         </div>
         <div class="tickets-table-wrap" data-ref="table"></div>`;
@@ -95,26 +94,9 @@ export default {
       const tableEl = wrap.querySelector('[data-ref="table"]');
       const mrefresh = wrap.querySelector('[data-ref="mrefresh"]');
 
-      // Contexto de TRABAJO del bug (kind=work): es parte del módulo Bugs.
-      // (La redacción de las notas del PR se edita en el modal Enviar PR.)
-      wrap.querySelector('[data-ref="mcontext"]').addEventListener('click', async () => {
-        let data = { context: '' };
-        try { data = await (await fetch('/api/bugfixes/context?kind=work')).json(); }
-        catch { return dialog.alertDialog({ title: 'Contexto', message: 'No se pudo leer el contexto.' }); }
-        dialog.textEditorDialog({
-          title: 'Contexto de trabajo de bugs',
-          hint: `Define CÓMO se trabaja un bug (verificación previa del ticket y de PRs de Chris, proceso de resolución, no enviar el PR desde el chat). Se inyecta en cada "Trabajar en Chat"${data.isDefault ? ' — estás viendo el default' : ''}.`,
-          value: data.context,
-          onSave: async (text) => {
-            const res = await fetch('/api/bugfixes/context', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ kind: 'work', context: text }),
-            });
-            const out = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(out.error || 'No se pudo guardar.');
-          },
-        });
-      });
+      // El contexto de TRABAJO del bug (kind=work) ya no se edita acá: se
+      // mudó a ⚙ Sistema → Proyectos ("Bugfixes: Trabajo"). Acá solo queda
+      // el triage/tabla.
 
       function paint() {
         sub.textContent = cache.error
@@ -183,10 +165,10 @@ export default {
     }
 
     async function openTicketChat(t) {
-      // Contextos EDITABLES: 'work' (botón Contexto de la vista expandida de
-      // Bugs — cómo se trabaja el bug) y 'pr' (botón Contexto del modal
-      // Enviar PR — cómo se redacta el cierre que alimenta las notas del PR).
-      // Si no se pueden leer, el chat sale igual sin ellos.
+      // Contextos EDITABLES desde ⚙ Sistema → Proyectos ("Bugfixes: Trabajo"
+      // / "Bugfixes: PR"): 'work' cómo se trabaja el bug, 'pr' cómo se
+      // redacta el cierre que alimenta las notas del PR. Si no se pueden
+      // leer, el chat sale igual sin ellos.
       let workContext = '';
       let prContext = '';
       try {

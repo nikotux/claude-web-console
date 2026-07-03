@@ -9,6 +9,10 @@
 //   GET  /api/tolkien/status  -> estado local (sin red)
 //   POST /api/tolkien/fetch   -> git fetch (red) + estado
 //   POST /api/tolkien/update  -> stash/pull/pop + estado
+//
+// El contexto (CLAUDE.md) y las memorias editables viven en el módulo
+// GENÉRICO `projects` (src/modules/projects/), no acá: sirve tanto a este
+// proyecto trackeado como a la propia consola. Ver projects/index.js.
 import express from 'express';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
