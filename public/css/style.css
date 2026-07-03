@@ -709,11 +709,15 @@ html, body {
 }
 .ctg-empty { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
 .ct-body { padding: .45rem .5rem; display: flex; flex-direction: column; gap: .35rem; font-size: var(--cwc-fs-sm); }
+/* Vista de EDITOR (pedido del usuario): las líneas NO se envuelven — se
+   conserva la indentación/tabulado real y se scrollea horizontal, como en
+   VS Code. tab-size 4 = default de editor. */
 .ct-cmd, .ct-out {
   margin: 0; padding: .4rem .5rem; overflow: auto; max-height: 220px;
   background: var(--cwc-bg); border-radius: var(--cwc-radius-sm);
   font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs);
-  color: var(--cwc-text-secondary); white-space: pre-wrap; word-break: break-word;
+  color: var(--cwc-text-secondary); white-space: pre; tab-size: 4;
+  line-height: 1.5;
 }
 .ct-out.err { color: var(--cwc-danger); }
 
@@ -721,7 +725,13 @@ html, body {
 .cwc-diff { display: flex; flex-direction: column; gap: 2px; }
 .cwc-diff-file { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); padding: .1rem 0; }
 .cwc-diff-block { border-radius: var(--cwc-radius-sm); overflow: auto; max-height: 200px; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
-.cwc-diff-line { padding: .05rem .5rem; white-space: pre-wrap; word-break: break-word; }
+/* Líneas de diff sin wrap (indentación real + scroll horizontal del bloque,
+   como la diff view de un editor); min-width max-content para que el tinte
+   de fondo +/− cubra TODO el ancho scrolleable, no solo el viewport. */
+.cwc-diff-line {
+  padding: .05rem .5rem; white-space: pre; tab-size: 4;
+  min-width: max-content; line-height: 1.5;
+}
 .df-del { background: color-mix(in srgb, var(--cwc-danger) 12%, transparent); }
 .df-del .cwc-diff-line { color: color-mix(in srgb, var(--cwc-danger) 65%, var(--cwc-white)); }
 .df-add { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); }
@@ -790,6 +800,7 @@ html, body {
 .chat-md pre {
   margin: 0; padding: .6rem .7rem; overflow-x: auto;
   background: var(--cwc-bg); border-radius: var(--cwc-radius-md);
+  tab-size: 4; /* mismo criterio editor que .ct-cmd/.cwc-diff-line */
 }
 .chat-md pre code { background: none; padding: 0; font-size: var(--cwc-fs-sm); }
 .chat-md table { border-collapse: collapse; margin: .4rem 0; font-size: var(--cwc-fs-sm); }
