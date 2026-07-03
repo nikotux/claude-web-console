@@ -271,6 +271,14 @@ html, body {
 
 /* ===== Modal Uso (tokens) ===== */
 .usage-totals { border-bottom: 1px solid var(--cwc-divider); padding-bottom: .5rem; margin-bottom: .4rem; }
+/* Botón Actualizar del header del modal: pegado a la × (el space-between del
+   dlg-head lo dejaría flotando en el centro sin este margin-left:auto). */
+.usage-reload { margin-left: auto; }
+.tok-note {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); line-height: 1.45;
+  padding-bottom: .5rem; margin-bottom: .4rem; border-bottom: 1px solid var(--cwc-divider);
+}
+.tok-note b { color: var(--cwc-text-dim); font-weight: 600; }
 .usage-total-row {
   display: grid; grid-template-columns: 1fr auto auto; gap: .8rem; align-items: baseline;
   font-size: var(--cwc-fs-md); color: var(--cwc-text-secondary); padding: .1rem 0;

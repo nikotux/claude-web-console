@@ -51,6 +51,17 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 06:14 — main
+- Modified `CLAUDE.md`
+- Modified `public/css/style.css`
+- Added `public/js/modules/system/project-context-panel.js`
+- Modified `public/js/modules/usage/usage.js`
+- Added `public/js/ui/pacman.js`
+- Added `src/core/session-names.js`
+- Added `src/modules/projects/index.js`
+- Added `src/modules/projects/memory.js`
+- Modified `src/modules/tokens/index.js`
+
 ### 2026-07-03 06:11 — main
 - Lanzador móvil: modal alcanzable (88dvh) y Retomar compacto con modal Ver más
 - Chat: re-anclar el scroll al final al volver a una pestaña oculta
@@ -297,8 +308,12 @@ config (`~/.claude/settings.json`):
   `.env`/`users.json`/`sessions.json`/`certs/`, blocks any URL containing
   `Mordor-Staffing`, and only commits already-tracked files (never adds
   untracked ones). Every successful push also refreshes this README's
-  Changelog section and the repository's GitHub description. You configure
-  the remote yourself:
+  Changelog section and the repository's GitHub description. The inverse,
+  **pull from GitHub**, restores the code from the remote: fetch +
+  stash → fast-forward-only merge → stash pop (local work is never
+  discarded, diverged histories are never forced), reruns `npm install`
+  when the lockfile changed, and restarts the server on its own — only if
+  the tree is clean. You configure the remote yourself:
   `git remote add personal git@github.com:<user>/<repo>.git`.
 - **Health** (⚙ System → Health) — live quick checks (systemd/KillMode,
   tmux, chat runners, observer, cert, git, syntax of the whole codebase,

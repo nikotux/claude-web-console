@@ -131,6 +131,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (2) reafirma la descripción del repo en GitHub (inglés, resume
                             consola+módulos) vía `gh repo edit` (best-effort: si falta gh/auth
                             no rompe el push, ver campo `description` de la respuesta).
+                            PULL desde GitHub (POST /pull, admin): restauración del código —
+                            mismas guardas, fetch + stash→merge --ff-only→pop (patrón
+                            tolkien/update: NUNCA descarta trabajo ni fuerza nada; divergencia
+                            = 409 con el stash repuesto). "Nada que traer" se detecta con
+                            merge-base --is-ancestor (comparar HEAD==remote NO alcanza: local
+                            adelante reiniciaría al pedo). Si package(-lock).json cambió corre
+                            npm install ANTES del restart; reinicia SOLO con árbol sano (pop
+                            conflictuado o npm roto → avisa y NO reinicia: un server sobre
+                            archivos con marcas de conflicto entra en crash-loop). OJO: el
+                            push NUNCA sube untracked (guard anti-secretos) — código nuevo
+                            requiere `git add` manual o no viaja al backup off-site.
   bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol

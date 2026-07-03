@@ -20,13 +20,18 @@ import { keyOf } from '../../core/claude-model.js';
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
 // Precio de input por millón, por modelo; el resto se deriva del input.
+// OJO: el costo es un EQUIVALENTE a precios de API — la suscripción del CLI
+// no factura por token (no existe "gasto real" consultable; la Admin
+// Usage & Cost API exige organización + admin key, no aplica acá).
 function pin(m) {
+  if (/fable|mythos/.test(m)) return 10.0;
   if (/opus/.test(m)) return 5.0;
   if (/sonnet/.test(m)) return 3.0;
   if (/haiku/.test(m)) return 1.0;
-  return 5.0;
+  return 5.0; // fallback: modelos no reconocidos se tasan como Opus
 }
 function pout(m) {
+  if (/fable|mythos/.test(m)) return 50.0;
   if (/opus/.test(m)) return 25.0;
   if (/sonnet/.test(m)) return 15.0;
   if (/haiku/.test(m)) return 5.0;
@@ -183,10 +188,12 @@ export default {
   registerHttp(router) {
     const r = express.Router();
 
+    // ?fresh=1 saltea el TTL del summary (botón Actualizar del modal Uso);
+    // el caché por archivo (mtime+size) queda: solo re-parsea lo que cambió.
     r.get('/summary', async (req, res) => {
       const now = process.hrtime.bigint();
       const ms = Number(now) / 1e6;
-      if (summaryCache && ms - summaryAt < SUMMARY_TTL_MS) {
+      if (!req.query.fresh && summaryCache && ms - summaryAt < SUMMARY_TTL_MS) {
         return res.json(summaryCache);
       }
       try {

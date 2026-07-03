@@ -30,8 +30,8 @@ function fmtRelative(ms) {
   return new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' });
 }
 
-async function fetchSummary() {
-  const res = await fetch('/api/tokens/summary');
+async function fetchSummary(fresh = false) {
+  const res = await fetch(`/api/tokens/summary${fresh ? '?fresh=1' : ''}`);
   if (!res.ok) throw new Error();
   return res.json();
 }
@@ -73,7 +73,8 @@ function renderProjects(container, sum) {
     <div class="usage-totals">
       <div class="usage-total-row"><span>Total</span><span class="tok-big">${fmtTokens(sum.totals.tokens)}</span><span class="tok-cost">${fmtCost(sum.totals.cost)}</span></div>
       <div class="usage-total-row"><span>Hoy</span><span>${fmtTokens(sum.today.tokens)}</span><span class="tok-cost">${fmtCost(sum.today.cost)}</span></div>
-    </div>` +
+    </div>
+    <div class="tok-note">Tokens exactos (reportados por Anthropic en cada respuesta). El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token, así que no existe un gasto real en dólares consultable.</div>` +
     sum.projects.map((p) => {
       const w = Math.max(4, Math.round((p.cost / max) * 100));
       return `
@@ -100,7 +101,7 @@ export default {
   name: 'usage',
 
   mount(el, ctx) {
-    const { dialog } = ctx;
+    const { dialog, icon } = ctx;
     // El botón muestra los TOKENS de hoy (el costo va al tooltip y al modal).
     el.innerHTML = `
       <button class="btn-ghost btn--sm usage-btn" title="Uso de tokens (hoy)">
@@ -116,7 +117,7 @@ export default {
         const sum = await fetchSummary();
         const t = sum.today.tokens || 0;
         valEl.textContent = fmtTokens(t);
-        btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)}`;
+        btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)} equiv. API`;
         // Animación cuando el contador SUBE (tokens consumiéndose ahora).
         if (lastTokens != null && t > lastTokens) {
           valEl.classList.remove('tick');
@@ -132,13 +133,28 @@ export default {
 
     btn.addEventListener('click', async () => {
       const m = dialog.openModal({ title: 'Uso de tokens', width: 520 });
-      m.body.innerHTML = `<div class="cwc-loading">${pacman()}calculando…</div>`;
-      try {
-        const sum = await fetchSummary();
-        renderProjects(m.body, sum);
-      } catch {
-        m.body.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
+
+      // Botón Actualizar en el header del modal (junto a la ×): fuerza una
+      // re-lectura fresca en el backend (?fresh=1 saltea el TTL del summary).
+      const reload = document.createElement('button');
+      reload.className = 'btn-ghost btn--sm btn--icon usage-reload';
+      reload.title = 'Actualizar (re-lee los transcripts ahora)';
+      reload.innerHTML = icon('refresh', { size: 15 });
+      m.card.querySelector('.dlg-head').insertBefore(reload, m.card.querySelector('.dlg-x'));
+
+      async function load(fresh) {
+        reload.disabled = true;
+        m.body.innerHTML = `<div class="cwc-loading">${pacman()}calculando…</div>`;
+        try {
+          const sum = await fetchSummary(fresh);
+          renderProjects(m.body, sum);
+        } catch {
+          m.body.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
+        }
+        reload.disabled = false;
       }
+      reload.addEventListener('click', () => load(true));
+      load(false);
     });
   },
 };
