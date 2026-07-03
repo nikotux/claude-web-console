@@ -751,7 +751,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   cambió. Botón "Analizar cambios" (incremental, default) vs "Completo" (POST
   /review {full:true} → runner con --full, ignora la caché). El auto-fix edita
   código ⇒ cambia el fingerprint ⇒ esa unidad se re-audita fresca ⇒ el hallazgo
-  resuelto desaparece solo. INVARIANTES + FOCO (Fase 4 del sistema nervioso):
+  resuelto desaparece solo. PARALELO ADAPTATIVO (Fase 2.5): la fase de ANÁLISIS
+  (haiku por unidad, read-only) corre en PARALELO vía health/pool.js
+  (runAdaptivePool, genérico/testeable): concurrencia dinámica que RAMPA según
+  CPU/RAM libres (os.loadavg/freemem) con back-off ante 429/overload
+  (ctl.backoff → baja target + pausa), tope duro = nº de unidades a auditar
+  (mín 2, arranque 4). La SÍNTESIS (interpretación) es SERIAL tras la BARRERA
+  (depende de todos los findings) y el AUTO-FIX sigue serial (lock) — regla de
+  oro: paralelo lo que LEE, serial lo que ESCRIBE. ANTI-COLISIÓN: los agentes
+  no editan código y mutan UN solo objeto `state` en memoria (cada uno su
+  casillero) + la caché se escribe UNA vez en la barrera → nadie pisa a otro.
+  INVARIANTES + FOCO (Fase 4 del sistema nervioso):
   health/invariants.js lista aserciones {match, text} (seed de los gotchas
   conocidos: simetría mode/model en chat, validación de rutas, settingSources
   headless sin user, bind ZeroTier, guard [hidden], integridad de secciones en

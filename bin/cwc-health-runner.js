@@ -10,6 +10,7 @@
 // hook PreToolUse (deniega ANTES de la evaluación de permisos) + canUseTool
 // como allowlist de solo-lectura. La revisión NUNCA modifica código: los
 // hallazgos accionables se trabajan después en un chat supervisado.
+import os from 'node:os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, discoverUnits, unitPrompt, synthesisPrompt, parseFindings, parseSynthesis,
@@ -17,8 +18,25 @@ import {
   readAuditCache, writeAuditCache, unitFingerprint,
   UNIT_TIMEOUT_MS, SYNTH_TIMEOUT_MS, UNIT_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
+import { runAdaptivePool } from '../src/modules/health/pool.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
+
+// ===== Pool de auditoría PARALELA ADAPTATIVA (F2.5) =====
+// Solo la fase de ANÁLISIS (haiku, read-only) corre en paralelo; la SÍNTESIS es
+// serial y va tras la barrera. Concurrencia DINÁMICA: rampa según CPU/RAM
+// libres, back-off ante 429/overload; tope duro = nº de unidades a auditar.
+const MIN_CONC = 2;      // piso de concurrencia
+const START_CONC = 4;    // arranque moderado (rampa hacia arriba)
+const RAMP_LOAD = 0.75;  // subir solo si loadavg[0] < núcleos * esto
+const RAMP_FREE = 0.15;  // y si queda > 15% de RAM libre
+const BACKOFF_MS = 15000;
+const MAX_429_RETRIES = 3;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function isRateLimit(err) {
+  const m = String((err && err.message) || err).toLowerCase();
+  return /429|rate.?limit|overloaded|too many requests|529|503/.test(m);
+}
 
 if (isRunning()) { log('ya hay una revisión corriendo (lock fresco): salgo.'); process.exit(0); }
 
@@ -87,13 +105,52 @@ async function main() {
   // INCREMENTAL (Fase 2): con --full se ignora la caché y se re-audita todo.
   const FULL = process.argv.includes('--full');
   const cache = FULL ? {} : readAuditCache();
-  let reused = 0;
+  // Audita UNA unidad (haiku, read-only) con reintento + back-off ante 429.
+  // ANTI-COLISIÓN: no edita código; muta SU casillero del `state` compartido y
+  // su propia key del `cache`. Nadie relee archivos → imposible pisar a otro.
+  // `ctl` viene del pool: ctl.backoff() baja la concurrencia y pausa nuevos.
+  async function auditUnit(entry, ctl) {
+    const { i, u, fp } = entry;
+    state.units[i].status = 'running';
+    flush();
+    let attempt = 0;
+    for (;;) {
+      try {
+        const text = await readOnlyRun(unitPrompt(u), 'haiku', UNIT_TIMEOUT_MS, UNIT_MAX_TURNS);
+        const found = parseFindings(text);
+        if (!found) throw new Error('respuesta no interpretable');
+        cache[u.name] = { fingerprint: fp, findings: found, auditedAt: Date.now() }; // findings CRUDOS
+        for (const f of found) state.findings.push({ ...f, module: u.label, unit: u.name });
+        state.units[i].status = 'done';
+        state.units[i].findings = found.length;
+        log(`  OK ${u.label}: ${found.length} hallazgo(s).`);
+        break;
+      } catch (err) {
+        if (isRateLimit(err) && attempt < MAX_429_RETRIES) {
+          attempt += 1;
+          ctl.backoff(); // avisa al pool: baja concurrencia + pausa lanzamientos
+          log(`  429/overload en ${u.label}: back-off, reintento ${attempt}.`);
+          await sleep(BACKOFF_MS);
+          continue;
+        }
+        state.units[i].status = 'error';
+        state.units[i].error = String((err && err.message) || err).slice(0, 120);
+        log(`  FAIL ${u.label}: ${state.units[i].error}`);
+        break;
+      }
+    }
+    state.done += 1;
+    flush();
+  }
 
+  // PASO 1 — resolver al instante las unidades SIN cambios (cacheadas) y juntar
+  // las que hay que auditar de verdad.
+  const toAudit = [];
+  let reused = 0;
   for (let i = 0; i < units.length; i += 1) {
     const u = units[i];
     const fp = unitFingerprint(u);
     const hit = cache[u.name];
-    // Sin cambios desde la última auditoría → REUSAR sus findings (no gasta haiku).
     if (hit && hit.fingerprint === fp && Array.isArray(hit.findings)) {
       for (const f of hit.findings) state.findings.push({ ...f, module: u.label, unit: u.name });
       state.units[i].status = 'cached';
@@ -101,32 +158,23 @@ async function main() {
       state.units[i].findings = hit.findings.length;
       reused += 1;
       log(`  = ${u.label}: sin cambios (cacheado, ${hit.findings.length}).`);
-      state.done = i + 1;
-      flush();
-      continue;
+    } else {
+      toAudit.push({ i, u, fp });
     }
-    state.units[i].status = 'running';
-    state.phase = u.label;
-    flush();
-    try {
-      const text = await readOnlyRun(unitPrompt(u), 'haiku', UNIT_TIMEOUT_MS, UNIT_MAX_TURNS);
-      const found = parseFindings(text);
-      if (!found) throw new Error('respuesta no interpretable');
-      cache[u.name] = { fingerprint: fp, findings: found, auditedAt: Date.now() }; // findings CRUDOS
-      for (const f of found) state.findings.push({ ...f, module: u.label, unit: u.name });
-      state.units[i].status = 'done';
-      state.units[i].findings = found.length;
-      log(`  OK ${u.label}: ${found.length} hallazgo(s).`);
-    } catch (err) {
-      state.units[i].status = 'error';
-      state.units[i].error = String(err && err.message || err).slice(0, 120);
-      log(`  FAIL ${u.label}: ${state.units[i].error}`);
-      // no cacheamos errores: la próxima corrida reintenta esa unidad
-    }
-    state.done = i + 1;
-    flush();
   }
-  // Podar del cache las unidades que ya no existen y persistir.
+  state.done = reused;
+  state.phase = toAudit.length ? `analizando ${toAudit.length} unidad(es) en paralelo…` : null;
+  flush();
+
+  // PASO 2 — ANÁLISIS en PARALELO (barrera antes de la síntesis).
+  if (toAudit.length) {
+    await runAdaptivePool(toAudit, auditUnit, {
+      min: MIN_CONC, start: START_CONC, backoffMs: BACKOFF_MS,
+      rampLoad: RAMP_LOAD, rampFree: RAMP_FREE,
+    });
+  }
+
+  // Podar del cache las unidades que ya no existen y persistir (UNA sola vez).
   for (const k of Object.keys(cache)) if (!units.some((u) => u.name === k)) delete cache[k];
   writeAuditCache(cache);
   log(`unidades: ${units.length} · reusadas del cache: ${reused} · auditadas: ${units.length - reused}.`);
