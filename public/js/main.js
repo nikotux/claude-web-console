@@ -530,6 +530,16 @@ if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
     if (focus && tabs.has(focus)) setActive(focus);
     if (focus) history.replaceState(null, '', '/');
     if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
+    // Si el tab ACTIVO es un chat, esperar a que su historial esté renderizado
+    // DE VERDAD (promesa `ready` del ChatTab, resuelta al procesar el primer
+    // `history` del attach — no un timer) antes de destapar: sin esto el
+    // splash caía y el chat aparecía vacío unos segundos. Tope de 8 s por si
+    // el WS no conecta (la red inline del HTML fuerza a los 12 s igual).
+    const act = tabs.get(activeId);
+    if (act?.type === 'chat' && act.tab?.ready) {
+      bootMsg('cargando la conversación…');
+      await Promise.race([act.tab.ready, new Promise((r) => setTimeout(r, 8000))]);
+    }
   } finally {
     // App lista (o el boot falló y el error ya está a la vista): fuera splash.
     window.__bootHide?.();

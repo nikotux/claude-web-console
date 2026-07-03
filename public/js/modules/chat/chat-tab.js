@@ -63,6 +63,10 @@ export class ChatTab {
     this._slashActive = 0;        // índice de la fila activa (↑↓)
     this._slashItems = [];        // filas visibles tras el filtro
     this._slashSuppressed = null; // texto con el que se cerró con Esc (no reabrir)
+    // Señal REAL de "historial renderizado al 100%": se resuelve al terminar
+    // de procesar el PRIMER evento `history` del attach (no un timer). La
+    // espera el splash de arranque (main.js) antes de destapar la app.
+    this.ready = new Promise((resolve) => { this._readyResolve = resolve; });
 
     container.classList.add('chat-pane-host');
     container.innerHTML = `
@@ -313,6 +317,9 @@ export class ChatTab {
         for (const ev of m.events) this._onEvent(ev);
         if (m.mode) this.modeEl.value = m.mode;
         this._setWorking(m.status === 'working');
+        // Historial renderizado: destraba al splash de arranque (ver arriba).
+        this._readyResolve?.();
+        this._readyResolve = null;
         break;
       case 'meta':
         this.slashCommands = Array.isArray(m.slashCommands) ? m.slashCommands : [];
