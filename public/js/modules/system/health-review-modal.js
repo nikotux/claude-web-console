@@ -34,6 +34,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   let alive = true;
   let pollTimer = null;
   let solvedLog = []; // registro durable (GET /solved), refrescado en cada tick
+  let batchState = null; // estado del batch de resolución (Fase B), polea GET /batch
   let proposals = []; // invariantes propuestos pendientes de aprobación (F5)
   let lastData = null; // último estado renderizado (para parches optimistas)
   const origOnClose = m.close;
@@ -126,6 +127,9 @@ export function openHealthReview(ctx, { isAdmin }) {
       .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
     const nFixing = all.filter((f) => f.fixStatus === 'fixing').length;
     const nOpen = activos.length - nFixing;
+    // Auto-resolubles en batch: abiertos, NO críticos, no en curso.
+    const autoables = activos.filter((f) => f.policy?.risk !== 'critical' && f.fixStatus !== 'fixing');
+    const nAuto = autoables.length;
     const resumen = [
       `${all.length} hallazgo(s)`,
       resueltos.length ? `✅ ${resueltos.length} resuelto(s)` : '',
@@ -143,10 +147,12 @@ export function openHealthReview(ctx, { isAdmin }) {
       ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
       ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
-      ${!running && isAdmin ? `<div class="hr-actions-row">
+      ${batchBannerHtml()}
+      ${!running && !batchState?.running && isAdmin ? `<div class="hr-actions-row">
         <button class="btn btn--block" data-ref="start" title="Analiza SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan). Rápido y barato.">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Analizar cambios' : 'Iniciar análisis profundo'}</span></button>
         ${d.verdict || d.findings?.length ? `<button class="btn-ghost btn--block" data-ref="startfull" title="Re-analiza TODOS los módulos desde cero, ignorando la caché (más lento y más tokens)">${icon('refresh', { size: 14 })}<span>Completo</span></button>` : ''}
-        ${nOpen ? `<button class="btn btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat supervisado que trabaja todos los hallazgos sin resolver">${icon('sparkle', { size: 14 })}<span>Resolver todo en chat</span></button>` : ''}
+        ${nAuto ? `<button class="btn btn--block hr-resolve-auto" data-ref="resolveauto" title="Resuelve los ${nAuto} hallazgos NO críticos en PARALELO (sandboxes aislados) + integración serial con node --check. No reinicia. Los críticos van solo por chat.">${icon('gear', { size: 14 })}<span>Resolver seguros (${nAuto})</span></button>` : ''}
+        ${nOpen ? `<button class="btn-ghost btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat supervisado que trabaja todos los hallazgos sin resolver">${icon('sparkle', { size: 14 })}<span>Resolver todo en chat</span></button>` : ''}
       </div>` : ''}
       <div class="hr-findings">
         ${activos.length ? activos.map(findingCard).join('')
@@ -188,6 +194,7 @@ export function openHealthReview(ctx, { isAdmin }) {
     }
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
     wrap.querySelector('[data-ref="startfull"]')?.addEventListener('click', () => startReview(true));
+    wrap.querySelector('[data-ref="resolveauto"]')?.addEventListener('click', () => batchResolve(autoables));
     wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(activos.filter((f) => f.fixStatus !== 'fixing')));
     for (const el of wrap.querySelectorAll('.hr-prop')) {
       el.querySelector('[data-prop-act="approve"]')?.addEventListener('click', () => decideProposal(el.dataset.prop, 'approve'));
@@ -292,15 +299,56 @@ export function openHealthReview(ctx, { isAdmin }) {
     }
   }
 
-  // Trae review + registro de resueltos + invariantes propuestos; refresca cachés.
+  // Banner del batch de resolución (Fase B): en curso o resumen del último.
+  function batchBannerHtml() {
+    const b = batchState;
+    if (!b || !Array.isArray(b.items)) return '';
+    const c = b.items.reduce((a, it) => { a[it.status] = (a[it.status] || 0) + 1; return a; }, {});
+    const warn = (c.conflict || 0) + (c['check-failed'] || 0);
+    if (b.running) {
+      return `<div class="hr-batch hr-batch--run">${pacman()}<span>Resolviendo ${b.items.length} en paralelo (aislado)${b.phase ? ` · ${esc(b.phase)}` : ''} — ✅ ${c.integrated || 0}${warn ? ` · ⚠ ${warn}` : ''}${c.failed ? ` · ✗ ${c.failed}` : ''}</span></div>`;
+    }
+    if (b.finishedAt) {
+      return `<div class="hr-batch">Último batch: ✅ ${c.integrated || 0} integrado(s)${c.conflict ? ` · ⚠ ${c.conflict} conflicto` : ''}${c['check-failed'] ? ` · ⚠ ${c['check-failed']} check` : ''}${c.failed ? ` · ✗ ${c.failed} fallo` : ''}. Los no integrados quedan abiertos (retry o "En chat").</div>`;
+    }
+    return '';
+  }
+
+  // Resolver en BATCH los hallazgos NO críticos (paralelo aislado + integración
+  // serial). Dispara el orquestador desacoplado; el modal polea /batch y /review.
+  async function batchResolve(findings) {
+    if (!findings.length) return;
+    const ok = await dialog.confirmDialog({
+      title: `Resolver seguros (${findings.length})`,
+      message: `Se resuelven los ${findings.length} hallazgos NO críticos de forma autónoma: cada uno en su propio sandbox aislado EN PARALELO, y después se integran al código UNO POR UNO con node --check (los que choquen quedan sin aplicar). NO reinicia el servicio — revisás con git y reiniciás vos.\n\nLos hallazgos críticos NO entran (van solo por "En chat").`,
+      confirmLabel: `Resolver ${findings.length}`,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`${API}/finding-fix-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: findings.map((f) => f.id) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar el batch.');
+      clearTimeout(pollTimer);
+      poll();
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Resolver seguros', message: err.message });
+    }
+  }
+
+  // Trae review + resueltos + propuestas + estado del batch; refresca cachés.
   async function fetchState() {
-    const [rev, sol, prop] = await Promise.all([
+    const [rev, sol, prop, bat] = await Promise.all([
       fetch(`${API}/review`).then((r) => r.json()).catch(() => null),
       fetch(`${API}/solved`).then((r) => r.json()).catch(() => null),
       fetch(`${API}/invariant-proposals`).then((r) => r.json()).catch(() => null),
+      fetch(`${API}/batch`).then((r) => r.json()).catch(() => null),
     ]);
     if (sol && Array.isArray(sol.solved)) solvedLog = sol.solved;
     if (prop && Array.isArray(prop.proposals)) proposals = prop.proposals;
+    if (bat) batchState = bat.batch ? { ...bat.batch, running: bat.running } : null;
     return rev;
   }
 
@@ -320,7 +368,7 @@ export function openHealthReview(ctx, { isAdmin }) {
     }
   }
   // Hay que seguir poleando si corre la revisión O hay un auto-fix en curso.
-  const needsPoll = (d) => !!d && (d.running || d.fixing || (d.findings || []).some((f) => f.fixStatus === 'fixing'));
+  const needsPoll = (d) => (!!d && (d.running || d.fixing || (d.findings || []).some((f) => f.fixStatus === 'fixing'))) || !!batchState?.running;
 
   async function poll() {
     if (!alive) return;

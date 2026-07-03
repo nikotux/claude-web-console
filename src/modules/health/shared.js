@@ -302,6 +302,52 @@ export function unitFingerprint(unit) {
   return h.digest('hex').slice(0, 12);
 }
 
+// ===== Batch de resolución (Fase B del orquestador) =====
+// El batch se resuelve en un RUNNER DESACOPLADO (bin/cwc-healthfix-orchestrator.js)
+// con estado en archivo + lock/heartbeat → sobrevive a un reinicio de la web
+// (regla de oro) y es REANUDABLE. El front polea BATCH_FILE.
+export const BATCH_FILE = path.join(DATA_DIR, 'healthfix-batch.json');
+export const BATCH_LOCK = path.join(DATA_DIR, 'healthfix-batch.lock');
+export function readBatch() { try { return JSON.parse(fss.readFileSync(BATCH_FILE, 'utf8')); } catch { return null; } }
+export function writeBatch(b) {
+  try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); fss.writeFileSync(BATCH_FILE, JSON.stringify(b), { mode: 0o600 }); }
+  catch (err) { console.error('[health] no pude escribir batch:', err?.message); }
+}
+export function writeBatchLock(pid) {
+  try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); fss.writeFileSync(BATCH_LOCK, JSON.stringify({ pid, ts: Date.now() }), { mode: 0o600 }); }
+  catch { /* noop */ }
+}
+export function clearBatchLock() { try { fss.unlinkSync(BATCH_LOCK); } catch { /* noop */ } }
+export function isBatchRunning() {
+  try { const { ts } = JSON.parse(fss.readFileSync(BATCH_LOCK, 'utf8')); return Date.now() - ts < LOCK_FRESH_MS; }
+  catch { return false; }
+}
+
+// Prompt de resolución autónoma de UN hallazgo (compartido con el auto-fix de a
+// uno): edita el fix mínimo, verifica con node --check, y opcionalmente propone
+// un invariante (Fase 5). `f` = { area, module, severity, kind, file, detail,
+// suggestedFix }.
+export function fixPrompt(f) {
+  return [
+    'Sos un runner autónomo que arregla UN hallazgo de la revisión de salud de esta consola (Claude Web Console). Trabajás SIN supervisión humana.',
+    '',
+    `Módulo: ${f.module || '—'}`,
+    `Severidad: ${f.severity || '—'} · Tipo: ${f.kind || '—'}`,
+    `Qué falla: ${f.area}`,
+    f.file ? `Archivo: ${f.file}` : '',
+    '',
+    `Detalle: ${f.detail}`,
+    f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
+    '',
+    'Reglas ESTRICTAS:',
+    '1. Verificá leyendo el código citado que el hallazgo es REAL. Si es falso positivo, NO edites nada y terminá con: FIXFAIL falso positivo — <por qué>.',
+    '2. Si es real, aplicá el fix MÍNIMO editando los archivos necesarios.',
+    '3. Verificá CADA archivo .js que edites con `node --check <archivo>` (única orden de terminal permitida). NO corras git, tests, npm, systemctl ni reinicies nada.',
+    '4. Terminá tu ÚLTIMO mensaje con UNA línea exacta: "FIXOK <qué cambiaste, en qué archivos>" o "FIXFAIL <motivo>".',
+    '5. Solo si el fix fue OK y el bug es una CLASE que conviene blindar, agregá DESPUÉS del FIXOK: "PROPOSED-INVARIANT <aserción verificable> | <patrón de archivos>". Si no, "NO-INVARIANT".',
+  ].filter(Boolean).join('\n');
+}
+
 // ===== Invariantes PROPUESTOS (Fase 5: loop que aprende) =====
 // El auto-fix, al resolver un bug de una clase que vale la pena blindar,
 // propone un invariante. Se guarda PENDIENTE acá (no se auto-agrega — decisión

@@ -16,7 +16,8 @@ código.
    (`bin/cwc-chat-runner.js`); triage de bugs → runner desacoplado
    (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
-   runner desacoplado (`bin/cwc-healthfix-runner.js`). La unidad systemd usa
+   runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
+   paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -843,8 +844,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   se auto-resuelven: el front deshabilita "Automático" (badge 🔒 crítico + nota
   "hacelo en chat") y POST /finding-fix los RECHAZA (409, guarda REAL de defensa
   en profundidad). 'shared' (registry/tokens.css/ui/shared.js/CLAUDE.md) y 'safe'
-  sí; la Fase B (worktrees + integración serial) usará domain para el grafo de
-  colisión. la tarjeta
+  sí. BATCH EN PARALELO (Fase B del orquestador, 2026-07-04): botón "Resolver
+  seguros (N)" (N = abiertos no-críticos) → POST /finding-fix-batch {ids} (excluye
+  críticos por el gate) → ORQUESTADOR DESACOPLADO bin/cwc-healthfix-orchestrator.js,
+  estado en ~/.cwc-data/healthfix-batch.json + lock/heartbeat (REANUDABLE,
+  sobrevive al reinicio de la web — regla de oro). Fase 1 (PARALELO, aislado):
+  cada fix en su SANDBOX (git worktree que refleja el estado actual, ver
+  health/worktree.js: createSandbox/extractPatch) vía el pool adaptativo F2.5 →
+  produce un PATCH; colisión imposible al editar. BARRERA. Fase 2 (SERIAL,
+  verdad de git): integratePatch aplica cada patch al árbol REAL uno por uno con
+  git apply --check (conflicto → NO aplica, se marca) + node --check por
+  aplicación (falla → revierte); NUNCA reinicia el servicio. Éxito ⇒ marca el
+  finding resolved en review.json (la tarjeta se actualiza sola) + recordSolved.
+  El front polea GET /batch (banner de progreso) mientras corre. la tarjeta
   polea review.json y pasa fixStatus fixing→resolved|failed sola. Éxito ⇒
   registro durable health-solved.json (GET /solved): historial + `count` de
   recurrencia. Los resueltos bajan a la sección "✅ Resueltos" y ya NO
