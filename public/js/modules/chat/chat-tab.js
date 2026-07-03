@@ -9,6 +9,7 @@ import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman } from '../../ui/pacman.js';
+import { openModal } from '../../ui/dialog.js';
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
@@ -47,7 +48,10 @@ export class ChatTab {
     this.id = id;
     this.title = title || 'chat';
     this.container = container;
-    this.onToggleMode = onToggleMode; // pasar a TUI (lo maneja el shell)
+    // Pasar a TUI ya no tiene botón en el header (se quitó junto con el costo):
+    // el camino es el menú ⋯ de la tarjeta en Sesiones. El callback queda por
+    // compatibilidad con el shell (main.js lo sigue pasando).
+    this.onToggleMode = onToggleMode;
     this.onViewMode = onViewMode;     // el server anunció un cambio de modo
     this.initialPrompt = initialPrompt; // primer mensaje a enviar al conectar
     this._sentInitial = false;
@@ -55,7 +59,6 @@ export class ChatTab {
     this.reconnectTimer = null;
     this.closedByUser = false;
     this.streamEl = null;   // burbuja del asistente en streaming
-    this.totalCost = 0;
     this.slashCommands = [];      // [{name, description|null}] del meta/attach
     this._metaSeen = false;       // ¿ya llegó el init de ESTA conversación?
     this._slashPop = null;        // popup de autocompletado abierto
@@ -78,8 +81,7 @@ export class ChatTab {
           <select class="chat-mode" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
-          <button class="btn-ghost btn--icon chat-toggle" title="Abrir como Terminal (TUI)">${icon('terminal', { size: 16 })}</button>
-          <span class="chat-cost" title="Costo estimado de esta conversación">$0.00</span>
+          <button class="btn-ghost btn--icon chat-mode-help" title="¿Qué significan estos modos?">${icon('help', { size: 15 })}</button>
         </header>
         <div class="chat-msgs"></div>
         <div class="chat-composer">
@@ -95,8 +97,6 @@ export class ChatTab {
     this.sendBtn = container.querySelector('.chat-send');
     this.stopBtn = container.querySelector('.chat-stop');
     this.modeEl = container.querySelector('.chat-mode');
-    this.costEl = container.querySelector('.chat-cost');
-    this.toggleBtn = container.querySelector('.chat-toggle');
     this.aliveEl = container.querySelector('.chat-alive');
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
@@ -106,8 +106,8 @@ export class ChatTab {
     });
     this.sendBtn.addEventListener('click', () => this._submit());
     this.stopBtn.addEventListener('click', () => this._send({ type: 'interrupt' }));
-    this.toggleBtn.addEventListener('click', () => this.onToggleMode?.());
     this.modeEl.addEventListener('change', () => this._send({ type: 'set_mode', mode: this.modeEl.value }));
+    container.querySelector('.chat-mode-help').addEventListener('click', () => this._modeHelp());
     this.inputEl.addEventListener('keydown', (e) => {
       if (this._slashKeydown(e)) return; // el autocompletado consumió la tecla
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -311,7 +311,6 @@ export class ChatTab {
       case 'history':
         this.msgsEl.innerHTML = '';
         this.streamEl = null;
-        this.totalCost = 0;
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
         for (const ev of m.events) this._onEvent(ev);
@@ -339,10 +338,8 @@ export class ChatTab {
       case 'viewmode':
         if (m.viewMode === 'switching') {
           this._line('chat-switch-note', 'Cambiando a Terminal (TUI)…');
-          if (this.toggleBtn) this.toggleBtn.disabled = true;
         } else if (m.error) {
           this._line('chat-error', m.error);
-          if (this.toggleBtn) this.toggleBtn.disabled = false;
         }
         // El shell reconstruye la vista si el modo efectivo cambió.
         this.onViewMode?.(m);
@@ -606,11 +603,37 @@ export class ChatTab {
     group.querySelector('.ctg-row').appendChild(chip);
   }
 
+  // ¿Qué significan los modos de permisos? Modal explicativo del "?" del header.
+  _modeHelp() {
+    const m = openModal({ title: 'Modos de permisos', width: 460 });
+    m.body.innerHTML = `
+      <div class="mode-help">
+        <div class="mh-item">
+          <b>Preguntar</b>
+          <p>El modo estándar. Claude pide permiso antes de CADA acción que toque
+          tu sistema (editar archivos, correr comandos): aparece una tarjeta y
+          vos aprobás o denegás una por una.</p>
+        </div>
+        <div class="mh-item">
+          <b>Aceptar ediciones</b>
+          <p>Claude puede editar y crear archivos sin preguntar; todo lo demás
+          (comandos de terminal, red, etc.) sigue pidiendo permiso. Cómodo
+          cuando ya confiás en el rumbo del trabajo.</p>
+        </div>
+        <div class="mh-item">
+          <b>Solo plan</b>
+          <p>Claude no toca nada: solo lee el proyecto y arma un plan de
+          trabajo. Ideal para explorar una idea o ver qué haría antes de
+          soltarle la mano.</p>
+        </div>
+        <p class="mh-foot">Podés cambiar de modo en cualquier momento; aplica
+        desde la próxima acción de la conversación.</p>
+      </div>`;
+  }
+
   _result(m) {
     this._closeStream();
     if (m.costUsd != null) {
-      this.totalCost += m.costUsd;
-      this.costEl.textContent = `$${this.totalCost.toFixed(2)}`;
       const el = document.createElement('div');
       el.className = 'chat-turn-cost';
       const tok = m.usage ? ` · ${m.usage.output} tok` : '';

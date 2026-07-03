@@ -573,7 +573,14 @@ html, body {
   border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm);
   font-size: var(--cwc-fs-xs); padding: .2rem .35rem;
 }
-.chat-cost { font-size: var(--cwc-fs-sm); color: var(--cwc-ok); font-variant-numeric: tabular-nums; }
+/* "?" junto al selector de modos: abre el modal explicativo (._modeHelp). */
+.chat-mode-help { flex: none; color: var(--cwc-text-dim); }
+
+/* Modal "Modos de permisos" */
+.mode-help .mh-item { margin-bottom: .7rem; }
+.mode-help .mh-item b { color: var(--cwc-text); font-size: var(--cwc-fs-md); }
+.mode-help .mh-item p { margin: .2rem 0 0; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; }
+.mode-help .mh-foot { margin: .6rem 0 0; padding-top: .5rem; border-top: 1px solid var(--cwc-divider); color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
 
 /* Ritmo de diálogo: aire chico entre elementos del mismo turno (gap) y aire
    grande al abrir turno nuevo (margen extra sobre cada mensaje del usuario). */
@@ -720,7 +727,6 @@ html, body {
 .chat-error { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
 .chat-closed-note { text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .4rem; }
 .chat-switch-note { text-align: center; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); padding: .4rem; }
-.chat-toggle { flex: none; }
 
 /* ===== Conversación en modo TUI (Terminal dentro de una conversación) ===== */
 .terminal-pane.conv-tui-host { display: flex; flex-direction: column; }
