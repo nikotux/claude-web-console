@@ -1,5 +1,9 @@
 // modules/mobile/auxbar.js — barra de teclas auxiliares + dictado (móvil).
 //
+// SOLO para vistas de TERMINAL (PTY y TUI de conversaciones): con la vista
+// Chat activa la barra entera se oculta por CSS (body:has(.chat-pane-host…)
+// en style.css) — el chat tiene textarea nativo, ☰ propio y "/" tipeable,
+// la barra era redundante ahí.
 // - Teclas: Esc, Tab, ⇧Tab, Ctrl (armado), flechas, ^C.
 // - Ctrl "armado": el próximo carácter tipeado se convierte en Ctrl+<char>.
 // - Pegar: navigator.clipboard.readText() -> PTY.

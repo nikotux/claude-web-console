@@ -109,6 +109,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             puerta modo→UI. OJO: un runner ya vivo de antes del deploy no
                             conoce bypassPermissions (Set importado al spawn) e ignora ese
                             set_mode hasta dormirse/reabrirse.
+                            AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
+                            _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
+                            READ-ONLY doble capa regla 6 con TODA herramienta denegada) que
+                            resume en ≤20 chars qué se está haciendo y renombra chat.title EN
+                            PARALELO (jamás bloquea el turno; si falla queda el título viejo).
+                            Guardas: throttle 20 s/chat + 1 en vuelo, mensajes <15 chars o
+                            /comandos no re-titulan, chats con ticket (bugfixes) NO se tocan
+                            (título curado "PR en progreso · TKT #n"). La UI lo levanta por
+                            el poll de 8 s de main.js (pollTabStatus sincroniza header+chip
+                            y dispara sessions-changed para las tarjetas). El renombre manual
+                            sigue existiendo pero el próximo mensaje puede pisarlo (a
+                            pedido: nombres siempre actualizados).
   files/ stats/ tmux/ admin/ health/
   tickets/                  triage de bugs BAJO DEMANDA (consume tokens; admin). La corrida
                             vive en un RUNNER DETACHED (bin/cwc-triage-runner.js, patrón
@@ -247,7 +259,14 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             registro" en el detalle de cualquier fix (confirm rojo →
                             /delete: borra SOLO el registro local, ni código ni PRs);
                             EXCLUSIVO de ~/tolkien) ·
-                            tickets · explorer · mobile/auxbar ·
+                            tickets · explorer ·
+                            mobile/auxbar (teclas Esc/Tab/flechas/^C + dictado, SOLO para
+                            vistas de terminal: con la vista Chat activa la barra ENTERA —
+                            botón ⌨ incluido — se oculta por CSS puro con
+                            body:has(.terminal-pane.active.chat-pane-host) en style.css,
+                            selector con #terminals+3 clases que le gana al display:flex
+                            del media query móvil; la TUI es .conv-tui-host y no matchea,
+                            ahí la barra queda) ·
                             usage (pie: tokens de HOY; su modal "Uso": arriba límites del
                             plan — /api/tokens/limits, barras % con umbrales ok/warn/danger
                             y "queda X% · resetea en …" — y abajo el consumo por modelo con

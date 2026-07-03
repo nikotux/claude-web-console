@@ -944,6 +944,14 @@ html, body {
   display: none; flex: none; flex-direction: column;
   background: var(--cwc-bg-panel); border-top: 1px solid var(--cwc-divider);
 }
+/* Con la vista CHAT activa la barra entera es redundante (el textarea nativo
+   ya dicta/pega, el ☰ vive en el header y "/" se tipea directo): se oculta,
+   botón ⌨ incluido. La TUI de una conversación es .conv-tui-host (no
+   .chat-pane-host), así que ahí NO matchea y la barra queda — el PTY sí
+   necesita Esc/Tab/flechas/^C/dictado. El selector lleva #terminals + 3
+   clases: le gana SIEMPRE al display:flex del media query móvil de abajo,
+   sin depender del orden. */
+body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: none; }
 #aux-handle {
   align-self: center; width: 72px; height: 20px; margin: 3px 0;
   background: var(--cwc-divider); border: 1px solid var(--cwc-border-soft); border-radius: 10px;
