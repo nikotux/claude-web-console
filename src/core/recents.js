@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, '..', '..', 'recents.json');
-const MAX = 8;
+const MAX = 10; // el lanzador muestra 3 y el resto vive en el modal "Ver más"
 
 function load() {
   try { return JSON.parse(fs.readFileSync(FILE, 'utf8')).recents || []; }

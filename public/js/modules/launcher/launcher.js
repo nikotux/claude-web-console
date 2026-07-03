@@ -97,16 +97,48 @@ export default {
           ${icon(ic, { size: 15 })}<span class="ln-dest-label">${label}</span><span class="ln-sub">${sub}</span>
         </button>`;
       const shortcuts = dest('', 'Home', '~', 'home') + dest(st.project.rel, st.project.name, `~/${st.project.rel}`, 'gitBranch');
-      const recents = st.recents
-        .filter((r) => r.cwd !== st.project.rel)
-        .slice(0, 5)
-        .map((r) => dest(r.cwd, baseName(r.cwd), `~/${r.cwd}`, 'folder'))
-        .join('');
+      const rec = st.recents.filter((r) => r.cwd !== st.project.rel);
+      // Solo los 3 recientes más usados; el resto vive en el modal "Ver más"
+      // para no empujar el botón Iniciar fuera de pantalla en móvil.
+      let visible = rec.slice(0, 3);
+      // Si el destino elegido vino del modal y no está en el top 3, se lo
+      // muestra en el tercer lugar para que la selección activa se vea.
+      if (st.dest.rel && !visible.some((r) => r.cwd === st.dest.rel)) {
+        const sel = rec.find((r) => r.cwd === st.dest.rel);
+        if (sel) visible = visible.slice(0, 2).concat(sel);
+      }
+      const recents = visible.map((r) => dest(r.cwd, baseName(r.cwd), `~/${r.cwd}`, 'folder')).join('');
+      const more = rec.length > visible.length
+        ? `<button class="btn-ghost btn--sm ln-dests-more">${icon('chevronRight', { size: 13 })}<span>Ver más (${rec.length})</span></button>`
+        : '';
       const resume = st.type === 'chat' ? '<div class="ln-resume" data-ref="resume"></div>' : '';
       return `
         <div class="ln-dests">${shortcuts}${recents}</div>
-        <button class="btn-ghost btn--sm ln-browse-open">${icon('folder', { size: 14 })}<span>Elegir otra carpeta…</span></button>
+        <div class="ln-list-actions">
+          <button class="btn-ghost btn--sm ln-browse-open">${icon('folder', { size: 14 })}<span>Elegir otra carpeta…</span></button>
+          ${more}
+        </div>
         ${resume}`;
+    }
+
+    // "Ver más" de ubicaciones: modal emergente con todos los recientes.
+    function openDestsMore() {
+      const rec = st.recents.filter((r) => r.cwd !== st.project.rel);
+      const m = dialog.openModal({ title: 'Abrir en…', width: 440 });
+      const list = document.createElement('div');
+      list.className = 'ln-dests ln-dests--dlg';
+      list.innerHTML = rec.map((r) => `
+        <button class="btn-ghost ln-dest ${st.dest.rel === r.cwd ? 'active' : ''}" data-rel="${r.cwd}" data-label="${baseName(r.cwd)}">
+          ${icon('folder', { size: 15 })}<span class="ln-dest-label">${baseName(r.cwd)}</span><span class="ln-sub">~/${r.cwd}</span>
+        </button>`).join('');
+      m.body.appendChild(list);
+      for (const b of list.querySelectorAll('.ln-dest')) {
+        b.addEventListener('click', () => {
+          st.dest = { rel: b.dataset.rel, label: b.dataset.label };
+          m.close();
+          render();
+        });
+      }
     }
 
     function fmtAgo(ms) {
@@ -184,6 +216,7 @@ export default {
           render();
         });
       }
+      body.querySelector('.ln-dests-more')?.addEventListener('click', openDestsMore);
       body.querySelector('.ln-browse-open')?.addEventListener('click', () => {
         st.view = 'browse';
         st.browseRel = st.dest.rel;

@@ -327,7 +327,11 @@ html, body {
 .ln-dest-label { font-weight: 600; }
 .ln-sub { margin-left: auto; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); overflow: hidden; text-overflow: ellipsis; }
 .ln-dest.active .ln-sub { color: inherit; opacity: .75; }
-.ln-browse-open, .ln-back { margin-bottom: .5rem; }
+.ln-back { margin-bottom: .5rem; }
+/* Fila "Elegir otra carpeta…" + "Ver más": lado a lado, no apiladas, para
+   no gastar alto vertical (crítico en móvil, donde el modal ya va justo). */
+.ln-list-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.ln-dests--dlg { margin-top: .2rem; } /* lista dentro del modal "Ver más" */
 .ln-crumbs {
   display: flex; align-items: center; gap: .1rem; flex-wrap: wrap;
   margin-bottom: .4rem; min-height: 26px;
@@ -353,7 +357,7 @@ html, body {
 .ln-resume { margin-top: .7rem; display: flex; flex-direction: column; gap: .3rem; }
 .ln-resume--dlg { margin-top: .2rem; } /* lista dentro del modal "Ver más" */
 .ln-resume-item { justify-content: flex-start; max-width: 100%; }
-.ln-resume-more { justify-content: flex-start; color: var(--cwc-text-dim); }
+.ln-resume-more, .ln-dests-more { justify-content: flex-start; color: var(--cwc-text-dim); }
 .ln-resume-snip {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: left; color: var(--cwc-text-secondary);
