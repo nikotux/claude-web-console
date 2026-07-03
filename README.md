@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 06:49 — main
+- CLAUDE.md: Salud sin bugfixes (UI única en el modal Enviar PR de Tolkien)
+
 ### 2026-07-03 06:44 — main
 - Uso de tokens: vista por MODELO con desplegable de últimos 3 proyectos
 - Uso: límites del plan (claude.ai) y Pac-Man por modelo consumiendo ahora
