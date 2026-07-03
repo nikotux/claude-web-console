@@ -1297,6 +1297,14 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-solved-area { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cwc-text-secondary); }
 .hr-solved-mod { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); flex: none; }
 .hr-solved-date { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); flex: none; }
+/* Invariantes propuestos (F5): borde de acento, texto + match + aprobar/descartar. */
+.hr-prop-sec > summary { color: var(--cwc-accent); }
+.hr-prop-list { display: flex; flex-direction: column; gap: .5rem; padding-bottom: .4rem; }
+.hr-prop { border: 1px solid var(--cwc-border-soft); border-left: 3px solid var(--cwc-accent); border-radius: var(--cwc-radius-sm); padding: .45rem .55rem; }
+.hr-prop-text { margin: 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text); line-height: 1.4; }
+.hr-prop-meta { margin-top: .25rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.hr-prop-meta code { color: var(--cwc-accent-cool); }
+.hr-prop-actions { margin-top: .4rem; display: flex; justify-content: flex-end; gap: .4rem; }
 @media (max-width: 768px) {
   .dlg-overlay:has(.dlg-card--health) { padding: 0; }
   .dlg-card--health { width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; }

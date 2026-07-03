@@ -180,6 +180,10 @@ export function openHealthReview(ctx, { isAdmin }) {
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
     wrap.querySelector('[data-ref="startfull"]')?.addEventListener('click', () => startReview(true));
     wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(activos.filter((f) => f.fixStatus !== 'fixing')));
+    for (const el of wrap.querySelectorAll('.hr-prop')) {
+      el.querySelector('[data-prop-act="approve"]')?.addEventListener('click', () => decideProposal(el.dataset.prop, 'approve'));
+      el.querySelector('[data-prop-act="reject"]')?.addEventListener('click', () => decideProposal(el.dataset.prop, 'reject'));
+    }
   }
 
   // Lanza la revisión (el ÚNICO punto que gasta tokens). `full` = ignorar la

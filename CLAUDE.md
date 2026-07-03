@@ -96,7 +96,8 @@ código.
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
   tickets/salud, `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
-  incremental de salud), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  incremental de salud, `health-invariant-proposals.json` invariantes propuestos
+  pendientes), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
 
@@ -758,9 +759,18 @@ docs/                       frontend-modules.md · brief-original.txt · context
   de la unidad y le pide verificar CADA uno citando el código — así caza bugs
   sutiles que el barrido genérico pierde. El foco acota el pedido de CLAUDE.md a
   las reglas duras. OJO: unitFingerprint ahora hashea TAMBIÉN los invariantes
-  aplicables → editar un invariante fuerza re-auditar las unidades que toca. La
-  Fase 5 propondrá invariantes nuevos al resolver. Al final SONNET sintetiza el
-  veredicto (solo procesa los hallazgos, no re-lee código). Interfaz por archivos: health-review.json
+  aplicables → editar un invariante fuerza re-auditar las unidades que toca.
+  LOOP QUE APRENDE (Fase 5 del sistema nervioso, cierre): al resolver un bug de
+  una clase que conviene blindar, el auto-fix runner emite una línea
+  "PROPOSED-INVARIANT <texto> | <match>" (o NO-INVARIANT); addProposal la guarda
+  PENDIENTE en ~/.cwc-data/health-invariant-proposals.json (NUNCA se auto-aplica
+  — decisión del usuario). El modal de salud muestra "🧠 Invariantes propuestos"
+  con Aprobar/Descartar (GET /invariant-proposals · POST /invariant-proposals/:id
+  {approve|reject}, admin). Aprobar → appendLearnedInvariant valida el regex y lo
+  suma a src/modules/health/invariants-learned.json (JSON de DATOS en el repo,
+  NO código; se commitea y revisa); invariants.js mergea SEED_INVARIANTS +
+  loadLearned(). Así el bug resuelto no puede regresar sin que salte. Al final
+  SONNET sintetiza el veredicto (solo procesa los hallazgos, no re-lee código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +
   health-review.lock (heartbeat => running). POST responde INMEDIATO
   (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA
