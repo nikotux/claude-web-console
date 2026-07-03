@@ -62,7 +62,9 @@ async function diskInfo() {
     const used = total - s.bfree * s.bsize;
     return { total, used, pct: total ? (used / total) * 100 : 0, avail };
   } catch {
-    return { total: 0, used: 0, pct: 0, avail: 0 };
+    // Mismo shape (el frontend lee disk.pct directo) + flag para distinguir
+    // "no se pudo leer el disco" de un 0% real.
+    return { total: 0, used: 0, pct: 0, avail: 0, unavailable: true };
   }
 }
 

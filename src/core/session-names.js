@@ -28,7 +28,11 @@ export function loadTitles() {
 }
 export function saveTitles(titles) {
   try { fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2)); }
-  catch { /* noop */ }
+  catch (err) {
+    // No rompe la operación (el título vive en RAM), pero el fallo se loguea:
+    // sin persistir, el nombre custom se pierde en el próximo reinicio.
+    console.error('[session-names] no se pudo persistir titles.json:', err?.message || err);
+  }
 }
 export const titleKey = (socketName, name) => `${socketName}/${name}`;
 

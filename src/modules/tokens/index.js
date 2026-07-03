@@ -297,7 +297,9 @@ export default {
     // Límites del plan (ventanas de claude.ai): % usado y hora de reset.
     // ?fresh=1 saltea el TTL (botón Actualizar del modal Uso).
     r.get('/limits', async (req, res) => {
-      const now = Date.now();
+      // Reloj MONOTÓNICO (como /summary): Date.now() retrocede con ajustes
+      // NTP y dejaba el caché de límites "fresco" para siempre.
+      const now = Number(process.hrtime.bigint()) / 1e6;
       if (!req.query.fresh && limitsCache && now - limitsAt < LIMITS_TTL_MS) {
         return res.json(limitsCache);
       }

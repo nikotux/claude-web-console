@@ -318,6 +318,19 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           en.deskResolved = d.resolved; en.deskClosed = d.closed;
           en.deskReplied = d.replied; en.deskStatusText = d.status; en.deskCheckedAt = d.fetchedAt;
           en.resolution = d.resolved ? 'complete' : (en.prState === 'merged' ? 'partial' : 'active');
+          // Y reflejar IN-PLACE en la fila visible (pipeline, celda Desk y
+          // chip de resolución) sin re-render: un re-render destruiría este
+          // panel abierto. Solo se tocan celdas de la fila resumen, nunca la
+          // fila de detalle donde vive el panel.
+          const row = mr.tbody.querySelector(`.bfm-row[data-sid="${en.sessionId}"]`);
+          if (row && row.children.length >= 8) {
+            const arch = row.classList.contains('bb-arch-row');
+            const est = prEstado(en);
+            const resChip = !arch && RES_CHIP[resolutionOf(en)] ? ` ${RES_CHIP[resolutionOf(en)]}` : '';
+            row.children[3].innerHTML = pipelineHtml(en);
+            row.children[6].innerHTML = deskCellFor(en);
+            row.children[7].innerHTML = `${esc(est.label)}${resChip}`;
+          }
         }
       }
       const verdict = d.resolved

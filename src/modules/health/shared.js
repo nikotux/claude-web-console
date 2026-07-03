@@ -32,6 +32,8 @@ export const SEVERITY = new Set(['critical', 'high', 'medium', 'low']);
 export const KINDS = new Set(['bug', 'regla', 'mejora']); // tipo del hallazgo
 
 // Allowlist de herramientas: SOLO lecturas locales (dos capas — regla 6).
+// TodoWrite es la lista de tareas INTERNA del modelo (Agent SDK): solo toca
+// estado conversacional, nunca disco — es seguro en una corrida read-only.
 export function toolAllowed(name) {
   return ['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name);
 }
@@ -80,7 +82,9 @@ export function discoverUnits() {
     const files = listJs(path.join(modDir, m));
     // Adjunta el runner desacoplado del módulo si su nombre lo referencia.
     for (const r of binRunners) {
-      if (r.includes(m) || (m === 'chat' && r.includes('chat')) || (m === 'tickets' && r.includes('triage')) || (m === 'bugs' && r.includes('triage')) || (m === 'health' && r.includes('health'))) {
+      // r.includes(m) cubre chat/health/etc.; 'bugs' mapea a su runner
+      // 'triage' (el módulo se renombró de 'tickets' a 'bugs' en 2026-07).
+      if (r.includes(m) || (m === 'bugs' && r.includes('triage'))) {
         files.push(`bin/${r}`);
       }
     }

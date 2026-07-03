@@ -32,7 +32,9 @@ export function ensureCert(ip) {
       '-addext', `subjectAltName=IP:${ip},DNS:localhost`,
     ], { stdio: 'ignore' });
     try { fs.chmodSync(KEY, 0o600); } catch { /* noop */ }
-    fs.writeFileSync(IPMARK, ip);
+    // Best-effort: si la marca no se puede escribir NO se aborta el boot (el
+    // cert ya existe); solo se regenerará de más en el próximo arranque.
+    try { fs.writeFileSync(IPMARK, ip); } catch (e) { console.warn('[tls] No se pudo escribir la marca de IP:', e?.message); }
     console.log(`[tls] Certificado self-signed generado para ${ip} (aceptalo una vez en cada dispositivo).`);
   }
 

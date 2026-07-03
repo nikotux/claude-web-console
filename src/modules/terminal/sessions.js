@@ -170,6 +170,13 @@ class Session {
     while (this.bufferLen > maxBytes && this.buffer.length > 1) {
       this.bufferLen -= this.buffer.shift().length;
     }
+    // Tope DURO: si el único chunk sobreviviente excede por sí solo el máximo
+    // (burst gigante del pty), conservar solo su cola — el replay ya arranca
+    // en un límite arbitrario de chunk, así que esto no agrega corte nuevo.
+    if (this.bufferLen > maxBytes && this.buffer.length === 1) {
+      this.buffer[0] = this.buffer[0].slice(-maxBytes);
+      this.bufferLen = this.buffer[0].length;
+    }
     this._broadcast(data, /*raw*/ true);
   }
 

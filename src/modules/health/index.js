@@ -217,8 +217,10 @@ export default {
     r.post('/review', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        spawnReview();
-        res.json({ ...readReview(), running: true, started: true });
+        // spawnReview() devuelve false si YA había una revisión corriendo:
+        // started refleja si ESTE POST lanzó una nueva o no.
+        const started = spawnReview();
+        res.json({ ...readReview(), running: true, started });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });
       }

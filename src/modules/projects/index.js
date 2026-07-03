@@ -136,7 +136,9 @@ async function analyzeChange(before, after) {
     await Promise.race([pump, timeout]);
   } finally {
     clearTimeout(timer);
-    try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
+    // await: garantiza que el subproceso del SDK cerró antes de devolver
+    // (sin await la limpieza quedaba huérfana si el turno se cortaba).
+    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
   }
   const analysis = parseAnalysis(text);
   if (!analysis) throw new Error('No se pudo interpretar el análisis.');

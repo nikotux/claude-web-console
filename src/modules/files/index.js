@@ -236,9 +236,15 @@ export default {
     r.get('/trash', (req, res) => res.json({ items: listTrash() }));
 
     r.post('/trash/restore', (req, res) => {
-      const finalRel = restoreFromTrash(req.body?.id, resolveWithinHome);
-      if (finalRel == null) return res.status(404).json({ error: 'No está en la papelera.' });
-      res.json({ ok: true, path: finalRel });
+      try {
+        const finalRel = restoreFromTrash(req.body?.id, resolveWithinHome);
+        if (finalRel == null) return res.status(404).json({ error: 'No está en la papelera.' });
+        res.json({ ok: true, path: finalRel });
+      } catch {
+        // mkdir/rename fallaron ANTES de tocar el índice: el ítem sigue en la
+        // papelera, consistente — solo informamos que la restauración falló.
+        res.status(500).json({ error: 'No se pudo restaurar (permisos o destino inaccesible). El ítem sigue en la papelera.' });
+      }
     });
 
     r.post('/trash/purge', (req, res) => {

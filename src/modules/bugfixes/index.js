@@ -118,14 +118,17 @@ async function pushPr(entry) {
 
   try {
     // Copiar SOLO los archivos del fix desde el árbol real al worktree.
+    // Los que no pasan (fuera de ~/tolkien o borrados) se registran en
+    // `skipped`: un skip silencioso ocultaría un PR incompleto.
     const copied = [];
+    const skipped = [];
     for (const rel of entry.files) {
       const src = path.resolve(TOLKIEN, rel);
       const dst = path.resolve(wt, rel);
       // EXCLUSIVO de ~/tolkien: ni origen ni destino pueden salirse (aunque
       // el registro se haya editado a mano con ../).
-      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) continue;
-      if (!fss.existsSync(src)) continue;           // borrado después del chat
+      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) { skipped.push(rel); continue; }
+      if (!fss.existsSync(src)) { skipped.push(rel); continue; } // borrado después del chat
       fss.mkdirSync(path.dirname(dst), { recursive: true });
       fss.copyFileSync(src, dst);
       copied.push(rel);
@@ -155,7 +158,7 @@ async function pushPr(entry) {
       prUrl = compareUrl(origin, branch);
     }
     const prNumber = Number((String(prUrl).match(/\/pull\/(\d+)/) || [])[1]) || null;
-    return { branch, prUrl, prNumber, files: copied };
+    return { branch, prUrl, prNumber, files: copied, skipped };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {}); // el remoto ya lo tiene
@@ -189,11 +192,12 @@ async function updatePr(entry) {
 
   try {
     const copied = [];
+    const skipped = []; // fuera de ~/tolkien o borrados: se informan, no se ocultan
     for (const rel of entry.files) {
       const src = path.resolve(TOLKIEN, rel);
       const dst = path.resolve(wt, rel);
-      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) continue;
-      if (!fss.existsSync(src)) continue;
+      if (!src.startsWith(TOLKIEN + path.sep) || !dst.startsWith(wt + path.sep)) { skipped.push(rel); continue; }
+      if (!fss.existsSync(src)) { skipped.push(rel); continue; }
       fss.mkdirSync(path.dirname(dst), { recursive: true });
       fss.copyFileSync(src, dst);
       copied.push(rel);
@@ -236,7 +240,7 @@ async function updatePr(entry) {
     await run('gh', ['pr', 'comment', String(entry.prNumber), '--body',
       `PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos en el commit ${commit} (adicional en el branch, historial intacto). Notas del PR actualizadas.`], { cwd: wt }).catch(() => {});
 
-    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true, commit, commitCount, verified };
+    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, skipped, updated: true, commit, commitCount, verified };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {});
@@ -625,7 +629,7 @@ export default {
       if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una subida en curso para este fix.' });
       inFlight.add(id);
       try {
-        const { branch, prUrl, prNumber, files, updated, commit, commitCount } = await pushPr(entry);
+        const { branch, prUrl, prNumber, files, skipped, updated, commit, commitCount, verified } = await pushPr(entry);
         const esPrimerEnvio = !updated && !entry.sentAt; // 1er PR de este fix
         entry.status = 'subido';
         entry.branch = branch;
@@ -648,7 +652,7 @@ export default {
           deskAuto = true;
           deskUpdateAuto(entry.sessionId).catch(() => {});
         }
-        res.json({ ok: true, branch, prUrl, files, entry, updated: !!updated, commit: commit || null, commitCount: commitCount || null, deskAuto });
+        res.json({ ok: true, branch, prUrl, files, skipped: skipped || [], entry, updated: !!updated, commit: commit || null, commitCount: commitCount || null, deskAuto, verified: verified !== false });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 400) });
       } finally {

@@ -63,11 +63,13 @@ function enhanceCodeBlocks(root) {
     btn.className = 'md-copy';
     btn.title = 'Copiar código';
     btn.innerHTML = icon('clipboard', { size: 13 });
+    let revertTimer = null; // clicks rápidos: un solo timeout vivo
     btn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(code.textContent);
         btn.innerHTML = icon('check', { size: 13 });
-        setTimeout(() => { btn.innerHTML = icon('clipboard', { size: 13 }); }, 1200);
+        clearTimeout(revertTimer);
+        revertTimer = setTimeout(() => { btn.innerHTML = icon('clipboard', { size: 13 }); }, 1200);
       } catch { /* clipboard no disponible */ }
     });
     wrap.appendChild(btn);

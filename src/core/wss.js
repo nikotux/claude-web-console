@@ -35,9 +35,11 @@ export function createWsRouter() {
         socket.destroy();
         return;
       }
-      // 2) Ruteo por path.
+      // 2) Ruteo por path: match EXACTO o con separador '/' (un startsWith
+      // crudo haría que '/ws/t' capture '/ws/terminal/...' si algún día se
+      // registraran prefijos solapados).
       const url = new URL(req.url, 'http://localhost');
-      const route = routes.find((r) => url.pathname.startsWith(r.prefix));
+      const route = routes.find((r) => url.pathname === r.prefix || url.pathname.startsWith(`${r.prefix}/`));
       if (!route) {
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
