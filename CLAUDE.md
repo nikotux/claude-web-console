@@ -309,15 +309,33 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             comentarios ACTUALES del ticket en Zoho Desk vía corrida headless
                             READ-ONLY (sub-excepción de la regla 6: allowlist desk_* SOLO
                             lectura); parsea un bloque JSON de la respuesta del modelo, caché
-                            60 s. Sirve para ver si tu comentario ya se publicó.
+                            60 s. Además del panel, CLASIFICA la resolución: pide al modelo
+                            `closed` (status cerrado/resuelto, con red de seguridad regex) y
+                            `requesterReplied` (el cliente respondió tras la última nota del
+                            equipo). persistDeskSnapshot() vuelca en TODOS los registros del
+                            ticket: deskStatusText/deskClosed/deskReplied/deskResolved +
+                            deskCheckedAt, y emite ticket_cerrado|ticket_respondido al
+                            historial la 1ª vez. RESOLUCIÓN (resolutionOf, derivado, expuesto
+                            en GET /api/bugfixes como b.resolution): 'complete' si deskResolved
+                            · 'partial' si prState==='merged' (PR mergeado pero ticket SIN
+                            confirmar — merge ≠ resuelto: puede ser fix parcial o total, sin
+                            verificar) · 'active'. ARCHIVO (POST /archive {id,archived}): flag
+                            b.archived + evento archivado|restaurado; solo organiza el tablero,
+                            no toca código ni PRs.
                             UI ÚNICA: el TABLERO "Bugs & PRs" (tolkien/bug-board.js): filas de
                             registro local + tickets del triage + PRs SOLO-GitHub, estas
-                            últimas ahora EXPANDIBLES (badge #N del ticket detectado del
-                            título/branch con ticketOfPr, panel GitHub en vivo con commits, y
-                            "Actualizar ticket (chat)" si tienen ticket). Cada fila con ticket
-                            trae el botón "Traer estado de Desk" (desk-live, bajo botón). El
-                            botón "?" abre "Cómo leer este tablero" (pipeline, chips, puntos,
-                            GitHub/Desk en vivo).
+                            últimas EXPANDIBLES (badge #N del ticket detectado del título/branch
+                            con ticketOfPr, panel GitHub en vivo con commits, "Actualizar
+                            ticket (chat)" si tienen ticket). La 5ª barra del pipeline es
+                            "ticket confirmado" (verde SOLO si deskResolved); chip de
+                            resolución en la fila (🟡 parcial · 🟢 completo). Cada fila con
+                            ticket trae "Traer estado de Desk" (desk-live, bajo botón; muestra
+                            veredicto parcial/completo y actualiza b.resolution en memoria sin
+                            re-render). Sección colapsable "📦 Archivo · resueltos" al fondo
+                            (filas .bb-arch-row ocultables por la cabecera data-arch-toggle);
+                            botón Archivar (primario cuando completo) / Restaurar por fila. El
+                            "?" ("Cómo leer este tablero") explica pipeline, resolución,
+                            chips, puntos, Archivo y GitHub/Desk en vivo.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)

@@ -470,8 +470,11 @@ async function deskLive(ticketNumber, fresh) {
     '',
     'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera de él):',
     '```json',
-    '{"found":true,"status":"<estado legible, p.ej. On Hold>","subject":"<asunto corto>","comments":[{"author":"<quién>","at":"<fecha ISO o texto>","visibility":"public|private","excerpt":"<~200 chars del comentario>"}]}',
+    '{"found":true,"status":"<estado legible, p.ej. On Hold>","closed":true|false,"requesterReplied":true|false,"subject":"<asunto corto>","comments":[{"author":"<quién>","at":"<fecha ISO o texto>","visibility":"public|private","excerpt":"<~200 chars del comentario>"}]}',
     '```',
+    'Reglas para esos campos:',
+    '- "closed": true si el estado indica cerrado/resuelto (Closed, Resolved, Cerrado, Completed…), false si sigue abierto/en curso.',
+    '- "requesterReplied": true si el ÚLTIMO comentario visible lo escribió QUIEN REPORTÓ el ticket (el cliente/solicitante) DESPUÉS de la última respuesta del equipo de soporte — es decir, el ticket "tiene respuesta" del cliente. false si el último movimiento fue del equipo o no hay respuesta del cliente.',
     'Máximo los 5 comentarios más recientes (el más nuevo primero). Si no encontrás el ticket: {"found":false}.',
   ].join('\n');
 
@@ -517,11 +520,19 @@ async function deskLive(ticketNumber, fresh) {
   for (const c of candidates.reverse()) {
     try { parsed = JSON.parse(c); break; } catch { /* probamos el siguiente */ }
   }
+  // El status legible también se clasifica por regex como red de seguridad
+  // (por si el modelo no completa "closed"): cerrado/resuelto/completado.
+  const statusText = parsed?.status ? String(parsed.status).slice(0, 60) : null;
+  const closedByStatus = /clos|resolv|cerrad|complet|solved/i.test(statusText || '');
+  const closed = parsed?.closed === true || closedByStatus;
+  const replied = parsed?.requesterReplied === true;
   const data = parsed && typeof parsed === 'object'
     ? {
       found: parsed.found !== false,
-      status: parsed.status ? String(parsed.status).slice(0, 60) : null,
+      status: statusText,
       subject: parsed.subject ? String(parsed.subject).slice(0, 120) : null,
+      closed, replied,
+      resolved: closed || replied, // "completo": cerrado O el cliente respondió
       comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 5).map((c) => ({
         author: String(c.author || '?').slice(0, 60),
         at: c.at ? String(c.at).slice(0, 40) : null,
@@ -531,8 +542,46 @@ async function deskLive(ticketNumber, fresh) {
       fetchedAt: Date.now(),
     }
     : { found: false, error: 'No se pudo interpretar la respuesta de Desk.', fetchedAt: Date.now() };
-  if (data.found) deskCache.set(key, { at: Date.now(), data }); // no cacheamos fallos
+  if (data.found) {
+    deskCache.set(key, { at: Date.now(), data }); // no cacheamos fallos
+    persistDeskSnapshot(key, data); // marca resolución en los registros del ticket
+  }
   return data;
+}
+
+// Vuelca lo leído de Desk en TODOS los registros de ese ticket: estado,
+// timestamp y si quedó resuelto (cerrado o con respuesta del cliente). Emite
+// un evento al historial la PRIMERA vez que se detecta cada transición.
+function persistDeskSnapshot(ticketKey, data) {
+  const all = listBugfixes();
+  let touched = false;
+  for (const b of all) {
+    if (String(b.ticketNumber) !== ticketKey) continue;
+    touched = true;
+    b.deskStatusText = data.status || null;
+    b.deskCheckedAt = data.fetchedAt;
+    b.deskClosed = data.closed;
+    b.deskReplied = data.replied;
+    const wasResolved = b.deskResolved === true;
+    b.deskResolved = data.resolved;
+    if (data.resolved && !wasResolved) {
+      addEvent(b, data.closed ? 'ticket_cerrado' : 'ticket_respondido',
+        { status: data.status || null });
+    }
+    b.updatedAt = Date.now();
+  }
+  if (touched) saveBugfixes(all);
+}
+
+// Nivel de resolución de un fix (derivado, NO se persiste):
+//   'complete' — el ticket confirmó (cerrado o el cliente respondió: deskResolved)
+//   'partial'  — nuestro PR se mergeó, pero el ticket NO confirmó todavía
+//   'active'   — en curso (sin merge)
+// merge ≠ resuelto: un PR mergeado es solución PARCIAL hasta que Desk confirma.
+function resolutionOf(b) {
+  if (b.deskResolved === true) return 'complete';
+  if (b.prState === 'merged') return 'partial';
+  return 'active';
 }
 
 export default {
@@ -542,7 +591,8 @@ export default {
     const r = express.Router();
 
     r.get('/', (req, res) => {
-      const all = listBugfixes().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      const all = listBugfixes().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .map((b) => ({ ...b, resolution: resolutionOf(b) })); // derivado para el tablero
       res.json({ bugfixes: all, inFlight: [...inFlight] });
     });
 
@@ -755,6 +805,22 @@ export default {
       } catch (err) {
         res.status(502).json({ error: `Desk no disponible: ${String(err?.message || err).slice(0, 200)}` });
       }
+    });
+
+    // Archivar / restaurar un fix: lo saca de (o devuelve a) la lista activa.
+    // No toca código ni PRs — es solo organización del tablero.
+    r.post('/archive', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const archived = req.body?.archived !== false; // default true
+      const all = listBugfixes();
+      const entry = all.find((b) => b.sessionId === id);
+      if (!entry) return res.status(404).json({ error: 'Registro inexistente.' });
+      entry.archived = archived;
+      addEvent(entry, archived ? 'archivado' : 'restaurado', {});
+      entry.updatedAt = Date.now();
+      saveBugfixes(all);
+      res.json({ ok: true, entry: { ...entry, resolution: resolutionOf(entry) } });
     });
 
     r.post('/delete', (req, res) => {

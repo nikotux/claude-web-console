@@ -57,10 +57,28 @@ const EV_LABEL = {
   pr_mergeado: (e) => `PR #${e.pr ?? '?'} MERGEADO${e.by ? ` por ${e.by}` : ''}`,
   pr_cancelado: (e) => `PR #${e.pr ?? '?'} cancelado (fix vuelve a pendiente)`,
   ticket_actualizado: (e) => `Ticket ${e.ok ? 'actualizado en Desk' : 'NO se pudo actualizar'} (${e.mode === 'auto' ? 'automático' : 'por chat'})${e.detail ? ` — ${e.detail}` : ''}`,
+  ticket_cerrado: (e) => `Ticket CERRADO/resuelto en Desk${e.status ? ` (${e.status})` : ''} — completo`,
+  ticket_respondido: (e) => 'El cliente respondió el ticket — completo, se puede cerrar',
+  archivado: () => 'Archivado',
+  restaurado: () => 'Restaurado a la lista activa',
 };
 const EV_DOT = {
   creado: 'warn', trabajo_nuevo: 'warn', pr_creado: 'ok', pr_actualizado: 'ok',
-  pr_mergeado: 'ok', pr_cancelado: 'fail',
+  pr_mergeado: 'ok', pr_cancelado: 'fail', ticket_cerrado: 'ok', ticket_respondido: 'ok',
+  archivado: 'warn', restaurado: 'warn',
+};
+
+// Nivel de resolución (espeja resolutionOf del backend; el server ya manda
+// b.resolution, esto es el fallback si faltara). merge ≠ resuelto.
+function resolutionOf(b) {
+  if (b.resolution) return b.resolution;
+  if (b.deskResolved === true) return 'complete';
+  if (b.prState === 'merged') return 'partial';
+  return 'active';
+}
+const RES_CHIP = {
+  partial: '<span class="bb-chip bb-chip--warn" title="Nuestro PR ya se mergeó, pero el ticket NO confirmó todavía: solución PARCIAL hasta que el cliente responda o se cierre">🟡 parcial · falta confirmar ticket</span>',
+  complete: '<span class="bb-chip bb-chip--ok" title="El ticket se cerró o el cliente respondió: solución CONFIRMADA, se puede cerrar/archivar">🟢 completo · se puede cerrar</span>',
 };
 
 export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose }) {
@@ -146,18 +164,21 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     return w;
   }
 
-  // Pipeline visual: etapas del ciclo con estado.
+  // Pipeline visual: 5 etapas del ciclo. La ÚLTIMA es "ticket confirmado"
+  // (cerrado o cliente respondió) — verde SOLO cuando está completo de verdad:
+  // un PR mergeado (barra 4) es solución parcial hasta que el ticket confirma.
   function pipelineHtml(b) {
     const tk = b.ticketNumber ? triageByNum().get(String(b.ticketNumber)) : null;
-    const tl = timelineOf(b);
-    const deskOk = [...tl].reverse().find((e) => e.type === 'ticket_actualizado')?.ok;
     const seg = (on, cls, label) => `<span class="bb-seg ${on ? `bb-seg--${cls}` : ''}" title="${esc(label)}"></span>`;
+    const confirmLabel = b.deskResolved
+      ? (b.deskClosed ? 'Ticket cerrado/resuelto en Desk — completo' : 'El cliente respondió — completo')
+      : (b.prState === 'merged' ? 'PR mergeado pero ticket SIN confirmar (parcial): revisá el estado de Desk' : 'Ticket sin confirmar');
     return `<span class="bb-pipe">${[
       seg(!!(tk || b.ticketNumber), 'ok', tk ? 'Triage: ticket abierto en Desk' : 'Ticket referenciado (no está en el triage actual)'),
       seg(!!(b.files?.length), 'ok', b.files?.length ? `Trabajo: ${b.files.length} archivo/s editados` : 'Sin trabajo aún'),
       seg(!!b.prNumber, b.prState === 'closed' ? 'fail' : 'ok', b.prNumber ? `PR #${b.prNumber} (${b.prState || '?'})` : 'Sin PR'),
       seg(b.prState === 'merged', 'ok', b.prState === 'merged' ? `Mergeado por ${b.mergedBy || '?'}` : 'Sin merge'),
-      seg(deskOk === true, deskOk === false ? 'fail' : 'ok', deskOk == null ? 'Ticket sin actualizar en Desk' : deskOk ? 'Ticket actualizado en Desk' : 'Actualización de ticket FALLÓ'),
+      seg(b.deskResolved === true, 'ok', confirmLabel),
     ].join('')}</span>`;
   }
 
@@ -206,6 +227,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       ? `<button class="btn-ghost btn--sm" data-act="deskchat" title="Abre un chat con TODO el contexto para redactar (en inglés) y publicar la actualización del ticket en Desk — vos aprobás la escritura">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
         ${b.status === 'subido' && b.prState !== 'merged'
       ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>` : ''}
+        ${b.archived
+      ? `<button class="btn-ghost btn--sm" data-act="unarchive" title="Devolver a la lista activa">${icon('refresh', { size: 13 })}<span>Restaurar</span></button>`
+      : `<button class="${resolutionOf(b) === 'complete' ? 'btn' : 'btn-ghost'} btn--sm" data-act="archive" title="Mover al Archivo (no toca código ni PRs). Sugerido cuando el ticket ya está confirmado">${icon('check', { size: 13 })}<span>Archivar</span></button>`}
         <button class="btn-ghost btn--sm" data-act="del" title="Borra SOLO el registro local (no toca código ni PRs)">${icon('close', { size: 13 })}<span>Descartar registro</span></button>
       </p>`;
   }
@@ -253,8 +277,22 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         box.innerHTML = head(`<span class="bb-chip bb-chip--warn">${esc(d.error || 'ticket no encontrado')}</span>`);
         return;
       }
+      // El backend ya persistió deskResolved en los registros del ticket;
+      // reflejamos EN MEMORIA para que la próxima render del tablero lo muestre
+      // sin re-consultar (no re-renderizamos ahora: no perder este panel).
+      for (const en of entries) {
+        if (String(en.ticketNumber) === String(ticket)) {
+          en.deskResolved = d.resolved; en.deskClosed = d.closed;
+          en.deskReplied = d.replied; en.deskStatusText = d.status; en.deskCheckedAt = d.fetchedAt;
+          en.resolution = d.resolved ? 'complete' : (en.prState === 'merged' ? 'partial' : 'active');
+        }
+      }
+      const verdict = d.resolved
+        ? `<div class="bb-desk-verdict bb-desk-verdict--ok">🟢 Ticket confirmado (${d.closed ? 'cerrado/resuelto' : 'el cliente respondió'}) — este fix está <b>completo</b>. Podés archivarlo.</div>`
+        : `<div class="bb-desk-verdict bb-desk-verdict--wait">🟡 Ticket sin confirmar todavía${d.status ? ` (${esc(d.status)})` : ''} — solución parcial hasta que el cliente responda o se cierre.</div>`;
       box.innerHTML = `
-        ${head(d.status ? `<span class="bb-chip bb-chip--info" title="Estado actual del ticket en Desk">${esc(d.status)}</span>` : '')}
+        ${head(d.status ? `<span class="bb-chip bb-chip--${d.resolved ? 'ok' : 'info'}" title="Estado actual del ticket en Desk">${esc(d.status)}</span>` : '')}
+        ${verdict}
         ${d.subject ? `<div class="bb-desk-subj">${esc(d.subject)}</div>` : ''}
         ${d.comments.length ? `<div class="bb-live-fb">${d.comments.map((c) => `
           <div class="bb-fb">
@@ -319,23 +357,34 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</td></tr>';
       return;
     }
-    const rank = (b) => (b.status === 'pendiente' ? (b.files?.length ? 0 : 1) : 2);
-    const orden = [...entries].sort((a, b) => rank(a) - rank(b)
-      || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
-    const rows = [];
-    for (const b of orden) {
+    // Una fila de registro (activa o archivada). El chip de resolución
+    // (parcial/completo) va en la celda de estado.
+    const rowFor = (b, arch) => {
       const est = prEstado(b);
-      rows.push(`
-        <tr class="bfm-row" data-sid="${esc(b.sessionId)}">
+      const res = resolutionOf(b);
+      const resChip = !arch && RES_CHIP[res] ? ` ${RES_CHIP[res]}` : '';
+      return `
+        <tr class="bfm-row${arch ? ' bb-arch-row' : ''}" data-sid="${esc(b.sessionId)}"${arch ? ' hidden' : ''}>
           <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
           <td class="bfm-tkt">${b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—'}</td>
           <td class="bfm-title">${esc(b.title)}</td>
           <td>${pipelineHtml(b)}</td>
           <td class="bfm-stats">${statsHtml(b.stats)}</td>
-          <td class="bfm-state">${esc(est.label)}</td>
+          <td class="bfm-state">${esc(est.label)}${resChip}</td>
         </tr>
-        <tr class="bfm-detail" hidden><td colspan="6">${detailHtml(b)}</td></tr>`);
-    }
+        <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" hidden><td colspan="6">${detailHtml(b)}</td></tr>`;
+    };
+
+    const activos = entries.filter((b) => !b.archived);
+    const archivados = entries.filter((b) => b.archived);
+    // Orden activo: primero lo accionable (pendiente con archivos), completos al
+    // fondo (ya resueltos, listos para archivar).
+    const rank = (b) => (resolutionOf(b) === 'complete' ? 3
+      : b.status === 'pendiente' ? (b.files?.length ? 0 : 1) : 2);
+    const orden = [...activos].sort((a, b) => rank(a) - rank(b)
+      || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
+    const rows = [];
+    for (const b of orden) rows.push(rowFor(b, false));
     // Tickets del triage SIN trabajo todavía: parte de la misma línea de trabajo.
     for (const t of soloTriage) {
       rows.push(`
@@ -379,6 +428,15 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         </tr>
         <tr class="bfm-detail" hidden><td colspan="6">${ghDetailHtml(pr)}</td></tr>`);
     }
+    // ===== Sección Archivo · resueltos (colapsable, al fondo) =====
+    if (archivados.length) {
+      const arch = [...archivados].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      rows.push(`
+        <tr class="bb-arch-header" data-arch-toggle="1">
+          <td colspan="6">${icon('chevronDown', { size: 13 })} 📦 Archivo · ${arch.length} resuelto/s <span class="bb-arch-hint">(mostrar/ocultar)</span></td>
+        </tr>`);
+      for (const b of arch) rows.push(rowFor(b, true));
+    }
     mr.tbody.innerHTML = rows.join('');
   }
 
@@ -404,6 +462,18 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       if (box) await fillDesk(box, deskFresh.dataset.deskfresh, true);
       return;
     }
+    // Cabecera "Archivo": muestra/oculta las filas archivadas.
+    const archToggle = e.target.closest('[data-arch-toggle]');
+    if (archToggle) {
+      archToggle.classList.toggle('open');
+      for (const r of mr.tbody.querySelectorAll('.bb-arch-row')) {
+        // solo las filas base (no los detalles) togglean; los detalles quedan
+        // ocultos hasta que se expanden.
+        if (r.classList.contains('bfm-detail')) continue;
+        r.hidden = !r.hidden;
+      }
+      return;
+    }
     const act = e.target.closest('[data-act]');
     if (act) {
       // Acción sobre un PR solo-GitHub (sin registro local).
@@ -425,6 +495,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       } else if (act.dataset.act === 'work' && b) { m.close(); await doWorkOn(b); }
       else if (act.dataset.act === 'deskchat' && b) { m.close(); await doDeskChat(b); }
       else if (act.dataset.act === 'cancelpr' && b) await doCancelPr(b, act);
+      else if (act.dataset.act === 'archive' && b) await doArchive(b, true, act);
+      else if (act.dataset.act === 'unarchive' && b) await doArchive(b, false, act);
       else if (act.dataset.act === 'del' && b) await doDiscard(b, act);
       return;
     }
@@ -553,6 +625,21 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     } finally {
       await reload(); ghSync(true);
     }
+  }
+
+  // Archivar / restaurar: solo organización del tablero (no toca código ni PRs).
+  async function doArchive(b, archived, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/bugfixes/archive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: b.sessionId, archived }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo archivar.');
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Archivo', message: err.message });
+    } finally { await reload(); }
   }
 
   async function doDiscard(b, btn) {
@@ -691,9 +778,20 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
             <li>🛠 <b>Trabajo</b> — hay archivos editados en el fix</li>
             <li>⬆ <b>PR</b> — se creó el pull request</li>
             <li>✅ <b>Merge</b> — Chris lo mergeó a main</li>
-            <li>📩 <b>Ticket</b> — se actualizó el ticket en Zoho Desk</li>
+            <li>🎫 <b>Ticket confirmado</b> — el ticket se cerró o el cliente respondió (verde SOLO acá = completo de verdad)</li>
           </ol>
           <p class="bb-help-dim">Color de cada barra: <span class="bb-help-c bb-help-c--ok">verde</span> hecho · <span class="bb-help-c bb-help-c--fail">rojo</span> falló/cerrado · <span class="bb-help-c">gris</span> pendiente.</p>
+        </div>
+        <div class="bb-help-sec">
+          <b>Resolución</b> <span class="bb-help-dim">— merge ≠ terminado</span>
+          <ul class="bb-help-list">
+            <li>${RES_CHIP.partial} nuestro PR se mergeó, pero el ticket todavía NO confirmó: puede ser fix parcial o total, aún sin verificar</li>
+            <li>${RES_CHIP.complete} el ticket se cerró o el cliente respondió → confirmado, listo para archivar</li>
+          </ul>
+          <p class="bb-help-dim">El paso de parcial → completo se detecta al tocar <i>🎫 Traer estado de Desk</i> en el detalle de la fila.</p>
+        </div>
+        <div class="bb-help-sec">
+          <b>📦 Archivo · resueltos</b> — sección colapsable al fondo. Los fixes confirmados (o archivados a mano con "Archivar") salen de la lista activa y quedan acá con su historial completo. "Restaurar" los devuelve.
         </div>
         <div class="bb-help-sec">
           <b>Chips</b> <span class="bb-help-dim">(en el detalle de cada fila)</span>

@@ -986,6 +986,23 @@ html, body {
 .bb-vis { font-size: var(--cwc-fs-xs); }
 .bb-vis--private { color: var(--cwc-warn); }
 .bb-vis--public { color: var(--cwc-ok); }
+/* Veredicto de resolución dentro del panel de Desk. */
+.bb-desk-verdict { margin: .35rem 0; padding: .35rem .5rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm); }
+.bb-desk-verdict--ok { background: color-mix(in srgb, var(--cwc-ok) 14%, transparent); color: var(--cwc-ok); }
+.bb-desk-verdict--wait { background: color-mix(in srgb, var(--cwc-warn) 14%, transparent); color: var(--cwc-warn); }
+.bb-desk-verdict b { color: var(--cwc-text); }
+
+/* Sección Archivo · resueltos (cabecera colapsable + filas ocultables). */
+.bb-arch-header { cursor: pointer; user-select: none; }
+.bb-arch-header td {
+  padding: .4rem .5rem; font-size: var(--cwc-fs-sm); font-weight: 600;
+  color: var(--cwc-text-secondary); background: var(--cwc-bg-elevated);
+  border-top: 1px solid var(--cwc-border-strong);
+}
+.bb-arch-header .cwc-icon { transition: transform .15s ease; vertical-align: middle; }
+.bb-arch-header.open .cwc-icon { transform: rotate(180deg); }
+.bb-arch-hint { font-weight: 400; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.bb-arch-row .bfm-title, .bb-arch-row .bfm-state { color: var(--cwc-text-dim); }
 
 /* Modal "Cómo leer este tablero" (botón ? del tablero). */
 .bb-help-sec { margin-bottom: .8rem; font-size: var(--cwc-fs-md); line-height: 1.45; }
