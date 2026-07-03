@@ -51,6 +51,18 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 21:10 — main
+- Salud/revisión: resolución autónoma (acceptEdits) + hallazgos colapsables en móvil
+- Modified `CLAUDE.md`
+- Modified `public/css/style.css`
+- Modified `public/js/modules/tolkien/bug-board.js`
+- Modified `src/core/auth.js`
+- Modified `src/modules/backup/index.js`
+- Modified `src/modules/bugfixes/index.js`
+- Modified `src/modules/bugs/index.js`
+- Modified `src/modules/bugs/shared.js`
+- Modified `src/modules/tmux/index.js`
+
 ### 2026-07-03 20:41 — main
 - Modified `public/js/modules/system/health-review-modal.js`
 

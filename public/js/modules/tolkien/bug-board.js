@@ -100,8 +100,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     </div>
     <div class="bb-box">
       <table class="bfm-table bb-table">
-        <thead><tr><th></th><th>TKT</th><th>Título</th><th>Pipeline</th><th>Cambios</th><th>Estado</th></tr></thead>
-        <tbody data-ref="tbody"><tr><td colspan="6"><span class="cwc-spinner"></span></td></tr></tbody>
+        <thead><tr><th></th><th>TKT</th><th>Título</th><th>Pipeline</th><th>Cambios</th><th title="¿Implementado en un PR?">PR</th><th title="¿Respondido en Zoho Desk?">Desk</th><th>Estado</th></tr></thead>
+        <tbody data-ref="tbody"><tr><td colspan="8"><span class="cwc-spinner"></span></td></tr></tbody>
       </table>
     </div>`;
   m.body.appendChild(wrap);
@@ -193,6 +193,39 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     return { dot: 'warn', label: 'PR abierto (sin mergear)' };
   }
 
+  // ===== Columnas "PR" y "Desk" (íconos compactos, datos ya presentes) =====
+  // ¿El ticket fue implementado en algún PR? Cruce por número de ticket sobre
+  // TODOS los registros + PRs solo-GitHub: si alguno con ese ticket está
+  // mergeado -> implementado; si hay uno abierto -> en curso.
+  function prCellFor(b) {
+    const tkt = b.ticketNumber ? String(b.ticketNumber) : null;
+    let merged = b.prState === 'merged';
+    let open = !merged && (b.prState === 'open' || (b.status !== 'subido' && b.prNumber));
+    if (tkt) {
+      for (const e of entries) { if (String(e.ticketNumber) === tkt) { if (e.prState === 'merged') merged = true; else if (e.prState === 'open' || e.prNumber) open = open || true; } }
+      for (const p of ghRows) { if (ticketOfPr(p) === tkt) { if (p.state === 'merged') merged = true; else if (p.state === 'open') open = true; } }
+    }
+    if (merged) return '<span class="bb-icell bb-icell--ok" title="Implementado en un PR mergeado">✔</span>';
+    if (open) return '<span class="bb-icell bb-icell--warn" title="En un PR abierto (sin mergear)">◐</span>';
+    return '<span class="bb-icell bb-icell--none" title="Sin PR todavía">—</span>';
+  }
+
+  // ¿El ticket ya tiene la respuesta/comentario publicado en Desk? Se sabe
+  // sin gastar tokens: deskStatus 'ok' (deskUpdateAuto publicó) o un evento
+  // ticket_actualizado/ticket_respondido en el historial.
+  function deskAnswered(b) {
+    if (b.deskStatus === 'ok') return true;
+    const h = Array.isArray(b.history) ? b.history : [];
+    return h.some((e) => (e.type === 'ticket_actualizado' && e.ok !== false) || e.type === 'ticket_respondido');
+  }
+  function deskCellFor(b) {
+    if (!b.ticketNumber) return '<span class="bb-icell bb-icell--none">—</span>';
+    if (b.deskStatus === 'updating') return '<span class="bb-icell bb-icell--warn" title="Publicando la respuesta en Desk…">⏳</span>';
+    if (deskAnswered(b)) return '<span class="bb-icell bb-icell--ok" title="Respuesta ya publicada en el ticket de Desk">🎫✔</span>';
+    if (b.deskStatus === 'error') return '<span class="bb-icell bb-icell--fail" title="El último intento de actualizar Desk falló">🎫✕</span>';
+    return '<span class="bb-icell bb-icell--none" title="Ticket sin responder en Desk">—</span>';
+  }
+
   function statsHtml(s) {
     if (!s) return '<span class="bfm-nostats">—</span>';
     return `<span class="bfm-add">+${s.add}</span> <span class="bfm-del">−${s.del}</span>` +
@@ -223,8 +256,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
         ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
         <button class="btn btn--sm" data-act="work">${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
-        ${b.prNumber && b.ticketNumber
-      ? `<button class="btn-ghost btn--sm" data-act="deskchat" title="Abre un chat con TODO el contexto para redactar (en inglés) y publicar la actualización del ticket en Desk — vos aprobás la escritura">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
+        ${b.ticketNumber
+      ? `<button class="btn-ghost btn--sm" data-act="deskchat" title="Abre un chat con TODO el contexto para redactar (en inglés) y publicar una respuesta en el ticket de Zoho Desk — vos aprobás la escritura">${icon('edit', { size: 13 })}<span>Responder ticket (chat)</span></button>` : ''}
         ${b.status === 'subido' && b.prState !== 'merged'
       ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr">${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>` : ''}
         ${b.archived
@@ -354,7 +387,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const soloTriage = (triage.tickets || []).filter((t) => !cubiertos.has(String(t.ticketNumber)));
 
     if (!entries.length && !ghRows.length && !soloTriage.length) {
-      mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</td></tr>';
+      mr.tbody.innerHTML = '<tr><td colspan="8" class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</td></tr>';
       return;
     }
     // Una fila de registro (activa o archivada). El chip de resolución
@@ -370,9 +403,11 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <td class="bfm-title">${esc(b.title)}</td>
           <td>${pipelineHtml(b)}</td>
           <td class="bfm-stats">${statsHtml(b.stats)}</td>
+          <td class="bb-col-pr">${prCellFor(b)}</td>
+          <td class="bb-col-desk">${deskCellFor(b)}</td>
           <td class="bfm-state">${esc(est.label)}${resChip}</td>
         </tr>
-        <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" hidden><td colspan="6">${detailHtml(b)}</td></tr>`;
+        <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" hidden><td colspan="8">${detailHtml(b)}</td></tr>`;
     };
 
     const activos = entries.filter((b) => !b.archived);
@@ -394,9 +429,11 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <td class="bfm-title">${esc(t.whatBroke)}</td>
           <td>${`<span class="bb-pipe"><span class="bb-seg bb-seg--ok" title="En triage"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span></span>`}</td>
           <td class="bfm-stats"><span class="tk-sev tk-sev-${esc(t.severity)}">${esc(t.severity)}</span></td>
+          <td class="bb-col-pr"><span class="bb-icell bb-icell--none" title="Sin PR todavía">—</span></td>
+          <td class="bb-col-desk"><span class="bb-icell bb-icell--none" title="Ticket sin responder en Desk">—</span></td>
           <td class="bfm-state">sin trabajo aún</td>
         </tr>
-        <tr class="bfm-detail" hidden><td colspan="6">
+        <tr class="bfm-detail" hidden><td colspan="8">
           <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
           ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
           ${t.context ? `<p class="hp-bf-summary">${esc(t.context)}</p>` : ''}
@@ -424,16 +461,18 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <td class="bfm-title">#${esc(pr.number)} ${esc(pr.title)}</td>
           <td>${pipe}</td>
           <td class="bfm-stats">${statsHtml(pr.stats)}</td>
+          <td class="bb-col-pr">${prCellFor({ ticketNumber: ticket, prState: pr.state, prNumber: pr.number, status: 'subido' })}</td>
+          <td class="bb-col-desk">${deskCellFor({ ticketNumber: ticket })}</td>
           <td class="bfm-state">${pr.state === 'merged' ? `mergeado${pr.mergedBy ? ` por ${esc(pr.mergedBy)}` : ''}` : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
         </tr>
-        <tr class="bfm-detail" hidden><td colspan="6">${ghDetailHtml(pr)}</td></tr>`);
+        <tr class="bfm-detail" hidden><td colspan="8">${ghDetailHtml(pr)}</td></tr>`);
     }
     // ===== Sección Archivo · resueltos (colapsable, al fondo) =====
     if (archivados.length) {
       const arch = [...archivados].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       rows.push(`
         <tr class="bb-arch-header" data-arch-toggle="1">
-          <td colspan="6">${icon('chevronDown', { size: 13 })} 📦 Archivo · ${arch.length} resuelto/s <span class="bb-arch-hint">(mostrar/ocultar)</span></td>
+          <td colspan="8">${icon('chevronDown', { size: 13 })} 📦 Archivo · ${arch.length} resuelto/s <span class="bb-arch-hint">(mostrar/ocultar)</span></td>
         </tr>`);
       for (const b of arch) rows.push(rowFor(b, true));
     }
@@ -559,24 +598,33 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   // propósito — un chat de comunicación no debe re-registrar trabajo de código
   // (recordBugfix devolvería el fix a 'pendiente').
   async function doDeskChat(b) {
+    // Sirve para un ticket CON PR (nota de novedades) o SIN PR todavía
+    // (responder/pedir info al solicitante). El prompt se adapta al caso.
+    const hasPr = !!b.prNumber;
     const prompt = [
-      `Actualicemos el ticket de Zoho Desk #${b.ticketNumber} con las novedades del PR #${b.prNumber}.`,
+      hasPr
+        ? `Actualicemos el ticket de Zoho Desk #${b.ticketNumber} con las novedades del PR #${b.prNumber}.`
+        : `Respondamos el ticket de Zoho Desk #${b.ticketNumber} (todavía sin PR asociado).`,
       b.ticketUrl ? `Ticket: ${b.ticketUrl}` : '',
-      `PR: ${b.prUrl}`,
+      hasPr && b.prUrl ? `PR: ${b.prUrl}` : '',
       '',
       `HISTORIAL del fix:\n${historyText(b) || '(sin eventos)'}`,
       b.summary ? `\nResumen del fix:\n${b.summary.slice(0, 1200)}` : '',
       '',
       'Proceso (en este orden):',
-      `1. Mirá el estado real y el feedback del PR: gh pr view ${b.prNumber} --comments`,
-      '2. Verificá el ticket en Desk con las tools desk_* del MCP.',
-      '3. Redactá una actualización EN INGLÉS, corta y humana (2-4 frases) con lo que cambió desde la última nota (qué se corrigió/mejoró y que el despliegue sigue en curso). MOSTRÁMELA y esperá mi OK.',
+      hasPr
+        ? `1. Mirá el estado real y el feedback del PR: gh pr view ${b.prNumber} --comments`
+        : '1. Repasá el historial del fix y lo que ya sabemos del problema.',
+      '2. Verificá el ticket y su hilo en Desk con las tools desk_* del MCP (mirá si ya hay una respuesta nuestra para no repetir).',
+      hasPr
+        ? '3. Redactá una actualización EN INGLÉS, corta y humana (2-4 frases) con lo que cambió desde la última nota (qué se corrigió/mejoró y que el despliegue sigue en curso). MOSTRÁMELA y esperá mi OK.'
+        : '3. Redactá EN INGLÉS una respuesta corta y humana (2-4 frases) apropiada al estado real: un avance, un pedido de información, o el próximo paso. MOSTRÁMELA y esperá mi OK.',
       '4. Recién con mi OK, publicala en el ticket (visible al solicitante si se puede) y ajustá el estado si corresponde.',
       'NO toques código ni envíes PRs desde este chat.',
     ].filter(Boolean).join('\n');
     await openChat({
       cwd: projectRel(), mode: 'default', prompt,
-      title: `Ticket #${b.ticketNumber} · update`.slice(0, 60),
+      title: `Ticket #${b.ticketNumber} · ${hasPr ? 'update' : 'respuesta'}`.slice(0, 60),
     });
   }
 
@@ -672,7 +720,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       triage = tk || triage;
       renderTable();
     } catch {
-      mr.tbody.innerHTML = '<tr><td colspan="6" class="hp-empty">No se pudo leer el registro.</td></tr>';
+      mr.tbody.innerHTML = '<tr><td colspan="8" class="hp-empty">No se pudo leer el registro.</td></tr>';
     }
   }
 

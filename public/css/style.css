@@ -1030,8 +1030,18 @@ html, body {
 .bb-help-c--ok { color: var(--cwc-ok); }
 .bb-help-c--fail { color: var(--cwc-danger-strong); }
 
+/* Celdas de ícono de las columnas "PR" (¿implementado?) y "Desk" (¿respondido?):
+   un símbolo compacto con color-semáforo, centrado. */
+.bb-col-pr, .bb-col-desk { text-align: center; white-space: nowrap; }
+.bb-icell { font-size: var(--cwc-fs-md); font-variant-emoji: text; }
+.bb-icell--ok { color: var(--cwc-ok); }
+.bb-icell--warn { color: var(--cwc-warn); }
+.bb-icell--fail { color: var(--cwc-danger-strong); }
+.bb-icell--none { color: var(--cwc-text-dimmer); }
 @media (max-width: 640px) {
-  /* Móvil: fuera la columna Cambios; el pipeline y el estado quedan. */
+  /* Móvil: fuera Pipeline(4) y Cambios(5); PR(6) y Desk(7) — la info que se
+     quiere ver de un vistazo — se quedan junto a TKT/Título/Estado. */
+  .bb-table th:nth-child(4), .bb-table td:nth-child(4),
   .bb-table th:nth-child(5), .bb-table td:nth-child(5) { display: none; }
   .bb-triage { margin-left: 0; width: 100%; }
 }

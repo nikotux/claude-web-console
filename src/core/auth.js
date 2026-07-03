@@ -29,7 +29,11 @@ function persistSessions() {
   try {
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data), { mode: 0o600 });
     fs.chmodSync(SESSIONS_FILE, 0o600);
-  } catch { /* noop */ }
+  } catch (err) {
+    // La sesión sigue viva en RAM (el login no debe fallar por esto), pero el
+    // fallo tiene que VERSE: sin persistencia, un reinicio desloguea a todos.
+    console.error('[auth] no se pudo persistir sessions.json:', err?.message || err);
+  }
 }
 
 function loadSessions() {

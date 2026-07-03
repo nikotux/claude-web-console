@@ -35,6 +35,9 @@ const RECOMMENDATION = new Set(['fix', 'needs-info', 'duplicate', 'wont-fix']);
 // Allowlist de herramientas: SOLO lecturas (dos capas: hook PreToolUse +
 // canUseTool — ver regla 6 de CLAUDE.md).
 export function toolAllowed(name) {
+  // TodoWrite es la lista de tareas INTERNA del modelo (Agent SDK): solo toca
+  // estado conversacional, nunca disco ni sistemas externos — es seguro en
+  // una corrida read-only y ayuda al modelo a organizarse.
   if (['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite'].includes(name)) return true;
   // Herramientas MCP de lectura (desk_list/get/search, pad_search, graph_list…).
   // Regex ANCLADA al final: get_and_delete NO pasa (hallazgo de la revisión de salud).

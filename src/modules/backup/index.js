@@ -64,7 +64,8 @@ let busy = false; // evita crear/restaurar en paralelo
 function git(args, opts = {}) {
   return new Promise((resolve) => {
     execFile('git', ['-C', PROJECT_DIR, ...args], { timeout: opts.timeout || 30000 }, (err, out, stderr) => {
-      resolve({ code: err ? (err.code ?? 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
+      // err.code puede ser string ('ENOENT', señales de timeout): normalizar a número.
+      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
     });
   });
 }
@@ -111,7 +112,8 @@ const GITHUB_DESCRIPTION = 'Personal web console for driving Claude Code from an
 function ghCmd(args, opts = {}) {
   return new Promise((resolve) => {
     execFile('gh', args, { timeout: opts.timeout || 20000 }, (err, out, stderr) => {
-      resolve({ code: err ? (err.code ?? 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
+      // err.code puede ser string ('ENOENT' si falta gh): normalizar a número.
+      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
     });
   });
 }
@@ -190,6 +192,10 @@ function requireAdmin(req, res, next) {
 
 function ensureDir() {
   fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
+  // mkdirSync solo aplica `mode` al CREAR: si el directorio ya existía con
+  // permisos laxos (instalación anterior), hay que forzarlos igual — los
+  // backups contienen secretos (.env, certs).
+  try { fs.chmodSync(BACKUP_DIR, 0o700); } catch { /* best-effort */ }
 }
 
 function listBackups() {
@@ -370,7 +376,10 @@ export default {
           : [];
         const fileStatuses = staged.length
           ? lines((await git(['diff', '--cached', '--name-status'])).out)
-              .filter((l) => !l.endsWith('README.md'))
+              // Excluir el README raíz (lo toca el propio changelog) mirando los
+              // campos de path exactos: cubre también renombrados DESDE/HACIA él
+              // y no filtra de más (p.ej. docs/README.md sí se lista).
+              .filter((l) => !l.split('\t').slice(1).includes('README.md'))
               .map(describeFileStatus)
           : [];
         const entry = buildChangelogEntry({ branch, priorSubjects, fileStatuses, initial: !beforeRef });

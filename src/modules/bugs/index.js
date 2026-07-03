@@ -66,8 +66,10 @@ export default {
     r.post('/refresh', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        spawnTriage();
-        res.json({ ...readCache(), running: true, started: true });
+        // spawnTriage() devuelve false si YA había un triage corriendo (dedup
+        // por lock): started refleja si ESTE POST lanzó uno nuevo o no.
+        const started = spawnTriage();
+        res.json({ ...readCache(), running: true, started });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar el triage: ${String(err?.message || err).slice(0, 200)}` });
       }

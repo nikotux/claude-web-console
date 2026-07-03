@@ -36,7 +36,9 @@ function listSessionsForSocket(sock) {
   const sessions = [];
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
-    const [name, windows, attached, created, cwd] = line.split('\t');
+    const parts = line.split('\t');
+    if (parts.length < 5) continue; // formato inesperado de tmux: skip, no campos undefined
+    const [name, windows, attached, created, cwd] = parts;
     // Estado real (observador statusline/hooks); transcript como fallback.
     const st = cwd ? stateForCwd(cwd) : null;
     sessions.push({
@@ -119,9 +121,15 @@ export default {
       if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
       if (!VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       // -l = literal (no interpretar el texto como nombres de tecla); luego Enter.
-      runTmux(socketPath, ['send-keys', '-t', session, '-l', `/model ${model}`]);
-      runTmux(socketPath, ['send-keys', '-t', session, 'Enter']);
-      res.json({ ok: true });
+      // throwOnError: sin él runTmux traga el fallo y responderíamos ok:true
+      // con la sesión muerta (mismo patrón que /kill).
+      try {
+        runTmux(socketPath, ['send-keys', '-t', session, '-l', `/model ${model}`], { throwOnError: true });
+        runTmux(socketPath, ['send-keys', '-t', session, 'Enter'], { throwOnError: true });
+        res.json({ ok: true });
+      } catch {
+        res.status(500).json({ error: 'No se pudo enviar /model a la sesión (¿ya no existe?).' });
+      }
     });
 
     r.post('/kill', (req, res) => {

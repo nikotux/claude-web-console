@@ -211,14 +211,22 @@ async function updatePr(entry) {
     // Fast-forward sobre el branch del PR: GitHub actualiza el MISMO PR.
     await run('git', ['push', 'origin', branch], { cwd: wt });
 
-    // VERIFICACIÓN post-push: lo que quedó en GitHub tiene que ser EXACTAMENTE
-    // este commit (garantía "lo subido es un commit encima del PR", como
-    // código y no solo como diseño). Si no coincide, error explícito.
-    await run('git', ['fetch', 'origin', branch], { cwd: wt });
-    const remoteSha = await run('git', ['rev-parse', `origin/${branch}`], { cwd: wt });
-    const localSha = await run('git', ['rev-parse', 'HEAD'], { cwd: wt });
-    if (remoteSha !== localSha) {
-      throw new Error(`El push no quedó consistente: origin/${branch} (${remoteSha.slice(0, 7)}) != commit local (${localSha.slice(0, 7)}). Revisá el PR a mano.`);
+    // VERIFICACIÓN post-push: nuestro commit tiene que estar CONTENIDO en el
+    // branch remoto. BEST-EFFORT: el push ya fue exitoso (run() habría tirado
+    // si fallaba) — tirar error acá dejaría el registro local sin actualizar
+    // con el PR YA actualizado en GitHub (estado inconsistente peor que no
+    // verificar). Si alguien apiló un commit en el medio, is-ancestor lo
+    // tolera; solo un force-push ajeno (o red caída) marca verified: false.
+    let verified = true;
+    try {
+      await run('git', ['fetch', 'origin', branch], { cwd: wt });
+      const remoteSha = await run('git', ['rev-parse', `origin/${branch}`], { cwd: wt });
+      const localSha = await run('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      if (remoteSha !== localSha) {
+        await run('git', ['merge-base', '--is-ancestor', localSha, remoteSha], { cwd: wt });
+      }
+    } catch {
+      verified = false; // se informa en la respuesta; el registro se actualiza igual
     }
     // Posición del commit en el branch (2º, 3º…) — informativo para la UI.
     const commitCount = Number(await run('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: wt }).catch(() => '')) || null;
@@ -228,7 +236,7 @@ async function updatePr(entry) {
     await run('gh', ['pr', 'comment', String(entry.prNumber), '--body',
       `PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos en el commit ${commit} (adicional en el branch, historial intacto). Notas del PR actualizadas.`], { cwd: wt }).catch(() => {});
 
-    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true, commit, commitCount };
+    return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, updated: true, commit, commitCount, verified };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
     await run('git', ['branch', '-D', branch], { cwd: TOLKIEN }).catch(() => {});

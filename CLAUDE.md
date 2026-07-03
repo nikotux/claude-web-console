@@ -328,7 +328,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             con ticketOfPr, panel GitHub en vivo con commits, "Actualizar
                             ticket (chat)" si tienen ticket). La 5ª barra del pipeline es
                             "ticket confirmado" (verde SOLO si deskResolved); chip de
-                            resolución en la fila (🟡 parcial · 🟢 completo). Cada fila con
+                            resolución en la fila (🟡 parcial · 🟢 completo). DOS columnas
+                            de ícono compacto (prCellFor/deskCellFor, datos ya presentes, CERO
+                            tokens): "PR" (✔ implementado en PR mergeado · ◐ en PR abierto · —
+                            sin PR; cruce por ticketNumber sobre entries+ghRows) y "Desk"
+                            (🎫✔ respondido = deskStatus 'ok' o evento ticket_actualizado/
+                            ticket_respondido en history · ⏳ publicando · 🎫✕ error · —). En
+                            móvil (≤640) se ocultan Pipeline+Cambios y quedan PR/Desk (info de
+                            un vistazo). "Responder ticket (chat)" (data-act deskchat) aparece
+                            en TODA fila con ticketNumber (antes solo con PR): el prompt se
+                            adapta (con PR = nota de novedades · sin PR = responder/pedir info),
+                            siempre con aprobación del usuario en Desk (regla 6). Cada fila con
                             ticket trae "Traer estado de Desk" (desk-live, bajo botón; muestra
                             veredicto parcial/completo y actualiza b.resolution en memoria sin
                             re-render). Sección colapsable "📦 Archivo · resueltos" al fondo
