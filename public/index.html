@@ -20,6 +20,32 @@
   <script src="/vendor/marked/marked.min.js"></script>
 </head>
 <body>
+  <!-- Splash de arranque: cubre desde el primer paint hasta que main.js
+       termina el boot (window.__bootHide). El markup del Pac-Man espeja
+       ui/pacman.js (acá tiene que ser HTML estático: existe ANTES de que
+       cargue cualquier módulo JS); las clases vienen de ui.css, garantizado
+       al primer paint porque los <link> de CSS son render-blocking. -->
+  <div id="boot-splash">
+    <span class="cwc-pacman is-working"><span class="pac-man"></span><span class="pac-track"><i class="pac-dot"></i><i class="pac-dot"></i><i class="pac-dot"></i></span></span>
+    <div id="boot-msg">cargando…</div>
+  </div>
+  <script>
+    // Red de seguridad SIN módulos (corre aunque main.js nunca cargue):
+    // __bootHide desmonta el splash con fade; a los 8 s avisa que algo tarda
+    // y a los 12 s lo fuerza para no dejar un Pac-Man eterno tapando errores.
+    window.__bootHide = () => {
+      const s = document.getElementById('boot-splash');
+      if (!s) return;
+      s.classList.add('done');
+      setTimeout(() => s.remove(), 300);
+    };
+    setTimeout(() => {
+      const s = document.getElementById('boot-splash');
+      const m = document.getElementById('boot-msg');
+      if (s && m) m.textContent = 'esto está tardando más de lo normal…';
+    }, 8000);
+    setTimeout(() => window.__bootHide(), 12000);
+  </script>
   <div id="app">
     <div id="body">
       <!-- Panel izquierdo: organizado por INTENCIÓN (empezar / retomar / estado).

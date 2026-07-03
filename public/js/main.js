@@ -439,7 +439,16 @@ const ctx = {
   hideSidebarOnMobile,
 };
 
+// ===== Splash de arranque (#boot-splash en index.html) =====
+// Textos de progreso REALES del boot. El desmontaje (window.__bootHide) lo
+// define un script inline del HTML: funciona aunque este módulo no cargue.
+const bootMsg = (t) => {
+  const m = document.getElementById('boot-msg');
+  if (m) m.textContent = t;
+};
+
 // ===== Montaje de módulos (espejo del registry backend) =====
+bootMsg('montando módulos…');
 for (const mod of MODULES) {
   const el = document.querySelector(`[data-module="${mod.name}"]`);
   if (el) {
@@ -508,16 +517,22 @@ if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
 
 // ===== Arranque: re-adjunta sesiones PTY y conversaciones vivas; /?focus=<id> =====
 (async () => {
-  const [existing, chats] = await Promise.all([
-    apiListSessions(),
-    fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
-  ]);
-  const live = existing.filter((s) => s.alive);
-  live.forEach((s) => addTab(s));
-  chats.forEach((c) => addTab(c, { type: 'chat' }));
-  const focus = new URLSearchParams(location.search).get('focus');
-  if (focus && tabs.has(focus)) setActive(focus);
-  if (focus) history.replaceState(null, '', '/');
-  if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
+  bootMsg('restaurando sesiones…');
+  try {
+    const [existing, chats] = await Promise.all([
+      apiListSessions(),
+      fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+    ]);
+    const live = existing.filter((s) => s.alive);
+    live.forEach((s) => addTab(s));
+    chats.forEach((c) => addTab(c, { type: 'chat' }));
+    const focus = new URLSearchParams(location.search).get('focus');
+    if (focus && tabs.has(focus)) setActive(focus);
+    if (focus) history.replaceState(null, '', '/');
+    if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
+  } finally {
+    // App lista (o el boot falló y el error ya está a la vista): fuera splash.
+    window.__bootHide?.();
+  }
   pollTabStatus();
 })();

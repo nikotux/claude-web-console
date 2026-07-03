@@ -53,6 +53,20 @@ html, body {
 .users-badge { background: var(--cwc-accent-bg); color: var(--cwc-accent); border-radius: var(--cwc-radius-sm); padding: 0 .35rem; font-size: var(--cwc-fs-xs); }
 .users-actions { display: flex; gap: .3rem; flex-wrap: wrap; }
 
+/* ===== Splash de arranque (#boot-splash, index.html) =====
+   Overlay a pantalla completa con el Pac-Man compartido (clases .cwc-pacman
+   de ui.css). Lo desmonta main.js al terminar el boot (window.__bootHide,
+   definido inline en el HTML como red de seguridad de 12 s). z-index 300:
+   por encima de modales (200) y popups (210). */
+#boot-splash {
+  position: fixed; inset: 0; z-index: 300; background: var(--cwc-bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1.4rem; transition: opacity .25s ease;
+}
+#boot-splash .cwc-pacman { transform: scale(2.2); } /* tamaño splash sin duplicar medidas */
+#boot-splash.done { opacity: 0; pointer-events: none; }
+#boot-msg { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+
 /* ===== Layout de la app ===== */
 #app { display: flex; flex-direction: column; height: 100dvh; }
 #body { display: flex; flex: 1; min-height: 0; }
