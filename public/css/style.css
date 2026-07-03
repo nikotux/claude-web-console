@@ -1271,8 +1271,29 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-f-detail { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.45; }
 .hr-f-file { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .hr-f-fix { margin: .25rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
-.hr-f-actions { margin-top: .4rem; display: flex; justify-content: flex-end; }
+.hr-f-actions { margin-top: .4rem; display: flex; justify-content: flex-end; gap: .4rem; }
 .hr-empty { color: var(--cwc-text-dim); text-align: center; padding: 1.5rem; }
+/* Estado de resolución del hallazgo (badge en el header + cuerpo). */
+.hr-f-mod { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); flex: none; }
+.hr-badge {
+  font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .35rem; border-radius: var(--cwc-radius-sm);
+  border: 1px solid transparent; white-space: nowrap; flex: none;
+}
+.hr-badge--rec { color: var(--cwc-warn); border-color: var(--cwc-warn); }
+.hr-badge--fixing { color: var(--cwc-accent); border-color: var(--cwc-accent); }
+.hr-badge--ok { color: var(--cwc-ok); border-color: var(--cwc-ok); }
+.hr-badge--fail { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+.hr-f-fixing { justify-content: flex-start; align-items: center; gap: .45rem; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); }
+.hr-f-resolved { margin-top: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-ok); }
+.hr-f-fail { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); }
+/* Un hallazgo resuelto se ve apagado (ya no es trabajo pendiente). */
+.hr-resolved-sec .hr-finding { opacity: .72; }
+/* Registro DURABLE de resueltos (histórico + recurrencias). */
+.hr-solved-list { display: flex; flex-direction: column; gap: .2rem; padding-bottom: .4rem; }
+.hr-solved-item { display: flex; align-items: center; gap: .5rem; font-size: var(--cwc-fs-sm); }
+.hr-solved-area { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cwc-text-secondary); }
+.hr-solved-mod { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); flex: none; }
+.hr-solved-date { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); flex: none; }
 @media (max-width: 768px) {
   .dlg-overlay:has(.dlg-card--health) { padding: 0; }
   .dlg-card--health { width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; }

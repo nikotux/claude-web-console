@@ -17,7 +17,9 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
-import { readReview, isRunning } from './shared.js';
+import {
+  readReview, isRunning, isFixing, findingId, findingSig, readSolved,
+} from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -180,6 +182,8 @@ async function runChecks() {
 // runner y sirven su estado.
 const HEALTH_RUNNER = path.join(ROOT, 'bin', 'cwc-health-runner.js');
 const HEALTH_LOG = path.join(DATA_DIR, 'health-review.log');
+const HEALTHFIX_RUNNER = path.join(ROOT, 'bin', 'cwc-healthfix-runner.js');
+const HEALTHFIX_LOG = path.join(DATA_DIR, 'healthfix.log');
 
 function spawnReview() {
   if (isRunning()) return false;
@@ -191,6 +195,34 @@ function spawnReview() {
   child.unref();
   fss.closeSync(logFd);
   return true;
+}
+
+// Lanza el runner de auto-fix (resolución autónoma) para UN hallazgo (por id).
+function spawnFix(findingIdArg) {
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const logFd = fss.openSync(HEALTHFIX_LOG, 'a');
+  const child = spawn(process.execPath, [HEALTHFIX_RUNNER, findingIdArg], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+  });
+  child.unref();
+  fss.closeSync(logFd);
+}
+
+// Enriquece los hallazgos de review.json con id/sig (derivados del contenido) y
+// la marca de RECURRENCIA: el hallazgo coincide (por firma) con algo que YA se
+// había resuelto ANTES de arrancar esta revisión → volvió a aparecer.
+function enrichReview(state) {
+  const startedAt = state.startedAt || 0;
+  const solvedBySig = new Map(readSolved().map((e) => [e.sig, e]));
+  const findings = (state.findings || []).map((f) => {
+    const sig = findingSig(f);
+    const solved = solvedBySig.get(sig);
+    const recurrent = solved && solved.firstResolvedAt < startedAt
+      ? { times: solved.count, firstResolvedAt: solved.firstResolvedAt }
+      : null;
+    return { ...f, id: findingId(f), sig, recurrent };
+  });
+  return { ...state, findings };
 }
 
 export default {
@@ -208,7 +240,34 @@ export default {
     // Estado de la revisión: progreso + hallazgos (lo escribe el runner) +
     // si hay una corriendo (lock fresco). El front encuesta esto en vivo.
     r.get('/review', (req, res) => {
-      res.json({ ...readReview(), running: isRunning() });
+      res.json({ ...enrichReview(readReview()), running: isRunning(), fixing: isFixing() });
+    });
+
+    // Registro DURABLE de bugs resueltos (historial + recurrencias). Abierto a
+    // autenticados; es solo lectura de lo ya arreglado.
+    r.get('/solved', (req, res) => {
+      const solved = readSolved().sort((a, b) => (b.lastResolvedAt || 0) - (a.lastResolvedAt || 0));
+      res.json({ solved });
+    });
+
+    // Resolución AUTÓNOMA de un hallazgo (runner detached; excepción de
+    // escritura de la regla 6, ver bin/cwc-healthfix-runner.js). Responde
+    // inmediato; el front polea GET /review y ve fixStatus fixing→resolved|failed.
+    r.post('/finding-fix', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      if (!id) return res.status(400).json({ error: 'Falta el id del hallazgo.' });
+      if (isRunning()) return res.status(409).json({ error: 'Hay una revisión en curso; esperá a que termine.' });
+      if (isFixing()) return res.status(409).json({ error: 'Ya hay una resolución automática en curso (una a la vez).' });
+      const state = readReview();
+      const exists = (state.findings || []).some((f) => findingId(f) === id);
+      if (!exists) return res.status(404).json({ error: 'Hallazgo inexistente (¿se re-analizó?).' });
+      try {
+        spawnFix(id);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo lanzar el auto-fix: ${String(err?.message || err).slice(0, 200)}` });
+      }
     });
 
     // Lanza la revisión exhaustiva (runner detached, LENTA, consume tokens).

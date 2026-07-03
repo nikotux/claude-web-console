@@ -12,6 +12,7 @@
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,14 @@ const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 export const REVIEW_FILE = path.join(DATA_DIR, 'health-review.json');
 export const LOCK_FILE = path.join(DATA_DIR, 'health-review.lock');
 export const LOG_FILE = path.join(DATA_DIR, 'health-review.log');
+// Auto-fix (resolución autónoma de un hallazgo): registro durable de resueltos
+// (sobrevive a re-análisis, sirve para detectar recurrencias) + lock/log del
+// runner desacoplado bin/cwc-healthfix-runner.js.
+export const SOLVED_FILE = path.join(DATA_DIR, 'health-solved.json');
+export const FIX_LOCK_FILE = path.join(DATA_DIR, 'healthfix.lock');
+export const FIX_LOG_FILE = path.join(DATA_DIR, 'healthfix.log');
+export const FIX_TIMEOUT_MS = 6 * 60 * 1000; // corte duro del auto-fix
+export const FIX_MAX_TURNS = 40;
 
 export const UNIT_TIMEOUT_MS = 3 * 60 * 1000;   // corte por unidad
 export const SYNTH_TIMEOUT_MS = 2 * 60 * 1000;  // corte de la síntesis
@@ -204,6 +213,81 @@ export function writeReview(data) {
     fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
     fss.writeFileSync(REVIEW_FILE, JSON.stringify(data), { mode: 0o600 });
   } catch (err) { console.error('[health] no pude escribir review.json:', err?.message); }
+}
+
+// ===== Identidad de un hallazgo =====
+const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
+// `sig` = firma GRUESA (módulo·área·archivo): identifica "el mismo bug" entre
+// análisis distintos → registro de resueltos + detección de recurrencia.
+export const findingSig = (f) => sha(`${f.module || ''}|${f.area || ''}|${f.file || ''}`);
+// `id` = firma FINA (agrega el detalle): distingue hallazgos del MISMO archivo
+// dentro de una revisión → el runner de auto-fix apunta a uno exacto.
+export const findingId = (f) => sha(`${f.module || ''}|${f.area || ''}|${f.file || ''}|${f.detail || ''}`);
+
+// ===== Registro DURABLE de bugs resueltos (health-solved.json) =====
+// Nunca se borra (a diferencia de review.json, que es foto fresca por corrida):
+// es el historial de lo arreglado y la base para marcar recurrencias.
+export function readSolved() {
+  try { const o = JSON.parse(fss.readFileSync(SOLVED_FILE, 'utf8')); return Array.isArray(o) ? o : []; }
+  catch { return []; }
+}
+export function writeSolved(list) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(SOLVED_FILE, JSON.stringify(list), { mode: 0o600 });
+  } catch (err) { console.error('[health] no pude escribir health-solved.json:', err?.message); }
+}
+// Agrega/actualiza por firma. Si ya existía (bug recurrente), suma `count` y
+// actualiza lastResolvedAt conservando firstResolvedAt.
+export function recordSolved(f, summary) {
+  const sig = findingSig(f);
+  const list = readSolved();
+  const now = Date.now();
+  const prev = list.find((e) => e.sig === sig);
+  if (prev) {
+    prev.count = (prev.count || 1) + 1;
+    prev.lastResolvedAt = now;
+    prev.summary = String(summary || prev.summary || '').slice(0, 400);
+    prev.area = f.area || prev.area; prev.module = f.module || prev.module; prev.file = f.file || prev.file;
+  } else {
+    list.push({
+      sig, area: f.area || '', module: f.module || '', file: f.file || '',
+      severity: f.severity || null, kind: f.kind || null,
+      summary: String(summary || '').slice(0, 400),
+      firstResolvedAt: now, lastResolvedAt: now, count: 1,
+    });
+  }
+  writeSolved(list);
+  return prev || list[list.length - 1];
+}
+
+// ===== Lock del runner de auto-fix (uno a la vez) =====
+export function writeFixLock(pid) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(FIX_LOCK_FILE, JSON.stringify({ pid, ts: Date.now() }), { mode: 0o600 });
+  } catch { /* noop */ }
+}
+export function clearFixLock() { try { fss.unlinkSync(FIX_LOCK_FILE); } catch { /* noop */ } }
+export function isFixing() {
+  try {
+    const { ts } = JSON.parse(fss.readFileSync(FIX_LOCK_FILE, 'utf8'));
+    return Date.now() - ts < LOCK_FRESH_MS;
+  } catch { return false; }
+}
+
+// ===== Allowlist del auto-fix (DOS capas, regla 6 — excepción de ESCRITURA) =====
+// Puede LEER, EDITAR/CREAR archivos y verificar SOLO con `node --check`/`node -c`.
+// Todo lo demás (git, rm, systemctl, npm, curl, kill, reinicios…) DENEGADO: el
+// fix queda en el working tree (revertible con git) y el usuario reinicia al
+// revisar. Bash restringido por contenido a la verificación de sintaxis.
+export function fixToolAllowed(name, input) {
+  if (['Read', 'Grep', 'Glob', 'TodoWrite', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(name)) return true;
+  if (name === 'Bash') {
+    const cmd = String(input?.command || '').trim();
+    return /^node\s+(--check|-c)\s+[^;&|]+(\s*&&\s*node\s+(--check|-c)\s+[^;&|]+)*$/.test(cmd);
+  }
+  return false;
 }
 
 // ===== Lock de "revisión corriendo" (heartbeat del runner) =====

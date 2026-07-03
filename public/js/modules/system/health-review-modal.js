@@ -17,6 +17,7 @@ const VERDICT_LABEL = { ok: 'Todo en orden', atencion: 'Requiere atención', cri
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const SEV_LABEL = { critical: 'crítico', high: 'alto', medium: 'medio', low: 'bajo' };
 const KIND_LABEL = { bug: '🐛 bug', regla: '📏 regla', mejora: '✨ mejora' };
+const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' ' + new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '—');
 
 // Abre esta sub-ventana. `ctx` trae dialog + openChat (para trabajar un hallazgo).
 export function openHealthReview(ctx, { isAdmin }) {
@@ -32,35 +33,65 @@ export function openHealthReview(ctx, { isAdmin }) {
 
   let alive = true;
   let pollTimer = null;
+  let solvedLog = []; // registro durable (GET /solved), refrescado en cada tick
+  let lastData = null; // último estado renderizado (para parches optimistas)
   const origOnClose = m.close;
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 
-  // Tarjeta COLAPSABLE: header (severidad · tipo · área · módulo) siempre
-  // visible + chevron; el cuerpo (detalle, archivo, fix, acción) se pliega.
-  // Un único botón "Resolver" abre el chat autónomo (acceptEdits) con el
-  // contexto del hallazgo — las decisiones de alto riesgo alertan ahí.
+  // Badge de estado en el header: recurrencia + estado de resolución.
+  function statusBadge(f) {
+    const parts = [];
+    if (f.recurrent) parts.push(`<span class="hr-badge hr-badge--rec" title="Ya se había resuelto antes (${f.recurrent.times}×) y volvió a aparecer — candidato a análisis exhaustivo">🔁 recurrente${f.recurrent.times > 1 ? ` ×${f.recurrent.times}` : ''}</span>`);
+    if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
+    else if (f.fixStatus === 'resolved') parts.push('<span class="hr-badge hr-badge--ok">✅ resuelto</span>');
+    else if (f.fixStatus === 'failed') parts.push('<span class="hr-badge hr-badge--fail">⚠ falló</span>');
+    return parts.join(' ');
+  }
+
+  // Acciones del hallazgo según su estado de resolución:
+  //  - resuelto  → sin botones (✅ + resumen del fix).
+  //  - resolviendo → Pac-Man, sin botones.
+  //  - abierto/falló → dos botones: 💬 En chat (supervisado) y ⚡ Automático
+  //    (runner autónomo; la tarjeta se actualiza sola). Falló ⇒ + reintentar.
+  function actions(f) {
+    if (!(isAdmin && openChat)) return '';
+    if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman()}<span>resolviendo automáticamente…</span></div>`;
+    if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
+    const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ Auto-fix falló: ${esc(f.fixError)}</div>` : '';
+    return `${failLine}<div class="hr-f-actions">
+      <button class="btn-ghost btn--sm" data-act="chat" title="Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)">${icon('sparkle', { size: 13 })}<span>En chat</span></button>
+      <button class="btn btn--sm" data-act="autofix" title="Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? 'Reintentar auto' : 'Automático'}</span></button>
+    </div>`;
+  }
+
+  // Tarjeta COLAPSABLE: header (severidad · tipo · área · módulo · estado)
+  // siempre visible + chevron; el cuerpo (detalle, archivo, fix, acciones) se
+  // pliega. `resolved` = viene de la sección "Resueltos" (nace colapsada).
   function findingCard(f) {
     const sev = f.severity || 'medium';
+    const collapsed = (isMobile || f.fixStatus === 'resolved') ? ' hr-collapsed' : '';
     return `
-      <div class="hr-finding hr-finding--${esc(sev)}${isMobile ? ' hr-collapsed' : ''}" data-idx="${f._i}">
+      <div class="hr-finding hr-finding--${esc(sev)}${collapsed}" data-idx="${f._i}" data-id="${esc(f.id || '')}">
         <div class="hr-f-head" data-toggle="1">
           <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
           <span class="hr-sev hr-sev--${esc(sev)}">${SEV_LABEL[sev] || sev}</span>
           <span class="hr-kind">${KIND_LABEL[f.kind] || f.kind || ''}</span>
           <span class="hr-f-area">${esc(f.area)}</span>
           <span class="hr-f-mod">${esc(f.module || '')}</span>
+          ${statusBadge(f)}
         </div>
         <div class="hr-f-body">
           <p class="hr-f-detail">${esc(f.detail)}</p>
           ${f.file ? `<div class="hr-f-file">📄 ${esc(f.file)}</div>` : ''}
           ${f.suggestedFix ? `<p class="hr-f-fix">🔧 ${esc(f.suggestedFix)}</p>` : ''}
-          ${isAdmin && openChat ? `<div class="hr-f-actions"><button class="btn btn--sm" data-act="resolve" title="Abre un chat que resuelve este hallazgo de forma autónoma (edita solo; frena y te avisa en decisiones de alto riesgo)">${icon('sparkle', { size: 13 })}<span>Resolver</span></button></div>` : ''}
+          ${actions(f)}
         </div>
       </div>`;
   }
 
   function render(d) {
+    lastData = d;
     const running = !!d.running;
     const total = d.total || (d.units?.length || 0) + 1;
     const done = d.done || 0;
@@ -74,12 +105,21 @@ export function openHealthReview(ctx, { isAdmin }) {
       return `<span class="hr-unit ${cls}" title="${esc(u.label)}${u.error ? ` · ${esc(u.error)}` : ''}"><span class="hr-unit-dot"></span>${esc(u.label.replace(/^Módulo /, ''))}${n}</span>`;
     }).join('');
 
-    const findings = (d.findings || [])
-      .map((f, i) => ({ ...f, _i: i }))
-      .sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
-    const counts = findings.reduce((acc, f) => { acc[f.severity] = (acc[f.severity] || 0) + 1; return acc; }, {});
-    const countLine = ['critical', 'high', 'medium', 'low']
-      .filter((s) => counts[s]).map((s) => `${counts[s]} ${SEV_LABEL[s]}`).join(' · ') || 'sin hallazgos';
+    const all = (d.findings || []).map((f, i) => ({ ...f, _i: i }));
+    const bySev = (a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9);
+    // Activos = todo lo que NO está resuelto (arriba, accionable). Resueltos =
+    // abajo, en su propia sección colapsable.
+    const activos = all.filter((f) => f.fixStatus !== 'resolved').sort(bySev);
+    const resueltos = all.filter((f) => f.fixStatus === 'resolved')
+      .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
+    const nFixing = all.filter((f) => f.fixStatus === 'fixing').length;
+    const nOpen = activos.length - nFixing;
+    const resumen = [
+      `${all.length} hallazgo(s)`,
+      resueltos.length ? `✅ ${resueltos.length} resuelto(s)` : '',
+      nFixing ? `🔧 ${nFixing} resolviendo` : '',
+      `${nOpen} sin resolver`,
+    ].filter(Boolean).join(' · ');
 
     wrap.innerHTML = `
       <div class="hr-progress">
@@ -87,31 +127,43 @@ export function openHealthReview(ctx, { isAdmin }) {
         <div class="hr-bar"><span class="hr-bar-fill" style="width:${pct}%"></span></div>
         <span class="hr-phase">${running ? `${done}/${total} · ${esc(d.phase || 'analizando…')}` : `${done}/${total} completado`}</span>
       </div>
-      ${units ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Módulos analizados (${d.units?.length || 0})</summary><div class="hr-units">${units}</div></details>` : ''}
-      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${findings.length} hallazgo(s) · ${countLine}</span></div>` : ''}
+      ${units ? `<details class="hr-collapsible"${(isMobile && !running) ? '' : ' open'}><summary>Módulos analizados (${d.units?.length || 0})</summary><div class="hr-units">${units}</div></details>` : ''}
+      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
       ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
       ${!running && isAdmin ? `<div class="hr-actions-row">
         <button class="btn btn--block" data-ref="start">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Volver a analizar' : 'Iniciar análisis profundo'}</span></button>
-        ${findings.length ? `<button class="btn btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat que resuelve todos los hallazgos de forma autónoma (edita solo; frena en decisiones de alto riesgo)">${icon('sparkle', { size: 14 })}<span>Resolver todo (autónomo)</span></button>` : ''}
+        ${nOpen ? `<button class="btn btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat supervisado que trabaja todos los hallazgos sin resolver">${icon('sparkle', { size: 14 })}<span>Resolver todo en chat</span></button>` : ''}
       </div>` : ''}
       <div class="hr-findings">
-        ${findings.length ? findings.map(findingCard).join('')
+        ${activos.length ? activos.map(findingCard).join('')
     : running ? '<div class="hr-empty">Analizando módulos…</div>'
-      : '<div class="hr-empty">Sin hallazgos: el sistema está sano ✅</div>'}
-      </div>`;
+      : all.length ? '<div class="hr-empty">Todo resuelto 🎉 (ver "Resueltos" abajo)</div>'
+        : '<div class="hr-empty">Sin hallazgos: el sistema está sano ✅</div>'}
+      </div>
+      ${resueltos.length ? `<details class="hr-collapsible hr-resolved-sec"><summary>✅ Resueltos en esta revisión (${resueltos.length})</summary>${resueltos.map(findingCard).join('')}</details>` : ''}
+      ${solvedLog.length ? `<details class="hr-collapsible hr-solved-sec"><summary>📓 Registro de resueltos (${solvedLog.length})</summary>
+        <div class="hr-solved-list">${solvedLog.map((s) => `
+          <div class="hr-solved-item">
+            <span class="hr-solved-area">${esc(s.area || s.file || '—')}</span>
+            <span class="hr-solved-mod">${esc(s.module || '')}</span>
+            ${s.count > 1 ? `<span class="hr-badge hr-badge--rec" title="Se resolvió ${s.count} veces (recurrente)">🔁 ×${s.count}</span>` : ''}
+            <span class="hr-solved-date">${fmtDate(s.lastResolvedAt)}</span>
+          </div>`).join('')}</div>
+      </details>` : ''}`;
 
     for (const card of wrap.querySelectorAll('.hr-finding')) {
-      // Tap en el header = plegar/desplegar el detalle (vista general ↔ detalle).
-      card.querySelector('[data-toggle]')?.addEventListener('click', () => card.classList.toggle('hr-collapsed'));
-      card.querySelector('[data-act="resolve"]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const f = findings.find((x) => String(x._i) === card.dataset.idx);
-        if (f) resolveInChat(f);
+      // Tap en el header = plegar/desplegar (salvo si tocás un botón de acción).
+      card.querySelector('[data-toggle]')?.addEventListener('click', (e) => {
+        if (e.target.closest('[data-act]')) return;
+        card.classList.toggle('hr-collapsed');
       });
+      const f = all.find((x) => String(x._i) === card.dataset.idx);
+      card.querySelector('[data-act="chat"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) resolveInChat(f); });
+      card.querySelector('[data-act="autofix"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) autoFix(f); });
     }
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', startReview);
-    wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(findings));
+    wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(activos.filter((f) => f.fixStatus !== 'fixing')));
   }
 
   // Lanza la revisión (el ÚNICO punto que gasta tokens). Confirmación con
@@ -182,13 +234,48 @@ export function openHealthReview(ctx, { isAdmin }) {
     await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver ${findings.length} hallazgos de salud`.slice(0, 50) });
   }
 
+  // Resolución AUTÓNOMA de UN hallazgo: dispara el runner detached y arranca a
+  // polear para ver la tarjeta pasar fixing → resuelto/falló. NO cierra el
+  // modal (a diferencia del chat): el objetivo es ver la actualización en vivo.
+  async function autoFix(f) {
+    try {
+      const res = await fetch(`${API}/finding-fix`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: f.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar el auto-fix.');
+      // Parche optimista: marca 'fixing' ya mismo (el runner lo confirma enseguida).
+      if (lastData?.findings) {
+        const t = lastData.findings.find((x) => x.id === f.id);
+        if (t) { t.fixStatus = 'fixing'; render(lastData); }
+      }
+      clearTimeout(pollTimer);
+      poll();
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Resolver automático', message: err.message });
+    }
+  }
+
+  // Trae review + registro de resueltos juntos; refresca solvedLog.
+  async function fetchState() {
+    const [rev, sol] = await Promise.all([
+      fetch(`${API}/review`).then((r) => r.json()).catch(() => null),
+      fetch(`${API}/solved`).then((r) => r.json()).catch(() => null),
+    ]);
+    if (sol && Array.isArray(sol.solved)) solvedLog = sol.solved;
+    return rev;
+  }
+  // Hay que seguir poleando si corre la revisión O hay un auto-fix en curso.
+  const needsPoll = (d) => !!d && (d.running || d.fixing || (d.findings || []).some((f) => f.fixStatus === 'fixing'));
+
   async function poll() {
     if (!alive) return;
     try {
-      const d = await (await fetch(`${API}/review`)).json();
+      const d = await fetchState();
       if (!alive) return;
-      render(d);
-      if (d.running) pollTimer = setTimeout(poll, POLL_MS);
+      if (d) render(d);
+      if (needsPoll(d)) pollTimer = setTimeout(poll, POLL_MS);
     } catch {
       if (alive) pollTimer = setTimeout(poll, POLL_MS);
     }
@@ -196,12 +283,11 @@ export function openHealthReview(ctx, { isAdmin }) {
 
   // Arranque: abrir la sub-ventana NO dispara nada pesado — solo MUESTRA el
   // último estado (resultado cacheado, o vacío con el botón "Iniciar"). Si ya
-  // hay un barrido corriendo (otra pestaña / recarga), se engancha al vivo.
+  // hay un barrido o un auto-fix corriendo, se engancha al vivo.
   (async () => {
-    let d = {};
-    try { d = await (await fetch(`${API}/review`)).json(); } catch { /* noop */ }
+    const d = await fetchState();
     if (!alive) return;
-    render(d);
-    if (d.running) poll();
+    render(d || {});
+    if (needsPoll(d)) poll();
   })();
 }

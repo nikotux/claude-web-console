@@ -14,9 +14,11 @@ código.
    vida del proceso Node. Terminales → tmux (socket `cwc`); vistas TUI de
    conversaciones → tmux oculta (`cwct-`); motores de chat → runner desacoplado
    (`bin/cwc-chat-runner.js`); triage de bugs → runner desacoplado
-   (`bin/cwc-triage-runner.js`). La unidad systemd usa `KillMode=process` — no
-   lo quites: con el default (control-group) un crash del Node mataría el tmux
-   y los runners.
+   (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
+   desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
+   runner desacoplado (`bin/cwc-healthfix-runner.js`). La unidad systemd usa
+   `KillMode=process` — no lo quites: con el default (control-group) un crash
+   del Node mataría el tmux y los runners.
 3. **Todo local:** sin instalaciones npm globales; dependencias solo en
    `package.json` del proyecto.
 4. **No tocar archivos fuera del proyecto** salvo los runtime documentados
@@ -59,6 +61,17 @@ código.
    de lectura (get/list/search/view/…) — deny por defecto, en las DOS capas.
    Consume tokens: el front la dispara BAJO BOTÓN ("Traer estado de Desk"),
    nunca al expandir; caché 60 s, ?fresh=1 la saltea.
+   EXCEPCIÓN de ESCRITURA sobre CÓDIGO (pedido del usuario 2026-07-03):
+   `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
+   revisión — edita el código de la consola sin supervisión. Es la única
+   corrida que escribe código. Blindada por las DOS capas con `fixToolAllowed`
+   (health/shared.js): allow Read/Grep/Glob/Edit/Write/MultiEdit + Bash SOLO
+   si el comando matchea `node --check`/`node -c` (verificación de sintaxis);
+   git, rm, systemctl, npm, curl, kill y todo lo demás DENEGADO. NUNCA
+   reinicia el servicio (un fix malo queda en el working tree, revertible con
+   git; el usuario reinicia al revisar). Admin-only, uno a la vez (lock
+   `healthfix.lock`), bloqueado si hay una revisión corriendo. Éxito ⇒ marca
+   el hallazgo resolved en review.json + lo registra en health-solved.json.
 7. **La carpeta del proyecto es SIEMPRE `/home/nmosquera/claude-web-console`.**
    No moverla ni duplicarla; las sesiones de Claude Code se abren desde acá.
 8. **Hoja de ruta siempre completa:** en CADA modificación se actualizan los
@@ -436,6 +449,8 @@ public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos)
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
+bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
+                            allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
 docs/                       frontend-modules.md · brief-original.txt · contexto-ui.md (histórico)
@@ -678,15 +693,24 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA
   full-screen (health-review-modal.js, .dlg-card--health): barra de progreso
   + grilla de módulos con estado en vivo + hallazgos por severidad (color).
-  RESOLUCIÓN AUTÓNOMA (pedido del usuario 2026-07-03): cada hallazgo tiene UN
-  botón "Resolver" y hay un "Resolver todo (autónomo)" junto a "Volver a
-  analizar" (resolveInChat / resolveAll). Abren un chat en la raíz de la
-  consola (cwd 'claude-web-console') en modo `acceptEdits` con el contexto del
-  hallazgo/hallazgos: edita solo, pero el prompt le exige FRENAR y pedir
-  confirmación en acciones de ALTO RIESGO (bash destructivo/git push/reiniciar
-  servicios) — ahí aparece la tarjeta de permiso (alerta) del chat. La
-  revisión (headless) sigue read-only regla 6; lo que edita es el chat
-  supervisado que ve el usuario. COLAPSABLES (móvil, isMobile por matchMedia):
+  La revisión es una FOTO FRESCA: "Volver a analizar" descarta los hallazgos y
+  re-investiga (findings sin fixStatus). Cada finding se enriquece en GET
+  /review con id/sig (findingId/findingSig, hash de contenido) y `recurrent`
+  (coincide por firma con algo resuelto ANTES de esta revisión → volvió).
+  DOS caminos de resolución por hallazgo (pedido del usuario 2026-07-03):
+  (a) "En chat" (resolveInChat) → chat supervisado acceptEdits en cwd
+  'claude-web-console' con el contexto; el prompt le exige FRENAR y pedir
+  confirmación en ALTO RIESGO (ahí aparece la tarjeta de permiso). También el
+  "Resolver todo en chat" (resolveAll) sobre los sin resolver.
+  (b) "Automático" (autoFix → POST /finding-fix) → RUNNER DESACOPLADO
+  bin/cwc-healthfix-runner.js que edita+verifica (node --check) SIN
+  supervisión (excepción de escritura de la regla 6, ver ahí); la tarjeta
+  polea review.json y pasa fixStatus fixing→resolved|failed sola. Éxito ⇒
+  registro durable health-solved.json (GET /solved): historial + `count` de
+  recurrencia. Los resueltos bajan a la sección "✅ Resueltos" y ya NO
+  muestran botones; contadores "N · X resueltos · Y resolviendo · Z sin
+  resolver". El poll sigue vivo mientras d.running O algún fixStatus==='fixing'.
+  COLAPSABLES (móvil, isMobile por matchMedia):
   cada hallazgo es una tarjeta con header (severidad·tipo·área·módulo) siempre
   visible + cuerpo plegable (.hr-collapsed togglea .hr-f-body); módulos y
   resumen en <details.hr-collapsible> — todo colapsado en móvil, abierto en
