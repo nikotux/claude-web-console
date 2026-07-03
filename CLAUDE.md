@@ -723,8 +723,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   cambió. Botón "Analizar cambios" (incremental, default) vs "Completo" (POST
   /review {full:true} → runner con --full, ignora la caché). El auto-fix edita
   código ⇒ cambia el fingerprint ⇒ esa unidad se re-audita fresca ⇒ el hallazgo
-  resuelto desaparece solo. Al final SONNET sintetiza el veredicto (solo procesa los
-  hallazgos, no re-lee código). Interfaz por archivos: health-review.json
+  resuelto desaparece solo. INVARIANTES + FOCO (Fase 4 del sistema nervioso):
+  health/invariants.js lista aserciones {match, text} (seed de los gotchas
+  conocidos: simetría mode/model en chat, validación de rutas, settingSources
+  headless sin user, bind ZeroTier, guard [hidden], integridad de secciones en
+  projects…); unitPrompt inyecta SOLO los invariantes que matchean los archivos
+  de la unidad y le pide verificar CADA uno citando el código — así caza bugs
+  sutiles que el barrido genérico pierde. El foco acota el pedido de CLAUDE.md a
+  las reglas duras. OJO: unitFingerprint ahora hashea TAMBIÉN los invariantes
+  aplicables → editar un invariante fuerza re-auditar las unidades que toca. La
+  Fase 5 propondrá invariantes nuevos al resolver. Al final SONNET sintetiza el
+  veredicto (solo procesa los hallazgos, no re-lee código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +
   health-review.lock (heartbeat => running). POST responde INMEDIATO
   (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA

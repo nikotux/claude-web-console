@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { invariantsFor } from './invariants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo
@@ -123,20 +124,31 @@ export function discoverUnits() {
 // (opcional) fix sugerido. La UI usa la severidad como semáforo visual y
 // abre un chat con el detalle si el usuario decide trabajarlo.
 export function unitPrompt(unit) {
+  // FOCO (Fase 4): en vez de pedir el CLAUDE.md ENTERO, se apunta a las reglas
+  // duras + se INYECTAN los invariantes que aplican a esta unidad (verificables
+  // sí o sí). Menos ruido, más señal en lo que importa de ESTA unidad.
+  const invs = invariantsFor(unit);
+  const invBlock = invs.length
+    ? ['', 'INVARIANTES que DEBEN cumplirse en esta unidad — verificá CADA UNO',
+      'leyendo el código; si alguno se viola es un finding (critical/high) con',
+      'el código exacto citado:', ...invs.map((t, i) => `  ${i + 1}. ${t}`)]
+    : [];
   return [
     'Sos el AUDITOR DE SALUD de Claude Web Console. Corrida NO interactiva,',
     'SOLO LECTURA (no modifiques nada, no corras comandos).',
     '',
     `Auditá EXCLUSIVAMENTE esta unidad del proyecto: «${unit.label}».`,
-    'Leé PRIMERO el CLAUDE.md de la raíz (reglas duras, mapa, convenciones) y',
-    'después leé y analizá EN PROFUNDIDAD estos archivos:',
+    'Consultá las REGLAS DURAS (numeradas 1-9) y las convenciones de CLAUDE.md',
+    'de la raíz; después leé y analizá EN PROFUNDIDAD estos archivos:',
     ...unit.files.map((f) => `  - ${f}`),
+    ...invBlock,
     '',
     'Buscá DOS clases de problemas, con foco en lo REAL y verificable:',
     '  1. BUGS: lógica incorrecta, estados que no se persisten, condiciones de',
     '     carrera, fugas, manejo de error faltante, asimetrías sospechosas',
     '     (p.ej. un camino guarda estado y su gemelo no), validaciones ausentes.',
-    '  2. Violaciones de las reglas de CLAUDE.md o de sus convenciones.',
+    '  2. Violaciones de las reglas de CLAUDE.md, sus convenciones o los',
+    '     INVARIANTES de arriba.',
     'NO inventes problemas para llenar: si la unidad está sana, devolvé [].',
     'Cada hallazgo debe poder verificarse leyendo el código citado.',
     '',
@@ -277,13 +289,16 @@ export function writeAuditCache(cache) {
     fss.writeFileSync(AUDIT_CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
   } catch (err) { console.error('[health] no pude escribir audit-cache:', err?.message); }
 }
-// Fingerprint de contenido de una unidad → cambia si cambia su código.
+// Fingerprint de una unidad → cambia si cambia su código O sus invariantes
+// aplicables (Fase 4): así, editar un invariante fuerza re-auditar las unidades
+// que toca (el fingerprint no dependía de invariants.js, que vive aparte).
 export function unitFingerprint(unit) {
   const h = crypto.createHash('sha1');
   for (const f of unit.files || []) {
     h.update(f).update('\0');
     try { h.update(fss.readFileSync(path.join(ROOT, f))); } catch { /* archivo faltante */ }
   }
+  for (const t of invariantsFor(unit)) h.update('\0INV\0').update(t);
   return h.digest('hex').slice(0, 12);
 }
 
