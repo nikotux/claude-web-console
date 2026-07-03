@@ -95,7 +95,8 @@ código.
 - `.env` (config del usuario: token maestro, puerto, etc. — solo el usuario)
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
   tickets/salud, `inventory.json`+`inventory.md` generados por core/inventory.js,
-  `health-solved.json` registro de bugs), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  `health-solved.json` registro de bugs, `health-audit-cache.json` caché
+  incremental de salud), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
 
@@ -702,7 +703,15 @@ docs/                       frontend-modules.md · brief-original.txt · context
   cada src/modules/* (+ su runner de bin/) + frontend-core + frontend-modules;
   cada una se audita con HAIKU read-only (doble capa, regla 6) buscando bugs
   Y violaciones de reglas → findings {area,severity,kind,detail,file,
-  suggestedFix}; al final SONNET sintetiza el veredicto (solo procesa los
+  suggestedFix}. INCREMENTAL (Fase 2 del sistema nervioso, 2026-07-03): cada
+  unidad tiene un fingerprint de contenido (unitFingerprint, misma técnica que
+  core/inventory.js); el runner cachea {fingerprint, findings crudos} por unidad
+  en ~/.cwc-data/health-audit-cache.json y en la próxima corrida REUSA las
+  unidades sin cambios (status 'cached', 0 tokens) — solo re-audita lo que
+  cambió. Botón "Analizar cambios" (incremental, default) vs "Completo" (POST
+  /review {full:true} → runner con --full, ignora la caché). El auto-fix edita
+  código ⇒ cambia el fingerprint ⇒ esa unidad se re-audita fresca ⇒ el hallazgo
+  resuelto desaparece solo. Al final SONNET sintetiza el veredicto (solo procesa los
   hallazgos, no re-lee código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +
   health-review.lock (heartbeat => running). POST responde INMEDIATO

@@ -1217,8 +1217,11 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-unit--running { border-color: var(--cwc-accent); color: var(--cwc-accent); }
 .hr-unit--done { color: var(--cwc-text-secondary); }
 .hr-unit--error { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+/* Cacheado (sin cambios, reusado): apagado, punto tenue — no se re-auditó. */
+.hr-unit--cached { color: var(--cwc-text-dimmer); opacity: .7; }
 .hr-unit-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: currentColor; }
 .hr-unit--done .hr-unit-dot { background: var(--cwc-ok); }
+.hr-unit--cached .hr-unit-dot { background: var(--cwc-border-strong); }
 .hr-unit-n { font-weight: 700; }
 /* Veredicto */
 .hr-verdict { display: flex; align-items: baseline; gap: .6rem; font-size: var(--cwc-fs-md); padding-top: .3rem; }

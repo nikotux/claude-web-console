@@ -185,11 +185,13 @@ const HEALTH_LOG = path.join(DATA_DIR, 'health-review.log');
 const HEALTHFIX_RUNNER = path.join(ROOT, 'bin', 'cwc-healthfix-runner.js');
 const HEALTHFIX_LOG = path.join(DATA_DIR, 'healthfix.log');
 
-function spawnReview() {
+function spawnReview(full) {
   if (isRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   const logFd = fss.openSync(HEALTH_LOG, 'a');
-  const child = spawn(process.execPath, [HEALTH_RUNNER], {
+  const args = [HEALTH_RUNNER];
+  if (full) args.push('--full'); // ignora la caché → re-audita TODO
+  const child = spawn(process.execPath, args, {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
   child.unref();
@@ -276,9 +278,10 @@ export default {
     r.post('/review', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        // spawnReview() devuelve false si YA había una revisión corriendo:
-        // started refleja si ESTE POST lanzó una nueva o no.
-        const started = spawnReview();
+        // full=true → re-audita TODO (ignora caché); default = INCREMENTAL
+        // (solo lo que cambió por fingerprint). spawnReview devuelve false si
+        // YA había una revisión corriendo.
+        const started = spawnReview(req.body?.full === true);
         res.json({ ...readReview(), running: true, started });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });

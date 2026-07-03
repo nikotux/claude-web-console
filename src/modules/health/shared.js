@@ -261,6 +261,32 @@ export function recordSolved(f, summary) {
   return prev || list[list.length - 1];
 }
 
+// ===== Auditoría INCREMENTAL (Fase 2 del sistema nervioso) =====
+// Cache por unidad: { fingerprint, findings crudos, auditedAt }. En cada
+// corrida, si el fingerprint de la unidad no cambió → se REUSAN sus findings
+// (no se gasta haiku); solo se re-audita lo que cambió. Misma técnica de
+// fingerprint que core/inventory.js (hash de contenido).
+export const AUDIT_CACHE_FILE = path.join(DATA_DIR, 'health-audit-cache.json');
+export function readAuditCache() {
+  try { const o = JSON.parse(fss.readFileSync(AUDIT_CACHE_FILE, 'utf8')); return o && typeof o === 'object' ? o : {}; }
+  catch { return {}; }
+}
+export function writeAuditCache(cache) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(AUDIT_CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
+  } catch (err) { console.error('[health] no pude escribir audit-cache:', err?.message); }
+}
+// Fingerprint de contenido de una unidad → cambia si cambia su código.
+export function unitFingerprint(unit) {
+  const h = crypto.createHash('sha1');
+  for (const f of unit.files || []) {
+    h.update(f).update('\0');
+    try { h.update(fss.readFileSync(path.join(ROOT, f))); } catch { /* archivo faltante */ }
+  }
+  return h.digest('hex').slice(0, 12);
+}
+
 // ===== Lock del runner de auto-fix (uno a la vez) =====
 export function writeFixLock(pid) {
   try {

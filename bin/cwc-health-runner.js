@@ -14,6 +14,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, discoverUnits, unitPrompt, synthesisPrompt, parseFindings, parseSynthesis,
   toolAllowed, readReview, writeReview, writeLock, clearLock, isRunning,
+  readAuditCache, writeAuditCache, unitFingerprint,
   UNIT_TIMEOUT_MS, SYNTH_TIMEOUT_MS, UNIT_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
 
@@ -83,8 +84,27 @@ async function main() {
   flush();
   log(`revision arrancando: ${units.length} unidad(es).`);
 
+  // INCREMENTAL (Fase 2): con --full se ignora la caché y se re-audita todo.
+  const FULL = process.argv.includes('--full');
+  const cache = FULL ? {} : readAuditCache();
+  let reused = 0;
+
   for (let i = 0; i < units.length; i += 1) {
     const u = units[i];
+    const fp = unitFingerprint(u);
+    const hit = cache[u.name];
+    // Sin cambios desde la última auditoría → REUSAR sus findings (no gasta haiku).
+    if (hit && hit.fingerprint === fp && Array.isArray(hit.findings)) {
+      for (const f of hit.findings) state.findings.push({ ...f, module: u.label, unit: u.name });
+      state.units[i].status = 'cached';
+      state.units[i].cached = true;
+      state.units[i].findings = hit.findings.length;
+      reused += 1;
+      log(`  = ${u.label}: sin cambios (cacheado, ${hit.findings.length}).`);
+      state.done = i + 1;
+      flush();
+      continue;
+    }
     state.units[i].status = 'running';
     state.phase = u.label;
     flush();
@@ -92,6 +112,7 @@ async function main() {
       const text = await readOnlyRun(unitPrompt(u), 'haiku', UNIT_TIMEOUT_MS, UNIT_MAX_TURNS);
       const found = parseFindings(text);
       if (!found) throw new Error('respuesta no interpretable');
+      cache[u.name] = { fingerprint: fp, findings: found, auditedAt: Date.now() }; // findings CRUDOS
       for (const f of found) state.findings.push({ ...f, module: u.label, unit: u.name });
       state.units[i].status = 'done';
       state.units[i].findings = found.length;
@@ -100,10 +121,15 @@ async function main() {
       state.units[i].status = 'error';
       state.units[i].error = String(err && err.message || err).slice(0, 120);
       log(`  FAIL ${u.label}: ${state.units[i].error}`);
+      // no cacheamos errores: la próxima corrida reintenta esa unidad
     }
     state.done = i + 1;
     flush();
   }
+  // Podar del cache las unidades que ya no existen y persistir.
+  for (const k of Object.keys(cache)) if (!units.some((u) => u.name === k)) delete cache[k];
+  writeAuditCache(cache);
+  log(`unidades: ${units.length} · reusadas del cache: ${reused} · auditadas: ${units.length - reused}.`);
 
   state.phase = 'Sintesis del veredicto';
   flush();

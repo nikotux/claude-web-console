@@ -99,10 +99,12 @@ export function openHealthReview(ctx, { isAdmin }) {
 
     const units = (d.units || []).map((u) => {
       const cls = u.status === 'running' ? 'hr-unit--running'
-        : u.status === 'done' ? 'hr-unit--done'
-          : u.status === 'error' ? 'hr-unit--error' : '';
-      const n = u.status === 'done' && u.findings ? `<span class="hr-unit-n">${u.findings}</span>` : '';
-      return `<span class="hr-unit ${cls}" title="${esc(u.label)}${u.error ? ` · ${esc(u.error)}` : ''}"><span class="hr-unit-dot"></span>${esc(u.label.replace(/^Módulo /, ''))}${n}</span>`;
+        : u.status === 'cached' ? 'hr-unit--cached'
+          : u.status === 'done' ? 'hr-unit--done'
+            : u.status === 'error' ? 'hr-unit--error' : '';
+      const n = (u.status === 'done' || u.status === 'cached') && u.findings ? `<span class="hr-unit-n">${u.findings}</span>` : '';
+      const tip = u.status === 'cached' ? ' · sin cambios (reusado)' : u.error ? ` · ${esc(u.error)}` : '';
+      return `<span class="hr-unit ${cls}" title="${esc(u.label)}${tip}"><span class="hr-unit-dot"></span>${esc(u.label.replace(/^Módulo /, ''))}${n}</span>`;
     }).join('');
 
     const all = (d.findings || []).map((f, i) => ({ ...f, _i: i }));
@@ -132,7 +134,8 @@ export function openHealthReview(ctx, { isAdmin }) {
       ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
       ${!running && isAdmin ? `<div class="hr-actions-row">
-        <button class="btn btn--block" data-ref="start">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Volver a analizar' : 'Iniciar análisis profundo'}</span></button>
+        <button class="btn btn--block" data-ref="start" title="Analiza SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan). Rápido y barato.">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Analizar cambios' : 'Iniciar análisis profundo'}</span></button>
+        ${d.verdict || d.findings?.length ? `<button class="btn-ghost btn--block" data-ref="startfull" title="Re-analiza TODOS los módulos desde cero, ignorando la caché (más lento y más tokens)">${icon('refresh', { size: 14 })}<span>Completo</span></button>` : ''}
         ${nOpen ? `<button class="btn btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat supervisado que trabaja todos los hallazgos sin resolver">${icon('sparkle', { size: 14 })}<span>Resolver todo en chat</span></button>` : ''}
       </div>` : ''}
       <div class="hr-findings">
@@ -162,21 +165,28 @@ export function openHealthReview(ctx, { isAdmin }) {
       card.querySelector('[data-act="chat"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) resolveInChat(f); });
       card.querySelector('[data-act="autofix"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) autoFix(f); });
     }
-    wrap.querySelector('[data-ref="start"]')?.addEventListener('click', startReview);
+    wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
+    wrap.querySelector('[data-ref="startfull"]')?.addEventListener('click', () => startReview(true));
     wrap.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => resolveAll(activos.filter((f) => f.fixStatus !== 'fixing')));
   }
 
-  // Lanza la revisión (el ÚNICO punto que gasta tokens). Confirmación con
-  // aviso de costo; nunca se dispara sola al abrir la sub-ventana.
-  async function startReview() {
+  // Lanza la revisión (el ÚNICO punto que gasta tokens). `full` = ignorar la
+  // caché y re-auditar TODO; default = INCREMENTAL (solo lo que cambió).
+  async function startReview(full = false) {
     const ok = await dialog.confirmDialog({
-      title: 'Análisis profundo con Claude',
-      message: 'Audita el proyecto MÓDULO POR MÓDULO con Claude (haiku por módulo + síntesis final), buscando bugs y violaciones de reglas.\n\nTarda varios minutos y CONSUME TOKENS. Es de solo lectura: no modifica nada.',
-      confirmLabel: 'Iniciar',
+      title: full ? 'Análisis completo' : 'Análisis de cambios',
+      message: full
+        ? 'Re-audita TODOS los módulos desde cero (ignora la caché). Módulo por módulo con Claude. Tarda varios minutos y CONSUME MÁS TOKENS. Solo lectura.'
+        : 'Audita SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan de la caché). Rápido y barato. Solo lectura.',
+      confirmLabel: full ? 'Análisis completo' : 'Analizar cambios',
     });
     if (!ok) return;
     let d = {};
-    try { d = await (await fetch(`${API}/review`, { method: 'POST' })).json(); } catch { /* el poll averigua */ }
+    try {
+      d = await (await fetch(`${API}/review`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }),
+      })).json();
+    } catch { /* el poll averigua */ }
     render({ ...d, running: true });
     poll();
   }
