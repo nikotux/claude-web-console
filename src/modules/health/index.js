@@ -18,10 +18,12 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
-  readReview, isRunning, isFixing, findingId, findingSig, readSolved,
+  readReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
   readProposals, writeProposals,
+  readBatch, writeBatch, writeBatchLock, isBatchRunning,
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
+import { classifyFinding } from './policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -202,14 +204,47 @@ function spawnReview(full) {
 }
 
 // Lanza el runner de auto-fix (resolución autónoma) para UN hallazgo (por id).
+// El runner (proceso hijo, bin/cwc-healthfix-runner.js) recién escribe SU lock
+// al arrancar — y arrancar tarda (fork+exec, init de Node, carga de módulos).
+// Si dos requests llegan casi juntos, ambos podrían pasar el isFixing() del
+// endpoint ANTES de que el primer hijo alcance a escribir su lock (TOCTOU) →
+// dos runners concurrentes, el segundo pisando el lock del primero. Por eso
+// el chequeo+escritura del lock se hace ACÁ, sincrónico, en el mismo turno de
+// JS que decide spawnear (Node es single-threaded y esta función no tiene
+// ningún `await` de por medio, así que ninguna otra request puede intercalarse
+// entre el chequeo y la escritura): cierra la ventana de carrera sin depender
+// de que el hijo llegue a tiempo. Devuelve false si ya había una revisión o un
+// auto-fix en curso (no spawnea nada en ese caso).
 function spawnFix(findingIdArg) {
+  if (isRunning() || isFixing()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  writeFixLock(0); // placeholder inmediato; el runner lo pisa con su pid real al arrancar (heartbeat)
   const logFd = fss.openSync(HEALTHFIX_LOG, 'a');
   const child = spawn(process.execPath, [HEALTHFIX_RUNNER, findingIdArg], {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
   child.unref();
   fss.closeSync(logFd);
+  return true;
+}
+
+// Lanza el ORQUESTADOR de batch (Fase B): resuelve varios hallazgos en paralelo
+// aislado + integración serial. Estado en healthfix-batch.json (lo escribe el
+// endpoint antes de spawnear). Lock atómico como spawnFix (cierra la carrera
+// sin depender de que el hijo llegue a escribir su lock).
+const ORCHESTRATOR = path.join(ROOT, 'bin', 'cwc-healthfix-orchestrator.js');
+const ORCH_LOG = path.join(DATA_DIR, 'healthfix-batch.log');
+function spawnOrchestrator() {
+  if (isRunning() || isFixing() || isBatchRunning()) return false;
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  writeBatchLock(0); // placeholder; el runner lo pisa con su pid real (heartbeat)
+  const logFd = fss.openSync(ORCH_LOG, 'a');
+  const child = spawn(process.execPath, [ORCHESTRATOR], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+  });
+  child.unref();
+  fss.closeSync(logFd);
+  return true;
 }
 
 // Enriquece los hallazgos de review.json con id/sig (derivados del contenido) y
@@ -224,7 +259,8 @@ function enrichReview(state) {
     const recurrent = solved && solved.firstResolvedAt < startedAt
       ? { times: solved.count, firstResolvedAt: solved.firstResolvedAt }
       : null;
-    return { ...f, id: findingId(f), sig, recurrent };
+    // Política de riesgo (Fase A): el front bloquea "Automático" en los críticos.
+    return { ...f, id: findingId(f), sig, recurrent, policy: classifyFinding(f) };
   });
   return { ...state, findings };
 }
@@ -289,13 +325,66 @@ export default {
       if (isRunning()) return res.status(409).json({ error: 'Hay una revisión en curso; esperá a que termine.' });
       if (isFixing()) return res.status(409).json({ error: 'Ya hay una resolución automática en curso (una a la vez).' });
       const state = readReview();
-      const exists = (state.findings || []).some((f) => findingId(f) === id);
-      if (!exists) return res.status(404).json({ error: 'Hallazgo inexistente (¿se re-analizó?).' });
+      const target = (state.findings || []).find((f) => findingId(f) === id);
+      if (!target) return res.status(404).json({ error: 'Hallazgo inexistente (¿se re-analizó?).' });
+      // GATE de política (defensa en profundidad; el front ya deshabilita el
+      // botón, pero acá está la guarda REAL): los CRÍTICOS no se auto-resuelven.
+      const pol = classifyFinding(target);
+      if (pol.risk === 'critical') {
+        return res.status(409).json({ error: `Cambio crítico (${pol.reason}): no se auto-resuelve. Resolvelo en chat, supervisado.` });
+      }
       try {
-        spawnFix(id);
+        // spawnFix() re-chequea y escribe el lock atómicamente (mismo turno de
+        // JS, sin await de por medio): es la guarda REAL contra la carrera; el
+        // isFixing() de arriba es solo un short-circuit rápido para el caso
+        // común (evita el mkdir/spawn si ya sabemos que hay uno corriendo).
+        if (!spawnFix(id)) {
+          return res.status(409).json({ error: 'Ya hay una resolución automática en curso (una a la vez).' });
+        }
         res.json({ ok: true });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar el auto-fix: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+
+    // Estado del BATCH de resolución (Fase B). El front lo polea; sobrevive al
+    // reinicio de la web (runner desacoplado + archivo).
+    r.get('/batch', (req, res) => {
+      res.json({ batch: readBatch(), running: isBatchRunning() });
+    });
+
+    // Lanza el ORQUESTADOR sobre un batch de hallazgos (paralelo aislado +
+    // integración serial). Excluye los CRÍTICOS (gate de política, defensa real).
+    r.post('/finding-fix-batch', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return res.status(400).json({ error: 'Faltan ids de hallazgos.' });
+      if (isRunning()) return res.status(409).json({ error: 'Hay una revisión en curso; esperá a que termine.' });
+      if (isFixing() || isBatchRunning()) return res.status(409).json({ error: 'Ya hay una resolución en curso.' });
+      const state = readReview();
+      const byId = new Map((state.findings || []).map((f) => [findingId(f), f]));
+      const items = [];
+      const rejected = [];
+      for (const id of ids) {
+        const f = byId.get(id);
+        if (!f) continue;
+        const pol = classifyFinding(f);
+        if (pol.risk === 'critical') { rejected.push({ id, area: f.area, reason: pol.reason }); continue; }
+        items.push({
+          id, area: f.area, module: f.module, file: f.file, detail: f.detail,
+          suggestedFix: f.suggestedFix, severity: f.severity, kind: f.kind,
+          policy: pol, status: 'pending',
+        });
+      }
+      if (!items.length) return res.status(400).json({ error: 'Ningún hallazgo elegible (¿todos críticos?).', rejected });
+      writeBatch({ startedAt: Date.now(), updatedAt: Date.now(), running: true, phase: 'arrancando…', done: 0, total: items.length, items, rejected });
+      try {
+        if (!spawnOrchestrator()) {
+          return res.status(409).json({ error: 'Ya hay una resolución en curso.' });
+        }
+        res.json({ ok: true, queued: items.length, rejected });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo lanzar el orquestador: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 

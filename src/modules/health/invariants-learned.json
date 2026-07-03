@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "match": "src/modules/*/index.js",
+    "text": "Toda función que decide spawnear un proceso exclusivo (uno-a-la-vez) debe chequear y escribir su propio lock de forma sincrónica dentro de esa misma función, sin depender del lock que escriba el proceso hijo",
+    "addedAt": 1783117415270
+  }
+]
