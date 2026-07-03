@@ -200,13 +200,17 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
 public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
                             Proyectos/Salud — la pestaña Proyectos (project-context-panel.js,
                             backend módulo `projects` + /api/bugfixes/context) es DISTINTA del
-                            módulo tolkien de abajo: selector arriba con TODAS las entradas
-                            editables en un solo lugar — Tolkien / Consola (de GET
-                            /api/projects: contexto CLAUDE.md + memorias) y, agregados como
-                            entradas BUGFIX_ENTRIES del propio panel, "Bugfixes: Trabajo" /
-                            "Bugfixes: PR" (kind=work|pr de /api/bugfixes/context — SOLO
-                            contexto, sin memorias; sección Memorias se oculta con `hidden`
-                            para esas dos). Visible a todos (autenticados), edición gateada por
+                            módulo tolkien de abajo: TODAS las entradas editables en un solo
+                            lugar con navegación en DOS NIVELES lista→detalle (rediseño a
+                            pedido: las 4 pills idénticas de antes confundían). Vista lista =
+                            tarjetas .pj-card agrupadas ("Proyectos · contexto y memorias" =
+                            Tolkien/Consola de GET /api/projects, chip de ícono en acento;
+                            "Bugfixes · solo contexto" = BUGFIX_ENTRIES del panel, kind=work|pr
+                            de /api/bugfixes/context, chip neutro .pj-card--bf) con nombre +
+                            descripción + chevron. Tocar una tarjeta → detalle con "‹
+                            Proyectos" (volver), dir del proyecto, Contexto y (solo proyectos
+                            completos) Memorias — el detalle de un bugfix NI renderiza la
+                            sección Memorias. Visible a todos (autenticados), edición gateada por
                             isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
                             salud: chequeos rápidos + revisión profunda, sin bugfixes) ·
                             tolkien (botón Enviar PR admin → MODAL de gestión: cuadro con
