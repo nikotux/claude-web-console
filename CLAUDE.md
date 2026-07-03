@@ -189,8 +189,11 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (sin campos de PR) para rehacer el fix de cero; un PR MERGEADO
                             nunca se cancela (se verifica el estado real con gh antes).
                             El chat registra al CERRAR una conversación con ticket (diferido
-                            2s: el transcript se flushea tarde). UI en ⚙ Sistema → Salud y
-                            modal "Enviar PR" de la sección Tolkien (cuadro registro+GitHub).
+                            2s: el transcript se flushea tarde). UI ÚNICA: el modal "Enviar
+                            PR" de la sección Tolkien (cuadro registro+GitHub) — la lista que
+                            duplicaba la pestaña Salud se QUITÓ por redundante (Salud es solo
+                            salud); su "Descartar registro" (/delete) se movió al detalle de
+                            ese modal.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)
@@ -204,8 +207,8 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             "Bugfixes: PR" (kind=work|pr de /api/bugfixes/context — SOLO
                             contexto, sin memorias; sección Memorias se oculta con `hidden`
                             para esas dos). Visible a todos (autenticados), edición gateada por
-                            isAdmin en el frontend Y en el backend; la pestaña Salud incluye
-                            Bugfixes→PR) ·
+                            isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
+                            salud: chequeos rápidos + revisión profunda, sin bugfixes) ·
                             tolkien (botón Enviar PR admin → MODAL de gestión: cuadro con
                             historial de PRs + estado de merge desde GitHub + columna
                             Cambios (aporte en +/−/archivos: numstat local vs origin/main
@@ -214,7 +217,9 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             'PR en progreso · TKT #n' en tolkien para refinar a mano;
                             recordBugfix MERGEA por ticket los pendientes — no duplica) y
                             "Cancelar PR" en el detalle de un fix subido no mergeado
-                            (confirm rojo → /cancel-pr → vuelve a pendiente);
+                            (confirm rojo → /cancel-pr → vuelve a pendiente) y "Descartar
+                            registro" en el detalle de cualquier fix (confirm rojo →
+                            /delete: borra SOLO el registro local, ni código ni PRs);
                             EXCLUSIVO de ~/tolkien) ·
                             tickets · explorer · mobile/auxbar ·
                             usage (pie: tokens de HOY; su modal "Uso": arriba límites del
