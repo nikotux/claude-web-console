@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 06:20 — main
+- Modified `CLAUDE.md`
+- Modified `src/modules/tokens/index.js`
+
 ### 2026-07-03 06:19 — main
 - Deleted `docs/test-untracked.md`
 
@@ -314,9 +318,11 @@ config (`~/.claude/settings.json`):
   the server**), restoring restarts the service on its own. Separately,
   **code backup to GitHub**: `git push` to the **`personal`** remote (your
   own private repo) with hard safety guards — never uploads
-  `.env`/`users.json`/`sessions.json`/`certs/`, blocks any URL containing
-  `Mordor-Staffing`, and only commits already-tracked files (never adds
-  untracked ones). Every successful push also refreshes this README's
+  `.env`/`users.json`/`sessions.json`/`certs/` and blocks any URL containing
+  `Mordor-Staffing`. Brand-new (untracked) files never travel silently: the
+  push dialog lists them with a checkbox each, so nothing new leaves the
+  machine without explicit per-file approval (the backend re-validates the
+  selection against the secrets list). Every successful push also refreshes this README's
   Changelog section and the repository's GitHub description. The inverse,
   **pull from GitHub**, restores the code from the remote: fetch +
   stash → fast-forward-only merge → stash pop (local work is never

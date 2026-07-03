@@ -136,7 +136,9 @@ async function buildSummary() {
     const modelStats = {}; // model -> { tokens, cost }
 
     for (const file of files) {
-      try { lastMtime = Math.max(lastMtime, (await fs.stat(file)).mtimeMs); } catch { /* noop */ }
+      let fileMtime = 0;
+      try { fileMtime = (await fs.stat(file)).mtimeMs; } catch { /* noop */ }
+      lastMtime = Math.max(lastMtime, fileMtime);
       const rows = await rowsForFile(file);
       for (const [key, b] of Object.entries(rows)) {
         const [day, model] = key.split('\t');
@@ -144,8 +146,11 @@ async function buildSummary() {
         const tok = b.input + b.output + b.cw1h + b.cw5m + b.cr;
         addInto(projB, b); projCost += c;
         addInto(totals, b); totalCost += c;
-        const ms = (modelStats[model] ||= { tokens: 0, cost: 0 });
+        // lastMtime por (proyecto, modelo): alimenta la vista por modelo del
+        // panel Uso ("últimos proyectos que usaron este modelo").
+        const ms = (modelStats[model] ||= { tokens: 0, cost: 0, lastMtime: 0 });
         ms.tokens += tok; ms.cost += c;
+        ms.lastMtime = Math.max(ms.lastMtime, fileMtime);
         if (day === today) { addInto(todayB, b); todayCost += c; }
       }
     }
@@ -156,7 +161,7 @@ async function buildSummary() {
     // Se descartan entradas sin tokens (p.ej. "<synthetic>", mensajes internos
     // de Claude Code sin uso real).
     const models = Object.entries(modelStats)
-      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost }))
+      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
       .filter((m) => m.tokens > 0)
       .sort((a, b) => b.cost - a.cost);
     projects.push({

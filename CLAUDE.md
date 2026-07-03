@@ -122,8 +122,14 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             el CLAUDE.md/memorias que gobiernan las sesiones de Claude Code en
                             ESTE MISMO repo.
   backup/                   tar.gz completo (server-side, con secretos) + push del CÓDIGO al
-                            remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing,
-                            solo archivos ya trackeados). Cada push exitoso ADEMÁS: (1) agrega
+                            remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing).
+                            Untracked: NUNCA viajan solos — el diálogo de Push los lista con
+                            checkbox por archivo (body {includeUntracked:[...]}) y el backend
+                            valida la selección en 3 capas: solo lo que git lista como
+                            untracked no-ignorado (un .env ignorado NI aparece), re-chequeo
+                            contra SECRET_PATHS/SECRET_DIRS (403 si un secreto se coló) y
+                            selección humana explícita archivo por archivo. Cada push exitoso
+                            ADEMÁS: (1) agrega
                             una entrada EN INGLÉS a la sección "## Changelog" de README.md
                             (marcadores <!-- cwc:changelog:start/end -->, función
                             updateReadmeChangelog — commits locales sin pushear + archivos
@@ -139,9 +145,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             adelante reiniciaría al pedo). Si package(-lock).json cambió corre
                             npm install ANTES del restart; reinicia SOLO con árbol sano (pop
                             conflictuado o npm roto → avisa y NO reinicia: un server sobre
-                            archivos con marcas de conflicto entra en crash-loop). OJO: el
-                            push NUNCA sube untracked (guard anti-secretos) — código nuevo
-                            requiere `git add` manual o no viaja al backup off-site.
+                            archivos con marcas de conflicto entra en crash-loop).
   bugfixes/                 registro de fixes de tickets (store.js: ~/.cwc-data/bugfixes.json,
                             extracción del transcript, scan retroactivo) + subida de PR a
                             Tolkien (worktree temporal desde origin/main — NO toca el árbol
