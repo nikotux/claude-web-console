@@ -264,14 +264,24 @@ html, body {
 .tk-state.behind { color: var(--cwc-warn); }
 .tk-actions { display: flex; gap: .3rem; flex-wrap: wrap; }
 .tk-actions .btn-ghost { flex: 1 1 auto; text-decoration: none; }
-/* Tarjeta Tolkien informativa (rediseño): pulso del repo + 1 acción (⬇). */
-.tk-info { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .15rem; }
-.tk-line1 { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; }
-.tk-branch { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-family: var(--cwc-font-mono); }
+/* Tarjeta Tolkien informativa (rediseño icónico, 3 líneas — inspirado en la
+   barra de estado de VS Code / GitHub Desktop): branch+sync · dirty+fetch ·
+   pulso del último commit. Cada dato con su ícono; casi sin texto. */
+.tk-info { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .18rem; }
+.tk-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
+.tk-line--dim { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+/* Cada dato: ícono + valor pegados. */
+.tk-branch, .tk-sync, .tk-dirty, .tk-fresh, .tk-commit { display: inline-flex; align-items: center; gap: .2rem; }
+.tk-branch { font-family: var(--cwc-font-mono); color: var(--cwc-text); }
 .tk-branch--warn { color: var(--cwc-warn); }
-.tk-commit { color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tk-commit-sub, .tk-fetch { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
-/* Actualizar resaltado cuando hay commits para traer. */
+.tk-sync--ok { color: var(--cwc-ok); }
+.tk-sync--due { color: var(--cwc-warn); font-weight: 600; }
+.tk-dirty { color: var(--cwc-text-dim); }
+.tk-commit { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-commit .cwc-icon { flex: none; }
+/* Íconos de la tarjeta al tono de su texto. */
+.tk-info .cwc-icon { width: 12px; height: 12px; opacity: .85; }
+/* Pull resaltado cuando hay commits nuevos para traer. */
 .tk-update--due { color: var(--cwc-warn); border-color: var(--cwc-warn); }
 
 /* ===== Pie fijo (2 filas) ===== */
@@ -864,16 +874,19 @@ html, body {
   .explorer-frame { border-radius: 0; }
 }
 
-/* ===== Bugs & Features (sección del sidebar, modules/bugs) ===== */
+/* ===== Bugs & Features (sección del sidebar, modules/bugs) =====
+   Mismo criterio icónico que Tolkien: cada dato con su ícono, poco texto. */
 .bf-card { gap: .35rem; }
-.bf-stats { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .15rem; }
-.bf-line { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
-.bf-stat { color: var(--cwc-text); }
+.bf-stats { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .18rem; }
+.bf-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.bf-stat { color: var(--cwc-text); display: inline-flex; align-items: center; gap: .25rem; }
 .bf-stat b { font-weight: 700; }
-.bf-stat--warn b { color: var(--cwc-warn); }
-.bf-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.bf-stat--warn { color: var(--cwc-warn); }
+.bf-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: inline-flex; align-items: center; gap: .2rem; }
 .bf-att { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); margin-top: .1rem; }
+.bf-att b { font-weight: 700; }
 .bf-err { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
+.bf-stats .cwc-icon { width: 12px; height: 12px; opacity: .85; flex: none; }
 
 /* Severidad: mismo lenguaje de color que el resto (danger/warn/ok). La usa
    la sección Bugs y el TABLERO (bug-board.js) — no borrar. */
@@ -1173,4 +1186,64 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
     transition: opacity .2s ease;
   }
   #sidebar:not(.hidden) ~ #sidebar-scrim { opacity: 1; pointer-events: auto; }
+}
+
+/* ===== Revisión exhaustiva de salud (modal full-screen, health-review-modal.js) ===== */
+.dlg-card--health { width: 92vw; max-width: 900px; height: 90vh; max-height: 92vh; }
+.dlg-card--health .dlg-body { display: flex; flex-direction: column; min-height: 0; }
+.hr-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: .6rem; }
+/* Barra de progreso */
+.hr-progress { display: flex; align-items: center; gap: .6rem; }
+.hr-bar { flex: 1; height: 8px; background: var(--cwc-bg-chip); border-radius: 4px; overflow: hidden; }
+.hr-bar-fill { height: 100%; background: var(--cwc-accent); transition: width .4s ease; }
+.hr-phase { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: nowrap; }
+/* Grilla de unidades/módulos */
+.hr-units { display: flex; flex-wrap: wrap; gap: .3rem; }
+.hr-unit {
+  display: inline-flex; align-items: center; gap: .3rem; font-size: var(--cwc-fs-xs);
+  padding: .2rem .45rem; border-radius: var(--cwc-radius-sm);
+  background: var(--cwc-bg-chip); color: var(--cwc-text-dim); border: 1px solid transparent;
+}
+.hr-unit--running { border-color: var(--cwc-accent); color: var(--cwc-accent); }
+.hr-unit--done { color: var(--cwc-text-secondary); }
+.hr-unit--error { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+.hr-unit-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: currentColor; }
+.hr-unit--done .hr-unit-dot { background: var(--cwc-ok); }
+.hr-unit-n { font-weight: 700; }
+/* Veredicto */
+.hr-verdict { display: flex; align-items: baseline; gap: .6rem; font-size: var(--cwc-fs-md); padding-top: .3rem; }
+.hr-verdict--ok b { color: var(--cwc-ok); }
+.hr-verdict--atencion b { color: var(--cwc-warn); }
+.hr-verdict--critico b { color: var(--cwc-danger-strong); }
+.hr-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; margin: 0; }
+/* Lista de hallazgos */
+.hr-findings { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; }
+.hr-finding {
+  border: 1px solid var(--cwc-border); border-left-width: 4px; border-radius: var(--cwc-radius-md);
+  padding: .5rem .6rem; background: var(--cwc-bg-elevated);
+}
+.hr-finding--critical { border-left-color: var(--cwc-danger-strong); }
+.hr-finding--high { border-left-color: var(--cwc-danger); }
+.hr-finding--medium { border-left-color: var(--cwc-warn); }
+.hr-finding--low { border-left-color: var(--cwc-text-dimmer); }
+.hr-f-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.hr-sev {
+  font-size: var(--cwc-fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 .35rem; border-radius: var(--cwc-radius-sm);
+}
+.hr-sev--critical { background: var(--cwc-danger-strong); color: var(--cwc-white); }
+.hr-sev--high { background: var(--cwc-danger); color: var(--cwc-white); }
+.hr-sev--medium { color: var(--cwc-warn); border: 1px solid var(--cwc-warn); }
+.hr-sev--low { color: var(--cwc-text-dim); border: 1px solid var(--cwc-border-strong); }
+.hr-kind { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.hr-f-area { font-weight: 600; font-size: var(--cwc-fs-md); flex: 1; min-width: 0; }
+.hr-f-mod { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.hr-f-detail { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.45; }
+.hr-f-file { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.hr-f-fix { margin: .25rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.hr-f-actions { margin-top: .4rem; display: flex; justify-content: flex-end; }
+.hr-empty { color: var(--cwc-text-dim); text-align: center; padding: 1.5rem; }
+@media (max-width: 768px) {
+  .dlg-overlay:has(.dlg-card--health) { padding: 0; }
+  .dlg-card--health { width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; }
 }

@@ -21,8 +21,8 @@ export default {
     el.innerHTML = `
       <header class="sec-head">
         <span class="sec-title">Tolkien</span>
-        <span class="tk-chip" data-ref="chip"></span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Actualizar desde GitHub (stash → pull → pop)">${icon('download', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="Buscar cambios en GitHub (fetch)">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Descargar cambios (pull: stash → pull → pop)">${icon('download', { size: 14 })}</button>
       </header>
       <div class="tk-card">
         <div class="tk-info" data-ref="info">cargando…</div>
@@ -44,44 +44,49 @@ export default {
       return `hace ${Math.floor(s / 86400)} d`;
     }
 
-    function stateText(st) {
-      let s;
-      if (st.behind > 0) s = `${st.behind} detrás`;
-      else if (st.ahead > 0) s = `${st.ahead} adelante`;
-      else s = 'al día';
-      if (st.dirty) s += ` · ${st.dirtyCount} cambio${st.dirtyCount === 1 ? '' : 's'}`;
-      return s;
+    // Autor corto: "Christopher Swenor" -> "C. Swenor" (reconocible sin ocupar
+    // toda la línea). Una sola palabra se muestra tal cual, con tope.
+    function shortAuthor(a) {
+      const p = String(a || '').trim().split(/\s+/);
+      const s = p.length >= 2 ? `${p[0][0]}. ${p[p.length - 1]}` : (p[0] || '?');
+      return s.slice(0, 16);
     }
 
+    // 3 líneas icónicas (VS Code/GitHub Desktop): branch+sync · dirty+fetch ·
+    // pulso del último commit (corto; asunto completo en el tooltip).
     function render() {
       const st = current;
-      const cls = upToDate(st) ? 'ok' : 'behind';
-      refs.chip.className = `tk-chip ${cls}`;
-      refs.chip.innerHTML = st ? (upToDate(st) ? icon('check', { size: 12 }) : `↓${st.behind}`) : '';
+      refs.fetch.disabled = busy;
       refs.update.disabled = busy;
-      // Resaltar la acción cuando hay algo para traer.
+      // El pull resalta cuando hay commits nuevos para traer.
       refs.update.classList.toggle('tk-update--due', !!st && st.behind > 0);
       refs.update.title = st && st.behind > 0
-        ? `Actualizar: ${st.behind} commit(s) para traer`
-        : 'Actualizar desde GitHub (stash → pull → pop)';
+        ? `Descargar: ${st.behind} commit(s) nuevos para traer`
+        : 'Descargar cambios (pull: stash → pull → pop)';
 
       if (!st) { refs.info.innerHTML = busy ? '<span class="cwc-spinner"></span>' : '…'; return; }
-      const branch = st.branch && st.branch !== 'main'
-        ? `<span class="tk-branch tk-branch--warn" title="No estás en main">⎇ ${esc(st.branch)}</span>`
-        : `<span class="tk-branch">⎇ ${esc(st.branch || 'main')}</span>`;
-      const commit = st.subject
-        ? `<div class="tk-commit" title="${esc(st.subject)}">último: ${esc(st.subject)}</div>
-           <div class="tk-commit-sub">${esc(st.author || '?')} · ${fmtAgo(st.date)}</div>`
+
+      // Línea 1: branch (⚠ si ≠ main) + estado de sync (✓ al día | ↓N por traer).
+      const branch = `<span class="tk-branch${st.branch && st.branch !== 'main' ? ' tk-branch--warn' : ''}" title="branch actual${st.branch && st.branch !== 'main' ? ' — no es main' : ''}">${icon('gitBranch', { size: 12 })}${esc(st.branch || 'main')}</span>`;
+      const sync = st.behind > 0
+        ? `<span class="tk-sync tk-sync--due" title="${st.behind} commit(s) nuevos en GitHub para traer">↓${st.behind} por traer</span>`
+        : `<span class="tk-sync tk-sync--ok" title="Sin cambios nuevos en GitHub">${icon('check', { size: 12 })}al día</span>`;
+
+      // Línea 2: sin-commitear (ícono+nº, solo si dirty) + frescura del fetch.
+      const dirty = st.dirty
+        ? `<span class="tk-dirty" title="${st.dirtyCount} archivo(s) sin commitear en el árbol de trabajo">${icon('edit', { size: 12 })}${st.dirtyCount}</span>`
         : '';
-      const fetched = st.lastFetch ? `<div class="tk-fetch">remoto chequeado ${fmtAgo(st.lastFetch)}</div>` : '';
-      refs.info.innerHTML = `
-        <div class="tk-line1">
-          <span class="tk-head">#${esc(st.head)}</span>
-          ${branch}
-          <span class="tk-state ${cls}">${esc(stateText(st))}</span>
-        </div>
-        ${commit}
-        ${fetched}`;
+      const fetched = st.lastFetch
+        ? `<span class="tk-fresh" title="Último chequeo del remoto">${icon('clock', { size: 12 })}${fmtAgo(st.lastFetch)}</span>`
+        : '';
+      const line2 = (dirty || fetched) ? `<div class="tk-line tk-line--dim">${dirty}${fetched}</div>` : '';
+
+      // Línea 3: pulso — último commit (hora + autor corto; asunto en tooltip).
+      const commit = st.subject
+        ? `<div class="tk-line tk-line--dim tk-commit" title="${esc(st.subject)}">${icon('gitCommit', { size: 12 })}${fmtAgo(st.date)} · ${esc(shortAuthor(st.author))}</div>`
+        : '';
+
+      refs.info.innerHTML = `<div class="tk-line tk-line1">${branch}${sync}</div>${line2}${commit}`;
     }
 
     async function loadStatus() {
@@ -130,6 +135,7 @@ export default {
     }
 
     refs.update.addEventListener('click', doUpdate);
+    refs.fetch.addEventListener('click', checkRemote); // Buscar cambios (fetch)
 
     (async () => {
       await loadStatus();

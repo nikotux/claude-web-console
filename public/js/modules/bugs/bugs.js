@@ -87,18 +87,19 @@ export default {
         return;
       }
       const s = stats();
-      // Dos líneas compactas: bugs+frescura arriba, trabajo+PRs abajo.
+      // Icónico, poco texto (mismo criterio que Tolkien): bugs+frescura arriba,
+      // trabajo+PRs abajo (solo si hay), atención destacada.
       const l1 = cache.updatedAt
-        ? `<span class="bf-stat"><b>${s.bugs}</b> bug${s.bugs === 1 ? '' : 's'}</span> <span class="bf-sub">triage ${fmtAgo(cache.updatedAt)}</span>`
+        ? `<span class="bf-stat" title="bugs abiertos en el último triage">${icon('bug', { size: 12 })}<b>${s.bugs}</b></span> <span class="bf-sub" title="frescura del triage">${icon('clock', { size: 11 })}${fmtAgo(cache.updatedAt)}</span>`
         : '<span class="bf-sub">Sin triage · corré el ↻</span>';
       const parts = [];
-      if (s.pendientes) parts.push(`<span class="bf-stat bf-stat--warn"><b>${s.pendientes}</b> por enviar</span>`);
-      if (s.prsAbiertos) parts.push(`<span class="bf-stat"><b>${s.prsAbiertos}</b> PR abierto${s.prsAbiertos === 1 ? '' : 's'}</span>`);
-      const l2 = parts.length ? parts.join(' · ') : '<span class="bf-sub">Sin fixes en curso</span>';
+      if (s.pendientes) parts.push(`<span class="bf-stat bf-stat--warn" title="fixes listos para enviar como PR">${icon('gitBranch', { size: 12 })}<b>${s.pendientes}</b> por enviar</span>`);
+      if (s.prsAbiertos) parts.push(`<span class="bf-stat" title="PRs abiertos (sin mergear)">${icon('gitCommit', { size: 12 })}<b>${s.prsAbiertos}</b> abierto${s.prsAbiertos === 1 ? '' : 's'}</span>`);
+      const l2 = parts.length ? `<div class="bf-line">${parts.join(' ')}</div>` : '';
       const atencion = s.atencion
-        ? `<div class="bf-att" title="Fixes que necesitan tu atención (reabierto, doble registro o ticket sin actualizar)">⚠ ${s.atencion} requiere${s.atencion === 1 ? '' : 'n'} atención</div>`
+        ? `<div class="bf-att" title="Fixes que necesitan tu atención (reabierto, doble registro o ticket sin actualizar)">⚠ <b>${s.atencion}</b> ${s.atencion === 1 ? 'requiere' : 'requieren'} atención</div>`
         : '';
-      refs.stats.innerHTML = `<div class="bf-line">${l1}</div><div class="bf-line">${l2}</div>${atencion}`;
+      refs.stats.innerHTML = `<div class="bf-line">${l1}</div>${l2}${atencion}`;
     }
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
