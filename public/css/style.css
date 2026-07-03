@@ -573,17 +573,44 @@ html, body {
    únicamente en móvil (ver @media abajo). Dormido (sin .is-working) = gris
    boca cerrada; trabajando = dorado masticando. */
 .chat-alive { display: none; }
+/* Selector de modo COMPACTO: etiquetas de UNA palabra (ver MODES en
+   chat-tab.js) y color por NIVEL DE RIESGO vía data-risk (lo sincroniza
+   _applyMode): safe(Plan)=gris · ok(Preguntar)=verde · warn(Ediciones)=
+   amarillo · danger(Todo)=rojo. Altura fija compartida con el "?" de al
+   lado (--chat-mode-h). */
+.chat-head { --chat-mode-h: 24px; }
 .chat-mode {
   background: var(--cwc-bg-input); color: var(--cwc-text-secondary);
   border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm);
-  font-size: var(--cwc-fs-xs); padding: .2rem .35rem;
+  font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .3rem;
+  height: var(--chat-mode-h); box-sizing: border-box; flex: none;
 }
-/* "?" junto al selector de modos: abre el modal explicativo (._modeHelp). */
-.chat-mode-help { flex: none; color: var(--cwc-text-dim); }
+.chat-mode[data-risk="safe"] { color: var(--cwc-text-dim); }
+.chat-mode[data-risk="ok"] { color: var(--cwc-ok); }
+.chat-mode[data-risk="warn"] { color: var(--cwc-warn); }
+.chat-mode[data-risk="danger"] { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+/* La lista desplegada repite el código de color (desktop; los pickers
+   nativos de móvil ignoran estilos de <option> — el color del select
+   colapsado marca el riesgo igual). */
+.chat-mode option { color: var(--cwc-text-secondary); background: var(--cwc-bg-panel); }
+.chat-mode option[value="plan"] { color: var(--cwc-text-dim); }
+.chat-mode option[value="default"] { color: var(--cwc-ok); }
+.chat-mode option[value="acceptEdits"] { color: var(--cwc-warn); }
+.chat-mode option[value="bypassPermissions"] { color: var(--cwc-danger-strong); }
+/* "?" junto al selector: abre el modal explicativo (._modeHelp). MISMA altura
+   que el select (era un btn--icon de 30px y sobresalía). */
+.chat-mode-help {
+  flex: none; color: var(--cwc-text-dim);
+  /* min-height 0: pisa el min-height base de .btn-ghost (42px, 44px táctil),
+     si no la altura fija no aplica y el "?" sobresale del select. */
+  height: var(--chat-mode-h); min-height: 0; min-width: var(--chat-mode-h);
+  padding: 0 .25rem; box-sizing: border-box;
+}
 
 /* Modal "Modos de permisos" */
 .mode-help .mh-item { margin-bottom: .7rem; }
 .mode-help .mh-item b { color: var(--cwc-text); font-size: var(--cwc-fs-md); }
+.mode-help .mh-item b.mh-danger { color: var(--cwc-danger-strong); }
 .mode-help .mh-item p { margin: .2rem 0 0; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; }
 .mode-help .mh-foot { margin: .6rem 0 0; padding-top: .5rem; border-top: 1px solid var(--cwc-divider); color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
 

@@ -97,6 +97,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             chat.model para el próximo spawnRunner. Antes solo existía para
                             sesiones tmux (`/model` tipeado a la TUI) — ahora el menú ⋯ de una
                             conversación en Sesiones también tiene "Cambiar modelo".
+                            MODOS DE PERMISOS (PERMISSION_MODES en shared.js, único punto de
+                            validación server+runner): default/acceptEdits/bypassPermissions/
+                            plan. En la UI (chat-tab.js MODES) son etiquetas de UNA palabra
+                            con color por riesgo en el select del header (data-risk, ver
+                            .chat-mode en style.css): Preguntar=verde · Ediciones=amarillo ·
+                            Todo=ROJO (bypassPermissions: acepta ABSOLUTAMENTE todo sin
+                            canUseTool; confirm rojo obligatorio en _modeChanged antes de
+                            activarlo — deliberado, pedido del usuario; NO afecta las
+                            corridas headless, regla 6) · Plan=gris. _applyMode es la única
+                            puerta modo→UI. OJO: un runner ya vivo de antes del deploy no
+                            conoce bypassPermissions (Set importado al spawn) e ignora ese
+                            set_mode hasta dormirse/reabrirse.
   files/ stats/ tmux/ admin/ health/
   tickets/                  triage de bugs BAJO DEMANDA (consume tokens; admin). La corrida
                             vive en un RUNNER DETACHED (bin/cwc-triage-runner.js, patrón

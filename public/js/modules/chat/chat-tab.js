@@ -113,7 +113,7 @@ export class ChatTab {
     });
     this.sendBtn.addEventListener('click', () => this._submit());
     this.stopBtn.addEventListener('click', () => this._send({ type: 'interrupt' }));
-    this.modeEl.addEventListener('change', () => this._send({ type: 'set_mode', mode: this.modeEl.value }));
+    this.modeEl.addEventListener('change', () => this._modeChanged());
     container.querySelector('.chat-mode-help').addEventListener('click', () => this._modeHelp());
     this.inputEl.addEventListener('keydown', (e) => {
       if (this._slashKeydown(e)) return; // el autocompletado consumió la tecla
@@ -321,7 +321,7 @@ export class ChatTab {
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
         for (const ev of m.events) this._onEvent(ev);
-        if (m.mode) this.modeEl.value = m.mode;
+        if (m.mode) this._applyMode(m.mode);
         this._setWorking(m.status === 'working');
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
@@ -341,7 +341,7 @@ export class ChatTab {
       case 'permission_closed': this._permClose(m); break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
-      case 'mode': this.modeEl.value = m.mode; break;
+      case 'mode': this._applyMode(m.mode); break;
       case 'viewmode':
         if (m.viewMode === 'switching') {
           this._line('chat-switch-note', 'Cambiando a Terminal (TUI)…');
@@ -610,6 +610,32 @@ export class ChatTab {
     group.querySelector('.ctg-row').appendChild(chip);
   }
 
+  // El usuario eligió un modo en el select. "Todo" (bypassPermissions del SDK)
+  // acepta ABSOLUTAMENTE todo sin preguntar: confirm previo para que un tap
+  // accidental (sobre todo en móvil) no lo active.
+  async _modeChanged() {
+    const mode = this.modeEl.value;
+    if (mode === 'bypassPermissions') {
+      const ok = await confirmDialog({
+        title: 'Aceptar todo',
+        message: 'En este modo Claude ejecuta TODA acción (comandos, ediciones, red…) sin pedir permiso, hasta que lo cambies. Es el modo más riesgoso: usalo solo si confiás plenamente en la tarea.',
+        confirmLabel: 'Aceptar todo',
+        danger: true,
+      });
+      if (!ok) { this._applyMode(this._mode || 'default'); return; }
+    }
+    this._applyMode(mode); // optimista; el eco 'mode' del server confirma
+    this._send({ type: 'set_mode', mode });
+  }
+
+  // Única puerta de entrada del modo a la UI (usuario, history y eco del
+  // server): sincroniza valor + color de riesgo del select (data-risk).
+  _applyMode(mode) {
+    this._mode = mode;
+    this.modeEl.value = mode;
+    this.modeEl.dataset.risk = riskOf(mode);
+  }
+
   // ¿Qué significan los modos de permisos? Modal explicativo del "?" del header.
   _modeHelp() {
     const m = openModal({ title: 'Modos de permisos', width: 460 });
@@ -622,19 +648,27 @@ export class ChatTab {
           vos aprobás o denegás una por una.</p>
         </div>
         <div class="mh-item">
-          <b>Aceptar ediciones</b>
+          <b>Ediciones</b>
           <p>Claude puede editar y crear archivos sin preguntar; todo lo demás
           (comandos de terminal, red, etc.) sigue pidiendo permiso. Cómodo
           cuando ya confiás en el rumbo del trabajo.</p>
         </div>
         <div class="mh-item">
-          <b>Solo plan</b>
+          <b class="mh-danger">Todo</b>
+          <p>Aceptación avanzada: Claude ejecuta ABSOLUTAMENTE todo sin pedir
+          permiso — comandos, ediciones, red. Es el modo más riesgoso (por eso
+          pide confirmación al activarlo); usalo solo cuando confiás plenamente
+          en la tarea y quieras cero fricción.</p>
+        </div>
+        <div class="mh-item">
+          <b>Plan</b>
           <p>Claude no toca nada: solo lee el proyecto y arma un plan de
           trabajo. Ideal para explorar una idea o ver qué haría antes de
           soltarle la mano.</p>
         </div>
         <p class="mh-foot">Podés cambiar de modo en cualquier momento; aplica
-        desde la próxima acción de la conversación.</p>
+        desde la próxima acción. El color del selector marca el riesgo:
+        verde = controlado · amarillo = medio · rojo = acepta todo.</p>
       </div>`;
   }
 
