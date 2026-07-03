@@ -465,6 +465,11 @@ html, body {
 .pj-head-name { font-weight: 600; font-size: var(--cwc-fs-lg); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pj-dir { margin: 0 0 .5rem; }
 .pj-dir code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.pj-total { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+/* Secciones del contexto: indentación según nivel del encabezado (# ## ###);
+   nivel 0 = preámbulo (contenido antes del primer encabezado). */
+.pj-sec--l2 .hp-detail { padding-left: .8rem; }
+.pj-sec--l3 .hp-detail { padding-left: 1.6rem; }
 
 /* Panel de salud (pestaña) */
 .hp-head { display: flex; align-items: center; justify-content: space-between; margin: .2rem 0 .35rem; }

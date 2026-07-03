@@ -28,6 +28,7 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
+  listContextSections, readContextSection, writeContextSection,
 } from './memory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,31 @@ export default {
         res.json({ ok: true });
       } catch {
         res.status(500).json({ error: 'No se pudo guardar el contexto.' });
+      }
+    });
+
+    // ===== Contexto por SECCIONES (la UI edita fragmentos, nunca el archivo
+    // entero — integridad: un descuido arruina UNA sección como mucho) =====
+    r.get('/:key/context/sections', (req, res) => {
+      const p = project(req, res); if (!p) return;
+      try { res.json(listContextSections(p.dir)); }
+      catch { res.status(500).json({ error: 'No se pudo leer el contexto.' }); }
+    });
+
+    r.get('/:key/context/section/:i', (req, res) => {
+      const p = project(req, res); if (!p) return;
+      try { res.json(readContextSection(p.dir, req.params.i)); }
+      catch (e) { res.status(400).json({ error: e.message || 'No se pudo leer la sección.' }); }
+    });
+
+    r.post('/:key/context/section/:i', (req, res) => {
+      const p = project(req, res); if (!p) return;
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      try {
+        writeContextSection(p.dir, req.params.i, req.body?.hash, String(req.body?.content ?? ''));
+        res.json({ ok: true });
+      } catch (e) {
+        res.status(e.conflict ? 409 : 500).json({ error: e.message || 'No se pudo guardar la sección.' });
       }
     });
 

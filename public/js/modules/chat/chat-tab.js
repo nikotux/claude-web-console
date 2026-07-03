@@ -9,7 +9,7 @@ import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman } from '../../ui/pacman.js';
-import { openModal } from '../../ui/dialog.js';
+import { openModal, confirmDialog } from '../../ui/dialog.js';
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
@@ -37,11 +37,18 @@ function isDestructiveCommand(cmd) {
 // Ícono representativo por herramienta en la fila de permiso.
 const TOOL_ICONS = { Bash: 'terminal', Edit: 'edit', Write: 'edit', Read: 'eye', WebFetch: 'download' };
 
+// [valor SDK, etiqueta de UNA palabra, riesgo]. Etiquetas cortas a propósito:
+// el select colapsado queda mínimo; el "?" de al lado explica cada modo. El
+// riesgo pinta el color del select (ver .chat-mode[data-risk] en style.css):
+// safe=plan (no toca nada) · ok=pregunta todo · warn=edita solo · danger=
+// bypassPermissions del SDK (acepta ABSOLUTAMENTE todo, con confirm previo).
 const MODES = [
-  ['default', 'Preguntar'],
-  ['acceptEdits', 'Aceptar ediciones'],
-  ['plan', 'Solo plan'],
+  ['default', 'Preguntar', 'ok'],
+  ['acceptEdits', 'Ediciones', 'warn'],
+  ['bypassPermissions', 'Todo', 'danger'],
+  ['plan', 'Plan', 'safe'],
 ];
+const riskOf = (mode) => (MODES.find(([v]) => v === mode) || [])[2] || 'ok';
 
 export class ChatTab {
   constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
@@ -78,7 +85,7 @@ export class ChatTab {
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
           ${pacman({ working: false, cls: 'chat-alive', title: 'Esperando tu mensaje' })}
-          <select class="chat-mode" title="Modo de permisos">
+          <select class="chat-mode" data-risk="ok" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
           <button class="btn-ghost btn--icon chat-mode-help" title="¿Qué significan estos modos?">${icon('help', { size: 15 })}</button>

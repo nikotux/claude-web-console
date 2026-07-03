@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { encodeCwd } from '../../core/claude-model.js';
 
 const INDEX_FILE_NAME = 'MEMORY.md';
@@ -45,6 +46,83 @@ export function readContext(projectDir) {
 
 export function writeContext(projectDir, text) {
   fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), String(text ?? '').slice(0, MAX_SIZE));
+}
+
+// ===== Contexto por SECCIONES (integridad: nunca se edita el archivo entero) =====
+// El CLAUDE.md se corta en fragmentos por encabezados markdown (# a ###); la
+// UI edita UN fragmento por vez y el guardado lo empalma en el archivo real.
+// Un descuido (select-all + borrar en el celular) arruina como mucho UNA
+// sección, nunca el documento completo. El hash por sección detecta si el
+// archivo cambió entre abrir y guardar (las sesiones de Claude Code editan
+// CLAUDE.md en vivo) y rechaza el guardado con conflicto en vez de pisar.
+const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 16);
+
+// Corta el texto en secciones: [preámbulo si hay contenido antes del primer
+// encabezado] + una por cada línea `#`/`##`/`###` hasta el próximo encabezado.
+// INVARIANTE de integridad: sections.map(s => s.text).join('\n') === texto
+// original, byte a byte (split/join por '\n' es lossless).
+export function splitContextSections(text) {
+  const src = String(text ?? '');
+  const lines = src.split('\n');
+  const bounds = [];
+  lines.forEach((l, i) => { if (/^#{1,3}\s/.test(l)) bounds.push(i); });
+  const sections = [];
+  const add = (from, to) => {
+    const m = lines[from]?.match(/^(#{1,3})\s+(.*)$/);
+    sections.push({
+      title: m ? m[2].trim().slice(0, 120) : '(inicio del documento)',
+      level: m ? m[1].length : 0,
+      text: lines.slice(from, to).join('\n'),
+    });
+  };
+  if (!bounds.length) add(0, lines.length);
+  else {
+    if (bounds[0] > 0) add(0, bounds[0]);
+    for (let b = 0; b < bounds.length; b += 1) add(bounds[b], b + 1 < bounds.length ? bounds[b + 1] : lines.length);
+  }
+  return sections;
+}
+
+// Índice de secciones para la lista (sin el texto completo de cada una).
+export function listContextSections(projectDir) {
+  const src = readContext(projectDir);
+  const sections = splitContextSections(src).map((s, i) => ({
+    i,
+    title: s.title,
+    level: s.level,
+    lines: s.text.split('\n').length,
+    size: Buffer.byteLength(s.text),
+    hash: hashOf(s.text),
+  }));
+  return { totalLines: src ? src.split('\n').length : 0, totalSize: Buffer.byteLength(src), sections };
+}
+
+export function readContextSection(projectDir, i) {
+  const sections = splitContextSections(readContext(projectDir));
+  const idx = Number(i);
+  const s = sections[idx];
+  if (!Number.isInteger(idx) || !s) throw new Error('Sección inexistente.');
+  return { i: idx, title: s.title, text: s.text, hash: hashOf(s.text) };
+}
+
+// Empalma `content` en la sección i. `expectedHash` = hash del texto que el
+// cliente ABRIÓ: si la sección ya no existe o cambió, error con .conflict
+// (la ruta lo mapea a 409) — nunca se pisa una edición ajena a ciegas.
+export function writeContextSection(projectDir, i, expectedHash, content) {
+  const src = readContext(projectDir);
+  const sections = splitContextSections(src);
+  const idx = Number(i);
+  const s = sections[idx];
+  if (!Number.isInteger(idx) || !s) {
+    throw Object.assign(new Error('La sección ya no existe (el contexto cambió). Recargá la lista.'), { conflict: true });
+  }
+  if (hashOf(s.text) !== String(expectedHash || '')) {
+    throw Object.assign(new Error('El contexto cambió desde que abriste esta sección (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
+  }
+  s.text = String(content ?? '');
+  const out = sections.map((x) => x.text).join('\n');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto quedaría demasiado grande.');
+  fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
 }
 
 // Parsea "- [Título](archivo.md) — descripción" preservando el ORDEN del

@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
+// 'bypassPermissions' = "Todo" en la UI: el SDK aprueba TODA acción sin pasar
+// por canUseTool. Deliberado (pedido del usuario, con color danger y confirm
+// en el selector); SOLO existe en chats interactivos — las corridas headless
+// (tickets/salud) siguen blindadas read-only (regla dura 6).
+export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
 export const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
 export const SLEEP_MS = 45 * 60 * 1000; // inactiva => el runner se auto-duerme
 export const HISTORY_MAX = 600;

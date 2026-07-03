@@ -51,6 +51,16 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 07:07 — main
+- Header del chat: fuera costo y botón TUI; '?' que explica los modos de permisos
+- Modified `CLAUDE.md`
+- Modified `public/css/style.css`
+- Modified `public/js/modules/chat/chat-tab.js`
+- Modified `public/js/modules/system/project-context-panel.js`
+- Modified `src/modules/chat/shared.js`
+- Modified `src/modules/projects/index.js`
+- Modified `src/modules/projects/memory.js`
+
 ### 2026-07-03 06:55 — main
 - Modified `CLAUDE.md`
 - Modified `public/css/style.css`

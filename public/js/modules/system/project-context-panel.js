@@ -67,7 +67,6 @@ export function mountProjectContextPanel(el, ctx) {
 
   let entries = []; // proyectos completos + sub-proyectos de bugfixes
   let current = null; // entrada abierta en el detalle (null = vista lista)
-  let ctxContent = '';
   let bfContent = '';
   let indexContent = '';
 
@@ -118,8 +117,11 @@ export function mountProjectContextPanel(el, ctx) {
 
       <div class="hp-head">
         <span class="hp-title">${isProject ? 'Contexto (CLAUDE.md)' : 'Contexto'}</span>
+        ${isProject ? '<span class="pj-total" data-ref="ctxTotal"></span>' : ''}
       </div>
-      <div class="bk-row" data-ref="ctxRow"><span class="hp-empty">cargando…</span></div>
+      ${isProject
+    ? '<div class="bk-list" data-ref="ctxSections"><span class="cwc-spinner"></span></div>'
+    : '<div class="bk-row" data-ref="ctxRow"><span class="hp-empty">cargando…</span></div>'}
 
       ${isProject ? `
         <div class="hp-head hp-head--review">
@@ -134,23 +136,38 @@ export function mountProjectContextPanel(el, ctx) {
   }
 
   const ctxRow = () => root.querySelector('[data-ref="ctxRow"]');
+  const ctxSectionsEl = () => root.querySelector('[data-ref="ctxSections"]');
   const notesEl = () => root.querySelector('[data-ref="notes"]');
 
-  // ===== Contexto: proyecto completo (CLAUDE.md) =====
-  async function editContext() {
+  // ===== Contexto de proyecto: POR SECCIONES (integridad) =====
+  // El CLAUDE.md nunca se edita entero desde acá: la lista muestra sus
+  // secciones (por encabezados # a ###) y el editor abre SOLO el fragmento
+  // elegido — un descuido (select-all + borrar) arruina una sección como
+  // mucho. El guardado viaja con el hash de lo que abriste: si otra sesión
+  // tocó el archivo en el medio, el server responde 409 y no pisa nada.
+  async function editSection(i) {
+    let sec;
+    try {
+      const res = await fetch(projectApi(`/context/section/${i}`));
+      sec = await res.json();
+      if (!res.ok) throw new Error(sec.error || 'No se pudo leer la sección.');
+    } catch (e) {
+      dialog.alertDialog({ title: 'Contexto', message: e.message });
+      return;
+    }
     await dialog.textEditorDialog({
-      title: `Contexto — CLAUDE.md (${current.name})`,
-      hint: 'Es el CLAUDE.md real del proyecto: lo lee la próxima sesión de Claude Code ahí.',
-      value: ctxContent,
+      title: `Sección — ${sec.title}`,
+      hint: `Editás SOLO esta sección del CLAUDE.md de ${current.name} (el resto del archivo no se toca). El cambio es real: lo lee la próxima sesión de Claude ahí.`,
+      value: sec.text,
       width: 760,
-      saveLabel: 'Guardar',
+      saveLabel: 'Guardar sección',
       onSave: async (text) => {
-        const res = await fetch(projectApi('/context'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }),
+        const res = await fetch(projectApi(`/context/section/${i}`), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: text, hash: sec.hash }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
-        ctxContent = text;
       },
     });
     loadContext();
@@ -158,21 +175,31 @@ export function mountProjectContextPanel(el, ctx) {
 
   async function loadContext() {
     if (!alive || !current) return;
-    const row = ctxRow();
-    if (!row) return;
-    row.innerHTML = '<span class="hp-empty">cargando…</span>';
+    const box = ctxSectionsEl();
+    if (!box) return;
+    box.innerHTML = '<span class="cwc-spinner"></span>';
     try {
-      const { content } = await (await fetch(projectApi('/context'))).json();
-      if (!alive || !ctxRow()) return;
-      ctxContent = content || '';
-      const firstLine = (ctxContent.split('\n').find((l) => l.trim()) || '(vacío)').replace(/^#+\s*/, '');
-      const lineCount = ctxContent ? ctxContent.split('\n').length : 0;
-      ctxRow().innerHTML = `
-        <span class="hp-detail"><b>${esc(firstLine)}</b><br>${lineCount} líneas · ${fmtSize(ctxContent.length)}</span>
-        ${isAdmin ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-ref="ctxEdit" title="Editar contexto">${icon('edit', { size: 13 })}</button></span>` : ''}`;
-      ctxRow().querySelector('[data-ref="ctxEdit"]')?.addEventListener('click', editContext);
+      const data = await (await fetch(projectApi('/context/sections'))).json();
+      if (!alive || !ctxSectionsEl()) return;
+      const totalEl = root.querySelector('[data-ref="ctxTotal"]');
+      if (totalEl) totalEl.textContent = `${data.totalLines} líneas · ${fmtSize(data.totalSize)}`;
+      if (!data.sections.length) {
+        ctxSectionsEl().innerHTML = '<div class="bk-empty">El contexto está vacío.</div>';
+        return;
+      }
+      ctxSectionsEl().innerHTML = data.sections.map((s) => `
+        <div class="bk-row pj-sec pj-sec--l${s.level}" data-i="${s.i}">
+          <span class="hp-detail">
+            <b>${esc(s.title)}</b><br>
+            <span class="hp-sev">${s.lines} líneas · ${fmtSize(s.size)}</span>
+          </span>
+          ${isAdmin ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-act="edit" title="Editar SOLO esta sección">${icon('edit', { size: 13 })}</button></span>` : ''}
+        </div>`).join('');
+      for (const row of ctxSectionsEl().querySelectorAll('[data-i]')) {
+        row.querySelector('[data-act="edit"]')?.addEventListener('click', () => editSection(row.dataset.i));
+      }
     } catch {
-      if (alive && ctxRow()) ctxRow().innerHTML = '<span class="hp-empty">No se pudo leer el contexto.</span>';
+      if (alive && ctxSectionsEl()) ctxSectionsEl().innerHTML = '<div class="bk-empty">No se pudo leer el contexto.</div>';
     }
   }
 

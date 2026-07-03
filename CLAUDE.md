@@ -128,9 +128,19 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             uno nuevo es sumar una entrada al objeto, todas las funciones de
                             memory.js toman `projectDir` como parámetro (nada hardcodeado).
                             GET /api/projects = lista {key,name,dir}; GET/POST /:key/context =
-                            <projectDir>/CLAUDE.md real; GET /:key/memory = índice MEMORY.md +
-                            notas resueltas contra disco (orden del índice, huérfanas al
-                            final); GET/POST /:key/memory/index = MEMORY.md crudo; GET/POST
+                            <projectDir>/CLAUDE.md real (POST entero: existe para uso
+                            programático, la UI NO lo usa); INTEGRIDAD — la UI edita el
+                            contexto POR SECCIONES (riesgo señalado por el usuario: cargar el
+                            .md entero en un textarea permitía borrarlo completo de un
+                            descuido): GET /:key/context/sections = índice {i,title,level,
+                            lines,size,hash} cortado por encabezados # a ### (splitContextSections;
+                            INVARIANTE: sections.join('\n') === archivo byte a byte, verificado);
+                            GET/POST /:key/context/section/:i = UN fragmento — el POST exige el
+                            `hash` (sha256/16) del texto ABIERTO y si el archivo cambió en el
+                            medio (otra sesión de Claude editándolo) responde 409 sin pisar
+                            nada. GET /:key/memory = índice MEMORY.md + notas resueltas contra
+                            disco (orden del índice, huérfanas al final); GET/POST
+                            /:key/memory/index = MEMORY.md crudo; GET/POST
                             /:key/memory/note/:file = una nota (whitelist estricta
                             `^[A-Za-z0-9_-]+\.md$`, sin path traversal; `:key` validado contra
                             PROJECTS, 404 si no existe). GET abierto a autenticados, POST
@@ -283,6 +293,13 @@ docs/                       frontend-modules.md · brief-original.txt · context
   `attachSpec`, NO `attach` (colisiona con el método `attach(ws)`).
 - NO usar `pkill -f src/server.js` (el patrón mata al propio shell). Reiniciar
   SIEMPRE con `systemctl --user restart claude-web-console`.
+- NO usar `git checkout -- <archivo>` para limpiar una PRUEBA sobre archivos
+  que otras sesiones editan en vivo (CLAUDE.md, código): puede haber cambios
+  sin commitear ajenos y el checkout los descarta TODOS (pasó: se perdió una
+  edición de una sesión paralela y hubo que recuperarla desde los transcripts
+  de ~/.claude/projects — los tool_use Edit guardan old_string/new_string).
+  Revertir SIEMPRE deshaciendo el cambio propio (aplicar el inverso), y mirar
+  `git status` ANTES de decidir que un archivo está limpio.
 - Transcripts jsonl de Claude: el mismo `message.id` aparece en varias líneas —
   dedup por id+firma de contenido (ver `loadTranscriptEvents` y módulo tokens).
 - Hooks del observador se capturan al INICIAR claude: sesiones ya abiertas no
@@ -290,7 +307,13 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - El Agent SDK hereda la suscripción del CLI (`~/.claude/.credentials.json`);
   no necesita API key y sus transcripts caen en `~/.claude/projects/`.
 - Traspaso Chat↔TUI: regla dura "nunca ambos a la vez"; el cierre del lado
-  saliente se ESPERA verificado antes de abrir el otro.
+  saliente se ESPERA verificado antes de abrir el otro. El header del chat
+  YA NO tiene botón TUI ni contador de costo (se quitaron a pedido): pasar
+  a TUI vive SOLO en el menú ⋯ de la tarjeta en Sesiones (onToggleMode
+  queda en ChatTab por compatibilidad, sin botón). En su lugar hay un "?"
+  (icono `help` de icons.js) junto al selector de modos que abre el modal
+  "Modos de permisos" (_modeHelp: explica Preguntar / Aceptar ediciones /
+  Solo plan). El costo por turno dentro del hilo (chat-turn-cost) queda.
 - Tras un reboot, repetir `systemctl --user import-environment SSH_AUTH_SOCK`
   para que el git de Tolkien funcione desde el server.
 - `#sidebar` en móvil (`@media (max-width:768px)` de style.css): overlay con
