@@ -327,14 +327,38 @@ export default {
 
         const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'main';
         // Los untracked NO se suben (evita filtrar un secreto nuevo sin ignorar).
-        const untrackedSkipped = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
+        const untrackedNow = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
+
+        // Untracked SELECCIONADOS explícitamente desde el diálogo de push
+        // (checkbox por archivo). La guarda anti-secretos se mantiene en tres
+        // capas: (1) solo se acepta lo que git YA lista como untracked
+        // no-ignorado (un .env ignorado ni aparece en esa lista, así que no
+        // es seleccionable ni inyectable); (2) igual se re-valida contra
+        // SECRET_PATHS/SECRET_DIRS por si un secreto quedara sin ignorar;
+        // (3) nada viaja sin selección humana archivo por archivo.
+        const requested = Array.isArray(req.body?.includeUntracked)
+          ? req.body.includeUntracked.map(String).slice(0, 200)
+          : [];
+        const includable = requested.filter((f) => untrackedNow.includes(f));
+        const blockedSecrets = includable.filter(
+          (f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)),
+        );
+        if (blockedSecrets.length) {
+          return res.status(403).json({ error: `Secreto(s) en la selección: ${blockedSecrets.join(', ')}. Push BLOQUEADO.` });
+        }
+        for (const f of includable) {
+          const a = await git(['add', '--', f]);
+          if (a.code !== 0) return res.status(500).json({ error: `No se pudo agregar "${f}": ${a.stderr || a.out}` });
+        }
+        const untrackedSkipped = untrackedNow.filter((f) => !includable.includes(f));
 
         // "última versión" = lo que el remote YA tiene, ANTES de este push
         // (si el branch remoto todavía no existe, es el primer push).
         const beforeRefRes = await git(['rev-parse', `${REMOTE}/${branch}`]);
         const beforeRef = beforeRefRes.code === 0 ? beforeRefRes.out : null;
 
-        // Commit seguro: SOLO archivos ya trackeados (add -u), nunca untracked.
+        // Commit: los trackeados modificados/borrados (add -u) + los untracked
+        // recién seleccionados (ya stageados arriba).
         await git(['add', '-u']);
         let staged = lines((await git(['diff', '--cached', '--name-only'])).out);
 
@@ -372,6 +396,7 @@ export default {
 
         res.json({
           ok: true, branch, remoteUrl: g.url, committed, staged,
+          includedUntracked: includable,
           untrackedSkipped,
           changelogUpdated,
           description,

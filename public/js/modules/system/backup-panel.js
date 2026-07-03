@@ -184,7 +184,7 @@ export function mountBackupPanel(el, ctx) {
     refs.git.innerHTML = `
       <p class="bk-git-remote">→ <code>${esc(info.remote.url)}</code> · rama <b>${esc(info.branch)}</b></p>
       <p class="bk-git-out">Queda FUERA (ignorado): <span class="bk-git-secrets">${esc(excluded)}</span></p>
-      ${info.untracked?.length ? `<p class="bk-git-out">No se subirán ${info.untracked.length} archivo(s) sin trackear (agregalos a git a mano si querés incluirlos).</p>` : ''}
+      ${info.untracked?.length ? `<p class="bk-git-out">${info.untracked.length} archivo(s) nuevos sin trackear — al hacer Push podés elegir cuáles incluir.</p>` : ''}
       <p class="bk-git-out">${info.dirtyCount ? `${info.dirtyCount} cambio(s) trackeado(s) pendientes` : 'Sin cambios pendientes'}${info.lastCommit ? ` · último: <code>${esc(info.lastCommit)}</code>` : ''}</p>
       <button class="btn btn--block" data-ref="push">${icon('upload', { size: 15 })}<span>Push a GitHub ahora</span></button>
       <button class="btn-ghost btn--block" data-ref="pull" title="Trae el código desde GitHub (restauración): fetch + fast-forward; tus cambios locales quedan a salvo en un stash que se reaplica">${icon('download', { size: 15 })}<span>Pull desde GitHub (restaurar)</span></button>
@@ -201,22 +201,51 @@ export function mountBackupPanel(el, ctx) {
       gmsg.hidden = !t;
     };
 
+    // Confirmación de push. Con archivos nuevos sin trackear, el diálogo los
+    // lista con un checkbox cada uno: NADA nuevo viaja sin selección humana
+    // explícita (la guarda anti-secretos del backend igual re-valida).
+    function confirmPush(untracked) {
+      return new Promise((resolve) => {
+        const m = dialog.openModal({ title: 'Push del código a GitHub', width: 460, onClose: () => resolve(null) });
+        const box = document.createElement('div');
+        box.innerHTML = `
+          <p class="dlg-msg">Se commitean los cambios trackeados y se empuja SOLO al remote personal:\n${esc(info.remote.url)}\n\nNunca se suben .env, users.json, sessions.json, certs/ ni otros ignorados.</p>
+          ${untracked.length ? `
+            <p class="dlg-msg"><b>Archivos NUEVOS sin trackear</b> — marcá los que quieras incluir en el backup (sin marcar, no viajan):</p>
+            <div class="bk-untracked" data-ref="list">
+              ${untracked.map((f) => `<label class="bk-untracked-item"><input type="checkbox" value="${esc(f)}"><code>${esc(f)}</code></label>`).join('')}
+            </div>` : ''}
+          <div class="dlg-actions">
+            <button class="btn-ghost" data-ref="cancel">Cancelar</button>
+            <button class="btn" data-ref="ok">Push</button>
+          </div>`;
+        m.body.appendChild(box);
+        box.querySelector('[data-ref="cancel"]').addEventListener('click', () => m.close());
+        box.querySelector('[data-ref="ok"]').addEventListener('click', () => {
+          const selected = [...box.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
+          resolve(selected); // [] = push sin untracked (el comportamiento de siempre)
+          m.close();
+        });
+      });
+    }
+
     pushBtn.addEventListener('click', async () => {
       if (busy) return;
-      const ok = await dialog.confirmDialog({
-        title: 'Push del código a GitHub',
-        message: `Se commitean los cambios trackeados y se empuja SOLO al remote personal:\n${info.remote.url}\n\nNunca se suben .env, users.json, sessions.json, certs/ ni otros ignorados.`,
-        confirmLabel: 'Push',
-      });
-      if (!ok) return;
+      const includeUntracked = await confirmPush(info.untracked || []);
+      if (includeUntracked === null) return; // canceló
       setBusy(true); pushBtn.disabled = true; setGMsg('Empujando a GitHub…', 'info', { running: true });
       try {
-        const res = await fetch(`${API}/push`, { method: 'POST' });
+        const res = await fetch(`${API}/push`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ includeUntracked }),
+        });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'Falló el push.');
         const parts = [];
         if (data.committed) parts.push(`commit ${data.committed}`);
         parts.push('push OK');
+        if (data.includedUntracked?.length) parts.push(`${data.includedUntracked.length} archivo(s) nuevos incluidos`);
         if (data.untrackedSkipped?.length) parts.push(`${data.untrackedSkipped.length} sin trackear omitidos`);
         if (data.changelogUpdated) parts.push('changelog actualizado');
         if (data.description?.ok) parts.push('descripción de GitHub actualizada');

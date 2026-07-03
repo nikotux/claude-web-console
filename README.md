@@ -51,6 +51,12 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 06:18 — main
+- Sesiones: Pac-Man de estado en las tarjetas del sidebar
+- Added `docs/test-untracked.md`
+- Modified `public/js/modules/system/backup-panel.js`
+- Modified `src/modules/backup/index.js`
+
 ### 2026-07-03 06:14 — main
 - Modified `CLAUDE.md`
 - Modified `public/css/style.css`
