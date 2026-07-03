@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 20:41 — main
+- Modified `public/js/modules/system/health-review-modal.js`
+
 ### 2026-07-03 20:30 — main
 - Chat móvil: burbujas a ancho (casi) completo, sin columna muerta a la derecha
 - Sidebar: ☰ y Nueva sesión comparten fila (fuera el espacio muerto)

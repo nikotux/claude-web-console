@@ -81,6 +81,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${findings.length} hallazgo(s) · ${countLine}</span></div>` : ''}
       ${d.summary ? `<p class="hr-summary">${esc(d.summary)}</p>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
+      ${!running && isAdmin ? `<button class="btn btn--block" data-ref="start">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Volver a analizar en profundidad' : 'Iniciar análisis profundo'}</span></button>` : ''}
       <div class="hr-findings">
         ${findings.length ? findings.map(findingCard).join('')
     : running ? '<div class="hr-empty">Analizando módulos…</div>'
@@ -93,6 +94,22 @@ export function openHealthReview(ctx, { isAdmin }) {
         if (f) workInChat(f);
       });
     }
+    wrap.querySelector('[data-ref="start"]')?.addEventListener('click', startReview);
+  }
+
+  // Lanza la revisión (el ÚNICO punto que gasta tokens). Confirmación con
+  // aviso de costo; nunca se dispara sola al abrir la sub-ventana.
+  async function startReview() {
+    const ok = await dialog.confirmDialog({
+      title: 'Análisis profundo con Claude',
+      message: 'Audita el proyecto MÓDULO POR MÓDULO con Claude (haiku por módulo + síntesis final), buscando bugs y violaciones de reglas.\n\nTarda varios minutos y CONSUME TOKENS. Es de solo lectura: no modifica nada.',
+      confirmLabel: 'Iniciar',
+    });
+    if (!ok) return;
+    let d = {};
+    try { d = await (await fetch(`${API}/review`, { method: 'POST' })).json(); } catch { /* el poll averigua */ }
+    render({ ...d, running: true });
+    poll();
   }
 
   // Abre un chat en la RAÍZ de la consola con el hallazgo precargado. El
@@ -128,21 +145,13 @@ export function openHealthReview(ctx, { isAdmin }) {
     }
   }
 
-  // Arranque: si NO hay una corriendo, ofrecer lanzarla; si ya corre, engancharse.
+  // Arranque: abrir la sub-ventana NO dispara nada pesado — solo MUESTRA el
+  // último estado (resultado cacheado, o vacío con el botón "Iniciar"). Si ya
+  // hay un barrido corriendo (otra pestaña / recarga), se engancha al vivo.
   (async () => {
     let d = {};
     try { d = await (await fetch(`${API}/review`)).json(); } catch { /* noop */ }
-    if (!d.running && isAdmin) {
-      const ok = await dialog.confirmDialog({
-        title: 'Revisión exhaustiva con Claude',
-        message: 'Audita el proyecto MÓDULO POR MÓDULO con Claude (haiku por módulo + síntesis final), buscando bugs y violaciones de reglas.\n\nTarda varios minutos y CONSUME TOKENS. Es de solo lectura: no modifica nada.',
-        confirmLabel: 'Iniciar revisión',
-      });
-      if (!ok) { render(d); return; }
-      try {
-        d = await (await fetch(`${API}/review`, { method: 'POST' })).json();
-      } catch { /* el poll averigua */ }
-    }
+    if (!alive) return;
     render(d);
     if (d.running) poll();
   })();
