@@ -20,6 +20,7 @@ import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd } from '../../core/claude-state.js';
 import { recordRecent, listRecents } from '../../core/recents.js';
+import { uniqueName, loadTitles, saveTitles, titleKey } from '../../core/session-names.js';
 
 // Aplica al server tmux cwc YA en marcha las opciones de clipboard (la config
 // del socket solo se lee al iniciar el server tmux; esto cubre el rehidratado).
@@ -88,12 +89,24 @@ export default {
       }
 
       const cwdAbs = cwd ? safeCwd(cwd) : config.home;
+      // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
+      // customTitle || basename(cwd) — si el basename ya está en uso (por
+      // otra tmux O una conversación de chat), se persiste "tolkien 1" como
+      // customTitle. Calculado ANTES de crear (así la propia sesión nueva no
+      // cuenta como colisión contra sí misma).
+      const baseName = path.basename(cwdAbs) || 'terminal';
+      const cardName = uniqueName(baseName);
       const session = sessionManager.create({
         cwd: cwdAbs,
         runClaude: !!runClaude,
         model: model || null,
         title,
       });
+      if (cardName !== baseName) {
+        const titles = loadTitles();
+        titles[titleKey(config.tmuxSocket, session.tmuxName)] = cardName;
+        saveTitles(titles);
+      }
       // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
       recordRecent(path.relative(config.home, cwdAbs));
       res.json({ session: session.info() });

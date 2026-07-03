@@ -4,6 +4,7 @@
 // reinicio automático / eliminar), embebida en el modal Sistema y con
 // diálogos propios. El backend no cambió.
 import { icon } from '../../ui/icons.js';
+import { pacman } from '../../ui/pacman.js';
 
 const API = '/api/backup';
 
@@ -48,8 +49,11 @@ export function mountBackupPanel(el, ctx) {
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
-  function msg(text, kind = 'info') {
-    refs.msg.textContent = text;
+  // `running:true` antepone el Pac-Man (SOLO para textos estáticos de proceso
+  // largo — los mensajes de error vienen del server y van por textContent).
+  function msg(text, kind = 'info', { running = false } = {}) {
+    if (running) refs.msg.innerHTML = `${pacman()} ${text}`;
+    else refs.msg.textContent = text;
     refs.msg.className = `bk-msg ${kind}`;
     refs.msg.hidden = !text;
   }
@@ -84,7 +88,7 @@ export function mountBackupPanel(el, ctx) {
   async function create() {
     if (busy) return;
     setBusy(true);
-    msg('Creando backup…');
+    msg('Creando backup…', 'info', { running: true });
     try {
       const res = await fetch(`${API}/create`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
@@ -108,7 +112,7 @@ export function mountBackupPanel(el, ctx) {
     });
     if (!ok) return;
     setBusy(true);
-    msg('Restaurando… el servidor se está reiniciando.');
+    msg('Restaurando… el servidor se está reiniciando.', 'info', { running: true });
     try {
       const res = await fetch(`${API}/restore`, {
         method: 'POST',
@@ -183,11 +187,19 @@ export function mountBackupPanel(el, ctx) {
       ${info.untracked?.length ? `<p class="bk-git-out">No se subirán ${info.untracked.length} archivo(s) sin trackear (agregalos a git a mano si querés incluirlos).</p>` : ''}
       <p class="bk-git-out">${info.dirtyCount ? `${info.dirtyCount} cambio(s) trackeado(s) pendientes` : 'Sin cambios pendientes'}${info.lastCommit ? ` · último: <code>${esc(info.lastCommit)}</code>` : ''}</p>
       <button class="btn btn--block" data-ref="push">${icon('upload', { size: 15 })}<span>Push a GitHub ahora</span></button>
+      <button class="btn-ghost btn--block" data-ref="pull" title="Trae el código desde GitHub (restauración): fetch + fast-forward; tus cambios locales quedan a salvo en un stash que se reaplica">${icon('download', { size: 15 })}<span>Pull desde GitHub (restaurar)</span></button>
       <p class="bk-msg" data-ref="gmsg" hidden></p>`;
 
     const pushBtn = refs.git.querySelector('[data-ref="push"]');
+    const pullBtn = refs.git.querySelector('[data-ref="pull"]');
     const gmsg = refs.git.querySelector('[data-ref="gmsg"]');
-    const setGMsg = (t, kind = 'info') => { gmsg.textContent = t; gmsg.className = `bk-msg ${kind}`; gmsg.hidden = !t; };
+    // running=true antepone el Pac-Man (solo textos estáticos de proceso largo).
+    const setGMsg = (t, kind = 'info', { running = false } = {}) => {
+      if (running) gmsg.innerHTML = `${pacman()} ${t}`;
+      else gmsg.textContent = t;
+      gmsg.className = `bk-msg ${kind}`;
+      gmsg.hidden = !t;
+    };
 
     pushBtn.addEventListener('click', async () => {
       if (busy) return;
@@ -197,7 +209,7 @@ export function mountBackupPanel(el, ctx) {
         confirmLabel: 'Push',
       });
       if (!ok) return;
-      setBusy(true); pushBtn.disabled = true; setGMsg('Empujando a GitHub…');
+      setBusy(true); pushBtn.disabled = true; setGMsg('Empujando a GitHub…', 'info', { running: true });
       try {
         const res = await fetch(`${API}/push`, { method: 'POST' });
         const data = await res.json().catch(() => ({}));
@@ -214,6 +226,47 @@ export function mountBackupPanel(el, ctx) {
       } catch (e) {
         setGMsg(e.message, 'err');
       } finally {
+        setBusy(false);
+      }
+    });
+
+    // Pull = restauración del código desde GitHub. Si actualizó, el server se
+    // reinicia solo (mismo flujo que restaurar un backup: esperar y recargar).
+    pullBtn.addEventListener('click', async () => {
+      if (busy) return;
+      const ok = await dialog.confirmDialog({
+        title: 'Pull desde GitHub (restaurar código)',
+        message: `Se trae el código desde el remote personal:\n${info.remote.url}\n\nSolo avanza en línea recta (fast-forward): si tu historial local divergió, NO se fuerza nada. Los cambios locales sin commitear quedan a salvo en un stash que se reaplica. Si hay actualización, el servidor se reinicia solo (la página se recarga).`,
+        confirmLabel: 'Pull',
+      });
+      if (!ok) return;
+      setBusy(true); pullBtn.disabled = true; pushBtn.disabled = true;
+      setGMsg('Trayendo el código desde GitHub…', 'info', { running: true });
+      try {
+        const res = await fetch(`${API}/pull`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Falló el pull.');
+        if (data.upToDate) {
+          setGMsg(data.ahead
+            ? `Nada que traer: tu copia local va ${data.ahead} commit(s) ADELANTE de GitHub (${data.head}) — hacé push.`
+            : `Ya estás al día con GitHub (${data.head}).`, 'ok');
+          setBusy(false);
+          return;
+        }
+        const parts = [`actualizado ${data.from} → ${data.to}`, `${data.files} archivo(s)`];
+        if (data.stashed) parts.push(data.popConflict ? 'CONFLICTO al reaplicar tus cambios (quedaron en el stash)' : 'cambios locales reaplicados');
+        if (data.npmRan) parts.push(data.npmOk ? 'dependencias instaladas' : 'npm install FALLÓ');
+        if (data.restarting) {
+          setGMsg(`${parts.join(' · ')} · reiniciando…`, 'ok', { running: true });
+          await waitForServer();
+          location.reload();
+          return;
+        }
+        // Árbol con conflicto o npm roto: NO se reinició — requiere mano.
+        setGMsg(`${parts.join(' · ')} · el servidor NO se reinició: revisá el árbol (conflicto/deps) y reiniciá a mano.`, 'err');
+        setBusy(false);
+      } catch (e) {
+        setGMsg(e.message, 'err');
         setBusy(false);
       }
     });

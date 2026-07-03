@@ -11,28 +11,16 @@
 //   POST /api/tmux/set-model { socket, session, model }
 //   POST /api/tmux/title { socket, session, title } -> nombre humano custom
 import express from 'express';
-import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd } from '../../core/claude-state.js';
-
-// ===== Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux,
-// que es plomería y sostiene la rehidratación). Persisten en titles.json. =====
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TITLES_FILE = path.join(__dirname, '..', '..', '..', 'titles.json');
-
-function loadTitles() {
-  try { return JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8')).titles || {}; }
-  catch { return {}; }
-}
-function saveTitles(titles) {
-  try { fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2)); }
-  catch { /* noop */ }
-}
-const titleKey = (socketName, name) => `${socketName}/${name}`;
+// Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux, que es
+// plomería y sostiene la rehidratación): persisten en titles.json vía el core
+// compartido (core/session-names.js — también los usa el módulo terminal para
+// los nombres únicos al crear).
+import { loadTitles, saveTitles, titleKey, registerNameProvider } from '../../core/session-names.js';
 
 // Formato tabulado para parsear sin ambigüedad.
 const FMT = [
@@ -68,6 +56,20 @@ function listSessionsForSocket(sock) {
   }
   return sessions;
 }
+
+// Proveedor de nombres para el uniquificador (core/session-names.js): los
+// display names de TODAS las sesiones tmux, igual que los calcula la tarjeta
+// del frontend (customTitle || basename(cwd) || nombre tmux).
+registerNameProvider(() => {
+  const titles = loadTitles();
+  const names = [];
+  for (const sock of listSockets()) {
+    for (const s of listSessionsForSocket(sock)) {
+      names.push(titles[titleKey(s.socketName, s.name)] || (s.cwd ? path.basename(s.cwd) : s.name));
+    }
+  }
+  return names;
+});
 
 export default {
   name: 'tmux',

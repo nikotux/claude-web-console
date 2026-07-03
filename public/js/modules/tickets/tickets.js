@@ -5,6 +5,8 @@
 // que consume tokens reales; NUNCA hay polling automático. "Expandir" abre una
 // ventana flotante con la tabla; un click en un ticket abre una conversación
 // Chat en el proyecto (modo plan) con el contexto del bug precargado.
+import { pacman } from '../../ui/pacman.js';
+
 export default {
   name: 'tickets',
 
@@ -44,7 +46,7 @@ export default {
       refs.count.textContent = n ? String(n) : '';
       refs.refresh.disabled = busy;
       refs.expand.disabled = busy || !n;
-      if (busy) { refs.line.innerHTML = '<span class="cwc-spinner"></span> triando…'; return; }
+      if (busy) { refs.line.innerHTML = `${pacman()} triando…`; return; }
       if (cache.error) {
         refs.line.innerHTML = `<span class="tickets-err">Error: ${escapeHtml(cache.error)}</span>`;
         return;
@@ -104,7 +106,7 @@ export default {
           : `${cache.tickets.length} bug(s) · actualizado ${fmtAgo(cache.updatedAt)}`;
         mrefresh.disabled = busy;
         tableEl.innerHTML = '';
-        if (busy) { tableEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>triando…</div>'; return; }
+        if (busy) { tableEl.innerHTML = `<div class="cwc-loading">${pacman()}triando…</div>`; return; }
         if (!cache.tickets.length) { tableEl.innerHTML = '<div class="tickets-empty">Sin bugs abiertos.</div>'; return; }
         const table = document.createElement('table');
         table.className = 'tickets-table';

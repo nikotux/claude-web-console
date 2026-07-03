@@ -7,7 +7,8 @@
 // socket Unix (~/.cwc-data/chats/<id>.sock) con JSON por línea:
 //
 //   server->runner: {t:'hello'} · {t:'user',text} · {t:'perm',id,allow}
-//                   {t:'interrupt'} · {t:'set_mode',mode} · {t:'sleep'} · {t:'close'}
+//                   {t:'interrupt'} · {t:'set_mode',mode} · {t:'set_model',model}
+//                   {t:'sleep'} · {t:'close'}
 //   runner->server: {t:'hello', id, sessionId, model, mode, status, startedAt,
 //                    slashCommands, events:[...historial de ESTA vida]} (respuesta)
 //                   {t:'event', event:{...}}                          (en vivo)
@@ -38,6 +39,7 @@ const ID = args.id;
 const CWD = args.cwd;
 const SOCK = args.sock;
 const MODEL = args.model || null;
+let currentModel = MODEL; // puede cambiar en vivo (set_model) o al resolverse el init del SDK
 let mode = PERMISSION_MODES.has(args.mode) ? args.mode : 'default';
 const RESUME = args.resume || null;
 if (!ID || !CWD || !SOCK) {
@@ -118,7 +120,8 @@ function onMessage(m) {
     // Los comandos slash disponibles (built-ins + skills + custom del cwd)
     // vienen SOLO en el init: la lista del init es la fuente de verdad.
     if (Array.isArray(m.slash_commands)) slashCommands = m.slash_commands;
-    emit({ type: 'init', chatId: ID, sessionId, model: m.model || MODEL, cwd: CWD, mode }, { record: false });
+    currentModel = m.model || MODEL;
+    emit({ type: 'init', chatId: ID, sessionId, model: currentModel, cwd: CWD, mode }, { record: false });
     emit({ type: 'meta', slashCommands }, { record: false });
     return;
   }
@@ -221,7 +224,7 @@ function shutdown(code) {
 // ---- comandos del server ----
 function handleCommand(c, msg) {
   if (msg.t === 'hello') {
-    writeTo(c, { t: 'hello', id: ID, sessionId, model: MODEL, mode, status, startedAt, slashCommands, events: history });
+    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, events: history });
     return;
   }
   if (msg.t === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
@@ -259,6 +262,15 @@ function handleCommand(c, msg) {
       mode = msg.mode;
       emit({ type: 'mode', mode });
     }).catch(() => {});
+    return;
+  }
+  if (msg.t === 'set_model' && typeof msg.model === 'string' && msg.model) {
+    Promise.resolve(q?.setModel?.(msg.model)).then(() => {
+      currentModel = msg.model;
+      emit({ type: 'model', model: currentModel });
+    }).catch((err) => {
+      emit({ type: 'error', message: `No se pudo cambiar el modelo: ${String(err?.message || err).slice(0, 200)}` });
+    });
     return;
   }
   if (msg.t === 'sleep' || msg.t === 'close') {

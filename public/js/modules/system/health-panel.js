@@ -6,6 +6,7 @@
 // Abajo: Bugfixes → PR (registro de fixes de tickets trabajados en chat;
 // subir PR a Chris y scan retroactivo de chats sin registro — /api/bugfixes).
 import { icon } from '../../ui/icons.js';
+import { pacman } from '../../ui/pacman.js';
 
 const API = '/api/health';
 const BF_API = '/api/bugfixes';
@@ -89,7 +90,7 @@ export function mountHealthPanel(el, ctx) {
     }
     if (data.error) parts.push(`<p class="hp-error">Último intento falló: ${esc(data.error)}</p>`);
     if (data.running) {
-      parts.push('<p class="hp-running"><span class="cwc-spinner"></span> Claude está revisando el proyecto… (puede tardar unos minutos)</p>');
+      parts.push(`<p class="hp-running">${pacman()} Claude está revisando el proyecto… (puede tardar unos minutos)</p>`);
     } else if (isAdmin) {
       parts.push(`<button class="btn btn--block" data-ref="run">${icon('gear', { size: 14 })}<span>Revisar ahora con Claude</span></button>`);
     }
@@ -178,7 +179,7 @@ export function mountHealthPanel(el, ctx) {
         if (!ok) return;
         const btn = e.currentTarget;
         btn.disabled = true;
-        btn.innerHTML = '<span class="cwc-spinner"></span><span>Subiendo…</span>';
+        btn.innerHTML = `${pacman()}<span>Subiendo…</span>`;
         try {
           const res = await fetch(`${BF_API}/pr`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
           const data = await res.json().catch(() => ({}));

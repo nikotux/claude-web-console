@@ -26,6 +26,17 @@
 //      repo en GitHub sincronizada con GITHUB_DESCRIPTION (inglés, resume
 //      toda la consola + sus módulos). Si falta `gh`/auth/red, NO rompe el
 //      push (que ya ocurrió) — solo se informa en la respuesta.
+//
+// Pull desde GitHub (POST /api/backup/pull, admin) — restauración del CÓDIGO
+// desde el remote `personal` (la inversa del push): mismas guardas duras,
+// fetch + stash→merge --ff-only→pop (patrón de tolkien/update: NUNCA
+// descarta trabajo local; si las historias divergieron falla con 409 y el
+// stash se repone — nada de --force ni reset --hard). Si package(-lock).json
+// cambió, corre `npm install` ANTES de reiniciar (el server nuevo puede
+// necesitar deps nuevas). Con HEAD actualizado y árbol sano → scheduleRestart
+// (igual que restaurar un tar.gz: el código viejo sigue en RAM). Si el pop
+// del stash conflictuó o npm falló, NO se reinicia (un server que arranca
+// sobre archivos con marcas de conflicto entra en crash-loop) — se avisa.
 import express from 'express';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -368,6 +379,94 @@ export default {
         });
       } catch {
         res.status(500).json({ error: 'Falló el push.' });
+      } finally {
+        busy = false;
+      }
+    });
+
+    // Pull desde GitHub: restauración del código desde el remote personal.
+    // Ver el bloque de decisiones en la cabecera del archivo.
+    r.post('/pull', async (req, res) => {
+      if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
+      busy = true;
+      const log = [];
+      try {
+        const g = await securityGuards();
+        if (!g.ok) return res.status(g.needsSetup ? 428 : 403).json({ error: g.error, needsSetup: !!g.needsSetup });
+
+        const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'main';
+        const f = await git(['fetch', REMOTE], { timeout: 120000 });
+        if (f.code !== 0) return res.status(500).json({ error: `Falló el fetch: ${f.stderr || 'error de red o de git'}` });
+
+        const local = (await git(['rev-parse', 'HEAD'])).out;
+        const remoteRef = await git(['rev-parse', `${REMOTE}/${branch}`]);
+        if (remoteRef.code !== 0) {
+          return res.status(409).json({ error: `El remote no tiene la rama "${branch}" — nada desde donde restaurar.` });
+        }
+        // "Nada que traer" = el remote es ancestro de HEAD (mismo commit O el
+        // local va adelante con commits sin pushear). Comparar solo HEAD ==
+        // remote NO alcanza: con el local adelante, el merge --ff-only diría
+        // "Already up to date" y reiniciaríamos el server para nada.
+        const isAncestor = await git(['merge-base', '--is-ancestor', remoteRef.out, local]);
+        if (isAncestor.code === 0) {
+          const ahead = parseInt((await git(['rev-list', '--count', `${remoteRef.out}..${local}`])).out, 10) || 0;
+          return res.json({ ok: true, upToDate: true, head: local.slice(0, 7), ahead });
+        }
+
+        // Cambios locales sin commitear: a salvo en el stash antes de mover HEAD.
+        const dirty = (await git(['status', '--porcelain'])).out.length > 0;
+        let stashed = false;
+        if (dirty) {
+          const s = await git(['stash', 'push', '-u', '-m', 'cwc: auto antes de pull desde GitHub']);
+          log.push({ step: 'stash', code: s.code, out: (s.out || s.stderr).slice(0, 200) });
+          stashed = s.code === 0 && !/No local changes/i.test(s.out + s.stderr);
+        }
+
+        // Solo fast-forward: si las historias divergieron NO se fuerza nada.
+        const merge = await git(['merge', '--ff-only', `${REMOTE}/${branch}`], { timeout: 60000 });
+        log.push({ step: 'merge', code: merge.code, out: (merge.out || merge.stderr).slice(0, 200) });
+
+        let popConflict = false;
+        if (stashed) {
+          const pop = await git(['stash', 'pop']);
+          log.push({ step: 'stash-pop', code: pop.code, out: (pop.out || pop.stderr).slice(0, 200) });
+          popConflict = pop.code !== 0; // conflicto al reaplicar: queda en el stash
+        }
+
+        if (merge.code !== 0) {
+          return res.status(409).json({
+            error: 'El historial local divergió del de GitHub (hay commits locales que el remote no tiene). No se fuerza nada: resolvelo a mano (push primero, o rebase).',
+            log,
+          });
+        }
+
+        const to = (await git(['rev-parse', 'HEAD'])).out;
+        const changed = lines((await git(['diff', '--name-only', `${local}..${to}`])).out);
+
+        // Deps nuevas: npm install ANTES del restart (el server nuevo puede requerirlas).
+        let npm = null;
+        if (changed.includes('package.json') || changed.includes('package-lock.json')) {
+          npm = await new Promise((resolve) => {
+            execFile('npm', ['install'], { cwd: PROJECT_DIR, timeout: 300000 }, (err, _o, stderr) => {
+              resolve({ ok: !err, error: err ? String(stderr || err.message).slice(0, 300) : null });
+            });
+          });
+          log.push({ step: 'npm-install', code: npm.ok ? 0 : 1, out: npm.error || 'ok' });
+        }
+
+        // Reinicio SOLO con árbol sano: con conflicto del pop o npm roto, un
+        // restart puede dejar el server en crash-loop — mejor avisar.
+        const restarting = !popConflict && (!npm || npm.ok);
+        res.json({
+          ok: true, updated: true,
+          from: local.slice(0, 7), to: to.slice(0, 7),
+          files: changed.length, stashed, popConflict,
+          npmRan: !!npm, npmOk: npm ? npm.ok : null,
+          restarting, log,
+        });
+        if (restarting) scheduleRestart(); // el server viejo sigue en RAM hasta reiniciar
+      } catch {
+        res.status(500).json({ error: 'Falló el pull.', log });
       } finally {
         busy = false;
       }

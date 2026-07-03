@@ -145,6 +145,7 @@ export default {
         <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>Abrir</span></button>
         <button class="cwc-popup-item" data-act="mode">${icon(isTui ? 'sparkle' : 'terminal', { size: 15 })}<span>${isTui ? 'Pasar a Chat' : 'Pasar a TUI'}</span></button>
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
+        <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
         <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -153,7 +154,39 @@ export default {
       menu.querySelector('[data-act="open"]').addEventListener('click', () => act(() => openChatView(c)));
       menu.querySelector('[data-act="mode"]').addEventListener('click', () => act(() => switchChatMode(c)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
+      menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    // Modelo de una CONVERSACIÓN: en vivo (q.setModel() del SDK, sin perder
+    // contexto) si el motor está corriendo, o para el próximo arranque si
+    // está dormido. Mismo diálogo que pickModel (sesiones tmux), pero pega a
+    // /api/chat/model en vez de mandar /model a la terminal.
+    function pickModelForChat(c) {
+      const m = dialog.openModal({ title: 'Modelo de esta conversación', width: 320 });
+      m.body.innerHTML = `
+        <div class="sess-menu-list">
+          ${MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
+        </div>
+        <p class="sess-plumbing">Si la conversación está activa, el cambio es en vivo (no se pierde el contexto).</p>`;
+      for (const b of m.body.querySelectorAll('[data-model]')) {
+        b.addEventListener('click', async () => {
+          m.close();
+          try {
+            const res = await fetch('/api/chat/model', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: c.id, model: b.dataset.model }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo.');
+            syncConversation(data.chat);
+            refresh();
+          } catch (e) {
+            dialog.alertDialog({ title: 'Modelo', message: e.message });
+          }
+        });
+      }
     }
 
     async function switchChatMode(c) {

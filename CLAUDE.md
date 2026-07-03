@@ -315,6 +315,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
   Relacionado: el lanzador muestra solo las 2 últimas conversaciones en
   "Retomar" y el resto (hasta 10, tope del endpoint /api/chat/history) vive
   en el modal "Ver más" para no empujar el botón Iniciar fuera de pantalla.
+  Mismo patrón en "Abrir en": atajos fijos (Home/proyecto) + 3 recientes
+  (si el destino elegido en el modal no está en el top 3, reemplaza al 3ro
+  para que se vea activo) + "Ver más" AL LADO de "Elegir otra carpeta…"
+  (fila `.ln-list-actions`, no apilados: el alto vertical del lanzador es
+  escaso en móvil); tope de ubicaciones en `core/recents.js` (MAX = 10).
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.

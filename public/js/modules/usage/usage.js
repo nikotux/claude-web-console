@@ -5,6 +5,7 @@
 // "Uso" que abre ese botón. Mismos datos y endpoint de siempre
 // (/api/tokens/summary); nueva presentación.
 import { modelColor, modelName } from '../../ui/models.js';
+import { pacman } from '../../ui/pacman.js';
 
 const POLL_MS = 15000;
 
@@ -131,7 +132,7 @@ export default {
 
     btn.addEventListener('click', async () => {
       const m = dialog.openModal({ title: 'Uso de tokens', width: 520 });
-      m.body.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>calculando…</div>';
+      m.body.innerHTML = `<div class="cwc-loading">${pacman()}calculando…</div>`;
       try {
         const sum = await fetchSummary();
         renderProjects(m.body, sum);

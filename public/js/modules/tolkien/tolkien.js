@@ -9,6 +9,8 @@
 //                      EXCLUSIVO de ~/tolkien: no toca nada fuera de esa
 //                      carpeta (guard también en el backend).
 // Chequeo automático contra el remoto cada 5 minutos.
+import { pacman } from '../../ui/pacman.js';
+
 export default {
   name: 'tolkien',
 
@@ -323,7 +325,7 @@ export default {
       // están registrados. `silent` = apertura automática, sin alerts.
       async function ghSync(silent) {
         mr.ghsync.disabled = true;
-        mr.ghstate.innerHTML = '<span class="cwc-spinner"></span> consultando GitHub…';
+        mr.ghstate.innerHTML = `${pacman()} consultando GitHub…`;
         try {
           const res = await fetch('/api/bugfixes/refresh-prs', { method: 'POST' });
           const data = await res.json().catch(() => ({}));
@@ -354,7 +356,7 @@ export default {
         });
         if (!ok) return;
         mr.send.disabled = true;
-        mr.send.innerHTML = '<span class="cwc-spinner"></span><span>Subiendo…</span>';
+        mr.send.innerHTML = `${pacman()}<span>Subiendo…</span>`;
         try {
           const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
           if (up.status) current = up.status;

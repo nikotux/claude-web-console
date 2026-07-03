@@ -51,6 +51,22 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-03 06:11 — main
+- Lanzador móvil: modal alcanzable (88dvh) y Retomar compacto con modal Ver más
+- Chat: re-anclar el scroll al final al volver a una pestaña oculta
+- Lanzador: 'Abrir en' compacto — 3 recientes + Ver más al lado de Elegir carpeta
+- Modified `CLAUDE.md`
+- Modified `bin/cwc-chat-runner.js`
+- Modified `public/js/modules/sessions/sessions.js`
+- Modified `public/js/modules/system/backup-panel.js`
+- Modified `public/js/modules/system/health-panel.js`
+- Modified `public/js/modules/tickets/tickets.js`
+- Modified `public/js/modules/tolkien/tolkien.js`
+- Modified `public/js/modules/usage/usage.js`
+- Modified `src/modules/backup/index.js`
+- Modified `src/modules/terminal/index.js`
+- Modified `src/modules/tmux/index.js`
+
 ### 2026-07-03 02:22 — main
 - Modified `CLAUDE.md`
 - Modified `public/css/style.css`
@@ -238,13 +254,17 @@ config (`~/.claude/settings.json`):
   breadcrumb browser) and, for Chat, **"Resume"** the folder's latest
   conversations.
 - **Sessions** — cards with a human-readable name, a **real status** dot
-  (● working / ○ idle, via the observer) and a color-coded model. Tap to
-  attach/focus; the ⋯ menu renames / switches model / kills. External tmux
-  sessions live in a collapsed group.
+  (● working / ○ idle, via the observer) and a color-coded model. New
+  sessions get **unique names** automatically ("tolkien", "tolkien 1",
+  "tolkien 2" — checked across chats *and* terminals). Tap to attach/focus;
+  the ⋯ menu renames / switches model / kills (or, for a chat conversation,
+  renames / switches Chat↔TUI / **switches model live** without losing
+  context / closes). External tmux sessions live in a collapsed group.
 - **Native chat (Agent SDK)** — conversation with bubbles, markdown and
   code with a copy button, collapsible tool calls with their result,
   **red/green diffs** (also inside the **Allow/Deny** permission card),
-  permission modes (ask / accept edits / plan), per-turn cost, stop, and
+  permission modes (ask / accept edits / plan), a live model switch (from
+  the session's ⋯ menu, no restart needed), per-turn cost, stop, and
   resume. Uses the **CLI's own subscription** (no separate API key or
   billing). The textarea supports **native voice dictation** on phone.
 - **PTY terminal** — for the full Claude Code TUI, htop, vim: `tmux` on an
@@ -253,14 +273,23 @@ config (`~/.claude/settings.json`):
   touch/wheel scroll through copy-mode), so it isn't re-injected on reload.
 - **Status footer** — CPU/RAM/disk gauges, **today's $** (→ the **Usage**
   modal with a per-project/per-model breakdown), Explorer, and
-  **⚙ System** (Backup + Users + **Health** + Log out).
+  **⚙ System** (Backup + Users + **Projects** + **Health** + Log out).
 - **Explorer** (`/archivos`) — a Finder-style file manager: upload/download,
   zip folders and selections, a trash with 30-day purge, preview with
   syntax highlighting, and "Claude here / Terminal here" per folder.
 - **Mobile** — an auxiliary key bar (Esc/Tab/⇧Tab/Ctrl/arrows), dictation,
   paste; copy = select text (OSC52), paste = right-click on desktop. The
   sidebar becomes a compact overlay (capped width, dimmed backdrop, tap
-  outside to dismiss) instead of the fixed desktop panel.
+  outside to dismiss) instead of the fixed desktop panel, and drops the
+  redundant open-tabs strip (the Sessions cards already cover that). The
+  chat header has a tiny **Pac-Man** next to the title (pure CSS, no image):
+  gray, mouth closed and still while waiting for your message; golden and
+  chomping through a trail of dots while Claude is working — a real-time
+  "alive vs. asleep" cue (deliberately exempt from reduced-motion, since
+  it's a functional status indicator). The same Pac-Man doubles as the
+  loader for every long-running operation (deep health review, bug triage,
+  PR uploads, GitHub push, usage calculation) — if it's chomping, the
+  process is alive.
 - **Backups** — a full snapshot (`.tar.gz`, secrets included, **stays on
   the server**), restoring restarts the service on its own. Separately,
   **code backup to GitHub**: `git push` to the **`personal`** remote (your
