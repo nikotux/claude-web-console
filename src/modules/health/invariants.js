@@ -52,14 +52,38 @@ export const SEED_INVARIANTS = [
   },
 ];
 
-// Carga los aprendidos y compila su `match` (string) a RegExp; un patrón malo
-// se descarta sin romper el auditor (try/catch por entrada).
+// Convierte un patrón GLOB (lo que emite el modelo: `**`, `*`, rutas — el prompt
+// pide "<patrón de archivos>") a fuente de RegExp anclada al final. `**` cruza
+// directorios, `*` no; el resto de metacaracteres de regex se escapan. Los
+// invariantes APRENDIDOS guardan globs (legibles, mismo formato que la
+// propuesta); acá se compilan a regex para el matcheo. Antes se compilaba el
+// glob crudo con `new RegExp` y un `**` tiraba "Nothing to repeat" (rompía el
+// aprobar y dejaba el invariante muerto).
+export function globToRegExp(glob) {
+  const s = String(glob || '').trim();
+  let re = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '*') {
+      if (s[i + 1] === '*') { i += 1; if (s[i + 1] === '/') i += 1; re += '.*'; } // ** (+ / opcional) = cruza dirs
+      else re += '[^/]*'; // * = dentro de un segmento
+    } else if ('.+?()[]{}^$|\\/'.includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  return `${re}$`;
+}
+
+// Carga los aprendidos y compila su `match` (glob) a RegExp; un patrón malo se
+// descarta sin romper el auditor (try/catch por entrada).
 function loadLearned() {
   let arr;
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); } catch { return []; }
   if (!Array.isArray(arr)) return [];
   return arr.map((e) => {
-    try { return { match: new RegExp(e.match), text: String(e.text), learned: true }; }
+    try { return { match: new RegExp(globToRegExp(e.match)), text: String(e.text), learned: true }; }
     catch { return null; }
   }).filter(Boolean);
 }
@@ -83,7 +107,9 @@ export function appendLearnedInvariant({ match, text }) {
   const m = String(match || '').trim();
   const t = String(text || '').trim();
   if (!m || !t) throw new Error('Faltan match o texto del invariante.');
-  try { new RegExp(m); } catch { throw new Error('El match no es una expresión regular válida.'); }
+  // El match es un GLOB (`src/modules/**/*.js`), no un regex — se valida
+  // compilando su conversión, así `**` no revienta al aprobar.
+  try { new RegExp(globToRegExp(m)); } catch { throw new Error('El patrón de archivos no es válido.'); }
   let arr = [];
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
   if (arr.some((e) => e.match === m && e.text === t)) return; // dedup

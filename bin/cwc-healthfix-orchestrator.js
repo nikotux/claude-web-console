@@ -113,6 +113,11 @@ async function main() {
         const inv = out.match(/PROPOSED-INVARIANT\s+([^\n]+?)\s*\|\s*([^\n]+)/i);
         if (inv) addProposal({ text: inv[1].trim(), match: inv[2].trim() || (it.file || '').split(':')[0], fromFinding: it });
         log(`  ready ${it.area}`);
+      } else if (/FIXNONE/.test(out) || /falso positivo/i.test(out)) {
+        // No era un bug: el modelo lo descartó (falso positivo). NO es un fallo.
+        it.status = 'dismissed';
+        it.error = (out.match(/FIXNONE\s*(.*)/)?.[1] || out.match(/falso positivo[^\n]*/i)?.[0] || 'no era un bug').trim().slice(0, 200);
+        log(`  DISMISS ${it.area}: ${it.error}`);
       } else {
         it.status = 'failed';
         it.error = (out.match(/FIXFAIL\s*(.*)/)?.[1] || 'sin confirmación del modelo').trim().slice(0, 200);

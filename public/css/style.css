@@ -1289,6 +1289,7 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-badge--fixing { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 .hr-badge--ok { color: var(--cwc-ok); border-color: var(--cwc-ok); }
 .hr-badge--fail { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); }
+.hr-badge--dismiss { color: var(--cwc-text-dim); border-color: var(--cwc-border-strong); background: color-mix(in srgb, var(--cwc-text-dim) 8%, transparent); }
 .hr-badge--crit { color: var(--cwc-danger-strong); border-color: var(--cwc-danger); background: color-mix(in srgb, var(--cwc-danger) 12%, transparent); }
 .hr-f-fixing { justify-content: flex-start; align-items: center; gap: .45rem; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); }
 .hr-f-resolved { margin-top: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-ok); }

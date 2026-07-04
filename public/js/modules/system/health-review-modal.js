@@ -54,14 +54,18 @@ export function openHealthReview(ctx, { isAdmin }) {
   // terminales. Es lo que pediste para ver el estado de cada uno en vivo.
   function batchItemBadge(it) {
     if (!it) return '';
-    switch (it.status) {
+    // Retrocompat: corridas viejas marcaban el falso positivo como 'failed' con
+    // "falso positivo" en el error. Se muestra como descartado, no como error.
+    const status = (it.status === 'failed' && /falso positivo/i.test(it.error || '')) ? 'dismissed' : it.status;
+    switch (status) {
       case 'pending': return `<span class="hr-badge hr-badge--queue" title="En cola para resolver">${pacman({ working: false })}<span>en cola</span></span>`;
       case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="Resolviendo ahora (en paralelo, en su sandbox aislado)">${pacman()}<span>resolviendo</span></span>`;
       case 'ready': return `<span class="hr-badge hr-badge--fixing" title="Fix listo en el sandbox — esperando la integración serial al código real">${pacman()}<span>listo p/ integrar</span></span>`;
       case 'integrated': return '<span class="hr-badge hr-badge--ok">✅ resuelto</span>';
       case 'conflict': return `<span class="hr-badge hr-badge--fail" title="Conflicto al integrar (quedó sin aplicar): ${esc(it.error || '')}">🔴 conflicto</span>`;
       case 'check-failed': return `<span class="hr-badge hr-badge--fail" title="No pasó node --check al integrar: ${esc(it.error || '')}">🔴 falló el check</span>`;
-      case 'failed': return `<span class="hr-badge hr-badge--fail" title="${esc(it.error || 'error')}">🔴 error</span>`;
+      case 'dismissed': return `<span class="hr-badge hr-badge--dismiss" title="El modelo revisó el código y NO era un bug (falso positivo): ${esc(it.error || '')}">⊘ no era bug</span>`;
+      case 'failed': return `<span class="hr-badge hr-badge--fail" title="Era real pero no se pudo arreglar: ${esc(it.error || 'error')}">🔴 error</span>`;
       default: return '';
     }
   }

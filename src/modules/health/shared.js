@@ -350,10 +350,10 @@ export function fixPrompt(f) {
     f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
     '',
     'Reglas ESTRICTAS:',
-    '1. Verificá leyendo el código citado que el hallazgo es REAL. Si es falso positivo, NO edites nada y terminá con: FIXFAIL falso positivo — <por qué>.',
+    '1. Verificá leyendo el código citado que el hallazgo es REAL. Si NO hay bug (falso positivo: el código ya valida/maneja el caso), NO edites nada y terminá con: FIXNONE <por qué no era un bug>.',
     '2. Si es real, aplicá el fix MÍNIMO editando los archivos necesarios.',
     '3. Verificá CADA archivo .js que edites con `node --check <archivo>` (única orden de terminal permitida). NO corras git, tests, npm, systemctl ni reinicies nada.',
-    '4. Terminá tu ÚLTIMO mensaje con UNA línea exacta: "FIXOK <qué cambiaste, en qué archivos>" o "FIXFAIL <motivo>".',
+    '4. Terminá tu ÚLTIMO mensaje con UNA línea exacta: "FIXOK <qué cambiaste, en qué archivos>" (fix aplicado), "FIXNONE <por qué>" (falso positivo, no era bug) o "FIXFAIL <motivo>" (era real pero no pudiste arreglarlo).',
     '5. Solo si el fix fue OK y el bug es una CLASE que conviene blindar, agregá DESPUÉS del FIXOK: "PROPOSED-INVARIANT <aserción verificable> | <patrón de archivos>". Si no, "NO-INVARIANT".',
   ].filter(Boolean).join('\n');
 }
