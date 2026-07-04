@@ -240,12 +240,19 @@ export default {
         danger: true,
       });
       if (!ok) return;
-      await fetch('/api/chat/close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: c.id }),
-      }).catch(() => {});
-      refresh();
+      try {
+        const res = await fetch('/api/chat/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          dialog.alertDialog({ title: 'Cerrar conversación', message: data.error || 'No se pudo cerrar la conversación.' });
+        }
+      } finally {
+        refresh();
+      }
     }
 
     function card(s) {
@@ -349,12 +356,19 @@ export default {
         placeholder: displayName(s),
       });
       if (name === null) return;
-      await fetch('/api/tmux/title', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ socket: s.socket, session: s.name, title: name }),
-      }).catch(() => {});
-      refresh();
+      try {
+        const res = await fetch('/api/tmux/title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ socket: s.socket, session: s.name, title: name }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          dialog.alertDialog({ title: 'Renombrar sesión', message: data.error || 'No se pudo renombrar la sesión.' });
+        }
+      } finally {
+        refresh();
+      }
     }
 
     function pickModel(s) {

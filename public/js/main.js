@@ -225,8 +225,10 @@ function closeTab(id) {
 async function updateModelFlag(id) {
   const entry = tabs.get(id);
   if (!entry || entry.tabButton.dataset.type === 'chat') return;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
   try {
-    const { model } = await (await fetch(`/api/terminal/model?id=${encodeURIComponent(id)}`)).json();
+    const { model } = await (await fetch(`/api/terminal/model?id=${encodeURIComponent(id)}`, { signal: ac.signal })).json();
     if (model) {
       entry.flag.style.background = modelColor(model.key);
       entry.flag.style.display = 'block';
@@ -237,7 +239,7 @@ async function updateModelFlag(id) {
       entry.tabButton.title = entry.session.title || 'terminal';
       paintChip(entry, null); // fantasma: terminal sin Claude
     }
-  } catch { /* noop */ }
+  } catch { /* noop */ } finally { clearTimeout(timer); }
 }
 function pollModels() {
   if (document.hidden) return;
@@ -249,10 +251,12 @@ function pollModels() {
 async function pollTabStatus() {
   if (document.hidden || !tabs.size) return;
   try {
+    const ac = new AbortController();
+    const killer = setTimeout(() => ac.abort(), 5000);
     const [tmux, chats] = await Promise.all([
-      fetch('/api/tmux/sessions').then((r) => r.json()).then((d) => d.sessions || []).catch(() => []),
-      fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
-    ]);
+      fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => []),
+      fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+    ]).finally(() => clearTimeout(killer));
     const byName = new Map(tmux.map((s) => [s.name, s]));
     const byChat = new Map(chats.map((c) => [c.id, c]));
     let titleChanged = false;

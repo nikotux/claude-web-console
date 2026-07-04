@@ -335,6 +335,7 @@ class Chat {
       case 'mode':
         this.permissionMode = e.mode;
         this._push(e);
+        this.onUpdate?.(); // persistir el modo de permisos confirmado por el runner
         return;
       case 'model':
         this.model = e.model;

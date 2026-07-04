@@ -52,7 +52,10 @@ function costOf(m, { input, output, cw1h, cw5m, cr }) {
 }
 
 // Caché por archivo: path -> { mtimeMs, size, rows: {`day\tmodel`: {tok...}} }
+// LRU acotado: sin límite, cada .jsonl visto alguna vez (proyectos/sesiones
+// viejas incluidas) quedaba en memoria para siempre → crecimiento sin fin.
 const fileCache = new Map();
+const FILE_CACHE_MAX = 1000;
 
 function emptyBucket() {
   return { input: 0, output: 0, cw1h: 0, cw5m: 0, cr: 0 };
@@ -94,10 +97,21 @@ async function rowsForFile(file) {
   try { st = await fs.stat(file); } catch { return {}; }
   const cached = fileCache.get(file);
   if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+    // Re-insertar mueve la entrada al final (orden de inserción del Map):
+    // mantiene el orden de "usado más recientemente" para el LRU de abajo.
+    fileCache.delete(file);
+    fileCache.set(file, cached);
     return cached.rows;
   }
   const rows = await parseFile(file);
+  fileCache.delete(file);
   fileCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, rows });
+  // Evita crecimiento sin límite: con muchos proyectos/sesiones, cada .jsonl
+  // nuevo se acumulaba para siempre. Se descarta el menos usado recientemente.
+  if (fileCache.size > FILE_CACHE_MAX) {
+    const oldestKey = fileCache.keys().next().value;
+    fileCache.delete(oldestKey);
+  }
   return rows;
 }
 
@@ -189,6 +203,10 @@ async function buildSummary() {
 let summaryCache = null;
 let summaryAt = 0;
 const SUMMARY_TTL_MS = 4000;
+// Promesa compartida: evita buildSummary() concurrentes (dos requests casi
+// simultáneas que pasan el check de TTL antes de que la primera actualice
+// summaryAt re-parsearían todos los transcripts en paralelo).
+let summaryBuildPromise = null;
 
 // ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
 // Fuente: el endpoint OAuth de uso de Anthropic — el MISMO que consulta el
@@ -270,6 +288,10 @@ async function fetchPlanLimits() {
 let limitsCache = null;
 let limitsAt = 0;
 const LIMITS_TTL_MS = 60000;
+// Promesa compartida: evita fetchPlanLimits() concurrentes (p.ej. dos
+// requests casi simultáneas que pasan el check de TTL antes de que la
+// primera actualice limitsAt).
+let limitsFetchPromise = null;
 
 export default {
   name: 'tokens',
@@ -286,7 +308,12 @@ export default {
         return res.json(summaryCache);
       }
       try {
-        summaryCache = await buildSummary();
+        if (!summaryBuildPromise) {
+          summaryBuildPromise = buildSummary().finally(() => {
+            summaryBuildPromise = null;
+          });
+        }
+        summaryCache = await summaryBuildPromise;
         summaryAt = ms;
         res.json(summaryCache);
       } catch (err) {
@@ -304,7 +331,12 @@ export default {
         return res.json(limitsCache);
       }
       try {
-        limitsCache = await fetchPlanLimits();
+        if (!limitsFetchPromise) {
+          limitsFetchPromise = fetchPlanLimits().finally(() => {
+            limitsFetchPromise = null;
+          });
+        }
+        limitsCache = await limitsFetchPromise;
         limitsAt = now;
         res.json(limitsCache);
       } catch (err) {

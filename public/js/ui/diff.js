@@ -9,6 +9,7 @@
 import { langForPath, highlightLine } from './code.js';
 
 const HL_MAX_LINES = 400; // diffs enormes: sin sintaxis (perf)
+const DOM_MAX_LINES = 1000; // tope duro de nodos DOM por bloque (perf/memoria)
 
 export function renderDiff({ file, old: oldStr, new: newStr } = {}) {
   const el = document.createElement('div');
@@ -26,7 +27,9 @@ export function renderDiff({ file, old: oldStr, new: newStr } = {}) {
     if (!text) return;
     const b = document.createElement('div');
     b.className = `cwc-diff-block ${cls}`;
-    const lines = String(text).split('\n');
+    const allLines = String(text).split('\n');
+    const truncated = allLines.length > DOM_MAX_LINES;
+    const lines = truncated ? allLines.slice(0, DOM_MAX_LINES) : allLines;
     const hl = lang && lines.length <= HL_MAX_LINES;
     for (const line of lines) {
       const ln = document.createElement('div');
@@ -40,6 +43,12 @@ export function renderDiff({ file, old: oldStr, new: newStr } = {}) {
         ln.textContent = sign + line;
       }
       b.appendChild(ln);
+    }
+    if (truncated) {
+      const trunc = document.createElement('div');
+      trunc.className = 'cwc-diff-line cwc-diff-truncated';
+      trunc.textContent = `… (${allLines.length - DOM_MAX_LINES} líneas más ocultas por límite de rendimiento)`;
+      b.appendChild(trunc);
     }
     el.appendChild(b);
   };

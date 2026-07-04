@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWithinHome } from './paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, '..', '..', 'recents.json');
@@ -25,6 +26,8 @@ function save(recents) {
 export function recordRecent(relCwd) {
   const rel = String(relCwd || '').replace(/^\/+|\/+$/g, '');
   if (!rel) return;
+  // INVARIANTE 1: nunca persistir una ruta sin validar que cae dentro del home.
+  if (!resolveWithinHome(rel)) return;
   const recents = load();
   const existing = recents.find((r) => r.cwd === rel);
   if (existing) {

@@ -42,16 +42,18 @@ function enhanceCodeBlocks(root) {
   for (const pre of root.querySelectorAll('pre')) {
     const code = pre.querySelector('code');
     if (!code) continue;
-    // Resaltado (por language-* o autodetección).
+    // Resaltado solo con language-* explícito. Sin autodetección: adivinar
+    // el lenguaje sobre texto no confiable mete falsos positivos (ver code.js).
     if (hljs) {
       try {
         const langMatch = (code.className || '').match(/language-([\w-]+)/);
         const lang = langMatch && hljs.getLanguage(langMatch[1]) ? langMatch[1] : null;
-        const src = code.textContent;
-        code.innerHTML = lang
-          ? hljs.highlight(src, { language: lang }).value
-          : hljs.highlightAuto(src).value;
-        code.classList.add('hljs');
+        if (lang) {
+          const src = code.textContent;
+          code.innerHTML = hljs.highlight(src, { language: lang }).value;
+          code.classList.add('hljs');
+        }
+        // Sin lang confiable: se deja el texto plano tal cual (ya escapado).
       } catch { /* texto plano */ }
     }
     // Botón copiar.

@@ -45,7 +45,9 @@ export function readContext(projectDir) {
 }
 
 export function writeContext(projectDir, text) {
-  fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), String(text ?? '').slice(0, MAX_SIZE));
+  const out = String(text ?? '');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto es demasiado grande (máximo 400 KB). Nada se guardó.');
+  fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
 }
 
 // ===== Contexto por SECCIONES (integridad: nunca se edita el archivo entero) =====
@@ -196,8 +198,10 @@ export function readNote(projectDir, file) {
 
 export function writeNote(projectDir, file, text) {
   const p = safeNotePath(projectDir, file);
+  const out = String(text ?? '');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('La nota es demasiado grande (máximo 400 KB). Nada se guardó.');
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, String(text ?? '').slice(0, MAX_SIZE));
+  fs.writeFileSync(p, out);
 }
 
 export function readIndex(projectDir) {
@@ -207,6 +211,8 @@ export function readIndex(projectDir) {
 
 export function writeIndex(projectDir, text) {
   const dir = memoryDirFor(projectDir);
+  const out = String(text ?? '');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El índice de memorias es demasiado grande (máximo 400 KB). Nada se guardó.');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, INDEX_FILE_NAME), String(text ?? '').slice(0, MAX_SIZE));
+  fs.writeFileSync(path.join(dir, INDEX_FILE_NAME), out);
 }

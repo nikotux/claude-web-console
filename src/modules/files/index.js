@@ -168,7 +168,7 @@ export default {
       archive.on('error', () => { try { res.destroy(); } catch { /* noop */ } });
       archive.pipe(res);
       archive.glob('**/*', {
-        cwd: abs, dot: true,
+        cwd: abs, dot: true, follow: false,
         ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`],
       }, { prefix: name });
       archive.finalize();
@@ -193,7 +193,7 @@ export default {
       archive.pipe(res);
       const ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`];
       for (const it of items) {
-        if (it.isDir) archive.glob('**/*', { cwd: it.abs, dot: true, ignore }, { prefix: it.name });
+        if (it.isDir) archive.glob('**/*', { cwd: it.abs, dot: true, follow: false, ignore }, { prefix: it.name });
         else archive.file(it.abs, { name: it.name });
       }
       archive.finalize();

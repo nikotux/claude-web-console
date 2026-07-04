@@ -12,12 +12,47 @@ const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-chat-runner.js
 
 const HELLO_TIMEOUT_MS = 5000;
 
+// Lock SINCRÓNICO de arranque (INVARIANTE aprendido: toda función que decide
+// spawnear un proceso exclusivo debe chequear Y escribir su propio lock
+// DENTRO de sí misma, sin depender de guardas asíncronas del hijo — mismo
+// patrón que health/shared.js writeFixLock/isFixing + health/index.js
+// spawnFix/spawnOrchestrator, ver el comentario ahí sobre el TOCTOU). Antes
+// spawnRunner() dependía por completo de claimSocket() (async, corre DENTRO
+// del hijo bin/cwc-chat-runner.js DESPUÉS del spawn) para que un runner
+// duplicado se suicide: si dos spawns para el MISMO id se disparaban casi
+// juntos (p.ej. dos procesos server solapados en un restart), ambos podían
+// llegar a `server.listen()` del mismo socket antes de que cualquiera se
+// enterara del otro. Acá el chequeo+escritura pasa en el MISMO turno de JS
+// que decide spawnear, sin ningún `await` de por medio (Node es
+// single-thread: nada puede intercalarse en el medio) — cierra la ventana de
+// raíz en vez de confiar en que el hijo llegue a tiempo. La ventana de
+// frescura es corta a propósito: solo cubre fork+exec+bind del socket: la
+// autoridad de "¿sigue vivo?" a mediano/largo plazo sigue siendo el socket
+// (tryConnectRunner/claimSocket), esto no la reemplaza.
+const SPAWN_LOCK_FRESH_MS = 10000;
+const spawnLockPath = (id) => path.join(CHATS_DIR, `${id}.spawnlock`);
+function spawnLockAlive(id) {
+  try {
+    const { ts } = JSON.parse(fs.readFileSync(spawnLockPath(id), 'utf8'));
+    return Date.now() - ts < SPAWN_LOCK_FRESH_MS;
+  } catch { return false; }
+}
+function writeSpawnLock(id, pid) {
+  try { fs.writeFileSync(spawnLockPath(id), JSON.stringify({ pid, ts: Date.now() }), { mode: 0o600 }); }
+  catch { /* best-effort: un fallo de disco acá no debe tumbar el spawn */ }
+}
+
 // Lanza el runner de una conversación como proceso INDEPENDIENTE: detached
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
 // si no el cgroup entero (runners incluidos) moriría en cada restart.
 export function spawnRunner({ id, cwd, model, mode, resume }) {
   fs.mkdirSync(CHATS_DIR, { recursive: true, mode: 0o700 });
+  // Chequeo+escritura sincrónicos ANTES de spawnear (ver comentario arriba).
+  if (spawnLockAlive(id)) {
+    throw new Error('Ya se está lanzando (o ya corre) un runner para esta conversación.');
+  }
+  writeSpawnLock(id, 0); // placeholder inmediato; se pisa con el pid real abajo
   const log = fs.openSync(logPath(id), 'a');
   const args = [RUNNER, '--id', id, '--cwd', cwd, '--sock', sockPath(id), '--mode', mode || 'default'];
   if (model) args.push('--model', model);
@@ -25,6 +60,7 @@ export function spawnRunner({ id, cwd, model, mode, resume }) {
   const child = spawn(process.execPath, args, {
     cwd, detached: true, stdio: ['ignore', log, log], env: process.env,
   });
+  writeSpawnLock(id, child.pid);
   child.unref();
   fs.closeSync(log);
   return child.pid;

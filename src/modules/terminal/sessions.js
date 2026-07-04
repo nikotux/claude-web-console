@@ -100,9 +100,15 @@ class Session {
         '-c', this.cwd,
         this.command.file, ...this.command.args,
       );
-      this.proc = pty.spawn('tmux', args, {
-        name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
-      });
+      try {
+        this.proc = pty.spawn('tmux', args, {
+          name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
+        });
+      } catch (e) {
+        this.proc = null;
+        this.alive = false;
+        throw new Error(`No se pudo lanzar el pty de la sesión (bare): ${e?.message || e}`);
+      }
     } else {
       let args;
       if (this.attachSpec) {
@@ -119,9 +125,21 @@ class Session {
           '-c', this.cwd,
         );
       }
-      this.proc = pty.spawn('tmux', args, {
-        name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
-      });
+      try {
+        this.proc = pty.spawn('tmux', args, {
+          name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
+        });
+      } catch (e) {
+        this.proc = null;
+        this.alive = false;
+        throw new Error(`No se pudo lanzar el pty de la sesión: ${e?.message || e}`);
+      }
+    }
+    // Defensa en profundidad: si por lo que sea this.proc no quedó seteado
+    // (sin haber tirado excepción), no registramos handlers sobre undefined.
+    if (!this.proc) {
+      this.alive = false;
+      throw new Error('No se pudo lanzar el pty de la sesión: pty.spawn() no devolvió proceso.');
     }
     this.alive = true;
 
@@ -276,7 +294,12 @@ class SessionManager {
       const cwd = (cwdRaw && cwdRaw.trim()) || config.home;
       const title = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd) || 'terminal';
       const session = new Session({ id, cwd, title });
-      session.spawn({ runClaude: false });
+      try {
+        session.spawn({ runClaude: false });
+      } catch (e) {
+        console.error(`[terminal] Error rehidratando sesión ${id}:`, e);
+        continue; // no registrarla; seguimos con las siguientes
+      }
       this.sessions.set(id, session);
       count += 1;
     }
@@ -295,7 +318,18 @@ class SessionManager {
   // tmux que sobrevivió a un reinicio del server (new-session -A la retoma).
   createBare({ cwd, command, title, id = null } = {}) {
     const sid = id && !this.sessions.has(id) ? id : this._nextId();
-    const session = new Session({ id: sid, cwd, title, bare: true, command }).spawn();
+    const session = new Session({ id: sid, cwd, title, bare: true, command });
+    try {
+      session.spawn();
+    } catch (e) {
+      // No la registramos (this.sessions.set) si el spawn falló: evita dejar
+      // una sesión "fantasma" en el mapa. Logueamos acá para que quede
+      // rastro aunque el caller no maneje la excepción, y la repropagamos
+      // (mismo contrato de antes) porque los callers (chat/_toTui, rehydrate)
+      // ya la contemplan.
+      console.error(`[terminal] Error creando sesión bare ${sid}:`, e);
+      throw e;
+    }
     this.sessions.set(sid, session);
     return session;
   }
