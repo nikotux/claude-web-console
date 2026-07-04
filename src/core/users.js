@@ -96,10 +96,20 @@ export function deleteUser(username) {
   persist();
 }
 
+// Hash señuelo para usuarios inexistentes: igualar el costo (scrypt) entre
+// "usuario no existe" y "contraseña incorrecta" evita enumerar usuarios por
+// timing en /login (mismo cuidado que tokenMatches en auth.js).
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
+
 // Verifica credenciales. Devuelve { username, admin } o null.
 export function verifyUser(username, password) {
   const u = users.get(username);
-  if (!u) return null;
+  if (!u) {
+    // Mismo trabajo que con un usuario real antes de rechazar (anti-timing).
+    // String() defensivo: con u real un password no-string ya lanzaba igual.
+    verifyPassword(String(password ?? ''), DUMMY_HASH);
+    return null;
+  }
   return verifyPassword(password, u.hash) ? { username: u.username, admin: !!u.admin } : null;
 }
 
