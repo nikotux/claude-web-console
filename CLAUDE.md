@@ -415,7 +415,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             el detalle). CAPA IA OPCIONAL futura (Fase 4, no hecha): destilar la
                             "lección" con haiku. recordSolution() sigue exportada para esa capa.
                             GET /api/bugfixes/tickets = tickets consolidados (+ similar[]); el
-                            tablero (bug-board.js) lo consume vía ticketToRow (puente
+                            tablero (bugs/board/store.js) lo consume vía ticketToRow (puente
                             motor→helpers): 1 fila por ticket, los intentos en el detalle
                             (attemptsHtml). GET /api/bugfixes (viejo, array plano) queda para
                             retrocompat. ESTADO EN VIVO (fase 2): GitHub se auto-refresca cada
@@ -477,8 +477,8 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             de Zoho que usan las tools desk_* es de OTRO agente (Chris) —
                             la API publica toda nota como si la escribiera él y no permite
                             falsear el autor. Por eso TODO prompt de la consola que redacta
-                            escrituras a Desk (deskUpdateAuto acá y doDeskChat en
-                            bug-board.js — ghdeskchat reusa doDeskChat) exige cerrar la
+                            escrituras a Desk (deskUpdateAuto acá y deskChatPrompt en
+                            bugs/board/prompts.js — ghdeskchat reusa deskChat) exige cerrar la
                             nota con la firma exacta "— Nicolás (dev team)" en su propia
                             línea. Si se agrega otro camino de escritura a Desk, sumarle la
                             misma firma.
@@ -535,7 +535,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             número de PR abierto (openPrGroups) y saltea los secundarios (no
                             duplican fila); data-sid queda en el TKT primario → expandir/in-place
                             intactos. Mergeado/cerrado/sin-PR siguen como fila-TKT.
-                            UI ÚNICA: el TABLERO "Bugs & PRs" (tolkien/bug-board.js): filas de
+                            UI ÚNICA: el TABLERO "Bugs & PRs" (bugs/board/): filas de
                             registro local + tickets del triage + PRs SOLO-GitHub, estas
                             últimas EXPANDIBLES (badge #N del ticket detectado del título/branch
                             con ticketOfPr, panel GitHub en vivo con commits, "Actualizar
@@ -596,8 +596,30 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             reabierto/doble registro/ticket sin actualizar — los casos del
                             519). Botón "Abrir tablero" + ↻ triage (tokens, confirm). Al
                             cerrar el tablero (onClose) refresca las stats) ·
-                            El TABLERO (tolkien/bug-board.js, admin, lo abren "Bugs & Features"
-                            y —histórico— el botón de Tolkien):
+                            El TABLERO (bugs/board/, admin, lo abre "Bugs & Features"; vivió
+                            en tolkien/bug-board.js hasta el refactor 2026-07-04 —
+                            docs/plan-rediseno-movil-tickets.md §2, branch
+                            redesign/board-mobile): ARQUITECTURA con estado FUERA del
+                            DOM — index.js (composición: modal, listener delegado,
+                            timers, ciclo de vida) · store.js (estado ÚNICO: datos +
+                            expanded/archOpen/busy/paneles lazy; get/set/mutate/
+                            subscribe + ticketToRow; reset() por apertura) · render.js
+                            (funciones puras estado→HTML, un solo punto de re-render
+                            con scroll preservado) · actions.js (handlers/endpoints:
+                            escriben al store, jamás al DOM; confirms de tokens y
+                            destructivos intactos) · polls.js (encuestas POR CLAVE
+                            'desk:519'/'inv:232'/'tktinv:N'/'desk:bulk', dedup +
+                            deadline, inmunes a re-renders; stopAll() al cerrar) ·
+                            prompts.js (textos de los chats del ciclo) · labels.js
+                            (fuente única de etiquetas: prEstado/resolutionOf/EV_LABEL/
+                            evDot/celdas PR-Desk/rowKey 'sid:x|tkt:n|pr:n'/warningsFor)
+                            · util.js (esc/fmt). CLAVE: el re-render es SIEMPRE seguro
+                            ⇒ el auto-refresh de GitHub YA NO se pausa con un detalle
+                            abierto (cambio autorizado del plan, Fase 1); expansión y
+                            paneles GitHub/Desk/investigación sobreviven porque viven
+                            en el store, no en el DOM. R4 aplicada: OUTCOME_LABEL sin
+                            estados muertos (plan/abandoned) y evDot completa
+                            ticket_actualizado (ok/fail según e.ok).
                             UNA fila por ticket para TODO el ciclo — triage → trabajo → PR →
                             feedback → merge → ticket. Fuentes: registro de bugfixes +
                             triage de Desk (chips de verificación: severidad, "abierto en

@@ -1,5 +1,14 @@
 # Contexto UI — módulo "Bugs & PRs — Tolkien" (tablero de tickets)
 
+> ⚠️ **FOTO HISTÓRICA (pre-refactor).** La Fase 1 del plan
+> (`docs/plan-rediseno-movil-tickets.md`, branch `redesign/board-mobile`,
+> 2026-07-04) ya partió el monolito: el tablero vive ahora en
+> `public/js/modules/bugs/board/` (index/store/render/actions/polls/prompts/
+> labels/util), el estado salió del DOM y el auto-refresh ya no se pausa.
+> Las referencias `bug-board.js:línea` de este documento describen el estado
+> ANTERIOR; siguen siendo válidas como radiografía de flujos y deuda. Se
+> re-escribe en la Fase 6 (aceptación).
+
 > **Propósito:** documento de descubrimiento para un rediseño **mobile-first** del tablero.
 > Generado 2026-07-04 leyendo el código real (referencias `archivo:línea` verificadas a esa fecha).
 > **Fuente principal:** `public/js/modules/tolkien/bug-board.js` (1378 líneas).
