@@ -67,12 +67,20 @@ export default {
       return n;
     }
 
-    // Números derivados (baratos, sin tokens ni gh).
+    // Números derivados (baratos, sin tokens ni gh). Todo sale del registro que
+    // ya trae fetchFixes(): 'resolution' (active|partial|complete) y las señales
+    // de Desk (deskReplied/deskResolved) las deriva el motor de bugfixes.
     function stats() {
       const bugs = cache.tickets?.length || 0;
       const pendientes = fixes.filter((b) => b.status === 'pendiente' && b.files?.length).length;
       const prsAbiertos = fixes.filter((b) => b.status === 'subido' && b.prState !== 'merged').length;
-      return { bugs, pendientes, prsAbiertos, atencion: attentionCount() };
+      // Resolución (mismo criterio que el tablero): 🟢 completo = ticket
+      // confirmado resuelto en Desk · 🟡 parcial = PR mergeado sin confirmar.
+      const completos = fixes.filter((b) => b.resolution === 'complete').length;
+      const parciales = fixes.filter((b) => b.resolution === 'partial').length;
+      // Desk respondió pero el ticket todavía no se dio por resuelto.
+      const deskResp = fixes.filter((b) => b.deskReplied && !b.deskResolved).length;
+      return { bugs, pendientes, prsAbiertos, completos, parciales, deskResp, atencion: attentionCount() };
     }
 
     function render() {
@@ -96,10 +104,17 @@ export default {
       if (s.pendientes) parts.push(`<span class="bf-stat bf-stat--warn" title="fixes listos para enviar como PR">${icon('gitBranch', { size: 12 })}<b>${s.pendientes}</b> por enviar</span>`);
       if (s.prsAbiertos) parts.push(`<span class="bf-stat" title="PRs abiertos (sin mergear)">${icon('gitCommit', { size: 12 })}<b>${s.prsAbiertos}</b> abierto${s.prsAbiertos === 1 ? '' : 's'}</span>`);
       const l2 = parts.length ? `<div class="bf-line">${parts.join(' ')}</div>` : '';
+      // Línea de RESOLUCIÓN (mismo semáforo que el tablero) — solo si hay algo
+      // que mostrar: 🟢 completos · 🟡 parciales · 🎫 respondidos en Desk.
+      const res = [];
+      if (s.completos) res.push(`<span class="bf-stat bf-stat--ok" title="resueltos y confirmados en Desk (completo)">${icon('check', { size: 12 })}<b>${s.completos}</b> completo${s.completos === 1 ? '' : 's'}</span>`);
+      if (s.parciales) res.push(`<span class="bf-stat bf-stat--warn" title="PR mergeado, ticket sin confirmar (parcial)">${icon('gitCommit', { size: 12 })}<b>${s.parciales}</b> parcial${s.parciales === 1 ? '' : 'es'}</span>`);
+      if (s.deskResp) res.push(`<span class="bf-stat" title="Desk respondió, ticket sin resolver">${icon('clipboard', { size: 12 })}<b>${s.deskResp}</b> en Desk</span>`);
+      const l3 = res.length ? `<div class="bf-line">${res.join(' ')}</div>` : '';
       const atencion = s.atencion
         ? `<div class="bf-att" title="Fixes que necesitan tu atención (reabierto, doble registro o ticket sin actualizar)">⚠ <b>${s.atencion}</b> ${s.atencion === 1 ? 'requiere' : 'requieren'} atención</div>`
         : '';
-      refs.stats.innerHTML = `<div class="bf-line">${l1}</div>${l2}${atencion}`;
+      refs.stats.innerHTML = `<div class="bf-line">${l1}</div>${l2}${l3}${atencion}`;
     }
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -182,7 +197,12 @@ export default {
         projectRel: () => projectRel,
         updateRepo: async () => {
           try {
-            const up = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
+            const res = await fetch('/api/tolkien/update', { method: 'POST' });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({ error: 'Error' }));
+              return { ok: false, message: `${d.error || 'No se pudo actualizar el repo.'}\nNo se subió ningún PR.` };
+            }
+            const up = await res.json();
             if (up.error) return { ok: false, message: `${up.error}\nNo se subió ningún PR.` };
             if (up.popConflict) return { ok: false, message: 'Conflicto al reaplicar cambios locales (stash). Resolvelo antes de subir PRs.' };
             return { ok: true };

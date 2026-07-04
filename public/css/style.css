@@ -884,6 +884,7 @@ html, body {
 .bf-stat { color: var(--cwc-text); display: inline-flex; align-items: center; gap: .25rem; }
 .bf-stat b { font-weight: 700; }
 .bf-stat--warn { color: var(--cwc-warn); }
+.bf-stat--ok { color: var(--cwc-ok); }
 .bf-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: inline-flex; align-items: center; gap: .2rem; }
 .bf-att { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); margin-top: .1rem; }
 .bf-att b { font-weight: 700; }
