@@ -518,6 +518,8 @@ html, body {
 .hp-dot--ok { background: var(--cwc-ok); }
 .hp-dot--warn { background: var(--cwc-warn); }
 .hp-dot--fail { background: var(--cwc-danger-strong); }
+.hp-dot--info { background: var(--cwc-info); }   /* en revisión · esperando a Chris (no es tu acción) */
+.hp-dot--idle { background: var(--cwc-text-dimmer); }  /* en plan, sin actividad */
 .hp-label { color: var(--cwc-text); white-space: nowrap; }
 .hp-detail { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-sm); overflow-wrap: anywhere; }
 .hp-sum { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); padding: .35rem .1rem 0; }
@@ -933,6 +935,16 @@ html, body {
 .bfm-title a:hover { color: var(--cwc-accent); }
 .bfm-date { white-space: nowrap; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
 .bfm-state { white-space: nowrap; font-size: var(--cwc-fs-xs); }
+/* Estado con ícono tintado: distingue "tu acción" (warn) de "esperando a
+   Chris" (info/azul) de un vistazo. El ícono toma el color del estado; el
+   texto queda en el color de texto normal para legibilidad. */
+.bfm-est { display: inline-flex; align-items: center; gap: .25rem; }
+.bfm-est-ic { display: inline-flex; flex: none; }
+.bfm-est--ok .bfm-est-ic { color: var(--cwc-ok); }
+.bfm-est--warn .bfm-est-ic { color: var(--cwc-warn); }
+.bfm-est--fail .bfm-est-ic { color: var(--cwc-danger-strong); }
+.bfm-est--info .bfm-est-ic { color: var(--cwc-info); }
+.bfm-est--idle .bfm-est-ic { color: var(--cwc-text-dimmer); }
 .bfm-stats { white-space: nowrap; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
 .bfm-add { color: var(--cwc-ok); }
 .bfm-del { color: var(--cwc-danger); }
@@ -1294,6 +1306,9 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-f-fixing { justify-content: flex-start; align-items: center; gap: .45rem; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); }
 .hr-f-resolved { margin-top: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-ok); }
 .hr-f-fail { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); }
+/* Falso positivo descartado (no era un bug). */
+.hr-f-dismiss { margin: .3rem 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.hr-dismiss-sec .hr-finding { opacity: .62; }
 /* Nota de cambio crítico (auto-resolución bloqueada). */
 .hr-f-crit { margin: .3rem 0 0; font-size: var(--cwc-fs-sm); color: var(--cwc-warn); }
 .hr-f-crit b { color: var(--cwc-text); }

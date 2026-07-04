@@ -36,6 +36,10 @@
   /* ===== Estados semánticos ===== */
   --cwc-ok: #6c9e6e;
   --cwc-warn: #c9a94e;
+  /* info: estado NEUTRO "en revisión / esperando a alguien más" — NO es tu
+     acción pendiente (warn) ni un error (danger). Azul apagado, a tono con la
+     familia de estados (no es un segundo acento: el acento sigue siendo terracota). */
+  --cwc-info: #6d8cad;
   /* Sistema danger de DOS niveles (único en la app):
      - danger:        interactivo (bordes/hover/botones de riesgo)
      - danger-strong: énfasis (texto de error, acciones irreversibles) */

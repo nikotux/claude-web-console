@@ -194,15 +194,35 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     ].join('')}</span>`;
   }
 
+  // Estado del fix. CLAVE: distingue "TU acción pendiente" (warn/amarillo:
+  // falta enviar o subir algo) de "esperando a alguien MÁS" (info/azul: el PR
+  // ya está y espera el merge de Chris — NO es error ni acción tuya). `icon` es
+  // el nombre del ícono (se renderiza en la celda); `label` queda como texto
+  // plano (lo reusa el prompt de "Trabajar en esto").
   function prEstado(b) {
-    if (b.status !== 'subido') {
-      return b.prNumber
-        ? { dot: 'warn', label: `PR #${b.prNumber} abierto · cambios sin subir` }
-        : { dot: 'warn', label: b.files?.length ? 'pendiente' : 'en plan (sin archivos)' };
+    // Estados TERMINALES del PR (verdad de GitHub).
+    if (b.prState === 'merged') return { dot: 'ok', icon: 'check', label: `mergeado por ${b.mergedBy || '?'}` };
+    if (b.prState === 'closed') return { dot: 'fail', icon: 'close', label: 'cerrado sin merge' };
+    // PR VIVO en GitHub (abierto): del lado tuyo NO falta enviar nada — falta
+    // que Chris lo revise/mergee. Salvo que hayas reabierto y editado: ahí sí
+    // tenés código local que todavía no empujaste al PR.
+    if (b.prNumber) {
+      const cambiosLocales = b.status !== 'subido' && (b.files?.length || 0) > 0;
+      return cambiosLocales
+        ? { dot: 'warn', icon: 'upload', label: `PR #${b.prNumber} · tenés cambios sin subir` }
+        : { dot: 'info', icon: 'clock', label: `PR #${b.prNumber} en revisión · esperando a Chris` };
     }
-    if (b.prState === 'merged') return { dot: 'ok', label: `mergeado por ${b.mergedBy || '?'}` };
-    if (b.prState === 'closed') return { dot: 'fail', label: 'cerrado sin merge' };
-    return { dot: 'warn', label: 'PR abierto (sin mergear)' };
+    // Sin PR todavía.
+    return b.files?.length
+      ? { dot: 'warn', icon: 'upload', label: 'listo · falta enviar el PR' }
+      : { dot: 'idle', icon: null, label: 'en plan (sin archivos)' };
+  }
+
+  // Render de la celda de estado: ícono (si hay) + etiqueta, tintados por el
+  // dot (bfm-est--<dot> pinta el ícono con currentColor; el texto queda legible).
+  function estHtml(est) {
+    const ic = est.icon ? `<span class="bfm-est-ic">${icon(est.icon, { size: 12 })}</span>` : '';
+    return `<span class="bfm-est bfm-est--${est.dot}">${ic}<span>${esc(est.label)}</span></span>`;
   }
 
   // ===== Columnas "PR" y "Desk" (íconos compactos, datos ya presentes) =====
@@ -438,7 +458,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           const resChip = !arch && RES_CHIP[resolutionOf(en)] ? ` ${RES_CHIP[resolutionOf(en)]}` : '';
           row.children[3].innerHTML = pipelineHtml(en);
           row.children[6].innerHTML = deskCellFor(en);
-          row.children[7].innerHTML = `${esc(est.label)}${resChip}`;
+          row.children[7].innerHTML = `${estHtml(est)}${resChip}`;
         }
       }
     }
@@ -557,7 +577,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <td class="bfm-stats">${statsHtml(b.stats)}</td>
           <td class="bb-col-pr">${prCellFor(b)}</td>
           <td class="bb-col-desk">${deskCellFor(b)}</td>
-          <td class="bfm-state">${esc(est.label)}${resChip}</td>
+          <td class="bfm-state">${estHtml(est)}${resChip}</td>
         </tr>
         <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" hidden><td colspan="8">${detailHtml(b)}</td></tr>`;
     };
@@ -1019,11 +1039,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           </ul>
         </div>
         <div class="bb-help-sec">
-          <b>Punto de estado</b> <span class="bb-help-dim">(a la izquierda de la fila)</span>
+          <b>Estado del fix</b> <span class="bb-help-dim">(punto a la izquierda + última columna)</span>
           <ul class="bb-help-list">
-            <li><span class="hp-dot hp-dot--ok"></span> mergeado / al día</li>
-            <li><span class="hp-dot hp-dot--warn"></span> en curso (pendiente, PR abierto)</li>
+            <li><span class="hp-dot hp-dot--warn"></span> ${icon('upload', { size: 12 })} <b>tu acción</b> — falta que <i>vos</i> envíes el PR o subas cambios locales</li>
+            <li><span class="hp-dot hp-dot--info"></span> ${icon('clock', { size: 12 })} <b>en revisión</b> — el PR ya está en GitHub, espera el merge de <i>Chris</i>. No es error ni te falta nada</li>
+            <li><span class="hp-dot hp-dot--ok"></span> ${icon('check', { size: 12 })} <b>mergeado</b> — Chris integró el PR</li>
             <li><span class="hp-dot hp-dot--fail"></span> cerrado sin merge</li>
+            <li><span class="hp-dot hp-dot--idle"></span> en plan — todavía sin código</li>
           </ul>
         </div>
         <div class="bb-help-sec">
