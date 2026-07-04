@@ -793,9 +793,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad
   NO la mata). discoverUnits() (health/shared.js) arma ~16 unidades: core +
   cada src/modules/* (+ su runner de bin/) + frontend-core + frontend-modules;
-  cada una se audita con HAIKU read-only (doble capa, regla 6) buscando bugs
-  Y violaciones de reglas → findings {area,severity,kind,detail,file,
-  suggestedFix}. INCREMENTAL (Fase 2 del sistema nervioso, 2026-07-03): cada
+  cada una se audita read-only (doble capa, regla 6) con el modelo que dicta
+  `auditModelFor(unit)` de health/shared.js — FUENTE ÚNICA, el runner NO
+  hardcodea el modelo — buscando bugs Y violaciones de reglas → findings
+  {area,severity,kind,detail,file,suggestedFix}. AUDITOR = SONNET (2026-07-04):
+  antes era haiku y alucinaba falsos positivos hasta en módulos chicos (race
+  conditions en código síncrono, validaciones "ausentes" que ya existían) y era
+  inconsistente entre corridas ("cada Completo encontraba más y más"); sonnet da
+  resultados estables y con muchos menos FP. `auditModelFor` es el punto único
+  para un futuro híbrido/opus (p.ej. sonnet general + opus en unidades grandes).
+  unitFingerprint HASHEA el modelo → cambiarlo re-audita todo.
+  INCREMENTAL (Fase 2 del sistema nervioso, 2026-07-03): cada
   unidad tiene un fingerprint de contenido (unitFingerprint, misma técnica que
   core/inventory.js); el runner cachea {fingerprint, findings crudos} por unidad
   en ~/.cwc-data/health-audit-cache.json y en la próxima corrida REUSA las
@@ -882,13 +890,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   visible + cuerpo plegable (.hr-collapsed togglea .hr-f-body); módulos y
   resumen en <details.hr-collapsible> — todo colapsado en móvil, abierto en
   desktop. Vista general por defecto, detalle a demanda.
-- **GOTCHA de profundidad (verificado 2026-07-03):** haiku-por-módulo
-  encuentra bugs reales valiosos (fd leaks, race conditions en flags `busy`,
-  stash pop sin verificar merge, límites de tamaño faltantes en endpoints)
-  PERO se queda corto en archivos MUY grandes: en una corrida de prueba NO
-  detectó una asimetría sutil conocida (chat/index.js `case 'mode'` no llama
-  `onUpdate()` mientras su gemelo `case 'model'` sí → el modo de permisos no
-  persiste), porque chat/index.js (~900 líneas) excede lo que haiku procesa
-  con UNIT_MAX_TURNS. Si se quiere cazar bugs sutiles en módulos grandes:
-  subir esos a sonnet, subir UNIT_MAX_TURNS, o partir el archivo. La
-  herramienta es un RASTRILLO amplio, no una garantía de cobertura total.
+- **GOTCHA de profundidad (haiku→sonnet 2026-07-04):** cuando el auditor era
+  HAIKU encontraba bugs reales valiosos (fd leaks, race conditions en flags
+  `busy`, stash pop sin verificar merge, límites de tamaño faltantes) PERO (a)
+  se quedaba corto en archivos MUY grandes — no detectó la asimetría
+  chat/index.js `case 'mode'` sin `onUpdate()` (~900 líneas exceden lo que
+  procesa con UNIT_MAX_TURNS) — y (b) alucinaba FALSOS POSITIVOS hasta en
+  módulos chicos (race conditions en código síncrono, validaciones "ausentes"
+  que ya existían) siendo INCONSISTENTE entre corridas ("cada Completo
+  encontraba más y más"). Por eso el auditor pasó a SONNET (auditModelFor):
+  estable y con muchos menos FP. Sigue siendo un RASTRILLO amplio, no una
+  garantía de cobertura total; el registro de FP (health-dismissed.json) suprime
+  los descartados para que no reaparezcan. Si en el futuro sonnet se queda corto
+  en las unidades más grandes (frontend-modules ~5k líneas), el siguiente paso
+  es opus SOLO en esas (editar auditModelFor) o partir la unidad.

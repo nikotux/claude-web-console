@@ -15,7 +15,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, discoverUnits, unitPrompt, synthesisPrompt, parseFindings, parseSynthesis,
   toolAllowed, readReview, writeReview, writeLock, clearLock, isRunning,
-  readAuditCache, writeAuditCache, unitFingerprint,
+  readAuditCache, writeAuditCache, unitFingerprint, auditModelFor,
   UNIT_TIMEOUT_MS, SYNTH_TIMEOUT_MS, UNIT_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
 import { runAdaptivePool } from '../src/modules/health/pool.js';
@@ -116,7 +116,7 @@ async function main() {
     let attempt = 0;
     for (;;) {
       try {
-        const text = await readOnlyRun(unitPrompt(u), 'haiku', UNIT_TIMEOUT_MS, UNIT_MAX_TURNS);
+        const text = await readOnlyRun(unitPrompt(u), auditModelFor(u), UNIT_TIMEOUT_MS, UNIT_MAX_TURNS);
         const found = parseFindings(text);
         if (!found) throw new Error('respuesta no interpretable');
         cache[u.name] = { fingerprint: fp, findings: found, auditedAt: Date.now() }; // findings CRUDOS

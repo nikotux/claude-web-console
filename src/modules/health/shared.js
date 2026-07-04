@@ -39,6 +39,14 @@ export const UNIT_TIMEOUT_MS = 3 * 60 * 1000;   // corte por unidad
 export const SYNTH_TIMEOUT_MS = 2 * 60 * 1000;  // corte de la síntesis
 export const UNIT_MAX_TURNS = 20;               // cota de coste por unidad
 export const HEARTBEAT_MS = 3000;
+// MODELO del AUDITOR por unidad (fuente ÚNICA — el runner NO hardcodea el
+// modelo). Sonnet parejo: haiku (chico) alucinaba falsos positivos incluso en
+// módulos chicos (race conditions en código síncrono, validaciones "ausentes"
+// que ya existían) y era inconsistente entre corridas ("cada Completo encuentra
+// más"). Sonnet da resultados estables y con muchos menos FP. Punto único para
+// un futuro híbrido/opus (p.ej. sonnet general + opus en unidades grandes).
+// OJO: unitFingerprint incluye este valor → cambiar el modelo re-audita todo.
+export function auditModelFor(_unit) { return 'sonnet'; }
 export const LOCK_FRESH_MS = 20000;             // lock más viejo que esto = runner muerto
 
 export const VERDICTS = new Set(['ok', 'atencion', 'critico']);
@@ -364,6 +372,9 @@ export function unitFingerprint(unit) {
     try { h.update(fss.readFileSync(path.join(ROOT, f))); } catch { /* archivo faltante */ }
   }
   for (const t of invariantsFor(unit)) h.update('\0INV\0').update(t);
+  // El modelo del auditor es parte de la identidad de la auditoría: cambiarlo
+  // (p.ej. haiku→sonnet) invalida la caché y fuerza re-auditar con el nuevo.
+  h.update('\0MODEL\0').update(auditModelFor(unit));
   return h.digest('hex').slice(0, 12);
 }
 
