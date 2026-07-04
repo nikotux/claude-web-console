@@ -436,6 +436,120 @@ function triageDetailHtml(t, state) {
     </p>`;
 }
 
+// ===== Vista de FOCO móvil (Fase 4): mismo detalle, otra presentación =====
+// SOLO se renderiza dentro de .bb-card-det (visible ≤640px), así que puede
+// usar <details> cerrados sin tocar el desktop (la tabla usa detailHtml plano).
+// Estructura del plan §3.3: header sticky (← + identidad) · veredicto +
+// estado + chips prominentes · secciones LARGAS colapsadas · links · action
+// bar sticky inferior (§3.4). El scroll ancla la card al tope (lo hace index.js).
+
+// Envoltorio de foco: header sticky ← + cuerpo + action bar sticky.
+function focusWrap(id, inner, actionbar) {
+  return `
+    <div class="bb-focus-head">
+      <button class="bb-focus-back" data-focusclose="1" title="Volver a la lista">${icon('chevronLeft', { size: 20 })}</button>
+      <span class="bb-focus-id">${esc(id)}</span>
+    </div>
+    <div class="bb-focus-body">${inner}</div>
+    ${actionbar ? `<div class="bb-actionbar">${actionbar}</div>` : ''}`;
+}
+
+// Sección colapsable (bloques largos nacen cerrados en móvil — principio 4).
+const focusSec = (title, count, inner) => (inner
+  ? `<details class="bb-sec"><summary>${esc(title)}${count != null ? ` <span class="bb-sec-n">${count}</span>` : ''}</summary><div class="bb-sec-body">${inner}</div></details>`
+  : '');
+
+// Enunciado del ticket para el botón "Investigar contexto" del action bar.
+const problemJson = (b) => esc(JSON.stringify({
+  title: b.title || '', whatBroke: b.whatBroke || '', route: b.route || '',
+  reporter: b.reporter || '', severity: b.severity || '', context: b.context || '',
+  summary: b.summary || '', files: b.files || [],
+}));
+
+// Action bar del detalle (§3.4): primaria sólida + secundaria (investigar) +
+// menú ⋯. Reusa los MISMOS data-act que la tabla (el ⋯ lo abre index.js).
+function actionBarHtml(b, state) {
+  const key = rowKey(b);
+  const dis = state.busy[`act:${key}`] ? ' disabled' : '';
+  const primary = b.archived
+    ? { act: 'unarchive', label: 'Restaurar', ic: 'refresh' }
+    : resolutionOf(b) === 'complete'
+      ? { act: 'archive', label: 'Archivar', ic: 'check' }
+      : { act: 'work', label: 'Trabajar en esto', ic: 'sparkle' };
+  const secondary = b.prNumber
+    ? `<button class="btn-ghost btn--sm" data-investigate="${esc(b.prNumber)}" data-invticket="${esc(b.ticketNumber || '')}"${dis}>${icon('search', { size: 14 })}<span>Investigar</span></button>`
+    : b.ticketNumber
+      ? `<button class="btn-ghost btn--sm" data-tktinvestigate="${esc(b.ticketNumber)}" data-invproblem="${problemJson(b)}"${dis}>${icon('search', { size: 14 })}<span>Investigar</span></button>`
+      : '';
+  return `
+    <button class="btn btn--sm bb-ab-primary" data-act="${primary.act}"${dis}>${icon(primary.ic, { size: 14 })}<span>${primary.label}</span></button>
+    ${secondary}
+    <button class="btn-ghost btn--sm btn--icon bb-ab-more" data-detailmore="${esc(key)}" title="Más acciones"${dis}>${icon('more', { size: 16 })}</button>`;
+}
+
+// Detalle-foco de un ticket con registro (móvil).
+function detailMobileHtml(b, state) {
+  const id = [b.ticketNumber ? `#${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null].filter(Boolean).join(' · ') || '—';
+  const tl = timelineOf(b);
+  const timeline = tl.length
+    ? `<div class="bb-tl">${tl.map((e) => `
+        <div class="bb-tl-ev">
+          <span class="hp-dot hp-dot--${evDot(e)}"></span>
+          <span class="bb-tl-date">${fmtDate(e.t)}</span>
+          <span class="bb-tl-txt">${esc((EV_LABEL[e.type] || (() => e.type))(e))}</span>
+        </div>`).join('')}</div>`
+    : '';
+  const resumen = `
+    <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
+    ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
+    : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
+    ${attemptsHtml(b)}${feedbackHtml(b)}${similarHtml(b)}`;
+  const inner = `
+    ${invTopBox(b, state)}
+    <div class="bb-focus-status">${pipelineHtml(b, state)}${estHtml(prEstado(b))}${!b.archived && RES_CHIP[resolutionOf(b)] ? RES_CHIP[resolutionOf(b)] : ''}</div>
+    <div class="bb-chips">${chipsFor(b, state)}</div>
+    ${focusSec('Resumen y archivos', b.files?.length || null, resumen)}
+    ${timeline ? focusSec('Timeline', tl.length, timeline) : ''}
+    ${b.prNumber ? focusSec('GitHub en vivo', null, liveBoxHtml(b.prNumber, state)) : ''}
+    ${b.ticketNumber ? focusSec('Zoho Desk', null, deskSectionHtml(b.ticketNumber, state)) : ''}
+    <p class="bb-links">
+      ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
+      ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
+      ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
+    </p>`;
+  return focusWrap(id, inner, actionBarHtml(b, state));
+}
+
+// Detalle-foco de un ticket del triage sin trabajo (móvil).
+function triageMobileHtml(t, state) {
+  const inner = `
+    ${invTopBox({ ticketNumber: t.ticketNumber, title: t.whatBroke, whatBroke: t.whatBroke, route: t.route, reporter: t.reporter, severity: t.severity, context: t.context }, state)}
+    <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
+    ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
+    ${t.context ? focusSec('Contexto del triage', null, `<p class="hp-bf-summary">${esc(t.context)}</p>`) : ''}
+    ${t.webUrl ? `<p class="bb-links"><a href="${esc(t.webUrl)}" target="_blank" rel="noopener">Ticket #${esc(t.ticketNumber)} ↗</a></p>` : ''}`;
+  const actionbar = `<button class="btn btn--sm bb-ab-primary" data-act="triagework" data-tkt="${esc(t.ticketNumber)}">${icon('sparkle', { size: 14 })}<span>Trabajar en Chat (plan)</span></button>`;
+  return focusWrap(`#${esc(t.ticketNumber)}`, inner, actionbar);
+}
+
+// Detalle-foco de un PR solo-GitHub (móvil).
+function ghMobileHtml(pr, state) {
+  const ticket = ticketOfPr(pr);
+  const inner = `
+    ${invTopBox({ prNumber: pr.number, ticketNumber: ticket, title: pr.title }, state)}
+    <div class="bb-chips">${ticket
+    ? `<span class="bb-chip bb-chip--info">🎫 pertenece a TKT #${esc(ticket)}</span>`
+    : '<span class="bb-chip bb-chip--warn">sin ticket detectable</span>'}</div>
+    ${pr.branch ? `<p class="hp-bf-files"><code>${esc(pr.branch)}</code></p>` : ''}
+    ${focusSec('GitHub en vivo', null, liveBoxHtml(pr.number, state))}
+    ${ticket ? focusSec('Zoho Desk', null, deskSectionHtml(ticket, state)) : ''}
+    <p class="bb-links"><a href="${esc(pr.url)}" target="_blank" rel="noopener">Ver PR #${esc(pr.number)} en GitHub ↗</a></p>`;
+  const actionbar = ticket
+    ? `<button class="btn btn--sm bb-ab-primary" data-act="ghdeskchat" data-prnum="${pr.number}">${icon('edit', { size: 14 })}<span>Actualizar ticket</span></button>`
+    : '';
+  return focusWrap(`${ticket ? `#${esc(ticket)} · ` : ''}PR #${esc(pr.number)}`, inner, actionbar);
+}
+
 // ===== Render de la tabla (único punto de re-render, con scroll preservado) =====
 export function renderTable(state) {
   const { entries, ghRows, triage, expanded, archOpen } = state;
@@ -596,7 +710,9 @@ export function renderTable(state) {
       const S = state.inv[b.prNumber]?.st?.investigation?.semaforo;
       if (S) {
         const ball = S.ball === 'chris' ? 'La pelota la tiene Chris' : S.ball === 'yours' ? 'La pelota es TUYA' : 'Sin pendientes claros';
-        sem = `<div class="bb-card-sem">🚦 ${ball}${S.ultimaActividad ? ` · ${fmtAgo(S.ultimaActividad)}` : ''}</div>`;
+        // ultimaActividad es {quien, cuando(ms), tipo}: usar .cuando para el "hace X".
+        const cuando = S.ultimaActividad?.cuando;
+        sem = `<div class="bb-card-sem">🚦 ${ball}${cuando ? ` · ${fmtAgo(cuando)}` : ''}</div>`;
       }
     }
     return `
@@ -611,7 +727,7 @@ export function renderTable(state) {
         <div class="bb-card-est">${estHtml(est)}${resChip}</div>
         ${sem}
       </div>
-      <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${detailHtml(b, state)}</div>`;
+      <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${detailMobileHtml(b, state)}</div>`;
   };
 
   if (state.filter === 'arch') {
@@ -646,7 +762,7 @@ export function renderTable(state) {
           <div class="bb-card-title">${esc(t.whatBroke)}</div>
           <div class="bb-card-est"><span class="bb-est bb-est--warn"><span>sin trabajo aún</span></span></div>
         </div>
-        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${triageDetailHtml(t, state)}</div>`);
+        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${triageMobileHtml(t, state)}</div>`);
     }
     for (const pr of ghRows) {
       const ticket = ticketOfPr(pr);
@@ -667,7 +783,7 @@ export function renderTable(state) {
           <div class="bb-card-title">${esc(pr.title)}</div>
           <div class="bb-card-est"><span class="bb-est bb-est--${dot === 'warn' ? 'info' : dot}"><span>${estTxt}</span></span></div>
         </div>
-        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${ghDetailHtml(pr, state)}</div>`);
+        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${ghMobileHtml(pr, state)}</div>`);
     }
   }
   if (!cards.length) cards.push(`<div class="hp-empty">${q || state.filter ? 'Sin resultados para esta búsqueda/filtro.' : 'Sin bugs.'}</div>`);

@@ -638,7 +638,29 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             ↳ TKT anidados; mismo listener delegado que la tabla
                             (.bb-row/.bb-detail + data-key en ambas vistas). El
                             input de búsqueda es un ref ESTABLE que el render
-                            jamás re-crea (no pisar el tipeo).
+                            jamás re-crea (no pisar el tipeo). VISTA DE FOCO
+                            (Fase 4, §3.3/§3.4, SOLO en las cards ≤640px — la
+                            tabla desktop sigue con detailHtml plano): al tap la
+                            card se ancla al tope (scrollIntoView en index.js) y
+                            su detalle se presenta con focusWrap = header sticky
+                            (← bb-focus-back cierra, + identidad) · veredicto +
+                            estado + chips PROMINENTES · secciones LARGAS en
+                            <details> colapsados (focusSec: Resumen/archivos,
+                            Timeline, GitHub en vivo, Zoho Desk — nacen cerradas,
+                            se pueden usar <details> sin tocar desktop porque el
+                            detalle-foco solo se renderiza en .bb-card-det) ·
+                            links · ACTION BAR sticky inferior (.bb-actionbar):
+                            primaria sólida (Trabajar en esto / Trabajar en Chat
+                            plan / Actualizar ticket en gh / Archivar si complete
+                            / Restaurar si archivado) + secundaria Investigar
+                            (a fondo o contexto según haya PR) + menú ⋯
+                            (bb-ab-more → popup Responder ticket · Traer Desk ·
+                            Archivar · Cancelar PR · Descartar; lo abre index.js,
+                            resuelve b por key y ejecuta la acción directa porque
+                            el popup vive en document.body fuera del bb-detail).
+                            detailMobileHtml/triageMobileHtml/ghMobileHtml en
+                            render.js; el action bar reusa los MISMOS data-act de
+                            la tabla (closest('.bb-detail') resuelve la key igual).
                             UNA fila por ticket para TODO el ciclo — triage → trabajo → PR →
                             feedback → merge → ticket. Fuentes: registro de bugfixes +
                             triage de Desk (chips de verificación: severidad, "abierto en

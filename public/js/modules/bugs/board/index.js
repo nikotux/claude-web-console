@@ -24,7 +24,7 @@ import * as store from './store.js';
 import * as A from './actions.js';
 import { initRender, render, renderHeader, helpHtml, pendingOf } from './render.js';
 import { stopAll } from './polls.js';
-import { rowKey, ticketOfPr } from './labels.js';
+import { rowKey, ticketOfPr, resolutionOf } from './labels.js';
 import { dismissablePopup } from '../../../ui/popup.js';
 
 export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose }) {
@@ -132,13 +132,63 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       else if (act.dataset.act === 'del' && b) await A.discard(b);
       return;
     }
+    // ← de la vista de foco (móvil): cierra el detalle.
+    const back = e.target.closest('[data-focusclose]');
+    if (back) {
+      const key = back.closest('.bb-detail')?.dataset?.key;
+      if (key) A.toggleExpand(key);
+      return;
+    }
     if (e.target.closest('a')) return;
     const row = e.target.closest('.bb-row');
     if (!row?.dataset?.key) return; // las filas solo-GitHub TAMBIÉN expanden
-    A.toggleExpand(row.dataset.key, rowInfoOf(row.dataset.key));
+    const key = row.dataset.key;
+    A.toggleExpand(key, rowInfoOf(key));
+    // Móvil: anclar la card recién abierta al tope (vista de foco §3.3). El
+    // render ya repintó (mutate es síncrono); scrolleamos en el próximo frame.
+    if (store.get().expanded.has(key) && window.matchMedia('(max-width: 640px)').matches) {
+      requestAnimationFrame(() => {
+        const c = mr.cards.querySelector(`.bb-card[data-key="${key}"]`);
+        if (c) c.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      });
+    }
   };
   mr.tbody.addEventListener('click', onListClick);
   mr.cards.addEventListener('click', onListClick);
+
+  // Menú ⋯ del action bar del detalle (móvil): acciones secundarias/destructivas.
+  mr.cards.addEventListener('click', (e) => {
+    const more = e.target.closest('[data-detailmore]');
+    if (!more) return;
+    const b = store.get().entries.find((x) => rowKey(x) === more.dataset.detailmore);
+    if (!b) return;
+    const items = [];
+    if (b.ticketNumber) items.push(['deskchat', 'edit', 'Responder ticket (chat)', false]);
+    if (b.ticketNumber) items.push(['deskload', 'download', 'Traer estado de Desk', false]);
+    if (resolutionOf(b) !== 'complete' && !b.archived) items.push(['archive', 'check', 'Archivar', false]);
+    if (b.status === 'subido' && b.prState !== 'merged') items.push(['cancelpr', 'trash', 'Cancelar PR', true]);
+    items.push(['del', 'close', 'Descartar registro', true]);
+    const menu = document.createElement('div');
+    menu.className = 'cwc-popup-menu';
+    menu.innerHTML = items.map(([act, ic, label, danger]) =>
+      `<button class="cwc-popup-item${danger ? ' danger' : ''}" data-mact="${act}">${icon(ic, { size: 14 })}<span>${label}</span></button>`).join('');
+    document.body.appendChild(menu);
+    const r = more.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.round(r.right - 200))}px`;
+    menu.style.top = `${Math.round(r.top - 8 - Math.min(items.length, 5) * 40)}px`; // sobre el botón (está abajo)
+    const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+    menu.addEventListener('click', async (ev) => {
+      const it = ev.target.closest('[data-mact]');
+      if (!it) return;
+      dismiss();
+      const act = it.dataset.mact;
+      if (act === 'deskchat') { m.close(); await A.deskChat(b); }
+      else if (act === 'deskload') await A.deskLoad(b.ticketNumber, false); // pinta en la sección Zoho Desk
+      else if (act === 'archive') await A.archive(b, true);
+      else if (act === 'cancelpr') await A.cancelPr(b);
+      else if (act === 'del') await A.discard(b);
+    });
+  });
 
   // ===== Header móvil (Fase 3): búsqueda + segmentos + menú ⋯ =====
   mr.q.addEventListener('input', () => store.set({ query: mr.q.value }));
