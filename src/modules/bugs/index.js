@@ -46,6 +46,15 @@ function spawnTriage() {
   const child = spawn(process.execPath, [RUNNER], {
     detached: true, stdio: ['ignore', log, log], env: process.env,
   });
+  // Falla ASÍNCRONA del spawn (ruta del runner rota tras un deploy, permisos,
+  // node no ejecutable): el evento 'error' dispara en un tick posterior, fuera
+  // del try/catch del handler POST /refresh; sin listener, Node lo relanza como
+  // excepción no capturada y tira abajo TODO el server. Solo se registra: el
+  // lock lo crea el propio runner (acá no hay nada que limpiar) y el front
+  // detecta la corrida perdida por el polling de GET y reintenta.
+  child.on('error', (err) => {
+    console.error(`[bugs] no se pudo lanzar el runner de triage: ${String(err?.message || err)}`);
+  });
   child.unref();
   fs.closeSync(log);
   return true;
