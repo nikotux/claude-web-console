@@ -17,7 +17,10 @@ código.
    (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
    runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
-   paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`). La unidad systemd usa
+   paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`);
+   consulta EN VIVO de un ticket en Zoho Desk → runner desacoplado
+   (`bin/cwc-desk-runner.js`); investigación a fondo de un PR → runner
+   desacoplado (`bin/cwc-investigate-runner.js`). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -85,6 +88,19 @@ código.
    PAUSA su auto-refresh de GitHub mientras hay un panel de detalle abierto o
    una consulta Desk encuestándose (`canAutoRefresh`): el re-render total
    destruiría el panel — ESA era la raíz del bug del cambio de pestaña.
+   INVESTIGACIÓN a fondo de un PR (pedido del usuario 2026-07-04, DESACOPLADA):
+   `bin/cwc-investigate-runner.js` (lógica en `bugfixes/investigate-shared.js`)
+   responde "¿la pelota la tenés vos o Chris, y qué hacer?". Es la corrida IA
+   MÁS blindada de todas: junta los datos con `gh` EN NODE (determinístico) y la
+   corrida del modelo es PURA LECTURA DE TEXTO — NO usa NINGUNA herramienta ni
+   MCP (`investigateToolAllowed` devuelve siempre false; las DOS capas deniegan
+   TODO). POST /investigate {pr,ticket} lanza el runner (dedup lock
+   `investigate.lock`), responde YA; resultado en
+   `~/.cwc-data/investigations/<pr>.json`; GET /investigation/:pr solo lee disco.
+   El semáforo (¿de quién es la pelota?) se calcula GRATIS en el front desde
+   prLive; la lectura profunda (veredicto {accion, bloqueante, severidad, pasos,
+   titular}) es el botón que consume tokens. Sus `pasos` se inyectan en
+   "Trabajar en esto".
    EXCEPCIÓN de ESCRITURA sobre CÓDIGO (pedido del usuario 2026-07-03):
    `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
    revisión — edita el código de la consola sin supervisión. Es la única
@@ -119,7 +135,8 @@ código.
 - `.env` (config del usuario: token maestro, puerto, etc. — solo el usuario)
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
   tickets/salud, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
-  + `desk.lock` heartbeat del runner desk, `inventory.json`+`inventory.md` generados por core/inventory.js,
+  + `desk.lock` heartbeat del runner desk, `investigations/<pr>.json` veredicto de
+  la investigación a fondo + `investigate.lock` heartbeat, `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
@@ -547,6 +564,11 @@ bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Des
                             doble capa, allowlist desk_* de lectura; interfaz por archivos:
                             desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica
                             compartida con el módulo en bugfixes/desk-shared.js
+bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
+                            y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
+                            SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
+                            investigate.lock + investigations/<pr>.json. Lógica en
+                            bugfixes/investigate-shared.js
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)

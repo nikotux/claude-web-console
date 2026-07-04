@@ -49,10 +49,17 @@ import { runAdaptivePool } from '../health/pool.js';
 import {
   DESK_DIR, readDeskResult, readDeskLock, isDeskRunning, DESK_TTL_MS,
 } from './desk-shared.js';
+// Investigación a fondo de un PR: también en un RUNNER DESACOPLADO
+// (bin/cwc-investigate-runner.js). Acá solo lanzamos y leemos el disco.
+import {
+  readInvestigation, readInvLock, isInvestigating, INV_TTL_MS,
+} from './investigate-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESK_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-desk-runner.js');
 const DESK_LOG = path.join(os.homedir(), '.cwc-data', 'desk.log');
+const INV_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-investigate-runner.js');
+const INV_LOG = path.join(os.homedir(), '.cwc-data', 'investigate.log');
 
 // Últimos PRs solo-GitHub vistos por refresh-prs (para que el motor los
 // enganche a su ticket sin re-consultar gh en cada carga del tablero).
@@ -516,6 +523,33 @@ function deskState(ticket) {
   };
 }
 
+// ===== Investigación a fondo de un PR (IA read-only, DESACOPLADA) =====
+// La corrida real vive en bin/cwc-investigate-runner.js (junta datos con gh y
+// el modelo los interpreta SIN herramientas). Acá solo lanzamos y leemos disco.
+function spawnInvestigate(pr, ticket) {
+  const p = String(pr || '').replace(/[^\w.-]/g, '');
+  if (!p) return { started: false, reason: 'sin PR' };
+  if (isInvestigating()) return { started: false, reason: 'ya corriendo' };
+  fss.mkdirSync(path.dirname(INV_LOG), { recursive: true, mode: 0o700 });
+  const log = fss.openSync(INV_LOG, 'a');
+  const args = [INV_RUNNER, p];
+  if (ticket) args.push(String(ticket).replace(/[^\w.-]/g, ''));
+  const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', log, log], env: process.env });
+  child.unref();
+  fss.closeSync(log);
+  return { started: true, pr: p };
+}
+
+// Resultado persistido de la investigación de un PR + si la corrida sigue viva.
+function investigationState(pr) {
+  const p = String(pr).replace(/[^\w.-]/g, '').slice(0, 20);
+  const lock = readInvLock();
+  const running = !!lock && String(lock.pr) === p;
+  const data = readInvestigation(p);
+  const stale = !!data && (Date.now() - (data.fetchedAt || 0) >= INV_TTL_MS);
+  return { pr: p, running, investigation: data, stale };
+}
+
 // Nivel de resolución de un fix (derivado, NO se persiste):
 //   'complete' — el ticket confirmó (cerrado o el cliente respondió: deskResolved)
 //   'partial'  — nuestro PR se mergeó, pero el ticket NO confirmó todavía
@@ -769,6 +803,27 @@ export default {
       } catch (err) {
         res.status(502).json({ error: `GitHub no disponible: ${String(err?.message || err).slice(0, 200)}` });
       }
+    });
+
+    // Investigación a fondo de un PR — DESACOPLADA (regla 2). CONSUME TOKENS:
+    // el front la dispara bajo botón. POST lanza el runner y responde YA; GET
+    // lee el resultado persistido (0 tokens) + si la corrida sigue viva.
+    r.post('/investigate', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const pr = String(req.body?.pr || '').replace(/[^\w.-]/g, '').slice(0, 20);
+      const ticket = req.body?.ticket ? String(req.body.ticket).replace(/[^\w.-]/g, '').slice(0, 20) : null;
+      if (!pr) return res.status(400).json({ error: 'Falta el número de PR.' });
+      const st = investigationState(pr);
+      // Sin fresh y con resultado fresco (< TTL): no relanzar (ahorra tokens).
+      const launch = (req.body?.fresh || !st.investigation || st.stale) ? spawnInvestigate(pr, ticket) : null;
+      res.json({ ok: true, running: isInvestigating(), started: !!launch?.started, ...investigationState(pr) });
+    });
+
+    r.get('/investigation/:number', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const pr = String(req.params.number || '').replace(/[^\w.-]/g, '').slice(0, 20);
+      if (!pr) return res.status(400).json({ error: 'Número de PR inválido.' });
+      res.json({ ok: true, ...investigationState(pr) });
     });
 
     // Estado EN VIVO de un ticket de Zoho Desk — DESACOPLADO (regla 2). CONSUME

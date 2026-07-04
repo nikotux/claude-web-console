@@ -478,6 +478,71 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   }
 
   // Panel EN VIVO del PR: se llena al expandir (y con ↻ fuerza fresh).
+  // 🚦 Semáforo determinístico (0 tokens) desde los datos de prLive: ¿de quién
+  // es la pelota? Se muestra solo, sin botón, al expandir el PR.
+  function semaforoHtml(L) {
+    const chips = [];
+    if (L.reviewDecision === 'APPROVED') chips.push(['ok', '✅ Chris aprobó']);
+    else if (L.reviewDecision === 'CHANGES_REQUESTED') chips.push(['danger', '⚠ Chris pidió cambios']);
+    else if (L.reviewDecision === 'REVIEW_REQUIRED') chips.push(['info', '🕐 esperando review de Chris']);
+    const checksBad = (L.checks || []).filter((c) => ['failure', 'error', 'timed_out', 'cancelled'].includes(c.status)).length;
+    if (checksBad) chips.push(['danger', `🔴 ${checksBad} check(s) fallando`]);
+    if (L.mergeable === 'CONFLICTING') chips.push(['danger', '🔀 conflictos con main']);
+    const lastCommitAt = (L.commits || []).reduce((m, c) => Math.max(m, c.at || 0), 0);
+    const lastFb = (L.feedback || [])[(L.feedback || []).length - 1];
+    if (lastFb && lastFb.at > lastCommitAt) chips.push(['warn', `💬 ${esc(lastFb.author)} escribió tras tu último commit`]);
+    if (!chips.length) chips.push(['info', '🕐 en revisión · esperando a Chris']);
+    return `<div class="bb-sem">${chips.map(([k, t]) => `<span class="bb-chip bb-chip--${k}">${t}</span>`).join('')}</div>`;
+  }
+
+  // Render del veredicto de la investigación IA (persistido).
+  function verdictHtml(inv) {
+    const L = inv?.lectura;
+    if (!L || !L.ok) return `<div class="bb-inv-err">No se pudo interpretar la investigación${L?.error ? `: ${esc(L.error)}` : ''}.</div>`;
+    const tone = L.severidad === 'blocker' ? 'danger' : L.severidad === 'cambio' ? 'warn' : L.severidad === 'aprobacion' ? 'ok' : 'info';
+    const ic = L.severidad === 'aprobacion' ? 'check' : (L.bloqueante || L.severidad === 'blocker') ? 'close' : 'clock';
+    return `
+      <div class="bb-verdict bb-verdict--${tone}">
+        <div class="bb-verdict-head">${icon(ic, { size: 14 })}<b>${esc(L.titular || 'Investigación')}</b>${L.bloqueante ? '<span class="bb-chip bb-chip--danger">bloqueante</span>' : ''}<span class="bb-verdict-conf">confianza ${esc(L.confianza)}</span></div>
+        ${L.queQuiereChris ? `<div class="bb-verdict-what">${esc(L.queQuiereChris)}</div>` : ''}
+        ${L.pasos.length ? `<ul class="bb-verdict-steps">${L.pasos.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+        ${L.archivos.length ? `<div class="bb-verdict-files">${L.archivos.map((f) => `<code>${esc(f)}</code>`).join(' ')}</div>` : ''}
+      </div>`;
+  }
+
+  const getInv = (pr) => fetch(`/api/bugfixes/investigation/${encodeURIComponent(pr)}`).then((r) => r.json()).catch(() => null);
+
+  // Muestra el veredicto persistido (0 tokens) + el botón para (re)investigar.
+  async function loadInvestigation(box, pr, ticket) {
+    if (!box || !box.isConnected) return;
+    const st = await getInv(pr);
+    const inv = st?.investigation;
+    box.innerHTML = `
+      ${inv ? `${verdictHtml(inv)}<div class="bb-inv-at">investigado ${fmtAgo(inv.fetchedAt)}</div>` : ''}
+      <button class="btn ${inv ? 'btn-ghost' : ''} btn--sm" data-investigate="${esc(pr)}" data-invticket="${esc(ticket || '')}">${icon('search', { size: 13 })}<span>🔍 ${inv ? 'Investigar de nuevo' : 'Investigar a fondo'}</span></button>`;
+  }
+
+  // Dispara el runner desacoplado y encuesta (resiliente al cambio de pestaña).
+  async function runInvestigation(box, pr, ticket) {
+    if (!box) return;
+    box.innerHTML = `<div class="cwc-loading">${pacman()}investigando el PR #${esc(pr)}… (lee el diff y el feedback de Chris)</div>`;
+    const prevAt = (await getInv(pr))?.investigation?.fetchedAt || 0;
+    await fetch('/api/bugfixes/investigate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pr, ticket: ticket || null, fresh: true }),
+    }).catch(() => {});
+    const deadline = Date.now() + 5 * 60000;
+    for (;;) {
+      if (!box.isConnected) return; // panel cerrado: el runner sigue del lado del server
+      const st = await getInv(pr);
+      const inv = st?.investigation;
+      if (inv && !st.running && (inv.fetchedAt || 0) > prevAt) break;
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    await loadInvestigation(box, pr, ticket);
+  }
+
   async function fillLive(box, prNumber, fresh) {
     box.innerHTML = `<div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div>`;
     try {
@@ -500,6 +565,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <button class="btn-ghost btn--sm btn--icon" data-livefresh="${prNumber}" title="Consultar de nuevo (saltea la caché de 60 s)">${icon('refresh', { size: 12 })}</button>
           <span class="bb-live-at">${fmtAgo(L.fetchedAt)}</span>
         </div>
+        ${semaforoHtml(L)}
+        ${L.state === 'open' ? `<div class="bb-inv" data-invbox="${prNumber}"></div>` : ''}
         ${L.commits.length ? `<div class="bb-live-commits">${L.commits.map((c) => `<div class="bb-commit"><code>${esc(c.sha)}</code> ${esc(c.msg)} <span class="bb-tl-date">${fmtDate(c.at)}</span></div>`).join('')}</div>` : ''}
         ${L.feedback.length ? `<div class="bb-live-fb">${L.feedback.map((f) => `
           <div class="bb-fb">
@@ -507,6 +574,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
             ${f.body ? `<span class="bb-fb-body">${esc(f.body)}</span>` : ''}
           </div>`).join('')}</div>`
       : '<div class="bb-live-fb bb-live-empty">Sin comentarios ni reviews todavía.</div>'}`;
+      // Cargar la investigación persistida (0 tokens) + el botón, si el PR está abierto.
+      const invBox = box.querySelector('.bb-inv');
+      if (invBox) {
+        const ticket = entries.find((e) => String(e.prNumber) === String(prNumber))?.ticketNumber || '';
+        loadInvestigation(invBox, String(prNumber), ticket);
+      }
     } catch (err) {
       box.innerHTML = `<div class="bb-live-err">⚠ ${esc(err.message)} — datos locales abajo.</div>`;
     }
@@ -664,6 +737,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       if (box) await fillLive(box, n, true);
       return;
     }
+    // Investigar a fondo: dispara el runner IA (consume tokens, bajo botón).
+    const invBtn = e.target.closest('[data-investigate]');
+    if (invBtn) {
+      const box = invBtn.closest('.bb-inv');
+      if (box) await runInvestigation(box, invBtn.dataset.investigate, invBtn.dataset.invticket);
+      return;
+    }
     // Desk: botón "Traer estado" (primera carga) y ↻ (fresca).
     const deskLoad = e.target.closest('[data-deskload]');
     if (deskLoad) {
@@ -747,6 +827,14 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   async function doWorkOn(b) {
     const [workContext, prContext] = await fetchContexts();
     const est = prEstado(b);
+    // Veredicto de la investigación (si se corrió): sus pasos concretos guían el trabajo.
+    let invText = '';
+    if (b.prNumber) {
+      const L = (await getInv(b.prNumber))?.investigation?.lectura;
+      if (L?.ok && (L.pasos?.length || L.queQuiereChris)) {
+        invText = `\nINVESTIGACIÓN del PR (qué pide Chris${L.bloqueante ? ' — BLOQUEANTE' : ''}):\n${L.queQuiereChris || ''}${L.pasos?.length ? `\nPasos:\n${L.pasos.map((p) => `- ${p}`).join('\n')}` : ''}`;
+      }
+    }
     const prompt = [
       `Retomemos el fix del ticket Desk #${b.ticketNumber} para refinarlo a mano antes de ${b.status === 'subido' ? 'MODIFICAR el PR ya existente' : 'subir el PR'}.`,
       '',
@@ -760,6 +848,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       (b.feedback || []).length ? `\nFEEDBACK de Chris en el PR (guardado — tenelo MUY presente, marca qué espera):\n${b.feedback.slice(-5).map((f) => `- ${f.author}: ${(f.body || '').slice(0, 300)}`).join('\n')}` : '',
       // Lecciones de tickets pasados parecidos (biblioteca del motor).
       (b.similar || []).length ? `\nSOLUCIONES PASADAS PARECIDAS (aprendé de ellas antes de decidir):\n${b.similar.map((s) => `- TKT #${s.ticketNumber}${s.files?.[0] ? ` (${s.files[0]})` : ''}: ${s.fix || s.rootCause || ''}${s.lesson ? ` — lección: ${s.lesson}` : ''}`).join('\n')}` : '',
+      invText,
       b.prNumber ? `\nSi el PR tiene feedback más nuevo, revisalo: gh pr view ${b.prNumber} --comments` : '',
       workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
       prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
