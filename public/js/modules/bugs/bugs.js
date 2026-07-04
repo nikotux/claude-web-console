@@ -5,11 +5,12 @@
 //   - triage de Desk (GET /api/bugs): cuántos bugs abiertos + frescura.
 //   - registro de bugfixes (GET /api/bugfixes): fixes por enviar, PRs abiertos,
 //     y señales de ATENCIÓN (reabierto / doble registro / ticket sin actualizar).
-// El detalle vive en el TABLERO unificado "Bugs & PRs" (tolkien/bug-board.js),
-// que abre el botón [Abrir tablero]. El ↻ corre el triage BAJO DEMANDA (consume
+// El detalle vive en el TABLERO unificado "Bugs & PRs" (bugs/board/, módulos
+// store/render/actions/polls — antes el monolito tolkien/bug-board.js), que
+// abre el botón [Abrir tablero]. El ↻ corre el triage BAJO DEMANDA (consume
 // tokens; confirm previo). Al cerrar el tablero, las stats se refrescan.
 import { pacman } from '../../ui/pacman.js';
-import { openBugBoard } from '../tolkien/bug-board.js';
+import { openBugBoard } from './board/index.js';
 
 export default {
   name: 'bugs',

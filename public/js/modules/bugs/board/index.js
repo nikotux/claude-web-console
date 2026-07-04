@@ -10,7 +10,7 @@
 // /api/bugfixes/pr-live/:n (gh, caché 60 s) — reviews, comentarios de Chris,
 // checks y commits. Si GitHub no responde, la fila degrada a datos locales.
 // Lo abren el botón "Bugs & PRs" de Tolkien y el de la sección Bugs.
-import { pacman } from '../../ui/pacman.js';
+import { pacman } from '../../../ui/pacman.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -1034,6 +1034,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       hasPr
         ? '3. Redactá una actualización EN INGLÉS, corta y humana (2-4 frases) con lo que cambió desde la última nota (qué se corrigió/mejoró y que el despliegue sigue en curso). MOSTRÁMELA y esperá mi OK.'
         : '3. Redactá EN INGLÉS una respuesta corta y humana (2-4 frases) apropiada al estado real: un avance, un pedido de información, o el próximo paso. MOSTRÁMELA y esperá mi OK.',
+      '   La nota SIEMPRE cierra con la firma exacta "— Nicolás (dev team)" en su propia línea: Desk la publica con otra identidad (el token es de otro agente) y el autor real tiene que quedar claro.',
       '4. Recién con mi OK, publicala en el ticket (visible al solicitante si se puede) y ajustá el estado si corresponde.',
       'NO toques código ni envíes PRs desde este chat.',
     ].filter(Boolean).join('\n');
