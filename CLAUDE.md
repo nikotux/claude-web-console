@@ -619,7 +619,26 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             paneles GitHub/Desk/investigación sobreviven porque viven
                             en el store, no en el DOM. R4 aplicada: OUTCOME_LABEL sin
                             estados muertos (plan/abandoned) y evDot completa
-                            ticket_actualizado (ok/fail según e.ok).
+                            ticket_actualizado (ok/fail según e.ok). VISTA MÓVIL
+                            (Fase 3, ≤640px): tabla y CARDS se renderizan SIEMPRE
+                            del mismo estado y el CSS decide cuál se ve (rotar no
+                            pierde nada) — .bb-mhead (búsqueda en cliente por
+                            #/título/archivo + chips de segmento con conteo:
+                            Acción=pendiente c/files+triage-only ·
+                            Revisión=PR abierto · ✓=merged/completo ·
+                            📦=archivados; re-tap = Todos; segmentOfEntry/
+                            segmentOfGh en labels.js + query/filter en el store)
+                            + frescura en UNA línea + menú ⋯ (cwc-popup-menu:
+                            Enviar pendientes TEMPORAL hasta la action bar de
+                            Fase 5, Buscar bugfixes, GitHub, Desk, Ayuda). Card =
+                            L1 dot+identidad+íconos PR/Desk · L2 título limpio
+                            (cleanTitle pela el prefijo "TKT #N — ") · L3 estado
+                            COMPLETO sin truncar · L4 semáforo si hay
+                            investigación cargada; card-PR con borde acento +
+                            ↳ TKT anidados; mismo listener delegado que la tabla
+                            (.bb-row/.bb-detail + data-key en ambas vistas). El
+                            input de búsqueda es un ref ESTABLE que el render
+                            jamás re-crea (no pisar el tipeo).
                             UNA fila por ticket para TODO el ciclo — triage → trabajo → PR →
                             feedback → merge → ticket. Fuentes: registro de bugfixes +
                             triage de Desk (chips de verificación: severidad, "abierto en

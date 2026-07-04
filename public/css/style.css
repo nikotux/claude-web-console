@@ -1113,10 +1113,59 @@ html, body {
 .bb-icell--warn { color: var(--cwc-warn); }
 .bb-icell--fail { color: var(--cwc-danger-strong); }
 .bb-icell--none { color: var(--cwc-text-dimmer); }
+/* ===== Vista móvil del tablero (Fase 3: cards + búsqueda + segmentos).
+   Tabla y cards se renderizan SIEMPRE del mismo estado; este CSS decide cuál
+   se ve según el breakpoint (rotar el teléfono no pierde nada). ===== */
+.bb-mhead { display: none; flex-direction: column; gap: .45rem; margin-bottom: .5rem; }
+.bb-mrow { display: flex; gap: .4rem; align-items: center; }
+.bb-search {
+  flex: 1; min-width: 0; min-height: 44px; padding: .45rem .7rem;
+  font-size: var(--cwc-fs-md); color: var(--cwc-text);
+  background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-md);
+}
+.bb-search::placeholder { color: var(--cwc-text-dimmer); }
+.bb-search:focus { outline: none; border-color: var(--cwc-accent); }
+.bb-more { min-width: 44px; min-height: 44px; }
+.bb-segs { display: flex; gap: .35rem; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.bb-seg-chip {
+  flex: none; min-height: 40px; padding: .3rem .75rem;
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); cursor: pointer;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-md);
+}
+.bb-seg-chip.on {
+  border-color: var(--cwc-accent); color: var(--cwc-accent);
+  background: color-mix(in srgb, var(--cwc-accent) 14%, transparent);
+}
+.bb-mfresh { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.bb-cards { display: none; flex-direction: column; }
+.bb-card {
+  display: flex; flex-direction: column; gap: .3rem;
+  min-height: 72px; padding: .6rem .7rem;
+  border-bottom: 1px solid var(--cwc-divider); cursor: pointer;
+}
+.bb-card:active { background: var(--cwc-bg-hover); }
+.bb-card--pr { box-shadow: inset 3px 0 0 var(--cwc-info); } /* patrón árbol de la fila-PR */
+.bb-card-l1 { display: flex; align-items: center; gap: .45rem; }
+.bb-card-l1 .hp-dot { flex: none; }
+.bb-card-id { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); white-space: nowrap; }
+.bb-card-icons { margin-left: auto; display: inline-flex; gap: .55rem; align-items: center; }
+.bb-card-title { font-size: var(--cwc-fs-md); color: var(--cwc-text); }
+.bb-card-est { font-size: var(--cwc-fs-md); }
+.bb-card-est .bb-est { white-space: normal; } /* estado COMPLETO, nunca truncado */
+.bb-card-sem { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.bb-card-det { background: var(--cwc-bg-panel); padding: .6rem .7rem; border-bottom: 1px solid var(--cwc-divider); }
+
 @media (max-width: 640px) {
-  /* Móvil: fuera Pipeline y Cambios; PR y Desk — la info que se quiere ver
-     de un vistazo — se quedan junto a TKT/Título/Estado. Por CLASE explícita
+  /* Móvil: el toolbar desktop cede al header móvil (búsqueda + segmentos +
+     menú ⋯) y la tabla a las cards. Pipeline/Cambios por CLASE explícita
      (R7): agregar/reordenar columnas ya no rompe este media query. */
+  .bb-actions { display: none; }
+  .bb-table { display: none; }
+  .bb-mhead { display: flex; }
+  .bb-cards { display: flex; }
   .bb-col-pipe, .bb-col-stats { display: none; }
   .bb-triage { margin-left: 0; width: 100%; }
 }

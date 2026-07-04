@@ -23,9 +23,13 @@ const initial = () => ({
 
   // ----- estado UI (antes en el DOM) -----
   expanded: new Set(),   // claves de fila con el detalle abierto (rowKey)
-  archOpen: false,       // sección 📦 Archivo desplegada
+  archOpen: false,       // sección 📦 Archivo desplegada (tabla desktop)
   busy: {},              // botones en vuelo: send/scan/ghsync/desksync/act:<key>
   deskSyncProgress: null, // {done,total} del bulk "🎫 Desk"
+
+  // ----- vista móvil (Fase 3: cards + búsqueda + segmentos) -----
+  query: '',             // búsqueda en cliente: nº ticket / título / archivos
+  filter: null,          // segmento activo: 'accion'|'revision'|'done'|'arch'|null(=todos)
 
   // ----- paneles lazy del detalle (antes dataset.loaded + innerHTML) -----
   // Cada slot: { loading:true } | { running:true } | { data|st } | { error }.

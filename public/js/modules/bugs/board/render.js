@@ -13,7 +13,7 @@ import { esc, fmtDate, fmtAgo } from './util.js';
 import {
   ticketOfPr, timelineOf, EV_LABEL, evDot, resolutionOf, RES_CHIP, prEstado,
   prCellFor, deskCellFor, OUTCOME_LABEL, rowKey, triageKey, ghKey,
-  triageByNum, entriesByTicket,
+  triageByNum, entriesByTicket, segmentOfEntry, segmentOfGh, cleanTitle,
 } from './labels.js';
 
 let icon = null;
@@ -61,6 +61,31 @@ export function renderHeader(state) {
   mr.triage.innerHTML = state.triage.updatedAt
     ? `triage: ${fmtAgo(state.triage.updatedAt)}${Date.now() - state.triage.updatedAt > 86400000 ? ' <span class="bb-chip bb-chip--warn">viejo</span>' : ''}`
     : 'triage: sin datos';
+
+  // ----- Header MÓVIL (Fase 3): segmentos con conteo + frescura en UNA línea.
+  // El input de búsqueda (mr.q) NUNCA se re-renderiza: es un ref estable para
+  // no pisar el tipeo; acá solo se actualizan chips y texto.
+  if (mr.segs) {
+    const counts = { accion: 0, revision: 0, done: 0, arch: 0 };
+    for (const b of state.entries) { const sg = segmentOfEntry(b); if (sg) counts[sg]++; }
+    const cubiertos = new Set(state.entries.map((b) => String(b.ticketNumber)).filter(Boolean));
+    for (const t of (state.triage.tickets || [])) if (!cubiertos.has(String(t.ticketNumber))) counts.accion++;
+    for (const pr of state.ghRows) {
+      const tk = ticketOfPr(pr);
+      if (tk && cubiertos.has(String(tk))) continue;
+      const sg = segmentOfGh(pr); if (sg) counts[sg]++;
+    }
+    const SEGS = [['accion', 'Acción'], ['revision', 'Revisión'], ['done', '✓'], ['arch', '📦']];
+    mr.segs.innerHTML = SEGS.map(([k, label]) =>
+      `<button class="bb-seg-chip${state.filter === k ? ' on' : ''}" data-seg="${k}" title="${k === 'accion' ? 'Te toca a vos: pendientes de enviar + bugs sin trabajar' : k === 'revision' ? 'PR abierto esperando a Chris' : k === 'done' ? 'Mergeado o completo' : 'Archivados'}">${label} ${counts[k]}</button>`).join('');
+  }
+  if (mr.mfresh) {
+    mr.mfresh.textContent = [
+      state.lastGhAt ? `GitHub ${fmtAgo(state.lastGhAt)}` : (state.ghError ? 'GitHub no disponible' : 'GitHub —'),
+      state.lastDeskAt ? `Desk ${fmtAgo(state.lastDeskAt)}` : 'Desk sin consultar',
+      state.triage.updatedAt ? `triage ${fmtAgo(state.triage.updatedAt)}` : 'triage sin datos',
+    ].join(' · ');
+  }
 }
 
 // ===== Chips de verificación (cruce registro × triage × historial) =====
@@ -398,11 +423,25 @@ function ghDetailHtml(pr, state) {
     </p>`;
 }
 
+// Detalle de un ticket del triage sin trabajo (lo comparten tabla y card móvil).
+function triageDetailHtml(t, state) {
+  return `
+    ${invTopBox({ ticketNumber: t.ticketNumber, title: t.whatBroke, whatBroke: t.whatBroke, route: t.route, reporter: t.reporter, severity: t.severity, context: t.context }, state)}
+    <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
+    ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
+    ${t.context ? `<p class="hp-bf-summary">${esc(t.context)}</p>` : ''}
+    <p class="bb-links">
+      ${t.webUrl ? `<a href="${esc(t.webUrl)}" target="_blank" rel="noopener">Ticket #${esc(t.ticketNumber)} ↗</a>` : ''}
+      <button class="btn btn--sm" data-act="triagework" data-tkt="${esc(t.ticketNumber)}">${icon('sparkle', { size: 13 })}<span>Trabajar en Chat (plan)</span></button>
+    </p>`;
+}
+
 // ===== Render de la tabla (único punto de re-render, con scroll preservado) =====
 export function renderTable(state) {
   const { entries, ghRows, triage, expanded, archOpen } = state;
   if (state.loadError) {
     mr.tbody.innerHTML = '<tr><td colspan="8" class="hp-empty">No se pudo leer el registro.</td></tr>';
+    if (mr.cards) mr.cards.innerHTML = '<div class="hp-empty">No se pudo leer el registro.</div>';
     return;
   }
   const cubiertos = new Set(entries.map((b) => String(b.ticketNumber)).filter(Boolean));
@@ -410,6 +449,7 @@ export function renderTable(state) {
 
   if (!entries.length && !ghRows.length && !soloTriage.length) {
     mr.tbody.innerHTML = '<tr><td colspan="8" class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</td></tr>';
+    if (mr.cards) mr.cards.innerHTML = '<div class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</div>';
     return;
   }
   const activos = entries.filter((b) => !b.archived);
@@ -492,16 +532,7 @@ export function renderTable(state) {
         <td class="bb-col-desk"><span class="bb-icell bb-icell--none" title="Ticket sin responder en Desk">—</span></td>
         <td class="bb-col-est">sin trabajo aún</td>
       </tr>
-      <tr class="bb-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">
-        ${invTopBox({ ticketNumber: t.ticketNumber, title: t.whatBroke, whatBroke: t.whatBroke, route: t.route, reporter: t.reporter, severity: t.severity, context: t.context }, state)}
-        <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
-        ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
-        ${t.context ? `<p class="hp-bf-summary">${esc(t.context)}</p>` : ''}
-        <p class="bb-links">
-          ${t.webUrl ? `<a href="${esc(t.webUrl)}" target="_blank" rel="noopener">Ticket #${esc(t.ticketNumber)} ↗</a>` : ''}
-          <button class="btn btn--sm" data-act="triagework" data-tkt="${esc(t.ticketNumber)}">${icon('sparkle', { size: 13 })}<span>Trabajar en Chat (plan)</span></button>
-        </p>
-      </td></tr>`);
+      <tr class="bb-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${triageDetailHtml(t, state)}</td></tr>`);
   }
   // Los PRs solo-GitHub cuyo ticket YA está consolidado en una fila del
   // motor no se repiten (el motor los enganchó a external.github).
@@ -542,10 +573,110 @@ export function renderTable(state) {
       </tr>`);
     for (const b of arch) rows.push(rowFor(b, true));
   }
+  // ===== Cards móviles (Fase 3; el CSS gatea tabla vs cards por breakpoint,
+  // se renderizan AMBAS del mismo estado: rotar el teléfono no pierde nada) ==
+  const q = String(state.query || '').trim().toLowerCase();
+  const matches = (hay) => !q || hay.some((h) => String(h || '').toLowerCase().includes(q));
+  const segOk = (sg) => !state.filter || state.filter === sg;
+  const cards = [];
+
+  // Card de un ticket del motor: L1 identidad+íconos · L2 título limpio ·
+  // L3 estado COMPLETO (nunca truncado) · L4 semáforo si hay investigación.
+  const cardFor = (b, arch) => {
+    const key = rowKey(b);
+    const open = expanded.has(key);
+    const est = prEstado(b);
+    const resChip = !arch && RES_CHIP[resolutionOf(b)] ? ` ${RES_CHIP[resolutionOf(b)]}` : '';
+    const isPr = !arch && b.prState === 'open' && b.prNumber;
+    const group = isPr ? (openPrGroups.get(String(b.prNumber)) || [b]) : [b];
+    const id = [b.ticketNumber ? `#${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null]
+      .filter(Boolean).join(' · ') || '—';
+    let sem = '';
+    if (b.prNumber) {
+      const S = state.inv[b.prNumber]?.st?.investigation?.semaforo;
+      if (S) {
+        const ball = S.ball === 'chris' ? 'La pelota la tiene Chris' : S.ball === 'yours' ? 'La pelota es TUYA' : 'Sin pendientes claros';
+        sem = `<div class="bb-card-sem">🚦 ${ball}${S.ultimaActividad ? ` · ${fmtAgo(S.ultimaActividad)}` : ''}</div>`;
+      }
+    }
+    return `
+      <div class="bb-card bb-row${isPr ? ' bb-card--pr' : ''}" data-key="${esc(key)}">
+        <div class="bb-card-l1">
+          <span class="hp-dot hp-dot--${est.dot}"></span>
+          <span class="bb-card-id">${id}</span>
+          <span class="bb-card-icons">${prCellFor(b, entries, ghRows)}${deskCellFor(b)}</span>
+        </div>
+        <div class="bb-card-title">${esc(cleanTitle(b.title))}</div>
+        ${isPr ? `<div class="bb-prtkts">${group.map(subTktHtml).join('')}</div>` : ''}
+        <div class="bb-card-est">${estHtml(est)}${resChip}</div>
+        ${sem}
+      </div>
+      <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${detailHtml(b, state)}</div>`;
+  };
+
+  if (state.filter === 'arch') {
+    // Segmento 📦: SOLO archivados (en cards no hay sección colapsable).
+    for (const b of [...archivados].sort((a, b2) => (b2.updatedAt || 0) - (a.updatedAt || 0))) {
+      if (matches([b.ticketNumber, b.prNumber, b.title, ...(b.files || [])])) cards.push(cardFor(b, true));
+    }
+  } else {
+    const prRendered2 = new Set();
+    for (const b of orden) {
+      if (b.prState === 'open' && b.prNumber) {
+        const k = String(b.prNumber);
+        if (prRendered2.has(k)) continue;
+        prRendered2.add(k);
+      }
+      if (!segOk(segmentOfEntry(b))) continue;
+      if (!matches([b.ticketNumber, b.prNumber, b.title, ...(b.files || [])])) continue;
+      cards.push(cardFor(b, false));
+    }
+    for (const t of soloTriage) {
+      if (!segOk('accion')) continue;
+      if (!matches([t.ticketNumber, t.whatBroke, t.route])) continue;
+      const key = triageKey(t);
+      const open = expanded.has(key);
+      cards.push(`
+        <div class="bb-card bb-row" data-key="${esc(key)}" data-tkt="${esc(t.ticketNumber)}">
+          <div class="bb-card-l1">
+            <span class="hp-dot hp-dot--warn"></span>
+            <span class="bb-card-id">#${esc(t.ticketNumber)}</span>
+            <span class="bb-card-icons"><span class="tk-sev tk-sev-${esc(t.severity)}">${esc(t.severity)}</span></span>
+          </div>
+          <div class="bb-card-title">${esc(t.whatBroke)}</div>
+          <div class="bb-card-est"><span class="bb-est bb-est--warn"><span>sin trabajo aún</span></span></div>
+        </div>
+        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${triageDetailHtml(t, state)}</div>`);
+    }
+    for (const pr of ghRows) {
+      const ticket = ticketOfPr(pr);
+      if (ticket && ticketsEnTablero.has(String(ticket))) continue;
+      if (!segOk(segmentOfGh(pr))) continue;
+      if (!matches([ticket, pr.number, pr.title, pr.branch])) continue;
+      const key = ghKey(pr);
+      const open = expanded.has(key);
+      const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
+      const estTxt = pr.state === 'merged' ? `mergeado${pr.mergedBy ? ` por ${esc(pr.mergedBy)}` : ''}` : pr.state === 'closed' ? 'cerrado' : 'abierto';
+      cards.push(`
+        <div class="bb-card bb-row" data-key="${esc(key)}" data-prnum="${pr.number}">
+          <div class="bb-card-l1">
+            <span class="hp-dot hp-dot--${dot}"></span>
+            <span class="bb-card-id">${ticket ? `#${esc(ticket)} · ` : ''}PR #${esc(pr.number)}</span>
+            <span class="bb-card-icons">${prCellFor({ ticketNumber: ticket, prState: pr.state, prNumber: pr.number, status: 'subido' }, entries, ghRows)}${deskCellFor({ ticketNumber: ticket })}</span>
+          </div>
+          <div class="bb-card-title">${esc(pr.title)}</div>
+          <div class="bb-card-est"><span class="bb-est bb-est--${dot === 'warn' ? 'info' : dot}"><span>${estTxt}</span></span></div>
+        </div>
+        <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${ghDetailHtml(pr, state)}</div>`);
+    }
+  }
+  if (!cards.length) cards.push(`<div class="hp-empty">${q || state.filter ? 'Sin resultados para esta búsqueda/filtro.' : 'Sin bugs.'}</div>`);
+
   // Re-render con preservación de scroll (.bb-box es la única región de scroll).
   const st = mr.box ? mr.box.scrollTop : 0;
   const sl = mr.box ? mr.box.scrollLeft : 0;
   mr.tbody.innerHTML = rows.join('');
+  if (mr.cards) mr.cards.innerHTML = cards.join('');
   if (mr.box) { mr.box.scrollTop = st; mr.box.scrollLeft = sl; }
 }
 

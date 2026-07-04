@@ -145,6 +145,28 @@ export const rowKey = (b) => (b.sessionId ? `sid:${b.sessionId}` : (b.ticketNumb
 export const triageKey = (t) => `tkt:${t.ticketNumber}`;
 export const ghKey = (pr) => `pr:${pr.number}`;
 
+// ===== Segmentos de la vista móvil (Fase 3, mapean al rank de la lista) =====
+// 'accion' = te toca a vos (pendiente con archivos; triage-only también) ·
+// 'revision' = PR abierto esperando a Chris · 'done' = merged/completo ·
+// 'arch' = archivados. null = no entra en ningún segmento (solo en "Todos":
+// en plan sin archivos, cerrado sin merge).
+export function segmentOfEntry(b) {
+  if (b.archived) return 'arch';
+  if (resolutionOf(b) === 'complete' || b.prState === 'merged') return 'done';
+  if (b.prState === 'open' && b.prNumber) return 'revision';
+  if (b.status === 'pendiente' && b.files?.length) return 'accion';
+  return null;
+}
+export function segmentOfGh(pr) {
+  if (pr.state === 'open') return 'revision';
+  if (pr.state === 'merged') return 'done';
+  return null;
+}
+
+// Título "limpio" para la card móvil: la identidad (#N) ya va en la línea 1,
+// el prefijo "TKT #N — " duplicaba y comía dos renglones en 375px.
+export const cleanTitle = (t) => String(t || '').replace(/^TKT\s*#?[\w.-]+\s*[—–-]\s*/i, '');
+
 // ===== Cruces registro × triage (compartidos por chips y advertencias) =====
 export const triageByNum = (triage) => new Map((triage.tickets || []).map((t) => [String(t.ticketNumber), t]));
 export function entriesByTicket(entries) {

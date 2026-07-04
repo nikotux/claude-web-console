@@ -22,9 +22,10 @@
 
 import * as store from './store.js';
 import * as A from './actions.js';
-import { initRender, render, renderHeader, helpHtml } from './render.js';
+import { initRender, render, renderHeader, helpHtml, pendingOf } from './render.js';
 import { stopAll } from './polls.js';
 import { rowKey, ticketOfPr } from './labels.js';
+import { dismissablePopup } from '../../../ui/popup.js';
 
 export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose }) {
   const m = dialog.openModal({ title: 'Bugs & PRs — Tolkien', width: '90vw', onClose });
@@ -44,11 +45,20 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       <span class="bb-state" data-ref="ghstate"></span>
       <span class="bb-triage" data-ref="triage"></span>
     </div>
+    <div class="bb-mhead">
+      <div class="bb-mrow">
+        <input class="bb-search" data-ref="q" type="search" placeholder="Buscar por #, título, archivo…" autocomplete="off">
+        <button class="btn-ghost btn--sm btn--icon bb-more" data-ref="more" title="Más acciones (buscar bugfixes, GitHub, Desk, ayuda)">${icon('more', { size: 16 })}</button>
+      </div>
+      <div class="bb-segs" data-ref="segs"></div>
+      <span class="bb-mfresh" data-ref="mfresh"></span>
+    </div>
     <div class="bb-box" data-ref="box">
       <table class="bb-table">
         <thead><tr><th></th><th>TKT</th><th>Título</th><th class="bb-col-pipe">Pipeline</th><th class="bb-col-stats">Cambios</th><th title="¿Implementado en un PR?">PR</th><th title="¿Respondido en Zoho Desk?">Desk</th><th>Estado</th></tr></thead>
         <tbody data-ref="tbody"><tr><td colspan="8"><span class="cwc-spinner"></span></td></tr></tbody>
       </table>
+      <div class="bb-cards" data-ref="cards"></div>
     </div>`;
   m.body.appendChild(wrap);
   const mr = {};
@@ -73,8 +83,10 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     return null;
   }
 
-  // ===== Interacción (listener delegado — las claves salen del data-key) =====
-  mr.tbody.addEventListener('click', async (e) => {
+  // ===== Interacción (listener delegado — las claves salen del data-key).
+  // El MISMO handler sirve a la tabla (desktop) y a las cards (móvil): ambas
+  // vistas usan .bb-row/.bb-detail + data-key, así que closest() resuelve igual.
+  const onListClick = async (e) => {
     const liveBtn = e.target.closest('[data-livefresh]');
     if (liveBtn) { await A.loadLive(Number(liveBtn.dataset.livefresh), true); return; }
     // Investigar a fondo un PR: dispara el runner IA (consume tokens, bajo botón).
@@ -124,6 +136,42 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const row = e.target.closest('.bb-row');
     if (!row?.dataset?.key) return; // las filas solo-GitHub TAMBIÉN expanden
     A.toggleExpand(row.dataset.key, rowInfoOf(row.dataset.key));
+  };
+  mr.tbody.addEventListener('click', onListClick);
+  mr.cards.addEventListener('click', onListClick);
+
+  // ===== Header móvil (Fase 3): búsqueda + segmentos + menú ⋯ =====
+  mr.q.addEventListener('input', () => store.set({ query: mr.q.value }));
+  mr.segs.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-seg]');
+    if (!chip) return;
+    const seg = chip.dataset.seg;
+    store.set({ filter: store.get().filter === seg ? null : seg }); // re-tap = "Todos"
+  });
+  // Menú ⋯: las acciones episódicas del toolbar desktop (no merecen superficie
+  // permanente en 375px). "Enviar pendientes" vive acá HASTA la Fase 5 (action
+  // bar sticky inferior de la lista).
+  mr.more.addEventListener('click', () => {
+    const pend = pendingOf(store.get().entries).length;
+    const menu = document.createElement('div');
+    menu.className = 'cwc-popup-menu';
+    menu.innerHTML = `
+      <button class="cwc-popup-item" data-mact="send" ${pend ? '' : 'disabled'}>${icon('gitBranch', { size: 14 })}<span>Enviar pendientes${pend ? ` (${pend})` : ''}</span></button>
+      <button class="cwc-popup-item" data-mact="scan">${icon('sparkle', { size: 14 })}<span>Buscar bugfixes</span></button>
+      <button class="cwc-popup-item" data-mact="gh">${icon('refresh', { size: 14 })}<span>Sincronizar GitHub</span></button>
+      <button class="cwc-popup-item" data-mact="desk">${icon('download', { size: 14 })}<span>🎫 Consultar Desk</span></button>
+      <button class="cwc-popup-item" data-mact="help">${icon('help', { size: 14 })}<span>Cómo leer el tablero</span></button>`;
+    document.body.appendChild(menu);
+    const r = mr.more.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 6)}px`;
+    menu.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`;
+    const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+    menu.addEventListener('click', (e) => {
+      const it = e.target.closest('[data-mact]');
+      if (!it || it.disabled) return;
+      dismiss();
+      ({ send: () => A.sendPending(), scan: () => A.scan(), gh: () => A.ghSync(false), desk: () => A.deskSyncBulk(), help: openHelp })[it.dataset.mact]?.();
+    });
   });
 
   // ===== Header =====
@@ -131,11 +179,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   mr.scan.addEventListener('click', () => A.scan());
   mr.ghsync.addEventListener('click', () => A.ghSync(false));
   mr.desksync.addEventListener('click', () => A.deskSyncBulk());
-  mr.help.addEventListener('click', () => {
-    // Modal "Cómo leer este tablero": explica la nomenclatura del tablero.
+  // Modal "Cómo leer este tablero": explica la nomenclatura del tablero.
+  const openHelp = () => {
     const h = dialog.openModal({ title: 'Cómo leer este tablero', width: 460 });
     h.body.innerHTML = helpHtml();
-  });
+  };
+  mr.help.addEventListener('click', openHelp);
 
   // Auto-refresco de GitHub (BARATO: solo gh, sin tokens) mientras el tablero
   // está abierto, para que los merges de Chris aparezcan solos. Con el estado
