@@ -13,7 +13,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USERS_FILE = path.join(__dirname, '..', '..', 'users.json');
 
 const USERNAME_RE = /^[a-zA-Z0-9_.-]{1,32}$/;
-const MIN_PASSWORD = 4;
+// Mínimo endurecido (antes 4): la consola expone terminal/archivos/chat con
+// permisos reales, incluso para cuentas admin. Solo aplica a contraseñas
+// NUEVAS (crear usuario / cambiar contraseña); las existentes siguen válidas.
+const MIN_PASSWORD = 10;
 
 let users = new Map(); // username -> { username, hash, admin }
 
