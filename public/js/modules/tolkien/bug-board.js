@@ -397,10 +397,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       // Estado previo persistido (para distinguir un resultado NUEVO del viejo).
       const prevAt = (await deskGet(ticket))?.desk?.fetchedAt || 0;
       // Disparar el runner (o reusar caché fresca si no es fresh). Responde YA.
-      const kick = await fetch('/api/bugfixes/desk-refresh', {
+      const kickRes = await fetch('/api/bugfixes/desk-refresh', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tickets: [ticket], fresh: !!fresh }),
-      }).then((r) => r.json()).catch(() => ({}));
+      });
+      const kick = await kickRes.json().catch(() => ({}));
+      if (!kickRes.ok) throw new Error(kick.error || 'No se pudo lanzar la consulta a Zoho Desk.');
       const expectFresh = !!(kick.launched && kick.launched.length) || !!kick.started;
       // Encuestar el resultado persistido hasta que la corrida termine.
       const deadline = Date.now() + 5 * 60000; // tope defensivo (= timeout del runner)
@@ -527,10 +529,18 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     if (!box) return;
     box.innerHTML = `<div class="cwc-loading">${pacman()}investigando el PR #${esc(pr)}… (lee el diff y el feedback de Chris)</div>`;
     const prevAt = (await getInv(pr))?.investigation?.fetchedAt || 0;
-    await fetch('/api/bugfixes/investigate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr, ticket: ticket || null, fresh: true }),
-    }).catch(() => {});
+    try {
+      const res = await fetch('/api/bugfixes/investigate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pr, ticket: ticket || null, fresh: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar la investigación.');
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Investigar PR', message: err.message });
+      await loadInvestigation(box, pr, ticket); // restaura el botón (no quedó lanzada)
+      return;
+    }
     const deadline = Date.now() + 5 * 60000;
     for (;;) {
       if (!box.isConnected) return; // panel cerrado: el runner sigue del lado del server
@@ -635,17 +645,42 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       mr.tbody.innerHTML = '<tr><td colspan="8" class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</td></tr>';
       return;
     }
+    const activos = entries.filter((b) => !b.archived);
+    const archivados = entries.filter((b) => b.archived);
+
+    // Fase 2: cuando hay un PR ABIERTO, el PR es el protagonista y el/los TKT
+    // que resuelve van anidados debajo. Agrupamos por número de PR abierto;
+    // el primer TKT del grupo "posee" la fila, los demás se absorben (no duplican).
+    const openPrGroups = new Map(); // prNumber -> [entries]
+    for (const b of activos) {
+      if (b.prState === 'open' && b.prNumber) {
+        const k = String(b.prNumber);
+        if (!openPrGroups.has(k)) openPrGroups.set(k, []);
+        openPrGroups.get(k).push(b);
+      }
+    }
+    const prRendered = new Set(); // prNumbers ya representados (para saltar secundarios)
+
+    const subTktHtml = (g) => `<span class="bfm-subtkt">↳ 🎫 TKT #${esc(g.ticketNumber || '?')}${g.deskResolved ? ' <span class="bb-chip bb-chip--ok">resuelto</span>' : g.deskReplied ? ' <span class="bb-chip bb-chip--ok">respondido</span>' : ''}</span>`;
+
     // Una fila de registro (activa o archivada). El chip de resolución
     // (parcial/completo) va en la celda de estado.
     const rowFor = (b, arch) => {
       const est = prEstado(b);
       const res = resolutionOf(b);
       const resChip = !arch && RES_CHIP[res] ? ` ${RES_CHIP[res]}` : '';
+      // ¿Fila protagonizada por un PR abierto? (no en archivo)
+      const isPr = !arch && b.prState === 'open' && b.prNumber;
+      const group = isPr ? (openPrGroups.get(String(b.prNumber)) || [b]) : [b];
+      const tktCell = isPr ? `<span class="bfm-prnum">🔀 #${esc(b.prNumber)}</span>` : (b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—');
+      const titleCell = isPr
+        ? `<div class="bfm-prtitle"><b>PR #${esc(b.prNumber)}</b> · ${esc(b.title)}</div><div class="bfm-prtkts">${group.map(subTktHtml).join('')}</div>`
+        : esc(b.title);
       return `
-        <tr class="bfm-row${arch ? ' bb-arch-row' : ''}" data-sid="${esc(b.sessionId)}"${arch ? ' hidden' : ''}>
+        <tr class="bfm-row${isPr ? ' bfm-row--pr' : ''}${arch ? ' bb-arch-row' : ''}" data-sid="${esc(b.sessionId)}"${arch ? ' hidden' : ''}>
           <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
-          <td class="bfm-tkt">${b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—'}</td>
-          <td class="bfm-title">${esc(b.title)}</td>
+          <td class="bfm-tkt">${tktCell}</td>
+          <td class="bfm-title">${titleCell}</td>
           <td>${pipelineHtml(b)}</td>
           <td class="bfm-stats">${statsHtml(b.stats)}</td>
           <td class="bb-col-pr">${prCellFor(b)}</td>
@@ -654,9 +689,6 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         </tr>
         <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" hidden><td colspan="8">${detailHtml(b)}</td></tr>`;
     };
-
-    const activos = entries.filter((b) => !b.archived);
-    const archivados = entries.filter((b) => b.archived);
     // Orden activo: primero lo accionable (pendiente con archivos), completos al
     // fondo (ya resueltos, listos para archivar).
     const rank = (b) => (resolutionOf(b) === 'complete' ? 3
@@ -664,7 +696,15 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const orden = [...activos].sort((a, b) => rank(a) - rank(b)
       || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
     const rows = [];
-    for (const b of orden) rows.push(rowFor(b, false));
+    for (const b of orden) {
+      // Secundario de un PR abierto ya representado: se absorbió en la fila-PR.
+      if (b.prState === 'open' && b.prNumber) {
+        const k = String(b.prNumber);
+        if (prRendered.has(k)) continue;
+        prRendered.add(k);
+      }
+      rows.push(rowFor(b, false));
+    }
     // Tickets del triage SIN trabajo todavía: parte de la misma línea de trabajo.
     for (const t of soloTriage) {
       rows.push(`
@@ -1146,6 +1186,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         <div class="bb-help-sec">
           <b>Fila “#N …” (GitHub)</b> — un PR tuyo en GitHub sin registro local. El <b>#N</b> del ticket se detecta del título/branch; expandila para ver commits y actualizar su ticket.
         </div>
+        <div class="bb-help-sec">
+          <b>🔀 Fila-PR</b> — cuando un PR está <b>abierto</b>, el PR pasa a ser el protagonista de la fila y el/los <b>🎫 TKT</b> que resuelve quedan anidados debajo (<i>↳ TKT #N</i>). Al mergearse vuelve a ser fila-TKT.
+        </div>
+        <div class="bb-help-sec">
+          <b>🔍 Investigar a fondo</b> — al expandir un PR abierto: un semáforo gratis dice de quién es la pelota, y el botón corre una lectura IA de los comentarios de Chris + el diff que te dice si tenés que corregir y qué (persistido; sobrevive reinicios). <span class="bb-help-dim">Consume tokens; por eso es bajo botón.</span>
+        </div>
       </div>`;
   }
 
@@ -1170,10 +1216,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       // UN solo POST lanza el runner desacoplado para TODOS los tickets; luego
       // encuestamos el lock hasta que la corrida termine (sobrevive al cambio
       // de pestaña y a un reinicio del server).
-      await fetch('/api/bugfixes/desk-refresh', {
+      const kickRes = await fetch('/api/bugfixes/desk-refresh', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tickets }),
-      }).catch(() => {});
+      });
+      const kick = await kickRes.json().catch(() => ({}));
+      if (!kickRes.ok) throw new Error(kick.error || 'No se pudo lanzar la consulta a Zoho Desk.');
       const deadline = Date.now() + 6 * 60000;
       for (;;) {
         await new Promise((r) => setTimeout(r, 2500));
@@ -1183,6 +1231,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         mr.desksync.innerHTML = `${pacman()}<span>Desk${prog && prog.total ? ` ${prog.done}/${prog.total}` : ''}…</span>`;
         if (!running || Date.now() > deadline) break;
       }
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Desk', message: err.message });
+      return; // el lanzamiento falló: no hubo ciclo real, no tocar lastDeskAt/reload
     } finally {
       deskBusy = Math.max(0, deskBusy - 1);
       mr.desksync.disabled = false; mr.desksync.innerHTML = orig;

@@ -444,6 +444,20 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             verificar) · 'active'. ARCHIVO (POST /archive {id,archived}): flag
                             b.archived + evento archivado|restaurado; solo organiza el tablero,
                             no toca código ni PRs.
+                            INVESTIGAR A FONDO (Fase 1, 2026-07-04): al expandir un PR abierto,
+                            fillLive muestra un SEMÁFORO determinístico (semaforoHtml, 0 tokens,
+                            desde prLive: review/checks/conflictos + si Chris escribió tras tu
+                            último commit) + el botón "🔍 Investigar a fondo" (runInvestigation →
+                            POST /investigate → runner cwc-investigate-runner.js → GET
+                            /investigation/:pr, encuesta resiliente). El veredicto IA
+                            (verdictHtml: severidad/titular/pasos/archivos) se persiste y sus
+                            `pasos` se inyectan en "Trabajar en esto" (doWorkOn). Ver regla 6.
+                            FILA-PR (Fase 2, 2026-07-04): cuando un PR está ABIERTO el PR es el
+                            protagonista de la fila (🔀 #N + título) y el/los TKT que resuelve van
+                            ANIDADOS debajo (↳ 🎫 TKT #N, bfm-row--pr). renderTable agrupa por
+                            número de PR abierto (openPrGroups) y saltea los secundarios (no
+                            duplican fila); data-sid queda en el TKT primario → expandir/in-place
+                            intactos. Mergeado/cerrado/sin-PR siguen como fila-TKT.
                             UI ÚNICA: el TABLERO "Bugs & PRs" (tolkien/bug-board.js): filas de
                             registro local + tickets del triage + PRs SOLO-GitHub, estas
                             últimas EXPANDIBLES (badge #N del ticket detectado del título/branch

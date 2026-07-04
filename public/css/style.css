@@ -954,6 +954,12 @@ html, body {
 .bfm-nfiles, .bfm-nostats { color: var(--cwc-text-dimmer); }
 .bfm-work { margin-left: auto; }
 .bfm-detail td { background: var(--cwc-bg-panel); padding: .5rem .8rem; }
+/* Fila protagonizada por un PR abierto: el PR arriba, el/los TKT anidados debajo. */
+.bfm-row--pr > td:first-child { box-shadow: inset 3px 0 0 var(--cwc-info); }
+.bfm-prnum { font-weight: 600; color: var(--cwc-info); white-space: nowrap; }
+.bfm-prtitle { color: var(--cwc-text); }
+.bfm-prtkts { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-top: .15rem; }
+.bfm-subtkt { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .bfm-links { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
 .bfm-links a { color: var(--cwc-accent); }
 .bfm-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
