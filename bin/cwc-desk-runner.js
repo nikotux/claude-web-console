@@ -21,6 +21,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
+import { runAdaptivePool } from '../src/modules/health/pool.js';
 import {
   deskReadAllowed, deskPrompt, parseDeskResponse,
   writeDeskResult, persistDeskSnapshot,
@@ -94,16 +95,24 @@ async function fetchOne(ticket) {
 }
 
 async function run() {
-  for (const ticket of tickets) {
+  // PARALELO (regla de oro: paralelo lo que LEE, serial lo que ESCRIBE — esta
+  // consulta es READ-ONLY, regla 6). runAdaptivePool (el mismo de health F2.5)
+  // consulta varios tickets a la vez: cada corrida query() es aislada y escribe
+  // SU propio desk-live/<ticket>.json; lo único compartido es done/beat(),
+  // seguro por ser Node single-thread. Latencia del bulk: de ~N× a ~1× (el más
+  // lento), mismo gasto de tokens.
+  await runAdaptivePool(tickets, async (ticket, ctl) => {
     log(`consultando Desk #${ticket}…`);
     let data;
     try { data = await fetchOne(ticket); }
     catch (err) { data = { found: false, error: String(err?.message || err).slice(0, 160), fetchedAt: Date.now() }; }
+    // Rate-limit/overload del API ⇒ pedirle al pool que baje la concurrencia.
+    if (!data.found && /429|overload|rate.?limit/i.test(data.error || '')) ctl.backoff();
     writeDeskResult(ticket, data);                 // persiste SIEMPRE (found o error) para el front
     if (data.found) persistDeskSnapshot(ticket, data); // marca resolución en los registros del ticket
     done += 1; beat();
     log(`Desk #${ticket}: ${data.found ? (data.status || 'ok') : (data.error || 'no encontrado')}`);
-  }
+  });
 }
 
 log(`desk-runner arrancando (pid ${process.pid}, tickets ${tickets.join(', ')})`);
