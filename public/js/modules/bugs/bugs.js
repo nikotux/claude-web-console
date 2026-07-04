@@ -104,13 +104,18 @@ export default {
       if (s.pendientes) parts.push(`<span class="bf-stat bf-stat--warn" title="fixes listos para enviar como PR">${icon('gitBranch', { size: 12 })}<b>${s.pendientes}</b> por enviar</span>`);
       if (s.prsAbiertos) parts.push(`<span class="bf-stat" title="PRs abiertos (sin mergear)">${icon('gitCommit', { size: 12 })}<b>${s.prsAbiertos}</b> abierto${s.prsAbiertos === 1 ? '' : 's'}</span>`);
       const l2 = parts.length ? `<div class="bf-line">${parts.join(' ')}</div>` : '';
-      // Línea de RESOLUCIÓN (mismo semáforo que el tablero) — solo si hay algo
-      // que mostrar: 🟢 completos · 🟡 parciales · 🎫 respondidos en Desk.
-      const res = [];
-      if (s.completos) res.push(`<span class="bf-stat bf-stat--ok" title="resueltos y confirmados en Desk (completo)">${icon('check', { size: 12 })}<b>${s.completos}</b> completo${s.completos === 1 ? '' : 's'}</span>`);
-      if (s.parciales) res.push(`<span class="bf-stat bf-stat--warn" title="PR mergeado, ticket sin confirmar (parcial)">${icon('gitCommit', { size: 12 })}<b>${s.parciales}</b> parcial${s.parciales === 1 ? '' : 'es'}</span>`);
-      if (s.deskResp) res.push(`<span class="bf-stat" title="Desk respondió, ticket sin resolver">${icon('clipboard', { size: 12 })}<b>${s.deskResp}</b> en Desk</span>`);
-      const l3 = res.length ? `<div class="bf-line">${res.join(' ')}</div>` : '';
+      // Línea de RESOLUCIÓN (mismo semáforo que el tablero): pipeline SIEMPRE
+      // visible como mini-dashboard — 🟢 completos · 🟡 parciales · 🎫 en Desk.
+      // El chip en 0 se atenúa (bf-stat--dim); cuando todo está limpio, un
+      // "· al día" al final lo aclara. Así el panel nunca queda invisible.
+      const res = [
+        `<span class="bf-stat ${s.completos ? 'bf-stat--ok' : 'bf-stat--dim'}" title="resueltos y confirmados en Desk (completo)">${icon('check', { size: 12 })}<b>${s.completos}</b></span>`,
+        `<span class="bf-stat ${s.parciales ? 'bf-stat--warn' : 'bf-stat--dim'}" title="PR mergeado, ticket sin confirmar (parcial)">${icon('gitCommit', { size: 12 })}<b>${s.parciales}</b></span>`,
+        `<span class="bf-stat ${s.deskResp ? '' : 'bf-stat--dim'}" title="Desk respondió, ticket sin resolver">${icon('clipboard', { size: 12 })}<b>${s.deskResp}</b></span>`,
+      ];
+      const alDia = (!s.completos && !s.parciales && !s.deskResp)
+        ? '<span class="bf-sub">· al día</span>' : '';
+      const l3 = `<div class="bf-line" title="Resolución del ciclo (completos · parciales · en Desk)">${res.join(' ')} ${alDia}</div>`;
       const atencion = s.atencion
         ? `<div class="bf-att" title="Fixes que necesitan tu atención (reabierto, doble registro o ticket sin actualizar)">⚠ <b>${s.atencion}</b> ${s.atencion === 1 ? 'requiere' : 'requieren'} atención</div>`
         : '';
