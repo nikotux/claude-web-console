@@ -24,7 +24,7 @@ export const CACHE_FILE = path.join(DATA_DIR, 'tickets.json');
 export const LOCK_FILE = path.join(DATA_DIR, 'triage.lock');
 export const LOG_FILE = path.join(DATA_DIR, 'triage.log');
 
-export const RUN_TIMEOUT_MS = 4 * 60 * 1000; // corte duro del triage
+export const RUN_TIMEOUT_MS = 6 * 60 * 1000; // corte duro del triage (6 min, mismo patrón que FIX_TIMEOUT_MS de health/shared.js: con varios tickets abiertos las idas y vueltas MCP a Desk escalan y un timeout a mitad de camino tira el intento completo gastando tokens sin resultado)
 export const MAX_TURNS = 60;                  // cota de coste
 export const HEARTBEAT_MS = 3000;             // latido del runner al lock
 export const LOCK_FRESH_MS = 12000;           // lock más viejo que esto = runner muerto
