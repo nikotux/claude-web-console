@@ -81,6 +81,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       parts.push(batchItemBadge(it)); // estado por-ítem del batch (Pac-Man en vivo)
     } else if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
     else if (f.fixStatus === 'resolved') parts.push('<span class="hr-badge hr-badge--ok">✅ resuelto</span>');
+    else if (f.fixStatus === 'dismissed') parts.push(`<span class="hr-badge hr-badge--dismiss" title="Revisado y descartado: no era un bug (falso positivo)${f.knownFalsePositive ? ' · ya conocido de antes' : ''}">⊘ no era bug</span>`);
     else if (f.fixStatus === 'failed') parts.push('<span class="hr-badge hr-badge--fail">⚠ falló</span>');
     return parts.join(' ');
   }
@@ -94,6 +95,10 @@ export function openHealthReview(ctx, { isAdmin }) {
     if (!(isAdmin && openChat)) return '';
     if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman()}<span>resolviendo automáticamente…</span></div>`;
     if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
+    if (f.fixStatus === 'dismissed') {
+      return `<div class="hr-f-dismiss">⊘ No era un bug (falso positivo)${f.dismissReason ? `: ${esc(f.dismissReason)}` : ''}</div>
+        <div class="hr-f-actions"><button class="btn-ghost btn--sm" data-act="restore" title="Se descartó mal: sacalo del registro de falsos positivos y volvé a ponerlo en la cola por resolver">${icon('refresh', { size: 13 })}<span>Restaurar a la cola</span></button></div>`;
+    }
     const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ Auto-fix falló: ${esc(f.fixError)}</div>` : '';
     // GATE de política: superficie crítica O severidad crítica bloquean
     // "Automático" (queda solo "En chat"). Espeja el gate del backend.
@@ -115,7 +120,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   // pliega. `resolved` = viene de la sección "Resueltos" (nace colapsada).
   function findingCard(f) {
     const sev = f.severity || 'medium';
-    const collapsed = (isMobile || f.fixStatus === 'resolved') ? ' hr-collapsed' : '';
+    const collapsed = (isMobile || f.fixStatus === 'resolved' || f.fixStatus === 'dismissed') ? ' hr-collapsed' : '';
     return `
       <div class="hr-finding hr-finding--${esc(sev)}${collapsed}" data-idx="${f._i}" data-id="${esc(f.id || '')}">
         <div class="hr-f-head" data-toggle="1">
@@ -156,9 +161,13 @@ export function openHealthReview(ctx, { isAdmin }) {
     const bySev = (a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9);
     // Activos = todo lo que NO está resuelto (arriba, accionable). Resueltos =
     // abajo, en su propia sección colapsable.
-    const activos = all.filter((f) => f.fixStatus !== 'resolved').sort(bySev);
+    // Activos = ni resueltos ni descartados (falsos positivos). Los descartados
+    // salen de la cola "por resolver" y van a su propia sección.
+    const activos = all.filter((f) => f.fixStatus !== 'resolved' && f.fixStatus !== 'dismissed').sort(bySev);
     const resueltos = all.filter((f) => f.fixStatus === 'resolved')
       .sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0));
+    const descartados = all.filter((f) => f.fixStatus === 'dismissed')
+      .sort((a, b) => (b.dismissedAt || 0) - (a.dismissedAt || 0));
     const nFixing = all.filter((f) => f.fixStatus === 'fixing').length;
     const nOpen = activos.length - nFixing;
     // Auto-resolubles en batch: abiertos, NO bloqueados (ni superficie ni
@@ -168,6 +177,7 @@ export function openHealthReview(ctx, { isAdmin }) {
     const resumen = [
       `${all.length} hallazgo(s)`,
       resueltos.length ? `✅ ${resueltos.length} resuelto(s)` : '',
+      descartados.length ? `⊘ ${descartados.length} no eran bug` : '',
       nFixing ? `🔧 ${nFixing} resolviendo` : '',
       `${nOpen} sin resolver`,
     ].filter(Boolean).join(' · ');
@@ -196,6 +206,7 @@ export function openHealthReview(ctx, { isAdmin }) {
         : '<div class="hr-empty">Sin hallazgos: el sistema está sano ✅</div>'}
       </div>
       ${resueltos.length ? `<details class="hr-collapsible hr-resolved-sec"><summary>✅ Resueltos en esta revisión (${resueltos.length})</summary>${resueltos.map(findingCard).join('')}</details>` : ''}
+      ${descartados.length ? `<details class="hr-collapsible hr-dismiss-sec"><summary>⊘ Descartados · falsos positivos (${descartados.length}) — no se vuelven a escanear</summary>${descartados.map(findingCard).join('')}</details>` : ''}
       ${(isAdmin && proposals.length) ? `<details class="hr-collapsible hr-prop-sec" open><summary>🧠 Invariantes propuestos (${proposals.length}) — para aprobar</summary>
         <div class="hr-prop-list">${proposals.map((pr) => `
           <div class="hr-prop" data-prop="${esc(pr.id)}">
@@ -226,6 +237,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       const f = all.find((x) => String(x._i) === card.dataset.idx);
       card.querySelector('[data-act="chat"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) resolveInChat(f); });
       card.querySelector('[data-act="autofix"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) autoFix(f); });
+      card.querySelector('[data-act="restore"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) restoreDismiss(f); });
     }
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
     wrap.querySelector('[data-ref="startfull"]')?.addEventListener('click', () => startReview(true));
@@ -331,6 +343,27 @@ export function openHealthReview(ctx, { isAdmin }) {
       poll();
     } catch (err) {
       await dialog.alertDialog({ title: 'Resolver automático', message: err.message });
+    }
+  }
+
+  // Restaurar un falso positivo: lo saca del registro durable y lo devuelve a
+  // la cola "por resolver" (por si se descartó mal).
+  async function restoreDismiss(f) {
+    try {
+      const res = await fetch(`${API}/dismiss-restore`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: f.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo restaurar.');
+      if (lastData?.findings) {
+        const t = lastData.findings.find((x) => x.id === f.id);
+        if (t) { delete t.fixStatus; delete t.knownFalsePositive; delete t.dismissReason; render(lastData); }
+      }
+      clearTimeout(pollTimer);
+      fetchState().then(() => render(lastData));
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Restaurar', message: err.message });
     }
   }
 

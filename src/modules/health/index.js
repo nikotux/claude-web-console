@@ -18,7 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
-  readReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
+  readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
+  readDismissed, recordDismissed, removeDismissed,
   readProposals, writeProposals,
   readBatch, writeBatch, writeBatchLock, isBatchRunning,
 } from './shared.js';
@@ -253,14 +254,22 @@ function spawnOrchestrator() {
 function enrichReview(state) {
   const startedAt = state.startedAt || 0;
   const solvedBySig = new Map(readSolved().map((e) => [e.sig, e]));
+  const dismissedBySig = new Map(readDismissed().map((e) => [e.sig, e]));
   const findings = (state.findings || []).map((f) => {
     const sig = findingSig(f);
     const solved = solvedBySig.get(sig);
     const recurrent = solved && solved.firstResolvedAt < startedAt
       ? { times: solved.count, firstResolvedAt: solved.firstResolvedAt }
       : null;
+    // FALSO POSITIVO conocido: si la firma está en el registro durable y el
+    // hallazgo no está ya resuelto, se marca dismissed → sale de la cola "por
+    // resolver" aunque el motor lo haya vuelto a reportar (corta el bucle).
+    const known = dismissedBySig.get(sig);
+    const dismiss = known && f.fixStatus !== 'resolved'
+      ? { fixStatus: 'dismissed', knownFalsePositive: true, dismissReason: f.dismissReason || known.reason || '' }
+      : null;
     // Política de riesgo (Fase A): el front bloquea "Automático" en los críticos.
-    return { ...f, id: findingId(f), sig, recurrent, policy: classifyFinding(f) };
+    return { ...f, ...dismiss, id: findingId(f), sig, recurrent, policy: classifyFinding(f) };
   });
   return { ...state, findings };
 }
@@ -288,6 +297,23 @@ export default {
     r.get('/solved', (req, res) => {
       const solved = readSolved().sort((a, b) => (b.lastResolvedAt || 0) - (a.lastResolvedAt || 0));
       res.json({ solved });
+    });
+
+    // Restaurar un FALSO POSITIVO: lo saca del registro durable y limpia su
+    // fixStatus en review.json → vuelve a la cola "por resolver" (por si se
+    // descartó mal). Admin: reactiva un hallazgo que se auto-resolvería.
+    r.post('/dismiss-restore', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const state = readReview();
+      const f = (state.findings || []).find((x) => findingId(x) === id);
+      if (!f) return res.status(404).json({ error: 'Hallazgo inexistente.' });
+      removeDismissed(findingSig(f));
+      if (f.fixStatus === 'dismissed') {
+        delete f.fixStatus; delete f.dismissReason; delete f.dismissedAt;
+        state.updatedAt = Date.now(); writeReview(state);
+      }
+      res.json({ ok: true });
     });
 
     // Invariantes PROPUESTOS por el auto-fix, PENDIENTES de aprobación (Fase 5).
@@ -369,11 +395,18 @@ export default {
       if (isFixing() || isBatchRunning()) return res.status(409).json({ error: 'Ya hay una resolución en curso.' });
       const state = readReview();
       const byId = new Map((state.findings || []).map((f) => [findingId(f), f]));
+      const dismissedSigs = new Set(readDismissed().map((e) => e.sig));
       const items = [];
       const rejected = [];
       for (const id of ids) {
         const f = byId.get(id);
         if (!f) continue;
+        // FALSO POSITIVO conocido: nunca se re-encola (defensa en profundidad,
+        // aunque el front ya lo excluye de "activos").
+        if (dismissedSigs.has(findingSig(f))) {
+          rejected.push({ id, area: f.area, reason: 'falso positivo ya descartado' });
+          continue;
+        }
         // Mismo gate que el auto-fix de a uno: superficie crítica O severidad
         // crítica quedan FUERA del batch (no se auto-resuelven).
         const pol = classifyFinding(f);

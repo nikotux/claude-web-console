@@ -21,7 +21,7 @@ import fss from 'node:fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, otherBatchAlive,
-  fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, findingId, addProposal,
+  fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, recordDismissed, findingId, addProposal,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
 import { createSandbox, extractPatch, removeSandbox, integratePatch, pruneSandboxes, WT_BASE } from '../src/modules/health/worktree.js';
@@ -86,6 +86,15 @@ function markResolved(item, summary) {
   recordSolved(item, summary);
 }
 
+// Marca un FALSO POSITIVO en review.json (sale de la cola "por resolver") +
+// lo guarda en el registro DURABLE para que el motor no lo re-encole nunca más.
+function markDismissed(item, reason) {
+  const st = readReview();
+  const f = (st.findings || []).find((x) => findingId(x) === item.id);
+  if (f) { f.fixStatus = 'dismissed'; f.dismissReason = reason; f.dismissedAt = Date.now(); st.updatedAt = Date.now(); writeReview(st); }
+  recordDismissed(item, reason);
+}
+
 async function main() {
   const batch = readBatch();
   if (!batch || !Array.isArray(batch.items)) { log('sin batch: salgo.'); finish(0); return; }
@@ -131,6 +140,14 @@ async function main() {
       flush();
     }
   }, { min: 2, start: 4, backoffMs: 15000 });
+
+  // FALSOS POSITIVOS — pase SERIAL (sin race sobre review.json): los que el
+  // modelo descartó salen de la cola "por resolver" y quedan en el registro
+  // durable → el motor no los re-encola en la próxima corrida.
+  for (const it of batch.items.filter((x) => x.status === 'dismissed')) {
+    markDismissed(it, it.error || 'no era un bug (falso positivo)');
+    log(`  descartado ${it.area}: ${it.error || ''}`);
+  }
 
   // FASE 2 — integración SERIAL al árbol real (verdad de git). Orden: primero
   // los 'safe' (dominios disjuntos), después el resto — reduce conflictos.

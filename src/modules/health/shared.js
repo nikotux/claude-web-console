@@ -26,6 +26,10 @@ export const LOG_FILE = path.join(DATA_DIR, 'health-review.log');
 // (sobrevive a re-análisis, sirve para detectar recurrencias) + lock/log del
 // runner desacoplado bin/cwc-healthfix-runner.js.
 export const SOLVED_FILE = path.join(DATA_DIR, 'health-solved.json');
+// Registro DURABLE de FALSOS POSITIVOS: hallazgos que el auto-fix revisó y
+// descartó (no eran bugs). Sobrevive corridas → el motor NO los vuelve a poner
+// en la cola de "por resolver" (corta el bucle escaneo→mismo FP→escaneo).
+export const DISMISSED_FILE = path.join(DATA_DIR, 'health-dismissed.json');
 export const FIX_LOCK_FILE = path.join(DATA_DIR, 'healthfix.lock');
 export const FIX_LOG_FILE = path.join(DATA_DIR, 'healthfix.log');
 export const FIX_TIMEOUT_MS = 6 * 60 * 1000; // corte duro del auto-fix
@@ -133,6 +137,15 @@ export function unitPrompt(unit) {
       'leyendo el código; si alguno se viola es un finding (critical/high) con',
       'el código exacto citado:', ...invs.map((t, i) => `  ${i + 1}. ${t}`)]
     : [];
+  // FALSOS POSITIVOS ya descartados en esta unidad (Fase 5, corta el bucle en
+  // origen): se listan para que el auditor NO los vuelva a reportar salvo que
+  // encuentre evidencia NUEVA y concreta de que ahora sí son reales.
+  const fps = dismissedFor(unit);
+  const fpBlock = fps.length
+    ? ['', 'FALSOS POSITIVOS YA REVISADOS Y DESCARTADOS (NO los reportes de nuevo',
+      'salvo que el código haya cambiado y encuentres evidencia CONCRETA de que',
+      'ahora sí es un bug real):', ...fps.map((e, i) => `  ${i + 1}. ${e.area}${e.reason ? ` — ${e.reason}` : ''}`)]
+    : [];
   return [
     'Sos el AUDITOR DE SALUD de Claude Web Console. Corrida NO interactiva,',
     'SOLO LECTURA (no modifiques nada, no corras comandos).',
@@ -142,6 +155,7 @@ export function unitPrompt(unit) {
     'de la raíz; después leé y analizá EN PROFUNDIDAD estos archivos:',
     ...unit.files.map((f) => `  - ${f}`),
     ...invBlock,
+    ...fpBlock,
     '',
     'Buscá DOS clases de problemas, con foco en lo REAL y verificable:',
     '  1. BUGS: lógica incorrecta, estados que no se persisten, condiciones de',
@@ -271,6 +285,57 @@ export function recordSolved(f, summary) {
   }
   writeSolved(list);
   return prev || list[list.length - 1];
+}
+
+// ===== Registro DURABLE de FALSOS POSITIVOS (health-dismissed.json) =====
+// Clave = firma GRUESA (module|area|file), la misma que recurrencias: así, si el
+// motor re-encuentra el MISMO hallazgo, se reconoce como ya-descartado. No es
+// código; es memoria del "sistema nervioso" para no repetir el análisis.
+export function readDismissed() {
+  try { const o = JSON.parse(fss.readFileSync(DISMISSED_FILE, 'utf8')); return Array.isArray(o) ? o : []; }
+  catch { return []; }
+}
+export function writeDismissed(list) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(DISMISSED_FILE, JSON.stringify(list), { mode: 0o600 });
+  } catch (err) { console.error('[health] no pude escribir health-dismissed.json:', err?.message); }
+}
+// Upsert por firma. Si el motor lo volvió a proponer y se re-descartó, suma count.
+export function recordDismissed(f, reason) {
+  const sig = findingSig(f);
+  const list = readDismissed();
+  const now = Date.now();
+  const prev = list.find((e) => e.sig === sig);
+  if (prev) {
+    prev.count = (prev.count || 1) + 1;
+    prev.lastAt = now;
+    prev.reason = String(reason || prev.reason || '').slice(0, 300);
+    prev.area = f.area || prev.area; prev.module = f.module || prev.module; prev.file = f.file || prev.file;
+  } else {
+    list.push({
+      sig, area: f.area || '', module: f.module || '', file: f.file || '',
+      severity: f.severity || null, kind: f.kind || null,
+      reason: String(reason || '').slice(0, 300),
+      firstAt: now, lastAt: now, count: 1,
+    });
+  }
+  writeDismissed(list);
+  return prev || list[list.length - 1];
+}
+// Quita un FP del registro por firma (para "Restaurar": vuelve a la cola).
+export function removeDismissed(sig) {
+  const list = readDismissed();
+  const next = list.filter((e) => e.sig !== sig);
+  if (next.length !== list.length) writeDismissed(next);
+  return list.length - next.length;
+}
+// FP conocidos que aplican a una UNIDAD (por sus archivos/módulo) → se inyectan
+// en el prompt del auditor para que no los reporte de nuevo (corta en origen).
+export function dismissedFor(unit) {
+  const files = unit?.files || [];
+  const mods = new Set(files.map((f) => f.split('/').slice(0, 3).join('/')));
+  return readDismissed().filter((e) => files.includes(e.file) || (e.file && [...mods].some((m) => e.file.startsWith(m))));
 }
 
 // ===== Auditoría INCREMENTAL (Fase 2 del sistema nervioso) =====
