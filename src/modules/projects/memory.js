@@ -44,9 +44,21 @@ export function readContext(projectDir) {
   catch { return ''; }
 }
 
-export function writeContext(projectDir, text) {
+// `expectedHash` es OPCIONAL (a diferencia de writeContextSection, donde es
+// obligatorio): lo usa la ruta de archivo completo cuando el cliente lo abrió
+// vía GET /:key/context y quiere detectar que otra sesión (Claude Code, o el
+// editor por secciones) lo cambió mientras tanto. Si no lo manda, se conserva
+// el comportamiento histórico (pisa sin chequear) para no romper llamadores
+// programáticos existentes que ignoran el hash.
+export function writeContext(projectDir, text, expectedHash) {
   const out = String(text ?? '');
   if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto es demasiado grande (máximo 400 KB). Nada se guardó.');
+  if (expectedHash) {
+    const current = readContext(projectDir);
+    if (hashOf(current) !== String(expectedHash)) {
+      throw Object.assign(new Error('El contexto cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
+    }
+  }
   fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
 }
 
@@ -57,7 +69,7 @@ export function writeContext(projectDir, text) {
 // sección, nunca el documento completo. El hash por sección detecta si el
 // archivo cambió entre abrir y guardar (las sesiones de Claude Code editan
 // CLAUDE.md en vivo) y rechaza el guardado con conflicto en vez de pisar.
-const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 16);
+export const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 16);
 
 // Corta el texto en secciones: [preámbulo si hay contenido antes del primer
 // encabezado] + una por cada línea `#`/`##`/`###` hasta el próximo encabezado.

@@ -61,11 +61,28 @@ const SECRET_DIRS = ['certs'];
 
 let busy = false; // evita crear/restaurar en paralelo
 
+// Distingue terminación ANORMAL (matado por timeout/señal, binario ausente)
+// de un exit code real del comando: devuelve un Error para RECHAZAR la
+// promesa en esos casos, en vez de disfrazarlos de {code:1} (indistinguible
+// de un fallo normal, p.ej. exit 1 real de git). Invariante 10.
+function abnormalExec(err, cmd, timeoutMs) {
+  if (!err) return null;
+  if (err.killed || err.signal) {
+    return new Error(`"${cmd}" interrumpido (${err.signal || 'señal'}) — probable timeout de ${Math.round(timeoutMs / 1000)}s`);
+  }
+  if (typeof err.code !== 'number') {
+    return new Error(`"${cmd}" no se pudo ejecutar (${err.code || err.message})`);
+  }
+  return null;
+}
+
 function git(args, opts = {}) {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', PROJECT_DIR, ...args], { timeout: opts.timeout || 30000 }, (err, out, stderr) => {
-      // err.code puede ser string ('ENOENT', señales de timeout): normalizar a número.
-      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
+  const timeout = opts.timeout || 30000;
+  return new Promise((resolve, reject) => {
+    execFile('git', ['-C', PROJECT_DIR, ...args], { timeout }, (err, out, stderr) => {
+      const bad = abnormalExec(err, `git ${args[0] || ''}`, timeout);
+      if (bad) return reject(bad);
+      resolve({ code: err ? err.code : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
     });
   });
 }
@@ -110,10 +127,14 @@ const MAX_CHANGELOG_ENTRIES = 60; // no-silent-cap: si se recorta, se anota en e
 const GITHUB_DESCRIPTION = 'Personal web console for driving Claude Code from any browser (incl. phone) over ZeroTier: tmux-backed terminals, native Agent SDK chat, ticket triage, automated bugfix-to-PR workflow, backups, and admin/health dashboards.';
 
 function ghCmd(args, opts = {}) {
-  return new Promise((resolve) => {
-    execFile('gh', args, { timeout: opts.timeout || 20000 }, (err, out, stderr) => {
-      // err.code puede ser string ('ENOENT' si falta gh): normalizar a número.
-      resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
+  const timeout = opts.timeout || 20000;
+  return new Promise((resolve, reject) => {
+    execFile('gh', args, { timeout }, (err, out, stderr) => {
+      // ENOENT (falta gh) / timeout: RECHAZA — quien lo llame decide si es
+      // best-effort (updateGithubDescription lo atrapa) o error real.
+      const bad = abnormalExec(err, `gh ${args[0] || ''}`, timeout);
+      if (bad) return reject(bad);
+      resolve({ code: err ? err.code : 0, out: (out || '').trim(), stderr: (stderr || '').trim() });
     });
   });
 }
@@ -180,7 +201,13 @@ function updateReadmeChangelog(entryText) {
 async function updateGithubDescription(remoteUrl) {
   const slug = ownerRepoFromUrl(remoteUrl);
   if (!slug) return { ok: false, skipped: 'no se pudo derivar owner/repo del remote' };
-  const r = await ghCmd(['repo', 'edit', slug, '--description', GITHUB_DESCRIPTION]);
+  let r;
+  try {
+    r = await ghCmd(['repo', 'edit', slug, '--description', GITHUB_DESCRIPTION]);
+  } catch (e) {
+    // ghCmd rechaza si falta gh o hubo timeout: acá sigue siendo best-effort.
+    return { ok: false, skipped: String(e?.message || e) };
+  }
   if (r.code !== 0) return { ok: false, skipped: r.stderr || r.out || '"gh" no disponible o sin auth' };
   return { ok: true };
 }
@@ -216,9 +243,12 @@ function stamp() {
 }
 
 function tar(args) {
-  return new Promise((resolve) => {
-    execFile('tar', args, { timeout: 120000 }, (err, _out, stderr) => {
-      resolve({ code: err ? (err.code ?? 1) : 0, stderr: (stderr || '').trim() });
+  const timeout = 120000;
+  return new Promise((resolve, reject) => {
+    execFile('tar', args, { timeout }, (err, _out, stderr) => {
+      const bad = abnormalExec(err, `tar ${args[0] || ''}`, timeout);
+      if (bad) return reject(bad);
+      resolve({ code: err ? err.code : 0, stderr: (stderr || '').trim() });
     });
   });
 }
@@ -262,8 +292,8 @@ export default {
         }
         const st = fs.statSync(out);
         res.json({ ok: true, backup: { id, date: st.mtimeMs, size: st.size } });
-      } catch {
-        res.status(500).json({ error: 'Falló el backup.' });
+      } catch (e) {
+        res.status(500).json({ error: `Falló el backup: ${e?.message || e}` });
       } finally {
         busy = false;
       }
@@ -281,8 +311,8 @@ export default {
         if (t.code !== 0) return res.status(500).json({ error: `Falló la restauración: ${t.stderr || 'tar error'}` });
         res.json({ ok: true, restarting: true });
         scheduleRestart(); // el server se reinicia para cargar lo restaurado
-      } catch {
-        res.status(500).json({ error: 'Falló la restauración.' });
+      } catch (e) {
+        res.status(500).json({ error: `Falló la restauración: ${e?.message || e}` });
       } finally {
         busy = false;
       }
@@ -302,26 +332,30 @@ export default {
     // ===== Push del código a GitHub personal =====
     // Estado para la UI: remote, qué queda fuera, pendientes, comandos de setup.
     r.get('/git-info', async (req, res) => {
-      const inside = await git(['rev-parse', '--is-inside-work-tree']);
-      if (inside.code !== 0 || inside.out !== 'true') return res.json({ isRepo: false });
-      const url = await personalUrl();
-      const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'HEAD';
-      const excluded = [...SECRET_PATHS, ...SECRET_DIRS].filter((p) => fs.existsSync(path.join(PROJECT_DIR, p)));
-      const untracked = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
-      const dirty = lines((await git(['diff', '--name-only'])).out);
-      res.json({
-        isRepo: true,
-        branch,
-        remote: url ? { name: REMOTE, url, forbidden: FORBIDDEN_URL_RE.test(url) } : null,
-        excluded,
-        untracked,
-        dirtyCount: dirty.length,
-        lastCommit: (await git(['log', '-1', '--format=%h %s'])).out || null,
-        setupCommands: [
-          'cd ~/claude-web-console',
-          'git remote add personal git@github.com:<TU-USUARIO>/<TU-REPO>.git',
-        ],
-      });
+      try {
+        const inside = await git(['rev-parse', '--is-inside-work-tree']);
+        if (inside.code !== 0 || inside.out !== 'true') return res.json({ isRepo: false });
+        const url = await personalUrl();
+        const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'HEAD';
+        const excluded = [...SECRET_PATHS, ...SECRET_DIRS].filter((p) => fs.existsSync(path.join(PROJECT_DIR, p)));
+        const untracked = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
+        const dirty = lines((await git(['diff', '--name-only'])).out);
+        res.json({
+          isRepo: true,
+          branch,
+          remote: url ? { name: REMOTE, url, forbidden: FORBIDDEN_URL_RE.test(url) } : null,
+          excluded,
+          untracked,
+          dirtyCount: dirty.length,
+          lastCommit: (await git(['log', '-1', '--format=%h %s'])).out || null,
+          setupCommands: [
+            'cd ~/claude-web-console',
+            'git remote add personal git@github.com:<TU-USUARIO>/<TU-REPO>.git',
+          ],
+        });
+      } catch (e) {
+        res.status(500).json({ error: 'No se pudo leer el estado de git: ' + (e?.message || e) });
+      }
     });
 
     r.post('/push', async (req, res) => {
@@ -411,8 +445,10 @@ export default {
           description,
           output: (p.stderr || p.out || '').slice(0, 600),
         });
-      } catch {
-        res.status(500).json({ error: 'Falló el push.' });
+      } catch (e) {
+        // Rechazo de git()/ghCmd() (timeout/señal/binario ausente): el motivo
+        // real llega al usuario en vez de un genérico indistinguible.
+        res.status(500).json({ error: `Falló el push: ${e?.message || e}` });
       } finally {
         busy = false;
       }
@@ -499,8 +535,8 @@ export default {
           restarting, log,
         });
         if (restarting) scheduleRestart(); // el server viejo sigue en RAM hasta reiniciar
-      } catch {
-        res.status(500).json({ error: 'Falló el pull.', log });
+      } catch (e) {
+        res.status(500).json({ error: `Falló el pull: ${e?.message || e}`, log });
       } finally {
         busy = false;
       }

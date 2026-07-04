@@ -94,6 +94,10 @@ export default {
           return res.status(400).json({ error: 'Modelo inválido.' });
         }
 
+        if (runClaude != null && typeof runClaude !== 'boolean') {
+          return res.status(400).json({ error: 'runClaude debe ser booleano.' });
+        }
+
         const cwdAbs = cwd ? safeCwd(cwd) : config.home;
         // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
         // customTitle || basename(cwd) — si el basename ya está en uso (por

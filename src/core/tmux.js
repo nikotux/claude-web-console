@@ -30,7 +30,7 @@ export function runTmux(socketPath, args, { throwOnError = false } = {}) {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch (err) {
-    if (throwOnError) throw err;
+    if (throwOnError || err.killed || err.signal) throw err;
     return '';
   }
 }

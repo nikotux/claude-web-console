@@ -98,9 +98,18 @@ export default {
       if (busy) return;
       busy = true; render();
       try {
-        const data = await (await fetch('/api/tolkien/fetch', { method: 'POST' })).json();
+        const res = await fetch('/api/tolkien/fetch', { method: 'POST' });
+        const data = await res.json();
         if (data.status) current = data.status;
-      } catch { /* noop */ } finally { busy = false; render(); }
+        if (!res.ok || data.error) {
+          await dialog.alertDialog({
+            title: 'No se pudo buscar cambios',
+            message: data.error || 'No se pudo comprobar el estado remoto (respuesta inválida del servidor).',
+          });
+        }
+      } catch {
+        await dialog.alertDialog({ title: 'Tolkien', message: 'No se pudo buscar cambios (error de red o del servidor).' });
+      } finally { busy = false; render(); }
     }
 
     const fmtLog = (log) => Array.isArray(log)

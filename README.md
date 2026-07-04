@@ -51,6 +51,71 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-04 05:57 — main
+- Sistema nervioso F5 (cierre): loop que aprende — invariantes propuestos
+- Salud F2.5: análisis en paralelo adaptativo (síntesis y auto-fix serial)
+- CLAUDE.md: regla de oro — toda implementación sobrevive al reinicio de la web
+- Salud/orquestador Fase A: gate de política — críticos no se auto-resuelven
+- bugfixes: desacoplar la consulta a Zoho Desk en un runner detached
+- bugfixes: refresh-prs paraleliza las lecturas a GitHub (orquestador de Salud)
+- Salud/orquestador Fase B: resolución en batch — paralelo aislado + integración serial
+- bugfixes: feedback de Chris como base de conocimiento del motor
+- checkpoint: WIP del orquestador de salud (integracion batch) dejado por sesion paralela
+- Salud/orquestador: fix auto-deadlock (pid:0), gate por severidad y Pac-Man por hallazgo
+- Salud/orquestador: aprobar invariantes (glob→regex) + estado "falso positivo"
+- Salud/auto-fix: resolución en batch de 20 hallazgos de la revisión
+- bug-board: separar "tu acción pendiente" de "esperando a Chris" en el estado del PR
+- Salud: falsos positivos quedan descartados y no se re-escanean (corta el bucle)
+- Salud: invariantes aprendidos aprobados desde la UI (29 en total)
+- Salud/auto-fix: 2do batch — 16 hallazgos resueltos (revisados)
+- Salud: el auditor pasa de haiku a sonnet (auditModelFor, fuente única)
+- bugs(sidebar): línea de resolución (completos/parciales/Desk) con íconos
+- bugs(sidebar): pipeline de resolución SIEMPRE visible (dashboard)
+- tokens: detalle del modal Uso por MOTOR de origen + animación precisa por modelo
+- bugfixes: Fase 1 — botón "Investigar a fondo" de un PR (semáforo + IA)
+- Chat: arreglar selecciones que "se cambiaban solas o no se tomaban"
+- bug-board: Fase 2 — el PR abierto absorbe el/los TKT (fila-PR)
+- users: endurecer contraseña mínima de 4 a 10 caracteres
+- bugs: listener 'error' en el spawn del runner de triage
+- Seguridad: igualar timing de verifyUser para usuarios inexistentes
+- Modified `CLAUDE.md`
+- Added `bin/cwc-health-resolve.js`
+- Modified `bin/cwc-healthfix-orchestrator.js`
+- Added `bin/cwc-ticket-investigate-runner.js`
+- Modified `bin/cwc-triage-runner.js`
+- Added `docs/task-bugfixes-branch-mode.md`
+- Modified `public/css/style.css`
+- Modified `public/js/modules/launcher/launcher.js`
+- Modified `public/js/modules/system/backup-panel.js`
+- Modified `public/js/modules/system/health-review-modal.js`
+- Modified `public/js/modules/system/project-context-panel.js`
+- Modified `public/js/modules/tolkien/bug-board.js`
+- Modified `public/js/modules/tolkien/tolkien.js`
+- Modified `public/js/ui/dialog.js`
+- Modified `public/js/ui/markdown.js`
+- Modified `public/js/ui/pacman.js`
+- Modified `src/core/tmux.js`
+- Modified `src/core/trash.js`
+- Modified `src/modules/admin/index.js`
+- Modified `src/modules/backup/index.js`
+- Modified `src/modules/bugfixes/index.js`
+- Added `src/modules/bugfixes/ticket-investigate-shared.js`
+- Modified `src/modules/bugs/index.js`
+- Modified `src/modules/bugs/shared.js`
+- Modified `src/modules/chat/index.js`
+- Modified `src/modules/files/index.js`
+- Modified `src/modules/health/index.js`
+- Modified `src/modules/health/invariants-learned.json`
+- Modified `src/modules/health/shared.js`
+- Modified `src/modules/health/worktree.js`
+- Modified `src/modules/projects/index.js`
+- Modified `src/modules/projects/memory.js`
+- Modified `src/modules/stats/index.js`
+- Modified `src/modules/terminal/index.js`
+- Modified `src/modules/terminal/sessions.js`
+- Modified `src/modules/tmux/index.js`
+- Modified `src/modules/tolkien/index.js`
+
 ### 2026-07-03 23:23 — main
 - Modified `CLAUDE.md`
 - Modified `bin/cwc-healthfix-runner.js`

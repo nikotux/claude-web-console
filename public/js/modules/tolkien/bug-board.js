@@ -325,6 +325,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           </div>`).join('')}</div>`
       : '';
     return `
+      ${invTopBox(b)}
       <div class="bb-chips">${chipsFor(b)}</div>
       <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
       ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
@@ -363,6 +364,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   function ghDetailHtml(pr) {
     const ticket = ticketOfPr(pr);
     return `
+      ${invTopBox({ prNumber: pr.number, ticketNumber: ticket, title: pr.title })}
       <div class="bb-chips">${ticket
     ? `<span class="bb-chip bb-chip--info" title="Ticket detectado del título/branch del PR">🎫 pertenece a TKT #${esc(ticket)}</span>`
     : '<span class="bb-chip bb-chip--warn" title="El título/branch no sigue la convención bugfix/tkt-N">sin ticket detectable</span>'}</div>
@@ -514,12 +516,32 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
 
   const getInv = (pr) => fetch(`/api/bugfixes/investigation/${encodeURIComponent(pr)}`).then((r) => r.json()).catch(() => null);
 
+  // Caja DESTACADA de investigación al inicio del detalle. Dos variantes según
+  // la fila (se llena on-expand, 0 tokens: lee el veredicto persistido):
+  //   · CON PR  → investiga el PR (diff + comentarios de Chris): data-invtop.
+  //   · SIN PR  → investiga el CONTEXTO leyendo el código de Tolkien read-only
+  //     (POR QUÉ no se resolvió): data-tktinvtop + el enunciado del ticket.
+  function invTopBox(row) {
+    if (!row) return '';
+    if (row.prNumber) {
+      return `<div class="bb-inv bb-inv--top" data-invtop="${esc(row.prNumber)}" data-invticket="${esc(row.ticketNumber || '')}"><div class="cwc-loading">${pacman()}cargando investigación…</div></div>`;
+    }
+    if (!row.ticketNumber) return '';
+    const problem = {
+      title: row.title || '', whatBroke: row.whatBroke || '', route: row.route || '',
+      reporter: row.reporter || '', severity: row.severity || '', context: row.context || '',
+      summary: row.summary || '', files: row.files || [],
+    };
+    return `<div class="bb-inv bb-inv--top bb-inv--tkt" data-tktinvtop="${esc(row.ticketNumber)}" data-invproblem="${esc(JSON.stringify(problem))}"><div class="cwc-loading">${pacman()}cargando investigación…</div></div>`;
+  }
+
   // Muestra el veredicto persistido (0 tokens) + el botón para (re)investigar.
   async function loadInvestigation(box, pr, ticket) {
     if (!box || !box.isConnected) return;
     const st = await getInv(pr);
     const inv = st?.investigation;
     box.innerHTML = `
+      <div class="bb-inv-title">${icon('search', { size: 13 })}<b>Investigación del PR #${esc(pr)}</b></div>
       ${inv ? `${verdictHtml(inv)}<div class="bb-inv-at">investigado ${fmtAgo(inv.fetchedAt)}</div>` : ''}
       <button class="btn ${inv ? 'btn-ghost' : ''} btn--sm" data-investigate="${esc(pr)}" data-invticket="${esc(ticket || '')}">${icon('search', { size: 13 })}<span>🔍 ${inv ? 'Investigar de nuevo' : 'Investigar a fondo'}</span></button>`;
   }
@@ -553,6 +575,67 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     await loadInvestigation(box, pr, ticket);
   }
 
+  // ===== Investigación de CONTEXTO (ticket sin PR): lee el código de Tolkien =====
+  const getTktInv = (n) => fetch(`/api/bugfixes/ticket-investigation/${encodeURIComponent(n)}`).then((r) => r.json()).catch(() => null);
+
+  // Render del veredicto de contexto (persistido): POR QUÉ no se resolvió + causa raíz.
+  function verdictTicketHtml(inv) {
+    const L = inv?.lectura;
+    if (!L || !L.ok) return `<div class="bb-inv-err">No se pudo interpretar la investigación${L?.error ? `: ${esc(L.error)}` : ''}.</div>`;
+    const tone = L.necesitaMasInfo ? 'info' : L.complejidad === 'alta' ? 'danger' : L.complejidad === 'media' ? 'warn' : 'ok';
+    return `
+      <div class="bb-verdict bb-verdict--${tone}">
+        <div class="bb-verdict-head">${icon('search', { size: 14 })}<b>${esc(L.titular || 'Investigación de contexto')}</b><span class="bb-chip bb-chip--${tone}">complejidad ${esc(L.complejidad)}</span><span class="bb-verdict-conf">confianza ${esc(L.confianza)}</span></div>
+        ${L.porQueNoResuelto ? `<div class="bb-verdict-what"><b>Por qué no se resolvió:</b> ${esc(L.porQueNoResuelto)}</div>` : ''}
+        ${L.causaRaiz ? `<div class="bb-verdict-what"><b>Causa raíz:</b> ${esc(L.causaRaiz)}</div>` : ''}
+        ${L.pasos.length ? `<ul class="bb-verdict-steps">${L.pasos.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+        ${L.riesgo ? `<div class="bb-verdict-what"><b>Riesgo al tocarlo:</b> ${esc(L.riesgo)}</div>` : ''}
+        ${L.archivos.length ? `<div class="bb-verdict-files">${L.archivos.map((f) => `<code>${esc(f)}</code>`).join(' ')}</div>` : ''}
+      </div>`;
+  }
+
+  // Muestra el veredicto persistido (0 tokens) + el botón para (re)investigar.
+  async function loadTicketInvestigation(box, ticket, problem) {
+    if (!box || !box.isConnected) return;
+    const st = await getTktInv(ticket);
+    const inv = st?.investigation;
+    const pj = problem ? esc(JSON.stringify(problem)) : (box.dataset.invproblem || '');
+    box.innerHTML = `
+      <div class="bb-inv-title">${icon('search', { size: 13 })}<b>Investigación de contexto · TKT #${esc(ticket)}</b></div>
+      ${inv ? `${verdictTicketHtml(inv)}<div class="bb-inv-at">investigado ${fmtAgo(inv.fetchedAt)}</div>`
+      : '<div class="bb-inv-hint">Lee el código de Tolkien (read-only) y explica por qué el ticket sigue abierto.</div>'}
+      <button class="btn ${inv ? 'btn-ghost' : ''} btn--sm" data-tktinvestigate="${esc(ticket)}" data-invproblem="${pj}">${icon('search', { size: 13 })}<span>🔍 ${inv ? 'Investigar de nuevo' : 'Investigar contexto'}</span></button>`;
+  }
+
+  // Dispara el runner desacoplado y encuesta (resiliente al cambio de pestaña).
+  async function runTicketInvestigation(box, ticket, problem) {
+    if (!box) return;
+    box.innerHTML = `<div class="cwc-loading">${pacman()}investigando el ticket #${esc(ticket)}… (leyendo el código de Tolkien)</div>`;
+    const prevAt = (await getTktInv(ticket))?.investigation?.fetchedAt || 0;
+    try {
+      const res = await fetch('/api/bugfixes/ticket-investigate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket, problem: problem || {}, fresh: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar la investigación.');
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Investigar ticket', message: err.message });
+      await loadTicketInvestigation(box, ticket, problem); // restaura el botón (no quedó lanzada)
+      return;
+    }
+    const deadline = Date.now() + 6 * 60000;
+    for (;;) {
+      if (!box.isConnected) return; // panel cerrado: el runner sigue del lado del server
+      const st = await getTktInv(ticket);
+      const inv = st?.investigation;
+      if (inv && !st.running && (inv.fetchedAt || 0) > prevAt) break;
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    await loadTicketInvestigation(box, ticket, problem);
+  }
+
   async function fillLive(box, prNumber, fresh) {
     box.innerHTML = `<div class="cwc-loading">${pacman()}consultando GitHub en vivo…</div>`;
     try {
@@ -576,7 +659,6 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <span class="bb-live-at">${fmtAgo(L.fetchedAt)}</span>
         </div>
         ${semaforoHtml(L)}
-        ${L.state === 'open' ? `<div class="bb-inv" data-invbox="${prNumber}"></div>` : ''}
         ${L.commits.length ? `<div class="bb-live-commits">${L.commits.map((c) => `<div class="bb-commit"><code>${esc(c.sha)}</code> ${esc(c.msg)} <span class="bb-tl-date">${fmtDate(c.at)}</span></div>`).join('')}</div>` : ''}
         ${L.feedback.length ? `<div class="bb-live-fb">${L.feedback.map((f) => `
           <div class="bb-fb">
@@ -584,12 +666,6 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
             ${f.body ? `<span class="bb-fb-body">${esc(f.body)}</span>` : ''}
           </div>`).join('')}</div>`
       : '<div class="bb-live-fb bb-live-empty">Sin comentarios ni reviews todavía.</div>'}`;
-      // Cargar la investigación persistida (0 tokens) + el botón, si el PR está abierto.
-      const invBox = box.querySelector('.bb-inv');
-      if (invBox) {
-        const ticket = entries.find((e) => String(e.prNumber) === String(prNumber))?.ticketNumber || '';
-        loadInvestigation(invBox, String(prNumber), ticket);
-      }
     } catch (err) {
       box.innerHTML = `<div class="bb-live-err">⚠ ${esc(err.message)} — datos locales abajo.</div>`;
     }
@@ -719,6 +795,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
           <td class="bfm-state">sin trabajo aún</td>
         </tr>
         <tr class="bfm-detail" hidden><td colspan="8">
+          ${invTopBox({ ticketNumber: t.ticketNumber, title: t.whatBroke, whatBroke: t.whatBroke, route: t.route, reporter: t.reporter, severity: t.severity, context: t.context })}
           <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
           ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
           ${t.context ? `<p class="hp-bf-summary">${esc(t.context)}</p>` : ''}
@@ -777,11 +854,20 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       if (box) await fillLive(box, n, true);
       return;
     }
-    // Investigar a fondo: dispara el runner IA (consume tokens, bajo botón).
+    // Investigar a fondo un PR: dispara el runner IA (consume tokens, bajo botón).
     const invBtn = e.target.closest('[data-investigate]');
     if (invBtn) {
       const box = invBtn.closest('.bb-inv');
       if (box) await runInvestigation(box, invBtn.dataset.investigate, invBtn.dataset.invticket);
+      return;
+    }
+    // Investigar el CONTEXTO de un ticket sin PR: lee el código de Tolkien (tokens).
+    const tktInvBtn = e.target.closest('[data-tktinvestigate]');
+    if (tktInvBtn) {
+      const box = tktInvBtn.closest('.bb-inv');
+      let problem = {};
+      try { problem = JSON.parse(tktInvBtn.dataset.invproblem || '{}'); } catch { /* enunciado vacío */ }
+      if (box) await runTicketInvestigation(box, tktInvBtn.dataset.tktinvestigate, problem);
       return;
     }
     // Desk: botón "Traer estado" (primera carga) y ↻ (fresca).
@@ -848,6 +934,19 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         box.dataset.loaded = '1';
         fillLive(box, Number(box.dataset.live), false);
       }
+      // Caja de investigación destacada al inicio (0 tokens: veredicto persistido + botón).
+      // Con PR → investigación del PR; sin PR → investigación de contexto (código Tolkien).
+      const invTop = det.querySelector('.bb-inv--top');
+      if (invTop && !invTop.dataset.loaded) {
+        invTop.dataset.loaded = '1';
+        if (invTop.dataset.tktinvtop) {
+          let problem = {};
+          try { problem = JSON.parse(invTop.dataset.invproblem || '{}'); } catch { /* enunciado vacío */ }
+          loadTicketInvestigation(invTop, invTop.dataset.tktinvtop, problem);
+        } else {
+          loadInvestigation(invTop, invTop.dataset.invtop, invTop.dataset.invticket);
+        }
+      }
     }
   });
 
@@ -873,6 +972,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       const L = (await getInv(b.prNumber))?.investigation?.lectura;
       if (L?.ok && (L.pasos?.length || L.queQuiereChris)) {
         invText = `\nINVESTIGACIÓN del PR (qué pide Chris${L.bloqueante ? ' — BLOQUEANTE' : ''}):\n${L.queQuiereChris || ''}${L.pasos?.length ? `\nPasos:\n${L.pasos.map((p) => `- ${p}`).join('\n')}` : ''}`;
+      }
+    } else if (b.ticketNumber) {
+      // Sin PR: si se corrió la investigación de contexto (código de Tolkien), sus
+      // hallazgos (causa raíz + pasos) guían el arranque del trabajo.
+      const L = (await getTktInv(b.ticketNumber))?.investigation?.lectura;
+      if (L?.ok && (L.pasos?.length || L.causaRaiz || L.porQueNoResuelto)) {
+        invText = `\nINVESTIGACIÓN DE CONTEXTO (por qué no se resolvió):\n${L.porQueNoResuelto || ''}${L.causaRaiz ? `\nCausa raíz: ${L.causaRaiz}` : ''}${L.pasos?.length ? `\nPasos sugeridos:\n${L.pasos.map((p) => `- ${p}`).join('\n')}` : ''}${L.archivos?.length ? `\nArchivos: ${L.archivos.join(', ')}` : ''}`;
       }
     }
     const prompt = [
@@ -940,6 +1046,12 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   // Ticket del triage sin trabajo: mismo flujo que la sección Bugs.
   async function workOnTriage(t) {
     const [workContext, prContext] = await fetchContexts();
+    // Si se corrió la investigación de contexto, sus hallazgos arrancan el plan.
+    let invText = '';
+    const L = (await getTktInv(t.ticketNumber))?.investigation?.lectura;
+    if (L?.ok && (L.pasos?.length || L.causaRaiz || L.porQueNoResuelto)) {
+      invText = `\nINVESTIGACIÓN DE CONTEXTO ya hecha (por qué no se resolvió):\n${L.porQueNoResuelto || ''}${L.causaRaiz ? `\nCausa raíz: ${L.causaRaiz}` : ''}${L.pasos?.length ? `\nPasos sugeridos:\n${L.pasos.map((p) => `- ${p}`).join('\n')}` : ''}${L.archivos?.length ? `\nArchivos: ${L.archivos.join(', ')}` : ''}`;
+    }
     const prompt = [
       `Trabajemos el bug del ticket Desk #${t.ticketNumber}.`,
       '',
@@ -949,6 +1061,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       t.reporter ? `Reportó: ${t.reporter}` : '',
       t.webUrl ? `Ticket: ${t.webUrl}` : '',
       t.context ? `\nContexto del triage:\n${t.context}` : '',
+      invText,
       workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
       prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
       '',

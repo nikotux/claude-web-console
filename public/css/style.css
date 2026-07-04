@@ -1004,8 +1004,12 @@ html, body {
 /* 🚦 Semáforo (chips) + 🔍 investigación IA */
 .bb-sem { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
 .bb-inv { margin-top: .5rem; display: flex; flex-direction: column; gap: .4rem; align-items: flex-start; }
+/* Caja de investigación DESTACADA al inicio del detalle (más visible). */
+.bb-inv--top { margin: 0 0 .6rem; padding: .5rem .6rem; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-elevated); }
+.bb-inv-title { display: flex; align-items: center; gap: .35rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
 .bb-inv-at { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 .bb-inv-err { font-size: var(--cwc-fs-sm); color: var(--cwc-warn); }
+.bb-inv-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 .bb-verdict { width: 100%; border-radius: var(--cwc-radius-md); padding: .5rem .6rem; border-left: 3px solid var(--cwc-info); background: var(--cwc-bg-chip); display: flex; flex-direction: column; gap: .35rem; }
 .bb-verdict--danger { border-left-color: var(--cwc-danger-strong); }
 .bb-verdict--warn { border-left-color: var(--cwc-warn); }

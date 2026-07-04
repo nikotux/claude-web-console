@@ -126,12 +126,16 @@ export function clearLock() {
   try { fss.unlinkSync(LOCK_FILE); } catch { /* noop */ }
 }
 
+// Lee el lock crudo ({pid, ts}) o null si no existe/está roto. Lo usa el
+// runner para distinguir la RESERVA que escribió el server con SU pid
+// (spawnTriage) de un triage ajeno de verdad corriendo.
+export function readLock() {
+  try { return JSON.parse(fss.readFileSync(LOCK_FILE, 'utf8')); }
+  catch { return null; }
+}
+
 // ¿Hay un triage corriendo AHORA? Lock presente y con latido fresco.
 export function isRunning() {
-  try {
-    const { ts } = JSON.parse(fss.readFileSync(LOCK_FILE, 'utf8'));
-    return Date.now() - ts < LOCK_FRESH_MS;
-  } catch {
-    return false;
-  }
+  const lock = readLock();
+  return !!lock && Date.now() - lock.ts < LOCK_FRESH_MS;
 }

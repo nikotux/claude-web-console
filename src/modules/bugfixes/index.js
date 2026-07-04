@@ -54,12 +54,20 @@ import {
 import {
   readInvestigation, readInvLock, isInvestigating, INV_TTL_MS,
 } from './investigate-shared.js';
+// Investigación de CONTEXTO de un ticket sin PR (lee el código de Tolkien
+// read-only): también en un RUNNER DESACOPLADO (bin/cwc-ticket-investigate-runner.js).
+import {
+  readTicketInvestigation, readTktInvLock, isTicketInvestigating,
+  writeTicketInvRequest, TKTINV_TTL_MS,
+} from './ticket-investigate-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESK_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-desk-runner.js');
 const DESK_LOG = path.join(os.homedir(), '.cwc-data', 'desk.log');
 const INV_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-investigate-runner.js');
 const INV_LOG = path.join(os.homedir(), '.cwc-data', 'investigate.log');
+const TKTINV_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-ticket-investigate-runner.js');
+const TKTINV_LOG = path.join(os.homedir(), '.cwc-data', 'ticket-investigate.log');
 
 // Últimos PRs solo-GitHub vistos por refresh-prs (para que el motor los
 // enganche a su ticket sin re-consultar gh en cada carga del tablero).
@@ -550,6 +558,43 @@ function investigationState(pr) {
   return { pr: p, running, investigation: data, stale };
 }
 
+// ===== Investigación de CONTEXTO de un ticket SIN PR (IA read-only sobre el
+// código de Tolkien, DESACOPLADA) =====
+// La corrida real vive en bin/cwc-ticket-investigate-runner.js. Acá escribimos el
+// "problema" a disco (así sobrevive al reinicio), lanzamos y leemos el resultado.
+function spawnTicketInvestigate(ticket, problem) {
+  const n = String(ticket || '').replace(/[^\w.-]/g, '').slice(0, 20);
+  if (!n) return { started: false, reason: 'sin ticket' };
+  if (isTicketInvestigating()) return { started: false, reason: 'ya corriendo' };
+  // Persistimos el enunciado del ticket (lo lee el runner; no viaja por argv).
+  writeTicketInvRequest(n, {
+    title: String(problem?.title || '').slice(0, 300),
+    whatBroke: String(problem?.whatBroke || '').slice(0, 800),
+    route: String(problem?.route || '').slice(0, 200),
+    reporter: String(problem?.reporter || '').slice(0, 120),
+    severity: String(problem?.severity || '').slice(0, 40),
+    context: String(problem?.context || '').slice(0, 1200),
+    summary: String(problem?.summary || '').slice(0, 1200),
+    files: Array.isArray(problem?.files) ? problem.files.slice(0, 20).map((f) => String(f).slice(0, 200)) : [],
+  });
+  fss.mkdirSync(path.dirname(TKTINV_LOG), { recursive: true, mode: 0o700 });
+  const log = fss.openSync(TKTINV_LOG, 'a');
+  const child = spawn(process.execPath, [TKTINV_RUNNER, n], { detached: true, stdio: ['ignore', log, log], env: process.env });
+  child.unref();
+  fss.closeSync(log);
+  return { started: true, ticket: n };
+}
+
+// Resultado persistido de la investigación de contexto + si la corrida sigue viva.
+function ticketInvestigationState(ticket) {
+  const n = String(ticket).replace(/[^\w.-]/g, '').slice(0, 20);
+  const lock = readTktInvLock();
+  const running = !!lock && String(lock.ticket) === n;
+  const data = readTicketInvestigation(n);
+  const stale = !!data && (Date.now() - (data.fetchedAt || 0) >= TKTINV_TTL_MS);
+  return { ticket: n, running, investigation: data, stale };
+}
+
 // Nivel de resolución de un fix (derivado, NO se persiste):
 //   'complete' — el ticket confirmó (cerrado o el cliente respondió: deskResolved)
 //   'partial'  — nuestro PR se mergeó, pero el ticket NO confirmó todavía
@@ -824,6 +869,28 @@ export default {
       const pr = String(req.params.number || '').replace(/[^\w.-]/g, '').slice(0, 20);
       if (!pr) return res.status(400).json({ error: 'Número de PR inválido.' });
       res.json({ ok: true, ...investigationState(pr) });
+    });
+
+    // Investigación de CONTEXTO de un ticket SIN PR — DESACOPLADA (regla 2).
+    // Lee el código de Tolkien read-only y explica por qué NO se resolvió.
+    // CONSUME TOKENS: el front la dispara bajo botón. POST lanza el runner y
+    // responde YA; GET lee el resultado persistido (0 tokens) + si sigue viva.
+    r.post('/ticket-investigate', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const ticket = String(req.body?.ticket || '').replace(/[^\w.-]/g, '').slice(0, 20);
+      if (!ticket) return res.status(400).json({ error: 'Falta el número de ticket.' });
+      const st = ticketInvestigationState(ticket);
+      // Sin fresh y con resultado fresco (< TTL): no relanzar (ahorra tokens).
+      const launch = (req.body?.fresh || !st.investigation || st.stale)
+        ? spawnTicketInvestigate(ticket, req.body?.problem || {}) : null;
+      res.json({ ok: true, running: isTicketInvestigating(), started: !!launch?.started, ...ticketInvestigationState(ticket) });
+    });
+
+    r.get('/ticket-investigation/:number', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const ticket = String(req.params.number || '').replace(/[^\w.-]/g, '').slice(0, 20);
+      if (!ticket) return res.status(400).json({ error: 'Número de ticket inválido.' });
+      res.json({ ok: true, ...ticketInvestigationState(ticket) });
     });
 
     // Estado EN VIVO de un ticket de Zoho Desk — DESACOPLADO (regla 2). CONSUME

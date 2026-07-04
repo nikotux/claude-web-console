@@ -83,16 +83,20 @@ export default {
     const r = express.Router();
 
     r.get('/', async (req, res) => {
-      const [mem, disk] = await Promise.all([memInfo(), diskInfo()]);
-      res.json({
-        cpu: { pct: cpuPercent(), cores: os.cpus().length },
-        mem,
-        disk,
-        load: os.loadavg(),
-        uptime: os.uptime(),
-        hostname: os.hostname(),
-        server: { uptime: process.uptime(), pid: process.pid },
-      });
+      try {
+        const [mem, disk] = await Promise.all([memInfo(), diskInfo()]);
+        res.json({
+          cpu: { pct: cpuPercent(), cores: os.cpus().length },
+          mem,
+          disk,
+          load: os.loadavg(),
+          uptime: os.uptime(),
+          hostname: os.hostname(),
+          server: { uptime: process.uptime(), pid: process.pid },
+        });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
     });
 
     router.use('/stats', r);

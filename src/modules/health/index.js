@@ -19,6 +19,7 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
+  markFindingResolved,
   readDismissed, recordDismissed, removeDismissed,
   readProposals, writeProposals,
   readBatch, writeBatch, writeBatchLock, isBatchRunning,
@@ -377,6 +378,20 @@ export default {
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar el auto-fix: ${String(err?.message || err).slice(0, 200)}` });
       }
+    });
+
+    // Marca un hallazgo como RESUELTO manualmente (botón "Marcar resuelto" del
+    // modal, red de seguridad del camino "En chat"). Misma lógica que el runner
+    // mini bin/cwc-health-resolve.js: escribe fixStatus:'resolved' en review.json
+    // + recordSolved. NO edita código ni corre nada — solo marca el estado.
+    r.post('/finding-resolve', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      if (!id) return res.status(400).json({ error: 'Falta el id del hallazgo.' });
+      const summary = String(req.body?.summary || 'Marcado como resuelto manualmente.').slice(0, 400);
+      const f = markFindingResolved(id, summary);
+      if (!f) return res.status(404).json({ error: 'Hallazgo inexistente (¿se re-analizó?).' });
+      res.json({ ok: true });
     });
 
     // Estado del BATCH de resolución (Fase B). El front lo polea; sobrevive al

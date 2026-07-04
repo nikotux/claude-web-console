@@ -78,19 +78,40 @@ function enhanceCodeBlocks(root) {
   }
 }
 
+// Tope duro de líneas de entrada: el markdown es la salida de texto libre
+// del modelo, la fuente de contenido más grande e imprevisible de las tres
+// (ver DOM_MAX_LINES en diff.js y HL_MAX_CHARS en code.js). Sin esto, una
+// tabla o lista enorme generaría un número no acotado de nodos DOM.
+const MD_MAX_LINES = 2000;
+
 // Devuelve un elemento con el markdown renderizado, sanitizado y resaltado.
 export function renderMarkdown(text) {
   const el = document.createElement('div');
   el.className = 'chat-md';
+  const raw = String(text ?? '');
+  const allLines = raw.split('\n');
+  const truncated = allLines.length > MD_MAX_LINES;
+  const src = truncated ? allLines.slice(0, MD_MAX_LINES).join('\n') : raw;
   const marked = window.marked;
   if (!marked?.parse) {
-    el.textContent = text;
+    el.textContent = src;
+    if (truncated) {
+      el.appendChild(document.createTextNode(
+        `\n… (${allLines.length - MD_MAX_LINES} líneas más ocultas por límite de rendimiento)`
+      ));
+    }
     return el;
   }
   try {
-    el.innerHTML = marked.parse(text, { breaks: true, gfm: true });
+    el.innerHTML = marked.parse(src, { breaks: true, gfm: true });
     sanitize(el);
     enhanceCodeBlocks(el);
+    if (truncated) {
+      const trunc = document.createElement('p');
+      trunc.className = 'chat-md-truncated';
+      trunc.textContent = `… (${allLines.length - MD_MAX_LINES} líneas más ocultas por límite de rendimiento)`;
+      el.appendChild(trunc);
+    }
   } catch {
     el.textContent = text;
   }

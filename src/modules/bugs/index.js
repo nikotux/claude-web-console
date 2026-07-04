@@ -31,14 +31,17 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isAdmin } from '../../core/auth.js';
-import { DATA_DIR, LOG_FILE, readCache, isRunning } from './shared.js';
+import { DATA_DIR, LOG_FILE, readCache, isRunning, writeLock, clearLock } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-triage-runner.js');
 
 // Lanza el runner detached (sesión POSIX propia + unref: sobrevive al server;
-// la unidad systemd ya usa KillMode=process). Dedup: acá por lock fresco, y
-// el propio runner re-chequea al arrancar (carrera de doble POST).
+// la unidad systemd ya usa KillMode=process). Dedup SIN carrera: isRunning()
+// + writeLock() corren en el MISMO tick del event loop (todo sincrónico), así
+// que dos POST /refresh casi simultáneos no pueden pasar ambos el check —
+// antes el lock recién lo escribía el HIJO tras cargar sus imports (ventana
+// de segundos: doble triage, doble gasto de tokens; hallazgo de salud).
 function spawnTriage() {
   if (isRunning()) return false;
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -49,12 +52,23 @@ function spawnTriage() {
   // Falla ASÍNCRONA del spawn (ruta del runner rota tras un deploy, permisos,
   // node no ejecutable): el evento 'error' dispara en un tick posterior, fuera
   // del try/catch del handler POST /refresh; sin listener, Node lo relanza como
-  // excepción no capturada y tira abajo TODO el server. Solo se registra: el
-  // lock lo crea el propio runner (acá no hay nada que limpiar) y el front
-  // detecta la corrida perdida por el polling de GET y reintenta.
+  // excepción no capturada y tira abajo TODO el server. Se registra y se
+  // LIBERA la reserva del lock (el hijo nunca corrió; dejarla bloquearía el
+  // reintento hasta que venza LOCK_FRESH_MS); el front detecta la corrida
+  // perdida por el polling de GET y reintenta.
   child.on('error', (err) => {
-    console.error(`[bugs] no se pudo lanzar el runner de triage: ${String(err?.message || err)}`);
+    // Invariante 5: callback de emitter externo SIEMPRE blindado — un throw
+    // acá dispara en un tick posterior (fuera de todo try/catch de handler
+    // HTTP) y tumbaría el proceso entero si el logging cambiara algún día.
+    try {
+      console.error(`[bugs] no se pudo lanzar el runner de triage: ${String(err?.message || err)}`);
+      clearLock();
+    } catch { /* nunca dejar escapar una excepción del callback */ }
   });
+  // RESERVA sincrónica del lock con el pid del hijo: cierra la carrera de
+  // doble spawn (el hallazgo). El runner reconoce la reserva (pid propio) al
+  // arrancar y solo toma el heartbeat; un lock fresco ajeno lo hace salir.
+  writeLock(child.pid);
   child.unref();
   fs.closeSync(log);
   return true;
@@ -67,7 +81,11 @@ export default {
     const r = express.Router();
 
     r.get('/', (req, res) => {
-      res.json({ ...readCache(), running: isRunning() });
+      try {
+        res.json({ ...readCache(), running: isRunning() });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo leer el estado del triage: ${String(err?.message || err).slice(0, 200)}` });
+      }
     });
 
     // Corre el triage (LENTO, consume tokens). El front confirma antes.

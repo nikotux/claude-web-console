@@ -20,7 +20,9 @@ código.
    paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`);
    consulta EN VIVO de un ticket en Zoho Desk → runner desacoplado
    (`bin/cwc-desk-runner.js`); investigación a fondo de un PR → runner
-   desacoplado (`bin/cwc-investigate-runner.js`). La unidad systemd usa
+   desacoplado (`bin/cwc-investigate-runner.js`); investigación de CONTEXTO de un
+   ticket SIN PR (lee el código de Tolkien read-only para explicar por qué NO se
+   resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -101,6 +103,22 @@ código.
    prLive; la lectura profunda (veredicto {accion, bloqueante, severidad, pasos,
    titular}) es el botón que consume tokens. Sus `pasos` se inyectan en
    "Trabajar en esto".
+   INVESTIGACIÓN de CONTEXTO de un ticket SIN PR (pedido del usuario 2026-07-04,
+   DESACOPLADA): `bin/cwc-ticket-investigate-runner.js` (lógica en
+   `bugfixes/ticket-investigate-shared.js`) responde "¿POR QUÉ este ticket sigue
+   sin resolverse?". A DIFERENCIA de la de PR (que NO usa herramientas), ésta SÍ
+   necesita LEER el código: un ticket sin PR no tiene diff. Corre read-only con la
+   MISMA allowlist que el auditor de Salud — `ticketInvToolAllowed` = SOLO
+   Read/Grep/Glob/TodoWrite; Bash/Edit/Write/git/MCP DENEGADO en las DOS capas —
+   `cwd = Tolkien` (config.projectDir), sonnet, maxTurns 12, timeout 5 min,
+   `settingSources: []` (sin user/project: cero MCP ni permisos pre-aprobados).
+   NUNCA escribe. POST /ticket-investigate {ticket,problem} escribe el enunciado a
+   `~/.cwc-data/ticket-investigations/<n>.req.json` (así sobrevive al reinicio),
+   lanza el runner (dedup lock `ticket-investigate.lock`) y responde YA; resultado
+   en `~/.cwc-data/ticket-investigations/<n>.json`; GET /ticket-investigation/:n
+   solo lee disco (0 tokens). Veredicto {porQueNoResuelto, causaRaiz, archivos,
+   complejidad, pasos, riesgo, confianza, titular, necesitaMasInfo}; sus `pasos` se
+   inyectan en "Trabajar en esto"/"Trabajar en Chat (plan)".
    EXCEPCIÓN de ESCRITURA sobre CÓDIGO (pedido del usuario 2026-07-03):
    `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
    revisión — edita el código de la consola sin supervisión. Es la única
@@ -136,7 +154,10 @@ código.
 - Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
   tickets/salud, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
   + `desk.lock` heartbeat del runner desk, `investigations/<pr>.json` veredicto de
-  la investigación a fondo + `investigate.lock` heartbeat, `inventory.json`+`inventory.md` generados por core/inventory.js,
+  la investigación a fondo + `investigate.lock` heartbeat,
+  `ticket-investigations/<n>.json` veredicto de la investigación de contexto de un
+  ticket sin PR + `<n>.req.json` enunciado + `ticket-investigate.lock` heartbeat,
+  `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
@@ -246,7 +267,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             POST /refresh responde INMEDIATO (arrancar+encuestar, patrón
                             health/review); el front encuesta GET cada 3 s y re-dispara si la
                             corrida se pierde (3 intentos). Seguridad read-only de dos capas
-                            (regla 6) EN el runner. OJO: `bugs` (triage) ≠ `bugfixes` (motor
+                            (regla 6) EN el runner. DEDUP SIN CARRERA (hallazgo de salud
+                            2026-07-04): spawnTriage() RESERVA el lock sincrónicamente
+                            (writeLock con el pid del hijo, mismo tick que isRunning()) —
+                            antes el lock recién lo escribía el hijo tras cargar imports y
+                            dos POST casi simultáneos podían lanzar DOS triages; el runner
+                            reconoce su reserva (readLock, pid propio ⇒ sigue y toma el
+                            heartbeat; lock fresco AJENO ⇒ sale) y el 'error' del spawn
+                            libera la reserva (clearLock) para no bloquear el reintento.
+                            OJO: `bugs` (triage) ≠ `bugfixes` (motor
                             de PRs) — dominios distintos, nombres parecidos a propósito.
   tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
                             por mtime+size) + límites del PLAN (GET /api/tokens/limits:
@@ -452,6 +481,16 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             /investigation/:pr, encuesta resiliente). El veredicto IA
                             (verdictHtml: severidad/titular/pasos/archivos) se persiste y sus
                             `pasos` se inyectan en "Trabajar en esto" (doWorkOn). Ver regla 6.
+                            INVESTIGAR CONTEXTO (ticket SIN PR, 2026-07-04): la MISMA caja
+                            destacada al inicio del detalle (invTopBox decide por b.prNumber) muestra,
+                            para toda fila-ticket sin PR (incluidas las de triage), el botón "🔍
+                            Investigar contexto" (runTicketInvestigation → POST /ticket-investigate →
+                            runner cwc-ticket-investigate-runner.js → GET /ticket-investigation/:n,
+                            encuesta resiliente). A DIFERENCIA de la de PR, ésta LEE el código de
+                            Tolkien read-only (no hay diff sin PR) y responde POR QUÉ no se resolvió +
+                            causa raíz. Veredicto (verdictTicketHtml: porQueNoResuelto/causaRaiz/
+                            pasos/archivos/complejidad/riesgo) persistido; sus `pasos` se inyectan en
+                            doWorkOn (ticket sin PR) y en workOnTriage. Ver regla 6.
                             FILA-PR (Fase 2, 2026-07-04): cuando un PR está ABIERTO el PR es el
                             protagonista de la fila (🔀 #N + título) y el/los TKT que resuelve van
                             ANIDADOS debajo (↳ 🎫 TKT #N, bfm-row--pr). renderTable agrupa por
@@ -574,6 +613,12 @@ bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
+bin/cwc-health-resolve.js   marca UN hallazgo como RESUELTO (fixStatus:'resolved' en review.json
+                            + recordSolved). Lo corre el PROPIO chat "En chat" al terminar (le
+                            paso el id en el prompt) para que el tablero refleje el cierre.
+                            Determinístico, 0 tokens, NO toca código. Reusa markFindingResolved
+                            de health/shared.js (mismo helper que el endpoint POST /finding-resolve
+                            del botón manual "Marcar resuelto")
 bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Desk (READ-ONLY
                             doble capa, allowlist desk_* de lectura; interfaz por archivos:
                             desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica
@@ -583,6 +628,12 @@ bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tu
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
                             investigate.lock + investigations/<pr>.json. Lógica en
                             bugfixes/investigate-shared.js
+bin/cwc-ticket-investigate-runner.js investigación de CONTEXTO de UN ticket SIN PR (¿por qué
+                            NO se resolvió?). LEE el código de Tolkien read-only (Read/Grep/Glob,
+                            misma allowlist que el auditor de Salud — regla 6), cwd Tolkien, sonnet,
+                            maxTurns 12. Interfaz por archivos: ticket-investigate.lock +
+                            ticket-investigations/<n>.json (resultado) + <n>.req.json (enunciado que
+                            escribe el server). Lógica en bugfixes/ticket-investigate-shared.js
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
@@ -903,6 +954,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   'claude-web-console' con el contexto; el prompt le exige FRENAR y pedir
   confirmación en ALTO RIESGO (ahí aparece la tarjeta de permiso). También el
   "Resolver todo en chat" (resolveAll) sobre los sin resolver.
+  MARCADO AL CERRAR (pedido del usuario 2026-07-04): el camino "En chat" era
+  fire-and-forget — resolvía pero NUNCA marcaba el hallazgo resuelto (la lista
+  de "sin resolver" quedaba desactualizada, sin seguimiento en vivo). Ahora el
+  prompt le pasa el `id` del hallazgo y le pide, como ÚLTIMO paso tras verificar
+  el fix, ejecutar `node bin/cwc-health-resolve.js <id> "<resumen>"` (te pide OK
+  al comando, como al editar). Ese RUNNER MINI (bin/cwc-health-resolve.js)
+  reusa markFindingResolved() de health/shared.js — punto ÚNICO de "marcar
+  resuelto" fuera del auto-fix: setea fixStatus:'resolved' en review.json +
+  recordSolved en health-solved.json (determinístico, 0 tokens, no toca código
+  ni reinicia). resolveAll inyecta el id de CADA hallazgo y pide marcarlos uno a
+  uno. RED DE SEGURIDAD: botón "Marcar resuelto" por hallazgo (data-act
+  markresolved → POST /finding-resolve {id}, admin, misma markFindingResolved)
+  para dejar la lista al día a mano si el chat no llegó a correr el comando.
   (b) "Automático" (autoFix → POST /finding-fix) → RUNNER DESACOPLADO
   bin/cwc-healthfix-runner.js que edita+verifica (node --check) SIN
   supervisión (excepción de escritura de la regla 6, ver ahí).

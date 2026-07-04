@@ -128,6 +128,15 @@ const safeCwd = clampToHome;
 // turno tras un reinicio) permite que un chat nuevo en un cwd ya visto tenga
 // la lista al instante en el attach.
 const slashByCwd = new Map();
+const MAX_CACHED_CWDS = 50; // invariante 17: la caché no puede crecer sin límite
+
+// set() con expulsión LRU: reinsertar (recencia) y, si excede el límite,
+// descartar el cwd más viejo (primera clave del Map preserva orden de inserción).
+function cacheSlash(cwd, list) {
+  slashByCwd.delete(cwd);
+  slashByCwd.set(cwd, list);
+  if (slashByCwd.size > MAX_CACHED_CWDS) slashByCwd.delete(slashByCwd.keys().next().value);
+}
 const SKILL_NAME_RE = /^[a-z0-9_-]+$/i; // solo nombres saneados van a disco
 
 // description: del frontmatter de un SKILL.md (una línea plana; los bloques
@@ -326,7 +335,7 @@ class Chat {
         // acá se enriquecen con descripciones y se cachean por cwd. No va al
         // history: los clientes nuevos lo reciben en el payload del attach.
         this.slashCommands = enrichSlashCommands(this.cwd, e.slashCommands);
-        slashByCwd.set(this.cwd, this.slashCommands);
+        cacheSlash(this.cwd, this.slashCommands);
         this._broadcast({ type: 'meta', slashCommands: this.slashCommands });
         return;
       case 'status':
@@ -516,6 +525,7 @@ class Chat {
       // Motor dormido: queda para el próximo arranque (--mode).
       this.permissionMode = mode;
       this._push({ type: 'mode', mode });
+      this.onUpdate?.(); // persistir el nuevo modo elegido (simetría con setModel)
     }
   }
 
@@ -717,7 +727,7 @@ class ChatManager {
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
           if (Array.isArray(hello.slashCommands) && hello.slashCommands.length) {
             chat.slashCommands = enrichSlashCommands(chat.cwd, hello.slashCommands);
-            slashByCwd.set(chat.cwd, chat.slashCommands);
+            cacheSlash(chat.cwd, chat.slashCommands);
           }
           chat._adoptLink(link);
           console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
@@ -915,7 +925,13 @@ export default {
       if (target !== 'chat' && target !== 'tui') {
         return res.status(400).json({ error: 'Modo inválido (chat|tui).' });
       }
-      const result = await chat.switchMode(target);
+      let result;
+      try {
+        result = await chat.switchMode(target);
+      } catch (err) {
+        console.error('[chat] /mode falló:', err);
+        return res.status(500).json({ error: 'No se pudo cambiar de modo (error interno).' });
+      }
       if (!result.ok) return res.status(409).json({ error: result.error });
       manager.persist();
       res.json({ ok: true, chat: chat.info() });

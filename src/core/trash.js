@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { resolveWithinHome } from './paths.js';
 
 export const TRASH_DIRNAME = '.cwc-trash';
 const TRASH_DIR = path.join(config.home, TRASH_DIRNAME);
@@ -28,6 +29,11 @@ function saveIndex(items) {
 
 // Mueve un absoluto (ya validado dentro del home) a la papelera.
 export function moveToTrash(absPath, originalRel) {
+  // Defensa en profundidad: aunque restoreFromTrash revalida al restaurar,
+  // no persistimos una originalRel que escape del home (ej. '../../etc/passwd').
+  if (resolveWithinHome(originalRel) === null) {
+    throw new Error(`moveToTrash: originalRel fuera del home permitido: ${originalRel}`);
+  }
   ensureDir();
   const st = fs.lstatSync(absPath);
   const id = crypto.randomBytes(8).toString('hex');
@@ -58,7 +64,7 @@ export function listTrash() {
 
 // Restaura un ítem a su ruta original (con sufijo si ya existe). Devuelve la
 // ruta relativa final, o null si no se encontró el id.
-export function restoreFromTrash(id, resolveWithinHome) {
+export function restoreFromTrash(id) {
   const items = loadIndex();
   const idx = items.findIndex((i) => i.id === id);
   if (idx < 0) return null;

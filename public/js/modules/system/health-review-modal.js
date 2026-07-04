@@ -112,6 +112,7 @@ export function openHealthReview(ctx, { isAdmin }) {
     return `${failLine}${critNote}<div class="hr-f-actions">
       <button class="btn-ghost btn--sm" data-act="chat" title="Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)">${icon('sparkle', { size: 13 })}<span>En chat</span></button>
       ${autoBtn}
+      <button class="btn-ghost btn--sm" data-act="markresolved" title="Marcalo como resuelto en el tablero SIN tocar código (red de seguridad: si ya lo arreglaste en un chat, dejá la lista al día)">${icon('check', { size: 13 })}<span>Marcar resuelto</span></button>
     </div>`;
   }
 
@@ -237,6 +238,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       const f = all.find((x) => String(x._i) === card.dataset.idx);
       card.querySelector('[data-act="chat"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) resolveInChat(f); });
       card.querySelector('[data-act="autofix"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) autoFix(f); });
+      card.querySelector('[data-act="markresolved"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) markResolved(f); });
       card.querySelector('[data-act="restore"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) restoreDismiss(f); });
     }
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
@@ -295,6 +297,10 @@ export function openHealthReview(ctx, { isAdmin }) {
       f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
       '',
       RESOLVE_RULES,
+      '',
+      '5. IMPORTANTE — cuando hayas terminado y VERIFICADO el fix, marcá este hallazgo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando):',
+      `   node bin/cwc-health-resolve.js ${f.id} "<resumen corto de qué arreglaste>"`,
+      '   Hacelo SOLO si de verdad lo resolviste. Si resultó un falso positivo o no lo pudiste arreglar, NO ejecutes ese comando y avisame.',
     ].filter((l) => l !== null && l !== undefined).join('\n');
     m.close();
     await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver: ${f.area}`.slice(0, 40) });
@@ -309,7 +315,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       confirmLabel: `Resolver ${findings.length} hallazgo(s)`,
     });
     if (!ok) return;
-    const lista = findings.map((f, i) => `${i + 1}. [${SEV_LABEL[f.severity] || f.severity}] ${f.area}${f.module ? ` (${f.module})` : ''}${f.file ? ` — ${f.file}` : ''}\n   ${f.detail}${f.suggestedFix ? `\n   Fix sugerido: ${f.suggestedFix}` : ''}`).join('\n\n');
+    const lista = findings.map((f, i) => `${i + 1}. [${SEV_LABEL[f.severity] || f.severity}] ${f.area}${f.module ? ` (${f.module})` : ''}${f.file ? ` — ${f.file}` : ''}  (id=${f.id})\n   ${f.detail}${f.suggestedFix ? `\n   Fix sugerido: ${f.suggestedFix}` : ''}`).join('\n\n');
     const prompt = [
       `La revisión de salud de la consola (Claude Web Console) encontró ${findings.length} hallazgo(s). Resolvelos de forma autónoma, UNO POR UNO, en el orden de la lista (severidad de mayor a menor).`,
       '',
@@ -318,6 +324,10 @@ export function openHealthReview(ctx, { isAdmin }) {
       RESOLVE_RULES,
       '',
       'Trabajá secuencial: verificá, arreglá y pasá al siguiente. Avisá al terminar cada uno y hacé un resumen final con todo lo cambiado.',
+      '',
+      'IMPORTANTE — apenas termines y VERIFIQUES cada hallazgo, marcalo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando), usando el id que figura en la lista de arriba:',
+      '   node bin/cwc-health-resolve.js <id> "<resumen corto de qué arreglaste>"',
+      'Hacelo por CADA hallazgo que de verdad resolviste. Si alguno es falso positivo o no lo pudiste arreglar, NO lo marques y avisame.',
     ].join('\n');
     m.close();
     await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver ${findings.length} hallazgos de salud`.slice(0, 50) });
@@ -343,6 +353,33 @@ export function openHealthReview(ctx, { isAdmin }) {
       poll();
     } catch (err) {
       await dialog.alertDialog({ title: 'Resolver automático', message: err.message });
+    }
+  }
+
+  // Marcar resuelto MANUALMENTE (red de seguridad del camino "En chat"): no toca
+  // código, solo marca el estado en el tablero para dejar la lista al día. Útil
+  // si ya lo arreglaste en un chat y querés reflejarlo sin esperar otra revisión.
+  async function markResolved(f) {
+    const ok = await dialog.confirmDialog({
+      title: 'Marcar resuelto',
+      message: `¿Marcar "${f.area}" como resuelto? No toca código: solo lo saca de la lista de "sin resolver" y lo registra como resuelto. Usalo si ya lo arreglaste (p. ej. en un chat).`,
+      confirmLabel: 'Marcar resuelto',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`${API}/finding-resolve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: f.id, summary: 'Marcado como resuelto a mano (resuelto en chat).' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo marcar como resuelto.');
+      // Parche optimista: baja a "Resueltos" ya mismo; el poll/refresh lo confirma.
+      if (lastData?.findings) {
+        const t = lastData.findings.find((x) => x.id === f.id);
+        if (t) { t.fixStatus = 'resolved'; t.resolvedAt = Date.now(); render(lastData); }
+      }
+    } catch (err) {
+      await dialog.alertDialog({ title: 'Marcar resuelto', message: err.message });
     }
   }
 

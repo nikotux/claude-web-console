@@ -46,8 +46,8 @@ export default {
       // Datos frescos en paralelo (no bloquean el primer render).
       try {
         const [rec, tk] = await Promise.all([
-          fetch('/api/terminal/recents').then((r) => r.json()).catch(() => ({ recents: [] })),
-          fetch('/api/tolkien/status').then((r) => r.json()).catch(() => null),
+          fetch('/api/terminal/recents').then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText)))).catch(() => ({ recents: [] })),
+          fetch('/api/tolkien/status').then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText)))).catch(() => null),
         ]);
         st.recents = rec.recents || [];
         if (tk?.rel) st.project = { rel: tk.rel, name: tk.name || 'Proyecto' };

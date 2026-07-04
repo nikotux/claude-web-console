@@ -19,15 +19,22 @@ import { config } from '../src/core/config.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
 import {
   PROMPT, toolAllowed, parseTickets, readCache, writeCache,
-  writeLock, clearLock, isRunning, RUN_TIMEOUT_MS, MAX_TURNS, HEARTBEAT_MS,
+  writeLock, clearLock, readLock, RUN_TIMEOUT_MS, MAX_TURNS, HEARTBEAT_MS,
+  LOCK_FRESH_MS,
 } from '../src/modules/bugs/shared.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
-// Dedup entre procesos: si otro runner ya late, este sobra (carrera de
-// doble POST o de un server que relanzó sin ver el lock todavía).
-if (isRunning()) {
-  log('ya hay un triage corriendo (lock fresco): salgo.');
+// Dedup entre procesos: si OTRO runner ya late, este sobra. OJO: el server
+// (spawnTriage) RESERVA el lock con NUESTRO pid en el mismo tick del spawn
+// (cierra la carrera de doble POST — antes el lock recién se escribía acá,
+// después de cargar los imports, y dos hijos podían pasar ambos el check).
+// Un lock fresco con nuestro propio pid es esa reserva, no otra corrida:
+// seguimos y tomamos el heartbeat. Corridas lanzadas a mano (sin reserva)
+// conservan el chequeo de siempre contra un lock ajeno.
+const lock = readLock();
+if (lock && lock.pid !== process.pid && Date.now() - lock.ts < LOCK_FRESH_MS) {
+  log('ya hay un triage corriendo (lock fresco ajeno): salgo.');
   process.exit(0);
 }
 

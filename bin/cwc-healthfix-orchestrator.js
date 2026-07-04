@@ -111,8 +111,8 @@ async function main() {
   flush();
   await runAdaptivePool(pending, async (it) => {
     it.status = 'fixing'; flush();
-    const wt = createSandbox(it.id);
     try {
+      const wt = createSandbox(it.id);
       const out = await runFix(it, wt);
       if (/FIXOK/.test(out)) {
         const patch = extractPatch(wt);

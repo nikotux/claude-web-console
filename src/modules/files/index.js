@@ -29,6 +29,54 @@ const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
 const MAX_ZIP_ITEMS = 1000;
 
+// /raw sirve archivos subidos por cualquier usuario autenticado (ver /upload).
+// Si dejáramos que Content-Type se derive de la extensión (comportamiento por
+// defecto de sendFile), un .html/.svg malicioso se ejecutaría EN EL MISMO
+// ORIGEN que la consola al "previsualizarlo". Por eso acá se restringe a una
+// allowlist de MIME seguros para renderizar inline; todo lo demás se sirve
+// como texto plano (si no es binario) o se fuerza la descarga.
+const SAFE_INLINE_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+  '.pdf': 'application/pdf',
+};
+// Contenido activo: nunca se sirve con su tipo real ni "inline"; siempre
+// descarga forzada, sin importar el sniffing de contenido.
+const ACTIVE_CONTENT_EXT = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml', '.svg', '.svgz', '.mhtml', '.xml']);
+
+// Sanea el nombre para uso dentro del header Content-Disposition (evita que
+// comillas o CR/LF rompan/inyecten en el header).
+function safeAttachmentName(name) {
+  const n = String(name || '').replace(/["\r\n]/g, '_');
+  return n || 'file';
+}
+
+// resolveWithinHome() valida la ruta SOLO como string (no resuelve symlinks):
+// un symlink dentro del home que apunte AFUERA pasaba la validación y statSync
+// (que SÍ sigue symlinks) servía el contenido externo (hallazgo de salud
+// 2026-07-04). Este helper cierra el escape: fs.realpathSync resuelve TODOS
+// los symlinks (incluso en directorios intermedios) y se exige que la ruta
+// REAL siga cayendo dentro del home REAL antes de servir/descargar/archivar.
+// Devuelve el stat (siguiendo el symlink, ya validado) o null si escapa;
+// propaga el throw (ENOENT) si la ruta no existe — mismo contrato que statSync.
+let cachedHomeReal = null;
+function homeReal() {
+  if (!cachedHomeReal) cachedHomeReal = fss.realpathSync(config.home);
+  return cachedHomeReal;
+}
+function statSafeSync(abs) {
+  const real = fss.realpathSync(abs); // ENOENT si no existe
+  const relFromHome = path.relative(homeReal(), real);
+  if (relFromHome.startsWith('..') || path.isAbsolute(relFromHome)) return null;
+  return fss.statSync(abs);
+}
+
 // Nombre de archivo/carpeta seguro (sin separadores ni traversal).
 function safeName(name) {
   if (typeof name !== 'string') return null;
@@ -45,6 +93,18 @@ function uniqueName(dir, name) {
   let i = 1;
   let cand;
   do { cand = `${base} (${i})${ext}`; i += 1; } while (fss.existsSync(path.join(dir, cand)));
+  return cand;
+}
+
+// Nombre único dentro de un set en memoria (mismo esquema que uniqueName,
+// pero contra nombres ya usados en la selección en vez del filesystem).
+function uniqueZipName(usedNames, name) {
+  if (!usedNames.has(name)) return name;
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  let i = 1;
+  let cand;
+  do { cand = `${base} (${i})${ext}`; i += 1; } while (usedNames.has(cand));
   return cand;
 }
 
@@ -138,40 +198,101 @@ export default {
       }
     });
 
-    // Sirve el archivo INLINE (para previsualizar en el navegador).
+    // Sirve el archivo para previsualizar en el navegador — SOLO con un
+    // Content-Type de una allowlist "segura" (imágenes/PDF) o como texto
+    // plano; cualquier otra cosa (HTML/SVG/binarios desconocidos) se fuerza
+    // como descarga (attachment) para que el navegador no la ejecute/renderice
+    // en el mismo origen que la consola. Ver nota de seguridad más arriba.
     r.get('/raw', (req, res) => {
       const abs = resolveWithinHome(req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
-      try { if (!fss.statSync(abs).isFile()) return res.status(400).json({ error: 'No es un archivo.' }); }
-      catch { return res.status(404).json({ error: 'No existe.' }); }
-      res.sendFile(abs);
+      try {
+        let st;
+        try {
+          st = statSafeSync(abs);
+        } catch { return res.status(404).json({ error: 'No existe.' }); }
+        if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
+        if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo.' });
+
+        const ext = path.extname(abs).toLowerCase();
+        const safeMime = SAFE_INLINE_MIME[ext];
+        if (safeMime) {
+          res.setHeader('Content-Type', safeMime);
+          res.setHeader('Content-Disposition', 'inline');
+        } else if (ACTIVE_CONTENT_EXT.has(ext)) {
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('Content-Disposition', `attachment; filename="${safeAttachmentName(path.basename(abs))}"`);
+        } else {
+          let looksText = false;
+          try {
+            const fd = fss.openSync(abs, 'r');
+            try {
+              const buf = Buffer.alloc(Math.min(BINARY_SNIFF_BYTES, st.size));
+              fss.readSync(fd, buf, 0, buf.length, 0);
+              looksText = !buf.includes(0);
+            } finally { fss.closeSync(fd); }
+          } catch { looksText = false; }
+          if (looksText) {
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('Content-Disposition', 'inline');
+          } else {
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', `attachment; filename="${safeAttachmentName(path.basename(abs))}"`);
+          }
+        }
+
+        res.sendFile(abs, (err) => {
+          if (err && !res.headersSent) res.status(500).json({ error: 'No se pudo servir el archivo.' });
+        });
+      } catch {
+        if (!res.headersSent) res.status(500).json({ error: 'No se pudo servir el archivo.' });
+      }
     });
 
     r.get('/download', (req, res) => {
       const abs = resolveWithinHome(req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
-      try { if (!fss.statSync(abs).isFile()) return res.status(400).json({ error: 'No es un archivo (usá zip para carpetas).' }); }
-      catch { return res.status(404).json({ error: 'No existe.' }); }
-      res.download(abs, path.basename(abs));
+      try {
+        let st;
+        try { st = statSafeSync(abs); }
+        catch { return res.status(404).json({ error: 'No existe.' }); }
+        if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
+        if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo (usá zip para carpetas).' });
+        res.download(abs, path.basename(abs), (err) => {
+          if (err && !res.headersSent) res.status(500).json({ error: 'No se pudo descargar el archivo.' });
+        });
+      } catch {
+        if (!res.headersSent) res.status(500).json({ error: 'No se pudo descargar el archivo.' });
+      }
     });
 
     r.get('/download-zip', (req, res) => {
       const abs = resolveWithinHome(req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
-      let st;
-      try { st = fss.statSync(abs); } catch { return res.status(404).json({ error: 'No existe.' }); }
-      if (!st.isDirectory()) return res.status(400).json({ error: 'No es una carpeta.' });
-      const name = path.basename(abs) || 'home';
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${name}.zip"`);
-      const archive = archiver('zip', { zlib: { level: 6 } });
-      archive.on('error', () => { try { res.destroy(); } catch { /* noop */ } });
-      archive.pipe(res);
-      archive.glob('**/*', {
-        cwd: abs, dot: true, follow: false,
-        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`],
-      }, { prefix: name });
-      archive.finalize();
+      try {
+        let st;
+        try { st = statSafeSync(abs); } catch { return res.status(404).json({ error: 'No existe.' }); }
+        if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
+        if (!st.isDirectory()) return res.status(400).json({ error: 'No es una carpeta.' });
+        const name = path.basename(abs) || 'home';
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${name}.zip"`);
+        const archive = archiver('zip', { zlib: { level: 6 } });
+        archive.on('error', () => {
+          try {
+            if (!res.headersSent) return res.status(500).json({ error: 'No se pudo generar el zip.' });
+            res.destroy();
+          } catch { /* noop */ }
+        });
+        archive.pipe(res);
+        archive.glob('**/*', {
+          cwd: abs, dot: true, follow: false,
+          ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`],
+        }, { prefix: name });
+        archive.finalize();
+      } catch {
+        if (!res.headersSent) res.status(500).json({ error: 'No se pudo generar el zip.' });
+      }
     });
 
     // Zip de varios ítems (descarga de selección múltiple).
@@ -179,24 +300,40 @@ export default {
       const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
       if (!paths.length) return res.status(400).json({ error: 'Sin selección.' });
       if (paths.length > MAX_ZIP_ITEMS) return res.status(400).json({ error: `Demasiados ítems (máx. ${MAX_ZIP_ITEMS}).` });
-      const items = [];
-      for (const rel of paths) {
-        const abs = resolveWithinHome(rel);
-        if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
-        try { items.push({ abs, name: path.basename(abs), isDir: fss.statSync(abs).isDirectory() }); }
-        catch { /* omitimos los que no existan */ }
+      try {
+        const items = [];
+        const usedNames = new Set();
+        for (const rel of paths) {
+          const abs = resolveWithinHome(rel);
+          if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
+          try {
+            const st = statSafeSync(abs);
+            if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
+            const isDir = st.isDirectory();
+            const name = uniqueZipName(usedNames, path.basename(abs));
+            usedNames.add(name);
+            items.push({ abs, name, isDir });
+          } catch { /* omitimos los que no existan */ }
+        }
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', 'attachment; filename="archivos.zip"');
+        const archive = archiver('zip', { zlib: { level: 6 } });
+        archive.on('error', () => {
+          try {
+            if (!res.headersSent) return res.status(500).json({ error: 'No se pudo generar el zip.' });
+            res.destroy();
+          } catch { /* noop */ }
+        });
+        archive.pipe(res);
+        const ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`];
+        for (const it of items) {
+          if (it.isDir) archive.glob('**/*', { cwd: it.abs, dot: true, follow: false, ignore }, { prefix: it.name });
+          else archive.file(it.abs, { name: it.name });
+        }
+        archive.finalize();
+      } catch {
+        if (!res.headersSent) res.status(500).json({ error: 'No se pudo generar el zip.' });
       }
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', 'attachment; filename="archivos.zip"');
-      const archive = archiver('zip', { zlib: { level: 6 } });
-      archive.on('error', () => { try { res.destroy(); } catch { /* noop */ } });
-      archive.pipe(res);
-      const ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`];
-      for (const it of items) {
-        if (it.isDir) archive.glob('**/*', { cwd: it.abs, dot: true, follow: false, ignore }, { prefix: it.name });
-        else archive.file(it.abs, { name: it.name });
-      }
-      archive.finalize();
     });
 
     r.post('/upload', (req, res) => {
@@ -235,7 +372,10 @@ export default {
       catch { res.status(400).json({ error: 'No se pudo mover a la papelera.' }); }
     });
 
-    r.get('/trash', (req, res) => res.json({ items: listTrash() }));
+    r.get('/trash', (req, res) => {
+      try { res.json({ items: listTrash() }); }
+      catch { res.status(500).json({ error: 'No se pudo leer la papelera.' }); }
+    });
 
     r.post('/trash/restore', (req, res) => {
       try {
@@ -250,8 +390,12 @@ export default {
     });
 
     r.post('/trash/purge', (req, res) => {
-      purgeTrash(req.body?.id || null);
-      res.json({ ok: true });
+      try {
+        purgeTrash(req.body?.id || null);
+        res.json({ ok: true });
+      } catch {
+        res.status(500).json({ error: 'No se pudo purgar la papelera.' });
+      }
     });
 
     router.use('/files', r);

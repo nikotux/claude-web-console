@@ -15,12 +15,16 @@
 // proyecto trackeado como a la propia consola. Ver projects/index.js.
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
 const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
+const DATA_DIR = path.join(config.home, '.cwc-data');
+const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
 
 function git(args, { timeout = 90000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -39,9 +43,29 @@ function git(args, { timeout = 90000 } = {}) {
   });
 }
 
-// Timestamp del último fetch/pull exitoso (freshness del "N detrás"). En
-// memoria: tras un reinicio queda null hasta que el front auto-fetchea (5 min).
-let lastFetchAt = null;
+// Timestamp del último fetch/pull exitoso (freshness del "N detrás"). Se
+// persiste en DATA_DIR (CLAUDE.md regla 2: estado detectable tras reinicio
+// sin depender solo de variables en memoria) y se cachea acá para no pegarle
+// al disco en cada GET /status.
+function loadLastFetchAt() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(LASTFETCH_FILE, 'utf8'));
+    return typeof parsed.lastFetchAt === 'number' ? parsed.lastFetchAt : null;
+  } catch {
+    return null; // no existe todavía (primer arranque) o está corrupto
+  }
+}
+
+async function saveLastFetchAt(ts) {
+  try {
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+    await fsp.writeFile(LASTFETCH_FILE, JSON.stringify({ lastFetchAt: ts }), 'utf8');
+  } catch (err) {
+    console.error('[tolkien] No se pudo persistir lastFetchAt:', err.message);
+  }
+}
+
+let lastFetchAt = loadLastFetchAt();
 
 async function status() {
   const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -78,6 +102,9 @@ async function status() {
   // automático queda intacto en el repo (git lo persiste solo, no hace falta
   // estado propio) pero nadie lo señala tras un reinicio de la interfaz — se
   // detecta acá para que sobreviva al reinicio (CLAUDE.md regla 2).
+  // Igual que abRes: un fallo acá (repo raro, permisos, etc.) no debe tirar
+  // abajo /status. Se trata como "no hay stash pendiente" en vez de propagar
+  // el error — fallback razonable, no un bug silencioso.
   const stashRes = await git(['stash', 'list']);
   const pendingAutoStash = stashRes.code === 0 && stashRes.stdout
     ? stashRes.stdout.split('\n').some((l) => l.includes(AUTO_STASH_MSG))
@@ -108,7 +135,7 @@ export default {
     r.post('/fetch', async (req, res) => {
       try {
         const f = await git(['fetch', '--prune', 'origin']);
-        if (f.code === 0) lastFetchAt = Date.now();
+        if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
         res.json({ ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() });
       } catch {
         res.status(500).json({ error: 'No se pudo leer el estado del repo.' });
@@ -120,18 +147,34 @@ export default {
       busy = true;
       const log = [];
       try {
-        const dirty = (await git(['status', '--porcelain'])).stdout.length > 0;
+        const dirtyRes = await git(['status', '--porcelain']);
+        if (dirtyRes.code !== 0) throw new Error(`git status falló: ${dirtyRes.stderr || 'código ' + dirtyRes.code}`);
+        const dirty = dirtyRes.stdout.length > 0;
 
         let stashed = false;
         if (dirty) {
           const s = await git(['stash', 'push', '-u', '-m', AUTO_STASH_MSG]);
           log.push({ step: 'stash', code: s.code, out: s.stdout || s.stderr });
-          stashed = s.code === 0 && !/No local changes/i.test(s.stdout + s.stderr);
+          const noLocalChanges = /No local changes/i.test(s.stdout + s.stderr);
+          if (s.code !== 0 && !noLocalChanges) {
+            // El stash falló de verdad (lock tomado, permisos, disco lleno, etc.)
+            // y NO es el caso benigno de "no había nada que stashear": abortamos
+            // ANTES del pull para no arriesgar los cambios locales sin respaldo.
+            const st = await status();
+            return res.status(409).json({
+              ok: false,
+              stashFailed: true,
+              log,
+              status: st,
+              error: 'No se pudo guardar los cambios locales (git stash) antes de actualizar: se abortó antes del pull para no arriesgar tu trabajo sin respaldo. Revisá el error y volvé a intentar.',
+            });
+          }
+          stashed = s.code === 0 && !noLocalChanges;
         }
 
         const pull = await git(['pull', '--ff-only', 'origin']);
         log.push({ step: 'pull', code: pull.code, out: pull.stdout || pull.stderr });
-        if (pull.code === 0) lastFetchAt = Date.now(); // pull incluye fetch
+        if (pull.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); } // pull incluye fetch
 
         let popConflict = false;
         if (stashed) {
@@ -146,14 +189,18 @@ export default {
             // sigue intacto para reintentar a mano.
             const reset = await git(['reset', '--hard', '@{1}']);
             log.push({ step: 'reset-rollback', code: reset.code, out: reset.stdout || reset.stderr });
+            const resetFailed = reset.code !== 0;
             const st = await status();
             return res.status(409).json({
               ok: false,
               popConflict: true,
+              resetFailed,
               stashed,
               log,
               status: st,
-              error: 'No se pudieron reaplicar los cambios locales (stash) tras el pull: se revirtió la actualización para no dejar el repo a mitad de camino. Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).',
+              error: resetFailed
+                ? 'No se pudieron reaplicar los cambios locales (stash) tras el pull y ADEMÁS falló el intento de revertir el avance del pull (git reset --hard): la rama puede haber quedado adelantada a mitad de camino. Tus cambios siguen en el stash — revisá el estado del repo manualmente antes de continuar.'
+                : 'No se pudieron reaplicar los cambios locales (stash) tras el pull: se revirtió la actualización para no dejar el repo a mitad de camino. Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).',
             });
           }
         }

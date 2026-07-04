@@ -143,5 +143,190 @@
     "match": "src/modules/**/*.js",
     "text": "Todo pty.spawn()/child_process.spawn() en el código debe estar envuelto en try/catch (o su promesa debe tener .catch) antes de registrar handlers sobre el proceso devuelto",
     "addedAt": 1783124567505
+  },
+  {
+    "match": "src/modules/terminal/*.js",
+    "text": "Todo callback pasado a proc.onExit/proc.onData de un pty/emitter externo debe tener su cuerpo envuelto en try/catch con logging en el catch",
+    "addedAt": 1783126394461
+  },
+  {
+    "match": "src/modules/admin/*.js",
+    "text": "Todo endpoint que permite modificar o eliminar un recurso de \"usuario\" (PUT/DELETE /users/:username) debe rechazar con 409 cuando principalOf(req).username === username del path",
+    "addedAt": 1783126395632
+  },
+  {
+    "match": "src/modules/chat/index.js",
+    "text": "En chat/index.js, toda rama \"motor dormido\" (`if (this.link) {...} else {...}`) de un setter de estado persistente (mode, model, etc.) debe llamar `this.onUpdate?.()` tras `this._push()`",
+    "addedAt": 1783126396522
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Todo `fetch(...)` seguido de `.json()` debe verificar `res.ok` (o envolver el `.json()` en `.catch()`) antes de asumir que el body es JSON válido",
+    "addedAt": 1783126397092
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Toda función que hace fetch POST a /api/* y usa res.ok debe tener un catch que llame dialog.alertDialog (o equivalente) para no tragarse errores silenciosamente",
+    "addedAt": 1783126397697
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Todo campo booleano recibido en req.body debe rechazar valores no-boolean con 400 antes de coercionarse con `!!` o pasarse a una función core",
+    "addedAt": 1783126398197
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Todo `await res.json()` seguido de un chequeo `res.ok` debe usar `.catch(() => ({}))` (o verificar res.ok antes de parsear) para no perder el mensaje de error ante bodies no-JSON",
+    "addedAt": 1783126399767
+  },
+  {
+    "match": "src/core/**/*.js",
+    "text": "Todo wrapper de execFileSync/execFile con opción throwOnError=false debe re-lanzar (o propagar como rechazo) cuando err.killed===true o err.signal esté seteado, en vez de devolver un valor de éxito vacío",
+    "addedAt": 1783126400632
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Todo `fetch(...).then(r => r.json())` sobre endpoints propios debe verificar `res.ok` antes de parsear/usar el body, propagando el mensaje de error del servidor",
+    "addedAt": 1783126401236
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Todo `fetch(...).then((r) => r.json())` en public/js/modules/**/*.js debe verificar `r.ok` antes de parsear JSON",
+    "addedAt": 1783126401832
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo handler HTTP de router (`r.get`/`r.post`/etc.) que ejecuta I/O (tmux, filesystem) debe envolver su cuerpo en try/catch y responder JSON con status 500 en el catch, nunca dejar propagar la excepción",
+    "addedAt": 1783126402483
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "En cualquier endpoint con promesa compartida (`xxxBuildPromise`/`xxxFetchPromise`) y caché con TTL, la variable de timestamp de control (`xxxAt`) solo debe asignarse dentro del `.then()`/callback que resuelve la promesa compartida, nunca después de un `await` sobre esa promesa en el handler del request.",
+    "addedAt": 1783126403152
+  },
+  {
+    "match": "src/modules/tmux/*.js",
+    "text": "Toda llamada a saveTitles(...) en src/modules/tmux/index.js debe estar dentro de un `if (!saveTitles(...))` (o equivalente que use su valor de retorno)",
+    "addedAt": 1783126404347
+  },
+  {
+    "match": "src/modules/terminal/sessions.js",
+    "text": "Todo método público de SessionManager que invoque `new Session(...).spawn(...)` debe capturar la excepción con `try/catch`, loguear con `console.error` y NO llamar `this.sessions.set(...)` en la rama de error",
+    "addedAt": 1783126405266
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Todo `Map` module-level usado como caché (no como registro de entidades vivas) debe tener una constante `MAX_*` y lógica de expulsión (FIFO/LRU) en su punto de `set()`",
+    "addedAt": 1783126409017
+  },
+  {
+    "match": "src/core/*.js",
+    "text": "Toda función que persiste un campo `*Rel`/`*originalRel` derivado de una ruta de usuario en un archivo JSON de estado debe validarlo con resolveWithinHome/clampToHome ANTES de escribir a disco, no solo al leerlo/restaurarlo",
+    "addedAt": 1783126410126
+  },
+  {
+    "match": "src/modules/*/index.js (handlers `r.post`/`r.put`/`r.delete` async)",
+    "text": "Todo handler HTTP async en modules/*/index.js que haga `await` sobre una función capaz de lanzar (spawn de procesos, tmux, filesystem) debe envolver esa llamada en try/catch con respuesta 5xx, dado que no hay middleware global de errores ni handler de unhandledRejection que lo cubra",
+    "addedAt": 1783126411336
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Toda variable en memoria que forma parte de la respuesta JSON de un endpoint GET de estado (status()) debe tener un respaldo en disco bajo ~/.cwc-data/ que se cargue al iniciar el módulo",
+    "addedAt": 1783126412557
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Toda rama de código que ejecuta un comando de rollback/recuperación (git reset, restore, checkout, etc.) tras un fallo debe verificar su código de salida y reflejarlo en la respuesta/mensaje al cliente, nunca asumir éxito fijo",
+    "addedAt": 1783131993051
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo endpoint que acepta un campo booleano en req.body debe responder 400 si ese campo está presente y typeof !== 'boolean', antes de coercionarlo o pasarlo a una función core",
+    "addedAt": 1783131994268
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo handler Express en src/modules/**/*.js que invoque una función que pueda lanzar (I/O de fs, JSON.parse, etc.) debe estar envuelto en try/catch y responder JSON en el catch, nunca dejar que la excepción llegue al manejador de errores por defecto de Express",
+    "addedAt": 1783131995117
+  },
+  {
+    "match": "public/js/ui/dialog.js",
+    "text": "Ningún test/código debe registrar un listener `document.addEventListener('keydown', ..., true)` que cierre un modal sin antes verificar que ese modal es el tope de una pila global de modales abiertos",
+    "addedAt": 1783131995838
+  },
+  {
+    "match": "src/modules/*/index.js",
+    "text": "Todo handler de router registrado con router.get/post/put/delete que hace await de I/O debe envolver su cuerpo en try/catch y responder res.status(500).json({error:...}) en el catch",
+    "addedAt": 1783131996533
+  },
+  {
+    "match": "public/js/ui/*.js",
+    "text": "Todo render de contenido externo/usuario (modelo, diffs, código) debe truncar su entrada o sus nodos DOM resultantes con un tope explícito y un aviso visible de truncado, nunca generar un número no acotado de nodos DOM.",
+    "addedAt": 1783132000877
+  },
+  {
+    "match": "public/js/ui/*.js",
+    "text": "Ningún template-string en public/js/ui/*.js interpola una variable no literal dentro de un atributo HTML (`attr=\"${...}\"`) sin pasarla antes por una función de escape (escapeAttr/escapeHtml)",
+    "addedAt": 1783132001998
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo handler registrado vía `r.get/post/put/delete(...)` en registerHttp debe envolver su cuerpo en try/catch con una respuesta res.status(500).json({error:...}) en el catch",
+    "addedAt": 1783132309933
+  },
+  {
+    "match": "src/core/*.js",
+    "text": "Ninguna función exportada en core/*.js debe declarar un parámetro con el mismo nombre que un import de nivel de módulo (evita shadowing de defensas de validación de rutas)",
+    "addedAt": 1783132376637
+  },
+  {
+    "match": "src/modules/**/index.js, src/modules/**/memory.js",
+    "text": "Todo endpoint POST que sobreescribe un archivo completo leído previamente vía GET debe aceptar un hash opcional del contenido esperado y responder 409 (no pisar en silencio) si el hash no coincide con el contenido actual en disco",
+    "addedAt": 1783132378236
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Todo POST mutante a /api/** en public/js/modules/**/*.js debe revisar res.ok y/o data.error y mostrar dialog.alertDialog en el error (nunca un catch vacío)",
+    "addedAt": 1783132464023
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Toda función que hace fetch mutante (POST/PUT/DELETE) a /api/** debe chequear res.ok y nunca silenciarlo con .catch(() => {})/.catch(() => ({})) sin propagar el fallo",
+    "addedAt": 1783132465697
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo handler registrado vía `router.get/post/put/delete` en src/modules/**/index.js debe envolver su cuerpo en try/catch y responder `res.status(500).json({error})` en el catch",
+    "addedAt": 1783134421759
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Todo callback registrado con `.on('error', ...)` sobre un EventEmitter externo (archiver, node-pty, ws, child_process) debe envolver su cuerpo completo en try/catch antes de invocar res.status/json/destroy o cualquier API que pueda lanzar",
+    "addedAt": 1783134422922
+  },
+  {
+    "match": "src/modules/files/index.js",
+    "text": "En cualquier ruta que agregue múltiples entradas top-level a un mismo archiver/zip a partir de una selección de items, los nombres asignados a esas entradas (name/prefix) deben ser únicos entre sí antes de llamar a archive.file()/archive.glob()",
+    "addedAt": 1783134424337
+  },
+  {
+    "match": "src/modules/tmux/index.js",
+    "text": "GET /api/tmux/sessions nunca borra una entrada de titles.json cuyo socket dueño falló su consulta list-sessions en esa misma petición",
+    "addedAt": 1783134427572
+  },
+  {
+    "match": "src/modules/files/index.js",
+    "text": "Todo handler `archive.on('error', ...)` en endpoints de streaming zip debe intentar `res.status(500).json({error})` antes de `res.destroy()`, nunca destruir sin intentar JSON primero",
+    "addedAt": 1783136644042
+  },
+  {
+    "match": "src/modules/tolkien/index.js",
+    "text": "Tras cualquier `git stash push` no benigno (code!==0 y stdout+stderr no matchea /No local changes/), el handler debe retornar/abortar antes de ejecutar `git pull`",
+    "addedAt": 1783136649087
+  },
+  {
+    "match": "src/modules/**/*.js (cualquier ruta que sirva archivos de usuario)",
+    "text": "Ningún endpoint que sirva contenido subido por el usuario (`res.sendFile`/`res.download`/streaming de archivos) debe dejar que el Content-Type se derive de la extensión del archivo sin pasar por una allowlist explícita de tipos \"seguros para render inline\"; todo lo demás debe ir con `Content-Disposition: attachment`.",
+    "addedAt": 1783136793913
   }
 ]

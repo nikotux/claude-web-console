@@ -29,10 +29,19 @@ export default {
     const r = express.Router();
     r.use(requireAdmin);
 
-    r.get('/users', (req, res) => res.json({ users: listUsers() }));
+    r.get('/users', (req, res) => {
+      try {
+        res.json({ users: listUsers() });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
 
     r.post('/users', (req, res) => {
       const { username, password, admin } = req.body || {};
+      if (admin !== undefined && typeof admin !== 'boolean') {
+        return res.status(400).json({ error: 'admin debe ser boolean.' });
+      }
       try {
         createUser(username, password, typeof admin === 'boolean' ? admin : false);
         res.json({ ok: true });
@@ -44,6 +53,13 @@ export default {
     r.put('/users/:username', (req, res) => {
       const { username } = req.params;
       const { password, admin } = req.body || {};
+      if (admin !== undefined && typeof admin !== 'boolean') {
+        return res.status(400).json({ error: 'admin debe ser boolean.' });
+      }
+      const principal = principalOf(req);
+      if (principal && principal.username === username) {
+        return res.status(409).json({ error: 'No puedes modificar tu propio usuario.' });
+      }
       try {
         let changed = false;
         if (typeof password === 'string' && password.length) {

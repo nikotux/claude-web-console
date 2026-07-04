@@ -31,8 +31,8 @@ const FMT = [
   '#{pane_current_path}',
 ].join('\t');
 
-function listSessionsForSocket(sock) {
-  const out = runTmux(sock.path, ['list-sessions', '-F', FMT]);
+function listSessionsForSocket(sock, opts) {
+  const out = runTmux(sock.path, ['list-sessions', '-F', FMT], opts);
   const sessions = [];
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
@@ -80,21 +80,49 @@ export default {
     const r = express.Router();
 
     r.get('/sessions', (req, res) => {
-      const all = [];
-      for (const sock of listSockets()) all.push(...listSessionsForSocket(sock));
-      all.sort((a, b) =>
-        a.socketName === b.socketName ? a.name.localeCompare(b.name) : a.socketName.localeCompare(b.socketName),
-      );
-      // Títulos custom + poda de huérfanos (sesiones que ya no existen).
-      const titles = loadTitles();
-      const valid = new Set(all.map((s) => titleKey(s.socketName, s.name)));
-      let dirty = false;
-      for (const k of Object.keys(titles)) {
-        if (!valid.has(k)) { delete titles[k]; dirty = true; }
+      try {
+        const all = [];
+        // throwOnError: un fallo transitorio de tmux (ENOMEM, fork ocupado,
+        // exec momentáneo) NO debe leerse como "socket sin sesiones" — eso
+        // llevaría a podar como huérfanos títulos de sesiones que siguen
+        // vivas. Si list-sessions falla, tratamos ese socket como "no
+        // verificado esta pasada" y no tocamos sus títulos custom.
+        const unverifiedSockets = new Set();
+        for (const sock of listSockets()) {
+          try {
+            all.push(...listSessionsForSocket(sock, { throwOnError: true }));
+          } catch {
+            unverifiedSockets.add(sock.name);
+            console.error(`[tmux] list-sessions falló en el socket "${sock.name}"; se omite la poda de sus títulos esta vez.`);
+          }
+        }
+        all.sort((a, b) =>
+          a.socketName === b.socketName ? a.name.localeCompare(b.name) : a.socketName.localeCompare(b.socketName),
+        );
+        // Títulos custom + poda de huérfanos (sesiones que ya no existen).
+        const titles = loadTitles();
+        const valid = new Set(all.map((s) => titleKey(s.socketName, s.name)));
+        let dirty = false;
+        for (const k of Object.keys(titles)) {
+          if (valid.has(k)) continue;
+          // No podar títulos de un socket cuya consulta falló esta pasada:
+          // no sabemos si sus sesiones siguen vivas o no.
+          const sockName = k.slice(0, k.indexOf('/'));
+          if (unverifiedSockets.has(sockName)) continue;
+          delete titles[k];
+          dirty = true;
+        }
+        if (dirty && !saveTitles(titles)) {
+          // No abortamos la respuesta (los títulos podados ya están correctos
+          // en memoria para esta petición); solo dejamos rastro de que la
+          // poda no se persistió, para no fallar en silencio.
+          console.error('[tmux] No se pudo persistir la poda de títulos huérfanos.');
+        }
+        for (const s of all) s.customTitle = titles[titleKey(s.socketName, s.name)] || null;
+        res.json({ sessions: all });
+      } catch {
+        res.status(500).json({ error: 'No se pudo listar sesiones.' });
       }
-      if (dirty) saveTitles(titles);
-      for (const s of all) s.customTitle = titles[titleKey(s.socketName, s.name)] || null;
-      res.json({ sessions: all });
     });
 
     // Nombre humano de una tarjeta (vacío = volver al nombre por defecto).

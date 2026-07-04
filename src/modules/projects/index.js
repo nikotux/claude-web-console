@@ -29,7 +29,7 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
-  listContextSections, readContextSection, writeContextSection,
+  listContextSections, readContextSection, writeContextSection, hashOf,
 } from './memory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -152,24 +152,33 @@ export default {
     const r = express.Router();
 
     r.get('/', (req, res) => {
-      res.json(Object.entries(PROJECTS).map(([key, p]) => ({ key, name: p.name, dir: p.dir })));
+      try {
+        res.json(Object.entries(PROJECTS).map(([key, p]) => ({ key, name: p.name, dir: p.dir })));
+      } catch {
+        res.status(500).json({ error: 'No se pudo listar los proyectos.' });
+      }
     });
 
     // ===== Contexto (CLAUDE.md) =====
     r.get('/:key/context', (req, res) => {
       const p = project(req, res); if (!p) return;
-      try { res.json({ content: readContext(p.dir) }); }
+      try { const content = readContext(p.dir); res.json({ content, hash: hashOf(content) }); }
       catch { res.status(500).json({ error: 'No se pudo leer el contexto.' }); }
     });
 
+    // `hash` es OPCIONAL en el body: si el cliente lo manda (el que abrió el
+    // archivo vía el GET de arriba), se rechaza con 409 si CLAUDE.md cambió
+    // en el medio (misma protección que el guardado por secciones, invariante
+    // #2 — ver comentario en memory.js:writeContext). Sin hash, guarda como
+    // siempre (compatibilidad con llamadores programáticos existentes).
     r.post('/:key/context', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        writeContext(p.dir, String(req.body?.content ?? ''));
+        writeContext(p.dir, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
-      } catch {
-        res.status(500).json({ error: 'No se pudo guardar el contexto.' });
+      } catch (e) {
+        res.status(e.conflict ? 409 : 500).json({ error: e.message || 'No se pudo guardar el contexto.' });
       }
     });
 

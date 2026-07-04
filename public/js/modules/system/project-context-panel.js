@@ -231,7 +231,7 @@ export function mountProjectContextPanel(el, ctx) {
     let sec;
     try {
       const res = await fetch(projectApi(`/context/section/${i}`));
-      sec = await res.json();
+      sec = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(sec.error || 'No se pudo leer la sección.');
     } catch (e) {
       dialog.alertDialog({ title: 'Contexto', message: e.message });

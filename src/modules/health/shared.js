@@ -295,6 +295,28 @@ export function recordSolved(f, summary) {
   return prev || list[list.length - 1];
 }
 
+// Marca UN hallazgo como resuelto: setea fixStatus:'resolved' en review.json
+// (foto de la corrida) + lo suma al registro DURABLE (recordSolved). Punto ÚNICO
+// de "marcar resuelto" fuera del auto-fix runner — lo usan el runner mini
+// bin/cwc-health-resolve.js (lo corre el propio chat supervisado al terminar) y
+// el endpoint POST /finding-resolve (botón manual, red de seguridad). Devuelve el
+// hallazgo actualizado o null si ya no está en review.json (se re-analizó).
+export function markFindingResolved(id, summary) {
+  const st = readReview();
+  const f = (st.findings || []).find((x) => findingId(x) === id);
+  if (!f) return null;
+  Object.assign(f, {
+    fixStatus: 'resolved',
+    fixSummary: String(summary || '').slice(0, 400),
+    resolvedAt: Date.now(),
+    fixError: null,
+  });
+  st.updatedAt = Date.now();
+  writeReview(st);
+  recordSolved(f, summary);
+  return f;
+}
+
 // ===== Registro DURABLE de FALSOS POSITIVOS (health-dismissed.json) =====
 // Clave = firma GRUESA (module|area|file), la misma que recurrencias: así, si el
 // motor re-encuentra el MISMO hallazgo, se reconoce como ya-descartado. No es

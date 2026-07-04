@@ -35,7 +35,7 @@ export function createSandbox(id) {
     try { git(['apply', pf], wt); } catch { /* si no aplica, queda en HEAD */ }
     try { fss.unlinkSync(pf); } catch { /* noop */ }
   }
-  git([...GIT_ID, 'add', '-A'], wt);
+  try { git([...GIT_ID, 'add', '-A'], wt); } catch { /* repositorio en estado inconsistente */ }
   try { git([...GIT_ID, 'commit', '-m', 'base', '--no-verify', '--allow-empty'], wt); } catch { /* noop */ }
   return wt;
 }

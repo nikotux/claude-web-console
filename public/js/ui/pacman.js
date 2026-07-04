@@ -11,8 +11,19 @@
 // recolorean el círculo por estado con clases st-* (verde = libre, ver
 // .sess-pac en style.css) y achican con la variante `pac-sm` (ui.css). Un
 // loader de proceso se muestra siempre working y se REMUEVE al terminar.
+// Escapa un valor para uso seguro dentro de un atributo HTML con comillas
+// dobles (title puede venir de datos user-controlled: título de sesión/chat,
+// nombre de modelo, etc.).
+function escapeAttr(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export function pacman({ working = true, cls = '', title = '' } = {}) {
-  return `<span class="cwc-pacman${working ? ' is-working' : ''}${cls ? ` ${cls}` : ''}"${title ? ` title="${title}"` : ''}>` +
+  return `<span class="cwc-pacman${working ? ' is-working' : ''}${cls ? ` ${cls}` : ''}"${title ? ` title="${escapeAttr(title)}"` : ''}>` +
     '<span class="pac-man"></span>' +
     '<span class="pac-track"><i class="pac-dot"></i><i class="pac-dot"></i><i class="pac-dot"></i></span>' +
     '</span>';

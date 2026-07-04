@@ -147,15 +147,17 @@ class Session {
       try { this._onData(data); } catch (e) { console.error('[terminal]', e); }
     });
     this.proc.onExit(() => {
-      this.alive = false;
-      this._broadcast(JSON.stringify({ type: 'exit' }));
-      for (const ws of this.clients) {
-        try { ws.close(); } catch { /* noop */ }
-      }
-      this.clients.clear();
-      const waiters = this._exitWaiters;
-      this._exitWaiters = [];
-      for (const w of waiters) { try { w(); } catch { /* noop */ } }
+      try {
+        this.alive = false;
+        this._broadcast(JSON.stringify({ type: 'exit' }));
+        for (const ws of this.clients) {
+          try { ws.close(); } catch { /* noop */ }
+        }
+        this.clients.clear();
+        const waiters = this._exitWaiters;
+        this._exitWaiters = [];
+        for (const w of waiters) { try { w(); } catch { /* noop */ } }
+      } catch (e) { console.error('[terminal]', e); }
     });
 
     if (!this.bare && runClaude) {
@@ -208,6 +210,11 @@ class Session {
 
   _broadcast(payload, raw = false) {
     // Salida del PTY -> frame BINARIO. Control (JSON) -> frame de TEXTO.
+    // OJO: con raw=true `payload` es un STRING (node-pty se spawnea sin
+    // `encoding` => default 'utf8' => onData entrega strings, NO Buffers);
+    // Buffer.from(string,'utf8') lo re-codifica sin pérdida y fuerza el frame
+    // binario en ws. NO invertir este ternario: mandar el string crudo saldría
+    // como frame de TEXTO y el cliente lo confundiría con JSON de control.
     const frame = raw ? Buffer.from(payload, 'utf8') : payload;
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) ws.send(frame);
@@ -217,10 +224,14 @@ class Session {
   attach(ws) {
     this.clients.add(ws);
     // Re-pinta el buffer reciente al reconectar (frame binario).
-    // Buffer.concat preserva los bytes crudos: join('') haría toString()
-    // UTF-8 implícito en cada Buffer y corrompería datos binarios no-UTF8.
-    const replay = Buffer.concat(this.buffer);
-    if (replay.length && ws.readyState === ws.OPEN) ws.send(replay);
+    // Los chunks del ring buffer son STRINGS (node-pty default encoding
+    // 'utf8', ver _broadcast): join('') + Buffer.from(...,'utf8') es la
+    // conversión sin pérdida. NO usar Buffer.concat acá: sobre strings LANZA
+    // TypeError y el catch del router ws cierra la conexión => reconectar a
+    // una terminal con scrollback quedaba roto (regresión de un auto-fix
+    // previo que asumió Buffers, revertida 2026-07-04).
+    const replay = this.buffer.join('');
+    if (replay && ws.readyState === ws.OPEN) ws.send(Buffer.from(replay, 'utf8'));
   }
 
   detach(ws) {
@@ -308,7 +319,15 @@ class SessionManager {
 
   create({ cwd, runClaude = false, model = null, title, attach = null } = {}) {
     const id = this._nextId();
-    const session = new Session({ id, cwd, title, attach }).spawn({ runClaude, model });
+    const session = new Session({ id, cwd, title, attach });
+    try {
+      session.spawn({ runClaude, model });
+    } catch (e) {
+      // No la registramos (this.sessions.set) si el spawn falló: evita dejar
+      // una sesión "fantasma" en el mapa (mismo criterio que createBare()).
+      console.error(`[terminal] Error creando sesión ${id}:`, e);
+      throw e;
+    }
     this.sessions.set(id, session);
     return session;
   }

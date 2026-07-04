@@ -160,8 +160,15 @@ export function mountBackupPanel(el, ctx) {
 
   async function loadGit() {
     let info;
-    try { info = await (await fetch(`${API}/git-info`)).json(); }
-    catch { refs.git.innerHTML = '<div class="bk-empty">No se pudo leer el estado de git.</div>'; return; }
+    try {
+      const res = await fetch(`${API}/git-info`);
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || 'Error');
+      info = d;
+    } catch (e) {
+      refs.git.innerHTML = `<div class="bk-empty">No se pudo leer el estado de git${e.message ? `: ${esc(e.message)}` : ''}.</div>`;
+      return;
+    }
 
     if (!info.isRepo) {
       refs.git.innerHTML = '<div class="bk-empty">El proyecto no es un repositorio git.</div>';
