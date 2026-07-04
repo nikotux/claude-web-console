@@ -7,6 +7,7 @@ import { ChatTab } from './modules/chat/chat-tab.js';
 import { icon, hydrateIcons } from './ui/icons.js';
 import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
+import { initPermCenter } from './ui/perm-center.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -25,6 +26,7 @@ const terminalsEl = document.getElementById('terminals');
 
 const tabs = new Map(); // id -> { tab, tabButton, pane, flag, session }
 let activeId = null;
+let permCenter = null; // centro global de permisos (se inicializa más abajo)
 
 const getActiveTab = () => tabs.get(activeId)?.tab || null;
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
@@ -61,6 +63,9 @@ function setActive(id) {
     entry.tabButton.classList.toggle('active', on);
     if (on) entry.tab.focus();
   }
+  // El popup del chat que quedó activo se suprime (su tarjeta inline ya está a
+  // la vista); el del que dejó de estarlo reaparece.
+  permCenter?.refresh();
 }
 
 function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
@@ -249,14 +254,20 @@ function pollModels() {
 // Punto de estado por pestaña (trabajando/esperando), leído de las mismas
 // fuentes que las tarjetas de Sesiones. Una sola pasada para todas las tabs.
 async function pollTabStatus() {
-  if (document.hidden || !tabs.size) return;
+  // OJO: sin pestañas abiertas IGUAL se consulta /api/chat/list — el centro
+  // global de permisos debe avisar de chats vivos en el server aunque este
+  // navegador no los tenga abiertos (p.ej. lanzados desde el teléfono).
+  if (document.hidden) return;
   try {
     const ac = new AbortController();
     const killer = setTimeout(() => ac.abort(), 5000);
     const [tmux, chats] = await Promise.all([
-      fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => []),
+      tabs.size
+        ? fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => [])
+        : Promise.resolve([]),
       fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
     ]).finally(() => clearTimeout(killer));
+    permCenter?.syncFromList(chats);
     const byName = new Map(tmux.map((s) => [s.name, s]));
     const byChat = new Map(chats.map((c) => [c.id, c]));
     let titleChanged = false;
@@ -436,6 +447,21 @@ function findSessionByCwd(rel) {
   }
   return null;
 }
+
+// ===== Centro global de permisos: popups de aprobación desde cualquier
+// pantalla (ui/perm-center.js). Alimentado por los eventos window de las
+// ChatTab abiertas (instantáneo) + el poll de 8 s (catch-up y limpieza).
+permCenter = initPermCenter({
+  isChatActive: (chatId) => activeId === chatId && tabs.has(chatId),
+  chatTitle: (chatId) => tabs.get(chatId)?.session?.title || null,
+  openChat: async (chatId) => {
+    if (focusSession(chatId)) return;
+    // Chat sin pestaña en este navegador: traer su info y abrir la vista.
+    const chats = await fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []);
+    const info = chats.find((c) => c.id === chatId);
+    if (info) openChatView(info);
+  },
+});
 
 const ctx = {
   icon,

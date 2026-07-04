@@ -244,6 +244,32 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             cp-detail-tool = nombre COMPLETO de la función (word-break) +
                             comando/diff íntegro. Destructivos siguen naciendo EXPANDIDOS
                             (isDestructiveCommand).
+                            CENTRO GLOBAL DE PERMISOS (pedido del usuario 2026-07-04: con
+                            varios chats abiertos los permisos expiraban sin verse — solo
+                            chats SDK, tmux quedó explícitamente AFUERA): las solicitudes
+                            pendientes de TODAS las conversaciones se popupean desde
+                            CUALQUIER pantalla (ui/perm-center.js, detalle en la sección de
+                            public/js/ui/ abajo). Server: los pendientes se DERIVAN del
+                            history (permission_request sin su permission_closed, SOLO con
+                            motor vivo — pendingPerms() en Chat, cero estado duplicado;
+                            sobrevive reinicios porque la reconexión a un runner vivo
+                            reconstruye el history con hello.events) y viajan en info()/GET
+                            /api/chat/list como pendingPerms[] {id,tool,summary,detail,ts,
+                            expiresAt}. _engineDown emite permission_closed SINTÉTICOS
+                            (reason 'engine_down') por los no respondidos — sin eso una vida
+                            futura del motor los "resucitaría" y la tarjeta inline quedaría
+                            clickeable para siempre. POST /api/chat/permission
+                            {id,permId,allow} responde un permiso SIN WS adjunto (valida
+                            permId ^p\d+$ y que siga pendiente — 409 si ya se respondió; usa
+                            el MISMO answerPermission del camino WS). El runner sella `ts`
+                            en cada permission_request; el server lo sella igual si falta
+                            (runners vivos de antes del deploy). ChatTab re-emite los
+                            permission_* como eventos window 'cwc:perm-request'/'cwc:
+                            perm-closed' (exporta toolTypeIcon/isDestructiveCommand para el
+                            popup). OJO: pollTabStatus (main.js) consulta /api/chat/list
+                            aunque NO haya pestañas abiertas — el centro debe avisar de
+                            chats lanzados desde otro dispositivo; no "optimizar" ese early
+                            return de vuelta.
                             AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
                             _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
                             READ-ONLY doble capa regla 6 con TODA herramienta denegada) que
@@ -605,6 +631,33 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             scroll horizontal — NUNCA wrap, la indentación se conserva como
                             en VS Code; .cwc-diff-line lleva min-width:max-content para que
                             el tinte +/− cubra todo el ancho scrolleable) ·
+                            perm-center.js (CENTRO GLOBAL DE PERMISOS: pila de popups
+                            flotantes — .cwc-permcenter/.pc-card en ui.css, z-index 190
+                            bajo modales (200) — con los permisos PENDIENTES de todas las
+                            conversaciones, visible desde cualquier pantalla. DOBLE
+                            alimentación con dedupe chatId+permId: ⚡ eventos window
+                            'cwc:perm-request'/'cwc:perm-closed' de las ChatTab abiertas
+                            (instantáneo aunque el pane esté oculto; el replay de history
+                            también los emite y es correcto: pendiente ⇒ popup, su closed
+                            posterior lo retira) + 🔄 syncFromList(chats) con el poll de 8 s
+                            de main.js (catch-up de chats SIN pestaña + limpieza de
+                            resueltos en otro lado, con GRACIA anti-parpadeo de 12 s para
+                            items recién llegados por WS que el poll en vuelo aún no trae).
+                            Tarjeta = título del chat (tap → abre/enfoca la conversación,
+                            openChatView si no hay pestaña) + ⏳ cuenta regresiva (espejo
+                            local PERM_TIMEOUT_MS de PERMISSION_TIMEOUT_MS del server para
+                            el evento instantáneo; el expiresAt exacto llega con el poll) +
+                            chip de íconos con detalle expandible (REUSA .chat-perm-row/
+                            .cp-chip/.ct-body de style.css y toolTypeIcon/
+                            isDestructiveCommand exportados de chat-tab.js; destructivos
+                            nacen expandidos) + ✕ Denegar / ✓ Permitir (POST
+                            /api/chat/permission, sin WS; 409 "ya no está pendiente" ⇒ la
+                            tarjeta se retira sola). SUPRESIÓN: el popup del chat ACTIVO no
+                            se muestra (su tarjeta inline ya está a la vista) — setActive
+                            llama permCenter.refresh(). Móvil ≤768px: la pila va ARRIBA
+                            (top:52px, bajo el header) — abajo taparía el composer con el
+                            teclado abierto. Solo chats SDK: NO cubre TUIs tmux (decidido
+                            2026-07-04) ni toca las corridas headless de la regla 6) ·
                             pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
                             USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
                             de Bugs, subir PR, push/backup, cálculo de Uso; el spinner queda

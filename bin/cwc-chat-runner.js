@@ -189,6 +189,10 @@ function askPermission(toolName, toolInput, ctx) {
       type: 'permission_request', id, tool: toolName,
       summary: toolSummary(toolName, toolInput),
       detail: toolDetail(toolName, toolInput),
+      // Hora de emisión: el centro global de permisos calcula la cuenta
+      // regresiva (PERMISSION_TIMEOUT_MS) con esto. El server la sella igual
+      // si falta (runners viejos de antes del deploy).
+      ts: Date.now(),
     });
   });
 }

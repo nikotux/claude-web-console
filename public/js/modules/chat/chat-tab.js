@@ -30,7 +30,7 @@ const DESTRUCTIVE_PATTERNS = [
   /\bkill(all)?\b/, /\bpkill\b/,
   /\bshutdown\b/, /\breboot\b/, /\bsystemctl\b[^\n|;&]*\s(stop|disable|mask)\b/,
 ];
-function isDestructiveCommand(cmd) {
+export function isDestructiveCommand(cmd) {
   const c = String(cmd || '');
   return DESTRUCTIVE_PATTERNS.some((re) => re.test(c));
 }
@@ -49,7 +49,7 @@ const TOOL_TYPE_ICONS = [
   [/^Todo/i, 'list'],
   [/^(Task|Agent)/i, 'sparkle'],
 ];
-const toolTypeIcon = (name) => (TOOL_TYPE_ICONS.find(([re]) => re.test(String(name || ''))) || [null, 'gear'])[1];
+export const toolTypeIcon = (name) => (TOOL_TYPE_ICONS.find(([re]) => re.test(String(name || ''))) || [null, 'gear'])[1];
 
 // [valor SDK, etiqueta de UNA palabra, riesgo]. Etiquetas cortas a propósito:
 // el select colapsado queda mínimo; el "?" de al lado explica cada modo. El
@@ -368,8 +368,19 @@ export class ChatTab {
       case 'delta': this._stream(m.text); break;
       case 'tool_use': this._closeStream(); this._toolCard(m); break;
       case 'tool_result': this._toolResult(m); break;
-      case 'permission_request': this._permCard(m); break;
-      case 'permission_closed': this._permClose(m); break;
+      // Los permission_* además se anuncian GLOBALMENTE (window): el centro de
+      // permisos (ui/perm-center.js) muestra el popup al instante si esta
+      // pestaña NO es la activa, y lo retira al resolverse. El replay de
+      // history también pasa por acá y es correcto: un request aún pendiente
+      // debe popupear, y su closed posterior (mismo replay) lo retira.
+      case 'permission_request':
+        this._permCard(m);
+        window.dispatchEvent(new CustomEvent('cwc:perm-request', { detail: { chatId: this.id, perm: m } }));
+        break;
+      case 'permission_closed':
+        this._permClose(m);
+        window.dispatchEvent(new CustomEvent('cwc:perm-closed', { detail: { chatId: this.id, permId: m.id } }));
+        break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
       case 'mode':

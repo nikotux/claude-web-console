@@ -37,7 +37,7 @@ import { sessionIdForCwd } from '../../core/claude-state.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
-  UUID_RE, PERMISSION_MODES, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
+  UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
@@ -364,8 +364,41 @@ class Chat {
         return;
       default:
         // assistant / tool_use / tool_result / permission_* / error / user
+        // permission_request: sellar la hora de llegada si el runner no la
+        // trajo (runners viejos, pre-deploy) — el centro global de permisos
+        // la usa para la cuenta regresiva de expiración (PERMISSION_TIMEOUT_MS).
+        if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
         this._push(e);
     }
+  }
+
+  // Permisos PENDIENTES derivados del history (request sin su closed): cero
+  // estado duplicado — sobrevive reinicios del server porque la reconexión a
+  // un runner sobreviviente (rehydrate) reconstruye el history con los eventos
+  // permission_* de la vida del runner (hello.events). Solo con motor VIVO:
+  // muerto, el runner ya resolvió todo como deny (y _engineDown los cierra).
+  _unmatchedPerms() {
+    const closed = new Set();
+    for (const e of this.history) {
+      if (e.type === 'permission_closed' && e.id) closed.add(e.id);
+    }
+    const out = [];
+    for (const e of this.history) {
+      if (e.type === 'permission_request' && e.id && !closed.has(e.id)) out.push(e);
+    }
+    return out;
+  }
+
+  pendingPerms() {
+    if (!this.alive || this.closed) return [];
+    return this._unmatchedPerms().map((e) => ({
+      id: e.id,
+      tool: String(e.tool || '').slice(0, 200),
+      summary: String(e.summary || '').slice(0, 400),
+      detail: e.detail || null,
+      ts: e.ts || null,
+      expiresAt: e.ts ? e.ts + PERMISSION_TIMEOUT_MS : null,
+    }));
   }
 
   // El motor murió (evento 'closed' del runner, o socket cortado sin aviso).
@@ -373,6 +406,14 @@ class Chat {
     if (this._downAnnounced) return;
     this._downAnnounced = true;
     this.alive = false;
+    // Permisos que quedaron abiertos: el runner ya los resolvió como deny al
+    // salir, pero sin emitir permission_closed por cada uno. Cerrarlos acá
+    // (sintético) para que el history quede apareado — sin esto, una vida
+    // futura del motor los "resucitaría" en pendingPerms() y la tarjeta
+    // inline del chat quedaría clickeable para siempre.
+    for (const e of this._unmatchedPerms()) {
+      this._push({ type: 'permission_closed', id: e.id, allow: false, reason: 'engine_down' });
+    }
     const waiters = this._engineWaiters;
     this._engineWaiters = [];
     for (const w of waiters) { try { w(); } catch { /* noop */ } }
@@ -616,6 +657,9 @@ class Chat {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model,
       mode: this.permissionMode, status: this.status, alive: this.alive,
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
+      // Permisos esperando respuesta: los consume el centro global de popups
+      // (public/js/ui/perm-center.js) vía el poll de 8 s de /list.
+      pendingPerms: this.pendingPerms(),
     };
   }
 }
@@ -859,6 +903,22 @@ export default {
         if (out.length >= 10) break;
       }
       res.json({ conversations: out });
+    });
+
+    // Responder un permiso pendiente SIN WS adjunto (centro global de popups:
+    // aprobar/denegar desde cualquier pantalla). Mismo camino que el WS
+    // (answerPermission → runner 'perm'); el runner ignora ids ya resueltos.
+    r.post('/permission', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const permId = String(req.body?.permId || '');
+      if (!/^p\d{1,10}$/.test(permId)) return res.status(400).json({ error: 'Permiso inválido.' });
+      if (!chat.alive) return res.status(409).json({ error: 'El motor de esa conversación no está corriendo.' });
+      if (!chat.pendingPerms().some((p) => p.id === permId)) {
+        return res.status(409).json({ error: 'Ese permiso ya no está pendiente (respondido o expirado).' });
+      }
+      chat.answerPermission(permId, !!req.body?.allow);
+      res.json({ ok: true });
     });
 
     r.post('/close', (req, res) => {
