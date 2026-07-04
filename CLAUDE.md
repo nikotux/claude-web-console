@@ -473,6 +473,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             deskStatus updating→ok|error + evento al historial. Las
                             ITERACIONES no tocan Desk: el resultado del envío lo avisa y el
                             tablero ofrece "Actualizar ticket (chat)".
+                            FIRMA EN DESK (pedido del usuario 2026-07-04): el token OAuth
+                            de Zoho que usan las tools desk_* es de OTRO agente (Chris) —
+                            la API publica toda nota como si la escribiera él y no permite
+                            falsear el autor. Por eso TODO prompt de la consola que redacta
+                            escrituras a Desk (deskUpdateAuto acá y doDeskChat en
+                            bug-board.js — ghdeskchat reusa doDeskChat) exige cerrar la
+                            nota con la firma exacta "— Nicolás (dev team)" en su propia
+                            línea. Si se agrega otro camino de escritura a Desk, sumarle la
+                            misma firma.
                             PR-LIVE (GET /pr-live/:n, admin): datos EN VIVO de un PR vía gh
                             (reviews, reviewDecision, comentarios, checks, commits,
                             mergeable) con caché en memoria de 60 s (?fresh=1 la saltea);

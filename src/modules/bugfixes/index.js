@@ -376,6 +376,7 @@ async function deskUpdateAuto(sessionId) {
     '1. Buscá el ticket y verificá que sea ese.',
     '2. Ponelo en estado "On Hold" (o el equivalente que exista).',
     '3. Publicá una actualización EN INGLÉS, corta y humana (2 a 4 frases), para quien reportó: qué estaba fallando (en simple), que el arreglo ya está implementado y en revisión, y que se desplegará en los próximos días. Sin jerga interna, sin mencionar herramientas ni consolas. Si podés elegir, hacela VISIBLE para el solicitante (respuesta); si no, como comentario.',
+    '   La nota SIEMPRE cierra con la firma exacta "— Nicolás (dev team)" en su propia línea: la API de Desk publica con otra identidad y el autor real tiene que quedar claro.',
     '',
     'Referencia de lo arreglado (notas del PR, para tu resumen):',
     formatPrBody(entry).slice(0, 1500),
