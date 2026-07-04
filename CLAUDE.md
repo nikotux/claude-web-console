@@ -742,6 +742,18 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - **`[hidden]`:** existe un guard global `[hidden]{display:none!important}` en
   ui.css. Cualquier regla `display` de autor sobre un elemento ocultable debe
   respetarlo (esa fue la causa raíz del bug del menú contextual pegado).
+- **UI con mucho texto = COLAPSABLE + ÁRBOL (pedido del usuario 2026-07-04):**
+  todo módulo/menú/panel NUEVO que muestre bloques largos de texto nace
+  COLAPSADO: header compacto SIEMPRE visible (qué es + estado en una línea) y
+  el cuerpo plegable a demanda (`<details>` nativo o el patrón `.hr-collapsible`
+  de salud) — vista general primero, detalle a demanda; en móvil todo plegado,
+  en desktop puede nacer abierto lo esencial. Y si el contenido tiene
+  SUB-ELEMENTOS, se agrupan TIPO ÁRBOL: grupo padre colapsable → hijos
+  anidados con indentación/guía vertical (ejemplos vivos: hallazgos de
+  health-review-modal, fila-PR del tablero con TKT anidados, sub-ventana de
+  Optimización IA con censo agrupado bin//src y propuestas agrupadas por
+  motor — clases `.hp-opt-group`/`.hp-opt-card` en style.css como referencia).
+  Nunca un chorizo de tarjetas planas con todo el texto expandido.
 - **Módulo nuevo backend:** `src/modules/<n>/index.js` con la interfaz estándar
   y sumarlo al array de `registry.js`. Frontend: objeto `{name, mount}` +
   `[data-module="<n>"]` en index.html + registrarlo en main.js. (Mirá el

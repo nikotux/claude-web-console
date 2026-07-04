@@ -533,25 +533,40 @@ html, body {
 .hp-verdict--critico b { color: var(--cwc-danger-strong); }
 .hp-when { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 
-/* ===== Optimización IA (pestaña Salud): censo de motores + propuestas ===== */
+/* ===== Optimización IA (pestaña Salud): censo de motores + propuestas =====
+   Convención "UI textual = colapsable + árbol" (pedido del usuario 2026-07-04):
+   header compacto SIEMPRE visible, cuerpo plegable (<details>), y los
+   sub-elementos agrupados en árbol (grupo padre → hijos con indentación). */
 .hp-opt { display: flex; flex-direction: column; gap: .45rem; }
-.hp-opt-census summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); cursor: pointer; padding: .2rem 0; }
+.hp-opt summary { cursor: pointer; }
+.hp-opt-census > summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); padding: .2rem 0; }
+/* Grupo del árbol: hijos indentados colgando de una guía vertical. */
+.hp-opt-group { margin: .25rem 0 .25rem .2rem; }
+.hp-opt-group > summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); padding: .2rem 0; }
+.hp-opt-group > :not(summary) { margin-left: .55rem; padding-left: .55rem; border-left: 1px solid var(--cwc-divider); }
 .hp-opt-table { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-xs); }
 .hp-opt-table th { text-align: left; color: var(--cwc-text-dimmer); font-weight: 500; padding: .2rem .35rem; border-bottom: 1px solid var(--cwc-divider); }
 .hp-opt-table td { padding: .2rem .35rem; border-bottom: 1px solid var(--cwc-divider); color: var(--cwc-text-dim); overflow-wrap: anywhere; }
 .hp-opt-table tr:last-child td { border-bottom: 0; }
-.hp-opt-card { border: 1px solid var(--cwc-divider); border-radius: 8px; padding: .5rem .6rem; display: flex; flex-direction: column; gap: .3rem; background: var(--cwc-bg-elevated); }
+/* Tarjeta de propuesta = <details>: el summary es el header compacto. */
+.hp-opt-card { border: 1px solid var(--cwc-divider); border-radius: 8px; background: var(--cwc-bg-elevated); margin: .3rem 0; }
 .hp-opt-card--flow { border-color: color-mix(in srgb, var(--cwc-accent) 45%, transparent); }
-.hp-opt-head { display: flex; align-items: center; gap: .45rem; font-size: var(--cwc-fs-sm); }
-.hp-opt-risk { margin-left: auto; font-size: var(--cwc-fs-xs); white-space: nowrap; }
+.hp-opt-head { display: flex; align-items: center; gap: .45rem; font-size: var(--cwc-fs-sm); padding: .45rem .6rem; list-style: none; min-width: 0; }
+.hp-opt-head::-webkit-details-marker { display: none; }
+.hp-opt-head::after { content: '›'; color: var(--cwc-text-dimmer); transform: rotate(90deg); transition: transform .15s; flex: none; }
+.hp-opt-card[open] > .hp-opt-head::after { transform: rotate(-90deg); }
+.hp-opt-snippet { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.hp-opt-body { display: flex; flex-direction: column; gap: .3rem; padding: 0 .6rem .5rem; border-top: 1px solid var(--cwc-divider); padding-top: .4rem; }
+.hp-opt-risk { margin-left: auto; font-size: var(--cwc-fs-xs); white-space: nowrap; flex: none; }
 .hp-opt-risk--bajo { color: var(--cwc-ok); }
 .hp-opt-risk--medio { color: var(--cwc-warn); }
 .hp-opt-risk--alto { color: var(--cwc-danger-strong); }
 .hp-opt-diff { font-size: var(--cwc-fs-sm); color: var(--cwc-text); overflow-wrap: anywhere; }
 .hp-opt-diff s { color: var(--cwc-text-dimmer); }
-.hp-opt-resumen { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .2rem 0; white-space: pre-wrap; }
+.hp-opt-resumen-box > summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); padding: .2rem 0; }
+.hp-opt-resumen { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .2rem 0 .2rem .2rem; padding-left: .55rem; border-left: 1px solid var(--cwc-divider); white-space: pre-wrap; }
 .hp-opt-actions { display: flex; gap: .4rem; justify-content: flex-end; margin-top: .15rem; }
-.hp-opt-done { font-size: var(--cwc-fs-xs); color: var(--cwc-ok); align-self: flex-end; }
+.hp-opt-done { font-size: var(--cwc-fs-xs); color: var(--cwc-ok); margin-left: auto; flex: none; }
 .hp-opt-flow { margin: 0; padding-left: 1.1rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .hp-opt-flow li { margin: .15rem 0; }
 .hp-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .35rem 0 .5rem; white-space: pre-wrap; }

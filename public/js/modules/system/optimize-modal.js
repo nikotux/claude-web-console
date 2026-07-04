@@ -34,8 +34,11 @@ export function openOptimize(ctx, { isAdmin }) {
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 
-  function censusHtml(census) {
-    const rows = (census?.engines || []).map((e) => {
+  // ===== Censo en ÁRBOL: grupo padre colapsable → motores anidados =====
+  // (convención "UI textual = colapsable + árbol", pedido del usuario
+  // 2026-07-04: vista general primero, detalle a demanda).
+  function censusRows(items) {
+    return items.map((e) => {
       const model = e.models?.length ? e.models.join('/') : (e.modelDynamic ? 'dinámico' : 'default');
       const capas = (e.layers?.preToolUse ? 1 : 0) + (e.layers?.canUseTool ? 1 : 0);
       const blind = capas === 2 ? '🔒×2' : capas === 1 ? '🔓×1' : '—';
@@ -47,14 +50,31 @@ export function openOptimize(ctx, { isAdmin }) {
         <td>${esc(e.settingSources || '—')}</td>
       </tr>`;
     }).join('');
-    return `<details class="hp-opt-census" ${isMobile ? '' : 'open'}>
-      <summary>${(census?.engines || []).length} motor(es) IA en el censo · qué modelo usa cada uno</summary>
-      <table class="hp-opt-table">
-        <thead><tr><th>Motor</th><th>Modelo</th><th>Turnos</th><th>Capas</th><th>Settings</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+  }
+
+  function censusHtml(census) {
+    const engines = census?.engines || [];
+    const groups = [
+      { label: '🏃 Runners desacoplados (bin/)', items: engines.filter((e) => e.file.startsWith('bin/')) },
+      { label: '🧩 Corridas inline de módulos (src/)', items: engines.filter((e) => !e.file.startsWith('bin/')) },
+    ].filter((g) => g.items.length);
+    return `<details class="hp-opt-census">
+      <summary>📊 Censo · ${engines.length} motor(es) IA · qué modelo usa cada uno</summary>
+      ${groups.map((g) => `
+        <details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+          <summary>${g.label} · ${g.items.length}</summary>
+          <table class="hp-opt-table">
+            <thead><tr><th>Motor</th><th>Modelo</th><th>Turnos</th><th>Capas</th><th>Settings</th></tr></thead>
+            <tbody>${censusRows(g.items)}</tbody>
+          </table>
+        </details>`).join('')}
     </details>`;
   }
+
+  // ===== Propuestas: agrupadas por MOTOR (árbol) y cada una COLAPSABLE =====
+  // Header siempre visible (tipo · síntesis · riesgo/estado); el cuerpo
+  // (actual→propuesta, razón, acciones) se abre a demanda.
+  const TIPO_LABEL = { modelo: 'Modelo', turnos: 'Turnos', timeout: 'Timeout', flujo: 'Flujo', fusion: 'Fusión', paralelismo: 'Paralelismo', prompt: 'Prompt', otro: 'Ajuste' };
 
   function proposalHtml(p) {
     const decided = p.status === 'accepted' ? '<span class="hp-opt-done">✅ aceptada</span>' : '';
@@ -62,17 +82,36 @@ export function openOptimize(ctx, { isAdmin }) {
       <div class="hp-opt-actions">
         <button class="btn-ghost btn--sm" data-act="optreject" data-id="${esc(p.id)}">✕ Descartar</button>
         <button class="btn btn--sm" data-act="optapply" data-id="${esc(p.id)}">💬 Aplicar en chat</button>
-      </div>` : decided;
-    return `<div class="hp-opt-card">
-      <div class="hp-opt-head">
+      </div>` : '';
+    const state = p.status === 'accepted' ? decided : `<span class="hp-opt-risk hp-opt-risk--${esc(p.riesgo)}">${RISK_LABEL[p.riesgo] || esc(p.riesgo)}</span>`;
+    return `<details class="hp-opt-card">
+      <summary class="hp-opt-head">
         <span>${TIPO_ICON[p.tipo] || '🔧'}</span>
-        <b>${esc(p.motor)}</b>
-        <span class="hp-opt-risk hp-opt-risk--${esc(p.riesgo)}">${RISK_LABEL[p.riesgo] || esc(p.riesgo)}</span>
+        <b>${esc(TIPO_LABEL[p.tipo] || p.tipo)}</b>
+        <span class="hp-opt-snippet">${esc(p.propuesta)}</span>
+        ${state}
+      </summary>
+      <div class="hp-opt-body">
+        <div class="hp-opt-diff"><s>${esc(p.actual)}</s> → <b>${esc(p.propuesta)}</b></div>
+        <div class="hp-detail">${esc(p.razon)}${p.impacto ? ` · <b>Gana:</b> ${esc(p.impacto)}` : ''}</div>
+        ${actions}
       </div>
-      <div class="hp-opt-diff"><s>${esc(p.actual)}</s> → <b>${esc(p.propuesta)}</b></div>
-      <div class="hp-detail">${esc(p.razon)}${p.impacto ? ` · <b>Gana:</b> ${esc(p.impacto)}` : ''}</div>
-      ${actions}
-    </div>`;
+    </details>`;
+  }
+
+  function proposalsTreeHtml(list) {
+    const byMotor = new Map();
+    for (const p of list) {
+      if (!byMotor.has(p.motor)) byMotor.set(p.motor, []);
+      byMotor.get(p.motor).push(p);
+    }
+    return [...byMotor.entries()].map(([motor, ps]) => {
+      const pend = ps.filter((p) => p.status === 'pending').length;
+      return `<details class="hp-opt-group" open>
+        <summary>⚙️ ${esc(motor)} · ${ps.length} propuesta(s)${pend ? ` · ${pend} pendiente(s)` : ' · al día'}</summary>
+        ${ps.map(proposalHtml).join('')}
+      </details>`;
+    }).join('');
   }
 
   function render(census, d) {
@@ -87,16 +126,22 @@ export function openOptimize(ctx, { isAdmin }) {
       parts.push(`<div class="hp-verdict hp-verdict--${pend ? 'atencion' : 'ok'}">
         <b>${pend ? `${pend} propuesta(s) pendiente(s)` : 'Sin propuestas pendientes'}</b>
         <span class="hp-when">${fmtDate(d.updatedAt)}</span>
-      </div>
-      <p class="hp-opt-resumen">${esc(d.resumen)}</p>`);
-      parts.push((d.propuestas || []).filter((p) => p.status !== 'rejected').map(proposalHtml).join(''));
+      </div>`);
+      // Resumen largo → colapsable (abierto en desktop, plegado en móvil).
+      parts.push(`<details class="hp-opt-resumen-box" ${isMobile ? '' : 'open'}>
+        <summary>📋 Resumen del análisis</summary>
+        <p class="hp-opt-resumen">${esc(d.resumen)}</p>
+      </details>`);
+      parts.push(proposalsTreeHtml((d.propuestas || []).filter((p) => p.status !== 'rejected')));
       if (d.flujoNuevo?.vale) {
-        parts.push(`<div class="hp-opt-card hp-opt-card--flow">
-          <div class="hp-opt-head"><span>🕸</span><b>Flujo nuevo propuesto: ${esc(d.flujoNuevo.titulo)}</b></div>
-          <div class="hp-detail">${esc(d.flujoNuevo.descripcion)}</div>
-          <ul class="hp-opt-flow">${(d.flujoNuevo.diseno || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
-          ${isAdmin ? '<div class="hp-opt-actions"><button class="btn-ghost btn--sm" data-act="optflow">💬 Explorar en chat (plan)</button></div>' : ''}
-        </div>`);
+        parts.push(`<details class="hp-opt-card hp-opt-card--flow">
+          <summary class="hp-opt-head"><span>🕸</span><b>Flujo nuevo propuesto</b><span class="hp-opt-snippet">${esc(d.flujoNuevo.titulo)}</span></summary>
+          <div class="hp-opt-body">
+            <div class="hp-detail">${esc(d.flujoNuevo.descripcion)}</div>
+            <ul class="hp-opt-flow">${(d.flujoNuevo.diseno || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
+            ${isAdmin ? '<div class="hp-opt-actions"><button class="btn-ghost btn--sm" data-act="optflow">💬 Explorar en chat (plan)</button></div>' : ''}
+          </div>
+        </details>`);
       }
     } else if (!d.running) {
       parts.push('<p class="hp-empty">Todavía no se corrió ningún análisis de optimización.</p>');
