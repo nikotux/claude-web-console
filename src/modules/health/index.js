@@ -26,6 +26,10 @@ import {
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
+import { aiEnginesCensus } from '../../core/inventory.js';
+import {
+  readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
+} from './optimize-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -249,6 +253,24 @@ function spawnOrchestrator() {
   return true;
 }
 
+// Lanza el runner de OPTIMIZACIÓN IA (bin/cwc-optimize-runner.js): censo de
+// motores + consumo real + análisis con sonnet → propuestas. Mismo cierre de
+// carrera que spawnFix: la RESERVA del lock (pid:0) se escribe acá, sincrónica,
+// en el mismo turno de JS que decide spawnear; el runner la reclama con su pid.
+const OPT_RUNNER = path.join(ROOT, 'bin', 'cwc-optimize-runner.js');
+function spawnOptimize() {
+  if (isOptRunning()) return false;
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  writeOptLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
+  const logFd = fss.openSync(OPT_LOG, 'a');
+  const child = spawn(process.execPath, [OPT_RUNNER], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+  });
+  child.unref();
+  fss.closeSync(logFd);
+  return true;
+}
+
 // Enriquece los hallazgos de review.json con id/sig (derivados del contenido) y
 // la marca de RECURRENCIA: el hallazgo coincide (por firma) con algo que YA se
 // había resuelto ANTES de arrancar esta revisión → volvió a aparecer.
@@ -445,6 +467,49 @@ export default {
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar el orquestador: ${String(err?.message || err).slice(0, 200)}` });
       }
+    });
+
+    // ===== Optimización IA (censo de motores + análisis con propuestas) =====
+    // CENSO determinístico (0 tokens, en vivo): qué modelo/turnos/blindaje usa
+    // cada corrida del SDK. Abierto a autenticados (solo lee el repo con regex).
+    r.get('/ai-census', (req, res) => {
+      try { res.json({ generatedAt: Date.now(), engines: aiEnginesCensus() }); }
+      catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
+    });
+
+    // Estado del análisis: resultado persistido (lo escribe el runner) + si hay
+    // uno corriendo (lock fresco, con fase). El front encuesta esto. 0 tokens.
+    r.get('/optimization', (req, res) => {
+      res.json({ ...readOpt(), running: isOptRunning(), progress: readOptLock() });
+    });
+
+    // Lanza el análisis (runner detached, CONSUME TOKENS → admin + confirm en
+    // el front). Responde INMEDIATO (arrancar+encuestar, patrón triage/health).
+    r.post('/optimize', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (isOptRunning()) return res.status(409).json({ error: 'Ya hay un análisis de optimización en curso.' });
+      try {
+        if (!spawnOptimize()) return res.status(409).json({ error: 'Ya hay un análisis de optimización en curso.' });
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+
+    // Decisión sobre UNA propuesta: accept (el front abre el chat supervisado
+    // que la aplica) o reject. NUNCA se aplica nada desde acá — solo se marca.
+    r.post('/optimize-proposal', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const action = req.body?.action;
+      if (!['accept', 'reject'].includes(action)) return res.status(400).json({ error: 'Acción inválida (accept|reject).' });
+      const st = readOpt();
+      const p = (st.propuestas || []).find((x) => x.id === id);
+      if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
+      p.status = action === 'accept' ? 'accepted' : 'rejected';
+      p.decidedAt = Date.now();
+      writeOpt(st);
+      res.json({ ok: true });
     });
 
     // Lanza la revisión exhaustiva (runner detached, LENTA, consume tokens).

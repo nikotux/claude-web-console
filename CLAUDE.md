@@ -22,7 +22,9 @@ código.
    (`bin/cwc-desk-runner.js`); investigación a fondo de un PR → runner
    desacoplado (`bin/cwc-investigate-runner.js`); investigación de CONTEXTO de un
    ticket SIN PR (lee el código de Tolkien read-only para explicar por qué NO se
-   resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`). La unidad systemd usa
+   resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`);
+   optimización IA de los motores (censo + análisis con propuestas) → runner
+   desacoplado (`bin/cwc-optimize-runner.js`). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -160,7 +162,8 @@ código.
   `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
-  pendientes), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  pendientes, `optimization.json` resultado de la Optimización IA +
+  `optimize.lock` heartbeat de su runner), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
 
@@ -539,7 +542,10 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             completos) Memorias — el detalle de un bugfix NI renderiza la
                             sección Memorias. Visible a todos (autenticados), edición gateada por
                             isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
-                            salud: chequeos rápidos + revisión profunda, sin bugfixes) ·
+                            salud: chequeos rápidos + revisión profunda + sección "🧠
+                            Optimización IA" (censo de motores gratis + análisis bajo botón
+                            con propuestas aprobables, ver "Verificación de salud"), sin
+                            bugfixes) ·
                             tolkien (tarjeta git INFORMATIVA, rediseño 2026-07-03: sin
                             Continuar/Explorar/Bugs&PRs — quedaban redundantes; muestra el
                             PULSO del repo — #SHA · branch (⚠ si ≠ main) · al día/N detrás ·
@@ -634,6 +640,21 @@ bin/cwc-ticket-investigate-runner.js investigación de CONTEXTO de UN ticket SIN
                             maxTurns 12. Interfaz por archivos: ticket-investigate.lock +
                             ticket-investigations/<n>.json (resultado) + <n>.req.json (enunciado que
                             escribe el server). Lógica en bugfixes/ticket-investigate-shared.js
+bin/cwc-optimize-runner.js  OPTIMIZACIÓN IA de los motores de la consola (botón "🧠
+                            Optimización IA" de la pestaña Salud). Junta el CENSO
+                            determinístico de motores IA (aiEnginesCensus de core/inventory.js:
+                            qué modelo/turnos/timeouts/blindaje usa cada corrida del SDK, 0
+                            tokens) + el CONSUMO REAL (buildSummary del módulo tokens, export
+                            deliberado) y UNA corrida de sonnet (READ-ONLY doble capa regla 6,
+                            misma allowlist que el auditor de salud: Read/Grep/Glob/TodoWrite,
+                            settingSources: [], cwd = la consola) que VERIFICA leyendo el
+                            código y devuelve {resumen, propuestas[] (modelo/turnos/timeout/
+                            flujo/fusion/paralelismo/prompt, con riesgo y pasos), flujoNuevo}.
+                            Interfaz por archivos: optimize.lock (heartbeat con fase) +
+                            optimization.json (resultado persistido). Las propuestas NUNCA se
+                            auto-aplican: quedan pending y Aprobar = chat supervisado
+                            (acceptEdits) / flujo nuevo = chat en modo plan; Descartar las
+                            marca rejected. Lógica compartida en health/optimize-shared.js
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
@@ -887,6 +908,26 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime.
+- **Optimización IA** (sección "🧠 Optimización IA" de la pestaña Salud,
+  2026-07-04): analiza el flujo de TODOS los motores IA de la consola. DOS
+  niveles: (a) CENSO determinístico (GET /api/health/ai-census, 0 tokens,
+  autenticados) — `aiEnginesCensus()` de core/inventory.js detecta todo archivo
+  que importa el SDK y llama a query() y extrae con regex modelo(s)/dinámico,
+  maxTurns (resuelve consts), timeouts, allowlists, capas (PreToolUse+
+  canUseTool), settingSources y permissionModes; también se publica en
+  inventory.md (sección "Motores IA"). (b) ANÁLISIS (POST /api/health/optimize,
+  admin, CONSUME TOKENS, confirm en el front) → runner desacoplado
+  bin/cwc-optimize-runner.js (ver mapa; lock `optimize.lock` con fase, reserva
+  pid:0 del server patrón spawnFix, resultado persistido en
+  ~/.cwc-data/optimization.json); GET /api/health/optimization solo lee disco +
+  running/progress (el front encuesta cada 4 s). Propuestas PENDIENTES con
+  Aprobar/Descartar (POST /api/health/optimize-proposal {id, action}) — patrón
+  invariant-proposals: NADA se auto-aplica; "Aplicar en chat" abre un chat
+  supervisado (acceptEdits, cwd consola) con el contexto de la propuesta y
+  reglas estrictas (leer CLAUDE.md, node --check, frenar en alto riesgo);
+  "Explorar en chat (plan)" hace lo mismo con el flujo nuevo en modo plan.
+  El optimizador tiene PROHIBIDO proponer nada que debilite las reglas duras
+  (se lo exige el prompt y lo re-verifica el chat que aplica).
 - **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad

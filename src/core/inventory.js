@@ -164,6 +164,63 @@ function parseVocabulary() {
   return { cssTokens, envVars, models, permissionModes };
 }
 
+// ===== Motores IA (censo de corridas del Agent SDK) =====
+// Detecta TODO archivo que importa el SDK y llama a query(): cada uno es un
+// "motor IA" de la consola. Extrae su configuración REAL con regex (0 tokens):
+// modelo(s), maxTurns, timeouts, allowlists (blindaje regla 6), settingSources
+// y modos de permiso. Es la base del botón "🧠 Optimización IA" de Salud: el
+// censo es la FOTO determinística; el análisis (runner cwc-optimize-runner.js)
+// la interpreta. Determinístico como el resto del inventario — sin LLM.
+export function aiEnginesCensus() {
+  const candidates = [...new Set([
+    ...listJs(path.join(ROOT, 'src')),
+    ...listJs(path.join(ROOT, 'bin')),
+  ])];
+  // Mapa global de constantes numéricas (const X = 20, const Y = 4 * 60000…)
+  // para resolver maxTurns/timeouts definidos como const (propios o importados).
+  const constMap = {};
+  const texts = new Map();
+  for (const f of candidates) {
+    const txt = readSafe(path.join(ROOT, f));
+    texts.set(f, txt);
+    for (const m of txt.matchAll(/(?:export\s+)?const\s+([A-Z][A-Z0-9_]+)\s*=\s*([0-9][\d_\s*+\-.]*?)\s*;/g)) {
+      constMap[m[1]] = m[2].replace(/\s+/g, ' ').trim();
+    }
+  }
+  const resolveConst = (name) => (/^\d+$/.test(name) ? name : (constMap[name] ? `${name} (${constMap[name]})` : name));
+
+  const engines = [];
+  for (const f of candidates) {
+    const txt = texts.get(f) || '';
+    // Motor = archivo que IMPORTA el SDK y llama a query(). Exigir el import
+    // real (no solo la mención) evita auto-detectar archivos que hablan DEL
+    // SDK (este mismo, health/index.js con checkDeps, docs inline…).
+    if (!/from\s+['"]@anthropic-ai\/claude-agent-sdk['"]/.test(txt) || !/\bquery\s*\(\s*\{/.test(txt)) continue;
+    const models = [...new Set([...txt.matchAll(/\bmodel:\s*['"]([\w.-]+)['"]/g)].map((m) => m[1]))];
+    // model: IDENTIFICADOR (no literal) o shorthand `{ model, … }` = el modelo
+    // lo decide el llamador/usuario en runtime (dinámico).
+    const modelDynamic = /\bmodel:\s*(?!['"])[A-Za-z_$][\w$.]*\s*[,}\n]/.test(txt) || /[{,]\s*model\s*[,}]/.test(txt);
+    const maxTurns = [...new Set([...txt.matchAll(/\bmaxTurns:\s*([\w$]+)/g)].map((m) => resolveConst(m[1])))];
+    const timeouts = [...new Set([...txt.matchAll(/\b([A-Z][A-Z0-9_]*TIMEOUT[A-Z0-9_]*)\b/g)].map((m) => resolveConst(m[1])))];
+    const allowlists = [...new Set([...txt.matchAll(/\b([a-zA-Z][\w]*Allowed)\b/g)].map((m) => m[1]))];
+    const settingSources = (txt.match(/settingSourcesFor\(\s*['"](\w+)['"]/) || [])[1]
+      || (/settingSources:\s*\[\s*\]/.test(txt) ? 'ninguno' : (/settingSources/.test(txt) ? 'custom' : 'default (user+project)'));
+    const permissionModes = [...new Set([...txt.matchAll(/\bpermissionMode:\s*['"](\w+)['"]/g)].map((m) => m[1]))];
+    engines.push({
+      file: f,
+      purpose: purposeOf(f),
+      models: models.length ? models : (modelDynamic ? [] : ['default']),
+      modelDynamic,
+      maxTurns, timeouts, allowlists,
+      layers: { preToolUse: /PreToolUse/.test(txt), canUseTool: /canUseTool/.test(txt) },
+      settingSources, permissionModes,
+      queryCalls: (txt.match(/\bquery\s*\(/g) || []).length,
+      fingerprint: fingerprintOf([f]),
+    });
+  }
+  return engines.sort((a, b) => a.file.localeCompare(b.file));
+}
+
 // Arma el inventario completo. `stamp` = timestamp (el server pasa Date.now();
 // nunca lo llamamos acá para no romper entornos sin reloj).
 export function buildInventory(stamp) {
@@ -171,6 +228,7 @@ export function buildInventory(stamp) {
   const runners = parseRunners();
   const frontend = parseFrontend();
   const vocabulary = parseVocabulary();
+  const aiEngines = aiEnginesCensus();
   // Todos los archivos rastreados → mtime máx (gate de frescura) + fingerprint global.
   const allFiles = [
     ...modules.flatMap((m) => m.files),
@@ -183,8 +241,8 @@ export function buildInventory(stamp) {
     generatedAt: stamp || null,
     sourceMaxMtime: maxMtime([...new Set(allFiles)]),
     fingerprint: fingerprintOf([...new Set(allFiles)].sort()),
-    counts: { modules: modules.length, runners: runners.length, frontend: frontend.length },
-    modules, runners, frontend, vocabulary,
+    counts: { modules: modules.length, runners: runners.length, frontend: frontend.length, aiEngines: aiEngines.length },
+    modules, runners, frontend, vocabulary, aiEngines,
   };
 }
 
@@ -215,6 +273,15 @@ export function inventoryMarkdown(inv) {
   L.push('## Frontend (`public/js/modules/*`, montados por `[data-module]`)');
   for (const f of inv.frontend) L.push(`- **${f.name}** (${f.dir})${f.mounted ? '' : ' · no montado directo'} — ${f.files.length} archivo(s)`);
   L.push('');
+  if (inv.aiEngines?.length) {
+    L.push('## Motores IA (corridas del Agent SDK: qué modelo usa cada uno)');
+    for (const e of inv.aiEngines) {
+      const model = e.models.length ? e.models.join('/') : (e.modelDynamic ? 'dinámico (lo elige el llamador)' : 'default');
+      const capas = [e.layers.preToolUse ? 'PreToolUse' : null, e.layers.canUseTool ? 'canUseTool' : null].filter(Boolean).join('+') || 'SIN capas';
+      L.push(`- \`${e.file}\` — modelo **${model}** · maxTurns ${e.maxTurns.join('/') || '—'} · blindaje ${capas}${e.allowlists.length ? ` (${e.allowlists.join(', ')})` : ''} · settings ${e.settingSources}${e.purpose ? ` — ${e.purpose}` : ''}`);
+    }
+    L.push('');
+  }
   L.push('## Vocabulario del proyecto (usar ESTO, no reinventar)');
   L.push(`- **Tokens CSS** (${inv.vocabulary.cssTokens.length}): \`${inv.vocabulary.cssTokens.join('`, `')}\``);
   L.push(`- **Env vars**: \`${inv.vocabulary.envVars.join('`, `')}\``);

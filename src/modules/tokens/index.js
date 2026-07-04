@@ -167,7 +167,10 @@ function classifyEngine(dir, sessionId, entrypoint, chatIds) {
   return { key, label: ENGINE_LABELS[key] };
 }
 
-async function buildSummary() {
+// Exportada a propósito: el runner de Optimización IA (bin/cwc-optimize-runner.js)
+// la usa para cruzar el censo de motores con el CONSUMO REAL (solo lectura de
+// transcripts, mismo caché por mtime+size — no toca nada).
+export async function buildSummary() {
   const today = new Date().toISOString().slice(0, 10);
   let dirs = [];
   try {
