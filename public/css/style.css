@@ -938,7 +938,7 @@ html, body {
 .tk-sev-medium { color: var(--cwc-warn); border: 1px solid var(--cwc-warn); }
 .tk-sev-low { color: var(--cwc-text-dim); border: 1px solid var(--cwc-border-strong); }
 
-/* Ventana flotante del TABLERO Bugs & PRs (bug-board.js reutiliza esta clase;
+/* Ventana flotante del TABLERO Bugs & PRs (bugs/board/ reutiliza esta clase;
    la tabla/detalle de triage viejos se eliminaron al unificar en el tablero). */
 .dlg-card--tickets { width: 90vw; max-width: 1000px; height: 82vh; max-height: 88vh; }
 .dlg-card--tickets .dlg-body { display: flex; flex-direction: column; min-height: 0; }
@@ -954,66 +954,59 @@ html, body {
 .hp-bf-files code { font-size: var(--cwc-fs-xs); background: var(--cwc-bg-chip); padding: .1rem .35rem; border-radius: var(--cwc-radius-sm); }
 .hp-bf-files--none { color: var(--cwc-warn); font-size: var(--cwc-fs-xs); }
 
-/* Modal PRs de bugfixes (sección Tolkien) — cuadro registro + GitHub */
-.bfm-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
-.bfm-ghstate { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .35rem; }
-.bfm-box { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); max-height: 62vh; overflow: auto; }
-.bfm-table { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
-.bfm-table th {
+/* Tabla del tablero Bugs & PRs (bugs/board/render.js). Familia legacy .bfm-*
+   migrada a .bb-* en la Fase 2 del rediseño (docs/plan-rediseno-movil-tickets.md
+   R5); el modal viejo que compartía las clases ya no existía — su CSS murió acá. */
+.bb-table { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
+.bb-table th {
   text-align: left; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-weight: 600;
   padding: .4rem .5rem; border-bottom: 1px solid var(--cwc-border-soft);
   position: sticky; top: 0; background: var(--cwc-bg-elevated); z-index: 1;
 }
-.bfm-table td { padding: .38rem .5rem; border-bottom: 1px solid var(--cwc-divider); vertical-align: middle; }
-.bfm-row { cursor: pointer; }
-.bfm-row:hover { background: var(--cwc-bg-hover); }
-/* Las filas solo-GitHub ahora expanden como el resto (cursor heredado). */
-.bfm-row--gh .bfm-tkt { font-size: var(--cwc-fs-xs); }
-.bfm-tkt { font-family: var(--cwc-font-mono); white-space: nowrap; }
-.bfm-title { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bfm-title a { color: var(--cwc-text); }
-.bfm-title a:hover { color: var(--cwc-accent); }
-.bfm-date { white-space: nowrap; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
-.bfm-state { white-space: nowrap; font-size: var(--cwc-fs-xs); }
+.bb-table td { padding: .38rem .5rem; border-bottom: 1px solid var(--cwc-divider); vertical-align: middle; }
+.bb-row { cursor: pointer; }
+.bb-row:hover { background: var(--cwc-bg-hover); }
+/* Las filas solo-GitHub expanden como el resto (cursor heredado). */
+.bb-row--gh .bb-tkt { font-size: var(--cwc-fs-xs); }
+.bb-tkt { font-family: var(--cwc-font-mono); white-space: nowrap; }
+.bb-title { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-title a { color: var(--cwc-text); }
+.bb-title a:hover { color: var(--cwc-accent); }
+.bb-col-est { white-space: nowrap; font-size: var(--cwc-fs-xs); }
 /* Estado con ícono tintado: distingue "tu acción" (warn) de "esperando a
    Chris" (info/azul) de un vistazo. El ícono toma el color del estado; el
    texto queda en el color de texto normal para legibilidad. */
-.bfm-est { display: inline-flex; align-items: center; gap: .25rem; }
-.bfm-est-ic { display: inline-flex; flex: none; }
-.bfm-est--ok .bfm-est-ic { color: var(--cwc-ok); }
-.bfm-est--warn .bfm-est-ic { color: var(--cwc-warn); }
-.bfm-est--fail .bfm-est-ic { color: var(--cwc-danger-strong); }
-.bfm-est--info .bfm-est-ic { color: var(--cwc-info); }
-.bfm-est--idle .bfm-est-ic { color: var(--cwc-text-dimmer); }
-.bfm-stats { white-space: nowrap; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
-.bfm-add { color: var(--cwc-ok); }
-.bfm-del { color: var(--cwc-danger); }
-.bfm-nfiles, .bfm-nostats { color: var(--cwc-text-dimmer); }
-.bfm-work { margin-left: auto; }
-.bfm-detail td { background: var(--cwc-bg-panel); padding: .5rem .8rem; }
+.bb-est { display: inline-flex; align-items: center; gap: .25rem; }
+.bb-est-ic { display: inline-flex; flex: none; }
+.bb-est--ok .bb-est-ic { color: var(--cwc-ok); }
+.bb-est--warn .bb-est-ic { color: var(--cwc-warn); }
+.bb-est--fail .bb-est-ic { color: var(--cwc-danger-strong); }
+.bb-est--info .bb-est-ic { color: var(--cwc-info); }
+.bb-est--idle .bb-est-ic { color: var(--cwc-text-dimmer); }
+.bb-stats { white-space: nowrap; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); }
+.bb-add { color: var(--cwc-ok); }
+.bb-del { color: var(--cwc-danger); }
+.bb-nfiles, .bb-nostats { color: var(--cwc-text-dimmer); }
+.bb-detail td { background: var(--cwc-bg-panel); padding: .5rem .8rem; }
 /* Fila protagonizada por un PR abierto: el PR arriba, el/los TKT anidados debajo. */
-.bfm-row--pr > td:first-child { box-shadow: inset 3px 0 0 var(--cwc-info); }
-.bfm-prnum { font-weight: 600; color: var(--cwc-info); white-space: nowrap; }
-.bfm-prtitle { color: var(--cwc-text); }
-.bfm-prtkts { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-top: .15rem; }
-.bfm-subtkt { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
-.bfm-links { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
-.bfm-links a { color: var(--cwc-accent); }
-.bfm-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.bb-row--pr > td:first-child { box-shadow: inset 3px 0 0 var(--cwc-info); }
+.bb-prnum { font-weight: 600; color: var(--cwc-info); white-space: nowrap; }
+.bb-prtitle { color: var(--cwc-text); }
+.bb-prtkts { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-top: .15rem; }
+.bb-subtkt { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.bb-links { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+.bb-links a { color: var(--cwc-accent); }
+.bb-links code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 @media (max-width: 640px) {
-  .bfm-title { max-width: 110px; }
-  /* En móvil se ocultan Enviado y Merge; Cambios (el aporte) queda visible.
-     OJO: aplica al modal viejo de 7 columnas, NO al tablero (.bb-table). */
-  .bfm-table:not(.bb-table) th:nth-child(5), .bfm-table:not(.bb-table) td:nth-child(5),
-  .bfm-table:not(.bb-table) th:nth-child(7), .bfm-table:not(.bb-table) td:nth-child(7) { display: none; }
+  .bb-title { max-width: 110px; }
 }
 
-/* ===== Tablero unificado "Bugs & PRs" (tolkien/bug-board.js) ===== */
+/* ===== Tablero unificado "Bugs & PRs" (bugs/board/) ===== */
 .bb-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
 .bb-state { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .35rem; }
 .bb-triage { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .3rem; }
 .bb-box { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); max-height: 70vh; max-height: 74dvh; overflow: auto; }
-.bb-row--triage .bfm-title { color: var(--cwc-text-secondary); }
+.bb-row--triage .bb-title { color: var(--cwc-text-secondary); }
 /* Pipeline: 5 etapas del ciclo (triage → trabajo → PR → merge → ticket). */
 .bb-pipe { display: inline-flex; gap: 3px; align-items: center; }
 .bb-seg { width: 13px; height: 6px; border-radius: 3px; background: var(--cwc-bg-chip); }
@@ -1097,7 +1090,7 @@ html, body {
 .bb-arch-header .cwc-icon { transition: transform .15s ease; vertical-align: middle; }
 .bb-arch-header.open .cwc-icon { transform: rotate(180deg); }
 .bb-arch-hint { font-weight: 400; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
-.bb-arch-row .bfm-title, .bb-arch-row .bfm-state { color: var(--cwc-text-dim); }
+.bb-arch-row .bb-title, .bb-arch-row .bb-col-est { color: var(--cwc-text-dim); }
 
 /* Modal "Cómo leer este tablero" (botón ? del tablero). */
 .bb-help-sec { margin-bottom: .8rem; font-size: var(--cwc-fs-md); line-height: 1.45; }
@@ -1121,10 +1114,10 @@ html, body {
 .bb-icell--fail { color: var(--cwc-danger-strong); }
 .bb-icell--none { color: var(--cwc-text-dimmer); }
 @media (max-width: 640px) {
-  /* Móvil: fuera Pipeline(4) y Cambios(5); PR(6) y Desk(7) — la info que se
-     quiere ver de un vistazo — se quedan junto a TKT/Título/Estado. */
-  .bb-table th:nth-child(4), .bb-table td:nth-child(4),
-  .bb-table th:nth-child(5), .bb-table td:nth-child(5) { display: none; }
+  /* Móvil: fuera Pipeline y Cambios; PR y Desk — la info que se quiere ver
+     de un vistazo — se quedan junto a TKT/Título/Estado. Por CLASE explícita
+     (R7): agregar/reordenar columnas ya no rompe este media query. */
+  .bb-col-pipe, .bb-col-stats { display: none; }
   .bb-triage { margin-left: 0; width: 100%; }
 }
 

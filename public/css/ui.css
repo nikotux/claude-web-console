@@ -44,10 +44,13 @@
 .btn .cwc-icon, .btn-ghost .cwc-icon { width: 16px; height: 16px; }
 .btn--sm .cwc-icon { width: 14px; height: 14px; }
 
-/* Targets táctiles ≥44px en punteros gruesos (principio móvil-primero). */
+/* Targets táctiles ≥44px en punteros gruesos (principio móvil-primero).
+   OJO: .btn--sm ya NO pisa el min-height (Fase 2 del rediseño del tablero:
+   el override de 38px anulaba el bump de 44px en toda la app táctil); solo
+   conserva el padding más generoso. */
 @media (pointer: coarse) {
   .btn, .btn-ghost { min-height: 44px; }
-  .btn--sm { min-height: 38px; padding: .4rem .6rem; }
+  .btn--sm { padding: .4rem .6rem; }
 }
 
 /* ===== Diálogos y modales propios (ui/dialog.js) =====

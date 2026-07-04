@@ -3,6 +3,10 @@
 // del motor (engineState/resolution) viaja en /tickets; acá solo se ETIQUETA
 // (los fallbacks espejo se conservan para registros legacy sin derivación).
 // Nada acá toca el DOM ni el store: todo recibe sus datos por parámetro.
+// (icon() se importa directo de ui/icons.js — es la misma función que viaja
+// en ctx; evita enhebrar deps por algo que es un módulo puro.)
+
+import { icon } from '../../../ui/icons.js';
 
 // Ticket de un PR solo-GitHub: los branches del flujo son `bugfix/tkt-<N>-…` y
 // los títulos `Fix/Update TKT #<N>: …`, así que el número sale del título o del
@@ -110,18 +114,18 @@ export function prCellFor(b, entries, ghRows) {
     for (const e of entries) { if (String(e.ticketNumber) === tkt) { if (e.prState === 'merged') merged = true; else if (e.prState === 'open' || e.prNumber) open = open || true; } }
     for (const p of ghRows) { if (ticketOfPr(p) === tkt) { if (p.state === 'merged') merged = true; else if (p.state === 'open') open = true; } }
   }
-  if (merged) return '<span class="bb-icell bb-icell--ok" title="Implementado en un PR mergeado">✔</span>';
-  if (open) return '<span class="bb-icell bb-icell--warn" title="En un PR abierto (sin mergear)">◐</span>';
+  if (merged) return `<span class="bb-icell bb-icell--ok" title="Implementado en un PR mergeado">${icon('check', { size: 14 })}</span>`;
+  if (open) return `<span class="bb-icell bb-icell--warn" title="En un PR abierto (sin mergear)">${icon('halfCircle', { size: 14 })}</span>`;
   return '<span class="bb-icell bb-icell--none" title="Sin PR todavía">—</span>';
 }
 
 export function deskCellFor(b) {
   if (!b.ticketNumber) return '<span class="bb-icell bb-icell--none">—</span>';
-  if (b.deskStatus === 'updating') return '<span class="bb-icell bb-icell--warn" title="Publicando la respuesta en Desk…">⏳</span>';
-  if (b.deskResolved) return '<span class="bb-icell bb-icell--ok" title="Ticket resuelto/confirmado en Desk">🎫✅</span>';
-  if (deskAnswered(b)) return '<span class="bb-icell bb-icell--ok" title="Respuesta publicada en el ticket de Desk">🎫✔</span>';
-  if (b.deskStatus === 'error') return '<span class="bb-icell bb-icell--fail" title="El último intento de actualizar Desk falló">🎫✕</span>';
-  if (b.deskCheckedAt) return '<span class="bb-icell bb-icell--none" title="Consultado en Desk: aún sin respuesta">🎫○</span>';
+  if (b.deskStatus === 'updating') return `<span class="bb-icell bb-icell--warn" title="Publicando la respuesta en Desk…">${icon('clock', { size: 14 })}</span>`;
+  if (b.deskResolved) return `<span class="bb-icell bb-icell--ok" title="Ticket resuelto/confirmado en Desk">${icon('ticketDone', { size: 16 })}</span>`;
+  if (deskAnswered(b)) return `<span class="bb-icell bb-icell--ok" title="Respuesta publicada en el ticket de Desk">${icon('ticketCheck', { size: 16 })}</span>`;
+  if (b.deskStatus === 'error') return `<span class="bb-icell bb-icell--fail" title="El último intento de actualizar Desk falló">${icon('ticketX', { size: 16 })}</span>`;
+  if (b.deskCheckedAt) return `<span class="bb-icell bb-icell--none" title="Consultado en Desk: aún sin respuesta">${icon('ticketDot', { size: 16 })}</span>`;
   return '<span class="bb-icell bb-icell--none" title="Desk sin consultar (usá 🎫 Desk)">—</span>';
 }
 

@@ -31,6 +31,14 @@ const PATHS = {
   home: `<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h4v-6h2v6h4a1 1 0 0 0 1-1v-9"/>`,
   gitBranch: `<circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4V15.6"/><path d="M6 15.6c0-3.6 3-4.8 6-4.8h4.7"/><path d="M18 6.4V6.8"/>`,
   check: `<polyline points="4,13 9,18 20,6"/>`,
+  // Estados de ticket/PR del tablero Bugs & PRs (Fase 2 del rediseño: los
+  // emoji funcionales 🎫✅/🎫✔/🎫✕/🎫○/◐ de las celdas pasan a SVG de trazo
+  // para render consistente entre plataformas; el color lo pone .bb-icell--*).
+  halfCircle: `<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/>`,
+  ticketDone: `<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="15.5" y1="6.8" x2="15.5" y2="17.2" stroke-dasharray="2.2 2.2"/><circle cx="9.3" cy="12" r="4.1"/><polyline points="7.6,12.1 9,13.5 11.3,10.8"/>`,
+  ticketCheck: `<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="15.5" y1="6.8" x2="15.5" y2="17.2" stroke-dasharray="2.2 2.2"/><polyline points="6.6,12.2 8.9,14.4 12.4,10"/>`,
+  ticketX: `<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="15.5" y1="6.8" x2="15.5" y2="17.2" stroke-dasharray="2.2 2.2"/><line x1="7.2" y1="9.8" x2="11.6" y2="14.2"/><line x1="11.6" y1="9.8" x2="7.2" y2="14.2"/>`,
+  ticketDot: `<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="15.5" y1="6.8" x2="15.5" y2="17.2" stroke-dasharray="2.2 2.2"/><circle cx="9.3" cy="12" r="2.7"/>`,
   play: `<polygon points="6,4 20,12 6,20"/>`,
   trash: `<polyline points="4,7 20,7"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>`,
   folder: `<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>`,

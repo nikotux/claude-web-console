@@ -112,16 +112,16 @@ function pipelineHtml(b, state) {
 }
 
 // Render de la celda de estado: ícono (si hay) + etiqueta, tintados por el
-// dot (bfm-est--<dot> pinta el ícono con currentColor; el texto queda legible).
+// dot (bb-est--<dot> pinta el ícono con currentColor; el texto queda legible).
 function estHtml(est) {
-  const ic = est.icon ? `<span class="bfm-est-ic">${icon(est.icon, { size: 12 })}</span>` : '';
-  return `<span class="bfm-est bfm-est--${est.dot}">${ic}<span>${esc(est.label)}</span></span>`;
+  const ic = est.icon ? `<span class="bb-est-ic">${icon(est.icon, { size: 12 })}</span>` : '';
+  return `<span class="bb-est bb-est--${est.dot}">${ic}<span>${esc(est.label)}</span></span>`;
 }
 
 function statsHtml(s) {
-  if (!s) return '<span class="bfm-nostats">—</span>';
-  return `<span class="bfm-add">+${s.add}</span> <span class="bfm-del">−${s.del}</span>` +
-    `<span class="bfm-nfiles"> · ${s.files}a</span>`;
+  if (!s) return '<span class="bb-nostats">—</span>';
+  return `<span class="bb-add">+${s.add}</span> <span class="bb-del">−${s.del}</span>` +
+    `<span class="bb-nfiles"> · ${s.files}a</span>`;
 }
 
 // ===== Detalle expandible =====
@@ -364,7 +364,7 @@ function detailHtml(b, state) {
     ${timeline}
     ${b.prNumber ? liveBoxHtml(b.prNumber, state) : ''}
     ${b.ticketNumber ? deskSectionHtml(b.ticketNumber, state) : ''}
-    <p class="bfm-links">
+    <p class="bb-links">
       ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
       ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
       ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
@@ -392,7 +392,7 @@ function ghDetailHtml(pr, state) {
     ${pr.branch ? `<p class="hp-bf-files"><code>${esc(pr.branch)}</code></p>` : ''}
     ${liveBoxHtml(pr.number, state)}
     ${ticket ? deskSectionHtml(ticket, state) : ''}
-    <p class="bfm-links">
+    <p class="bb-links">
       <a href="${esc(pr.url)}" target="_blank" rel="noopener">Ver PR #${esc(pr.number)} en GitHub ↗</a>
       ${ticket ? `<button class="btn-ghost btn--sm" data-act="ghdeskchat" data-prnum="${pr.number}" title="Abre un chat para redactar y publicar la actualización del ticket en Desk (vos aprobás la escritura)">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
     </p>`;
@@ -428,7 +428,7 @@ export function renderTable(state) {
   }
   const prRendered = new Set(); // prNumbers ya representados (para saltar secundarios)
 
-  const subTktHtml = (g) => `<span class="bfm-subtkt">↳ 🎫 TKT #${esc(g.ticketNumber || '?')}${g.deskResolved ? ' <span class="bb-chip bb-chip--ok">resuelto</span>' : g.deskReplied ? ' <span class="bb-chip bb-chip--ok">respondido</span>' : ''}</span>`;
+  const subTktHtml = (g) => `<span class="bb-subtkt">↳ 🎫 TKT #${esc(g.ticketNumber || '?')}${g.deskResolved ? ' <span class="bb-chip bb-chip--ok">resuelto</span>' : g.deskReplied ? ' <span class="bb-chip bb-chip--ok">respondido</span>' : ''}</span>`;
 
   // Una fila de registro (activa o archivada). El chip de resolución
   // (parcial/completo) va en la celda de estado. La expansión sale del store
@@ -442,22 +442,22 @@ export function renderTable(state) {
     // ¿Fila protagonizada por un PR abierto? (no en archivo)
     const isPr = !arch && b.prState === 'open' && b.prNumber;
     const group = isPr ? (openPrGroups.get(String(b.prNumber)) || [b]) : [b];
-    const tktCell = isPr ? `<span class="bfm-prnum">🔀 #${esc(b.prNumber)}</span>` : (b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—');
+    const tktCell = isPr ? `<span class="bb-prnum">🔀 #${esc(b.prNumber)}</span>` : (b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—');
     const titleCell = isPr
-      ? `<div class="bfm-prtitle"><b>PR #${esc(b.prNumber)}</b> · ${esc(b.title)}</div><div class="bfm-prtkts">${group.map(subTktHtml).join('')}</div>`
+      ? `<div class="bb-prtitle"><b>PR #${esc(b.prNumber)}</b> · ${esc(b.title)}</div><div class="bb-prtkts">${group.map(subTktHtml).join('')}</div>`
       : esc(b.title);
     return `
-      <tr class="bfm-row${isPr ? ' bfm-row--pr' : ''}${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}" data-sid="${esc(b.sessionId)}"${arch && !archOpen ? ' hidden' : ''}>
+      <tr class="bb-row${isPr ? ' bb-row--pr' : ''}${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}" data-sid="${esc(b.sessionId)}"${arch && !archOpen ? ' hidden' : ''}>
         <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
-        <td class="bfm-tkt">${tktCell}</td>
-        <td class="bfm-title">${titleCell}</td>
-        <td>${pipelineHtml(b, state)}</td>
-        <td class="bfm-stats">${statsHtml(b.stats)}</td>
+        <td class="bb-tkt">${tktCell}</td>
+        <td class="bb-title">${titleCell}</td>
+        <td class="bb-col-pipe">${pipelineHtml(b, state)}</td>
+        <td class="bb-stats bb-col-stats">${statsHtml(b.stats)}</td>
         <td class="bb-col-pr">${prCellFor(b, entries, ghRows)}</td>
         <td class="bb-col-desk">${deskCellFor(b)}</td>
-        <td class="bfm-state">${estHtml(est)}${resChip}</td>
+        <td class="bb-col-est">${estHtml(est)}${resChip}</td>
       </tr>
-      <tr class="bfm-detail${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${detailHtml(b, state)}</td></tr>`;
+      <tr class="bb-detail${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${detailHtml(b, state)}</td></tr>`;
   };
   // ORDEN DE FILAS (R6 — se decide ACÁ y en ningún otro lado; pisa a propósito
   // el sort del motor): primero lo accionable (pendiente con archivos → 0),
@@ -482,22 +482,22 @@ export function renderTable(state) {
     const key = triageKey(t);
     const open = expanded.has(key);
     rows.push(`
-      <tr class="bfm-row bb-row--triage" data-key="${esc(key)}" data-tkt="${esc(t.ticketNumber)}">
+      <tr class="bb-row bb-row--triage" data-key="${esc(key)}" data-tkt="${esc(t.ticketNumber)}">
         <td><span class="hp-dot hp-dot--warn"></span></td>
-        <td class="bfm-tkt">#${esc(t.ticketNumber)}</td>
-        <td class="bfm-title">${esc(t.whatBroke)}</td>
-        <td>${`<span class="bb-pipe"><span class="bb-seg bb-seg--ok" title="En triage"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span></span>`}</td>
-        <td class="bfm-stats"><span class="tk-sev tk-sev-${esc(t.severity)}">${esc(t.severity)}</span></td>
+        <td class="bb-tkt">#${esc(t.ticketNumber)}</td>
+        <td class="bb-title">${esc(t.whatBroke)}</td>
+        <td class="bb-col-pipe">${`<span class="bb-pipe"><span class="bb-seg bb-seg--ok" title="En triage"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span><span class="bb-seg"></span></span>`}</td>
+        <td class="bb-stats bb-col-stats"><span class="tk-sev tk-sev-${esc(t.severity)}">${esc(t.severity)}</span></td>
         <td class="bb-col-pr"><span class="bb-icell bb-icell--none" title="Sin PR todavía">—</span></td>
         <td class="bb-col-desk"><span class="bb-icell bb-icell--none" title="Ticket sin responder en Desk">—</span></td>
-        <td class="bfm-state">sin trabajo aún</td>
+        <td class="bb-col-est">sin trabajo aún</td>
       </tr>
-      <tr class="bfm-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">
+      <tr class="bb-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">
         ${invTopBox({ ticketNumber: t.ticketNumber, title: t.whatBroke, whatBroke: t.whatBroke, route: t.route, reporter: t.reporter, severity: t.severity, context: t.context }, state)}
         <p class="hp-bf-summary">${esc(t.whatBroke)}${t.route ? ` · <code>${esc(t.route)}</code>` : ''}${t.reporter ? ` · reportó ${esc(t.reporter)}` : ''}</p>
         ${t.duplicate ? `<p class="bb-chips"><span class="bb-chip bb-chip--warn">👥 dup: ${esc(t.duplicate)}</span></p>` : ''}
         ${t.context ? `<p class="hp-bf-summary">${esc(t.context)}</p>` : ''}
-        <p class="bfm-links">
+        <p class="bb-links">
           ${t.webUrl ? `<a href="${esc(t.webUrl)}" target="_blank" rel="noopener">Ticket #${esc(t.ticketNumber)} ↗</a>` : ''}
           <button class="btn btn--sm" data-act="triagework" data-tkt="${esc(t.ticketNumber)}">${icon('sparkle', { size: 13 })}<span>Trabajar en Chat (plan)</span></button>
         </p>
@@ -521,17 +521,17 @@ export function renderTable(state) {
       <span class="bb-seg" title="Estado del ticket en Desk: abrí la fila y tocá “Traer estado de Desk”"></span>
     </span>`;
     rows.push(`
-      <tr class="bfm-row bfm-row--gh" data-key="${esc(key)}" data-prnum="${pr.number}">
+      <tr class="bb-row bb-row--gh" data-key="${esc(key)}" data-prnum="${pr.number}">
         <td><span class="hp-dot hp-dot--${dot}"></span></td>
-        <td class="bfm-tkt" title="${ticket ? `Ticket #${esc(ticket)} detectado del PR` : 'PR en GitHub sin ticket detectable'}">${ticket ? `#${esc(ticket)}` : 'GitHub'}</td>
-        <td class="bfm-title">#${esc(pr.number)} ${esc(pr.title)}</td>
-        <td>${pipe}</td>
-        <td class="bfm-stats">${statsHtml(pr.stats)}</td>
+        <td class="bb-tkt" title="${ticket ? `Ticket #${esc(ticket)} detectado del PR` : 'PR en GitHub sin ticket detectable'}">${ticket ? `#${esc(ticket)}` : 'GitHub'}</td>
+        <td class="bb-title">#${esc(pr.number)} ${esc(pr.title)}</td>
+        <td class="bb-col-pipe">${pipe}</td>
+        <td class="bb-stats bb-col-stats">${statsHtml(pr.stats)}</td>
         <td class="bb-col-pr">${prCellFor({ ticketNumber: ticket, prState: pr.state, prNumber: pr.number, status: 'subido' }, entries, ghRows)}</td>
         <td class="bb-col-desk">${deskCellFor({ ticketNumber: ticket })}</td>
-        <td class="bfm-state">${pr.state === 'merged' ? `mergeado${pr.mergedBy ? ` por ${esc(pr.mergedBy)}` : ''}` : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
+        <td class="bb-col-est">${pr.state === 'merged' ? `mergeado${pr.mergedBy ? ` por ${esc(pr.mergedBy)}` : ''}` : pr.state === 'closed' ? 'cerrado' : 'abierto'}</td>
       </tr>
-      <tr class="bfm-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${ghDetailHtml(pr, state)}</td></tr>`);
+      <tr class="bb-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${ghDetailHtml(pr, state)}</td></tr>`);
   }
   // ===== Sección Archivo · resueltos (colapsable, al fondo) =====
   if (archivados.length) {

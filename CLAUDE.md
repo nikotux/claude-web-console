@@ -531,7 +531,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             doWorkOn (ticket sin PR) y en workOnTriage. Ver regla 6.
                             FILA-PR (Fase 2, 2026-07-04): cuando un PR está ABIERTO el PR es el
                             protagonista de la fila (🔀 #N + título) y el/los TKT que resuelve van
-                            ANIDADOS debajo (↳ 🎫 TKT #N, bfm-row--pr). renderTable agrupa por
+                            ANIDADOS debajo (↳ 🎫 TKT #N, bb-row--pr — familia .bfm-* migrada a .bb-* en Fase 2). renderTable agrupa por
                             número de PR abierto (openPrGroups) y saltea los secundarios (no
                             duplican fila); data-sid queda en el TKT primario → expandir/in-place
                             intactos. Mergeado/cerrado/sin-PR siguen como fila-TKT.

@@ -45,8 +45,8 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       <span class="bb-triage" data-ref="triage"></span>
     </div>
     <div class="bb-box" data-ref="box">
-      <table class="bfm-table bb-table">
-        <thead><tr><th></th><th>TKT</th><th>Título</th><th>Pipeline</th><th>Cambios</th><th title="¿Implementado en un PR?">PR</th><th title="¿Respondido en Zoho Desk?">Desk</th><th>Estado</th></tr></thead>
+      <table class="bb-table">
+        <thead><tr><th></th><th>TKT</th><th>Título</th><th class="bb-col-pipe">Pipeline</th><th class="bb-col-stats">Cambios</th><th title="¿Implementado en un PR?">PR</th><th title="¿Respondido en Zoho Desk?">Desk</th><th>Estado</th></tr></thead>
         <tbody data-ref="tbody"><tr><td colspan="8"><span class="cwc-spinner"></span></td></tr></tbody>
       </table>
     </div>`;
@@ -107,7 +107,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         }
         return;
       }
-      const key = act.closest('.bfm-detail')?.dataset?.key;
+      const key = act.closest('.bb-detail')?.dataset?.key;
       const b = store.get().entries.find((x) => rowKey(x) === key);
       if (act.dataset.act === 'triagework') {
         const t = (store.get().triage.tickets || []).find((x) => String(x.ticketNumber) === act.dataset.tkt);
@@ -121,7 +121,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       return;
     }
     if (e.target.closest('a')) return;
-    const row = e.target.closest('.bfm-row');
+    const row = e.target.closest('.bb-row');
     if (!row?.dataset?.key) return; // las filas solo-GitHub TAMBIÉN expanden
     A.toggleExpand(row.dataset.key, rowInfoOf(row.dataset.key));
   });
