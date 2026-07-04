@@ -87,44 +87,52 @@ function renderLimits(el, data) {
 const ACTIVE_MS = 120000;
 const isLive = (lastMtime) => !!lastMtime && Date.now() - lastMtime < ACTIVE_MS;
 
-// Pivot proyectos→modelos: la lista principal son los MODELOS (acotada, no
-// crece con los proyectos). El detalle de cada modelo son los 3 proyectos que
-// lo usaron más recientemente, mostrados de mayor a menor uso de ESE modelo.
+// Emoji por motor (ancla visual del detalle). El label lo manda el server;
+// acá solo le anteponemos el ícono según la key semántica.
+const ENGINE_ICON = {
+  chat: '💬',
+  healthfix: '🔧',
+  tolkien: '🌳',
+  cli: '⌨️',
+  headless: '⚙️',
+};
+
+// Pivot motores→modelos: la lista principal son los MODELOS (acotada). El
+// detalle de cada modelo son los MOTORES que lo usaron (chat, auto-fix de
+// salud, tolkien, cli, headless), de mayor a menor uso de ESE modelo — ya no
+// carpetas/proyectos crudos.
 function buildModelView(sum) {
   const byModel = new Map();
-  for (const p of sum.projects) {
-    for (const m of (p.models || [])) {
-      const e = byModel.get(m.key) || { key: m.key, model: m.model, tokens: 0, cost: 0, lastMtime: 0, projects: [] };
+  for (const src of (sum.engines || [])) {
+    for (const m of (src.models || [])) {
+      const e = byModel.get(m.key) || { key: m.key, model: m.model, tokens: 0, cost: 0, lastMtime: 0, engines: [] };
       e.tokens += m.tokens;
       e.cost += m.cost;
-      const last = m.lastMtime || p.lastMtime || 0;
+      const last = m.lastMtime || src.lastMtime || 0;
       e.lastMtime = Math.max(e.lastMtime, last);
-      e.projects.push({ label: p.label, name: p.name, tokens: m.tokens, cost: m.cost, lastMtime: last });
+      e.engines.push({ key: src.key, label: src.label, tokens: m.tokens, cost: m.cost, lastMtime: last });
       byModel.set(m.key, e);
     }
   }
   const models = [...byModel.values()].sort((a, b) => b.cost - a.cost);
   for (const e of models) {
-    e.projects = e.projects
-      .sort((a, b) => b.lastMtime - a.lastMtime) // los 3 que lo usaron ÚLTIMO…
-      .slice(0, 3)
-      .sort((a, b) => b.cost - a.cost);          // …de mayor a menor uso
+    e.engines = e.engines.sort((a, b) => b.cost - a.cost); // mayor a menor uso
   }
   return models;
 }
 
 function detailFor(m) {
-  const rows = m.projects.map((p) => `
-    <div class="tok-detail-row" title="${p.name}">
-      <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
+  const rows = m.engines.map((eng) => `
+    <div class="tok-detail-row" title="${eng.label}">
+      <span class="tok-eng-ico">${ENGINE_ICON[eng.key] || '⚙️'}</span>
       <span class="tok-detail-name"></span>
-      <span class="tok-detail-tok">${fmtTokens(p.tokens)}</span>
-      <span class="tok-detail-cost">${fmtCost(p.cost)}</span>
+      <span class="tok-detail-tok">${fmtTokens(eng.tokens)}</span>
+      <span class="tok-detail-cost">${fmtCost(eng.cost)}</span>
     </div>`).join('');
   return `
     <div class="tok-detail" hidden>
       ${rows}
-      <div class="tok-detail-foot">últimos ${m.projects.length} proyecto(s) que usaron este modelo · mayor a menor uso</div>
+      <div class="tok-detail-foot">${m.engines.length} motor(es) que usaron este modelo · mayor a menor uso</div>
     </div>`;
 }
 
@@ -160,10 +168,10 @@ function renderUsage(container, sum) {
         </div>`;
     }).join('');
 
-  // Nombres de proyecto con textContent (nunca HTML).
+  // Nombres de motor con textContent (nunca HTML — vienen del server).
   const detailNames = container.querySelectorAll('.tok-detail-name');
   let i = 0;
-  for (const m of models) for (const p of m.projects) detailNames[i++].textContent = p.label;
+  for (const m of models) for (const eng of m.engines) detailNames[i++].textContent = eng.label;
 
   for (const row of container.querySelectorAll('.tok-row')) {
     row.querySelector('.tok-row-top').addEventListener('click', () => {

@@ -737,10 +737,22 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (mtime+size) nunca se saltea porque es exacto por construcción. El modal
   Uso agrupa POR MODELO (lista acotada; agrupar por proyecto crecía sin
   tope): el pivot vive en buildModelView() de usage.js sobre el mismo
-  /summary (que expone models[].lastMtime por proyecto — granularidad de
-  archivo: un jsonl multi-modelo "refresca" a todos sus modelos); el
-  desplegable de cada modelo son los 3 proyectos que lo usaron más
-  recientemente, ordenados de mayor a menor uso de ese modelo.
+  /summary. El desplegable de cada modelo son los MOTORES que lo usaron
+  (2026-07-04, antes eran "carpetas"/proyectos crudos): /summary expone
+  `engines[]` (mismo shape que projects[]: label + models[]) atribuido por
+  classifyEngine() de tokens/index.js — heurística determinística 0 tokens
+  sobre datos ya en disco: sessionId ∈ ~/.cwc-data/chats.json ⇒ 💬 chat ·
+  dir healthfix-wt-* ⇒ 🔧 auto-fix de salud · dir tolkien ⇒ 🌳 tolkien ·
+  entrypoint 'cli' ⇒ ⌨️ CLI · resto SDK ⇒ ⚙️ headless (triage/salud/desk/
+  auto-título — NO separables entre sí sin instrumentar cada runner, quedan
+  agrupados). projects[] SIGUE en el payload (retrocompat). ANIMACIÓN
+  "consumiendo ahora" (Pac-Man por modelo): models[].lastMtime es el
+  timestamp del ÚLTIMO MENSAJE de ESE modelo (parseFile guarda modelTs por
+  modelo), NO el mtime del archivo — antes un jsonl multi-modelo "refrescaba"
+  a TODOS sus modelos y el Haiku de auto-título (o un fable/sonnet viejo del
+  mismo chat) titilaba en falso mientras solo Sonnet/Opus trabajaba; ahora
+  solo se prende el modelo que de verdad emitió el último mensaje. isLive()
+  de usage.js sigue usando el umbral de 2 min.
 - Splash de arranque (`#boot-splash`, index.html): overlay con el Pac-Man
   compartido que cubre desde el primer paint hasta el fin del boot. Tres
   piezas coordinadas: (1) markup ESTÁTICO en index.html que espeja

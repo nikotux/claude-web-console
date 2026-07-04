@@ -367,6 +367,7 @@ html, body {
 .tok-detail { margin-top: .35rem; padding: .35rem .1rem 0; border-top: 1px dashed var(--cwc-border-soft); }
 .tok-detail-row { display: flex; align-items: center; gap: .35rem; font-size: var(--cwc-fs-sm); padding: .1rem 0; }
 .tok-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.tok-eng-ico { flex: none; width: 1.2em; text-align: center; font-size: var(--cwc-fs-sm); line-height: 1; }
 .tok-detail-name { flex: 1; color: var(--cwc-text-secondary); }
 .tok-detail-tok { color: var(--cwc-text-dim); width: 3.6em; text-align: right; }
 .tok-detail-cost { color: var(--cwc-ok); width: 3.8em; text-align: right; }
@@ -994,6 +995,26 @@ html, body {
 .bb-tl-txt { color: var(--cwc-text-secondary); }
 /* Panel EN VIVO de GitHub (no persistido). */
 .bb-live { margin: .45rem 0; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); padding: .45rem .55rem; background: var(--cwc-bg); }
+/* 🚦 Semáforo (chips) + 🔍 investigación IA */
+.bb-sem { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
+.bb-inv { margin-top: .5rem; display: flex; flex-direction: column; gap: .4rem; align-items: flex-start; }
+.bb-inv-at { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.bb-inv-err { font-size: var(--cwc-fs-sm); color: var(--cwc-warn); }
+.bb-verdict { width: 100%; border-radius: var(--cwc-radius-md); padding: .5rem .6rem; border-left: 3px solid var(--cwc-info); background: var(--cwc-bg-chip); display: flex; flex-direction: column; gap: .35rem; }
+.bb-verdict--danger { border-left-color: var(--cwc-danger-strong); }
+.bb-verdict--warn { border-left-color: var(--cwc-warn); }
+.bb-verdict--ok { border-left-color: var(--cwc-ok); }
+.bb-verdict--info { border-left-color: var(--cwc-info); }
+.bb-verdict-head { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
+.bb-verdict--danger .bb-verdict-head > svg { color: var(--cwc-danger-strong); }
+.bb-verdict--warn .bb-verdict-head > svg { color: var(--cwc-warn); }
+.bb-verdict--ok .bb-verdict-head > svg { color: var(--cwc-ok); }
+.bb-verdict--info .bb-verdict-head > svg { color: var(--cwc-info); }
+.bb-verdict-conf { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.bb-verdict-what { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.bb-verdict-steps { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .15rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.bb-verdict-files { display: flex; flex-wrap: wrap; gap: .3rem; }
+.bb-verdict-files code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-accent); }
 .bb-live-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
 .bb-live-at { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 .bb-live-commits { margin-top: .4rem; display: flex; flex-direction: column; gap: .1rem; }

@@ -8,9 +8,14 @@
 // Se cachea por archivo según mtime+size: solo se re-parsean los que cambiaron.
 //
 // HTTP:
-//   GET /api/tokens/summary  -> { totals, today, projects[], updatedAt }
+//   GET /api/tokens/summary  -> { totals, today, projects[], engines[], updatedAt }
 //   Cada proyecto incluye `models[]` (tokens+costo por CADA modelo usado, no
 //   solo el principal) e input/output/cache totales, para el desglose del panel.
+//   `engines[]` es el MISMO desglose pero atribuido al motor de origen (chat,
+//   auto-fix de salud, tolkien, cli, headless) — alimenta el detalle del modal
+//   Uso. `models[].lastMtime` es el timestamp del ÚLTIMO mensaje de ESE modelo
+//   (no el mtime del archivo): así el Pac-Man "consumiendo ahora" no titila en
+//   modelos secundarios del mismo transcript.
 //   GET /api/tokens/limits   -> { limits[], subscription, updatedAt }
 //   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales), vía el
 //   endpoint OAuth de Anthropic con el token del CLI (solo lectura, ver abajo).
@@ -21,6 +26,10 @@ import path from 'node:path';
 import { keyOf } from '../../core/claude-model.js';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+// Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
+// transcript a su MOTOR de origen (un .jsonl cuyo sessionId figura acá salió
+// del motor de conversaciones; el resto se clasifica por directorio/entrypoint).
+const CHATS_FILE = path.join(os.homedir(), '.cwc-data', 'chats.json');
 
 // Precio de input por millón, por modelo; el resto se deriva del input.
 // OJO: el costo es un EQUIVALENTE a precios de API — la suscripción del CLI
@@ -65,15 +74,25 @@ function addInto(dst, src) {
   dst.cw1h += src.cw1h; dst.cw5m += src.cw5m; dst.cr += src.cr;
 }
 
-// Parsea un jsonl deduplicando por message.id -> rows por (día, modelo).
+// Parsea un jsonl deduplicando por message.id. Devuelve:
+//   rows      -> buckets por (día, modelo)
+//   modelTs   -> timestamp (ms) del ÚLTIMO mensaje de CADA modelo (para que
+//                "consumiendo ahora" corresponda al modelo real, no al mtime
+//                del archivo — un jsonl multi-modelo lo compartía con TODOS
+//                sus modelos, así el Haiku de auto-título titilaba en falso
+//                en un chat que corre en Sonnet).
+//   entrypoint-> 'cli' | 'sdk-ts' | '' (clasifica CLI interactivo vs headless).
 async function parseFile(file) {
   const txt = await fs.readFile(file, 'utf8');
   const seen = new Set();
   const rows = {};
+  const modelTs = {};
+  let entrypoint = '';
   for (const line of txt.split('\n')) {
     if (!line) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
+    if (!entrypoint && obj.entrypoint) entrypoint = obj.entrypoint;
     const msg = obj.message;
     if (!msg || !msg.usage || !msg.id) continue;
     if (seen.has(msg.id)) continue;
@@ -81,6 +100,8 @@ async function parseFile(file) {
     const u = msg.usage;
     const day = (obj.timestamp || '').slice(0, 10) || 'unknown';
     const model = msg.model || 'unknown';
+    const ts = Date.parse(obj.timestamp || '') || 0;
+    if (ts && ts > (modelTs[model] || 0)) modelTs[model] = ts;
     const key = `${day}\t${model}`;
     const b = (rows[key] ||= emptyBucket());
     b.input += u.input_tokens || 0;
@@ -89,36 +110,61 @@ async function parseFile(file) {
     b.cw5m += u.cache_creation?.ephemeral_5m_input_tokens || 0;
     b.cr += u.cache_read_input_tokens || 0;
   }
-  return rows;
+  return { rows, modelTs, entrypoint };
 }
 
-async function rowsForFile(file) {
+// Cachea el parseo por archivo (mtime+size). El valor cacheado es el objeto
+// completo { rows, modelTs, entrypoint } — solo se re-parsea lo que cambió.
+async function parseCached(file) {
   let st;
-  try { st = await fs.stat(file); } catch { return {}; }
+  try { st = await fs.stat(file); } catch { return { rows: {}, modelTs: {}, entrypoint: '' }; }
   const cached = fileCache.get(file);
   if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
     // Re-insertar mueve la entrada al final (orden de inserción del Map):
     // mantiene el orden de "usado más recientemente" para el LRU de abajo.
     fileCache.delete(file);
     fileCache.set(file, cached);
-    return cached.rows;
+    return cached.data;
   }
-  const rows = await parseFile(file);
+  const data = await parseFile(file);
   fileCache.delete(file);
-  fileCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, rows });
+  fileCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, data });
   // Evita crecimiento sin límite: con muchos proyectos/sesiones, cada .jsonl
   // nuevo se acumulaba para siempre. Se descarta el menos usado recientemente.
   if (fileCache.size > FILE_CACHE_MAX) {
     const oldestKey = fileCache.keys().next().value;
     fileCache.delete(oldestKey);
   }
-  return rows;
+  return data;
 }
 
 // Etiqueta corta del proyecto a partir del nombre de directorio codificado.
 function labelFor(dirName) {
   const stripped = dirName.replace(/^-home-[^-]+-?/, '');
   return stripped || '~';
+}
+
+// ===== Atribución por MOTOR de origen (para el detalle del modal Uso) =====
+// Reemplaza el desglose por "carpetas" (nombres de directorio crudos) por uno
+// legible: qué MOTOR de la consola gastó cada modelo. Heurística determinística
+// (0 tokens) sobre datos ya en disco: sessionId ∈ chats.json + directorio +
+// entrypoint. Los motores headless (triage/salud/desk/auto-título) no se
+// distinguen entre sí sin instrumentar cada runner, así que quedan agrupados.
+const ENGINE_LABELS = {
+  chat: 'Chat · conversaciones',
+  healthfix: 'Auto-fix de salud',
+  tolkien: 'Tolkien · bugfix',
+  cli: 'CLI interactivo',
+  headless: 'Motores headless',
+};
+function classifyEngine(dir, sessionId, entrypoint, chatIds) {
+  let key;
+  if (chatIds.has(sessionId)) key = 'chat';
+  else if (/healthfix-wt-/.test(dir)) key = 'healthfix';
+  else if (/(^|-)tolkien(-|$)/.test(dir)) key = 'tolkien';
+  else if (entrypoint === 'cli') key = 'cli';
+  else key = 'headless';
+  return { key, label: ENGINE_LABELS[key] };
 }
 
 async function buildSummary() {
@@ -129,14 +175,30 @@ async function buildSummary() {
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
-    return { totals: emptyBucket(), today: emptyBucket(), projects: [], updatedAt: today };
+    return { totals: emptyBucket(), today: emptyBucket(), projects: [], engines: [], updatedAt: today };
   }
+
+  // sessionIds de los chats de la consola (para atribuir transcripts al motor
+  // de conversaciones). Sin chats.json: todo cae en headless/cli, no rompe.
+  const chatIds = new Set();
+  try {
+    const arr = JSON.parse(await fs.readFile(CHATS_FILE, 'utf8'));
+    if (Array.isArray(arr)) for (const c of arr) if (c?.sessionId) chatIds.add(c.sessionId);
+  } catch { /* noop */ }
 
   const totals = emptyBucket();
   let totalCost = 0;
   const todayB = emptyBucket();
   let todayCost = 0;
   const projects = [];
+
+  // Acumulador por MOTOR (mismo shape que un proyecto: bucket + modelStats).
+  const engineMap = new Map();
+  const engineFor = ({ key, label }) => {
+    let e = engineMap.get(key);
+    if (!e) { e = { key, label, B: emptyBucket(), cost: 0, modelStats: {} }; engineMap.set(key, e); }
+    return e;
+  };
 
   for (const dir of dirs) {
     const projPath = path.join(PROJECTS_DIR, dir);
@@ -150,24 +212,33 @@ async function buildSummary() {
 
     const projB = emptyBucket();
     let projCost = 0;
-    const modelStats = {}; // model -> { tokens, cost }
+    const modelStats = {}; // model -> { tokens, cost, lastMtime }
 
     for (const file of files) {
       let fileMtime = 0;
       try { fileMtime = (await fs.stat(file)).mtimeMs; } catch { /* noop */ }
       lastMtime = Math.max(lastMtime, fileMtime);
-      const rows = await rowsForFile(file);
+      const { rows, modelTs, entrypoint } = await parseCached(file);
+      // Motor de origen de ESTE transcript (sessionId = nombre del archivo).
+      const sessionId = path.basename(file, '.jsonl');
+      const engine = engineFor(classifyEngine(dir, sessionId, entrypoint, chatIds));
       for (const [key, b] of Object.entries(rows)) {
         const [day, model] = key.split('\t');
         const c = costOf(model, b);
         const tok = b.input + b.output + b.cw1h + b.cw5m + b.cr;
+        // Timestamp del ÚLTIMO mensaje de ESTE modelo (no el mtime del archivo):
+        // así "consumiendo ahora" corresponde al modelo real. Fallback al mtime.
+        const ts = modelTs[model] || fileMtime;
         addInto(projB, b); projCost += c;
         addInto(totals, b); totalCost += c;
-        // lastMtime por (proyecto, modelo): alimenta la vista por modelo del
-        // panel Uso ("últimos proyectos que usaron este modelo").
         const ms = (modelStats[model] ||= { tokens: 0, cost: 0, lastMtime: 0 });
         ms.tokens += tok; ms.cost += c;
-        ms.lastMtime = Math.max(ms.lastMtime, fileMtime);
+        ms.lastMtime = Math.max(ms.lastMtime, ts);
+        // Mismo desglose, agrupado por MOTOR (alimenta el detalle del modal).
+        const es = (engine.modelStats[model] ||= { tokens: 0, cost: 0, lastMtime: 0 });
+        es.tokens += tok; es.cost += c;
+        es.lastMtime = Math.max(es.lastMtime, ts);
+        addInto(engine.B, b); engine.cost += c;
         if (day === today) { addInto(todayB, b); todayCost += c; }
       }
     }
@@ -191,10 +262,22 @@ async function buildSummary() {
 
   projects.sort((a, b) => b.cost - a.cost);
   const tok = (b) => b.input + b.output + b.cw1h + b.cw5m + b.cr;
+
+  // Motores consolidados (mismo shape que projects[]: label + models[]).
+  const engines = [...engineMap.values()].map((e) => {
+    const models = Object.entries(e.modelStats)
+      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
+      .filter((m) => m.tokens > 0)
+      .sort((a, b) => b.cost - a.cost);
+    const lastMtime = models.reduce((mx, m) => Math.max(mx, m.lastMtime), 0);
+    return { key: e.key, label: e.label, tokens: tok(e.B), cost: e.cost, lastMtime, models };
+  }).filter((e) => e.tokens > 0).sort((a, b) => b.cost - a.cost);
+
   return {
     totals: { ...totals, tokens: tok(totals), cost: totalCost },
     today: { ...todayB, tokens: tok(todayB), cost: todayCost },
     projects,
+    engines,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -309,13 +392,21 @@ export default {
       }
       try {
         if (!summaryBuildPromise) {
-          summaryBuildPromise = buildSummary().finally(() => {
-            summaryBuildPromise = null;
-          });
+          summaryBuildPromise = buildSummary()
+            .then((result) => {
+              // Solo la promesa que efectivamente construyó el resultado
+              // actualiza el TTL: evita que un request concurrente que
+              // llega más tarde pise summaryAt con su propio timestamp.
+              summaryCache = result;
+              summaryAt = Number(process.hrtime.bigint()) / 1e6;
+              return result;
+            })
+            .finally(() => {
+              summaryBuildPromise = null;
+            });
         }
-        summaryCache = await summaryBuildPromise;
-        summaryAt = ms;
-        res.json(summaryCache);
+        const result = await summaryBuildPromise;
+        res.json(result);
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
       }
@@ -332,13 +423,21 @@ export default {
       }
       try {
         if (!limitsFetchPromise) {
-          limitsFetchPromise = fetchPlanLimits().finally(() => {
-            limitsFetchPromise = null;
-          });
+          limitsFetchPromise = fetchPlanLimits()
+            .then((result) => {
+              // Igual que en /summary: solo la promesa que construyó el
+              // resultado actualiza limitsAt, para que el TTL se cuente
+              // desde el momento real de la construcción.
+              limitsCache = result;
+              limitsAt = Number(process.hrtime.bigint()) / 1e6;
+              return result;
+            })
+            .finally(() => {
+              limitsFetchPromise = null;
+            });
         }
-        limitsCache = await limitsFetchPromise;
-        limitsAt = now;
-        res.json(limitsCache);
+        const result = await limitsFetchPromise;
+        res.json(result);
       } catch (err) {
         res.status(502).json({ error: err.message || 'No se pudieron leer los límites del plan.' });
       }
