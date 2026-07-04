@@ -37,7 +37,7 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
-import { buildTickets, findSimilarSolutions, saveFeedback, ticketOfPr } from './engine.js';
+import { buildTickets, createFeature, findSimilarSolutions, saveFeedback, ticketOfPr } from './engine.js';
 // Orquestador de concurrencia ADAPTATIVA — el mismo de Salud (genérico y
 // testeado). Acá lo usa refresh-prs para paralelizar las LECTURAS a GitHub
 // (`gh pr view`); los git-writes siguen SERIAL (regla de oro: paralelo lo
@@ -147,7 +147,10 @@ async function pushPr(entry) {
   }
 
   const safeNum = String(entry.ticketNumber || 'sn').replace(/[^\w.-]/g, '').slice(0, 20) || 'sn';
-  const branch = `bugfix/tkt-${safeNum}-${entry.sessionId.slice(0, 8)}`;
+  // Features: branch feature/feat-n-... (no es un bugfix ni tiene TKT de Desk).
+  const branch = entry.kind === 'feature'
+    ? `feature/${safeNum.toLowerCase()}-${entry.sessionId.slice(0, 8)}`
+    : `bugfix/tkt-${safeNum}-${entry.sessionId.slice(0, 8)}`;
   const wt = path.join(WT_BASE, entry.sessionId);
 
   // Limpieza de un intento anterior a medias.
@@ -356,7 +359,7 @@ const deskToolAllowed = (name) =>
 async function deskUpdateAuto(sessionId) {
   const all = listBugfixes();
   const entry = all.find((b) => b.sessionId === sessionId);
-  if (!entry || !entry.ticketNumber) return;
+  if (!entry || !entry.ticketNumber || entry.kind === 'feature') return; // FEAT-n no es un ticket de Desk
   entry.deskStatus = 'updating';
   saveBugfixes(all);
 
@@ -603,7 +606,8 @@ function ticketInvestigationState(ticket) {
 // merge ≠ resuelto: un PR mergeado es solución PARCIAL hasta que Desk confirma.
 function resolutionOf(b) {
   if (b.deskResolved === true) return 'complete';
-  if (b.prState === 'merged') return 'partial';
+  // Un FEATURE no tiene confirmación de Desk: mergeado = completo.
+  if (b.prState === 'merged') return b.kind === 'feature' ? 'complete' : 'partial';
   return 'active';
 }
 
@@ -637,6 +641,25 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const { scanned, added } = scanUnregistered(config.projectDir);
       res.json({ scanned, added: added.length, bugfixes: listBugfixes() });
+    });
+
+    // FEATURES: alta manual de un item de trabajo de TOLKIEN sin ticket de
+    // Desk (id sintético FEAT-n del motor). REGLA de clasificación (2026-07-04):
+    // el tablero es SOLO Tolkien — features de la consola u otros proyectos NO
+    // van acá (la UI lo recuerda en el modal de alta).
+    r.post('/feature', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const title = String(req.body?.title || '').trim();
+      const description = String(req.body?.description || '').trim();
+      if (title.length < 3) return res.status(400).json({ error: 'Falta el título (mínimo 3 caracteres).' });
+      if (title.length > 120) return res.status(400).json({ error: 'Título demasiado largo (máx 120).' });
+      if (description.length > 4000) return res.status(400).json({ error: 'Descripción demasiado larga (máx 4000).' });
+      try {
+        const entry = createFeature({ title, description });
+        res.json({ ok: true, entry });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 200) });
+      }
     });
 
     r.post('/pr', async (req, res) => {
@@ -673,7 +696,8 @@ export default {
         // del usuario ("Actualizar ticket" del tablero). Asíncrono: el PR ya
         // está subido, la respuesta no espera a Desk.
         let deskAuto = false;
-        if (esPrimerEnvio && prNumber && entry.ticketNumber) {
+        // Features: JAMÁS tocan Desk (no hay ticket real detrás de un FEAT-n).
+        if (esPrimerEnvio && prNumber && entry.ticketNumber && entry.kind !== 'feature') {
           deskAuto = true;
           deskUpdateAuto(entry.sessionId).catch(() => {});
         }

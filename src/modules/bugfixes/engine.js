@@ -22,7 +22,7 @@
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listBugfixes } from './store.js';
+import { listBugfixes, saveBugfixes, addEvent } from './store.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const SIDECAR_FILE = path.join(DATA_DIR, 'tickets-meta.json');
@@ -43,6 +43,8 @@ export function deriveState(t) {
   const resolved = !!desk.resolved || !!desk.closed;
   const hasCode = t.attempts.some((a) => (a.files?.length || 0) > 0);
 
+  // FEATURES sin ticket de Desk: el merge cierra el ciclo (no hay etapas Desk).
+  if (t.kind === 'feature' && anyMerged) return 'resolved';
   if (resolved && anyMerged) return 'resolved';
   if (answered && anyMerged) return 'desk-answered';
   if (anyMerged) return 'pr-merged';
@@ -58,7 +60,8 @@ export function deriveResolution(t) {
   if (desk.resolved) return 'complete';
   const anyMerged = (t.external?.github || []).some((p) => p.state === 'merged')
     || t.attempts.some((a) => a.pr?.state === 'merged');
-  if (anyMerged) return 'partial';
+  // Un FEATURE no tiene confirmación de Desk: mergeado = completo.
+  if (anyMerged) return t.kind === 'feature' ? 'complete' : 'partial';
   return 'active';
 }
 
@@ -145,7 +148,9 @@ export function buildTickets({ ghRows = [] } = {}) {
       byNum.set(key, {
         number: b.ticketNumber || null,
         url: b.ticketUrl || null,
-        source: b.ticketNumber ? 'desk' : 'manual',
+        kind: b.kind === 'feature' ? 'feature' : 'bug',
+        spec: b.spec || null, // enunciado ORIGINAL del feature (no lo pisa el resumen del chat)
+        source: b.kind === 'feature' ? 'feature' : (b.ticketNumber ? 'desk' : 'manual'),
         title: b.title || '',
         severity: meta.severity || null,
         area: meta.area || null,
@@ -161,6 +166,8 @@ export function buildTickets({ ghRows = [] } = {}) {
       });
     }
     const t = byNum.get(key);
+    if (b.kind === 'feature') t.kind = 'feature';
+    if (b.spec && !t.spec) t.spec = b.spec;
     t.attempts.push(attemptOf(b));
     if (Array.isArray(b.history)) t.history.push(...b.history);
     // Título: preferí el del intento con más contenido (código > plan).
@@ -315,6 +322,46 @@ export function findSimilarSolutions(ticket, { limit = 3 } = {}) {
   };
   return sols.map((s) => ({ s, n: score(s) })).filter((x) => x.n > 0)
     .sort((a, b) => b.n - a.n).slice(0, limit).map((x) => x.s);
+}
+
+// ===== FEATURES: alta manual con id sintético FEAT-n =====
+// Un FEATURE es un item de trabajo de TOLKIEN sin ticket de Desk (por ahora:
+// el intake automático desde la página Tolkien es fase futura). Reusa TODO el
+// ciclo del motor: su id sintético viaja en ticketNumber (el motor ya agrupa
+// por [\w-]+), y `kind:'feature'` lo distingue donde importa (pipeline sin
+// etapas Desk, branch feature/, nunca deskUpdateAuto). REGLA de clasificación
+// (pedido del usuario 2026-07-04): el tablero es SOLO Tolkien — un feature de
+// la consola o de otro proyecto NO se da de alta acá.
+export function nextFeatureId() {
+  const sc = loadSidecar();
+  sc.featureSeq = (sc.featureSeq || 0) + 1;
+  saveSidecar(sc);
+  return `FEAT-${sc.featureSeq}`;
+}
+
+export function createFeature({ title, description }) {
+  const id = nextFeatureId();
+  const all = listBugfixes();
+  const entry = {
+    sessionId: `feature-${id.toLowerCase()}`, // clave inicial; el 1er chat de trabajo la reemplaza (recordBugfix mergea por ticketNumber)
+    chatId: null,
+    cwd: null, // se fija al trabajarlo (config.projectDir del chat)
+    kind: 'feature',
+    ticketNumber: id,
+    ticketUrl: null,
+    title: `${id} — ${String(title).slice(0, 100)}`,
+    spec: String(description || '').slice(0, 4000), // enunciado original, permanente
+    summary: String(description || '').slice(0, 4000),
+    files: [],
+    status: 'pendiente',
+    branch: null,
+    prUrl: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  addEvent(entry, 'creado', { feature: id });
+  saveBugfixes([entry, ...all]);
+  return entry;
 }
 
 // ===== Curación de dimensiones (tags/area/severity/meta) por ticket =====

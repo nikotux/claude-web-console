@@ -509,15 +509,42 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             deskStatus updating→ok|error + evento al historial. Las
                             ITERACIONES no tocan Desk: el resultado del envío lo avisa y el
                             tablero ofrece "Actualizar ticket (chat)".
-                            FIRMA EN DESK (pedido del usuario 2026-07-04): el token OAuth
-                            de Zoho que usan las tools desk_* es de OTRO agente (Chris) —
-                            la API publica toda nota como si la escribiera él y no permite
-                            falsear el autor. Por eso TODO prompt de la consola que redacta
+                            IDENTIDAD AL PUBLICAR (regla general, pedido del usuario
+                            2026-07-04): si el camino de escritura puede publicar con la
+                            identidad REAL de Nico (token/cuenta propia) → usarla, SIN
+                            firma; si publica como otra identidad → firma obligatoria.
+                            FIRMA EN DESK (caso actual): el token OAuth de Zoho que usan
+                            las tools desk_* es de OTRO agente (Chris) — la API publica
+                            toda nota como si la escribiera él y no permite falsear el
+                            autor. Por eso TODO prompt de la consola que redacta
                             escrituras a Desk (deskUpdateAuto acá y deskChatPrompt en
                             bugs/board/prompts.js — ghdeskchat reusa deskChat) exige cerrar la
                             nota con la firma exacta "— Nicolás (dev team)" en su propia
-                            línea. Si se agrega otro camino de escritura a Desk, sumarle la
-                            misma firma.
+                            línea. Teams sale como bot "Tolkien" (misma regla si se
+                            automatiza). Si se agrega otro camino de escritura externa,
+                            aplicar la regla general (identidad real si se puede; si no,
+                            la firma). Si algún día llega un token de Zoho PROPIO de Nico,
+                            quitar la firma de esos prompts.
+                            FEATURES (💡 FEAT-n, 2026-07-04): item de trabajo de TOLKIEN
+                            SIN ticket de Desk. Alta manual admin: botón "💡 Nuevo feature"
+                            del tablero (desktop + menú ⋯ móvil) → POST /api/bugfixes/feature
+                            {title, description} → createFeature() de engine.js (id sintético
+                            FEAT-n, secuencia featureSeq en el sidecar; kind:'feature' +
+                            spec = enunciado ORIGINAL permanente que el resumen del chat no
+                            pisa). El id viaja en ticketNumber (el motor ya agrupa por
+                            [\w-]+): TODO el ciclo se reusa — recordBugfix mergea por
+                            ticketNumber, "Trabajar en esto" abre chat (featurePrompt de
+                            prompts.js, modo plan si aún sin archivos, diseño primero),
+                            pushPr usa branch feature/feat-n-<sid> (no bugfix/tkt-). Desk
+                            queda FUERA en todas las capas (deriveState: merge ⇒ resolved;
+                            deriveResolution/resolutionOf: merge ⇒ complete; deskUpdateAuto
+                            y el gate del POST /pr excluyen kind feature; la UI oculta
+                            botones/section/chips/investigación-contexto de Desk y el
+                            pipeline muestra "se completa con el merge"). REGLA de
+                            clasificación (memoria feature-clasificacion.md): el tablero es
+                            SOLO Tolkien — features de la consola u otros proyectos NO se
+                            cargan acá. Intake automático desde la página Tolkien
+                            ([Tolkien Feature] en Desk → triage) = fase FUTURA, no hecha.
                             PR-LIVE (GET /pr-live/:n, admin): datos EN VIVO de un PR vía gh
                             (reviews, reviewDecision, comentarios, checks, commits,
                             mergeable) con caché en memoria de 60 s (?fresh=1 la saltea);

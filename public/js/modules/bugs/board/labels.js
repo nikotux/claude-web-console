@@ -30,7 +30,7 @@ export function timelineOf(b) {
 }
 
 export const EV_LABEL = {
-  creado: (e) => 'Fix registrado desde el chat',
+  creado: (e) => (e.feature ? `Feature ${e.feature} creado en el tablero` : 'Fix registrado desde el chat'),
   trabajo_nuevo: (e) => `Se reabrió el trabajo (chat nuevo)${e.pr ? ` sobre el PR #${e.pr}` : ''}`,
   pr_creado: (e) => `PR #${e.pr ?? '?'} creado${e.files ? ` · ${e.files} archivo/s` : ''}`,
   pr_actualizado: (e) => `PR #${e.pr ?? '?'} actualizado · commit ${e.commit || '?'}${e.commitN ? ` (${e.commitN}º del branch)` : ''}`,
@@ -120,6 +120,8 @@ export function prCellFor(b, entries, ghRows) {
 }
 
 export function deskCellFor(b) {
+  // Un FEATURE no tiene ticket de Desk (su FEAT-n es id interno del motor).
+  if (b.kind === 'feature') return '<span class="bb-icell bb-icell--none" title="Feature: sin ticket de Desk">—</span>';
   if (!b.ticketNumber) return '<span class="bb-icell bb-icell--none">—</span>';
   if (b.deskStatus === 'updating') return `<span class="bb-icell bb-icell--warn" title="Publicando la respuesta en Desk…">${icon('clock', { size: 14 })}</span>`;
   if (b.deskResolved) return `<span class="bb-icell bb-icell--ok" title="Ticket resuelto/confirmado en Desk">${icon('ticketDone', { size: 16 })}</span>`;
@@ -155,6 +157,8 @@ export function segmentOfEntry(b) {
   if (resolutionOf(b) === 'complete' || b.prState === 'merged') return 'done';
   if (b.prState === 'open' && b.prNumber) return 'revision';
   if (b.status === 'pendiente' && b.files?.length) return 'accion';
+  // Un feature recién creado (sin trabajo todavía) también es acción tuya.
+  if (b.kind === 'feature' && b.status === 'pendiente' && !b.prNumber) return 'accion';
   return null;
 }
 export function segmentOfGh(pr) {
@@ -165,7 +169,7 @@ export function segmentOfGh(pr) {
 
 // Título "limpio" para la card móvil: la identidad (#N) ya va en la línea 1,
 // el prefijo "TKT #N — " duplicaba y comía dos renglones en 375px.
-export const cleanTitle = (t) => String(t || '').replace(/^TKT\s*#?[\w.-]+\s*[—–-]\s*/i, '');
+export const cleanTitle = (t) => String(t || '').replace(/^(?:TKT\s*#?|FEAT-?)[\w.-]+\s*[—–-]\s*/i, '');
 
 // ===== Cruces registro × triage (compartidos por chips y advertencias) =====
 export const triageByNum = (triage) => new Map((triage.tickets || []).map((t) => [String(t.ticketNumber), t]));
@@ -183,7 +187,8 @@ export function entriesByTicket(entries) {
 export function warningsFor(b, { entries, triage }) {
   const w = [];
   const tk = b.ticketNumber ? triageByNum(triage).get(String(b.ticketNumber)) : null;
-  if (b.ticketNumber && triage.updatedAt && !tk) w.push('no aparece en el último triage (¿ya resuelto/cerrado?)');
+  // Features: el triage es SOLO de bugs de Desk — "no aparece" es lo esperado.
+  if (b.kind !== 'feature' && b.ticketNumber && triage.updatedAt && !tk) w.push('no aparece en el último triage (¿ya resuelto/cerrado?)');
   if (timelineOf(b).some((e) => e.type === 'trabajo_nuevo')) w.push('fix retrabajado (actualiza un PR existente)');
   if (b.ticketNumber && (entriesByTicket(entries).get(String(b.ticketNumber)) || 0) > 1) w.push('DOBLE registro local para este ticket');
   if (tk?.duplicate) w.push(`posible duplicado de ${tk.duplicate}`);

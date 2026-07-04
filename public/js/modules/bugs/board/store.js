@@ -84,6 +84,8 @@ export function ticketToRow(t) {
   return {
     // identidad + acción (las acciones operan sobre el attempt principal)
     sessionId: mainAttempt.sessionId || null,
+    kind: t.kind || 'bug', // 'feature' = item de trabajo SIN ticket de Desk (FEAT-n)
+    spec: t.spec || null,  // enunciado original del feature (no lo pisa el chat)
     ticketNumber: t.number, ticketUrl: t.url, title: t.title,
     summary: mainAttempt.summary || (t.attempts.find((a) => a.summary)?.summary) || '',
     files: allFiles, stats: best ? mainAttempt.stats : mainAttempt.stats,

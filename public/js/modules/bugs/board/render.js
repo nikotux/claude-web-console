@@ -104,12 +104,17 @@ export function renderHeader(state) {
 // ===== Chips de verificación (cruce registro × triage × historial) =====
 function chipsFor(b, state) {
   const chips = [];
-  const tk = b.ticketNumber ? triageByNum(state.triage).get(String(b.ticketNumber)) : null;
+  // FEATURE: chip de identidad y NADA de cruces con el triage/Desk (un FEAT-n
+  // no es un ticket de Zoho — "no está en el triage" sería ruido esperado).
+  if (b.kind === 'feature') {
+    chips.push('<span class="bb-chip bb-chip--info" title="Feature de Tolkien creado en el tablero (sin ticket de Desk detrás)">💡 feature</span>');
+  }
+  const tk = b.ticketNumber && b.kind !== 'feature' ? triageByNum(state.triage).get(String(b.ticketNumber)) : null;
   if (tk) {
     chips.push(`<span class="tk-sev tk-sev-${esc(tk.severity)}">${esc(tk.severity)}</span>`);
     chips.push('<span class="bb-chip bb-chip--ok" title="El ticket aparece en el último triage de Desk (sigue abierto)">🎫 abierto en Desk</span>');
     if (tk.duplicate) chips.push(`<span class="bb-chip bb-chip--warn" title="El triage lo marcó como posible duplicado">👥 dup: ${esc(tk.duplicate)}</span>`);
-  } else if (b.ticketNumber && state.triage.updatedAt) {
+  } else if (b.ticketNumber && b.kind !== 'feature' && state.triage.updatedAt) {
     chips.push('<span class="bb-chip bb-chip--warn" title="No aparece en el último triage: puede estar resuelto/cerrado — verificá antes de enviar">🎫 no está en el triage</span>');
   }
   const tl = timelineOf(b);
@@ -125,7 +130,7 @@ function chipsFor(b, state) {
     chips.push(desk.ok
       ? '<span class="bb-chip bb-chip--ok" title="Última actualización del ticket en Desk: OK">🎫 ticket ✓</span>'
       : '<span class="bb-chip bb-chip--danger" title="La última actualización del ticket FALLÓ — hacela por chat o a mano">🎫 ticket ✗</span>');
-  } else if (b.status === 'subido' && b.ticketNumber) {
+  } else if (b.status === 'subido' && b.ticketNumber && b.kind !== 'feature') {
     chips.push('<span class="bb-chip bb-chip--warn" title="El PR se envió pero el ticket no registra actualización en Desk">🎫 sin actualizar</span>');
   }
   return chips.join(' ');
@@ -135,8 +140,19 @@ function chipsFor(b, state) {
 // (cerrado o cliente respondió) — verde SOLO cuando está completo de verdad:
 // un PR mergeado (barra 4) es solución parcial hasta que el ticket confirma.
 function pipelineHtml(b, state) {
-  const tk = b.ticketNumber ? triageByNum(state.triage).get(String(b.ticketNumber)) : null;
   const seg = (on, cls, label) => `<span class="bb-seg ${on ? `bb-seg--${cls}` : ''}" title="${esc(label)}"></span>`;
+  // FEATURE: pipeline SIN etapas de Desk — idea → trabajo → PR → merge (cierra
+  // el ciclo; la 5ª barra acompaña al merge para que "completo" se vea lleno).
+  if (b.kind === 'feature') {
+    return `<span class="bb-pipe">${[
+      seg(true, 'ok', `Feature ${b.ticketNumber || ''} creado en el tablero`),
+      seg(!!(b.files?.length), 'ok', b.files?.length ? `Trabajo: ${b.files.length} archivo/s editados` : 'Sin trabajo aún'),
+      seg(!!b.prNumber, b.prState === 'closed' ? 'fail' : 'ok', b.prNumber ? `PR #${b.prNumber} (${b.prState || '?'})` : 'Sin PR'),
+      seg(b.prState === 'merged', 'ok', b.prState === 'merged' ? `Mergeado por ${b.mergedBy || '?'}` : 'Sin merge'),
+      seg(b.prState === 'merged', 'ok', b.prState === 'merged' ? 'Feature completo (mergeado — no requiere confirmación de Desk)' : 'Se completa con el merge (sin etapa de Desk)'),
+    ].join('')}</span>`;
+  }
+  const tk = b.ticketNumber ? triageByNum(state.triage).get(String(b.ticketNumber)) : null;
   const confirmLabel = b.deskResolved
     ? (b.deskClosed ? 'Ticket cerrado/resuelto en Desk — completo' : 'El cliente respondió — completo')
     : (b.prState === 'merged' ? 'PR mergeado pero ticket SIN confirmar (parcial): revisá el estado de Desk' : 'Ticket sin confirmar');
@@ -310,7 +326,9 @@ function invTopBox(row, state) {
     }
     return `<div class="bb-inv bb-inv--top" data-invtop="${esc(pr)}" data-invticket="${esc(row.ticketNumber || '')}">${body}</div>`;
   }
-  if (!row.ticketNumber) return '';
+  // Feature sin PR: no hay investigación de contexto (el runner es de tickets
+  // de Desk; un FEAT-n no existe en Zoho). Con PR sí aplica la del PR (arriba).
+  if (!row.ticketNumber || row.kind === 'feature') return '';
   const problem = {
     title: row.title || '', whatBroke: row.whatBroke || '', route: row.route || '',
     reporter: row.reporter || '', severity: row.severity || '', context: row.context || '',
@@ -390,9 +408,12 @@ function detailHtml(b, state) {
           <span class="bb-tl-txt">${esc((EV_LABEL[e.type] || (() => e.type))(e))}</span>
         </div>`).join('')}</div>`
     : '';
+  const specBlock = b.kind === 'feature' && b.spec && b.spec !== b.summary
+    ? `<div class="bb-spec"><b>Enunciado del feature:</b><p class="hp-bf-summary">${esc(b.spec)}</p></div>` : '';
   return `
     ${invTopBox(b, state)}
     <div class="bb-chips">${chipsFor(b, state)}</div>
+    ${specBlock}
     <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
     ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
     : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
@@ -401,13 +422,13 @@ function detailHtml(b, state) {
     ${similarHtml(b)}
     ${timeline}
     ${b.prNumber ? liveBoxHtml(b.prNumber, state) : ''}
-    ${b.ticketNumber ? deskSectionHtml(b.ticketNumber, state) : ''}
+    ${b.ticketNumber && b.kind !== 'feature' ? deskSectionHtml(b.ticketNumber, state) : ''}
     <p class="bb-links">
       ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
       ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
       ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
       <button class="btn btn--sm" data-act="work"${dis}>${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
-      ${b.ticketNumber
+      ${b.ticketNumber && b.kind !== 'feature'
     ? `<button class="btn-ghost btn--sm" data-act="deskchat"${dis} title="Abre un chat con TODO el contexto para redactar (en inglés) y publicar una respuesta en el ticket de Zoho Desk — vos aprobás la escritura">${icon('edit', { size: 13 })}<span>Responder ticket (chat)</span></button>` : ''}
       ${b.status === 'subido' && b.prState !== 'merged'
     ? `<button class="btn-ghost btn--sm btn--danger" data-act="cancelpr"${dis}>${icon('trash', { size: 13 })}<span>Cancelar PR</span></button>` : ''}
@@ -491,7 +512,7 @@ function actionBarHtml(b, state) {
       : { act: 'work', label: 'Trabajar en esto', ic: 'sparkle' };
   const secondary = b.prNumber
     ? `<button class="btn-ghost btn--sm" data-investigate="${esc(b.prNumber)}" data-invticket="${esc(b.ticketNumber || '')}"${dis}>${icon('search', { size: 14 })}<span>Investigar</span></button>`
-    : b.ticketNumber
+    : b.ticketNumber && b.kind !== 'feature'
       ? `<button class="btn-ghost btn--sm" data-tktinvestigate="${esc(b.ticketNumber)}" data-invproblem="${problemJson(b)}"${dis}>${icon('search', { size: 14 })}<span>Investigar</span></button>`
       : '';
   return `
@@ -502,7 +523,7 @@ function actionBarHtml(b, state) {
 
 // Detalle-foco de un ticket con registro (móvil).
 function detailMobileHtml(b, state) {
-  const id = [b.ticketNumber ? `#${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null].filter(Boolean).join(' · ') || '—';
+  const id = [b.ticketNumber ? `${b.kind === 'feature' ? '💡 ' : '#'}${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null].filter(Boolean).join(' · ') || '—';
   const tl = timelineOf(b);
   const timeline = tl.length
     ? `<div class="bb-tl">${tl.map((e) => `
@@ -513,6 +534,7 @@ function detailMobileHtml(b, state) {
         </div>`).join('')}</div>`
     : '';
   const resumen = `
+    ${b.kind === 'feature' && b.spec && b.spec !== b.summary ? `<div class="bb-spec"><b>Enunciado del feature:</b><p class="hp-bf-summary">${esc(b.spec)}</p></div>` : ''}
     <p class="hp-bf-summary">${esc(b.summary || '(sin resumen)')}</p>
     ${b.files?.length ? `<p class="hp-bf-files">${b.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>`
     : '<p class="hp-bf-files hp-bf-files--none">Sin archivos editados (quedó en plan).</p>'}
@@ -524,7 +546,7 @@ function detailMobileHtml(b, state) {
     ${focusSec('Resumen y archivos', b.files?.length || null, resumen)}
     ${timeline ? focusSec('Timeline', tl.length, timeline) : ''}
     ${b.prNumber ? focusSec('GitHub en vivo', null, liveBoxHtml(b.prNumber, state)) : ''}
-    ${b.ticketNumber ? focusSec('Zoho Desk', null, deskSectionHtml(b.ticketNumber, state)) : ''}
+    ${b.ticketNumber && b.kind !== 'feature' ? focusSec('Zoho Desk', null, deskSectionHtml(b.ticketNumber, state)) : ''}
     <p class="bb-links">
       ${b.ticketUrl ? `<a href="${esc(b.ticketUrl)}" target="_blank" rel="noopener">Ticket #${esc(b.ticketNumber)} ↗</a>` : ''}
       ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
@@ -609,7 +631,9 @@ export function renderTable(state) {
     // ¿Fila protagonizada por un PR abierto? (no en archivo)
     const isPr = !arch && b.prState === 'open' && b.prNumber;
     const group = isPr ? (openPrGroups.get(String(b.prNumber)) || [b]) : [b];
-    const tktCell = isPr ? `<span class="bb-prnum">🔀 #${esc(b.prNumber)}</span>` : (b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—');
+    const tktCell = isPr ? `<span class="bb-prnum">🔀 #${esc(b.prNumber)}</span>`
+      : b.kind === 'feature' ? `<span title="Feature de Tolkien (sin ticket de Desk)">💡 ${esc(b.ticketNumber)}</span>`
+        : (b.ticketNumber ? `#${esc(b.ticketNumber)}` : '—');
     const titleCell = isPr
       ? `<div class="bb-prtitle"><b>PR #${esc(b.prNumber)}</b> · ${esc(b.title)}</div><div class="bb-prtkts">${group.map(subTktHtml).join('')}</div>`
       : esc(b.title);
@@ -716,7 +740,7 @@ export function renderTable(state) {
     const resChip = !arch && RES_CHIP[resolutionOf(b)] ? ` ${RES_CHIP[resolutionOf(b)]}` : '';
     const isPr = !arch && b.prState === 'open' && b.prNumber;
     const group = isPr ? (openPrGroups.get(String(b.prNumber)) || [b]) : [b];
-    const id = [b.ticketNumber ? `#${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null]
+    const id = [b.ticketNumber ? `${b.kind === 'feature' ? '💡 ' : '#'}${esc(b.ticketNumber)}` : null, b.prNumber ? `PR #${esc(b.prNumber)}` : null]
       .filter(Boolean).join(' · ') || '—';
     let sem = '';
     if (b.prNumber) {
@@ -833,6 +857,7 @@ export function helpHtml() {
           <li>✅ <b>Merge</b> — Chris lo mergeó a main</li>
           <li>🎫 <b>Ticket confirmado</b> — el ticket se cerró o el cliente respondió (verde SOLO acá = completo de verdad)</li>
         </ol>
+        <p class="bb-help-dim">💡 <b>Features</b> (filas <b>💡 FEAT-n</b>, alta con "Nuevo feature"): trabajo de Tolkien SIN ticket de Desk — su pipeline no tiene etapas de Desk y el ciclo se completa con el merge. El tablero es SOLO para Tolkien: features de la consola u otros proyectos van por su propio repo.</p>
         <p class="bb-help-dim">Color de cada barra: <span class="bb-help-c bb-help-c--ok">verde</span> hecho · <span class="bb-help-c bb-help-c--fail">rojo</span> falló/cerrado · <span class="bb-help-c">gris</span> pendiente.</p>
       </div>
       <div class="bb-help-sec">

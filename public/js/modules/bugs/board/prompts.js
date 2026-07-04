@@ -56,6 +56,34 @@ export function workPrompt(b, { invText, workContext, prContext }) {
   ].filter(Boolean).join('\n');
 }
 
+// Prompt de "Trabajar en esto" para un FEATURE del tablero (FEAT-n, sin
+// ticket de Desk). El feature es de TOLKIEN por definición (regla de
+// clasificación: el tablero no carga trabajo de otros proyectos).
+export function featurePrompt(b, { invText, workContext, prContext }) {
+  const est = prEstado(b);
+  return [
+    `Trabajemos el feature ${b.ticketNumber} de Tolkien: ${b.title || ''}`,
+    '',
+    'ENUNCIADO del feature (lo que se pidió):',
+    b.spec || b.summary || '(sin enunciado — pedímelo antes de empezar)',
+    '',
+    `Estado actual: ${est.label}.`,
+    b.prUrl ? `PR: ${b.prUrl}` : '',
+    b.files?.length ? `Archivos tocados hasta ahora:\n${b.files.map((f) => `- ${f}`).join('\n')}` : 'Todavía sin archivos editados.',
+    `\nHISTORIAL del ciclo:\n${historyText(b) || '(sin eventos)'}`,
+    (b.feedback || []).length ? `\nFEEDBACK de Chris en el PR (guardado — tenelo MUY presente):\n${b.feedback.slice(-5).map((f) => `- ${f.author}: ${(f.body || '').slice(0, 300)}`).join('\n')}` : '',
+    (b.similar || []).length ? `\nSOLUCIONES PASADAS PARECIDAS (aprendé de ellas):\n${b.similar.map((s) => `- ${s.ticketNumber}${s.files?.[0] ? ` (${s.files[0]})` : ''}: ${s.fix || s.rootCause || ''}${s.lesson ? ` — lección: ${s.lesson}` : ''}`).join('\n')}` : '',
+    invText || '',
+    'Proceso: es un FEATURE, no un bugfix — arrancá por el DISEÑO: qué se',
+    'quiere lograr, dónde encaja en el código de Tolkien, qué opciones hay y',
+    'cuál conviene. Presentame el plan y esperá mi OK antes de implementar.',
+    'OJO: no hay ticket de Desk detrás (no toques Desk). El respaldo del',
+    `trabajo es este feature del tablero (${b.ticketNumber}); citalo en tu cierre.`,
+    workContext ? `\n--- CONTEXTO DE TRABAJO (aplica lo general; lo específico de Desk NO corre acá) ---\n${workContext}\n---` : '',
+    prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
+  ].filter(Boolean).join('\n');
+}
+
 // Prompt de "Responder/Actualizar ticket (chat)": redacta EN INGLÉS y escribe
 // en Desk solo con aprobación del usuario. Se adapta a con/sin PR.
 export function deskChatPrompt(b) {

@@ -11,7 +11,7 @@ import { poll } from './polls.js';
 import { rowKey, warningsFor } from './labels.js';
 import { pendingOf } from './render.js';
 import {
-  fetchContexts, workPrompt, deskChatPrompt, triagePrompt,
+  fetchContexts, workPrompt, featurePrompt, deskChatPrompt, triagePrompt,
   invTextOfPr, invTextOfTicket,
 } from './prompts.js';
 
@@ -317,19 +317,48 @@ export function toggleArch() {
 // ===== Chats del ciclo (cierran el tablero y abren pestañas del SDK) =====
 export async function workOn(b) {
   const [workContext, prContext] = await fetchContexts();
+  const isFeature = b.kind === 'feature';
   // Veredicto de la investigación (si se corrió): sus pasos guían el trabajo.
+  // Features sin PR no tienen investigación (el runner es de tickets de Desk).
   let invText = '';
   if (b.prNumber) {
     invText = invTextOfPr((await getInv(b.prNumber))?.investigation?.lectura);
-  } else if (b.ticketNumber) {
+  } else if (b.ticketNumber && !isFeature) {
     invText = invTextOfTicket((await getTktInv(b.ticketNumber))?.investigation?.lectura);
   }
   await deps.openChat({
-    cwd: deps.projectRel(), mode: 'default',
-    prompt: workPrompt(b, { invText, workContext, prContext }),
-    title: `PR en progreso · TKT #${b.ticketNumber}`.slice(0, 60),
+    cwd: deps.projectRel(), mode: isFeature && !b.files?.length ? 'plan' : 'default',
+    prompt: (isFeature ? featurePrompt : workPrompt)(b, { invText, workContext, prContext }),
+    title: (isFeature ? `Feature ${b.ticketNumber}` : `PR en progreso · TKT #${b.ticketNumber}`).slice(0, 60),
     ticket: { number: b.ticketNumber, url: b.ticketUrl || null },
   });
+}
+
+// ===== Alta manual de un FEATURE (FEAT-n del motor, admin) =====
+// REGLA de clasificación (2026-07-04): el tablero es SOLO Tolkien — features
+// de la consola u otros proyectos NO se cargan acá (el hint lo recuerda).
+export async function newFeature() {
+  const title = await deps.dialog.promptDialog({
+    title: 'Nuevo feature — Tolkien',
+    message: 'Título corto del feature. OJO: el tablero es SOLO para features de TOLKIEN (los de la consola u otros proyectos van por su propio repo).',
+    placeholder: 'p.ej. Export CSV del reporte de PTO',
+  });
+  if (!title || title.trim().length < 3) return;
+  await deps.dialog.textEditorDialog({
+    title: `Enunciado — ${title.trim().slice(0, 40)}`,
+    hint: 'Describí QUÉ se quiere lograr y para quién (esto es lo que leerá el chat de trabajo como enunciado permanente del feature).',
+    value: '',
+    saveLabel: 'Crear feature',
+    onSave: async (text) => {
+      const res = await fetch('/api/bugfixes/feature', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim(), description: String(text || '').trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo crear el feature.');
+    },
+  });
+  await reload();
 }
 
 // Chat "Actualizar/Responder ticket": SIN ticket:{} a propósito — un chat de

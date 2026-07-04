@@ -38,6 +38,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   wrap.innerHTML = `
     <div class="bb-actions">
       <button class="btn btn--sm" data-ref="send" disabled>${icon('gitBranch', { size: 13 })}<span>Enviar pendientes</span></button>
+      <button class="btn-ghost btn--sm" data-ref="newfeat" title="Da de alta un FEATURE de Tolkien en el tablero (FEAT-n, sin ticket de Desk). El tablero es SOLO para trabajo de Tolkien">💡<span>Nuevo feature</span></button>
       <button class="btn-ghost btn--sm" data-ref="scan" title="Re-busca en los chats de tickets cambios sin registrar">${icon('sparkle', { size: 13 })}<span>Buscar bugfixes</span></button>
       <button class="btn-ghost btn--sm" data-ref="ghsync" title="Refresca desde GitHub el estado de los PRs (automático mientras el tablero está abierto)">${icon('refresh', { size: 13 })}<span>GitHub</span></button>
       <button class="btn-ghost btn--sm" data-ref="desksync" title="Consulta Zoho Desk el estado REAL de los tickets activos (respuesta publicada, resuelto). CONSUME TOKENS — con confirmación">${icon('download', { size: 13 })}<span>🎫 Desk</span></button>
@@ -166,8 +167,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const b = store.get().entries.find((x) => rowKey(x) === more.dataset.detailmore);
     if (!b) return;
     const items = [];
-    if (b.ticketNumber) items.push(['deskchat', 'edit', 'Responder ticket (chat)', false]);
-    if (b.ticketNumber) items.push(['deskload', 'download', 'Traer estado de Desk', false]);
+    const hasDesk = b.ticketNumber && b.kind !== 'feature'; // un FEAT-n no existe en Zoho
+    if (hasDesk) items.push(['deskchat', 'edit', 'Responder ticket (chat)', false]);
+    if (hasDesk) items.push(['deskload', 'download', 'Traer estado de Desk', false]);
     if (resolutionOf(b) !== 'complete' && !b.archived) items.push(['archive', 'check', 'Archivar', false]);
     if (b.status === 'subido' && b.prState !== 'merged') items.push(['cancelpr', 'trash', 'Cancelar PR', true]);
     items.push(['del', 'close', 'Descartar registro', true]);
@@ -208,6 +210,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const menu = document.createElement('div');
     menu.className = 'cwc-popup-menu';
     menu.innerHTML = `
+      <button class="cwc-popup-item" data-mact="newfeat">💡<span>Nuevo feature</span></button>
       <button class="cwc-popup-item" data-mact="scan">${icon('sparkle', { size: 14 })}<span>Buscar bugfixes</span></button>
       <button class="cwc-popup-item" data-mact="gh">${icon('refresh', { size: 14 })}<span>Sincronizar GitHub</span></button>
       <button class="cwc-popup-item" data-mact="desk">${icon('download', { size: 14 })}<span>🎫 Consultar Desk</span></button>
@@ -221,13 +224,14 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       const it = e.target.closest('[data-mact]');
       if (!it || it.disabled) return;
       dismiss();
-      ({ scan: () => A.scan(), gh: () => A.ghSync(false), desk: () => A.deskSyncBulk(), help: openHelp })[it.dataset.mact]?.();
+      ({ newfeat: () => A.newFeature(), scan: () => A.scan(), gh: () => A.ghSync(false), desk: () => A.deskSyncBulk(), help: openHelp })[it.dataset.mact]?.();
     });
   });
 
   // ===== Header =====
   mr.send.addEventListener('click', () => A.sendPending());
   mr.listsend.addEventListener('click', () => A.sendPending());
+  mr.newfeat.addEventListener('click', () => A.newFeature());
   mr.scan.addEventListener('click', () => A.scan());
   mr.ghsync.addEventListener('click', () => A.ghSync(false));
   mr.desksync.addEventListener('click', () => A.deskSyncBulk());
