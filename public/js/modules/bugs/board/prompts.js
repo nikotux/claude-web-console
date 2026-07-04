@@ -78,6 +78,7 @@ export function deskChatPrompt(b) {
     hasPr
       ? '3. Redactá una actualización EN INGLÉS, corta y humana (2-4 frases) con lo que cambió desde la última nota (qué se corrigió/mejoró y que el despliegue sigue en curso). MOSTRÁMELA y esperá mi OK.'
       : '3. Redactá EN INGLÉS una respuesta corta y humana (2-4 frases) apropiada al estado real: un avance, un pedido de información, o el próximo paso. MOSTRÁMELA y esperá mi OK.',
+    '   La nota SIEMPRE cierra con la firma exacta "— Nicolás (dev team)" en su propia línea: la API de Desk publica con otra identidad y el autor real tiene que quedar claro.',
     '4. Recién con mi OK, publicala en el ticket (visible al solicitante si se puede) y ajustá el estado si corresponde.',
     'NO toques código ni envíes PRs desde este chat.',
   ].filter(Boolean).join('\n');
