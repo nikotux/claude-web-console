@@ -6,7 +6,7 @@
 //   PUT    /api/admin/users/:username    -> { password?, admin? }
 //   DELETE /api/admin/users/:username    -> elimina
 import express from 'express';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
 
 function requireAdmin(req, res, next) {
@@ -17,7 +17,15 @@ function requireAdmin(req, res, next) {
 export default {
   name: 'admin',
 
-  registerHttp(router) {
+  init(ctx) { // eslint-disable-line no-unused-vars -- interfaz estándar (CLAUDE.md:162), no usado por este módulo
+    return Promise.resolve();
+  },
+
+  registerWs(wss, ctx) { // eslint-disable-line no-unused-vars -- interfaz estándar (CLAUDE.md:162), no usado por este módulo
+    // No-op: este módulo no usa WebSocket.
+  },
+
+  registerHttp(router, ctx) { // eslint-disable-line no-unused-vars -- ctx: interfaz estándar (CLAUDE.md:162), no usado por este módulo
     const r = express.Router();
     r.use(requireAdmin);
 
@@ -26,7 +34,7 @@ export default {
     r.post('/users', (req, res) => {
       const { username, password, admin } = req.body || {};
       try {
-        createUser(username, password, !!admin);
+        createUser(username, password, typeof admin === 'boolean' ? admin : false);
         res.json({ ok: true });
       } catch (e) {
         res.status(400).json({ error: e.message });
@@ -37,17 +45,30 @@ export default {
       const { username } = req.params;
       const { password, admin } = req.body || {};
       try {
-        if (typeof password === 'string' && password.length) setPassword(username, password);
-        if (typeof admin === 'boolean') setAdmin(username, admin);
-        res.json({ ok: true });
+        let changed = false;
+        if (typeof password === 'string' && password.length) {
+          setPassword(username, password);
+          changed = true;
+        }
+        if (typeof admin === 'boolean') {
+          setAdmin(username, admin);
+          changed = true;
+        }
+        if (!changed) return res.status(400).json({ error: 'Ningún parámetro válido enviado (password o admin).' });
+        res.json({ ok: true, changed });
       } catch (e) {
         res.status(400).json({ error: e.message });
       }
     });
 
     r.delete('/users/:username', (req, res) => {
+      const { username } = req.params;
+      const principal = principalOf(req);
+      if (principal && principal.username === username) {
+        return res.status(409).json({ error: 'No puedes eliminar tu propio usuario.' });
+      }
       try {
-        deleteUser(req.params.username);
+        deleteUser(username);
         res.json({ ok: true });
       } catch (e) {
         res.status(400).json({ error: e.message });

@@ -139,11 +139,15 @@ export function mountBackupPanel(el, ctx) {
     });
     if (!ok) return;
     try {
-      await fetch(`${API}/delete`, {
+      const res = await fetch(`${API}/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Falló la eliminación.');
+    } catch (e) {
+      msg(e.message, 'err');
     } finally {
       loadList();
     }

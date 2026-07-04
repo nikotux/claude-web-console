@@ -119,6 +119,14 @@ export function writeContextSection(projectDir, i, expectedHash, content) {
   if (hashOf(s.text) !== String(expectedHash || '')) {
     throw Object.assign(new Error('El contexto cambió desde que abriste esta sección (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
   }
+  // Verificación defensiva del INVARIANTE documentado (CLAUDE.md): split/join
+  // debe reconstruir el original byte a byte ANTES de mutar la sección editada.
+  // Si no coincide, splitContextSections está roto y empalmar corrompería el
+  // resto del archivo sin que nadie lo note: abortamos en vez de escribir.
+  const roundTrip = sections.map((x) => x.text).join('\n');
+  if (roundTrip !== src) {
+    throw new Error('Integridad de secciones violada: splitContextSections no reconstruye el archivo original. Guardado abortado para no corromper CLAUDE.md.');
+  }
   s.text = String(content ?? '');
   const out = sections.map((x) => x.text).join('\n');
   if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto quedaría demasiado grande.');

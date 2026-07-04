@@ -13,6 +13,12 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
+// Títulos humanos custom (titles.json), compartidos con el módulo tmux: se
+// consultan acá para que una sesión rehidratada tras un reinicio de Node
+// recupere el título que tenía antes de reiniciar (ver rehydrate() abajo —
+// antes SIEMPRE usaba basename(cwd) para el título en memoria, ignorando
+// cualquier customTitle ya persistido para esa misma sesión tmux).
+import { loadTitles, titleKey } from '../../core/session-names.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMUX_CONF = path.join(__dirname, 'tmux.cwc.conf');
@@ -119,7 +125,9 @@ class Session {
     }
     this.alive = true;
 
-    this.proc.onData((data) => this._onData(data));
+    this.proc.onData((data) => {
+      try { this._onData(data); } catch (e) { console.error('[terminal]', e); }
+    });
     this.proc.onExit(() => {
       this.alive = false;
       this._broadcast(JSON.stringify({ type: 'exit' }));
@@ -191,8 +199,10 @@ class Session {
   attach(ws) {
     this.clients.add(ws);
     // Re-pinta el buffer reciente al reconectar (frame binario).
-    const replay = this.buffer.join('');
-    if (replay && ws.readyState === ws.OPEN) ws.send(Buffer.from(replay, 'utf8'));
+    // Buffer.concat preserva los bytes crudos: join('') haría toString()
+    // UTF-8 implícito en cada Buffer y corrompería datos binarios no-UTF8.
+    const replay = Buffer.concat(this.buffer);
+    if (replay.length && ws.readyState === ws.OPEN) ws.send(replay);
   }
 
   detach(ws) {
@@ -252,6 +262,11 @@ class SessionManager {
       return 0; // sin servidor tmux o sin sesiones: nada que rehidratar
     }
     let count = 0;
+    // Títulos custom persistidos (titles.json): mismo mecanismo que usa el
+    // módulo tmux para mostrar la tarjeta. Sin esto, una sesión con customTitle
+    // (p.ej. "tolkien 1" por colisión de basename al crearla) recupera SOLO el
+    // basename crudo al rehidratar tras un reinicio de Node.
+    const titles = loadTitles();
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
       const [name, cwdRaw] = line.split('\t');
@@ -259,7 +274,8 @@ class SessionManager {
       const id = name.slice(PREFIX.length);
       if (this.sessions.has(id)) continue;
       const cwd = (cwdRaw && cwdRaw.trim()) || config.home;
-      const session = new Session({ id, cwd, title: path.basename(cwd) || 'terminal' });
+      const title = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd) || 'terminal';
+      const session = new Session({ id, cwd, title });
       session.spawn({ runClaude: false });
       this.sessions.set(id, session);
       count += 1;

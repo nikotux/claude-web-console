@@ -68,48 +68,67 @@ export default {
 
     r.post('/sessions', (req, res) => {
       const { cwd, runClaude, title, attach, model } = req.body || {};
+      // Si sessionManager.create() llega a completar, guardamos el id acá
+      // para poder limpiarla si algo posterior (persistencia de título,
+      // recientes) falla — evita sesión huérfana viva pero invisible al cliente.
+      let createdId = null;
 
-      // Adjuntado a una sesión tmux existente (de cualquier socket): validamos
-      // socket + nombre para no ejecutar tmux con argumentos arbitrarios.
-      if (attach) {
-        const socketPath = validateSocketPath(attach.socket);
-        if (!socketPath || !isValidSessionName(attach.session)) {
-          return res.status(400).json({ error: 'Destino de adjuntado inválido.' });
+      try {
+        // Adjuntado a una sesión tmux existente (de cualquier socket): validamos
+        // socket + nombre para no ejecutar tmux con argumentos arbitrarios.
+        if (attach) {
+          const socketPath = validateSocketPath(attach.socket);
+          if (!socketPath || !isValidSessionName(attach.session)) {
+            return res.status(400).json({ error: 'Destino de adjuntado inválido.' });
+          }
+          const session = sessionManager.create({
+            attach: { socket: socketPath, session: attach.session },
+            title: title || attach.session,
+          });
+          createdId = session.id;
+          return res.json({ session: session.info() });
         }
+
+        // Modelo inicial opcional (lanzador): se arranca `claude --model <x>`.
+        if (model != null && !VALID_MODELS.has(model)) {
+          return res.status(400).json({ error: 'Modelo inválido.' });
+        }
+
+        const cwdAbs = cwd ? safeCwd(cwd) : config.home;
+        // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
+        // customTitle || basename(cwd) — si el basename ya está en uso (por
+        // otra tmux O una conversación de chat), se persiste "tolkien 1" como
+        // customTitle. Calculado ANTES de crear (así la propia sesión nueva no
+        // cuenta como colisión contra sí misma).
+        const baseName = path.basename(cwdAbs) || 'terminal';
+        const cardName = uniqueName(baseName);
         const session = sessionManager.create({
-          attach: { socket: socketPath, session: attach.session },
-          title: title || attach.session,
+          cwd: cwdAbs,
+          runClaude: !!runClaude,
+          model: model || null,
+          title,
         });
-        return res.json({ session: session.info() });
+        createdId = session.id;
+        if (cardName !== baseName) {
+          const titles = loadTitles();
+          titles[titleKey(config.tmuxSocket, session.tmuxName)] = cardName;
+          saveTitles(titles);
+        }
+        // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
+        recordRecent(path.relative(config.home, cwdAbs));
+        res.json({ session: session.info() });
+      } catch (err) {
+        console.error('[terminal] Error creando sesión:', err);
+        if (createdId) {
+          // La sesión llegó a crearse (tmux/pty pudo haber arrancado) pero el
+          // request no puede responder OK: la matamos y la sacamos del mapa
+          // para no dejarla viva-pero-invisible para el cliente.
+          const orphan = sessionManager.get(createdId);
+          try { orphan?.kill(); } catch { /* noop */ }
+          sessionManager.remove(createdId);
+        }
+        if (!res.headersSent) res.status(500).json({ error: 'No se pudo crear la sesión.' });
       }
-
-      // Modelo inicial opcional (lanzador): se arranca `claude --model <x>`.
-      if (model != null && !VALID_MODELS.has(model)) {
-        return res.status(400).json({ error: 'Modelo inválido.' });
-      }
-
-      const cwdAbs = cwd ? safeCwd(cwd) : config.home;
-      // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
-      // customTitle || basename(cwd) — si el basename ya está en uso (por
-      // otra tmux O una conversación de chat), se persiste "tolkien 1" como
-      // customTitle. Calculado ANTES de crear (así la propia sesión nueva no
-      // cuenta como colisión contra sí misma).
-      const baseName = path.basename(cwdAbs) || 'terminal';
-      const cardName = uniqueName(baseName);
-      const session = sessionManager.create({
-        cwd: cwdAbs,
-        runClaude: !!runClaude,
-        model: model || null,
-        title,
-      });
-      if (cardName !== baseName) {
-        const titles = loadTitles();
-        titles[titleKey(config.tmuxSocket, session.tmuxName)] = cardName;
-        saveTitles(titles);
-      }
-      // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
-      recordRecent(path.relative(config.home, cwdAbs));
-      res.json({ session: session.info() });
     });
 
     // Carpetas recientes donde se crearon sesiones (para el lanzador).

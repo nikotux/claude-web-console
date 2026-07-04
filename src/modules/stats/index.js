@@ -44,7 +44,15 @@ async function memInfo() {
       return m ? parseInt(m[1], 10) * 1024 : 0;
     };
     const total = kb(/MemTotal:\s+(\d+) kB/);
-    const avail = kb(/MemAvailable:\s+(\d+) kB/);
+    // MemAvailable no existe en kernels < 3.14; caer a MemFree y, si tampoco
+    // está, al fallback de os.* para no reportar un 100% de uso falso.
+    let avail = kb(/MemAvailable:\s+(\d+) kB/);
+    if (!avail) avail = kb(/MemFree:\s+(\d+) kB/);
+    if (!total || !avail) {
+      const t = os.totalmem();
+      const u = t - os.freemem();
+      return { total: t, used: u, pct: t ? (u / t) * 100 : 0 };
+    }
     const used = total - avail;
     return { total, used, pct: total ? (used / total) * 100 : 0 };
   } catch {

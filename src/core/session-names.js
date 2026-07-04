@@ -26,12 +26,20 @@ export function loadTitles() {
   try { return JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8')).titles || {}; }
   catch { return {}; }
 }
+// Devuelve true/false (éxito de persistencia) para que los callers que
+// necesitan confirmar durabilidad (p. ej. POST /tmux/title) puedan informar
+// al cliente si el guardado realmente pisó disco. Callers "best effort"
+// (como terminal/index.js al uniquificar un nombre) pueden seguir ignorando
+// el valor de retorno: nunca lanza, solo loguea y devuelve el resultado.
 export function saveTitles(titles) {
-  try { fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2)); }
-  catch (err) {
+  try {
+    fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2));
+    return true;
+  } catch (err) {
     // No rompe la operación (el título vive en RAM), pero el fallo se loguea:
     // sin persistir, el nombre custom se pierde en el próximo reinicio.
     console.error('[session-names] no se pudo persistir titles.json:', err?.message || err);
+    return false;
   }
 }
 export const titleKey = (socketName, name) => `${socketName}/${name}`;

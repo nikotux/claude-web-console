@@ -27,6 +27,7 @@ import {
 const ALWAYS_HIDDEN = new Set(['node_modules', '.git', 'dist', TRASH_DIRNAME]);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
+const MAX_ZIP_ITEMS = 1000;
 
 // Nombre de archivo/carpeta seguro (sin separadores ni traversal).
 function safeName(name) {
@@ -177,6 +178,7 @@ export default {
     r.post('/zip', (req, res) => {
       const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
       if (!paths.length) return res.status(400).json({ error: 'Sin selección.' });
+      if (paths.length > MAX_ZIP_ITEMS) return res.status(400).json({ error: `Demasiados ítems (máx. ${MAX_ZIP_ITEMS}).` });
       const items = [];
       for (const rel of paths) {
         const abs = resolveWithinHome(rel);

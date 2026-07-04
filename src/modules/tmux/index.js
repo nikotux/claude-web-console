@@ -103,13 +103,22 @@ export default {
       const socketPath = validateSocketPath(socket);
       if (!socketPath) return res.status(400).json({ error: 'Socket inválido.' });
       if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
-      const clean = String(title || '').trim().slice(0, 60);
-      const titles = loadTitles();
-      const key = titleKey(path.basename(socketPath), session);
-      if (clean) titles[key] = clean;
-      else delete titles[key];
-      saveTitles(titles);
-      res.json({ ok: true, title: clean || null });
+      try {
+        const clean = String(title || '').trim().slice(0, 60);
+        const titles = loadTitles();
+        const key = titleKey(path.basename(socketPath), session);
+        if (clean) titles[key] = clean;
+        else delete titles[key];
+        // saveTitles no lanza (atrapa I/O internamente, ver core/session-names.js):
+        // hay que mirar su valor de retorno para detectar un guardado fallido
+        // (permisos, disco lleno) y no responder ok:true sin haber persistido.
+        if (!saveTitles(titles)) {
+          return res.status(500).json({ error: 'No se pudo guardar el título de la sesión.' });
+        }
+        res.json({ ok: true, title: clean || null });
+      } catch {
+        res.status(500).json({ error: 'No se pudo guardar el título de la sesión.' });
+      }
     });
 
     // Fija el modelo de una sesión de Claude Code inyectando `/model <x>` por

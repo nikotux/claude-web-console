@@ -20,12 +20,21 @@ import { config } from '../../core/config.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
+const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 
 function git(args, { timeout = 90000 } = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     execFile('git', ['-C', CWD, ...args], { timeout, env: process.env, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        resolve({ code: err ? (err.code ?? 1) : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
+        // Un `err` con exit code NUMÉRICO es git devolviendo un error normal
+        // (ej. pull rechazado, push conflict): eso se resuelve como {code}.
+        // Timeout (kill), señales, o fallos de spawn (ENOENT/EACCES) son
+        // fallos de SISTEMA, no del comando git — ahí rechazamos en vez de
+        // ocultarlos detrás de un {code} inventado.
+        if (err && (err.killed || err.signal || typeof err.code !== 'number')) {
+          return reject(err);
+        }
+        resolve({ code: err ? err.code : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
       });
   });
 }
@@ -35,28 +44,51 @@ function git(args, { timeout = 90000 } = {}) {
 let lastFetchAt = null;
 
 async function status() {
-  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || 'HEAD';
-  const head = (await git(['rev-parse', '--short', 'HEAD'])).stdout;
+  const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (branchRes.code !== 0) throw new Error(`git rev-parse HEAD falló: ${branchRes.stderr || 'código ' + branchRes.code}`);
+  const branch = branchRes.stdout || 'HEAD';
+
+  const headRes = await git(['rev-parse', '--short', 'HEAD']);
+  if (headRes.code !== 0) throw new Error(`git rev-parse --short HEAD falló: ${headRes.stderr || 'código ' + headRes.code}`);
+  const head = headRes.stdout;
+
   // Último commit: fecha ISO + autor + asunto (para el "pulso" del repo).
-  const last = (await git(['log', '-1', '--format=%cI%x09%an%x09%s'])).stdout;
-  const [date, author, subject] = last.split('\t');
-  const porcelain = (await git(['status', '--porcelain'])).stdout;
+  const lastRes = await git(['log', '-1', '--format=%cI%x09%an%x09%s']);
+  if (lastRes.code !== 0) throw new Error(`git log falló: ${lastRes.stderr || 'código ' + lastRes.code}`);
+  const [date, author, subject] = lastRes.stdout.split('\t');
+
+  const porcelainRes = await git(['status', '--porcelain']);
+  if (porcelainRes.code !== 0) throw new Error(`git status falló: ${porcelainRes.stderr || 'código ' + porcelainRes.code}`);
+  const porcelain = porcelainRes.stdout;
   const dirtyCount = porcelain ? porcelain.split('\n').length : 0;
 
   // ahead/behind vs origin/<branch> (usa lo ya fetchado; no toca la red).
+  // Nota: esta llamada puede fallar legítimamente (sin remoto "origin", rama
+  // todavía no trackeada, etc.) — no es indicio de repo roto, así que no se
+  // propaga como error; se deja en 0/0 como antes.
   let behind = 0;
   let ahead = 0;
-  const ab = (await git(['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`])).stdout;
-  if (ab) {
-    const [l, r] = ab.split(/\s+/);
+  const abRes = await git(['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`]);
+  if (abRes.code === 0 && abRes.stdout) {
+    const [l, r] = abRes.stdout.split(/\s+/);
     behind = parseInt(l, 10) || 0;
     ahead = parseInt(r, 10) || 0;
   }
+  // Si el proceso (o el host) murió a mitad de un stash->pull->pop, el stash
+  // automático queda intacto en el repo (git lo persiste solo, no hace falta
+  // estado propio) pero nadie lo señala tras un reinicio de la interfaz — se
+  // detecta acá para que sobreviva al reinicio (CLAUDE.md regla 2).
+  const stashRes = await git(['stash', 'list']);
+  const pendingAutoStash = stashRes.code === 0 && stashRes.stdout
+    ? stashRes.stdout.split('\n').some((l) => l.includes(AUTO_STASH_MSG))
+    : false;
+
   return {
     name: config.projectName, rel: REL, branch, head,
     subject: subject || '', author: author || '', date: date || '',
     dirty: dirtyCount > 0, dirtyCount, behind, ahead,
     lastFetch: lastFetchAt,
+    pendingAutoStash,
   };
 }
 
@@ -74,9 +106,13 @@ export default {
     });
 
     r.post('/fetch', async (req, res) => {
-      const f = await git(['fetch', '--prune', 'origin']);
-      if (f.code === 0) lastFetchAt = Date.now();
-      res.json({ ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() });
+      try {
+        const f = await git(['fetch', '--prune', 'origin']);
+        if (f.code === 0) lastFetchAt = Date.now();
+        res.json({ ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() });
+      } catch {
+        res.status(500).json({ error: 'No se pudo leer el estado del repo.' });
+      }
     });
 
     r.post('/update', async (req, res) => {
@@ -88,7 +124,7 @@ export default {
 
         let stashed = false;
         if (dirty) {
-          const s = await git(['stash', 'push', '-u', '-m', 'cwc: auto antes de actualizar']);
+          const s = await git(['stash', 'push', '-u', '-m', AUTO_STASH_MSG]);
           log.push({ step: 'stash', code: s.code, out: s.stdout || s.stderr });
           stashed = s.code === 0 && !/No local changes/i.test(s.stdout + s.stderr);
         }
@@ -102,6 +138,24 @@ export default {
           const pop = await git(['stash', 'pop']);
           log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
           popConflict = pop.code !== 0; // conflicto al reaplicar: queda en el stash
+          if (popConflict) {
+            // El pull ya avanzó la rama (ff-only exitoso) pero el stash no se
+            // pudo reaplicar limpio: revertimos el avance (git reset --hard
+            // @{1} vuelve HEAD a la posición previa al pull, según el reflog)
+            // para no dejar el repo a mitad de camino. El stash NO se toca —
+            // sigue intacto para reintentar a mano.
+            const reset = await git(['reset', '--hard', '@{1}']);
+            log.push({ step: 'reset-rollback', code: reset.code, out: reset.stdout || reset.stderr });
+            const st = await status();
+            return res.status(409).json({
+              ok: false,
+              popConflict: true,
+              stashed,
+              log,
+              status: st,
+              error: 'No se pudieron reaplicar los cambios locales (stash) tras el pull: se revirtió la actualización para no dejar el repo a mitad de camino. Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).',
+            });
+          }
         }
 
         const st = await status();
