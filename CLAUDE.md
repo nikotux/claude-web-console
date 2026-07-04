@@ -568,8 +568,9 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             completos) Memorias — el detalle de un bugfix NI renderiza la
                             sección Memorias. Visible a todos (autenticados), edición gateada por
                             isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
-                            salud: chequeos rápidos + revisión profunda + sección "🧠
-                            Optimización IA" (censo de motores gratis + análisis bajo botón
+                            salud: chequeos rápidos + revisión profunda + subsección "🧠
+                            Optimización IA" (resumen compacto + botón → sub-ventana
+                            optimize-modal.js: censo de motores gratis + análisis bajo botón
                             con propuestas aprobables, ver "Verificación de salud"), sin
                             bugfixes) ·
                             tolkien (tarjeta git INFORMATIVA, rediseño 2026-07-03: sin
@@ -961,9 +962,14 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime.
-- **Optimización IA** (sección "🧠 Optimización IA" de la pestaña Salud,
-  2026-07-04): analiza el flujo de TODOS los motores IA de la consola. DOS
-  niveles: (a) CENSO determinístico (GET /api/health/ai-census, 0 tokens,
+- **Optimización IA** (subsección "🧠 Optimización IA" de la pestaña Salud,
+  2026-07-04): analiza el flujo de TODOS los motores IA de la consola. La
+  pestaña muestra SOLO el resumen compacto (veredicto en 1 línea + botón
+  "Optimización IA →", mismo patrón que Revisión profunda — rediseño a pedido
+  del usuario: la sección inline completa estiraba Salud); el contenido entero
+  (censo, análisis, tarjetas de propuesta) vive en la SUB-VENTANA
+  system/optimize-modal.js (gemela de health-review-modal, .dlg-card--health).
+  DOS niveles: (a) CENSO determinístico (GET /api/health/ai-census, 0 tokens,
   autenticados) — `aiEnginesCensus()` de core/inventory.js detecta todo archivo
   que importa el SDK y llama a query() y extrae con regex modelo(s)/dinámico,
   maxTurns (resuelve consts), timeouts, allowlists, capas (PreToolUse+
