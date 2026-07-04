@@ -65,3 +65,10 @@ Las corridas headless usan `settingSourcesFor('headless')` =
 `['project','local']`, NUNCA `'user'`, y llevan doble blindaje read-only
 (hook `PreToolUse` + `canUseTool`). Regla dura 6 de CLAUDE.md — no igualar
 esa configuración a la del chat.
+
+Excepción aún MÁS restrictiva: el auto-título (`extractTitle` de
+`index.js`, la corrida más frecuente de la flota) usa `settingSources: []`
+— cero MCP/skills/CLAUDE.md, no puede ni necesita herramientas (las dos
+capas deniegan TODO); su prompt trae todo inline. Mismo patrón que
+`projects/analyzeChange`. Ahorra tokens de entrada y arranque en cada
+extracción.

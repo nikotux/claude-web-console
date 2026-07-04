@@ -43,7 +43,6 @@ import {
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
 import { recordBugfix } from '../bugfixes/store.js';
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
-import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
@@ -73,7 +72,7 @@ async function extractTitle({ cwd, current, text }) {
       model: 'haiku',
       maxTurns: 1,
       permissionMode: 'default',
-      settingSources: settingSourcesFor('headless'), // regla 6: nunca 'user' en corridas headless
+      settingSources: [], // sin NINGÚN setting (ni project/local): no usa herramientas — cero MCP/skills/CLAUDE.md, solo resume texto (patrón projects/analyzeChange)
       hooks: {
         PreToolUse: [{
           hooks: [async () => ({

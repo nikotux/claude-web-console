@@ -53,6 +53,11 @@ async function run() {
     prompt: PROMPT,
     options: {
       cwd: config.projectDir,
+      // Modelo PINEADO (optimización 2026-07-04): sin esta clave corría con el
+      // default de la cuenta (opus/fable, el gasto más caro de la flota).
+      // Sonnet es el estándar probado del proyecto para tareas de juicio
+      // (mismo criterio que auditModelFor de health/shared.js).
+      model: 'sonnet',
       // Fuente única (core/sdk-settings.js): 'project'+'local', sin 'user'.
       settingSources: settingSourcesFor('headless'),
       skills: ['bug-triage'],

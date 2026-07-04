@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // bin/cwc-health-runner.js — revisión exhaustiva de salud, DESACOPLADA del server.
 //
-// Barrido módulo por módulo (haiku, read-only doble capa) + síntesis final
-// (sonnet). Escribe progreso incremental a health-review.json a medida que
+// Barrido módulo por módulo (sonnet, read-only doble capa — el modelo lo dicta
+// auditModelFor de health/shared.js, fuente única; migrado haiku→sonnet
+// 2026-07-04 por falsos positivos) + síntesis final (sonnet). Escribe progreso incremental a health-review.json a medida que
 // cada unidad termina — el server lo sirve y el front lo muestra en vivo. El
 // server lo lanza detached (setsid): un reinicio a mitad NO lo mata (regla 2).
 //
@@ -23,7 +24,7 @@ import { runAdaptivePool } from '../src/modules/health/pool.js';
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 // ===== Pool de auditoría PARALELA ADAPTATIVA (F2.5) =====
-// Solo la fase de ANÁLISIS (haiku, read-only) corre en paralelo; la SÍNTESIS es
+// Solo la fase de ANÁLISIS (sonnet, read-only) corre en paralelo; la SÍNTESIS es
 // serial y va tras la barrera. Concurrencia DINÁMICA: rampa según CPU/RAM
 // libres, back-off ante 429/overload; tope duro = nº de unidades a auditar.
 const MIN_CONC = 2;      // piso de concurrencia
@@ -105,7 +106,7 @@ async function main() {
   // INCREMENTAL (Fase 2): con --full se ignora la caché y se re-audita todo.
   const FULL = process.argv.includes('--full');
   const cache = FULL ? {} : readAuditCache();
-  // Audita UNA unidad (haiku, read-only) con reintento + back-off ante 429.
+  // Audita UNA unidad (sonnet vía auditModelFor, read-only) con reintento + back-off ante 429.
   // ANTI-COLISIÓN: no edita código; muta SU casillero del `state` compartido y
   // su propia key del `cache`. Nadie relee archivos → imposible pisar a otro.
   // `ctl` viene del pool: ctl.backoff() baja la concurrencia y pausa nuevos.

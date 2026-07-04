@@ -19,7 +19,6 @@
 import { execFile } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
-import { settingSourcesFor } from '../src/core/sdk-settings.js';
 import { listBugfixes } from '../src/modules/bugfixes/store.js';
 import {
   computeSemaforo, investigatePrompt, parseVerdict, investigateToolAllowed,
@@ -84,7 +83,7 @@ async function run() {
         model: 'sonnet',
         maxTurns: 1,
         permissionMode: 'default',
-        settingSources: settingSourcesFor('headless'),
+        settingSources: [], // sin user/project/local: cero MCP ni CLAUDE.md — corrida sin herramientas (patrón ticket-investigate/optimize)
         hooks: { PreToolUse: [{ hooks: [async (input) => (investigateToolAllowed(input.tool_name) ? {} : denyHook)] }] },
         canUseTool: async () => ({ behavior: 'deny', message: denyMsg }),
       },
