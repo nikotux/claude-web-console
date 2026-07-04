@@ -24,7 +24,11 @@ código.
    ticket SIN PR (lee el código de Tolkien read-only para explicar por qué NO se
    resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`);
    optimización IA de los motores (censo + análisis con propuestas) → runner
-   desacoplado (`bin/cwc-optimize-runner.js`). La unidad systemd usa
+   desacoplado (`bin/cwc-optimize-runner.js`); INTERFONO entre sesiones
+   (mensajería + claims anti-conflicto: `bin/cwc-bus.js` invocado por los hooks
+   de Claude Code, estado 100% en archivos en `~/.cwc-data/session-bus/` —
+   NADA en el proceso del server, sobrevive reinicios por construcción; el
+   módulo backend `interfono` solo LEE ese disco). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -40,7 +44,12 @@ código.
 4. **No tocar archivos fuera del proyecto** salvo los runtime documentados
    abajo (`~/.cwc-*`, unidad systemd instalada, observer). El observer de
    `~/.claude/settings.json` SOLO se toca con `bin/install-observer.js` /
-   `bin/uninstall-observer.js`. Excepción deliberada adicional: el módulo
+   `bin/uninstall-observer.js`. Excepción análoga: el INTERFONO entre sesiones
+   (ver abajo) agrega SUS hooks al mismo `~/.claude/settings.json` +
+   instala el comando `~/.claude/commands/btw.md`, SOLO vía
+   `bin/install-interfono.js` / `bin/uninstall-interfono.js` (aditivo y
+   reversible como el observer: preserva las entradas ajenas, filtra las
+   propias por la marca `cwc-bus.js`). Excepción deliberada adicional: el módulo
    `projects` (pestaña "Proyectos" del menú Sistema) lee y ESCRIBE a
    propósito el `CLAUDE.md` y las memorias (`~/.claude/projects/<dir
    codificado>/memory/*.md`) de CADA proyecto de su registro — Tolkien
@@ -163,7 +172,11 @@ código.
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes, `optimization.json` resultado de la Optimización IA +
-  `optimize.lock` heartbeat de su runner), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  `optimize.lock` heartbeat de su runner, `session-bus/` del INTERFONO entre
+  sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
+  reservas de archivo (1 por archivo, clave = hash de la ruta) ·
+  `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
+  `bin/cwc-bus.js`, el módulo `interfono` solo lo lee), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
 
@@ -199,7 +212,22 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
                             unidades cuyo fingerprint cambió), F3 contexto de chats nuevos,
                             F4 invariantes, F5 loop que aprende. NADIE lo importa aún —
-                            standalone en F1, cero riesgo al server)
+                            standalone en F1, cero riesgo al server) ·
+                            bus(INTERFONO entre sesiones: BUS DE ARCHIVOS determinístico, 0
+                            tokens, en ~/.cwc-data/session-bus/. Dos capacidades: (1)
+                            MENSAJERÍA — sendMessage/pendingFor/markDelivered: una sesión deja
+                            un mensaje para otra (o broadcast 'all'); la destinataria lo recibe
+                            inyectado por su hook en el próximo turno. (2) CLAIMS anti-conflicto
+                            — claimFile/getClaim/releaseFile/releaseAll + evaluateClaim (árbol
+                            zombi: HOT<5min→bloquea · observador ended/working · tmux has-session
+                            · gris<30min soft · TTL vencido→robable) + tombstone (lápida al
+                            zombi robado). IDENTIDAD por "handle": TUI=`tmux:<sesión>`,
+                            chat=`claude:<sessionId>` — una TUI escucha en ambos. buildDirectory
+                            reconstruye el mapa nombre↔handle SIN estado del server (tmux del
+                            socket cwc + chats.json + titles.json). resolveTarget mapea el
+                            `/btw <nombre>` a un handle. Lo consumen bin/cwc-bus.js (hooks/CLI) y
+                            el módulo `interfono` (panel, solo lee). gc() oportunista en cada
+                            invocación)
 src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(router, ctx), registerWs(wss, ctx) }
                             → se registra agregándolo al array de src/core/registry.js
   terminal/                 sesiones tmux (PREFIX cwc-) + bare/TUI (BARE_PREFIX cwct-) + rehidratación
@@ -283,6 +311,14 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             sigue existiendo pero el próximo mensaje puede pisarlo (a
                             pedido: nombres siempre actualizados).
   files/ stats/ tmux/ admin/ health/
+  interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
+                            (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
+                            claims con verdict de evaluateClaim + ts) · POST /send {to,text}
+                            (mensaje manual desde la web a una sesión o 'all') · POST
+                            /claim-release {file} (admin, libera un claim zombi a mano). La
+                            mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
+                            de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
+                            menú ⚙ Sistema (system/interfono-panel.js)
   bugs/                     (ANTES `tickets`, renombrado 2026-07-03) backend del hub
                             "Bugs & Features" del sidebar: triage de bugs BAJO DEMANDA
                             (consume tokens; admin). Ruta HTTP /api/bugs (GET estado, POST
@@ -563,7 +599,12 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)
 public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
-                            Proyectos/Salud — la pestaña Proyectos (project-context-panel.js,
+                            Proyectos/Interfono/Salud — la pestaña Interfono
+                            (interfono-panel.js) es la ventana + canal humano del INTERFONO
+                            entre sesiones (GET/POST /api/interfono): sesiones activas,
+                            enviar mensaje manual, reservas de archivo con semáforo 🔴🟡🟢 y
+                            liberar (admin), mensajes recientes — todo colapsable+árbol. La
+                            pestaña Proyectos (project-context-panel.js,
                             backend módulo `projects` + /api/bugfixes/context) es DISTINTA del
                             módulo tolkien de abajo: TODAS las entradas editables en un solo
                             lugar con navegación en DOS NIVELES lista→detalle (rediseño a
@@ -661,6 +702,18 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             detailMobileHtml/triageMobileHtml/ghMobileHtml en
                             render.js; el action bar reusa los MISMOS data-act de
                             la tabla (closest('.bb-detail') resuelve la key igual).
+                            ACCIÓN GLOBAL (Fase 5, §3.5): "Enviar pendientes (N)"
+                            es un action bar STICKY inferior de la LISTA
+                            (.bb-listbar tras el bb-box, móvil-only por CSS, en
+                            la zona del pulgar) visible SOLO si hay pendientes Y
+                            ninguna card en foco (expanded.size===0: con una card
+                            abierta manda el action bar del detalle) — si no hay
+                            nada que enviar, no existe. Salió del menú ⋯ (que
+                            queda con Buscar bugfixes · GitHub · Desk · Ayuda). En
+                            móvil .bb es flex column y bb-box flex:1 para anclar
+                            la barra al fondo. El confirm de envío (una entrada
+                            por línea, .dlg-msg pre-line + scroll del modal) entra
+                            sin overflow en 375px.
                             UNA fila por ticket para TODO el ciclo — triage → trabajo → PR →
                             feedback → merge → ticket. Fuentes: registro de bugfixes +
                             triage de Desk (chips de verificación: severidad, "abierto en
@@ -781,6 +834,25 @@ bin/cwc-optimize-runner.js  OPTIMIZACIÓN IA de los motores de la consola (botó
                             auto-aplican: quedan pending y Aprobar = chat supervisado
                             (acceptEdits) / flujo nuevo = chat en modo plan; Descartar las
                             marca rejected. Lógica compartida en health/optimize-shared.js
+bin/cwc-bus.js              CLI del INTERFONO entre sesiones (lógica en src/core/bus.js). PUERTA
+                            ÚNICA de los hooks de Claude Code + el comando /btw. Subcomandos:
+                            send (lo usa /btw) · hook-inject (SessionStart/UserPromptSubmit:
+                            imprime mensajes/lápidas pendientes → Claude los inyecta) ·
+                            hook-guard (PreToolUse Edit|Write|MultiEdit: frena si otra sesión
+                            VIVA reclama el archivo, exit 2) · hook-claim (PostToolUse: reserva
+                            el archivo editado) · hook-release (SessionEnd: suelta claims
+                            propios) · list (debug). Identidad propia por $TMUX_PANE (TUI) o
+                            session_id del stdin (chat). Fail-open salvo hook-guard. Nudge SEGURO
+                            opcional por send-keys SOLO a TUI con claude idle (observador
+                            waiting+model+ts fresco); si trabaja o es shell, el mensaje espera en
+                            la bandeja
+bin/install-interfono.js + bin/uninstall-interfono.js  instalan/quitan los hooks del interfono
+                            en ~/.claude/settings.json + el comando ~/.claude/commands/btw.md
+                            (aditivo/reversible, patrón install-observer: preservan entradas
+                            ajenas incluidas las del observador; filtran las propias por marca
+                            `cwc-bus.js`). OJO: los hooks se capturan al INICIAR claude — las
+                            sesiones ya abiertas no toman el interfono hasta reiniciar claude
+                            adentro (mismo gotcha que el observador)
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)

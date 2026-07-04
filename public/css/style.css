@@ -533,6 +533,42 @@ html, body {
 .hp-verdict--critico b { color: var(--cwc-danger-strong); }
 .hp-when { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 
+/* ===== Interfono (pestaña Sistema): comunicación entre sesiones =====
+   Convención "UI textual = colapsable + árbol": grupos <details> con header
+   compacto y filas anidadas. Solo tokens de tokens.css. */
+.if-head { display: flex; align-items: center; justify-content: space-between; margin: .2rem 0 .3rem; }
+.if-hint { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); margin: 0 0 .6rem; line-height: 1.4; }
+.if-send {
+  display: grid; grid-template-columns: 1fr auto; gap: .4rem; align-items: start;
+  padding: .5rem; margin-bottom: .7rem;
+  background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md);
+}
+.if-select { grid-column: 1 / 2; }
+.if-text {
+  grid-column: 1 / 3; resize: vertical; min-height: 2.2rem;
+  font-family: var(--cwc-font-ui); font-size: var(--cwc-fs-md);
+  background: var(--cwc-bg-input); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: .35rem .5rem;
+}
+.if-send .btn { grid-column: 2 / 3; grid-row: 1; align-self: start; }
+.if-sendmsg { grid-column: 1 / 3; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.if-group { margin: .3rem 0; border-top: 1px solid var(--cwc-divider); padding-top: .4rem; }
+.if-group > summary { cursor: pointer; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em; padding: .2rem 0; }
+.if-gtitle { font-weight: 600; }
+.if-count { color: var(--cwc-text-dimmer); font-weight: 400; }
+.if-list { display: flex; flex-direction: column; margin: .3rem 0 .1rem .3rem; }
+.if-item {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: .4rem;
+  padding: .3rem .1rem; border-bottom: 1px solid var(--cwc-divider); font-size: var(--cwc-fs-md);
+}
+.if-item:last-child { border-bottom: 0; }
+.if-kind { flex: none; }
+.if-name { color: var(--cwc-text); font-weight: 500; }
+.if-sub { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); overflow-wrap: anywhere; }
+.if-body { flex-basis: 100%; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); overflow-wrap: anywhere; }
+.if-badge { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; }
+.if-claim .if-rel { margin-left: auto; }
+
 /* ===== Optimización IA (pestaña Salud): censo de motores + propuestas =====
    Convención "UI textual = colapsable + árbol" (pedido del usuario 2026-07-04):
    header compacto SIEMPRE visible, cuerpo plegable (<details>), y los
@@ -1198,14 +1234,23 @@ html, body {
 .bb-actionbar .btn, .bb-actionbar .btn-ghost { min-height: 48px; }
 .bb-ab-more { flex: none; min-width: 48px; }
 
+/* Action bar sticky "Enviar pendientes" de la lista (§3.5): móvil-only, en la
+   zona del pulgar. El guard global [hidden] la retira cuando no hay pendientes
+   o hay una card en foco (ahí manda el action bar del detalle). */
+.bb-listbar { display: none; }
+.bb-listbar-btn { width: 100%; justify-content: center; min-height: 50px; font-size: var(--cwc-fs-md); }
+
 @media (max-width: 640px) {
   /* Móvil: el toolbar desktop cede al header móvil (búsqueda + segmentos +
      menú ⋯) y la tabla a las cards. Pipeline/Cambios por CLASE explícita
      (R7): agregar/reordenar columnas ya no rompe este media query. */
+  .bb { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .bb-actions { display: none; }
   .bb-table { display: none; }
   .bb-mhead { display: flex; }
+  .bb-box { flex: 1; max-height: none; }
   .bb-cards { display: flex; }
+  .bb-listbar { display: flex; padding: .5rem .6rem calc(.5rem + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--cwc-border-soft); background: var(--cwc-bg-elevated); }
   .bb-col-pipe, .bb-col-stats { display: none; }
   .bb-triage { margin-left: 0; width: 100%; }
 }

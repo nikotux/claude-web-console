@@ -86,6 +86,19 @@ export function renderHeader(state) {
       state.triage.updatedAt ? `triage ${fmtAgo(state.triage.updatedAt)}` : 'triage sin datos',
     ].join(' · ');
   }
+  // Action bar sticky "Enviar pendientes" de la LISTA (§3.5, móvil-only por CSS):
+  // visible solo si hay pendientes Y ninguna card en foco (ahí manda el action
+  // bar del detalle). En la zona del pulgar; si no hay nada que enviar, no existe.
+  if (mr.listbar) {
+    const n = pendientes.length;
+    mr.listbar.hidden = !(n > 0 && state.expanded.size === 0);
+    if (mr.listsend && n > 0) {
+      mr.listsend.disabled = !!state.busy.send;
+      mr.listsend.innerHTML = state.busy.send
+        ? `${pacman()}<span>Subiendo…</span>`
+        : `${icon('gitBranch', { size: 15 })}<span>Enviar pendientes (${n})</span>`;
+    }
+  }
 }
 
 // ===== Chips de verificación (cruce registro × triage × historial) =====

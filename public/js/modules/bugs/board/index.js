@@ -59,6 +59,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         <tbody data-ref="tbody"><tr><td colspan="8"><span class="cwc-spinner"></span></td></tr></tbody>
       </table>
       <div class="bb-cards" data-ref="cards"></div>
+    </div>
+    <div class="bb-listbar" data-ref="listbar" hidden>
+      <button class="btn bb-listbar-btn" data-ref="listsend">${icon('gitBranch', { size: 15 })}<span>Enviar pendientes</span></button>
     </div>`;
   m.body.appendChild(wrap);
   const mr = {};
@@ -202,11 +205,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
   // permanente en 375px). "Enviar pendientes" vive acá HASTA la Fase 5 (action
   // bar sticky inferior de la lista).
   mr.more.addEventListener('click', () => {
-    const pend = pendingOf(store.get().entries).length;
     const menu = document.createElement('div');
     menu.className = 'cwc-popup-menu';
     menu.innerHTML = `
-      <button class="cwc-popup-item" data-mact="send" ${pend ? '' : 'disabled'}>${icon('gitBranch', { size: 14 })}<span>Enviar pendientes${pend ? ` (${pend})` : ''}</span></button>
       <button class="cwc-popup-item" data-mact="scan">${icon('sparkle', { size: 14 })}<span>Buscar bugfixes</span></button>
       <button class="cwc-popup-item" data-mact="gh">${icon('refresh', { size: 14 })}<span>Sincronizar GitHub</span></button>
       <button class="cwc-popup-item" data-mact="desk">${icon('download', { size: 14 })}<span>🎫 Consultar Desk</span></button>
@@ -220,12 +221,13 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       const it = e.target.closest('[data-mact]');
       if (!it || it.disabled) return;
       dismiss();
-      ({ send: () => A.sendPending(), scan: () => A.scan(), gh: () => A.ghSync(false), desk: () => A.deskSyncBulk(), help: openHelp })[it.dataset.mact]?.();
+      ({ scan: () => A.scan(), gh: () => A.ghSync(false), desk: () => A.deskSyncBulk(), help: openHelp })[it.dataset.mact]?.();
     });
   });
 
   // ===== Header =====
   mr.send.addEventListener('click', () => A.sendPending());
+  mr.listsend.addEventListener('click', () => A.sendPending());
   mr.scan.addEventListener('click', () => A.scan());
   mr.ghsync.addEventListener('click', () => A.ghSync(false));
   mr.desksync.addEventListener('click', () => A.deskSyncBulk());
