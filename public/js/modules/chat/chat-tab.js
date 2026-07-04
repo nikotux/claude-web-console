@@ -79,6 +79,7 @@ export class ChatTab {
     this.ws = null;
     this.reconnectTimer = null;
     this.closedByUser = false;
+    this._pendingMode = null; // modo elegido por el usuario, aún sin confirmar por el eco del server
     this.streamEl = null;   // burbuja del asistente en streaming
     this.slashCommands = [];      // [{name, description|null}] del meta/attach
     this._metaSeen = false;       // ¿ya llegó el init de ESTA conversación?
@@ -175,6 +176,7 @@ export class ChatTab {
   }
 
   _slashOpen() {
+    this._slashActive = 0; // el popup nace resaltando la mejor coincidencia
     const pop = document.createElement('div');
     pop.className = 'chat-slash-pop';
     // Los taps en las filas no deben robar el foco del input (teclado abierto).
@@ -219,7 +221,11 @@ export class ChatTab {
     const pre = all.filter((c) => c.name.toLowerCase().startsWith(q));
     const sub = q ? all.filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q)) : [];
     this._slashItems = [...pre, ...sub];
-    this._slashActive = Math.min(this._slashActive, Math.max(0, this._slashItems.length - 1));
+    // La lista se REORDENA por relevancia en cada tecla (prefijo antes que
+    // subcadena): el resaltado tiene que volver SIEMPRE a la mejor coincidencia
+    // (índice 0). Antes solo se clampeaba, así que el índice heredado apuntaba a
+    // otra fila tras el reordenamiento → Enter insertaba un comando distinto.
+    this._slashActive = 0;
     pop.replaceChildren();
     if (!this._slashItems.length) {
       const empty = document.createElement('div');
@@ -335,7 +341,18 @@ export class ChatTab {
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
         for (const ev of m.events) this._onEvent(ev);
-        if (m.mode) this._applyMode(m.mode);
+        // Si el usuario eligió un modo que el server TODAVÍA no confirmó, no lo
+        // pisamos con el modo (posiblemente viejo) del history: reafirmamos el
+        // elegido y lo REENVIAMOS (reconciliación tras reconexión / set_mode
+        // perdido si la ws no estaba abierta). Si ya coincide o no hay pendiente,
+        // aplicamos el del server y limpiamos el pendiente.
+        if (this._pendingMode && this._pendingMode !== m.mode) {
+          this._applyMode(this._pendingMode);
+          this._send({ type: 'set_mode', mode: this._pendingMode });
+        } else {
+          if (m.mode) this._applyMode(m.mode);
+          this._pendingMode = null;
+        }
         this._setWorking(m.status === 'working');
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
@@ -355,7 +372,10 @@ export class ChatTab {
       case 'permission_closed': this._permClose(m); break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
-      case 'mode': this._applyMode(m.mode); break;
+      case 'mode':
+        this._applyMode(m.mode);
+        if (m.mode === this._pendingMode) this._pendingMode = null; // confirmado por el server
+        break;
       case 'viewmode':
         if (m.viewMode === 'switching') {
           this._line('chat-switch-note', 'Cambiando a Terminal (TUI)…');
@@ -648,6 +668,7 @@ export class ChatTab {
       });
       if (!ok) { this._applyMode(this._mode || 'default'); return; }
     }
+    this._pendingMode = mode; // deseo del usuario hasta que el server lo confirme por eco
     this._applyMode(mode); // optimista; el eco 'mode' del server confirma
     this._send({ type: 'set_mode', mode });
   }

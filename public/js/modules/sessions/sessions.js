@@ -188,7 +188,12 @@ export default {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo.');
             syncConversation(data.chat);
-            refresh();
+            await refresh();
+            // Update OPTIMISTA: con motor vivo, data.chat/list traen this.model
+            // aún STALE (se confirma por eco). Pinto el chip ya para feedback
+            // inmediato; el poll de 8s lo reconcilia cuando llega el eco.
+            const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
+            if (chip) chip.textContent = b.dataset.model;
           } catch (e) {
             dialog.alertDialog({ title: 'Modelo', message: e.message });
           }
@@ -226,7 +231,10 @@ export default {
           body: JSON.stringify({ id: c.id, title: name }),
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok) syncConversation(data.chat);
+        if (!res.ok) throw new Error(data.error || 'No se pudo renombrar.');
+        syncConversation(data.chat);
+      } catch (e) {
+        dialog.alertDialog({ title: 'Renombrar conversación', message: e.message });
       } finally {
         refresh();
       }
@@ -443,6 +451,11 @@ export default {
             if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
             const modeEl = cardEl.querySelector('.sess-mode');
             if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'; }
+            // Refrescar el chip de modelo: con motor vivo el cambio de modelo se
+            // confirma por eco (this.model queda stale un instante), así que sin
+            // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.
+            const chatModelEl = cardEl.querySelector('.sess-model');
+            if (chatModelEl) chatModelEl.textContent = c.model || '';
             continue;
           }
           const s = map.get(key);
