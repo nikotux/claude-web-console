@@ -188,6 +188,22 @@ export function aiEnginesCensus() {
     }
   }
   const resolveConst = (name) => (/^\d+$/.test(name) ? name : (constMap[name] ? `${name} (${constMap[name]})` : name));
+  // Funciones auxiliares que PINEAN el modelo (optimización IA 2026-07-05):
+  // si `model:` no es literal pero lo provee una función de un solo
+  // `return 'literal'` (p.ej. auditModelFor() de health/shared.js → 'sonnet'),
+  // el modelo está FIJO de facto. Antes esos motores quedaban 'models:[]' +
+  // modelDynamic a secas y un futuro corredor de Optimización gastaba turnos
+  // investigando (o proponiendo "pinear") un modelo que YA está pineado.
+  // Busca la definición en cualquier archivo del censo (propia o importada).
+  const resolveModelFn = (name) => {
+    for (const [file, t] of texts) {
+      const m = t.match(new RegExp(
+        `(?:function\\s+${name}\\s*\\([^)]*\\)\\s*\\{\\s*return\\s+|(?:const|let)\\s+${name}\\s*=\\s*(?:\\([^)]*\\)|[\\w$]+)\\s*=>\\s*)['"]([\\w.-]+)['"]`,
+      ));
+      if (m) return { model: m[1], via: `${name}() en ${file}` };
+    }
+    return null;
+  };
 
   const engines = [];
   for (const f of candidates) {
@@ -200,6 +216,15 @@ export function aiEnginesCensus() {
     // model: IDENTIFICADOR (no literal) o shorthand `{ model, … }` = el modelo
     // lo decide el llamador/usuario en runtime (dinámico).
     const modelDynamic = /\bmodel:\s*(?!['"])[A-Za-z_$][\w$.]*\s*[,}\n]/.test(txt) || /[{,]\s*model\s*[,}]/.test(txt);
+    // model no-literal: ¿lo resuelve una función identificable de un solo return?
+    // (setModel()/modelForCwd() y demás no matchean la definición → siguen dinámicos)
+    let modelResolvedVia = null;
+    if (!models.length && modelDynamic) {
+      for (const fn of new Set([...txt.matchAll(/\b([A-Za-z_$][\w$]*[Mm]odel[\w$]*)\s*\(/g)].map((m) => m[1]))) {
+        const r = resolveModelFn(fn);
+        if (r) { models.push(r.model); modelResolvedVia = r.via; break; }
+      }
+    }
     const maxTurns = [...new Set([...txt.matchAll(/\bmaxTurns:\s*([\w$]+)/g)].map((m) => resolveConst(m[1])))];
     const timeouts = [...new Set([...txt.matchAll(/\b([A-Z][A-Z0-9_]*TIMEOUT[A-Z0-9_]*)\b/g)].map((m) => resolveConst(m[1])))];
     const allowlists = [...new Set([...txt.matchAll(/\b([a-zA-Z][\w]*Allowed)\b/g)].map((m) => m[1]))];
@@ -211,6 +236,7 @@ export function aiEnginesCensus() {
       purpose: purposeOf(f),
       models: models.length ? models : (modelDynamic ? [] : ['default']),
       modelDynamic,
+      modelResolvedVia,
       maxTurns, timeouts, allowlists,
       layers: { preToolUse: /PreToolUse/.test(txt), canUseTool: /canUseTool/.test(txt) },
       settingSources, permissionModes,
@@ -277,8 +303,9 @@ export function inventoryMarkdown(inv) {
     L.push('## Motores IA (corridas del Agent SDK: qué modelo usa cada uno)');
     for (const e of inv.aiEngines) {
       const model = e.models.length ? e.models.join('/') : (e.modelDynamic ? 'dinámico (lo elige el llamador)' : 'default');
+      const via = e.modelResolvedVia ? ` (vía ${e.modelResolvedVia})` : '';
       const capas = [e.layers.preToolUse ? 'PreToolUse' : null, e.layers.canUseTool ? 'canUseTool' : null].filter(Boolean).join('+') || 'SIN capas';
-      L.push(`- \`${e.file}\` — modelo **${model}** · maxTurns ${e.maxTurns.join('/') || '—'} · blindaje ${capas}${e.allowlists.length ? ` (${e.allowlists.join(', ')})` : ''} · settings ${e.settingSources}${e.purpose ? ` — ${e.purpose}` : ''}`);
+      L.push(`- \`${e.file}\` — modelo **${model}**${via} · maxTurns ${e.maxTurns.join('/') || '—'} · blindaje ${capas}${e.allowlists.length ? ` (${e.allowlists.join(', ')})` : ''} · settings ${e.settingSources}${e.purpose ? ` — ${e.purpose}` : ''}`);
     }
     L.push('');
   }
