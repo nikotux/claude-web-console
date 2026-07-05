@@ -337,6 +337,23 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             `tickets.json` (resultado) + `triage.lock` a propósito — describen
                             el DATO (tickets [Tolkien Bug] de Desk), no el módulo, y renombrar
                             la caché perdería el triage (que cuesta tokens regenerar).
+                            DOS FASES EN PARALELO (optimización IA 2026-07-05; antes UNA
+                            query() serial de 6 min donde un timeout tiraba el intento
+                            COMPLETO): fase 1 = listado barato (LIST_PROMPT, solo MCP list,
+                            LIST_MAX_TURNS 12 / 2 min); fase 2 = perTicketPrompt(t, lista)
+                            por CADA ticket en paralelo con runAdaptivePool (health F2.5,
+                            mismo uso que desk-runner; backoff ante 429/overload), 1 query
+                            corta por ticket (TICKET_MAX_TURNS 20 / 3 min) que escribe SU
+                            entrada INCREMENTAL a tickets.json (slots por índice, orden del
+                            listado — el front que encuesta ve crecer la lista con
+                            running=true). El prompt por ticket inyecta los HERMANOS (nº +
+                            asunto) para no perder la detección de duplicados entre tickets.
+                            Fallo individual ⇒ entrada fallback needs-info + error final
+                            "Triage parcial: fallaron N de M"; fallo del LISTADO ⇒ se
+                            conserva la caché vieja (la caché recién se pisa tras un listado
+                            OK). El skill bug-triage va cargado en AMBAS fases (ahí viven el
+                            department_id y las tools Desk). La doble capa read-only (regla
+                            6) va EN CADA query de las dos fases.
                             POST /refresh responde INMEDIATO (arrancar+encuestar, patrón
                             health/review); el front encuesta GET cada 3 s y re-dispara si la
                             corrida se pierde (3 intentos). Seguridad read-only de dos capas
@@ -829,7 +846,13 @@ public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de ac�
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden]
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
-bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos)
+bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
+                            DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
+                            barata que solo LISTA los [Tolkien Bug] abiertos; (2) triage de
+                            CADA ticket en paralelo vía runAdaptivePool (health/pool.js, mismo
+                            patrón que desk-runner), 1 query corta por ticket con escritura
+                            INCREMENTAL a tickets.json — un timeout pierde solo ese ticket,
+                            nunca el batch. Doble capa read-only (regla 6) en CADA query
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
@@ -964,6 +987,14 @@ docs/                       frontend-modules.md · brief-original.txt · context
   reportan hasta reiniciar claude dentro de ellas.
 - El Agent SDK hereda la suscripción del CLI (`~/.claude/.credentials.json`);
   no necesita API key y sus transcripts caen en `~/.claude/projects/`.
+- Tools MCP DIFERIDAS y allowlists headless (visto 2026-07-05): el SDK puede
+  diferir los schemas de las tools MCP y el modelo necesita la META-tool
+  `ToolSearch` para cargarlos antes de invocarlas — solo devuelve schemas, NO
+  ejecuta nada (la ejecución real sigue pasando por las dos capas de la regla
+  6). Una allowlist que deniega `ToolSearch` puede dejar al modelo CIEGO de
+  todo el MCP (el triage moría con "herramienta no permitida" en el listado).
+  `toolAllowed` de bugs/shared.js ya lo permite; si otro runner con MCP
+  (desk-runner, p.ej.) empieza a fallar igual, revisar su allowlist.
 - Traspaso Chat↔TUI: regla dura "nunca ambos a la vez"; el cierre del lado
   saliente se ESPERA verificado antes de abrir el otro. El header del chat
   YA NO tiene botón TUI ni contador de costo (se quitaron a pedido): pasar

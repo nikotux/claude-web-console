@@ -1,6 +1,7 @@
 // modules/bugs/shared.js — lo COMPARTIDO entre el módulo server y el
-// runner desacoplado del triage (bin/cwc-triage-runner.js): prompt, allowlist
-// de seguridad, parser del resultado, caché y lock de "corriendo".
+// runner desacoplado del triage (bin/cwc-triage-runner.js): prompts de las
+// DOS fases (listado + triage por ticket), allowlist de seguridad, parsers
+// del resultado, caché y lock de "corriendo".
 //
 // El triage corría DENTRO del proceso Node y cada reinicio del server (deploy,
 // push/pull, otra sesión trabajando en la consola) lo mataba a mitad de
@@ -24,8 +25,17 @@ export const CACHE_FILE = path.join(DATA_DIR, 'tickets.json');
 export const LOCK_FILE = path.join(DATA_DIR, 'triage.lock');
 export const LOG_FILE = path.join(DATA_DIR, 'triage.log');
 
-export const RUN_TIMEOUT_MS = 6 * 60 * 1000; // corte duro del triage (6 min, mismo patrón que FIX_TIMEOUT_MS de health/shared.js: con varios tickets abiertos las idas y vueltas MCP a Desk escalan y un timeout a mitad de camino tira el intento completo gastando tokens sin resultado)
-export const MAX_TURNS = 60;                  // cota de coste
+// DOS FASES (optimización IA 2026-07-05, patrón desk-runner): antes una ÚNICA
+// query() serial listaba Y analizaba todos los tickets (6 min de timeout
+// global: con varios tickets las idas y vueltas MCP escalaban y un timeout a
+// mitad de camino tiraba el intento COMPLETO gastando tokens sin resultado).
+// Ahora: (1) un listado barato, (2) triage de cada ticket EN PARALELO
+// (runAdaptivePool) — cada query es corta, aislada y escribe SU entrada
+// incremental; un timeout pierde solo ESE ticket, nunca el batch.
+export const LIST_TIMEOUT_MS = 2 * 60 * 1000;   // fase 1: solo listar (MCP list, sin análisis)
+export const TICKET_TIMEOUT_MS = 3 * 60 * 1000; // fase 2: triage de UN ticket (get + pad_search + repo)
+export const LIST_MAX_TURNS = 12;               // cota de coste del listado
+export const TICKET_MAX_TURNS = 20;             // cota de coste por ticket
 export const HEARTBEAT_MS = 3000;             // latido del runner al lock
 export const LOCK_FRESH_MS = 12000;           // lock más viejo que esto = runner muerto
 
@@ -38,53 +48,103 @@ export function toolAllowed(name) {
   // TodoWrite es la lista de tareas INTERNA del modelo (Agent SDK): solo toca
   // estado conversacional, nunca disco ni sistemas externos — es seguro en
   // una corrida read-only y ayuda al modelo a organizarse.
-  if (['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite'].includes(name)) return true;
+  // ToolSearch es la META-tool del SDK para tools DIFERIDAS: solo devuelve el
+  // SCHEMA de una tool para poder invocarla (no ejecuta nada); sin ella el
+  // modelo no puede ni nombrar las tools MCP de lectura (visto 2026-07-05: el
+  // listado moría con "herramienta no permitida" en ToolSearch). La ejecución
+  // real de cada tool sigue pasando por estas DOS capas.
+  if (['Read', 'Grep', 'Glob', 'Skill', 'TodoWrite', 'ToolSearch'].includes(name)) return true;
   // Herramientas MCP de lectura (desk_list/get/search, pad_search, graph_list…).
   // Regex ANCLADA al final: get_and_delete NO pasa (hallazgo de la revisión de salud).
   if (/^mcp__[a-z0-9_-]+__[a-z0-9_]*(list|get|search|read|find)[a-z0-9_]*$/i.test(name) && !/(delete|update|create|write|set|add|remove|send)/i.test(name)) return true;
   return false; // todo lo demás (mutaciones, Bash, Write/Edit) -> denegado
 }
 
-export const PROMPT = [
-  'Ejecutá el skill bug-triage para revisar los tickets de bug ABIERTOS de Tolkien',
-  '([Tolkien Bug] en Zoho Desk). Es una corrida NO interactiva y de SOLO LECTURA:',
-  'PARÁ en el paso 3 (la tabla de triage). NO crees TASKs en Pad, NO actualices',
-  'ningún ticket de Desk, no modifiques nada.',
+// FASE 1: solo LISTAR los tickets abiertos (barata, sin razonamiento). El
+// skill bug-triage va cargado porque ahí viven el department_id de Tolkien y
+// los nombres de las tools Desk — si el skill cambia, esto no queda viejo.
+export const LIST_PROMPT = [
+  'Ejecutá SOLO el paso 1 del skill bug-triage: obtener la LISTA de tickets de',
+  'bug ABIERTOS de Tolkien ([Tolkien Bug] en Zoho Desk). Es una corrida NO',
+  'interactiva y de SOLO LECTURA.',
+  '',
+  'Usá desk_list_tickets (o desk_search_tickets) con el department_id de',
+  'Tolkien que indica el skill y quedate con los tickets cuyo subject empieza',
+  'con [Tolkien Bug] y siguen abiertos (statusType "Open" — NO el status',
+  'localizado). NO llames desk_get_ticket, NO analices ningún ticket, NO uses',
+  'pad_search: solo el listado.',
   '',
   'Cuando termines, respondé ÚNICAMENTE con un bloque de código ```json que',
   'contenga un array de objetos, uno por ticket abierto, con exactamente estas',
   'claves:',
   '  - ticketNumber (string o número, el # del ticket de Desk)',
-  '  - whatBroke     (string, una línea: qué se rompió, en criollo)',
-  '  - route         (string, la ruta/página del contexto capturado; "" si no hay)',
-  '  - severity      (uno de: critical | high | medium | low)',
-  '  - recommendation(uno de: fix | needs-info | duplicate | wont-fix)',
-  '  - duplicate     (string: link/ref del duplicado si aplica; "" si no)',
-  '  - webUrl        (string: el webUrl del ticket de Desk; "" si no lo tenés)',
-  '  - reporter      (string: email de quien reportó; "" si no está)',
-  '  - context       (string, 3-8 líneas: el CONTEXTO del bug — qué estaba',
-  '    haciendo el usuario según el breadcrumb/estado del formulario, el error',
-  '    JS si hay, tu hipótesis de la causa y archivos/componentes sospechosos',
-  '    del repo. Texto plano, sin markdown.)',
+  '  - subject      (string, el asunto del ticket)',
+  '  - webUrl       (string: el webUrl del ticket; "" si no lo tenés)',
   '',
   'Si no hay tickets abiertos, respondé con ```json\n[]\n```. No agregues texto',
   'fuera del bloque json.',
 ].join('\n');
 
-// Extrae el ÚLTIMO bloque ```json ...``` (o el último array JSON suelto).
-export function parseTickets(text) {
+// FASE 2: triage de UN ticket. Recibe la lista completa de hermanos (nº +
+// asunto) para no perder la detección de duplicados ENTRE tickets que tenía
+// la corrida única.
+export function perTicketPrompt(ticket, allTickets) {
+  const siblings = (allTickets || [])
+    .filter((t) => String(t.ticketNumber) !== String(ticket.ticketNumber))
+    .map((t) => `  - #${t.ticketNumber}: ${String(t.subject || '').slice(0, 160)}`);
+  return [
+    `Triageá UN ÚNICO ticket de bug de Tolkien: el #${ticket.ticketNumber} de`,
+    `Zoho Desk (asunto: ${String(ticket.subject || '').slice(0, 200)}).`,
+    'Seguí la metodología del paso 2 del skill bug-triage SOLO para este',
+    'ticket. Es una corrida NO interactiva y de SOLO LECTURA: NO crees TASKs',
+    'en Pad, NO actualices ningún ticket de Desk, no modifiques nada.',
+    '',
+    'Pasos: leé el ticket completo con desk_get_ticket (el contexto capturado',
+    'vive en la descripción), corré pad_search sobre el síntoma/ruta para ver',
+    'si ya está trackeado, y si ayuda buscá en el repo los archivos sospechosos.',
+    '',
+    siblings.length
+      ? ['Estos son los OTROS tickets abiertos del mismo triage (para detectar',
+        'duplicados entre sí — si este ticket duplica a uno de estos, marcalo):',
+        ...siblings].join('\n')
+      : 'No hay otros tickets abiertos en este triage.',
+    '',
+    'Cuando termines, respondé ÚNICAMENTE con un bloque de código ```json que',
+    'contenga UN objeto (no un array) con exactamente estas claves:',
+    '  - ticketNumber (string o número, el # del ticket de Desk)',
+    '  - whatBroke     (string, una línea: qué se rompió, en criollo)',
+    '  - route         (string, la ruta/página del contexto capturado; "" si no hay)',
+    '  - severity      (uno de: critical | high | medium | low)',
+    '  - recommendation(uno de: fix | needs-info | duplicate | wont-fix)',
+    '  - duplicate     (string: link/ref del duplicado si aplica; "" si no)',
+    '  - webUrl        (string: el webUrl del ticket de Desk; "" si no lo tenés)',
+    '  - reporter      (string: email de quien reportó; "" si no está)',
+    '  - context       (string, 3-8 líneas: el CONTEXTO del bug — qué estaba',
+    '    haciendo el usuario según el breadcrumb/estado del formulario, el error',
+    '    JS si hay, tu hipótesis de la causa y archivos/componentes sospechosos',
+    '    del repo. Texto plano, sin markdown.)',
+    '',
+    'No agregues texto fuera del bloque json.',
+  ].join('\n');
+}
+
+// Extrae el ÚLTIMO bloque ```json ...``` (o, como último recurso, el primer
+// array/objeto JSON suelto del texto) y lo parsea. Devuelve el valor o null.
+function lastJsonBlock(text, fallbackRe) {
   if (!text) return null;
   const fences = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
   let raw = fences.length ? fences[fences.length - 1][1].trim() : null;
   if (!raw) {
-    const m = text.match(/\[[\s\S]*\]/); // último recurso: primer array del texto
+    const m = text.match(fallbackRe);
     raw = m ? m[0] : null;
   }
   if (!raw) return null;
-  let arr;
-  try { arr = JSON.parse(raw); } catch { return null; }
-  if (!Array.isArray(arr)) return null;
-  return arr.map((t) => ({
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// Sanea/acota UN ticket triageado al shape que consumen la caché y el front.
+export function normalizeTicket(t) {
+  return {
     ticketNumber: String(t.ticketNumber ?? t.number ?? '').slice(0, 40),
     whatBroke: String(t.whatBroke ?? t.title ?? '').slice(0, 400),
     route: String(t.route ?? '').slice(0, 200),
@@ -94,7 +154,28 @@ export function parseTickets(text) {
     webUrl: /^https?:\/\//.test(t.webUrl || '') ? String(t.webUrl).slice(0, 400) : '',
     reporter: String(t.reporter ?? '').slice(0, 120),
     context: String(t.context ?? '').slice(0, 2000),
-  }));
+  };
+}
+
+// FASE 1: parsea el listado [{ticketNumber, subject, webUrl}] (sin triage).
+export function parseTicketList(text) {
+  const arr = lastJsonBlock(text, /\[[\s\S]*\]/);
+  if (!Array.isArray(arr)) return null;
+  return arr
+    .map((t) => ({
+      ticketNumber: String(t.ticketNumber ?? t.number ?? '').slice(0, 40),
+      subject: String(t.subject ?? t.title ?? '').slice(0, 300),
+      webUrl: /^https?:\/\//.test(t.webUrl || '') ? String(t.webUrl).slice(0, 400) : '',
+    }))
+    .filter((t) => t.ticketNumber);
+}
+
+// FASE 2: parsea el triage de UN ticket (objeto; tolera array de 1 elemento).
+export function parseTicketTriage(text) {
+  let v = lastJsonBlock(text, /\{[\s\S]*\}/);
+  if (Array.isArray(v)) v = v[0];
+  if (!v || typeof v !== 'object') return null;
+  return normalizeTicket(v);
 }
 
 export function readCache() {
