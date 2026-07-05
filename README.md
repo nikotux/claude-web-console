@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-05 18:21 — redesign/board-mobile
+- Initial published version.
+
 ### 2026-07-05 18:07 — redesign/board-mobile
 - Integración del Estándar Documental v1.0 (`docs/estandar-documental.md`): fuente única de convenciones documentales (idiomas por audiencia, plantillas de correo/informe/minuta, firmas de canales externos)
 - CLAUDE.md: nueva regla dura #10 — leer el estándar antes de generar cualquier documento o publicar en un canal externo
