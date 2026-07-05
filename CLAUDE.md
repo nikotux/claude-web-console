@@ -1210,8 +1210,14 @@ docs/                       frontend-modules.md · brief-original.txt · context
   projects…); unitPrompt inyecta SOLO los invariantes que matchean los archivos
   de la unidad y le pide verificar CADA uno citando el código — así caza bugs
   sutiles que el barrido genérico pierde. El foco acota el pedido de CLAUDE.md a
-  las reglas duras. OJO: unitFingerprint ahora hashea TAMBIÉN los invariantes
-  aplicables → editar un invariante fuerza re-auditar las unidades que toca.
+  las reglas duras, que van INYECTADAS pre-masticadas en el prompt (optimización
+  IA 2026-07-05: hardRulesText() de health/shared.js recorta la sección
+  "## Reglas duras" UNA vez en Node y la mete en unitPrompt, mismo patrón que
+  invBlock — el auditor ya NO hace un Read de CLAUDE.md entero por unidad; si la
+  extracción falla, fallback a la instrucción vieja de consultar el archivo).
+  OJO: unitFingerprint ahora hashea TAMBIÉN los invariantes aplicables Y las
+  reglas duras inyectadas → editar un invariante o una regla dura fuerza
+  re-auditar las unidades que toca.
   LOOP QUE APRENDE (Fase 5 del sistema nervioso, cierre): al resolver un bug de
   una clase que conviene blindar, el auto-fix runner emite una línea
   "PROPOSED-INVARIANT <texto> | <match>" (o NO-INVARIANT); addProposal la guarda

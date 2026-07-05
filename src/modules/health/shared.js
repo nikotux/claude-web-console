@@ -49,6 +49,32 @@ export const HEARTBEAT_MS = 3000;
 export function auditModelFor(_unit) { return 'sonnet'; }
 export const LOCK_FRESH_MS = 20000;             // lock más viejo que esto = runner muerto
 
+// ===== Reglas duras de CLAUDE.md, pre-masticadas (optimización IA 2026-07-05) ==
+// Antes unitPrompt le pedía al modelo "consultá las REGLAS DURAS de CLAUDE.md":
+// un Read del archivo ENTERO (~1300 líneas) POR UNIDAD auditada. Ahora la
+// sección '## Reglas duras' se recorta UNA vez acá en Node y se INYECTA como
+// texto en el prompt (mismo patrón que invBlock/fpBlock con los invariantes).
+// Caché a nivel proceso: el runner es un proceso fresco por corrida, así que
+// siempre audita con las reglas actuales; unitFingerprint la hashea para que
+// editarlas invalide la caché incremental. Si la extracción falla (archivo
+// movido / sección renombrada) devuelve '' y unitPrompt cae a la instrucción
+// vieja de consultar el archivo — nunca se pierde cobertura.
+let _hardRules = null;
+export function hardRulesText() {
+  if (_hardRules !== null) return _hardRules;
+  try {
+    const lines = fss.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8').split('\n');
+    const start = lines.findIndex((l) => /^##\s+Reglas duras/.test(l));
+    if (start === -1) { _hardRules = ''; return _hardRules; }
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i])) { end = i; break; }
+    }
+    _hardRules = lines.slice(start, end).join('\n').trim();
+  } catch { _hardRules = ''; }
+  return _hardRules;
+}
+
 export const VERDICTS = new Set(['ok', 'atencion', 'critico']);
 export const SEVERITY = new Set(['critical', 'high', 'medium', 'low']);
 export const KINDS = new Set(['bug', 'regla', 'mejora']); // tipo del hallazgo
@@ -154,14 +180,26 @@ export function unitPrompt(unit) {
       'salvo que el código haya cambiado y encuentres evidencia CONCRETA de que',
       'ahora sí es un bug real):', ...fps.map((e, i) => `  ${i + 1}. ${e.area}${e.reason ? ` — ${e.reason}` : ''}`)]
     : [];
+  // REGLAS DURAS ya masticadas (0 tool calls): si hardRulesText() trae texto se
+  // inyecta y se le PROHÍBE al modelo abrir CLAUDE.md (ahorra un Read de ~1300
+  // líneas por unidad); si vino vacío, fallback a la instrucción vieja.
+  const rules = hardRulesText();
+  const rulesBlock = rules
+    ? ['', 'REGLAS DURAS del proyecto (sección «## Reglas duras» de CLAUDE.md, YA',
+      'extraída acá — NO abras CLAUDE.md, usá este texto directo):', '', rules]
+    : [];
   return [
     'Sos el AUDITOR DE SALUD de Claude Web Console. Corrida NO interactiva,',
     'SOLO LECTURA (no modifiques nada, no corras comandos).',
     '',
     `Auditá EXCLUSIVAMENTE esta unidad del proyecto: «${unit.label}».`,
-    'Consultá las REGLAS DURAS (numeradas 1-9) y las convenciones de CLAUDE.md',
-    'de la raíz; después leé y analizá EN PROFUNDIDAD estos archivos:',
+    ...(rules
+      ? ['Las REGLAS DURAS van INYECTADAS más abajo (no hace falta leer CLAUDE.md).',
+        'Leé y analizá EN PROFUNDIDAD estos archivos:']
+      : ['Consultá las REGLAS DURAS (numeradas 1-9) y las convenciones de CLAUDE.md',
+        'de la raíz; después leé y analizá EN PROFUNDIDAD estos archivos:']),
     ...unit.files.map((f) => `  - ${f}`),
+    ...rulesBlock,
     ...invBlock,
     ...fpBlock,
     '',
@@ -169,8 +207,8 @@ export function unitPrompt(unit) {
     '  1. BUGS: lógica incorrecta, estados que no se persisten, condiciones de',
     '     carrera, fugas, manejo de error faltante, asimetrías sospechosas',
     '     (p.ej. un camino guarda estado y su gemelo no), validaciones ausentes.',
-    '  2. Violaciones de las reglas de CLAUDE.md, sus convenciones o los',
-    '     INVARIANTES de arriba.',
+    '  2. Violaciones de las REGLAS DURAS de arriba, las convenciones del',
+    '     proyecto o los INVARIANTES.',
     'NO inventes problemas para llenar: si la unidad está sana, devolvé [].',
     'Cada hallazgo debe poder verificarse leyendo el código citado.',
     '',
@@ -397,6 +435,9 @@ export function unitFingerprint(unit) {
   // El modelo del auditor es parte de la identidad de la auditoría: cambiarlo
   // (p.ej. haiku→sonnet) invalida la caché y fuerza re-auditar con el nuevo.
   h.update('\0MODEL\0').update(auditModelFor(unit));
+  // Las REGLAS DURAS van inyectadas en el prompt (hardRulesText): editarlas
+  // cambia la auditoría → invalida la caché igual que invariantes/modelo.
+  h.update('\0RULES\0').update(hardRulesText());
   return h.digest('hex').slice(0, 12);
 }
 
