@@ -30,6 +30,15 @@ const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // transcript a su MOTOR de origen (un .jsonl cuyo sessionId figura acá salió
 // del motor de conversaciones; el resto se clasifica por directorio/entrypoint).
 const CHATS_FILE = path.join(os.homedir(), '.cwc-data', 'chats.json');
+// Registro DURABLE append-only de sessionIds que ALGUNA VEZ fueron chat (lo
+// escribe el módulo chat, nunca se poda): chats.json solo tiene los VIVOS —
+// un chat cerrado/olvidado (FORGET_MS) salía de ahí y su transcript caía en
+// "Motores headless" aunque fuera una conversación normal en fable/opus.
+const CHAT_IDS_FILE = path.join(os.homedir(), '.cwc-data', 'chat-session-ids.json');
+// Backfill retroactivo: cada registro de bugfixes.json ES un chat que trabajó
+// un ticket (clave sessionId) — recupera la atribución de chats cerrados antes
+// de que existiera el registro durable. Solo lectura.
+const BUGFIXES_FILE = path.join(os.homedir(), '.cwc-data', 'bugfixes.json');
 
 // Precio de input por millón, por modelo; el resto se deriva del input.
 // OJO: el costo es un EQUIVALENTE a precios de API — la suscripción del CLI
@@ -147,7 +156,8 @@ function labelFor(dirName) {
 // ===== Atribución por MOTOR de origen (para el detalle del modal Uso) =====
 // Reemplaza el desglose por "carpetas" (nombres de directorio crudos) por uno
 // legible: qué MOTOR de la consola gastó cada modelo. Heurística determinística
-// (0 tokens) sobre datos ya en disco: sessionId ∈ chats.json + directorio +
+// (0 tokens) sobre datos ya en disco: sessionId ∈ unión chats.json +
+// chat-session-ids.json + bugfixes.json (ver buildSummary) + directorio +
 // entrypoint. Los motores headless (triage/salud/desk/auto-título) no se
 // distinguen entre sí sin instrumentar cada runner, así que quedan agrupados.
 const ENGINE_LABELS = {
@@ -182,11 +192,21 @@ export async function buildSummary() {
   }
 
   // sessionIds de los chats de la consola (para atribuir transcripts al motor
-  // de conversaciones). Sin chats.json: todo cae en headless/cli, no rompe.
+  // de conversaciones). UNIÓN de tres fuentes — cada una best-effort (si
+  // falta un archivo, las demás siguen; sin ninguna: headless/cli, no rompe):
+  // chats vivos + registro durable de todo-lo-que-fue-chat + bugfixes.
   const chatIds = new Set();
   try {
     const arr = JSON.parse(await fs.readFile(CHATS_FILE, 'utf8'));
     if (Array.isArray(arr)) for (const c of arr) if (c?.sessionId) chatIds.add(c.sessionId);
+  } catch { /* noop */ }
+  try {
+    const arr = JSON.parse(await fs.readFile(CHAT_IDS_FILE, 'utf8'));
+    if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string' && id) chatIds.add(id);
+  } catch { /* noop */ }
+  try {
+    const arr = JSON.parse(await fs.readFile(BUGFIXES_FILE, 'utf8'));
+    if (Array.isArray(arr)) for (const r of arr) if (r?.sessionId) chatIds.add(r.sessionId);
   } catch { /* noop */ }
 
   const totals = emptyBucket();

@@ -162,7 +162,15 @@ código.
 - `certs/` (cert self-signed autogenerado; se regenera si cambia la IP)
 - `users.json`, `sessions.json` (auth; perms 600), `recents.json`, `titles.json`
 - `.env` (config del usuario: token maestro, puerto, etc. — solo el usuario)
-- Fuera del repo: `~/.cwc-data/` (chats.json, sockets/logs de runners, caché
+- Fuera del repo: `~/.cwc-data/` (chats.json, `chat-session-ids.json` —
+  registro DURABLE append-only de TODOS los sessionIds que alguna vez fueron
+  chat: lo escribe el módulo chat en persist()/rehydrate() y NUNCA se poda (a
+  diferencia de chats.json, que persist() filtra a los vivos y el reaper poda
+  a las 24 h); lo lee tokens/buildSummary (unión con chats.json + bugfixes.json)
+  para que un chat cerrado/olvidado no se atribuya como "Motores headless" en
+  el panel de Uso (fable/opus fantasma, hallazgo de la Optimización IA
+  2026-07-05; backfill histórico one-time hecho desde los logs de
+  ~/.cwc-data/chats/*.log) —, sockets/logs de runners, caché
   tickets/salud, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
   + `desk.lock` heartbeat del runner desk, `investigations/<pr>.json` veredicto de
   la investigación a fondo + `investigate.lock` heartbeat,
@@ -1086,7 +1094,9 @@ docs/                       frontend-modules.md · brief-original.txt · context
   (2026-07-04, antes eran "carpetas"/proyectos crudos): /summary expone
   `engines[]` (mismo shape que projects[]: label + models[]) atribuido por
   classifyEngine() de tokens/index.js — heurística determinística 0 tokens
-  sobre datos ya en disco: sessionId ∈ ~/.cwc-data/chats.json ⇒ 💬 chat ·
+  sobre datos ya en disco: sessionId ∈ unión de ~/.cwc-data/chats.json (vivos)
+  + chat-session-ids.json (registro durable append-only de todo-lo-que-fue-chat,
+  lo escribe el módulo chat) + bugfixes.json (chats de tickets) ⇒ 💬 chat ·
   dir healthfix-wt-* ⇒ 🔧 auto-fix de salud · dir tolkien ⇒ 🌳 tolkien ·
   entrypoint 'cli' ⇒ ⌨️ CLI · resto SDK ⇒ ⚙️ headless (triage/salud/desk/
   auto-título — NO separables entre sí sin instrumentar cada runner, quedan

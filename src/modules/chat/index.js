@@ -113,6 +113,36 @@ async function extractTitle({ cwd, current, text }) {
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
 
+// Registro DURABLE append-only de TODOS los sessionIds que ALGUNA VEZ
+// pertenecieron a un chat de la consola. A diferencia de chats.json (que
+// persist() poda al cerrar y el reaper al olvidar a las 24 h), este archivo
+// NUNCA se poda: lo lee el módulo tokens (buildSummary) para atribuir cada
+// transcript al motor "chat" aunque la conversación ya no exista — sin él,
+// un chat cerrado se contaba como "Motores headless" en el panel de Uso
+// (fable/opus fantasma). Set en memoria (lazy) + escritura SOLO si aparecen
+// ids nuevos; best-effort: jamás rompe persist()/rehydrate().
+const CHAT_IDS_FILE = path.join(DATA_DIR, 'chat-session-ids.json');
+let _chatIdsReg = null;
+function registerChatSessionIds(ids) {
+  try {
+    if (!_chatIdsReg) {
+      _chatIdsReg = new Set();
+      try {
+        const arr = JSON.parse(fss.readFileSync(CHAT_IDS_FILE, 'utf8'));
+        if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string' && id) _chatIdsReg.add(id);
+      } catch { /* primera vez: el archivo todavía no existe */ }
+    }
+    let dirty = false;
+    for (const id of ids) {
+      if (id && typeof id === 'string' && !_chatIdsReg.has(id)) { _chatIdsReg.add(id); dirty = true; }
+    }
+    if (dirty) {
+      fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+      fss.writeFileSync(CHAT_IDS_FILE, JSON.stringify([..._chatIdsReg]), { mode: 0o600 });
+    }
+  } catch { /* best-effort */ }
+}
+
 // Traspaso Chat <-> TUI (una misma conversación, un solo modo a la vez).
 const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
 const SWITCH_CTRLC_MS = 8000; // T2: esperar a que `claude` salga tras Ctrl-C x2
@@ -710,6 +740,10 @@ class ChatManager {
 
   // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
   persist() {
+    // Registro durable append-only: TODOS los chats del map (incluidos los
+    // cerrados aún no cosechados) — persist() corre en cada onUpdate, así que
+    // captura el sessionId apenas existe (init/result/create con resume).
+    registerChatSessionIds([...this.chats.values()].map((c) => c.sessionId).filter(Boolean));
     const open = [...this.chats.values()]
       .filter((c) => !c.closed && c.sessionId)
       .map((c) => ({
@@ -735,6 +769,9 @@ class ChatManager {
   async rehydrate() {
     let saved = [];
     try { saved = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8')); } catch { saved = []; }
+    // Registrar también lo rehidratado: cubre chats persistidos ANTES de que
+    // existiera el registro durable (aunque nunca vuelvan a disparar persist).
+    registerChatSessionIds(saved.map((s) => s?.sessionId).filter(Boolean));
     let count = 0;
     for (const s of saved) {
       if (!s?.sessionId || !UUID_RE.test(s.sessionId) || this.chats.has(s.id)) continue;
