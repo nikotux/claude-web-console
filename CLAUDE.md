@@ -121,7 +121,7 @@ código.
    necesita LEER el código: un ticket sin PR no tiene diff. Corre read-only con la
    MISMA allowlist que el auditor de Salud — `ticketInvToolAllowed` = SOLO
    Read/Grep/Glob/TodoWrite; Bash/Edit/Write/git/MCP DENEGADO en las DOS capas —
-   `cwd = Tolkien` (config.projectDir), sonnet, maxTurns 12, timeout 5 min,
+   `cwd = Tolkien` (config.projectDir), sonnet, maxTurns 16, timeout 5 min,
    `settingSources: []` (sin user/project: cero MCP ni permisos pre-aprobados).
    NUNCA escribe. POST /ticket-investigate {ticket,problem} escribe el enunciado a
    `~/.cwc-data/ticket-investigations/<n>.req.json` (así sobrevive al reinicio),
@@ -851,7 +851,7 @@ bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tu
 bin/cwc-ticket-investigate-runner.js investigación de CONTEXTO de UN ticket SIN PR (¿por qué
                             NO se resolvió?). LEE el código de Tolkien read-only (Read/Grep/Glob,
                             misma allowlist que el auditor de Salud — regla 6), cwd Tolkien, sonnet,
-                            maxTurns 12. Interfaz por archivos: ticket-investigate.lock +
+                            maxTurns 16. Interfaz por archivos: ticket-investigate.lock +
                             ticket-investigations/<n>.json (resultado) + <n>.req.json (enunciado que
                             escribe el server). Lógica en bugfixes/ticket-investigate-shared.js
 bin/cwc-optimize-runner.js  OPTIMIZACIÓN IA de los motores de la consola (botón "🧠
