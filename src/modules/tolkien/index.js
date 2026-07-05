@@ -172,6 +172,14 @@ export default {
           stashed = s.code === 0 && !noLocalChanges;
         }
 
+        // SHA de HEAD ANTES del pull: si después hay que revertir, se vuelve a
+        // este punto EXACTO. No se usa @{1} del reflog porque solo es "el
+        // estado previo al pull" cuando el pull de verdad movió la rama; si el
+        // pull falló (o fue no-op "Already up to date") @{1} apunta a un
+        // movimiento de HEAD anterior y AJENO — un reset --hard ahí
+        // descartaría trabajo real (hallazgo de salud 2026-07-05).
+        const headBefore = await git(['rev-parse', 'HEAD']);
+
         const pull = await git(['pull', '--ff-only', 'origin']);
         log.push({ step: 'pull', code: pull.code, out: pull.stdout || pull.stderr });
         if (pull.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); } // pull incluye fetch
@@ -182,14 +190,25 @@ export default {
           log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
           popConflict = pop.code !== 0; // conflicto al reaplicar: queda en el stash
           if (popConflict) {
-            // El pull ya avanzó la rama (ff-only exitoso) pero el stash no se
-            // pudo reaplicar limpio: revertimos el avance (git reset --hard
-            // @{1} vuelve HEAD a la posición previa al pull, según el reflog)
-            // para no dejar el repo a mitad de camino. El stash NO se toca —
+            // El stash no se pudo reaplicar limpio. Revertir el avance del
+            // pull SOLO si el pull fue exitoso Y movió HEAD de verdad: con
+            // pull fallido (rama divergida, red) o no-op, HEAD no se movió y
+            // no hay nada que revertir — resetear igual pisaría estados
+            // legítimos anteriores. El stash NO se toca en ningún caso:
             // sigue intacto para reintentar a mano.
-            const reset = await git(['reset', '--hard', '@{1}']);
-            log.push({ step: 'reset-rollback', code: reset.code, out: reset.stdout || reset.stderr });
-            const resetFailed = reset.code !== 0;
+            const headNow = await git(['rev-parse', 'HEAD']);
+            const pullMovedHead = pull.code === 0
+              && headBefore.code === 0 && headNow.code === 0
+              && headBefore.stdout && headBefore.stdout !== headNow.stdout;
+
+            let resetFailed = false;
+            if (pullMovedHead) {
+              const reset = await git(['reset', '--hard', headBefore.stdout]);
+              log.push({ step: 'reset-rollback', code: reset.code, out: reset.stdout || reset.stderr });
+              resetFailed = reset.code !== 0;
+            } else {
+              log.push({ step: 'reset-rollback', code: 0, out: 'omitido: el pull no movió HEAD, no hay avance que revertir' });
+            }
             const st = await status();
             return res.status(409).json({
               ok: false,
@@ -200,7 +219,9 @@ export default {
               status: st,
               error: resetFailed
                 ? 'No se pudieron reaplicar los cambios locales (stash) tras el pull y ADEMÁS falló el intento de revertir el avance del pull (git reset --hard): la rama puede haber quedado adelantada a mitad de camino. Tus cambios siguen en el stash — revisá el estado del repo manualmente antes de continuar.'
-                : 'No se pudieron reaplicar los cambios locales (stash) tras el pull: se revirtió la actualización para no dejar el repo a mitad de camino. Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).',
+                : pullMovedHead
+                  ? 'No se pudieron reaplicar los cambios locales (stash) tras el pull: se revirtió la actualización para no dejar el repo a mitad de camino. Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).'
+                  : 'El pull no avanzó la rama y encima los cambios locales (stash) no se pudieron reaplicar limpios. No se revirtió nada (HEAD no se movió). Tus cambios siguen a salvo en el stash — resolvelo a mano (git stash pop).',
             });
           }
         }
