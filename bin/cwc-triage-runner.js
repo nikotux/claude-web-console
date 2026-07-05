@@ -9,7 +9,17 @@
 //
 // Interfaz (ver shared.js): tickets.json = resultado; triage.lock = heartbeat
 // {pid, ts} mientras corre (el server responde `running` según su frescura).
-// Sin argumentos. Log en ~/.cwc-data/triage.log (lo redirige el spawn).
+// Único argumento opcional: --full (ignora la caché incremental por ticket).
+// Log en ~/.cwc-data/triage.log (lo redirige el spawn).
+//
+// CACHÉ INCREMENTAL por ticket (optimización IA 2026-07-05, patrón
+// health-audit-cache de salud F2): el listado de la fase 1 trae status +
+// modifiedTime de cada ticket; su fingerprint (ticketFingerprint de shared.js)
+// se compara contra ~/.cwc-data/triage-cache.json y los tickets SIN cambios
+// reusan el triage anterior sin abrir query() (0 tokens) — solo se re-triagea
+// lo que cambió o es nuevo. La caché se escribe UNA vez tras la barrera del
+// pool y SOLO con tickets abiertos (los cerrados caen solos); los fallidos no
+// se cachean (se reintentan). --full la ignora (red de seguridad).
 //
 // DOS FASES EN PARALELO (optimización IA 2026-07-05, patrón desk-runner):
 // (1) una query BARATA que solo LISTA los tickets [Tolkien Bug] abiertos;
@@ -32,11 +42,13 @@ import { runAdaptivePool } from '../src/modules/health/pool.js';
 import {
   LIST_PROMPT, perTicketPrompt, toolAllowed, parseTicketList, parseTicketTriage,
   normalizeTicket, readCache, writeCache, writeLock, clearLock, readLock,
+  readTicketCache, writeTicketCache, ticketFingerprint,
   LIST_TIMEOUT_MS, TICKET_TIMEOUT_MS, LIST_MAX_TURNS, TICKET_MAX_TURNS,
   HEARTBEAT_MS, LOCK_FRESH_MS,
 } from '../src/modules/bugs/shared.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
+const FULL = process.argv.includes('--full');
 
 // Dedup entre procesos: si OTRO runner ya late, este sobra. OJO: el server
 // (spawnTriage) RESERVA el lock con NUESTRO pid en el mismo tick del spawn
@@ -136,7 +148,17 @@ async function run() {
     throw new Error('No se pudo interpretar el listado de tickets.');
   }
   log(`fase 1 OK: ${list.length} ticket(s) abiertos.`);
-  if (!list.length) return { tickets: [], failures: 0, total: 0 };
+  if (!list.length) {
+    writeTicketCache({}); // sin abiertos: la caché por ticket se vacía sola
+    return { tickets: [], failures: 0, total: 0, reused: 0 };
+  }
+
+  // Caché INCREMENTAL por ticket: fingerprint (status+modifiedTime de la
+  // fase 1) vs triage-cache.json. --full la saltea entera (red de seguridad).
+  const tcache = FULL ? {} : readTicketCache();
+  const newCache = {};
+  let reused = 0;
+  if (FULL) log('modo --full: ignoro la caché incremental por ticket.');
 
   // FASE 2: triage de cada ticket EN PARALELO (pool adaptativo de health
   // F2.5, mismo uso que desk-runner). Cada worker escribe su resultado
@@ -147,6 +169,19 @@ async function run() {
   const results = new Array(list.length).fill(null);
   let failures = 0;
   await runAdaptivePool(list.map((t, i) => ({ t, i })), async ({ t, i }, ctl) => {
+    // HIT de caché: el ticket no cambió desde su último triage ⇒ se reusa el
+    // resultado anterior SIN abrir query() (0 tokens). Fingerprint '' (sin
+    // modifiedTime) nunca matchea: dirección segura, se re-triagea.
+    const fp = ticketFingerprint(t);
+    const hit = fp ? tcache[t.ticketNumber] : null;
+    if (hit && hit.fingerprint === fp && hit.ticket) {
+      reused += 1;
+      newCache[t.ticketNumber] = hit;
+      results[i] = hit.ticket;
+      writeCache({ updatedAt: Date.now(), tickets: results.filter(Boolean), error: null });
+      log(`ticket #${t.ticketNumber}: sin cambios desde el último triage — reusado de la caché (0 tokens).`);
+      return;
+    }
     log(`fase 2: triageando ticket #${t.ticketNumber}…`);
     let entry = null;
     try {
@@ -158,6 +193,9 @@ async function run() {
       // El número/URL de la fase 1 son la verdad; el modelo no los pisa.
       entry.ticketNumber = t.ticketNumber;
       if (!entry.webUrl && t.webUrl) entry.webUrl = t.webUrl;
+      // Triage fresco OK ⇒ entra a la caché por ticket (solo con fingerprint
+      // real; los fallbacks de error NO se cachean para que se reintenten).
+      if (fp) newCache[t.ticketNumber] = { fingerprint: fp, ticket: entry, triagedAt: Date.now() };
       log(`ticket #${t.ticketNumber}: ${entry.severity} · ${entry.recommendation}`);
     } catch (err) {
       const msg = String(err?.message || err).slice(0, 200);
@@ -178,16 +216,21 @@ async function run() {
     writeCache({ updatedAt: Date.now(), tickets: results.filter(Boolean), error: null });
   });
 
-  return { tickets: results.filter(Boolean), failures, total: list.length };
+  // La caché por ticket se escribe UNA vez tras la barrera del pool (regla de
+  // oro: paralelo lo que lee, serial lo que escribe) y SOLO con los abiertos
+  // de ESTE listado: los tickets cerrados caen solos de la caché.
+  writeTicketCache(newCache);
+
+  return { tickets: results.filter(Boolean), failures, total: list.length, reused };
 }
 
 log(`triage arrancando (pid ${process.pid}, proyecto ${config.projectDir})`);
 run()
-  .then(({ tickets, failures, total }) => {
+  .then(({ tickets, failures, total, reused }) => {
     // `error` informa el parcial: los tickets que sí salieron quedan servidos.
     const error = failures ? `Triage parcial: fallaron ${failures} de ${total} ticket(s).` : null;
     writeCache({ updatedAt: Date.now(), tickets, error });
-    log(`triage ${failures ? 'PARCIAL' : 'OK'}: ${tickets.length} ticket(s)${failures ? `, ${failures} fallidos` : ''}.`);
+    log(`triage ${failures ? 'PARCIAL' : 'OK'}: ${tickets.length} ticket(s)${reused ? `, ${reused} reusado(s) de caché` : ''}${failures ? `, ${failures} fallidos` : ''}.`);
     finish(0);
   })
   .catch((err) => {

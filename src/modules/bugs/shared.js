@@ -12,6 +12,7 @@
 //   - LOCK_FILE  (triage.lock):  heartbeat {pid, ts} del runner vivo; "corriendo"
 //     = lock con ts fresco (LOCK_FRESH_MS). Un runner muerto a lo bestia deja
 //     lock viejo => se considera no-corriendo y se puede relanzar.
+import crypto from 'node:crypto';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,6 +81,9 @@ export const LIST_PROMPT = [
   '  - ticketNumber (string o número, el # del ticket de Desk)',
   '  - subject      (string, el asunto del ticket)',
   '  - webUrl       (string: el webUrl del ticket; "" si no lo tenés)',
+  '  - status       (string, el estado EXACTO del ticket tal como lo reporta Desk)',
+  '  - modifiedTime (string, el timestamp de última modificación que reporta',
+  '    Desk para el ticket; "" si no lo tenés)',
   '',
   'Si no hay tickets abiertos, respondé con ```json\n[]\n```. No agregues texto',
   'fuera del bloque json.',
@@ -157,7 +161,9 @@ export function normalizeTicket(t) {
   };
 }
 
-// FASE 1: parsea el listado [{ticketNumber, subject, webUrl}] (sin triage).
+// FASE 1: parsea el listado [{ticketNumber, subject, webUrl, status,
+// modifiedTime}] (sin triage). status/modifiedTime alimentan el fingerprint
+// de la caché incremental por ticket (ver ticketFingerprint).
 export function parseTicketList(text) {
   const arr = lastJsonBlock(text, /\[[\s\S]*\]/);
   if (!Array.isArray(arr)) return null;
@@ -166,6 +172,8 @@ export function parseTicketList(text) {
       ticketNumber: String(t.ticketNumber ?? t.number ?? '').slice(0, 40),
       subject: String(t.subject ?? t.title ?? '').slice(0, 300),
       webUrl: /^https?:\/\//.test(t.webUrl || '') ? String(t.webUrl).slice(0, 400) : '',
+      status: String(t.status ?? '').slice(0, 60),
+      modifiedTime: String(t.modifiedTime ?? '').slice(0, 60),
     }))
     .filter((t) => t.ticketNumber);
 }
@@ -193,6 +201,39 @@ export function writeCache(data) {
       if (attempt === 1) console.error('[tickets] no se pudo escribir la caché:', CACHE_FILE, err?.message);
     }
   }
+}
+
+// ===== Caché INCREMENTAL por ticket (optimización IA 2026-07-05) =====
+// Mismo patrón que health-audit-cache.json (readAuditCache/writeAuditCache/
+// unitFingerprint de health/shared.js): { [ticketNumber]: {fingerprint,
+// ticket, triagedAt} }. El fingerprint sale del LISTADO de la fase 1
+// (status + modifiedTime de Desk): si no cambió desde el último triage, el
+// resultado anterior se REUSA sin query() (0 tokens) — re-triagear lo que no
+// cambió es gasto puro. Sin modifiedTime NO hay señal confiable ⇒ fingerprint
+// '' ⇒ NUNCA se considera "sin cambios" (dirección segura: se re-triagea).
+// Borrar el archivo solo fuerza un triage completo; --full del runner lo
+// ignora (red de seguridad si la caché ensucia algo).
+export const TICKET_CACHE_FILE = path.join(DATA_DIR, 'triage-cache.json');
+
+export function readTicketCache() {
+  try { const o = JSON.parse(fss.readFileSync(TICKET_CACHE_FILE, 'utf8')); return o && typeof o === 'object' ? o : {}; }
+  catch { return {}; }
+}
+
+export function writeTicketCache(cache) {
+  try {
+    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(TICKET_CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
+  } catch (err) { console.error('[tickets] no pude escribir triage-cache:', err?.message); }
+}
+
+// Fingerprint de UN ticket del listado. modifiedTime de Desk cambia ante
+// CUALQUIER actividad (comentarios incluidos), status refuerza. '' = sin señal.
+export function ticketFingerprint(t) {
+  if (!t?.modifiedTime) return '';
+  return crypto.createHash('sha1')
+    .update(String(t.status || '')).update('\0').update(String(t.modifiedTime))
+    .digest('hex').slice(0, 12);
 }
 
 // ===== Lock de "triage corriendo" (heartbeat del runner) =====

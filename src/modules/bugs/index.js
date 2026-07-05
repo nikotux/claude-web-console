@@ -42,11 +42,13 @@ const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-triage-runner.
 // que dos POST /refresh casi simultáneos no pueden pasar ambos el check —
 // antes el lock recién lo escribía el HIJO tras cargar sus imports (ventana
 // de segundos: doble triage, doble gasto de tokens; hallazgo de salud).
-function spawnTriage() {
+// `full` ⇒ el runner ignora la caché incremental por ticket (triage-cache.json)
+// y re-triagea TODO — red de seguridad si la caché quedó sucia.
+function spawnTriage(full = false) {
   if (isRunning()) return false;
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   const log = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER], {
+  const child = spawn(process.execPath, full ? [RUNNER, '--full'] : [RUNNER], {
     detached: true, stdio: ['ignore', log, log], env: process.env,
   });
   // Falla ASÍNCRONA del spawn (ruta del runner rota tras un deploy, permisos,
@@ -95,7 +97,8 @@ export default {
       try {
         // spawnTriage() devuelve false si YA había un triage corriendo (dedup
         // por lock): started refleja si ESTE POST lanzó uno nuevo o no.
-        const started = spawnTriage();
+        // {full:true} en el body saltea la caché incremental por ticket.
+        const started = spawnTriage(req.body?.full === true);
         res.json({ ...readCache(), running: true, started });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar el triage: ${String(err?.message || err).slice(0, 200)}` });
