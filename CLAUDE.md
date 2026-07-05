@@ -172,7 +172,7 @@ código.
   2026-07-05; backfill histórico one-time hecho desde los logs de
   ~/.cwc-data/chats/*.log) —, sockets/logs de runners, caché
   tickets/salud — incluida `triage-cache.json`, caché INCREMENTAL por ticket
-  del triage (fingerprint status+modifiedTime de Desk; borrarla solo fuerza
+  del triage (fingerprint status+subject + TTL 12 h; borrarla solo fuerza
   un triage completo) —, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
   + `desk.lock` heartbeat del runner desk, `investigations/<pr>.json` veredicto de
   la investigación a fondo + `investigate.lock` heartbeat,
@@ -357,18 +357,25 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             department_id y las tools Desk). La doble capa read-only (regla
                             6) va EN CADA query de las dos fases.
                             CACHÉ INCREMENTAL por ticket (optimización IA 2026-07-05, mismo
-                            patrón que health-audit-cache de salud F2): el listado de fase 1
-                            trae además status+modifiedTime de Desk; ticketFingerprint
-                            (shared.js, sha1 status+modifiedTime — sin modifiedTime da '' y
-                            NUNCA matchea: dirección segura, se re-triagea) se compara con
-                            ~/.cwc-data/triage-cache.json ({ticketNumber: {fingerprint,
-                            ticket, triagedAt}}) y un ticket SIN cambios REUSA su triage
-                            anterior sin abrir query() (0 tokens). Solo se cachean triages
-                            frescos OK (los fallback de error NO — se reintentan); la caché
-                            se escribe UNA vez tras la barrera del pool y SOLO con los
-                            abiertos del listado (los cerrados caen solos). POST /refresh
-                            {full:true} (o `--full` a mano) la ignora — red de seguridad si
-                            quedó sucia; borrar el archivo solo fuerza un triage completo.
+                            patrón que health-audit-cache de salud F2): ticketFingerprint
+                            (shared.js, sha1 status+subject+modifiedTime) del listado de
+                            fase 1 se compara con ~/.cwc-data/triage-cache.json
+                            ({ticketNumber: {fingerprint, ticket, triagedAt}}) y un ticket
+                            SIN cambios con triage cacheado FRESCO REUSA su resultado sin
+                            abrir query() (0 tokens). OJO VERIFICADO 2026-07-05: el MCP de
+                            Tolkien (summarizeTickets de apps/mcp/src/zoho-tools.ts) RECORTA
+                            modifiedTime del listado — la señal real hoy es status+subject,
+                            CIEGA a un comentario nuevo sin cambio de estado; por eso el hit
+                            exige además TTL (TICKET_CACHE_TTL_MS 12 h: staleness acotada; si
+                            el MCP algún día expone modifiedTime, entra solo al hash y ese
+                            primer listado fuerza re-triage general). El prompt SIGUE
+                            pidiendo modifiedTime a propósito (future-proof, hoy llega "").
+                            Solo se cachean triages frescos OK (los fallback de error NO —
+                            se reintentan); la caché se escribe UNA vez tras la barrera del
+                            pool y SOLO con los abiertos del listado (los cerrados caen
+                            solos). POST /refresh {full:true} (o `--full` a mano) la ignora
+                            — red de seguridad si quedó sucia; borrar el archivo solo fuerza
+                            un triage completo.
                             POST /refresh responde INMEDIATO (arrancar+encuestar, patrón
                             health/review); el front encuesta GET cada 3 s y re-dispara si la
                             corrida se pierde (3 intentos). Seguridad read-only de dos capas
@@ -869,8 +876,8 @@ bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz
                             INCREMENTAL a tickets.json — un timeout pierde solo ese ticket,
                             nunca el batch. Doble capa read-only (regla 6) en CADA query.
                             CACHÉ INCREMENTAL por ticket (triage-cache.json, fingerprint
-                            status+modifiedTime del listado): sin cambios ⇒ reusa el triage
-                            anterior sin query() (0 tokens); --full la ignora
+                            status+subject del listado + TTL 12 h): sin cambios y fresco ⇒
+                            reusa el triage anterior sin query() (0 tokens); --full la ignora
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)

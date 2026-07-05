@@ -13,13 +13,16 @@
 // Log en ~/.cwc-data/triage.log (lo redirige el spawn).
 //
 // CACHÉ INCREMENTAL por ticket (optimización IA 2026-07-05, patrón
-// health-audit-cache de salud F2): el listado de la fase 1 trae status +
-// modifiedTime de cada ticket; su fingerprint (ticketFingerprint de shared.js)
-// se compara contra ~/.cwc-data/triage-cache.json y los tickets SIN cambios
-// reusan el triage anterior sin abrir query() (0 tokens) — solo se re-triagea
-// lo que cambió o es nuevo. La caché se escribe UNA vez tras la barrera del
-// pool y SOLO con tickets abiertos (los cerrados caen solos); los fallidos no
-// se cachean (se reintentan). --full la ignora (red de seguridad).
+// health-audit-cache de salud F2): el fingerprint del listado de fase 1
+// (ticketFingerprint de shared.js — status+subject; el MCP de Tolkien recorta
+// modifiedTime del payload, verificado en zoho-tools.ts) se compara contra
+// ~/.cwc-data/triage-cache.json y los tickets SIN cambios con triage cacheado
+// FRESCO (< TICKET_CACHE_TTL_MS, 12 h — la señal no ve comentarios nuevos:
+// staleness acotada) reusan el triage anterior sin abrir query() (0 tokens) —
+// solo se re-triagea lo que cambió, es nuevo o venció. La caché se escribe UNA
+// vez tras la barrera del pool y SOLO con tickets abiertos (los cerrados caen
+// solos); los fallidos no se cachean (se reintentan). --full la ignora (red
+// de seguridad).
 //
 // DOS FASES EN PARALELO (optimización IA 2026-07-05, patrón desk-runner):
 // (1) una query BARATA que solo LISTA los tickets [Tolkien Bug] abiertos;
@@ -42,7 +45,7 @@ import { runAdaptivePool } from '../src/modules/health/pool.js';
 import {
   LIST_PROMPT, perTicketPrompt, toolAllowed, parseTicketList, parseTicketTriage,
   normalizeTicket, readCache, writeCache, writeLock, clearLock, readLock,
-  readTicketCache, writeTicketCache, ticketFingerprint,
+  readTicketCache, writeTicketCache, ticketFingerprint, TICKET_CACHE_TTL_MS,
   LIST_TIMEOUT_MS, TICKET_TIMEOUT_MS, LIST_MAX_TURNS, TICKET_MAX_TURNS,
   HEARTBEAT_MS, LOCK_FRESH_MS,
 } from '../src/modules/bugs/shared.js';
@@ -169,12 +172,14 @@ async function run() {
   const results = new Array(list.length).fill(null);
   let failures = 0;
   await runAdaptivePool(list.map((t, i) => ({ t, i })), async ({ t, i }, ctl) => {
-    // HIT de caché: el ticket no cambió desde su último triage ⇒ se reusa el
-    // resultado anterior SIN abrir query() (0 tokens). Fingerprint '' (sin
-    // modifiedTime) nunca matchea: dirección segura, se re-triagea.
+    // HIT de caché: mismo fingerprint (status+subject del listado — el MCP
+    // recorta modifiedTime, ver shared.js) Y triage cacheado FRESCO
+    // (< TICKET_CACHE_TTL_MS: la señal no ve comentarios nuevos, el TTL acota
+    // la staleness) ⇒ se reusa el resultado SIN abrir query() (0 tokens).
     const fp = ticketFingerprint(t);
-    const hit = fp ? tcache[t.ticketNumber] : null;
-    if (hit && hit.fingerprint === fp && hit.ticket) {
+    const hit = tcache[t.ticketNumber];
+    const fresco = !!hit && Date.now() - (hit.triagedAt || 0) < TICKET_CACHE_TTL_MS;
+    if (hit && fresco && hit.fingerprint === fp && hit.ticket) {
       reused += 1;
       newCache[t.ticketNumber] = hit;
       results[i] = hit.ticket;
@@ -193,9 +198,9 @@ async function run() {
       // El número/URL de la fase 1 son la verdad; el modelo no los pisa.
       entry.ticketNumber = t.ticketNumber;
       if (!entry.webUrl && t.webUrl) entry.webUrl = t.webUrl;
-      // Triage fresco OK ⇒ entra a la caché por ticket (solo con fingerprint
-      // real; los fallbacks de error NO se cachean para que se reintenten).
-      if (fp) newCache[t.ticketNumber] = { fingerprint: fp, ticket: entry, triagedAt: Date.now() };
+      // Triage fresco OK ⇒ entra a la caché por ticket (los fallbacks de
+      // error NO se cachean para que se reintenten).
+      newCache[t.ticketNumber] = { fingerprint: fp, ticket: entry, triagedAt: Date.now() };
       log(`ticket #${t.ticketNumber}: ${entry.severity} · ${entry.recommendation}`);
     } catch (err) {
       const msg = String(err?.message || err).slice(0, 200);

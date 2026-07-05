@@ -227,12 +227,24 @@ export function writeTicketCache(cache) {
   } catch (err) { console.error('[tickets] no pude escribir triage-cache:', err?.message); }
 }
 
-// Fingerprint de UN ticket del listado. modifiedTime de Desk cambia ante
-// CUALQUIER actividad (comentarios incluidos), status refuerza. '' = sin señal.
+// Tope de FRESCURA de un hit de caché: la señal del listado (ver abajo) es
+// ciega a un comentario nuevo sin cambio de estado, así que un triage
+// cacheado de más de 12 h se re-hace aunque el fingerprint coincida —
+// staleness acotada por diseño (el caso de uso real del ahorro son los
+// reintentos del botón Refrescar en el mismo día).
+export const TICKET_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+
+// Fingerprint de UN ticket del listado. VERIFICADO 2026-07-05 contra el MCP
+// de Tolkien (apps/mcp/src/zoho-tools.ts, summarizeTickets): el listado
+// RECORTA modifiedTime del payload de Zoho (el modelo devuelve "" honesto),
+// así que la señal disponible hoy es status+subject. modifiedTime queda en
+// el hash igual: si el MCP algún día lo expone, se incorpora solo (y ese
+// primer listado con el campo nuevo fuerza un re-triage general, correcto).
 export function ticketFingerprint(t) {
-  if (!t?.modifiedTime) return '';
   return crypto.createHash('sha1')
-    .update(String(t.status || '')).update('\0').update(String(t.modifiedTime))
+    .update(String(t?.status || '')).update('\0')
+    .update(String(t?.subject || '')).update('\0')
+    .update(String(t?.modifiedTime || ''))
     .digest('hex').slice(0, 12);
 }
 
