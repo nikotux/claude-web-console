@@ -15,7 +15,7 @@ import path from 'node:path';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
-import { stateForCwd } from '../../core/claude-state.js';
+import { stateForCwd, stateForPane } from '../../core/claude-state.js';
 // Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux, que es
 // plomería y sostiene la rehidratación): persisten en titles.json vía el core
 // compartido (core/session-names.js — también los usa el módulo terminal para
@@ -31,16 +31,43 @@ const FMT = [
   '#{pane_current_path}',
 ].join('\t');
 
+// Mapa sesión→panes del socket (para el estado por pane del observador).
+// Best-effort: si list-panes falla, se devuelve un mapa vacío y el estado cae
+// al mapeo por carpeta de siempre.
+function panesBySession(sock, opts) {
+  const map = new Map();
+  try {
+    const out = runTmux(sock.path, ['list-panes', '-a', '-F', '#{session_name}\t#{pane_id}'], opts);
+    for (const line of out.split('\n')) {
+      if (!line.trim()) continue;
+      const [sess, pane] = line.split('\t');
+      if (!sess || !pane) continue;
+      if (!map.has(sess)) map.set(sess, []);
+      map.get(sess).push(pane);
+    }
+  } catch { /* fallback por carpeta */ }
+  return map;
+}
+
 function listSessionsForSocket(sock, opts) {
   const out = runTmux(sock.path, ['list-sessions', '-F', FMT], opts);
+  const panes = panesBySession(sock, opts);
   const sessions = [];
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
     const parts = line.split('\t');
     if (parts.length < 5) continue; // formato inesperado de tmux: skip, no campos undefined
     const [name, windows, attached, created, cwd] = parts;
-    // Estado real (observador statusline/hooks); transcript como fallback.
-    const st = cwd ? stateForCwd(cwd) : null;
+    // Estado real (observador statusline/hooks): PRIMERO por pane (identidad
+    // exacta de la sesión — dos claudes en el mismo cwd ya no comparten
+    // Pac-Man); si ningún pane tiene estado (claude viejo sin re-tick, o sin
+    // observador), fallback al mapeo por carpeta de siempre.
+    let st = null;
+    for (const pane of panes.get(name) || []) {
+      st = stateForPane(pane);
+      if (st) break;
+    }
+    if (!st && cwd) st = stateForCwd(cwd);
     sessions.push({
       socket: sock.path,
       socketName: sock.name,
@@ -66,7 +93,18 @@ registerNameProvider(() => {
   const titles = loadTitles();
   const names = [];
   for (const sock of listSockets()) {
-    for (const s of listSessionsForSocket(sock)) {
+    // throwOnError: igual que en GET /sessions (ver comentario más abajo), un
+    // fallo transitorio de list-sessions no debe leerse como "socket sin
+    // sesiones" — eso liberaría nombres en uso por sesiones vivas. Si falla,
+    // excluimos ese socket de este cálculo en vez de tratarlo como vacío.
+    let sessions;
+    try {
+      sessions = listSessionsForSocket(sock, { throwOnError: true });
+    } catch {
+      console.error(`[tmux] list-sessions falló en el socket "${sock.name}" al calcular nombres únicos; se omite esta pasada.`);
+      continue;
+    }
+    for (const s of sessions) {
       names.push(titles[titleKey(s.socketName, s.name)] || (s.cwd ? path.basename(s.cwd) : s.name));
     }
   }
@@ -160,9 +198,17 @@ export default {
       // -l = literal (no interpretar el texto como nombres de tecla); luego Enter.
       // throwOnError: sin él runTmux traga el fallo y responderíamos ok:true
       // con la sesión muerta (mismo patrón que /kill).
+      // Un solo runTmux (dos comandos tmux encadenados con ';') en vez de dos
+      // llamadas separadas: si la sesión muere entre el texto y el Enter, con
+      // dos invocaciones el texto queda tipeado a medias en el pane y el
+      // endpoint responde 500 sin poder avisar ni revertir. Encadenados en una
+      // sola invocación no queda ventana entre nuestro proceso y tmux.
       try {
-        runTmux(socketPath, ['send-keys', '-t', session, '-l', `/model ${model}`], { throwOnError: true });
-        runTmux(socketPath, ['send-keys', '-t', session, 'Enter'], { throwOnError: true });
+        runTmux(
+          socketPath,
+          ['send-keys', '-t', session, '-l', `/model ${model}`, ';', 'send-keys', '-t', session, 'Enter'],
+          { throwOnError: true }
+        );
         res.json({ ok: true });
       } catch {
         res.status(500).json({ error: 'No se pudo enviar /model a la sesión (¿ya no existe?).' });

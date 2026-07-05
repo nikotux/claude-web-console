@@ -51,10 +51,16 @@ function run() {
   const cwd = j.cwd || j.workspace?.current_dir || prev.cwd || null;
   const model = j.model || prev.model || null;
   const status = mode === 'statusline' ? (prev.status || 'waiting') : mode;
+  // Identidad por pane de tmux (mismo truco que el interfono, bin/cwc-bus.js):
+  // el observador corre como hijo de claude, así que hereda $TMUX_PANE. Con
+  // esto el server mapea estado→sesión tmux EXACTA en vez de por carpeta
+  // (dos claudes en el mismo cwd ya no comparten Pac-Man). prev como red por
+  // si alguna invocación llegara sin el env.
+  const tmuxPane = process.env.TMUX_PANE || prev.tmuxPane || null;
 
   if (file) {
     try {
-      fs.writeFileSync(file, JSON.stringify({ sessionId: sid, cwd, model, status, ts: Date.now() }));
+      fs.writeFileSync(file, JSON.stringify({ sessionId: sid, cwd, tmuxPane, model, status, ts: Date.now() }));
     } catch { /* noop */ }
   }
 
