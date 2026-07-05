@@ -22,6 +22,10 @@ const PATHS = {
   chevronLeft: `<polyline points="15,5 8,12 15,19"/>`,
   refresh: `<path d="M20 11a8 8 0 0 0-14.6-4.6M4 13a8 8 0 0 0 14.6 4.6"/><polyline points="19,4 19,9 14,9"/><polyline points="5,20 5,15 10,15"/>`,
   terminal: `<rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 11,12.5 7,16"/><line x1="12" y1="16" x2="16" y2="16"/>`,
+  // "Mi Consola" (este proyecto): monitor de escritorio con el prompt >_ —
+  // espejo del emoji 🖥️ que ya se usa en docs/chats para referirse a la
+  // consola. Identidad visual del proyecto (ver ui/places.js).
+  console: `<rect x="2.5" y="4" width="19" height="13" rx="2"/><polyline points="6.5,7.8 9.5,10.5 6.5,13.2"/><line x1="11.5" y1="13.2" x2="15" y2="13.2"/><line x1="12" y1="17" x2="12" y2="20.5"/><line x1="8.5" y1="20.5" x2="15.5" y2="20.5"/>`,
   sparkle: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>`,
   help: `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.6 2.6 0 1 1 3.8 2.3c-.8.4-1.2 1-1.2 1.9"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>`,
   search: `<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/>`,

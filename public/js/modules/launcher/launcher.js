@@ -1,11 +1,17 @@
 // modules/launcher/launcher.js — "Nueva sesión": LA acción prominente de la app.
 //
 // Modal lanzador completo: tipo (Claude/Terminal), modelo (recuerda el último
-// usado), y destino con atajos fijos (Home/Tolkien), carpetas RECIENTES
-// (GET /api/terminal/recents) y navegador de carpetas con breadcrumb
-// (GET /api/files/list, solo directorios). [Iniciar] crea y enfoca.
+// usado), y destino con atajos fijos (Home/Tolkien/Mi Consola — los lugares
+// con identidad salen de ui/places.js: nombre + ícono + diferenciador),
+// carpetas RECIENTES (GET /api/terminal/recents) y navegador de carpetas con
+// breadcrumb (GET /api/files/list, solo directorios). [Iniciar] crea y enfoca.
 // Flujos: Home = 2 taps · reciente = 3 taps · carpeta nueva = navegar + Iniciar.
+import { placeFor } from '../../ui/places.js';
+
 const LAST_MODEL_KEY = 'cwc:lastModel';
+// "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
+// usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
+const CONSOLE_PLACE = placeFor('claude-web-console');
 
 const MODELS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
@@ -92,12 +98,16 @@ export default {
     }
 
     function listHTML() {
-      const dest = (rel, label, sub, ic) => `
-        <button class="btn-ghost ln-dest ${st.dest.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
+      const dest = (rel, label, sub, ic, cls = '') => `
+        <button class="btn-ghost ln-dest ${cls} ${st.dest.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
           ${icon(ic, { size: 15 })}<span class="ln-dest-label">${label}</span><span class="ln-sub">${sub}</span>
         </button>`;
-      const shortcuts = dest('', 'Home', '~', 'home') + dest(st.project.rel, st.project.name, `~/${st.project.rel}`, 'gitBranch');
-      const rec = st.recents.filter((r) => r.cwd !== st.project.rel);
+      // Atajos fijos: Home + Tolkien + Mi Consola (identidad de ui/places.js;
+      // el diferenciador visual es la clase ln-dest--console de style.css).
+      const shortcuts = dest('', 'Home', '~', 'home')
+        + dest(st.project.rel, st.project.name, `~/${st.project.rel}`, 'gitBranch')
+        + dest(CONSOLE_PLACE.rel, CONSOLE_PLACE.label, `~/${CONSOLE_PLACE.rel}`, CONSOLE_PLACE.ico, 'ln-dest--console');
+      const rec = st.recents.filter((r) => r.cwd !== st.project.rel && r.cwd !== CONSOLE_PLACE.rel);
       // Solo los 3 recientes más usados; el resto vive en el modal "Ver más"
       // para no empujar el botón Iniciar fuera de pantalla en móvil.
       let visible = rec.slice(0, 3);
@@ -107,7 +117,12 @@ export default {
         const sel = rec.find((r) => r.cwd === st.dest.rel);
         if (sel) visible = visible.slice(0, 2).concat(sel);
       }
-      const recents = visible.map((r) => dest(r.cwd, baseName(r.cwd), `~/${r.cwd}`, 'folder')).join('');
+      // Un reciente que sea (o cuelgue de) un lugar conocido hereda su
+      // nombre + ícono (p.ej. una subcarpeta de Mi Consola no queda genérica).
+      const recents = visible.map((r) => {
+        const p = placeFor(r.cwd);
+        return dest(r.cwd, p?.label || baseName(r.cwd), `~/${r.cwd}`, p?.ico || 'folder', p?.cls === 'is-console' ? 'ln-dest--console' : '');
+      }).join('');
       const more = rec.length > visible.length
         ? `<button class="btn-ghost btn--sm ln-dests-more">${icon('chevronRight', { size: 13 })}<span>Ver más (${rec.length})</span></button>`
         : '';
@@ -123,7 +138,7 @@ export default {
 
     // "Ver más" de ubicaciones: modal emergente con todos los recientes.
     function openDestsMore() {
-      const rec = st.recents.filter((r) => r.cwd !== st.project.rel);
+      const rec = st.recents.filter((r) => r.cwd !== st.project.rel && r.cwd !== CONSOLE_PLACE.rel);
       const m = dialog.openModal({ title: 'Abrir en…', width: 440 });
       const list = document.createElement('div');
       list.className = 'ln-dests ln-dests--dlg';
@@ -231,7 +246,8 @@ export default {
     // Navegador de carpetas: navegar implica seleccionar la carpeta actual.
     async function browse(rel) {
       st.browseRel = rel;
-      st.dest = { rel, label: baseName(rel) };
+      // Un lugar conocido conserva su nombre también al llegar navegando.
+      st.dest = { rel, label: placeFor(rel)?.label || baseName(rel) };
       const body = modal?.body;
       if (!body) return;
       const startBtn = body.querySelector('.ln-start span');

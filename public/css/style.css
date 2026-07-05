@@ -209,6 +209,10 @@ html, body {
   font-size: var(--cwc-fs-md); font-weight: 600;
 }
 .sess-model { flex: none; font-size: var(--cwc-fs-xs); font-weight: 600; }
+/* Mini-ícono de LUGAR de la tarjeta (ui/places.js): dónde corre la sesión —
+   Mi Consola en acento, otros lugares conocidos en tono tenue. */
+.sess-place { display: inline-flex; color: var(--cwc-text-dimmer); flex: none; }
+.sess-place.is-console { color: var(--cwc-accent); }
 .sess-mode:not(:empty) {
   flex: none; font-size: var(--cwc-fs-xs); font-weight: 700; letter-spacing: .03em;
   color: var(--cwc-accent); background: var(--cwc-accent-bg);
@@ -403,6 +407,10 @@ html, body {
 .ln-dests { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .5rem; }
 .ln-dest { justify-content: flex-start; }
 .ln-dest.active { border-color: var(--cwc-accent); color: var(--cwc-accent); background: var(--cwc-accent-bg); }
+/* "Mi Consola" (ui/places.js): ícono + nombre en acento para ubicarla de un
+   vistazo entre los destinos (pedido 2026-07-05). .active pinta el botón
+   entero igual que siempre — este tinte solo distingue el estado en reposo. */
+.ln-dest--console svg, .ln-dest--console .ln-dest-label { color: var(--cwc-accent); }
 .ln-dest-label { font-weight: 600; }
 .ln-sub { margin-left: auto; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); overflow: hidden; text-overflow: ellipsis; }
 .ln-dest.active .ln-sub { color: inherit; opacity: .75; }

@@ -966,6 +966,18 @@ docs/                       frontend-modules.md · brief-original.txt · context
   `alert()/confirm()/prompt()` nativos.
 - **Íconos:** `icon(name)` de `ui/icons.js` (SVG de trazo, currentColor);
   agregar íconos nuevos AHÍ, no SVG inline.
+- **"Mi Consola" = nombre CANÓNICO de este proyecto (pedido del usuario
+  2026-07-05):** en toda la UI el proyecto se llama "Mi Consola" (nunca
+  "claude-web-console" ni "Consola (este proyecto)") con el ícono `console`
+  de icons.js (monitor con >_ , espejo del emoji 🖥️ de docs/chats; Tolkien
+  sigue con `gitBranch`/🌳). Fuente ÚNICA frontend: `ui/places.js`
+  (PLACES/placeFor — mapa rel↔{label, ico, cls}); backend: PROJECTS de
+  `src/modules/projects/index.js`. Lo consumen: launcher (atajo fijo
+  "Mi Consola" en "Abrir en" con tinte acento `.ln-dest--console` + recientes
+  y navegador heredan nombre/ícono), tarjetas de Sesiones (mini-ícono
+  `.sess-place` de lugar: acento si es la consola, tenue si es Tolkien; el
+  displayName de tmux también usa el label) y la pestaña Proyectos de ⚙
+  Sistema. Un lugar nuevo con identidad = una entrada más en PLACES.
 - **`[hidden]`:** existe un guard global `[hidden]{display:none!important}` en
   ui.css. Cualquier regla `display` de autor sobre un elemento ocultable debe
   respetarlo (esa fue la causa raíz del bug del menú contextual pegado).

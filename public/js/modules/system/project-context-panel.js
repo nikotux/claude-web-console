@@ -28,7 +28,8 @@ const BUGFIX_API = '/api/bugfixes/context';
 // Presentación por key de proyecto completo (ícono + descripción corta).
 const PROJECT_META = {
   tolkien: { ico: 'gitBranch', desc: 'Contexto CLAUDE.md + memorias del proyecto Tolkien' },
-  console: { ico: 'terminal', desc: 'Contexto CLAUDE.md + memorias de esta consola' },
+  // Ícono de identidad de "Mi Consola" (ui/icons.js `console`, ver ui/places.js).
+  console: { ico: 'console', desc: 'Contexto CLAUDE.md + memorias de Mi Consola (esta web)' },
 };
 
 // "Sub-proyectos" de bugfixes: solo contexto (texto libre), sin memorias.
@@ -71,6 +72,11 @@ export function mountProjectContextPanel(el, ctx) {
   let current = null; // entrada abierta en el detalle (null = vista lista)
   let bfContent = '';
   let indexContent = '';
+  // Hash de lo último leído de MEMORY.md: viaja en el guardado para que el
+  // server detecte si una sesión de Claude Code lo tocó en el medio (mismo
+  // patrón que el hash por sección del contexto) y devuelva 409 en vez de
+  // pisarlo en silencio.
+  let indexHash = '';
 
   const projectApi = (suffix) => `${PROJECTS_API}/${encodeURIComponent(current.key)}${suffix}`;
 
@@ -155,7 +161,8 @@ export function mountProjectContextPanel(el, ctx) {
   // confirmó.
   function reviewChange(sec, newText, saveFn) {
     return new Promise((resolve) => {
-      const m = dialog.openModal({ title: 'Revisión del cambio', width: 560, onClose: () => resolve(false) });
+      let closed = false;
+      const m = dialog.openModal({ title: 'Revisión del cambio', width: 560, onClose: () => { closed = true; resolve(false); } });
       m.body.innerHTML = `
         <p class="dlg-msg">Sección <b>${esc(sec.title)}</b> — ${esc(current.name)}</p>
         <div class="cr-body" data-ref="body">
@@ -200,12 +207,34 @@ export function mountProjectContextPanel(el, ctx) {
 
       (async () => {
         try {
+          // El POST solo LANZA la corrida (runner desacoplado, regla de oro) y
+          // devuelve {id, status}; acá se encuesta el resultado persistido en
+          // disco — un reinicio del server a mitad del análisis ya no lo
+          // pierde. Se toleran fetch fallidos consecutivos (deploy en el
+          // medio) antes de caer al diff local.
           const res = await fetch(projectApi(`/context/section/${sec.i}/analyze`), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: newText, hash: sec.hash }),
           });
-          const data = await res.json().catch(() => ({}));
+          let data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || 'Falló el análisis.');
+          const jobId = data.id;
+          let misses = 0;
+          while (data.status === 'running') {
+            if (closed) return; // el usuario cerró el modal: dejar de encuestar
+            await new Promise((r) => setTimeout(r, 2000));
+            try {
+              const poll = await fetch(projectApi(`/context/section/${sec.i}/analyze/${jobId}`));
+              const pd = await poll.json().catch(() => ({}));
+              if (!poll.ok) throw new Error(pd.error || 'Falló el análisis.');
+              data = pd;
+              misses = 0;
+            } catch (err) {
+              if (++misses >= 5) throw err; // ~10 s sin respuesta: fallback a diff
+            }
+          }
+          if (closed) return;
+          if (data.status !== 'done' || !data.analysis) throw new Error(data.error || 'Falló el análisis.');
           const a = data.analysis;
           body.innerHTML = `
             <div class="hp-verdict hp-verdict--${esc(a.risk)}"><b>${RISK_LABEL[a.risk] || a.risk}</b></div>
@@ -332,9 +361,11 @@ export function mountProjectContextPanel(el, ctx) {
   // ===== Memorias (solo proyectos completos) =====
   async function editNote(file, title) {
     let content = '';
+    let hash = '';
     try {
       const data = await (await fetch(projectApi(`/memory/note/${encodeURIComponent(file)}`))).json();
       content = data.content || '';
+      hash = data.hash || '';
     } catch { /* arranca vacío si falló la lectura */ }
     await dialog.textEditorDialog({
       title: `Memoria — ${title || file}`,
@@ -343,11 +374,14 @@ export function mountProjectContextPanel(el, ctx) {
       width: 640,
       saveLabel: 'Guardar',
       onSave: async (text) => {
+        // El hash de lo que se abrió viaja en el guardado: si Claude Code
+        // (o un admin desde otra pestaña) tocó la nota en el medio, el
+        // server devuelve 409 en vez de pisarla en silencio.
         const res = await fetch(projectApi(`/memory/note/${encodeURIComponent(file)}`), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text, hash }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+        if (!res.ok) throw new Error(res.status === 409 ? `${data.error} Recargá esta nota para ver el cambio ajeno antes de reintentar.` : (data.error || 'No se pudo guardar.'));
       },
     });
     loadNotes();
@@ -361,11 +395,13 @@ export function mountProjectContextPanel(el, ctx) {
       width: 640,
       saveLabel: 'Guardar',
       onSave: async (text) => {
+        // Mismo chequeo de hash que las notas: MEMORY.md lo escribe Claude
+        // Code en vivo a partir de feedback real de las conversaciones.
         const res = await fetch(projectApi('/memory/index'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text, hash: indexHash }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo guardar.');
+        if (!res.ok) throw new Error(res.status === 409 ? `${data.error} Recargá el índice para ver el cambio ajeno antes de reintentar.` : (data.error || 'No se pudo guardar.'));
         indexContent = text;
       },
     });
@@ -381,6 +417,7 @@ export function mountProjectContextPanel(el, ctx) {
       const data = await (await fetch(projectApi('/memory'))).json();
       if (!alive || !notesEl()) return;
       indexContent = data.index || '';
+      indexHash = data.indexHash || '';
       if (!data.files.length) {
         notesEl().innerHTML = '<div class="bk-empty">Todavía no hay memorias registradas para este proyecto.</div>';
         return;

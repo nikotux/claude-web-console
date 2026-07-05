@@ -10,6 +10,7 @@
 import { modelColor } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman } from '../../ui/pacman.js';
+import { placeFor } from '../../ui/places.js';
 
 // Pac-Man de estado de una tarjeta: la clase st-* pone el color (style.css) y
 // SOLO st-working mastica (is-working). Misma firma que updateInPlace.
@@ -48,8 +49,17 @@ export default {
       const parts = (p || '').split('/').filter(Boolean);
       return parts.length ? parts[parts.length - 1] : '~';
     };
-    const displayName = (s) => s.customTitle || (s.cwd ? baseName(s.cwd) : s.name);
+    // Nombre humano: custom > lugar conocido (ui/places.js: "Mi Consola",
+    // "Tolkien") > basename del cwd. El renombre manual sigue mandando.
+    const displayName = (s) => s.customTitle || placeFor(s.cwd)?.label || (s.cwd ? baseName(s.cwd) : s.name);
     const plumbing = (s) => `tmux: ${s.name} · socket ${s.socketName}${s.cwd ? ` · ${s.cwd}` : ''}`;
+    // Mini-ícono de LUGAR (dónde corre la sesión): solo lugares conocidos —
+    // Mi Consola en acento (is-console), Tolkien tenue. El badge es estático
+    // por tarjeta (el cwd no cambia), updateInPlace no necesita tocarlo.
+    const placeBadge = (cwd) => {
+      const p = placeFor(cwd);
+      return p ? `<span class="sess-place ${p.cls}" title="${p.label}">${icon(p.ico, { size: 11 })}</span>` : '';
+    };
 
     function fmtAgo(ms) {
       if (!ms) return '';
@@ -128,6 +138,7 @@ export default {
       main.innerHTML = `
         ${pacStatus(dotCls, c.status === 'working' ? 'trabajando' : 'esperando input')}
         <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
+        ${placeBadge(c.cwd)}
         <span class="sess-name">${c.title}</span>
         <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
         <span class="sess-model">${c.model || ''}</span>`;
@@ -274,6 +285,7 @@ export default {
       main.className = 'sess-main';
       main.innerHTML = `
         ${pacStatus(dot.cls, dot.label)}
+        ${placeBadge(s.cwd)}
         <span class="sess-name">${displayName(s)}</span>
         <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? s.model.name : ''}</span>`;
       main.addEventListener('click', () => openCard(s));

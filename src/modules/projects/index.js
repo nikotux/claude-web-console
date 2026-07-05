@@ -24,13 +24,15 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
   listContextSections, readContextSection, writeContextSection, hashOf,
 } from './memory.js';
+import {
+  analyzeJobId, readAnalyzeJob, writeAnalyzeJob, spawnAnalyzeRunner, jobResult, isFreshRunning,
+} from './analyze-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_DIR = path.resolve(__dirname, '..', '..', '..'); // raíz de este mismo repo
@@ -39,7 +41,9 @@ const displayName = (n) => (n ? n[0].toUpperCase() + n.slice(1) : 'Tolkien');
 
 const PROJECTS = {
   tolkien: { name: displayName(config.projectName), dir: config.projectDir },
-  console: { name: 'Consola (este proyecto)', dir: CONSOLE_DIR },
+  // "Mi Consola" = nombre CANÓNICO de este proyecto en toda la UI (pedido del
+  // usuario 2026-07-05; identidad frontend en ui/places.js + ícono `console`).
+  console: { name: 'Mi Consola', dir: CONSOLE_DIR },
 };
 
 function project(req, res) {
@@ -50,100 +54,13 @@ function project(req, res) {
 
 // ===== Análisis con IA de un cambio de contexto (guardián del CLAUDE.md) =====
 // Compara la sección ANTERIOR vs la NUEVA con una corrida corta del SDK
-// (haiku, 1 turno, CERO herramientas: las dos capas de la regla 6 acá
-// directamente deniegan TODO — el análisis solo necesita el prompt) y
-// devuelve un veredicto estructurado: qué se elimina / agrega / modifica y
-// el nivel de riesgo. La UI lo muestra en un modal de confirmación FORZADA
-// antes de escribir el archivo. Si esta corrida falla, la UI cae a un diff
-// local igualmente forzado (esto nunca bloquea el guardado consciente).
-const ANALYZE_TIMEOUT_MS = 60 * 1000;
-
-function analyzePrompt(before, after) {
-  return [
-    'Sos el guardián de un CLAUDE.md: la guía operativa que una IA lee antes de',
-    'trabajar en un proyecto (reglas duras, prohibiciones, invariantes, mapa).',
-    'Compará la versión ANTERIOR y la NUEVA de UNA sección y respondé ÚNICAMENTE',
-    'con un bloque ```json así:',
-    '{',
-    '  "removed":  ["cada regla/prohibición/dato operativo que DESAPARECE"],',
-    '  "added":    ["qué se agrega"],',
-    '  "modified": ["qué cambia de sentido o se debilita"],',
-    '  "risk":     "ok" | "atencion" | "critico",',
-    '  "riskWhy":  "1-2 líneas: por qué ese nivel",',
-    '  "summary":  "1-2 líneas en criollo: qué hace este cambio"',
-    '}',
-    'Criterio de risk: "critico" = borra o debilita reglas duras, guardas de',
-    'seguridad o invariantes (aunque sea de forma sutil); "atencion" = elimina',
-    'contenido operativo o cambia semántica; "ok" = agrega/mejora/reformula sin',
-    'pérdida. Arrays vacíos si no aplica. Sé específico y breve.',
-    '',
-    '=== SECCIÓN ANTERIOR ===',
-    before || '(sección nueva: no había contenido)',
-    '',
-    '=== SECCIÓN NUEVA ===',
-    after || '(la sección queda VACÍA: se elimina todo su contenido)',
-  ].join('\n');
-}
-
-function parseAnalysis(text) {
-  const fences = [...String(text || '').matchAll(/```json\s*([\s\S]*?)```/gi)];
-  const raw = fences.length ? fences[fences.length - 1][1] : (String(text || '').match(/\{[\s\S]*\}/) || [])[0];
-  if (!raw) return null;
-  let o;
-  try { o = JSON.parse(raw); } catch { return null; }
-  const arr = (x) => (Array.isArray(x) ? x.map((s) => String(s).slice(0, 300)).slice(0, 20) : []);
-  return {
-    removed: arr(o.removed),
-    added: arr(o.added),
-    modified: arr(o.modified),
-    risk: ['ok', 'atencion', 'critico'].includes(o.risk) ? o.risk : 'atencion',
-    riskWhy: String(o.riskWhy || '').slice(0, 500),
-    summary: String(o.summary || '').slice(0, 500),
-  };
-}
-
-async function analyzeChange(before, after) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'El análisis de cambios no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: analyzePrompt(before, after),
-    options: {
-      cwd: CONSOLE_DIR,
-      settingSources: [], // nada de settings/skills: análisis puro de texto
-      model: 'haiku',     // rápido y barato; el criterio viene entero en el prompt
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
-  });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El análisis tardó demasiado.')), ANALYZE_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    // await: garantiza que el subproceso del SDK cerró antes de devolver
-    // (sin await la limpieza quedaba huérfana si el turno se cortaba).
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
-  const analysis = parseAnalysis(text);
-  if (!analysis) throw new Error('No se pudo interpretar el análisis.');
-  return analysis;
-}
+// (haiku, 1 turno, CERO herramientas). DESACOPLADO (regla de oro 2026-07-04):
+// la corrida NO vive en el handler Express — el POST persiste el job en
+// ~/.cwc-data/projects-analyze/<id>.json y spawnea
+// bin/cwc-projects-analyze-runner.js detached; el front encuesta el GET (solo
+// lee disco, 0 tokens). Un reinicio del server (deploy) a mitad del análisis
+// ya no lo pierde: el runner sobrevive y el resultado queda persistido.
+// Prompt/parseo/persistencia compartidos con el runner en ./analyze-shared.js.
 
 export default {
   name: 'projects',
@@ -178,7 +95,7 @@ export default {
         writeContext(p.dir, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
       } catch (e) {
-        res.status(e.conflict ? 409 : 500).json({ error: e.message || 'No se pudo guardar el contexto.' });
+        res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar el contexto.' });
       }
     });
 
@@ -193,7 +110,7 @@ export default {
     r.get('/:key/context/section/:i', (req, res) => {
       const p = project(req, res); if (!p) return;
       try { res.json(readContextSection(p.dir, req.params.i)); }
-      catch (e) { res.status(400).json({ error: e.message || 'No se pudo leer la sección.' }); }
+      catch (e) { res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo leer la sección.' }); }
     });
 
     r.post('/:key/context/section/:i', (req, res) => {
@@ -203,14 +120,19 @@ export default {
         writeContextSection(p.dir, req.params.i, req.body?.hash, String(req.body?.content ?? ''));
         res.json({ ok: true });
       } catch (e) {
-        res.status(e.conflict ? 409 : 500).json({ error: e.message || 'No se pudo guardar la sección.' });
+        res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar la sección.' });
       }
     });
 
     // Analiza con IA el cambio propuesto sobre una sección ANTES de guardar
     // (admin: consume tokens). Valida el hash primero: si la sección ya
-    // cambió, 409 sin gastar tokens. NO escribe nada.
-    r.post('/:key/context/section/:i/analyze', async (req, res) => {
+    // cambió, 409 sin gastar tokens. NO escribe la sección. Responde INMEDIATO
+    // (patrón triage/health/desk-live): persiste el job + spawnea el runner
+    // detached y devuelve {id, status:'running'}; el front encuesta el GET de
+    // abajo. Id determinístico por (proyecto, sección, hash, contenido): un
+    // reintento del POST (doble click, re-engancharse tras un deploy) reusa el
+    // MISMO job en vez de spawnear otro runner y gastar tokens de nuevo.
+    r.post('/:key/context/section/:i/analyze', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
@@ -218,11 +140,35 @@ export default {
         if (sec.hash !== String(req.body?.hash || '')) {
           return res.status(409).json({ error: 'El contexto cambió desde que abriste esta sección. Recargá y reintentá.' });
         }
-        const analysis = await analyzeChange(sec.text, String(req.body?.content ?? ''));
-        res.json({ ok: true, analysis });
+        const after = String(req.body?.content ?? '');
+        const id = analyzeJobId(req.params.key, req.params.i, sec.hash, after);
+        const job = readAnalyzeJob(id);
+        if (job && (isFreshRunning(job) || job.status === 'done')) {
+          return res.json({ ok: true, id, ...jobResult(job) });
+        }
+        writeAnalyzeJob(id, {
+          status: 'running', key: req.params.key, section: String(req.params.i),
+          before: sec.text, after, startedAt: Date.now(), updatedAt: Date.now(),
+        });
+        spawnAnalyzeRunner(id);
+        res.json({ ok: true, id, status: 'running', analysis: null, error: null });
       } catch (e) {
-        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+        res.status(e.badRequest ? 400 : (e.conflict ? 409 : 500)).json({ error: String(e?.message || e).slice(0, 300) });
       }
+    });
+
+    // Estado/resultado del análisis: SOLO lee el disco (0 tokens). Sobrevive a
+    // un reinicio del server porque el job y el runner viven fuera del proceso;
+    // si el runner murió sin escribir (kill/OOM), jobResult lo reporta como
+    // error pasado el corte de staleness — el front nunca queda colgado.
+    r.get('/:key/context/section/:i/analyze/:id', (req, res) => {
+      const p = project(req, res); if (!p) return;
+      if (!/^[0-9a-f]{24}$/.test(String(req.params.id))) {
+        return res.status(400).json({ error: 'Id de análisis inválido.' });
+      }
+      const job = readAnalyzeJob(req.params.id);
+      if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
+      res.json({ ok: true, id: req.params.id, ...jobResult(job) });
     });
 
     // ===== Memorias (MEMORY.md + notas individuales) =====
@@ -234,35 +180,44 @@ export default {
 
     r.get('/:key/memory/index', (req, res) => {
       const p = project(req, res); if (!p) return;
-      try { res.json({ content: readIndex(p.dir) }); }
+      try { const content = readIndex(p.dir); res.json({ content, hash: hashOf(content) }); }
       catch { res.status(500).json({ error: 'No se pudo leer el índice.' }); }
     });
 
+    // `hash` OPCIONAL en el body (mismo patrón que POST /:key/context): si el
+    // cliente lo manda (lo leyó del GET de arriba o de listMemory), se rechaza
+    // con 409 si MEMORY.md cambió en el medio — misma protección contra
+    // ediciones concurrentes de sesiones de Claude Code (ver memory.js:writeIndex).
     r.post('/:key/memory/index', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        writeIndex(p.dir, String(req.body?.content ?? ''));
+        writeIndex(p.dir, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
-      } catch {
-        res.status(500).json({ error: 'No se pudo guardar el índice.' });
+      } catch (e) {
+        res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar el índice.' });
       }
     });
 
     r.get('/:key/memory/note/:file', (req, res) => {
       const p = project(req, res); if (!p) return;
-      try { res.json({ file: req.params.file, content: readNote(p.dir, req.params.file) }); }
-      catch (e) { res.status(400).json({ error: e.message || 'No se pudo leer la nota.' }); }
+      try {
+        const content = readNote(p.dir, req.params.file);
+        res.json({ file: req.params.file, content, hash: hashOf(content) });
+      } catch (e) { res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo leer la nota.' }); }
     });
 
+    // `hash` OPCIONAL en el body, mismo patrón que el índice de arriba: detecta
+    // si la nota cambió entre que se abrió (GET de arriba) y se guardó (ver
+    // memory.js:writeNote).
     r.post('/:key/memory/note/:file', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        writeNote(p.dir, req.params.file, String(req.body?.content ?? ''));
+        writeNote(p.dir, req.params.file, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
       } catch (e) {
-        res.status(400).json({ error: e.message || 'No se pudo guardar la nota.' });
+        res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar la nota.' });
       }
     });
 
