@@ -713,6 +713,14 @@ export class ChatTab {
         <span class="mh-leg-icons">${icon('terminal', { size: 13 })}${icon(ic, { size: 12 })}</span>
         <b>${name}</b><span>${desc}</span>
       </div>`;
+    // Leyenda del motor Pac-Man (ver ui/pacman.js): un swatch real de cada
+    // estado (mismo componente que el header/las tarjetas de Sesiones) para
+    // reconocer de un vistazo qué está haciendo la conversación.
+    const pacLeg = (state, name, desc) => `
+      <div class="mh-leg">
+        <span class="mh-leg-icons">${pacman({ state, size: 'sm', title: name })}</span>
+        <b>${name}</b><span>${desc}</span>
+      </div>`;
     const m = openModal({ title: 'Ayuda del chat', width: 480 });
     m.body.innerHTML = `
       <div class="mode-help">
@@ -760,6 +768,20 @@ export class ChatTab {
           ${leg('list', 'Todo', 'lista de tareas del agente')}
           ${leg('sparkle', 'Task', 'lanza un subagente')}
           ${leg('gear', 'Otras', 'cualquier otra herramienta')}
+        </div>
+
+        <div class="mh-sec">Estados del Pac-Man</div>
+        <p class="mh-intro">El mismo Pac-Man aparece acá arriba y en las
+        tarjetas de Sesiones — el color Y el movimiento te dicen qué está
+        haciendo la conversación en cada momento:</p>
+        <div class="mh-legend">
+          ${pacLeg('working', 'Trabajando', 'dorado, mordisco rápido: un turno corriendo ahora')}
+          ${pacLeg('delegating', 'Delegando', 'violeta con el ícono del interfono: esperando que vuelva un subagente (Task) u otro proceso')}
+          ${pacLeg('queued', 'En cola', 'ámbar que respira: esperando su turno detrás de otro paso')}
+          ${pacLeg('waiting', 'Tu turno', 'verde, parpadeo lento: esperando tu mensaje o tu decisión')}
+          ${pacLeg('stale', 'Sin señales', 'ámbar apagado y quieto: se perdió el rastro, no se sabe si sigue activo')}
+          ${pacLeg('error', 'Falló', 'rojo y quieto: se detuvo por un error')}
+          ${pacLeg('dormant', 'Dormido', 'gris y quieto: nada activo ni delegado — el único estado sin animación')}
         </div>
       </div>`;
   }
