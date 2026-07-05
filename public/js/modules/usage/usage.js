@@ -159,7 +159,7 @@ function renderUsage(container, sum) {
           <div class="tok-row-top">
             <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
             <span class="tok-name">${modelName(m.key, m.model)}</span>
-            ${live ? pacman({ cls: 'pac-sm tok-live', title: 'consumiendo tokens ahora' }) : ''}
+            ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: 'consumiendo tokens ahora' }) : ''}
             <span class="tok-row-cost">${fmtCost(m.cost)}</span>
           </div>
           <span class="tok-bar"><span class="tok-fill" style="width:${w}%;background:${modelColor(m.key)}"></span></span>

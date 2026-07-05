@@ -90,7 +90,7 @@ export default {
       refs.refresh.disabled = busy;
       refs.board.disabled = busy;
 
-      if (busy) { refs.stats.innerHTML = `${pacman()} triando…`; return; }
+      if (busy) { refs.stats.innerHTML = `${pacman({ state: 'delegating' })} triando…`; return; }
       if (cache.error) {
         refs.stats.innerHTML = `<span class="bf-err">Error: ${escapeHtml(cache.error)}</span>`;
         return;

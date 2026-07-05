@@ -58,9 +58,9 @@ export function openHealthReview(ctx, { isAdmin }) {
     // "falso positivo" en el error. Se muestra como descartado, no como error.
     const status = (it.status === 'failed' && /falso positivo/i.test(it.error || '')) ? 'dismissed' : it.status;
     switch (status) {
-      case 'pending': return `<span class="hr-badge hr-badge--queue" title="En cola para resolver">${pacman({ working: false })}<span>en cola</span></span>`;
-      case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="Resolviendo ahora (en paralelo, en su sandbox aislado)">${pacman()}<span>resolviendo</span></span>`;
-      case 'ready': return `<span class="hr-badge hr-badge--fixing" title="Fix listo en el sandbox — esperando la integración serial al código real">${pacman()}<span>listo p/ integrar</span></span>`;
+      case 'pending': return `<span class="hr-badge hr-badge--queue" title="En cola para resolver">${pacman({ state: 'queued' })}<span>en cola</span></span>`;
+      case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="Resolviendo ahora (delegado a su propio sandbox aislado)">${pacman({ state: 'delegating' })}<span>resolviendo</span></span>`;
+      case 'ready': return `<span class="hr-badge hr-badge--fixing" title="Fix listo en el sandbox — en cola para la integración serial al código real">${pacman({ state: 'queued' })}<span>listo p/ integrar</span></span>`;
       case 'integrated': return '<span class="hr-badge hr-badge--ok">✅ resuelto</span>';
       case 'conflict': return `<span class="hr-badge hr-badge--fail" title="Conflicto al integrar (quedó sin aplicar): ${esc(it.error || '')}">🔴 conflicto</span>`;
       case 'check-failed': return `<span class="hr-badge hr-badge--fail" title="No pasó node --check al integrar: ${esc(it.error || '')}">🔴 falló el check</span>`;
@@ -93,7 +93,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   //    (runner autónomo; la tarjeta se actualiza sola). Falló ⇒ + reintentar.
   function actions(f) {
     if (!(isAdmin && openChat)) return '';
-    if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman()}<span>resolviendo automáticamente…</span></div>`;
+    if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman({ state: 'delegating' })}<span>resolviendo automáticamente…</span></div>`;
     if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
     if (f.fixStatus === 'dismissed') {
       return `<div class="hr-f-dismiss">⊘ No era un bug (falso positivo)${f.dismissReason ? `: ${esc(f.dismissReason)}` : ''}</div>
@@ -411,7 +411,7 @@ export function openHealthReview(ctx, { isAdmin }) {
     const c = b.items.reduce((a, it) => { a[it.status] = (a[it.status] || 0) + 1; return a; }, {});
     const warn = (c.conflict || 0) + (c['check-failed'] || 0);
     if (b.running) {
-      return `<div class="hr-batch hr-batch--run">${pacman()}<span>Resolviendo ${b.items.length} en paralelo (aislado)${b.phase ? ` · ${esc(b.phase)}` : ''} — ✅ ${c.integrated || 0}${warn ? ` · ⚠ ${warn}` : ''}${c.failed ? ` · ✗ ${c.failed}` : ''}</span></div>`;
+      return `<div class="hr-batch hr-batch--run">${pacman({ state: 'delegating' })}<span>Resolviendo ${b.items.length} en paralelo (aislado)${b.phase ? ` · ${esc(b.phase)}` : ''} — ✅ ${c.integrated || 0}${warn ? ` · ⚠ ${warn}` : ''}${c.failed ? ` · ✗ ${c.failed}` : ''}</span></div>`;
     }
     if (b.finishedAt) {
       return `<div class="hr-batch">Último batch: ✅ ${c.integrated || 0} integrado(s)${c.conflict ? ` · ⚠ ${c.conflict} conflicto` : ''}${c['check-failed'] ? ` · ⚠ ${c['check-failed']} check` : ''}${c.failed ? ` · ✗ ${c.failed} fallo` : ''}. Los no integrados quedan abiertos (retry o "En chat").</div>`;

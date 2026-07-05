@@ -166,7 +166,7 @@ export function mountProjectContextPanel(el, ctx) {
       m.body.innerHTML = `
         <p class="dlg-msg">Sección <b>${esc(sec.title)}</b> — ${esc(current.name)}</p>
         <div class="cr-body" data-ref="body">
-          <p class="hp-running">${pacman()} La IA está analizando el cambio…</p>
+          <p class="hp-running">${pacman({ state: 'delegating' })} La IA está analizando el cambio…</p>
         </div>`;
       const body = m.body.querySelector('[data-ref="body"]');
 

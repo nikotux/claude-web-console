@@ -1152,42 +1152,70 @@ docs/                       frontend-modules.md · brief-original.txt · context
   cambian de pestaña vía `focusSession`/`openChatView` sin depender de este
   chip. Si se vuelve a tocar, verificar que el rail colapsado de desktop no
   se rompió (ahí `#rail-tabs` es indispensable).
-- Pac-Man (`.cwc-pacman`, ui.css + ui/pacman.js) — loader COMPARTIDO en CSS
-  puro, triple rol: (a) indicador de PROCESO LARGO (> ~5 s: revisión profunda,
-  triage de Bugs, subir PR, push/backup, Uso) siempre con `.is-working`; (b)
-  ícono "vivo/dormido" del header del chat (mismo componente con cls
-  `chat-alive`, SOLO móvil — style.css lo oculta en desktop — y su
-  `.is-working` lo togglea `_setWorking(on)` de chat-tab.js); (c) estado de
-  las tarjetas de Sesiones del sidebar (cls `pac-sm sess-pac st-*`, render y
-  updateInPlace de sessions.js con `pacStatus`/`pacClass`): amarillo
-  masticando = trabajando (`.is-working`), verde boca cerrada = esperando
-  input (`.sess-pac.st-waiting` recolorea el borde a `--cwc-ok` en
-  style.css), verde/amarillo tenue = idle/stale, gris = shell (default
-  dormido). `pac-sm` (ui.css) es la variante 0.75× (30×12, borde 6px) y el
-  ojo de `.sess-pac` cala `--cwc-bg-elevated` (fondo de la tarjeta, no
-  panel). Anatomía:
-  `.pac-man` es una caja 0×0 con `border-width` parejo + `border-radius:50%`
-  (el truco clásico: el BORDE es el círculo) y el borde derecho anima entre
-  sólido (boca cerrada) y `transparent` (boca abierta) — `@keyframes
-  pac-chomp`; `.pac-track` con 3 `.pac-dot` viajan con `translateX` de
-  derecha a izquierda y se desvanecen al llegar a la boca
-  (`@keyframes pac-dot-travel`). Ojo = `::before` (el (0,0) de un pseudo
-  absoluto en una caja 0×0 con borde es el CENTRO del círculo); la boca
-  cerrada NO lleva marca (hubo una línea `::after` y se quitó a pedido).
-  Dormido = gris quieto; trabajando = dorado (`--cwc-warn`) masticando.
-  OJO 1: el kill-switch global de `prefers-reduced-motion` (ui.css)
-  congelaba el Pac-Man en teléfonos con "reducir movimiento" del sistema —
-  hay una EXCEPCIÓN deliberada (mismo bloque de ui.css, mayor especificidad
-  + !important: es indicador de estado funcional, no decoración); no
-  borrarla. OJO 2: `.is-working .pac-man` pone los 4 bordes en warn como
-  base (fallback estático = boca cerrada dorada, nunca hueco gris
-  congelado). OJO 3: el recorrido de `.pac-dot` es `translateX(var(--pac-travel,
-  -24px))` y TIENE que coincidir con el ancho de `.pac-track` (ancho total −
-  círculo) para que la bolita llegue EXACTO a la boca — el default -24px es
-  del tamaño normal (40−16); cada variante define el suyo (`pac-sm`:
+- Pac-Man — MOTOR de estados (pedido del usuario 2026-07-05, reemplaza el
+  loader binario working/dormido de antes): catálogo ÚNICO en
+  `ui/pacman.js` (`PAC_STATES`) + CSS puro en `ui.css` (sección "Pac-Man —
+  MOTOR de estados"). Regla de diseño: la ÚNICA animación estática es
+  `dormant` (nada activo ni delegado); todo lo demás se reconoce por CÓMO se
+  mueve, no solo por el color — `working` (dorado, mordisco+bolitas
+  viajando, el de siempre) · `delegating` (violeta `--cwc-accent-cool`, boca
+  entreabierta fija + bolitas ORBITANDO ida-y-vuelta + badge con el ícono
+  `relay` de icons.js — esperando la vuelta de un subagente/proceso
+  delegado: Task tool, pool paralelo de salud, triage, investigar PR/ticket,
+  desk-live, Optimización IA, commit-message IA) · `queued` (ámbar
+  atenuado, pulso de opacidad — en cola detrás de un lock/paso serial) ·
+  `waiting` (verde, parpadeo lento — tu turno) · `stale`/`error` (ámbar
+  dim/rojo, ESTÁTICOS a propósito: incertidumbre o falla, no confirmación de
+  actividad). API: `pacman({state, size, cls, title})` arma el markup
+  (el badge del interfono SIEMPRE está en el HTML, lo muestra/oculta el CSS
+  según la clase — así las actualizaciones EN LUGAR de sessions.js/
+  health-review-modal.js, que solo tocan `className`, no necesitan
+  reinyectar HTML); `pacClass(state, {size, cls})` arma solo la lista de
+  clases para esas actualizaciones. RETROCOMPAT: `pacman()` SIN argumentos
+  sigue significando "trabajando" (default histórico, lo usan los loaders de
+  Salud/Backup/Optimización/Uso) y `pacman({working:true/false})` (API
+  vieja) sigue mapeando a working/dormant — ningún call site no migrado se
+  rompe. Consumidores: header del chat (`chat-alive`, `_renderPacState` de
+  chat-tab.js combina turno + contador de subagentes Task/Agent pendientes
+  — ver `_delegatingCount`/`_toolCard`/`_toolResult`) · tarjetas de Sesiones
+  (`pac-sm`, `dotInfo`/`chatDotInfo` de sessions.js) · badges/banners de
+  Salud (health-review-modal.js: `pending`/`ready`→queued,
+  `fixing`→delegating, batch paralelo→delegating) · Optimización IA,
+  triage de Bugs, investigar PR/ticket, desk-live, sync Desk bulk (bugs
+  board) → delegating · commit-message IA y guardián de contexto (Proyectos)
+  → delegating · Uso (`tok-live`, `isLive` por modelo) → working/nada.
+  BUG FIX 2026-07-05 (chat en modo TUI con Pac-Man CONGELADO): cuando un chat
+  pasa a `viewMode:'tui'` el runner SDK se duerme y `Chat.status` (backend)
+  queda frío — la actividad real vive en el pane tmux oculto `cwct-<id>`,
+  reportada por el observador (`stateForPane`, `core/claude-state.js`), pero
+  esas sesiones bare NUNCA se listaban (`terminal/sessions.js: list()`
+  filtra `!s.bare`) así que la tarjeta del chat no tenía cómo verlo. Fix:
+  `/api/tmux/sessions` (tmux/index.js) SÍ expone las `cwct-*` con su estado
+  real (list-sessions no filtra por prefijo) — sessions.js las cruza por
+  nombre (`chatDotInfo`, `bareNameOf(c.terminalId)`) para pintar el estado
+  real de esa tarjeta, y las EXCLUYE de la lista general (`render()`
+  filtra `s.name.startsWith('cwct-')`) para que no aparezcan además como
+  tarjeta "Otras sesiones tmux" duplicada. Esto es lo que hacía que una
+  reactivación por el interfono (o cualquier actividad en la TUI oculta) no
+  se viera hasta volver a modo Chat.
+  DELEGANDO server-side (`Chat._delegatingIds`, chat/index.js): un
+  `tool_use` Task/Agent abre la espera, su `tool_result` la cierra;
+  `info().delegating` lo expone en `/api/chat/list` para que la tarjeta lo
+  vea SIN la pestaña abierta (antes el ícono de Task solo existía en el
+  frontend del chat abierto, invisible para Sesiones). Invariante: `waiting`
+  limpia siempre el contador (`_setStatus`) — un tool_result perdido
+  (interrupt, crash) no deja la tarjeta pegada en "delegando" para siempre.
+  Anatomía CSS (sin cambios): `.pac-man` es una caja 0×0 con `border-width`
+  parejo + `border-radius:50%` (el borde es el círculo); `.pac-track` con 3
+  `.pac-dot`; ojo = `::before`. OJO 1: el kill-switch global de
+  `prefers-reduced-motion` (ui.css) tiene una EXCEPCIÓN deliberada para
+  TODOS los estados animados (no solo `working`) — indicador funcional, no
+  decoración; no borrarla. OJO 2: el recorrido de `.pac-dot` es
+  `translateX(var(--pac-travel, -24px))`, DEBE coincidir con el ancho de
+  `.pac-track`; cada variante de tamaño define el suyo (`pac-sm`:
   `--pac-travel: -18px`, 30−12). La barra TUI (`.conv-tui-bar`) NO tiene el
   vivo/dormido (su estado viene del observador de hooks, no del stream del
-  SDK — plomería distinta, no conectada todavía).
+  SDK — plomería distinta).
 - Cambio de pestaña y scroll del chat: los paneles se ocultan con
   `display:none` (`.terminal-pane` sin `.active`), y con `display:none` el
   `scrollTop` de `.chat-msgs` se pierde (scrollHeight=0) — el replay de

@@ -284,7 +284,10 @@ export function mountBackupPanel(el, ctx) {
         const genState = box.querySelector('[data-ref="gen-state"]');
         const selected = () => [...box.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
         const state = (t, kind = 'info', { running = false } = {}) => {
-          if (running) genState.innerHTML = `${pacman()} ${t}`;
+          // 'delegating': acá siempre es la IA (runner desacoplado
+          // cwc-commitmsg-runner.js) generando el mensaje — nunca la corrida
+          // sincrónica del propio commit.
+          if (running) genState.innerHTML = `${pacman({ state: 'delegating' })} ${t}`;
           else genState.textContent = t;
           genState.className = `bk-msg ${kind}`;
           genState.hidden = !t;

@@ -43,7 +43,7 @@ export function renderHeader(state) {
   if (state.busy.desksync) {
     mr.desksync.disabled = true;
     const p = state.deskSyncProgress;
-    mr.desksync.innerHTML = `${pacman()}<span>Desk${p && p.total ? ` ${p.done}/${p.total}` : ''}…</span>`;
+    mr.desksync.innerHTML = `${pacman({ state: 'delegating' })}<span>Desk${p && p.total ? ` ${p.done}/${p.total}` : ''}…</span>`;
   } else {
     mr.desksync.disabled = false;
     mr.desksync.innerHTML = `${icon('download', { size: 13 })}<span>🎫 Desk</span>`;
@@ -316,7 +316,7 @@ function invTopBox(row, state) {
     const slot = state.inv[pr];
     let body;
     if (!slot || slot.loading) body = `<div class="cwc-loading">${pacman()}cargando investigación…</div>`;
-    else if (slot.running) body = `<div class="cwc-loading">${pacman()}investigando el PR #${esc(pr)}… (lee el diff y el feedback de Chris)</div>`;
+    else if (slot.running) body = `<div class="cwc-loading">${pacman({ state: 'delegating' })}investigando el PR #${esc(pr)}… (lee el diff y el feedback de Chris)</div>`;
     else {
       const inv = slot.st?.investigation;
       body = `
@@ -339,7 +339,7 @@ function invTopBox(row, state) {
   const slot = state.tktInv[t];
   let body;
   if (!slot || slot.loading) body = `<div class="cwc-loading">${pacman()}cargando investigación…</div>`;
-  else if (slot.running) body = `<div class="cwc-loading">${pacman()}investigando el ticket #${esc(t)}… (leyendo el código de Tolkien)</div>`;
+  else if (slot.running) body = `<div class="cwc-loading">${pacman({ state: 'delegating' })}investigando el ticket #${esc(t)}… (leyendo el código de Tolkien)</div>`;
   else {
     const inv = slot.st?.investigation;
     body = `
@@ -361,7 +361,7 @@ function deskSectionHtml(ticket, state) {
     body = `<button class="btn-ghost btn--sm bb-desk-btn" data-deskload="${esc(ticket)}" title="Trae el estado ACTUAL del ticket desde Zoho Desk (consume tokens) — para ver si tu comentario ya quedó publicado">${icon('download', { size: 13 })}<span>🎫 Traer estado de Desk</span></button>`;
   } else if (slot.loading) {
     const prog = slot.progress && slot.progress.total > 1 ? ` (${slot.progress.done}/${slot.progress.total})` : '';
-    body = `<div class="cwc-loading">${pacman()}consultando Zoho Desk…${prog}</div>`;
+    body = `<div class="cwc-loading">${pacman({ state: 'delegating' })}consultando Zoho Desk…${prog}</div>`;
   } else if (slot.error) {
     body = `<div class="bb-live-err">⚠ ${esc(slot.error)} — reintentá con ↻.</div>
       <div class="bb-desk-head"><button class="btn-ghost btn--sm btn--icon" data-deskfresh="${esc(ticket)}" title="Reintentar">${icon('refresh', { size: 12 })}</button></div>`;

@@ -117,7 +117,7 @@ export function openOptimize(ctx, { isAdmin }) {
   function render(census, d) {
     const parts = [censusHtml(census)];
     if (d.running) {
-      parts.push(`<p class="hp-running">${pacman()} Analizando · ${esc(d.progress?.phase || '…')}</p>`);
+      parts.push(`<p class="hp-running">${pacman({ state: 'delegating' })} Analizando · ${esc(d.progress?.phase || '…')}</p>`);
     } else if (d.error) {
       parts.push(`<p class="hp-error">El último análisis falló: ${esc(d.error)}</p>`);
     }
