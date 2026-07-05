@@ -35,7 +35,7 @@ function memoryDirFor(projectDir) {
 }
 
 function safeNotePath(projectDir, file) {
-  if (!NOTE_RE.test(file || '')) throw new Error('Nombre de nota inválido.');
+  if (!NOTE_RE.test(file || '')) throw Object.assign(new Error('Nombre de nota inválido.'), { badRequest: true });
   return path.join(memoryDirFor(projectDir), file);
 }
 
@@ -52,7 +52,7 @@ export function readContext(projectDir) {
 // programáticos existentes que ignoran el hash.
 export function writeContext(projectDir, text, expectedHash) {
   const out = String(text ?? '');
-  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto es demasiado grande (máximo 400 KB). Nada se guardó.');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contexto es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
   if (expectedHash) {
     const current = readContext(projectDir);
     if (hashOf(current) !== String(expectedHash)) {
@@ -115,7 +115,7 @@ export function readContextSection(projectDir, i) {
   const sections = splitContextSections(readContext(projectDir));
   const idx = Number(i);
   const s = sections[idx];
-  if (!Number.isInteger(idx) || !s) throw new Error('Sección inexistente.');
+  if (!Number.isInteger(idx) || !s) throw Object.assign(new Error('Sección inexistente.'), { badRequest: true });
   return { i: idx, title: s.title, text: s.text, hash: hashOf(s.text) };
 }
 
@@ -143,7 +143,7 @@ export function writeContextSection(projectDir, i, expectedHash, content) {
   }
   s.text = String(content ?? '');
   const out = sections.map((x) => x.text).join('\n');
-  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El contexto quedaría demasiado grande.');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contexto quedaría demasiado grande.'), { badRequest: true });
   fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
 }
 
@@ -201,17 +201,37 @@ export function listMemory(projectDir) {
   }
   for (const file of Array.from(onDisk).sort()) files.push(describeNote(memoryDir, file, null, true));
 
-  return { indexExists, index: indexText, files };
+  return { indexExists, index: indexText, indexHash: hashOf(indexText), files };
 }
 
 export function readNote(projectDir, file) {
   return fs.readFileSync(safeNotePath(projectDir, file), 'utf8');
 }
 
-export function writeNote(projectDir, file, text) {
+// Lectura tolerante para comparar contra `expectedHash`: una nota que todavía
+// no existe en disco vale '' (mismo criterio que readContext), así el chequeo
+// funciona igual para notas nuevas que para ediciones.
+function readNoteSafe(projectDir, file) {
+  try { return fs.readFileSync(safeNotePath(projectDir, file), 'utf8'); }
+  catch { return ''; }
+}
+
+// `expectedHash` es OPCIONAL, mismo criterio que writeContext (ver comentario
+// ahí): detecta que otra sesión (Claude Code escribiendo la nota "en vivo" a
+// partir de feedback real, o un admin editándola en esta misma pantalla)
+// cambió el archivo entre que se abrió y se guardó, y rechaza con .conflict
+// en vez de pisar en silencio. Sin hash, guarda como siempre (compatibilidad
+// con llamadores programáticos existentes).
+export function writeNote(projectDir, file, text, expectedHash) {
   const p = safeNotePath(projectDir, file);
   const out = String(text ?? '');
-  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('La nota es demasiado grande (máximo 400 KB). Nada se guardó.');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('La nota es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
+  if (expectedHash) {
+    const current = readNoteSafe(projectDir, file);
+    if (hashOf(current) !== String(expectedHash)) {
+      throw Object.assign(new Error('La nota cambió desde que la abriste (otra sesión la editó). Recargá y reintentá.'), { conflict: true });
+    }
+  }
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, out);
 }
@@ -221,10 +241,20 @@ export function readIndex(projectDir) {
   catch { return ''; }
 }
 
-export function writeIndex(projectDir, text) {
+// `expectedHash` OPCIONAL, mismo patrón que writeContext/writeNote: MEMORY.md
+// también lo escribe Claude Code en vivo a partir de feedback real de las
+// conversaciones, así que un admin editando el índice acá puede pisarle esa
+// escritura en silencio sin este chequeo.
+export function writeIndex(projectDir, text, expectedHash) {
   const dir = memoryDirFor(projectDir);
   const out = String(text ?? '');
-  if (Buffer.byteLength(out) > MAX_SIZE) throw new Error('El índice de memorias es demasiado grande (máximo 400 KB). Nada se guardó.');
+  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El índice de memorias es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
+  if (expectedHash) {
+    const current = readIndex(projectDir);
+    if (hashOf(current) !== String(expectedHash)) {
+      throw Object.assign(new Error('El índice de memorias cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
+    }
+  }
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, INDEX_FILE_NAME), out);
 }

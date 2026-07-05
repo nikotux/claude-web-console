@@ -328,5 +328,90 @@
     "match": "src/modules/**/*.js (cualquier ruta que sirva archivos de usuario)",
     "text": "Ningún endpoint que sirva contenido subido por el usuario (`res.sendFile`/`res.download`/streaming de archivos) debe dejar que el Content-Type se derive de la extensión del archivo sin pasar por una allowlist explícita de tipos \"seguros para render inline\"; todo lo demás debe ir con `Content-Disposition: attachment`.",
     "addedAt": 1783136793913
+  },
+  {
+    "match": "bin/*.js",
+    "text": "Todo `fs.writeFileSync(P, ...)` en bin/*.js debe estar precedido en el mismo archivo por un `fs.mkdirSync(path.dirname(P), { recursive: true })` (o equivalente) para el mismo path P",
+    "addedAt": 1783260848797
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Toda promesa lanzada con `Promise.race([p, ...])` donde `p` puede seguir viva tras perder la carrera debe tener un `.catch()` adjunto en el mismo statement o inmediatamente después de su creación",
+    "addedAt": 1783260852776
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Todo handler registrado vía r.get/post/put/delete(...) en registerHttp debe envolver su cuerpo en try/catch con una respuesta res.status(500).json en el catch",
+    "addedAt": 1783260854842
+  },
+  {
+    "match": "src/modules/tmux/index.js",
+    "text": "Toda llamada a listSessionsForSocket(sock) en src/modules/tmux/index.js debe pasar { throwOnError: true } y envolver en try/catch por-socket (nunca leer un fallo de tmux list-sessions como \"socket vacío\")",
+    "addedAt": 1783260856657
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "En cualquier catch de handler HTTP que hace I/O de filesystem, el status code debe derivarse de una propiedad explícita del error (`.badRequest`/`.conflict`) y nunca ser un 4xx hardcodeado por defecto — el fallback no reconocido debe ser 500.",
+    "addedAt": 1783260955842
+  },
+  {
+    "match": "src/modules/files/index.js",
+    "text": "Todo endpoint de escritura/borrado en src/modules/files/index.js que reciba una ruta vía resolveWithinHome debe validar con statSafeSync (o equivalente que resuelva symlinks) que la ruta real de la carpeta contenedora siga dentro de homeReal() antes de llamar a cualquier fss.*Sync/moveToTrash que mute el filesystem",
+    "addedAt": 1783260957451
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Todo `throw new Error(...)` dentro de src/modules/*/*.js que representa una validación de input del usuario (tamaño excedido, formato inválido, etc.) debe llevar `{ badRequest: true }` (o `{ conflict: true }` si es un conflicto de concurrencia), y toda ruta Express que haga `catch (e) { res.status(...) }` debe chequear `e.badRequest`/`e.conflict` antes de caer a 500, para que los 5xx queden reserv",
+    "addedAt": 1783260958864
+  },
+  {
+    "match": "bin/install-*.js",
+    "text": "Ningún contenido de comando .md generado (grep `!\\`` en bin/install-*.js) interpola una variable de plantilla shell (`$ARGUMENTS`, `$1`, etc.) sin encomillarla dentro del backtick de ejecución",
+    "addedAt": 1783260960432
+  },
+  {
+    "match": "src/modules/projects/index.js",
+    "text": "Todo catch de endpoint bajo /:key/context/section/** debe mapear e.badRequest→400 y e.conflict→409 antes de default 500",
+    "addedAt": 1783261848280
+  },
+  {
+    "match": "src/modules/files/**/*.js",
+    "text": "Para toda entrada con symlink:true en la respuesta de /list, size y mtimeMs deben provenir del mismo stat (el que determina type) — nunca mezclar fs.stat (target) para type con fs.lstat (enlace) para size/mtimeMs",
+    "addedAt": 1783261849625
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Todo catch de ruta HTTP que responde 4xx a partir de una excepción capturada debe derivar el código de una propiedad explícita del error (`.badRequest`/`.conflict`/etc.), nunca un status 4xx hardcodeado por defecto; fallback no reconocido = 500",
+    "addedAt": 1783261851126
+  },
+  {
+    "match": "src/modules/projects/*.js",
+    "text": "Todo `throw new Error(...)` disparado por una validación de tamaño/formato de input de usuario en src/modules/projects/*.js debe incluir `{ badRequest: true }`, y toda ruta POST/PUT en src/modules/projects/index.js debe mapear `e.badRequest ? 400 : 500` en su catch",
+    "addedAt": 1783261852790
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "En todo catch de un handler HTTP, el status de la respuesta debe derivar de una propiedad explícita del error (p.ej. `.badRequest`/`.upstream`/`.conflict`) marcada en el punto donde se lanza, nunca de un literal `.status(NNN)` hardcodeado como único camino para todos los errores del bloque try.",
+    "addedAt": 1783261858049
+  },
+  {
+    "match": "src/modules/*/index.js",
+    "text": "Ningún endpoint HTTP de src/modules/**/index.js que modifique el estado de una sesión tmux externa (send-keys, resize, etc.) debe hacer más de una llamada a runTmux con throwOnError:true por request cuando esas llamadas representan pasos de una misma operación lógica (p. ej. escribir texto + Enter); deben encadenarse en una sola invocación tmux (`;`) o usar un único comando.",
+    "addedAt": 1783261864467
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "En cualquier catch genérico de una ruta HTTP, el status de respuesta debe ser 500 salvo que el error capturado exponga explícitamente `.badRequest` (→400) o `.conflict` (→409); nunca un 4xx hardcodeado sin distinguir el tipo de error.",
+    "addedAt": 1783261912969
+  },
+  {
+    "match": "src/modules/files/index.js, src/core/trash.js",
+    "text": "Todo handler que haga mkdirSync/renameSync/writeFile sobre una ruta derivada de resolveWithinHome() debe validar con statSafeSync (o equivalente basado en realpathSync) que la carpeta contenedora REAL sigue dentro de homeReal() antes de mutar el filesystem",
+    "addedAt": 1783261945179
+  },
+  {
+    "match": "src/modules/**/memory.js",
+    "text": "Toda función write*() en src/modules/*/memory.js (o equivalente) que persista un archivo editable tanto por un admin desde la UI como por una escritura automática/externa concurrente debe aceptar un expectedHash opcional y rechazar con error .conflict si el hash actual no coincide, en vez de pisar en silencio",
+    "addedAt": 1783262012728
   }
 ]

@@ -36,6 +36,11 @@ export function mountHealthPanel(el, ctx) {
     <div class="hp-checks" data-ref="checks"><span class="cwc-spinner"></span></div>
 
     <div class="hp-head hp-head--review">
+      <span class="hp-title">🔍 Censo del proyecto</span>
+    </div>
+    <div data-ref="scan">cargando…</div>
+
+    <div class="hp-head hp-head--review">
       <span class="hp-title">Revisión profunda con Claude</span>
     </div>
     <div class="hp-review" data-ref="review">cargando…</div>
@@ -71,6 +76,90 @@ export function mountHealthPanel(el, ctx) {
     }
   }
 
+  // ===== censo del proyecto (chip compacto → detalle expandible inline) =====
+  // GET /api/health/scan (0 tokens, sin LLM) — cuenta módulos backend/
+  // frontend, runners y motores IA vía generateInventory() (caché por
+  // fingerprint). Nace COLAPSADO (`<details>`, mismo patrón que el censo de
+  // Optimización IA); un clic lo expande sin abrir ningún modal. El botón
+  // de refrescar fuerza un re-escaneo (?force=1) e ignora el toggle nativo
+  // del <summary> (preventDefault) para no expandir/colapsar sin querer.
+  let scanning = false;
+
+  function scanDetailHtml(d) {
+    const modRows = (d.modules || []).map((m) => `
+      <div class="hp-row">
+        <span class="hp-dot ${m.registered ? 'hp-dot--ok' : 'hp-dot--warn'}"></span>
+        <span class="hp-label">${esc(m.name)}</span>
+        <span class="hp-detail">${m.registered ? esc(m.purpose || '') : '⚠️ no registrado en registry.js'}</span>
+      </div>`).join('') || '<p class="hp-empty">Sin módulos.</p>';
+    const engineRows = (d.aiEngines || []).map((eng) => `
+      <div class="hp-row">
+        <span class="hp-dot hp-dot--info"></span>
+        <span class="hp-label">${esc(eng.file.split('/').pop())}</span>
+        <span class="hp-detail">${esc(eng.models?.length ? eng.models.join('/') : (eng.modelDynamic ? 'modelo dinámico' : 'default'))}</span>
+      </div>`).join('') || '<p class="hp-empty">Sin motores detectados.</p>';
+    const runnerRows = (d.runners || []).map((f) => `
+      <div class="hp-row"><span class="hp-label">${esc(f)}</span></div>`).join('') || '<p class="hp-empty">Sin runners.</p>';
+    return `
+      <details class="hp-opt-group" open>
+        <summary>🧩 Módulos backend · ${d.counts.modules}</summary>
+        ${modRows}
+      </details>
+      <details class="hp-opt-group">
+        <summary>🤖 Motores IA · ${d.counts.aiEngines}</summary>
+        ${engineRows}
+      </details>
+      <details class="hp-opt-group">
+        <summary>🏃 Runners (bin/) · ${d.counts.runners}</summary>
+        ${runnerRows}
+      </details>
+      <p class="hp-empty">🖥 Frontend · ${d.counts.frontend} módulo(s)</p>`;
+  }
+
+  function renderScan(d, err) {
+    if (err) { refs.scan.innerHTML = '<p class="hp-empty">No se pudo leer el censo.</p>'; return; }
+    if (!d) {
+      refs.scan.innerHTML = scanning
+        ? '<p class="hp-empty"><span class="cwc-spinner"></span> Escaneando…</p>'
+        : '<p class="hp-empty">Todavía no se corrió el censo.</p>';
+      return;
+    }
+    const warn = d.unregistered.length
+      ? `<span class="hp-opt-risk hp-opt-risk--medio">⚠️ ${d.unregistered.length} sin registrar</span>` : '';
+    refs.scan.innerHTML = `
+      <details class="hp-opt-card">
+        <summary class="hp-opt-head">
+          ${scanning ? '<span class="cwc-spinner"></span>' : icon('search', { size: 13 })}
+          <b>${d.counts.modules} módulo(s) · ${d.counts.aiEngines} motor(es) IA</b>
+          ${warn}
+          <span class="hp-opt-snippet" style="margin-left:auto">${fmtDate(d.generatedAt)}</span>
+          <button class="btn-ghost btn--sm btn--icon" data-ref="scanReload" title="Re-escanear ahora">${icon('refresh', { size: 12 })}</button>
+        </summary>
+        <div class="hp-opt-body">${scanDetailHtml(d)}</div>
+      </details>`;
+    refs.scan.querySelector('[data-ref="scanReload"]')?.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      loadScan(true);
+    });
+  }
+
+  let lastScan = null;
+  async function loadScan(force) {
+    scanning = true;
+    renderScan(lastScan);
+    try {
+      const d = await (await fetch(`${API}/scan${force ? '?force=1' : ''}`)).json();
+      if (!alive) return;
+      lastScan = d;
+      scanning = false;
+      renderScan(d);
+    } catch {
+      if (!alive) return;
+      scanning = false;
+      renderScan(lastScan, true);
+    }
+  }
+
   // ===== revisión exhaustiva (resumen compacto + botón que abre el modal) =====
   // El detalle vive en la sub-ventana full-screen (health-review-modal.js):
   // barra de progreso, módulos y hallazgos accionables. Acá solo el último
@@ -78,10 +167,16 @@ export function mountHealthPanel(el, ctx) {
   function renderReview(d) {
     const parts = [];
     if (d.verdict) {
+      // Veredicto EN VIVO (backend enrichReview): baja de crítico→atención→ok a
+      // medida que se resuelven hallazgos. Fallback al de la síntesis por si un
+      // review viejo aún no trae liveVerdict.
+      const shown = d.liveVerdict || d.verdict;
+      const open = d.openCount ?? (d.findings?.length || 0);
+      const resolved = d.resolvedCount || 0;
       parts.push(`
-        <div class="hp-verdict hp-verdict--${esc(d.verdict)}">
-          <b>${VERDICT_LABEL[d.verdict] || 'Sin veredicto'}</b>
-          <span class="hp-when">${d.findings?.length || 0} hallazgo(s)${d.updatedAt ? ` · ${fmtDate(d.updatedAt)}` : ''}</span>
+        <div class="hp-verdict hp-verdict--${esc(shown)}">
+          <b>${VERDICT_LABEL[shown] || 'Sin veredicto'}</b>
+          <span class="hp-when">${open} sin resolver${resolved ? ` · ${resolved} resuelto(s)` : ''}${d.updatedAt ? ` · ${fmtDate(d.updatedAt)}` : ''}</span>
         </div>`);
     } else {
       parts.push('<p class="hp-empty">Todavía no se corrió ninguna revisión exhaustiva.</p>');
@@ -149,6 +244,7 @@ export function mountHealthPanel(el, ctx) {
 
   refs.reload.addEventListener('click', loadChecks);
   loadChecks();
+  loadScan();
   loadReview();
   loadOpt();
 }

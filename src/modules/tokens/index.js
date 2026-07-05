@@ -333,11 +333,22 @@ async function fetchPlanLimits() {
   try {
     oauth = JSON.parse(await fs.readFile(CREDS_FILE, 'utf8')).claudeAiOauth;
   } catch {
-    throw new Error('No se pudieron leer las credenciales del CLI (~/.claude/.credentials.json).');
+    // Falla local (credenciales del CLI ilegibles/ausentes): no es culpa de
+    // Anthropic, no amerita 502. `.badRequest` deja que el catch del router
+    // derive el status explícitamente en vez de hardcodear uno.
+    const e = new Error('No se pudieron leer las credenciales del CLI (~/.claude/.credentials.json).');
+    e.badRequest = true;
+    throw e;
   }
-  if (!oauth?.accessToken) throw new Error('Sin token OAuth del CLI.');
+  if (!oauth?.accessToken) {
+    const e = new Error('Sin token OAuth del CLI.');
+    e.badRequest = true;
+    throw e;
+  }
   if (oauth.expiresAt && oauth.expiresAt < Date.now()) {
-    throw new Error('El token del CLI está vencido: abrí una sesión de claude para refrescarlo.');
+    const e = new Error('El token del CLI está vencido: abrí una sesión de claude para refrescarlo.');
+    e.badRequest = true;
+    throw e;
   }
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 10000);
@@ -352,11 +363,19 @@ async function fetchPlanLimits() {
       signal: ctl.signal,
     });
   } catch {
-    throw new Error('No se pudo consultar a Anthropic (¿sin salida a internet?).');
+    // Fallo real de red al llamar a Anthropic: esto sí es un problema
+    // upstream, se marca explícitamente para mapear a 502 en el catch.
+    const e = new Error('No se pudo consultar a Anthropic (¿sin salida a internet?).');
+    e.upstream = true;
+    throw e;
   } finally {
     clearTimeout(t);
   }
-  if (!res.ok) throw new Error(`Anthropic respondió ${res.status}.`);
+  if (!res.ok) {
+    const e = new Error(`Anthropic respondió ${res.status}.`);
+    e.upstream = true;
+    throw e;
+  }
   const data = await res.json();
 
   // Normalización: preferimos el array `limits` (trae también las ventanas
@@ -462,7 +481,12 @@ export default {
         const result = await limitsFetchPromise;
         res.json(result);
       } catch (err) {
-        res.status(502).json({ error: err.message || 'No se pudieron leer los límites del plan.' });
+        // Status derivado de una propiedad explícita del error (invariante
+        // 29): credenciales/token local -> 400, fallo real de Anthropic ->
+        // 502, cualquier otra cosa no reconocida -> 500 (nunca hardcodear
+        // un 4xx por defecto).
+        const status = err.badRequest ? 400 : err.upstream ? 502 : 500;
+        res.status(status).json({ error: err.message || 'No se pudieron leer los límites del plan.' });
       }
     });
 

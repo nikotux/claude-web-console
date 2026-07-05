@@ -51,6 +51,14 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-05 18:07 — redesign/board-mobile
+- Integración del Estándar Documental v1.0 (`docs/estandar-documental.md`): fuente única de convenciones documentales (idiomas por audiencia, plantillas de correo/informe/minuta, firmas de canales externos)
+- CLAUDE.md: nueva regla dura #10 — leer el estándar antes de generar cualquier documento o publicar en un canal externo
+- MEMORY.md: indexada la entrada del estándar
+- Validación (sección 8 del estándar): 5 casos de prueba ejecutados — 4 cumplen, 1 desviación de contenido detectada (plantilla de informe técnico §4.2b sin sección "Resumen ejecutivo" pese a exigirla su propia regla dura), diagnosticada y propuesta sin aplicar
+- Added `docs/estandar-documental.md`
+- Modified `CLAUDE.md`
+
 ### 2026-07-04 05:57 — main
 - Sistema nervioso F5 (cierre): loop que aprende — invariantes propuestos
 - Salud F2.5: análisis en paralelo adaptativo (síntesis y auto-fix serial)

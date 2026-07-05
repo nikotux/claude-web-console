@@ -26,7 +26,7 @@ import {
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
-import { aiEnginesCensus } from '../../core/inventory.js';
+import { aiEnginesCensus, generateInventory } from '../../core/inventory.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
 } from './optimize-shared.js';
@@ -294,7 +294,22 @@ function enrichReview(state) {
     // Política de riesgo (Fase A): el front bloquea "Automático" en los críticos.
     return { ...f, ...dismiss, id: findingId(f), sig, recurrent, policy: classifyFinding(f) };
   });
-  return { ...state, findings };
+  // VEREDICTO EN VIVO (0 tokens, determinístico): el `verdict` de state es una
+  // FOTO de la síntesis (sonnet) al terminar la revisión y NUNCA se recalcula;
+  // a medida que se resuelven/descartan hallazgos, ese chip quedaba clavado en
+  // CRÍTICO aunque ya no quedara nada abierto. Acá derivamos el veredicto REAL
+  // desde los hallazgos ABIERTOS (ni resueltos ni descartados; los 'fixing'
+  // cuentan como abiertos) usando el MISMO criterio que la síntesis y el
+  // fallback del runner: critical/high ⇒ critico · medium ⇒ atencion · solo low
+  // o vacío ⇒ ok. Solo se calcula si hubo una revisión (state.verdict presente).
+  const open = findings.filter((f) => f.fixStatus !== 'resolved' && f.fixStatus !== 'dismissed');
+  const resolvedCount = findings.length - open.length;
+  let liveVerdict = null;
+  if (state.verdict) {
+    const sev = new Set(open.map((f) => String(f.severity)));
+    liveVerdict = sev.has('critical') || sev.has('high') ? 'critico' : sev.has('medium') ? 'atencion' : 'ok';
+  }
+  return { ...state, findings, liveVerdict, openCount: open.length, resolvedCount };
 }
 
 export default {
@@ -307,6 +322,34 @@ export default {
     r.get('/checks', async (req, res) => {
       try { res.json(await runChecks()); }
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
+    });
+
+    // Censo del proyecto (módulos backend/frontend, runners, motores IA),
+    // gratis (0 tokens, sin LLM) — reusa generateInventory() (core/inventory.js,
+    // caché por fingerprint/mtime, la misma fuente que inventory.md). El front
+    // lo muestra como chip compacto que se expande a pedido (2026-07-04):
+    // así un módulo/motor NUEVO (p.ej. comunicación entre sesiones) aparece
+    // solo, sin registrarlo a mano en ningún lado — salvo en registry.js, que
+    // sigue siendo obligatorio para que el módulo CORRA (esto solo lo señala
+    // si falta con `unregistered`). ?force=1 ignora el caché y re-escanea YA
+    // (botón "refrescar" del front); sin el flag, sirve el caché si nada
+    // cambió desde la última vez.
+    r.get('/scan', (req, res) => {
+      try {
+        const { inventory, regenerated } = generateInventory({ force: req.query.force === '1' });
+        const unregistered = inventory.modules.filter((m) => !m.registered).map((m) => m.name);
+        res.json({
+          generatedAt: inventory.generatedAt,
+          regenerated,
+          counts: inventory.counts,
+          unregistered,
+          modules: inventory.modules.map((m) => ({ name: m.name, registered: m.registered, purpose: m.purpose })),
+          runners: inventory.runners.map((rr) => rr.file),
+          aiEngines: inventory.aiEngines.map((e) => ({
+            file: e.file, purpose: e.purpose, models: e.models, modelDynamic: e.modelDynamic,
+          })),
+        });
+      } catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
 
     // Estado de la revisión: progreso + hallazgos (lo escribe el runner) +

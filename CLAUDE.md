@@ -155,6 +155,11 @@ código.
    Tras su OK, ejecutar DE CORRIDO sin confirmaciones intermedias (ni por
    archivos sensibles). Parar SOLO ante un error crítico (posible pérdida de
    datos o cambio de alcance). Cerrar con resumen visual de lo hecho.
+10. **Estándar documental:** antes de generar cualquier documento (informe,
+    correo, nota, guía, minuta) o publicar en un canal externo, leer
+    `docs/estandar-documental.md` y aplicarlo. Los canales externos y sus
+    firmas están registrados en su sección 6; canal no registrado = preguntar
+    antes de publicar.
 
 ## NO MODIFICAR (generado o estado de runtime)
 
@@ -182,7 +187,11 @@ código.
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes, `optimization.json` resultado de la Optimización IA +
-  `optimize.lock` heartbeat de su runner, `session-bus/` del INTERFONO entre
+  `optimize.lock` heartbeat de su runner, `projects-analyze/<id>.json` jobs del
+  análisis IA de secciones de contexto (módulo projects; poda >24 h en cada
+  escritura) + `projects-analyze.log` de su runner, `commitmsg/<id>.json` jobs
+  de la generación IA del mensaje de commit (módulo backup; misma poda >24 h) +
+  `commitmsg.log` de su runner, `session-bus/` del INTERFONO entre
   sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
   reservas de archivo (1 por archivo, clave = hash de la ruta) ·
   `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
@@ -200,7 +209,15 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             rutas del cliente pasa por acá; nunca startsWith crudo) ·
                             sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
                             'chat'=user+project / 'headless'=project+local sin user) ·
-                            claude-model(VALID_MODELS/encodeCwd) · claude-state(observador) ·
+                            claude-model(VALID_MODELS/encodeCwd) · claude-state(observador —
+                            estado por PANE de tmux primero: cwc-observe.js captura
+                            $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
+                            reactivarse una sesión por interfono: el mapeo era SOLO por cwd
+                            y la statusline de una hermana ociosa del mismo cwd lo pisaba);
+                            stateForPane = identidad exacta (tmux/index.js mapea sesión→panes
+                            con list-panes), stateForCwd queda como FALLBACK para estados sin
+                            pane; las tmux abiertas toman el pane en su próximo tick de
+                            statusline, sin reiniciar claude) ·
                             session-names(nombres ÚNICOS de tarjetas: registro de
                             registerNameProvider — chat aporta títulos de conversaciones
                             abiertas, tmux los display names de sus sesiones — +
@@ -422,7 +439,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (haiku, 1 turno, CERO herramientas — las dos capas de la regla 6
                             acá deniegan TODO) que compara sección vieja vs nueva y devuelve
                             {removed, added, modified, risk ok|atencion|critico, riskWhy,
-                            summary}; la UI lo muestra en un modal de CONFIRMACIÓN FORZADA
+                            summary}. DESACOPLADA a runner (regla de oro, 2026-07-05: antes
+                            corría INLINE en el handler y un deploy a mitad la perdía con los
+                            tokens gastados): el POST persiste el job en
+                            ~/.cwc-data/projects-analyze/<id>.json (id DETERMINÍSTICO por
+                            proyecto+sección+hash+contenido: un reintento reusa el MISMO job,
+                            sin runner duplicado — lock implícito por identidad), spawnea
+                            bin/cwc-projects-analyze-runner.js detached y responde YA
+                            {id,status:'running'}; GET /:key/context/section/:i/analyze/:id
+                            SOLO lee disco (0 tokens; staleness ⇒ error, nunca cuelga) y el
+                            front encuesta cada 2 s tolerando fetch fallidos (deploy en el
+                            medio). Lógica compartida en projects/analyze-shared.js (prompt +
+                            parseo + jobs con poda >24 h). La UI lo muestra en un modal de CONFIRMACIÓN FORZADA
                             (reviewChange en project-context-panel.js) — solo "Confirmar y
                             guardar" escribe, "Seguir editando" vuelve al editor sin tocar
                             nada, y si la IA falla cae a un diff local (renderDiff) con la
@@ -445,6 +473,27 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             ESTE MISMO repo.
   backup/                   tar.gz completo (server-side, con secretos) + push del CÓDIGO al
                             remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing).
+                            COMMIT SIN PUSH (2026-07-05, pedido del usuario): botón "Commit
+                            (sin push)" del panel — commit LOCAL descriptivo de los cambios
+                            pendientes sin tocar el remote (el push sigue commiteando con su
+                            mensaje genérico "cwc backup <fecha>"; este botón deja historia
+                            con mensajes en español). POST /api/backup/commit {message,
+                            includeUntracked[]}: guardas repoSecretGuards (repo + secretos,
+                            SIN exigir remote — extraídas de securityGuards) + selectUntracked
+                            (las 3 capas anti-secretos del push, helper ahora COMPARTIDO por
+                            push y commit) + sanitizeCommitMessage (sin chars de control,
+                            tope 2000); add -u + untracked seleccionados; NO changelog, NO
+                            restart, reversible con git reset --soft. Mensaje IA: POST
+                            /commit-message captura diff+archivos EN NODE, escribe el job en
+                            ~/.cwc-data/commitmsg/<id>.json (id determinístico por estado del
+                            árbol ⇒ doble click = mismo job) y spawnea
+                            bin/cwc-commitmsg-runner.js DETACHED (regla de oro; haiku, 1
+                            turno, CERO herramientas — regla 6 con TODO denegado, patrón
+                            projects/analyze-shared); GET /commit-message/:id solo lee disco
+                            y el diálogo encuesta cada 1.5 s — si la IA falla, el mensaje se
+                            escribe a mano (nunca bloquea). GET /git-info ahora expone
+                            `dirty[]` (name-status contra HEAD, incluye stageados) además de
+                            dirtyCount. Lógica compartida en backup/commitmsg-shared.js.
                             Untracked: NUNCA viajan solos — el diálogo de Push los lista con
                             checkbox por archivo (body {includeUntracked:[...]}) y el backend
                             valida la selección en 3 capas: solo lo que git lista como
@@ -905,6 +954,20 @@ bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Des
                             doble capa, allowlist desk_* de lectura; interfaz por archivos:
                             desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica
                             compartida con el módulo en bugfixes/desk-shared.js
+bin/cwc-projects-analyze-runner.js análisis IA (guardián) de UN cambio de sección de contexto
+                            (CLAUDE.md) del módulo projects, DESACOPLADO del server (haiku, 1
+                            turno, CERO herramientas — doble capa regla 6 deniega TODO).
+                            Interfaz por archivos: ~/.cwc-data/projects-analyze/<id>.json
+                            (job con before/after que escribe el POST; el runner persiste el
+                            veredicto en el MISMO archivo). Lógica compartida en
+                            src/modules/projects/analyze-shared.js
+bin/cwc-commitmsg-runner.js generación IA del mensaje de commit del botón "Commit (sin push)"
+                            del panel Backup, DESACOPLADA del server (haiku, 1 turno, CERO
+                            herramientas — doble capa regla 6 deniega TODO; el diff viaja en
+                            el prompt, capturado por el server EN NODE). Interfaz por
+                            archivos: ~/.cwc-data/commitmsg/<id>.json (job con files/diff que
+                            escribe el POST; el runner persiste el mensaje en el MISMO
+                            archivo). Lógica compartida en src/modules/backup/commitmsg-shared.js
 bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
                             y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
@@ -950,6 +1013,15 @@ bin/install-interfono.js + bin/uninstall-interfono.js  instalan/quitan los hooks
                             `cwc-bus.js`). OJO: los hooks se capturan al INICIAR claude — las
                             sesiones ya abiertas no toman el interfono hasta reiniciar claude
                             adentro (mismo gotcha que el observador)
+bin/install-pelota.js + bin/uninstall-pelota.js  instalan/quitan el hook "🎾 La pelota"
+                            en ~/.claude/settings.json (UserPromptSubmit con echo puro, marca
+                            `cwc-pelota`; aditivo/reversible/idempotente, patrón
+                            install-observer). Hace DETERMINÍSTICO el cierre "🎾 Pelota: ..."
+                            de las preferencias globales del usuario (~/.claude/CLAUDE.md):
+                            inyecta el recordatorio fresco en CADA turno (~40 tokens) porque
+                            el CLAUDE.md solo se carga al iniciar y en hilos largos el modelo
+                            lo omitía (pedido del usuario 2026-07-05). Mismo gotcha de captura
+                            al INICIAR claude que observador/interfono
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)

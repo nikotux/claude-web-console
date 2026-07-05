@@ -18,8 +18,9 @@ import bugs from '../modules/bugs/index.js';
 import health from '../modules/health/index.js';
 import bugfixes from '../modules/bugfixes/index.js';
 import projects from '../modules/projects/index.js';
+import interfono from '../modules/interfono/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, bugs, health, bugfixes, projects];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, bugs, health, bugfixes, projects, interfono];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

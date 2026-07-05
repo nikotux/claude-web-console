@@ -1,0 +1,359 @@
+// core/bus.js — "Interfono" entre sesiones de Claude Code.
+//
+// Problema que resuelve: varias sesiones de Claude Code (TUIs tmux + chats del
+// SDK) corriendo a la vez sobre el MISMO repo pueden pisarse. Hoy la única
+// forma de que se "hablen" era que el usuario hiciera de cartero. Este módulo
+// es un BUS DE ARCHIVOS (0 tokens, determinístico) con dos capacidades:
+//
+//   1) MENSAJERÍA  — una sesión deja un mensaje para otra (o broadcast); la
+//      destinataria lo recibe inyectado por su hook en el próximo turno.
+//   2) CLAIMS      — antes de editar un archivo, una sesión reclama un "claim";
+//      si otra sesión VIVA ya lo tiene, se frena y coordina. Los claims de
+//      sesiones muertas (zombis) se detectan y roban con red de seguridad.
+//
+// TODO el estado vive en ~/.cwc-data/session-bus/ (sobrevive reinicios del
+// server — regla de oro del proyecto). Nada colgado del proceso Node: las
+// sesiones y los hooks invocan este core a través de bin/cwc-bus.js; el módulo
+// backend (src/modules/interfono) lo importa para el panel.
+//
+// Identidad de una sesión = uno o más "handles":
+//   - TUI  (tmux): `tmux:<nombre-de-sesión-tmux>`  (estable; emisor y receptor
+//                   lo derivan de $TMUX_PANE — ver bin/cwc-bus.js)
+//   - chat (SDK):  `claude:<sessionId>`             (id de sesión de Claude)
+// Una TUI escucha en AMBOS (su claude sid y su tmux name); un chat solo en el
+// claude sid. Así el emisor puede direccionar por nombre de tarjeta (tmux) y el
+// receptor igual se reconoce.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { config } from './config.js';
+import { runTmux, tmuxDir } from './tmux.js';
+import { loadTitles, titleKey } from './session-names.js';
+
+// ===== Rutas y constantes =====
+const ROOT = path.join(config.home, '.cwc-data', 'session-bus');
+const MSG_DIR = path.join(ROOT, 'messages');
+const CLAIM_DIR = path.join(ROOT, 'claims');
+const TOMB_DIR = path.join(ROOT, 'tombstones');
+const STATE_DIR = path.join(config.home, '.cwc-state'); // observador (cwc-observe.js)
+
+// Umbrales del árbol de decisión de claims (ver evaluateClaim).
+export const HOT_MS = 5 * 60 * 1000;      // claim "caliente": editado hace <5min
+export const GRAY_MS = 30 * 60 * 1000;    // zona gris: viva pero inactiva <30min
+export const OBS_FRESH_MS = 5 * 60 * 1000; // ts del observador considerado fresco
+export const MSG_TTL_MS = 6 * 60 * 60 * 1000;   // mensajes viven 6h
+export const TOMB_TTL_MS = 24 * 60 * 60 * 1000; // lápidas viven 24h
+export const MAX_HOPS = 6; // corta cadenas de respuesta infinitas
+
+function ensureDirs() {
+  for (const d of [MSG_DIR, CLAIM_DIR, TOMB_DIR]) {
+    try { fs.mkdirSync(d, { recursive: true, mode: 0o700 }); } catch { /* noop */ }
+  }
+}
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+function writeJson(file, obj) {
+  try { fs.writeFileSync(file, JSON.stringify(obj)); return true; } catch { return false; }
+}
+function listJson(dir) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    const j = readJson(path.join(dir, n));
+    if (j) out.push({ _file: path.join(dir, n), ...j });
+  }
+  return out;
+}
+
+// Id sin depender de Math.random (vetado en algunos contextos del proyecto):
+// contador de proceso + pid + tiempo. Único dentro de una corrida y entre
+// procesos distintos.
+let _seq = 0;
+function newId(prefix) {
+  _seq += 1;
+  return `${prefix}${process.pid.toString(36)}${Date.now().toString(36)}${_seq.toString(36)}`;
+}
+
+// Slug estable de una ruta absoluta para nombre de archivo de claim.
+function claimFileFor(absPath) {
+  const hash = crypto.createHash('sha256').update(absPath).digest('hex').slice(0, 16);
+  return path.join(CLAIM_DIR, `${hash}.json`);
+}
+
+// ===== Observador (estado real trabajando/esperando por sesión de Claude) =====
+export function readObserver(claudeSid) {
+  if (!claudeSid) return null;
+  return readJson(path.join(STATE_DIR, `${claudeSid}.json`));
+}
+
+// ===== tmux =====
+function cwcSocketPath() {
+  return path.join(tmuxDir(), config.tmuxSocket);
+}
+// ¿Existe una sesión tmux con ese nombre en el socket cwc?
+export function tmuxHasSession(name) {
+  if (!name) return false;
+  const out = runTmux(cwcSocketPath(), ['has-session', '-t', `=${name}`], { throwOnError: false });
+  // has-session no imprime nada en éxito y falla (runTmux => '') si no existe.
+  // Distinguimos con list para no depender del throw: preguntamos la lista.
+  if (out !== '') return true;
+  const list = runTmux(cwcSocketPath(), ['list-sessions', '-F', '#{session_name}']);
+  return list.split('\n').some((l) => l.trim() === name);
+}
+
+// ===== Directorio de sesiones (nombre amigable <-> handle) =====
+// Reconstruye, SIN estado del server, el mismo mapa que muestran las tarjetas
+// de "Sesiones": TUIs tmux (nombre = título custom || basename del cwd) + chats
+// del SDK (de chats.json). Cada entrada trae su handle canónico para ruteo.
+export function buildDirectory() {
+  const entries = [];
+  // --- TUIs tmux del socket cwc ---
+  const titles = loadTitles();
+  const raw = runTmux(cwcSocketPath(), ['list-sessions', '-F', '#{session_name}\t#{pane_current_path}\t#{pane_pid}']);
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const [name, cwd, pid] = line.split('\t');
+    if (!name) continue;
+    const isBare = name.startsWith('cwct-'); // vistas TUI de conversaciones
+    const friendly = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd || '') || name;
+    entries.push({
+      handle: `tmux:${name}`,
+      name: friendly,
+      kind: isBare ? 'tui-chat' : 'tui',
+      tmux: name,
+      cwd: cwd || null,
+      pid: pid ? parseInt(pid, 10) : null,
+      alive: true,
+    });
+  }
+  // --- Chats del SDK (chats.json) ---
+  const chats = readJson(path.join(config.home, '.cwc-data', 'chats.json'));
+  if (Array.isArray(chats)) {
+    for (const c of chats) {
+      if (!c || !c.sessionId) continue;
+      // Un chat en modo TUI ya aparece como sesión tmux bare: no duplicar.
+      if (c.viewMode === 'tui') continue;
+      entries.push({
+        handle: `claude:${c.sessionId}`,
+        name: c.title || c.id || 'chat',
+        kind: 'chat',
+        cwd: c.cwd || null,
+        claudeSid: c.sessionId,
+        alive: null, // se completa con el observador al evaluar
+      });
+    }
+  }
+  return entries;
+}
+
+// Resuelve el argumento de `/btw <destino>` a un handle (o 'all').
+// Acepta: "all"/"todos" (broadcast); un handle explícito (tmux:… / claude:…);
+// o un nombre amigable (case-insensitive, match exacto y luego por inclusión).
+export function resolveTarget(arg) {
+  const q = String(arg || '').trim();
+  if (!q) return { error: 'Falta el destino' };
+  if (/^(all|todos|todas|broadcast)$/i.test(q)) return { handle: 'all', name: 'todas las sesiones' };
+  if (/^(tmux|claude):/.test(q)) return { handle: q, name: q };
+  const dir = buildDirectory();
+  const lc = q.toLowerCase();
+  let hit = dir.find((e) => e.name.toLowerCase() === lc);
+  if (!hit) {
+    const partial = dir.filter((e) => e.name.toLowerCase().includes(lc));
+    if (partial.length === 1) [hit] = partial;
+    else if (partial.length > 1) {
+      return { error: `"${q}" es ambiguo: ${partial.map((e) => e.name).join(', ')}` };
+    }
+  }
+  if (!hit) return { error: `No encontré una sesión llamada "${q}". Sesiones: ${dir.map((e) => e.name).join(', ') || '(ninguna)'}` };
+  return { handle: hit.handle, name: hit.name, entry: hit };
+}
+
+// ===== Mensajería =====
+// Crea un mensaje. `from`/`fromName` identifican al emisor (best-effort).
+export function sendMessage({ from, fromName, to, toName, text, kind = 'note', hops = 0 }) {
+  ensureDirs();
+  const id = newId('m');
+  const msg = {
+    id, from: from || null, fromName: fromName || 'una sesión',
+    to, toName: toName || to, text: String(text || '').slice(0, 4000),
+    kind, hops, ts: Date.now(), deliveredTo: {}, ackBy: {},
+  };
+  writeJson(path.join(MSG_DIR, `${id}.json`), msg);
+  return msg;
+}
+
+// Mensajes pendientes para un conjunto de handles propios (no entregados aún a
+// ninguno de ellos, no emitidos por uno mismo, dentro del TTL). NO muta.
+export function pendingFor(handles) {
+  const set = new Set(handles || []);
+  const now = Date.now();
+  return listJson(MSG_DIR).filter((m) => {
+    if (now - (m.ts || 0) > MSG_TTL_MS) return false;
+    if (set.has(m.from)) return false; // no me muestro mis propios mensajes
+    const forMe = m.to === 'all' || set.has(m.to);
+    if (!forMe) return false;
+    return !handles.some((h) => m.deliveredTo && m.deliveredTo[h]);
+  }).sort((a, b) => a.ts - b.ts);
+}
+
+// Marca como entregados a estos handles (idempotente) y persiste.
+export function markDelivered(messages, handles) {
+  const now = Date.now();
+  for (const m of messages) {
+    m.deliveredTo = m.deliveredTo || {};
+    for (const h of handles) m.deliveredTo[h] = now;
+    writeJson(m._file || path.join(MSG_DIR, `${m.id}.json`), stripMeta(m));
+  }
+}
+function stripMeta(o) { const { _file, ...rest } = o; return rest; }
+
+// Todos los mensajes vivos (para el panel).
+export function allMessages() {
+  const now = Date.now();
+  return listJson(MSG_DIR)
+    .filter((m) => now - (m.ts || 0) <= MSG_TTL_MS)
+    .map(stripMeta)
+    .sort((a, b) => b.ts - a.ts);
+}
+
+// ===== Claims =====
+export function getClaim(absPath) {
+  return readJson(claimFileFor(absPath));
+}
+export function allClaims() {
+  return listJson(CLAIM_DIR).map(stripMeta);
+}
+
+// Crea o renueva el claim de `owner` sobre un archivo.
+export function claimFile({ absPath, handle, claudeSid, name, kind, tmux, note }) {
+  ensureDirs();
+  const file = claimFileFor(absPath);
+  const prev = readJson(file);
+  const now = Date.now();
+  const claim = {
+    file: absPath,
+    handle,
+    claudeSid: claudeSid || (prev && prev.handle === handle ? prev.claudeSid : null) || null,
+    name: name || (prev && prev.name) || handle,
+    kind: kind || (prev && prev.kind) || null,
+    tmux: tmux || (prev && prev.handle === handle ? prev.tmux : null) || null,
+    note: note || (prev && prev.handle === handle ? prev.note : null) || null,
+    ts: prev && prev.handle === handle ? (prev.ts || now) : now,
+    renewedAt: now,
+  };
+  writeJson(file, claim);
+  return claim;
+}
+
+// Libera el claim de un archivo si pertenece a alguno de estos handles.
+export function releaseFile(absPath, handles) {
+  const file = claimFileFor(absPath);
+  const c = readJson(file);
+  if (c && handles.includes(c.handle)) {
+    try { fs.unlinkSync(file); } catch { /* noop */ }
+    return true;
+  }
+  return false;
+}
+
+// Libera TODOS los claims de estos handles (cierre de sesión).
+export function releaseAll(handles) {
+  const set = new Set(handles || []);
+  let n = 0;
+  for (const c of listJson(CLAIM_DIR)) {
+    if (set.has(c.handle)) {
+      try { fs.unlinkSync(c._file); n += 1; } catch { /* noop */ }
+    }
+  }
+  return n;
+}
+
+// Lápida: aviso persistido de que a `formerHandle` le robaron el claim de un
+// archivo. Su próximo turno lo recibe inyectado (ver bin/cwc-bus.js hook-inject).
+export function tombstone({ file, formerHandle, byHandle, byName }) {
+  ensureDirs();
+  const id = newId('t');
+  writeJson(path.join(TOMB_DIR, `${id}.json`), {
+    id, type: 'claim_stolen', file, formerHandle, byHandle, byName: byName || byHandle, ts: Date.now(),
+  });
+}
+// Lápidas pendientes para un conjunto de handles (no entregadas).
+export function tombstonesFor(handles) {
+  const set = new Set(handles || []);
+  const now = Date.now();
+  return listJson(TOMB_DIR).filter((t) =>
+    now - (t.ts || 0) <= TOMB_TTL_MS && set.has(t.formerHandle) && !(t.delivered));
+}
+export function markTombstonesDelivered(tombs) {
+  for (const t of tombs) {
+    t.delivered = Date.now();
+    writeJson(t._file || path.join(TOMB_DIR, `${t.id}.json`), stripMeta(t));
+  }
+}
+
+// ===== Árbol de decisión de un claim ajeno (¿sigue viva la dueña?) =====
+// Devuelve { state, label, reason }. state ∈ hot | alive | gray | zombie | stale
+export function evaluateClaim(claim) {
+  if (!claim) return { state: 'none' };
+  const now = Date.now();
+  const age = now - (claim.renewedAt || claim.ts || 0);
+
+  // 1) Caliente: editó ese archivo hace <5min => está EN el archivo ahora.
+  if (age < HOT_MS) {
+    return { state: 'hot', label: '🔴 editando ahora', reason: `${claim.name} editó este archivo hace menos de 5 minutos` };
+  }
+
+  // 2) Estado real del observador (si es una sesión con claude sid conocido).
+  const obs = readObserver(claim.claudeSid);
+  if (obs) {
+    if (obs.status === 'ended') {
+      return { state: 'zombie', label: '🟢 sesión terminada', reason: `${claim.name} ya cerró su sesión` };
+    }
+    if (obs.status === 'working' && now - (obs.ts || 0) < OBS_FRESH_MS) {
+      return { state: 'alive', label: '🔴 trabajando', reason: `${claim.name} está trabajando activamente` };
+    }
+  }
+
+  // 3) Signo vital físico: para TUIs, ¿existe todavía la sesión tmux?
+  if (claim.tmux && !tmuxHasSession(claim.tmux)) {
+    return { state: 'zombie', label: '🟢 tmux caída', reason: `La sesión tmux de ${claim.name} ya no existe` };
+  }
+
+  // 4) Viva pero inactiva: zona gris (<30min) vs TTL vencido.
+  if (age < GRAY_MS) {
+    return { state: 'gray', label: '🟡 inactiva', reason: `${claim.name} tenía el claim pero está inactiva (sin editar hace ${Math.round(age / 60000)} min)` };
+  }
+  return { state: 'stale', label: '🟢 claim vencido', reason: `El claim de ${claim.name} venció (sin actividad hace ${Math.round(age / 60000)} min)` };
+}
+
+// ¿Este estado bloquea la edición ajena?
+export function blocks(state) { return state === 'hot' || state === 'alive'; }
+// ¿Este estado permite robar el claim?
+export function stealable(state) { return state === 'zombie' || state === 'stale' || state === 'none'; }
+
+// ===== Recolección de basura oportunista =====
+// La corre cualquier invocación del CLI: barre mensajes/lápidas/claims vencidos.
+export function gc() {
+  const now = Date.now();
+  for (const m of listJson(MSG_DIR)) {
+    if (now - (m.ts || 0) > MSG_TTL_MS) { try { fs.unlinkSync(m._file); } catch { /* noop */ } }
+  }
+  for (const t of listJson(TOMB_DIR)) {
+    if (now - (t.ts || 0) > TOMB_TTL_MS) { try { fs.unlinkSync(t._file); } catch { /* noop */ } }
+  }
+  // Claims: se limpian por evaluación perezosa al chocar; acá solo barremos los
+  // que superan LARGAMENTE el TTL gris y cuya tmux ya no existe (huérfanos).
+  for (const c of listJson(CLAIM_DIR)) {
+    const age = now - (c.renewedAt || c.ts || 0);
+    if (age > GRAY_MS && c.tmux && !tmuxHasSession(c.tmux)) {
+      try { fs.unlinkSync(c._file); } catch { /* noop */ }
+    }
+  }
+}
+
+export const paths = { ROOT, MSG_DIR, CLAIM_DIR, TOMB_DIR };

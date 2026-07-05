@@ -190,7 +190,7 @@ export function openHealthReview(ctx, { isAdmin }) {
         <span class="hr-phase">${running ? `${done}/${total} · ${esc(d.phase || 'analizando…')}` : `${done}/${total} completado`}</span>
       </div>
       ${units ? `<details class="hr-collapsible"${(isMobile && !running) ? '' : ' open'}><summary>Módulos analizados (${d.units?.length || 0})</summary><div class="hr-units">${units}</div></details>` : ''}
-      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.verdict)}"><b>${VERDICT_LABEL[d.verdict] || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
+      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.liveVerdict || d.verdict)}"><b>${VERDICT_LABEL[d.liveVerdict || d.verdict] || d.liveVerdict || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
       ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
       ${batchBannerHtml()}

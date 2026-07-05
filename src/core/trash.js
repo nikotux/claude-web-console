@@ -64,7 +64,16 @@ export function listTrash() {
 
 // Restaura un ítem a su ruta original (con sufijo si ya existe). Devuelve la
 // ruta relativa final, o null si no se encontró el id.
-export function restoreFromTrash(id) {
+//
+// `assertContainerSafe(containerDir)`, si se pasa, se invoca con la carpeta
+// contenedora final ANTES de crear/mover nada; debe tirar si esa carpeta (una
+// vez resueltos symlinks) escapa del home real. resolveWithinHome() de arriba
+// solo valida el string (ver core/paths.js), así que sin este chequeo un
+// symlink que reemplazó a `originalRel` entre el trash y el restore movería
+// el contenido de la papelera fuera del home sin que nada lo detecte —
+// a diferencia de mkdir/rename/trash, que sí validan la carpeta contenedora
+// REAL antes de mutar (ver statSafeSync en modules/files/index.js).
+export function restoreFromTrash(id, assertContainerSafe) {
   const items = loadIndex();
   const idx = items.findIndex((i) => i.id === id);
   if (idx < 0) return null;
@@ -80,6 +89,7 @@ export function restoreFromTrash(id) {
     target = path.join(path.dirname(target), `${base} (restaurado)${ext}`);
     targetRel = path.relative(config.home, target);
   }
+  if (typeof assertContainerSafe === 'function') assertContainerSafe(path.dirname(target));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.renameSync(src, target);
   items.splice(idx, 1);

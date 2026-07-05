@@ -126,10 +126,14 @@ export default {
       if (!ok) return;
       busy = true; render();
       try {
-        const data = await (await fetch('/api/tolkien/update', { method: 'POST' })).json();
+        const res = await fetch('/api/tolkien/update', { method: 'POST' });
+        const data = await res.json();
         if (data.status) current = data.status;
-        if (data.error) {
-          await dialog.alertDialog({ title: 'No se pudo actualizar', message: `${data.error}\n\n${fmtLog(data.log)}` });
+        if (!res.ok || data.error) {
+          await dialog.alertDialog({
+            title: 'No se pudo actualizar',
+            message: `${data.error || 'No se pudo actualizar (respuesta inválida del servidor).'}\n\n${fmtLog(data.log)}`,
+          });
         } else if (data.popConflict) {
           await dialog.alertDialog({
             title: 'Actualizado, con conflicto',

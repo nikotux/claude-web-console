@@ -9,6 +9,7 @@ import { mountBackupPanel } from './backup-panel.js';
 import { mountUsersPanel } from './users.js';
 import { mountHealthPanel } from './health-panel.js';
 import { mountProjectContextPanel } from './project-context-panel.js';
+import { mountInterfonoPanel } from './interfono-panel.js';
 
 export default {
   name: 'system',
@@ -32,6 +33,7 @@ export default {
             ]
           : []),
         { label: 'Proyectos', mount: (c) => mountProjectContextPanel(c, { ...ctx, isAdmin }) },
+        { label: 'Interfono', mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
         { label: 'Salud', mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
       ];
 

@@ -46,7 +46,7 @@ export default {
         createUser(username, password, typeof admin === 'boolean' ? admin : false);
         res.json({ ok: true });
       } catch (e) {
-        res.status(400).json({ error: e.message });
+        res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }
     });
 
@@ -73,7 +73,7 @@ export default {
         if (!changed) return res.status(400).json({ error: 'Ningún parámetro válido enviado (password o admin).' });
         res.json({ ok: true, changed });
       } catch (e) {
-        res.status(400).json({ error: e.message });
+        res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }
     });
 
@@ -87,7 +87,7 @@ export default {
         deleteUser(username);
         res.json({ ok: true });
       } catch (e) {
-        res.status(400).json({ error: e.message });
+        res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }
     });
 

@@ -64,21 +64,27 @@ export function listUsers() {
 }
 
 // Crea un usuario. Lanza Error con mensaje claro si algo no valida.
+function badRequest(message) {
+  const e = new Error(message);
+  e.badRequest = true;
+  return e;
+}
+
 export function createUser(username, password, admin = false) {
-  if (!isValidUsername(username)) throw new Error('Usuario inválido (letras, números, . _ - ; máx 32).');
+  if (!isValidUsername(username)) throw badRequest('Usuario inválido (letras, números, . _ - ; máx 32).');
   if (typeof password !== 'string' || password.length < MIN_PASSWORD) {
-    throw new Error(`La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
+    throw badRequest(`La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
   }
-  if (users.has(username)) throw new Error('Ese usuario ya existe.');
+  if (users.has(username)) throw badRequest('Ese usuario ya existe.');
   users.set(username, { username, hash: hashPassword(password), admin: !!admin });
   persist();
 }
 
 export function setPassword(username, password) {
   const u = users.get(username);
-  if (!u) throw new Error('Usuario inexistente.');
+  if (!u) throw badRequest('Usuario inexistente.');
   if (typeof password !== 'string' || password.length < MIN_PASSWORD) {
-    throw new Error(`La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
+    throw badRequest(`La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
   }
   u.hash = hashPassword(password);
   persist();
@@ -86,13 +92,13 @@ export function setPassword(username, password) {
 
 export function setAdmin(username, admin) {
   const u = users.get(username);
-  if (!u) throw new Error('Usuario inexistente.');
+  if (!u) throw badRequest('Usuario inexistente.');
   u.admin = !!admin;
   persist();
 }
 
 export function deleteUser(username) {
-  if (!users.delete(username)) throw new Error('Usuario inexistente.');
+  if (!users.delete(username)) throw badRequest('Usuario inexistente.');
   persist();
 }
 
