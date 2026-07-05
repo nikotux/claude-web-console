@@ -8,7 +8,7 @@ import { icon } from '../../ui/icons.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
-import { pacman } from '../../ui/pacman.js';
+import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 
@@ -88,6 +88,8 @@ export class ChatTab {
     this._slashActive = 0;        // índice de la fila activa (↑↓)
     this._slashItems = [];        // filas visibles tras el filtro
     this._slashSuppressed = null; // texto con el que se cerró con Esc (no reabrir)
+    this._working = false;        // motor Pac-Man del header (ver _renderPacState)
+    this._delegatingCount = 0;    // subagentes Task/Agent pendientes del turno actual
     // Señal REAL de "historial renderizado al 100%": se resuelve al terminar
     // de procesar el PRIMER evento `history` del attach (no un timer). La
     // espera el splash de arranque (main.js) antes de destapar la app.
@@ -99,7 +101,7 @@ export class ChatTab {
         <header class="chat-head">
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
-          ${pacman({ working: false, cls: 'chat-alive', title: 'Esperando tu mensaje' })}
+          ${pacman({ state: 'waiting', cls: 'chat-alive', title: 'Esperando tu mensaje' })}
           <select class="chat-mode" data-risk="ok" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
@@ -494,6 +496,11 @@ export class ChatTab {
     chip._detail = m.detail || null;         // datos crudos para el render perezoso
     chip._summary = String(m.summary || ''); // fallback del detalle (tools sin input propio)
     chip._output = null;                     // {ok, text} cuando llegue el tool_result
+    // Motor Pac-Man: un Task/Agent abre la espera de un subagente — mismo
+    // matcher que TOOL_TYPE_ICONS/toolTypeIcon, acá para pintar 'delegating'
+    // en el header mientras el subagente no vuelva con su tool_result.
+    chip._isDelegate = /^(Task|Agent)/i.test(m.name || '');
+    if (chip._isDelegate) { this._delegatingCount++; this._renderPacState(); }
     chip.addEventListener('click', () => this._toolToggle(group, chip));
     group.querySelector('.ctg-row').appendChild(chip);
     this._scroll();
@@ -560,6 +567,11 @@ export class ChatTab {
     if (!m.id) return;
     const chip = this.msgsEl.querySelector(`.chat-toolchip[data-tool-id="${CSS.escape(m.id)}"]`);
     if (!chip) return;
+    if (chip._isDelegate && !chip._delegateDone) {
+      chip._delegateDone = true; // guarda: un tool_result por id, nunca decrementar dos veces
+      this._delegatingCount = Math.max(0, this._delegatingCount - 1);
+      this._renderPacState();
+    }
     chip._output = { ok: !!m.ok, text: m.output || '' };
     chip.classList.add(m.ok ? 'done' : 'fail');
     // Si justo está expandido, el detalle se refresca en vivo con la salida.
@@ -775,11 +787,25 @@ export class ChatTab {
   _setWorking(on) {
     this.stopBtn.hidden = !on;
     this.sendBtn.hidden = on;
-    this.container.querySelector('.chat-view').classList.toggle('working', on);
-    // Ícono "vivo" (móvil): pulsa mientras Claude trabaja, quieto ("dormido")
-    // cuando espera tu mensaje — mismo lenguaje de color que sess-dot/rail-status.
-    this.aliveEl.classList.toggle('is-working', on);
-    this.aliveEl.title = on ? 'Trabajando…' : 'Esperando tu mensaje';
+    this._working = on;
+    // Un turno nuevo (u "off") arranca sin subagentes delegados pendientes:
+    // evita que un tool_result perdido de un turno anterior deje el header
+    // pegado en "delegando" para siempre.
+    if (!on) this._delegatingCount = 0;
+    this._renderPacState();
+  }
+
+  // Motor Pac-Man del header (ver ui/pacman.js): 'working' (dorado) mientras
+  // el turno corre, 'delegating' (violeta + badge del interfono) si hay un
+  // subagente Task/Agent corriendo dentro del turno, 'waiting' (verde,
+  // parpadeo) esperando tu mensaje. Ícono "vivo" (móvil): mismo lenguaje de
+  // color que sess-pac/rail-status.
+  _renderPacState() {
+    const state = !this._working ? 'waiting' : (this._delegatingCount > 0 ? 'delegating' : 'working');
+    this.container.querySelector('.chat-view').classList.toggle('working', this._working);
+    this.aliveEl.className = pacClass(state, { cls: 'chat-alive' });
+    this.aliveEl.title = state === 'delegating' ? 'Delegando a un subagente…'
+      : state === 'working' ? 'Trabajando…' : 'Esperando tu mensaje';
   }
 
   _scroll() {

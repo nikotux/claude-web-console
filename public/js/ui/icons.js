@@ -64,6 +64,11 @@ const PATHS = {
   cpu: `<rect x="7" y="7" width="10" height="10" rx="1.5"/><line x1="10" y1="7" x2="10" y2="3.5"/><line x1="14" y1="7" x2="14" y2="3.5"/><line x1="10" y1="20.5" x2="10" y2="17"/><line x1="14" y1="20.5" x2="14" y2="17"/><line x1="7" y1="10" x2="3.5" y2="10"/><line x1="7" y1="14" x2="3.5" y2="14"/><line x1="20.5" y1="10" x2="17" y2="10"/><line x1="20.5" y1="14" x2="17" y2="14"/>`,
   ram: `<rect x="3" y="8" width="18" height="9" rx="1.5"/><line x1="7.5" y1="17" x2="7.5" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/><line x1="16.5" y1="17" x2="16.5" y2="20"/><line x1="7.5" y1="11" x2="7.5" y2="14"/><line x1="12" y1="11" x2="12" y2="14"/><line x1="16.5" y1="11" x2="16.5" y2="14"/>`,
   disk: `<ellipse cx="12" cy="6.5" rx="8" ry="3"/><path d="M4 6.5v11c0 1.7 3.6 3 8 3s8-1.3 8-3v-11"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>`,
+  // Señal/interfono (motor Pac-Man, estado "delegando"): punto + ondas
+  // concéntricas a ambos lados — eco del 📻 del panel Interfono. Se usa como
+  // badge diminuto sobre el Pac-Man cuando está esperando la vuelta de un
+  // subagente/proceso delegado (Task tool, pool paralelo, investigación, etc.).
+  relay: `<circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/><path d="M8.6 8.6a5 5 0 0 0 0 6.8"/><path d="M15.4 8.6a5 5 0 0 0 0 6.8"/><path d="M5.6 5.6a10 10 0 0 0 0 12.8"/><path d="M18.4 5.6a10 10 0 0 0 0 12.8"/>`,
 };
 
 // Devuelve markup <svg>…</svg> para el nombre dado. Si no existe, un círculo

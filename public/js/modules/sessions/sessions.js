@@ -9,13 +9,25 @@
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
 import { modelColor } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
-import { pacman } from '../../ui/pacman.js';
+import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor } from '../../ui/places.js';
 
-// Pac-Man de estado de una tarjeta: la clase st-* pone el color (style.css) y
-// SOLO st-working mastica (is-working). Misma firma que updateInPlace.
-const pacClass = (cls) => `cwc-pacman pac-sm sess-pac ${cls}${cls === 'st-working' ? ' is-working' : ''}`;
-const pacStatus = (cls, label) => pacman({ working: cls === 'st-working', cls: `pac-sm sess-pac ${cls}`, title: label });
+// Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
+// animación por estado vienen del catálogo central (ver ui.css); acá solo
+// se arma el markup/clase en tamaño 'sm'. Misma firma para render inicial y
+// updateInPlace (que solo toca la clase, nunca reinyecta HTML interno).
+const pacEl = (state, label) => pacman({ state, size: 'sm', cls: 'sess-pac', title: label });
+const pacCls = (state) => pacClass(state, { size: 'sm', cls: 'sess-pac' });
+
+// Nombre de la tmux OCULTA que sostiene un chat en modo TUI (misma fórmula
+// que BARE_PREFIX del backend, terminal/sessions.js). Esas sesiones NO se
+// listan como tarjeta propia (son plomería interna del modo TUI de un chat,
+// duplicarían la tarjeta del chat) — pero SÍ traen el estado REAL vía el
+// observador de hooks. Antes eran invisibles del todo y la tarjeta del chat
+// quedaba con el Pac-Man CONGELADO al pasar a TUI: cualquier reactivación
+// (por el interfono, por vos tipeando en la terminal oculta, por lo que
+// sea) no se veía hasta volver a modo Chat (bug reportado 2026-07-05).
+const bareNameOf = (terminalId) => `cwct-${terminalId}`;
 
 const MODEL_OPTIONS = [
   ['opusplan', 'Auto (Opus plan / Sonnet)'],
@@ -70,15 +82,37 @@ export default {
       return `hace ${Math.floor(s / 86400)} d`;
     }
 
-    // Estado → clase y texto del punto. Sin datos de estado: modelo detectado
-    // implica Claude presente (esperando genérico); sin modelo = shell.
+    // Estado → estado del motor Pac-Man + texto del punto. Sin datos de
+    // estado: modelo detectado implica Claude presente (tratamos como
+    // "esperándote", el caso más común); sin modelo = shell (dormant).
     function dotInfo(s) {
       const st = s.state?.status;
-      if (st === 'working') return { cls: 'st-working', label: `trabajando · ${fmtAgo(s.state.ts)}` };
-      if (st === 'waiting') return { cls: 'st-waiting', label: `esperando input · ${fmtAgo(s.state.ts)}` };
-      if (st === 'stale') return { cls: 'st-stale', label: `sin señales · ${fmtAgo(s.state.ts)}` };
-      if (s.model) return { cls: 'st-idle', label: 'Claude presente' };
-      return { cls: 'st-shell', label: 'shell (sin Claude)' };
+      if (st === 'working') return { state: 'working', label: `trabajando · ${fmtAgo(s.state.ts)}` };
+      if (st === 'waiting') return { state: 'waiting', label: `esperando input · ${fmtAgo(s.state.ts)}` };
+      if (st === 'stale') return { state: 'stale', label: `sin señales · ${fmtAgo(s.state.ts)}` };
+      if (s.model) return { state: 'waiting', label: 'Claude presente' };
+      return { state: 'dormant', label: 'shell (sin Claude)' };
+    }
+
+    // Estado de una tarjeta de CONVERSACIÓN: en modo TUI el motor SDK está
+    // dormido (this.link=null en el backend) y `c.status` queda congelado —
+    // la actividad real vive en el pane tmux oculto (cwct-<id>), reportada
+    // por el observador. `tmuxByName` (armado en render/updateInPlace desde
+    // el mismo fetch de /api/tmux/sessions) trae ese estado en vivo.
+    function chatDotInfo(c, tmuxByName) {
+      if (c.viewMode === 'tui' && c.terminalId) {
+        const bare = tmuxByName.get(bareNameOf(c.terminalId));
+        const st = bare?.state?.status;
+        if (st === 'working') return { state: 'working', label: `trabajando (TUI) · ${fmtAgo(bare.state.ts)}` };
+        if (st === 'stale') return { state: 'stale', label: `sin señales (TUI) · ${fmtAgo(bare.state.ts)}` };
+        return { state: 'waiting', label: bare ? `esperando input (TUI) · ${fmtAgo(bare.state.ts)}` : 'en modo TUI' };
+      }
+      // Delegando a un subagente (Task tool): más específico que "trabajando"
+      // a secas, así que manda sobre c.status==='working' cuando aplica.
+      if (c.delegating) return { state: 'delegating', label: 'delegando a un subagente…' };
+      return c.status === 'working'
+        ? { state: 'working', label: 'trabajando' }
+        : { state: 'waiting', label: 'esperando input' };
     }
 
     async function fetchAll() {
@@ -102,17 +136,22 @@ export default {
     }
 
     function render({ sessions, chats }) {
-      const total = sessions.length + chats.length;
+      // Mapa completo (INCLUYE cwct-*) para resolver el estado de un chat en
+      // modo TUI; la lista VISIBLE excluye esas tmux ocultas — son plomería
+      // interna del modo TUI de un chat, no una sesión propia del usuario.
+      const tmuxByName = new Map(sessions.map((s) => [s.name, s]));
+      const visible = sessions.filter((s) => !s.name.startsWith('cwct-'));
+      const total = visible.length + chats.length;
       countEl.textContent = total ? String(total) : '';
-      const owned = sessions.filter((s) => s.owned);
-      const others = sessions.filter((s) => !s.owned);
+      const owned = visible.filter((s) => s.owned);
+      const others = visible.filter((s) => !s.owned);
 
       listEl.innerHTML = '';
       if (!total) {
         listEl.innerHTML = '<div class="sess-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
         return;
       }
-      for (const c of chats) listEl.appendChild(chatCard(c));
+      for (const c of chats) listEl.appendChild(chatCard(c, tmuxByName));
       for (const s of owned) listEl.appendChild(card(s));
 
       if (others.length) {
@@ -125,18 +164,18 @@ export default {
     }
 
     // ===== Tarjeta de conversación (chat SDK) =====
-    function chatCard(c) {
+    function chatCard(c, tmuxByName) {
       const elCard = document.createElement('div');
       elCard.className = 'sess-card sess-chat';
       elCard.dataset.key = `chat:${c.id}`;
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
 
-      const dotCls = c.status === 'working' ? 'st-working' : 'st-waiting';
+      const dot = chatDotInfo(c, tmuxByName);
       const isTui = c.viewMode === 'tui';
       const main = document.createElement('button');
       main.className = 'sess-main';
       main.innerHTML = `
-        ${pacStatus(dotCls, c.status === 'working' ? 'trabajando' : 'esperando input')}
+        ${pacEl(dot.state, dot.label)}
         <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
         ${placeBadge(c.cwd)}
         <span class="sess-name">${c.title}</span>
@@ -284,7 +323,7 @@ export default {
       const main = document.createElement('button');
       main.className = 'sess-main';
       main.innerHTML = `
-        ${pacStatus(dot.cls, dot.label)}
+        ${pacEl(dot.state, dot.label)}
         ${placeBadge(s.cwd)}
         <span class="sess-name">${displayName(s)}</span>
         <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? s.model.name : ''}</span>`;
@@ -449,15 +488,17 @@ export default {
       if (document.hidden) return;
       try {
         const { sessions, chats } = await fetchAll();
+        const tmuxByName = new Map(sessions.map((s) => [s.name, s]));
         const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s]));
         const chatMap = new Map(chats.map((c) => [`chat:${c.id}`, c]));
         for (const cardEl of listEl.querySelectorAll('.sess-card')) {
           const key = cardEl.dataset.key;
           if (chatMap.has(key)) {
             const c = chatMap.get(key);
+            const dot = chatDotInfo(c, tmuxByName);
             const dotEl = cardEl.querySelector('.sess-pac');
-            dotEl.className = pacClass(c.status === 'working' ? 'st-working' : 'st-waiting');
-            dotEl.title = c.status === 'working' ? 'trabajando' : 'esperando input';
+            dotEl.className = pacCls(dot.state);
+            dotEl.title = dot.label;
             const isTui = c.viewMode === 'tui';
             const icEl = cardEl.querySelector('.sess-type-ic');
             if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
@@ -474,7 +515,7 @@ export default {
           if (!s) continue;
           const dot = dotInfo(s);
           const dotEl = cardEl.querySelector('.sess-pac');
-          dotEl.className = pacClass(dot.cls);
+          dotEl.className = pacCls(dot.state);
           dotEl.title = dot.label;
           cardEl.querySelector('.sess-name').textContent = displayName(s);
           const modelEl = cardEl.querySelector('.sess-model');

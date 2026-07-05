@@ -289,6 +289,12 @@ class Chat {
     this._engineStopping = false; // cierre esperado (traspaso/sueño pedido): no anunciar 'closed'
     this._engineWaiters = [];     // callbacks al morir el motor (traspaso a TUI)
     this._downAnnounced = true;   // ya anunciamos la muerte de la vida actual del motor
+    // Motor Pac-Man — estado "delegando" (2026-07-05): ids de tool_use Task/
+    // Agent aún sin su tool_result. >0 ⇒ está esperando la vuelta de un
+    // subagente, visible en /api/chat/list como `delegating` sin necesitar
+    // la pestaña del chat abierta (antes esto solo vivía en el frontend,
+    // como ícono de tool call, invisible para la tarjeta de Sesiones).
+    this._delegatingIds = new Set();
   }
 
   start() {
@@ -397,6 +403,15 @@ class Chat {
         // trajo (runners viejos, pre-deploy) — el centro global de permisos
         // la usa para la cuenta regresiva de expiración (PERMISSION_TIMEOUT_MS).
         if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
+        // Estado "delegando" (ver PAC_STATES en ui/pacman.js): un tool_use
+        // Task/Agent abre la espera de un subagente; su tool_result la cierra
+        // (mismo patrón de matching que TOOL_TYPE_ICONS del frontend, acá
+        // server-side para que /api/chat/list lo vea sin la pestaña abierta).
+        if (e.type === 'tool_use' && /^(Task|Agent)/i.test(e.name || '')) {
+          this._delegatingIds.add(e.id);
+        } else if (e.type === 'tool_result' && this._delegatingIds.has(e.id)) {
+          this._delegatingIds.delete(e.id);
+        }
         this._push(e);
     }
   }
@@ -644,6 +659,11 @@ class Chat {
   }
 
   _setStatus(state) {
+    // Invariante: 'delegando' solo tiene sentido con el motor 'working'. Al
+    // volver a 'waiting' (turno terminado, interrumpido, o motor caído a
+    // mitad de un Task) se limpia SIEMPRE — evita que un tool_result perdido
+    // (interrupt, crash) deje la tarjeta pegada en "delegando" para siempre.
+    if (state === 'waiting') this._delegatingIds.clear();
     if (this.status === state) return;
     this.status = state;
     this._broadcast({ type: 'status', state });
@@ -686,6 +706,10 @@ class Chat {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model,
       mode: this.permissionMode, status: this.status, alive: this.alive,
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
+      // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
+      // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
+      // la pestaña del chat esté cerrada.
+      delegating: this._delegatingIds.size > 0,
       // Permisos esperando respuesta: los consume el centro global de popups
       // (public/js/ui/perm-center.js) vía el poll de 8 s de /list.
       pendingPerms: this.pendingPerms(),

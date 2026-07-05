@@ -141,14 +141,18 @@
   padding: .8rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
 }
 
-/* ===== Pac-Man loader (componente compartido — ui/pacman.js) =====
-   Indicador de PROCESO LARGO corriendo (> ~5 s): Pac-Man dorado masticando
-   bolitas que llegan de derecha a izquierda. `is-working` = vivo/comiendo;
-   sin ella = dormido (gris, boca cerrada — solo lo usa el header del chat).
-   Truco del cuerpo: caja 0×0 con border-radius:50% y borde parejo = un
-   círculo hecho de BORDE; el borde derecho anima sólido/transparente para
-   masticar. El ojo es ::before (el (0,0) de un pseudo absoluto en una caja
-   0×0 con borde cae en el CENTRO del círculo). */
+/* ===== Pac-Man — MOTOR de estados (componente compartido, ui/pacman.js) =====
+   Indicador de PROCESO LARGO corriendo (> ~5 s) o de estado en background:
+   Pac-Man cuya boca y bolitas se mueven DISTINTO según el estado (catálogo
+   PAC_STATES de pacman.js) — el color solo no alcanza, cada estado se
+   reconoce por CÓMO se mueve. La ÚNICA animación estática es 'dormant'
+   (nada activo): pedido explícito del usuario 2026-07-05, no aflojar sin
+   volver a preguntar. Truco del cuerpo: caja 0×0 con border-radius:50% y
+   borde parejo = un círculo hecho de BORDE; el ojo es ::before (el (0,0) de
+   un pseudo absoluto en una caja 0×0 con borde cae en el CENTRO del círculo).
+   Clases de estado (ver PAC_STATES en pacman.js): is-working / pac-st-
+   delegating / pac-st-queued / pac-st-waiting / pac-st-stale / pac-st-error;
+   sin ninguna = dormant. */
 .cwc-pacman {
   display: inline-flex; align-items: center; position: relative; flex: none;
   width: 40px; height: 16px; vertical-align: middle;
@@ -169,6 +173,18 @@
   width: 3px; height: 3px; border-radius: 50%;
   background: var(--cwc-text-dimmer); opacity: 0;
 }
+/* Badge diminuto (ícono del interfono) sobre el círculo: SOLO visible en
+   'delegating'. Vive siempre en el markup (pacman.js) para que las
+   actualizaciones en lugar (solo tocan className) puedan mostrarlo/ocultarlo
+   con css puro, sin reinyectar HTML. */
+.cwc-pacman .pac-badge {
+  display: none; position: absolute; left: -2px; top: -7px; z-index: 2;
+  width: 9px; height: 9px; line-height: 0; color: var(--cwc-bg-panel);
+  background: var(--cwc-accent-cool); border-radius: 50%; padding: 1px;
+}
+.cwc-pacman .pac-badge svg { display: block; }
+
+/* ----- working: mordisco rápido + bolitas viajando (el de siempre) ----- */
 .cwc-pacman.is-working .pac-man {
   /* 4 bordes dorados como BASE: si la animación no corre, el fallback es
      boca cerrada dorada — nunca el hueco gris "congelado a medio morder". */
@@ -192,11 +208,59 @@
      (ancho total − círculo) — cada variante de tamaño define el suyo. */
   100% { transform: translateX(var(--pac-travel, -24px)); opacity: 0; }
 }
+
+/* ----- delegating: boca entreabierta fija + bolitas orbitando ida-y-vuelta,
+   badge del interfono visible — "mandé y espero que vuelva" ----- */
+.cwc-pacman.pac-st-delegating .pac-man {
+  border-color: var(--cwc-accent-cool);
+  border-right-color: color-mix(in srgb, var(--cwc-accent-cool) 35%, transparent);
+}
+.cwc-pacman.pac-st-delegating .pac-badge { display: flex; align-items: center; justify-content: center; }
+.cwc-pacman.pac-st-delegating .pac-dot {
+  background: var(--cwc-accent-cool);
+  animation: pac-dot-orbit 1.4s ease-in-out infinite;
+}
+@keyframes pac-dot-orbit {
+  0% { transform: translateX(0); opacity: 0; }
+  20% { opacity: 1; }
+  50% { transform: translateX(var(--pac-travel, -24px)); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(0); opacity: 0; }
+}
+
+/* ----- queued: pulso de opacidad ("respirando"), sin desplazamiento ----- */
+.cwc-pacman.pac-st-queued .pac-man {
+  border-color: var(--cwc-warn);
+  animation: pac-breathe 1.6s ease-in-out infinite;
+}
+@keyframes pac-breathe {
+  0%, 100% { opacity: .4; }
+  50% { opacity: 1; }
+}
+
+/* ----- waiting: parpadeo lento de boca, sin bolitas — tu turno ----- */
+.cwc-pacman.pac-st-waiting .pac-man {
+  border-color: var(--cwc-ok);
+  animation: pac-blink 1.8s ease-in-out infinite;
+}
+@keyframes pac-blink {
+  0%, 80%, 100% { border-right-color: var(--cwc-ok); } /* boca cerrada */
+  40% { border-right-color: transparent; }              /* boca abierta */
+}
+
+/* ----- stale: señal perdida — ESTÁTICO a propósito (incertidumbre, no
+   confirmación de actividad NI de reposo: no se sabe) ----- */
+.cwc-pacman.pac-st-stale .pac-man { border-color: var(--cwc-warn); opacity: .55; }
+
+/* ----- error: paró por una falla — ESTÁTICO (no hay proceso corriendo) --- */
+.cwc-pacman.pac-st-error .pac-man { border-color: var(--cwc-danger-strong); }
+
 /* Variante compacta (0.75×, tarjetas de Sesiones): mismas proporciones. */
 .cwc-pacman.pac-sm { width: 30px; height: 12px; --pac-travel: -18px; }
 .cwc-pacman.pac-sm .pac-man { border-width: 6px; }
 .cwc-pacman.pac-sm .pac-man::before { width: 2.5px; height: 2.5px; top: -4px; left: -1px; }
 .cwc-pacman.pac-sm .pac-track { left: 12px; }
+.cwc-pacman.pac-sm .pac-badge { width: 7px; height: 7px; left: -1px; top: -5px; }
 
 /* ===== Accesibilidad: sin animaciones si el sistema lo pide ===== */
 @media (prefers-reduced-motion: reduce) {
@@ -206,15 +270,20 @@
     transition-duration: .01ms !important;
   }
   /* EXCEPCIÓN deliberada: el Pac-Man es un INDICADOR DE ESTADO funcional
-     (proceso corriendo / vivo vs dormido), no decoración — congelado daba
-     falsos "colgado" en teléfonos con "reducir movimiento" del sistema. Es
-     chico (16px) y de movimiento suave; se re-habilita con mayor
-     especificidad + !important sobre la regla global `*`. */
-  .cwc-pacman.is-working .pac-man {
+     (qué está haciendo la sesión, no decoración) — congelado daba falsos
+     "colgado" en teléfonos con "reducir movimiento" del sistema. Es chico
+     (≤40px) y de movimiento suave; se re-habilita con mayor especificidad +
+     !important sobre la regla global `*`, PARA TODOS los estados animados
+     (working/delegating/queued/waiting) — no solo el histórico working. */
+  .cwc-pacman.is-working .pac-man,
+  .cwc-pacman.pac-st-delegating .pac-man,
+  .cwc-pacman.pac-st-queued .pac-man,
+  .cwc-pacman.pac-st-waiting .pac-man {
     animation-duration: .35s !important;
     animation-iteration-count: infinite !important;
   }
-  .cwc-pacman.is-working .pac-dot {
+  .cwc-pacman.is-working .pac-dot,
+  .cwc-pacman.pac-st-delegating .pac-dot {
     animation-duration: .9s !important;
     animation-iteration-count: infinite !important;
   }

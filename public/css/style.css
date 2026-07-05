@@ -220,17 +220,11 @@ html, body {
 }
 .sess-menu { align-self: center; }
 
-/* Estado de la tarjeta: Pac-Man compartido (ui/pacman.js, variante pac-sm).
-   Amarillo masticando bolitas = en uso (trabajando; lo pinta .is-working de
-   ui.css); verde boca cerrada = libre/esperando input; verde tenue = Claude
-   presente sin señales; amarillo tenue quieto = sin señales frescas; gris =
-   shell sin Claude (el "dormido" default del componente). Mismas clases st-*
-   que .rail-status. */
-.sess-pac.st-waiting .pac-man,
-.sess-pac.st-idle .pac-man { border-color: var(--cwc-ok); }
-.sess-pac.st-stale .pac-man { border-color: var(--cwc-warn); }
-.sess-pac.st-idle, .sess-pac.st-stale { opacity: .55; }
-/* El "ojo" cala el fondo real de la tarjeta (elevated, no panel). */
+/* Estado de la tarjeta: motor Pac-Man compartido (ui/pacman.js, size 'sm').
+   Color Y animación por estado los define el CATÁLOGO CENTRAL en ui.css
+   (working/delegating/queued/waiting/stale/error/dormant) — acá NO se
+   pisan colores por clase, solo el detalle propio de la tarjeta: el "ojo"
+   cala el fondo real de la tarjeta (elevated, no panel). */
 .sess-pac .pac-man::before { background: var(--cwc-bg-elevated); }
 @keyframes sess-pulse { 50% { opacity: .3; } } /* la usa .rail-status */
 
