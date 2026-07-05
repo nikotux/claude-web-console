@@ -52,6 +52,8 @@ export function workPrompt(b, { invText, workContext, prContext }) {
     workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
     '',
+    '🚦 RECORDATORIO (gate del contexto de trabajo): antes de CUALQUIER push (git push / gh pr create|edit / actualizar PR) mostrá el PLAN DE PUSH y esperá mi OK explícito; recién ahí ejecutá de corrido.',
+    '',
     'Empezá mostrándome el diff actual de esos archivos contra origin/main y tu evaluación de qué falta o qué mejorarías.',
   ].filter(Boolean).join('\n');
 }
@@ -79,6 +81,7 @@ export function featurePrompt(b, { invText, workContext, prContext }) {
     'cuál conviene. Presentame el plan y esperá mi OK antes de implementar.',
     'OJO: no hay ticket de Desk detrás (no toques Desk). El respaldo del',
     `trabajo es este feature del tablero (${b.ticketNumber}); citalo en tu cierre.`,
+    '🚦 GATE DE PUSH (igual que en bugs): antes de CUALQUIER push (git push / gh pr create|edit / actualizar PR) mostrá el PLAN DE PUSH y esperá mi OK explícito; recién ahí ejecutá de corrido.',
     workContext ? `\n--- CONTEXTO DE TRABAJO (aplica lo general; lo específico de Desk NO corre acá) ---\n${workContext}\n---` : '',
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
   ].filter(Boolean).join('\n');

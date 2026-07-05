@@ -69,9 +69,18 @@ export async function sendPending() {
   const state = store.get();
   const pendientes = pendingOf(state.entries);
   if (!pendientes.length) return;
+  // PLAN DE PUSH por fix (pedido 2026-07-05: aprobar sabiendo QUÉ viaja):
+  // destino (PR nuevo → branch calculado con la MISMA fórmula que pushPr, o
+  // actualización del branch real del PR) + lista de archivos (tope 5).
   const lineas = pendientes.map((b) => {
     const w = warningsFor(b, state);
-    return `   • TKT #${b.ticketNumber} (${b.files.length} archivo/s) — ${b.prNumber ? `ACTUALIZA el PR #${b.prNumber}` : 'PR nuevo'}${w.length ? `\n     ⚠ ${w.join(' · ')}` : ''}`;
+    const safeNum = String(b.ticketNumber || 'sn').replace(/[^\w.-]/g, '').slice(0, 20) || 'sn';
+    const branch = b.prNumber
+      ? (b.branch || '(branch del PR)')
+      : (b.kind === 'feature' ? `feature/${safeNum.toLowerCase()}-${(b.sessionId || '').slice(0, 8)}` : `bugfix/tkt-${safeNum}-${(b.sessionId || '').slice(0, 8)}`);
+    const files = b.files || [];
+    const lista = files.slice(0, 5).map((f) => `\n       - ${f}`).join('') + (files.length > 5 ? `\n       … +${files.length - 5} más` : '');
+    return `   • ${b.kind === 'feature' ? b.ticketNumber : `TKT #${b.ticketNumber}`} — ${b.prNumber ? `ACTUALIZA el PR #${b.prNumber}` : 'PR nuevo'} → ${branch} (${files.length} archivo/s)${lista}${w.length ? `\n     ⚠ ${w.join(' · ')}` : ''}`;
   });
   const conDeskAuto = pendientes.filter((b) => !b.sentAt && !b.prNumber && b.ticketNumber);
   const ok = await deps.dialog.confirmDialog({

@@ -532,7 +532,21 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             verificación previa del ticket/PRs de Chris, proceso, NO enviar PR
                             desde el chat) y 'pr' (bugfix-pr-context.md — cómo se REDACTAN las
                             notas del PR: formato Problema:/Qué hice:/Mejor solución: del
-                            cierre). YA NO se editan con botón "Contexto" propio en el
+                            cierre).
+                            🚦 GATE DE PUSH (pedido del usuario 2026-07-05): el contexto
+                            'work' abre con una regla dura — el trabajo se ejecuta DE
+                            CORRIDO, pero ANTES de CUALQUIER push (git push / gh pr
+                            create|edit / actualizar PR / "Enviar PR") el chat FRENA,
+                            muestra el PLAN DE PUSH (branch destino + PR nuevo/actualiza
+                            #N + archivos con diff stat + texto exacto de las notas) y
+                            espera el OK explícito del usuario; recién ahí pushea de
+                            corrido y verifica contra GitHub. workPrompt/featurePrompt
+                            (board/prompts.js) lo recuerdan en el arranque del chat, y el
+                            confirm de "Enviar pendientes" (sendPending de
+                            board/actions.js) muestra el mismo plan por fix: destino →
+                            branch (misma fórmula que pushPr) + lista de archivos (tope
+                            5). deskChatPrompt ya tenía su gate propio (nota → OK →
+                            publicar) y no se tocó. YA NO se editan con botón "Contexto" propio en el
                             EXPANDIR de Bugs ni en el modal Enviar PR (se sacaron de ahí): se
                             editan desde ⚙ Sistema → Proyectos, como "Bugfixes: Trabajo" /
                             "Bugfixes: PR" (sub-proyectos SIN memorias, junto a Tolkien/Consola
