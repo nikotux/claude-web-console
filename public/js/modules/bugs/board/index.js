@@ -46,6 +46,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       <span class="bb-state" data-ref="ghstate"></span>
       <span class="bb-triage" data-ref="triage"></span>
     </div>
+    <div class="bb-tabs" data-ref="tabs" role="tablist"></div>
     <div class="bb-mhead">
       <div class="bb-mrow">
         <input class="bb-search" data-ref="q" type="search" placeholder="Buscar por #, título, archivo…" autocomplete="off">
@@ -193,6 +194,16 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       else if (act === 'cancelpr') await A.cancelPr(b);
       else if (act === 'del') await A.discard(b);
     });
+  });
+
+  // ===== Pestañas primarias (Tickets · Features · Archivados) =====
+  // Cambiar de subvista es un simple set del store; el re-render es seguro
+  // (estado fuera del DOM). No tocamos `expanded`: las expansiones se guardan
+  // por rowKey y sobreviven — las filas de otra pestaña solo no se dibujan.
+  mr.tabs.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-tab]');
+    if (!t || t.dataset.tab === store.get().tab) return;
+    store.set({ tab: t.dataset.tab });
   });
 
   // ===== Header móvil (Fase 3): búsqueda + segmentos + menú ⋯ =====

@@ -27,9 +27,12 @@ const initial = () => ({
   busy: {},              // botones en vuelo: send/scan/ghsync/desksync/act:<key>
   deskSyncProgress: null, // {done,total} del bulk "🎫 Desk"
 
+  // ----- subvistas (pestañas primarias: organizan TODO el tablero) -----
+  tab: 'tickets',        // 'tickets' | 'features' | 'archived' — subvista activa
+
   // ----- vista móvil (Fase 3: cards + búsqueda + segmentos) -----
   query: '',             // búsqueda en cliente: nº ticket / título / archivos
-  filter: null,          // segmento activo: 'accion'|'revision'|'done'|'arch'|null(=todos)
+  filter: null,          // segmento activo (secundario, dentro de la pestaña): 'accion'|'revision'|'done'|null(=todos)
 
   // ----- paneles lazy del detalle (antes dataset.loaded + innerHTML) -----
   // Cada slot: { loading:true } | { running:true } | { data|st } | { error }.

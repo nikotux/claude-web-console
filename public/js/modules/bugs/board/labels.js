@@ -147,6 +147,15 @@ export const rowKey = (b) => (b.sessionId ? `sid:${b.sessionId}` : (b.ticketNumb
 export const triageKey = (t) => `tkt:${t.ticketNumber}`;
 export const ghKey = (pr) => `pr:${pr.number}`;
 
+// ===== Subvistas (pestañas primarias que organizan TODO el tablero) =====
+// A qué pestaña pertenece una fila de registro: archivado manda sobre todo
+// (un feature archivado va a 📦, no a 💡). Los tickets del triage y los PRs
+// solo-GitHub SIEMPRE pertenecen a 'tickets' (se gatean en el render).
+export function tabOfEntry(b) {
+  if (b.archived) return 'archived';
+  return b.kind === 'feature' ? 'features' : 'tickets';
+}
+
 // ===== Segmentos de la vista móvil (Fase 3, mapean al rank de la lista) =====
 // 'accion' = te toca a vos (pendiente con archivos; triage-only también) ·
 // 'revision' = PR abierto esperando a Chris · 'done' = merged/completo ·

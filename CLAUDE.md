@@ -727,11 +727,25 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             siempre con aprobación del usuario en Desk (regla 6). Cada fila con
                             ticket trae "Traer estado de Desk" (desk-live, bajo botón; muestra
                             veredicto parcial/completo y actualiza b.resolution en memoria sin
-                            re-render). Sección colapsable "📦 Archivo · resueltos" al fondo
-                            (filas .bb-arch-row ocultables por la cabecera data-arch-toggle);
-                            botón Archivar (primario cuando completo) / Restaurar por fila. El
-                            "?" ("Cómo leer este tablero") explica pipeline, resolución,
-                            chips, puntos, Archivo y GitHub/Desk en vivo.
+                            re-render). Botón Archivar (primario cuando completo) /
+                            Restaurar por fila. El "?" ("Cómo leer este tablero") explica
+                            pipeline, resolución, chips, puntos, Archivo y GitHub/Desk en vivo.
+                            SUBVISTAS / PESTAÑAS (pedido del usuario 2026-07-05): el tablero
+                            se organiza en TRES pestañas primarias (barra .bb-tabs, visible
+                            en desktop Y móvil, `state.tab` en store.js — R1, fuera del DOM):
+                            🎫 Tickets (bugs con ticket + tickets del triage sin trabajar +
+                            PRs solo-GitHub) · 💡 Features (FEAT-n) · 📦 Archivados (todo lo
+                            archivado, tickets y features). tabOfEntry (labels.js) deriva la
+                            pestaña de cada fila (archived manda sobre kind); renderTable
+                            filtra tanto la tabla desktop como las cards móviles por
+                            state.tab. Antes TODO apilaba en una sola lista con la sección
+                            colapsable "📦 Archivo · resueltos" al fondo (data-arch-toggle /
+                            .bb-arch-row / archOpen — ahora en desuso, reemplazados por la
+                            pestaña Archivados). Los conteos de cada pestaña salen del estado
+                            (0 tokens). Los SEGMENTOS móviles (Acción/Revisión/✓) quedan como
+                            filtro SECUNDARIO dentro de Tickets/Features (ya NO tienen 📦 —
+                            es pestaña); se ocultan en Archivados. Cambiar de pestaña es un
+                            store.set({tab}) y el re-render es seguro (no toca `expanded`).
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md)

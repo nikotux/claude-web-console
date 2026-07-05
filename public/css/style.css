@@ -1043,6 +1043,28 @@ html, body {
 .bb-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
 .bb-state { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .35rem; }
 .bb-triage { margin-left: auto; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: flex; align-items: center; gap: .3rem; }
+/* Pestañas primarias (subvistas): 🎫 Tickets · 💡 Features · 📦 Archivados.
+   Visibles en desktop y móvil; organizan TODO el tablero. */
+.bb-tabs {
+  display: flex; gap: .25rem; margin-bottom: .55rem;
+  border-bottom: 1px solid var(--cwc-border-soft);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+}
+.bb-tab {
+  flex: none; white-space: nowrap; min-height: 40px;
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .35rem .75rem; margin-bottom: -1px;
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); cursor: pointer;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  border-radius: var(--cwc-radius-sm) var(--cwc-radius-sm) 0 0;
+}
+.bb-tab:hover { color: var(--cwc-text); }
+.bb-tab.on { color: var(--cwc-accent); border-bottom-color: var(--cwc-accent); }
+.bb-tab-n {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer);
+  background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: 0 .35rem;
+}
+.bb-tab.on .bb-tab-n { color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 14%, transparent); }
 .bb-box { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); max-height: 70vh; max-height: 74dvh; overflow: auto; }
 .bb-row--triage .bb-title { color: var(--cwc-text-secondary); }
 /* Pipeline: 5 etapas del ciclo (triage → trabajo → PR → merge → ticket). */

@@ -14,6 +14,7 @@ import {
   ticketOfPr, timelineOf, EV_LABEL, evDot, resolutionOf, RES_CHIP, prEstado,
   prCellFor, deskCellFor, OUTCOME_LABEL, rowKey, triageKey, ghKey,
   triageByNum, entriesByTicket, segmentOfEntry, segmentOfGh, cleanTitle,
+  tabOfEntry,
 } from './labels.js';
 
 let icon = null;
@@ -62,22 +63,50 @@ export function renderHeader(state) {
     ? `triage: ${fmtAgo(state.triage.updatedAt)}${Date.now() - state.triage.updatedAt > 86400000 ? ' <span class="bb-chip bb-chip--warn">viejo</span>' : ''}`
     : 'triage: sin datos';
 
+  // ----- Barra de PESTAÑAS (subvistas primarias, desktop + móvil) -----
+  // Organizan TODO el tablero: 🎫 Tickets (bugs + triage + PRs solo-GitHub) ·
+  // 💡 Features (FEAT-n) · 📦 Archivados. Conteos derivados del estado.
+  if (mr.tabs) {
+    const tc = { tickets: 0, features: 0, archived: 0 };
+    for (const b of state.entries) tc[tabOfEntry(b)]++;
+    const cubiertosT = new Set(state.entries.map((b) => String(b.ticketNumber)).filter(Boolean));
+    for (const t of (state.triage.tickets || [])) if (!cubiertosT.has(String(t.ticketNumber))) tc.tickets++;
+    for (const pr of state.ghRows) {
+      const tk = ticketOfPr(pr);
+      if (tk && cubiertosT.has(String(tk))) continue;
+      tc.tickets++;
+    }
+    const TABS = [['tickets', '🎫 Tickets'], ['features', '💡 Features'], ['archived', '📦 Archivados']];
+    mr.tabs.innerHTML = TABS.map(([k, label]) =>
+      `<button class="bb-tab${state.tab === k ? ' on' : ''}" data-tab="${k}">${label} <span class="bb-tab-n">${tc[k]}</span></button>`).join('');
+  }
+
   // ----- Header MÓVIL (Fase 3): segmentos con conteo + frescura en UNA línea.
+  // Los segmentos son un filtro SECUNDARIO dentro de la pestaña activa (por eso
+  // sus conteos son POR pestaña); 📦 ya no es segmento — es la pestaña Archivados.
   // El input de búsqueda (mr.q) NUNCA se re-renderiza: es un ref estable para
   // no pisar el tipeo; acá solo se actualizan chips y texto.
   if (mr.segs) {
-    const counts = { accion: 0, revision: 0, done: 0, arch: 0 };
-    for (const b of state.entries) { const sg = segmentOfEntry(b); if (sg) counts[sg]++; }
-    const cubiertos = new Set(state.entries.map((b) => String(b.ticketNumber)).filter(Boolean));
-    for (const t of (state.triage.tickets || [])) if (!cubiertos.has(String(t.ticketNumber))) counts.accion++;
-    for (const pr of state.ghRows) {
-      const tk = ticketOfPr(pr);
-      if (tk && cubiertos.has(String(tk))) continue;
-      const sg = segmentOfGh(pr); if (sg) counts[sg]++;
+    mr.segs.hidden = state.tab === 'archived'; // en 📦 no aplican estados de acción
+    if (state.tab !== 'archived') {
+      const counts = { accion: 0, revision: 0, done: 0 };
+      for (const b of state.entries) {
+        if (tabOfEntry(b) !== state.tab) continue;
+        const sg = segmentOfEntry(b); if (sg && sg !== 'arch') counts[sg]++;
+      }
+      if (state.tab === 'tickets') {
+        const cubiertos = new Set(state.entries.map((b) => String(b.ticketNumber)).filter(Boolean));
+        for (const t of (state.triage.tickets || [])) if (!cubiertos.has(String(t.ticketNumber))) counts.accion++;
+        for (const pr of state.ghRows) {
+          const tk = ticketOfPr(pr);
+          if (tk && cubiertos.has(String(tk))) continue;
+          const sg = segmentOfGh(pr); if (sg) counts[sg]++;
+        }
+      }
+      const SEGS = [['accion', 'Acción'], ['revision', 'Revisión'], ['done', '✓']];
+      mr.segs.innerHTML = SEGS.map(([k, label]) =>
+        `<button class="bb-seg-chip${state.filter === k ? ' on' : ''}" data-seg="${k}" title="${k === 'accion' ? 'Te toca a vos: pendientes de enviar + bugs sin trabajar' : k === 'revision' ? 'PR abierto esperando a Chris' : 'Mergeado o completo'}">${label} ${counts[k]}</button>`).join('');
     }
-    const SEGS = [['accion', 'Acción'], ['revision', 'Revisión'], ['done', '✓'], ['arch', '📦']];
-    mr.segs.innerHTML = SEGS.map(([k, label]) =>
-      `<button class="bb-seg-chip${state.filter === k ? ' on' : ''}" data-seg="${k}" title="${k === 'accion' ? 'Te toca a vos: pendientes de enviar + bugs sin trabajar' : k === 'revision' ? 'PR abierto esperando a Chris' : k === 'done' ? 'Mergeado o completo' : 'Archivados'}">${label} ${counts[k]}</button>`).join('');
   }
   if (mr.mfresh) {
     mr.mfresh.textContent = [
@@ -601,14 +630,21 @@ export function renderTable(state) {
     if (mr.cards) mr.cards.innerHTML = '<div class="hp-empty">Sin bugs en triage, fixes registrados ni PRs en GitHub.</div>';
     return;
   }
-  const activos = entries.filter((b) => !b.archived);
   const archivados = entries.filter((b) => b.archived);
+  // Subvista activa: 'tickets' = bugs con ticket (+ triage + PRs solo-GitHub) ·
+  // 'features' = FEAT-n · 'archived' = todo lo archivado (usa `archivados`).
+  const tab = state.tab;
+  const tabActivos = tab === 'features'
+    ? entries.filter((b) => !b.archived && b.kind === 'feature')
+    : tab === 'tickets'
+      ? entries.filter((b) => !b.archived && b.kind !== 'feature')
+      : []; // 'archived' no tiene "activos" propios
 
   // Fila-PR: cuando hay un PR ABIERTO, el PR es el protagonista y el/los TKT
   // que resuelve van anidados debajo. Agrupamos por número de PR abierto;
   // el primer TKT del grupo "posee" la fila, los demás se absorben (no duplican).
   const openPrGroups = new Map(); // prNumber -> [entries]
-  for (const b of activos) {
+  for (const b of tabActivos) {
     if (b.prState === 'open' && b.prNumber) {
       const k = String(b.prNumber);
       if (!openPrGroups.has(k)) openPrGroups.set(k, []);
@@ -638,7 +674,7 @@ export function renderTable(state) {
       ? `<div class="bb-prtitle"><b>PR #${esc(b.prNumber)}</b> · ${esc(b.title)}</div><div class="bb-prtkts">${group.map(subTktHtml).join('')}</div>`
       : esc(b.title);
     return `
-      <tr class="bb-row${isPr ? ' bb-row--pr' : ''}${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}" data-sid="${esc(b.sessionId)}"${arch && !archOpen ? ' hidden' : ''}>
+      <tr class="bb-row${isPr ? ' bb-row--pr' : ''}${arch ? ' bb-arch-row' : ''}" data-key="${esc(key)}" data-sid="${esc(b.sessionId)}">
         <td><span class="hp-dot hp-dot--${est.dot}"></span></td>
         <td class="bb-tkt">${tktCell}</td>
         <td class="bb-title">${titleCell}</td>
@@ -656,7 +692,7 @@ export function renderTable(state) {
   // resueltos, listos para archivar); a igual rank, más reciente primero.
   const rank = (b) => (resolutionOf(b) === 'complete' ? 3
     : b.status === 'pendiente' ? (b.files?.length ? 0 : 1) : 2);
-  const orden = [...activos].sort((a, b) => rank(a) - rank(b)
+  const orden = [...tabActivos].sort((a, b) => rank(a) - rank(b)
     || (b.sentAt || b.updatedAt || 0) - (a.sentAt || a.updatedAt || 0));
   const rows = [];
   for (const b of orden) {
@@ -668,8 +704,8 @@ export function renderTable(state) {
     }
     rows.push(rowFor(b, false));
   }
-  // Tickets del triage SIN trabajo todavía: parte de la misma línea de trabajo.
-  for (const t of soloTriage) {
+  // Tickets del triage SIN trabajo + PRs solo-GitHub: SOLO en la pestaña Tickets.
+  for (const t of (tab === 'tickets' ? soloTriage : [])) {
     const key = triageKey(t);
     const open = expanded.has(key);
     rows.push(`
@@ -688,7 +724,7 @@ export function renderTable(state) {
   // Los PRs solo-GitHub cuyo ticket YA está consolidado en una fila del
   // motor no se repiten (el motor los enganchó a external.github).
   const ticketsEnTablero = new Set(entries.map((b) => String(b.ticketNumber)).filter(Boolean));
-  for (const pr of ghRows) {
+  for (const pr of (tab === 'tickets' ? ghRows : [])) {
     const dot = pr.state === 'merged' ? 'ok' : pr.state === 'closed' ? 'fail' : 'warn';
     const ticket = ticketOfPr(pr);
     if (ticket && ticketsEnTablero.has(String(ticket))) continue;
@@ -715,14 +751,18 @@ export function renderTable(state) {
       </tr>
       <tr class="bb-detail" data-key="${esc(key)}"${open ? '' : ' hidden'}><td colspan="8">${ghDetailHtml(pr, state)}</td></tr>`);
   }
-  // ===== Sección Archivo · resueltos (colapsable, al fondo) =====
-  if (archivados.length) {
+  // ===== Pestaña Archivados: todo lo archivado, sin sección colapsable =====
+  // (antes era una sección plegable al fondo de la única lista; ahora es su
+  // propia subvista, así el resto del tablero queda limpio.)
+  if (tab === 'archived') {
     const arch = [...archivados].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    rows.push(`
-      <tr class="bb-arch-header${archOpen ? ' open' : ''}" data-arch-toggle="1">
-        <td colspan="8">${icon('chevronDown', { size: 13 })} 📦 Archivo · ${arch.length} resuelto/s <span class="bb-arch-hint">(mostrar/ocultar)</span></td>
-      </tr>`);
     for (const b of arch) rows.push(rowFor(b, true));
+  }
+  if (!rows.length) {
+    const empty = tab === 'features' ? 'Sin features. Creá uno con “Nuevo feature”.'
+      : tab === 'archived' ? 'Nada archivado todavía.'
+        : 'Sin bugs en triage, fixes registrados ni PRs en GitHub.';
+    rows.push(`<tr><td colspan="8" class="hp-empty">${empty}</td></tr>`);
   }
   // ===== Cards móviles (Fase 3; el CSS gatea tabla vs cards por breakpoint,
   // se renderizan AMBAS del mismo estado: rotar el teléfono no pierde nada) ==
@@ -767,8 +807,8 @@ export function renderTable(state) {
       <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${detailMobileHtml(b, state)}</div>`;
   };
 
-  if (state.filter === 'arch') {
-    // Segmento 📦: SOLO archivados (en cards no hay sección colapsable).
+  if (tab === 'archived') {
+    // Pestaña 📦: SOLO archivados (tickets y features), con búsqueda.
     for (const b of [...archivados].sort((a, b2) => (b2.updatedAt || 0) - (a.updatedAt || 0))) {
       if (matches([b.ticketNumber, b.prNumber, b.title, ...(b.files || [])])) cards.push(cardFor(b, true));
     }
@@ -784,7 +824,7 @@ export function renderTable(state) {
       if (!matches([b.ticketNumber, b.prNumber, b.title, ...(b.files || [])])) continue;
       cards.push(cardFor(b, false));
     }
-    for (const t of soloTriage) {
+    for (const t of (tab === 'tickets' ? soloTriage : [])) {
       if (!segOk('accion')) continue;
       if (!matches([t.ticketNumber, t.whatBroke, t.route])) continue;
       const key = triageKey(t);
@@ -801,7 +841,7 @@ export function renderTable(state) {
         </div>
         <div class="bb-detail bb-card-det" data-key="${esc(key)}"${open ? '' : ' hidden'}>${triageMobileHtml(t, state)}</div>`);
     }
-    for (const pr of ghRows) {
+    for (const pr of (tab === 'tickets' ? ghRows : [])) {
       const ticket = ticketOfPr(pr);
       if (ticket && ticketsEnTablero.has(String(ticket))) continue;
       if (!segOk(segmentOfGh(pr))) continue;
