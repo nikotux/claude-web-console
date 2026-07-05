@@ -394,6 +394,40 @@ export async function workOnTriage(t) {
   });
 }
 
+// ===== Vincular un PR EXISTENTE (creado fuera del módulo "Enviar PR") =====
+// Cierra el punto ciego FEAT-2/PR #249 (bug 2026-07-05): el registro huérfano
+// se engancha a mano al PR real. La reconciliación de ghSync hace lo mismo
+// SOLA cuando el título/branch referencia al ítem sin ambigüedad; este botón
+// cubre los casos que el regex no ve (p.ej. "FEAT-1/2"). Solo LECTURA de gh.
+export async function linkPr(b) {
+  const raw = await deps.dialog.promptDialog({
+    title: `Vincular PR — ${b.kind === 'feature' ? b.ticketNumber : `TKT #${b.ticketNumber || '?'}`}`,
+    message: 'Número del PR de Tolkien YA existente en GitHub (creado por fuera del módulo "Enviar PR"). Se verifica su estado real con gh y este registro pasa a seguirlo (estado, merge, timeline). No toca código ni GitHub.',
+    placeholder: 'p.ej. 249',
+  });
+  if (raw == null || String(raw).trim() === '') return;
+  const n = Number(String(raw).trim().replace(/^#/, ''));
+  if (!Number.isInteger(n) || n <= 0) {
+    await deps.dialog.alertDialog({ title: 'Vincular PR', message: 'Número de PR inválido.' });
+    return;
+  }
+  const key = rowKey(b);
+  store.mutate((s) => { s.busy[`act:${key}`] = true; });
+  try {
+    const res = await fetch('/api/bugfixes/link-pr', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: b.sessionId, prNumber: n }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'No se pudo vincular el PR.');
+  } catch (err) {
+    await deps.dialog.alertDialog({ title: 'Vincular PR', message: err.message });
+  } finally {
+    store.mutate((s) => { delete s.busy[`act:${key}`]; });
+    await reload(); ghSync(true);
+  }
+}
+
 // ===== Acciones por fila (confirms destructivos intactos) =====
 export async function cancelPr(b) {
   const ok = await deps.dialog.confirmDialog({

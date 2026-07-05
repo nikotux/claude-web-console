@@ -227,10 +227,19 @@ export function buildTickets({ ghRows = [] } = {}) {
   return tickets;
 }
 
-// Detecta el número de ticket del título/branch de un PR (bugfix/tkt-N o "#N").
+// Detecta el ID de trabajo del título/branch de un PR y lo devuelve en la MISMA
+// forma que viaja en ticketNumber ('519' o 'FEAT-2'), así el PR engancha con
+// `#${id}` en buildTickets. Orden deliberado: tkt-N primero (la convención del
+// módulo manda), FEAT-n después PERO antes de "#N" — un título
+// "Feature FEAT-2 (#245)" debe dar FEAT-2, no 245. Antes del bug 2026-07-05
+// (FEAT-2/PR #249) los features NUNCA se auto-vinculaban: solo dígitos.
 export function ticketOfPr(pr) {
   const s = `${pr.headRefName || pr.branch || ''} ${pr.title || ''}`;
-  const m = s.match(/tkt[-_ ]?(\d+)/i) || s.match(/#(\d{2,})/) || s.match(/desk[-_ #]*(\d+)/i);
+  const t = s.match(/tkt[-_ ]?(\d+)/i);
+  if (t) return t[1];
+  const f = s.match(/feat[-_ ]?(\d+)/i);
+  if (f) return `FEAT-${f[1]}`;
+  const m = s.match(/#(\d{2,})/) || s.match(/desk[-_ #]*(\d+)/i);
   return m ? m[1] : null;
 }
 

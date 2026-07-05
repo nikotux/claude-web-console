@@ -14,10 +14,19 @@ import { icon } from '../../../ui/icons.js';
 export function ticketOfPr(pr) {
   const t = String(pr.title || '').match(/TKT\s*#?\s*([\w.-]+)/i);
   if (t) return t[1];
+  // FEAT-n (features del motor): del título o del branch (feature/feat-n-…).
+  // Va ANTES de los patrones sueltos de branch: "feat/ticket-workboard-…"
+  // matchearía (?:ticket)[-_]? capturando basura ("workboard").
+  const f = `${pr.title || ''} ${pr.branch || ''}`.match(/feat[-_ ]?(\d+)/i);
+  if (f) return `FEAT-${f[1]}`;
   const b = String(pr.branch || '').match(/(?:tkt|ticket)-([\w.]+?)-[0-9a-f]{6,}$/i)
     || String(pr.branch || '').match(/(?:tkt|ticket)[-_]?#?([\w.]+)/i);
   return b ? b[1] : null;
 }
+
+// ¿El id detectado es un FEATURE del motor (FEAT-n)? Los features NO tienen
+// ticket de Desk: la UI no debe ofrecer acciones/paneles de Zoho sobre ellos.
+export const isFeatId = (id) => /^FEAT-/i.test(String(id || ''));
 
 // Timeline: history[] real, o sintetizado para registros anteriores al cambio.
 export function timelineOf(b) {
@@ -33,6 +42,7 @@ export const EV_LABEL = {
   creado: (e) => (e.feature ? `Feature ${e.feature} creado en el tablero` : 'Fix registrado desde el chat'),
   trabajo_nuevo: (e) => `Se reabrió el trabajo (chat nuevo)${e.pr ? ` sobre el PR #${e.pr}` : ''}`,
   pr_creado: (e) => `PR #${e.pr ?? '?'} creado${e.files ? ` · ${e.files} archivo/s` : ''}`,
+  pr_vinculado: (e) => `PR #${e.pr ?? '?'} vinculado al registro (${e.mode === 'auto' ? 'detectado en la sync de GitHub' : e.mode === 'chat' ? 'desde la sesión que lo publicó' : 'a mano desde el tablero'})`,
   pr_actualizado: (e) => `PR #${e.pr ?? '?'} actualizado · commit ${e.commit || '?'}${e.commitN ? ` (${e.commitN}º del branch)` : ''}`,
   pr_mergeado: (e) => `PR #${e.pr ?? '?'} MERGEADO${e.by ? ` por ${e.by}` : ''}`,
   pr_cancelado: (e) => `PR #${e.pr ?? '?'} cancelado (fix vuelve a pendiente)`,
@@ -44,7 +54,7 @@ export const EV_LABEL = {
 };
 
 const EV_DOT = {
-  creado: 'warn', trabajo_nuevo: 'warn', pr_creado: 'ok', pr_actualizado: 'ok',
+  creado: 'warn', trabajo_nuevo: 'warn', pr_creado: 'ok', pr_actualizado: 'ok', pr_vinculado: 'ok',
   pr_mergeado: 'ok', pr_cancelado: 'fail', ticket_cerrado: 'ok', ticket_respondido: 'ok',
   archivado: 'warn', restaurado: 'warn',
 };

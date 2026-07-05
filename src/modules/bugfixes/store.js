@@ -49,6 +49,12 @@ export const DEFAULT_CONTEXTS = {
     'create): el PR se sube después desde el módulo "Enviar PR" de la consola,',
     'que también ACTUALIZA un PR abierto si el ticket se retrabaja (commit',
     'encima del branch, sin duplicar PRs).',
+    '',
+    'Si IGUAL el PR se crea/actualiza por FUERA del módulo (excepción que el',
+    'usuario autorice explícitamente), en el MISMO turno del push ejecutá:',
+    '  node /home/nmosquera/claude-web-console/bin/cwc-bugfix-link.js <TKT-n|FEAT-n> <nroPR>',
+    'para vincular el PR al tablero (determinístico, 0 tokens). Sin esto el',
+    'registro queda huérfano y el tablero sigue diciendo "falta enviar el PR".',
   ].join('\n'),
   pr: [
     'Cómo se redactan los cambios que van al PR (las notas que lee Chris):',

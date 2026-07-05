@@ -14,6 +14,8 @@
 //   POST /api/bugfixes/context {kind, context} -> guarda el contexto (admin)
 //   POST /api/bugfixes/cancel-pr {id} -> cierra el PR + borra el branch remoto
 //        y el registro vuelve a 'pendiente' para rehacer el fix (admin)
+//   POST /api/bugfixes/link-pr {id, prNumber} -> vincula un PR YA existente en
+//        GitHub (creado fuera del módulo "Enviar PR") al registro (admin)
 //   POST /api/bugfixes/delete {id} -> descarta un registro (admin)
 //
 // GIT/PR — decisiones duras:
@@ -38,6 +40,10 @@ import { isAdmin } from '../../core/auth.js';
 import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
 import { buildTickets, createFeature, findSimilarSolutions, saveFeedback, ticketOfPr } from './engine.js';
+// Vinculación de un PR YA existente a un registro (bug 2026-07-05 FEAT-2/#249):
+// misma lógica para el endpoint manual, la reconciliación de refresh-prs y el
+// CLI bin/cwc-bugfix-link.js que corre el propio chat.
+import { applyPrLink, linkPrToRegistry } from './link-shared.js';
 // Orquestador de concurrencia ADAPTATIVA — el mismo de Salud (genérico y
 // testeado). Acá lo usa refresh-prs para paralelizar las LECTURAS a GitHub
 // (`gh pr view`); los git-writes siguen SERIAL (regla de oro: paralelo lo
@@ -784,30 +790,51 @@ export default {
       saveBugfixes(all);
 
       let github = [];
+      const linked = [];
       try {
         const out = await run('gh', [
           'pr', 'list', '--author', '@me', '--state', 'all', '--limit', '50',
           '--json', 'number,title,state,mergedAt,mergedBy,url,createdAt,headRefName,additions,deletions,changedFiles',
         ], { cwd: config.projectDir });
+        const parsed = JSON.parse(out).map((pr) => ({
+          number: pr.number,
+          title: String(pr.title || '').slice(0, 160),
+          state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
+          createdAt: pr.createdAt ? Date.parse(pr.createdAt) : null,
+          mergedAt: pr.mergedAt ? Date.parse(pr.mergedAt) : null,
+          mergedBy: pr.mergedBy?.login || null,
+          url: pr.url,
+          branch: pr.headRefName || null,
+          stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
+        }));
         const registrados = new Set(all.map((b) => b.prNumber).filter(Boolean));
-        github = JSON.parse(out)
-          .filter((pr) => !registrados.has(pr.number))
-          .map((pr) => ({
-            number: pr.number,
-            title: String(pr.title || '').slice(0, 160),
-            state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
-            createdAt: pr.createdAt ? Date.parse(pr.createdAt) : null,
-            mergedAt: pr.mergedAt ? Date.parse(pr.mergedAt) : null,
-            mergedBy: pr.mergedBy?.login || null,
-            url: pr.url,
-            branch: pr.headRefName || null,
-            stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
-          }));
+        // RECONCILIACIÓN (bug 2026-07-05, caso FEAT-2/PR #249): un PR creado
+        // por FUERA del módulo "Enviar PR" (gh pr create desde un chat o un
+        // worktree externo) dejaba el registro huérfano para siempre — el
+        // tablero seguía diciendo "falta enviar el PR" con el PR ya abierto.
+        // Si un PR de la lista referencia (título/branch: tkt-N / FEAT-n / #N)
+        // un registro SIN PR y el match es INEQUÍVOCO (exactamente UN candidato
+        // no archivado), se ADOPTA: prNumber/prState/branch persisten + evento
+        // pr_vinculado al timeline. Cerrados sin merge NO se adoptan (ruido
+        // histórico); ambiguos tampoco (quedan como fila solo-GitHub, que el
+        // motor ya engancha en external.github vía ticketOfPr para mostrarlos).
+        for (const pr of parsed) {
+          if (pr.state === 'closed' || registrados.has(pr.number)) continue;
+          const tn = ticketOfPr(pr);
+          if (!tn) continue;
+          const cands = all.filter((b) => String(b.ticketNumber) === String(tn) && !b.prNumber && !b.archived);
+          if (cands.length !== 1) continue;
+          applyPrLink(cands[0], pr, { mode: 'auto' });
+          registrados.add(pr.number);
+          linked.push(`${tn} ← PR #${pr.number}`);
+        }
+        if (linked.length) saveBugfixes(all);
+        github = parsed.filter((pr) => !registrados.has(pr.number));
       } catch (err) {
         errors.push(`gh pr list: ${String(err?.message || err).slice(0, 120)}`);
       }
       lastGhRows = github.map((pr) => ({ ...pr, fetchedAt: Date.now() }));
-      res.json({ bugfixes: all, github, errors });
+      res.json({ bugfixes: all, github, linked, errors });
     });
 
     // Contextos editables (?kind=work|pr). Ambos se inyectan en cada
@@ -826,6 +853,31 @@ export default {
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío (borralo a mano si de verdad querés eso).' });
       saveContext(kind, text);
       res.json({ ok: true, kind, context: getContext(kind) });
+    });
+
+    // Vincula un PR YA EXISTENTE en GitHub (creado por fuera del módulo
+    // "Enviar PR": gh pr create desde un chat/worktree) a un registro del
+    // tablero. Verifica el estado REAL con gh; el registro pasa a 'subido' y
+    // refresh-prs lo mantiene desde ahí. NO toca código ni GitHub (solo lee).
+    // Bug 2026-07-05 (FEAT-2/PR #249): antes NO existía ningún camino manual.
+    r.post('/link-pr', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const n = Number(req.body?.prNumber);
+      if (!id) return res.status(400).json({ error: 'Falta el id del registro.' });
+      if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: 'Número de PR inválido.' });
+      if (inFlight.has(id)) return res.status(409).json({ error: 'Ya hay una operación en curso para este fix.' });
+      inFlight.add(id);
+      try {
+        const entry = await linkPrToRegistry({ sessionId: id, prNumber: n, projectDir: config.projectDir, mode: 'manual' });
+        res.json({ ok: true, entry });
+      } catch (err) {
+        const msg = String(err?.message || err).slice(0, 300);
+        const code = /inválido|Falta/.test(msg) ? 400 : /No hay registro/.test(msg) ? 404 : /ya está vinculado|CERRADO/.test(msg) ? 409 : 502;
+        res.status(code).json({ error: msg });
+      } finally {
+        inFlight.delete(id);
+      }
     });
 
     // Cancela el PR de un fix subido y LIMPIA el registro a 'pendiente' (sin

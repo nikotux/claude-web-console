@@ -604,6 +604,37 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             borra el branch remoto y el registro vuelve LIMPIO a 'pendiente'
                             (sin campos de PR) para rehacer el fix de cero; un PR MERGEADO
                             nunca se cancela (se verifica el estado real con gh antes).
+                            VINCULACIÓN + RECONCILIACIÓN de PRs externos (bug 2026-07-05,
+                            caso FEAT-2/PR #249; patrón Desk #519/PR #232): un PR creado por
+                            FUERA del módulo "Enviar PR" (gh pr create desde un chat o un
+                            worktree externo) dejaba el registro huérfano PARA SIEMPRE
+                            ("falta enviar el PR" con el PR ya abierto) — extractFromTranscript
+                            solo mira tools Edit/Write (ignora Bash/gh) y prNumber solo lo
+                            escribían pushPr o refresh-prs FASE 2 (que solo refresca PRs YA
+                            registrados). TRES vías nuevas, UNA lógica (link-shared.js:
+                            applyPrLink mutación pura idempotente + linkPrToRegistry con gh
+                            pr view; NO importa core/config.js a propósito — exige CWC_TOKEN
+                            y haría exit fuera del repo): (1) RECONCILIACIÓN automática en
+                            refresh-prs — si un PR de gh pr list referencia (ticketOfPr:
+                            tkt-N / FEAT-n / #N) un registro SIN prNumber y el match es
+                            INEQUÍVOCO (exactamente UN candidato no archivado), lo ADOPTA
+                            (prNumber/prState/branch/status 'subido' + evento pr_vinculado
+                            {mode:'auto'}; cerrados sin merge y ambiguos NO se adoptan;
+                            respuesta expone linked[]); (2) POST /link-pr {id, prNumber}
+                            (admin) + botón "🔗 Vincular PR…" en el detalle (desktop) y menú
+                            ⋯ del action bar (móvil) para lo que el regex no ve (p.ej.
+                            "FEAT-1/2": solo captura FEAT-1); (3) PREVENCIÓN — el propio
+                            chat corre bin/cwc-bugfix-link.js en el MISMO turno del push
+                            (mode:'chat'); lo exigen el contexto 'work' (condición (e) de la
+                            excepción), DEFAULT_CONTEXTS.work y los gates de workPrompt/
+                            featurePrompt. ticketOfPr (motor) ahora entiende FEAT-n y
+                            devuelve la clave completa ('FEAT-2', no el dígito), con orden
+                            deliberado tkt-N → FEAT-n → #N (un título "Feature FEAT-2
+                            (#245)" da FEAT-2, no 245); el espejo del front (labels.js) igual
+                            + isFeatId gatea Desk en filas solo-GitHub de features (chip 💡,
+                            sin sección Zoho ni "Actualizar ticket"). Evento pr_vinculado en
+                            EV_LABEL/evDot. Un PR vinculado pasa a mantenerse solo (FASE 2
+                            de refresh-prs lo refresca como cualquier subido).
                             El chat registra al CERRAR una conversación con ticket (diferido
                             2s: el transcript se flushea tarde).
                             HISTORIAL por fix (history[] en cada registro, addEvent de
@@ -964,6 +995,17 @@ bin/cwc-health-resolve.js   marca UN hallazgo como RESUELTO (fixStatus:'resolved
                             Determinístico, 0 tokens, NO toca código. Reusa markFindingResolved
                             de health/shared.js (mismo helper que el endpoint POST /finding-resolve
                             del botón manual "Marcar resuelto")
+bin/cwc-bugfix-link.js      vincula un PR YA existente de GitHub a un registro del tablero
+                            Bugs & Features (pata de PREVENCIÓN del bug 2026-07-05 "el
+                            tablero no se entera del trabajo en los chats"): lo corre el
+                            PROPIO chat en el MISMO turno de un push hecho por fuera del
+                            módulo "Enviar PR" (excepción autorizada). Determinístico, 0
+                            tokens (patrón cwc-health-resolve): un gh pr view de LECTURA +
+                            escritura de bugfixes.json vía linkPrToRegistry de
+                            bugfixes/link-shared.js (la MISMA lógica del endpoint POST
+                            /link-pr y de la reconciliación de refresh-prs). NO importa
+                            core/config.js (haría exit fuera del repo): carga el .env por
+                            ruta explícita. Uso: cwc-bugfix-link.js <TKT-n|FEAT-n|sessionId> <nroPR>
 bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Desk (READ-ONLY
                             doble capa, allowlist desk_* de lectura; interfaz por archivos:
                             desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica

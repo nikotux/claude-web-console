@@ -27,7 +27,7 @@ import { stopAll } from './polls.js';
 import { rowKey, ticketOfPr, resolutionOf } from './labels.js';
 import { dismissablePopup } from '../../../ui/popup.js';
 
-export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose }) {
+export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, onClose, initialTab }) {
   const m = dialog.openModal({ title: 'Bugs & PRs — Tolkien', width: '90vw', onClose });
   m.card.classList.add('dlg-card--tickets');
   // El maxWidth INLINE de openModal le ganaría al media query fullscreen de
@@ -71,6 +71,9 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
 
   // Estado limpio por apertura (el store es singleton de módulo) + wiring.
   store.reset();
+  // Subvista inicial (opcional): el panel puede abrir el tablero directo en
+  // Tickets/Features/Archivados (clic en una columna). Validado contra la lista.
+  if (['tickets', 'features', 'archived'].includes(initialTab)) store.get().tab = initialTab;
   initRender({ icon, refs: mr });
   A.initActions({ dialog, openChat, projectRel, updateRepo });
   store.subscribe(render);
@@ -130,6 +133,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
         const t = (store.get().triage.tickets || []).find((x) => String(x.ticketNumber) === act.dataset.tkt);
         if (t) { m.close(); await A.workOnTriage(t); }
       } else if (act.dataset.act === 'work' && b) { m.close(); await A.workOn(b); }
+      else if (act.dataset.act === 'linkpr' && b) await A.linkPr(b);
       else if (act.dataset.act === 'deskchat' && b) { m.close(); await A.deskChat(b); }
       else if (act.dataset.act === 'cancelpr' && b) await A.cancelPr(b);
       else if (act.dataset.act === 'archive' && b) await A.archive(b, true);
@@ -171,6 +175,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
     const hasDesk = b.ticketNumber && b.kind !== 'feature'; // un FEAT-n no existe en Zoho
     if (hasDesk) items.push(['deskchat', 'edit', 'Responder ticket (chat)', false]);
     if (hasDesk) items.push(['deskload', 'download', 'Traer estado de Desk', false]);
+    if (!b.prNumber && !b.archived) items.push(['linkpr', 'gitBranch', 'Vincular PR existente…', false]);
     if (resolutionOf(b) !== 'complete' && !b.archived) items.push(['archive', 'check', 'Archivar', false]);
     if (b.status === 'subido' && b.prState !== 'merged') items.push(['cancelpr', 'trash', 'Cancelar PR', true]);
     items.push(['del', 'close', 'Descartar registro', true]);
@@ -189,6 +194,7 @@ export function openBugBoard({ dialog, icon, openChat, projectRel, updateRepo, o
       dismiss();
       const act = it.dataset.mact;
       if (act === 'deskchat') { m.close(); await A.deskChat(b); }
+      else if (act === 'linkpr') await A.linkPr(b);
       else if (act === 'deskload') await A.deskLoad(b.ticketNumber, false); // pinta en la sección Zoho Desk
       else if (act === 'archive') await A.archive(b, true);
       else if (act === 'cancelpr') await A.cancelPr(b);

@@ -11,7 +11,7 @@
 import { pacman } from '../../../ui/pacman.js';
 import { esc, fmtDate, fmtAgo } from './util.js';
 import {
-  ticketOfPr, timelineOf, EV_LABEL, evDot, resolutionOf, RES_CHIP, prEstado,
+  ticketOfPr, isFeatId, timelineOf, EV_LABEL, evDot, resolutionOf, RES_CHIP, prEstado,
   prCellFor, deskCellFor, OUTCOME_LABEL, rowKey, triageKey, ghKey,
   triageByNum, entriesByTicket, segmentOfEntry, segmentOfGh, cleanTitle,
   tabOfEntry,
@@ -457,6 +457,8 @@ function detailHtml(b, state) {
       ${b.prUrl ? `<a href="${esc(b.prUrl)}" target="_blank" rel="noopener">PR ${b.prNumber ? `#${esc(b.prNumber)}` : ''} ↗</a>` : ''}
       ${b.branch ? `<code>${esc(b.branch)}</code>` : ''}
       <button class="btn btn--sm" data-act="work"${dis}>${icon('sparkle', { size: 13 })}<span>Trabajar en esto</span></button>
+      ${!b.prNumber && !b.archived
+    ? `<button class="btn-ghost btn--sm" data-act="linkpr"${dis} title="Vincular un PR YA existente en GitHub (creado por fuera del módulo Enviar PR) a este registro: el tablero pasa a seguir su estado real">${icon('gitBranch', { size: 13 })}<span>Vincular PR…</span></button>` : ''}
       ${b.ticketNumber && b.kind !== 'feature'
     ? `<button class="btn-ghost btn--sm" data-act="deskchat"${dis} title="Abre un chat con TODO el contexto para redactar (en inglés) y publicar una respuesta en el ticket de Zoho Desk — vos aprobás la escritura">${icon('edit', { size: 13 })}<span>Responder ticket (chat)</span></button>` : ''}
       ${b.status === 'subido' && b.prState !== 'merged'
@@ -472,17 +474,18 @@ function detailHtml(b, state) {
 // panel de commits/reviews en vivo + estado de Desk + acción de actualizar.
 function ghDetailHtml(pr, state) {
   const ticket = ticketOfPr(pr);
+  const feat = isFeatId(ticket); // un FEAT-n no existe en Zoho: sin Desk acá
   return `
     ${invTopBox({ prNumber: pr.number, ticketNumber: ticket, title: pr.title }, state)}
     <div class="bb-chips">${ticket
-  ? `<span class="bb-chip bb-chip--info" title="Ticket detectado del título/branch del PR">🎫 pertenece a TKT #${esc(ticket)}</span>`
+  ? `<span class="bb-chip bb-chip--info" title="${feat ? 'Feature detectado del título/branch del PR' : 'Ticket detectado del título/branch del PR'}">${feat ? `💡 pertenece al feature ${esc(ticket)}` : `🎫 pertenece a TKT #${esc(ticket)}`}</span>`
   : '<span class="bb-chip bb-chip--warn" title="El título/branch no sigue la convención bugfix/tkt-N">sin ticket detectable</span>'}</div>
     ${pr.branch ? `<p class="hp-bf-files"><code>${esc(pr.branch)}</code></p>` : ''}
     ${liveBoxHtml(pr.number, state)}
-    ${ticket ? deskSectionHtml(ticket, state) : ''}
+    ${ticket && !feat ? deskSectionHtml(ticket, state) : ''}
     <p class="bb-links">
       <a href="${esc(pr.url)}" target="_blank" rel="noopener">Ver PR #${esc(pr.number)} en GitHub ↗</a>
-      ${ticket ? `<button class="btn-ghost btn--sm" data-act="ghdeskchat" data-prnum="${pr.number}" title="Abre un chat para redactar y publicar la actualización del ticket en Desk (vos aprobás la escritura)">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
+      ${ticket && !feat ? `<button class="btn-ghost btn--sm" data-act="ghdeskchat" data-prnum="${pr.number}" title="Abre un chat para redactar y publicar la actualización del ticket en Desk (vos aprobás la escritura)">${icon('edit', { size: 13 })}<span>Actualizar ticket (chat)</span></button>` : ''}
     </p>`;
 }
 
@@ -599,19 +602,20 @@ function triageMobileHtml(t, state) {
 // Detalle-foco de un PR solo-GitHub (móvil).
 function ghMobileHtml(pr, state) {
   const ticket = ticketOfPr(pr);
+  const feat = isFeatId(ticket); // un FEAT-n no existe en Zoho: sin Desk acá
   const inner = `
     ${invTopBox({ prNumber: pr.number, ticketNumber: ticket, title: pr.title }, state)}
     <div class="bb-chips">${ticket
-    ? `<span class="bb-chip bb-chip--info">🎫 pertenece a TKT #${esc(ticket)}</span>`
+    ? `<span class="bb-chip bb-chip--info">${feat ? `💡 pertenece al feature ${esc(ticket)}` : `🎫 pertenece a TKT #${esc(ticket)}`}</span>`
     : '<span class="bb-chip bb-chip--warn">sin ticket detectable</span>'}</div>
     ${pr.branch ? `<p class="hp-bf-files"><code>${esc(pr.branch)}</code></p>` : ''}
     ${focusSec('GitHub en vivo', null, liveBoxHtml(pr.number, state))}
-    ${ticket ? focusSec('Zoho Desk', null, deskSectionHtml(ticket, state)) : ''}
+    ${ticket && !feat ? focusSec('Zoho Desk', null, deskSectionHtml(ticket, state)) : ''}
     <p class="bb-links"><a href="${esc(pr.url)}" target="_blank" rel="noopener">Ver PR #${esc(pr.number)} en GitHub ↗</a></p>`;
-  const actionbar = ticket
+  const actionbar = ticket && !feat
     ? `<button class="btn btn--sm bb-ab-primary" data-act="ghdeskchat" data-prnum="${pr.number}">${icon('edit', { size: 14 })}<span>Actualizar ticket</span></button>`
     : '';
-  return focusWrap(`${ticket ? `#${esc(ticket)} · ` : ''}PR #${esc(pr.number)}`, inner, actionbar);
+  return focusWrap(`${ticket ? `${feat ? esc(ticket) : `#${esc(ticket)}`} · ` : ''}PR #${esc(pr.number)}`, inner, actionbar);
 }
 
 // ===== Render de la tabla (único punto de re-render, con scroll preservado) =====

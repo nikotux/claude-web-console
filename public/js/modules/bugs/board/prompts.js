@@ -53,6 +53,7 @@ export function workPrompt(b, { invText, workContext, prContext }) {
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
     '',
     '🚦 RECORDATORIO (gate del contexto de trabajo): antes de CUALQUIER push (git push / gh pr create|edit / actualizar PR) mostrá el PLAN DE PUSH y esperá mi OK explícito; recién ahí ejecutá de corrido.',
+    `🔗 Si el push termina saliendo por FUERA del módulo "Enviar PR" (excepción autorizada), en el MISMO turno ejecutá: node /home/nmosquera/claude-web-console/bin/cwc-bugfix-link.js ${b.ticketNumber} <nroPR> — vincula el PR al tablero (determinístico, 0 tokens); sin eso el registro queda huérfano.`,
     '',
     'Empezá mostrándome el diff actual de esos archivos contra origin/main y tu evaluación de qué falta o qué mejorarías.',
   ].filter(Boolean).join('\n');
@@ -82,6 +83,7 @@ export function featurePrompt(b, { invText, workContext, prContext }) {
     'OJO: no hay ticket de Desk detrás (no toques Desk). El respaldo del',
     `trabajo es este feature del tablero (${b.ticketNumber}); citalo en tu cierre.`,
     '🚦 GATE DE PUSH (igual que en bugs): antes de CUALQUIER push (git push / gh pr create|edit / actualizar PR) mostrá el PLAN DE PUSH y esperá mi OK explícito; recién ahí ejecutá de corrido.',
+    `🔗 Si el push termina saliendo por FUERA del módulo "Enviar PR" (excepción autorizada), en el MISMO turno ejecutá: node /home/nmosquera/claude-web-console/bin/cwc-bugfix-link.js ${b.ticketNumber} <nroPR> — vincula el PR al tablero (determinístico, 0 tokens); sin eso el registro queda huérfano (caso FEAT-2/PR #249).`,
     workContext ? `\n--- CONTEXTO DE TRABAJO (aplica lo general; lo específico de Desk NO corre acá) ---\n${workContext}\n---` : '',
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
   ].filter(Boolean).join('\n');
