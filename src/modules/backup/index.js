@@ -27,6 +27,15 @@
 //      toda la consola + sus módulos). Si falta `gh`/auth/red, NO rompe el
 //      push (que ya ocurrió) — solo se informa en la respuesta.
 //
+// Commit SIN push (POST /api/backup/commit, admin) — commit local descriptivo
+// de los cambios trackeados (+ untracked seleccionados con la MISMA guarda de
+// 3 capas del push). No toca el remote, no actualiza el changelog (eso sigue
+// siendo del push), no reinicia nada; reversible con git reset --soft. El
+// mensaje puede generarse con IA (POST /commit-message → job + runner
+// desacoplado bin/cwc-commitmsg-runner.js, haiku 1 turno CERO herramientas,
+// regla 6; GET /commit-message/:id solo lee disco) — siempre editable, con
+// fallback manual si la corrida falla.
+//
 // Pull desde GitHub (POST /api/backup/pull, admin) — restauración del CÓDIGO
 // desde el remote `personal` (la inversa del push): mismas guardas duras,
 // fetch + stash→merge --ff-only→pop (patrón de tolkien/update: NUNCA
@@ -44,6 +53,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAdmin } from '../../core/auth.js';
+import {
+  commitMsgJobId, readCommitMsgJob, writeCommitMsgJob, spawnCommitMsgRunner,
+  isFreshRunning, jobResult,
+} from './commitmsg-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(__dirname, '..', '..', '..');
@@ -93,27 +106,60 @@ async function personalUrl() {
   return r.code === 0 ? r.out : null;
 }
 
-// Valida TODAS las guardas de seguridad antes de cualquier push.
-async function securityGuards() {
+// Guardas de repo + secretos (sin remote): las necesita también el commit
+// local, que no toca GitHub. `verb` solo ajusta el texto del error.
+async function repoSecretGuards(verb = 'Push') {
   const inside = await git(['rev-parse', '--is-inside-work-tree']);
   if (inside.code !== 0 || inside.out !== 'true') return { ok: false, error: 'El proyecto no es un repositorio git.' };
-
-  const url = await personalUrl();
-  if (!url) return { ok: false, needsSetup: true, error: `No existe el remote "${REMOTE}". Configuralo vos (ver comandos).` };
-  if (FORBIDDEN_URL_RE.test(url)) return { ok: false, error: `El remote "${REMOTE}" apunta a Mordor-Staffing (${url}). Push BLOQUEADO.` };
 
   // Ningún secreto versionado.
   const tracked = lines((await git(['ls-files'])).out);
   const leaked = tracked.filter((f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)));
-  if (leaked.length) return { ok: false, error: `Hay secretos versionados: ${leaked.join(', ')}. Push BLOQUEADO.` };
+  if (leaked.length) return { ok: false, error: `Hay secretos versionados: ${leaked.join(', ')}. ${verb} BLOQUEADO.` };
 
   // Cada secreto que existe en disco DEBE seguir ignorado (atrapa regresión de .gitignore).
   for (const p of [...SECRET_PATHS, ...SECRET_DIRS]) {
     if (!fs.existsSync(path.join(PROJECT_DIR, p))) continue;
     const ig = await git(['check-ignore', '-q', p]);
-    if (ig.code !== 0) return { ok: false, error: `"${p}" existe pero NO está en .gitignore. Push BLOQUEADO.` };
+    if (ig.code !== 0) return { ok: false, error: `"${p}" existe pero NO está en .gitignore. ${verb} BLOQUEADO.` };
   }
+  return { ok: true };
+}
+
+// Valida TODAS las guardas de seguridad antes de cualquier push (repo +
+// secretos + remote personal válido).
+async function securityGuards() {
+  const url = await personalUrl();
+  if (!url) return { ok: false, needsSetup: true, error: `No existe el remote "${REMOTE}". Configuralo vos (ver comandos).` };
+  if (FORBIDDEN_URL_RE.test(url)) return { ok: false, error: `El remote "${REMOTE}" apunta a Mordor-Staffing (${url}). Push BLOQUEADO.` };
+
+  const base = await repoSecretGuards('Push');
+  if (!base.ok) return base;
   return { ok: true, url };
+}
+
+// Selección de untracked (compartida por push y commit): 3 capas — (1) solo lo
+// que git YA lista como untracked no-ignorado; (2) re-validación anti-secretos;
+// (3) nada viaja sin selección humana explícita (la lista viene del diálogo).
+function selectUntracked(requested, untrackedNow) {
+  const req = Array.isArray(requested) ? requested.map(String).slice(0, 200) : [];
+  const includable = req.filter((f) => untrackedNow.includes(f));
+  const blockedSecrets = includable.filter(
+    (f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)),
+  );
+  return { includable, blockedSecrets };
+}
+
+// Sanea el mensaje de commit: sin caracteres de control (salvo saltos de
+// línea), tope de tamaño; vacío => null.
+function sanitizeCommitMessage(raw) {
+  const m = String(raw ?? '')
+    .replace(/\r/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 2000);
+  return m || null;
 }
 
 // ===== Changelog en inglés (README.md) + descripción del repo en GitHub =====
@@ -339,13 +385,17 @@ export default {
         const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'HEAD';
         const excluded = [...SECRET_PATHS, ...SECRET_DIRS].filter((p) => fs.existsSync(path.join(PROJECT_DIR, p)));
         const untracked = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
-        const dirty = lines((await git(['diff', '--name-only'])).out);
+        // Contra HEAD (no solo el working tree): incluye también lo ya
+        // stageado — es lo que un commit va a llevarse. Formato name-status
+        // ("M\tpath") para que el diálogo de Commit muestre QUÉ cambia.
+        const dirty = lines((await git(['diff', 'HEAD', '--name-status'])).out);
         res.json({
           isRepo: true,
           branch,
           remote: url ? { name: REMOTE, url, forbidden: FORBIDDEN_URL_RE.test(url) } : null,
           excluded,
           untracked,
+          dirty,
           dirtyCount: dirty.length,
           lastCommit: (await git(['log', '-1', '--format=%h %s'])).out || null,
           setupCommands: [
@@ -370,19 +420,9 @@ export default {
         const untrackedNow = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
 
         // Untracked SELECCIONADOS explícitamente desde el diálogo de push
-        // (checkbox por archivo). La guarda anti-secretos se mantiene en tres
-        // capas: (1) solo se acepta lo que git YA lista como untracked
-        // no-ignorado (un .env ignorado ni aparece en esa lista, así que no
-        // es seleccionable ni inyectable); (2) igual se re-valida contra
-        // SECRET_PATHS/SECRET_DIRS por si un secreto quedara sin ignorar;
-        // (3) nada viaja sin selección humana archivo por archivo.
-        const requested = Array.isArray(req.body?.includeUntracked)
-          ? req.body.includeUntracked.map(String).slice(0, 200)
-          : [];
-        const includable = requested.filter((f) => untrackedNow.includes(f));
-        const blockedSecrets = includable.filter(
-          (f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)),
-        );
+        // (checkbox por archivo). Guarda anti-secretos de 3 capas en
+        // selectUntracked() — compartida con el commit sin push.
+        const { includable, blockedSecrets } = selectUntracked(req.body?.includeUntracked, untrackedNow);
         if (blockedSecrets.length) {
           return res.status(403).json({ error: `Secreto(s) en la selección: ${blockedSecrets.join(', ')}. Push BLOQUEADO.` });
         }
@@ -449,6 +489,92 @@ export default {
         // Rechazo de git()/ghCmd() (timeout/señal/binario ausente): el motivo
         // real llega al usuario en vez de un genérico indistinguible.
         res.status(500).json({ error: `Falló el push: ${e?.message || e}` });
+      } finally {
+        busy = false;
+      }
+    });
+
+    // ===== Commit SIN push (ver bloque de decisiones en la cabecera) =====
+    // Generación IA del mensaje: el POST captura el estado del árbol (diff +
+    // archivos) EN NODE, escribe el job y spawnea el runner desacoplado
+    // (regla de oro — sobrevive a un reinicio); el GET solo lee disco.
+    r.post('/commit-message', async (req, res) => {
+      try {
+        const g = await repoSecretGuards('Commit');
+        if (!g.ok) return res.status(403).json({ error: g.error });
+
+        const files = lines((await git(['diff', 'HEAD', '--name-status'])).out);
+        const untrackedNow = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
+        const { includable } = selectUntracked(req.body?.includeUntracked, untrackedNow);
+        if (!files.length && !includable.length) {
+          return res.status(409).json({ error: 'No hay cambios para describir.' });
+        }
+
+        // Diff para el prompt: tope de 30k chars (haiku no necesita más). Un
+        // diff gigante puede reventar el maxBuffer default de execFile — en
+        // ese caso se cae al resumen --stat (la lista de archivos ya viaja).
+        let diff = '';
+        try { diff = (await git(['diff', 'HEAD'])).out.slice(0, 30000); }
+        catch { try { diff = (await git(['diff', 'HEAD', '--stat'])).out.slice(0, 30000); } catch { /* sin diff */ } }
+
+        // Identidad determinística por estado del árbol: doble click o retry
+        // apuntan al MISMO job (sin runner duplicado); si ya terminó, se reusa.
+        const id = commitMsgJobId(`${files.join('|')}::${includable.join('|')}::${diff}`);
+        const existing = readCommitMsgJob(id);
+        if (existing && (isFreshRunning(existing) || existing.status === 'done')) {
+          return res.json({ ok: true, id, reused: true });
+        }
+        writeCommitMsgJob(id, {
+          status: 'running', startedAt: Date.now(),
+          files, untracked: includable, diff,
+        });
+        spawnCommitMsgRunner(id);
+        res.json({ ok: true, id });
+      } catch (e) {
+        res.status(500).json({ error: `No se pudo lanzar la generación: ${e?.message || e}` });
+      }
+    });
+
+    r.get('/commit-message/:id', (req, res) => {
+      const id = String(req.params.id || '');
+      if (!/^[a-f0-9]{24}$/.test(id)) return res.status(400).json({ error: 'Id inválido.' });
+      const job = readCommitMsgJob(id);
+      if (!job) return res.status(404).json({ error: 'Ese job no existe (¿se limpió?).' });
+      res.json(jobResult(job));
+    });
+
+    r.post('/commit', async (req, res) => {
+      if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
+      busy = true;
+      try {
+        const g = await repoSecretGuards('Commit');
+        if (!g.ok) return res.status(403).json({ error: g.error });
+
+        const message = sanitizeCommitMessage(req.body?.message);
+        if (!message) return res.status(400).json({ error: 'Falta el mensaje del commit.' });
+
+        // Untracked seleccionados: mismas 3 capas anti-secretos que el push.
+        const untrackedNow = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
+        const { includable, blockedSecrets } = selectUntracked(req.body?.includeUntracked, untrackedNow);
+        if (blockedSecrets.length) {
+          return res.status(403).json({ error: `Secreto(s) en la selección: ${blockedSecrets.join(', ')}. Commit BLOQUEADO.` });
+        }
+        for (const f of includable) {
+          const a = await git(['add', '--', f]);
+          if (a.code !== 0) return res.status(500).json({ error: `No se pudo agregar "${f}": ${a.stderr || a.out}` });
+        }
+
+        // Trackeados modificados/borrados + untracked recién stageados.
+        await git(['add', '-u']);
+        const staged = lines((await git(['diff', '--cached', '--name-only'])).out);
+        if (!staged.length) return res.status(409).json({ error: 'No hay cambios para commitear.' });
+
+        const c = await git(['commit', '-m', message]);
+        if (c.code !== 0) return res.status(500).json({ error: `No se pudo commitear: ${c.stderr || c.out}` });
+        const committed = (await git(['rev-parse', '--short', 'HEAD'])).out;
+        res.json({ ok: true, committed, staged, includedUntracked: includable });
+      } catch (e) {
+        res.status(500).json({ error: `Falló el commit: ${e?.message || e}` });
       } finally {
         busy = false;
       }

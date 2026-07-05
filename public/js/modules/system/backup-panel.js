@@ -197,10 +197,12 @@ export function mountBackupPanel(el, ctx) {
       <p class="bk-git-out">Queda FUERA (ignorado): <span class="bk-git-secrets">${esc(excluded)}</span></p>
       ${info.untracked?.length ? `<p class="bk-git-out">${info.untracked.length} archivo(s) nuevos sin trackear — al hacer Push podés elegir cuáles incluir.</p>` : ''}
       <p class="bk-git-out">${info.dirtyCount ? `${info.dirtyCount} cambio(s) trackeado(s) pendientes` : 'Sin cambios pendientes'}${info.lastCommit ? ` · último: <code>${esc(info.lastCommit)}</code>` : ''}</p>
+      <button class="btn-ghost btn--block" data-ref="commit" title="Commit local descriptivo de los cambios pendientes — NO empuja nada a GitHub (eso sigue siendo Push)">${icon('gitCommit', { size: 15 })}<span>Commit (sin push)</span></button>
       <button class="btn btn--block" data-ref="push">${icon('upload', { size: 15 })}<span>Push a GitHub ahora</span></button>
       <button class="btn-ghost btn--block" data-ref="pull" title="Trae el código desde GitHub (restauración): fetch + fast-forward; tus cambios locales quedan a salvo en un stash que se reaplica">${icon('download', { size: 15 })}<span>Pull desde GitHub (restaurar)</span></button>
       <p class="bk-msg" data-ref="gmsg" hidden></p>`;
 
+    const commitBtn = refs.git.querySelector('[data-ref="commit"]');
     const pushBtn = refs.git.querySelector('[data-ref="push"]');
     const pullBtn = refs.git.querySelector('[data-ref="pull"]');
     const gmsg = refs.git.querySelector('[data-ref="gmsg"]');
@@ -239,6 +241,128 @@ export function mountBackupPanel(el, ctx) {
         });
       });
     }
+
+    // Diálogo de commit: lista de cambios trackeados (solo lectura) +
+    // checkboxes de untracked (mismo patrón que el push: nada nuevo viaja sin
+    // selección explícita) + mensaje editable con "Generar con IA" a demanda
+    // (job + runner desacoplado; acá solo se encuesta el resultado).
+    function commitDialog() {
+      return new Promise((resolve) => {
+        let alive = true;
+        const m = dialog.openModal({
+          title: 'Commit (sin push)', width: 520,
+          onClose: () => { alive = false; resolve(null); },
+        });
+        const box = document.createElement('div');
+        const dirty = info.dirty || [];
+        const fmtStatus = (l) => {
+          const [code, ...paths] = l.split('\t');
+          return `<b>${esc((code || '')[0] || '?')}</b> <code>${esc(paths.join(' → '))}</code>`;
+        };
+        box.innerHTML = `
+          <p class="dlg-msg">Commit LOCAL de los cambios pendientes — no toca GitHub (el push sigue siendo el otro botón). Reversible con git.</p>
+          ${dirty.length ? `
+            <div class="bk-untracked">
+              ${dirty.map((l) => `<div class="bk-untracked-item">${fmtStatus(l)}</div>`).join('')}
+            </div>` : '<p class="dlg-msg">Sin cambios trackeados pendientes.</p>'}
+          ${info.untracked?.length ? `
+            <p class="dlg-msg"><b>Archivos NUEVOS sin trackear</b> — marcá los que quieras incluir (sin marcar, quedan afuera):</p>
+            <div class="bk-untracked">
+              ${info.untracked.map((f) => `<label class="bk-untracked-item"><input type="checkbox" value="${esc(f)}"><code>${esc(f)}</code></label>`).join('')}
+            </div>` : ''}
+          <textarea class="dlg-editor-text" data-ref="cmsg" rows="4" spellcheck="false" placeholder="Mensaje del commit (en español, asunto ≤72 caracteres)…"></textarea>
+          <p class="bk-msg" data-ref="gen-state" hidden></p>
+          <div class="dlg-actions">
+            <button class="btn-ghost" data-ref="gen" title="Genera una propuesta de mensaje con IA (haiku, corrida corta) — siempre editable">${icon('sparkle', { size: 14 })}<span>Generar con IA</span></button>
+            <button class="btn-ghost" data-ref="cancel">Cancelar</button>
+            <button class="btn" data-ref="ok">Commit</button>
+          </div>`;
+        m.body.appendChild(box);
+
+        const ta = box.querySelector('[data-ref="cmsg"]');
+        const genBtn = box.querySelector('[data-ref="gen"]');
+        const genState = box.querySelector('[data-ref="gen-state"]');
+        const selected = () => [...box.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
+        const state = (t, kind = 'info', { running = false } = {}) => {
+          if (running) genState.innerHTML = `${pacman()} ${t}`;
+          else genState.textContent = t;
+          genState.className = `bk-msg ${kind}`;
+          genState.hidden = !t;
+        };
+
+        genBtn.addEventListener('click', async () => {
+          genBtn.disabled = true;
+          state('Generando mensaje con IA…', 'info', { running: true });
+          try {
+            const res = await fetch(`${API}/commit-message`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ includeUntracked: selected() }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.error || 'No se pudo lanzar la generación.');
+            // Encuesta resiliente: el runner es desacoplado, el GET solo lee
+            // disco; si se cierra el modal, se deja de encuestar y ya.
+            const t0 = Date.now();
+            while (alive && Date.now() - t0 < 95000) {
+              await new Promise((ok) => setTimeout(ok, 1500));
+              const jr = await fetch(`${API}/commit-message/${d.id}`);
+              const j = await jr.json().catch(() => ({}));
+              if (!jr.ok) throw new Error(j.error || 'Se perdió el job de generación.');
+              if (j.status === 'running') continue;
+              if (j.status === 'done' && j.message) {
+                ta.value = j.message;
+                state('');
+              } else {
+                throw new Error(j.error || 'La generación falló — escribí el mensaje a mano.');
+              }
+              return;
+            }
+            if (alive) throw new Error('La generación tardó demasiado — escribí el mensaje a mano.');
+          } catch (e) {
+            if (alive) state(e.message, 'err');
+          } finally {
+            genBtn.disabled = false;
+          }
+        });
+
+        box.querySelector('[data-ref="cancel"]').addEventListener('click', () => m.close());
+        box.querySelector('[data-ref="ok"]').addEventListener('click', () => {
+          const message = ta.value.trim();
+          if (!message) { state('Escribí (o generá) el mensaje del commit.', 'err'); return; }
+          alive = false;
+          resolve({ message, includeUntracked: selected() });
+          m.close();
+        });
+      });
+    }
+
+    commitBtn.addEventListener('click', async () => {
+      if (busy) return;
+      const sel = await commitDialog();
+      if (!sel) return; // canceló
+      setBusy(true); commitBtn.disabled = true;
+      setGMsg('Commiteando…', 'info', { running: true });
+      try {
+        const res = await fetch(`${API}/commit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sel),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Falló el commit.');
+        const parts = [`commit ${data.committed}`, `${data.staged.length} archivo(s)`];
+        if (data.includedUntracked?.length) parts.push(`${data.includedUntracked.length} nuevo(s) incluidos`);
+        parts.push('sin push (usá "Push a GitHub" cuando quieras respaldarlo)');
+        setGMsg(parts.join(' · '), 'ok');
+        loadGit();
+      } catch (e) {
+        setGMsg(e.message, 'err');
+      } finally {
+        setBusy(false);
+        commitBtn.disabled = false; // tras un error, el botón sigue usable (el éxito re-renderiza)
+      }
+    });
 
     pushBtn.addEventListener('click', async () => {
       if (busy) return;
