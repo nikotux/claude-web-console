@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-06 15:45 — redesign/board-mobile
+- Implementar AutoTux, interfono global y flujos interactivos mejorados
+
 ### 2026-07-06 05:48 — redesign/board-mobile
 - Motor de estados Pac-Man: catálogo central + fix de reactivación en TUI/interfono
 - Migrar Salud, Bugs, Backup, Uso y Proyectos al motor Pac-Man
