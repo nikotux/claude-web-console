@@ -13,37 +13,35 @@
 //   - bin/cwc-bugfix-link.js (el propio chat lo corre tras publicar por la
 //     excepción autorizada — patrón cwc-health-resolve, determinístico, 0 tokens)
 //
-// OJO: este módulo NO importa core/config.js a propósito — config exige
-// CWC_TOKEN y hace process.exit fuera del repo, y el CLI corre desde cualquier
-// cwd (p.ej. ~/tolkien). El projectDir para gh viaja por parámetro.
-import { execFile } from 'node:child_process';
+// OJO: este módulo NO importa core/config.js EN TOP-LEVEL a propósito — config
+// exige CWC_TOKEN y hace process.exit fuera del repo, y el CLI corre desde
+// cualquier cwd (p.ej. ~/tolkien). El projectDir para gh viaja por parámetro.
+// La lectura del PR se DELEGA en comms/pr-read-shared.js (fetchPrRich, LECTOR
+// ÚNICO de un PR con caché 60 s — Fase C), pero con import() DINÁMICO dentro
+// de fetchPr(): pr-read-shared importa core/config.js, y un import estático
+// acá se hoistearía ANTES del dotenv.config() por ruta explícita del CLI
+// cwc-bugfix-link.js (ESM) → exit(1) por CWC_TOKEN ausente. Para cuando
+// fetchPr() se ejecuta, el .env de la consola ya está cargado.
 import { listBugfixes, saveBugfixes, addEvent } from './store.js';
 
 export const normalizePrState = (s) => (s === 'MERGED' ? 'merged' : s === 'CLOSED' ? 'closed' : 'open');
 
-// gh pr view → objeto normalizado (LECTURA de red; cwd = repo de Tolkien).
-export function fetchPr(prNumber, projectDir) {
-  return new Promise((resolve, reject) => {
-    execFile('gh', [
-      'pr', 'view', String(prNumber),
-      '--json', 'number,state,url,title,createdAt,headRefName,mergedAt,mergedBy,additions,deletions,changedFiles',
-    ], { cwd: projectDir, timeout: 60000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(`gh pr view: ${String(stderr || err.message).trim().slice(0, 300)}`));
-      let pr;
-      try { pr = JSON.parse(stdout); } catch { return reject(new Error('gh pr view: respuesta no parseable.')); }
-      resolve({
-        number: pr.number,
-        state: normalizePrState(pr.state),
-        url: pr.url || null,
-        title: pr.title || '',
-        headRefName: pr.headRefName || null,
-        createdAt: pr.createdAt ? Date.parse(pr.createdAt) : null,
-        mergedAt: pr.mergedAt ? Date.parse(pr.mergedAt) : null,
-        mergedBy: pr.mergedBy?.login || null,
-        stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
-      });
-    });
-  });
+// fetchPrRich (lector canónico) → objeto normalizado al shape que consume
+// applyPrLink (LECTURA de red con caché 60 s; cwd = repo de Tolkien).
+export async function fetchPr(prNumber, projectDir) {
+  const { fetchPrRich } = await import('../comms/pr-read-shared.js');
+  const pr = await fetchPrRich(prNumber, { cwd: projectDir });
+  return {
+    number: pr.number,
+    state: normalizePrState(pr.state),
+    url: pr.url || null,
+    title: pr.title || '',
+    headRefName: pr.headRefName || null,
+    createdAt: pr.createdAt ? Date.parse(pr.createdAt) : null,
+    mergedAt: pr.mergedAt ? Date.parse(pr.mergedAt) : null,
+    mergedBy: pr.mergedBy?.login || null,
+    stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
+  };
 }
 
 // Mutación PURA (sin I/O): aplica el vínculo al registro. `pr` ya normalizado

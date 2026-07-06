@@ -17,7 +17,7 @@
 //        tipeado a la TUI); ahora las conversaciones también lo tienen desde
 //        el menú ⋯ de Sesiones.
 // WS  /ws/chat?id=<id>
-//   c->s: {type:'user', text} · {type:'permission_response', id, allow}
+//   c->s: {type:'user', text} · {type:'permission_response', id, allow[, answers]}
 //         {type:'interrupt'} · {type:'set_mode', mode} · {type:'set_model', model}
 //   s->c: {type:'history', events, slashCommands} · {type:'user', text} · {type:'delta', text}
 //         {type:'tool_use', name, summary} · {type:'result', costUsd, usage, ms}
@@ -25,6 +25,31 @@
 //         {type:'mode', mode} · {type:'model', model} · {type:'error', message} · {type:'closed'}
 //         {type:'meta', slashCommands:[{name,description|null}]} (Fase 8:
 //          comandos del init, enriquecidos con el frontmatter de los SKILL.md)
+//
+// ROUTER DE MODELO AUTOMÁTICO (2026-07-06, Fase 1 — núcleo en
+// core/model-router.js): en cada turno real del usuario (sendUser),
+// _applyModelRouter() corre una heurística 0-costo (¿mensaje trivial? ¿trae
+// código? ¿es muy largo?) con histéresis de dos umbrales (sube apenas se
+// detecta algo más difícil; baja recién tras 3 turnos simples SEGUIDOS, un
+// escalón por vez — nunca de un salto) y aplica el cambio con el MISMO
+// setModel() de siempre. Techo deliberado en `opus`: subir a `fable` sigue
+// siendo manual (ver el porqué en core/model-router.js). Inerte a propósito
+// si el modelo del chat no es exactamente haiku/sonnet/opus/fable — elegir
+// `opusplan`/`default` (o no elegir nada) apaga el modo automático sin
+// necesitar un toggle nuevo en la UI. El contador de histéresis
+// (`_routerDownStreak`) se persiste junto al resto del chat (persist()/
+// rehydrate()); el NIVEL en sí NUNCA se duplica, se deriva de `this.model`.
+// FASE 2 (2026-07-06, sumada al mismo núcleo): cuando la heurística no sabe
+// qué opinar (`ambiguous:true`), _applyModelRouter consulta a Haiku
+// (classifyComplexity, patrón defensivo idéntico a extractTitle — 1 turno,
+// READ-ONLY doble capa) en SEGUNDO PLANO (fire-and-forget, `_routerClassifying`
+// evita solapes) — VERIFICADO EN CALIENTE que el solo arranque de query()
+// tarda ~2-3s antes de que Haiku conteste una palabra, así que NUNCA se
+// espera en línea: si contesta a tiempo, gobierna el modelo del PRÓXIMO
+// turno (o este mismo si el motor todavía no arrancó a responder). Además,
+// escalado REACTIVO: al terminar un turno (_setStatus('waiting')), si usó ≥6
+// tool_use de golpe (_turnToolCount, efímero, no persiste), sube un escalón
+// para el PRÓXIMO turno — señal barata de "esto pesó más de lo esperado".
 import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
@@ -34,6 +59,7 @@ import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
+import { decideModelForTurn, applyHysteresis, reactiveEscalation, logDecision, MODEL_LEVELS } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
@@ -43,9 +69,43 @@ import {
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
 import { recordBugfix } from '../bugfixes/store.js';
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
+import * as bus from '../../core/bus.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
+
+// Respuesta de AskUserQuestion desde el cliente: mapa texto-de-pregunta -> label
+// elegido (string; multiSelect = labels con coma). Se sanea antes de reenviarla
+// al runner: solo pares string->string, claves/valores acotados, tope de 4
+// preguntas (contrato del SDK). Devuelve null si no hay nada válido.
+function sanitizeAnswers(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(raw)) {
+    if (n >= 4) break;
+    if (typeof k !== 'string' || typeof v !== 'string') continue;
+    const key = k.slice(0, 400);
+    const val = v.slice(0, 600);
+    if (!key || !val) continue;
+    out[key] = val;
+    n += 1;
+  }
+  return n ? out : null;
+}
+
+// ===== Entrega del INTERFONO a los chats (core/bus.js) =====
+// Una TUI recibe un mensaje del interfono por un "nudge" (send-keys) que la
+// despierta EN VIVO; un chat del SDK NO: solo "ve" el mensaje cuando toma un
+// turno (el hook-inject corre en UserPromptSubmit — settingSources: ['user']).
+// Por eso, para el chat visual (superficie principal de trabajo; la TUI es
+// backup), esta plomería (a) AUTO-ENTREGA el mensaje a los chats abiertos y
+// ociosos inyectando un turno sintético (paridad con el nudge idle de la TUI),
+// y (b) expone los pendientes en /api/chat/list para el popup global
+// (public/js/ui/interfono-center.js) + el botón "Retomar" (que despierta
+// incluso un chat dormido, a demanda del usuario — 0 tokens fantasma).
+const CWC_BUS = path.join(CONSOLE_ROOT, 'bin', 'cwc-bus.js'); // CLI del interfono
+const INTERFONO_POLL_MS = 12000; // watcher server-side de entrega a chats abiertos+ociosos
 
 // ===== Auto-título con IA (Haiku) =====
 // En cada mensaje del usuario se extrae EN PARALELO (jamás bloquea el turno)
@@ -107,6 +167,76 @@ async function extractTitle({ cwd, current, text }) {
   }
   // Saneo duro: una línea, sin comillas, tope de caracteres SIEMPRE.
   return out.replace(/["'«»`]/g, '').split('\n')[0].trim().slice(0, AUTOTITLE_MAX_LEN);
+}
+
+// ===== Router de modelo: clasificador barato para turnos ambiguos (Fase 2) =====
+// Cuando la heurística 0-costo de core/model-router.js no sabe qué opinar
+// (ni obviamente trivial ni obviamente pesado), esta corrida MÍNIMA con Haiku
+// (1 turno, READ-ONLY doble capa regla 6 — mismo patrón defensivo que
+// extractTitle de arriba) devuelve un nivel sugerido. Confirmado con datos
+// reales de esta consola (2026-07-06): clasificar con Haiku sale ~0,005% del
+// gasto real medido — no hace falta pelear por evitarlo. OJO DE LATENCIA
+// (verificado en caliente 2026-07-06): el arranque de query() por sí solo
+// (proceso del SDK + init) tarda ~2-3s ANTES de que Haiku responda una sola
+// palabra — muy por encima de lo que un turno puede esperar sin sentirse
+// roto. Por eso esto NUNCA bloquea el despacho del turno (ver
+// _applyModelRouter): corre en SEGUNDO PLANO, patrón fire-and-forget idéntico
+// a _autoTitle, con timeout+interrupt generoso (mismo orden que
+// AUTOTITLE_TIMEOUT_MS) solo para no dejar el proceso colgado para siempre.
+const ROUTER_CLASSIFY_TIMEOUT_MS = 20000;
+// Mismo techo que la heurística de Fase 1 (core/model-router.js): el
+// clasificador tampoco sugiere nunca 'fable' sola.
+const ROUTER_LEVEL_NAMES = ['trivial', 'normal', 'complejo']; // -> MODEL_LEVELS[0]=haiku [1]=sonnet [2]=opus
+
+async function classifyComplexity({ cwd, text }) {
+  const q = query({
+    prompt:
+      'Clasificá la COMPLEJIDAD de este pedido para elegir qué modelo de IA debería responderlo. ' +
+      'Respondé UNA sola palabra, sin nada más: "trivial" (saludo, confirmación, charla liviana), ' +
+      '"normal" (pregunta o tarea acotada, de dificultad media) o "complejo" (requiere código, ' +
+      'análisis profundo, o tocar varias partes de un sistema).\n' +
+      `Pedido: «${String(text || '').slice(0, 1000)}»`,
+    options: {
+      cwd,
+      model: 'haiku',
+      maxTurns: 1,
+      permissionMode: 'default',
+      settingSources: [], // patrón projects/analyzeChange: sin herramientas, solo clasifica texto
+      hooks: {
+        PreToolUse: [{
+          hooks: [async () => ({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: 'Router de modelo: sin herramientas.',
+            },
+          })],
+        }],
+      },
+      canUseTool: async () => ({ behavior: 'deny', message: 'Router de modelo: sin herramientas.' }),
+    },
+  });
+  let out = '';
+  let timer = null;
+  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), ROUTER_CLASSIFY_TIMEOUT_MS); });
+  const pump = (async () => {
+    for await (const m of q) {
+      if (m.type === 'assistant') {
+        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
+      } else if (m.type === 'result') break;
+    }
+  })();
+  try {
+    await Promise.race([pump, timeout]);
+  } catch {
+    try { q.interrupt?.(); } catch { /* noop */ }
+    return null; // timeout u otro error: seguimos tratando el turno como ambiguo
+  } finally {
+    clearTimeout(timer);
+  }
+  const word = out.toLowerCase().replace(/[^a-záéíóúñ]/g, '').trim();
+  const idx = ROUTER_LEVEL_NAMES.indexOf(word);
+  return idx === -1 ? null : idx;
 }
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
@@ -269,7 +399,23 @@ class Chat {
   constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
     this.id = id;
     this.cwd = cwd;
-    this.model = model || null;
+    // AutoTux (2026-07-06): `modelChoice` es QUÉ ELIGIÓ LA PERSONA (auto |
+    // opusplan | fable | opus | sonnet | haiku | default | null=sin elegir);
+    // `this.model` es lo que corre DE VERDAD contra el SDK/CLI real y NUNCA
+    // vale 'auto' (el CLI no conoce ese alias — ver core/model-router.js y
+    // setModelChoice() para el porqué). Con 'auto', el router (Fase 1-3)
+    // gestiona `this.model` mientras `modelChoice` se queda fijo en 'auto'
+    // para siempre — el badge nunca deja de decir "AutoTux". Con cualquier
+    // otro valor, modelChoice y model son EL MISMO valor (forzado, sin
+    // router) — así una creación directa con model:'sonnet' (sin pasar por
+    // setModelChoice) ya queda coherente sin casos especiales aparte.
+    if (model === 'auto') {
+      this.modelChoice = 'auto';
+      this.model = 'sonnet'; // punto de partida razonable; el router lo ajusta desde acá
+    } else {
+      this.modelChoice = model || null;
+      this.model = model || null;
+    }
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
@@ -295,6 +441,17 @@ class Chat {
     // la pestaña del chat abierta (antes esto solo vivía en el frontend,
     // como ícono de tool call, invisible para la tarjeta de Sesiones).
     this._delegatingIds = new Set();
+    // Router de modelo automático (núcleo: core/model-router.js, Fase 1,
+    // 2026-07-06): contador de turnos "simples" seguidos para la histéresis
+    // de bajada. El NIVEL en sí no se duplica acá — se deriva de `this.model`
+    // en cada turno (decideModelForTurn), así que solo hace falta persistir
+    // este contador chico (ver _applyModelRouter/persist()/rehydrate()).
+    this._routerDownStreak = 0;
+    // Fase 2: tool_use del turno EN CURSO (para el escalado reactivo — ver
+    // _applyReactiveEscalation). Efímero a propósito: no se persiste, un
+    // reinicio del server a mitad de turno como mucho pierde la señal de ESE
+    // turno puntual, no la histéresis general.
+    this._turnToolCount = 0;
   }
 
   start() {
@@ -381,11 +538,19 @@ class Chat {
         this._push(e);
         this.onUpdate?.(); // persistir el modo de permisos confirmado por el runner
         return;
-      case 'model':
+      case 'model': {
         this.model = e.model;
-        this._push(e);
+        // `auto` (Fase 3, indicador visible): el router marca la intención
+        // ANTES de mandar set_model al runner (_pendingModelAuto); acá se
+        // consume esa marca para taguear el eco real con el mismo origen —
+        // el frontend usa `auto` para mostrar la notita "🤖 cambió solo" vs.
+        // un cambio manual del selector (que no toca _pendingModelAuto).
+        const auto = !!this._pendingModelAuto;
+        this._pendingModelAuto = false;
+        this._push({ ...e, auto });
         this.onUpdate?.(); // persistir el modelo confirmado por el runner
         return;
+      }
       case 'result': {
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
@@ -403,12 +568,17 @@ class Chat {
         // trajo (runners viejos, pre-deploy) — el centro global de permisos
         // la usa para la cuenta regresiva de expiración (PERMISSION_TIMEOUT_MS).
         if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
-        // Estado "delegando" (ver PAC_STATES en ui/pacman.js): un tool_use
-        // Task/Agent abre la espera de un subagente; su tool_result la cierra
-        // (mismo patrón de matching que TOOL_TYPE_ICONS del frontend, acá
-        // server-side para que /api/chat/list lo vea sin la pestaña abierta).
-        if (e.type === 'tool_use' && /^(Task|Agent)/i.test(e.name || '')) {
-          this._delegatingIds.add(e.id);
+        if (e.type === 'tool_use') {
+          // Contador del turno en curso (Fase 2 del router de modelo — ver
+          // _applyReactiveEscalation): CUALQUIER herramienta cuenta, no solo
+          // Task/Agent.
+          this._turnToolCount = (this._turnToolCount || 0) + 1;
+          // Estado "delegando" (ver PAC_STATES en ui/pacman.js): un tool_use
+          // Task/Agent abre la espera de un subagente; su tool_result la
+          // cierra (mismo patrón de matching que TOOL_TYPE_ICONS del
+          // frontend, acá server-side para que /api/chat/list lo vea sin la
+          // pestaña abierta).
+          if (/^(Task|Agent)/i.test(e.name || '')) this._delegatingIds.add(e.id);
         } else if (e.type === 'tool_result' && this._delegatingIds.has(e.id)) {
           this._delegatingIds.delete(e.id);
         }
@@ -443,6 +613,67 @@ class Chat {
       ts: e.ts || null,
       expiresAt: e.ts ? e.ts + PERMISSION_TIMEOUT_MS : null,
     }));
+  }
+
+  // ===== Interfono (mensajería entre sesiones, core/bus.js) =====
+  // Handle canónico de este chat en el bus (mismo que deriva el hook-inject
+  // desde el session_id del SDK — bin/cwc-bus.js selfIdentity).
+  _busHandle() { return this.sessionId ? `claude:${this.sessionId}` : null; }
+
+  // Mensajes del interfono aún NO entregados a este chat (para el popup global
+  // y el botón "Retomar"). Solo LEE el bus (0 tokens); no marca entregado — así
+  // el aviso persiste hasta que el chat lo toma (turno/hook o botón).
+  pendingInterfono() {
+    const h = this._busHandle();
+    if (this.closed || !h) return [];
+    let msgs;
+    try { msgs = bus.pendingFor([h]); } catch { return []; }
+    return msgs.map((m) => ({
+      id: m.id,
+      fromName: String(m.fromName || 'sesión').slice(0, 60),
+      text: String(m.text || '').slice(0, 400),
+      ts: m.ts || null,
+    }));
+  }
+
+  // Inyecta los mensajes pendientes como UN turno sintético (equivalente al
+  // nudge send-keys de la TUI). Marca ENTREGADO antes de disparar el turno para
+  // que el hook-inject de ese mismo UserPromptSubmit no re-inyecte el mismo
+  // mensaje (doble). Revive el motor con resume si estaba dormido (_ensureEngine).
+  deliverInterfono(msgs) {
+    const h = this._busHandle();
+    if (this.closed || !h || !Array.isArray(msgs) || !msgs.length) return;
+    try { bus.markDelivered(msgs, [h]); } catch { /* noop */ }
+    const body = msgs.map((m) => {
+      const when = new Date(m.ts || Date.now()).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      return `• [${when}] ${m.fromName || 'una sesión'}: ${m.text}`;
+    }).join('\n');
+    const text =
+      '📨 INTERFONO — mensaje(s) de otra(s) sesión(es) de Claude Code:\n' +
+      `${body}\n` +
+      `Si alguno requiere respuesta, contestá UNA vez con: node ${CWC_BUS} send "<nombre-de-la-sesión>" "<respuesta>".`;
+    this.lastActivity = Date.now();
+    this._setStatus('working');
+    this._push({ type: 'user', text }); // visible como burbuja en la conversación
+    this._ensureEngine().then((ok) => {
+      if (ok !== false) this.link?.send({ t: 'user', text });
+    });
+  }
+
+  // Acción del popup/botón: 'deliver' inyecta (y despierta si hace falta),
+  // 'dismiss' marca entregado SIN actuar (limpia el aviso). Idempotente.
+  consumeInterfono(action) {
+    const h = this._busHandle();
+    if (this.closed || !h) return { ok: false, error: 'La conversación no tiene una sesión activa.' };
+    let msgs;
+    try { msgs = bus.pendingFor([h]); } catch { msgs = []; }
+    if (!msgs.length) return { ok: true }; // ya no hay nada: idempotente
+    if (action === 'dismiss') {
+      try { bus.markDelivered(msgs, [h]); } catch { /* noop */ }
+      return { ok: true };
+    }
+    this.deliverInterfono(msgs);
+    return { ok: true };
   }
 
   // El motor murió (evento 'closed' del runner, o socket cortado sin aviso).
@@ -623,14 +854,20 @@ class Chat {
     return { ok: true };
   }
 
-  answerPermission(id, allow) {
-    this.link?.send({ t: 'perm', id, allow: !!allow });
+  // `answers` (opcional) solo aplica a AskUserQuestion: mapa texto-de-pregunta ->
+  // label elegido (multiSelect = labels con coma). El runner lo materializa en
+  // updatedInput.answers; para el resto de tools se ignora.
+  answerPermission(id, allow, answers = null) {
+    const msg = { t: 'perm', id, allow: !!allow };
+    if (allow && answers && typeof answers === 'object') msg.answers = answers;
+    this.link?.send(msg);
   }
 
   sendUser(text) {
     if (this.closed) return;
     if (!this.alive && this.viewMode !== 'chat') return;
     this.lastActivity = Date.now();
+    this._applyModelRouter(text); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
     this._setStatus('working');
     this._push({ type: 'user', text });
     this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
@@ -638,6 +875,77 @@ class Chat {
     this._ensureEngine().then((ok) => {
       if (ok !== false) this.link?.send({ t: 'user', text });
     });
+  }
+
+  // Router de modelo automático — AutoTux (núcleo: core/model-router.js).
+  // Reusa el MISMO setModel() que ya usa el selector manual — nada de
+  // plomería de cambio de modelo nueva, solo la decisión. Inerte a propósito
+  // si `modelChoice` no es exactamente 'auto': elegir Fable/Opus/Sonnet/Haiku
+  // (u opusplan/default) desde el menú FUERZA ese único modelo y apaga el
+  // router para esta conversación (setModelChoice ya lo resuelve).
+  _applyModelRouter(text) {
+    if (this.modelChoice !== 'auto') return; // forzado a un modelo fijo: AutoTux no opina
+    const decision = decideModelForTurn({ currentModel: this.model, text, downStreak: this._routerDownStreak });
+    if (!decision) return; // el modelo actual todavía no es uno de los 4 niveles (transición rara)
+
+    if (decision.ambiguous) {
+      // Fase 2: la heurística 0-costo no supo qué opinar. Consultar a Haiku
+      // tarda VARIOS SEGUNDOS solo de arranque (verificado en caliente) — por
+      // eso corre en SEGUNDO PLANO (fire-and-forget, patrón _autoTitle) y
+      // jamás demora el turno actual; si contesta a tiempo, gobierna el
+      // PRÓXIMO turno (o este mismo si el motor todavía no arrancó a
+      // responder — setModel() ya resuelve ambos casos como siempre). Guarda
+      // simple contra solapes: un chat no clasifica dos turnos en paralelo.
+      if (this._routerClassifying) return;
+      this._routerClassifying = true;
+      classifyComplexity({ cwd: this.cwd, text })
+        .then((suggestion) => {
+          if (suggestion === null || this.closed) return;
+          const currentLevel = MODEL_LEVELS.indexOf(this.model);
+          if (currentLevel === -1) return; // el usuario pudo pasar a opusplan/default mientras tanto
+          const resolved = applyHysteresis({ currentLevel, suggestion, downStreak: this._routerDownStreak });
+          this._routerDownStreak = resolved.downStreak;
+          if (resolved.changed) {
+            const from = this.model;
+            const next = MODEL_LEVELS[resolved.level];
+            if (next && next !== from) {
+              this.setModel(next, { auto: true });
+              // Fase 3: registro para calibrar después (nunca decide nada solo).
+              logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) });
+            }
+          }
+        })
+        .catch(() => { /* best-effort: mejor no tocar nada que romper el turno */ })
+        .finally(() => { this._routerClassifying = false; });
+      return;
+    }
+    this._routerDownStreak = decision.downStreak;
+    if (decision.changed) {
+      const from = this.model;
+      const next = MODEL_LEVELS[decision.level];
+      if (next && next !== from) {
+        this.setModel(next, { auto: true });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'heuristic', from, to: next, text: text.slice(0, 150) });
+      }
+    }
+  }
+
+  // Escalado reactivo (núcleo: core/model-router.js, Fase 2): al TERMINAR un
+  // turno (transición a 'waiting', ver _setStatus), si usó demasiadas
+  // herramientas de golpe, sube un escalón para el PRÓXIMO turno — señal
+  // barata de "esto pesó más de lo que pensábamos", cero tokens extra.
+  _applyReactiveEscalation() {
+    if (this.modelChoice !== 'auto') return; // forzado a un modelo fijo: AutoTux no opina
+    const currentLevel = MODEL_LEVELS.indexOf(this.model);
+    const decision = reactiveEscalation({ currentLevel, toolCallsInTurn: this._turnToolCount });
+    if (!decision) return;
+    this._routerDownStreak = decision.downStreak;
+    const from = this.model;
+    const next = MODEL_LEVELS[decision.level];
+    if (next && next !== from) {
+      this.setModel(next, { auto: true });
+      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'reactive', from, to: next, text: `(${this._turnToolCount} tool_use en el turno)` });
+    }
   }
 
   // Auto-título (ver extractTitle arriba). Fire-and-forget: nunca bloquea ni
@@ -680,17 +988,52 @@ class Chat {
 
   // Cambia el MODELO de la conversación. Con motor vivo usa q.setModel() del
   // SDK (en vivo, sin perder contexto); dormido, solo actualiza this.model
-  // (_startEngine ya lo lee para el próximo spawnRunner).
-  setModel(model) {
+  // (_startEngine ya lo lee para el próximo spawnRunner). `auto` (Fase 3):
+  // true SOLO cuando lo llama el router de modelo (nunca el selector manual
+  // ni /api/chat/model) — viaja en el evento 'model' para que el frontend
+  // muestre el indicador "🤖 cambió solo" en vez de tratarlo como un cambio
+  // pedido por la persona.
+  setModel(model, { auto = false } = {}) {
     if (!VALID_MODELS.has(model)) return;
     if (this.link) {
+      this._pendingModelAuto = auto; // lo consume _onRunnerEvent al llegar el eco 'model'
       // El cambio real lo confirma el runner con su evento 'model'.
       this.link.send({ t: 'set_model', model });
     } else {
       this.model = model;
-      this._push({ type: 'model', model });
+      this._push({ type: 'model', model, auto });
       this.onUpdate?.(); // persistir el nuevo modelo elegido
     }
+  }
+
+  // Fija la ELECCIÓN de la persona (AutoTux, pedido 2026-07-06): 'auto' deja
+  // el router al mando (Fase 1-3, core/model-router.js) — modelChoice se
+  // queda en 'auto' PARA SIEMPRE (el badge nunca deja de decir "AutoTux"
+  // aunque `this.model` suba/baje por debajo). Cualquier otro valor FUERZA
+  // ese único modelo real y apaga el router para esta conversación
+  // (_applyModelRouter/_applyReactiveEscalation chequean modelChoice antes
+  // que nada). Es el único método que debería llamar el selector del menú
+  // "Cambiar modelo" — setModel() de arriba sigue siendo el bajo nivel que
+  // usa tanto este método como el propio router internamente.
+  setModelChoice(choice) {
+    if (choice === 'auto') {
+      const wasAuto = this.modelChoice === 'auto';
+      this.modelChoice = 'auto';
+      this._push({ type: 'modelChoice', modelChoice: 'auto' });
+      this.onUpdate?.();
+      if (!wasAuto) {
+        // Arranca desde el nivel actual si ya es uno gestionado; si no, un
+        // punto de partida razonable (mismo criterio que el constructor).
+        const start = MODEL_LEVELS.includes(this.model) ? this.model : 'sonnet';
+        if (start !== this.model) this.setModel(start, { auto: true });
+      }
+      return;
+    }
+    if (!VALID_MODELS.has(choice)) return;
+    this.modelChoice = choice;
+    this._push({ type: 'modelChoice', modelChoice: choice });
+    this.onUpdate?.();
+    this.setModel(choice); // fuerza el modelo real — auto:false (elección manual)
   }
 
   close() {
@@ -727,7 +1070,11 @@ class Chat {
     // volver a 'waiting' (turno terminado, interrumpido, o motor caído a
     // mitad de un Task) se limpia SIEMPRE — evita que un tool_result perdido
     // (interrupt, crash) deje la tarjeta pegada en "delegando" para siempre.
-    if (state === 'waiting') this._delegatingIds.clear();
+    if (state === 'waiting') {
+      this._delegatingIds.clear();
+      this._applyReactiveEscalation(); // Fase 2 del router de modelo (ver arriba)
+      this._turnToolCount = 0; // arranca en cero el conteo del próximo turno
+    }
     if (this.status === state) return;
     this.status = state;
     this._broadcast({ type: 'status', state });
@@ -760,6 +1107,7 @@ class Chat {
     ws.send(JSON.stringify({
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
       viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
+      model: this.model, modelChoice: this.modelChoice, // para que el badge "🤖 AutoTux: X" nazca poblado
     }));
   }
 
@@ -767,7 +1115,7 @@ class Chat {
 
   info() {
     return {
-      id: this.id, title: this.title, cwd: this.cwd, model: this.model,
+      id: this.id, title: this.title, cwd: this.cwd, model: this.model, modelChoice: this.modelChoice,
       mode: this.permissionMode, status: this.status, alive: this.alive,
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
@@ -781,6 +1129,9 @@ class Chat {
       // Permisos esperando respuesta: los consume el centro global de popups
       // (public/js/ui/perm-center.js) vía el poll de 8 s de /list.
       pendingPerms: this.pendingPerms(),
+      // Mensajes del interfono esperando ser tomados por este chat: los consume
+      // el centro global de interfono (public/js/ui/interfono-center.js).
+      pendingInterfono: this.pendingInterfono(),
     };
   }
 }
@@ -808,6 +1159,25 @@ class ChatManager {
       }
       if (dirty) this.persist();
     }, 60 * 1000).unref();
+
+    // Watcher del INTERFONO: auto-entrega los mensajes a los chats ABIERTOS y
+    // OCIOSOS (paridad con el nudge idle de la TUI). Los dormidos/ocupados NO
+    // se despiertan solos (evita gastar tokens fantasma): quedan para el popup
+    // global + botón "Retomar". Cadencia ~12 s (barato: solo lee el bus).
+    setInterval(() => { try { this._deliverInterfono(); } catch { /* noop */ } }, INTERFONO_POLL_MS).unref();
+  }
+
+  // Recorre los chats y auto-entrega el interfono a los que están ABIERTOS
+  // (algún cliente WS) y OCIOSOS (motor vivo, sin turno en curso). Un chat
+  // trabajando espera a terminar; uno dormido o sin pestaña queda para el popup.
+  _deliverInterfono() {
+    for (const c of this.chats.values()) {
+      if (c.closed || !c.sessionId || c.viewMode !== 'chat') continue;
+      if (!(c.alive && c.status === 'waiting' && c.clients.size > 0)) continue;
+      let msgs;
+      try { msgs = bus.pendingFor([`claude:${c.sessionId}`]); } catch { continue; }
+      if (msgs.length) c.deliverInterfono(msgs);
+    }
   }
 
   create({ cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
@@ -842,6 +1212,14 @@ class ChatManager {
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
         ticket: c.ticket || null,
+        // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
+        // persiste explícito porque `model` solo no alcanza para distinguir
+        // "elegí Sonnet a mano" de "AutoTux bajó a Sonnet" — ver constructor.
+        modelChoice: c.modelChoice || null,
+        // Router de modelo automático (core/model-router.js): el NIVEL se
+        // deriva de `model` (arriba); esto es solo el contador chico de
+        // histéresis de bajada, para no perderlo al reiniciar el server.
+        routerDownStreak: c._routerDownStreak || 0,
         // Modo TUI: la tmux oculta (cwct-) sobrevive reinicios del server, así
         // que persistimos lo necesario para RE-ADJUNTARLA al rehidratar.
         viewMode: c.viewMode === 'tui' ? 'tui' : 'chat',
@@ -876,6 +1254,12 @@ class ChatManager {
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       chat.lastActivity = s.lastActivity || Date.now();
+      // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
+      // infirió un valor razonable a partir de `model`, pero solo el campo
+      // explícito distingue "elegí Sonnet a mano" de "AutoTux está en Sonnet
+      // ahora" — chats viejos sin este campo se quedan con lo que infirió).
+      if (s.modelChoice) chat.modelChoice = s.modelChoice;
+      chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
         // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
         const term = sessionManager.createBare({
@@ -968,7 +1352,12 @@ export default {
 
     r.post('/create', (req, res) => {
       const { cwd, model, permissionMode, resume, title, ticket } = req.body || {};
-      if (model != null && !VALID_MODELS.has(model)) {
+      // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
+      // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
+      // reconoce Claude Code). Sin `model` en el pedido, el default pasa a
+      // ser 'auto' (antes quedaba null = "lo que decida el CLI"): AutoTux es
+      // ahora el predeterminado de toda conversación nueva.
+      if (model != null && model !== 'auto' && !VALID_MODELS.has(model)) {
         return res.status(400).json({ error: 'Modelo inválido.' });
       }
       if (permissionMode != null && !PERMISSION_MODES.has(permissionMode)) {
@@ -979,7 +1368,7 @@ export default {
       }
       const chat = manager.create({
         cwd: safeCwd(cwd),
-        model: model || null,
+        model: model || 'auto',
         permissionMode: permissionMode || 'default',
         resume: resume || null,
         title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
@@ -1045,7 +1434,7 @@ export default {
       if (!chat.pendingPerms().some((p) => p.id === permId)) {
         return res.status(409).json({ error: 'Ese permiso ya no está pendiente (respondido o expirado).' });
       }
-      chat.answerPermission(permId, !!req.body?.allow);
+      chat.answerPermission(permId, !!req.body?.allow, sanitizeAnswers(req.body?.answers));
       res.json({ ok: true });
     });
 
@@ -1125,13 +1514,14 @@ export default {
       res.json({ ok: true, chat: chat.info() });
     });
 
-    // Cambia el modelo de una conversación (en vivo o para el próximo arranque).
+    // Cambia la ELECCIÓN de modelo de una conversación — AutoTux (router,
+    // 'auto') o un modelo FORZADO (en vivo o para el próximo arranque).
     r.post('/model', (req, res) => {
       const chat = manager.get(req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const model = req.body?.model;
-      if (!VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
-      chat.setModel(model);
+      if (model !== 'auto' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
+      chat.setModelChoice(model);
       manager.persist();
       res.json({ ok: true, chat: chat.info() });
     });
@@ -1153,6 +1543,21 @@ export default {
       res.json({ ok: true, chat: chat.info() });
     });
 
+    // Interfono: el popup global responde acá. action='deliver' inyecta los
+    // mensajes pendientes como un turno (despierta el chat si estaba dormido);
+    // action='dismiss' los marca entregados sin actuar (limpia el aviso).
+    r.post('/interfono', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const action = req.body?.action;
+      if (action !== 'deliver' && action !== 'dismiss') {
+        return res.status(400).json({ error: 'Acción inválida (deliver|dismiss).' });
+      }
+      const result = chat.consumeInterfono(action);
+      if (!result.ok) return res.status(409).json({ error: result.error });
+      res.json({ ok: true, chat: chat.info() });
+    });
+
     router.use('/chat', r);
   },
 
@@ -1171,7 +1576,7 @@ export default {
         if (msg.type === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
           chat.sendUser(msg.text);
         } else if (msg.type === 'permission_response') {
-          chat.answerPermission(msg.id, !!msg.allow);
+          chat.answerPermission(msg.id, !!msg.allow, sanitizeAnswers(msg.answers));
         } else if (msg.type === 'interrupt') {
           chat.interrupt();
         } else if (msg.type === 'set_mode') {

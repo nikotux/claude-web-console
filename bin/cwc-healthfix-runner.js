@@ -10,12 +10,14 @@
 // queda en el working tree (revertible con git); NUNCA reinicia el servicio.
 //
 // Éxito ⇒ marca el hallazgo `resolved` en review.json + lo agrega al registro
-// durable health-solved.json (historial + recurrencias). Falla/timeout ⇒
+// durable health-solved.json (historial + recurrencias). Falso positivo (FIXNONE)
+// ⇒ `dismissed` + registro durable health-dismissed.json (corta el bucle
+// escaneo→mismo FP→escaneo, igual que el orquestador de batch). Falla/timeout ⇒
 // `failed` con el motivo. La tarjeta del front polea review.json y se actualiza.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  ROOT, readReview, writeReview, recordSolved, findingId, addProposal,
-  writeFixLock, clearFixLock, isFixing, isRunning,
+  ROOT, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
+  writeFixLock, clearFixLock, isFixing, isRunning, fixPrompt,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed,
 } from '../src/modules/health/shared.js';
 
@@ -56,30 +58,11 @@ async function main() {
       permissionDecisionReason: 'Auto-fix: solo lectura/edición + node --check.',
     },
   };
-  const prompt = [
-    'Sos un runner autónomo que arregla UN hallazgo de la revisión de salud de esta consola (Claude Web Console). Trabajás SIN supervisión humana.',
-    '',
-    `Módulo: ${f.module || '—'}`,
-    `Severidad: ${f.severity || '—'} · Tipo: ${f.kind || '—'}`,
-    `Qué falla: ${f.area}`,
-    f.file ? `Archivo: ${f.file}` : '',
-    '',
-    `Detalle: ${f.detail}`,
-    f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
-    '',
-    'Reglas ESTRICTAS:',
-    '1. Verificá leyendo el código citado que el hallazgo es REAL. Si es falso positivo, NO edites nada y terminá con: FIXFAIL falso positivo — <por qué>.',
-    '2. Si es real, aplicá el fix MÍNIMO editando los archivos necesarios.',
-    '3. Verificá CADA archivo .js que edites con `node --check <archivo>` (es la ÚNICA orden de terminal permitida). NO podés correr git, tests, npm, systemctl ni reiniciar nada.',
-    '4. Terminá tu ÚLTIMO mensaje con UNA línea exacta: "FIXOK <qué cambiaste, en qué archivos>" si quedó resuelto y verificado, o "FIXFAIL <motivo>" si no pudiste.',
-    '5. Solo si el fix fue OK y el bug pertenece a una CLASE que conviene blindar',
-    '   para que NO regrese, agregá DESPUÉS del FIXOK una línea:',
-    '   "PROPOSED-INVARIANT <aserción verificable en una frase> | <patrón de',
-    '   archivos donde aplica, p.ej. src/modules/chat/>". Si es un caso único o',
-    '   trivial (typo), poné "NO-INVARIANT". El invariante NO se aplica solo: lo',
-    '   revisa un humano.',
-    'No expliques de más: hacé el trabajo y cerrá con FIXOK/FIXFAIL (+ la línea del invariante si corresponde).',
-  ].filter(Boolean).join('\n');
+  // Prompt COMPARTIDO con el orquestador de batch (fixPrompt de shared.js):
+  // misma rama FIXNONE de falso positivo — antes el runner tenía una copia
+  // inline divergente ("FIXFAIL falso positivo") y el FP quedaba 'failed' en
+  // vez de 'dismissed', re-auditándose en cada revisión.
+  const prompt = fixPrompt(f);
 
   let out = '';
   try {
@@ -114,6 +97,8 @@ async function main() {
 
   const okMatch = out.match(/FIXOK\s*(.*)/);
   const failMatch = out.match(/FIXFAIL\s*(.*)/);
+  // Mismo orden de parseo que el orquestador: FIXOK → FIXNONE/falso positivo → FIXFAIL.
+  const dismissed = !okMatch && (/FIXNONE/.test(out) || /falso positivo/i.test(out));
   if (okMatch) {
     const summary = (okMatch[1] || '').trim().slice(0, 400);
     patchFinding({ fixStatus: 'resolved', fixSummary: summary, resolvedAt: Date.now(), fixError: null });
@@ -127,12 +112,20 @@ async function main() {
       addProposal({ text: inv[1].trim(), match, fromFinding: f });
       log(`  invariante propuesto: ${inv[1].trim().slice(0, 80)} | ${match}`);
     }
+  } else if (dismissed) {
+    // No era un bug: falso positivo. NO es un fallo — se marca 'dismissed' en
+    // review.json + registro durable (health-dismissed.json) vía el helper
+    // COMPARTIDO con el orquestador, para que la próxima auditoría no lo
+    // re-encuentre (dismissedFor lo inyecta en el prompt del auditor).
+    const reason = (out.match(/FIXNONE\s*(.*)/)?.[1] || out.match(/falso positivo[^\n]*/i)?.[0] || 'no era un bug').trim().slice(0, 200);
+    markFindingDismissed(targetId, reason, f);
+    log(`auto-fix DISMISS (falso positivo): ${f.area} — ${reason}`);
   } else {
     const reason = (failMatch?.[1] || 'sin confirmación del modelo').trim().slice(0, 200);
     patchFinding({ fixStatus: 'failed', fixError: reason });
     log(`auto-fix FAIL: ${f.area} — ${reason}`);
   }
-  finish(okMatch ? 0 : 1);
+  finish(okMatch || dismissed ? 0 : 1);
 }
 
 main().catch((err) => {

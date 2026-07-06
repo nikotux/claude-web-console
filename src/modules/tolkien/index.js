@@ -133,12 +133,18 @@ export default {
     });
 
     r.post('/fetch', async (req, res) => {
+      // Comparte el flag `busy` con /update: un fetch y un pull simultáneos
+      // sobre el mismo .git contienden por locks de git y fallan espurio.
+      if (busy) return res.status(409).json({ error: 'Ya hay una operación git en curso.' });
+      busy = true;
       try {
         const f = await git(['fetch', '--prune', 'origin']);
         if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
         res.json({ ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() });
       } catch {
         res.status(500).json({ error: 'No se pudo leer el estado del repo.' });
+      } finally {
+        busy = false;
       }
     });
 

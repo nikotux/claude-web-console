@@ -59,6 +59,22 @@ export function destroySession(id) {
   if (id && sessions.delete(id)) persistSessions();
 }
 
+// Revoca TODAS las sesiones activas de un usuario (borrado o democión de rol):
+// sin esto, una cookie viva seguiría operando con los privilegios viejos hasta
+// vencer. Devuelve cuántas sesiones se eliminaron.
+export function invalidateSessionsForUser(username) {
+  if (!username) return 0;
+  let removed = 0;
+  for (const [id, s] of sessions) {
+    if (s.username === username) {
+      sessions.delete(id);
+      removed++;
+    }
+  }
+  if (removed) persistSessions();
+  return removed;
+}
+
 // Comparación en tiempo constante para evitar timing attacks.
 function tokenMatches(candidate) {
   if (typeof candidate !== 'string' || candidate.length === 0) return false;

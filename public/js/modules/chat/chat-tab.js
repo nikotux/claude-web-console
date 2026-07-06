@@ -11,6 +11,11 @@ import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
+import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS } from '../../ui/models.js';
+
+// Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
+// única en ui/models.js, la misma que usa el menú "Cambiar modelo").
+const CHAT_MODEL_LABEL = new Map(CHAT_MODEL_OPTIONS);
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
@@ -48,8 +53,137 @@ const TOOL_TYPE_ICONS = [
   [/^Web/i, 'download'],
   [/^Todo/i, 'list'],
   [/^(Task|Agent)/i, 'sparkle'],
+  [/^AskUserQuestion/i, 'help'],
 ];
 export const toolTypeIcon = (name) => (TOOL_TYPE_ICONS.find(([re]) => re.test(String(name || ''))) || [null, 'gear'])[1];
+
+// Cuerpo interactivo de un AskUserQuestion (preguntas + opciones + acciones).
+// COMPARTIDO por la tarjeta inline del chat (_askQuestionCard) y el centro global
+// de permisos (perm-center) para no duplicar el render. `questions` es el
+// detail.askQuestions normalizado por el server (shared.js/toolDetail): cada
+// pregunta { question, header, multiSelect, options:[{label, description}] }.
+// onSubmit(answers) recibe el mapa { textoPregunta: label(s) } (multiSelect =
+// labels con coma, contrato del SDK); onCancel() deniega/cancela la pregunta.
+export function buildAskQuestionBody(questions, { onSubmit, onCancel }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'askq-body';
+  const qs = Array.isArray(questions) ? questions : [];
+  const state = qs.map(() => ({ chosen: new Set(), other: '' }));
+
+  qs.forEach((q, qi) => {
+    const qEl = document.createElement('div');
+    qEl.className = 'askq-q';
+
+    const qhead = document.createElement('div');
+    qhead.className = 'askq-qhead';
+    if (q.header) {
+      const chip = document.createElement('span');
+      chip.className = 'askq-chip';
+      chip.textContent = q.header;
+      qhead.appendChild(chip);
+    }
+    const qtext = document.createElement('span');
+    qtext.className = 'askq-qtext';
+    qtext.textContent = q.question || '';
+    qhead.appendChild(qtext);
+    qEl.appendChild(qhead);
+
+    const opts = document.createElement('div');
+    opts.className = 'askq-opts';
+    qEl.appendChild(opts);
+
+    // Texto libre = la opción "Other" que el SDK ofrece siempre.
+    const otherInput = document.createElement('input');
+    otherInput.type = 'text';
+    otherInput.className = 'askq-other';
+    otherInput.placeholder = 'Otra respuesta…';
+
+    (Array.isArray(q.options) ? q.options : []).forEach((o) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'askq-opt';
+      const lab = document.createElement('span');
+      lab.className = 'askq-opt-label';
+      lab.textContent = o.label || '';
+      b.appendChild(lab);
+      if (o.description) {
+        const desc = document.createElement('span');
+        desc.className = 'askq-opt-desc';
+        desc.textContent = o.description;
+        b.appendChild(desc);
+      }
+      b.addEventListener('click', () => {
+        const st = state[qi];
+        if (q.multiSelect) {
+          if (st.chosen.has(o.label)) st.chosen.delete(o.label);
+          else st.chosen.add(o.label);
+          b.classList.toggle('sel', st.chosen.has(o.label));
+        } else {
+          st.chosen.clear();
+          st.chosen.add(o.label);
+          for (const sib of opts.querySelectorAll('.askq-opt')) sib.classList.remove('sel');
+          b.classList.add('sel');
+          st.other = '';
+          otherInput.value = '';
+        }
+        refresh();
+      });
+      opts.appendChild(b);
+    });
+
+    otherInput.addEventListener('input', () => {
+      const st = state[qi];
+      st.other = otherInput.value.trim();
+      // En single-select, escribir texto libre desmarca las opciones.
+      if (st.other && !q.multiSelect) {
+        st.chosen.clear();
+        for (const sib of opts.querySelectorAll('.askq-opt')) sib.classList.remove('sel');
+      }
+      refresh();
+    });
+    qEl.appendChild(otherInput);
+
+    wrap.appendChild(qEl);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'askq-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn-ghost btn--sm askq-cancel';
+  cancel.innerHTML = `${icon('close', { size: 13 })} Cancelar`;
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'btn btn--sm askq-submit';
+  actions.appendChild(cancel);
+  actions.appendChild(submit);
+  wrap.appendChild(actions);
+
+  const answered = () => state.filter((st) => st.chosen.size || st.other).length;
+  const refresh = () => {
+    const done = answered();
+    submit.disabled = done < qs.length;
+    submit.innerHTML = `${icon('check', { size: 13 })} Enviar${qs.length > 1 ? ` (${done}/${qs.length})` : ''}`;
+  };
+  const buildAnswers = () => {
+    const answers = {};
+    qs.forEach((q, qi) => {
+      const st = state[qi];
+      const parts = [...st.chosen];
+      if (st.other) parts.push(st.other);
+      if (parts.length && q.question) answers[q.question] = parts.join(', ');
+    });
+    return answers;
+  };
+
+  cancel.addEventListener('click', () => onCancel?.());
+  submit.addEventListener('click', () => {
+    if (submit.disabled) return;
+    onSubmit?.(buildAnswers());
+  });
+  refresh();
+  return wrap;
+}
 
 // [valor SDK, etiqueta de UNA palabra, riesgo]. Etiquetas cortas a propósito:
 // el select colapsado queda mínimo; el "?" de al lado explica cada modo. El
@@ -90,6 +224,8 @@ export class ChatTab {
     this._slashSuppressed = null; // texto con el que se cerró con Esc (no reabrir)
     this._working = false;        // motor Pac-Man del header (ver _renderPacState)
     this._delegatingCount = 0;    // subagentes Task/Agent pendientes del turno actual
+    this._model = null;           // modelo REAL en curso (haiku/sonnet/opus/fable/opusplan/...)
+    this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
     // Señal REAL de "historial renderizado al 100%": se resuelve al terminar
     // de procesar el PRIMER evento `history` del attach (no un timer). La
     // espera el splash de arranque (main.js) antes de destapar la app.
@@ -102,6 +238,7 @@ export class ChatTab {
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: 'Esperando tu mensaje' })}
+          <span class="chat-model-pill" title="Router de modelo automático" hidden></span>
           <select class="chat-mode" data-risk="ok" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
@@ -122,6 +259,7 @@ export class ChatTab {
     this.stopBtn = container.querySelector('.chat-stop');
     this.modeEl = container.querySelector('.chat-mode');
     this.aliveEl = container.querySelector('.chat-alive');
+    this.modelPillEl = container.querySelector('.chat-model-pill');
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
@@ -356,6 +494,8 @@ export class ChatTab {
           this._pendingMode = null;
         }
         this._setWorking(m.status === 'working');
+        this._modelChoice = m.modelChoice || null; // sin notita: solo poblar el estado al abrir/reconectar
+        this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
         this._readyResolve = null;
@@ -385,6 +525,8 @@ export class ChatTab {
         break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
+      case 'model': this._applyModel(m.model, { auto: !!m.auto }); break;
+      case 'modelChoice': this._applyModelChoice(m.modelChoice); break;
       case 'mode':
         // Reconciliación con el modo REAL del motor (paso 2, fin del drift): el
         // select SIEMPRE refleja lo que el motor aplica de verdad. Si el usuario
@@ -604,6 +746,12 @@ export class ChatTab {
   // [✓ Permitir]. Tocar el chip expande el detalle íntegro (función completa +
   // comando/diff) ANTES de decidir; en desktop el tooltip ya adelanta todo.
   _permCard(m) {
+    // AskUserQuestion NO es un permiso permitir/denegar: es una PREGUNTA con
+    // opciones. Se renderiza distinto (elegir opción => responde al SDK).
+    if (m.tool === 'AskUserQuestion' && m.detail?.askQuestions?.length) {
+      this._askQuestionCard(m);
+      return;
+    }
     const el = document.createElement('div');
     el.className = 'chat-perm';
     el.dataset.permId = m.id;
@@ -637,6 +785,35 @@ export class ChatTab {
     }
     // Regla de seguridad: los comandos destructivos nacen EXPANDIDOS.
     if (m.tool === 'Bash' && isDestructiveCommand(m.detail?.command || m.summary)) toggle(true);
+    this.msgsEl.appendChild(el);
+    this._scroll();
+  }
+
+  // Tarjeta de AskUserQuestion: pregunta(s) con opciones seleccionables. Elegir
+  // y Enviar responde al SDK (permission_response con answers); Cancelar deniega.
+  // Mantiene _tool/_summary/_detail y data-perm-id para que _permClose la colapse
+  // a un chip de registro igual que cualquier permiso.
+  _askQuestionCard(m) {
+    const el = document.createElement('div');
+    el.className = 'chat-perm chat-askq';
+    el.dataset.permId = m.id;
+    el._tool = m.tool;
+    el._summary = String(m.summary || '');
+    el._detail = m.detail || null;
+
+    const head = document.createElement('div');
+    head.className = 'askq-head';
+    head.innerHTML = icon('help', { size: 14 });
+    const label = document.createElement('span');
+    label.textContent = 'Pregunta del asistente';
+    head.appendChild(label);
+    el.appendChild(head);
+
+    el.appendChild(buildAskQuestionBody(m.detail.askQuestions, {
+      onSubmit: (answers) => this._send({ type: 'permission_response', id: m.id, allow: true, answers }),
+      onCancel: () => this._send({ type: 'permission_response', id: m.id, allow: false }),
+    }));
+
     this.msgsEl.appendChild(el);
     this._scroll();
   }
@@ -718,6 +895,57 @@ export class ChatTab {
     this._mode = mode;
     this.modeEl.value = mode;
     this.modeEl.dataset.risk = riskOf(mode);
+  }
+
+  // Puerta de entrada del MODELO REAL a la UI (AutoTux, core/model-router.js):
+  // actualiza el badge del header y, si el cambio lo decidió el router
+  // (`auto:true` — nunca un cambio manual del selector de Sesiones), agrega
+  // una notita inline para que quede claro que nadie lo tocó a mano.
+  _applyModel(model, { auto = false } = {}) {
+    const prev = this._model;
+    this._model = model || null;
+    this._renderModelBadge();
+    if (auto && prev && this._modelChoice === 'auto' && prev !== model) {
+      this._line('chat-switch-note', `🤖 AutoTux cambió el modelo a ${modelName(model)} sin que hagas nada.`);
+    }
+  }
+
+  // Puerta de entrada de la ELECCIÓN a la UI: 'auto' (AutoTux, el router
+  // queda al mando) u otro valor fijo (Fable/Opus/Sonnet/Haiku/opusplan/
+  // default — la conversación queda FORZADA a ese único modelo). Separado de
+  // _applyModel porque el backend los manda como eventos distintos
+  // (`modelChoice` cambia mucho menos seguido que `model`).
+  _applyModelChoice(modelChoice) {
+    this._modelChoice = modelChoice || null;
+    this._renderModelBadge();
+  }
+
+  // Único punto que pinta el badge, a partir de _model (real) + _modelChoice
+  // (elegido). Con AutoTux ('auto') el badge SIEMPRE dice "AutoTux" primero
+  // — el nivel real (color + nombre de ui/models.js) va después de los dos
+  // puntos, y cambia solo, sin que el badge deje de anunciar el router.
+  // Forzado a un modelo fijo: badge plano con ese nombre, sin 🤖. Sin
+  // elección (chats viejos/adoptados de TUI): oculto, como siempre.
+  _renderModelBadge() {
+    const choice = this._modelChoice;
+    const model = this._model;
+    if (choice === 'auto') {
+      this.modelPillEl.hidden = false;
+      const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
+      this.modelPillEl.textContent = `🤖 AutoTux: ${level}`;
+      this.modelPillEl.style.color = modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown');
+      this.modelPillEl.style.borderColor = this.modelPillEl.style.color;
+      this.modelPillEl.title = `AutoTux (router de modelo automático) — nivel actual: ${level}`;
+    } else if (choice) {
+      this.modelPillEl.hidden = false;
+      this.modelPillEl.textContent = CHAT_MODEL_LABEL.get(choice) || choice;
+      const color = modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown');
+      this.modelPillEl.style.color = color;
+      this.modelPillEl.style.borderColor = color;
+      this.modelPillEl.title = `Modelo forzado — esta conversación solo usa ${CHAT_MODEL_LABEL.get(choice) || choice}`;
+    } else {
+      this.modelPillEl.hidden = true;
+    }
   }
 
   // ¿Qué significan los modos de permisos? Modal explicativo del "?" del header.

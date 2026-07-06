@@ -355,6 +355,31 @@ export function markFindingResolved(id, summary) {
   return f;
 }
 
+// Marca UN hallazgo como FALSO POSITIVO: setea fixStatus:'dismissed' en
+// review.json (sale de la cola "por resolver") + lo suma al registro DURABLE
+// (recordDismissed) para que la próxima auditoría no lo re-encuentre (corta el
+// bucle escaneo→mismo FP→escaneo). Punto ÚNICO de "marcar descartado" — lo usan
+// el auto-fix individual (bin/cwc-healthfix-runner.js) y el orquestador de
+// batch (bin/cwc-healthfix-orchestrator.js). `fallback` = el hallazgo original
+// por si ya no está en review.json (se re-analizó): el registro durable se
+// escribe igual, que es lo que evita la re-auditoría.
+export function markFindingDismissed(id, reason, fallback = null) {
+  const st = readReview();
+  const f = (st.findings || []).find((x) => findingId(x) === id);
+  if (f) {
+    Object.assign(f, {
+      fixStatus: 'dismissed',
+      dismissReason: String(reason || '').slice(0, 300),
+      dismissedAt: Date.now(),
+    });
+    st.updatedAt = Date.now();
+    writeReview(st);
+  }
+  const base = f || fallback;
+  if (base) recordDismissed(base, reason);
+  return f || null;
+}
+
 // ===== Registro DURABLE de FALSOS POSITIVOS (health-dismissed.json) =====
 // Clave = firma GRUESA (module|area|file), la misma que recurrencias: así, si el
 // motor re-encuentra el MISMO hallazgo, se reconoce como ya-descartado. No es

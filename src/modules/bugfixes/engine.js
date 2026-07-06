@@ -191,8 +191,10 @@ export function buildTickets({ ghRows = [] } = {}) {
   }
 
   // PRs solo-GitHub: engancharlos al ticket detectado de su título/branch.
+  // Si la fila ya trae ticketNumber (lo adjunta refresh-prs con ESTE mismo
+  // ticketOfPr), se reusa; recalcular es solo para filas viejas sin el campo.
   for (const pr of ghRows) {
-    const num = ticketOfPr(pr);
+    const num = pr.ticketNumber !== undefined ? pr.ticketNumber : ticketOfPr(pr);
     if (!num) continue;
     const key = `#${num}`;
     const t = byNum.get(key);

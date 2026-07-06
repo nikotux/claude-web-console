@@ -335,3 +335,43 @@
 @media (max-width: 768px) {
   .cwc-permcenter { top: 52px; bottom: auto; right: 8px; max-height: 50vh; }
 }
+
+/* Centro global de INTERFONO (ui/interfono-center.js): gemelo del de permisos,
+   ancla abajo-IZQUIERDA para no pisarse con él (permisos = abajo-derecha).
+   Borde en el acento "cool" (mismo violeta que el Pac-Man delegando). */
+.cwc-intercom {
+  position: fixed; left: 12px; bottom: 12px; z-index: 189;
+  display: flex; flex-direction: column; gap: 8px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(60vh, 480px); overflow-y: auto; overscroll-behavior: contain;
+}
+.ic-card {
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-accent-cool, var(--cwc-accent));
+  border-radius: var(--cwc-radius-md);
+  box-shadow: var(--cwc-shadow-lg);
+  padding: .45rem .55rem;
+  animation: msg-in .18s ease;
+}
+.ic-title {
+  display: flex; align-items: center; gap: .35rem; width: 100%;
+  background: none; border: 0; padding: 0 0 .35rem; cursor: pointer;
+  color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); text-align: left;
+}
+.ic-title:hover .ic-title-text { color: var(--cwc-accent); }
+.ic-title-text {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-weight: 600;
+}
+.ic-count { flex: none; color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; }
+.ic-body { font-size: var(--cwc-fs-sm); color: var(--cwc-text); margin-bottom: .45rem; }
+.ic-msg { word-break: break-word; margin: .1rem 0; }
+.ic-msg + .ic-msg { border-top: 1px solid var(--cwc-divider); padding-top: .25rem; }
+.ic-from { color: var(--cwc-text-dim); font-weight: 600; }
+.ic-actions { display: flex; gap: .4rem; justify-content: flex-end; }
+.ic-error { color: var(--cwc-danger); font-size: var(--cwc-fs-sm); padding-top: .3rem; }
+@media (pointer: coarse) { .ic-card .ic-dismiss, .ic-card .ic-resume { min-height: 44px; } }
+/* Móvil: arriba-izquierda (permisos quedan arriba-derecha), sin tapar composer. */
+@media (max-width: 768px) {
+  .cwc-intercom { top: 52px; bottom: auto; left: 8px; max-height: 50vh; width: min(360px, calc(100vw - 16px)); }
+}

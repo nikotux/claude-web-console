@@ -724,11 +724,18 @@ export default {
       await runAdaptivePool(ghItems, async (b, ctl) => {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           try {
-            const out = await run('gh', [
-              'pr', 'view', String(b.prNumber || b.branch),
-              '--json', 'number,state,mergedAt,mergedBy,url,additions,deletions,changedFiles',
-            ], { cwd: config.projectDir });
-            const pr = JSON.parse(out);
+            // Coherencia 2026-07-06: con prNumber la lectura sale del LECTOR
+            // ÚNICO (fetchPrRich fresh, comms/pr-read-shared) — misma cantidad
+            // de red, pero deja caliente la caché de 60 s que el panel prLive
+            // reusa sin volver a pagar. Solo-branch (PR sin número registrado)
+            // sigue con gh directo: fetchPrRich cachea POR NÚMERO y un branch
+            // no tiene clave de caché.
+            const pr = b.prNumber
+              ? await fetchPrRich(b.prNumber, { fresh: true })
+              : JSON.parse(await run('gh', [
+                'pr', 'view', String(b.branch),
+                '--json', 'number,state,mergedAt,mergedBy,url,additions,deletions,changedFiles',
+              ], { cwd: config.projectDir }));
             b.prNumber = pr.number || b.prNumber;
             b.prUrl = pr.url || b.prUrl;
             const nuevoEstado = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open';
@@ -773,6 +780,11 @@ export default {
           mergedBy: pr.mergedBy?.login || null,
           url: pr.url,
           branch: pr.headRefName || null,
+          // Ticket detectado por el MOTOR (fuente única de la convención
+          // tkt-N → FEAT-n → #N): viaja YA calculado al front, que lo consume
+          // en labels.js sin re-derivarlo con su propia regex (espejo
+          // eliminado 2026-07-06, hallazgo del Módulo de Coherencia).
+          ticketNumber: ticketOfPr(pr),
           stats: { add: pr.additions ?? 0, del: pr.deletions ?? 0, files: pr.changedFiles ?? 0, src: 'github' },
         }));
         const registrados = new Set(all.map((b) => b.prNumber).filter(Boolean));
@@ -788,7 +800,7 @@ export default {
         // motor ya engancha en external.github vía ticketOfPr para mostrarlos).
         for (const pr of parsed) {
           if (pr.state === 'closed' || registrados.has(pr.number)) continue;
-          const tn = ticketOfPr(pr);
+          const tn = pr.ticketNumber; // ya calculado en el map de arriba (1 solo cómputo)
           if (!tn) continue;
           const cands = all.filter((b) => String(b.ticketNumber) === String(tn) && !b.prNumber && !b.archived);
           if (cands.length !== 1) continue;

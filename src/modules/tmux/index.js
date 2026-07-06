@@ -76,8 +76,11 @@ function listSessionsForSocket(sock, opts) {
       attached: (parseInt(attached, 10) || 0) > 0,
       created: parseInt(created, 10) || 0,
       cwd: cwd || '',
-      // "owned" = sesiones creadas por esta consola (socket cwc + prefijo cwc-).
-      owned: sock.name === config.tmuxSocket && name.startsWith('cwc-'),
+      // "owned" = sesiones creadas por esta consola (socket cwc + prefijo
+      // cwc- de terminales O cwct- de vistas TUI ocultas de conversaciones —
+      // ambas nacen de esta consola en el mismo socket; 'cwct-' NO matchea
+      // startsWith('cwc-') porque el 4º carácter es 't', no '-').
+      owned: sock.name === config.tmuxSocket && (name.startsWith('cwc-') || name.startsWith('cwct-')),
       // Modelo: en tiempo real vía observador; si no, inferido del transcript.
       model: st?.model || (cwd ? modelForCwd(cwd) : null),
       state: st ? { status: st.status, ts: st.ts } : null,

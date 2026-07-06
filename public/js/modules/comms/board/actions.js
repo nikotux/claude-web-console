@@ -22,7 +22,7 @@ async function jpost(url, body) {
   if (!r.ok) throw new Error(d.error || 'Error');
   return d;
 }
-function alert(message) { deps.dialog?.alertDialog?.({ title: 'Error', message: String(message) }); }
+function showError(message) { deps.dialog?.alertDialog?.({ title: 'Error', message: String(message) }); }
 
 export async function reload() {
   try {
@@ -68,7 +68,7 @@ export async function scan() {
       intervalMs: 2500,
       timeoutMs: 4 * 60000,
     });
-  } catch (e) { alert(e.message); }
+  } catch (e) { showError(e.message); }
   finally { store.mutate((s) => { s.busy.scan = false; s.running = false; }); }
 }
 
@@ -97,7 +97,7 @@ export async function scanTeams() {
       intervalMs: 3000,
       timeoutMs: 5 * 60000,
     });
-  } catch (e) { alert(e.message); }
+  } catch (e) { showError(e.message); }
   finally { store.mutate((s) => { s.busy.scanTeams = false; s.teamsRunning = false; }); }
 }
 
@@ -116,7 +116,7 @@ export async function markSeen(id) {
 
 export async function archive(id, archived) {
   try { await jpost(`/api/comms/thread/${encodeURIComponent(id)}/archive`, { archived }); await reload(); }
-  catch (e) { alert(e.message); }
+  catch (e) { showError(e.message); }
 }
 
 export async function assignProject(id) {
@@ -132,7 +132,7 @@ export async function assignProject(id) {
     const exists = store.get().projects.some((p) => p.name.toLowerCase() === clean.toLowerCase());
     if (clean && !exists) await jpost('/api/comms/project', { name: clean }).catch(() => {});
     await reload();
-  } catch (e) { alert(e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 export async function addContact() {
@@ -144,7 +144,7 @@ export async function addContact() {
     const d = await jpost('/api/comms/contact', { name: String(name).trim(), github: github ? String(github).trim() : null, email: email ? String(email).trim() : null });
     await reload();
     store.set({ tab: d.contact.id });
-  } catch (e) { alert(e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 export async function logManual(contactId) {
@@ -156,7 +156,7 @@ export async function logManual(contactId) {
   });
   if (text === null || !String(text).trim()) return;
   try { await jpost('/api/comms/log', { contactId, text: String(text).trim(), direction: 'out', channel: 'web' }); await reload(); }
-  catch (e) { alert(e.message); }
+  catch (e) { showError(e.message); }
 }
 
 // Abre un chat asistido con el contexto del hilo inyectado (patrón doWorkOn).
@@ -208,7 +208,7 @@ export async function applySuggestedProject(id, name) {
     const exists = store.get().projects.some((p) => p.name.toLowerCase() === clean.toLowerCase());
     if (!exists) await jpost('/api/comms/project', { name: clean }).catch(() => {});
     await reload();
-  } catch (e) { alert(e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 function buildChatPrompt(t, c) {

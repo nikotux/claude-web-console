@@ -11,6 +11,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
+import { runAdaptivePool } from '../src/modules/health/pool.js';
 import { readContacts, writeTeams, readTeams, readSelf } from '../src/modules/comms/shared.js';
 import {
   graphReadAllowed, teamsPrompt, parseTeamsResponse,
@@ -69,18 +70,27 @@ async function fetchOne(contact) {
 }
 
 async function run() {
+  // PARALELO (regla de oro: paralelo lo que LEE, serial lo que ESCRIBE — este
+  // escaneo es READ-ONLY vía graph_*, regla 6). runAdaptivePool (el mismo de
+  // health F2.5, patrón desk/triage) escanea varios contactos a la vez: cada
+  // query() es aislada; lo único compartido es threads[]/done, seguro por ser
+  // Node single-thread. start:3 porque cada query consume tokens. Los
+  // resultados llegan FUERA DE ORDEN — la escritura incremental de writeTeams()
+  // tras cada contacto sigue siendo válida (el array solo crece).
   const threads = [];
-  for (const contact of contacts) {
+  await runAdaptivePool(contacts, async (contact, ctl) => {
     log(`escaneando DMs de ${contact.name}…`);
     let res;
     try { res = await fetchOne(contact); }
     catch (err) { res = { found: false, note: String(err?.message || err).slice(0, 160) }; }
     if (res.found && res.thread) { threads.push(res.thread); log(`${contact.name}: ${res.thread.messages.length} mensajes.`); }
     else { log(`${contact.name}: descartado — ${res.note || 'no encontrado'}${res.rejected ? ' [RECHAZADO por atribución]' : ''}.`); }
+    // Rate-limit/overload del API ⇒ pedirle al pool que baje la concurrencia.
+    if (!res.found && /429|overload|rate.?limit/i.test(res.note || '')) ctl.backoff();
     done += 1; beat();
     // Escritura incremental (preserva DMs de otros contactos ya escaneados).
     writeTeams({ threads, scannedAt: Date.now(), error: null });
-  }
+  }, { start: 3 });
   writeTeams({ threads, scannedAt: Date.now(), error: null });
   log(`listo: ${threads.length} hilo(s) de Teams.`);
 }

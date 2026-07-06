@@ -18,7 +18,7 @@
 // está a la vista); main.js llama refresh() al cambiar de pestaña.
 import { icon } from './icons.js';
 import { renderDiff } from './diff.js';
-import { toolTypeIcon, isDestructiveCommand } from '../modules/chat/chat-tab.js';
+import { toolTypeIcon, isDestructiveCommand, buildAskQuestionBody } from '../modules/chat/chat-tab.js';
 
 // Gracia anti-parpadeo: un item recién llegado por WS puede no figurar aún en
 // la respuesta del poll (fetch disparado antes del permiso) — no se borra por
@@ -47,6 +47,12 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     const k = keyOf(chatId, perm.id);
     if (items.has(k)) { if (title) setTitle(items.get(k), title); return; }
     if (perm.expiresAt && perm.expiresAt <= Date.now()) return; // ya vencido
+
+    // AskUserQuestion: tarjeta de PREGUNTA con opciones (no permitir/denegar).
+    if (perm.tool === 'AskUserQuestion' && perm.detail?.askQuestions?.length) {
+      addQuestion(chatId, perm, title);
+      return;
+    }
 
     const el = document.createElement('div');
     el.className = 'pc-card';
@@ -92,6 +98,37 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     render();
   }
 
+  // Tarjeta de AskUserQuestion (reusa el mismo cuerpo que el chat inline).
+  function addQuestion(chatId, perm, title) {
+    const k = keyOf(chatId, perm.id);
+    const el = document.createElement('div');
+    el.className = 'pc-card pc-askq';
+    el.innerHTML = `
+      <button type="button" class="pc-title" title="Ir a la conversación">
+        ${icon('help', { size: 13 })}<span class="pc-title-text"></span><span class="pc-count"></span>
+      </button>
+      <div class="pc-error" hidden></div>`;
+
+    const item = {
+      el, chatId, permId: perm.id, tool: perm.tool || '', summary: String(perm.summary || ''),
+      detail: perm.detail || null,
+      expiresAt: perm.expiresAt || (perm.ts ? perm.ts + PERM_TIMEOUT_MS : null),
+      addedAt: Date.now(), busy: false,
+    };
+    setTitle(item, title || chatTitle?.(chatId) || chatId);
+    el.querySelector('.pc-title').addEventListener('click', () => openChat(chatId));
+
+    const body = buildAskQuestionBody(perm.detail.askQuestions, {
+      onSubmit: (answers) => answer(item, true, answers),
+      onCancel: () => answer(item, false),
+    });
+    el.insertBefore(body, el.querySelector('.pc-error'));
+
+    items.set(k, item);
+    stack.appendChild(el);
+    render();
+  }
+
   function setTitle(item, title) {
     item.title = String(title || '');
     item.el.querySelector('.pc-title-text').textContent = item.title;
@@ -117,15 +154,18 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     return body;
   }
 
-  async function answer(item, allow) {
+  async function answer(item, allow, answers = null) {
     if (item.busy) return;
     item.busy = true;
-    for (const b of item.el.querySelectorAll('.cp-deny, .cp-allow')) b.disabled = true;
+    const btnSel = '.cp-deny, .cp-allow, .askq-cancel, .askq-submit';
+    for (const b of item.el.querySelectorAll(btnSel)) b.disabled = true;
     try {
+      const body = { id: item.chatId, permId: item.permId, allow };
+      if (allow && answers && typeof answers === 'object') body.answers = answers;
       const res = await fetch('/api/chat/permission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.chatId, permId: item.permId, allow }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'No se pudo responder el permiso.');
@@ -137,7 +177,7 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
         return;
       }
       item.busy = false;
-      for (const b of item.el.querySelectorAll('.cp-deny, .cp-allow')) b.disabled = false;
+      for (const b of item.el.querySelectorAll(btnSel)) b.disabled = false;
       const errEl = item.el.querySelector('.pc-error');
       errEl.textContent = String(err.message);
       errEl.hidden = false;

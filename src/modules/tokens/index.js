@@ -24,6 +24,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { keyOf } from '../../core/claude-model.js';
+import { runAdaptivePool } from '../health/pool.js';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
@@ -237,11 +238,24 @@ export async function buildSummary() {
     let projCost = 0;
     const modelStats = {}; // model -> { tokens, cost, lastMtime }
 
-    for (const file of files) {
+    // LECTURA en PARALELO (pool adaptativo de health F2.5, regla de oro:
+    // paralelo lo que LEE, serial lo que ESCRIBE): stat + parseo cacheado son
+    // independientes por archivo; cada worker escribe SOLO su casillero por
+    // índice (anti-colisión, mismo patrón que la revisión de salud). La
+    // ACUMULACIÓN queda SERIAL en el orden original: los costos son floats y
+    // sumar siempre en el mismo orden mantiene el resultado determinístico.
+    const parsed = new Array(files.length);
+    await runAdaptivePool(files.map((file, i) => ({ file, i })), async ({ file, i }) => {
       let fileMtime = 0;
       try { fileMtime = (await fs.stat(file)).mtimeMs; } catch { /* noop */ }
+      const data = await parseCached(file);
+      parsed[i] = { file, fileMtime, ...data };
+    });
+
+    // .filter(Boolean): un worker que falló deja su casillero vacío (el pool
+    // no propaga errores) — se saltea ese archivo, igual que antes un stat roto.
+    for (const { file, fileMtime, rows, modelTs, entrypoint } of parsed.filter(Boolean)) {
       lastMtime = Math.max(lastMtime, fileMtime);
-      const { rows, modelTs, entrypoint } = await parseCached(file);
       // Motor de origen de ESTE transcript (sessionId = nombre del archivo).
       const sessionId = path.basename(file, '.jsonl');
       const engine = engineFor(classifyEngine(dir, sessionId, entrypoint, chatIds));
@@ -376,7 +390,16 @@ async function fetchPlanLimits() {
     e.upstream = true;
     throw e;
   }
-  const data = await res.json();
+  // Un 200 con cuerpo no-JSON (o vacío) sigue siendo un fallo UPSTREAM: se
+  // marca igual que el resto de los caminos de error de esta llamada (502).
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    const e = new Error('Anthropic respondió 200 pero el cuerpo no es JSON válido.');
+    e.upstream = true;
+    throw e;
+  }
 
   // Normalización: preferimos el array `limits` (trae también las ventanas
   // por modelo, p.ej. "Semana · Fable"); si no vino, caemos a los campos

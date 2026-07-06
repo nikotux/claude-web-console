@@ -6,7 +6,7 @@
 //   PUT    /api/admin/users/:username    -> { password?, admin? }
 //   DELETE /api/admin/users/:username    -> elimina
 import express from 'express';
-import { isAdmin, principalOf } from '../../core/auth.js';
+import { isAdmin, principalOf, invalidateSessionsForUser } from '../../core/auth.js';
 import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
 
 function requireAdmin(req, res, next) {
@@ -69,6 +69,9 @@ export default {
         if (typeof admin === 'boolean') {
           setAdmin(username, admin);
           changed = true;
+          // Democión: revocar las sesiones vivas para que la cookie no siga
+          // operando como admin hasta vencer (re-login toma el flag nuevo).
+          if (admin === false) invalidateSessionsForUser(username);
         }
         if (!changed) return res.status(400).json({ error: 'Ningún parámetro válido enviado (password o admin).' });
         res.json({ ok: true, changed });
@@ -85,6 +88,8 @@ export default {
       }
       try {
         deleteUser(username);
+        // Usuario eliminado ⇒ ninguna sesión suya puede seguir viva.
+        invalidateSessionsForUser(username);
         res.json({ ok: true });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });

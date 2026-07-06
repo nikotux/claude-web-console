@@ -28,17 +28,39 @@ export function toolSummary(name, input) {
     if (name === 'Bash') return String(input?.command || '').slice(0, 120);
     if (name === 'Read') return String(input?.file_path || '');
     if (name === 'Write' || name === 'Edit') return String(input?.file_path || '');
+    // AskUserQuestion: el summary es el texto de la 1ª pregunta (el detalle lleva
+    // las opciones completas para el render especial de la tarjeta).
+    if (name === 'AskUserQuestion') {
+      const q = input?.questions?.[0]?.question;
+      return q ? String(q).slice(0, 120) : 'Pregunta del asistente';
+    }
     const s = JSON.stringify(input);
     return s.length > 120 ? `${s.slice(0, 120)}…` : s;
   } catch { return ''; }
 }
 
-// Detalle del input para la UI (diffs en Edit/Write, comando en Bash).
+// Detalle del input para la UI (diffs en Edit/Write, comando en Bash, preguntas
+// con opciones en AskUserQuestion).
 export function toolDetail(name, input) {
   try {
     if (name === 'Edit') return { file: input?.file_path, old: trim(input?.old_string), new: trim(input?.new_string) };
     if (name === 'Write') return { file: input?.file_path, new: trim(input?.content) };
     if (name === 'Bash') return { command: trim(input?.command, 1000) };
+    // AskUserQuestion: viajan las preguntas normalizadas para que el front las
+    // renderice como opciones seleccionables (inline + centro global de permisos,
+    // que reenvía este `detail`). Cada opción = { label, description, preview? }.
+    if (name === 'AskUserQuestion') {
+      const questions = (Array.isArray(input?.questions) ? input.questions : []).slice(0, 4).map((q) => ({
+        question: trim(String(q?.question || ''), 400),
+        header: trim(String(q?.header || ''), 40),
+        multiSelect: !!q?.multiSelect,
+        options: (Array.isArray(q?.options) ? q.options : []).slice(0, 4).map((o) => ({
+          label: trim(String(o?.label || ''), 120),
+          description: trim(String(o?.description || ''), 300),
+        })),
+      }));
+      return { askQuestions: questions };
+    }
     return null;
   } catch { return null; }
 }

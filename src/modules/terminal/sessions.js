@@ -163,7 +163,12 @@ class Session {
     if (!this.bare && runClaude) {
       // Lanza Claude Code en la sesión; el modelo va como flag del CLI
       // (validado upstream contra VALID_MODELS — nunca texto arbitrario).
-      this.proc.write(model ? `claude --model ${model}\r` : 'claude\r');
+      // Default "Todo": arranca en modo bypass (--dangerously-skip-permissions)
+      // — pedido del usuario 2026-07-06: sesión TUI nueva no pide permisos.
+      const claudeCmd = model
+        ? `claude --dangerously-skip-permissions --model ${model}`
+        : 'claude --dangerously-skip-permissions';
+      this.proc.write(`${claudeCmd}\r`);
     }
     return this;
   }

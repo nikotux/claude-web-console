@@ -230,6 +230,14 @@ function updateReadmeChangelog(entryText) {
   const after = src.slice(ei);
   const existing = src.slice(si + CHANGELOG_START.length, ei).trim();
   const entries = existing ? existing.split(/\n(?=### )/).map((e) => e.trim()).filter(Boolean) : [];
+  // Round-trip: separar y re-unir el contenido EXISTENTE debe reproducirlo
+  // (tolerando el trim). Si no (entrada editada a mano sin '### ', formato
+  // viejo), NO tocamos el README — mejor omitir la entrada nueva que
+  // escribir una fusión/pérdida de texto sobre el archivo real.
+  if (existing && entries.join('\n\n') !== existing) {
+    console.error('[backup] changelog README: split/join no reproduce el contenido existente — actualización omitida.');
+    return false;
+  }
   entries.unshift(entryText.trim());
 
   let trimmedNote = '';
@@ -307,8 +315,15 @@ function scheduleRestart() {
       process.exit(1); // systemd nos reinicia
     }
     const cmd = `sleep 1.5 && cd '${PROJECT_DIR}' && setsid npm start >/dev/null 2>&1 < /dev/null &`;
-    spawn('bash', ['-c', cmd], { detached: true, stdio: 'ignore' }).unref();
-    setTimeout(() => process.exit(0), 300);
+    try {
+      spawn('bash', ['-c', cmd], { detached: true, stdio: 'ignore' }).unref();
+      setTimeout(() => process.exit(0), 300);
+    } catch (e) {
+      // Si el relanzador no pudo lanzarse (ENOENT/EMFILE), morir acá dejaría
+      // el server caído SIN reemplazo: mejor quedarse vivo con el código viejo
+      // en RAM y avisar — el usuario reinicia a mano.
+      console.error('[backup] scheduleRestart: no se pudo lanzar el relanzador, el server sigue vivo:', e?.message || e);
+    }
   }, 400);
 }
 
@@ -389,9 +404,14 @@ export default {
         // stageado — es lo que un commit va a llevarse. Formato name-status
         // ("M\tpath") para que el diálogo de Commit muestre QUÉ cambia.
         const dirty = lines((await git(['diff', 'HEAD', '--name-status'])).out);
+        // Stash cwc pendiente (pull anterior con pop conflictuado): estado git
+        // PERSISTIDO, detectable tras recargar la página o reiniciar el server.
+        const pendingStash = lines((await git(['stash', 'list'])).out)
+          .filter((l) => l.includes('cwc: auto antes de pull'));
         res.json({
           isRepo: true,
           branch,
+          pendingStash,
           remote: url ? { name: REMOTE, url, forbidden: FORBIDDEN_URL_RE.test(url) } : null,
           excluded,
           untracked,
@@ -536,11 +556,15 @@ export default {
     });
 
     r.get('/commit-message/:id', (req, res) => {
-      const id = String(req.params.id || '');
-      if (!/^[a-f0-9]{24}$/.test(id)) return res.status(400).json({ error: 'Id inválido.' });
-      const job = readCommitMsgJob(id);
-      if (!job) return res.status(404).json({ error: 'Ese job no existe (¿se limpió?).' });
-      res.json(jobResult(job));
+      try {
+        const id = String(req.params.id || '');
+        if (!/^[a-f0-9]{24}$/.test(id)) return res.status(400).json({ error: 'Id inválido.' });
+        const job = readCommitMsgJob(id);
+        if (!job) return res.status(404).json({ error: 'Ese job no existe (¿se limpió?).' });
+        res.json(jobResult(job));
+      } catch (e) {
+        res.status(500).json({ error: `No se pudo leer el job: ${e?.message || e}` });
+      }
     });
 
     r.post('/commit', async (req, res) => {
@@ -610,7 +634,12 @@ export default {
         }
 
         // Cambios locales sin commitear: a salvo en el stash antes de mover HEAD.
-        const dirty = (await git(['status', '--porcelain'])).out.length > 0;
+        // Si status falla, NO asumir árbol limpio (saltearía el stash de resguardo).
+        const status = await git(['status', '--porcelain']);
+        if (status.code !== 0) {
+          return res.status(500).json({ error: `No se pudo verificar el estado del árbol (git status): ${status.stderr || status.out || 'error de git'}`, log });
+        }
+        const dirty = status.out.length > 0;
         let stashed = false;
         if (dirty) {
           const s = await git(['stash', 'push', '-u', '-m', 'cwc: auto antes de pull desde GitHub']);
@@ -633,6 +662,20 @@ export default {
           return res.status(409).json({
             error: 'El historial local divergió del de GitHub (hay commits locales que el remote no tiene). No se fuerza nada: resolvelo a mano (push primero, o rebase).',
             log,
+          });
+        }
+
+        // Pop conflictuado: la rama YA avanzó pero los cambios locales quedaron
+        // atrapados en el stash sin reaplicar. NUNCA responder 200 acá (un
+        // cliente que solo mire ok/status lo trataría como éxito pleno): 409
+        // documentando el estado, sin npm install ni restart.
+        if (popConflict) {
+          const headNow = (await git(['rev-parse', 'HEAD'])).out;
+          return res.status(409).json({
+            error: 'El pull avanzó la rama pero tus cambios locales NO se pudieron reaplicar (conflicto en el stash pop). Siguen a salvo en el stash: resolvelo a mano con `git stash pop` y arreglá los conflictos. El servicio NO se reinicia.',
+            updated: true,
+            from: local.slice(0, 7), to: headNow.slice(0, 7),
+            stashed, popConflict: true, restarting: false, log,
           });
         }
 

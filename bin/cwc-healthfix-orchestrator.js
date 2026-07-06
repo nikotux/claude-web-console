@@ -21,7 +21,7 @@ import fss from 'node:fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, otherBatchAlive,
-  fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, recordDismissed, findingId, addProposal,
+  fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
 import { createSandbox, extractPatch, removeSandbox, integratePatch, pruneSandboxes, WT_BASE } from '../src/modules/health/worktree.js';
@@ -88,11 +88,10 @@ function markResolved(item, summary) {
 
 // Marca un FALSO POSITIVO en review.json (sale de la cola "por resolver") +
 // lo guarda en el registro DURABLE para que el motor no lo re-encole nunca más.
+// La lógica vive en shared.js (markFindingDismissed), compartida con el auto-fix
+// individual (bin/cwc-healthfix-runner.js).
 function markDismissed(item, reason) {
-  const st = readReview();
-  const f = (st.findings || []).find((x) => findingId(x) === item.id);
-  if (f) { f.fixStatus = 'dismissed'; f.dismissReason = reason; f.dismissedAt = Date.now(); st.updatedAt = Date.now(); writeReview(st); }
-  recordDismissed(item, reason);
+  markFindingDismissed(item.id, reason, item);
 }
 
 async function main() {

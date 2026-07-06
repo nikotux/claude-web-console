@@ -8,10 +8,17 @@
 
 import { icon } from '../../../ui/icons.js';
 
-// Ticket de un PR solo-GitHub: los branches del flujo son `bugfix/tkt-<N>-…` y
-// los títulos `Fix/Update TKT #<N>: …`, así que el número sale del título o del
-// branch sin backend nuevo. null si el PR no sigue la convención.
+// Ticket de un PR solo-GitHub. FUENTE DE VERDAD: el MOTOR backend
+// (ticketOfPr de src/modules/bugfixes/engine.js) — refresh-prs adjunta el
+// campo `ticketNumber` YA CALCULADO a cada fila de `github`, y acá se consume
+// tal cual (aunque sea null: si el motor no detectó convención, no hay ticket).
+// La regex de abajo es SOLO un fallback LEGACY para filas viejas sin el campo
+// (caché del cliente anterior al cableado 2026-07-06, hallazgo del Módulo de
+// Coherencia); NO mantenerla en paridad con el motor — el camino vivo es el
+// campo del backend. null si el PR no sigue la convención.
 export function ticketOfPr(pr) {
+  if (pr.ticketNumber !== undefined) return pr.ticketNumber;
+  // --- fallback legacy (filas sin ticketNumber) ---
   const t = String(pr.title || '').match(/TKT\s*#?\s*([\w.-]+)/i);
   if (t) return t[1];
   // FEAT-n (features del motor): del título o del branch (feature/feat-n-…).

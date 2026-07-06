@@ -16,6 +16,12 @@ import crypto from 'node:crypto';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+// Motor transversal de Comunicaciones (comms): buildIndex() es 100% lectura
+// de disco (~/.cwc-data/comms/*.json ya indexados), 0 tokens, sin red. Se usa
+// para inyectar al triage lo YA hablado con el contacto sobre cada ticket
+// (espejo backend de fetchCommsContext del front — hallazgo del Módulo de
+// Coherencia 2026-07-06: el ciclo de bugs debe consumir comms, no ignorarlo).
+import { buildIndex as buildCommsIndex } from '../comms/shared.js';
 
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 // El módulo se llama `bugs`, pero el archivo de caché conserva el nombre
@@ -89,6 +95,39 @@ export const LIST_PROMPT = [
   'fuera del bloque json.',
 ].join('\n');
 
+// Contexto de COMUNICACIONES para UN ticket: hilos del motor comms (GitHub/
+// Teams/chatbot/manual) que mencionen el ticket (tkt-N / TKT #N / #N). Si hay
+// un PR en discusión o el contacto ya habló del bug, el triage lo tiene que
+// saber (mejor detección de duplicate/ya-trabajado). Best-effort por diseño:
+// cualquier falla (comms sin datos, json roto) devuelve '' y el triage sigue
+// igual que antes — NUNCA rompe la corrida.
+export function commsContextFor(ticketNumber) {
+  try {
+    const n = String(ticketNumber || '').trim();
+    if (!/^\d+$/.test(n)) return '';
+    // Boundary numérico a mano: "#519" no debe matchear "#5192".
+    const re = new RegExp(`(?:tkt[\\s#_-]*|#)${n}(?![0-9])`, 'i');
+    const { threads } = buildCommsIndex();
+    const hits = [];
+    for (const t of threads || []) {
+      if (t.archived) continue;
+      const lastMsgs = (t.messages || []).slice(-5);
+      const haystack = [t.title || '', ...lastMsgs.map((m) => String(m.text || ''))].join('\n');
+      if (!re.test(haystack)) continue;
+      const last = lastMsgs[lastMsgs.length - 1];
+      hits.push(`  - [${t.source}] ${t.title}${t.awaitingReply ? ' (esperando respuesta del contacto)' : ''}${last ? `: "${String(last.text || '').slice(0, 200)}"` : ''}`);
+      if (hits.length >= 3) break; // tope: contexto acotado, no un chorizo
+    }
+    if (!hits.length) return '';
+    return [
+      'COMUNICACIONES ya registradas sobre este ticket (motor Comunicaciones,',
+      'datos ya indexados — si acá se ve un PR/charla en curso, este bug puede',
+      'estar YA trabajado o ser duplicado; pesalo en recommendation):',
+      ...hits,
+    ].join('\n');
+  } catch { return ''; }
+}
+
 // FASE 2: triage de UN ticket. Recibe la lista completa de hermanos (nº +
 // asunto) para no perder la detección de duplicados ENTRE tickets que tenía
 // la corrida única.
@@ -96,6 +135,7 @@ export function perTicketPrompt(ticket, allTickets) {
   const siblings = (allTickets || [])
     .filter((t) => String(t.ticketNumber) !== String(ticket.ticketNumber))
     .map((t) => `  - #${t.ticketNumber}: ${String(t.subject || '').slice(0, 160)}`);
+  const comms = commsContextFor(ticket.ticketNumber);
   return [
     `Triageá UN ÚNICO ticket de bug de Tolkien: el #${ticket.ticketNumber} de`,
     `Zoho Desk (asunto: ${String(ticket.subject || '').slice(0, 200)}).`,
@@ -112,6 +152,7 @@ export function perTicketPrompt(ticket, allTickets) {
         'duplicados entre sí — si este ticket duplica a uno de estos, marcalo):',
         ...siblings].join('\n')
       : 'No hay otros tickets abiertos en este triage.',
+    comms ? `\n${comms}` : '',
     '',
     'Cuando termines, respondé ÚNICAMENTE con un bloque de código ```json que',
     'contenga UN objeto (no un array) con exactamente estas claves:',

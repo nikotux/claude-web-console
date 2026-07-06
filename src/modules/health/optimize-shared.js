@@ -16,12 +16,17 @@
 //     (Read/Grep/Glob/TodoWrite). settingSources: [] (cero MCP ni permisos).
 //   - Las propuestas NUNCA se auto-aplican: quedan PENDIENTES (patrón
 //     invariant-proposals) y aplicar = chat supervisado (acceptEdits).
-import fss from 'node:fs';
-import os from 'node:os';
+//
+// PLOMERÍA COMPARTIDA (fusión 2026-07-06, propuesta de la propia Optimización
+// IA): el lock/heartbeat, el store del resultado y el parseo de propuestas
+// estaban duplicados línea por línea con coherence-shared.js — ahora ambos
+// instancian las FÁBRICAS de proposal-runner-shared.js re-exportando los
+// nombres históricos (bin/cwc-optimize-runner.js y el módulo server no cambian).
 import path from 'node:path';
-import crypto from 'node:crypto';
-
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+import { hardRulesText } from './shared.js';
+import {
+  DATA_DIR, readOnlyToolAllowed, makeLock, makeResultStore, makeProposalParser,
+} from './proposal-runner-shared.js';
 export const OPT_FILE = path.join(DATA_DIR, 'optimization.json');   // resultado persistido
 export const OPT_LOCK = path.join(DATA_DIR, 'optimize.lock');       // heartbeat del runner
 export const OPT_LOG = path.join(DATA_DIR, 'optimize.log');
@@ -38,20 +43,24 @@ export const OPT_LOCK_FRESH_MS = 20000;       // lock más viejo = runner muerto
 // Allowlist de herramientas: SOLO lecturas locales (dos capas — regla 6).
 // Idéntica a la del auditor de salud (toolAllowed de shared.js) a propósito:
 // el optimizador LEE código y datos, jamás escribe.
-export function optToolAllowed(name) {
-  return ['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name);
-}
+export const optToolAllowed = readOnlyToolAllowed;
 
 export const OPT_RISKS = new Set(['bajo', 'medio', 'alto']);
 export const OPT_TIPOS = new Set(['modelo', 'turnos', 'timeout', 'flujo', 'fusion', 'paralelismo', 'prompt', 'otro']);
 
-// id estable de una propuesta (para aceptar/descartar sin ambigüedad).
-const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
-export const proposalId = (p) => sha(`${p.motor || ''}|${p.tipo || ''}|${p.propuesta || ''}`);
+// Parseo defensivo + id estable (sha1 motor|tipo|propuesta) — fábrica compartida.
+const parser = makeProposalParser({ keyField: 'motor', tipos: OPT_TIPOS, risks: OPT_RISKS });
+export const proposalId = parser.proposalId;
+export const parseOptimization = parser.parse;
 
 // Prompt del análisis: recibe el CENSO determinístico + el CONSUMO REAL ya
 // masticados (JSON) y VERIFICA leyendo el código antes de proponer.
 export function optimizePrompt(census, usage) {
+  // REGLAS DURAS ya masticadas (0 tool calls, mismo patrón que unitPrompt de
+  // shared.js): si hardRulesText() trae texto se inyecta directo y el modelo
+  // NO gasta un Read del CLAUDE.md entero (~1900 líneas) solo para esto; si
+  // vino vacío (sección movida/renombrada), fallback a la instrucción vieja.
+  const rules = hardRulesText();
   return [
     'Sos el CONSULTOR DE OPTIMIZACIÓN IA de Claude Web Console. Corrida NO',
     'interactiva, SOLO LECTURA (no modifiques nada, no corras comandos).',
@@ -69,13 +78,25 @@ export function optimizePrompt(census, usage) {
     '```',
     usage ? 'CONSUMO REAL por motor y modelo (módulo tokens; costo = equivalente API):' : 'CONSUMO REAL: no disponible en esta corrida.',
     ...(usage ? ['```json', JSON.stringify(usage), '```'] : []),
+    ...(rules ? [
+      '',
+      'REGLAS DURAS del proyecto (sección «## Reglas duras» de CLAUDE.md, YA',
+      'extraída acá — NO abras CLAUDE.md para esto, usá este texto directo):',
+      '',
+      rules,
+    ] : []),
     '',
     'Método (importante — tenés un presupuesto ACOTADO de turnos, administralo:',
-    'leé primero CLAUDE.md, después SOLO los archivos que necesites verificar;',
+    ...(rules
+      ? ['las reglas duras van inyectadas arriba (no gastes un turno en abrir',
+        'CLAUDE.md para eso); leé SOLO los archivos que necesites verificar;']
+      : ['leé primero CLAUDE.md, después SOLO los archivos que necesites verificar;']),
     'el censo y el consumo de arriba ya están masticados, no los re-derives.',
     'Reservá SIEMPRE el último turno para el bloque ```json final: una respuesta',
     'sin ese bloque no sirve de nada):',
-    '1. Leé CLAUDE.md de la raíz: las REGLAS DURAS (1-9) son INVIOLABLES.',
+    ...(rules
+      ? ['1. Las REGLAS DURAS (1-9) van INYECTADAS arriba y son INVIOLABLES.']
+      : ['1. Leé CLAUDE.md de la raíz: las REGLAS DURAS (1-9) son INVIOLABLES.']),
     '   Ninguna propuesta puede debilitar el blindaje read-only de dos capas,',
     '   los runners desacoplados, el bind ZeroTier ni el resto de las reglas.',
     '2. Por cada motor del censo, ABRÍ el archivo citado y verificá qué hace de',
@@ -121,80 +142,20 @@ export function optimizePrompt(census, usage) {
   ].join('\n');
 }
 
-// Parseo defensivo del texto del modelo → resultado normalizado.
-export function parseOptimization(text) {
-  const fences = [...String(text || '').matchAll(/```json\s*([\s\S]*?)```/gi)];
-  const raw = fences.length ? fences[fences.length - 1][1] : (String(text || '').match(/\{[\s\S]*\}/) || [])[0];
-  if (!raw) return null;
-  let o;
-  try { o = JSON.parse(raw); } catch { return null; }
-  if (!o || typeof o !== 'object') return null;
-  const propuestas = (Array.isArray(o.propuestas) ? o.propuestas : []).slice(0, 12).map((p) => {
-    const clean = {
-      motor: String(p.motor ?? '').slice(0, 80),
-      archivo: String(p.archivo ?? '').slice(0, 200),
-      tipo: OPT_TIPOS.has(p.tipo) ? p.tipo : 'otro',
-      actual: String(p.actual ?? '').slice(0, 400),
-      propuesta: String(p.propuesta ?? '').slice(0, 500),
-      razon: String(p.razon ?? '').slice(0, 600),
-      impacto: String(p.impacto ?? '').slice(0, 300),
-      riesgo: OPT_RISKS.has(p.riesgo) ? p.riesgo : 'medio',
-      archivos: (Array.isArray(p.archivos) ? p.archivos : []).slice(0, 6).map((a) => String(a).slice(0, 200)),
-      pasos: (Array.isArray(p.pasos) ? p.pasos : []).slice(0, 8).map((s) => String(s).slice(0, 300)),
-      status: 'pending',
-    };
-    return { ...clean, id: proposalId(clean) };
-  });
-  const fn = o.flujoNuevo && typeof o.flujoNuevo === 'object' ? o.flujoNuevo : null;
-  return {
-    resumen: String(o.resumen ?? '').slice(0, 1200),
-    propuestas,
-    flujoNuevo: fn ? {
-      vale: fn.vale === true,
-      titulo: String(fn.titulo ?? '').slice(0, 120),
-      descripcion: String(fn.descripcion ?? '').slice(0, 800),
-      diseno: (Array.isArray(fn.diseno) ? fn.diseno : []).slice(0, 10).map((s) => String(s).slice(0, 300)),
-    } : null,
-  };
-}
-
 // ===== Resultado persistido (sobrevive reinicios; el front lo encuesta) =====
-export function readOpt() {
-  try { return JSON.parse(fss.readFileSync(OPT_FILE, 'utf8')); }
-  catch { return { updatedAt: null, resumen: null, propuestas: [], flujoNuevo: null, error: null }; }
-}
-export function writeOpt(data) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(OPT_FILE, JSON.stringify(data), { mode: 0o600 });
-  } catch (err) { console.error('[optimize] no pude escribir optimization.json:', err?.message); }
-}
+const store = makeResultStore({
+  file: OPT_FILE, tag: 'optimize',
+  empty: () => ({ updatedAt: null, resumen: null, propuestas: [], flujoNuevo: null, error: null }),
+});
+export const readOpt = store.read;
+export const writeOpt = store.write;
 
 // ===== Lock/heartbeat del runner (patrón desk/triage) =====
-// Guarda { pid, ts, phase } — phase alimenta el progreso del front. El server
-// RESERVA con pid:0 antes de spawnear (cierra la carrera TOCTOU, patrón
-// spawnFix); el runner reclama esa reserva (otherOptAlive exige pid real).
-export function writeOptLock(state) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(OPT_LOCK, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 });
-  } catch { /* noop */ }
-}
-export function clearOptLock() { try { fss.unlinkSync(OPT_LOCK); } catch { /* noop */ } }
-export function readOptLock() {
-  try {
-    const l = JSON.parse(fss.readFileSync(OPT_LOCK, 'utf8'));
-    if (Date.now() - l.ts >= OPT_LOCK_FRESH_MS) return null; // lock viejo = runner muerto
-    return l;
-  } catch { return null; }
-}
-export function isOptRunning() { return !!readOptLock(); }
-// ¿Hay OTRO runner realmente corriendo? Exige pid REAL (≠ 0): la reserva del
-// server (pid:0) NO cuenta — sin esto el runner vería su propia reserva y se
-// auto-deadlockearía (mismo patrón que otherBatchAlive del orquestador).
-export function otherOptAlive() {
-  try {
-    const { pid, ts } = JSON.parse(fss.readFileSync(OPT_LOCK, 'utf8'));
-    return !!pid && pid !== process.pid && Date.now() - ts < OPT_LOCK_FRESH_MS;
-  } catch { return false; }
-}
+// Fábrica compartida: reserva pid:0 del server + reclamo del runner (ver
+// makeLock en proposal-runner-shared.js — otherOptAlive exige pid real).
+const lock = makeLock({ file: OPT_LOCK, freshMs: OPT_LOCK_FRESH_MS });
+export const writeOptLock = lock.write;
+export const clearOptLock = lock.clear;
+export const readOptLock = lock.read;
+export const isOptRunning = lock.isRunning;
+export const otherOptAlive = lock.otherAlive;

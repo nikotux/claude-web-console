@@ -6,7 +6,7 @@
 // SIGUE — requisito duro del proyecto. El server habla con el runner por un
 // socket Unix (~/.cwc-data/chats/<id>.sock) con JSON por línea:
 //
-//   server->runner: {t:'hello'} · {t:'user',text} · {t:'perm',id,allow}
+//   server->runner: {t:'hello'} · {t:'user',text} · {t:'perm',id,allow[,answers]}
 //                   {t:'interrupt'} · {t:'set_mode',mode} · {t:'set_model',model}
 //                   {t:'sleep'} · {t:'close'}
 //   runner->server: {t:'hello', id, sessionId, model, mode, status, startedAt,
@@ -258,8 +258,15 @@ function handleCommand(c, msg) {
     if (!p) return;
     clearTimeout(p.timer);
     pendingPerms.delete(msg.id);
+    // AskUserQuestion: la RESPUESTA elegida viaja en msg.answers (mapa
+    // texto-de-pregunta -> label elegido; multiSelect = labels con coma) y se
+    // materializa en el updatedInput.answers que el SDK pasa a la tool. Para el
+    // resto de tools, updatedInput sigue siendo el input original.
+    const updatedInput = (msg.answers && typeof msg.answers === 'object')
+      ? { ...p.input, answers: msg.answers }
+      : p.input;
     p.resolve(msg.allow
-      ? { behavior: 'allow', updatedInput: p.input }
+      ? { behavior: 'allow', updatedInput }
       : { behavior: 'deny', message: 'Denegado por el usuario.' });
     emit({ type: 'permission_closed', id: msg.id, allow: !!msg.allow });
     return;

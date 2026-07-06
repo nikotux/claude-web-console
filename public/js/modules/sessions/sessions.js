@@ -7,7 +7,7 @@
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
-import { modelColor } from '../../ui/models.js';
+import { modelColor, CHAT_MODEL_OPTIONS } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor } from '../../ui/places.js';
@@ -19,6 +19,15 @@ import { placeFor } from '../../ui/places.js';
 const pacEl = (state, label) => pacman({ state, size: 'sm', cls: 'sess-pac', title: label });
 const pacCls = (state) => pacClass(state, { size: 'sm', cls: 'sess-pac' });
 
+// Texto del chip .sess-model de un chat: con AutoTux ('auto') muestra el
+// nombre del router + el NIVEL real (que va cambiando solo); con una
+// elección forzada, el modelo tal cual. Fuente única para la tarjeta inicial
+// y la actualización en su lugar del poll de 8s (ver más abajo).
+function chatModelLabel(c) {
+  if (c.modelChoice === 'auto') return `🤖 AutoTux: ${c.model || '…'}`;
+  return c.model || '';
+}
+
 // Nombre de la tmux OCULTA que sostiene un chat en modo TUI (misma fórmula
 // que BARE_PREFIX del backend, terminal/sessions.js). Esas sesiones NO se
 // listan como tarjeta propia (son plomería interna del modo TUI de un chat,
@@ -29,8 +38,12 @@ const pacCls = (state) => pacClass(state, { size: 'sm', cls: 'sess-pac' });
 // sea) no se veía hasta volver a modo Chat (bug reportado 2026-07-05).
 const bareNameOf = (terminalId) => `cwct-${terminalId}`;
 
-const MODEL_OPTIONS = [
-  ['opusplan', 'Auto (Opus plan / Sonnet)'],
+// Modelo de una sesión TUI (tmux, vía `/model` tecleado real): NO incluye
+// AutoTux — el CLI real no conoce ese alias, y el router (core/model-router.js)
+// solo gestiona el chat visual del SDK por ahora. Lista SEPARADA a propósito
+// de CHAT_MODEL_OPTIONS (ui/models.js), que sí lleva AutoTux primero.
+const TUI_MODEL_OPTIONS = [
+  ['opusplan', 'Opus plan'],
   ['fable', 'Fable'],
   ['opus', 'Opus'],
   ['sonnet', 'Sonnet'],
@@ -185,7 +198,7 @@ export default {
         ${placeBadge(c.cwd)}
         <span class="sess-name">${c.title}</span>
         <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
-        <span class="sess-model">${c.model || ''}</span>`;
+        <span class="sess-model">${chatModelLabel(c)}</span>`;
       main.addEventListener('click', () => openChatView(c));
 
       const menuBtn = document.createElement('button');
@@ -258,11 +271,14 @@ export default {
     // /api/chat/model en vez de mandar /model a la terminal.
     function pickModelForChat(c) {
       const m = dialog.openModal({ title: 'Modelo de esta conversación', width: 320 });
+      // La opción activa se marca contra `modelChoice` (QUÉ ELIGIÓ la
+      // persona) — con AutoTux, `c.model` sigue siendo el nivel real y
+      // cambia solo, así que comparar contra ESO marcaría mal la fila.
       m.body.innerHTML = `
         <div class="sess-menu-list">
-          ${MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
+          ${CHAT_MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item${v === c.modelChoice ? ' sess-menu-item--active' : ''}" data-model="${v}"><span>${l}</span>${v === c.modelChoice ? icon('check', { size: 14 }) : ''}</button>`).join('')}
         </div>
-        <p class="sess-plumbing">Si la conversación está activa, el cambio es en vivo (no se pierde el contexto).</p>`;
+        <p class="sess-plumbing">AutoTux decide el modelo solo, según la conversación. Los demás FUERZAN un único modelo fijo. Si la conversación está activa, el cambio es en vivo (no se pierde el contexto).</p>`;
       for (const b of m.body.querySelectorAll('[data-model]')) {
         b.addEventListener('click', async () => {
           m.close();
@@ -280,7 +296,7 @@ export default {
             // aún STALE (se confirma por eco). Pinto el chip ya para feedback
             // inmediato; el poll de 8s lo reconcilia cuando llega el eco.
             const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
-            if (chip) chip.textContent = b.dataset.model;
+            if (chip) chip.textContent = chatModelLabel(data.chat || { modelChoice: b.dataset.model, model: c.model });
           } catch (e) {
             dialog.alertDialog({ title: 'Modelo', message: e.message });
           }
@@ -471,9 +487,9 @@ export default {
       const m = dialog.openModal({ title: 'Modelo de esta sesión', width: 320 });
       m.body.innerHTML = `
         <div class="sess-menu-list">
-          ${MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
+          ${TUI_MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
         </div>
-        <p class="sess-plumbing">Se envía /model a la sesión (solo tiene efecto si corre Claude Code).</p>`;
+        <p class="sess-plumbing">Se envía /model a la sesión (solo tiene efecto si corre Claude Code). AutoTux todavía no gestiona sesiones de terminal.</p>`;
       for (const b of m.body.querySelectorAll('[data-model]')) {
         b.addEventListener('click', async () => {
           m.close();
@@ -545,7 +561,7 @@ export default {
             // confirma por eco (this.model queda stale un instante), así que sin
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.
             const chatModelEl = cardEl.querySelector('.sess-model');
-            if (chatModelEl) chatModelEl.textContent = c.model || '';
+            if (chatModelEl) chatModelEl.textContent = chatModelLabel(c);
             continue;
           }
           const s = map.get(key);

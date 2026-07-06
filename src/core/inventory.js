@@ -284,6 +284,20 @@ const CANONICAL_PATTERNS = [
     // SDK), en un archivo que hace trabajo de red/SDK y no usa el pool.
     candidate: (f, t) => /for\s*\(\s*(?:const|let|var)\s+[\w[\]{}, ]+\s+of\s+[^)]+\)\s*\{[\s\S]{0,300}?\bawait\b/.test(t)
       && /\b(?:query|fetch|execFile|spawnSync|execFileSync)\s*\(/.test(t),
+    // Falsos positivos VERIFICADOS a mano (2026-07-06, hallazgo de Coherencia
+    // resuelto en chat): seriales POR DISEÑO — no volver a marcarlos.
+    //  · backup/index.js: `git add` por archivo ESCRIBE el índice (paralelo
+    //    colisiona en index.lock).
+    //  · chat/index.js y cwc-chat-runner.js: for-await de streams del SDK
+    //    (seriales por naturaleza) + bucles de boot que mutan estado
+    //    compartido (rehydrate/cleanup de huérfanos = escritura).
+    // Si se les agrega un bucle de LECTURA paralelizable de verdad, sacar la
+    // entrada de acá para que el censo lo vuelva a proponer.
+    exclude: [
+      'src/modules/backup/index.js',
+      'src/modules/chat/index.js',
+      'bin/cwc-chat-runner.js',
+    ],
   },
   {
     key: 'incremental-cache',
@@ -312,7 +326,10 @@ const CANONICAL_PATTERNS = [
 // las caza la capa IA del análisis de Coherencia, que recibe el texto de
 // "## Convenciones" inyectado en el prompt (coherencePrompt, coherence-shared.js).
 // Semilla hand-authored, como CANONICAL_PATTERNS/SEED_INVARIANTS — sumar acá
-// cuando una convención nueva merezca chequeo automático.
+// cuando una convención nueva merezca chequeo automático. `exclude` (opcional,
+// mismo mecanismo que en CANONICAL_PATTERNS) lista archivos con EXCEPCIÓN
+// deliberada documentada EN SU PROPIO CÓDIGO: el lead regex los saltea para no
+// repetir el mismo falso positivo en cada censo.
 const CANONICAL_CONVENTIONS = [
   {
     key: 'colores-tokens',
@@ -331,6 +348,13 @@ const CANONICAL_CONVENTIONS = [
     label: 'Íconos nuevos solo en ui/icons.js — nunca SVG inline',
     scope: (f) => /^public\/js\/.*\.js$/.test(f) && f !== 'public/js/ui/icons.js',
     violates: (t) => /<svg[\s>]/i.test(t),
+    // Falso positivo VERIFICADO a mano (2026-07-06, hallazgo de Coherencia
+    // resuelto en chat): las miniaturas del Explorador (folderSVG/fileSVG de
+    // fm.js) son SVG RELLENOS a dos tonos (carpeta/archivo), no íconos de
+    // trazo — la excepción está documentada en el propio fm.js y los fills
+    // usan tokens (var(--cwc-folder), --cwc-cat-*). No pertenecen al set de
+    // ui/icons.js; si fm.js suma un ícono de TRAZO inline, sacarlo de acá.
+    exclude: ['public/js/filemanager/fm.js'],
   },
   {
     key: 'colapsable-arbol',
@@ -486,7 +510,8 @@ export function coherenceCensus() {
     const providerExists = files.some((f) => pat.provider(f));
     const adopters = files.filter((f) => f !== SELF && !pat.provider(f) && pat.adopts(texts.get(f) || ''));
     const candidates = pat.candidate
-      ? files.filter((f) => f !== SELF && !pat.provider(f) && !adopters.includes(f) && pat.candidate(f, texts.get(f) || ''))
+      ? files.filter((f) => f !== SELF && !pat.provider(f) && !adopters.includes(f)
+        && !pat.exclude?.includes(f) && pat.candidate(f, texts.get(f) || ''))
       : [];
     return { key: pat.key, label: pat.label, providerExists, adopters, candidates };
   });
@@ -505,7 +530,12 @@ export function coherenceCensus() {
   const webText = (f) => frontText.get(f) ?? cssText.get(f) ?? '';
   const conventions = CANONICAL_CONVENTIONS.map((c) => {
     const scoped = webFiles.filter((f) => c.scope(f));
-    const violations = c.violates ? scoped.filter((f) => c.violates(webText(f))) : [];
+    // `exclude`: excepciones deliberadas documentadas en su propio archivo
+    // (falsos positivos verificados del lead) — se saltean SOLO en el chequeo
+    // mecánico; el archivo sigue en scope para la capa IA.
+    const violations = c.violates
+      ? scoped.filter((f) => !c.exclude?.includes(f) && c.violates(webText(f)))
+      : [];
     return { key: c.key, label: c.label, mechanical: !!c.violates, scopedCount: scoped.length, violations };
   });
 

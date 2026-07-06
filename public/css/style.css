@@ -270,6 +270,11 @@ html, body {
 /* Menú ⋯ de tarjeta */
 .sess-menu-list { display: flex; flex-direction: column; gap: .35rem; }
 .sess-menu-item { justify-content: flex-start; }
+/* Opción activa del picker "Cambiar modelo" (AutoTux, 2026-07-06): marca cuál
+   es la elección VIGENTE (comparada contra modelChoice, no el modelo real —
+   con AutoTux el nivel real cambia solo). El check queda pegado a la derecha. */
+.sess-menu-item--active { color: var(--cwc-accent); font-weight: 600; }
+.sess-menu-item--active svg { margin-left: auto; flex: none; }
 .sess-plumbing {
   margin: .7rem 0 0; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer);
   font-family: var(--cwc-font-mono); word-break: break-all;
@@ -735,6 +740,18 @@ html, body {
   font-size: var(--cwc-fs-xs); font-weight: 600; padding: 0 .3rem;
   height: var(--chat-mode-h); box-sizing: border-box; flex: none;
 }
+/* Badge del router de modelo automático (Fase 3, core/model-router.js):
+   mismo molde que .chat-mode (altura/tipografía), color dinámico vía JS
+   (_applyModel en chat-tab.js, ui/models.js modelColor — NUNCA hex acá).
+   Oculto (guard [hidden] global) si el chat corre opusplan/default/sin
+   elegir, donde el router queda inerte a propósito. */
+.chat-model-pill {
+  display: inline-flex; align-items: center;
+  background: var(--cwc-bg-input); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-xs); font-weight: 600;
+  padding: 0 .3rem; height: var(--chat-mode-h); box-sizing: border-box; flex: none;
+  white-space: nowrap;
+}
 .chat-mode[data-risk="safe"] { color: var(--cwc-text-dim); }
 .chat-mode[data-risk="ok"] { color: var(--cwc-ok); }
 .chat-mode[data-risk="warn"] { color: var(--cwc-warn); }
@@ -918,6 +935,51 @@ html, body {
   font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); font-weight: 600;
   color: var(--cwc-warn); word-break: break-all;
 }
+/* ===== AskUserQuestion: pregunta con opciones (no permitir/denegar) =====
+   Borde en acento FRÍO para separarlo visualmente del amarillo de "riesgo" de
+   un permiso normal: acá no se aprueba una acción, se ELIGE una respuesta. */
+.chat-askq { border-color: var(--cwc-accent-cool); gap: .5rem; padding: .5rem .6rem; }
+.askq-head {
+  display: flex; align-items: center; gap: .35rem;
+  font-size: var(--cwc-fs-xs); font-weight: 600; color: var(--cwc-accent-cool);
+}
+.askq-head svg { flex: none; }
+.askq-body { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
+.askq-q { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.askq-qhead { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
+.askq-chip {
+  flex: none; font-size: var(--cwc-fs-xs); font-weight: 600;
+  padding: .05rem .35rem; border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-accent-cool);
+  background: color-mix(in srgb, var(--cwc-accent-cool) 15%, transparent);
+}
+.askq-qtext { font-size: var(--cwc-fs-sm); color: var(--cwc-text); font-weight: 600; }
+.askq-opts { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.askq-opt {
+  display: flex; flex-direction: column; gap: .1rem; text-align: left;
+  padding: .4rem .55rem; border-radius: var(--cwc-radius-sm);
+  border: 1px solid var(--cwc-border); background: var(--cwc-bg-elevated);
+  color: var(--cwc-text); cursor: pointer; min-width: 0; width: 100%;
+  transition: border-color .12s ease, background .12s ease;
+}
+.askq-opt:hover { border-color: var(--cwc-accent-cool); }
+.askq-opt.sel {
+  border-color: var(--cwc-accent-cool);
+  background: color-mix(in srgb, var(--cwc-accent-cool) 18%, transparent);
+}
+.askq-opt-label { font-size: var(--cwc-fs-sm); font-weight: 600; }
+.askq-opt-desc { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.askq-other {
+  width: 100%; padding: .35rem .5rem; border-radius: var(--cwc-radius-sm);
+  border: 1px dashed var(--cwc-border); background: transparent;
+  color: var(--cwc-text); font-size: var(--cwc-fs-sm); font-family: inherit;
+}
+.askq-other:focus { outline: none; border-color: var(--cwc-accent-cool); border-style: solid; }
+.askq-actions { display: flex; align-items: center; gap: .45rem; }
+.askq-submit { margin-left: auto; }
+.askq-cancel, .askq-submit { flex: none; min-height: 32px; }
+@media (pointer: coarse) { .askq-opt, .askq-other, .askq-cancel, .askq-submit { min-height: 44px; } }
+
 /* Chip de registro del veredicto (se integra al grupo de tool calls) */
 .chat-permchip.ok { border-left: 2px solid var(--cwc-ok); }
 .chat-permchip.ok .ct-name { color: var(--cwc-ok); }

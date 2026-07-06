@@ -323,6 +323,17 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             puerta modo→UI. OJO: un runner ya vivo de antes del deploy no
                             conoce bypassPermissions (Set importado al spawn) e ignora ese
                             set_mode hasta dormirse/reabrirse.
+                            DEFAULT "Todo" DEL LANZADOR (pedido del usuario 2026-07-06): TODO
+                            chat/sesión NUEVO abierto desde el lanzador arranca en
+                            bypassPermissions — launcher.js pasa mode:'bypassPermissions' al
+                            crear/retomar chat (antes 'default') y la sesión TUI lanza
+                            `claude --dangerously-skip-permissions` (terminal/sessions.js). El
+                            confirm rojo de _modeChanged NO salta (solo aplica al elegirlo a
+                            mano), pero el chip del header nace ROJO "Todo" así queda visible.
+                            NO afecta: las corridas headless (regla 6), los chats de bugfixes
+                            "Trabajar en esto" (pasan modo explícito default/plan por el gate
+                            de push) ni el fallback del server /create (sigue 'default' como
+                            red anti-footgun para llamadas programáticas).
                             CHIPS DE EJECUCIÓN (tool calls): SOLO dos íconos, sin texto —
                             consola (= herramienta ejecutada) + tipo (TOOL_TYPE_ICONS en
                             chat-tab.js: Bash=play · Edit/Write=edit · Read=eye ·
@@ -342,6 +353,37 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             cp-detail-tool = nombre COMPLETO de la función (word-break) +
                             comando/diff íntegro. Destructivos siguen naciendo EXPANDIDOS
                             (isDestructiveCommand).
+                            PREGUNTA CON OPCIONES — AskUserQuestion (2026-07-06, pedido del
+                            usuario: el popup salía como un permitir/denegar genérico sin
+                            mostrar las opciones): el tool AskUserQuestion NO es un permiso
+                            permitir/denegar — es una PREGUNTA que espera que el usuario ELIJA
+                            una opción. Cae por el MISMO canal canUseTool/permission_request
+                            que cualquier tool, pero se renderiza distinto. Backend
+                            (shared.js): toolSummary = texto de la 1ª pregunta · toolDetail =
+                            {askQuestions:[{question,header,multiSelect,options:[{label,
+                            description}]}]} normalizado (viaja en `detail`, así lo reenvía
+                            también pendingPerms()→perm-center). Front: _permCard detecta
+                            tool==='AskUserQuestion' y llama _askQuestionCard, que usa el
+                            builder COMPARTIDO buildAskQuestionBody (exportado de chat-tab.js,
+                            reusado por perm-center.js — sin duplicar el render): pinta
+                            header-chip + pregunta + opciones seleccionables (single = radio,
+                            multiSelect = toggle) + "Otra respuesta…" (texto libre = la opción
+                            "Other" que el SDK ofrece siempre) + Enviar (habilitado cuando
+                            TODAS las preguntas tienen respuesta; muestra N/total) / Cancelar
+                            (deny). CONTRATO SDK (verificado en node_modules/@anthropic-ai/
+                            claude-agent-sdk/sdk-tools.d.ts): se responde devolviendo
+                            {behavior:'allow', updatedInput:{...input, answers:{"<texto
+                            pregunta>":"<label>"}}} — clave = TEXTO de la pregunta, valor =
+                            label elegido; multiSelect = labels SEPARADOS POR COMA. El campo
+                            `answers` viaja end-to-end: chat-tab _send({...,answers}) → WS/HTTP
+                            → chat.answerPermission(id,allow,answers) (saneado por
+                            sanitizeAnswers de index.js: solo pares string→string, tope 4) →
+                            runner {t:'perm',id,allow,answers} → materializa updatedInput.
+                            answers. runner-link.send() reenvía el objeto entero, sin cambios.
+                            Estilos .askq-* en style.css (borde --cwc-accent-cool para separar
+                            "elegir respuesta" del amarillo de "riesgo" de un permiso normal).
+                            Al responder, permission_closed colapsa la card a chip de registro
+                            (Permitido/Denegado) igual que cualquier permiso.
                             CENTRO GLOBAL DE PERMISOS (pedido del usuario 2026-07-04: con
                             varios chats abiertos los permisos expiraban sin verse — solo
                             chats SDK, tmux quedó explícitamente AFUERA): las solicitudes
@@ -380,6 +422,141 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             y dispara sessions-changed para las tarjetas). El renombre manual
                             sigue existiendo pero el próximo mensaje puede pisarlo (a
                             pedido: nombres siempre actualizados).
+                            ROUTER DE MODELO AUTOMÁTICO (2026-07-06, Fase 1, pedido del
+                            usuario): decide solo si el turno necesita más o menos modelo,
+                            escalando haiku→sonnet→opus→fable con MEMORIA de hilo (sube
+                            fácil, baja con inercia) en vez de un modelo fijo por chat.
+                            NÚCLEO puro en core/model-router.js (NO es un motor — mismo
+                            estatus que core/tool-policy.js: plomería in-process consultada
+                            EN VIVO, sin runner ni endpoints propios). sendUser llama a
+                            _applyModelRouter(text) ANTES de mandar el turno:
+                            decideModelForTurn() aplica una heurística 0-costo sobre el
+                            TEXTO (mensaje trivial "dale"/"gracias" → baja; trae ``` código →
+                            sube; muy largo ⇒ sube; ambiguo ⇒ no opina, no toca nada) con
+                            HISTÉRESIS de dos umbrales: subir es inmediato (mismo turno),
+                            bajar exige 3 turnos simples SEGUIDOS y de a UN escalón por vez
+                            (nunca de un salto). El NIVEL nunca se duplica en un estado
+                            propio: se deriva de `this.model` en cada turno; lo único que
+                            persiste el Chat es el contador chico de histéresis
+                            (`_routerDownStreak`, en persist()/rehydrate() junto al resto).
+                            El cambio de modelo en sí reusa el setModel() de siempre (mismo
+                            q.setModel() del SDK que ya usaba el selector manual) — CERO
+                            plomería de cambio de modelo nueva. TECHO deliberado en `opus`:
+                            la heurística de Fase 1 NUNCA sugiere `fable` sola (con solo 16
+                            cambios manuales de /model en el historial real de esta consola
+                            no había señal confiable para distinguir Opus de Fable — ver
+                            core/model-router.js para el razonamiento completo); subir a
+                            fable sigue siendo SOLO manual por ahora. ACTIVACIÓN IMPLÍCITA
+                            sin UI nueva: el router SOLO gestiona un chat si su modelo
+                            ACTUAL es exactamente haiku/sonnet/opus/fable — elegir
+                            `opusplan`/`default` desde el selector (o no elegir nada) lo deja
+                            INERTE a propósito, sin necesitar un toggle dedicado. Alcance:
+                            SOLO el chat interactivo (los motores headless — triage/salud/
+                            desk/auto-título — siguen con su asignación fija de siempre,
+                            deliberadamente afuera). Fundamentos completos (research de
+                            RouteLLM/FrugalGPT, análisis de costo real de transcripts propios
+                            — clasificar con Haiku en cada turno es ~0,005% del costo —, y
+                            minería de los cambios manuales de /model del propio usuario) en
+                            la cabecera de core/model-router.js.
+                            FASE 2 (mismo día, sumada al núcleo): clasificador Haiku para
+                            turnos AMBIGUOS (decideModelForTurn devuelve `ambiguous:true` si
+                            la heurística no opina) + escalado REACTIVO si un turno "no dio
+                            abasto". OJO DE LATENCIA verificado EN CALIENTE: el solo arranque
+                            de query() tarda ~2-3s antes de que Haiku conteste una palabra (en
+                            la práctica, 4-8s totales) — MUY por encima de lo que un turno
+                            puede esperar en línea. Por eso classifyComplexity()
+                            (modules/chat/index.js, patrón defensivo idéntico a extractTitle:
+                            1 turno, READ-ONLY doble capa, timeout+interrupt 20s) corre
+                            SIEMPRE en SEGUNDO PLANO (fire-and-forget, guarda
+                            `_routerClassifying` contra solapes) — nunca gobierna el turno
+                            actual, sí el PRÓXIMO (o el actual si el motor todavía no arrancó
+                            a responder). Mismo techo en `opus` que la heurística (nunca
+                            sugiere fable). Escalado reactivo: `_turnToolCount` (efímero, NO
+                            persiste) cuenta CUALQUIER tool_use del turno en curso
+                            (_onRunnerEvent); al volver a 'waiting' (_setStatus),
+                            _applyReactiveEscalation() sube un escalón si el turno usó ≥6 de
+                            golpe (REACTIVE_TOOL_THRESHOLD en core/model-router.js) — señal
+                            barata de "esto pesó más de lo esperado", 0 tokens extra, mismo
+                            techo en opus.
+                            FASE 3 (mismo día): VISIBILIDAD — badge "🤖 <modelo>" en el header
+                            del chat (chat-tab.js `_applyModel`, único punto de entrada del
+                            modelo a la UI — igual patrón que `_applyMode`), coloreado con
+                            ui/models.js (modelColor/modelName — el alias haiku/sonnet/opus/
+                            fable ES la key que esas funciones esperan). Oculto si el chat corre
+                            opusplan/default/sin elegir (mismo criterio de "inerte" del
+                            backend, replicado en `ROUTER_MANAGED_MODELS` del front — NO se
+                            importa nada del server). `Chat.attach()` manda `model` en el
+                            payload `history` para que nazca poblado; `Chat.setModel(model,
+                            {auto})` (nuevo 2º parámetro, default false) tagea el evento
+                            `{type:'model', model, auto}` — `auto:true` SOLO cuando lo decide
+                            el router (`_pendingModelAuto` lo consume el eco 'model' del
+                            runner vivo; el camino "motor dormido" lo taguea directo). Un
+                            cambio con `auto:true` dispara una notita inline en el chat ("🤖 El
+                            router cambió el modelo a X sin que hagas nada") — un cambio MANUAL
+                            (selector de Sesiones, `POST /api/chat/model`) sigue sin nota,
+                            como siempre. APRENDIZAJE — cada cambio que hace el router (los 3
+                            orígenes: heuristic/classifier/reactive) se registra con
+                            `logDecision()` (núcleo, `~/.cwc-data/model-router-log.jsonl`,
+                            append-only con poda cruda a la mitad pasado ~2MB) — SOLO
+                            observación para calibrar después con datos reales, patrón
+                            "invariantes propuestos" de Salud: nada de esta fase decide ni se
+                            relee sola; no hay UI de revisión todavía (pendiente de Fase 4 si
+                            hace falta).
+                            NOMBRE PROPIO + FORZADO REAL — "AutoTux" (2026-07-06, pedido del
+                            usuario, Frente A de 2 — el Frente B, extender esto a sesiones TUI/
+                            tmux, queda pendiente a propósito, ver más abajo): el router deja de
+                            activarse implícitamente por elegir un alias crudo y pasa a ser una
+                            ELECCIÓN EXPLÍCITA con nombre propio, separada del modelo real. Chat
+                            suma `modelChoice` (QUÉ ELIGIÓ la persona: 'auto'=AutoTux | opusplan |
+                            fable | opus | sonnet | haiku | default | null) — DISTINTO de `model`
+                            (lo que corre DE VERDAD contra el SDK/CLI real, nunca 'auto': ese
+                            sentinel es propio de la consola, VALID_MODELS de core/claude-model.js
+                            son los únicos alias que el CLI real reconoce). `setModelChoice(choice)`
+                            (chat/index.js) es la ÚNICA puerta: con 'auto' arranca desde el nivel
+                            actual (o 'sonnet' si no hay uno gestionado) y AutoTux queda al mando
+                            — `modelChoice` quedá en 'auto' PARA SIEMPRE, el badge nunca deja de
+                            decir "AutoTux" aunque el nivel real suba/baje por debajo; con
+                            cualquier otro valor FUERZA ese único modelo (setModel(choice) sin
+                            auto) y apaga el router (_applyModelRouter/_applyReactiveEscalation
+                            chequean `this.modelChoice !== 'auto'` primero, antes que nada).
+                            `POST /api/chat/create` sin `model` en el body ahora defaultea a
+                            'auto' (antes null): AutoTux es el predeterminado de TODA conversación
+                            de Chat nueva. `POST /api/chat/model` acepta 'auto' además de
+                            VALID_MODELS y delega a setModelChoice (antes llamaba a setModel
+                            directo). Persistencia: `modelChoice` viaja en persist()/rehydrate()
+                            igual que `_routerDownStreak`, EXPLÍCITO porque `model` solo no
+                            alcanza para distinguir "elegí Sonnet a mano" de "AutoTux está en
+                            Sonnet ahora". MIGRACIÓN: chats de ANTES de este cambio que ya tenían
+                            un alias crudo elegido (activación implícita vieja) quedan con
+                            modelChoice=ese mismo valor (forzados, router apagado) — hay que
+                            elegir "AutoTux" a mano una vez para que vuelvan a tener router.
+                            FUENTE ÚNICA del menú: `CHAT_MODEL_OPTIONS`/`ROUTER_MANAGED_MODELS`
+                            en public/js/ui/models.js (AutoTux primero, "Opus plan" segundo —
+                            renombrado, sin la palabra "Auto" para no confundirlo con el badge
+                            🤖 — después Fable/Opus/Sonnet/Haiku/Default), consumida por
+                            sessions.js (picker de chat, marca la opción ACTIVA contra
+                            `modelChoice` con ✓, patrón `.sess-menu-item--active`) y
+                            launcher.js (default de "Chat" nuevo). El picker de sesión TUI
+                            (`pickModel` en sessions.js) y el tipo "Claude (TUI)"/"Terminal" del
+                            lanzador usan `TUI_MODEL_OPTIONS`/`TUI_MODELS` — SIN 'auto' a
+                            propósito: el CLI real de esas sesiones (`claude --model X` /
+                            `/model X` tecleado) no conoce ese alias y rompería. El header del
+                            chat (chat-tab.js `_renderModelBadge`) pinta `🤖 AutoTux: <nivel>`
+                            con AutoTux, o el nombre plano (sin 🤖) con un modelo forzado; las
+                            tarjetas de Sesiones usan el mismo criterio (`chatModelLabel()`).
+                            FRENTE B (pendiente, mayor alcance/riesgo — toca `~/.claude/
+                            settings.json`, GLOBAL a toda sesión de Claude Code de la máquina,
+                            no solo las de este proyecto): llevar AutoTux también a sesiones TUI/
+                            tmux. Requiere un hook `UserPromptSubmit` propio (heurística 0-costo
+                            SOLO — un clasificador Haiku ahí bloquearía al usuario tipeando en la
+                            terminal varios segundos) + estado por pane en `~/.cwc-data/autotux/`
+                            + aplicar el cambio real (`tmux send-keys "/model X"`) recién cuando
+                            la sesión queda OCIOSA (nunca a mitad de turno — mismo patrón ya
+                            probado del "nudge" del interfono) + escalado reactivo vía hook
+                            `PostToolUse` + un instalador PROPIO aditivo/reversible
+                            (`bin/install-autotux.js`/`uninstall-autotux.js`, como exige la regla
+                            dura del proyecto para tocar configuración fuera del repo). No
+                            iniciado — queda documentado acá para cuando se retome.
   files/ stats/ tmux/ admin/ health/
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
@@ -388,7 +565,25 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             /claim-release {file} (admin, libera un claim zombi a mano). La
                             mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
                             de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
-                            menú ⚙ Sistema (system/interfono-panel.js)
+                            menú ⚙ Sistema (system/interfono-panel.js).
+                            ENTREGA AL CHAT (2026-07-06, pedido del usuario: el chat visual es
+                            la superficie PRINCIPAL de trabajo, la TUI es backup): una TUI recibe
+                            el mensaje por un nudge send-keys que la despierta en vivo, pero un
+                            chat del SDK solo lo "ve" al tomar un turno (el hook-inject de
+                            bin/cwc-bus.js corre en UserPromptSubmit — settingSources: ['user']).
+                            Esa brecha la cierra el MÓDULO chat (no éste): un watcher server-side
+                            (~12 s, ChatManager._deliverInterfono) AUTO-ENTREGA el mensaje a los
+                            chats ABIERTOS (algún cliente WS) y OCIOSOS (alive+waiting) inyectando
+                            un turno sintético con el texto (Chat.deliverInterfono → marca
+                            entregado en el bus ANTES de disparar el turno para que el hook-inject
+                            del mismo UserPromptSubmit no lo duplique — paridad con el nudge idle
+                            de la TUI). Los chats dormidos/ocupados/sin pestaña NO se despiertan
+                            solos (0 tokens fantasma): quedan para el POPUP GLOBAL
+                            (public/js/ui/interfono-center.js) alimentado por pendingInterfono[]
+                            de /api/chat/list (poll 8 s) con botones ▶ Retomar (POST
+                            /api/chat/interfono {action:'deliver'} — inyecta y DESPIERTA a
+                            demanda) y ✕ Descartar ({action:'dismiss'} — marca entregado sin
+                            actuar). El chat consume el bus SOLO leyendo (pendingFor/markDelivered)
   comms/                    COMUNICACIONES: motor TRANSVERSAL file-based (patrón Interfono)
                             que recopila/indexa/contextualiza las comunicaciones con cada
                             CONTACTO (eje primario = usuario; Chris `cswenor` es el seed —
@@ -437,7 +632,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             entrada INCREMENTAL a tickets.json (slots por índice, orden del
                             listado — el front que encuesta ve crecer la lista con
                             running=true). El prompt por ticket inyecta los HERMANOS (nº +
-                            asunto) para no perder la detección de duplicados entre tickets.
+                            asunto) para no perder la detección de duplicados entre tickets,
+                            Y el contexto del motor COMMS (commsContextFor de bugs/shared.js,
+                            hallazgo de Coherencia 2026-07-06 — espejo backend de
+                            fetchCommsContext del front): hilos indexados GitHub/Teams/
+                            chatbot que mencionen el ticket (tkt-N/#N con boundary numérico,
+                            tope 3 hilos), 0 tokens (buildIndex de comms/shared.js solo lee
+                            disco), best-effort (cualquier falla ⇒ '' y el triage sigue) —
+                            así el triage sabe si el bug YA se habló con Chris / tiene PR en
+                            curso al decidir recommendation (duplicate/ya-trabajado).
                             Fallo individual ⇒ entrada fallback needs-info + error final
                             "Triage parcial: fallaron N de M"; fallo del LISTADO ⇒ se
                             conserva la caché vieja (la caché recién se pisa tras un listado
@@ -478,7 +681,11 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             OJO: `bugs` (triage) ≠ `bugfixes` (motor
                             de PRs) — dominios distintos, nombres parecidos a propósito.
   tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
-                            por mtime+size) + límites del PLAN (GET /api/tokens/limits:
+                            por mtime+size; buildSummary parsea los .jsonl de cada dir en
+                            PARALELO con runAdaptivePool — adopción Coherencia 2026-07-06:
+                            LECTURA en pool con casillero por índice, ACUMULACIÓN serial en
+                            orden fijo porque los costos son floats y el orden de suma debe
+                            ser determinístico) + límites del PLAN (GET /api/tokens/limits:
                             % usado y reset de las ventanas de claude.ai — sesión 5 h /
                             semanales, incluida la del modelo activo — vía el endpoint
                             OAuth de uso de Anthropic con el accessToken de
@@ -701,8 +908,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             featurePrompt. ticketOfPr (motor) ahora entiende FEAT-n y
                             devuelve la clave completa ('FEAT-2', no el dígito), con orden
                             deliberado tkt-N → FEAT-n → #N (un título "Feature FEAT-2
-                            (#245)" da FEAT-2, no 245); el espejo del front (labels.js) igual
-                            + isFeatId gatea Desk en filas solo-GitHub de features (chip 💡,
+                            (#245)" da FEAT-2, no 245); FUENTE ÚNICA de esa convención
+                            (cableado Coherencia 2026-07-06, ANTES espejo duplicado a mano
+                            en el front): refresh-prs adjunta `ticketNumber: ticketOfPr(pr)`
+                            YA calculado a cada fila de `github`/lastGhRows y ticketOfPr de
+                            labels.js CONSUME ese campo si está presente (aunque sea null) —
+                            su regex quedó SOLO como fallback legacy para filas cacheadas
+                            sin el campo, NO mantenerla en paridad con el motor; buildTickets
+                            también prefiere el campo. isFeatId (front) sigue local y gatea
+                            Desk en filas solo-GitHub de features (chip 💡,
                             sin sección Zoho ni "Actualizar ticket"). Evento pr_vinculado en
                             EV_LABEL/evDot. Un PR vinculado pasa a mantenerse solo (FASE 2
                             de refresh-prs lo refresca como cualquier subido).
@@ -1061,6 +1275,16 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             (top:52px, bajo el header) — abajo taparía el composer con el
                             teclado abierto. Solo chats SDK: NO cubre TUIs tmux (decidido
                             2026-07-04) ni toca las corridas headless de la regla 6) ·
+                            interfono-center.js (CENTRO GLOBAL DE INTERFONO, gemelo del de
+                            permisos, 2026-07-06: popups con los mensajes de OTRAS sesiones que
+                            un chat aún no tomó — pendingInterfono[] de /api/chat/list, poll 8 s.
+                            Una tarjeta por CHAT (agrupa sus mensajes) con ▶ Retomar (inyecta y
+                            despierta el chat) y ✕ Descartar (marca entregado sin actuar), POST
+                            /api/chat/interfono {id,action}. Suprime la del chat ACTIVO (el
+                            watcher lo inyecta solo y aparece como burbuja). Ancla abajo-IZQUIERDA
+                            —.cwc-intercom/.ic-card en ui.css, borde --cwc-accent-cool— para no
+                            pisarse con el de permisos (abajo-derecha); móvil arriba-izquierda.
+                            Ver la ENTREGA AL CHAT del módulo interfono/) ·
                             pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
                             USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
                             de Bugs, subir PR, push/backup, cálculo de Uso; el spinner queda
@@ -1083,7 +1307,17 @@ bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz
                             reusa el triage anterior sin query() (0 tokens); --full la ignora
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
-                            allowlist fixToolAllowed, node --check, sin reinicio — excepción regla 6)
+                            allowlist fixToolAllowed, node --check, sin reinicio — excepción
+                            regla 6). Prompt COMPARTIDO con el orquestador de batch: fixPrompt()
+                            de health/shared.js (fusión Optimización IA 2026-07-06 — antes tenía
+                            una copia inline divergente que pedía "FIXFAIL falso positivo" y el
+                            FP quedaba 'failed', re-auditándose con sonnet en CADA revisión).
+                            Falso positivo (FIXNONE/"falso positivo") ⇒ markFindingDismissed()
+                            de shared.js (punto ÚNICO de "marcar descartado"; también delega ahí
+                            el markDismissed del orquestador): fixStatus:'dismissed' en
+                            review.json + registro durable health-dismissed.json → dismissedFor
+                            lo inyecta al auditor y el bucle escaneo→mismo FP→escaneo se corta
+                            también resolviendo hallazgos SUELTOS, no solo por batch
 bin/cwc-health-resolve.js   marca UN hallazgo como RESUELTO (fixStatus:'resolved' en review.json
                             + recordSolved). Lo corre el PROPIO chat "En chat" al terminar (le
                             paso el id en el prompt) para que el tablero refleje el cierre.
@@ -1145,6 +1379,14 @@ bin/cwc-optimize-runner.js  OPTIMIZACIÓN IA de los motores de la consola (botó
                             auto-aplican: quedan pending y Aprobar = chat supervisado
                             (acceptEdits) / flujo nuevo = chat en modo plan; Descartar las
                             marca rejected. Lógica compartida en health/optimize-shared.js
+                            (su plomería lock/heartbeat + store persistido + parseo de
+                            propuestas son FÁBRICAS de health/proposal-runner-shared.js —
+                            makeLock/makeResultStore/makeProposalParser + allowlist
+                            readOnlyToolAllowed — compartidas con coherence-shared.js;
+                            fusión 2026-07-06 propuesta por la propia Optimización IA:
+                            estaban duplicadas línea por línea y ya habían divergido.
+                            Ambos módulos re-exportan los nombres históricos
+                            (writeOptLock/parseCoherence/…): runners y server no cambian)
 bin/cwc-coherence-runner.js MÓDULO DE COHERENCIA (subsección "🔗 Coherencia" de la pestaña
                             Salud). Gemelo del optimizador pero mira las ARISTAS del sistema,
                             no los nodos: ¿los motores/módulos se usan ENTRE SÍ o reinventan/
@@ -1154,7 +1396,9 @@ bin/cwc-coherence-runner.js MÓDULO DE COHERENCIA (subsección "🔗 Coherencia"
                             imports resueltos + consumo de servicios transversales comms/bus/
                             inventory/tokens/paths/sdk-settings + señales gh/runners/motores) +
                             los HALLAZGOS de cableado determinísticos (evaluateCoherence de
-                            health/coherence-shared.js: comms infrautilizado · gh duplicado ·
+                            health/coherence-shared.js: comms infrautilizado · gh fuera de las
+                            fuentes canónicas (lector pr-read-shared / gateway gateway-shared;
+                            exenciones verificadas en GH_EXEMPT) ·
                             runner sin regla de oro · motor sin doble capa · servicio huérfano ·
                             COMPLETITUD del inventario: módulo sin registrar/frontend sin montar
                             · runner/motor SDK huérfano; cada hallazgo con `pasos` + botón
@@ -1167,7 +1411,8 @@ bin/cwc-coherence-runner.js MÓDULO DE COHERENCIA (subsección "🔗 Coherencia"
                             (resultado + hallazgos persistidos). Propuestas NUNCA auto-aplicadas
                             (Aprobar = chat acceptEdits · Explorar flujo = plan · Descartar =
                             rejected), patrón invariant-proposals. Lógica compartida en
-                            health/coherence-shared.js
+                            health/coherence-shared.js (plomería lock/store/parseo =
+                            fábricas de health/proposal-runner-shared.js, ver optimize)
 bin/cwc-bus.js              CLI del INTERFONO entre sesiones (lógica en src/core/bus.js). PUERTA
                             ÚNICA de los hooks de Claude Code + el comando /btw. Subcomandos:
                             send (lo usa /btw) · hook-inject (SessionStart/UserPromptSubmit:
@@ -1632,7 +1877,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
   reglas estrictas (leer CLAUDE.md, node --check, frenar en alto riesgo);
   "Explorar en chat (plan)" hace lo mismo con el flujo nuevo en modo plan.
   El optimizador tiene PROHIBIDO proponer nada que debilite las reglas duras
-  (se lo exige el prompt y lo re-verifica el chat que aplica).
+  (se lo exige el prompt y lo re-verifica el chat que aplica). Las REGLAS
+  DURAS van INYECTADAS pre-masticadas en optimizePrompt() vía hardRulesText()
+  de health/shared.js (2026-07-06, mismo patrón que unitPrompt): la corrida ya
+  NO gasta un Read de CLAUDE.md entero para eso — si la extracción falla,
+  fallback a la instrucción vieja de leer el archivo.
 - **Coherencia** (subsección "🔗 Coherencia" de la pestaña Salud, gemela de
   Optimización IA): mientras la Revisión audita NODOS (cada módulo por dentro)
   y la Optimización mira la CONFIG de cada motor, Coherencia mira las ARISTAS —
@@ -1648,7 +1897,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   respetan la regla de oro — un runner que DELEGA en su `*-shared.js` cuenta
   como OK). `evaluateCoherence()` de health/coherence-shared.js aplica REGLAS de
   cableado sobre el censo → hallazgos duros: comms infrautilizado (bug/feature
-  que no consulta comms) · gh duplicado en >1 módulo · runner sin regla de oro ·
+  que no consulta comms) · gh FUERA de las fuentes canónicas (2026-07-06,
+  antes "gh en >1 módulo" y saltaba eternamente como FP aunque la unificación
+  Fase C ya estaba hecha: ahora GH_CANONICAL exime al lector único
+  comms/pr-read-shared.js y al gateway comms/gateway-shared.js, y GH_EXEMPT
+  —hand-authored con motivo, patrón `exclude` de los patrones canónicos—
+  exime los usos verificados a mano: backup/index.js repo-edit del repo de
+  la consola y bugfixes/index.js cuyos gh restantes son excepciones
+  documentadas; basta UN archivo nuevo no eximido para disparar. OJO: los
+  motivos en GH_EXEMPT se redactan "repo edit (gh)" y no al revés — el
+  censor ghRe de core/inventory.js matchea comillas+gh+verbo y el propio
+  coherence-shared.js se auto-detectaría como caller) · runner sin regla de oro ·
   motor SDK sin doble capa · servicio transversal huérfano · y COMPLETITUD del
   inventario (census.completeness, reusa parseBackendModules/Frontend/Runners +
   el grafo): módulo backend sin registrar en registry.js · módulo frontend sin
@@ -1665,6 +1924,10 @@ docs/                       frontend-modules.md · brief-original.txt · context
   for-of con await sobre I/O que no usa el pool); la regla `adopcion` lo marca
   pero la REGLA DE ORO ("paralelo lo que LEE, serial lo que ESCRIBE") la confirma
   la IA/humano (un bucle que escribe en orden o es interactivo NO se paraleliza).
+  Un FP confirmado a mano se exime con el campo `exclude: [archivos]` del patrón
+  (hand-authored con comentario del porqué, 2026-07-06: backup/index.js `git add`
+  escribe el índice · chat/index.js y cwc-chat-runner.js son streams del SDK) —
+  así el aviso no reaparece eternamente por sitios seriales POR DISEÑO.
   Cada hallazgo trae `pasos` (procedimiento) y en el modal un botón "💬 Resolver
   en chat" (chat supervisado acceptEdits, admin) — accionable SIN gastar la IA.
   El modal muestra los hallazgos SIEMPRE frescos del censo (no los persistidos en
@@ -1689,7 +1952,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
   análisis IA, que elige unos módulos frontend y los abre a verificar. Sumar
   una convención nueva chequeable por regex = agregar una entrada a
   CANONICAL_CONVENTIONS (semilla hand-authored, como CANONICAL_PATTERNS/
-  SEED_INVARIANTS — nunca autogenerada). (b) ANÁLISIS (POST
+  SEED_INVARIANTS — nunca autogenerada; `exclude` opcional por entrada =
+  excepciones deliberadas VERIFICADAS documentadas en su propio archivo,
+  p.ej. las miniaturas rellenas folderSVG/fileSVG de fm.js en
+  `iconos-centralizados` — el lead mecánico las saltea, la capa IA las sigue
+  viendo). (b) ANÁLISIS (POST
   /api/health/coherence, admin, CONSUME TOKENS, confirm) → runner desacoplado
   bin/cwc-coherence-runner.js (lock `coherence.lock` con fase, reserva pid:0
   patrón spawnOptimize, resultado persistido en ~/.cwc-data/coherence.json); GET
@@ -1705,7 +1972,11 @@ docs/                       frontend-modules.md · brief-original.txt · context
   "Explorar flujo" en modo plan. La sub-ventana (system/coherence-modal.js)
   muestra el grafo/servicios + patrones + convenciones + los hallazgos
   determinísticos (gratis) + las propuestas IA. El auditor tiene PROHIBIDO
-  proponer nada que debilite las reglas duras.
+  proponer nada que debilite las reglas duras. Igual que el optimizador, las
+  REGLAS DURAS van INYECTADAS pre-masticadas en coherencePrompt() vía
+  hardRulesText() de health/shared.js (2026-07-06, junto al bloque de
+  conventionsText): sin Read de CLAUDE.md entero; fallback a la instrucción
+  vieja si la extracción falla.
 - **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad

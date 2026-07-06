@@ -47,8 +47,11 @@ const PROJECTS = {
 };
 
 function project(req, res) {
-  const p = PROJECTS[req.params.key];
-  if (!p) { res.status(404).json({ error: `Proyecto desconocido: ${req.params.key}` }); return null; }
+  // hasOwnProperty: una key heredada de Object.prototype ('toString',
+  // 'constructor'…) sería truthy en PROJECTS[key] y saltearía el 404.
+  const key = req.params.key;
+  const p = Object.prototype.hasOwnProperty.call(PROJECTS, key) ? PROJECTS[key] : null;
+  if (!p) { res.status(404).json({ error: `Proyecto desconocido: ${key}` }); return null; }
   return p;
 }
 
@@ -162,13 +165,17 @@ export default {
     // si el runner murió sin escribir (kill/OOM), jobResult lo reporta como
     // error pasado el corte de staleness — el front nunca queda colgado.
     r.get('/:key/context/section/:i/analyze/:id', (req, res) => {
-      const p = project(req, res); if (!p) return;
-      if (!/^[0-9a-f]{24}$/.test(String(req.params.id))) {
-        return res.status(400).json({ error: 'Id de análisis inválido.' });
+      try {
+        const p = project(req, res); if (!p) return;
+        if (!/^[0-9a-f]{24}$/.test(String(req.params.id))) {
+          return res.status(400).json({ error: 'Id de análisis inválido.' });
+        }
+        const job = readAnalyzeJob(req.params.id);
+        if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
+        res.json({ ok: true, id: req.params.id, ...jobResult(job) });
+      } catch (e) {
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }
-      const job = readAnalyzeJob(req.params.id);
-      if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
-      res.json({ ok: true, id: req.params.id, ...jobResult(job) });
     });
 
     // ===== Memorias (MEMORY.md + notas individuales) =====

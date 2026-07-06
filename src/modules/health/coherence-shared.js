@@ -19,13 +19,20 @@
 // GARANTÍAS (idénticas a optimize-shared): regla de oro (runner desacoplado +
 // estado persistido en ~/.cwc-data/coherence.json) · regla 6 (dos capas
 // read-only, allowlist Read/Grep/Glob/TodoWrite, settingSources: []).
+//
+// PLOMERÍA COMPARTIDA (fusión 2026-07-06, propuesta de la Optimización IA):
+// el lock/heartbeat, el store del resultado y el parseo de propuestas estaban
+// duplicados línea por línea con optimize-shared.js — ahora ambos instancian
+// las FÁBRICAS de proposal-runner-shared.js re-exportando los nombres
+// históricos (bin/cwc-coherence-runner.js y el módulo server no cambian).
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { ROOT } from '../../core/inventory.js';
+import { hardRulesText } from './shared.js';
+import {
+  DATA_DIR, sha, readOnlyToolAllowed, makeLock, makeResultStore, makeProposalParser,
+} from './proposal-runner-shared.js';
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 export const COH_FILE = path.join(DATA_DIR, 'coherence.json');   // resultado persistido
 export const COH_LOCK = path.join(DATA_DIR, 'coherence.lock');   // heartbeat del runner
 export const COH_LOG = path.join(DATA_DIR, 'coherence.log');
@@ -37,9 +44,7 @@ export const COH_LOCK_FRESH_MS = 20000;       // lock más viejo = runner muerto
 
 // Allowlist de herramientas: SOLO lecturas locales (dos capas — regla 6).
 // Idéntica al auditor de salud y al optimizador: LEE código, jamás escribe.
-export function cohToolAllowed(name) {
-  return ['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name);
-}
+export const cohToolAllowed = readOnlyToolAllowed;
 
 export const COH_RISKS = new Set(['bajo', 'medio', 'alto']);
 export const COH_TIPOS = new Set(['cableado', 'dedup', 'fuente-unica', 'regla-oro', 'blindaje', 'espejo', 'adopcion', 'convencion', 'otro']);
@@ -69,8 +74,9 @@ export function conventionsText() {
   return _conventions;
 }
 
-const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
-export const proposalId = (p) => sha(`${p.foco || ''}|${p.tipo || ''}|${p.propuesta || ''}`);
+// Parseo defensivo + id estable (sha1 foco|tipo|propuesta) — fábrica compartida.
+const parser = makeProposalParser({ keyField: 'foco', tipos: COH_TIPOS, risks: COH_RISKS });
+export const proposalId = parser.proposalId;
 const findingId = (f) => sha(`${f.categoria || ''}|${f.foco || ''}|${f.detalle || ''}`);
 
 // ===== Reglas de coherencia determinísticas (0 tokens) =====
@@ -104,17 +110,49 @@ export function evaluateCoherence(census) {
     }
   }
 
-  // Regla 2: scraping de `gh` en más de un módulo = duplicación potencial.
-  const ghModules = [...new Set((census.ghCallers || []).map((g) => g.module))];
-  if (ghModules.length > 1) {
+  // Regla 2: scraping de `gh` FUERA de las fuentes canónicas = duplicación.
+  // EXENCIONES hand-authored (FP verificado a mano 2026-07-06, mismo espíritu
+  // que el campo `exclude` de CANONICAL_PATTERNS/CANONICAL_CONVENTIONS: sin
+  // esto el aviso reaparecía eternamente aunque la unificación Fase C ya se
+  // hizo). Dos categorías:
+  //   GH_CANONICAL — los archivos que SON la fuente única (no pueden ser su
+  //     propia duplicación): comms/pr-read-shared.js (LECTOR ÚNICO fetchPrRich/
+  //     fetchPrDiff con caché por PR) y comms/gateway-shared.js (GATEWAY de
+  //     escritura pr comment/reviewer/close/edit).
+  //   GH_EXEMPT — llamadas verificadas UNA a una que NO son el scraping que la
+  //     regla caza (motivo al lado; si estos archivos suman gh NUEVO, la capa
+  //     IA lo sigue viendo — la exención es solo de esta regla mecánica).
+  // Un módulo NUEVO que llame a gh por su cuenta SÍ dispara el aviso (ahora
+  // basta UNO solo: duplica contra la fuente canónica, no hace falta un par).
+  const GH_CANONICAL = new Set([
+    'src/modules/comms/pr-read-shared.js', // LECTOR ÚNICO de PRs (Fase C 2026-07-05)
+    'src/modules/comms/gateway-shared.js', // GATEWAY de escritura (2026-07-05)
+  ]);
+  const GH_EXEMPT = new Map([
+    // `repo edit` (gh) de la descripción del repo de LA CONSOLA (remote
+    // personal) — dominio distinto de Tolkien, best-effort, no es scraping de
+    // PRs. OJO: acá se escribe "repo edit (gh)" y no al revés a propósito: el
+    // censor ghRe de core/inventory.js matchea comillas+gh+verbo y este mismo
+    // archivo se auto-detectaría como caller (FP del censor).
+    ['src/modules/backup/index.js', 'repo edit (gh) del repo de la consola (dominio propio, no Tolkien)'],
+    // Ya consume fetchPrRich (refresh-prs camino principal). Los gh restantes
+    // son excepciones DOCUMENTADAS en CLAUDE.md/inline: `pr view --json state`
+    // de 1 campo (verificación en cancel/push), fallback por BRANCH sin
+    // prNumber (fetchPrRich cachea por número), `pr list` (listado, no lectura
+    // por-PR) y `pr create` (write del flujo pushPr).
+    ['src/modules/bugfixes/index.js', 'consume fetchPrRich; restos = excepciones documentadas (state 1-campo, fallback branch, pr list, pr create)'],
+  ]);
+  const ghSuspects = (census.ghCallers || []).filter((g) => !GH_CANONICAL.has(g.file) && !GH_EXEMPT.has(g.file));
+  if (ghSuspects.length > 0) {
+    const ghModules = [...new Set(ghSuspects.map((g) => g.module))];
     add({
       categoria: 'fuente-unica', severidad: 'aviso', foco: ghModules.join(', '),
-      detalle: `Hay llamadas a la CLI "gh" en ${ghModules.length} módulos distintos (${(census.ghCallers || []).map((g) => g.file).join(', ')}) — scraping de GitHub potencialmente DUPLICADO sin fuente compartida.`,
-      sugerencia: 'Unificar el scraping de gh en una sola fuente (p.ej. comms/shared) y que los demás la consuman, para no divergir ni re-pagar el mismo trabajo.',
+      detalle: `Hay llamadas a la CLI "gh" fuera de las fuentes canónicas (${ghSuspects.map((g) => g.file).join(', ')}) — scraping de GitHub potencialmente DUPLICADO contra el lector único comms/pr-read-shared.js o el gateway comms/gateway-shared.js.`,
+      sugerencia: 'Consumir la fuente canónica: lecturas de PR → fetchPrRich/fetchPrDiff (comms/pr-read-shared.js, caché por PR); escrituras → sendComm (comms/gateway-shared.js). Si es una excepción legítima verificada, documentarla y sumarla a GH_EXEMPT (coherence-shared.js) con su motivo.',
       pasos: [
-        'Listar qué lee cada módulo de gh (reviews/comentarios de un PR, estado, repo edit…)',
-        'Extraer la lectura común a UN lector compartido (patrón comms/pr-read-shared.js con caché por PR) y que los demás lo consuman',
-        'Dejar en cada módulo solo su parseo específico; verificar que ninguno pierde campos',
+        'Listar qué lee/escribe de gh cada archivo señalado (reviews/comentarios de un PR, estado, repo edit…)',
+        'Migrar la lectura a fetchPrRich/fetchPrDiff y la escritura a sendComm; dejar en el módulo solo su parseo específico',
+        'Verificar que ningún consumidor pierde campos; si es excepción legítima, exención en GH_EXEMPT con motivo',
       ],
     });
   }
@@ -283,6 +321,11 @@ function compactCensus(census) {
 // Prompt del análisis: recibe el censo (compacto) + los hallazgos determinísticos
 // y VERIFICA leyendo el código antes de proponer el cableado concreto.
 export function coherencePrompt(census, findings) {
+  // REGLAS DURAS ya masticadas (0 tool calls, mismo patrón que unitPrompt de
+  // shared.js y que conventionsText() de arriba): si hardRulesText() trae texto
+  // se inyecta directo y el modelo NO gasta un Read del CLAUDE.md entero solo
+  // para esto; si vino vacío, fallback a la instrucción vieja.
+  const rules = hardRulesText();
   return [
     'Sos el AUDITOR DE COHERENCIA de Claude Web Console. Corrida NO interactiva,',
     'SOLO LECTURA (no modifiques nada, no corras comandos).',
@@ -312,11 +355,24 @@ export function coherencePrompt(census, findings) {
       conventionsText(),
       '```',
     ] : []),
+    ...(rules ? [
+      '',
+      'REGLAS DURAS del proyecto (sección «## Reglas duras» de CLAUDE.md, YA',
+      'extraída acá — NO abras CLAUDE.md para esto, usá este texto directo):',
+      '',
+      rules,
+    ] : []),
     '',
-    'Método (presupuesto ACOTADO de turnos, administralo: leé primero CLAUDE.md,',
-    'después SOLO lo que necesites verificar; reservá el último turno para el',
-    'bloque ```json final):',
-    '1. Leé CLAUDE.md de la raíz: las REGLAS DURAS (1-9) son INVIOLABLES. Ninguna',
+    ...(rules
+      ? ['Método (presupuesto ACOTADO de turnos, administralo: las reglas duras van',
+        'inyectadas arriba — no gastes un turno en abrir CLAUDE.md para eso; leé',
+        'SOLO lo que necesites verificar; reservá el último turno para el',
+        'bloque ```json final):',
+        '1. Las REGLAS DURAS (1-9) van INYECTADAS arriba y son INVIOLABLES. Ninguna']
+      : ['Método (presupuesto ACOTADO de turnos, administralo: leé primero CLAUDE.md,',
+        'después SOLO lo que necesites verificar; reservá el último turno para el',
+        'bloque ```json final):',
+        '1. Leé CLAUDE.md de la raíz: las REGLAS DURAS (1-9) son INVIOLABLES. Ninguna']),
     '   propuesta puede debilitar el blindaje read-only de dos capas, los runners',
     '   desacoplados (regla de oro), el bind ZeroTier ni el resto.',
     '2. Verificá cada hallazgo determinístico abriendo el código citado. Descartá',
@@ -372,76 +428,23 @@ export function coherencePrompt(census, findings) {
   ].join('\n');
 }
 
-// Parseo defensivo del texto del modelo → resultado normalizado.
-export function parseCoherence(text) {
-  const fences = [...String(text || '').matchAll(/```json\s*([\s\S]*?)```/gi)];
-  const raw = fences.length ? fences[fences.length - 1][1] : (String(text || '').match(/\{[\s\S]*\}/) || [])[0];
-  if (!raw) return null;
-  let o;
-  try { o = JSON.parse(raw); } catch { return null; }
-  if (!o || typeof o !== 'object') return null;
-  const propuestas = (Array.isArray(o.propuestas) ? o.propuestas : []).slice(0, 12).map((p) => {
-    const clean = {
-      foco: String(p.foco ?? '').slice(0, 80),
-      archivo: String(p.archivo ?? '').slice(0, 200),
-      tipo: COH_TIPOS.has(p.tipo) ? p.tipo : 'otro',
-      actual: String(p.actual ?? '').slice(0, 400),
-      propuesta: String(p.propuesta ?? '').slice(0, 500),
-      razon: String(p.razon ?? '').slice(0, 600),
-      impacto: String(p.impacto ?? '').slice(0, 300),
-      riesgo: COH_RISKS.has(p.riesgo) ? p.riesgo : 'medio',
-      archivos: (Array.isArray(p.archivos) ? p.archivos : []).slice(0, 6).map((a) => String(a).slice(0, 200)),
-      pasos: (Array.isArray(p.pasos) ? p.pasos : []).slice(0, 8).map((s) => String(s).slice(0, 300)),
-      status: 'pending',
-    };
-    return { ...clean, id: proposalId(clean) };
-  });
-  const fn = o.flujoNuevo && typeof o.flujoNuevo === 'object' ? o.flujoNuevo : null;
-  return {
-    resumen: String(o.resumen ?? '').slice(0, 1200),
-    propuestas,
-    flujoNuevo: fn ? {
-      vale: fn.vale === true,
-      titulo: String(fn.titulo ?? '').slice(0, 120),
-      descripcion: String(fn.descripcion ?? '').slice(0, 800),
-      diseno: (Array.isArray(fn.diseno) ? fn.diseno : []).slice(0, 10).map((s) => String(s).slice(0, 300)),
-    } : null,
-  };
-}
+// Parseo defensivo del texto del modelo — fábrica compartida (ver arriba).
+export const parseCoherence = parser.parse;
 
 // ===== Resultado persistido (sobrevive reinicios; el front lo encuesta) =====
-export function readCoh() {
-  try { return JSON.parse(fss.readFileSync(COH_FILE, 'utf8')); }
-  catch { return { updatedAt: null, resumen: null, propuestas: [], flujoNuevo: null, findings: [], error: null }; }
-}
-export function writeCoh(data) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(COH_FILE, JSON.stringify(data), { mode: 0o600 });
-  } catch (err) { console.error('[coherence] no pude escribir coherence.json:', err?.message); }
-}
+const store = makeResultStore({
+  file: COH_FILE, tag: 'coherence',
+  empty: () => ({ updatedAt: null, resumen: null, propuestas: [], flujoNuevo: null, findings: [], error: null }),
+});
+export const readCoh = store.read;
+export const writeCoh = store.write;
 
 // ===== Lock/heartbeat del runner (patrón optimize/desk) =====
-export function writeCohLock(state) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(COH_LOCK, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 });
-  } catch { /* noop */ }
-}
-export function clearCohLock() { try { fss.unlinkSync(COH_LOCK); } catch { /* noop */ } }
-export function readCohLock() {
-  try {
-    const l = JSON.parse(fss.readFileSync(COH_LOCK, 'utf8'));
-    if (Date.now() - l.ts >= COH_LOCK_FRESH_MS) return null;
-    return l;
-  } catch { return null; }
-}
-export function isCohRunning() { return !!readCohLock(); }
-// ¿Hay OTRO runner realmente corriendo? Exige pid REAL (≠ 0): la reserva del
-// server (pid:0) no cuenta, así el runner no ve su propia reserva.
-export function otherCohAlive() {
-  try {
-    const { pid, ts } = JSON.parse(fss.readFileSync(COH_LOCK, 'utf8'));
-    return !!pid && pid !== process.pid && Date.now() - ts < COH_LOCK_FRESH_MS;
-  } catch { return false; }
-}
+// Fábrica compartida: reserva pid:0 del server + reclamo del runner (ver
+// makeLock en proposal-runner-shared.js — otherCohAlive exige pid real).
+const lock = makeLock({ file: COH_LOCK, freshMs: COH_LOCK_FRESH_MS });
+export const writeCohLock = lock.write;
+export const clearCohLock = lock.clear;
+export const readCohLock = lock.read;
+export const isCohRunning = lock.isRunning;
+export const otherCohAlive = lock.otherAlive;

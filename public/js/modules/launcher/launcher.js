@@ -7,20 +7,19 @@
 // breadcrumb (GET /api/files/list, solo directorios). [Iniciar] crea y enfoca.
 // Flujos: Home = 2 taps · reciente = 3 taps · carpeta nueva = navegar + Iniciar.
 import { placeFor } from '../../ui/places.js';
+import { CHAT_MODEL_OPTIONS } from '../../ui/models.js';
 
 const LAST_MODEL_KEY = 'cwc:lastModel';
 // "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
 // usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
 const CONSOLE_PLACE = placeFor('claude-web-console');
 
-const MODELS = [
-  ['opusplan', 'Auto (Opus plan / Sonnet)'],
-  ['fable', 'Fable'],
-  ['opus', 'Opus'],
-  ['sonnet', 'Sonnet'],
-  ['haiku', 'Haiku'],
-  ['default', 'Default de la cuenta'],
-];
+// AutoTux (2026-07-06): predeterminado de TODA conversación de Chat nueva —
+// fuente única en ui/models.js (mismo listado/orden que el picker de
+// Sesiones). "Claude (TUI)" usa una lista SIN AutoTux (TUI_MODELS abajo): el
+// CLI real de esas sesiones no conoce ese alias — ver core/model-router.js.
+const MODELS = CHAT_MODEL_OPTIONS;
+const TUI_MODELS = CHAT_MODEL_OPTIONS.filter(([v]) => v !== 'auto');
 
 export default {
   name: 'launcher',
@@ -35,7 +34,7 @@ export default {
     let modal = null;
     const st = {
       type: 'chat', // chat (SDK, default) | claude (PTY) | terminal
-      model: localStorage.getItem(LAST_MODEL_KEY) || 'opusplan',
+      model: localStorage.getItem(LAST_MODEL_KEY) || 'auto',
       dest: { rel: '', label: 'Home' },
       view: 'list',       // list | browse
       browseRel: '',
@@ -78,7 +77,7 @@ export default {
         <div class="ln-model-row" ${st.type === 'terminal' ? 'hidden' : ''}>
           <label class="ln-sec-title" for="ln-model">Modelo</label>
           <select id="ln-model" class="ln-model">
-            ${MODELS.map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
+            ${(st.type === 'chat' ? MODELS : TUI_MODELS).map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
         <div class="ln-sec-title">Abrir en</div>
@@ -87,7 +86,13 @@ export default {
 
       // Tipo
       for (const b of body.querySelectorAll('.ln-type')) {
-        b.addEventListener('click', () => { st.type = b.dataset.type; render(); });
+        b.addEventListener('click', () => {
+          st.type = b.dataset.type;
+          // AutoTux ('auto') no existe fuera de "Chat": el CLI real de una
+          // sesión TUI/terminal no conoce ese alias (ver TUI_MODELS arriba).
+          if (st.type !== 'chat' && st.model === 'auto') st.model = 'opusplan';
+          render();
+        });
       }
       // Modelo
       body.querySelector('#ln-model')?.addEventListener('change', (e) => { st.model = e.target.value; });
@@ -168,7 +173,10 @@ export default {
     async function resumeChat(dest, sessionId) {
       localStorage.setItem(LAST_MODEL_KEY, st.model);
       modal?.close();
-      await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default', resume: sessionId });
+      // Default del lanzador: "Todo" (bypassPermissions) — pedido del usuario
+      // 2026-07-06: todo chat/sesión nuevo arranca sin pedir permisos. Los chats
+      // de bugfixes/headless NO pasan por acá (mantienen su modo explícito).
+      await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'bypassPermissions', resume: sessionId });
     }
 
     // Pinta botones de conversación (snippet vía textContent, nunca HTML).
@@ -293,7 +301,8 @@ export default {
       if (st.type !== 'terminal') localStorage.setItem(LAST_MODEL_KEY, st.model);
       modal.close();
       if (st.type === 'chat') {
-        await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default' });
+        // Default "Todo" (bypassPermissions) para chat nuevo del lanzador.
+        await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'bypassPermissions' });
       } else {
         const runClaude = st.type === 'claude';
         await openSession({ cwd: dest.rel, runClaude, model: runClaude ? st.model : undefined });

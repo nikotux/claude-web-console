@@ -21,7 +21,7 @@ export const PR_CACHE_TTL_MS = 60 * 1000;
 // consumidor nuevo necesita otro campo, se agrega ACÁ (una sola fuente).
 export const PR_RICH_FIELDS = [
   'number', 'title', 'url', 'state', 'headRefName', 'mergeable', 'reviewDecision',
-  'updatedAt', 'createdAt', 'additions', 'deletions', 'changedFiles',
+  'updatedAt', 'createdAt', 'mergedAt', 'mergedBy', 'additions', 'deletions', 'changedFiles',
   'statusCheckRollup', 'reviews', 'comments', 'commits', 'author', 'reviewRequests',
 ].join(',');
 
@@ -55,4 +55,19 @@ export async function fetchPrRich(prNumber, { fresh = false, cwd = config.projec
   const pr = JSON.parse(await ghView(prNumber, cwd));
   writeCache(prNumber, pr);
   return pr;
+}
+
+// DIFF de un PR (texto plano de `gh pr diff`). Vive acá para que TODA lectura
+// de un PR salga de esta fuente (coherencia 2026-07-06; antes el
+// investigate-runner tenía su propio execFile de gh). SIN caché a propósito:
+// es pesado, tiene un solo consumidor hoy y siempre se quiere fresco; si
+// aparece otro consumidor, cachear acá (patrón fetchPrRich). `cap` recorta el
+// texto (el buffer amplio absorbe diffs grandes antes del recorte).
+export function fetchPrDiff(prNumber, { cwd = config.projectDir, cap = null } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile('gh', ['pr', 'diff', String(prNumber)], { cwd, timeout: 90000, maxBuffer: 24 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`gh pr diff #${prNumber}: ${String(stderr || err.message).trim().slice(0, 300)}`));
+      else resolve(cap ? String(stdout).slice(0, cap) : String(stdout));
+    });
+  });
 }

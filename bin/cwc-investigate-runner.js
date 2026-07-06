@@ -16,10 +16,9 @@
 // SEGURIDAD (regla 6, la MÁS blindada): junta los datos con gh EN NODE
 // (determinístico), y la corrida IA es PURA LECTURA DE TEXTO — NO usa ninguna
 // herramienta ni MCP. Las DOS capas (hook PreToolUse + canUseTool) deniegan TODO.
-import { execFile } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
-import { fetchPrRich } from '../src/modules/comms/pr-read-shared.js';
+import { fetchPrRich, fetchPrDiff } from '../src/modules/comms/pr-read-shared.js';
 import { listBugfixes } from '../src/modules/bugfixes/store.js';
 import {
   computeSemaforo, investigatePrompt, parseVerdict, investigateToolAllowed,
@@ -40,25 +39,17 @@ const heartbeat = setInterval(() => writeInvLock({ pid: process.pid, pr }), INV_
 heartbeat.unref?.();
 function finish(code) { clearInterval(heartbeat); clearInvLock(); process.exit(code); }
 
-// gh en Node (execFile): buffer amplio para el diff; luego se recorta.
-function gh(args, { big = false } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile('gh', args, { cwd: config.projectDir, timeout: 90000, maxBuffer: big ? 24 * 1024 * 1024 : 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(String(stderr || err.message).trim().slice(0, 300)));
-      else resolve(String(stdout));
-    });
-  });
-}
-
 const denyMsg = 'Investigación read-only: sin herramientas.';
 const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg } };
 
 async function run() {
   // 1) Juntar datos con gh (determinístico).
   // Fase C: lectura de GitHub centralizada en comms (pr-read-shared, superset).
+  // Coherencia 2026-07-06: el diff también sale de la fuente única (fetchPrDiff)
+  // — este runner ya no tiene ningún execFile de gh propio.
   const prJson = await fetchPrRich(pr, { fresh: true });
   let diff = '';
-  try { diff = (await gh(['pr', 'diff', pr], { big: true })).slice(0, DIFF_CAP); } catch { /* sin diff */ }
+  try { diff = await fetchPrDiff(pr, { cap: DIFF_CAP }); } catch { /* sin diff */ }
 
   // deskReplied del registro (si lo consultamos antes; 0 tokens).
   let deskReplied = null;
