@@ -247,6 +247,275 @@ export function aiEnginesCensus() {
   return engines.sort((a, b) => a.file.localeCompare(b.file));
 }
 
+// ===== Coherencia: grafo de dependencias + uso de servicios transversales =====
+// FASE de COHERENCIA del "sistema nervioso" (gemela del censo de motores IA):
+// determinístico (0 tokens), parsea los imports/require RELATIVOS entre los
+// archivos de src/ y bin/ para saber QUIÉN USA A QUIÉN, detecta el consumo de
+// los servicios transversales canónicos (comms, bus/interfono, inventory,
+// tokens, paths, sdk-settings) y marca señales crudas (llamadas a `gh`, motores
+// del SDK, runners y si respetan la regla de oro). Es la FOTO que interpreta el
+// runner de Coherencia (bin/cwc-coherence-runner.js): el censo dice "qué se
+// usa"; el análisis IA propone "qué debería usarse". A diferencia de la
+// Revisión de Salud (audita NODOS: cada módulo por dentro), esto mira las
+// ARISTAS (cómo se relacionan los módulos entre sí).
+const CANON_SERVICES = [
+  { key: 'comms', label: 'Comunicaciones (contexto de contactos/Chris)', match: (f) => f.startsWith('src/modules/comms/') },
+  { key: 'bus', label: 'Interfono / bus entre sesiones', match: (f) => f === 'src/core/bus.js' },
+  { key: 'inventory', label: 'Inventario / censo del proyecto', match: (f) => f === 'src/core/inventory.js' },
+  { key: 'tokens', label: 'Uso de tokens (buildSummary)', match: (f) => f === 'src/modules/tokens/index.js' },
+  { key: 'paths', label: 'Validación de rutas (resolveWithinHome/clampToHome)', match: (f) => f === 'src/core/paths.js' },
+  { key: 'sdk-settings', label: 'settingSources (fuente única headless/chat)', match: (f) => f === 'src/core/sdk-settings.js' },
+];
+
+// Patrones CANÓNICOS del proyecto (3ª dimensión de coherencia: propagación).
+// Cada patrón probado (paralelismo, caché incremental, runner desacoplado…)
+// DEBERÍA adoptarse donde aplique. El censo detecta: ¿existe el proveedor? ¿quién
+// lo adopta? ¿qué sitios parecen reinventarlo? El `candidate` es una heurística
+// de LEAD (la IA/humano confirma si de verdad se puede adoptar — para
+// paralelismo rige "paralelo lo que LEE, serial lo que ESCRIBE"); cuando es
+// demasiado semántico para un regex, queda en null y lo caza la capa IA.
+const CANONICAL_PATTERNS = [
+  {
+    key: 'parallel-pool',
+    label: 'Pool paralelo adaptativo (health/pool.js · runAdaptivePool)',
+    provider: (f) => f === 'src/modules/health/pool.js',
+    adopts: (t) => /runAdaptivePool/.test(t),
+    // Candidato: bucle for-of con await sobre I/O (NO el for-await de streams del
+    // SDK), en un archivo que hace trabajo de red/SDK y no usa el pool.
+    candidate: (f, t) => /for\s*\(\s*(?:const|let|var)\s+[\w[\]{}, ]+\s+of\s+[^)]+\)\s*\{[\s\S]{0,300}?\bawait\b/.test(t)
+      && /\b(?:query|fetch|execFile|spawnSync|execFileSync)\s*\(/.test(t),
+  },
+  {
+    key: 'incremental-cache',
+    label: 'Caché incremental por fingerprint (inventory · *-cache.json)',
+    provider: (f) => f === 'src/core/inventory.js',
+    adopts: (t) => /fingerprint/i.test(t) && /cache/i.test(t),
+    candidate: null, // demasiado semántico para regex: lo caza la IA
+  },
+  {
+    key: 'detached-runner',
+    label: 'Runner desacoplado + lock/heartbeat (regla de oro)',
+    provider: (f) => f === 'src/modules/health/optimize-shared.js',
+    adopts: (t) => /writeLock|heartbeat|\.lock/i.test(t),
+    candidate: null,
+  },
+];
+
+// Convenciones CANÓNICAS del proyecto (4ª dimensión de coherencia, 2026-07-06).
+// A diferencia de CANONICAL_PATTERNS (idiomas de código con UN proveedor
+// concreto), estas son reglas TRANSVERSALES de la sección "## Convenciones" de
+// CLAUDE.md: aplican a CUALQUIER módulo nuevo/cambiado, no a un archivo puntual
+// (eso son los invariantes de Salud, health/invariants.js). Las mecánicamente
+// chequeables por regex tienen `violates` (0 tokens, es un LEAD — puede tener
+// falsos positivos, la capa IA los descarta leyendo el código); las que
+// requieren criterio (¿"nuevo"? ¿"mucho texto"?) quedan con `violates: null` y
+// las caza la capa IA del análisis de Coherencia, que recibe el texto de
+// "## Convenciones" inyectado en el prompt (coherencePrompt, coherence-shared.js).
+// Semilla hand-authored, como CANONICAL_PATTERNS/SEED_INVARIANTS — sumar acá
+// cuando una convención nueva merezca chequeo automático.
+const CANONICAL_CONVENTIONS = [
+  {
+    key: 'colores-tokens',
+    label: 'Colores/espaciado solo desde tokens.css (o color-mix sobre ellos)',
+    scope: (f) => /^public\/css\/.*\.css$/.test(f) && f !== 'public/css/tokens.css',
+    violates: (t) => /#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b/.test(t),
+  },
+  {
+    key: 'sin-dialogos-nativos',
+    label: 'Nunca alert()/confirm()/prompt() nativos — siempre ui/dialog.js',
+    scope: (f) => /^public\/js\/.*\.js$/.test(f) && f !== 'public/js/ui/dialog.js',
+    violates: (t) => /\b(?:window\.)?(?:alert|confirm|prompt)\s*\(/.test(t),
+  },
+  {
+    key: 'iconos-centralizados',
+    label: 'Íconos nuevos solo en ui/icons.js — nunca SVG inline',
+    scope: (f) => /^public\/js\/.*\.js$/.test(f) && f !== 'public/js/ui/icons.js',
+    violates: (t) => /<svg[\s>]/i.test(t),
+  },
+  {
+    key: 'colapsable-arbol',
+    label: 'UI con mucho texto nace COLAPSADA + agrupada en árbol',
+    scope: (f) => /^public\/js\/modules\//.test(f),
+    violates: null, // semántico ("¿es nuevo? ¿tiene mucho texto?"): lo caza la capa IA
+  },
+];
+
+// Módulo lógico de un archivo rel-ROOT (agrupa el grafo por módulo).
+function moduleOfRel(f) {
+  const mm = f.match(/^src\/modules\/([^/]+)\//);
+  if (mm) return mm[1];
+  if (f.startsWith('src/core/')) return 'core';
+  if (f.startsWith('bin/')) return 'bin';
+  return 'src';
+}
+
+// Resuelve un specifier relativo (./ ../) a una ruta rel-ROOT existente,
+// probando .js / .mjs / /index.js. Devuelve null si es paquete externo o no
+// existe (así el grafo solo tiene aristas internas reales).
+function resolveImport(fromRel, spec) {
+  if (!spec.startsWith('.')) return null;
+  const baseAbs = path.join(ROOT, path.dirname(fromRel));
+  const cand = path.normalize(path.join(baseAbs, spec));
+  for (const t of [cand, `${cand}.js`, `${cand}.mjs`, path.join(cand, 'index.js')]) {
+    try { if (fss.statSync(t).isFile()) return rel(t); } catch { /* noop */ }
+  }
+  return null;
+}
+
+export function coherenceCensus() {
+  const files = [...new Set([...listJs(path.join(ROOT, 'src')), ...listJs(path.join(ROOT, 'bin'))])];
+  const texts = new Map(files.map((f) => [f, readSafe(path.join(ROOT, f))]));
+  // Llamadas a la CLI `gh` (scraping de GitHub): execFile/spawn('gh') o `gh pr…`.
+  const ghRe = /(?:execFile|execFileSync|spawn|spawnSync|exec)\(\s*['"]gh['"]|[`'"]gh\s+(?:pr|repo|api|issue|auth|search|view|list)\b/;
+
+  const nodes = files.map((f) => {
+    const t = texts.get(f) || '';
+    return {
+      file: f,
+      module: moduleOfRel(f),
+      isRunner: /^bin\/.*(?:runner|orchestrator)/.test(f),
+      importsSdk: /from\s+['"]@anthropic-ai\/claude-agent-sdk['"]/.test(t),
+      callsQuery: /\bquery\s*\(\s*\{/.test(t),
+      // Excluye este mismo archivo: su texto contiene el regex `ghRe` como
+      // literal y se auto-matchearía (falso positivo del censor).
+      callsGh: f !== 'src/core/inventory.js' && ghRe.test(t),
+    };
+  });
+
+  // Aristas internas archivo→archivo (imports/require relativos RESUELTOS).
+  const edges = [];
+  for (const f of files) {
+    const t = texts.get(f) || '';
+    const specs = new Set([...t.matchAll(/(?:import[^'"]*from\s*|import\s*|require\(\s*)['"]([^'"]+)['"]/g)].map((m) => m[1]));
+    for (const spec of specs) {
+      const to = resolveImport(f, spec);
+      if (to && to !== f) edges.push({ from: f, to, moduleFrom: moduleOfRel(f), moduleTo: moduleOfRel(to) });
+    }
+  }
+
+  // Grafo por módulo (uses / usedBy), ignorando aristas dentro del mismo módulo.
+  const modUses = new Map();
+  const modUsedBy = new Map();
+  for (const e of edges) {
+    if (e.moduleFrom === e.moduleTo) continue;
+    if (!modUses.has(e.moduleFrom)) modUses.set(e.moduleFrom, new Set());
+    modUses.get(e.moduleFrom).add(e.moduleTo);
+    if (!modUsedBy.has(e.moduleTo)) modUsedBy.set(e.moduleTo, new Set());
+    modUsedBy.get(e.moduleTo).add(e.moduleFrom);
+  }
+  const modules = [...new Set(nodes.map((n) => n.module))].sort().map((m) => ({
+    module: m,
+    uses: [...(modUses.get(m) || [])].sort(),
+    usedBy: [...(modUsedBy.get(m) || [])].sort(),
+  }));
+
+  // Servicios transversales: quién los consume (por aristas resueltas, excluyendo
+  // los archivos del propio servicio).
+  const services = CANON_SERVICES.map((svc) => {
+    const providerFiles = files.filter((f) => svc.match(f));
+    const consumers = [...new Set(edges.filter((e) => svc.match(e.to) && !svc.match(e.from)).map((e) => e.from))].sort();
+    return {
+      key: svc.key, label: svc.label, exists: providerFiles.length > 0,
+      consumers, consumerModules: [...new Set(consumers.map(moduleOfRel))].sort(),
+    };
+  });
+
+  // Motores IA (reusa el censo del SDK) — solo lo que necesita la coherencia.
+  const engines = aiEnginesCensus().map((e) => ({
+    file: e.file, models: e.models, modelDynamic: e.modelDynamic, layers: e.layers, settingSources: e.settingSources, purpose: e.purpose,
+  }));
+
+  // Runners: ¿respetan la regla de oro? (lock/heartbeat + estado en ~/.cwc-data).
+  // Muchos runners DELEGAN el lock/estado a su `*-shared.js` (patrón del repo):
+  // si importan un shared, la persistencia vive ahí — no es un incumplimiento.
+  const runners = nodes.filter((n) => n.isRunner).map((n) => {
+    const t = texts.get(n.file) || '';
+    const hasLock = /Lock\b|\.lock|writeLock|readLock/.test(t);
+    const hasHeartbeat = /heartbeat|setInterval\s*\(\s*beat/i.test(t);
+    const writesData = /\.cwc-data|DATA_DIR/.test(t);
+    const delegatesShared = /from\s+['"][^'"]*-shared(?:\.js)?['"]/.test(t) || /from\s+['"][^'"]*\/shared\.js['"]/.test(t);
+    return {
+      file: n.file,
+      hasLock, hasHeartbeat, writesData, delegatesShared,
+      goldenRule: hasLock || hasHeartbeat || writesData || delegatesShared,
+    };
+  });
+
+  // ===== Completitud del inventario: ¿todo lo nuevo está CABLEADO? =====
+  // Reusa los parsers del inventario (registered/mounted ya calculados) + el
+  // grafo para detectar lo suelto: módulo backend sin registrar, frontend sin
+  // montar, runner o motor SDK huérfano (nadie lo importa ni lo referencia por
+  // nombre). Un archivo se considera "referenciado" si otro archivo lo importa
+  // (arista) o menciona su basename (los runners se spawnean por string, no por
+  // import — de ahí el chequeo por basename).
+  const importedFiles = new Set(edges.map((e) => e.to));
+  const basenameReferenced = (relFile) => {
+    const bn = relFile.split('/').pop();
+    for (const [f, t] of texts) { if (f !== relFile && t.includes(bn)) return true; }
+    return false;
+  };
+  const backendMods = parseBackendModules();
+  const frontendMods = parseFrontend();
+  // Un módulo frontend puede montarse por vista (per-tab, initAuxBar) en vez de
+  // por [data-module]; sigue estando CABLEADO si algún otro archivo de public/js
+  // lo importa. Solo es "suelto" si NO se monta por data-module NI lo importa
+  // nadie (evita marcar chat/terminal/mobile, que main.js monta a mano).
+  const frontFiles = listJs(path.join(ROOT, 'public', 'js'));
+  const frontText = new Map(frontFiles.map((f) => [f, readSafe(path.join(ROOT, f))]));
+  const frontWired = (fm) => {
+    if (fm.mounted) return true;
+    const bns = fm.files.map((f) => f.split('/').pop());
+    for (const [ff, t] of frontText) {
+      if (ff.startsWith(fm.dir)) continue;
+      if (bns.some((bn) => t.includes(bn))) return true;
+    }
+    return false;
+  };
+  const completeness = {
+    unregistered: backendMods.filter((m) => !m.registered).map((m) => m.name),
+    unmounted: frontendMods.filter((f) => !frontWired(f)).map((f) => f.name),
+    orphanRunners: runners.filter((r) => !basenameReferenced(r.file)).map((r) => r.file),
+    orphanEngines: engines.filter((e) => !importedFiles.has(e.file) && !basenameReferenced(e.file)).map((e) => e.file),
+  };
+
+  // ===== Propagación de patrones canónicos (3ª dimensión) =====
+  // Excluye este archivo (define CANONICAL_PATTERNS: su texto contiene los
+  // literales de detección y se auto-matchearía como adopter/candidato).
+  const SELF = 'src/core/inventory.js';
+  const patterns = CANONICAL_PATTERNS.map((pat) => {
+    const providerExists = files.some((f) => pat.provider(f));
+    const adopters = files.filter((f) => f !== SELF && !pat.provider(f) && pat.adopts(texts.get(f) || ''));
+    const candidates = pat.candidate
+      ? files.filter((f) => f !== SELF && !pat.provider(f) && !adopters.includes(f) && pat.candidate(f, texts.get(f) || ''))
+      : [];
+    return { key: pat.key, label: pat.label, providerExists, adopters, candidates };
+  });
+
+  // ===== Convenciones transversales (4ª dimensión) =====
+  // Escanea public/js (ya listado arriba como frontFiles/frontText, para la
+  // completitud) + public/css (listado acá, plano — no hay lector genérico de
+  // .css en este archivo). `violates` es un LEAD determinístico; las entradas
+  // con `violates: null` quedan en scopedCount para que la IA las verifique
+  // contra el texto real de "## Convenciones" (coherence-shared.js).
+  const cssDir = path.join(ROOT, 'public', 'css');
+  let cssFiles = [];
+  try { cssFiles = fss.readdirSync(cssDir).filter((f) => f.endsWith('.css')).map((f) => `public/css/${f}`); } catch { /* noop */ }
+  const cssText = new Map(cssFiles.map((f) => [f, readSafe(path.join(ROOT, f))]));
+  const webFiles = [...frontFiles, ...cssFiles];
+  const webText = (f) => frontText.get(f) ?? cssText.get(f) ?? '';
+  const conventions = CANONICAL_CONVENTIONS.map((c) => {
+    const scoped = webFiles.filter((f) => c.scope(f));
+    const violations = c.violates ? scoped.filter((f) => c.violates(webText(f))) : [];
+    return { key: c.key, label: c.label, mechanical: !!c.violates, scopedCount: scoped.length, violations };
+  });
+
+  return {
+    counts: { files: files.length, edges: edges.length, modules: modules.length },
+    modules, services, engines, runners, completeness, patterns, conventions,
+    ghCallers: nodes.filter((n) => n.callsGh).map((n) => ({ file: n.file, module: n.module })),
+  };
+}
+
 // Arma el inventario completo. `stamp` = timestamp (el server pasa Date.now();
 // nunca lo llamamos acá para no romper entornos sin reloj).
 export function buildInventory(stamp) {

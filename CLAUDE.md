@@ -186,8 +186,10 @@ código.
   `inventory.json`+`inventory.md` generados por core/inventory.js,
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
-  pendientes, `optimization.json` resultado de la Optimización IA +
-  `optimize.lock` heartbeat de su runner, `projects-analyze/<id>.json` jobs del
+  pendientes, `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · comms.lock heartbeat · teams.lock · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
+  `optimize.lock` heartbeat de su runner, `coherence.json` resultado del Módulo
+  de Coherencia (propuestas + hallazgos determinísticos persistidos) +
+  `coherence.lock` heartbeat de su runner, `projects-analyze/<id>.json` jobs del
   análisis IA de secciones de contexto (módulo projects; poda >24 h en cada
   escritura) + `projects-analyze.log` de su runner, `commitmsg/<id>.json` jobs
   de la generación IA del mensaje de commit (módulo backup; misma poda >24 h) +
@@ -209,6 +211,25 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             rutas del cliente pasa por acá; nunca startsWith crudo) ·
                             sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
                             'chat'=user+project / 'headless'=project+local sin user) ·
+                            tool-policy(NÚCLEO de gobernanza de permisos del chat interactivo —
+                            NO es motor, es plomería in-process como sdk-settings/paths: el
+                            estado del modo lo persiste el server (Chat.permissionMode→chats.json)
+                            y lo aplica el runner; acá viven las REGLAS como fuente única.
+                            PERMISSION_MODES (default/acceptEdits/bypassPermissions/plan,
+                            re-exportado por chat/shared.js), normalizeMode, autoApprovesAll y
+                            chatQueryOptions() que arma las opciones de query() del chat con
+                            allowDangerouslySkipPermissions SIEMPRE (contrato del SDK; inerte
+                            salvo en 'Todo'). VERIFICADO 2026-07-06 (SDK 0.3.198): el bypass ya
+                            "shadowea" canUseTool sin el flag, así que el flag NO era la causa de
+                            "elegí Todo y sigue preguntando" — la causa real es DRIFT (el modo no
+                            llega/aplica en el runner) + la tarjeta ya emitida que no se
+                            auto-resolvía; se arregla en el runner (set_mode robusto que emite el
+                            modo REAL en éxito Y fallo + approveAllPending) y en la UI (chat-tab
+                            reconcilia el select con el modo real y avisa si no tomó). Las
+                            allow-rules del settings.json del usuario también shadowean canUseTool:
+                            en 'default' algunas acciones no piden permiso — es la allowlist del
+                            usuario, no un bug. La regla 6 (blindaje read-only headless) NO pasa
+                            por acá: esos runners arman sus propias allowlists) ·
                             claude-model(VALID_MODELS/encodeCwd) · claude-state(observador —
                             estado por PANE de tmux primero: cwc-observe.js captura
                             $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
@@ -268,6 +289,28 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             chat.model para el próximo spawnRunner. Antes solo existía para
                             sesiones tmux (`/model` tipeado a la TUI) — ahora el menú ⋯ de una
                             conversación en Sesiones también tiene "Cambiar modelo".
+                            REABRIR PARA CAMBIOS (menú ⋯ de una conversación en Sesiones,
+                            2026-07-06, pedido del usuario): mata el runner desacoplado vivo
+                            y levanta uno FRESCO sobre la MISMA sesión (`--resume`: conserva
+                            contexto, NO cierra la conversación) para que un chat vivo tome
+                            cambios de CÓDIGO nuevos tras un deploy — un runner spawneado
+                            antes del deploy importó el código viejo (PERMISSION_MODES,
+                            bypassPermissions, allowlists) y no los toma hasta dormirse/
+                            reabrirse. Método `Chat.reopen()` (index.js): motor dormido ⇒
+                            `_ensureEngine()` directo; motor vivo ⇒ sleep + ESPERAR el
+                            descarte REAL del link viejo (`while (this.link)` con deadline
+                            SWITCH_CLOSE_MS) antes de re-spawnear — OJO: el runner emite el
+                            evento `closed` y RECIÉN ~2s después cierra el socket, así que
+                            `_waitEngineDown` resuelve con `this.link` aún seteado; spawnear
+                            ahí haría early-return de `_ensureEngine` Y el runner nuevo se
+                            suicidaría ("ya hay un runner vivo"). Tras el respawn fija
+                            `_setStatus('waiting')` (el runner arranca en waiting pero no
+                            emite status si no cambia → quedaría un working/delegating stale).
+                            Emite evento `reopened` (nota en chat-tab.js). Endpoint POST
+                            /api/chat/reopen {id} (molde de /mode). SOLO conversaciones Chat
+                            (el ítem se oculta con `isTui` en sessions.js; una TUI se reinicia
+                            desde la terminal). Confirm en el front SOLO si status==='working'
+                            (cortaría el turno en curso).
                             MODOS DE PERMISOS (PERMISSION_MODES en shared.js, único punto de
                             validación server+runner): default/acceptEdits/bypassPermissions/
                             plan. En la UI (chat-tab.js MODES) son etiquetas de UNA palabra
@@ -346,6 +389,34 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
                             de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
                             menú ⚙ Sistema (system/interfono-panel.js)
+  comms/                    COMUNICACIONES: motor TRANSVERSAL file-based (patrón Interfono)
+                            que recopila/indexa/contextualiza las comunicaciones con cada
+                            CONTACTO (eje primario = usuario; Chris `cswenor` es el seed —
+                            escala a muchos usuarios sumando entradas, cero código). Estado
+                            100% en ~/.cwc-data/comms/ (0 tokens, sobrevive reinicios). Ruta
+                            /api/comms. index.js SOLO lee/escribe disco + lanza el runner;
+                            shared.js: contactos/proyectos/manual/overrides + buildIndex()
+                            (merge determinístico github.json+manual.json → hilos con
+                            newFromContact/awaitingReply derivados) + lock/heartbeat. Fuentes:
+                            GitHub vía gh (runner, reviews/comentarios sobre Tolkien, 0
+                            tokens) + Teams (DMs vía MCP graph_* read-only, bajo botón, tokens)
+                            + chatbot (chatbot.json, source:'chatbot': comunicaciones de Chris
+                            RELAYADAS por el bot Tolkien/TheEye en Teams — "Chris disfrazado de
+                            Tolkien"; el bot es código nuestro en ~/tolkien apps/api/src/lib/teams,
+                            pero la fuente COMPLETA del chat es Graph MCP, no la DB de Tolkien que
+                            solo guarda el lado entrante; escáner de Graph = fase futura, hoy
+                            seedeado/registrado a mano) + manual (CLI/web). Un hilo = 1 PR ×
+                            contacto o 1 nota
+                            manual. El tablero (public/js/modules/comms/board/, gemelo de
+                            bugs/board: store/render/actions/polls) tiene pestañas primarias
+                            = CONTACTOS, agrupa por proyecto→hilo→mensajes (los hilos
+                            source:'chatbot' van en su propia sección "🤖 Chatbot" SIEMPRE
+                            visible en la vista del contacto, aparte de los grupos de proyecto),
+                            y "Hablar de
+                            esto" abre un chat asistido con el hilo inyectado (patrón
+                            doWorkOn). Escaneo bajo botón (gh, sin tokens); NO usa MCP/Desk
+                            todavía (fase futura). OJO: `comms` (comunicaciones con personas)
+                            ≠ `interfono` (mensajería entre sesiones de Claude).
   bugs/                     (ANTES `tickets`, renombrado 2026-07-03) backend del hub
                             "Bugs & Features" del sidebar: triage de bugs BAJO DEMANDA
                             (consume tokens; admin). Ruta HTTP /api/bugs (GET estado, POST
@@ -817,8 +888,32 @@ public/js/modules/          launcher · sessions · stats · usage · system(⚙
                             tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y
                             /api/bugfixes (registro: por enviar, PRs abiertos, y ⚠ ATENCIÓN =
                             reabierto/doble registro/ticket sin actualizar — los casos del
-                            519). Botón "Abrir tablero" + ↻ triage (tokens, confirm). Al
-                            cerrar el tablero (onClose) refresca las stats) ·
+                            519). TRES COLUMNAS (.bf-cols, pedido del usuario 2026-07-05)
+                            como ESCANEO PREVIO antes de entrar al tablero: 🎫 Tickets · 💡
+                            Features (conteos con el MISMO criterio que tabOfEntry de
+                            board/labels.js sobre los tickets CONSOLIDADOS de GET
+                            /api/bugfixes/tickets — barato: caché server lastGhRows, sin gh
+                            vivo; Tickets suma los triage-only no cubiertos) · ⚠ Atención
+                            (3ª columna: reemplaza a 📦 Archivados —que no se acciona desde
+                            acá— por attentionCount(): anomalías del ciclo reabierto tras
+                            PR / doble registro / ticket sin actualizar en Desk, los casos
+                            del 519; resalta en ámbar .bf-col--alert cuando hay algo). Las
+                            columnas son clickeables (admin): Tickets/Features abren el
+                            tablero en su pestaña, Atención lo abre en Tickets
+                            (openBugBoard({initialTab})). La leyenda inferior se REDUJO a la
+                            frescura del triage (las líneas de resolución/por-enviar eran
+                            redundantes con las columnas). PAC-MAN DE ACTIVIDAD por columna
+                            (pedido del usuario 2026-07-05, .bf-col-pac esquina): un poll
+                            liviano de /api/chat/list (~8 s, 0 tokens) enciende el Pac-Man de
+                            la columna que se está trabajando — un chat con ticketNumber
+                            (working o delegando un subagente) prende su columna (FEAT-n →
+                            Features · resto → Tickets), y el triage corriendo delega sobre
+                            Tickets; un chat working (más específico) le gana al triage. En
+                            reposo, sin Pac-Man. Requiere que chat.info() exponga
+                            `ticketNumber` (src/modules/chat/index.js) para saber qué chat
+                            trabaja qué ticket sin abrir la pestaña. Botón "Abrir tablero" +
+                            ↻ triage (tokens, confirm). Al cerrar el tablero (onClose)
+                            refresca las stats + columnas) ·
                             El TABLERO (bugs/board/, admin, lo abre "Bugs & Features"; vivió
                             en tolkien/bug-board.js hasta el refactor 2026-07-04 —
                             docs/plan-rediseno-movil-tickets.md §2, branch
@@ -1050,6 +1145,29 @@ bin/cwc-optimize-runner.js  OPTIMIZACIÓN IA de los motores de la consola (botó
                             auto-aplican: quedan pending y Aprobar = chat supervisado
                             (acceptEdits) / flujo nuevo = chat en modo plan; Descartar las
                             marca rejected. Lógica compartida en health/optimize-shared.js
+bin/cwc-coherence-runner.js MÓDULO DE COHERENCIA (subsección "🔗 Coherencia" de la pestaña
+                            Salud). Gemelo del optimizador pero mira las ARISTAS del sistema,
+                            no los nodos: ¿los motores/módulos se usan ENTRE SÍ o reinventan/
+                            duplican/se ignoran? (disparador: motores del ciclo de tickets que
+                            NO usaban `comms`). Junta el CENSO determinístico de coherencia
+                            (core/inventory.js → coherenceCensus: grafo quién-usa-a-quién por
+                            imports resueltos + consumo de servicios transversales comms/bus/
+                            inventory/tokens/paths/sdk-settings + señales gh/runners/motores) +
+                            los HALLAZGOS de cableado determinísticos (evaluateCoherence de
+                            health/coherence-shared.js: comms infrautilizado · gh duplicado ·
+                            runner sin regla de oro · motor sin doble capa · servicio huérfano ·
+                            COMPLETITUD del inventario: módulo sin registrar/frontend sin montar
+                            · runner/motor SDK huérfano; cada hallazgo con `pasos` + botón
+                            "Resolver en chat" supervisado. "Está corriendo" NO — eso es runtime,
+                            queda en Chequeos rápidos)
+                            y UNA corrida de sonnet READ-ONLY doble capa (regla 6, misma
+                            allowlist Read/Grep/Glob/TodoWrite, settingSources: []) que VERIFICA
+                            leyendo el código y PROPONE el cableado concreto. Interfaz por
+                            archivos: coherence.lock (heartbeat con fase) + coherence.json
+                            (resultado + hallazgos persistidos). Propuestas NUNCA auto-aplicadas
+                            (Aprobar = chat acceptEdits · Explorar flujo = plan · Descartar =
+                            rejected), patrón invariant-proposals. Lógica compartida en
+                            health/coherence-shared.js
 bin/cwc-bus.js              CLI del INTERFONO entre sesiones (lógica en src/core/bus.js). PUERTA
                             ÚNICA de los hooks de Claude Code + el comando /btw. Subcomandos:
                             send (lo usa /btw) · hook-inject (SessionStart/UserPromptSubmit:
@@ -1078,6 +1196,80 @@ bin/install-pelota.js + bin/uninstall-pelota.js  instalan/quitan el hook "🎾 L
                             el CLAUDE.md solo se carga al iniciar y en hilos largos el modelo
                             lo omitía (pedido del usuario 2026-07-05). Mismo gotcha de captura
                             al INICIAR claude que observador/interfono
+bin/cwc-comms-runner.js     escaneo de comunicaciones: junta con `gh` (0 tokens, cwd Tolkien)
+                            las reviews/comentarios de los contactos con login de GitHub y
+                            arma los hilos (github.json). Reanudable (lock/heartbeat +
+                            caché incremental por PR). Lógica en src/modules/comms/shared.js
+bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo comms:
+                            por cada contacto lee sus DMs con las tools graph_* de LECTURA
+                            del MCP tolkien-mordor (cwd=projectDir, settingSources headless,
+                            doble capa read-only regla 6 = graphReadAllowed). CONSUME TOKENS
+                            (sonnet) ⇒ bajo botón. Lógica en src/modules/comms/teams-shared.js
+                            ATRIBUCIÓN (fix 2026-07-05): cada hilo es entre YO (self.json:
+                            Nicolás/nmosquera@/gh nmosqueramordor) y el contacto. Teams exige
+                            el 1:1 {yo, contacto} — RECHAZA (found:false) un DM que no me
+                            incluya y guarda participants+chatId. GitHub filtra a PRs míos o
+                            donde participé (self.github). El tablero muestra los participantes
+                            por hilo y marca ⚠️ si no soy parte.
+                            INTEGRACIÓN con bugs/bugfixes (2026-07-05, pedido del usuario): regla
+                            de diseño — todo flujo del ciclo de TKT/feature/bug que necesita algo
+                            DE CHRIS consulta (o a futuro registra) en ESTE motor, en vez de
+                            reinventar su propio scraping. Hecho hoy: bugs/board/prompts.js
+                            (fetchCommsContext, 0 tokens, GET /api/comms/index ya cacheado)
+                            inyecta en "Trabajar en esto" (workPrompt/featurePrompt/triagePrompt)
+                            el hilo de GitHub del PR (gh:<prNumber>:chris) y el DM de Teams
+                            (teams:chris) si existen — el chat arranca sabiendo qué se habló
+                            último con Chris sin abrir el tablero de Comunicaciones a mano.
+                            PENDIENTE (fuera de alcance, no implementado): auto-registrar en el
+                            motor cuando un chat de trabajo le pide algo a Chris, y unificar el
+                            scraping de GitHub hoy DUPLICADO entre bugfixes/desk-shared.js
+                            (feedback por PR, caché propia) y comms/shared.js (gh-cache.json
+                            propia) — ambos leen `gh` por separado sin compartir fuente.
+                            GATEWAY DE ENVÍO (2026-07-05, pedido del usuario: "toda
+                            comunicación usa el motor"): comms dejó de ser solo visor
+                            read-only — ahora EJECUTA y registra TODO envío externo.
+                            gateway-shared.js (sendComm): valida contacto/identidad,
+                            aplica la FIRMA centralizada (SIGNATURE, antes hardcodeada
+                            en 2 lugares), EJECUTA (github inline con gh, 0 tokens ·
+                            desk/teams desacoplado al send-runner con allowlist de
+                            escritura gobernada), REGISTRA en outbox.json (ledger
+                            append-only de auditoría) + en el hilo del contacto, y
+                            DEVUELVE el resultado. dryRun no envía. Endpoints: POST
+                            /send · GET /send/:jobId · GET /outbox. CLI: cwc-comms
+                            send (ejecuta) · record (registra un envío ya aprobado en
+                            un chat, sin re-enviar). MIGRADO: bugfixes ya NO hace gh
+                            pr comment/close/add-reviewer ni escribe Desk por su
+                            cuenta — pushPr/updatePr/cancelPr y deskUpdateAuto
+                            (ticket_auto_update) llaman al gateway; deskChat registra
+                            con cwc-comms record tras publicar con tu OK.
+                            LECTURA CENTRALIZADA Fase C (2026-07-05): comms/pr-read-shared.js
+                            (fetchPrRich) es el LECTOR ÚNICO de un PR de GitHub — SUPERSET de
+                            campos (unión de prLive+investigate+comms) + caché de archivo por
+                            PR con TTL 60 s en ~/.cwc-data/comms/pr-cache/. Los tres consumidores
+                            (bugfixes/prLive, bin/cwc-investigate-runner.js, bin/cwc-comms-runner.js)
+                            la usan: la triple lectura de red del feedback de Chris quedó unificada
+                            (cada uno sigue parseando SOLO sus campos; se comparte el fetch+caché).
+                            liveCache in-process de prLive eliminado. Quedan fuera los `gh pr view
+                            --json state` de un campo (verificación de estado en cancel/refresh),
+                            que no son la lectura de feedback.
+bin/cwc-comms-send-runner.js EJECUTOR desacoplado de envíos Desk/Teams del GATEWAY de
+                            comms (2026-07-05): publica notas de Desk (desk_add_comment/
+                            update) y DMs de Teams (teams_send) vía MCP con ESCRITURA
+                            GOBERNADA (doble capa regla 6, ahora permitiendo SOLO los
+                            verbos de envío del canal — deskWriteAllowed/teamsWriteAllowed).
+                            Job en ~/.cwc-data/comms/send/<id>.json. Lógica en
+                            src/modules/comms/gateway-shared.js
+bin/cwc-comms-analyze-runner.js análisis IA de UN hilo de comunicaciones (resumen +
+                            clasificación: estado/pelota, tema, proyecto sugerido, próximo
+                            paso, clima), DESACOPLADO (regla de oro; haiku, 1 turno, CERO
+                            herramientas — doble capa regla 6, solo resume el texto ya
+                            indexado). Job en ~/.cwc-data/comms/analyze/<id>.json (id
+                            determinístico por hilo+contenido). Lógica en
+                            src/modules/comms/analyze-shared.js
+bin/cwc-comms.js            CLI TRANSVERSAL del motor de Comunicaciones (patrón cwc-bus.js):
+                            cualquier sesión registra/consulta una comunicación con un
+                            contacto sin depender del server. Subcomandos: log/query/list/
+                            contacts/contact-add/scan. Estado file-based en ~/.cwc-data/comms/
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
@@ -1393,6 +1585,29 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime.
+- **Dashboard del proyecto** (subsección "📊 Dashboard del proyecto" de la
+  pestaña Salud, 2026-07-06, pedido del usuario: antes "🔍 Censo del
+  proyecto" solo mostraba conteos —"11 módulos"— sin decir CUÁLES, y sin
+  ningún dato de CPU/RAM/núcleos). Mismo patrón resumen-compacto+botón que
+  Optimización IA/Coherencia: la pestaña muestra solo el veredicto (conteos +
+  adelanto de núcleos/CPU/RAM) + botón "Ver dashboard completo →"; el detalle
+  entero vive en la SUB-VENTANA `system/inventory-modal.js`
+  (`.dlg-card--health`). TODO gratis (0 tokens, sin LLM, sin capa IA — por eso
+  no tiene botón "Analizar con IA" como sus gemelas, solo "Re-escanear
+  ahora"): reusa `GET /api/health/scan` (`generateInventory()` de
+  `core/inventory.js`, caché por fingerprint) ENRIQUECIDO con lo que antes se
+  recortaba antes de responder — cada módulo backend trae `registryLine` +
+  `endpoints[]` + cantidad de archivos; el array `frontend[]` (antes NI se
+  enviaba, solo `counts.frontend`) ahora viaja completo con `mounted`; los
+  runners traen su `purpose`. RECURSOS DEL SERVIDOR (núcleos, CPU%, RAM
+  usada/total, disco usado/total, load avg, uptime, hostname): el endpoint
+  suma el campo `resources` llamando a `systemSnapshot()` de
+  `modules/stats/index.js` — FUENTE ÚNICA compartida con `GET /api/stats`
+  (el gauge del pie), en vez de reimplementar `os.cpus()/loadavg()/freemem()`
+  por su cuenta (antes esos datos existían pero SOLO en el pie de página,
+  invisibles desde Salud). El frontend también reusa `heat()`/`fmtBytes()`/
+  `fmtUptime()` de `stats/stats.js` (recién exportados) para pintar los
+  tiles con el MISMO criterio de color que el gauge del pie.
 - **Optimización IA** (subsección "🧠 Optimización IA" de la pestaña Salud,
   2026-07-04): analiza el flujo de TODOS los motores IA de la consola. La
   pestaña muestra SOLO el resumen compacto (veredicto en 1 línea + botón
@@ -1418,6 +1633,79 @@ docs/                       frontend-modules.md · brief-original.txt · context
   "Explorar en chat (plan)" hace lo mismo con el flujo nuevo en modo plan.
   El optimizador tiene PROHIBIDO proponer nada que debilite las reglas duras
   (se lo exige el prompt y lo re-verifica el chat que aplica).
+- **Coherencia** (subsección "🔗 Coherencia" de la pestaña Salud, gemela de
+  Optimización IA): mientras la Revisión audita NODOS (cada módulo por dentro)
+  y la Optimización mira la CONFIG de cada motor, Coherencia mira las ARISTAS —
+  ¿los motores/módulos se APROVECHAN entre sí o reinventan/duplican/se ignoran?
+  Disparador real: motores del ciclo de tickets que scrapeaban GitHub por su
+  cuenta en vez de usar el motor `comms`. DOS niveles: (a) CENSO determinístico
+  (GET /api/health/coherence-census, 0 tokens) — `coherenceCensus()` de
+  core/inventory.js construye el GRAFO quién-usa-a-quién parseando los imports
+  relativos resueltos (.js//index.js) de src/ y bin/ (antes NO existía: era la
+  única pieza nueva de verdad), detecta el consumo de los servicios
+  transversales canónicos (comms, bus/interfono, inventory, tokens, paths,
+  sdk-settings) y marca señales (llamadas a `gh`, motores SDK, runners y si
+  respetan la regla de oro — un runner que DELEGA en su `*-shared.js` cuenta
+  como OK). `evaluateCoherence()` de health/coherence-shared.js aplica REGLAS de
+  cableado sobre el censo → hallazgos duros: comms infrautilizado (bug/feature
+  que no consulta comms) · gh duplicado en >1 módulo · runner sin regla de oro ·
+  motor SDK sin doble capa · servicio transversal huérfano · y COMPLETITUD del
+  inventario (census.completeness, reusa parseBackendModules/Frontend/Runners +
+  el grafo): módulo backend sin registrar en registry.js · módulo frontend sin
+  montar NI importar en public/js (los que main.js monta a mano como
+  chat/terminal/mobile NO se marcan) · runner huérfano (bin/*runner* que nadie
+  spawnea por nombre) · motor SDK huérfano (llama query() pero nadie lo importa/
+  referencia). "Está CORRIENDO donde debe" NO se chequea acá — eso es runtime y
+  queda en los Chequeos rápidos (pedido del usuario: no sacarlo de ahí). TERCERA
+  dimensión — PROPAGACIÓN DE PATRONES (census.patterns, CANONICAL_PATTERNS de
+  core/inventory.js): "ya probamos un patrón bueno (pool paralelo adaptativo
+  health/pool.js·runAdaptivePool · caché incremental por fingerprint · runner
+  desacoplado) — ¿qué otros sitios deberían adoptarlo y lo reinventan?". El censo
+  detecta proveedor/adopters/candidatos (candidato = LEAD por regex, p.ej. bucle
+  for-of con await sobre I/O que no usa el pool); la regla `adopcion` lo marca
+  pero la REGLA DE ORO ("paralelo lo que LEE, serial lo que ESCRIBE") la confirma
+  la IA/humano (un bucle que escribe en orden o es interactivo NO se paraleliza).
+  Cada hallazgo trae `pasos` (procedimiento) y en el modal un botón "💬 Resolver
+  en chat" (chat supervisado acceptEdits, admin) — accionable SIN gastar la IA.
+  El modal muestra los hallazgos SIEMPRE frescos del censo (no los persistidos en
+  coherence.json, que son la foto de cuando corrió la IA). CUARTA dimensión —
+  CONVENCIONES (census.conventions, CANONICAL_CONVENTIONS de core/inventory.js,
+  2026-07-06): a diferencia de las 3 anteriores (grafo/cableado/patrones, todas
+  sobre src/ y bin/), esta mira si los módulos FRONTEND (public/js, public/css)
+  respetan la sección "## Convenciones" de este mismo archivo — TRANSVERSAL a
+  cualquier módulo nuevo/cambiado, a diferencia de un invariante de Salud
+  (health/invariants.js) que apunta a un archivo puntual. Disparador real: el
+  módulo `comms` nació con su panel colapsable pero sin nacer COLAPSADO por
+  defecto, y ni Coherencia ni la Revisión profunda lo cazaban — ninguna de las
+  dos tenía esa convención de UI en su radar. Dos capas iguales a los patrones
+  canónicos: (a) MECÁNICA (`violates`, 0 tokens, LEAD por regex — colores hex
+  fuera de tokens.css, `alert/confirm/prompt` nativos fuera de ui/dialog.js,
+  `<svg` inline fuera de ui/icons.js) verificada por `evaluateCoherence()`
+  (categoría `convencion`); (b) SEMÁNTICA (`violates: null`, p.ej. "todo panel
+  nuevo con mucho texto nace colapsado + agrupado en árbol") que NO es
+  chequeable por regex — se resuelve inyectando `conventionsText()` de
+  health/coherence-shared.js (recorta "## Convenciones" UNA vez, mismo patrón
+  que `hardRulesText()` de Salud con "## Reglas duras") en el prompt del
+  análisis IA, que elige unos módulos frontend y los abre a verificar. Sumar
+  una convención nueva chequeable por regex = agregar una entrada a
+  CANONICAL_CONVENTIONS (semilla hand-authored, como CANONICAL_PATTERNS/
+  SEED_INVARIANTS — nunca autogenerada). (b) ANÁLISIS (POST
+  /api/health/coherence, admin, CONSUME TOKENS, confirm) → runner desacoplado
+  bin/cwc-coherence-runner.js (lock `coherence.lock` con fase, reserva pid:0
+  patrón spawnOptimize, resultado persistido en ~/.cwc-data/coherence.json); GET
+  /coherence solo lee disco + running/progress (front encuesta cada 4 s). La
+  corrida es sonnet READ-ONLY doble capa (regla 6, allowlist Read/Grep/Glob/
+  TodoWrite, settingSources: []) que VERIFICA los hallazgos leyendo el código y
+  busca MÁS (duplicación, espejos back↔front como labels.js↔engine.js) →
+  propuestas {foco, tipo cableado|dedup|fuente-unica|regla-oro|blindaje|espejo|
+  convencion, actual, propuesta, riesgo, archivos, pasos}. Propuestas
+  PENDIENTES con Aprobar/Descartar (POST /api/health/coherence-proposal {id,
+  action}) — NADA se auto-aplica; "Aplicar en chat" abre chat supervisado
+  (acceptEdits, reglas estrictas: reusar la fuente canónica, no duplicar) ·
+  "Explorar flujo" en modo plan. La sub-ventana (system/coherence-modal.js)
+  muestra el grafo/servicios + patrones + convenciones + los hallazgos
+  determinísticos (gratis) + las propuestas IA. El auditor tiene PROHIBIDO
+  proponer nada que debilite las reglas duras.
 - **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad

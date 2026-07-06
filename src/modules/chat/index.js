@@ -559,6 +559,70 @@ class Chat {
     return { ok: true, viewMode: 'chat' };
   }
 
+  // Reabre el motor sobre la MISMA sesión: duerme el runner vivo (sale limpio
+  // con resume disponible), ESPERA su muerte verificada y re-spawnea uno FRESCO.
+  // Sirve para que una conversación viva tome cambios de CÓDIGO nuevos tras un
+  // deploy: un runner spawneado antes del deploy importó el código viejo
+  // (PERMISSION_MODES, bypassPermissions, allowlists) y no los toma hasta
+  // dormirse/reabrirse. No cierra la conversación ni pierde contexto.
+  async reopen() {
+    if (this.closed) return { ok: false, error: 'La conversación está cerrada.' };
+    if (this.viewMode !== 'chat') return { ok: false, error: 'Solo se puede reabrir en modo Chat (una TUI se reinicia desde la terminal).' };
+    if (this.viewMode === 'switching') return { ok: false, error: 'Hay un cambio de modo en curso; probá de nuevo.' };
+    // Motor dormido/caído: no hay proceso viejo que matar. Un arranque fresco
+    // ya toma el código nuevo.
+    if (!this.alive || !this.link) {
+      const ok = await this._ensureEngine();
+      if (ok === false) return { ok: false, error: 'El motor no arrancó (mirá ~/.cwc-data/chats/*.log).' };
+      // Motor fresco sin turno en curso: el runner arranca en 'waiting' pero no
+      // emite un 'status' si no cambia, así que lo fijamos acá (evita que quede
+      // un 'working'/'delegating' stale de una vida anterior del motor).
+      this._setStatus('waiting');
+      this._push({ type: 'reopened' }, { record: false });
+      return { ok: true };
+    }
+    // Motor vivo: dormirlo (sale con resume) y ESPERAR su muerte verificada
+    // antes de re-spawnear. 'sleep' y no 'close': la conversación sigue viva.
+    // _engineStopping suprime la nota "dormida por inactividad" en el relevo.
+    this._engineStopping = true;
+    this.link.send({ t: 'sleep' });
+    // OJO: el runner emite el evento 'closed' y RECIÉN ~2s después cierra el
+    // socket (bin/cwc-chat-runner.js: margen para que 'closed' llegue). Ese
+    // evento resuelve _waitEngineDown con this.link TODAVÍA seteado, así que no
+    // alcanza: si re-spawneáramos ahí, (a) _ensureEngine haría early-return por
+    // el link viejo y (b) el runner nuevo se suicidaría porque el viejo aún
+    // escucha ("ya hay un runner vivo"). Esperamos el descarte REAL del link
+    // (onClose lo nula al cerrarse el socket: ahí el runner viejo dejó de
+    // escuchar y su lock quedó liberable).
+    await this._waitEngineDown(SWITCH_CLOSE_MS);
+    const deadline = Date.now() + SWITCH_CLOSE_MS;
+    while (this.link && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    this._engineStopping = false;
+    if (this.link) {
+      return { ok: false, error: 'No se pudo cerrar el motor actual a tiempo; probá de nuevo.' };
+    }
+    // Recargar el history desde el transcript (por si el turno cortado dejó
+    // algo) y levantar un runner FRESCO sobre la misma sesión.
+    if (this.sessionId) this.history = loadTranscriptEvents(this.cwd, this.sessionId);
+    const ok = await this._ensureEngine();
+    if (ok === false) return { ok: false, error: 'El motor no volvió a arrancar (mirá ~/.cwc-data/chats/*.log).' };
+    // Motor fresco sin turno en curso (matamos el que hubiera): fijar 'waiting'
+    // — el runner arranca así pero no emite 'status' si no cambia, y sin esto
+    // quedaría el 'working'/'delegating' del turno cortado.
+    this._setStatus('waiting');
+    // Reenviar el history recargado a los clientes conectados + anunciar la
+    // reapertura (mismo patrón que _toChat).
+    for (const ws of this.clients) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this._slashList() }));
+      }
+    }
+    this._push({ type: 'reopened' }, { record: false });
+    return { ok: true };
+  }
+
   answerPermission(id, allow) {
     this.link?.send({ t: 'perm', id, allow: !!allow });
   }
@@ -710,6 +774,10 @@ class Chat {
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
       // la pestaña del chat esté cerrada.
       delegating: this._delegatingIds.size > 0,
+      // Ticket/feature que trabaja este chat (si nació de un bug de Desk o de un
+      // FEAT-n). Lo consume el panel "Bugs & Features" para pintar el Pac-Man de
+      // actividad en la columna correcta sin abrir la pestaña del chat.
+      ticketNumber: this.ticket?.number || null,
       // Permisos esperando respuesta: los consume el centro global de popups
       // (public/js/ui/perm-center.js) vía el poll de 8 s de /list.
       pendingPerms: this.pendingPerms(),
@@ -1064,6 +1132,23 @@ export default {
       const model = req.body?.model;
       if (!VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       chat.setModel(model);
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // Reabre el motor de una conversación (mata el runner viejo y re-spawnea
+    // uno fresco sobre la misma sesión) para que tome cambios de código nuevos.
+    r.post('/reopen', async (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      let result;
+      try {
+        result = await chat.reopen();
+      } catch (err) {
+        console.error('[chat] /reopen falló:', err);
+        return res.status(500).json({ error: 'No se pudo reabrir el motor (error interno).' });
+      }
+      if (!result.ok) return res.status(409).json({ error: result.error });
       manager.persist();
       res.json({ ok: true, chat: chat.info() });
     });

@@ -189,6 +189,31 @@ html, body {
   font-size: var(--cwc-fs-xs); padding: 0 .4rem; min-width: 1.2em; text-align: center;
 }
 
+/* ===== Secciones colapsables del sidebar =====
+   El header (.sec-head) SIEMPRE queda visible: chevron + semáforo de estado +
+   título + contador + controles (botones). Solo se pliega el CUERPO (todo lo
+   que no es el header). La clase .sec-collapsed vive en la <section
+   class="side-sec"> de index.html (NO en el innerHTML del módulo), así
+   sobrevive a los re-render que cada módulo hace de su header/cuerpo.
+   El toggle es un click delegado en main.js (ignora los botones del header). */
+.sec-head { cursor: pointer; user-select: none; }
+.sec-head::before {
+  content: '▾'; flex: none; font-size: 10px; line-height: 1;
+  color: var(--cwc-text-dim); transition: transform .15s ease;
+}
+.side-sec.sec-collapsed .sec-head::before { transform: rotate(-90deg); }
+.side-sec.sec-collapsed > :not(.sec-head) { display: none; }
+
+/* Semáforo de estado del módulo — visible también colapsado, junto al chevron.
+   idle=sin datos/vacío · ok=al día · warn=algo que atender · alert=requiere
+   acción · busy=trabajando (acento). Colores de tokens.css. */
+.sec-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cwc-text-dim); opacity: .4; }
+.sec-dot--idle  { background: var(--cwc-text-dim); opacity: .4; }
+.sec-dot--ok    { background: var(--cwc-ok); opacity: 1; }
+.sec-dot--warn  { background: var(--cwc-warn); opacity: 1; }
+.sec-dot--alert { background: var(--cwc-danger); opacity: 1; }
+.sec-dot--busy  { background: var(--cwc-accent); opacity: 1; }
+
 /* ===== Sesiones: tarjetas ===== */
 .sess-list { padding: 0 .4rem; display: flex; flex-direction: column; gap: .2rem; }
 .sess-card {
@@ -607,6 +632,20 @@ html, body {
 .hp-opt-done { font-size: var(--cwc-fs-xs); color: var(--cwc-ok); margin-left: auto; flex: none; }
 .hp-opt-flow { margin: 0; padding-left: 1.1rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .hp-opt-flow li { margin: .15rem 0; }
+
+/* ===== Dashboard del proyecto (inventory-modal.js): tiles de recursos ===== */
+.hp-inv-warn { font-size: var(--cwc-fs-xs); color: var(--cwc-warn); margin: 0; }
+.hp-inv-res { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: .5rem; margin: .1rem 0 .3rem; }
+.hp-inv-tile {
+  display: flex; flex-direction: column; gap: .15rem; padding: .4rem .55rem;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-divider); border-radius: 8px;
+}
+.hp-inv-tile-label { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.hp-inv-tile-val { font-size: var(--cwc-fs-md); color: var(--cwc-text); font-variant-numeric: tabular-nums; }
+.hp-inv-tile-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); overflow-wrap: anywhere; }
+.hp-inv-tile .gauge-bar { width: 100%; }
+.hp-inv-eps { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+
 .hp-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin: .35rem 0 .5rem; white-space: pre-wrap; }
 .hp-findings { display: flex; flex-direction: column; gap: .15rem; margin-bottom: .5rem; }
 .hp-finding summary {
@@ -955,6 +994,26 @@ html, body {
 /* ===== Bugs & Features (sección del sidebar, modules/bugs) =====
    Mismo criterio icónico que Tolkien: cada dato con su ícono, poco texto. */
 .bf-card { gap: .35rem; }
+/* Tres columnas = las subvistas del tablero (🎫 Tickets · 💡 Features · 📦
+   Archivados). Clickeables: abren el tablero en esa pestaña. */
+.bf-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
+.bf-col {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: .05rem;
+  padding: .4rem .2rem; cursor: pointer; text-align: center;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-md); color: var(--cwc-text-secondary);
+}
+/* Pac-Man de actividad (esquina): la columna se está trabajando/procesando. */
+.bf-col-pac { position: absolute; top: 3px; right: 4px; display: inline-flex; }
+.bf-col:hover:not(:disabled) { border-color: var(--cwc-accent); color: var(--cwc-text); }
+.bf-col:disabled { cursor: default; }
+.bf-col--dim { opacity: .55; }
+/* Columna de atención con anomalías: resalta en ámbar (escaneo previo). */
+.bf-col--alert { border-color: var(--cwc-warn); background: color-mix(in srgb, var(--cwc-warn) 12%, transparent); opacity: 1; }
+.bf-col--alert .bf-col-n, .bf-col--alert .bf-col-lbl { color: var(--cwc-warn); }
+.bf-col-n { font-size: var(--cwc-fs-lg); font-weight: 700; color: var(--cwc-text); line-height: 1.1; }
+.bf-col-lbl { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
 .bf-stats { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .18rem; }
 .bf-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .bf-stat { color: var(--cwc-text); display: inline-flex; align-items: center; gap: .25rem; }
@@ -1582,3 +1641,78 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bb-fbmem { margin: .5rem 0; display: flex; flex-direction: column; gap: .4rem; background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-md); padding: .45rem .6rem; }
 .bb-fbmem-h { font-size: var(--cwc-fs-xs); color: var(--cwc-accent); font-weight: 600; }
 .bb-fresh { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+
+/* ===== Comunicaciones — tablero (board/) ===== */
+.cm { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.cm-top { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: 0 0 .4rem; border-bottom: 1px solid var(--cwc-divider); }
+.cm-top .bb-tabs { flex: 1; min-width: 0; margin-bottom: -1px; }
+.cm-toolbar { display: flex; align-items: center; gap: .35rem; }
+.cm-body { flex: 1; min-height: 0; overflow: auto; padding: .5rem .1rem 1rem; }
+
+.cm-badge { display: inline-flex; min-width: 1.1em; justify-content: center; padding: 0 .3em; border-radius: 999px; font-size: var(--cwc-fs-xs); font-weight: 700; color: var(--cwc-accent-ink); }
+.cm-badge--new { background: var(--cwc-accent); }
+.cm-badge--wait { background: var(--cwc-warn); color: var(--cwc-bg); }
+
+.cm-chead { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .1rem .3rem .5rem; flex-wrap: wrap; }
+.cm-chead-info { font-weight: 600; color: var(--cwc-text); }
+.cm-chead .cm-gh { color: var(--cwc-text-dim); font-weight: 400; }
+.cm-chead-act { display: flex; gap: .35rem; }
+.cm-chead-act .on { color: var(--cwc-accent); }
+
+.cm-group { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); margin: 0 .2rem .5rem; overflow: hidden; }
+.cm-gsum { display: flex; align-items: center; gap: .4rem; padding: .4rem .6rem; cursor: pointer; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); background: var(--cwc-bg-panel); list-style: none; }
+.cm-gsum::-webkit-details-marker { display: none; }
+.cm-gn { margin-left: auto; color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+.cm-glist { display: flex; flex-direction: column; }
+
+.cm-thread { border-top: 1px solid var(--cwc-divider); }
+.cm-thread:first-child { border-top: 0; }
+.cm-thead { display: flex; align-items: center; gap: .5rem; padding: .5rem .6rem; cursor: pointer; }
+.cm-thead:hover { background: var(--cwc-bg-hover); }
+.cm-thread.on > .cm-thead { background: var(--cwc-bg-hover); }
+.cm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cwc-text-dimmer); }
+.cm-dot--new { background: var(--cwc-accent); box-shadow: 0 0 0 3px var(--cwc-accent-bg-soft); }
+.cm-dot--wait { background: var(--cwc-warn); }
+.cm-dot--idle { background: var(--cwc-ok); opacity: .5; }
+.cm-tinfo { flex: 1; min-width: 0; }
+.cm-ttitle { font-size: var(--cwc-fs-sm); color: var(--cwc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-tsub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-tmeta { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+
+.cm-detail { padding: .3rem .7rem .7rem; background: var(--cwc-bg-panel); }
+.cm-msgs { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .6rem; }
+.cm-msg { border-radius: var(--cwc-radius-md); padding: .4rem .6rem; max-width: 92%; }
+.cm-msg--in { background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft); align-self: flex-start; }
+.cm-msg--out { background: var(--cwc-accent-bg-soft); border: 1px solid var(--cwc-accent-bg); align-self: flex-end; }
+.cm-msg-h { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .15rem; }
+.cm-msg-b { font-size: var(--cwc-fs-sm); color: var(--cwc-text); white-space: pre-wrap; word-break: break-word; }
+.cm-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+
+.cm-empty { padding: 1.5rem 1rem; text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); }
+.cm-empty-inline { padding: .3rem .5rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); }
+
+/* ===== Comunicaciones — tarjeta de análisis IA del hilo ===== */
+.cm-ai { border: 1px solid var(--cwc-accent-bg); background: var(--cwc-accent-bg-soft); border-radius: var(--cwc-radius-md); padding: .5rem .65rem; margin-bottom: .6rem; }
+.cm-ai--load { color: var(--cwc-text-dim); display: flex; align-items: center; gap: .4rem; }
+.cm-ai--err { border-color: var(--cwc-danger); color: var(--cwc-danger); background: transparent; }
+.cm-ai-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .35rem; }
+.cm-ai-topic { font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); }
+.cm-ai-sent { margin-left: auto; }
+.cm-ai-sum { font-size: var(--cwc-fs-sm); color: var(--cwc-text); white-space: pre-wrap; }
+.cm-ai-next { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin-top: .3rem; }
+.cm-ai-act { margin-top: .4rem; }
+.cm-st { display: inline-flex; align-items: center; gap: .25em; font-size: var(--cwc-fs-xs); font-weight: 600; padding: .1rem .45rem; border-radius: 999px; border: 1px solid var(--cwc-border-soft); color: var(--cwc-text-secondary); }
+.cm-st--wait { color: var(--cwc-warn); border-color: color-mix(in srgb, var(--cwc-warn) 45%, transparent); }
+.cm-st--mine { color: var(--cwc-accent); border-color: var(--cwc-accent-bg); }
+.cm-st--done { color: var(--cwc-ok); border-color: color-mix(in srgb, var(--cwc-ok) 45%, transparent); }
+.cm-st--blocked { color: var(--cwc-danger); border-color: color-mix(in srgb, var(--cwc-danger) 45%, transparent); }
+.cm-st--wip { color: var(--cwc-accent-cool); border-color: color-mix(in srgb, var(--cwc-accent-cool) 45%, transparent); }
+.btn--xs { padding: .12rem .5rem; font-size: var(--cwc-fs-xs); border-radius: var(--cwc-radius-sm); }
+
+/* ===== Comunicaciones — badge de fuente por hilo ===== */
+.cm-src { font-size: .82em; opacity: .9; margin-right: .1em; }
+.cm-toolbar { flex-wrap: wrap; }
+
+/* ===== Comunicaciones — participantes / atribución ===== */
+.cm-parts { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .5rem; display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.cm-suspect { color: var(--cwc-warn); font-weight: 600; }

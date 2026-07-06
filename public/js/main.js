@@ -17,8 +17,9 @@ import bugs from './modules/bugs/bugs.js';
 import stats from './modules/stats/stats.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
+import comms from './modules/comms/comms.js';
 
-const MODULES = [launcher, sessions, tolkien, bugs, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, bugs, comms, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
@@ -535,6 +536,36 @@ window.addEventListener('resize', applySidebarState);
 
 // El ＋ del rail abre el mismo lanzador (una sola puerta de entrada).
 document.getElementById('rail-new').addEventListener('click', () => bus.dispatchEvent(new Event('open-launcher')));
+
+// ===== Secciones colapsables del sidebar (por módulo, persistido) =====
+// Cada <section class="side-sec"> del scroll se pliega a solo su header
+// (chevron + semáforo + contador + controles siguen visibles); el cuerpo se
+// oculta por CSS con la clase .sec-collapsed. El estado vive en la <section>
+// de index.html (no en el innerHTML del módulo) => sobrevive a sus re-render.
+const SEC_KEY = (name) => `cwc.sec.${name}.collapsed`;
+const sidebarScroll = document.querySelector('.sidebar-scroll');
+if (sidebarScroll) {
+  // Por defecto TODO contraído (pedido del usuario): una sección solo nace
+  // expandida si el usuario la abrió explícitamente antes (valor '0'). Sin
+  // entrada guardada => contraída.
+  for (const sec of sidebarScroll.querySelectorAll('.side-sec')) {
+    if (!sec.dataset.module) continue;
+    if (localStorage.getItem(SEC_KEY(sec.dataset.module)) !== '0') {
+      sec.classList.add('sec-collapsed');
+    }
+  }
+  // Toggle al tocar el header (los botones del header NO colapsan; el cuerpo
+  // tampoco: closest('.sec-head') solo matchea la fila del título).
+  sidebarScroll.addEventListener('click', (e) => {
+    const head = e.target.closest('.sec-head');
+    if (!head) return;
+    if (e.target.closest('button, a, input, select')) return;
+    const sec = head.closest('.side-sec');
+    if (!sec) return;
+    const collapsed = sec.classList.toggle('sec-collapsed');
+    if (sec.dataset.module) localStorage.setItem(SEC_KEY(sec.dataset.module), collapsed ? '1' : '0');
+  });
+}
 
 initAuxBar({ getActiveTab });
 hydrateIcons();

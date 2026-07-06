@@ -5,6 +5,12 @@
 //
 // La CPU se calcula como delta entre la lectura anterior y la actual de
 // os.cpus(); guardamos el último snapshot en memoria del módulo.
+//
+// `systemSnapshot()` (sin el `server` propio de este proceso) es la FUENTE
+// ÚNICA de recursos del sistema — la reusa el dashboard de Salud
+// (health/index.js: GET /api/health/scan, sección "Recursos del servidor")
+// en vez de reimplementar CPU/mem/disk por su cuenta (convención de
+// reuso/fuente-única del proyecto).
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -76,6 +82,20 @@ async function diskInfo() {
   }
 }
 
+// Snapshot de recursos del SISTEMA (sin el `server` propio del proceso que
+// hace la llamada) — reusado por /api/stats y por el dashboard de Salud.
+export async function systemSnapshot() {
+  const [mem, disk] = await Promise.all([memInfo(), diskInfo()]);
+  return {
+    cpu: { pct: cpuPercent(), cores: os.cpus().length },
+    mem,
+    disk,
+    load: os.loadavg(),
+    uptime: os.uptime(),
+    hostname: os.hostname(),
+  };
+}
+
 export default {
   name: 'stats',
 
@@ -84,16 +104,8 @@ export default {
 
     r.get('/', async (req, res) => {
       try {
-        const [mem, disk] = await Promise.all([memInfo(), diskInfo()]);
-        res.json({
-          cpu: { pct: cpuPercent(), cores: os.cpus().length },
-          mem,
-          disk,
-          load: os.loadavg(),
-          uptime: os.uptime(),
-          hostname: os.hostname(),
-          server: { uptime: process.uptime(), pid: process.pid },
-        });
+        const snap = await systemSnapshot();
+        res.json({ ...snap, server: { uptime: process.uptime(), pid: process.pid } });
       } catch (err) {
         res.status(500).json({ error: err.message });
       }

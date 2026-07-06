@@ -386,8 +386,19 @@ export class ChatTab {
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
       case 'mode':
+        // Reconciliación con el modo REAL del motor (paso 2, fin del drift): el
+        // select SIEMPRE refleja lo que el motor aplica de verdad. Si el usuario
+        // pidió un modo y el motor reporta OTRO, el cambio NO tomó: avisamos
+        // claro y no dejamos el select mintiendo un modo que no está vigente.
+        if (this._pendingMode && m.mode !== this._pendingMode) {
+          const want = (MODES.find(([v]) => v === this._pendingMode) || [, this._pendingMode])[1];
+          const real = (MODES.find(([v]) => v === m.mode) || [, m.mode])[1];
+          this._line('chat-error', `No se pudo activar el modo “${want}”: sigue en “${real}”. Si esta conversación viene de antes, cerrala y reabrila para aplicar el cambio.`);
+          this._pendingMode = null;
+        } else if (m.mode === this._pendingMode) {
+          this._pendingMode = null; // confirmado por el motor
+        }
         this._applyMode(m.mode);
-        if (m.mode === this._pendingMode) this._pendingMode = null; // confirmado por el server
         break;
       case 'viewmode':
         if (m.viewMode === 'switching') {
@@ -399,6 +410,11 @@ export class ChatTab {
         this.onViewMode?.(m);
         break;
       case 'error': this._line('chat-error', `Error: ${m.message}`); break;
+      case 'reopened':
+        // Se mató el runner viejo y arrancó uno fresco sobre la misma sesión
+        // (opción "Reabrir para cambios" del menú ⋯): ya toma el código nuevo.
+        this._line('chat-closed-note', 'Motor reabierto — arrancó un proceso fresco que toma los cambios de código nuevos. El contexto se conserva.');
+        break;
       case 'closed':
         if (m.resumable) {
           // El motor se durmió (inactividad); la conversación sigue viva:

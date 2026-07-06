@@ -5,20 +5,23 @@
 // pausado con la pestaña en segundo plano.
 const POLL_MS = 2500;
 
-function fmtBytes(b) {
+// Exportados (además de uso local acá): el dashboard de Salud
+// (system/inventory-modal.js) los reusa para pintar CPU/RAM/Disco con el
+// MISMO criterio de color/formato que este gauge del pie (fuente única).
+export function fmtBytes(b) {
   if (!b) return '0';
   const u = ['B', 'K', 'M', 'G', 'T'];
   let i = 0;
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return `${b.toFixed(b < 10 && i > 0 ? 1 : 0)}${u[i]}`;
 }
-function fmtUptime(s) {
+export function fmtUptime(s) {
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   if (d) return `${d}d ${h}h`;
   return `${h}h ${Math.floor((s % 3600) / 60)}m`;
 }
-function heat(pct) {
+export function heat(pct) {
   if (pct >= 85) return 'hi';
   if (pct >= 60) return 'mid';
   return 'lo';

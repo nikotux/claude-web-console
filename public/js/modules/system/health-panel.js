@@ -1,6 +1,13 @@
 // modules/system/health-panel.js — pestaña "Salud" del menú Sistema.
 //
 // Arriba: chequeos rápidos en vivo (GET /api/health/checks, gratis).
+// "📊 Dashboard del proyecto" (2026-07-06): resumen compacto (GET
+// /api/health/scan, 0 tokens) + botón que abre la sub-ventana
+// (inventory-modal.js) con el detalle REAL — recursos del servidor (núcleos/
+// CPU/RAM/disco), módulos backend (con sus endpoints y línea de registro),
+// módulos frontend (montaje), runners y motores IA. Antes era un chip
+// colapsable inline que solo mostraba conteos ("11 módulos") sin decir
+// cuáles ni exponer CPU/RAM (pedido del usuario: más amigable y más detalle).
 // Al medio: última revisión profunda con Claude (caché) + botón para correrla
 // (POST /api/health/review — admin, consume tokens, con confirm previo).
 // Abajo: Optimización IA de los motores — MISMO patrón que la revisión:
@@ -13,6 +20,8 @@ import { icon } from '../../ui/icons.js';
 import { pacman } from '../../ui/pacman.js';
 import { openHealthReview } from './health-review-modal.js';
 import { openOptimize } from './optimize-modal.js';
+import { openCoherence } from './coherence-modal.js';
+import { openInventory } from './inventory-modal.js';
 
 const API = '/api/health';
 
@@ -36,7 +45,8 @@ export function mountHealthPanel(el, ctx) {
     <div class="hp-checks" data-ref="checks"><span class="cwc-spinner"></span></div>
 
     <div class="hp-head hp-head--review">
-      <span class="hp-title">🔍 Censo del proyecto</span>
+      <span class="hp-title">📊 Dashboard del proyecto</span>
+      <button class="btn-ghost btn--sm btn--icon" data-ref="scanReload" title="Re-escanear ahora">${icon('refresh', { size: 13 })}</button>
     </div>
     <div data-ref="scan">cargando…</div>
 
@@ -48,7 +58,12 @@ export function mountHealthPanel(el, ctx) {
     <div class="hp-head hp-head--review">
       <span class="hp-title">🧠 Optimización IA</span>
     </div>
-    <div class="hp-review" data-ref="opt">cargando…</div>`;
+    <div class="hp-review" data-ref="opt">cargando…</div>
+
+    <div class="hp-head hp-head--review">
+      <span class="hp-title">🔗 Coherencia</span>
+    </div>
+    <div class="hp-review" data-ref="coh">cargando…</div>`;
 
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
@@ -76,45 +91,13 @@ export function mountHealthPanel(el, ctx) {
     }
   }
 
-  // ===== censo del proyecto (chip compacto → detalle expandible inline) =====
-  // GET /api/health/scan (0 tokens, sin LLM) — cuenta módulos backend/
-  // frontend, runners y motores IA vía generateInventory() (caché por
-  // fingerprint). Nace COLAPSADO (`<details>`, mismo patrón que el censo de
-  // Optimización IA); un clic lo expande sin abrir ningún modal. El botón
-  // de refrescar fuerza un re-escaneo (?force=1) e ignora el toggle nativo
-  // del <summary> (preventDefault) para no expandir/colapsar sin querer.
+  // ===== Dashboard del proyecto (resumen compacto → sub-ventana con detalle) =====
+  // GET /api/health/scan (0 tokens, sin LLM) — cuenta y da un adelanto de
+  // recursos del servidor; el detalle REAL (endpoints por módulo backend,
+  // montaje por módulo frontend, núcleos/CPU/RAM/disco) vive en la sub-ventana
+  // (inventory-modal.js, mismo patrón que Optimización IA/Coherencia: acá solo
+  // el veredicto + botón).
   let scanning = false;
-
-  function scanDetailHtml(d) {
-    const modRows = (d.modules || []).map((m) => `
-      <div class="hp-row">
-        <span class="hp-dot ${m.registered ? 'hp-dot--ok' : 'hp-dot--warn'}"></span>
-        <span class="hp-label">${esc(m.name)}</span>
-        <span class="hp-detail">${m.registered ? esc(m.purpose || '') : '⚠️ no registrado en registry.js'}</span>
-      </div>`).join('') || '<p class="hp-empty">Sin módulos.</p>';
-    const engineRows = (d.aiEngines || []).map((eng) => `
-      <div class="hp-row">
-        <span class="hp-dot hp-dot--info"></span>
-        <span class="hp-label">${esc(eng.file.split('/').pop())}</span>
-        <span class="hp-detail">${esc(eng.models?.length ? eng.models.join('/') : (eng.modelDynamic ? 'modelo dinámico' : 'default'))}</span>
-      </div>`).join('') || '<p class="hp-empty">Sin motores detectados.</p>';
-    const runnerRows = (d.runners || []).map((f) => `
-      <div class="hp-row"><span class="hp-label">${esc(f)}</span></div>`).join('') || '<p class="hp-empty">Sin runners.</p>';
-    return `
-      <details class="hp-opt-group" open>
-        <summary>🧩 Módulos backend · ${d.counts.modules}</summary>
-        ${modRows}
-      </details>
-      <details class="hp-opt-group">
-        <summary>🤖 Motores IA · ${d.counts.aiEngines}</summary>
-        ${engineRows}
-      </details>
-      <details class="hp-opt-group">
-        <summary>🏃 Runners (bin/) · ${d.counts.runners}</summary>
-        ${runnerRows}
-      </details>
-      <p class="hp-empty">🖥 Frontend · ${d.counts.frontend} módulo(s)</p>`;
-  }
 
   function renderScan(d, err) {
     if (err) { refs.scan.innerHTML = '<p class="hp-empty">No se pudo leer el censo.</p>'; return; }
@@ -126,20 +109,18 @@ export function mountHealthPanel(el, ctx) {
     }
     const warn = d.unregistered.length
       ? `<span class="hp-opt-risk hp-opt-risk--medio">⚠️ ${d.unregistered.length} sin registrar</span>` : '';
+    const res = d.resources
+      ? `${d.resources.cpu.cores} núcleo(s) · CPU ${Math.round(d.resources.cpu.pct)}% · RAM ${Math.round(d.resources.mem.pct)}% · `
+      : '';
     refs.scan.innerHTML = `
-      <details class="hp-opt-card">
-        <summary class="hp-opt-head">
-          ${scanning ? '<span class="cwc-spinner"></span>' : icon('search', { size: 13 })}
-          <b>${d.counts.modules} módulo(s) · ${d.counts.aiEngines} motor(es) IA</b>
-          ${warn}
-          <span class="hp-opt-snippet" style="margin-left:auto">${fmtDate(d.generatedAt)}</span>
-          <button class="btn-ghost btn--sm btn--icon" data-ref="scanReload" title="Re-escanear ahora">${icon('refresh', { size: 12 })}</button>
-        </summary>
-        <div class="hp-opt-body">${scanDetailHtml(d)}</div>
-      </details>`;
-    refs.scan.querySelector('[data-ref="scanReload"]')?.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      loadScan(true);
+      <div class="hp-verdict hp-verdict--${d.unregistered.length ? 'atencion' : 'ok'}">
+        <b>${d.counts.modules} backend · ${d.counts.frontend} frontend · ${d.counts.runners} runners · ${d.counts.aiEngines} motor(es) IA</b>
+        ${warn}
+        <span class="hp-when">${res}${fmtDate(d.generatedAt)}</span>
+      </div>
+      <button class="btn btn--block" data-ref="openinv">${icon('search', { size: 14 })}<span>Ver dashboard completo →</span></button>`;
+    refs.scan.querySelector('[data-ref="openinv"]')?.addEventListener('click', () => {
+      openInventory(ctx);
     });
   }
 
@@ -242,9 +223,50 @@ export function mountHealthPanel(el, ctx) {
     }
   }
 
+  // ===== Coherencia (resumen compacto + botón que abre el modal) =====
+  // Mismo patrón que Optimización IA: acá solo el veredicto (hallazgos
+  // determinísticos + propuestas pendientes); el grafo, los hallazgos y las
+  // propuestas viven en coherence-modal.js.
+  function renderCoh(d) {
+    const parts = [];
+    const detFindings = d.findingsCount ?? (d.findings?.length || 0);
+    if (d.updatedAt && d.resumen) {
+      const pend = (d.propuestas || []).filter((p) => p.status === 'pending').length;
+      parts.push(`
+        <div class="hp-verdict hp-verdict--${pend ? 'atencion' : 'ok'}">
+          <b>${pend ? `${pend} propuesta(s) pendiente(s)` : 'Sin propuestas pendientes'}</b>
+          <span class="hp-when">${detFindings ? `${detFindings} hallazgo(s) · ` : ''}${fmtDate(d.updatedAt)}</span>
+        </div>`);
+    } else {
+      parts.push('<p class="hp-empty">Todavía no se corrió ningún análisis de coherencia (hay hallazgos determinísticos gratis adentro).</p>');
+    }
+    if (d.running) {
+      parts.push(`<p class="hp-running">${pacman()} Analizando · ${esc(d.progress?.phase || '…')}</p>`);
+    }
+    parts.push(`<button class="btn btn--block" data-ref="opencoh">${icon('gear', { size: 14 })}<span>${d.running ? 'Ver análisis en curso' : 'Coherencia →'}</span></button>`);
+    refs.coh.innerHTML = parts.join('');
+    refs.coh.querySelector('[data-ref="opencoh"]')?.addEventListener('click', () => {
+      openCoherence(ctx, { isAdmin });
+      setTimeout(loadCoh, 500);
+    });
+  }
+
+  async function loadCoh() {
+    try {
+      const d = await (await fetch(`${API}/coherence`)).json();
+      if (!alive) return;
+      renderCoh(d);
+      if (d.running) setTimeout(loadCoh, 5000); // mantener el resumen fresco
+    } catch {
+      if (alive) refs.coh.innerHTML = '<p class="hp-empty">No se pudo leer la coherencia.</p>';
+    }
+  }
+
   refs.reload.addEventListener('click', loadChecks);
+  refs.scanReload.addEventListener('click', () => loadScan(true));
   loadChecks();
   loadScan();
   loadReview();
   loadOpt();
+  loadCoh();
 }

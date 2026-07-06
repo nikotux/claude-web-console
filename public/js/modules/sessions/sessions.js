@@ -46,6 +46,7 @@ export default {
 
     el.innerHTML = `
       <header class="sec-head">
+        <span class="sec-dot" data-ref="dot" title="Estado del módulo"></span>
         <span class="sec-title">Sesiones</span>
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Refrescar">${icon('refresh', { size: 14 })}</button>
@@ -54,6 +55,7 @@ export default {
 
     const listEl = el.querySelector('[data-ref="list"]');
     const countEl = el.querySelector('[data-ref="count"]');
+    const dotEl = el.querySelector('[data-ref="dot"]');
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
     bus.addEventListener('sessions-changed', refresh);
 
@@ -143,6 +145,9 @@ export default {
       const visible = sessions.filter((s) => !s.name.startsWith('cwct-'));
       const total = visible.length + chats.length;
       countEl.textContent = total ? String(total) : '';
+      // Semáforo (visible colapsado): verde si hay sesiones, tenue si no hay.
+      dotEl.className = 'sec-dot ' + (total ? 'sec-dot--ok' : 'sec-dot--idle');
+      dotEl.title = total ? `${total} sesión(es) activas` : 'Sin sesiones';
       const owned = visible.filter((s) => s.owned);
       const others = visible.filter((s) => !s.owned);
 
@@ -203,6 +208,7 @@ export default {
         <button class="cwc-popup-item" data-act="mode">${icon(isTui ? 'sparkle' : 'terminal', { size: 15 })}<span>${isTui ? 'Pasar a Chat' : 'Pasar a TUI'}</span></button>
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
         <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
+        ${isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>Reabrir para cambios</span></button>`}
         <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -212,7 +218,38 @@ export default {
       menu.querySelector('[data-act="mode"]').addEventListener('click', () => act(() => switchChatMode(c)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
       menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModelForChat(c)));
+      menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
       menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    // Reabre el motor de una conversación para que tome cambios de código
+    // nuevos tras un deploy (mata el runner viejo y levanta uno fresco sobre la
+    // MISMA sesión: conserva el contexto, no cierra el chat). Confirm SOLO si
+    // hay un turno en curso (se cortaría).
+    async function reopenChat(c) {
+      if (c.status === 'working') {
+        const ok = await dialog.confirmDialog({
+          title: 'Reabrir para cambios',
+          message: `"${c.title}" está trabajando ahora: reabrir el motor corta el turno en curso. La conversación y su contexto se conservan.`,
+          confirmLabel: 'Reabrir igual',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      try {
+        const res = await fetch('/api/chat/reopen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo reabrir el motor.');
+        if (data.chat) syncConversation(data.chat);
+      } catch (e) {
+        dialog.alertDialog({ title: 'Reabrir para cambios', message: e.message });
+      } finally {
+        refresh();
+      }
     }
 
     // Modelo de una CONVERSACIÓN: en vivo (q.setModel() del SDK, sin perder

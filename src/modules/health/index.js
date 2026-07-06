@@ -26,10 +26,14 @@ import {
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
-import { aiEnginesCensus, generateInventory } from '../../core/inventory.js';
+import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
+import { systemSnapshot } from '../stats/index.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
 } from './optimize-shared.js';
+import {
+  readCoh, writeCoh, isCohRunning, readCohLock, writeCohLock, COH_LOG, evaluateCoherence,
+} from './coherence-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -271,6 +275,23 @@ function spawnOptimize() {
   return true;
 }
 
+// Lanza el runner del MÓDULO DE COHERENCIA (bin/cwc-coherence-runner.js): grafo
+// de dependencias + hallazgos de cableado + análisis con sonnet → propuestas.
+// Mismo cierre de carrera que spawnOptimize (reserva pid:0 sincrónica).
+const COH_RUNNER = path.join(ROOT, 'bin', 'cwc-coherence-runner.js');
+function spawnCoherence() {
+  if (isCohRunning()) return false;
+  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  writeCohLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
+  const logFd = fss.openSync(COH_LOG, 'a');
+  const child = spawn(process.execPath, [COH_RUNNER], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+  });
+  child.unref();
+  fss.closeSync(logFd);
+  return true;
+}
+
 // Enriquece los hallazgos de review.json con id/sig (derivados del contenido) y
 // la marca de RECURRENCIA: el hallazgo coincide (por firma) con algo que YA se
 // había resuelto ANTES de arrancar esta revisión → volvió a aparecer.
@@ -324,27 +345,43 @@ export default {
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
 
-    // Censo del proyecto (módulos backend/frontend, runners, motores IA),
-    // gratis (0 tokens, sin LLM) — reusa generateInventory() (core/inventory.js,
-    // caché por fingerprint/mtime, la misma fuente que inventory.md). El front
-    // lo muestra como chip compacto que se expande a pedido (2026-07-04):
-    // así un módulo/motor NUEVO (p.ej. comunicación entre sesiones) aparece
-    // solo, sin registrarlo a mano en ningún lado — salvo en registry.js, que
-    // sigue siendo obligatorio para que el módulo CORRA (esto solo lo señala
-    // si falta con `unregistered`). ?force=1 ignora el caché y re-escanea YA
-    // (botón "refrescar" del front); sin el flag, sirve el caché si nada
-    // cambió desde la última vez.
-    r.get('/scan', (req, res) => {
+    // Censo del proyecto (módulos backend/frontend, runners, motores IA) +
+    // recursos del servidor, gratis (0 tokens, sin LLM) — reusa
+    // generateInventory() (core/inventory.js, caché por fingerprint/mtime, la
+    // misma fuente que inventory.md) y systemSnapshot() (modules/stats, misma
+    // fuente que el gauge del pie). El front lo muestra como resumen compacto
+    // + botón "Ver dashboard completo →" (system/inventory-modal.js, censo con
+    // detalle real: endpoints/registro por módulo backend, montaje por módulo
+    // frontend, núcleos/CPU/RAM/disco) — así un módulo/motor NUEVO (p.ej.
+    // comunicación entre sesiones) aparece solo, sin registrarlo a mano en
+    // ningún lado salvo en registry.js, que sigue siendo obligatorio para que
+    // el módulo CORRA (esto solo lo señala si falta con `unregistered`).
+    // ?force=1 ignora el caché del inventario y re-escanea YA (botón
+    // "refrescar" del front); sin el flag, sirve el caché si nada cambió.
+    r.get('/scan', async (req, res) => {
       try {
         const { inventory, regenerated } = generateInventory({ force: req.query.force === '1' });
         const unregistered = inventory.modules.filter((m) => !m.registered).map((m) => m.name);
+        let resources = null;
+        try { resources = await systemSnapshot(); } catch { /* el dashboard igual muestra el resto */ }
         res.json({
           generatedAt: inventory.generatedAt,
           regenerated,
           counts: inventory.counts,
           unregistered,
-          modules: inventory.modules.map((m) => ({ name: m.name, registered: m.registered, purpose: m.purpose })),
-          runners: inventory.runners.map((rr) => rr.file),
+          resources,
+          modules: inventory.modules.map((m) => ({
+            name: m.name,
+            registered: m.registered,
+            purpose: m.purpose,
+            registryLine: m.registryLine,
+            endpoints: m.endpoints,
+            fileCount: m.files.length,
+          })),
+          frontend: inventory.frontend.map((f) => ({
+            name: f.name, dir: f.dir, mounted: f.mounted, fileCount: f.files.length,
+          })),
+          runners: inventory.runners.map((rr) => ({ file: rr.file, purpose: rr.purpose })),
           aiEngines: inventory.aiEngines.map((e) => ({
             file: e.file, purpose: e.purpose, models: e.models, modelDynamic: e.modelDynamic,
           })),
@@ -552,6 +589,51 @@ export default {
       p.status = action === 'accept' ? 'accepted' : 'rejected';
       p.decidedAt = Date.now();
       writeOpt(st);
+      res.json({ ok: true });
+    });
+
+    // ===== Coherencia (grafo de dependencias + cableado entre motores) =====
+    // CENSO determinístico (0 tokens, en vivo): grafo quién-usa-a-quién + uso de
+    // los servicios transversales + hallazgos de cableado. Autenticados.
+    r.get('/coherence-census', (req, res) => {
+      try {
+        const census = coherenceCensus();
+        res.json({ generatedAt: Date.now(), census, findings: evaluateCoherence(census) });
+      } catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
+    });
+
+    // Estado del análisis IA: resultado persistido (lo escribe el runner) + si
+    // hay uno corriendo (lock fresco, con fase). El front encuesta esto. 0 tokens.
+    r.get('/coherence', (req, res) => {
+      res.json({ ...readCoh(), running: isCohRunning(), progress: readCohLock() });
+    });
+
+    // Lanza el análisis (runner detached, CONSUME TOKENS → admin + confirm en el
+    // front). Responde INMEDIATO (arrancar+encuestar, patrón optimize).
+    r.post('/coherence', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (isCohRunning()) return res.status(409).json({ error: 'Ya hay un análisis de coherencia en curso.' });
+      try {
+        if (!spawnCoherence()) return res.status(409).json({ error: 'Ya hay un análisis de coherencia en curso.' });
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+
+    // Decisión sobre UNA propuesta de coherencia: accept (el front abre el chat
+    // supervisado que la aplica) o reject. NUNCA se aplica nada desde acá.
+    r.post('/coherence-proposal', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = String(req.body?.id || '');
+      const action = req.body?.action;
+      if (!['accept', 'reject'].includes(action)) return res.status(400).json({ error: 'Acción inválida (accept|reject).' });
+      const st = readCoh();
+      const p = (st.propuestas || []).find((x) => x.id === id);
+      if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
+      p.status = action === 'accept' ? 'accepted' : 'rejected';
+      p.decidedAt = Date.now();
+      writeCoh(st);
       res.json({ ok: true });
     });
 

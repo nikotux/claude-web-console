@@ -20,6 +20,7 @@ export default {
 
     el.innerHTML = `
       <header class="sec-head">
+        <span class="sec-dot" data-ref="dot" title="Estado del repo"></span>
         <span class="sec-title">Tolkien</span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="Buscar cambios en GitHub (fetch)">${icon('refresh', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Descargar cambios (pull: stash → pull → pop)">${icon('download', { size: 14 })}</button>
@@ -58,6 +59,14 @@ export default {
       const st = current;
       refs.fetch.disabled = busy;
       refs.update.disabled = busy;
+      // Semáforo (visible colapsado): amarillo si hay commits por traer o
+      // cambios sin commitear; verde si está al día y limpio; tenue sin datos.
+      if (refs.dot) {
+        const dstate = !st ? 'idle' : ((st.behind > 0 || st.dirty) ? 'warn' : 'ok');
+        refs.dot.className = `sec-dot sec-dot--${dstate}`;
+        refs.dot.title = !st ? 'Sin datos'
+          : (st.behind > 0 ? `${st.behind} commit(s) por traer` : (st.dirty ? `${st.dirtyCount} sin commitear` : 'Al día'));
+      }
       // El pull resalta cuando hay commits nuevos para traer.
       refs.update.classList.toggle('tk-update--due', !!st && st.behind > 0);
       refs.update.title = st && st.behind > 0

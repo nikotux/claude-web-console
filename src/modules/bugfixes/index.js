@@ -34,16 +34,19 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
-import { settingSourcesFor } from '../../core/sdk-settings.js';
 import { listBugfixes, saveBugfixes, scanUnregistered, getContext, saveContext, DEFAULT_CONTEXTS, addEvent } from './store.js';
 import { buildTickets, createFeature, findSimilarSolutions, saveFeedback, ticketOfPr } from './engine.js';
 // Vinculación de un PR YA existente a un registro (bug 2026-07-05 FEAT-2/#249):
 // misma lógica para el endpoint manual, la reconciliación de refresh-prs y el
 // CLI bin/cwc-bugfix-link.js que corre el propio chat.
 import { applyPrLink, linkPrToRegistry } from './link-shared.js';
+// GATEWAY de comunicaciones: comms EJECUTA y REGISTRA todo envío externo
+// (auditoría 2026-07-05). bugfixes ya no hace gh pr comment / Desk por su cuenta.
+import * as GW from '../comms/gateway-shared.js';
+import { fetchPrRich } from '../comms/pr-read-shared.js';
+import { readSendJob, sendJobResult } from '../comms/gateway-shared.js';
 // Orquestador de concurrencia ADAPTATIVA — el mismo de Salud (genérico y
 // testeado). Acá lo usa refresh-prs para paralelizar las LECTURAS a GitHub
 // (`gh pr view`); los git-writes siguen SERIAL (regla de oro: paralelo lo
@@ -200,15 +203,18 @@ async function pushPr(entry) {
     try {
       prUrl = await run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body], { cwd: wt });
       prUrl = (prUrl.match(/https:\/\/\S+/) || [null])[0];
-      // Reviewer = Chris (mergea los PRs del repo). Best-effort: si falla, el
-      // PR ya existe igual.
-      if (prUrl) await run('gh', ['pr', 'edit', prUrl, '--add-reviewer', 'cswenor'], { cwd: wt }).catch(() => {});
     } catch { /* sin gh o sin permisos de PR: cae al compare */ }
     if (!prUrl) {
       const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: TOLKIEN });
       prUrl = compareUrl(origin, branch);
     }
     const prNumber = Number((String(prUrl).match(/\/pull\/(\d+)/) || [])[1]) || null;
+    // Reviewer (Chris) + registro del PR creado VÍA EL GATEWAY comms: centraliza
+    // la comunicación (add-reviewer notifica a Chris) y la deja en el outbox/hilo.
+    if (prNumber) {
+      await GW.sendComm({ channel: 'github', action: 'pr_add_reviewer', contactId: 'chris', actor: 'bugfixes:pushPr', payload: { prNumber, reviewer: 'cswenor', prUrl } }).catch(() => {});
+      await GW.sendComm({ channel: 'github', action: 'record', contactId: 'chris', actor: 'bugfixes:pushPr', payload: { prNumber, prUrl, project: 'Tolkien', text: `PR #${prNumber} creado y enviado a review: ${title}` } }).catch(() => {});
+    }
     return { branch, prUrl, prNumber, files: copied, skipped };
   } finally {
     await run('git', ['worktree', 'remove', '--force', wt], { cwd: TOLKIEN }).catch(() => {});
@@ -286,10 +292,10 @@ async function updatePr(entry) {
     // Posición del commit en el branch (2º, 3º…) — informativo para la UI.
     const commitCount = Number(await run('git', ['rev-list', '--count', 'origin/main..HEAD'], { cwd: wt }).catch(() => '')) || null;
 
-    // Notas del PR al día + aviso al reviewer (best-effort: el PR ya se actualizó).
-    await run('gh', ['pr', 'edit', String(entry.prNumber), '--body', body], { cwd: wt }).catch(() => {});
-    await run('gh', ['pr', 'comment', String(entry.prNumber), '--body',
-      `PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos en el commit ${commit} (adicional en el branch, historial intacto). Notas del PR actualizadas.`], { cwd: wt }).catch(() => {});
+    // Notas del PR al día + aviso al reviewer VÍA EL GATEWAY comms (ejecuta,
+    // registra en outbox y en el hilo de Chris; best-effort: el PR ya se actualizó).
+    await GW.sendComm({ channel: 'github', action: 'pr_edit_body', contactId: 'chris', actor: 'bugfixes:updatePr', payload: { prNumber: entry.prNumber, text: body } }).catch(() => {});
+    await GW.sendComm({ channel: 'github', action: 'pr_comment', contactId: 'chris', actor: 'bugfixes:updatePr', payload: { prNumber: entry.prNumber, prUrl: entry.prUrl, text: `PR actualizado desde la consola: el ticket se retrabajó y este PR recibió los cambios nuevos en el commit ${commit} (adicional en el branch, historial intacto). Notas del PR actualizadas.` } }).catch(() => {});
 
     return { branch, prUrl: entry.prUrl, prNumber: entry.prNumber, files: copied, skipped, updated: true, commit, commitCount, verified };
   } finally {
@@ -319,8 +325,8 @@ async function cancelPr(entry) {
   let prCerrado = state === 'closed';
   if (entry.prNumber && !prCerrado) {
     try {
-      await run('gh', ['pr', 'close', String(entry.prNumber), '--comment',
-        'Cancelado desde la consola: el fix se rehace y se sube en un PR nuevo.'], { cwd: TOLKIEN });
+      const rc = await GW.sendComm({ channel: 'github', action: 'pr_close_comment', contactId: 'chris', actor: 'bugfixes:cancelPr', payload: { prNumber: entry.prNumber, text: 'Cancelado desde la consola: el fix se rehace y se sube en un PR nuevo.' } });
+      if (!rc.ok) throw new Error(rc.error || 'no se pudo cerrar el PR');
       steps.push(`PR #${entry.prNumber} cerrado en GitHub (sin mergear)`);
       prCerrado = true;
     } catch (err) {
@@ -349,19 +355,14 @@ async function cancelPr(entry) {
 }
 
 // ===== Actualización automática del ticket en Desk (SOLO el 1er PR) =====
-// Corrida headless del SDK con el MCP de Desk (el mismo que usa el triage).
-// EXCEPCIÓN QUIRÚRGICA a la regla 6 de CLAUDE.md (headless = read-only):
-// esta corrida SÍ puede escribir, pero ÚNICAMENTE vía tools `desk_*` del MCP
-// (allowlist por prefijo en las DOS capas: hook PreToolUse + canUseTool);
-// Bash/Edit/Write/git y cualquier otra tool quedan denegados. Es asíncrona y
-// best-effort: si falla, el PR no se afecta y el tablero muestra el estado
-// (deskStatus + evento ticket_actualizado en el historial, ok o error).
+// DELEGADA AL GATEWAY comms (2026-07-05): la ESCRITURA a Desk ya no la hace
+// bugfixes — la ejecuta el motor Comunicaciones (GW.sendComm 'ticket_auto_update'
+// → bin/cwc-comms-send-runner.js), con la allowlist de escritura gobernada + la
+// firma centralizada. Acá solo se SOLICITA y se espera el resultado para el
+// tablero (deskStatus + evento ticket_actualizado, ok o error). Best-effort:
+// si falla, el PR no se afecta.
 // Las ITERACIONES del PR (feedback) NUNCA actualizan Desk automáticamente:
 // van por el chat "Actualizar ticket" del tablero, con aprobación del usuario.
-const DESK_TIMEOUT_MS = 4 * 60000;
-const deskToolAllowed = (name) =>
-  /^mcp__[a-z0-9_-]+__desk_[a-z0-9_]+$/i.test(String(name)) || name === 'TodoWrite';
-
 async function deskUpdateAuto(sessionId) {
   const all = listBugfixes();
   const entry = all.find((b) => b.sessionId === sessionId);
@@ -369,76 +370,50 @@ async function deskUpdateAuto(sessionId) {
   entry.deskStatus = 'updating';
   saveBugfixes(all);
 
-  const deny = (why) => ({ behavior: 'deny', message: why });
-  const denyHook = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'Actualización de ticket: SOLO tools desk_* del MCP.',
-    },
-  };
-  const prompt = [
-    `Se envió el PR interno #${entry.prNumber} (${entry.prUrl}) con el fix del ticket de Zoho Desk #${entry.ticketNumber}.`,
-    entry.ticketUrl ? `Ticket: ${entry.ticketUrl}` : '',
-    '',
-    'Tu ÚNICA tarea, usando las tools desk_* del MCP:',
-    '1. Buscá el ticket y verificá que sea ese.',
-    '2. Ponelo en estado "On Hold" (o el equivalente que exista).',
-    '3. Publicá una actualización EN INGLÉS, corta y humana (2 a 4 frases), para quien reportó: qué estaba fallando (en simple), que el arreglo ya está implementado y en revisión, y que se desplegará en los próximos días. Sin jerga interna, sin mencionar herramientas ni consolas. Si podés elegir, hacela VISIBLE para el solicitante (respuesta); si no, como comentario.',
-    '   La nota SIEMPRE cierra con la firma exacta "— Nicolás (dev team)" en su propia línea: la API de Desk publica con otra identidad y el autor real tiene que quedar claro.',
-    '',
-    'Referencia de lo arreglado (notas del PR, para tu resumen):',
-    formatPrBody(entry).slice(0, 1500),
-    '',
-    'NO toques nada más (ni otros tickets, ni código). Al terminar respondé SOLO una línea: "DESK-OK <qué aplicaste>" o "DESK-FAIL <motivo>".',
-  ].filter(Boolean).join('\n');
-
-  let out = '';
+  // La ESCRITURA a Desk la EJECUTA el gateway comms (send-runner desacoplado,
+  // allowlist de escritura gobernada + firma centralizada). bugfixes solo la
+  // SOLICITA y espera el resultado para reflejar el estado (auditoría 2026-07-05:
+  // toda comunicación externa pasa por el motor Comunicaciones).
+  let jobId = null;
   try {
-    const q = query({
-      prompt,
-      options: {
-        cwd: config.projectDir,
-        model: 'sonnet',
-        maxTurns: 15,
-        permissionMode: 'default',
-        settingSources: settingSourcesFor('headless'), // carga el MCP del proyecto, sin settings de user
-        hooks: {
-          PreToolUse: [{
-            hooks: [async (input) => (deskToolAllowed(input.tool_name) ? {} : denyHook)],
-          }],
-        },
-        canUseTool: async (name, input) => (deskToolAllowed(name)
-          ? { behavior: 'allow', updatedInput: input }
-          : deny('Actualización de ticket: SOLO tools desk_* del MCP.')),
+    const r = await GW.sendComm({
+      channel: 'desk', action: 'ticket_auto_update', actor: 'bugfixes:deskUpdateAuto',
+      payload: {
+        ticketNumber: entry.ticketNumber, prNumber: entry.prNumber, prUrl: entry.prUrl,
+        ticketUrl: entry.ticketUrl, prBody: formatPrBody(entry).slice(0, 1500),
+        status: 'On Hold', signature: GW.SIGNATURE,
       },
     });
-    let timer = null;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), DESK_TIMEOUT_MS); });
-    const pump = (async () => {
-      for await (const m of q) {
-        if (m.type === 'assistant') {
-          for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`;
-        } else if (m.type === 'result') break;
-      }
-    })();
-    try {
-      await Promise.race([pump, timeout]);
-    } finally { clearTimeout(timer); }
+    jobId = r.jobId;
   } catch (err) {
-    out += `\nDESK-FAIL ${String(err?.message || err).slice(0, 120)}`;
+    const f0 = listBugfixes();
+    const e0 = f0.find((b) => b.sessionId === sessionId);
+    if (e0) {
+      e0.deskStatus = 'error';
+      addEvent(e0, 'ticket_actualizado', { mode: 'auto', ok: false, detail: String(err?.message || err).slice(0, 160) });
+      e0.updatedAt = Date.now();
+      saveBugfixes(f0);
+    }
+    return;
   }
 
-  const okMatch = out.match(/DESK-OK\s*(.*)/);
-  const failMatch = out.match(/DESK-FAIL\s*(.*)/);
+  // Espera el resultado del envío (best-effort, hasta ~5 min).
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let res = null;
+  for (let i = 0; i < 100 && jobId; i += 1) {
+    await sleep(3000);
+    const jr = sendJobResult(readSendJob(jobId));
+    if (jr && (jr.status === 'done' || jr.status === 'error')) { res = jr; break; }
+  }
+
   const fresh = listBugfixes();
   const e2 = fresh.find((b) => b.sessionId === sessionId);
   if (!e2) return;
-  e2.deskStatus = okMatch ? 'ok' : 'error';
+  const ok = !!res && res.status === 'done';
+  e2.deskStatus = ok ? 'ok' : 'error';
   addEvent(e2, 'ticket_actualizado', {
-    mode: 'auto',
-    ok: !!okMatch,
-    detail: (okMatch?.[1] || failMatch?.[1] || 'sin confirmación del modelo').trim().slice(0, 200),
+    mode: 'auto', ok,
+    detail: (ok ? (res.result?.detail || 'actualizado vía gateway comms') : (res?.error || 'sin confirmación / timeout')).toString().slice(0, 200),
   });
   e2.updatedAt = Date.now();
   saveBugfixes(fresh);
@@ -448,17 +423,11 @@ async function deskUpdateAuto(sessionId) {
 // Proxy de gh con caché en memoria de 60 s: reviews, comentarios, checks y
 // commits para el panel vivo del tablero. Si gh falla, error limpio y el
 // tablero degrada a los datos locales.
-const liveCache = new Map(); // prNumber -> { at, data }
-const LIVE_TTL_MS = 60000;
-
-async function prLive(prNumber) {
-  const hit = liveCache.get(prNumber);
-  if (hit && Date.now() - hit.at < LIVE_TTL_MS) return hit.data;
-  const out = await run('gh', [
-    'pr', 'view', String(prNumber),
-    '--json', 'number,state,title,url,headRefName,mergeable,reviewDecision,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviews,comments,commits',
-  ], { cwd: config.projectDir });
-  const pr = JSON.parse(out);
+// Fase C (2026-07-05): la LECTURA de GitHub la centraliza comms (pr-read-shared,
+// caché compartida 60 s). prLive ya no hace su propio `gh pr view` ni su Map:
+// reusa fetchPrRich (mismo superset de campos) y solo transforma para el panel.
+async function prLive(prNumber, fresh = false) {
+  const pr = await fetchPrRich(prNumber, { fresh });
   const data = {
     number: pr.number,
     state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
@@ -489,7 +458,6 @@ async function prLive(prNumber) {
     ].filter((f) => f.body || f.kind !== 'comment').sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-8),
     fetchedAt: Date.now(),
   };
-  liveCache.set(prNumber, { at: Date.now(), data });
   // PERSISTIR el feedback de Chris (regla 2): lo que gh trae acá se pierde a los
   // 60 s / al reiniciar; guardarlo por ticket lo convierte en memoria y base de
   // conocimiento. Mapear PR→ticket por el registro, el branch o el título.
@@ -919,9 +887,8 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const n = Number(req.params.number);
       if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: 'Número de PR inválido.' });
-      if (req.query.fresh) liveCache.delete(n);
       try {
-        res.json({ ok: true, live: await prLive(n) });
+        res.json({ ok: true, live: await prLive(n, !!req.query.fresh) });
       } catch (err) {
         res.status(502).json({ error: `GitHub no disponible: ${String(err?.message || err).slice(0, 200)}` });
       }

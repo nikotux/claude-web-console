@@ -19,6 +19,7 @@
 import { execFile } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
+import { fetchPrRich } from '../src/modules/comms/pr-read-shared.js';
 import { listBugfixes } from '../src/modules/bugfixes/store.js';
 import {
   computeSemaforo, investigatePrompt, parseVerdict, investigateToolAllowed,
@@ -54,8 +55,8 @@ const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permission
 
 async function run() {
   // 1) Juntar datos con gh (determinístico).
-  const prJson = JSON.parse(await gh(['pr', 'view', pr, '--json',
-    'number,title,author,reviews,comments,commits,statusCheckRollup,mergeable,reviewDecision']));
+  // Fase C: lectura de GitHub centralizada en comms (pr-read-shared, superset).
+  const prJson = await fetchPrRich(pr, { fresh: true });
   let diff = '';
   try { diff = (await gh(['pr', 'diff', pr], { big: true })).slice(0, DIFF_CAP); } catch { /* sin diff */ }
 

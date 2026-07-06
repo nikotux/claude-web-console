@@ -27,7 +27,7 @@ import {
   PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX,
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
-import { settingSourcesFor } from '../src/core/sdk-settings.js';
+import { chatQueryOptions, autoApprovesAll } from '../src/core/tool-policy.js';
 
 // ---- argv ----
 const args = {};
@@ -95,21 +95,18 @@ function setStatus(state) {
 const input = makeInput();
 let q = null;
 function startEngine() {
+  // Opciones armadas por el NÚCLEO de gobernanza (core/tool-policy.js): fuente
+  // única que garantiza `allowDangerouslySkipPermissions` para que el modo
+  // "Todo" (bypassPermissions) realmente saltee permisos. Ver ese archivo.
   q = query({
     prompt: input.gen(),
-    options: {
+    options: chatQueryOptions({
       cwd: CWD,
-      ...(MODEL ? { model: MODEL } : {}),
-      ...(RESUME ? { resume: RESUME } : {}),
-      permissionMode: mode,
-      includePartialMessages: true,
-      // Fase 8: cargar skills + comandos slash + CLAUDE.md del usuario y del
-      // proyecto del cwd (fuente única en core/sdk-settings.js), y habilitar
-      // la invocación autónoma de skills (además de la manual con /).
-      settingSources: settingSourcesFor('chat'),
-      allowedTools: ['Skill'],
+      model: MODEL,
+      resume: RESUME,
+      mode,
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
-    },
+    }),
   });
 }
 
@@ -197,6 +194,17 @@ function askPermission(toolName, toolInput, ctx) {
   });
 }
 
+// Auto-aprueba TODA solicitud pendiente (al pasar a modo "Todo"). Usa la MISMA
+// forma de "allow" que la respuesta manual del usuario (t:'perm', allow:true).
+function approveAllPending() {
+  for (const [id, p] of pendingPerms) {
+    clearTimeout(p.timer);
+    p.resolve({ behavior: 'allow', updatedInput: p.input });
+    emit({ type: 'permission_closed', id, allow: true, reason: 'bypass' });
+  }
+  pendingPerms.clear();
+}
+
 async function pump() {
   try {
     for await (const m of q) onMessage(m);
@@ -265,7 +273,18 @@ function handleCommand(c, msg) {
     Promise.resolve(q?.setPermissionMode?.(msg.mode)).then(() => {
       mode = msg.mode;
       emit({ type: 'mode', mode });
-    }).catch(() => {});
+      // "Todo" (bypassPermissions) aplicado EN VIVO: auto-aprobar las tarjetas
+      // que ya estaban pendientes al momento del cambio, para que se resuelvan
+      // YA (si no, la card que el SDK emitió antes seguiría esperando tu clic
+      // aunque el modo nuevo ya no exija permiso).
+      if (autoApprovesAll(mode)) approveAllPending();
+    }).catch((err) => {
+      // NO tragarse el error (era la causa del "drift"): si el SDK rechaza el
+      // cambio, avisar y REPORTAR el modo REAL vigente para que la UI reconcilie
+      // en vez de mostrar un modo que el motor no tiene.
+      emit({ type: 'error', message: `No se pudo cambiar el modo a "${msg.mode}": ${String(err?.message || err).slice(0, 200)}` });
+      emit({ type: 'mode', mode });
+    });
     return;
   }
   if (msg.t === 'set_model' && typeof msg.model === 'string' && msg.model) {

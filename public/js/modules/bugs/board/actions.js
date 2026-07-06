@@ -11,7 +11,7 @@ import { poll } from './polls.js';
 import { rowKey, warningsFor } from './labels.js';
 import { pendingOf } from './render.js';
 import {
-  fetchContexts, workPrompt, featurePrompt, deskChatPrompt, triagePrompt,
+  fetchContexts, workPrompt, featurePrompt, deskChatPrompt, triagePrompt, fetchCommsContext,
   invTextOfPr, invTextOfTicket,
 } from './prompts.js';
 
@@ -335,9 +335,13 @@ export async function workOn(b) {
   } else if (b.ticketNumber && !isFeature) {
     invText = invTextOfTicket((await getTktInv(b.ticketNumber))?.investigation?.lectura);
   }
+  // Motor Comunicaciones (0 tokens, índice ya cacheado): si este PR/ticket
+  // tiene conversación indexada con Chris, el chat arranca sabiendo qué se
+  // habló últimamente sin tener que abrir el tablero de Comunicaciones.
+  const commsText = await fetchCommsContext(b);
   await deps.openChat({
     cwd: deps.projectRel(), mode: isFeature && !b.files?.length ? 'plan' : 'default',
-    prompt: (isFeature ? featurePrompt : workPrompt)(b, { invText, workContext, prContext }),
+    prompt: (isFeature ? featurePrompt : workPrompt)(b, { invText, workContext, prContext, commsText }),
     title: (isFeature ? `Feature ${b.ticketNumber}` : `PR en progreso · TKT #${b.ticketNumber}`).slice(0, 60),
     ticket: { number: b.ticketNumber, url: b.ticketUrl || null },
   });
@@ -386,9 +390,10 @@ export async function deskChat(b) {
 export async function workOnTriage(t) {
   const [workContext, prContext] = await fetchContexts();
   const invText = invTextOfTicket((await getTktInv(t.ticketNumber))?.investigation?.lectura, { yaHecha: true });
+  const commsText = await fetchCommsContext(t);
   await deps.openChat({
     cwd: deps.projectRel(), mode: 'plan',
-    prompt: triagePrompt(t, { invText, workContext, prContext }),
+    prompt: triagePrompt(t, { invText, workContext, prContext, commsText }),
     title: `TKT #${t.ticketNumber} — ${t.whatBroke}`.slice(0, 60),
     ticket: { number: t.ticketNumber, url: t.webUrl || null },
   });

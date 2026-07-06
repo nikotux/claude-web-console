@@ -15,6 +15,33 @@ export async function fetchContexts() {
   } catch { return ['', '']; }
 }
 
+// Contexto del motor Comunicaciones (comms) para Chris: 0 tokens, lee el
+// índice ya cacheado en disco (GET /api/comms/index). Si el PR de este fix
+// tiene hilo indexado o hay un DM de Teams con Chris, lo trae para que el chat
+// arranque sabiendo qué se habló últimamente — sin tener que abrir el tablero
+// de Comunicaciones a mano. Best-effort: si falla o no hay nada, no rompe nada.
+export async function fetchCommsContext(b) {
+  try {
+    const idx = await (await fetch('/api/comms/index')).json();
+    const threads = idx.threads || [];
+    const wanted = [];
+    if (b.prNumber) {
+      const t = threads.find((x) => x.id === `gh:${b.prNumber}:chris`);
+      if (t) wanted.push(t);
+    }
+    const dm = threads.find((x) => x.id === 'teams:chris');
+    if (dm) wanted.push(dm);
+    if (!wanted.length) return '';
+    const lines = ['COMUNICACIONES con Chris (motor Comunicaciones — datos ya indexados):'];
+    for (const t of wanted) {
+      const last = t.messages?.[t.messages.length - 1];
+      if (!last) continue;
+      lines.push(`- [${t.source}] ${t.title}${t.awaitingReply ? ' (esperando respuesta de Chris)' : ''}: "${String(last.text).slice(0, 200)}"`);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+  } catch { return ''; }
+}
+
 // Texto del historial para inyectar contexto COMPLETO en los chats del ciclo.
 export const historyText = (b) => timelineOf(b)
   .map((e) => `- ${fmtDate(e.t)}: ${(EV_LABEL[e.type] || (() => e.type))(e)}`).join('\n');
@@ -32,7 +59,7 @@ export function invTextOfTicket(L, { yaHecha = false } = {}) {
 }
 
 // Prompt de "Trabajar en esto" (fila con registro del motor).
-export function workPrompt(b, { invText, workContext, prContext }) {
+export function workPrompt(b, { invText, workContext, prContext, commsText }) {
   const est = prEstado(b);
   return [
     `Retomemos el fix del ticket Desk #${b.ticketNumber} para refinarlo a mano antes de ${b.status === 'subido' ? 'MODIFICAR el PR ya existente' : 'subir el PR'}.`,
@@ -48,6 +75,7 @@ export function workPrompt(b, { invText, workContext, prContext }) {
     // Lecciones de tickets pasados parecidos (biblioteca del motor).
     (b.similar || []).length ? `\nSOLUCIONES PASADAS PARECIDAS (aprendé de ellas antes de decidir):\n${b.similar.map((s) => `- TKT #${s.ticketNumber}${s.files?.[0] ? ` (${s.files[0]})` : ''}: ${s.fix || s.rootCause || ''}${s.lesson ? ` — lección: ${s.lesson}` : ''}`).join('\n')}` : '',
     invText || '',
+    commsText || '',
     b.prNumber ? `\nSi el PR tiene feedback más nuevo, revisalo: gh pr view ${b.prNumber} --comments` : '',
     workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
@@ -62,7 +90,7 @@ export function workPrompt(b, { invText, workContext, prContext }) {
 // Prompt de "Trabajar en esto" para un FEATURE del tablero (FEAT-n, sin
 // ticket de Desk). El feature es de TOLKIEN por definición (regla de
 // clasificación: el tablero no carga trabajo de otros proyectos).
-export function featurePrompt(b, { invText, workContext, prContext }) {
+export function featurePrompt(b, { invText, workContext, prContext, commsText }) {
   const est = prEstado(b);
   return [
     `Trabajemos el feature ${b.ticketNumber} de Tolkien: ${b.title || ''}`,
@@ -77,6 +105,7 @@ export function featurePrompt(b, { invText, workContext, prContext }) {
     (b.feedback || []).length ? `\nFEEDBACK de Chris en el PR (guardado — tenelo MUY presente):\n${b.feedback.slice(-5).map((f) => `- ${f.author}: ${(f.body || '').slice(0, 300)}`).join('\n')}` : '',
     (b.similar || []).length ? `\nSOLUCIONES PASADAS PARECIDAS (aprendé de ellas):\n${b.similar.map((s) => `- ${s.ticketNumber}${s.files?.[0] ? ` (${s.files[0]})` : ''}: ${s.fix || s.rootCause || ''}${s.lesson ? ` — lección: ${s.lesson}` : ''}`).join('\n')}` : '',
     invText || '',
+    commsText || '',
     'Proceso: es un FEATURE, no un bugfix — arrancá por el DISEÑO: qué se',
     'quiere lograr, dónde encaja en el código de Tolkien, qué opciones hay y',
     'cuál conviene. Presentame el plan y esperá mi OK antes de implementar.',
@@ -113,12 +142,13 @@ export function deskChatPrompt(b) {
       : '3. Redactá EN INGLÉS una respuesta corta y humana (2-4 frases) apropiada al estado real: un avance, un pedido de información, o el próximo paso. MOSTRÁMELA y esperá mi OK.',
     '   La nota SIEMPRE cierra con la firma exacta "— Nicolás (dev team)" en su propia línea: la API de Desk publica con otra identidad y el autor real tiene que quedar claro.',
     '4. Recién con mi OK, publicala en el ticket (visible al solicitante si se puede) y ajustá el estado si corresponde.',
+    `5. Inmediatamente DESPUÉS de publicarla, registrala en el motor Comunicaciones (auditoría central) ejecutando: node /home/nmosquera/claude-web-console/bin/cwc-comms.js record desk ticket_reply --ticket ${b.ticketNumber} -- "<la nota exacta que publicaste>". Es determinístico y 0 tokens; NO re-envía nada, solo deja el registro.`,
     'NO toques código ni envíes PRs desde este chat.',
   ].filter(Boolean).join('\n');
 }
 
 // Prompt de "Trabajar en Chat (plan)" (ticket del triage sin trabajo).
-export function triagePrompt(t, { invText, workContext, prContext }) {
+export function triagePrompt(t, { invText, workContext, prContext, commsText }) {
   return [
     `Trabajemos el bug del ticket Desk #${t.ticketNumber}.`,
     '',
@@ -129,6 +159,7 @@ export function triagePrompt(t, { invText, workContext, prContext }) {
     t.webUrl ? `Ticket: ${t.webUrl}` : '',
     t.context ? `\nContexto del triage:\n${t.context}` : '',
     invText || '',
+    commsText || '',
     workContext ? `\n--- CONTEXTO DE TRABAJO (seguilo al pie de la letra) ---\n${workContext}\n---` : '',
     prContext ? `\n--- REDACCIÓN DEL PR (así se escribe tu cierre) ---\n${prContext}\n---` : '',
     '',

@@ -1,0 +1,64 @@
+// core/tool-policy.js — NÚCLEO de gobernanza de permisos del chat interactivo.
+//
+// NO es un motor: es plomería IN-PROCESS (como sdk-settings.js / paths.js). El
+// estado del modo lo PERSISTE el server (Chat.permissionMode → chats.json) y lo
+// APLICA en vivo el chat-runner (que ya es un motor). Acá viven SOLO las REGLAS,
+// como FUENTE ÚNICA — así el bug del flag de bypass (abajo) no puede recurrir.
+//
+// Modos (PERMISSION_MODES): 'default' (pregunta) · 'acceptEdits' (auto-acepta
+// ediciones) · 'bypassPermissions' ("Todo": acepta TODO sin canUseTool) ·
+// 'plan' (sin ejecución). Deliberado que "Todo" exista SOLO en chats
+// interactivos — las corridas headless (tickets/salud) siguen blindadas
+// read-only con sus PROPIAS allowlists (regla dura 6): ESO no pasa por acá.
+//
+// SOBRE EL FLAG `allowDangerouslySkipPermissions` (verificado empíricamente
+// 2026-07-06, SDK 0.3.198): el .d.ts dice "Must be set to `true` when using
+// permissionMode 'bypassPermissions'", así que lo pasamos SIEMPRE por contrato
+// (es INERTE salvo en 'bypassPermissions'). PERO el test A/B mostró que en esta
+// versión el bypass YA auto-aprueba y "shadowea" canUseTool SIN el flag — o sea
+// el flag NO era la causa de "elegí Todo y me sigue preguntando". La causa REAL
+// es que el modo no siempre LLEGA/aplica en el runner (drift: runner viejo,
+// setPermissionMode que falla y se traga el error, o la tarjeta ya emitida que
+// no se auto-resuelve al cambiar). Eso se arregla en el runner (set_mode robusto
+// + approveAllPending) — este núcleo aporta la fuente única de opciones/flag.
+// OJO adicional: las ALLOW-RULES del ~/.claude/settings.json del usuario también
+// "shadowean" canUseTool (pre-aprueban tools antes del callback), así que en modo
+// 'default' algunas acciones NO piden permiso — eso es la allowlist del usuario,
+// no un bug de la consola.
+
+import { settingSourcesFor } from './sdk-settings.js';
+
+// FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
+// romper a sus importadores; server y runner validan contra este mismo Set).
+export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
+
+// ¿El modo necesita el flag "peligroso" del SDK para activarse?
+export function requiresDangerousSkip(mode) { return mode === 'bypassPermissions'; }
+
+// Normaliza un modo arbitrario (del cliente / disco) a uno válido.
+export function normalizeMode(mode) { return PERMISSION_MODES.has(mode) ? mode : 'default'; }
+
+// ¿Este modo auto-aprueba TODA solicitud sin preguntar? (lo usa el runner para
+// resolver al instante las tarjetas que quedaron pendientes al pasar a "Todo").
+export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
+
+// Opciones de query() del chat interactivo — FUENTE ÚNICA (la usan el runner al
+// spawnear el motor). El flag va SIEMPRE: debe estar presente en la CREACIÓN de
+// query() para que un cambio a "Todo" (al arranque o en vivo con
+// setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
+export function chatQueryOptions({ cwd, model, resume, mode, canUseTool }) {
+  return {
+    cwd,
+    ...(model ? { model } : {}),
+    ...(resume ? { resume } : {}),
+    permissionMode: normalizeMode(mode),
+    // Habilita que el modo "Todo" realmente saltee permisos. Requisito del SDK.
+    allowDangerouslySkipPermissions: true,
+    includePartialMessages: true,
+    // Fase 8: skills + comandos slash + CLAUDE.md del usuario y del proyecto del
+    // cwd (fuente única en core/sdk-settings.js) + invocación autónoma de skills.
+    settingSources: settingSourcesFor('chat'),
+    allowedTools: ['Skill'],
+    canUseTool,
+  };
+}
