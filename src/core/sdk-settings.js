@@ -3,10 +3,16 @@
 // Una sola fuente de verdad (Fase 8 + hallazgo de la revisión de salud) en
 // vez de arrays sueltos en cada módulo:
 //
-//  - 'chat' (interactivo, runner de conversaciones): 'user' + 'project'.
-//    Hereda skills, comandos slash, CLAUDE.md y hooks tanto del usuario
-//    (~/.claude/...) como del proyecto del cwd (.claude/...). Acá el usuario
-//    aprueba cada tool en vivo, así que heredar allowlists es aceptable.
+//  - 'chat' (interactivo, runner de conversaciones): 'user' + 'project' +
+//    'local'. Hereda skills, comandos slash, CLAUDE.md y hooks tanto del
+//    usuario (~/.claude/...) como del proyecto del cwd (.claude/...). Acá el
+//    usuario aprueba cada tool en vivo (y en bypassPermissions ya se
+//    auto-aprueba todo), así que heredar allowlists es aceptable. 'local' es
+//    IMPRESCINDIBLE para los MCP de scope local (los que `claude mcp add`
+//    guarda en ~/.claude.json → projects[cwd].mcpServers, p.ej. `pad` y
+//    `honcho`): sin 'local' esos servers NO se cargan en la consola aunque el
+//    `claude` interactivo sí los vea. 'project' cubre .mcp.json
+//    (tolkien-mordor, context7).
 //
 //  - 'headless' (tickets y toda corrida no interactiva): 'project' + 'local',
 //    NUNCA 'user' (regla dura 6 de CLAUDE.md: esas corridas son read-only
@@ -16,7 +22,7 @@
 //    permisos). 'project' carga .mcp.json + skills; 'local' habilita el
 //    server MCP (enabledMcpjsonServers).
 export function settingSourcesFor(kind) {
-  if (kind === 'chat') return ['user', 'project'];
+  if (kind === 'chat') return ['user', 'project', 'local'];
   if (kind === 'headless') return ['project', 'local'];
   throw new Error(`settingSourcesFor: tipo desconocido "${kind}"`);
 }
