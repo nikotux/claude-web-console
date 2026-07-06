@@ -51,6 +51,14 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-06 05:48 — redesign/board-mobile
+- Motor de estados Pac-Man: catálogo central + fix de reactivación en TUI/interfono
+- Migrar Salud, Bugs, Backup, Uso y Proyectos al motor Pac-Man
+- Sumar leyenda del motor Pac-Man a la ayuda del chat
+- Tablero Bugs & PRs: organizar en 3 subvistas (Tickets · Features · Archivados)
+- bugfixes: el tablero se entera de PRs creados fuera del módulo Enviar PR
+- Agregar motor Comunicaciones + módulo Coherencia
+
 ### 2026-07-05 18:21 — redesign/board-mobile
 - Initial published version.
 
