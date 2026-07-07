@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-07 05:44 — redesign/board-mobile
+- fix(sdk): cargar MCP de scope local en los chats (pad/honcho no aparecían)
+- Modularizar tareas y audio, rediseñar barras laterales
+
 ### 2026-07-06 15:45 — redesign/board-mobile
 - Implementar AutoTux, interfono global y flujos interactivos mejorados
 
