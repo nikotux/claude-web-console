@@ -51,11 +51,20 @@ export function buildDashboard(rawTickets, nowMs) {
   // 5. Resolved this week
   const resolvedThisWeek = tickets.filter((t) => t.resolvedThisWeek).map(slim);
 
+  // 6. Nuevos · sin triar: abiertos que esperan triage (recién creados, sin
+  //    asignar, todavía sin vencer). Es el punto ciego que dejaban las otras
+  //    listas — un ticket nuevo no es overdue (reloj sin correr) ni aging (7+
+  //    días) ni resuelto ni tiene PR, así que sólo se veía como número en "Por
+  //    carril". Más NUEVO primero (menos días de antigüedad arriba).
+  const needsTriage = open.filter((t) => t.waitingOn === 'triage')
+    .sort((a, b) => a.aging.days - b.aging.days).map(slim);
+
   return {
     generatedAt: nowMs,
-    counts: { open: open.length, total: tickets.length, overdue: overdue.length, aging: aging.length, resolvedThisWeek: resolvedThisWeek.length },
+    counts: { open: open.length, total: tickets.length, overdue: overdue.length, aging: aging.length, resolvedThisWeek: resolvedThisWeek.length, needsTriage: needsTriage.length },
     openByLane,
     waitingOn,
+    needsTriage,
     overdue,
     aging,
     resolvedThisWeek,

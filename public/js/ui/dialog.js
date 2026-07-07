@@ -91,6 +91,82 @@ export function confirmDialog({
   });
 }
 
+// Confirmación ADAPTATIVA (pedido del usuario 2026-07-07 para el botón "Detener"
+// del chat): en ESCRITORIO usa la ventana centrada de confirmDialog; en MÓVIL
+// muestra un "menú de deslizamiento" (bottom sheet que sube desde abajo, con
+// grip + swipe-down para cancelar). Devuelve Promise<boolean> igual que
+// confirmDialog. confirmLabel es la acción (p.ej. "Parar"), cancelLabel aborta.
+export function confirmSheet({
+  title = 'Confirmar', message = '', confirmLabel = 'Confirmar',
+  cancelLabel = 'Cancelar', danger = false,
+} = {}) {
+  const mobile = window.matchMedia('(max-width: 768px)').matches;
+  if (!mobile) return confirmDialog({ title, message, confirmLabel, cancelLabel, danger });
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'dlg-overlay dlg-overlay--sheet';
+    const sheet = document.createElement('div');
+    sheet.className = 'dlg-sheet';
+
+    const grip = document.createElement('div');
+    grip.className = 'dlg-sheet-grip';
+    const head = document.createElement('div');
+    head.className = 'dlg-sheet-head';
+    head.textContent = title;
+    sheet.append(grip, head);
+    if (message) {
+      const p = document.createElement('p');
+      p.className = 'dlg-sheet-msg';
+      p.textContent = message;
+      sheet.appendChild(p);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'dlg-sheet-actions';
+    const confirm = document.createElement('button');
+    confirm.className = `btn${danger ? ' btn--danger' : ''} dlg-sheet-confirm`;
+    confirm.textContent = confirmLabel;
+    const cancel = document.createElement('button');
+    cancel.className = 'btn-ghost dlg-sheet-cancel';
+    cancel.textContent = cancelLabel;
+    actions.append(confirm, cancel);
+    sheet.appendChild(actions);
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      // Salida deslizando hacia abajo (usa la transition base de .dlg-sheet).
+      sheet.style.transform = 'translateY(100%)';
+      overlay.style.opacity = '0';
+      setTimeout(() => overlay.remove(), 200);
+      resolve(val);
+    };
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) finish(false); });
+    cancel.addEventListener('click', () => finish(false));
+    confirm.addEventListener('click', () => finish(true));
+
+    // Swipe-down para descartar (= Cancelar): arrastrar el sheet > 80px lo cierra.
+    let startY = null, dy = 0;
+    sheet.addEventListener('touchstart', (e) => {
+      startY = e.touches[0].clientY; dy = 0; sheet.style.transition = 'none';
+    }, { passive: true });
+    sheet.addEventListener('touchmove', (e) => {
+      if (startY == null) return;
+      dy = Math.max(0, e.touches[0].clientY - startY);
+      sheet.style.transform = `translateY(${dy}px)`;
+    }, { passive: true });
+    sheet.addEventListener('touchend', () => {
+      sheet.style.transition = '';
+      if (dy > 80) finish(false);
+      else sheet.style.transform = '';
+      startY = null;
+    });
+  });
+}
+
 // Entrada de texto. Devuelve el string o null si se cancela.
 export function promptDialog({
   title = '', message = '', value = '', placeholder = '',

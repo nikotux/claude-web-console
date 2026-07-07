@@ -1422,7 +1422,15 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             Pac-Man pac-sm masticando en los que consumen AHORA (lastMtime
                             < 2 min); auto-refresh cada 10 s mientras el modal está abierto,
                             preservando detalles expandidos, con clearInterval en onClose)
-public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos) ·
+public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
+                            openModal/confirmDialog/promptDialog/alertDialog/textEditorDialog +
+                            confirmSheet — confirmación ADAPTATIVA 2026-07-07: en desktop delega en
+                            confirmDialog (ventana centrada), en móvil (matchMedia max-width:768px)
+                            muestra un "menú de deslizamiento" = bottom sheet .dlg-sheet que sube
+                            desde abajo, con grip + swipe-down para cancelar + botones full-width
+                            táctiles 44px; devuelve Promise<boolean> igual que confirmDialog. Lo usa
+                            el botón "Detener" del chat (chat-tab.js: confirma antes de enviar
+                            {type:'interrupt'} — Parar/Cancelar). Estilos .dlg-sheet* en ui.css) ·
                             markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup) ·
                             code.js (resaltado hljs COMPARTIDO para detalles de tool calls y
                             diffs: SOLO con lenguaje confiable — extensión conocida o bash
@@ -1478,7 +1486,27 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             con cls 'chat-alive' y estado vivo/dormido)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
-public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden]
+public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden].
+                            DISEÑO COMPACTO UNIFICADO (2026-07-07, pedido del usuario: replicar
+                            el look fino del sidebar en TODA la app). Los primitivos base son
+                            COMPACTOS: .btn/.btn-ghost = min-height 30px · pad .3/.6rem ·
+                            font-size fs-sm; .btn--sm = 24px; .btn--icon = 26px; .dlg-title = fs-md
+                            · .dlg-body/.dlg-msg = fs-sm · .dlg-input = fs-md; .cwc-popup-item =
+                            fs-sm. Se QUITÓ el bump táctil de 44px de los botones (máximo compacto
+                            también en móvil, pedido explícito) — EXCEPCIÓN: .aux-key (teclado
+                            auxiliar) y .chat-slash-* conservan tamaño táctil cómodo (herramientas
+                            de tecleo rápido). Como TODO usa estos primitivos, la unidad se propaga
+                            sola a modales/menús/gestor. Además un WORKFLOW de auditoría (9 agentes
+                            read-only por superficie) detectó y se corrigieron ~26 estilos de MÓDULO
+                            en style.css/fm.css que hardcodeaban tamaños gordos (fs-lg/md donde iba
+                            fs-sm en filas densas, paddings/min-height grandes): chat (.chat-input/
+                            .chat-send), salud (.hp-row/.hr-f-area), sistema (.users-*/.if-item/
+                            .bk-row/.pj-*), uso (.tok-row-top/.lim-top/.tok-big), sesiones/lanzador
+                            (.ln-dir/.ln-model), comms (.cm-thead), tasks/audio (.tk-tab/.au-title-*/
+                            .task-*), tickets (.bv2-sum-main), gestor (.fm-body/.fm-item/.fm-toolbar).
+                            REGLA: al agregar UI nueva, heredar de los primitivos y usar fs-sm/fs-xs
+                            para filas/controles densos; fs-lg/fs-xl SOLO para títulos prominentes.
+public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).

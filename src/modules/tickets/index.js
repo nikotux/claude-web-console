@@ -97,6 +97,7 @@ export default {
           : d.devLane;
         res.json({
           ...d, devLane,
+          needsTriage: stamp(d.needsTriage),
           overdue: stamp(d.overdue), aging: stamp(d.aging), resolvedThisWeek: stamp(d.resolvedThisWeek),
           you, generatedAt: s.generatedAt, lastError: s.lastError || null,
         });

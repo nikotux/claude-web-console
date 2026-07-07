@@ -221,7 +221,8 @@ export function openBugsV2Dashboard(deps = {}) {
         <select class="bv2-owner-select btn--sm" data-ref="owner" title="Filtrar por dueño (opcional)">${ownerOpts}</select>
       </div>
 
-      <div class="bv2-cols4">
+      <div class="bv2-cols5">
+        ${block(`🆕 Nuevos · sin triar · ${countBadge(applyFilter(d.needsTriage).length, d.counts.needsTriage)}`, ticketList(d.needsTriage, (t) => `${t.agingDays}d`, 'bb-chip--info'), true)}
         ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.overdue).length, d.counts.overdue)}`, ticketList(d.overdue, (t) => `${t.agingDays}d`, 'bb-chip--danger'), true)}
         ${block(`🕐 Sin update 7+ días · ${countBadge(applyFilter(d.aging).length, d.counts.aging)}`, ticketList(d.aging, (t) => `${t.agingDays}d`, 'bb-chip--warn'), true)}
         ${block(`✅ Resueltos esta semana · ${countBadge(applyFilter(d.resolvedThisWeek).length, d.counts.resolvedThisWeek)}`, ticketList(d.resolvedThisWeek, () => '✓', 'bb-chip--ok'), true)}

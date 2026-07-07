@@ -104,6 +104,32 @@
 .dlg-input:focus { outline: none; border-color: var(--cwc-accent); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .7rem; }
 
+/* ===== Bottom sheet ("menú de deslizamiento") — confirmSheet en móvil =====
+   Confirmación que SUBE desde abajo (acción sheet estilo iOS) con grip y
+   swipe-down para cancelar. En escritorio confirmSheet usa confirmDialog, así
+   que estas reglas solo aplican al variante móvil. */
+.dlg-overlay--sheet { align-items: end; padding: 0; transition: opacity .2s ease; }
+.dlg-sheet {
+  width: 100%; background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border-strong); border-bottom: 0;
+  border-radius: var(--cwc-radius-lg) var(--cwc-radius-lg) 0 0;
+  box-shadow: var(--cwc-shadow-lg);
+  padding: .4rem .9rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: .5rem;
+  animation: sheet-in .22s ease; transition: transform .2s ease; touch-action: none;
+}
+@keyframes sheet-in { from { transform: translateY(100%); } to { transform: none; } }
+.dlg-sheet-grip {
+  align-self: center; width: 40px; height: 4px; border-radius: 2px;
+  background: var(--cwc-border-strong); margin: .15rem 0 .35rem;
+}
+.dlg-sheet-head { font-size: var(--cwc-fs-md); font-weight: 600; color: var(--cwc-text); }
+.dlg-sheet-msg { margin: 0; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.45; white-space: pre-line; }
+.dlg-sheet-actions { display: flex; flex-direction: column; gap: .4rem; margin-top: .3rem; }
+/* Botones táctiles cómodos (acción principal del sheet — excepción deliberada
+   al "máximo compacto", como el teclado auxiliar). */
+.dlg-sheet-actions .btn, .dlg-sheet-actions .btn-ghost { width: 100%; min-height: 44px; font-size: var(--cwc-fs-md); }
+
 /* ===== Popup descartable (menú ⋯, menús anclados) — ver ui/popup.js ===== */
 .cwc-popup-menu {
   position: fixed; z-index: 210; min-width: 160px; padding: 4px;

@@ -9,7 +9,7 @@ import { renderMarkdown } from '../../ui/markdown.js';
 import { renderDiff } from '../../ui/diff.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
-import { openModal, confirmDialog } from '../../ui/dialog.js';
+import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS } from '../../ui/models.js';
 
@@ -267,7 +267,17 @@ export class ChatTab {
       window.dispatchEvent(new Event('cwc:open-sidebar'));
     });
     this.sendBtn.addEventListener('click', () => this._submit());
-    this.stopBtn.addEventListener('click', () => this._send({ type: 'interrupt' }));
+    // Confirmación antes de detener (pedido del usuario 2026-07-07): ventana en
+    // escritorio, "menú de deslizamiento" (bottom sheet) en móvil. Cancelar
+    // aborta la operación; Parar envía el interrupt.
+    this.stopBtn.addEventListener('click', async () => {
+      const ok = await confirmSheet({
+        title: 'Detener respuesta',
+        message: '¿Parar la respuesta en curso? Se interrumpe lo que Claude está generando.',
+        confirmLabel: 'Parar', cancelLabel: 'Cancelar', danger: true,
+      });
+      if (ok) this._send({ type: 'interrupt' });
+    });
     this.modeEl.addEventListener('change', () => this._modeChanged());
     container.querySelector('.chat-mode-help').addEventListener('click', () => this._modeHelp());
     this.inputEl.addEventListener('keydown', (e) => {
