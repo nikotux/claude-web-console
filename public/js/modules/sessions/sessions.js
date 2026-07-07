@@ -7,7 +7,7 @@
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
-import { modelColor, CHAT_MODEL_OPTIONS } from '../../ui/models.js';
+import { modelColor, modelIcon, CHAT_MODEL_OPTIONS } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor } from '../../ui/places.js';
@@ -24,8 +24,8 @@ const pacCls = (state) => pacClass(state, { size: 'sm', cls: 'sess-pac' });
 // elección forzada, el modelo tal cual. Fuente única para la tarjeta inicial
 // y la actualización en su lugar del poll de 8s (ver más abajo).
 function chatModelLabel(c) {
-  if (c.modelChoice === 'auto') return `🤖 AutoTux: ${c.model || '…'}`;
-  return c.model || '';
+  if (c.modelChoice === 'auto') return `${modelIcon('auto')} AutoTux: ${c.model || '…'}`;
+  return c.model ? `${modelIcon(c.model)} ${c.model}` : '';
 }
 
 // Nombre de la tmux OCULTA que sostiene un chat en modo TUI (misma fórmula
@@ -194,11 +194,17 @@ export default {
       main.className = 'sess-main';
       main.innerHTML = `
         ${pacEl(dot.state, dot.label)}
-        <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
-        ${placeBadge(c.cwd)}
-        <span class="sess-name">${c.title}</span>
-        <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
-        <span class="sess-model">${chatModelLabel(c)}</span>`;
+        <span class="sess-body">
+          <span class="sess-row1">
+            <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
+            ${placeBadge(c.cwd)}
+            <span class="sess-name">${c.title}</span>
+            <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
+          </span>
+          <span class="sess-row2">
+            <span class="sess-model">${chatModelLabel(c)}</span>
+          </span>
+        </span>`;
       main.addEventListener('click', () => openChatView(c));
 
       const menuBtn = document.createElement('button');
@@ -377,9 +383,15 @@ export default {
       main.className = 'sess-main';
       main.innerHTML = `
         ${pacEl(dot.state, dot.label)}
-        ${placeBadge(s.cwd)}
-        <span class="sess-name">${displayName(s)}</span>
-        <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? s.model.name : ''}</span>`;
+        <span class="sess-body">
+          <span class="sess-row1">
+            ${placeBadge(s.cwd)}
+            <span class="sess-name">${displayName(s)}</span>
+          </span>
+          <span class="sess-row2">
+            <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? `${modelIcon(s.model.key)} ${s.model.name}` : ''}</span>
+          </span>
+        </span>`;
       main.addEventListener('click', () => openCard(s));
 
       const menuBtn = document.createElement('button');
@@ -572,7 +584,7 @@ export default {
           dotEl.title = dot.label;
           cardEl.querySelector('.sess-name').textContent = displayName(s);
           const modelEl = cardEl.querySelector('.sess-model');
-          modelEl.textContent = s.model ? s.model.name : '';
+          modelEl.textContent = s.model ? `${modelIcon(s.model.key)} ${s.model.name}` : '';
           modelEl.style.color = s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)';
         }
       } catch { /* noop */ }

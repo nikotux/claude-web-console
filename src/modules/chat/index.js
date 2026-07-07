@@ -67,7 +67,9 @@ import {
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
-import { recordBugfix } from '../bugfixes/store.js';
+// [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
+// archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
+// chats. Ver _archived/ARCHIVED.md.
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 import * as bus from '../../core/bus.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -1044,15 +1046,8 @@ class Chat {
     // líneas del transcript (verificado E2E: extraer en el instante del close
     // pierde el resumen). Best-effort: si el server muere en esa ventana, el
     // scan de la pestaña Salud lo recupera/completa.
-    if (this.ticket && this.sessionId) {
-      const args = { cwd: this.cwd, sessionId: this.sessionId, chatId: this.id, ticket: this.ticket, title: this.title };
-      setTimeout(() => {
-        try {
-          const entry = recordBugfix(args);
-          if (entry) console.log(`[chat] bugfix registrado: TKT #${entry.ticketNumber} (${entry.files.length} archivo(s))`);
-        } catch (err) { console.error('[chat] registro de bugfix falló:', err?.message); }
-      }, 2000).unref();
-    }
+    // (El registro de bugfix al cerrar un chat de ticket vivía en v1, ahora
+    // archivado — ver import arriba.)
     // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);

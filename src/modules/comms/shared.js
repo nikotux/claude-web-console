@@ -73,6 +73,11 @@ function uniqueId(base, taken) {
 // ===== Contactos (usuarios). Chris es el primero (seed). =====
 export const DEFAULT_CONTACTS = [
   { id: 'chris', name: 'Chris', github: 'cswenor', createdAt: 0 },
+  // Tolkien = "Mordor's AI assistant", bot de Teams (TheEye/OpenClaw). NO es
+  // una persona pero al usuario le llegan mensajes ahí y debe procesarlos
+  // igual (pedido 2026-07-06). Sin github/email: el scan de Teams lo busca por
+  // nombre. `kind:'bot'` es meta informativa (el resto del motor solo usa id).
+  { id: 'tolkien', name: 'Tolkien', github: null, email: null, kind: 'bot', createdAt: 0 },
 ];
 export function readContacts() {
   const o = readJson(CONTACTS_FILE, null);

@@ -99,9 +99,20 @@ html, body {
 .sb-new { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 
 /* ===== Pestañas abiertas (relocalizadas dentro del panel) ===== */
-/* Expandido: chips en fila que envuelve. Colapsado: columna de iconos. */
+/* Colapsado (rail de escritorio): columna de iconos — ES la única forma de
+   cambiar de pestaña ahí (la lista "Sesiones" se oculta en ese modo). */
 #rail-tabs { flex: none; display: flex; flex-wrap: wrap; gap: .35rem; padding: .2rem .6rem .4rem; }
 #rail-tabs:empty { padding: 0; }
+/* Expandido (desktop Y móvil, pedido del usuario 2026-07-06): oculto. Ya en
+   móvil era redundante con las tarjetas de "Sesiones" (estado/modelo + tap
+   ya hace foco/adjunta); en desktop expandido pasaba lo mismo pero antes
+   solo se ocultaba dentro del media query móvil, así que en desktop
+   quedaban estos chips chicos arriba de "Sesiones" sin motivo (visto por el
+   usuario). Alta especificidad (2 IDs) le gana al `display:flex` de arriba
+   sin tocar el orden de las reglas. NO tocar el rail COLAPSADO: sigue
+   siendo la única forma de cambiar de pestaña ahí (ver arriba).
+   #rail-tabs ahora vive en la barra DERECHA (con Sesiones). */
+#sidebar-right:not(.collapsed) #rail-tabs { display: none; }
 .rail-tab { position: relative; width: 36px; height: 36px; flex: none; }
 .rail-chip {
   width: 36px; height: 36px; border-radius: var(--cwc-radius-md); cursor: pointer;
@@ -178,6 +189,82 @@ html, body {
 #sidebar.collapsed .usage-lbl { display: none; }
 #sidebar.collapsed .usage-btn { padding: .1rem .2rem; font-size: var(--cwc-fs-xs); min-height: 0; max-width: 50px; overflow: hidden; }
 
+/* ===== Barra DERECHA (Sesiones + "Nueva sesión") =====
+   Espejo del panel izquierdo: colapsable a rail (key propia en main.js) y, en
+   móvil, drawer overlay que entra desde la derecha. El pie muestra el pulso de
+   Tolkien PERSISTENTE (leyenda, no acordeón). */
+#sidebar-right {
+  width: 300px; background: var(--cwc-bg-panel); border-left: 1px solid var(--cwc-border);
+  display: flex; flex-direction: column;
+  transition: width .18s ease, margin-right .2s ease;
+}
+#sidebar-right.hidden { margin-right: -300px; }
+.sb-head--right { padding: .4rem .5rem .2rem; }
+
+/* "Nueva sesión": misma altura/diseño que el ☰ (rail-btn, 34px) con tipografía
+   acorde; llena el ancho junto al toggle (la .sidebar-top es flex:1). */
+.sb-new-btn {
+  width: 100%; height: 34px; min-height: 34px; padding: 0 .7rem; gap: .35rem;
+  font-size: var(--cwc-fs-sm); font-weight: 600; border-radius: var(--cwc-radius-md);
+  white-space: nowrap;
+}
+
+/* Rail colapsado (desktop) — espejo de #sidebar.collapsed. */
+#sidebar-right.collapsed { width: 54px; }
+#sidebar-right.collapsed .only-expanded { display: none; }
+#sidebar-right.collapsed .only-collapsed { display: inline-flex; }
+#sidebar-right.collapsed .sb-head { flex-direction: column; align-items: center; gap: .35rem; padding: .4rem 0 .2rem; }
+#sidebar-right.collapsed #rail-tabs {
+  display: flex; flex: 1; min-height: 0; overflow-y: auto; flex-wrap: nowrap; flex-direction: column;
+  align-items: center; padding: .3rem 0; scrollbar-width: none;
+}
+#sidebar-right.collapsed #rail-tabs::-webkit-scrollbar { display: none; }
+/* Rail colapsado: Tolkien se oculta (only-expanded) pero CPU/RAM/disco quedan
+   como anillos-ícono compactos (mismo tratamiento que tenía el pie izquierdo). */
+#sidebar-right.collapsed .sidebar-footer--right { align-items: stretch; padding: .45rem .4rem .55rem; }
+#sidebar-right.collapsed .gauges-row { flex-direction: column; gap: .35rem; align-items: center; }
+#sidebar-right.collapsed .gauge-label,
+#sidebar-right.collapsed .gauge-bar,
+#sidebar-right.collapsed .gauge-val { display: none; }
+#sidebar-right.collapsed .gauge-ring { display: grid; }
+/* Sin Tolkien arriba (oculto), el divisor sobre stats no tiene sentido. */
+#sidebar-right.collapsed .sidebar-footer--right [data-module="stats"] { border-top: 0; padding-top: 0; }
+
+/* Pulso de Tolkien PERSISTENTE en el pie derecho: COMPACTO y SIN chevron (ya
+   no es colapsable). Header en una línea fina + info densa (no se pierde dato).
+   Debajo va la leyenda CPU/RAM/disco, separada por un divisor sutil. */
+.sidebar-footer--right { gap: .3rem; }
+.tk-persist .sec-head { padding: .05rem .1rem .1rem; cursor: default; gap: .3rem; }
+.tk-persist .sec-head::before { display: none; }         /* fuera la flecha */
+.tk-persist .sec-head { user-select: text; }
+.tk-persist .sec-title { font-size: .62rem; }
+.tk-persist .sec-head .btn--sm { min-height: 22px; }
+.tk-persist .sec-head .btn--icon { min-width: 22px; padding: .12rem; }
+.tk-persist .tk-card { padding: 0; gap: .1rem; }
+.tk-persist .tk-info { gap: .08rem; }
+.tk-persist .tk-line { gap: .35rem; }
+.sidebar-footer--right [data-module="stats"] {
+  border-top: 1px solid var(--cwc-divider); padding-top: .3rem;
+}
+
+/* Asas flotantes (solo móvil; ocultas en desktop) para abrir los drawers.
+   Look compartido; cada una pegada a su borde con el radio espejado. */
+#sidebar-handle, #sidebar-right-handle {
+  display: none; align-items: center; justify-content: center;
+  width: 30px; height: 46px; padding: 0;
+  background: var(--cwc-bg-panel); color: var(--cwc-accent);
+  border: 1px solid var(--cwc-border);
+  cursor: pointer; box-shadow: var(--cwc-shadow-sm);
+}
+#sidebar-handle {                 /* borde izquierdo */
+  border-left: 0; border-radius: 0 var(--cwc-radius-md) var(--cwc-radius-md) 0;
+}
+#sidebar-right-handle {           /* borde derecho */
+  border-right: 0; border-radius: var(--cwc-radius-md) 0 0 var(--cwc-radius-md);
+}
+#sidebar-handle .cwc-icon, #sidebar-right-handle .cwc-icon { width: 18px; height: 18px; }
+#sidebar-right-scrim { display: none; }
+
 .side-sec { padding: .2rem 0 .35rem; border-bottom: 1px solid var(--cwc-divider); }
 .sec-head { display: flex; align-items: center; gap: .4rem; padding: .12rem .55rem .2rem; }
 .sec-title {
@@ -189,22 +276,13 @@ html, body {
   font-size: var(--cwc-fs-xs); padding: 0 .4rem; min-width: 1.2em; text-align: center;
 }
 
-/* ===== Secciones colapsables del sidebar =====
-   El header (.sec-head) SIEMPRE queda visible: chevron + semáforo de estado +
-   título + contador + controles (botones). Solo se pliega el CUERPO (todo lo
-   que no es el header). La clase .sec-collapsed vive en la <section
-   class="side-sec"> de index.html (NO en el innerHTML del módulo), así
-   sobrevive a los re-render que cada módulo hace de su header/cuerpo.
-   El toggle es un click delegado en main.js (ignora los botones del header). */
-.sec-head { cursor: pointer; user-select: none; }
-.sec-head::before {
-  content: '▾'; flex: none; font-size: 10px; line-height: 1;
-  color: var(--cwc-text-dim); transition: transform .15s ease;
-}
-.side-sec.sec-collapsed .sec-head::before { transform: rotate(-90deg); }
-.side-sec.sec-collapsed > :not(.sec-head) { display: none; }
+/* ===== Secciones del sidebar (2026-07-07: YA NO son colapsables) =====
+   La distribución en dos barras deja espacio de sobra, así que se quitó el
+   plegado: sin chevron, sin cursor de click, todo el cuerpo siempre visible.
+   El header queda como una etiqueta fija (semáforo + título + contador +
+   controles). Se eliminó el listener de toggle y el estado .sec-collapsed. */
 
-/* Semáforo de estado del módulo — visible también colapsado, junto al chevron.
+/* Semáforo de estado del módulo — junto al título.
    idle=sin datos/vacío · ok=al día · warn=algo que atender · alert=requiere
    acción · busy=trabajando (acento). Colores de tokens.css. */
 .sec-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cwc-text-dim); opacity: .4; }
@@ -213,6 +291,28 @@ html, body {
 .sec-dot--warn  { background: var(--cwc-warn); opacity: 1; }
 .sec-dot--alert { background: var(--cwc-danger); opacity: 1; }
 .sec-dot--busy  { background: var(--cwc-accent); opacity: 1; }
+
+/* ===== Densidad COMPACTA uniforme (estilo Tolkien) =====
+   2026-07-07 (pedido del usuario): replicar en TODAS las secciones del sidebar
+   el look fino de la leyenda de Tolkien — header delgado, botones chicos,
+   cuerpo denso. Scopeado a .side-sec (Tolkien vive en .tk-persist, con sus
+   propias reglas) y con ≥2 clases para ganarle al bump táctil de 44px de
+   ui.css sin desactivar la accesibilidad global. El chevron de colapsar SIGUE
+   (todavía nada se descolapsa; es la prueba pedida antes de quitarlos). */
+.side-sec .sec-head { padding: .06rem .4rem .1rem; gap: .3rem; }
+.side-sec .sec-title { font-size: .62rem; }
+.side-sec .sec-head .btn--sm { min-height: 22px; }
+.side-sec .sec-head .btn--icon { min-width: 22px; padding: .12rem; }
+.side-sec .sec-head .btn--sm .cwc-icon { width: 13px; height: 13px; }
+/* Cuerpo de tickets/pendientes/comunicaciones (usan .tk-card). */
+.side-sec .tk-card { padding: 0 .4rem; gap: .2rem; }
+.side-sec .tk-actions { gap: .25rem; }
+.side-sec .tk-actions .btn,
+.side-sec .tk-actions .btn-ghost { min-height: 26px; padding: .25rem .5rem; }
+/* Tarjetas de Sesiones: un poco más finas (sin perder las 2 filas). */
+.side-sec .sess-list { padding: 0 .35rem; gap: .15rem; }
+.side-sec .sess-card { padding: .1rem; }
+.side-sec .sess-main { min-height: 30px; padding: .15rem .25rem; }
 
 /* ===== Sesiones: tarjetas ===== */
 .sess-list { padding: 0 .4rem; display: flex; flex-direction: column; gap: .2rem; }
@@ -223,25 +323,36 @@ html, body {
 }
 .sess-card:hover { border-color: var(--cwc-border-strong); }
 .sess-main {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: .5rem;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: .4rem;
   background: none; border: 0; color: var(--cwc-text); cursor: pointer;
   padding: .2rem .3rem; border-radius: var(--cwc-radius-sm); text-align: left;
-  min-height: 30px;
+  min-height: 34px;
 }
 .sess-main:hover { background: var(--cwc-bg-hover); }
+/* Cuerpo de 2 filas (2026-07-06, pedido del usuario: el título se cortaba
+   peleando por espacio con modo/modelo en una sola línea). El Pac-Man queda
+   HERMANO de este bloque (no adentro) — con .sess-main en align-items:center
+   se centra solo entre las 2 filas, sin CSS extra de posicionamiento.
+   Texto achicado a pedido (mismo día): título a --cwc-fs-sm (antes md) y
+   modelo/badges a .65rem (bajo el token --cwc-fs-xs, que ya era el piso de
+   la escala) — deliberadamente por debajo de la escala de tokens.css porque
+   acá el objetivo es densidad máxima en una columna angosta, no jerarquía
+   tipográfica; no usar este valor fuera de esta tarjeta. */
+.sess-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .05rem; justify-content: center; }
+.sess-row1, .sess-row2 { display: flex; align-items: center; gap: .3rem; min-width: 0; }
 .sess-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: var(--cwc-fs-md); font-weight: 600;
+  font-size: var(--cwc-fs-sm); font-weight: 600;
 }
-.sess-model { flex: none; font-size: var(--cwc-fs-xs); font-weight: 600; }
+.sess-model { flex: none; font-size: .65rem; font-weight: 600; }
 /* Mini-ícono de LUGAR de la tarjeta (ui/places.js): dónde corre la sesión —
    Mi Consola en acento, otros lugares conocidos en tono tenue. */
 .sess-place { display: inline-flex; color: var(--cwc-text-dimmer); flex: none; }
 .sess-place.is-console { color: var(--cwc-accent); }
 .sess-mode:not(:empty) {
-  flex: none; font-size: var(--cwc-fs-xs); font-weight: 700; letter-spacing: .03em;
+  flex: none; font-size: .6rem; font-weight: 700; letter-spacing: .03em;
   color: var(--cwc-accent); background: var(--cwc-accent-bg);
-  border-radius: var(--cwc-radius-sm); padding: 0 .3rem;
+  border-radius: var(--cwc-radius-sm); padding: 0 .25rem;
 }
 .sess-menu { align-self: center; }
 
@@ -340,6 +451,18 @@ html, body {
 .gauge-ring.lo { --ring: var(--cwc-ok); }
 .gauge-ring.mid { --ring: var(--cwc-warn); }
 .gauge-ring.hi { --ring: var(--cwc-danger); }
+
+/* Límites del plan en el PIE (encima de CPU/RAM/Disco): reusa las barras
+   .lim-* del modal Uso en versión más compacta + separador de los gauges.
+   Se oculta en el rail colapsado vía .only-expanded (ver index.html). */
+.plan-lims {
+  display: flex; flex-direction: column; gap: .1rem;
+  border-bottom: 1px solid var(--cwc-divider); padding-bottom: .3rem;
+}
+.plan-lims .lim-head { margin-bottom: .15rem; }
+.plan-lims .lim-row { padding: .12rem 0; }
+.plan-lims .lim-top { font-size: var(--cwc-fs-sm); }
+.plan-lims .lim-bar { height: 4px; margin: .15rem 0; }
 
 .footer-acct { display: flex; align-items: center; gap: .4rem; }
 .footer-acct .btn-ghost { text-decoration: none; }
@@ -1513,13 +1636,29 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 @media (max-width: 768px) {
   .mobile-menu-btn { display: inline-flex; }
   .chat-alive { display: inline-flex; }
+  /* CONTENCIÓN de los drawers (fix scroll fantasma reportado 2026-07-07): en
+     móvil ambas barras son position:absolute. Sin un ancestro posicionado se
+     ubicaban contra el VIEWPORT, y el drawer derecho cerrado (translateX(100%))
+     quedaba FUERA del área visible generando scroll horizontal/vertical "al
+     negro". Haciendo #body el bloque contenedor (relative) + overflow:hidden,
+     los drawers se posicionan y se RECORTAN contra #body: nada desborda. */
+  /* Bloquea el scroll del DOCUMENTO en la app (scope :has(#app) → NO afecta a
+     login/otras páginas). Al enfocar el input del chat iOS/Android empujan la
+     página para "mostrar" el campo y dejaban un hueco negro entre el chat y el
+     teclado (reportado 2026-07-07). Con el body FIJO el documento no puede
+     scrollear; #app sigue al viewport visible por JS (visualViewport, main.js).
+     Los modales/popups se montan en document.body (no en #app), así que el
+     translateY de #app no los descoloca. */
+  html:has(#app) { overflow: hidden; }
+  body:has(#app) { position: fixed; inset: 0; overflow: hidden; }
+  #body { position: relative; overflow: hidden; overflow: clip; }
   /* En móvil el panel es overlay (se oculta con .hidden, deslizado fuera de
      pantalla con transform en vez de margin-left: así el desplazamiento
      siempre es exacto sin impotar el ancho, que ahora tiene un tope en px
      para no ocupar un % tan grande en teléfonos grandes); el modo "rail
      colapsado" es solo de escritorio, así que forzamos ancho completo. */
   #sidebar, #sidebar.collapsed {
-    position: absolute; z-index: 10; height: 100%;
+    position: absolute; left: 0; z-index: 10; height: 100%;
     width: min(78vw, 300px); box-shadow: 4px 0 24px var(--cwc-shadow-ink);
     transition: transform .2s ease;
   }
@@ -1530,14 +1669,12 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   #sidebar.collapsed .footer-acct { flex-direction: row; }
   #sidebar.hidden { transform: translateX(-100%); box-shadow: none; }
 
-  /* La fila de chips de pestañas ABIERTAS (#rail-tabs) es la única forma de
-     cambiar de pestaña en el rail COLAPSADO (desktop) — en móvil el panel
-     nunca colapsa (applySidebarState lo fuerza), así que acá es redundante
-     con las tarjetas de "Sesiones" de abajo (que YA muestran estado/modelo y
-     cuyo tap ya hace foco/adjunta vía focusSession/openChatView, sin pasar
-     por este chip). Se oculta solo en este media query: en el rail
-     colapsado de escritorio sigue siendo necesaria. */
-  #rail-tabs { display: none; }
+  /* #rail-tabs ya se oculta en expandido (desktop Y móvil) por la regla
+     general `#sidebar:not(.collapsed) #rail-tabs` de más arriba — acá no
+     hace falta repetirlo. En móvil el panel NUNCA colapsa (applySidebarState
+     lo fuerza), así que este chip nunca se ve en esta vista, siempre
+     redundante con las tarjetas de "Sesiones" (estado/modelo + tap ya hace
+     foco/adjunta vía focusSession/openChatView). */
 
   /* Densidad: un poco más ajustado que en desktop para que el panel se
      sienta liviano incluso ocupando menos ancho. */
@@ -1550,6 +1687,38 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
     transition: opacity .2s ease;
   }
   #sidebar:not(.hidden) ~ #sidebar-scrim { opacity: 1; pointer-events: auto; }
+
+  /* Barra DERECHA en móvil: drawer overlay que entra desde la DERECHA
+     (translateX positivo). Su ☰ colapsar no aplica (nunca colapsa: es
+     overlay), como la izquierda. */
+  #sidebar-right, #sidebar-right.collapsed {
+    position: absolute; right: 0; z-index: 10; height: 100%;
+    width: min(78vw, 300px); box-shadow: -4px 0 24px var(--cwc-shadow-ink);
+    transition: transform .2s ease; margin-right: 0;
+  }
+  #sidebar-right.collapsed .only-expanded { display: revert; }
+  #sidebar-right.collapsed .only-collapsed { display: none; }
+  #sidebar-right.collapsed .sb-head { flex-direction: row; }
+  #sidebar-right.collapsed .sidebar-footer--right { display: flex; }
+  #sidebar-right.hidden { transform: translateX(100%); box-shadow: none; }
+
+  /* Asas flotantes (izq = módulos, der = Sesiones) UBICADAS SOBRE EL COMPOSER
+     (pedido del usuario 2026-07-07: antes al medio del borde estorbaban). El
+     offset (~64px) las deja justo encima de la entrada de texto del chat; en
+     vistas sin composer flotan cerca del borde inferior, sin molestar. Cada
+     una pegada a su borde; se ocultan tras su drawer al abrirlo (z-index menor). */
+  #sidebar-handle, #sidebar-right-handle {
+    display: inline-flex; position: absolute; z-index: 8;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+  #sidebar-handle { left: 0; }
+  #sidebar-right-handle { right: 0; }
+  #sidebar-right-scrim {
+    display: block; position: absolute; inset: 0; z-index: 9;
+    background: var(--cwc-scrim); opacity: 0; pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  #sidebar-right:not(.hidden) ~ #sidebar-right-scrim { opacity: 1; pointer-events: auto; }
 }
 
 /* ===== Revisión exhaustiva de salud (modal full-screen, health-review-modal.js) ===== */
@@ -1720,6 +1889,22 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .cm-chead .cm-gh { color: var(--cwc-text-dim); font-weight: 400; }
 .cm-chead-act { display: flex; gap: .35rem; }
 .cm-chead-act .on { color: var(--cwc-accent); }
+.cm-botbadge { font-size: var(--cwc-fs-xs); font-weight: 400; color: var(--cwc-text-dim); }
+
+/* Composer de envío por Teams (2026-07-06): escribir + enviar un DM real
+   desde el propio tablero (antes solo se podía por CLI/chat). */
+.cm-composer {
+  margin: 0 .2rem .6rem; padding: .5rem; border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel);
+}
+.cm-composer-input {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 2.4rem;
+  background: var(--cwc-bg-input); color: var(--cwc-text);
+  border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm);
+  padding: .4rem .5rem; font-family: inherit; font-size: var(--cwc-fs-sm);
+}
+.cm-composer-bar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .4rem; flex-wrap: wrap; }
+.cm-composer-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 
 .cm-group { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); margin: 0 .2rem .5rem; overflow: hidden; }
 .cm-gsum { display: flex; align-items: center; gap: .4rem; padding: .4rem .6rem; cursor: pointer; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); background: var(--cwc-bg-panel); list-style: none; }
@@ -1778,3 +1963,410 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 /* ===== Comunicaciones — participantes / atribución ===== */
 .cm-parts { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .5rem; display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
 .cm-suspect { color: var(--cwc-warn); font-weight: 600; }
+
+/* ===================================================================== */
+/* Pendientes (tasks) + Extracción de audio (audio)                       */
+/* ===================================================================== */
+
+/* --- Tarjetas mini del sidebar (compartidas) --- */
+.task-mini { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .4rem; min-height: 1.2em; }
+.task-chip {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-sm); padding: .05rem .35rem;
+}
+
+/* --- Tablero de tareas (modal) --- */
+.task-board-card { width: 92vw; }
+.task-board { display: flex; flex-direction: column; gap: .6rem; }
+.task-board-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.task-filters { display: flex; gap: .3rem; flex-wrap: wrap; }
+.task-filter {
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); cursor: pointer;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-sm); padding: .2rem .6rem;
+}
+.task-filter.is-on { color: var(--cwc-accent-ink); background: var(--cwc-accent-bg); border-color: var(--cwc-accent); }
+
+.task-list { display: flex; flex-direction: column; gap: .5rem; max-height: 62vh; overflow-y: auto; }
+.task-empty, .au-none { color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); text-align: center; padding: 1.2rem .5rem; }
+
+/* --- Pestaña Tareas: cuadritos en columnas (estilo Bugs v2), clic → modal --- */
+.task-grid { columns: 3 240px; column-gap: .5rem; max-height: 64vh; overflow-y: auto; padding-right: .2rem; }
+.task-grid .task-empty { column-span: all; }
+.task-cardv2 {
+  break-inside: avoid; margin-bottom: .5rem; cursor: pointer;
+  border: 1px solid var(--cwc-border); border-left: 3px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel);
+  padding: .5rem .6rem; display: flex; flex-direction: column; gap: .3rem;
+  transition: border-color .12s ease, background .12s ease;
+}
+.task-cardv2:hover { border-color: var(--cwc-accent); background: var(--cwc-bg-hover); }
+.task-cardv2:focus-visible { outline: 2px solid var(--cwc-accent); outline-offset: 1px; }
+.task-cardv2--pendiente { border-left-color: var(--cwc-warn); }
+.task-cardv2--en-progreso { border-left-color: var(--cwc-info); }
+.task-cardv2--hecha { border-left-color: var(--cwc-ok); opacity: .72; }
+.task-cardv2-top { display: flex; align-items: center; gap: .35rem; }
+.task-cardv2-id { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; margin-right: auto; }
+.task-cardv2-status { flex: none; }
+.task-cardv2-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text); font-weight: 600; word-break: break-word; line-height: 1.3; }
+.task-cardv2--hecha .task-cardv2-title { text-decoration: line-through; }
+.task-cardv2-foot { display: flex; flex-wrap: wrap; gap: .3rem; }
+
+/* --- Detalle de una tarea (modal / ventana nueva) --- */
+.task-detail-card { width: 92vw; max-width: 560px; }
+.task-detail { display: flex; flex-direction: column; gap: .6rem; }
+.task-detail-title { font-size: var(--cwc-fs-lg); font-weight: 600; color: var(--cwc-text); word-break: break-word; }
+.task-detail-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+.task-chip2 {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); background: var(--cwc-bg-chip);
+  border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .1rem .4rem; white-space: nowrap;
+}
+.task-chip2--plan { color: var(--cwc-accent); border-color: var(--cwc-accent); }
+.task-detail-desc {
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  max-height: 40vh; overflow: auto; padding: .5rem .6rem; border: 1px solid var(--cwc-border-soft);
+  border-radius: var(--cwc-radius-sm); background: var(--cwc-bg);
+}
+.task-detail-dates { display: flex; flex-wrap: wrap; gap: .8rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.task-detail-dates span { display: inline-flex; align-items: center; gap: .25rem; }
+.task-detail-acts { display: flex; flex-wrap: wrap; gap: .4rem; padding-top: .2rem; }
+@media (max-width: 640px) { .task-grid { columns: 1; } }
+
+.task-item {
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md);
+  background: var(--cwc-bg-panel); padding: .55rem .7rem; display: flex; flex-direction: column; gap: .35rem;
+  border-left: 3px solid var(--cwc-border-strong);
+}
+.task-item--pendiente { border-left-color: var(--cwc-warn); }
+.task-item--en-progreso { border-left-color: var(--cwc-info); }
+.task-item--hecha { border-left-color: var(--cwc-ok); opacity: .72; }
+.task-item-top { display: flex; align-items: baseline; gap: .45rem; }
+.task-item-title { font-weight: 600; color: var(--cwc-text); flex: 1; word-break: break-word; }
+.task-item--hecha .task-item-title { text-decoration: line-through; }
+.task-status-badge { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; }
+.task-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; word-break: break-word; }
+.task-tags { display: flex; gap: .3rem; flex-wrap: wrap; }
+.task-tag {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-accent-ink); background: var(--cwc-accent-bg-soft);
+  border-radius: var(--cwc-radius-sm); padding: .02rem .35rem;
+}
+.task-item-foot { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.task-date { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); display: inline-flex; align-items: center; gap: .25rem; }
+.task-src { margin-right: .25rem; }
+.task-actions { display: flex; align-items: center; gap: .2rem; }
+
+/* --- Formulario de tarea --- */
+.task-form { display: flex; flex-direction: column; gap: .6rem; }
+.task-form-row { display: flex; gap: .6rem; }
+.task-form-row .task-fld { flex: 1; }
+.task-fld { display: flex; flex-direction: column; gap: .2rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.task-fld > span { font-size: var(--cwc-fs-xs); }
+.task-fld input, .task-fld textarea, .task-fld select {
+  font: inherit; font-size: var(--cwc-fs-sm); color: var(--cwc-text);
+  background: var(--cwc-bg-input); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
+  padding: .35rem .5rem; width: 100%; box-sizing: border-box;
+}
+.task-fld textarea { resize: vertical; }
+
+/* --- Panel de audio (modal) --- */
+.au-card { width: 92vw; }
+.au-panel { display: flex; flex-direction: column; gap: .55rem; }
+.au-intro { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.au-title, .au-input {
+  font: inherit; color: var(--cwc-text); background: var(--cwc-bg-input);
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
+  padding: .45rem .55rem; width: 100%; box-sizing: border-box;
+}
+.au-input { resize: vertical; font-size: var(--cwc-fs-sm); }
+.au-actions { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
+.au-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin-right: auto; }
+.au-status { display: flex; align-items: center; gap: .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); padding: .3rem 0; }
+.au-status--err { color: var(--cwc-danger); }
+
+.au-result { display: flex; flex-direction: column; gap: .5rem; }
+.au-summary {
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text); background: var(--cwc-accent-bg-soft);
+  border-left: 3px solid var(--cwc-accent); border-radius: var(--cwc-radius-sm); padding: .5rem .6rem; white-space: pre-wrap;
+}
+.au-block { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); padding: .5rem .6rem; background: var(--cwc-bg-panel); }
+.au-block > summary { cursor: pointer; font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
+.au-block-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-sm); margin-bottom: .4rem; }
+.au-tasks-block { border-color: var(--cwc-accent); }
+
+.au-segs, .au-plan, .au-speakers { margin: .45rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .35rem; }
+.au-segs { list-style: none; padding-left: 0; }
+.au-seg { display: flex; gap: .45rem; align-items: baseline; font-size: var(--cwc-fs-sm); }
+.au-seg-type { flex: none; }
+.au-seg-who { font-weight: 600; color: var(--cwc-text); }
+.au-seg-body { color: var(--cwc-text-secondary); word-break: break-word; }
+.au-seg-why { display: block; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin-top: .1rem; }
+.au-why { color: var(--cwc-text-dim); font-weight: 400; }
+.au-plan li, .au-speakers li { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+
+.au-tasks { display: flex; flex-direction: column; gap: .45rem; }
+.au-task { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: .45rem .55rem; background: var(--cwc-bg); }
+.au-task-top { display: flex; align-items: center; gap: .45rem; }
+.au-task-title { flex: 1; font-weight: 600; color: var(--cwc-text); word-break: break-word; }
+.au-task-add { flex: none; white-space: nowrap; }
+.au-task-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin-top: .3rem; white-space: pre-wrap; }
+
+.au-history { margin-top: .3rem; }
+.au-history > summary { cursor: pointer; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.au-hist-list { display: flex; flex-direction: column; gap: .3rem; margin-top: .4rem; }
+.au-hist-item {
+  display: flex; justify-content: space-between; gap: .5rem; align-items: center; cursor: pointer; text-align: left;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .3rem .5rem;
+}
+.au-hist-title { color: var(--cwc-text); font-size: var(--cwc-fs-sm); word-break: break-word; }
+.au-hist-meta { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+
+/* ===== Pendientes: pestañas del tablero (espejo de .bb-tabs del board de Bugs) ===== */
+.tk-tabs { display: flex; gap: .1rem; border-bottom: 1px solid var(--cwc-border); }
+.tk-tab {
+  background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer;
+  padding: .4rem .7rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-md); font-weight: 600;
+  display: inline-flex; align-items: center; gap: .35rem; white-space: nowrap;
+}
+.tk-tab:hover { color: var(--cwc-text); }
+.tk-tab.on { color: var(--cwc-accent); border-bottom-color: var(--cwc-accent); }
+.tk-tab-n {
+  font-size: var(--cwc-fs-xs); font-weight: 700; color: var(--cwc-text-dim);
+  background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: 0 .3rem; min-width: 1.1em; text-align: center;
+}
+.tk-tab.on .tk-tab-n { color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 14%, transparent); }
+.tk-pane { margin-top: .6rem; display: flex; flex-direction: column; gap: .5rem; max-height: 66vh; overflow-y: auto; }
+
+/* ===== Panel (dashboard estilo Pad, datos locales) ===== */
+.dash { display: flex; flex-direction: column; gap: .55rem; }
+.dash-sec { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel); }
+.dash-sec-h {
+  cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: .5rem;
+  padding: .45rem .6rem; font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-sm);
+}
+.dash-sec-h::-webkit-details-marker { display: none; }
+.dash-sec-t { flex: 1; }
+.dash-sec-n {
+  font-size: var(--cwc-fs-xs); font-weight: 700; color: var(--cwc-text-dim);
+  background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: 0 .35rem; min-width: 1.3em; text-align: center;
+}
+.dash-sec-b { padding: .1rem .6rem .55rem; display: flex; flex-direction: column; gap: .25rem; }
+.dash-empty { color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .3rem 0; }
+
+.dash-item {
+  display: flex; align-items: baseline; gap: .45rem; padding: .28rem .4rem;
+  border-radius: var(--cwc-radius-sm); cursor: default;
+}
+.dash-item[data-goto] { cursor: pointer; }
+.dash-item[data-goto]:hover { background: var(--cwc-bg-hover); }
+.dash-item-ico { flex: none; }
+.dash-item-title { flex: 1; color: var(--cwc-text); font-size: var(--cwc-fs-sm); word-break: break-word; }
+.dash-item-meta { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+.dash-item--chat .dash-item-title { color: var(--cwc-accent-cool); }
+.dash-item--warn { border-left: 2px solid var(--cwc-warn); }
+
+.dash-next { display: flex; align-items: baseline; gap: .5rem; padding: .28rem .4rem; border-radius: var(--cwc-radius-sm); cursor: pointer; }
+.dash-next:hover { background: var(--cwc-bg-hover); }
+.dash-next-n {
+  flex: none; width: 1.4em; height: 1.4em; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--cwc-accent-bg); color: var(--cwc-accent); font-size: var(--cwc-fs-xs); font-weight: 700;
+}
+
+.dash-coll { display: flex; gap: .5rem; flex-wrap: wrap; }
+.dash-coll-card { flex: 1 1 30%; min-width: 140px; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .4rem .5rem; background: var(--cwc-bg); }
+.dash-coll-h { font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); display: flex; justify-content: space-between; gap: .4rem; margin-bottom: .3rem; }
+.dash-coll-h span { color: var(--cwc-text-dim); }
+.dash-coll-b { display: flex; flex-wrap: wrap; gap: .25rem; }
+.dash-pill { font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: .05rem .35rem; white-space: nowrap; }
+.dash-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .5rem; }
+
+.dash-act { display: flex; align-items: baseline; gap: .45rem; font-size: var(--cwc-fs-sm); padding: .18rem 0; }
+.dash-act-ico { flex: none; }
+.dash-act-txt { flex: 1; color: var(--cwc-text-secondary); word-break: break-word; }
+.dash-act-ts { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+
+/* ===== Barras de progreso + planes en el panel ===== */
+.dash-bar { height: 6px; border-radius: 999px; background: var(--cwc-bg-chip); overflow: hidden; }
+.dash-bar-fill { display: block; height: 100%; background: var(--cwc-accent); border-radius: 999px; transition: width .25s ease; }
+.dash-plan { padding: .3rem .4rem; border-radius: var(--cwc-radius-sm); cursor: pointer; display: flex; flex-direction: column; gap: .25rem; }
+.dash-plan:hover { background: var(--cwc-bg-hover); }
+.dash-plan-top { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+
+/* ===== Chips de tipo y plan en las tarjetas de tarea ===== */
+.task-type { flex: none; }
+.task-plan {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-accent); background: var(--cwc-accent-bg);
+  border-radius: var(--cwc-radius-sm); padding: .05rem .35rem; white-space: nowrap;
+}
+
+/* ===== Pestaña Planes ===== */
+.tk-pane-title { font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
+.plan-list { display: flex; flex-direction: column; gap: .4rem; }
+.plan-item { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel); }
+.plan-sum {
+  cursor: pointer; user-select: none; list-style: none; display: flex; align-items: baseline; gap: .5rem;
+  padding: .45rem .6rem; font-size: var(--cwc-fs-sm);
+}
+.plan-sum::-webkit-details-marker { display: none; }
+.plan-status { flex: none; }
+.plan-title { flex: 1; color: var(--cwc-text); font-weight: 600; word-break: break-word; }
+.plan-meta { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; }
+.plan-body { padding: .2rem .6rem .6rem; display: flex; flex-direction: column; gap: .45rem; }
+.plan-tasks { display: flex; flex-direction: column; gap: .2rem; }
+.plan-task { display: flex; align-items: baseline; gap: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.plan-actions { display: flex; gap: .4rem; margin-top: .2rem; }
+
+/* ===== Informes (pestaña de audios como informes colapsables) ===== */
+.au-reports { display: flex; flex-direction: column; gap: .55rem; }
+.au-reports-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.au-reports-title { font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-md); }
+.au-reports-list { display: flex; flex-direction: column; gap: .4rem; }
+.au-report { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel); }
+.au-report-sum {
+  cursor: pointer; user-select: none; list-style: none; display: flex; align-items: baseline; gap: .5rem;
+  padding: .45rem .6rem; font-size: var(--cwc-fs-sm);
+}
+.au-report-sum::-webkit-details-marker { display: none; }
+.au-report-ico { flex: none; }
+.au-report-title { flex: 1; color: var(--cwc-text); font-weight: 600; word-break: break-word; }
+.au-report-meta { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); white-space: nowrap; }
+.au-report-body { padding: .2rem .6rem .6rem; display: flex; flex-direction: column; gap: .5rem; }
+
+/* ===== Título del informe (generado por IA, editable inline) ===== */
+.au-titlebar { display: flex; align-items: center; gap: .4rem; }
+.au-title-txt { font-size: var(--cwc-fs-lg); font-weight: 600; color: var(--cwc-text); word-break: break-word; }
+.au-title-edit { flex: none; opacity: .7; }
+.au-title-edit:hover { opacity: 1; }
+.au-title-input {
+  flex: 1; font-size: var(--cwc-fs-lg); font-weight: 600; color: var(--cwc-text);
+  background: var(--cwc-bg-input); border: 1px solid var(--cwc-accent);
+  border-radius: var(--cwc-radius-sm); padding: .15rem .4rem;
+}
+
+/* ===== Raw (crudo del procesamiento: transcripción + JSON) ===== */
+.au-raw { border: 1px dashed var(--cwc-border-strong); border-radius: var(--cwc-radius-md); padding: .5rem .6rem; }
+.au-raw > summary { cursor: pointer; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); font-weight: 600; }
+.au-raw-blk { margin-top: .5rem; }
+.au-raw-h { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); text-transform: uppercase; letter-spacing: .03em; margin-bottom: .25rem; }
+.au-raw-pre {
+  margin: 0; max-height: 40vh; overflow: auto; background: var(--cwc-bg); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-sm); padding: .5rem; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text-secondary); white-space: pre-wrap; word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .task-form-row { flex-direction: column; }
+  .task-item-foot { align-items: flex-start; }
+  .dash-coll-card { flex-basis: 100%; }
+  .tk-tab { padding: .4rem .5rem; }
+}
+
+.task-board-actions { display: flex; gap: .4rem; align-items: center; }
+
+/* ===== Bugs v2 (dashboard One Front Door determinístico) ===== */
+/* Panel del sidebar */
+.bv2-sum { display: flex; flex-direction: column; gap: .35rem; }
+.bv2-sum-main { font-size: var(--cwc-fs-md); color: var(--cwc-text); font-weight: 600; }
+.bv2-sum-chips { display: flex; gap: .3rem; flex-wrap: wrap; }
+/* Modal del dashboard */
+.bv2-dash { display: flex; flex-direction: column; gap: .6rem; }
+.bv2-head { display: flex; align-items: center; justify-content: space-between; }
+.bv2-h { font-size: var(--cwc-fs-sm); color: var(--cwc-text); font-weight: 600; margin-bottom: .35rem; }
+/* Acciones en el header del modal (buscar + actualizar), separadas de la ✕ */
+.bv2-head-actions { display: flex; align-items: center; gap: .15rem; margin-left: auto; margin-right: 1.4rem; }
+/* Buscador de ticket por número */
+.bv2-searchbar { padding: .1rem 0 .2rem; }
+.bv2-searchbar input { width: 100%; }
+/* Pestañas de propietario */
+.bv2-tabs { display: flex; gap: .3rem; overflow-x: auto; padding: .1rem 0; scrollbar-width: thin; }
+.bv2-tab { flex: none; font-size: var(--cwc-fs-xs); padding: .22rem .6rem; border-radius: 999px; border: 1px solid var(--cwc-border-soft); background: var(--cwc-bg-chip); color: var(--cwc-text-secondary); cursor: pointer; white-space: nowrap; }
+.bv2-tab:hover { background: var(--cwc-bg-hover); }
+.bv2-tab--on { border-color: var(--cwc-accent); color: var(--cwc-accent); font-weight: 600; }
+/* Barra de filtros: pestañas de carril (izq, scroll) + dropdown de dueño (der) */
+.bv2-filterbar { display: flex; align-items: center; gap: .5rem; }
+.bv2-filterbar .bv2-tabs { flex: 1; min-width: 0; }
+.bv2-owner-select { flex: none; font-size: var(--cwc-fs-xs); padding: .2rem .4rem; border-radius: var(--cwc-radius-sm); border: 1px solid var(--cwc-border-soft); background: var(--cwc-bg-input); color: var(--cwc-text-secondary); }
+/* 4 columnas en UNA fila (vencidos · aging · resueltos · dev-lane); responsive */
+.bv2-cols4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: .6rem; align-items: start; }
+@media (max-width: 900px) { .bv2-cols4 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .bv2-cols4 { grid-template-columns: 1fr; } }
+/* Masonry por columnas (CSS multi-col): hasta 3 columnas de mín. 320px; las
+   tarjetas FLUYEN y llenan el hueco de la columna anterior (no dejan aire como
+   un grid de filas). 1 columna en móvil (320px no entra dos veces). */
+.bv2-cols { columns: 3 320px; column-gap: .6rem; }
+/* Bloques colapsables (<details>). break-inside:avoid → una tarjeta no se
+   parte entre columnas; margin-bottom da el gap vertical del flujo. */
+.bv2-block { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel); overflow: hidden; break-inside: avoid; margin-bottom: .6rem; }
+.bv2-block > summary { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .6rem; cursor: pointer; font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); list-style: none; user-select: none; }
+.bv2-block > summary::-webkit-details-marker { display: none; }
+.bv2-block > summary:hover { background: var(--cwc-bg-hover); }
+.bv2-block > summary svg { transition: transform .15s ease; color: var(--cwc-text-dim); flex: none; }
+.bv2-block[open] > summary svg { transform: rotate(180deg); }
+.bv2-block-body { padding: .1rem .6rem .55rem; }
+/* Barras "por carril" */
+.bv2-lane { display: grid; grid-template-columns: 8.5rem 1fr auto auto; align-items: center; gap: .5rem; padding: .12rem 0; }
+.bv2-lane-name { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.bv2-lane-bar { height: .5rem; background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); overflow: hidden; }
+.bv2-lane-bar > span { display: block; height: 100%; background: var(--cwc-accent); border-radius: var(--cwc-radius-sm); }
+.bv2-lane-n { font-size: var(--cwc-fs-sm); color: var(--cwc-text); font-weight: 600; min-width: 1.5rem; text-align: right; }
+/* Barra de carril clickeable (filtra igual que las pestañas) + realce del activo. */
+.bv2-lane--click { cursor: pointer; border-radius: var(--cwc-radius-sm); padding-inline: .35rem; margin-inline: -.35rem; transition: background .12s; }
+.bv2-lane--click:hover { background: var(--cwc-bg-hover); }
+.bv2-lane--on { background: var(--cwc-bg-hover); }
+.bv2-lane--on .bv2-lane-name { color: var(--cwc-accent); font-weight: 600; }
+/* Marcador de dato en caché (conservado de una pasada previa, no del último refresh). */
+.bv2-stale { color: var(--cwc-text-tertiary, var(--cwc-text-secondary)); font-size: var(--cwc-fs-xs); opacity: .7; cursor: help; }
+/* Lock por usuario (quién trabaja el ticket). Chip en filas + banner en el modal. */
+.bv2-lock { white-space: nowrap; }
+.bv2-lockbar { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; padding: .45rem .6rem; border-radius: var(--cwc-radius-sm); margin-bottom: .55rem; font-size: var(--cwc-fs-sm); border: 1px solid var(--cwc-border-soft); }
+.bv2-lockbar--other { background: color-mix(in srgb, var(--cwc-danger, #d64545) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-danger, #d64545) 35%, transparent); color: var(--cwc-text); }
+.bv2-lockbar--mine { background: color-mix(in srgb, var(--cwc-ok, #3a9d5d) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-ok, #3a9d5d) 35%, transparent); color: var(--cwc-text); }
+.bv2-lockbar-hint { color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); }
+.bv2-danger { color: var(--cwc-danger, #d64545); }
+/* Waiting-on */
+.bv2-waits { display: flex; gap: 1rem; }
+.bv2-wait { display: flex; flex-direction: column; align-items: center; }
+.bv2-wait-n { font-size: var(--cwc-fs-xl); color: var(--cwc-text); font-weight: 700; }
+/* Filas de ticket (listas). 4 columnas: id · chip lane · subject · métrica. */
+.bv2-row { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: .4rem; padding: .2rem .15rem; border-radius: var(--cwc-radius-sm); text-decoration: none; color: var(--cwc-text-secondary); }
+.bv2-row:hover { background: var(--cwc-bg-hover); }
+.bv2-row--click { cursor: pointer; }
+.bv2-row-id { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; }
+.bv2-row-sub { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bv2-row-metric { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; }
+/* Modal de detalle del ticket */
+.bv2-detail { display: flex; flex-direction: column; gap: .55rem; }
+.bv2-detail-meta { display: flex; flex-wrap: wrap; gap: .3rem; }
+.bv2-detail-sub { font-size: var(--cwc-fs-xs); }
+.bv2-detail-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.5; max-height: 40vh; overflow: auto; padding: .5rem .6rem; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg); }
+.bv2-detail-acts { display: flex; flex-wrap: wrap; gap: .4rem; padding-top: .2rem; }
+/* Secciones de propiedades/personas/tiempos: header + grid de pares clave-valor */
+.bv2-sec-h { font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .04em; color: var(--cwc-text-dim); font-weight: 600; margin: .2rem 0 -.1rem; }
+.bv2-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .1rem .8rem; }
+.bv2-field { display: flex; justify-content: space-between; gap: .5rem; font-size: var(--cwc-fs-sm); padding: .12rem 0; border-bottom: 1px solid var(--cwc-border-soft); }
+.bv2-field-k { color: var(--cwc-text-dim); flex: none; }
+.bv2-field-v { color: var(--cwc-text-secondary); text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.bv2-note { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-style: italic; }
+/* Detalle de PR: conversaciones + archivos */
+.bv2-conv { display: flex; flex-direction: column; gap: .4rem; max-height: 34vh; overflow: auto; }
+.bv2-conv-item { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .35rem .5rem; }
+.bv2-conv-head { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-sm); }
+.bv2-conv-body { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.45; white-space: pre-wrap; margin-top: .25rem; }
+.bv2-files { display: flex; flex-direction: column; gap: .05rem; max-height: 26vh; overflow: auto; }
+.bv2-file { display: flex; justify-content: space-between; gap: .5rem; font-size: var(--cwc-fs-xs); padding: .1rem 0; }
+.bv2-file-path { color: var(--cwc-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--cwc-mono, monospace); }
+.bv2-file-stat { flex: none; font-variant-numeric: tabular-nums; }
+.bv2-add { color: var(--cwc-ok); }
+.bv2-del { color: var(--cwc-danger); }
+/* Modal de PR en 2 columnas: contenido principal | Pad (derecha) */
+.bv2-pr-cols { display: grid; grid-template-columns: 1fr 250px; gap: 1rem; align-items: start; }
+@media (max-width: 720px) { .bv2-pr-cols { grid-template-columns: 1fr; } }
+.bv2-pr-main { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
+.bv2-pr-side { display: flex; flex-direction: column; gap: .4rem; border-left: 1px solid var(--cwc-border-soft); padding-left: .8rem; position: sticky; top: 0; }
+@media (max-width: 720px) { .bv2-pr-side { border-left: none; padding-left: 0; border-top: 1px solid var(--cwc-border-soft); padding-top: .6rem; } }
+.bv2-pad-list { display: flex; flex-direction: column; gap: .35rem; max-height: 55vh; overflow: auto; }
+.bv2-pad-item { display: block; text-decoration: none; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .35rem .45rem; color: var(--cwc-text-secondary); }
+.bv2-pad-item:hover { background: var(--cwc-bg-hover); }
+.bv2-pad-item-h { display: flex; align-items: center; justify-content: space-between; gap: .4rem; }
+.bv2-pad-item-t { font-size: var(--cwc-fs-sm); color: var(--cwc-text); line-height: 1.35; margin-top: .15rem; }
+.bv2-pad-item-c { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); line-height: 1.4; margin-top: .25rem; white-space: pre-wrap; }

@@ -44,6 +44,12 @@ export function mountBackupPanel(el, ctx) {
     <div class="bk-git">
       <div class="bk-git-title">${icon('gitBranch', { size: 14 })}<span>Backup del código a GitHub</span></div>
       <div class="bk-git-body" data-ref="git">cargando…</div>
+    </div>
+
+    <div class="bk-git">
+      <div class="bk-git-title">${icon('refresh', { size: 14 })}<span>Mantenimiento</span></div>
+      <button class="btn-ghost btn--block" data-ref="recycle" title="Recicla los motores de chat vivos (SIGTERM). Se reabren solos con el historial intacto y vuelven a leer las credenciales del disco (arregla el MCP pad que no carga tras una credencial vieja).">🔄<span>Reiniciar sesiones</span></button>
+      <p class="bk-msg" data-ref="rmsg" hidden></p>
     </div>`;
 
   const refs = {};
@@ -439,7 +445,45 @@ export function mountBackupPanel(el, ctx) {
     });
   }
 
+  // Reciclar los motores de chat: manda SIGTERM a cada runner vivo. Se reabren
+  // solos (--resume) con el historial intacto y RE-LEEN ~/.claude/.credentials.json
+  // al re-inicializar sus MCP — arregla el MCP `pad` que no carga tras una
+  // credencial OAuth vieja.
+  function rmsg(text, kind = 'info', { running = false } = {}) {
+    if (running) refs.rmsg.innerHTML = `${pacman()} ${text}`;
+    else refs.rmsg.textContent = text;
+    refs.rmsg.className = `bk-msg ${kind}`;
+    refs.rmsg.hidden = !text;
+  }
+
+  async function recycle() {
+    if (busy) return;
+    const ok = await dialog.confirmDialog({
+      title: 'Reiniciar sesiones',
+      message: '¿Reiniciar todas las sesiones? Se reabren solas con el historial intacto. Los motores vuelven a leer las credenciales del disco (arregla el MCP que no carga tras una credencial vieja).',
+      confirmLabel: 'Reiniciar',
+    });
+    if (!ok) return;
+    setBusy(true);
+    refs.recycle.disabled = true;
+    rmsg('Reiniciando sesiones…', 'info', { running: true });
+    try {
+      const res = await fetch('/api/admin/restart-runners', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Falló el reinicio de sesiones.');
+      rmsg(data.killed
+        ? `${data.killed} sesión(es) reiniciada(s) — se reabren solas al interactuar.`
+        : 'No había sesiones vivas para reiniciar.', 'ok');
+    } catch (e) {
+      rmsg(e.message, 'err');
+    } finally {
+      setBusy(false);
+      refs.recycle.disabled = false;
+    }
+  }
+
   refs.create.addEventListener('click', create);
+  refs.recycle.addEventListener('click', recycle);
   loadList();
   loadGit();
 }

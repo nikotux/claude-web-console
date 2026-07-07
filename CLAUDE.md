@@ -193,7 +193,13 @@ código.
   análisis IA de secciones de contexto (módulo projects; poda >24 h en cada
   escritura) + `projects-analyze.log` de su runner, `commitmsg/<id>.json` jobs
   de la generación IA del mensaje de commit (módulo backup; misma poda >24 h) +
-  `commitmsg.log` de su runner, `session-bus/` del INTERFONO entre
+  `commitmsg.log` de su runner, `tasks.json` registro PRIVADO de las tareas
+  pendientes + PLANES (módulo tasks; CRUD síncrono determinístico, escritura
+  atómica tmp+rename — NO hay runner) + `tasks-activity.json` LOG de actividad
+  append-only (create/update/status/complete/delete de tareas y planes; poda a
+  300 eventos), `audio/<id>.json` jobs del análisis IA de
+  transcripciones (módulo audio; id determinístico por contenido, poda >30 días)
+  + `audio.log` de su runner, `session-bus/` del INTERFONO entre
   sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
   reservas de archivo (1 por archivo, clave = hash de la ruta) ·
   `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
@@ -558,6 +564,104 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             dura del proyecto para tocar configuración fuera del repo). No
                             iniciado — queda documentado acá para cuando se retome.
   files/ stats/ tmux/ admin/ health/
+  tasks/                    PENDIENTES: tablero PRIVADO de tareas de este proyecto (nada sale al
+                            exterior, no se pushea). Versión simplificada de "Bugs & Features":
+                            1 tarjeta = 1 tarea {id T<n>, title, description, status
+                            (pendiente/en-progreso/hecha), priority (alta/media/baja), tags[],
+                            source (manual|audio), sourceRef (jobId de audio), createdAt/
+                            updatedAt/doneAt}. El CRUD es SÍNCRONO y determinístico (store.js,
+                            ~/.cwc-data/tasks.json, escritura atómica tmp+rename) → NO necesita
+                            runner desacoplado: no hay corrida en el tiempo atada al proceso;
+                            sobrevive reinicios por su estado en disco (regla de oro cumplida sin
+                            runner). FASE 2 ✅ (2026-07-06): (A) PLANES que agrupan tareas con
+                            progreso % (id PLAN-<n>, secuencia planSeq; status active/proposed/
+                            done/cancelled; taskCount/doneCount/pct DERIVADOS al leer, NUNCA
+                            persistidos; borrar un plan DESASIGNA sus tareas, no las borra). La
+                            tarea gana `planId` (validado contra planes existentes) y `type`
+                            (task/idea/nota/feature). (B) LOG de actividad REAL persistido en
+                            ~/.cwc-data/tasks-activity.json (append-only, poda a 300 eventos):
+                            cada create/update/status/complete/delete de tarea Y plan registra un
+                            evento {id,ts,kind,entity,refId,title,detail} — el panel "Actividad
+                            reciente" lee ESTO (antes se derivaba de timestamps, sin historial).
+                            Ruta /api/tasks (todo AUTENTICADO, sin admin — bloc privado del dueño):
+                            GET / {tasks,counts,plans} · GET /activity {events} · GET /plans
+                            {plans} · POST / (crear tarea) · POST /from-audio {jobId,tasks[]} ·
+                            POST /plans (crear) · POST /plans/:id (editar) · POST /plans/:id/delete
+                            · POST /:id (editar tarea) · POST /:id/delete. OJO ORDEN: las rutas
+                            literales /plans y /activity se registran ANTES de la paramétrica /:id
+                            (valida ^T\d+$) para que Express no las capture como id; /plans valida
+                            ^PLAN-\d+$. Se alimenta MANUAL y desde el módulo `audio`. Frontend
+                            tasks.js: sección colapsable del sidebar
+                            (semáforo + conteos) + TABLERO modal (openModal) con CUATRO PESTAÑAS
+                            (.tk-tabs/.tk-tab, espejo visual de .bb-tabs del board de Bugs;
+                            openBoard(initialTab), default 'panel' — OJO: el handler del botón
+                            envuelve la llamada `() => openBoard()` para NO pasar el PointerEvent
+                            como initialTab): (1) 📊 PANEL = DASHBOARD estilo Pad alimentado 100%
+                            con datos LOCALES (0 tokens, todo DERIVADO en el front) — Pad es solo el
+                            REFERENTE de diseño, NUNCA la fuente (pedido del usuario 2026-07-06).
+                            Secciones colapsables (.dash-sec, regla de UI árbol). ORDEN (pedido del
+                            usuario 2026-07-06): 🗂️ Clasificación PRIMERO y abierta (resumen de todo:
+                            conteos Tareas/Planes/Informes/Sesiones + pills por tipo + top tags) · 🔥
+                            En curso (tareas en-progreso + chats de trabajo de /api/chat/list con
+                            status==='working'||delegating) · ⚠️ Necesita atención (en-progreso
+                            estancadas >3d sin update + alta prioridad sin arrancar) · ⏭️ Seguí por
+                            acá (top 3 por prioridad+antigüedad) · 📊 Planes activos (barra de
+                            progreso % por plan active/proposed) · 🕑 Actividad reciente (LOG REAL de
+                            /api/tasks/activity + análisis de audio). Un ítem con [data-goto] salta a
+                            Tareas, [data-goto-plan] a Planes.
+                            (2) 📋 TAREAS = CUADRITOS EN COLUMNAS estilo Bugs v2 (.task-grid,
+                            columns:3 240px masonry; 1 col en móvil ≤640) + filtros Activas/Todas/
+                            Hechas. Cada cuadrito (.task-cardv2) nace CONTRAÍDO (tipo+id+prioridad+
+                            estado+título+chip de plan) y al CLIC abre el DETALLE en VENTANA NUEVA
+                            (modal openTaskDetail: chips, descripción, tags, fechas + acciones
+                            avanzar/editar/eliminar; role=button + Enter/Espacio) — pedido del usuario
+                            2026-07-06 (antes eran filas .task-item expandibles inline). alta/edición
+                            por taskForm con Tipo+Plan. (3) 🗺️ PLANES = planCard colapsable con barra
+                            de progreso, subtareas del plan y editar/eliminar (planForm); "Nuevo plan"
+                            arriba. (4) 🎙️ INFORMES = mountReports() del módulo audio (ver abajo).
+                            Escucha el evento `tasks-changed` del bus (lo dispara audio al crear
+                            tareas) para refrescar. FASE 2 ✅ (Planes + log real + tipos) + rediseño
+                            de Tareas a cuadritos+modal y Panel con Clasificación primero (2026-07-06).
+                            FASE 3 pendiente (anotada): más tipos de Collection tipo Pad
+                            (Docs/Feedback/Roadmap) si hacen falta.
+  audio/                    EXTRACCIÓN DE AUDIO: cargás una TRANSCRIPCIÓN (ya pasada a texto,
+                            NO hay speech-to-text acá) y la IA interpreta quién dijo qué y por
+                            qué, clasifica cada tramo (accion/plan/decision/problema/pregunta/
+                            info), resume, arma un PLAN y PROPONE tareas → módulo `tasks` con la
+                            aprobación del usuario. CONSUME TOKENS ⇒ RUNNER DESACOPLADO
+                            (bin/cwc-audio-runner.js, regla de oro) + READ-ONLY blindado (regla 6:
+                            sonnet, 1 turno, CERO herramientas — las dos capas PreToolUse+
+                            canUseTool deniegan TODO; el texto viaja entero en el prompt, nunca
+                            lee/escribe disco). shared.js: jobs en ~/.cwc-data/audio/<id>.json (id
+                            DETERMINÍSTICO por contenido: reintento reusa el MISMO job, no gasta
+                            de nuevo; poda >30 días) + prompt + parseo + spawn detached, patrón
+                            projects/analyze-shared+commitmsg-shared. TÍTULO GENERADO POR IA
+                            (pedido del usuario 2026-07-06): el prompt pide un `title` corto
+                            (parseAudio lo extrae) y el runner lo aplica al job si titleAuto (el
+                            usuario ya NO escribe el título a mano — se quitó el input del panel);
+                            el `id` del job pasó a depender SOLO de la transcripción (audioJobId
+                            ignora el título, que ya no es identidad). EDITABLE después: POST
+                            /:id/title fija titleAuto=false; en el front se edita INLINE (✏️ →
+                            input → Enter/blur guarda, Esc cancela; .au-titlebar). Ruta /api/audio:
+                            GET / (historial liviano) · GET /:id (transcript+result) · POST /analyze
+                            (ADMIN, arranca el runner, responde YA) · POST /:id/title (ADMIN, editar
+                            título) · POST /:id/delete (admin). El
+                            front encuesta GET /:id (0 tokens). Frontend audio.js: NO es sección
+                            de sidebar propia (pedido del usuario) — exporta openAudioPanel(ctx) y
+                            lo abre el módulo `tasks` (Pendientes) con un botón admin. El panel
+                            modal: pegar transcripción → Analizar con confirm de tokens →
+                            resultado en ÁRBOL colapsable (resumen · tareas propuestas con "Crear
+                            tarea"/"Crear todas" · segmentos · plan · hablantes · historial de
+                            análisis previos). renderResult ahora incluye un bloque 🧾 RAW
+                            colapsado (.au-raw): el CRUDO del procesamiento = transcripción
+                            original + JSON interpretado (el "producto" es el render lindo, el raw
+                            es lo crudo; pedido del usuario 2026-07-06). Además audio.js exporta
+                            mountReports(container, ctx) — la PESTAÑA 🎙️ Informes del tablero de
+                            Pendientes: cada audio procesado como un INFORME colapsable (.au-report,
+                            regla de UI árbol) que al expandir hace GET /:id y renderiza el
+                            resultado con el botón raw. wrapBusReload envuelve el bus para refrescar
+                            la lista de informes tras un análisis nuevo. OJO: `audio` (interpretar
+                            reuniones) ≠ `--cwc-cat-audio` (categoría de archivo)
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
                             claims con verdict de evaluateClaim + ts) · POST /send {to,text}
@@ -1064,8 +1168,90 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             store.set({tab}) y el re-render es seguro (no toca `expanded`).
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
-                            (patrón completo en docs/frontend-modules.md)
-public/js/modules/          launcher · sessions · stats · usage · system(⚙: Backup/Usuarios/
+                            (patrón completo en docs/frontend-modules.md).
+                            DOS BARRAS LATERALES (2026-07-07, pedido del usuario "Sesiones
+                            ocupa mucho espacio"): #sidebar IZQUIERDA = control/módulos
+                            (Tickets & Features → Pendientes → Comunicaciones, en ese orden)
+                            + pie de estado (plan-limits · usage · cuenta · explorador ·
+                            system). #sidebar-right DERECHA = Sesiones + "Nueva sesión"
+                            (launcher) + #rail-tabs (pestañas abiertas) + pie
+                            (.sidebar-footer--right) con el pulso de TOLKIEN PERSISTENTE
+                            ARRIBA (data-module="tolkien" en .tk-persist — ya NO es una
+                            sección colapsable: SIN chevron (.tk-persist .sec-head::before
+                            oculto) y compacto, leyenda densa branch · ↓N por traer · dirty ·
+                            fresh · último commit + botones fetch/update) y la leyenda
+                            CPU/RAM/disco (data-module="stats") DEBAJO, separada por un
+                            divisor. Los gauges se movieron del pie IZQUIERDO al DERECHO
+                            (pedido 2026-07-07): en el rail colapsado derecho Tolkien se oculta
+                            (only-expanded) y los gauges quedan como anillos-ícono compactos
+                            (#sidebar-right.collapsed .gauge-ring), mismo tratamiento que tenían
+                            en el pie izquierdo. DENSIDAD COMPACTA UNIFORME (2026-07-07, pedido
+                            del usuario "replicar el look fino de Tolkien en todos los módulos"):
+                            un bloque CSS scopeado a `.side-sec` (Tolkien va aparte en .tk-persist)
+                            adelgaza header/botones/cuerpo de TODAS las secciones (Tickets ·
+                            Pendientes · Comunicaciones · Sesiones): .sec-head fino, botones del
+                            header a 22px (.sec-head .btn--sm/.btn--icon), .tk-card denso, botones
+                            de acción a 26px (.tk-actions .btn/.btn-ghost) y tarjetas de Sesiones
+                            más finas (.sess-main min-height 30px). Los selectores usan ≥2 clases
+                            a propósito: le ganan al bump táctil de 44px de ui.css (@media pointer:
+                            coarse) sin desactivar esa accesibilidad global. (El chevron de
+                            colapsar se probó compacto y LUEGO se quitó — ver "SECCIONES NO
+                            COLAPSABLES" abajo.) CADA barra colapsa a rail
+                            independiente (main.js: toggle-sidebar / toggle-sidebar-right, keys
+                            cwc.sidebar.collapsed / cwc.sidebar-right.collapsed; applySidebarState
+                            aplica ambas). "Nueva sesión" = .sb-new-btn (mismo alto 34px y
+                            diseño que el ☰ colapsar, con tipografía acorde) al lado del toggle
+                            derecho.
+                            SECCIONES NO COLAPSABLES (2026-07-07): las <section class="side-sec">
+                            YA NO se pliegan — se quitó el chevron (.sec-head::before), el
+                            cursor/click y TODO el bloque de main.js que aplicaba/toggleaba
+                            .sec-collapsed + las keys cwc.sec.<mod>.collapsed. Todo nace expandido
+                            (la distribución en 2 barras da espacio). Si se vuelve a necesitar
+                            plegado, hay que reponer ese listener + la clase.
+                            En MÓVIL ambas barras son drawers overlay que se abren con DOS ASAS
+                            flotantes (#sidebar-handle izq = módulos / #sidebar-right-handle der
+                            = Sesiones; look compartido espejado, solo móvil) UBICADAS SOBRE EL
+                            COMPOSER (bottom: calc(64px + safe-area) — pedido del usuario
+                            2026-07-07: antes al medio del borde estorbaban) — la izquierda
+                            también responde al ☰ header/auxbar (cwc:open-sidebar). Cada drawer
+                            con su scrim (#sidebar-scrim / #sidebar-right-scrim, hermano `~`
+                            :not(.hidden)). FIX scroll fantasma (mismo pedido): en móvil los
+                            drawers son position:absolute; sin ancestro posicionado se ubicaban
+                            contra el viewport y el drawer derecho cerrado (translateX(100%))
+                            desbordaba generando scroll "al negro" — se contiene con
+                            `#body { position: relative; overflow: hidden; overflow: clip }`
+                            (clip = ni siquiera scroll programático lo revela) + left:0 explícito
+                            al drawer izquierdo.
+                            FIX hueco negro del TECLADO (móvil, reportado 2026-07-07): al enfocar
+                            el input del chat iOS/Android DESPLAZAN la página para mostrar el campo
+                            y aparecía una franja negra (fondo del body) entre el chat y el teclado.
+                            Se BLOQUEA el scroll del documento en la app —
+                            `html:has(#app){overflow:hidden}` + `body:has(#app){position:fixed;
+                            inset:0;overflow:hidden}` (scope :has(#app) → login/otras páginas
+                            intactas)— y `#app` sigue al VIEWPORT VISIBLE por JS: fitViewport
+                            (main.js) setea height=visualViewport.height Y translateY(offsetTop)
+                            (escucha 'resize' Y 'scroll' de visualViewport) reanclando el tope al
+                            área visible; además el meta viewport lleva
+                            `interactive-widget=resizes-content` (Chrome Android). Los modales/
+                            popups se montan en document.body (no en #app) → el translateY de #app
+                            no los descoloca (verificado). NO quitar el body:fixed sin reponer otra
+                            forma de impedir el scroll de foco de iOS (overflow:hidden solo NO
+                            alcanza en iOS).
+public/js/modules/          launcher · sessions · tasks(sección "Pendientes": tarjeta sidebar
+                            colapsable + tablero modal con CUATRO PESTAÑAS 📊 Panel (dashboard estilo
+                            Pad con datos LOCALES: En curso / Necesita atención / Seguí por acá /
+                            Planes activos con progreso % / Clasificación / Actividad reciente del
+                            log real — todo derivado, 0 tokens; Pad solo REFERENTE de diseño) · 📋
+                            Tareas (filtros/alta/edición con Tipo+Plan) · 🗺️ Planes (agrupan tareas,
+                            progreso %) · 🎙️ Informes (audios como informes colapsables + botón 🧾
+                            raw). Se alimenta manual y
+                            desde audio vía evento bus `tasks-changed`. El módulo AUDIO NO es sección
+                            propia: vive DENTRO de Pendientes — el botón "Audio" DEL TABLERO (admin,
+                            tokens; el acceso "Analizar audio" del HEADER del sidebar se quitó a
+                            pedido del usuario 2026-07-07) importa openAudioPanel de audio/audio.js
+                            (pegar transcripción → Analizar → interpretación en árbol + tareas
+                            propuestas + raw), y la pestaña Informes usa mountReports de audio.js) ·
+                            stats · usage · system(⚙: Backup/Usuarios/
                             Proyectos/Interfono/Salud — la pestaña Interfono
                             (interfono-panel.js) es la ventana + canal humano del INTERFONO
                             entre sesiones (GET/POST /api/interfono): sesiones activas,
@@ -1353,6 +1539,14 @@ bin/cwc-commitmsg-runner.js generación IA del mensaje de commit del botón "Com
                             archivos: ~/.cwc-data/commitmsg/<id>.json (job con files/diff que
                             escribe el POST; el runner persiste el mensaje en el MISMO
                             archivo). Lógica compartida en src/modules/backup/commitmsg-shared.js
+bin/cwc-audio-runner.js     análisis IA de UNA transcripción de audio (módulo `audio`),
+                            DESACOPLADO del server (regla de oro; sonnet, 1 turno, CERO
+                            herramientas — doble capa regla 6 deniega TODO; el texto viaja
+                            entero en el prompt). Interpreta quién dijo qué y por qué, arma un
+                            plan y propone tareas. Interfaz por archivos:
+                            ~/.cwc-data/audio/<id>.json (job con la transcripción que escribe el
+                            POST; el runner persiste el resultado en el MISMO archivo). Lógica
+                            compartida en src/modules/audio/shared.js
 bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
                             y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
@@ -1487,6 +1681,65 @@ bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo c
                             cuenta — pushPr/updatePr/cancelPr y deskUpdateAuto
                             (ticket_auto_update) llaman al gateway; deskChat registra
                             con cwc-comms record tras publicar con tu OK.
+                            COMPOSER EN EL TABLERO + REGISTRO VISIBLE (2026-07-06, pedido del
+                            usuario "cuando envío algo no me queda registro"): hasta hoy NO
+                            había forma de enviar desde la UI del tablero — el envío por
+                            Teams solo salía por CLI (cwc-comms send) o desde un chat que
+                            llamaba al MCP teams_send POR FUERA del gateway (por eso no dejaba
+                            rastro: buildIndex arma los hilos de github/teams/chatbot/manual,
+                            NUNCA lee outbox.json). Ahora el tablero (comms/board/) tiene un
+                            COMPOSER por contacto (render.js `.cm-composer` bajo el header;
+                            el texto vive en store.composer[contactId] y se escribe en cada
+                            tecla SIN re-render —listener 'input' en index.js— para sobrevivir
+                            a un re-render por scan) que ENVÍA un DM de Teams real vía
+                            A.sendMessage → POST /api/comms/send {channel:'teams', action:'dm',
+                            contactId, payload:{text}} con confirm duro (publica con tu
+                            identidad + firma). Encuesta el job (GET /send/:jobId) y al
+                            terminar hace reload() para traer el registro. CLAVE del fix: el
+                            composer SIEMPRE pasa contactId ⇒ el send-runner corre appendManual
+                            (registro al hilo, línea condicional a job.contactId) ⇒ el envío
+                            queda visible en el hilo del contacto (antes, sin contactId,
+                            quedaba solo en outbox invisible). Para la vía CHAT (un chat que
+                            envía por su cuenta), buildChatPrompt de board/actions.js ahora
+                            instruye: si con tu OK enviás, registralo con `cwc-comms record
+                            teams dm <contacto> -- "<texto>"` (NO re-envía, solo deja el rastro).
+                            El registro nativo en Teams ya existe: el DM sale con TU cuenta al
+                            chat 1:1 real, así que aparece en tu Teams solo — el gap era solo el
+                            tablero. (La idea original de "que el bot Tolkien/TheEye confirme"
+                            NO es viable: no hay NINGÚN enganche programático con OpenClaw/TheEye
+                            en este repo — verificado.)
+                            CHATEAR DIRECTO + ENVÍO A BOTS (2026-07-06, pedido del usuario
+                            "poder chatear/responder rápido"): (1) botón "Responder" en cada
+                            hilo (render.js data-act='reply') que hace scroll+focus al composer
+                            del contacto (respuesta veloz sin scrollear). (2) ENVÍO A BOTS: el
+                            send-runner (teamsDmPrompt de bin/cwc-comms-send-runner.js) para un
+                            contacto kind:'bot' con chatId conocido ENVÍA DIRECTO a ese chatId
+                            con teams_send_message (el "ubicar chat 1:1" fallaría igual que el
+                            scan — graph_list_chats no surface bots); personas siguen con la
+                            vía 1:1. Verificado dryRun: Tolkien→vía-bot-directa, Chris→vía-
+                            persona. La firma "— Nicolás (dev team)" se sigue aplicando a TODO
+                            envío Teams (ensureSignature del gateway) — inocua para un bot,
+                            revisable si molesta.
+                            TOLKIEN COMO CONTACTO (2026-07-06): "Tolkien" (Mordor's AI
+                            assistant, bot de Teams) se agregó a DEFAULT_CONTACTS (shared.js)
+                            y al contacts.json vivo — id 'tolkien', kind:'bot', sin github/
+                            email. Al usuario le llegan mensajes de ese bot y debe procesarlos
+                            igual. El tablero lo marca con badge "🤖 bot".
+                            SCAN DE BOTS (teams-shared.js teamsBotPrompt + runner elige por
+                            contact.kind==='bot'): VERIFICADO 2026-07-06 que graph_list_chats
+                            del MCP NO surface los chats con apps/bots (solo devuelve 1:1 entre
+                            PERSONAS — el modelo reportó "revisé 8 chats 1:1, ninguno es la app
+                            Tolkien"). Por eso el prompt de bot tiene DOS vías: (1) VÍA DIRECTA
+                            preferida — si el contacto tiene un `chatId` guardado, lo lee
+                            directo con graph_read_chat_messages (saltea el "buscar" que falla);
+                            (2) fallback de búsqueda si no hay chatId. El chatId del bot Tolkien
+                            se tomó del seed chatbot.json (formato 19:<miGUID>_<appGUID>@unq.
+                            gbl.spaces) y se guardó en el contacto. parseTeamsResponse RELAJA la
+                            validación de miembros para kind:'bot' (solo exige que YO esté — el
+                            bot no matchea por email/nombre de persona). CON la vía directa el
+                            scan trajo los 15 mensajes reales del bot. Un contacto-bot nuevo sin
+                            chatId conocido caería a la vía búsqueda (que hoy falla por el MCP) —
+                            para esos, guardar el chatId a mano en contacts.json es el camino.
                             LECTURA CENTRALIZADA Fase C (2026-07-05): comms/pr-read-shared.js
                             (fetchPrRich) es el LECTOR ÚNICO de un PR de GitHub — SUPERSET de
                             campos (unión de prLive+investigate+comms) + caché de archivo por
@@ -1602,7 +1855,16 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - Hooks del observador se capturan al INICIAR claude: sesiones ya abiertas no
   reportan hasta reiniciar claude dentro de ellas.
 - El Agent SDK hereda la suscripción del CLI (`~/.claude/.credentials.json`);
-  no necesita API key y sus transcripts caen en `~/.claude/projects/`.
+  no necesita API key y sus transcripts caen en `~/.claude/projects/`. OJO: un
+  runner lee ese archivo (y arma sus MCP) al ARRANCAR — si la credencial OAuth
+  cambia/vence después, el runner vivo NO la re-lee y algún MCP (visto con `pad`)
+  queda silenciosamente sin cargar. Remedio: **"🔄 Reiniciar sesiones"** (pestaña
+  Backup del menú ⚙ Sistema, admin) → `POST /api/admin/restart-runners` manda
+  SIGTERM a cada `bin/cwc-chat-runner.js` vivo (enumerados con `pgrep -f
+  'cwc-chat-runner\.js'`, nunca toca `src/server.js` ni el servicio systemd) y
+  responde `{ killed, pids }`. Al morir el runner, el server detecta el socket
+  cerrado (`RunnerLink.onClose` → `Chat._engineDown`) y lo RE-LANZA con
+  `--resume` en la próxima interacción: 0 historial perdido, credenciales frescas.
 - Tools MCP DIFERIDAS y allowlists headless (visto 2026-07-05): el SDK puede
   diferir los schemas de las tools MCP y el modelo necesita la META-tool
   `ToolSearch` para cargarlos antes de invocarlas — solo devuelve schemas, NO
@@ -1631,20 +1893,23 @@ docs/                       frontend-modules.md · brief-original.txt · context
   cambiar, `margin-left` quedaría desincronizado; `transform: -100%` siempre
   es exacto porque un % ahí SÍ se resuelve contra el propio elemento.
 - Cabecera del sidebar: el slot del launcher (`.sidebar-top`,
-  `[data-module="launcher"]`) vive DENTRO de `.sb-head`, en la MISMA fila que
-  el ☰ (flex:1 llena el espacio junto al botón — antes esa fila quedaba medio
-  vacía y "Nueva sesión" gastaba una fila propia; pedido del usuario en
-  móvil, aplica igual en desktop expandido). En el rail colapsado de desktop
-  el launcher se oculta (only-expanded) y queda la columna ☰ + "+"
-  (only-collapsed) de siempre.
-- `#rail-tabs` (chips de pestañas ABIERTAS) se oculta con `display:none` SOLO
-  en el media query móvil de style.css: en el rail COLAPSADO de escritorio
-  sigue siendo la única forma de cambiar de pestaña (la lista "Sesiones" se
-  oculta ahí); en móvil el panel nunca colapsa (`applySidebarState` lo
-  fuerza) así que es redundante con las tarjetas de Sesiones, que ya
-  cambian de pestaña vía `focusSession`/`openChatView` sin depender de este
-  chip. Si se vuelve a tocar, verificar que el rail colapsado de desktop no
-  se rompió (ahí `#rail-tabs` es indispensable).
+  `[data-module="launcher"]`) vive DENTRO de `.sb-head` de la barra DERECHA
+  (`#sidebar-right` desde 2026-07-07), en la MISMA fila que el ☰ derecho
+  (flex:1 llena el espacio junto al botón). En el rail colapsado de la barra
+  derecha el launcher se oculta (only-expanded) y queda la columna ☰ + "+"
+  (only-collapsed). El botón usa `.sb-new-btn` (34px, mismo alto que el ☰).
+- `#rail-tabs` (chips de pestañas ABIERTAS) vive en la barra DERECHA
+  (`#sidebar-right`, con Sesiones) desde 2026-07-07 y se oculta con
+  `#sidebar-right:not(.collapsed) #rail-tabs { display: none; }` (antes el
+  selector era `#sidebar` — se movió con los chips): en el rail COLAPSADO de
+  escritorio (`#sidebar-right.collapsed`) sigue siendo la ÚNICA forma de
+  cambiar de pestaña (la lista "Sesiones" se oculta ahí, así que la regla base
+  `#sidebar-right.collapsed #rail-tabs { display:flex }` la muestra en columna);
+  en desktop expandido Y en móvil (la barra nunca colapsa ahí,
+  `applySidebarState` lo fuerza) es redundante con las tarjetas de Sesiones, que
+  ya cambian de pestaña vía `focusSession`/`openChatView` sin depender de este
+  chip. Si se vuelve a tocar, verificar que el rail colapsado de la barra
+  derecha no se rompió (ahí `#rail-tabs` sigue siendo indispensable).
 - Pac-Man — MOTOR de estados (pedido del usuario 2026-07-05, reemplaza el
   loader binario working/dormido de antes): catálogo ÚNICO en
   `ui/pacman.js` (`PAC_STATES`) + CSS puro en `ui.css` (sección "Pac-Man —

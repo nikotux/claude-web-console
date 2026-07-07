@@ -52,6 +52,13 @@ export function openCommsBoard({ dialog, icon, openChat, projectRel, onClose } =
         case 'scan': A.scan(); return;
         case 'scanteams': A.scanTeams(); return;
         case 'log': A.logManual(store.get().tab); return;
+        case 'send': A.sendMessage(store.get().tab); return;
+        case 'reply': {
+          // Respuesta rápida: enfoca el composer del contacto (arriba del hilo).
+          const ta = wrap.querySelector('.cm-composer-input');
+          if (ta) { ta.scrollIntoView({ behavior: 'smooth', block: 'center' }); ta.focus(); }
+          return;
+        }
         case 'togglearch': store.set({ showArchived: !store.get().showArchived }); return;
         case 'talk': { const t = store.get().threads.find((x) => x.id === id); if (t) A.talkAbout(t); return; }
         case 'project': A.assignProject(id); return;
@@ -64,6 +71,20 @@ export function openCommsBoard({ dialog, icon, openChat, projectRel, onClose } =
     }
     const head = e.target.closest('.cm-thead');
     if (head?.dataset?.id) A.toggleExpand(head.dataset.id);
+  });
+
+  // Composer: cada tecla escribe el borrador al store SIN re-render (así el
+  // texto sobrevive a un re-render por scan/reload; el botón Enviar se rehúsa
+  // hasta que hay texto — se sincroniza con el próximo render legítimo).
+  wrap.addEventListener('input', (e) => {
+    const ta = e.target.closest('.cm-composer-input');
+    if (!ta) return;
+    const tab = store.get().tab;
+    if (tab) store.get().composer[tab] = ta.value;
+    // Habilitar/deshabilitar el botón Enviar en vivo, sin re-render (que
+    // perdería el foco del textarea mientras se tipea).
+    const btn = wrap.querySelector('[data-act="send"]');
+    if (btn) btn.disabled = !ta.value.trim() || !!store.get().busy.send;
   });
 
   A.reload();

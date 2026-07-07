@@ -1,17 +1,38 @@
-// modules/admin/index.js — administración de usuarios (solo administradores).
+// modules/admin/index.js — administración: usuarios + mantenimiento del sistema
+// (solo administradores).
 //
 // HTTP (todo bajo requireAdmin):
 //   GET    /api/admin/users              -> lista de usuarios
 //   POST   /api/admin/users             -> crea { username, password, admin }
 //   PUT    /api/admin/users/:username    -> { password?, admin? }
 //   DELETE /api/admin/users/:username    -> elimina
+//   POST   /api/admin/restart-runners    -> recicla los runners de chat (SIGTERM)
 import express from 'express';
+import { execFileSync } from 'node:child_process';
 import { isAdmin, principalOf, invalidateSessionsForUser } from '../../core/auth.js';
 import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
 
 function requireAdmin(req, res, next) {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
   next();
+}
+
+// PIDs de los runners de chat VIVOS (bin/cwc-chat-runner.js). pgrep -f matchea
+// la línea de comando completa: SOLO los runners, nunca src/server.js (el
+// proceso principal) ni el propio pid. Exit 1 de pgrep = sin coincidencias, no
+// es un error. Se excluye process.pid por las dudas (defensivo).
+function liveRunnerPids() {
+  let out = '';
+  try {
+    out = execFileSync('pgrep', ['-f', 'cwc-chat-runner\\.js'], { encoding: 'utf8' });
+  } catch (e) {
+    if (e.status === 1) return []; // sin runners vivos
+    throw e;
+  }
+  return out
+    .split('\n')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0 && n !== process.pid);
 }
 
 export default {
@@ -93,6 +114,33 @@ export default {
         res.json({ ok: true });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });
+      }
+    });
+
+    // Reciclar los runners de chat: SIGTERM a cada bin/cwc-chat-runner.js vivo.
+    // Al morir el runner, el server detecta el socket cerrado (RunnerLink.onClose
+    // → Chat._engineDown) y lo RE-LANZA con `--resume <sessionId>` en la próxima
+    // interacción del usuario, así que NO se pierde historial de la conversación.
+    // Objetivo real: forzar que cada runner RE-LEA ~/.claude/.credentials.json al
+    // re-inicializar sus MCP (el Agent SDK hereda la suscripción del CLI desde ese
+    // archivo). Arregla el caso del MCP `pad` que queda silenciosamente sin cargar
+    // en las corridas headless del SDK tras una credencial OAuth vieja: reciclar
+    // los runners los hace re-leer las credenciales frescas del disco. NO reinicia
+    // el servicio systemd ni el proceso principal — solo los hijos runner.
+    r.post('/restart-runners', (req, res) => {
+      try {
+        const killed = [];
+        for (const pid of liveRunnerPids()) {
+          try {
+            process.kill(pid, 'SIGTERM');
+            killed.push(pid);
+          } catch (err) {
+            if (err.code !== 'ESRCH') throw err; // ESRCH = ya murió, se ignora
+          }
+        }
+        res.json({ killed: killed.length, pids: killed });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
     });
 

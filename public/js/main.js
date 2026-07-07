@@ -14,13 +14,17 @@ import { initAuxBar } from './modules/mobile/auxbar.js';
 import launcher from './modules/launcher/launcher.js';
 import sessions from './modules/sessions/sessions.js';
 import tolkien from './modules/tolkien/tolkien.js';
-import bugs from './modules/bugs/bugs.js';
+import tickets from './modules/tickets/tickets.js';
+import tasks from './modules/tasks/tasks.js';
 import stats from './modules/stats/stats.js';
+import planLimits from './modules/stats/plan-limits.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
 import comms from './modules/comms/comms.js';
 
-const MODULES = [launcher, sessions, tolkien, bugs, comms, stats, usage, system];
+// `audio` ya no es una sección de sidebar: vive DENTRO de `tasks` (Pendientes),
+// que importa openAudioPanel directamente. Por eso no está en MODULES.
+const MODULES = [launcher, sessions, tolkien, tickets, tasks, comms, planLimits, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
@@ -514,10 +518,12 @@ for (const mod of MODULES) {
 
 // ===== Shell: sidebar (colapsable a rail), auxbar, viewport =====
 const sidebarEl = document.getElementById('sidebar');
+const sidebarRightEl = document.getElementById('sidebar-right');
 const COLLAPSE_KEY = 'cwc.sidebar.collapsed';
+const COLLAPSE_KEY_R = 'cwc.sidebar-right.collapsed';
 
-// El botón ☰: en desktop contrae/expande el panel a un rail (persistido); en
-// móvil actúa como el overlay de siempre (mostrar/ocultar).
+// El botón ☰ (izquierda): en desktop contrae/expande el panel a un rail
+// (persistido); en móvil actúa como el overlay de siempre (mostrar/ocultar).
 document.getElementById('toggle-sidebar').addEventListener('click', () => {
   if (isMobile()) { sidebarEl.classList.toggle('hidden'); return; }
   const collapsed = !sidebarEl.classList.contains('collapsed');
@@ -525,24 +531,42 @@ document.getElementById('toggle-sidebar').addEventListener('click', () => {
   localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
 });
 
-// Cualquier vista puede pedir el panel lateral (☰ móvil de los headers de
-// chat/TUI y tecla ☰ de la auxbar): en móvil el panel es overlay y su propio
-// ☰ queda fuera de pantalla al ocultarse.
+// El botón ☰ (derecha, barra de Sesiones): mismo comportamiento, key propia.
+document.getElementById('toggle-sidebar-right').addEventListener('click', () => {
+  if (isMobile()) { sidebarRightEl.classList.toggle('hidden'); return; }
+  const collapsed = !sidebarRightEl.classList.contains('collapsed');
+  sidebarRightEl.classList.toggle('collapsed', collapsed);
+  localStorage.setItem(COLLAPSE_KEY_R, collapsed ? '1' : '0');
+});
+
+// Cualquier vista puede pedir el panel lateral IZQUIERDO (☰ móvil de los
+// headers de chat/TUI y tecla ☰ de la auxbar): en móvil el panel es overlay y
+// su propio ☰ queda fuera de pantalla al ocultarse.
 window.addEventListener('cwc:open-sidebar', () => {
   sidebarEl.classList.remove('hidden');
   if (isMobile()) sidebarEl.classList.remove('collapsed');
 });
 
-// Velo de fondo (solo visible/clickeable en móvil, vía CSS): tocar afuera
+// El drawer DERECHO (Sesiones) en móvil: lo abre el asa flotante y lo cierra
+// su scrim. En desktop el asa/scrim no se ven (CSS).
+const openRightDrawer = () => { sidebarRightEl.classList.remove('hidden'); if (isMobile()) sidebarRightEl.classList.remove('collapsed'); };
+document.getElementById('sidebar-right-handle').addEventListener('click', openRightDrawer);
+
+// Velos de fondo (solo visibles/clickeables en móvil, vía CSS): tocar afuera
 // del panel lo cierra, como cualquier drawer/overlay estándar.
 document.getElementById('sidebar-scrim').addEventListener('click', () => {
   if (isMobile()) sidebarEl.classList.add('hidden');
 });
+document.getElementById('sidebar-right-scrim').addEventListener('click', () => {
+  if (isMobile()) sidebarRightEl.classList.add('hidden');
+});
 
-// Aplica el estado colapsado guardado (solo desktop; en móvil nunca colapsa).
+// Aplica el estado colapsado guardado de AMBAS barras (solo desktop; en móvil
+// nunca colapsan — son drawers overlay).
 function applySidebarState() {
-  if (isMobile()) { sidebarEl.classList.remove('collapsed'); return; }
+  if (isMobile()) { sidebarEl.classList.remove('collapsed'); sidebarRightEl.classList.remove('collapsed'); return; }
   sidebarEl.classList.toggle('collapsed', localStorage.getItem(COLLAPSE_KEY) === '1');
+  sidebarRightEl.classList.toggle('collapsed', localStorage.getItem(COLLAPSE_KEY_R) === '1');
 }
 applySidebarState();
 window.addEventListener('resize', applySidebarState);
@@ -550,35 +574,15 @@ window.addEventListener('resize', applySidebarState);
 // El ＋ del rail abre el mismo lanzador (una sola puerta de entrada).
 document.getElementById('rail-new').addEventListener('click', () => bus.dispatchEvent(new Event('open-launcher')));
 
-// ===== Secciones colapsables del sidebar (por módulo, persistido) =====
-// Cada <section class="side-sec"> del scroll se pliega a solo su header
-// (chevron + semáforo + contador + controles siguen visibles); el cuerpo se
-// oculta por CSS con la clase .sec-collapsed. El estado vive en la <section>
-// de index.html (no en el innerHTML del módulo) => sobrevive a sus re-render.
-const SEC_KEY = (name) => `cwc.sec.${name}.collapsed`;
-const sidebarScroll = document.querySelector('.sidebar-scroll');
-if (sidebarScroll) {
-  // Por defecto TODO contraído (pedido del usuario): una sección solo nace
-  // expandida si el usuario la abrió explícitamente antes (valor '0'). Sin
-  // entrada guardada => contraída.
-  for (const sec of sidebarScroll.querySelectorAll('.side-sec')) {
-    if (!sec.dataset.module) continue;
-    if (localStorage.getItem(SEC_KEY(sec.dataset.module)) !== '0') {
-      sec.classList.add('sec-collapsed');
-    }
-  }
-  // Toggle al tocar el header (los botones del header NO colapsan; el cuerpo
-  // tampoco: closest('.sec-head') solo matchea la fila del título).
-  sidebarScroll.addEventListener('click', (e) => {
-    const head = e.target.closest('.sec-head');
-    if (!head) return;
-    if (e.target.closest('button, a, input, select')) return;
-    const sec = head.closest('.side-sec');
-    if (!sec) return;
-    const collapsed = sec.classList.toggle('sec-collapsed');
-    if (sec.dataset.module) localStorage.setItem(SEC_KEY(sec.dataset.module), collapsed ? '1' : '0');
-  });
-}
+// El asa flotante IZQUIERDA (solo móvil) abre el drawer de módulos — gemela de
+// la derecha, ubicada sobre el composer para estorbar menos (pedido del usuario
+// 2026-07-07). Reusa el mismo evento que el ☰ del header.
+document.getElementById('sidebar-handle').addEventListener('click', () => window.dispatchEvent(new Event('cwc:open-sidebar')));
+
+// Las secciones del sidebar YA NO son colapsables (pedido del usuario
+// 2026-07-07): la distribución en dos barras deja espacio de sobra, así que
+// todo nace expandido y sin chevron. Se quitó el listener de toggle y el
+// estado .sec-collapsed en localStorage (era `cwc.sec.<mod>.collapsed`).
 
 initAuxBar({ getActiveTab });
 hydrateIcons();
@@ -590,15 +594,30 @@ whoami.then((me) => {
   else if (me?.type === 'token') acct.textContent = '(token)';
 });
 
-// Mantiene el layout sobre el teclado virtual (móvil).
+// Mantiene el layout sobre el teclado virtual (móvil). Al enfocar el input del
+// chat, el navegador (sobre todo iOS) DESPLAZA la página para "mostrar" el
+// campo; como el body está bloqueado (position:fixed en móvil, ver style.css)
+// no puede scrollear, pero el visualViewport SÍ se desplaza y quedaba un hueco
+// negro entre el chat y el teclado (reportado 2026-07-07). Fix: además de
+// ajustar la ALTURA de #app al viewport visible, lo REANCLAMOS con un
+// translateY(offsetTop) para que su tope siga al del viewport visible.
 if (window.visualViewport) {
+  const app = document.getElementById('app');
   const fitViewport = () => {
-    document.getElementById('app').style.height = `${window.visualViewport.height}px`;
+    const vv = window.visualViewport;
+    app.style.height = `${vv.height}px`;
+    app.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
+    // Por las dudas, deshacer cualquier scroll que el navegador haya forzado.
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
   };
   window.visualViewport.addEventListener('resize', fitViewport);
+  window.visualViewport.addEventListener('scroll', fitViewport);
   fitViewport();
 }
-if (isMobile()) document.getElementById('sidebar').classList.add('hidden');
+if (isMobile()) {
+  document.getElementById('sidebar').classList.add('hidden');
+  document.getElementById('sidebar-right').classList.add('hidden');
+}
 
 // ===== Arranque: re-adjunta sesiones PTY y conversaciones vivas; /?focus=<id> =====
 (async () => {

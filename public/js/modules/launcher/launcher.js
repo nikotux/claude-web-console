@@ -27,7 +27,9 @@ export default {
   mount(el, ctx) {
     const { icon, dialog, bus, openSession } = ctx;
 
-    el.innerHTML = `<button class="btn btn--block" id="ln-open">${icon('plus')}<span>Nueva sesión</span></button>`;
+    // Botón compacto: misma altura/diseño que el ☰ de colapsar (rail-btn),
+    // con tipografía acorde. Va al lado del toggle en la cabecera derecha.
+    el.innerHTML = `<button class="btn sb-new-btn" id="ln-open">${icon('plus', { size: 16 })}<span>Nueva sesión</span></button>`;
     el.querySelector('#ln-open').addEventListener('click', open);
     bus.addEventListener('open-launcher', open);
 

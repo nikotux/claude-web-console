@@ -57,6 +57,25 @@ function deskAutoUpdatePrompt(payload) {
 function teamsDmPrompt(payload, contact, self) {
   const name = contact?.name || payload.contactId;
   const email = contact?.email ? ` (email ${contact.email})` : '';
+  // BOT (kind:'bot' con chatId conocido, p.ej. Tolkien): enviar DIRECTO a ese
+  // chatId — el graph_list_chats NO surface los chats con apps/bots (verificado
+  // 2026-07-06), así que "ubicar el chat 1:1" fallaría. Mismo criterio que el
+  // scan (teams-shared.js teamsBotPrompt).
+  if (contact?.kind === 'bot' && contact?.chatId) {
+    return [
+      `Enviá un mensaje al chat de Microsoft Teams con id EXACTO "${contact.chatId}"`,
+      `— es mi conversación con el BOT/APP "${name}". Es una ESCRITURA autorizada:`,
+      `usá teams_send_message (o el send de Teams) con ESE chatId. NO uses ninguna`,
+      `otra tool. NO envíes a ningún otro chat.`,
+      '',
+      'Texto EXACTO a enviar (ya viene firmado, no lo cambies):',
+      '"""',
+      String(payload.text || ''),
+      '"""',
+      '',
+      'Cuando termines respondé SOLO con ```json {"sent":true} ``` (o {"sent":false,"error":"..."}).',
+    ].join('\n');
+  }
   return [
     `Enviá un mensaje directo (DM) de Microsoft Teams a "${name}"${email} DE PARTE de`,
     `${self?.name || 'mí'}. Es una ESCRITURA autorizada y gobernada: usá graph_* de lectura`,

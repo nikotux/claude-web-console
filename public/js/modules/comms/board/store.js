@@ -15,6 +15,7 @@ const initial = () => ({
   busy: {},              // acciones en vuelo
   showArchived: false,
   analysis: {},          // threadId -> { status, data, error } (análisis IA lazy)
+  composer: {},          // contactId -> texto del composer de envío por Teams
 });
 
 let state = initial();

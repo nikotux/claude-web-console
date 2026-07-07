@@ -39,7 +39,11 @@ async function fetchSummary(fresh = false) {
 }
 
 // ===== Límites del PLAN (ventanas de claude.ai) =====
-async function fetchLimits(fresh = false) {
+// Exportadas: el bloque del pie (modules/stats/plan-limits.js) las reusa para
+// pintar las MISMAS barras de límite con idéntico criterio de color/formato
+// (fuente única — no duplicar). NO consumen tokens: solo consultan el medidor
+// OAuth de uso (GET /api/tokens/limits, con caché de 60 s en el server).
+export async function fetchLimits(fresh = false) {
   const res = await fetch(`/api/tokens/limits${fresh ? '?fresh=1' : ''}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'No se pudieron leer los límites.');
@@ -48,7 +52,7 @@ async function fetchLimits(fresh = false) {
 
 // "resetea en 1 h 40 min (10:00)" — relativo + hora local absoluta (con día
 // si no es hoy, p.ej. las ventanas semanales).
-function fmtReset(iso) {
+export function fmtReset(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   const diff = d - Date.now();
@@ -63,7 +67,7 @@ function fmtReset(iso) {
   return `resetea en ${rel} (${abs})`;
 }
 
-function renderLimits(el, data) {
+export function renderLimits(el, data) {
   const rows = (data.limits || []).map((l) => {
     const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
     const color = pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';

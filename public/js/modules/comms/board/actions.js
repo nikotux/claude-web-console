@@ -147,6 +147,51 @@ export async function addContact() {
   } catch (e) { showError(e.message); }
 }
 
+// Composer: ENVÍA de verdad un DM de Teams al contacto (vía el gateway
+// GW.sendComm → runner de envío, que firma con "— Nicolás (dev team)" y deja
+// el registro en el hilo con appendManual). A diferencia de logManual (que
+// solo ANOTA), esto publica en Teams con tu identidad — por eso confirm duro,
+// y por eso siempre pasa contactId (así el registro al hilo nunca se salta,
+// que era el bug: un envío sin contacto quedaba solo en el outbox invisible).
+export async function sendMessage(contactId) {
+  if (!contactId) return;
+  const s = store.get();
+  if (s.busy.send) return;
+  const c = s.contacts.find((x) => x.id === contactId);
+  const text = (s.composer[contactId] || '').trim();
+  if (!text) return;
+  const ok = await deps.dialog.confirmDialog({
+    title: 'Enviar por Teams',
+    message: `Se ENVÍA de verdad este mensaje a ${c?.name || contactId} por Microsoft Teams (con tu identidad, firmado "— Nicolás (dev team)"). Consume tokens.\n\n${text.slice(0, 500)}`,
+    confirmLabel: 'Enviar',
+  });
+  if (!ok) return;
+  store.mutate((st) => { st.busy.send = true; });
+  try {
+    const started = await jpost('/api/comms/send', { channel: 'teams', action: 'dm', contactId, payload: { text }, actor: 'web' });
+    // Teams es diferido (runner): encuestamos el job hasta que termine.
+    const jobId = started.jobId;
+    if (jobId) {
+      await poll(`send:${jobId}`, {
+        tick: async () => {
+          const st = await jget(`/api/comms/send/${jobId}`).catch(() => null);
+          if (!st) return false;
+          if (st.status === 'done') return true;
+          if (st.status === 'error') { showError(st.error || 'El envío falló.'); return true; }
+          return false;
+        },
+        intervalMs: 2500,
+        timeoutMs: 5 * 60000,
+        onTimeout: () => showError('El envío no confirmó a tiempo (revisá el hilo en un rato).'),
+      });
+    }
+    // Limpiar el composer y refrescar para traer el registro del hilo.
+    store.mutate((st) => { st.composer[contactId] = ''; });
+    await reload();
+  } catch (e) { showError(e.message); }
+  finally { store.mutate((st) => { st.busy.send = false; }); }
+}
+
 export async function logManual(contactId) {
   if (!contactId) return;
   const text = await deps.dialog.promptDialog({
@@ -220,6 +265,10 @@ function buildChatPrompt(t, c) {
   lines.push('Historial de mensajes (más viejo → más nuevo):');
   for (const m of t.messages) lines.push(`- [${m.fromContact ? (c?.name || 'contacto') : 'yo'}] ${String(m.text).slice(0, 700)}`);
   lines.push('');
-  lines.push('Ayudame a preparar la próxima comunicación con esta persona sobre este tema: resumí el estado actual, qué falta o qué está trabado, y proponé una respuesta clara. NO envíes ni publiques nada por tu cuenta — es solo para preparar la comunicación.');
+  lines.push('Ayudame a preparar la próxima comunicación con esta persona sobre este tema: resumí el estado actual, qué falta o qué está trabado, y proponé una respuesta clara. NO envíes ni publiques nada por tu cuenta.');
+  lines.push('');
+  lines.push('IMPORTANTE — si en algún momento SÍ te pido explícitamente que envíes el mensaje (por Teams u otro canal) y lo hacés con mi aprobación, DESPUÉS de enviarlo registrá el envío para que quede en el tablero de Comunicaciones (hoy un envío hecho por fuera del tablero no deja rastro visible). Corré exactamente:');
+  lines.push(`  node /home/nmosquera/claude-web-console/bin/cwc-comms.js record teams dm ${c?.id || t.contactId} -- "<el texto que enviaste>"`);
+  lines.push('(reemplazá el canal/acción si no fue Teams; el <texto> es el mensaje real que mandaste). Eso NO re-envía nada: solo deja el registro en el hilo del contacto.');
   return lines.join('\n');
 }

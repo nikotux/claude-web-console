@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Claude Web Console</title>
   <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
   <link rel="stylesheet" href="/vendor/hljs/theme.css" />
@@ -65,38 +65,30 @@
            Colapsable a un rail angosto (persistido en localStorage). En móvil se
            comporta como overlay (se oculta con .hidden).
            Cada slot [data-module] lo llena su módulo (ver docs/frontend-modules.md). -->
-      <aside id="sidebar">
-        <!-- Cabecera del panel: ☰ + Nueva sesión EN LA MISMA FILA (expandido:
-             el botón del launcher llena el espacio junto al ☰ — antes esa
-             fila quedaba medio vacía y el launcher gastaba una fila propia;
-             pedido del usuario en móvil, aplica igual en desktop).
-             Colapsado (solo desktop): columna ☰ + "+". -->
+      <!-- Panel IZQUIERDO: control y módulos (Tickets & Features · Pendientes ·
+           Comunicaciones) + pie de estado (CPU/RAM/disco · cuenta · sistema).
+           Las Sesiones y "Nueva sesión" viven ahora en la barra DERECHA. -->
+      <aside id="sidebar" class="side-panel">
+        <!-- Cabecera del panel: solo ☰ (contraer/expandir a rail). -->
         <div class="sb-head">
           <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Contraer/expandir panel"></button>
-          <button id="rail-new" class="rail-btn sb-new only-collapsed" data-icon="plus" title="Nueva sesión"></button>
-          <!-- Empezar trabajo: LA acción prominente (solo panel expandido) -->
-          <div class="sidebar-top only-expanded" data-module="launcher"></div>
         </div>
 
-        <!-- Pestañas abiertas (pty | chat): navegación principal. Iconos en el
-             rail colapsado (dot de estado + color de modelo); chips con inicial
-             en el panel expandido. -->
-        <div id="rail-tabs"></div>
-
         <div class="sidebar-scroll only-expanded">
-          <!-- Retomar trabajo: sesiones (siempre visible, sin acordeón) -->
-          <section class="side-sec" data-module="sessions"></section>
-          <!-- Proyecto principal -->
-          <section class="side-sec" data-module="tolkien"></section>
-          <!-- Bugs & Features: hub del ciclo del bug (triage + tablero) -->
-          <section class="side-sec" data-module="bugs"></section>
+          <!-- Tickets & Features (2026-07-07): dashboard One Front Door
+               determinístico (Zoho/GitHub directo vía MCP, sin IA en la
+               lectura). Reemplazó a "Bugs & Features" v1 (archivado en
+               _archived/). Ver plan en ~/pool of documents/. -->
+          <section class="side-sec" data-module="tickets"></section>
+          <!-- Pendientes: tablero PRIVADO de tareas (manual + audio adentro) -->
+          <section class="side-sec" data-module="tasks"></section>
           <section class="side-sec" data-module="comms"></section>
         </div>
 
         <!-- Ver estado: pie fijo compacto (gauges y tokens visibles también
              en el rail colapsado, en versión compacta) -->
         <footer class="sidebar-footer">
-          <div data-module="stats"></div>
+          <div data-module="plan-limits" class="only-expanded"></div>
           <div class="footer-acct">
             <span data-module="usage"></span>
             <span id="acct-user" class="acct-user only-expanded"></span>
@@ -106,13 +98,55 @@
         </footer>
       </aside>
 
-      <!-- Velo de fondo del panel lateral en móvil (donde es overlay): lo
+      <!-- Velo de fondo del panel lateral IZQUIERDO en móvil (overlay): lo
            atenúa y permite cerrarlo con un tap afuera. Invisible en
            desktop (CSS, ver "Móvil" en style.css). -->
       <div id="sidebar-scrim"></div>
 
       <!-- Panel central: terminales -->
       <main id="terminals"></main>
+
+      <!-- Panel DERECHO: Sesiones + "Nueva sesión". Colapsable a rail con su
+           propio ☰; en móvil es un drawer que entra desde la derecha (su
+           scrim va DESPUÉS para el selector hermano `~`). El pie muestra el
+           pulso de Tolkien persistente (leyenda, no acordeón). -->
+      <aside id="sidebar-right" class="side-panel">
+        <!-- Cabecera: ☰ (contraer/expandir) + "Nueva sesión" al lado, ambos
+             con la misma altura/diseño (rail-btn). Colapsado: ☰ + "+". -->
+        <div class="sb-head sb-head--right">
+          <button id="toggle-sidebar-right" class="rail-btn" data-icon="menu" title="Contraer/expandir sesiones"></button>
+          <button id="rail-new" class="rail-btn sb-new only-collapsed" data-icon="plus" title="Nueva sesión"></button>
+          <!-- Empezar trabajo: LA acción prominente (solo panel expandido) -->
+          <div class="sidebar-top only-expanded" data-module="launcher"></div>
+        </div>
+
+        <!-- Pestañas abiertas (pty | chat): navegación principal. Iconos en el
+             rail colapsado; ocultas en expandido (redundante con Sesiones). -->
+        <div id="rail-tabs"></div>
+
+        <div class="sidebar-scroll only-expanded">
+          <!-- Retomar trabajo: sesiones (siempre visible, sin acordeón) -->
+          <section class="side-sec" data-module="sessions"></section>
+        </div>
+
+        <!-- Pie derecho: pulso de Tolkien PERSISTENTE (branch · ↓N por traer ·
+             actualizar) + leyenda CPU/RAM/disco DEBAJO. Ambos siempre visibles,
+             sin colapsar (Tolkien se oculta solo en el rail angosto). -->
+        <footer class="sidebar-footer sidebar-footer--right">
+          <div class="tk-persist only-expanded" data-module="tolkien"></div>
+          <div data-module="stats"></div>
+        </footer>
+      </aside>
+
+      <!-- Velo de fondo del panel DERECHO en móvil (overlay desde la derecha):
+           va DESPUÉS de #sidebar-right para el selector hermano `~`. -->
+      <div id="sidebar-right-scrim"></div>
+
+      <!-- Asas flotantes (solo móvil): abren los drawers. Ubicadas sobre el
+           composer para estorbar menos (pedido del usuario): la IZQUIERDA abre
+           módulos (Tickets/Pendientes/Comunicaciones), la DERECHA Sesiones. -->
+      <button id="sidebar-handle" data-icon="menu" title="Módulos: Tickets · Pendientes · Comunicaciones"></button>
+      <button id="sidebar-right-handle" data-icon="sparkle" title="Sesiones / Nueva sesión"></button>
     </div>
 
     <!-- Barra de teclas auxiliares + dictado (móvil; fija sobre el teclado). -->

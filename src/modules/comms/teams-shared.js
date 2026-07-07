@@ -92,7 +92,65 @@ export function teamsPrompt(contact, self) {
   ].join('\n');
 }
 
+// Prompt de escaneo para un contacto que es un BOT/APP de Teams (kind:'bot',
+// p.ej. Tolkien/TheEye). A diferencia de teamsPrompt (chat 1:1 entre DOS
+// personas), acá el "otro" miembro es una APLICACIÓN, no un usuario: no está
+// en graph_list_users y no tiene email estándar. Por eso se busca el chat por
+// el NOMBRE del bot entre mis chats, y la validación de miembros se relaja
+// (ver parseTeamsResponse con contact.kind==='bot').
+export function teamsBotPrompt(contact, self) {
+  const name = contact.name || contact.id;
+  const meName = self?.name || 'yo';
+  const meEmail = self?.email ? ` (email ${self.email})` : '';
+  // VÍA DIRECTA (preferida): si el contacto ya tiene un chatId conocido del bot,
+  // leerlo directo con graph_read_chat_messages. El graph_list_chats NO surface
+  // los chats con bots/apps (verificado 2026-07-06: solo devuelve 1:1 entre
+  // personas), así que "buscar" el chat falla — leer por id lo saltea.
+  if (contact.chatId) {
+    return [
+      `Leé los mensajes recientes del chat de Microsoft Teams con id EXACTO`,
+      `"${contact.chatId}" — es mi conversación con el BOT/APP "${name}".`,
+      `Es SOLO LECTURA: usá graph_read_chat_messages con ese chatId. No envíes`,
+      `ni modifiques nada. Si querés, confirmá los miembros con graph_chat_members.`,
+      '',
+      'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
+      '```json',
+      `{"found":true,"chatId":"${contact.chatId}","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<~300 chars>"}]}`,
+      '```',
+      `"from":"contact" = lo escribió el bot ${name}; "from":"me" = lo escribí yo (${meName}).`,
+      'Máximo 30 mensajes, del más viejo al más nuevo. Si el chat no existe o no',
+      'se puede leer: {"found":false,"note":"<por qué en 1 línea>"}.',
+    ].join('\n');
+  }
+  // VÍA BÚSQUEDA (fallback, sin chatId): intentar ubicar el chat con el bot.
+  return [
+    `Buscá el chat de Microsoft Teams entre ${meName}${meEmail} y el BOT/APP`,
+    `llamado "${name}" (es una aplicación de Teams, NO una persona — no aparece`,
+    `en graph_list_users). Es SOLO LECTURA: no envíes ni modifiques nada.`,
+    '',
+    'Pasos con las tools graph_* de LECTURA:',
+    `1. Listá mis chats con graph_list_chats para ${meName} (mi cuenta).`,
+    `2. Identificá el chat cuyo interlocutor es la app/bot "${name}" — mirá el`,
+    `   topic/nombre del chat y sus miembros (graph_chat_members): uno soy yo`,
+    `   (${meName}) y el otro es la aplicación "${name}" (un miembro de tipo`,
+    `   application, o cuyo displayName contiene "${name}").`,
+    `3. Si lo encontrás, leé los mensajes recientes con graph_read_chat_messages.`,
+    `4. Si NO existe ningún chat con el bot "${name}", devolvé found:false.`,
+    '',
+    'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
+    '```json',
+    `{"found":true,"chatId":"<id>","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<~300 chars>"}]}`,
+    '```',
+    `"from":"contact" = lo escribió el bot ${name}; "from":"me" = lo escribí yo (${meName}).`,
+    'Máximo 30 mensajes, del más viejo al más nuevo. Si no hay chat con el bot:',
+    '{"found":false,"note":"<por qué en 1 línea>"}.',
+  ].join('\n');
+}
+
 // Parseo defensivo + VALIDACIÓN de que el chat me incluye a MÍ y al contacto.
+// Para contactos BOT (kind:'bot') la validación de miembros se RELAJA: el bot
+// no es un usuario resoluble por email, así que solo se exige que YO esté (si
+// hay lista de miembros) — no se puede exigir "contactIn" por email/nombre.
 export function parseTeamsResponse(out, contact, self) {
   const candidates = [];
   const fences = String(out || '').match(/```(?:json)?\s*([\s\S]*?)```/gi);
@@ -110,16 +168,21 @@ export function parseTeamsResponse(out, contact, self) {
     ? parsed.members.map((m) => ({ name: String(m?.name || '').slice(0, 80), email: String(m?.email || '').slice(0, 120) })).filter((m) => m.name || m.email)
     : [];
   // Guarda de atribución: si hay lista de miembros y YO no estoy, RECHAZAR.
+  // Para BOTS se exige solo que YO esté (el bot no matchea por email/nombre de
+  // persona — su identidad es una app); para personas se exige YO + el contacto.
+  const isBot = contact.kind === 'bot';
   if (members.length) {
     const selfIn = members.some((m) => isSelfPerson(m, self));
-    const contactIn = members.some((m) => isContactPerson(m, contact));
     if (!selfIn) {
       const who = members.map((m) => m.name || m.email).join(', ');
-      return { found: false, note: `El DM no te incluye (participantes: ${who}).`, members, rejected: true };
+      return { found: false, note: `El chat no te incluye (participantes: ${who}).`, members, rejected: true };
     }
-    if (!contactIn) {
-      const who = members.map((m) => m.name || m.email).join(', ');
-      return { found: false, note: `El DM no incluye a ${contact.name} (participantes: ${who}).`, members, rejected: true };
+    if (!isBot) {
+      const contactIn = members.some((m) => isContactPerson(m, contact));
+      if (!contactIn) {
+        const who = members.map((m) => m.name || m.email).join(', ');
+        return { found: false, note: `El DM no incluye a ${contact.name} (participantes: ${who}).`, members, rejected: true };
+      }
     }
   }
 
@@ -140,7 +203,7 @@ export function parseTeamsResponse(out, contact, self) {
     contactId: contact.id,
     source: 'teams',
     project: null,
-    title: `Teams · DM con ${contact.name || contact.id}`,
+    title: isBot ? `Teams · con el bot ${contact.name || contact.id}` : `Teams · DM con ${contact.name || contact.id}`,
     url: null,
     state: null,
     participants: members,     // auditable: con quién es realmente

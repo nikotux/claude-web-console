@@ -13,17 +13,18 @@ html, body { margin: 0; height: 100%; }
 #fm { display: flex; flex-direction: column; height: 100dvh; }
 
 /* ===== Toolbar ===== */
+/* Compactado 2026-07-07 (unidad gráfica con el resto de la consola). */
 .fm-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
-  padding: .5rem .8rem; background: var(--cwc-bg-elevated);
-  border-bottom: 1px solid var(--cwc-border-soft); min-height: 48px;
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+  padding: .35rem .6rem; background: var(--cwc-bg-elevated);
+  border-bottom: 1px solid var(--cwc-border-soft); min-height: 40px;
 }
 .fm-tb-left { display: flex; align-items: center; gap: .5rem; min-width: 0; flex: 1; }
 .fm-tb-right { display: flex; align-items: center; gap: .4rem; }
 .fm-home { background: transparent; border-color: transparent; }
 .fm-home:hover { background: var(--cwc-bg-chip); }
 .fm-viewtoggle { display: flex; background: var(--cwc-bg); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: 2px; gap: 2px; }
-.fm-viewtoggle .btn-ghost { background: transparent; border: 0; min-height: 26px; }
+.fm-viewtoggle .btn-ghost { background: transparent; border: 0; min-height: 24px; }
 .fm-viewtoggle .btn-ghost.active { background: var(--cwc-accent-bg); color: var(--cwc-accent); }
 
 /* Breadcrumbs */
@@ -40,18 +41,18 @@ html, body { margin: 0; height: 100%; }
 /* ===== Cuerpo ===== */
 .fm-body-row { display: flex; flex: 1; min-height: 0; }
 .fm-sidebar {
-  width: 190px; flex: none; background: var(--cwc-bg); border-right: 1px solid var(--cwc-border-soft);
-  padding: .6rem .5rem; overflow: auto; display: flex; flex-direction: column; gap: .1rem;
+  width: 176px; flex: none; background: var(--cwc-bg); border-right: 1px solid var(--cwc-border-soft);
+  padding: .45rem .4rem; overflow: auto; display: flex; flex-direction: column; gap: .1rem;
 }
-.fm-side-title { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em; margin: .5rem .4rem .2rem; }
+.fm-side-title { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .04em; margin: .4rem .35rem .15rem; }
 .fm-place {
   display: flex; align-items: center; gap: .4rem; text-align: left;
   background: none; border: 0; color: var(--cwc-text); cursor: pointer;
-  padding: .35rem .5rem; border-radius: var(--cwc-radius-md); font-size: var(--cwc-fs-md); width: 100%;
+  padding: .3rem .45rem; border-radius: var(--cwc-radius-md); font-size: var(--cwc-fs-sm); width: 100%;
 }
 .fm-place:hover { background: var(--cwc-bg-hover); }
 .fm-place.active { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
-.fm-place .cwc-icon { width: 16px; height: 16px; }
+.fm-place .cwc-icon { width: 15px; height: 15px; }
 .fm-badge { margin-left: auto; background: var(--cwc-border-strong); color: var(--cwc-text); border-radius: var(--cwc-radius-md); padding: 0 .4rem; font-size: var(--cwc-fs-xs); }
 .fm-place.active .fm-badge { background: color-mix(in srgb, var(--cwc-white) 25%, transparent); }
 
@@ -147,14 +148,14 @@ html, body { margin: 0; height: 100%; }
 /* ===== Menú contextual ===== */
 .fm-ctx {
   animation: dlg-card-in .15s ease;
-  position: fixed; z-index: 100; min-width: 160px; padding: 5px;
+  position: fixed; z-index: 100; min-width: 160px; padding: 4px;
   background: var(--cwc-bg-elevated);
   border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
-  box-shadow: var(--cwc-shadow-md); display: flex; flex-direction: column;
+  box-shadow: var(--cwc-shadow-md); display: flex; flex-direction: column; gap: 2px;
 }
 .fm-ctx button {
   background: none; border: 0; color: var(--cwc-text); text-align: left;
-  padding: .35rem .6rem; border-radius: var(--cwc-radius-sm); cursor: pointer; font-size: var(--cwc-fs-sm);
+  padding: .3rem .5rem; border-radius: var(--cwc-radius-sm); cursor: pointer; font-size: var(--cwc-fs-sm);
 }
 .fm-ctx button:hover { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
 .fm-ctx button.danger { color: var(--cwc-danger-strong); }

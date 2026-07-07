@@ -58,6 +58,10 @@ const PATHS = {
   archive: `<rect x="3" y="8" width="18" height="12" rx="1.5"/><path d="M3 8V5.5A1.5 1.5 0 0 1 4.5 4h15A1.5 1.5 0 0 1 21 5.5V8"/><line x1="10" y1="12" x2="14" y2="12"/>`,
   more: `<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>`,
   edit: `<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14.5 7.5l3 3"/>`,
+  // Tareas pendientes (módulo `tasks`): checklist en portapapeles.
+  checklist: `<rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2.4" width="6" height="3.4" rx="1"/><polyline points="8,11 9.4,12.4 12,9.6"/><polyline points="8,16.2 9.4,17.6 12,14.8"/><line x1="14" y1="11" x2="16.5" y2="11"/><line x1="14" y1="16.2" x2="16.5" y2="16.2"/>`,
+  // Extracción de audio (módulo `audio`): micrófono.
+  mic: `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8.5" y1="21" x2="15.5" y2="21"/>`,
   // Fantasma: sesión de terminal SIN Claude adentro (sin modelo).
   ghost: `<path d="M5 11a7 7 0 0 1 14 0v9l-2.3-2-2.4 2-2.3-2-2.3 2-2.4-2L5 20z"/><circle cx="9.5" cy="10.5" r=".9" fill="currentColor" stroke="none"/><circle cx="14.5" cy="10.5" r=".9" fill="currentColor" stroke="none"/>`,
   // Recursos de sistema (mini-gauges del rail colapsado).

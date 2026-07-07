@@ -14,7 +14,7 @@ import { settingSourcesFor } from '../src/core/sdk-settings.js';
 import { runAdaptivePool } from '../src/modules/health/pool.js';
 import { readContacts, writeTeams, readTeams, readSelf } from '../src/modules/comms/shared.js';
 import {
-  graphReadAllowed, teamsPrompt, parseTeamsResponse,
+  graphReadAllowed, teamsPrompt, teamsBotPrompt, parseTeamsResponse,
   writeTeamsLock, clearTeamsLock, isTeamsRunning,
   TEAMS_TIMEOUT_MS, TEAMS_HEARTBEAT_MS,
 } from '../src/modules/comms/teams-shared.js';
@@ -39,7 +39,9 @@ async function fetchOne(contact) {
   let out = '';
   try {
     const q = query({
-      prompt: teamsPrompt(contact, self),
+      // Contacto BOT (kind:'bot', p.ej. Tolkien): prompt que busca el chat con
+      // la APP por nombre; el resto de contactos usa el prompt de DM 1:1.
+      prompt: contact.kind === 'bot' ? teamsBotPrompt(contact, self) : teamsPrompt(contact, self),
       options: {
         cwd: config.projectDir,
         model: 'sonnet',

@@ -16,11 +16,16 @@
    .btn        → primario (acción prominente; una por vista)
    .btn-ghost  → todo lo demás
    Modificadores: .btn--sm (denso) · .btn--danger · .btn--block · .btn--icon */
+/* DISEÑO COMPACTO UNIFICADO (2026-07-07, pedido del usuario: replicar el look
+   fino/compacto del sidebar en TODA la app — modales, menús, gestor, tableros).
+   Los botones base bajan a ~30px con tipografía fina; esto propaga la unidad a
+   cada superficie que use .btn/.btn-ghost. "Máximo compacto" incluye móvil (se
+   quitó el bump táctil de 44px — ver abajo). */
 .btn, .btn-ghost {
-  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
   border-radius: var(--cwc-radius-md); cursor: pointer;
-  font-family: var(--cwc-font-ui); font-size: var(--cwc-fs-md); line-height: 1.1;
-  padding: .55rem .95rem; min-height: 42px;
+  font-family: var(--cwc-font-ui); font-size: var(--cwc-fs-sm); line-height: 1.1;
+  padding: .3rem .6rem; min-height: 30px;
   transition: border-color .15s ease, background .15s ease, color .15s ease, opacity .15s ease;
 }
 .btn {
@@ -36,22 +41,21 @@
 .btn-ghost:hover { border-color: var(--cwc-accent); color: var(--cwc-accent); }
 .btn:disabled, .btn-ghost:disabled { opacity: .5; cursor: default; filter: none; }
 
-.btn--sm { padding: .28rem .55rem; min-height: 30px; font-size: var(--cwc-fs-sm); border-radius: var(--cwc-radius-sm); }
+.btn--sm { padding: .2rem .45rem; min-height: 24px; font-size: var(--cwc-fs-sm); border-radius: var(--cwc-radius-sm); }
 .btn--danger.btn { background: var(--cwc-danger); color: var(--cwc-white); }
 .btn--danger.btn-ghost:hover { border-color: var(--cwc-danger); color: var(--cwc-danger); }
 .btn--block { width: 100%; }
-.btn--icon { padding: .28rem; min-width: 30px; }
-.btn .cwc-icon, .btn-ghost .cwc-icon { width: 16px; height: 16px; }
+.btn--icon { padding: .2rem; min-width: 26px; }
+.btn .cwc-icon, .btn-ghost .cwc-icon { width: 15px; height: 15px; }
 .btn--sm .cwc-icon { width: 14px; height: 14px; }
 
-/* Targets táctiles ≥44px en punteros gruesos (principio móvil-primero).
-   OJO: .btn--sm ya NO pisa el min-height (Fase 2 del rediseño del tablero:
-   el override de 38px anulaba el bump de 44px en toda la app táctil); solo
-   conserva el padding más generoso. */
-@media (pointer: coarse) {
-  .btn, .btn-ghost { min-height: 44px; }
-  .btn--sm { padding: .4rem .6rem; }
-}
+/* Diseño COMPACTO también en móvil (pedido del usuario 2026-07-07 "máximo
+   compacto en todo"): se QUITÓ el bump táctil de 44px de los botones para que
+   se vean igual de finos que en desktop. El teclado auxiliar (.aux-key) y el
+   autocompletado slash conservan su tamaño táctil cómodo — son herramientas de
+   tecleo rápido, no "ventanas/menús" (excepción acordada). Si algún control
+   puntual queda muy chico para el dedo, subirlo localmente, no reponer el bump
+   global. */
 
 /* ===== Diálogos y modales propios (ui/dialog.js) =====
    Reemplazan confirm()/prompt()/alert() nativos en TODA la app. */
@@ -85,37 +89,37 @@
 }
 @keyframes dlg-card-in { from { transform: translateY(6px); opacity: .6; } to { transform: none; opacity: 1; } }
 .dlg-head {
-  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
-  padding: .7rem .9rem .5rem;
+  display: flex; align-items: center; justify-content: space-between; gap: .7rem;
+  padding: .5rem .7rem .35rem;
 }
-.dlg-title { font-size: var(--cwc-fs-lg); font-weight: 600; color: var(--cwc-text); }
-.dlg-body { padding: 0 .9rem .8rem; overflow: auto; min-height: 0; color: var(--cwc-text); font-size: var(--cwc-fs-md); }
-.dlg-msg { margin: 0 0 .4rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; white-space: pre-line; }
+.dlg-title { font-size: var(--cwc-fs-md); font-weight: 600; color: var(--cwc-text); }
+.dlg-body { padding: 0 .7rem .65rem; overflow: auto; min-height: 0; color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
+.dlg-msg { margin: 0 0 .4rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); line-height: 1.45; white-space: pre-line; }
 .dlg-input {
-  width: 100%; padding: .55rem .65rem; margin-top: .3rem;
+  width: 100%; padding: .4rem .55rem; margin-top: .3rem;
   background: var(--cwc-bg-input); color: var(--cwc-text);
   border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
-  font-size: var(--cwc-fs-lg); font-family: var(--cwc-font-ui);
+  font-size: var(--cwc-fs-md); font-family: var(--cwc-font-ui);
 }
 .dlg-input:focus { outline: none; border-color: var(--cwc-accent); }
-.dlg-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
+.dlg-actions { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .7rem; }
 
 /* ===== Popup descartable (menú ⋯, menús anclados) — ver ui/popup.js ===== */
 .cwc-popup-menu {
-  position: fixed; z-index: 210; min-width: 168px; padding: 5px;
+  position: fixed; z-index: 210; min-width: 160px; padding: 4px;
   background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border-strong);
   border-radius: var(--cwc-radius-md); box-shadow: var(--cwc-shadow-md);
   display: flex; flex-direction: column; gap: 2px; animation: dlg-card-in .12s ease;
 }
 .cwc-popup-item {
-  display: flex; align-items: center; gap: .5rem; text-align: left; width: 100%;
+  display: flex; align-items: center; gap: .45rem; text-align: left; width: 100%;
   background: none; border: 0; color: var(--cwc-text); cursor: pointer;
-  padding: .4rem .55rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-md);
+  padding: .3rem .5rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
 }
 .cwc-popup-item:hover { background: var(--cwc-accent); color: var(--cwc-accent-ink); }
 .cwc-popup-item.danger { color: var(--cwc-danger-strong); }
 .cwc-popup-item.danger:hover { background: var(--cwc-danger-strong); color: var(--cwc-text); }
-.cwc-popup-item .cwc-icon { width: 15px; height: 15px; flex: none; }
+.cwc-popup-item .cwc-icon { width: 14px; height: 14px; flex: none; }
 
 /* ===== Editor de texto en modal (textEditorDialog) ===== */
 .dlg-editor-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .5rem; }

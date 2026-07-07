@@ -23,7 +23,7 @@ import { pacman } from '../../ui/pacman.js';
 import { renderDiff } from '../../ui/diff.js';
 
 const PROJECTS_API = '/api/projects';
-const BUGFIX_API = '/api/bugfixes/context';
+const BUGFIX_API = '/api/tickets/context'; // migrado de v1 a Tickets & Features
 
 // Presentación por key de proyecto completo (ícono + descripción corta).
 const PROJECT_META = {

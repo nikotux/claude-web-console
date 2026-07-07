@@ -13,6 +13,30 @@ export function modelName(key, fallbackId = '') {
   return key[0].toUpperCase() + key.slice(1);
 }
 
+// Ícono diferenciador por modelo (2026-07-06, pedido del usuario: AutoTux ya
+// tenía el suyo — 🤖 — y el resto de los modelos quedaban como texto pelado
+// en el chip .sess-model de Sesiones; ahora TODOS tienen uno, mismo criterio
+// visual). Emoji (no ui/icons.js) a propósito: mismo lenguaje que el 🤖 de
+// AutoTux, que también es un emoji suelto en el texto del chip — no un SVG
+// de trazo. Tema poesía/música (nombres reales de los modelos de Anthropic:
+// haiku/sonnet/opus son formas cada vez más complejas). Fuente ÚNICA: si se
+// agrega un modelo nuevo, sumarlo acá — nunca hardcodear el emoji en un
+// módulo de más arriba.
+const MODEL_ICONS = {
+  auto: '🤖',      // AutoTux (router de modelo automático)
+  opusplan: '🧭',  // Opus plan (modo planificación)
+  fable: '📖',
+  opus: '🎼',
+  sonnet: '📜',
+  haiku: '🍃',
+  default: '⚙️',
+  unknown: '❓',
+};
+
+export function modelIcon(key) {
+  return MODEL_ICONS[key] || MODEL_ICONS.unknown;
+}
+
 // ===== AutoTux — router de modelo automático (2026-07-06) =====
 // Fuente ÚNICA de las opciones del menú "Cambiar modelo" de un CHAT (no de
 // una sesión TUI/tmux — esa sigue con su propia lista sin 'auto' en

@@ -113,7 +113,8 @@ function threadHtml(t, state) {
       <div class="cm-msgs">${t.messages.map((m) => msgHtml(m, c)).join('')}</div>
       ${analysisHtml(t, state)}
       <div class="cm-actions">
-        <button class="btn btn--sm" data-act="talk" data-id="${esc(t.id)}">${icon('sparkle', { size: 13 })}<span>Hablar de esto</span></button>
+        <button class="btn btn--sm" data-act="reply" data-id="${esc(t.id)}">${icon('play', { size: 13 })}<span>Responder</span></button>
+        <button class="btn-ghost btn--sm" data-act="talk" data-id="${esc(t.id)}">${icon('sparkle', { size: 13 })}<span>Hablar de esto</span></button>
         <button class="btn-ghost btn--sm" data-act="analyze" data-id="${esc(t.id)}">${icon('search', { size: 13 })}<span>Analizar</span></button>
         ${t.url ? `<a class="btn-ghost btn--sm" href="${esc(t.url)}" target="_blank" rel="noopener">${icon('gitBranch', { size: 13 })}<span>Ver en GitHub</span></a>` : ''}
         <button class="btn-ghost btn--sm" data-act="project" data-id="${esc(t.id)}">${icon('folder', { size: 13 })}<span>Proyecto</span></button>
@@ -166,10 +167,25 @@ function renderBody(state) {
 
   const head = `
     <div class="cm-chead">
-      <div class="cm-chead-info">${esc(c.name)}${c.github ? ` · <span class="cm-gh">@${esc(c.github)}</span>` : ''}</div>
+      <div class="cm-chead-info">${esc(c.name)}${c.github ? ` · <span class="cm-gh">@${esc(c.github)}</span>` : ''}${c.kind === 'bot' ? ' <span class="cm-botbadge" title="Bot de Teams (no una persona)">🤖 bot</span>' : ''}</div>
       <div class="cm-chead-act">
         <button class="btn-ghost btn--sm" data-act="log">${icon('edit', { size: 13 })}<span>Registrar</span></button>
         <button class="btn-ghost btn--sm${state.showArchived ? ' on' : ''}" data-act="togglearch">${icon('archive', { size: 13 })}<span>${state.showArchived ? 'Ver activos' : 'Archivados'}</span></button>
+      </div>
+    </div>`;
+
+  // Composer: ENVÍA un DM de Teams REAL a este contacto (queda registrado en
+  // el hilo — ver A.sendMessage). El value sale del store para sobrevivir a un
+  // re-render (el input escribe al store en cada tecla, sin emit). El botón se
+  // deshabilita mientras hay un envío en vuelo.
+  const draft = state.composer[c.id] || '';
+  const sending = !!state.busy.send;
+  const composer = `
+    <div class="cm-composer">
+      <textarea class="cm-composer-input" rows="2" placeholder="Escribir un mensaje a ${esc(c.name)} por Teams…" ${sending ? 'disabled' : ''}>${esc(draft)}</textarea>
+      <div class="cm-composer-bar">
+        <span class="cm-composer-hint">Envía por Teams con tu identidad · firma automática “— Nicolás (dev team)”</span>
+        <button class="btn btn--sm" data-act="send" ${sending || !draft.trim() ? 'disabled' : ''}>${icon('play', { size: 13 })}<span>${sending ? 'Enviando…' : 'Enviar'}</span></button>
       </div>
     </div>`;
 
@@ -177,5 +193,5 @@ function renderBody(state) {
     ? '<div class="cm-empty">Sin comunicaciones archivadas.</div>'
     : '<div class="cm-empty">Sin comunicaciones todavía. Escaneá GitHub (↻) o registrá una a mano.</div>';
   const nothing = !chatbotHtml && rest.length === 0;
-  refs.body.innerHTML = head + chatbotHtml + (rest.length ? groupsHtml : '') + (nothing ? empty : '');
+  refs.body.innerHTML = head + composer + chatbotHtml + (rest.length ? groupsHtml : '') + (nothing ? empty : '');
 }

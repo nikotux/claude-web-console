@@ -14,14 +14,15 @@ import admin from '../modules/admin/index.js';
 import tolkien from '../modules/tolkien/index.js';
 import backup from '../modules/backup/index.js';
 import chat from '../modules/chat/index.js';
-import bugs from '../modules/bugs/index.js';
 import health from '../modules/health/index.js';
-import bugfixes from '../modules/bugfixes/index.js';
+import tickets from '../modules/tickets/index.js';
 import projects from '../modules/projects/index.js';
 import interfono from '../modules/interfono/index.js';
 import comms from '../modules/comms/index.js';
+import tasks from '../modules/tasks/index.js';
+import audio from '../modules/audio/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, bugs, health, bugfixes, projects, interfono, comms];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, comms, tasks, audio];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {
