@@ -35,6 +35,7 @@ export async function reload() {
       scannedAt: idx.scannedAt || null,
       running: !!idx.running,
       teamsRunning: !!idx.teamsRunning,
+      chatbotRunning: !!idx.chatbotRunning,
       loadError: false,
     };
     const cur = store.get().tab;
@@ -99,6 +100,39 @@ export async function scanTeams() {
     });
   } catch (e) { showError(e.message); }
   finally { store.mutate((s) => { s.busy.scanTeams = false; s.teamsRunning = false; }); }
+}
+
+// Deriva la sección "🤖 Chatbot" de lo que ya escaneamos del bot de Teams:
+// (1) lee los mensajes relayados del bot (Graph, read-only) y (2) interpreta con
+// IA quién es la persona REAL detrás de cada uno, atribuyéndolo a un contacto.
+// CONSUME TOKENS (Graph read + interpretación). No solo Chris: cualquier contacto.
+export async function scanChatbot() {
+  if (store.get().busy.scanChatbot) return;
+  const ok = await deps.dialog.confirmDialog({
+    title: 'Actualizar chatbot',
+    message: 'Lee los mensajes que el bot Tolkien (TheEye) te relayó en Teams e interpreta con IA quién es la persona real detrás de cada uno (Chris u otros contactos), alimentando la sección 🤖 Chatbot.\nCONSUME TOKENS y puede tardar 1-3 min. Es SOLO LECTURA: no envía ni modifica nada. Suma sin pisar lo anterior.',
+    confirmLabel: 'Actualizar chatbot',
+  });
+  if (!ok) return;
+  store.mutate((s) => { s.busy.scanChatbot = true; s.chatbotRunning = true; });
+  try {
+    await jpost('/api/comms/chatbot-refresh');
+    await poll('chatbot-scan', {
+      tick: async () => {
+        const st = await jget('/api/comms/index').catch(() => null);
+        if (!st) return false;
+        if (!st.chatbotRunning) {
+          store.set({ threads: st.threads || [], contacts: st.contacts || [], scannedAt: st.scannedAt || null, chatbotRunning: false });
+          return true;
+        }
+        store.set({ threads: st.threads || [], chatbotRunning: true });
+        return false;
+      },
+      intervalMs: 3000,
+      timeoutMs: 6 * 60000,
+    });
+  } catch (e) { showError(e.message); }
+  finally { store.mutate((s) => { s.busy.scanChatbot = false; s.chatbotRunning = false; }); }
 }
 
 export function toggleExpand(id) {

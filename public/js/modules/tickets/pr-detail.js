@@ -4,6 +4,7 @@
 // Consume GET /api/tickets/pr/:number. 2 acciones: trabajar en un chat, abrir en GitHub.
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { icon } from '../../ui/icons.js';
+import { metaSideHtml, wireMetaPanel, metaPromptBlocks, fetchWorkflowContexts, workflowContextBlocks } from './meta-panel.js';
 
 const TOLKIEN_CWD = 'tolkien';
 
@@ -42,7 +43,7 @@ function padStatusClass(s) {
 // Contexto para el chat, generado desde los MISMOS datos que renderiza la
 // tarjeta (resumen + body + checks + conversaciones + archivos). Lo que se ve,
 // se exporta; auto-extensible (pedido de Niko).
-function buildPrContext(pr, conv, checks, files) {
+function buildPrContext(pr, conv, checks, files, contexts) {
   const lines = [`Revisemos el PR #${pr.number} de Tolkien (Mordor-Staffing/tolkien) — ${pr.title || ''}`, ''];
   lines.push('== Resumen ==');
   lines.push(`Rama: ${pr.headRefName || '?'} → ${pr.baseRefName || 'main'}`);
@@ -62,7 +63,14 @@ function buildPrContext(pr, conv, checks, files) {
   if (checks.length) { lines.push('== Checks (CI) =='); for (const k of checks) lines.push(`- ${k.name}: ${String(k.conclusion || k.status || '').toLowerCase()}`); lines.push(''); }
   if (conv.length) { lines.push('== Conversaciones =='); for (const m of conv) lines.push(`- ${m.who}${m.state ? ` [${m.state}]` : ''} (${fmtDate(m.when)}): ${String(m.body || '').slice(0, 600)}`); lines.push(''); }
   if (files.length) { lines.push('== Archivos cambiados =='); for (const fl of files.slice(0, 50)) lines.push(`- ${fl.path} (+${fl.additions ?? 0}/-${fl.deletions ?? 0})`); lines.push(''); }
+  // Contexto adicional (charla interpretada) + Histórico del trabajo de sesiones
+  // previas sobre este PR (pedido de Niko: continuar con todo el contexto).
+  lines.push(...metaPromptBlocks(pr.meta));
   lines.push('Mirá el diff, los comentarios de review y el estado de CI; decime qué falta o qué hay que ajustar.');
+  // Contextos de trabajo editables (Sistema → Proyectos → "Tickets & Features"):
+  // CÓMO se trabaja + CÓMO se redacta el PR (house style). Al final para que
+  // gobiernen el resto del prompt.
+  lines.push(...workflowContextBlocks(contexts));
   return lines.join('\n');
 }
 
@@ -175,8 +183,11 @@ export function openPrDetail(prLite, deps = {}) {
           <div class="bv2-sec-h">Pad · ${(pr.padItems || []).length}${pr.padStale ? ' · ⚠️' : ''}</div>
           <div class="bv2-pad-list">${padHtml}</div>
           <div class="bv2-note">${icon('help', { size: 11 })} Pad ${pr.padFetchedAt ? `act. ${fmtDate(pr.padFetchedAt)}` : '(sin traer)'} · token OAuth (~1h). <b>Pendiente:</b> refresh propio.</div>
+          ${metaSideHtml(pr.meta)}
         </aside>
       </div>`;
+    // 2ª columna: Contexto adicional + Histórico del trabajo (panel compartido).
+    wireMetaPanel({ box, key: `pr:${pr.number}`, itemTitle: pr.title || '', itemDesc: String(pr.body || '').slice(0, 2000), onChanged: reload });
 
     box.querySelector('[data-act="claim"]')?.addEventListener('click', () => postClaim('claim'));
     box.querySelector('[data-act="release"]')?.addEventListener('click', () => postClaim('release'));
@@ -193,11 +204,15 @@ export function openPrDetail(prLite, deps = {}) {
     box.querySelector('[data-act="chat"]')?.addEventListener('click', async () => {
       if (lockedByOther) return; // no se trabaja lo de otro (hay que robar primero)
       if (!mine) await apiClaim('claim'); // auto-tomar al empezar a trabajarlo
+      const contexts = await fetchWorkflowContexts(); // work + pr editables (Proyectos)
       await deps.openChat?.({
         cwd: deps.projectRel ? deps.projectRel() : TOLKIEN_CWD,
         mode: 'default',
-        prompt: buildPrContext(pr, conv, checks, files), // mismos datos que la tarjeta
+        prompt: buildPrContext(pr, conv, checks, files, contexts), // datos de la tarjeta + contextos de trabajo
         title: `PR #${pr.number} — review`.slice(0, 60),
+        // clave 'pr:<n>' → al cerrar el chat se guarda el histórico del trabajo
+        // bajo ESTE PR (mismo prefijo que los claims/meta de PR).
+        ticket: { number: `pr:${pr.number}`, url: pr.url || null },
       });
       modal.close();
     });

@@ -9,6 +9,7 @@
 // de Tolkien (requiere ticket/TASK + OK de Chris). Ver plan en pool of documents.
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { icon } from '../../ui/icons.js';
+import { metaSideHtml, wireMetaPanel, metaPromptBlocks, fetchWorkflowContexts, workflowContextBlocks } from './meta-panel.js';
 
 const LANE_LABEL = {
   bug: '🐞 bug', feature: '💡 feature', hardware: '🖥 hardware', access: '🔑 access',
@@ -40,7 +41,7 @@ function stripHtml(s) {
 // tarjeta (`sections` + descripción). Regla: lo que se ve, se exporta. Si se
 // agrega un campo a `sections`, aparece en la tarjeta Y en el contexto — sin
 // tener que acordarse de tocar dos lados.
-function buildContext(t, sections, desc) {
+function buildContext(t, sections, desc, meta, contexts) {
   const lines = [`Trabajemos el ticket de Zoho Desk #${t.ticketNumber} — ${t.subject || ''}`, ''];
   for (const [title, fields] of sections) {
     const present = fields.filter(([, v]) => v != null && v !== '' && v !== '—');
@@ -50,13 +51,20 @@ function buildContext(t, sections, desc) {
     lines.push('');
   }
   if (desc) lines.push('== Descripción ==', stripHtml(desc), '');
+  // Contexto adicional (charla interpretada) + Histórico del trabajo de sesiones
+  // previas — para continuar con TODO el contexto acumulado (pedido de Niko).
+  lines.push(...metaPromptBlocks(meta));
   if (t.webUrl) lines.push(`Ticket: ${t.webUrl}`, '');
   lines.push('Entendé el pedido y proponé un plan antes de tocar nada.');
+  // Contextos de trabajo editables (Sistema → Proyectos → "Tickets & Features"):
+  // CÓMO se trabaja un ticket (Pensamiento Profundo, triage, gate de push) + CÓMO
+  // se redacta el PR. Van AL FINAL para que gobiernen el resto del prompt.
+  lines.push(...workflowContextBlocks(contexts));
   return lines.join('\n');
 }
 
 export function openTicketDetail(t, deps = {}) {
-  const modal = openModal({ title: `#${t.ticketNumber} · ${(t.subject || '').slice(0, 44)}`, width: 'min(720px, 94vw)' });
+  const modal = openModal({ title: `#${t.ticketNumber} · ${(t.subject || '').slice(0, 44)}`, width: 'min(980px, 95vw)' });
   const c = modal.body;
   c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${icon('clock', { size: 12 })} cargando detalle del ticket…</div></div>`;
   const box = c.querySelector('.bv2-detail');
@@ -125,23 +133,30 @@ export function openTicketDetail(t, deps = {}) {
 
     box.innerHTML = `
       ${lockBanner}
-      <div class="bv2-detail-meta">
-        <span class="bb-chip">${esc(LANE_LABEL[t.lane] || t.lane)}</span>
-        <span class="bb-chip">${esc(f.status || t.status || '')}</span>
-        ${t.waitingOn ? `<span class="bb-chip bb-chip--info">espera: ${esc(WAIT_LABEL[t.waitingOn] || t.waitingOn)}</span>` : ''}
-        ${f.priority_norm ? `<span class="bb-chip">${esc(f.priority_norm)}</span>` : ''}
-        ${(f.aging?.days ?? t.agingDays) != null ? `<span class="bb-chip ${t.overdue ? 'bb-chip--danger' : 'bb-chip--warn'}">${f.aging?.days ?? t.agingDays}d sin update</span>` : ''}
-      </div>
-      ${sectionsHtml}
-      <div class="bv2-sec-h">Descripción</div>
-      <div class="bv2-detail-desc">${desc || '<span class="bf-sub">(sin descripción)</span>'}</div>
-      <div class="bv2-note">${icon('help', { size: 11 })} Las conversaciones e historial de actividad se ven en Zoho Desk (el MCP aún no los expone — pendiente).</div>
-      <div class="bv2-detail-acts">
-        ${claimActs}
-        <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ' disabled title="En uso por otro usuario"' : ''}>${icon('play', { size: 13 })}<span>Continuar en el chat</span></button>
-        ${isDev ? `<button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>Verificar en GitHub</span></button>` : ''}
-        <button class="btn-ghost btn--sm" data-act="zoho">${icon('upload', { size: 13 })}<span>Conversaciones en Zoho Desk</span></button>
+      <div class="bv2-pr-cols">
+        <div class="bv2-pr-main">
+          <div class="bv2-detail-meta">
+            <span class="bb-chip">${esc(LANE_LABEL[t.lane] || t.lane)}</span>
+            <span class="bb-chip">${esc(f.status || t.status || '')}</span>
+            ${t.waitingOn ? `<span class="bb-chip bb-chip--info">espera: ${esc(WAIT_LABEL[t.waitingOn] || t.waitingOn)}</span>` : ''}
+            ${f.priority_norm ? `<span class="bb-chip">${esc(f.priority_norm)}</span>` : ''}
+            ${(f.aging?.days ?? t.agingDays) != null ? `<span class="bb-chip ${t.overdue ? 'bb-chip--danger' : 'bb-chip--warn'}">${f.aging?.days ?? t.agingDays}d sin update</span>` : ''}
+          </div>
+          ${sectionsHtml}
+          <div class="bv2-sec-h">Descripción</div>
+          <div class="bv2-detail-desc">${desc || '<span class="bf-sub">(sin descripción)</span>'}</div>
+          <div class="bv2-note">${icon('help', { size: 11 })} Las conversaciones e historial de actividad se ven en Zoho Desk (el MCP aún no los expone — pendiente).</div>
+          <div class="bv2-detail-acts">
+            ${claimActs}
+            <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ' disabled title="En uso por otro usuario"' : ''}>${icon('play', { size: 13 })}<span>Continuar en el chat</span></button>
+            ${isDev ? `<button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>Verificar en GitHub</span></button>` : ''}
+            <button class="btn-ghost btn--sm" data-act="zoho">${icon('upload', { size: 13 })}<span>Conversaciones en Zoho Desk</span></button>
+          </div>
+        </div>
+        <aside class="bv2-pr-side">${metaSideHtml(f.meta)}</aside>
       </div>`;
+    // 2ª columna: Contexto adicional + Histórico del trabajo (panel compartido).
+    wireMetaPanel({ box, key: t.ticketNumber, itemTitle: t.subject || '', itemDesc: stripHtml(desc || ''), onChanged: reload });
 
     // POST a /claim o /release. Devuelve el JSON; no re-renderiza (lo hace el caller).
     async function apiClaim(action, force) {
@@ -169,10 +184,11 @@ export function openTicketDetail(t, deps = {}) {
     box.querySelector('[data-act="chat"]')?.addEventListener('click', async () => {
       if (lockedByOther) return; // no se trabaja lo de otro (hay que robar primero)
       if (!mine) await apiClaim('claim'); // auto-tomar al empezar a trabajarlo (si estaba libre)
+      const contexts = await fetchWorkflowContexts(); // work + pr editables (Proyectos)
       await deps.openChat?.({
         cwd: deps.projectRel ? deps.projectRel() : 'tolkien',
         mode: 'plan',
-        prompt: buildContext(t, sections, desc), // mismo `sections` que la tarjeta → todo se exporta
+        prompt: buildContext(t, sections, desc, f.meta, contexts), // sections + meta + contextos de trabajo
         title: `TKT #${t.ticketNumber} — ${(t.subject || '').slice(0, 40)}`.slice(0, 60),
         ticket: { number: t.ticketNumber, url: t.webUrl || null },
       });

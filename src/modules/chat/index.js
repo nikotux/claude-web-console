@@ -58,6 +58,7 @@ import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
+import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { decideModelForTurn, applyHysteresis, reactiveEscalation, logDecision, MODEL_LEVELS } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
@@ -1048,6 +1049,26 @@ class Chat {
     // scan de la pestaña Salud lo recupera/completa.
     // (El registro de bugfix al cerrar un chat de ticket vivía en v1, ahora
     // archivado — ver import arriba.)
+    //
+    // HISTÓRICO DEL TRABAJO (2026-07-07, módulo tickets): si el chat trabajó un
+    // ticket/PR (this.ticket.number: '123' o 'pr:<n>'), al cerrarlo guardamos un
+    // resumen DETERMINÍSTICO de la sesión (archivos tocados + texto de cierre del
+    // asistente, 0 tokens) en la metadata del ítem (meta-store) para que la
+    // PRÓXIMA sesión "Continuar en el chat" traiga todo el historial y se pueda
+    // seguir con contexto. DIFERIDO 2s por la misma razón que el resumen v1 (el
+    // SDK tarda en flushear el transcript). Best-effort: no bloquea el cierre.
+    if (this.ticket?.number && this.sessionId && !this._historicoDone) {
+      this._historicoDone = true;
+      const key = this.ticket.number;
+      const cwd = this.cwd;
+      const sid = this.sessionId;
+      setTimeout(() => {
+        try {
+          const work = extractSessionWork(cwd, sid);
+          if (work) appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files });
+        } catch (err) { console.error('[chat] no pude guardar histórico del ticket:', err?.message); }
+      }, 2000).unref();
+    }
     // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);

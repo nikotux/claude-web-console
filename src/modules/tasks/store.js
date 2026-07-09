@@ -77,6 +77,41 @@ function validPlanId(plans, id) {
   return plans.some((p) => p.id === s) ? s : null;
 }
 
+// ---- Campos "estilo Pad" (2026-07-07): owner/estimate/fecha + relaciones ----
+const normDate = (d) => {
+  const s = clampStr(d, 10).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+};
+const REL_ID_RE = /^(T\d+|PLAN-\d+)$/;
+// ids que existen (tareas + planes) para validar relaciones "blocks".
+function allIdsOf(db) {
+  const s = new Set();
+  for (const t of db.tasks) s.add(t.id);
+  for (const p of db.plans) s.add(p.id);
+  return s;
+}
+// Relación "bloquea": ids válidos, existentes, sin el propio, deduplicados.
+function normBlocks(ids, allIds, selfId) {
+  if (!Array.isArray(ids)) return [];
+  const set = new Set();
+  for (const x of ids) {
+    const s = clampStr(x, 20).trim();
+    if (REL_ID_RE.test(s) && s !== selfId && allIds.has(s)) set.add(s);
+  }
+  return [...set].slice(0, 30);
+}
+
+// ---- Comentarios por ítem (append + borrar; sin editar, a pedido) ----
+const MAX_COMMENTS = 200;
+let commentCounter = 0;
+function newComment(text) {
+  commentCounter += 1;
+  return { id: `C${Date.now()}-${commentCounter}`, ts: Date.now(), text: clampStr(text, 4000) };
+}
+function findItem(db, kind, id) {
+  return kind === 'plan' ? db.plans.find((x) => x.id === id) : db.tasks.find((x) => x.id === id);
+}
+
 // ===== LOG DE ACTIVIDAD (append-only con poda; archivo aparte) =====
 function loadActivity() {
   try {
@@ -124,11 +159,17 @@ export function createPlan(input = {}) {
   const db = load();
   db.planSeq += 1;
   const now = Date.now();
+  const id = `PLAN-${db.planSeq}`;
   const plan = {
-    id: `PLAN-${db.planSeq}`,
+    id,
     title: clampStr(input.title, 200).trim() || 'Plan sin título',
     description: clampStr(input.description, 4000),
     status: normPlanStatus(input.status),
+    owner: clampStr(input.owner, 120),
+    phase: clampStr(input.phase, 20),
+    targetDate: normDate(input.targetDate),
+    comments: [],
+    blocks: normBlocks(input.blocks, allIdsOf(db), id),
     createdAt: now,
     updatedAt: now,
   };
@@ -144,6 +185,10 @@ export function updatePlan(id, patch = {}) {
   if (!p) { const e = new Error('Plan inexistente.'); e.notFound = true; throw e; }
   if (patch.title != null) p.title = clampStr(patch.title, 200).trim() || p.title;
   if (patch.description != null) p.description = clampStr(patch.description, 4000);
+  if (patch.owner != null) p.owner = clampStr(patch.owner, 120);
+  if (patch.phase != null) p.phase = clampStr(patch.phase, 20);
+  if (patch.targetDate != null) p.targetDate = normDate(patch.targetDate);
+  if (patch.blocks != null) p.blocks = normBlocks(patch.blocks, allIdsOf(db), p.id);
   let statusChanged = null;
   if (patch.status != null) {
     const next = normPlanStatus(patch.status);
@@ -189,8 +234,9 @@ export function createTask(input = {}) {
   db.seq += 1;
   const now = Date.now();
   const status = normStatus(input.status);
+  const id = `T${db.seq}`;
   const task = {
-    id: `T${db.seq}`,
+    id,
     title: clampStr(input.title, 200).trim() || 'Sin título',
     description: clampStr(input.description, 4000),
     type: normType(input.type),
@@ -198,6 +244,11 @@ export function createTask(input = {}) {
     priority: normPriority(input.priority),
     tags: normTags(input.tags),
     planId: validPlanId(db.plans, input.planId),
+    owner: clampStr(input.owner, 120),
+    estimate: clampStr(input.estimate, 40),
+    dueDate: normDate(input.dueDate),
+    comments: [],
+    blocks: normBlocks(input.blocks, allIdsOf(db), id),
     source: input.source === 'audio' ? 'audio' : 'manual',
     sourceRef: input.sourceRef ? clampStr(input.sourceRef, 64) : null,
     createdAt: now,
@@ -220,6 +271,10 @@ export function updateTask(id, patch = {}) {
   if (patch.type != null) t.type = normType(patch.type);
   if (patch.tags != null) t.tags = normTags(patch.tags);
   if (patch.planId !== undefined) t.planId = validPlanId(db.plans, patch.planId);
+  if (patch.owner != null) t.owner = clampStr(patch.owner, 120);
+  if (patch.estimate != null) t.estimate = clampStr(patch.estimate, 40);
+  if (patch.dueDate != null) t.dueDate = normDate(patch.dueDate);
+  if (patch.blocks != null) t.blocks = normBlocks(patch.blocks, allIdsOf(db), t.id);
   let statusChanged = null;
   if (patch.status != null) {
     const next = normStatus(patch.status);
@@ -244,6 +299,46 @@ export function deleteTask(id) {
   save(db);
   appendActivity({ kind: 'deleted', entity: 'task', refId: removed.id, title: removed.title });
   return removed;
+}
+
+// ===== COMENTARIOS + TIMELINE por ítem (tarea o plan) =====
+// kind = 'task' | 'plan'. Agregar un comentario también deja un evento en el log.
+export function addComment(kind, id, text) {
+  const clean = clampStr(text, 4000).trim();
+  if (!clean) { const e = new Error('El comentario está vacío.'); e.bad = true; throw e; }
+  const db = load();
+  const it = findItem(db, kind, id);
+  if (!it) { const e = new Error('Ítem inexistente.'); e.notFound = true; throw e; }
+  if (!Array.isArray(it.comments)) it.comments = [];
+  const c = newComment(clean);
+  it.comments.push(c);
+  it.comments = it.comments.slice(-MAX_COMMENTS);
+  it.updatedAt = Date.now();
+  save(db);
+  appendActivity({ kind: 'comment', entity: kind, refId: id, title: it.title, detail: clean.slice(0, 80) });
+  return c;
+}
+export function deleteComment(kind, id, cid) {
+  const db = load();
+  const it = findItem(db, kind, id);
+  if (!it) { const e = new Error('Ítem inexistente.'); e.notFound = true; throw e; }
+  it.comments = (it.comments || []).filter((c) => c.id !== cid);
+  save(db);
+  return true;
+}
+// Timeline del ítem: sus comentarios + los eventos del log que lo referencian
+// (excluye los eventos 'comment', que ya vienen del array de comentarios), desc.
+export function timelineFor(kind, id) {
+  const db = load();
+  const it = findItem(db, kind, id);
+  if (!it) return { events: [] };
+  const events = [];
+  for (const c of it.comments || []) events.push({ type: 'comment', ts: c.ts, cid: c.id, text: c.text });
+  for (const ev of loadActivity()) {
+    if (ev.refId === id && ev.kind !== 'comment') events.push({ type: 'event', ts: ev.ts, kind: ev.kind, detail: ev.detail || null });
+  }
+  events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return { events: events.slice(0, 100) };
 }
 
 // Alta EN LOTE desde una propuesta del módulo audio (el usuario ya aprobó cada

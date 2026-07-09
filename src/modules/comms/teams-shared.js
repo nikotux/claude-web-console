@@ -82,12 +82,12 @@ export function teamsPrompt(contact, self) {
     '',
     'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
     '```json',
-    '{"found":true,"chatId":"<id>","members":[{"name":"<displayName>","email":"<email>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<~300 chars>"}]}',
+    '{"found":true,"chatId":"<id>","members":[{"name":"<displayName>","email":"<email>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<texto COMPLETO del mensaje, SIN recortar>"}]}',
     '```',
     `"members" son los participantes REALES del chat (deben ser ${meName} y ${name}).`,
     `"from":"contact" = lo escribió ${name}; "from":"me" = lo escribí yo (${meName}).`,
     `"sender" = el displayName REAL de quien mandó ese mensaje.`,
-    'Máximo 20 mensajes, del más viejo al más nuevo. Si no hay ese 1:1 conmigo:',
+    'Máximo 20 mensajes, del más viejo al más nuevo. Transcribí el texto ENTERO de cada mensaje (no lo resumas ni recortes).Si no hay ese 1:1 conmigo:',
     '{"found":false,"note":"<por qué en 1 línea>"}.',
   ].join('\n');
 }
@@ -115,10 +115,10 @@ export function teamsBotPrompt(contact, self) {
       '',
       'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
       '```json',
-      `{"found":true,"chatId":"${contact.chatId}","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<~300 chars>"}]}`,
+      `{"found":true,"chatId":"${contact.chatId}","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<texto COMPLETO del mensaje, SIN recortar>"}]}`,
       '```',
       `"from":"contact" = lo escribió el bot ${name}; "from":"me" = lo escribí yo (${meName}).`,
-      'Máximo 30 mensajes, del más viejo al más nuevo. Si el chat no existe o no',
+      'Máximo 30 mensajes, del más viejo al más nuevo. Transcribí el texto ENTERO de cada mensaje (no lo resumas ni recortes).Si el chat no existe o no',
       'se puede leer: {"found":false,"note":"<por qué en 1 línea>"}.',
     ].join('\n');
   }
@@ -139,10 +139,10 @@ export function teamsBotPrompt(contact, self) {
     '',
     'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
     '```json',
-    `{"found":true,"chatId":"<id>","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<~300 chars>"}]}`,
+    `{"found":true,"chatId":"<id>","members":[{"name":"<displayName>","email":"<email o vacío>"}],"messages":[{"from":"contact"|"me","sender":"<displayName real>","at":"<fecha ISO>","text":"<texto COMPLETO del mensaje, SIN recortar>"}]}`,
     '```',
     `"from":"contact" = lo escribió el bot ${name}; "from":"me" = lo escribí yo (${meName}).`,
-    'Máximo 30 mensajes, del más viejo al más nuevo. Si no hay chat con el bot:',
+    'Máximo 30 mensajes, del más viejo al más nuevo. Transcribí el texto ENTERO de cada mensaje (no lo resumas ni recortes).Si no hay chat con el bot:',
     '{"found":false,"note":"<por qué en 1 línea>"}.',
   ].join('\n');
 }
@@ -191,7 +191,9 @@ export function parseTeamsResponse(out, contact, self) {
     author: String(m.sender || (m.from === 'contact' ? (contact.name || 'contacto') : (self?.name || 'Yo'))).slice(0, 80),
     login: '',
     ts: ts(m.at),
-    text: String(m.text || '').slice(0, 1200),
+    // Cap alto: en Comunicaciones se quiere el mensaje COMPLETO (el prompt ya
+    // pide transcribir entero). 8000 chars es red de seguridad, no recorte de UX.
+    text: String(m.text || '').slice(0, 8000),
     kind: 'teams',
     url: null,
     fromContact: m.from === 'contact',

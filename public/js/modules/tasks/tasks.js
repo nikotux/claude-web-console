@@ -11,6 +11,8 @@
 // (admin, consume tokens) abre openAudioPanel; al crear tareas desde una
 // transcripción, audio dispara `tasks-changed` y este módulo se refresca.
 import { openAudioPanel, mountReports } from '../audio/audio.js';
+import { pacman } from '../../ui/pacman.js';
+import { renderMarkdown } from '../../ui/markdown.js';
 const STATUS = [
   { key: 'pendiente', label: 'Pendiente', emoji: '⚪' },
   { key: 'en-progreso', label: 'En progreso', emoji: '🔵' },
@@ -50,6 +52,12 @@ function fmtDate(ms) {
   else if (s >= 3600) ago = `hace ${Math.floor(s / 3600)} h`;
   else if (s >= 60) ago = `hace ${Math.floor(s / 60)} min`;
   return `${day} · ${ago}`;
+}
+// Fecha objetivo/vencimiento (guardada como YYYY-MM-DD) → "13 may 2026".
+function fmtDay(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  const [y, mo, dd] = iso.split('-').map(Number);
+  return new Date(y, mo - 1, dd).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 export default {
@@ -108,15 +116,15 @@ export default {
         let settled = false;
         const finish = (v) => { if (settled) return; settled = true; resolve(v); };
         const isEdit = !!existing;
-        const t = existing || { title: '', description: '', type: 'task', priority: 'media', status: 'pendiente', tags: [], planId: null };
+        const t = existing || { title: '', description: '', type: 'task', priority: 'media', status: 'pendiente', tags: [], planId: null, owner: '', estimate: '', dueDate: '' };
         const m = dialog.openModal({ title: isEdit ? `Editar ${t.id}` : 'Nueva tarea', width: '520px', onClose: () => finish(null) });
         const planOpts = `<option value="">— sin plan —</option>${plans.map((p) => `<option value="${p.id}"${p.id === t.planId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}`;
         m.body.innerHTML = `
           <div class="task-form">
             <label class="task-fld"><span>Título</span>
               <input type="text" data-f="title" maxlength="200" placeholder="Qué hay que hacer" value="${esc(t.title)}" /></label>
-            <label class="task-fld"><span>Detalle</span>
-              <textarea data-f="description" rows="4" maxlength="4000" placeholder="Contexto, por qué, notas…">${esc(t.description)}</textarea></label>
+            <label class="task-fld"><span>Detalle (Markdown)</span>
+              <textarea data-f="description" rows="4" maxlength="4000" placeholder="Contexto, por qué, notas… (soporta Markdown)">${esc(t.description)}</textarea></label>
             <div class="task-form-row">
               <label class="task-fld"><span>Tipo</span>
                 <select data-f="type">${TYPE.map((x) => `<option value="${x.key}"${x.key === (t.type || 'task') ? ' selected' : ''}>${x.emoji} ${x.label}</option>`).join('')}</select></label>
@@ -124,6 +132,14 @@ export default {
                 <select data-f="priority">${PRIO.map((p) => `<option value="${p.key}"${p.key === t.priority ? ' selected' : ''}>${p.emoji} ${p.label}</option>`).join('')}</select></label>
               <label class="task-fld"><span>Estado</span>
                 <select data-f="status">${STATUS.map((s) => `<option value="${s.key}"${s.key === t.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
+            </div>
+            <div class="task-form-row">
+              <label class="task-fld"><span>Owner</span>
+                <input type="text" data-f="owner" maxlength="120" placeholder="Quién es responsable" value="${esc(t.owner || '')}" /></label>
+              <label class="task-fld"><span>Estimación</span>
+                <input type="text" data-f="estimate" maxlength="40" placeholder="ej: 1d, 4h" value="${esc(t.estimate || '')}" /></label>
+              <label class="task-fld"><span>Fecha objetivo</span>
+                <input type="date" data-f="dueDate" value="${esc(t.dueDate || '')}" /></label>
             </div>
             <label class="task-fld"><span>Plan</span>
               <select data-f="planId">${planOpts}</select></label>
@@ -144,6 +160,9 @@ export default {
             priority: get('priority'),
             status: get('status'),
             planId: get('planId') || null,
+            owner: get('owner').trim(),
+            estimate: get('estimate').trim(),
+            dueDate: get('dueDate'),
             tags: get('tags').split(',').map((x) => x.trim()).filter(Boolean),
           };
           if (!payload.title) { m.body.querySelector('[data-f="title"]').focus(); return; }
@@ -160,16 +179,26 @@ export default {
         let settled = false;
         const finish = (v) => { if (settled) return; settled = true; resolve(v); };
         const isEdit = !!existing;
-        const p = existing || { title: '', description: '', status: 'active' };
+        const p = existing || { title: '', description: '', status: 'active', owner: '', phase: '', targetDate: '' };
         const m = dialog.openModal({ title: isEdit ? `Editar ${p.id}` : 'Nuevo plan', width: '520px', onClose: () => finish(null) });
         m.body.innerHTML = `
           <div class="task-form">
             <label class="task-fld"><span>Título</span>
               <input type="text" data-f="title" maxlength="200" placeholder="Nombre del plan" value="${esc(p.title)}" /></label>
-            <label class="task-fld"><span>Detalle</span>
-              <textarea data-f="description" rows="3" maxlength="4000" placeholder="Objetivo del plan…">${esc(p.description)}</textarea></label>
-            <label class="task-fld"><span>Estado</span>
-              <select data-f="status">${PLAN_STATUS.map((s) => `<option value="${s.key}"${s.key === p.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
+            <label class="task-fld"><span>Detalle (Markdown)</span>
+              <textarea data-f="description" rows="3" maxlength="4000" placeholder="Objetivo del plan… (soporta Markdown)">${esc(p.description)}</textarea></label>
+            <div class="task-form-row">
+              <label class="task-fld"><span>Estado</span>
+                <select data-f="status">${PLAN_STATUS.map((s) => `<option value="${s.key}"${s.key === p.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
+              <label class="task-fld"><span>Fase</span>
+                <input type="text" data-f="phase" maxlength="20" placeholder="ej: 1, 4" value="${esc(p.phase || '')}" /></label>
+            </div>
+            <div class="task-form-row">
+              <label class="task-fld"><span>Owner</span>
+                <input type="text" data-f="owner" maxlength="120" placeholder="Responsable" value="${esc(p.owner || '')}" /></label>
+              <label class="task-fld"><span>Fecha objetivo</span>
+                <input type="date" data-f="targetDate" value="${esc(p.targetDate || '')}" /></label>
+            </div>
           </div>
           <div class="dlg-actions">
             <button class="btn-ghost" data-a="cancel">Cancelar</button>
@@ -178,7 +207,7 @@ export default {
         const get = (f) => m.body.querySelector(`[data-f="${f}"]`).value;
         m.body.querySelector('[data-a="cancel"]').addEventListener('click', () => m.close());
         m.body.querySelector('[data-a="save"]').addEventListener('click', () => {
-          const payload = { title: get('title').trim(), description: get('description'), status: get('status') };
+          const payload = { title: get('title').trim(), description: get('description'), status: get('status'), owner: get('owner').trim(), phase: get('phase').trim(), targetDate: get('targetDate') };
           if (!payload.title) { m.body.querySelector('[data-f="title"]').focus(); return; }
           finish(payload);
           m.close();
@@ -260,57 +289,215 @@ export default {
         </div>`;
       }
 
-      // Detalle de UNA tarea en ventana nueva (modal) + acciones.
-      function openTaskDetail(t) {
-        const st = statusOf(t.status);
-        const pr = prioOf(t.priority);
-        const ty = typeOf(t.type);
-        const plan = t.planId ? plans.find((p) => p.id === t.planId) : null;
-        const dm = dialog.openModal({ title: `${ty.emoji} ${t.id}`, width: '560px' });
-        dm.card.classList.add('task-detail-card');
-        const advanceBtn = t.status === 'pendiente'
-          ? '<button class="btn btn--sm" data-da="advance">▶ En progreso</button>'
-          : t.status === 'en-progreso'
-            ? '<button class="btn btn--sm" data-da="advance">✅ Marcar hecha</button>'
-            : '<button class="btn-ghost btn--sm" data-da="reopen">↩ Reabrir</button>';
-        dm.body.innerHTML = `
-          <div class="task-detail">
-            <div class="task-detail-title">${esc(t.title)}</div>
-            <div class="task-detail-chips">
-              <span class="task-chip2">${ty.emoji} ${ty.label}</span>
-              <span class="task-chip2">${pr.emoji} ${pr.label}</span>
-              <span class="task-chip2">${st.emoji} ${st.label}</span>
-              ${plan ? `<span class="task-chip2 task-chip2--plan">🗺️ ${esc(plan.title)}${plan.taskCount ? ` · ${plan.pct}%` : ''}</span>` : ''}
-              ${t.source === 'audio' ? '<span class="task-chip2">🎙️ desde audio</span>' : ''}
+      // ===== Detalle enriquecido (estilo Pad) — compartido tarea/plan =====
+      // Helpers de relaciones (blocks/blockedBy cruzan tareas↔planes).
+      const itemRaw = (id) => tasks.find((x) => x.id === id) || plans.find((x) => x.id === id);
+      const allItems = () => [...tasks.map((t) => ({ id: t.id, title: t.title, kind: 'task' })), ...plans.map((p) => ({ id: p.id, title: p.title, kind: 'plan' }))];
+      const relLabel = (id) => { const r = itemRaw(id); return r ? r.title : id; };
+      const relIco = (id) => (id.startsWith('PLAN-') ? '🗺️' : '🔹');
+      const blockedByIds = (id) => [...tasks, ...plans].filter((x) => (x.blocks || []).includes(id)).map((x) => x.id);
+      const relChip = (id, removable) => `<span class="tk-rel" data-open-item="${id}" title="${esc(relLabel(id))}">${relIco(id)} <span class="tk-rel-id">${esc(id)}</span> <span class="tk-rel-t">${esc(relLabel(id))}</span>${removable ? `<button class="tk-rel-x" data-rel-remove="${id}" title="Quitar">✕</button>` : ''}</span>`;
+      const ACT_ICO = { created: '➕', completed: '✅', status: '🔄', updated: '✏️', deleted: '🗑️' };
+      const evText = (ev) => {
+        if (ev.kind === 'created') return 'Creado';
+        if (ev.kind === 'completed') return 'Completado';
+        if (ev.kind === 'status') return `Estado → ${ev.detail || ''}`;
+        if (ev.kind === 'updated') return 'Actualizado';
+        if (ev.kind === 'deleted') return 'Eliminado';
+        return ev.kind || '';
+      };
+
+      // Picker de relación "bloquea": modal con búsqueda sobre todos los ítems.
+      function pickRelationship(excludeIds) {
+        return new Promise((resolve) => {
+          let done = false; const fin = (v) => { if (done) return; done = true; resolve(v); };
+          const items = allItems().filter((x) => !excludeIds.includes(x.id));
+          const pm = dialog.openModal({ title: 'Vincular · bloquea a…', width: '440px', onClose: () => fin(null) });
+          pm.body.innerHTML = `
+            <input class="tk-rel-search" data-ref="s" placeholder="Buscar por id o título…" />
+            <div class="tk-rel-picklist" data-ref="l"></div>`;
+          const s = pm.body.querySelector('[data-ref="s"]');
+          const l = pm.body.querySelector('[data-ref="l"]');
+          const draw = (q = '') => {
+            const ql = q.toLowerCase();
+            const rows = items.filter((x) => !ql || x.id.toLowerCase().includes(ql) || x.title.toLowerCase().includes(ql)).slice(0, 60);
+            l.innerHTML = rows.length ? rows.map((x) => `<button class="tk-rel-pick" data-id="${x.id}">${x.kind === 'plan' ? '🗺️' : '🔹'} <b>${esc(x.id)}</b> ${esc(x.title)}</button>`).join('') : '<div class="dash-empty">Nada coincide.</div>';
+          };
+          draw();
+          s.addEventListener('input', () => draw(s.value));
+          l.addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (b) { fin(b.dataset.id); pm.close(); } });
+          setTimeout(() => s.focus(), 30);
+        });
+      }
+
+      // Detalle de UNA tarea o plan en ventana nueva (modal) — breadcrumb,
+      // propiedades, descripción Markdown, relaciones y timeline+comentarios.
+      function openDetail(kind, itemArg) {
+        const isPlan = kind === 'plan';
+        let item = itemArg;
+        let dirty = false; // aplicamos algo ⇒ recargar el tablero al cerrar
+        const headIco = isPlan ? planStatusOf(item.status).emoji : typeOf(item.type).emoji;
+        const dm = dialog.openModal({ title: `${headIco} ${item.id}`, width: '660px', onClose: () => { if (dirty) boardApi?.reload(); } });
+        dm.card.classList.add('tk-detail-card');
+
+        const patchItem = (body) => fetch(isPlan ? `/api/tasks/plans/${item.id}` : `/api/tasks/${item.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        // Aplica una mutación, recarga el tablero y re-renderiza el detalle con el
+        // ítem fresco (o cierra si se borró).
+        const mutate = async (fn) => {
+          await fn(); dirty = true; await boardApi.reload();
+          const fresh = (isPlan ? plans : tasks).find((x) => x.id === item.id);
+          if (!fresh) { dm.close(); return; }
+          item = fresh; renderBody();
+        };
+
+        function propRow(label, val) { return `<div class="tk-prop"><span class="tk-prop-k">${label}</span><span class="tk-prop-v">${val}</span></div>`; }
+        function propsHtml() {
+          if (isPlan) {
+            const st = planStatusOf(item.status);
+            return [
+              propRow('Estado', `${st.emoji} ${st.label}`),
+              propRow('Fase', item.phase ? esc(item.phase) : '—'),
+              propRow('Fecha objetivo', item.targetDate ? fmtDay(item.targetDate) : '—'),
+              propRow('Owner', item.owner ? esc(item.owner) : '—'),
+              propRow('Progreso', `${item.doneCount || 0}/${item.taskCount || 0} · ${item.pct || 0}%`),
+            ].join('');
+          }
+          const st = statusOf(item.status); const pr = prioOf(item.priority); const ty = typeOf(item.type);
+          return [
+            propRow('Estado', `${st.emoji} ${st.label}`),
+            propRow('Prioridad', `${pr.emoji} ${pr.label}`),
+            propRow('Tipo', `${ty.emoji} ${ty.label}`),
+            propRow('Owner', item.owner ? esc(item.owner) : '—'),
+            propRow('Estimación', item.estimate ? esc(item.estimate) : '—'),
+            propRow('Fecha objetivo', item.dueDate ? fmtDay(item.dueDate) : '—'),
+          ].join('');
+        }
+        function relHtml() {
+          const blocks = item.blocks || [];
+          const bby = blockedByIds(item.id);
+          const childOf = !isPlan && item.planId ? item.planId : null;
+          const children = isPlan ? tasks.filter((t) => t.planId === item.id) : [];
+          const doneCh = children.filter((t) => t.status === 'hecha').length;
+          const rows = [];
+          if (!isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Parte del plan</span><div class="tk-rel-chips">${childOf ? relChip(childOf, false) : '<span class="dash-empty">Sin plan</span>'}</div></div>`);
+          if (isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Hijos ${doneCh}/${children.length}</span><div class="tk-rel-chips">${children.length ? children.map((t) => relChip(t.id, false)).join('') : '<span class="dash-empty">Sin tareas asignadas</span>'}</div></div>`);
+          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Bloquea a</span><div class="tk-rel-chips">${blocks.length ? blocks.map((id) => relChip(id, true)).join('') : ''}<button class="btn-ghost btn--sm tk-rel-add" data-rel-add title="Vincular">＋</button></div></div>`);
+          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Bloqueado por</span><div class="tk-rel-chips">${bby.length ? bby.map((id) => relChip(id, false)).join('') : '<span class="dash-empty">—</span>'}</div></div>`);
+          return rows.join('');
+        }
+        function crumbHtml() {
+          const plan = !isPlan && item.planId ? plans.find((p) => p.id === item.planId) : null;
+          return `<div class="tk-crumb">
+            <span class="tk-crumb-lnk" data-goto-tab="panel">🏠 Pendientes</span><span class="tk-crumb-sep">/</span>
+            <span class="tk-crumb-lnk" data-goto-tab="planes">📋 Planes</span>
+            ${plan ? `<span class="tk-crumb-sep">/</span><span class="tk-crumb-lnk" data-open-item="${plan.id}">${esc(plan.id)}</span>` : ''}
+            <span class="tk-crumb-sep">/</span><span class="tk-crumb-cur">${item.id}</span></div>`;
+        }
+        function actsHtml() {
+          if (isPlan) {
+            return `<button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
+              <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>Eliminar</span></button>`;
+          }
+          const advanceBtn = item.status === 'pendiente'
+            ? '<button class="btn btn--sm" data-da="advance">▶ En progreso</button>'
+            : item.status === 'en-progreso'
+              ? '<button class="btn btn--sm" data-da="advance">✅ Marcar hecha</button>'
+              : '<button class="btn-ghost btn--sm" data-da="reopen">↩ Reabrir</button>';
+          return `${advanceBtn}
+            <button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
+            <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>Eliminar</span></button>`;
+        }
+
+        function renderBody() {
+          const blocks = item.blocks || [];
+          const hasRel = blocks.length || blockedByIds(item.id).length || (!isPlan && item.planId) || (isPlan && tasks.some((t) => t.planId === item.id));
+          const tags = !isPlan && (item.tags || []).length ? `<div class="task-tags">${item.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : '';
+          dm.body.innerHTML = `
+            <div class="tk-detail">
+              ${crumbHtml()}
+              <div class="tk-detail-title">${esc(item.title)}</div>
+              <div class="tk-detail-sub">${icon('clock', { size: 11 })} Creada ${fmtDate(item.createdAt)}${item.updatedAt && item.updatedAt !== item.createdAt ? ` · ✏️ ${fmtDate(item.updatedAt)}` : ''}${item.source === 'audio' ? ' · 🎙️ desde audio' : ''}</div>
+              <div class="tk-detail-acts">${actsHtml()}</div>
+              <details class="tk-sec" open><summary class="tk-sec-h">⚙️ Propiedades</summary><div class="tk-sec-b"><div class="tk-props">${propsHtml()}</div>${tags}</div></details>
+              <details class="tk-sec" open><summary class="tk-sec-h">📝 Descripción</summary><div class="tk-sec-b">${item.description ? `<div class="tk-md">${renderMarkdown(item.description)}</div>` : '<div class="dash-empty">Sin descripción.</div>'}</div></details>
+              <details class="tk-sec"${hasRel ? ' open' : ''}><summary class="tk-sec-h">🔗 Relaciones</summary><div class="tk-sec-b tk-rels">${relHtml()}</div></details>
+              <details class="tk-sec"><summary class="tk-sec-h">🕑 Timeline y comentarios</summary><div class="tk-sec-b" data-ref="timeline">cargando…</div></details>
+            </div>`;
+          loadTimeline();
+        }
+
+        async function loadTimeline() {
+          const box = dm.body.querySelector('[data-ref="timeline"]');
+          if (!box) return;
+          let events = [];
+          try {
+            const url = isPlan ? `/api/tasks/plans/${item.id}/timeline` : `/api/tasks/${item.id}/timeline`;
+            events = (await (await fetch(url)).json()).events || [];
+          } catch { /* noop */ }
+          const rows = events.map((ev) => {
+            if (ev.type === 'comment') {
+              return `<div class="tk-tl tk-tl--c"><span class="tk-tl-ico">💬</span><div class="tk-tl-body"><div class="tk-tl-txt">${esc(ev.text)}</div><div class="tk-tl-meta">${fmtDate(ev.ts)} <button class="tk-tl-del" data-comment-del="${ev.cid}" title="Borrar comentario">✕</button></div></div></div>`;
+            }
+            return `<div class="tk-tl"><span class="tk-tl-ico">${ACT_ICO[ev.kind] || '•'}</span><div class="tk-tl-body"><div class="tk-tl-txt">${esc(evText(ev))}</div><div class="tk-tl-meta">${fmtDate(ev.ts)}</div></div></div>`;
+          }).join('');
+          box.innerHTML = `
+            <div class="tk-tl-composer">
+              <textarea class="tk-tl-input" data-ref="cinput" rows="2" placeholder="Escribí un comentario… (Ctrl+Enter para enviar)"></textarea>
+              <button class="btn btn--sm" data-comment-send>Comentar</button>
             </div>
-            ${t.description ? `<div class="task-detail-desc">${esc(t.description)}</div>` : '<div class="dash-empty">Sin descripción.</div>'}
-            ${(t.tags || []).length ? `<div class="task-tags">${t.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}
-            <div class="task-detail-dates">
-              <span>${icon('clock', { size: 11 })} Creada ${fmtDate(t.createdAt)}</span>
-              ${t.updatedAt && t.updatedAt !== t.createdAt ? `<span>✏️ ${fmtDate(t.updatedAt)}</span>` : ''}
-              ${t.doneAt ? `<span>✅ ${fmtDate(t.doneAt)}</span>` : ''}
-            </div>
-            <div class="task-detail-acts">
-              ${advanceBtn}
-              <button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
-              <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>Eliminar</span></button>
-            </div>
-          </div>`;
+            <div class="tk-tl-list">${rows || '<div class="dash-empty">Sin actividad todavía.</div>'}</div>`;
+          const ta = box.querySelector('[data-ref="cinput"]');
+          ta?.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); box.querySelector('[data-comment-send]')?.click(); } });
+        }
+
         dm.body.addEventListener('click', async (e) => {
+          // Quitar relación (antes que open-item: el ✕ vive dentro del chip).
+          const rr = e.target.closest('[data-rel-remove]');
+          if (rr) { const id = rr.dataset.relRemove; await mutate(() => patchItem({ blocks: (item.blocks || []).filter((x) => x !== id) })); return; }
+          const ra = e.target.closest('[data-rel-add]');
+          if (ra) { const chosen = await pickRelationship([item.id, ...(item.blocks || [])]); if (chosen) await mutate(() => patchItem({ blocks: [...(item.blocks || []), chosen] })); return; }
+          // Comentarios.
+          const cs = e.target.closest('[data-comment-send]');
+          if (cs) {
+            const ta = dm.body.querySelector('[data-ref="cinput"]');
+            const text = (ta?.value || '').trim();
+            if (!text) return;
+            cs.disabled = true;
+            try {
+              const url = isPlan ? `/api/tasks/plans/${item.id}/comment` : `/api/tasks/${item.id}/comment`;
+              await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+              dirty = true; await loadTimeline();
+            } finally { cs.disabled = false; }
+            return;
+          }
+          const cd = e.target.closest('[data-comment-del]');
+          if (cd) {
+            const url = isPlan ? `/api/tasks/plans/${item.id}/comment/${cd.dataset.commentDel}/delete` : `/api/tasks/${item.id}/comment/${cd.dataset.commentDel}/delete`;
+            await fetch(url, { method: 'POST' }); dirty = true; await loadTimeline(); return;
+          }
+          // Navegación.
+          const oi = e.target.closest('[data-open-item]');
+          if (oi) { const raw = itemRaw(oi.dataset.openItem); if (raw) { dm.close(); openDetail(oi.dataset.openItem.startsWith('PLAN-') ? 'plan' : 'task', raw); } return; }
+          const gt = e.target.closest('[data-goto-tab]');
+          if (gt) { dm.close(); showTab(gt.dataset.gotoTab); return; }
+          // Acciones.
           const b = e.target.closest('[data-da]');
           if (!b) return;
           const a = b.dataset.da;
-          if (a === 'advance') { await patch(t.id, { status: t.status === 'pendiente' ? 'en-progreso' : 'hecha' }); dm.close(); return; }
-          if (a === 'reopen') { await patch(t.id, { status: 'pendiente' }); dm.close(); return; }
-          if (a === 'edit') { const p = await taskForm(t, plans); if (p) await patch(t.id, p); dm.close(); return; }
+          if (a === 'advance') { await mutate(() => patchItem({ status: item.status === 'pendiente' ? 'en-progreso' : 'hecha' })); return; }
+          if (a === 'reopen') { await mutate(() => patchItem({ status: 'pendiente' })); return; }
+          if (a === 'edit') { const p = isPlan ? await planForm(item) : await taskForm(item, plans); if (p) await mutate(() => patchItem(p)); return; }
           if (a === 'del') {
-            const ok = await dialog.confirmDialog({ title: 'Eliminar tarea', message: `¿Eliminar “${t.title}”? No se puede deshacer.`, confirmLabel: 'Eliminar', danger: true });
-            if (ok) { await fetch(`/api/tasks/${t.id}/delete`, { method: 'POST' }); await boardApi.reload(); }
-            dm.close();
+            const ok = await dialog.confirmDialog({ title: isPlan ? 'Eliminar plan' : 'Eliminar tarea', message: isPlan ? `¿Eliminar el plan “${item.title}”? Las tareas quedan SIN plan.` : `¿Eliminar “${item.title}”? No se puede deshacer.`, confirmLabel: 'Eliminar', danger: true });
+            if (ok) { await fetch(isPlan ? `/api/tasks/plans/${item.id}/delete` : `/api/tasks/${item.id}/delete`, { method: 'POST' }); dirty = true; await boardApi.reload(); dm.close(); }
             return;
           }
         });
+
+        renderBody();
       }
+      const openTaskDetail = (t) => openDetail('task', t);
+      const openPlanDetail = (p) => openDetail('plan', p);
 
       function tareasHtml() {
         const FILT = [
@@ -322,6 +509,7 @@ export default {
           <div class="task-board-head">
             <div class="task-filters">${FILT.map((f) => `<button class="task-filter${f.key === filter ? ' is-on' : ''}" data-filt="${f.key}">${f.label}</button>`).join('')}</div>
             <div class="task-board-actions">
+              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze" title="Análisis general con IA: duplicados, unificables y completar info (consume tokens)">${icon('sparkle', { size: 13 })}<span>Análisis general</span></button>` : ''}
               ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="audio" title="Analizar una transcripción de audio (consume tokens)">${icon('mic', { size: 13 })}<span>Audio</span></button>` : ''}
               <button class="btn btn--sm" data-a="new">${icon('plus', { size: 13 })}<span>Nueva</span></button>
             </div>
@@ -359,6 +547,7 @@ export default {
             ${p.description ? `<div class="task-desc">${esc(p.description)}</div>` : ''}
             <div class="plan-tasks">${subtasks}</div>
             <div class="plan-actions">
+              <button class="btn-ghost btn--sm" data-pact="open" data-id="${p.id}">${icon('checklist', { size: 13 })}<span>Abrir</span></button>
               <button class="btn-ghost btn--sm" data-pact="edit" data-id="${p.id}">${icon('edit', { size: 13 })}<span>Editar</span></button>
               <button class="btn-ghost btn--sm" data-pact="del" data-id="${p.id}">${icon('trash', { size: 13 })}<span>Eliminar</span></button>
             </div>
@@ -370,6 +559,7 @@ export default {
           <div class="task-board-head">
             <span class="tk-pane-title">Planes que agrupan tareas con progreso</span>
             <div class="task-board-actions">
+              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze-plans" title="Análisis general de planes con IA: duplicados, unificables y completar info (consume tokens)">${icon('sparkle', { size: 13 })}<span>Análisis general</span></button>` : ''}
               <button class="btn btn--sm" data-a="newplan">${icon('plus', { size: 13 })}<span>Nuevo plan</span></button>
             </div>
           </div>
@@ -549,6 +739,8 @@ export default {
         const filt = e.target.closest('[data-filt]');
         if (filt) { filter = filt.dataset.filt; paneEl.querySelectorAll('.task-filter').forEach((x) => x.classList.toggle('is-on', x.dataset.filt === filter)); renderList(); return; }
         if (e.target.closest('[data-a="audio"]')) { openAudioPanel(audioCtx); return; }
+        if (e.target.closest('[data-a="analyze"]')) { openAnalysis('tasks'); return; }
+        if (e.target.closest('[data-a="analyze-plans"]')) { openAnalysis('plans'); return; }
         const nb = e.target.closest('[data-a="new"]');
         if (nb) { const p = await taskForm(null, plans); if (p) { await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }); await boardApi.reload(); } return; }
         // ----- Planes -----
@@ -562,6 +754,7 @@ export default {
           const pid = pact.dataset.id;
           const p = plans.find((x) => x.id === pid);
           if (!p) return;
+          if (pact.dataset.pact === 'open') { openPlanDetail(p); return; }
           if (pact.dataset.pact === 'edit') { const upd = await planForm(p); if (upd) { await fetch(`/api/tasks/plans/${pid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(upd) }); await boardApi.reload(); } return; }
           if (pact.dataset.pact === 'del') {
             const ok = await dialog.confirmDialog({ title: 'Eliminar plan', message: `¿Eliminar el plan “${p.title}”? Las tareas quedan SIN plan (no se borran).`, confirmLabel: 'Eliminar', danger: true });
@@ -591,6 +784,176 @@ export default {
         const ob = e.target.closest('[data-open]');
         if (ob) { e.preventDefault(); const t = tasks.find((x) => x.id === ob.dataset.open); if (t) openTaskDetail(t); }
       });
+
+      // ===== Análisis general IA (duplicados / unificables / completar) =====
+      // scope='tasks' | 'plans'. Runner desacoplado (POST /analyze) + poll del GET.
+      // Las propuestas se aprueban de a una; aplicar reusa el CRUD existente.
+      function openAnalysis(scope) {
+        const isPlans = scope === 'plans';
+        const label = isPlans ? 'planes' : 'tareas';
+        const titleOf = (id) => {
+          const arrX = isPlans ? plans : tasks;
+          const it = arrX.find((x) => x.id === id);
+          return it ? it.title : id;
+        };
+        let polling = false;
+        let dirty = false;       // aplicamos algo ⇒ recargar el tablero al cerrar
+        let lastResult = null;
+        const am = dialog.openModal({
+          title: `🧠 Análisis general · ${label}`, width: '640px',
+          onClose: () => { polling = false; if (dirty) boardApi?.reload(); },
+        });
+        am.body.innerHTML = `
+          <div class="tk-analysis">
+            <div class="tk-an-head">
+              <span class="tk-an-sub">Detecta duplicados, unificables y completa info faltante con los informes.</span>
+              <button class="btn btn--sm" data-ref="run">${icon('sparkle', { size: 13 })}<span>Analizar</span></button>
+            </div>
+            <div class="tk-an-status" data-ref="status" hidden></div>
+            <div class="tk-an-result" data-ref="result"></div>
+          </div>`;
+        const runBtn = am.body.querySelector('[data-ref="run"]');
+        const statusEl = am.body.querySelector('[data-ref="status"]');
+        const resultEl = am.body.querySelector('[data-ref="result"]');
+
+        function propCard(kind, idx, headHtml, bodyHtml) {
+          return `<div class="tk-an-card" data-kind="${kind}" data-idx="${idx}">
+            <div class="tk-an-card-h">${headHtml}</div>
+            ${bodyHtml}
+            <div class="tk-an-card-acts">
+              <button class="btn-ghost btn--sm" data-dismiss>Descartar</button>
+              <button class="btn btn--sm" data-ap>Aprobar</button>
+            </div>
+            <div class="tk-an-card-state" hidden></div>
+          </div>`;
+        }
+        function section(title, items, cards, open) {
+          return `<details class="tk-an-sec"${open ? ' open' : ''}>
+            <summary class="tk-an-sec-h">${title} <span class="tk-an-n">${items.length}</span></summary>
+            <div class="tk-an-sec-b">${items.length ? cards : '<div class="dash-empty">Nada por acá.</div>'}</div></details>`;
+        }
+        function renderAnalysis(result) {
+          lastResult = result;
+          const dup = result.duplicados || [];
+          const unif = result.unificables || [];
+          const comp = result.completar || [];
+          const total = dup.length + unif.length + comp.length;
+          const dupCards = dup.map((d, i) => propCard('dup', i,
+            `🔁 Conservar <b>${esc(titleOf(d.keep))}</b>`,
+            `<div class="tk-an-line">Eliminar: ${d.remove.map((id) => esc(titleOf(id))).join(', ')}</div>${d.why ? `<div class="tk-an-why">${esc(d.why)}</div>` : ''}`)).join('');
+          const unifCards = unif.map((u, i) => propCard('unif', i,
+            `🔗 Unir ${u.ids.length} en uno`,
+            `<div class="tk-an-line">${u.ids.map((id) => esc(titleOf(id))).join(' + ')} → <b>${esc(u.title || '(mismo título)')}</b></div>${u.description ? `<div class="tk-an-desc">${esc(u.description)}</div>` : ''}${u.why ? `<div class="tk-an-why">${esc(u.why)}</div>` : ''}`)).join('');
+          const compCards = comp.map((c, i) => propCard('comp', i,
+            `📝 Completar <b>${esc(titleOf(c.id))}</b>`,
+            `${c.description ? `<div class="tk-an-desc">${esc(c.description)}</div>` : ''}${(c.tags || []).length ? `<div class="task-tags">${c.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
+          resultEl.innerHTML = `
+            ${result.resumen ? `<div class="tk-an-summary">${esc(result.resumen)}</div>` : ''}
+            ${total ? '' : '<div class="dash-empty">✅ Sin duplicados, unificables ni info faltante. Todo prolijo.</div>'}
+            ${section('🔁 Duplicados', dup, dupCards, dup.length > 0)}
+            ${section('🔗 Unificables', unif, unifCards, unif.length > 0)}
+            ${section('📝 Completar info', comp, compCards, comp.length > 0)}`;
+        }
+
+        const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+        const delUrl = (id) => (isPlans ? `/api/tasks/plans/${id}/delete` : `/api/tasks/${id}/delete`);
+        const updUrl = (id) => (isPlans ? `/api/tasks/plans/${id}` : `/api/tasks/${id}`);
+        async function applyProposal(kind, p) {
+          if (kind === 'dup') {
+            for (const id of p.remove) await post(delUrl(id));
+          } else if (kind === 'unif') {
+            const [first, ...rest] = p.ids;
+            await post(updUrl(first), { title: p.title || undefined, description: p.description || undefined });
+            for (const id of rest) await post(delUrl(id));
+          } else if (kind === 'comp') {
+            const body = { description: p.description };
+            if (!isPlans && (p.tags || []).length) body.tags = p.tags;
+            await post(updUrl(p.id), body);
+          }
+          dirty = true;
+        }
+
+        resultEl.addEventListener('click', async (e) => {
+          const card = e.target.closest('.tk-an-card');
+          if (!card) return;
+          const ap = e.target.closest('[data-ap]');
+          const dis = e.target.closest('[data-dismiss]');
+          if (!ap && !dis) return;
+          const kind = card.dataset.kind;
+          const list = kind === 'dup' ? lastResult.duplicados : kind === 'unif' ? lastResult.unificables : lastResult.completar;
+          const p = list?.[Number(card.dataset.idx)];
+          if (!p) return;
+          const acts = card.querySelector('.tk-an-card-acts');
+          const stateEl = card.querySelector('.tk-an-card-state');
+          if (dis) { card.classList.add('tk-an-card--dismissed'); acts?.remove(); stateEl.hidden = false; stateEl.textContent = 'Descartada'; return; }
+          acts.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+          stateEl.hidden = false; stateEl.textContent = 'Aplicando…';
+          try {
+            await applyProposal(kind, p);
+            card.classList.add('tk-an-card--done'); acts.remove(); stateEl.textContent = '✓ Aplicada';
+          } catch {
+            acts.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+            stateEl.textContent = '✕ Error al aplicar';
+          }
+        });
+
+        async function poll() {
+          for (let i = 0; i < 130 && polling; i += 1) {
+            await new Promise((r) => setTimeout(r, 2000));
+            let j;
+            try { j = await (await fetch(`/api/tasks/analysis?scope=${scope}`)).json(); } catch { continue; }
+            if (!j || j.status === 'running') continue;
+            return j;
+          }
+          return null;
+        }
+        async function analyze() {
+          const ok = await dialog.confirmDialog({
+            title: 'Análisis general',
+            message: `Se analizan todas las ${label} con Claude (sonnet). CONSUME TOKENS reales y puede tardar. Es de solo lectura; nada se aplica sin tu aprobación.`,
+            confirmLabel: 'Analizar',
+          });
+          if (!ok) return;
+          runBtn.disabled = true;
+          resultEl.innerHTML = '';
+          statusEl.hidden = false; statusEl.className = 'tk-an-status';
+          statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>analizando las ${label}…</span>`;
+          polling = true;
+          try {
+            const r = await post('/api/tasks/analyze', { scope });
+            const started = await r.json();
+            if (!r.ok) throw new Error(started.error || 'No se pudo iniciar el análisis.');
+            const j = started.status === 'done' ? started : await poll();
+            if (!j) throw new Error('El análisis se interrumpió. Reintentá.');
+            if (j.status === 'error') throw new Error(j.error || 'El análisis falló.');
+            statusEl.hidden = true;
+            renderAnalysis(j.result);
+            runBtn.querySelector('span').textContent = 'Volver a analizar';
+          } catch (err) {
+            statusEl.className = 'tk-an-status tk-an-status--err'; statusEl.textContent = err.message || 'Error al analizar.';
+          } finally {
+            runBtn.disabled = false; polling = false;
+          }
+        }
+        runBtn.addEventListener('click', analyze);
+        const origClose = am.close;
+        am.close = () => { polling = false; origClose(); };
+
+        // Al abrir: si hay un resultado previo persistido, mostrarlo; si corre, encuestar.
+        (async () => {
+          try {
+            const j = await (await fetch(`/api/tasks/analysis?scope=${scope}`)).json();
+            if (j.status === 'done' && j.result) { renderAnalysis(j.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
+            else if (j.status === 'running') {
+              polling = true; statusEl.hidden = false; statusEl.className = 'tk-an-status';
+              statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>analizando las ${label}…</span>`;
+              const done = await poll();
+              if (done && done.status === 'done' && done.result) { statusEl.hidden = true; renderAnalysis(done.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
+              else { statusEl.hidden = true; }
+            }
+          } catch { /* noop */ }
+        })();
+      }
 
       (async () => { await loadData(); showTab(tab); })();
     }

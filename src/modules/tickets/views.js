@@ -59,12 +59,30 @@ export function buildDashboard(rawTickets, nowMs) {
   const needsTriage = open.filter((t) => t.waitingOn === 'triage')
     .sort((a, b) => a.aging.days - b.aging.days).map(slim);
 
+  // 7 y 8. Estados de TRABAJO que antes caían en el limbo (abiertos, recién
+  //    tocados → ni vencidos ni aging, ni nuevos ni resueltos, sin PR): un
+  //    ticket se volvía invisible justo cuando MÁS se lo trabajaba. Ahora tienen
+  //    hogar propio. Más ESTANCADO primero (más horas sin update arriba).
+  //    EXCLUYEN los vencidos/aging (opción B, pedido Niko): un ticket urgente
+  //    vive SOLO en su columna de alerta (Vencidos/Aging), no se duplica acá →
+  //    cada ticket aparece en UN solo lugar. Estas columnas = "en curso sano".
+  const healthy = (t) => !t.clock.overdue && !t.aging.aging;
+  const byStale = (a, b) => b.clock.businessHoursSinceUpdate - a.clock.businessHoursSinceUpdate;
+  const inProgress = open.filter((t) => t.waitingOn === 'dev' && healthy(t)).sort(byStale).map(slim);
+  const waitingClient = open.filter((t) => t.waitingOn === 'requester' && healthy(t)).sort(byStale).map(slim);
+
   return {
     generatedAt: nowMs,
-    counts: { open: open.length, total: tickets.length, overdue: overdue.length, aging: aging.length, resolvedThisWeek: resolvedThisWeek.length, needsTriage: needsTriage.length },
+    counts: {
+      open: open.length, total: tickets.length, overdue: overdue.length, aging: aging.length,
+      resolvedThisWeek: resolvedThisWeek.length, needsTriage: needsTriage.length,
+      inProgress: inProgress.length, waitingClient: waitingClient.length,
+    },
     openByLane,
     waitingOn,
     needsTriage,
+    inProgress,
+    waitingClient,
     overdue,
     aging,
     resolvedThisWeek,

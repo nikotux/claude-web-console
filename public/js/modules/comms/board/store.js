@@ -9,6 +9,7 @@ const initial = () => ({
   scannedAt: null,
   running: false,
   teamsRunning: false,
+  chatbotRunning: false,
   loadError: false,
   tab: null,             // contactId activo (pestaña primaria)
   expanded: new Set(),   // ids de hilo con el detalle abierto

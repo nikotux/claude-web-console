@@ -463,6 +463,8 @@ html, body {
 .plan-lims .lim-row { padding: .12rem 0; }
 .plan-lims .lim-top { font-size: var(--cwc-fs-sm); }
 .plan-lims .lim-bar { height: 4px; margin: .15rem 0; }
+.plan-lims .lim-credits { margin-top: .18rem; padding-top: .22rem; }
+.plan-lims .lim-stale { margin-bottom: .1rem; }
 
 .footer-acct { display: flex; align-items: center; gap: .4rem; }
 .footer-acct .btn-ghost { text-decoration: none; }
@@ -488,6 +490,16 @@ html, body {
 .lim-fill { display: block; height: 100%; border-radius: 2px; }
 .lim-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 .lim-err { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .2rem 0; }
+/* Créditos de uso extra: separador sutil de las ventanas del plan (van arriba). */
+.lim-credits { border-top: 1px solid var(--cwc-divider); margin-top: .25rem; padding-top: .35rem; }
+/* Estado deshabilitado (el plan no tiene extra usage): fila tenue, sin barra. */
+.lim-credits--off .lim-label,
+.lim-credits--off .lim-pct { color: var(--cwc-text-dimmer); }
+/* Aviso de dato viejo (server sirvió el último snapshot persistido). */
+.lim-stale {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-warn);
+  margin-bottom: .2rem;
+}
 /* Pac-Man "consumiendo ahora" en la fila de un modelo (no roba el ellipsis
    del nombre: va flex:none entre el nombre y el costo). */
 .tok-row-top .cwc-pacman { flex: none; }
@@ -495,6 +507,19 @@ html, body {
 /* Botón Actualizar del header del modal: pegado a la × (el space-between del
    dlg-head lo dejaría flotando en el centro sin este margin-left:auto). */
 .usage-reload { margin-left: auto; }
+/* Botón Reset a la derecha del header, junto a Actualizar: el margin-left:auto
+   en el PRIMERO del grupo empuja reset+reload+× a la derecha. */
+.usage-reset-btn { margin-left: auto; }
+/* Aviso "contando desde el reset" bajo los totales, con el link para volver
+   al histórico completo. */
+.usage-reset-note {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer);
+  padding-top: .25rem; grid-column: 1 / -1;
+}
+.usage-reset-undo {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--cwc-accent); font-size: inherit; text-decoration: underline;
+}
 .tok-note {
   font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); line-height: 1.45;
   padding-bottom: .5rem; margin-bottom: .4rem; border-bottom: 1px solid var(--cwc-divider);
@@ -1327,6 +1352,8 @@ html, body {
 .bb-chip--warn { border-color: var(--cwc-warn); color: var(--cwc-warn); }
 .bb-chip--danger { border-color: var(--cwc-danger-strong); color: var(--cwc-danger-strong); }
 .bb-chip--info { border-color: var(--cwc-border-strong); color: var(--cwc-text-secondary); }
+.bb-chip--cool { border-color: var(--cwc-accent-cool); color: var(--cwc-accent-cool); }
+.bb-chip--muted { border-color: var(--cwc-border-soft); color: var(--cwc-text-dim); }
 /* Timeline del fix (history[]). */
 .bb-tl { margin: .45rem 0; display: flex; flex-direction: column; gap: .15rem; }
 .bb-tl-ev { display: flex; align-items: baseline; gap: .45rem; font-size: var(--cwc-fs-xs); }
@@ -1992,7 +2019,10 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .task-empty, .au-none { color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); text-align: center; padding: 1.2rem .5rem; }
 
 /* --- Pestaña Tareas: cuadritos en columnas (estilo Bugs v2), clic → modal --- */
-.task-grid { columns: 3 240px; column-gap: .5rem; max-height: 64vh; overflow-y: auto; padding-right: .2rem; }
+/* 6 columnas fijas (sin min-width) ⇒ NUNCA hay scroll horizontal: los cuadritos
+   se angostan y el contenido baja. Se degrada por breakpoints (pedido del
+   usuario 2026-07-07: antes 3 columnas con min 240px). */
+.task-grid { columns: 6; column-gap: .5rem; max-height: 64vh; overflow-y: auto; padding-right: .2rem; }
 .task-grid .task-empty { column-span: all; }
 .task-cardv2 {
   break-inside: avoid; margin-bottom: .5rem; cursor: pointer;
@@ -2031,7 +2061,77 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .task-detail-dates { display: flex; flex-wrap: wrap; gap: .8rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
 .task-detail-dates span { display: inline-flex; align-items: center; gap: .25rem; }
 .task-detail-acts { display: flex; flex-wrap: wrap; gap: .4rem; padding-top: .2rem; }
-@media (max-width: 640px) { .task-grid { columns: 1; } }
+
+/* ===== Detalle enriquecido estilo Pad (tarea/plan): breadcrumb, propiedades,
+   Markdown, relaciones, timeline+comentarios ===== */
+.tk-detail-card { width: 94vw; max-width: 660px; }
+.tk-detail { display: flex; flex-direction: column; gap: .55rem; }
+.tk-crumb { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.tk-crumb-lnk { cursor: pointer; color: var(--cwc-text-secondary); }
+.tk-crumb-lnk:hover { color: var(--cwc-accent); text-decoration: underline; }
+.tk-crumb-sep { color: var(--cwc-text-dimmer); }
+.tk-crumb-cur { color: var(--cwc-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tk-detail-title { font-size: var(--cwc-fs-md); font-weight: 600; color: var(--cwc-text); word-break: break-word; }
+.tk-detail-sub { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.tk-detail-acts { display: flex; flex-wrap: wrap; gap: .4rem; }
+
+.tk-sec { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-panel); }
+.tk-sec-h { cursor: pointer; padding: .4rem .55rem; font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); }
+.tk-sec-b { padding: .1rem .55rem .55rem; display: flex; flex-direction: column; gap: .45rem; }
+
+.tk-props { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .3rem .8rem; }
+.tk-prop { display: flex; justify-content: space-between; gap: .5rem; font-size: var(--cwc-fs-sm); border-bottom: 1px solid var(--cwc-border-soft); padding: .15rem 0; }
+.tk-prop-k { color: var(--cwc-text-dim); }
+.tk-prop-v { color: var(--cwc-text); text-align: right; word-break: break-word; }
+
+/* Markdown de la descripción (reusa el sanitizado de ui/markdown.js) */
+.tk-md { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.55; word-break: break-word; }
+.tk-md h1, .tk-md h2, .tk-md h3 { color: var(--cwc-text); margin: .4rem 0 .2rem; font-size: var(--cwc-fs-md); }
+.tk-md p { margin: .3rem 0; }
+.tk-md ul, .tk-md ol { margin: .3rem 0; padding-left: 1.2rem; }
+.tk-md code { background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: 0 .25rem; font-size: .92em; }
+.tk-md pre { background: var(--cwc-bg); border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .5rem; overflow-x: auto; }
+.tk-md a { color: var(--cwc-accent); }
+
+/* Relaciones */
+.tk-rels { gap: .4rem; }
+.tk-rel-row { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.tk-rel-lbl { flex: none; min-width: 6.5rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.tk-rel-chips { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; flex: 1; }
+.tk-rel {
+  display: inline-flex; align-items: center; gap: .25rem; cursor: pointer; max-width: 100%;
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); background: var(--cwc-bg-chip);
+  border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .1rem .35rem;
+}
+.tk-rel:hover { border-color: var(--cwc-accent); }
+.tk-rel-id { font-weight: 600; color: var(--cwc-text); font-variant-numeric: tabular-nums; flex: none; }
+.tk-rel-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 12rem; }
+.tk-rel-x { border: none; background: none; cursor: pointer; color: var(--cwc-text-dim); padding: 0 .1rem; font-size: var(--cwc-fs-xs); }
+.tk-rel-x:hover { color: var(--cwc-danger); }
+.tk-rel-add { flex: none; }
+.tk-rel-search { width: 100%; margin-bottom: .5rem; }
+.tk-rel-picklist { display: flex; flex-direction: column; gap: .25rem; max-height: 50vh; overflow-y: auto; }
+.tk-rel-pick { text-align: left; cursor: pointer; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); background: var(--cwc-bg-panel); border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .3rem .5rem; }
+.tk-rel-pick:hover { border-color: var(--cwc-accent); background: var(--cwc-bg-hover); }
+
+/* Timeline + comentarios */
+.tk-tl-composer { display: flex; gap: .4rem; align-items: flex-end; margin-bottom: .5rem; }
+.tk-tl-input { flex: 1; resize: vertical; font-family: inherit; }
+.tk-tl-list { display: flex; flex-direction: column; gap: .4rem; max-height: 40vh; overflow-y: auto; }
+.tk-tl { display: flex; gap: .45rem; align-items: baseline; }
+.tk-tl-ico { flex: none; }
+.tk-tl-body { flex: 1; display: flex; flex-direction: column; gap: .1rem; }
+.tk-tl--c .tk-tl-txt { color: var(--cwc-text); white-space: pre-wrap; word-break: break-word; padding: .3rem .45rem; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg); }
+.tk-tl-txt { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.tk-tl-meta { display: flex; gap: .4rem; align-items: center; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.tk-tl-del { border: none; background: none; cursor: pointer; color: var(--cwc-text-dim); padding: 0; font-size: var(--cwc-fs-xs); }
+.tk-tl-del:hover { color: var(--cwc-danger); }
+
+@media (max-width: 1100px) { .task-grid { columns: 5; } }
+@media (max-width: 900px)  { .task-grid { columns: 4; } }
+@media (max-width: 700px)  { .task-grid { columns: 3; } }
+@media (max-width: 520px)  { .task-grid { columns: 2; } }
+@media (max-width: 380px)  { .task-grid { columns: 1; } }
 
 .task-item {
   border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md);
@@ -2110,6 +2210,10 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .au-task-title { flex: 1; font-weight: 600; color: var(--cwc-text); word-break: break-word; }
 .au-task-add { flex: none; white-space: nowrap; }
 .au-task-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); margin-top: .3rem; white-space: pre-wrap; }
+.au-block-acts { display: flex; gap: .35rem; align-items: center; flex: none; }
+/* Tarea propuesta que YA está creada en Pendientes (match por título/sourceRef). */
+.au-task--done { opacity: .72; border-color: var(--cwc-ok); }
+.au-task-already { flex: none; white-space: nowrap; font-size: var(--cwc-fs-xs); color: var(--cwc-ok); font-weight: 600; }
 
 .au-history { margin-top: .3rem; }
 .au-history > summary { cursor: pointer; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
@@ -2261,7 +2365,29 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   .tk-tab { padding: .4rem .5rem; }
 }
 
-.task-board-actions { display: flex; gap: .4rem; align-items: center; }
+.task-board-actions { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+
+/* ===== Análisis general IA de Pendientes (duplicados / unificables / completar) ===== */
+.tk-analysis { display: flex; flex-direction: column; gap: .6rem; }
+.tk-an-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.tk-an-sub { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.tk-an-status { display: flex; align-items: center; gap: .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
+.tk-an-status--err { color: var(--cwc-danger); }
+.tk-an-result { display: flex; flex-direction: column; gap: .5rem; max-height: 64vh; overflow-y: auto; }
+.tk-an-summary { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); line-height: 1.5; padding: .5rem .6rem; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg); }
+.tk-an-sec { border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-panel); }
+.tk-an-sec-h { cursor: pointer; padding: .4rem .55rem; font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); }
+.tk-an-n { color: var(--cwc-text-dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+.tk-an-sec-b { display: flex; flex-direction: column; gap: .4rem; padding: .1rem .5rem .5rem; }
+.tk-an-card { border: 1px solid var(--cwc-border); border-left: 3px solid var(--cwc-accent); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg); padding: .45rem .55rem; display: flex; flex-direction: column; gap: .3rem; }
+.tk-an-card--done { border-left-color: var(--cwc-ok); opacity: .75; }
+.tk-an-card--dismissed { border-left-color: var(--cwc-border-strong); opacity: .5; }
+.tk-an-card-h { font-size: var(--cwc-fs-sm); color: var(--cwc-text); }
+.tk-an-line { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); word-break: break-word; }
+.tk-an-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; word-break: break-word; padding: .3rem .4rem; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-panel); }
+.tk-an-why { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.tk-an-card-acts { display: flex; gap: .4rem; justify-content: flex-end; padding-top: .1rem; }
+.tk-an-card-state { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-align: right; }
 
 /* ===== Bugs v2 (dashboard One Front Door determinístico) ===== */
 /* Panel del sidebar */
@@ -2290,11 +2416,13 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bv2-cols4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: .6rem; align-items: start; }
 @media (max-width: 900px) { .bv2-cols4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px) { .bv2-cols4 { grid-template-columns: 1fr; } }
-/* 5 bloques en UNA fila (nuevos·sin triar · vencidos · aging · resueltos ·
-   dev-lane); baja a 2 columnas en angosto y 1 en móvil. */
-.bv2-cols5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: .6rem; align-items: start; }
-@media (max-width: 1100px) { .bv2-cols5 { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .bv2-cols5 { grid-template-columns: 1fr; } }
+/* 7 bloques en UNA fila (nuevos · en progreso · en espera · vencidos · aging ·
+   resueltos · dev-lane). minmax(0,1fr) evita que el contenido desborde la
+   columna; baja a 3 → 2 → 1 al angostar. */
+.bv2-cols7 { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .5rem; align-items: start; }
+@media (max-width: 1300px) { .bv2-cols7 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .bv2-cols7 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .bv2-cols7 { grid-template-columns: 1fr; } }
 /* Masonry por columnas (CSS multi-col): hasta 3 columnas de mín. 320px; las
    tarjetas FLUYEN y llenan el hueco de la columna anterior (no dejan aire como
    un grid de filas). 1 columna en móvil (320px no entra dos veces). */
@@ -2332,13 +2460,28 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bv2-waits { display: flex; gap: 1rem; }
 .bv2-wait { display: flex; flex-direction: column; align-items: center; }
 .bv2-wait-n { font-size: var(--cwc-fs-xl); color: var(--cwc-text); font-weight: 700; }
-/* Filas de ticket (listas). 4 columnas: id · chip lane · subject · métrica. */
-.bv2-row { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: .4rem; padding: .2rem .15rem; border-radius: var(--cwc-radius-sm); text-decoration: none; color: var(--cwc-text-secondary); }
-.bv2-row:hover { background: var(--cwc-bg-hover); }
-.bv2-row--click { cursor: pointer; }
+/* Card de ticket/PR en DOS filas (rediseño Niko 2026-07-07): fila 1 = título
+   completo; fila 2 = #nº + chips SOLO-ícono (carril/estado) + chips de PROPIEDAD
+   (prioridad/dueño/antigüedad). Los chips de la meta pueden envolver a otra
+   línea en columnas MUY angostas (flex-wrap) para no perder ninguno. */
+.bv2-card { padding: .3rem .35rem; border-radius: var(--cwc-radius-sm); cursor: pointer; }
+.bv2-card:hover { background: var(--cwc-bg-hover); }
+.bv2-card-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: .18rem; }
+.bv2-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem; }
+.bv2-card-meta > * { flex: none; }
 .bv2-row-id { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; }
-.bv2-row-sub { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bv2-row-metric { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; }
+.bv2-row--click { cursor: pointer; }
+/* Chip SOLO-ícono (carril/estado): compacto, el emoji manda. */
+.bb-chip.bv2-ic { padding: .06rem .3rem; }
+/* Chip de propiedad: lleva su valor (P1 / iniciales / Xd), no envuelve. */
+.bb-chip.bv2-prop { white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Leyenda de íconos (botón "?" del header). */
+.bv2-legend { display: flex; flex-direction: column; gap: .8rem; }
+.bv2-leg-group { display: flex; flex-direction: column; gap: .3rem; }
+.bv2-leg-h { font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); margin-bottom: .1rem; }
+.bv2-leg-row { display: flex; align-items: center; gap: .5rem; }
+.bv2-leg-row .bb-chip { flex: none; min-width: 2.2rem; justify-content: center; }
+.bv2-leg-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }
 /* Modal de detalle del ticket */
 .bv2-detail { display: flex; flex-direction: column; gap: .55rem; }
 .bv2-detail-meta { display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -2369,6 +2512,22 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bv2-pr-main { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
 .bv2-pr-side { display: flex; flex-direction: column; gap: .4rem; border-left: 1px solid var(--cwc-border-soft); padding-left: .8rem; position: sticky; top: 0; }
 @media (max-width: 720px) { .bv2-pr-side { border-left: none; padding-left: 0; border-top: 1px solid var(--cwc-border-soft); padding-top: .6rem; } }
+
+/* Panel COMPARTIDO de la 2ª columna (ticket-detail + pr-detail): Contexto
+   adicional (charla interpretada por IA) + Histórico del trabajo. */
+.tkm-side { display: flex; flex-direction: column; gap: .4rem; }
+.tkm-ctx-text { font-size: var(--cwc-fs-sm); color: var(--cwc-text); white-space: pre-wrap; word-break: break-word; background: var(--cwc-bg); border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .4rem .5rem; }
+.tkm-ctx-acts { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .3rem; }
+.tkm-add { border: 1px dashed var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: .3rem .45rem; }
+.tkm-add > summary { cursor: pointer; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.tkm-ta { font: inherit; font-size: var(--cwc-fs-sm); color: var(--cwc-text); background: var(--cwc-bg-input); border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); padding: .35rem .5rem; width: 100%; box-sizing: border-box; resize: vertical; margin-top: .35rem; }
+.tkm-add-acts { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .35rem; }
+.tkm-status { font-size: var(--cwc-fs-xs); }
+.tkm-hist { display: flex; flex-direction: column; gap: .3rem; }
+.tkm-hist-item > summary { cursor: pointer; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.tkm-hist-sum { font-size: var(--cwc-fs-sm); color: var(--cwc-text); white-space: pre-wrap; word-break: break-word; margin: .25rem 0; }
+.tkm-hist-files { display: flex; flex-direction: column; gap: .15rem; }
+.tkm-hist-files code { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); word-break: break-all; }
 .bv2-pad-list { display: flex; flex-direction: column; gap: .35rem; max-height: 55vh; overflow: auto; }
 .bv2-pad-item { display: block; text-decoration: none; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-sm); padding: .35rem .45rem; color: var(--cwc-text-secondary); }
 .bv2-pad-item:hover { background: var(--cwc-bg-hover); }

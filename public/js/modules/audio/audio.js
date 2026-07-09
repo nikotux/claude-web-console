@@ -35,10 +35,21 @@ function fmtAgo(ms) {
 }
 
 // Pinta un resultado ya interpretado dentro de `container`. bus (opcional) se
-// usa para avisar `tasks-changed` al crear tareas desde las propuestas.
-function renderResult(container, job, id, bus) {
+// usa para avisar `tasks-changed` al crear tareas desde las propuestas; dialog
+// (opcional) para el confirm de "Pasar a plan".
+// Es ASÍNCRONA: antes de pintar consulta qué tareas de este informe ya están
+// creadas (source=audio + sourceRef=jobId) para marcarlas ✓ y bloquear su botón.
+async function renderResult(container, job, id, bus, dialog) {
   const res = job.result;
   if (!res) { container.innerHTML = ''; return; }
+  // Tareas de ESTE informe ya presentes en Pendientes (match por título).
+  let createdTitles = new Set();
+  if (id) {
+    try {
+      const d = await (await fetch('/api/tasks')).json();
+      createdTitles = new Set((d.tasks || []).filter((t) => t.sourceRef === id).map((t) => t.title));
+    } catch { /* noop */ }
+  }
   const speakers = (res.speakers || []).map((s) =>
     `<li><strong>${esc(s.name || '?')}</strong>${s.role ? ` — ${esc(s.role)}` : ''}</li>`).join('');
   const segments = (res.segments || []).map((s) => {
@@ -50,16 +61,23 @@ function renderResult(container, job, id, bus) {
   }).join('');
   const plan = (res.plan || []).map((p) =>
     `<li><strong>${esc(p.step)}</strong>${p.why ? `<span class="au-why"> — ${esc(p.why)}</span>` : ''}</li>`).join('');
-  const tasks = (res.proposedTasks || []).map((t, i) => `
-    <div class="au-task" data-i="${i}">
+  const proposed = res.proposedTasks || [];
+  const allCreated = proposed.length > 0 && proposed.every((t) => createdTitles.has(t.title));
+  const tasks = proposed.map((t, i) => {
+    const already = createdTitles.has(t.title);
+    return `
+    <div class="au-task${already ? ' au-task--done' : ''}" data-i="${i}">
       <div class="au-task-top">
         <span class="au-task-prio">${PRIO_EMOJI[t.priority] || '🟡'}</span>
         <span class="au-task-title">${esc(t.title)}</span>
-        <button class="btn-ghost btn--sm au-task-add" data-i="${i}">＋ Crear tarea</button>
+        ${already
+          ? '<span class="au-task-already" title="Ya está en Pendientes">✓ Ya creada</span>'
+          : `<button class="btn-ghost btn--sm au-task-add" data-i="${i}">＋ Crear tarea</button>`}
       </div>
       ${t.description ? `<div class="au-task-desc">${esc(t.description)}</div>` : ''}
       ${(t.tags || []).length ? `<div class="task-tags">${t.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   // Botón "raw": el CRUDO del procesamiento — la transcripción original que se
   // pegó + el JSON interpretado por la IA. Nace COLAPSADO (regla de UI). El
@@ -84,10 +102,13 @@ function renderResult(container, job, id, bus) {
   container.innerHTML = `
     ${titleBar}
     ${res.summary ? `<div class="au-summary">${esc(res.summary)}</div>` : ''}
-    ${res.proposedTasks?.length ? `
+    ${proposed.length ? `
       <div class="au-block au-tasks-block">
-        <div class="au-block-head"><span>➕ Tareas propuestas (${res.proposedTasks.length})</span>
-          <button class="btn btn--sm" data-ref="addall">Crear todas</button></div>
+        <div class="au-block-head"><span>➕ Tareas propuestas (${proposed.length})</span>
+          <div class="au-block-acts">
+            <button class="btn-ghost btn--sm" data-ref="toplan" title="Crear un plan con estas tareas">🗺️ Pasar a plan</button>
+            <button class="btn btn--sm" data-ref="addall"${allCreated ? ' disabled' : ''}>${allCreated ? '✓ Creadas' : 'Crear todas'}</button>
+          </div></div>
         <div class="au-tasks">${tasks}</div>
       </div>` : '<div class="au-none">La IA no propuso tareas de este audio.</div>'}
     <details class="au-block" open><summary>🗣️ Segmentos (${res.segments?.length || 0})</summary>
@@ -116,6 +137,39 @@ function renderResult(container, job, id, bus) {
     addAll.disabled = true; addAll.textContent = '✓ Creadas';
     await createTasks(res.proposedTasks || []);
     container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = '✓ Creada'; });
+  });
+
+  // "Pasar a plan": crea un PLAN (título del audio) + todas las tareas propuestas
+  // asignadas a ese plan. Reusa el CRUD existente (POST /plans + /from-audio con
+  // planId por ítem → createTask valida el planId contra los planes reales).
+  const toPlan = container.querySelector('[data-ref="toplan"]');
+  if (toPlan) toPlan.addEventListener('click', async () => {
+    const items = res.proposedTasks || [];
+    if (!items.length) return;
+    if (dialog?.confirmDialog) {
+      const ok = await dialog.confirmDialog({
+        title: 'Pasar a plan',
+        message: `Se crea el plan “${job.title || 'Audio'}” y ${items.length} tarea(s) asignada(s). ¿Continuar?`,
+        confirmLabel: 'Crear plan',
+      });
+      if (!ok) return;
+    }
+    toPlan.disabled = true; toPlan.textContent = '⏳ creando…';
+    try {
+      const pr = await fetch('/api/tasks/plans', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: job.title || 'Plan de audio', description: res.summary || '', status: 'active' }),
+      });
+      const plan = (await pr.json()).plan;
+      await fetch('/api/tasks/from-audio', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: id, tasks: items.map((t) => ({ ...t, planId: plan?.id || null })) }),
+      });
+      bus?.dispatchEvent?.(new Event('tasks-changed'));
+      toPlan.textContent = '✓ Plan creado';
+      container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = '✓ Creada'; });
+      if (addAll) { addAll.disabled = true; addAll.textContent = '✓ Creadas'; }
+    } catch { toPlan.disabled = false; toPlan.textContent = '🗺️ Pasar a plan'; }
   });
 
   // Edición INLINE del título (clic en ✏️ → input → Enter/blur guarda, Esc cancela).
@@ -238,7 +292,7 @@ export function openAudioPanel(ctx) {
       if (!job) throw new Error('El análisis se interrumpió. Reintentá.');
       if (job.status === 'error') throw new Error(job.error || 'El análisis falló.');
       statusEl.hidden = true;
-      renderResult(resultEl, job, started.id || job.id, bus);
+      renderResult(resultEl, job, started.id || job.id, bus, dialog);
       await loadJobs();
     } catch (e) {
       statusEl.className = 'au-status au-status--err';
@@ -256,7 +310,7 @@ export function openAudioPanel(ctx) {
       const job = await (await fetch(`/api/audio/${id}`)).json();
       ta.value = job.transcript || '';
       statusEl.hidden = true;
-      if (job.status === 'done') renderResult(resultEl, job, id, bus);
+      if (job.status === 'done') renderResult(resultEl, job, id, bus, dialog);
       else if (job.status === 'error') { statusEl.hidden = false; statusEl.className = 'au-status au-status--err'; statusEl.textContent = job.error || 'Ese análisis falló.'; }
     } catch { statusEl.className = 'au-status au-status--err'; statusEl.textContent = 'No se pudo cargar.'; }
   }
@@ -275,7 +329,7 @@ export function openAudioPanel(ctx) {
 // incluye el botón "raw" (transcripción + JSON). ctx = { icon, dialog, bus }.
 // Devuelve { reload } para refrescar la lista tras analizar un audio nuevo.
 export function mountReports(container, ctx) {
-  const { icon, bus } = ctx;
+  const { icon, bus, dialog } = ctx;
   container.innerHTML = `
     <div class="au-reports">
       <div class="au-reports-head">
@@ -316,7 +370,7 @@ export function mountReports(container, ctx) {
         body.innerHTML = '<div class="au-status">cargando…</div>';
         try {
           const job = await (await fetch(`/api/audio/${det.dataset.id}`)).json();
-          if (job.status === 'done') renderResult(body, job, det.dataset.id, bus);
+          if (job.status === 'done') renderResult(body, job, det.dataset.id, bus, dialog);
           else if (job.status === 'error') { body.innerHTML = `<div class="au-status au-status--err">${esc(job.error || 'Ese análisis falló.')}</div>`; }
           else body.innerHTML = '<div class="au-status">El análisis sigue en curso. Volvé a abrir en un rato.</div>';
         } catch { body.innerHTML = '<div class="au-status au-status--err">No se pudo cargar el informe.</div>'; }

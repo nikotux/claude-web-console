@@ -19,8 +19,10 @@ código.
    runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
    paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`);
    consulta EN VIVO de un ticket en Zoho Desk → runner desacoplado
-   (`bin/cwc-desk-runner.js`); investigación a fondo de un PR → runner
-   desacoplado (`bin/cwc-investigate-runner.js`); investigación de CONTEXTO de un
+   (`bin/cwc-desk-runner.js`); ANÁLISIS GENERAL IA del tablero de Pendientes
+   (duplicados/unificables/completar info, por tareas o planes) → runner
+   desacoplado (`bin/cwc-tasks-analyze-runner.js`); investigación a fondo de un
+   PR → runner desacoplado (`bin/cwc-investigate-runner.js`); investigación de CONTEXTO de un
    ticket SIN PR (lee el código de Tolkien read-only para explicar por qué NO se
    resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`);
    optimización IA de los motores (censo + análisis con propuestas) → runner
@@ -184,9 +186,14 @@ código.
   `ticket-investigations/<n>.json` veredicto de la investigación de contexto de un
   ticket sin PR + `<n>.req.json` enunciado + `ticket-investigate.lock` heartbeat,
   `inventory.json`+`inventory.md` generados por core/inventory.js,
+  `plan-limits.json` último snapshot BUENO de límites/créditos del plan (lo
+  escribe el módulo tokens en cada respuesta OK de /api/tokens/limits; se sirve
+  como fallback `stale` ante 429/corte de red/reinicio),
+  `tokens-reset.json` línea de base del RESET de estadísticas de Uso (foto del
+  consumo al resetear; /summary muestra crudo−baseline; borrarla = ver histórico),
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
-  pendientes, `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · comms.lock heartbeat · teams.lock · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
+  pendientes, `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · chatbot.json chatbot derivado por IA · comms.lock heartbeat · teams.lock · chatbot.lock heartbeat · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
   `optimize.lock` heartbeat de su runner, `coherence.json` resultado del Módulo
   de Coherencia (propuestas + hallazgos determinísticos persistidos) +
   `coherence.lock` heartbeat de su runner, `projects-analyze/<id>.json` jobs del
@@ -197,15 +204,75 @@ código.
   pendientes + PLANES (módulo tasks; CRUD síncrono determinístico, escritura
   atómica tmp+rename — NO hay runner) + `tasks-activity.json` LOG de actividad
   append-only (create/update/status/complete/delete de tareas y planes; poda a
-  300 eventos), `audio/<id>.json` jobs del análisis IA de
+  300 eventos) + `tasks-analysis-<scope>.json` resultado del ANÁLISIS GENERAL IA
+  del tablero (scope tasks|plans; lo escribe `bin/cwc-tasks-analyze-runner.js`) +
+  `tasks-analyze.log` de ese runner, `audio/<id>.json` jobs del análisis IA de
   transcripciones (módulo audio; id determinístico por contenido, poda >30 días)
   + `audio.log` de su runner, `session-bus/` del INTERFONO entre
   sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
   reservas de archivo (1 por archivo, clave = hash de la ruta) ·
   `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
-  `bin/cwc-bus.js`, el módulo `interfono` solo lo lee), `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
+  `bin/cwc-bus.js`, el módulo `interfono` solo lo lee), `ticket-meta.json`
+  (metadata NUESTRA por ticket/PR del módulo VIVO `tickets/`: "Contexto adicional"
+  + "Histórico del trabajo" — clave `ticketNumber` o `pr:<n>`; lo escribe
+  `tickets/meta-store.js`, escritura atómica tmp+rename; NADA lo poda),
+  `ticket-context/<id>.json` jobs del runner de contexto adicional
+  (`bin/cwc-ticket-context-runner.js`; poda >30 días) + `ticket-context.log`,
+  `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
+
+## Módulo VIVO `tickets/` — Contexto adicional + Histórico del trabajo (2026-07-07)
+
+⚠️ El tablero `bugfixes/board` que describe gran parte de este archivo está
+ARCHIVADO (`_archived/`, branch `redesign/board-mobile`). El módulo VIVO del ciclo
+de tickets/features/PRs es **`tickets/`** (Bugs v2 · "One Front Door"): dashboard
+determinístico (snapshot Zoho/GitHub cada 60 s, sin IA) con ventanas de detalle
+en MODAL — `public/js/modules/tickets/{ticket-detail,pr-detail}.js` (clases `.bv2-*`).
+
+DOS SECCIONES nuevas en la 2ª columna de esas ventanas (pedido de Niko), panel
+FRONT compartido `public/js/modules/tickets/meta-panel.js` (mismo HTML/handlers/
+inyección al prompt para ticket, feature y PR — no se duplica):
+- **🎙️ Contexto adicional:** pegás la TRANSCRIPCIÓN de una charla → la IA la
+  interpreta (runner desacoplado read-only, ver arriba) → se AUTO-GUARDA como
+  sección persistida y se INYECTA en "Continuar en el chat". Editable/borrable.
+- **📚 Histórico del trabajo:** al CERRAR el chat de un ticket/PR, `Chat.close()`
+  (chat/index.js, diferido 2 s) extrae DETERMINÍSTICAMENTE (0 tokens) archivos
+  tocados + resumen del cierre (`extractSessionWork` de `tickets/meta-store.js`,
+  portado del board v1) y lo agrega al histórico del ítem → la PRÓXIMA sesión
+  arranca con TODO el historial acumulado. PRs pasan `ticket:{number:'pr:<n>'}`
+  para registrar bajo esa clave.
+
+Backend: `tickets/meta-store.js` (store persistente, overlay `withMeta` sobre el
+ticket/PR al servir) + `tickets/context-analyze-shared.js` (molde de audio) +
+endpoints en `tickets/index.js`: `POST /meta/context-analyze` (spawn runner,
+CONSUME TOKENS bajo confirm) · `GET /meta/context-analyze/:job` (poll, 0 tokens) ·
+`POST /meta/context` (guardar/editar/borrar a mano) · `GET /meta/:key`.
+
+CONTEXTOS DE TRABAJO EDITABLES (migrado de v1 al chat v2, 2026-07-08). Además de
+los DOS bloques por-ítem de arriba (contexto adicional + histórico), cada chat de
+"Continuar en el chat" / "Trabajar esto en un chat" (ticket, feature y PR) inyecta
+DOS contextos GLOBALES editables — los mismos de la v1 (bugfixes), que estaban en
+disco (`~/.cwc-data/bugfix-context.md` = 'work' · `bugfix-pr-context.md` = 'pr') y
+servidos por `GET/POST /api/tickets/context?kind=work|pr` (`tickets/context-store.js`)
+pero YA NO se inyectaban en ningún chat (agujero de la migración): 'work' = CÓMO se
+trabaja un ticket (el **"Pensamiento Profundo"** paso-0 antes del plan —cuadro de
+contra-verificación con links autoritativos, lección Desk #519—, entregas en tablas
++ "Puntos a investigar", narrativa humana, triage BUG/FR/EXTERNA, gate de push, y la
+sesión publica el PR directo tras el gate: en v2 NO existe el módulo "Enviar PR" de
+v1) · 'pr' = house style de la descripción del PR (Summary con 3 preguntas, causa
+raíz, verificación, variantes feature/external). Se editan en ⚙ Sistema → Proyectos,
+grupo "Tickets & Features · contexto de trabajo" (entradas "Tickets & Features:
+Trabajo/PR" — antes "Bugfixes:", renombradas; keys internas `bugfix-work`/`bugfix-pr`
+sin cambiar para no tocar el endpoint), `system/project-context-panel.js`. Wiring:
+`fetchWorkflowContexts()` + `workflowContextBlocks()` en `tickets/meta-panel.js`
+(fuente única, patrón `fetchContexts` de v1); `buildContext`/`buildPrContext`
+(ticket-detail/pr-detail) apendean los bloques `--- CONTEXTO DE TRABAJO ---` /
+`--- REDACCIÓN DEL PR ---` AL FINAL del prompt. La metodología del Pensamiento
+Profundo ADEMÁS sigue en la memoria de Tolkien (`…tolkien/memory/pensamiento-profundo.md`
+y hermanas), que auto-carga en TODA sesión de Tolkien (incluidas TUI) — solapamiento
+deliberado (pedido de Niko 2026-07-08): la memoria cubre las TUI/chats manuales, el
+contexto inyectado cubre los chats abiertos desde el botón de un ticket v2.
 
 ## Mapa del proyecto
 
@@ -587,10 +654,27 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             GET / {tasks,counts,plans} · GET /activity {events} · GET /plans
                             {plans} · POST / (crear tarea) · POST /from-audio {jobId,tasks[]} ·
                             POST /plans (crear) · POST /plans/:id (editar) · POST /plans/:id/delete
-                            · POST /:id (editar tarea) · POST /:id/delete. OJO ORDEN: las rutas
+                            · POST /:id (editar tarea) · POST /:id/delete · POST /analyze +
+                            GET /analysis (análisis general IA, ver arriba) · comentarios/timeline
+                            (ver "CAMPOS estilo Pad" abajo). OJO ORDEN: las rutas
                             literales /plans y /activity se registran ANTES de la paramétrica /:id
                             (valida ^T\d+$) para que Express no las capture como id; /plans valida
-                            ^PLAN-\d+$. Se alimenta MANUAL y desde el módulo `audio`. Frontend
+                            ^PLAN-\d+$. CAMPOS estilo Pad (2026-07-07, pedido del usuario, "nutrir
+                            el detalle basándonos en GetPad pero simple"): la TAREA suma
+                            owner/estimate/dueDate/comments[]/blocks[]; el PLAN suma
+                            owner/phase/targetDate/comments[]/blocks[]. Todo se normaliza en
+                            store.js (dueDate/targetDate = YYYY-MM-DD validado; blocks = ids
+                            EXISTENTES T<n>|PLAN-<n>, sin el propio, tope 30 — pueden CRUZAR
+                            tarea↔plan como en Pad); `blockedBy` NO se persiste, se deriva en el
+                            front (quién te tiene en su blocks). COMENTARIOS append+borrar
+                            (sin editar): POST /:id/comment {text} + POST /:id/comment/:cid/delete
+                            (id ^C\d+-\d+$) y sus gemelos /plans/:id/comment[...]; addComment deja
+                            además un evento 'comment' en el log. TIMELINE por ítem: GET
+                            /:id/timeline · GET /plans/:id/timeline = merge de los comments del
+                            ítem + los eventos del log con refId===id (excluye 'comment' para no
+                            duplicar), desc. Las rutas /:id/timeline, /:id/comment[...] van al final
+                            (tras las literales); sus gemelas /plans/:id/... ANTES de /plans/:id.
+                            Se alimenta MANUAL y desde el módulo `audio`. Frontend
                             tasks.js: sección colapsable del sidebar
                             (semáforo + conteos) + TABLERO modal (openModal) con CUATRO PESTAÑAS
                             (.tk-tabs/.tk-tab, espejo visual de .bb-tabs del board de Bugs;
@@ -622,8 +706,52 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Escucha el evento `tasks-changed` del bus (lo dispara audio al crear
                             tareas) para refrescar. FASE 2 ✅ (Planes + log real + tipos) + rediseño
                             de Tareas a cuadritos+modal y Panel con Clasificación primero (2026-07-06).
-                            FASE 3 pendiente (anotada): más tipos de Collection tipo Pad
+                            ANÁLISIS GENERAL IA (2026-07-07, pedido del usuario): botón "🧠 Análisis
+                            general" (admin, consume tokens) en las pestañas 📋 Tareas y 🗺️ Planes.
+                            Corre el motor `tasks/analyze-shared.js` + runner desacoplado
+                            `bin/cwc-tasks-analyze-runner.js` (regla de oro; regla 6: sonnet, 1 turno,
+                            CERO herramientas — los datos se juntan EN NODE y viajan en el prompt,
+                            nunca lee/escribe disco). scope='tasks'|'plans': junta TODAS las tareas (o
+                            planes) + los INFORMES de audio (summary/tareas propuestas/plan) y devuelve
+                            {resumen, duplicados[{keep,remove[]}], unificables[{ids[],title,description}],
+                            completar[{id,description,tags[]}]}. Estado persistido por alcance en
+                            ~/.cwc-data/tasks-analysis-<scope>.json (patrón audio: status running/done/
+                            error + dedup por corrida fresca, NO hay lock aparte); POST
+                            /api/tasks/analyze {scope} (admin) arranca+responde YA · GET
+                            /api/tasks/analysis?scope=... solo lee disco (0 tokens); el front encuesta.
+                            Las propuestas NUNCA se auto-aplican: el modal (tasks.js openAnalysis,
+                            colapsable/árbol) las muestra por sección y cada una tiene Aprobar/Descartar;
+                            APLICAR reusa el CRUD determinístico existente (dup→delete los remove ·
+                            unif→update el 1º con título/detalle fusionado + delete el resto ·
+                            completar→update description/tags) — endpoints /api/tasks/:id vs
+                            /api/tasks/plans/:id según scope. Al cerrar, si aplicó algo, recarga el
+                            tablero. FASE 3 pendiente (anotada): más tipos de Collection tipo Pad
                             (Docs/Feedback/Roadmap) si hacen falta.
+                            6 COLUMNAS en la pestaña Tareas (2026-07-07, pedido del usuario: antes 3
+                            con min 240px): .task-grid pasó a `columns: 6` FIJAS (sin min-width ⇒
+                            NUNCA scroll horizontal, los cuadritos se angostan) + breakpoints
+                            5/4/3/2/1 (1100/900/700/520/380px).
+                            DETALLE ENRIQUECIDO estilo Pad (2026-07-07): tareas Y planes abren el
+                            MISMO modal `openDetail(kind, item)` (openTaskDetail/openPlanDetail son
+                            wrappers) — antes el detalle de tarea era plano y el plan ni tenía modal
+                            (era un <details> inline; ahora la tarjeta de plan trae botón "Abrir").
+                            Secciones colapsables (regla UI árbol): 🍞 BREADCRUMB navegable
+                            (Pendientes / Planes / [PLAN si la tarea tiene] / ID; los links cierran el
+                            modal y saltan de pestaña o abren el plan) · ⚙️ PROPIEDADES en grilla
+                            (tarea: estado·prioridad·tipo·owner·estimación·fecha · plan: estado·fase·
+                            fecha·owner·progreso) · 📝 DESCRIPCIÓN en MARKDOWN (renderMarkdown de
+                            ui/markdown.js, el mismo sanitizado del chat) · 🔗 RELACIONES (tarea:
+                            "Parte del plan" · plan: "Hijos X/Y" = sus tareas · ambos: "Bloquea a"
+                            editable con picker de búsqueda [＋] y quitar [✕], "Bloqueado por"
+                            derivado read-only; los chips son navegables → abren ese ítem) · 🕑
+                            TIMELINE + COMENTARIOS (GET /:id/timeline: eventos del log + comentarios;
+                            composer con Ctrl+Enter, borrar por comentario). Patrón de refresco:
+                            `mutate(fn)` aplica el cambio, marca dirty, hace boardApi.reload (recarga
+                            las arrays tasks/plans del board) y re-renderiza el modal con el ítem
+                            fresco (o cierra si se borró); el listener del modal está delegado UNA vez
+                            (no por render). taskForm suma owner/estimación/fecha objetivo; planForm
+                            suma owner/fase/fecha objetivo. Estilos .tk-detail/.tk-crumb/.tk-sec/
+                            .tk-props/.tk-md/.tk-rel*/.tk-tl* en style.css.
   audio/                    EXTRACCIÓN DE AUDIO: cargás una TRANSCRIPCIÓN (ya pasada a texto,
                             NO hay speech-to-text acá) y la IA interpreta quién dijo qué y por
                             qué, clasifica cada tramo (accion/plan/decision/problema/pregunta/
@@ -652,7 +780,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             modal: pegar transcripción → Analizar con confirm de tokens →
                             resultado en ÁRBOL colapsable (resumen · tareas propuestas con "Crear
                             tarea"/"Crear todas" · segmentos · plan · hablantes · historial de
-                            análisis previos). renderResult ahora incluye un bloque 🧾 RAW
+                            análisis previos). YA-CREADAS (2026-07-07, pedido del usuario):
+                            renderResult es ASÍNCRONA y antes de pintar consulta GET /api/tasks →
+                            filtra las tareas de ESTE informe (source=audio + sourceRef=jobId) y
+                            marca por TÍTULO exacto las propuestas ya creadas: chip "✓ Ya creada"
+                            en vez del botón "＋ Crear tarea" (.au-task--done/.au-task-already) y, si
+                            TODAS están, "Crear todas" nace deshabilitado. PASAR A PLAN (mismo pedido):
+                            botón "🗺️ Pasar a plan" en el head del bloque de tareas propuestas →
+                            crea un PLAN (título del audio, detalle=summary) y todas las propuestas
+                            como tareas ASIGNADAS a ese plan (POST /plans + /from-audio con planId por
+                            ítem; createTask valida el planId). renderResult toma un 5º arg `dialog`
+                            (confirm del "Pasar a plan"); los 3 call sites (analyze/openExisting/
+                            mountReports) lo pasan. renderResult ahora incluye un bloque 🧾 RAW
                             colapsado (.au-raw): el CRUDO del procesamiento = transcripción
                             original + JSON interpretado (el "producto" es el render lindo, el raw
                             es lo crudo; pedido del usuario 2026-07-06). Además audio.js exporta
@@ -791,12 +930,54 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             orden fijo porque los costos son floats y el orden de suma debe
                             ser determinístico) + límites del PLAN (GET /api/tokens/limits:
                             % usado y reset de las ventanas de claude.ai — sesión 5 h /
-                            semanales, incluida la del modelo activo — vía el endpoint
-                            OAuth de uso de Anthropic con el accessToken de
-                            ~/.claude/.credentials.json, la misma credencial que hereda el
-                            SDK; el archivo SOLO se lee, el token nunca viaja al cliente,
-                            caché 60 s y ?fresh=1 la saltea; si el token venció el error
-                            dice cómo arreglarlo — jamás refrescarlo desde acá)
+                            semanales, incluida la del modelo activo — + los CRÉDITOS de uso
+                            extra (`credits` derivado de `extra_usage`: enabled/usedCredits/
+                            monthlyLimit/percent/currency; el front muestra SIEMPRE la fila que
+                            Claude reporte — con barra % si hay tope, contador si es pago por
+                            uso, o fila tenue "sin créditos activos" si enabled=false. OJO
+                            REPRESENTACIÓN (bug 2026-07-07): `used_credits`/`monthly_limit`
+                            vienen en la UNIDAD MÍNIMA (centavos) con `decimal_places` diciendo
+                            cuántos decimales → el backend divide por 10^decimal_places para
+                            pasarlos a dólares ($100 llegaba como 10000; se usa el campo, no un
+                            /100 hardcodeado). `utilization` YA viene en % (0-100)),
+                            vía el endpoint OAuth de uso de Anthropic con
+                            el accessToken de ~/.claude/.credentials.json, la misma credencial
+                            que hereda el SDK; el archivo SOLO se lee, el token nunca viaja al
+                            cliente, caché 120 s (subido de 60 s: el medidor OAuth tira 429 si
+                            se lo consulta seguido) y ?fresh=1 la saltea; si el token venció el
+                            error dice cómo arreglarlo — jamás refrescarlo desde acá.
+                            PERSISTENCIA + FALLBACK (2026-07-07, pedido del usuario: el dato
+                            venía SOLO de memoria y un 429/corte de red/reinicio lo perdía):
+                            cada respuesta BUENA se guarda en ~/.cwc-data/plan-limits.json
+                            (writePersistedLimits, atómica tmp+rename, best-effort); ante
+                            CUALQUIER error de fetch se sirve el último snapshot bueno — de la
+                            caché en memoria o, si el server se reinició, del disco
+                            (readPersistedLimits) — con 200 y `stale:true`+`staleReason` en vez
+                            de tirar el error; recién sin NINGÚN dato previo se devuelve el
+                            error real con su status (400 creds / 502 Anthropic / 500). El
+                            front (usage.js renderLimits, fuente única del modal Uso Y del pie
+                            plan-limits.js) pinta el aviso "⚠ datos guardados · hace X" cuando
+                            `stale`, y loadLimits del modal ya NO borra el último render bueno
+                            si un refresco posterior falla — paridad con el pie).
+                            RESET de estadísticas (2026-07-07, pedido del usuario: botón para
+                            poner el costo en dólares en CERO): el costo NO se persiste, se
+                            recalcula SIEMPRE desde los transcripts de Claude Code (que no se
+                            tocan). "Resetear a cero" es guardar una FOTO del consumo actual como
+                            línea de base (~/.cwc-data/tokens-reset.json, atómica, sobrevive
+                            reinicios) y mostrar solo lo acumulado DESDE ese punto (mostrado =
+                            crudo − baseline, recortado a ≥0, por totals/today/projects/engines
+                            uniformemente para que todo quede consistente). buildSummary SIGUE
+                            devolviendo el CRUDO (lo consume también el runner de Optimización
+                            IA); la resta (applyReset) se aplica SOLO en la ruta /summary. "Hoy"
+                            solo resta el baseline si el reset se tomó el MISMO día UTC (si fue
+                            antes, todo el consumo de hoy es post-reset). POST /api/tokens/reset
+                            toma la foto (buildSummary FRESCO, no el cacheado) · {clear:true}
+                            deshace (borra la foto, vuelve el histórico). Autenticado, no admin
+                            (mismo nivel de confianza que el resto de Uso; muta solo estado
+                            personal). Front (usage.js): botón "↺ Reset" en el header del modal
+                            (con confirm) + nota "contando desde <fecha> · ver total histórico"
+                            (el link deshace) + label "Total · desde reset"; `resetAt` viaja en
+                            el summary)
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
                             stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
@@ -1575,6 +1756,15 @@ bin/cwc-audio-runner.js     análisis IA de UNA transcripción de audio (módulo
                             ~/.cwc-data/audio/<id>.json (job con la transcripción que escribe el
                             POST; el runner persiste el resultado en el MISMO archivo). Lógica
                             compartida en src/modules/audio/shared.js
+bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
+                            Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
+                            server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
+                            regla 6 deniega TODO; los datos se juntan EN NODE y viajan en el
+                            prompt). Arg `scope` = tasks|plans: junta TODAS las tareas (o planes)
+                            + los informes de audio y devuelve {resumen, duplicados, unificables,
+                            completar}. Interfaz por archivos: ~/.cwc-data/tasks-analysis-<scope>.json
+                            (status running/done/error, dedup por corrida fresca, sin lock aparte).
+                            Lógica compartida en src/modules/tasks/analyze-shared.js
 bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
                             y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
@@ -1667,11 +1857,23 @@ bin/cwc-comms-runner.js     escaneo de comunicaciones: junta con `gh` (0 tokens,
                             las reviews/comentarios de los contactos con login de GitHub y
                             arma los hilos (github.json). Reanudable (lock/heartbeat +
                             caché incremental por PR). Lógica en src/modules/comms/shared.js
+bin/cwc-comms-chatbot-runner.js motor del CHATBOT del módulo comms (botón "🤖 Chatbot"
+                            del tablero), DESACOPLADO (regla de oro). Deriva la sección Chatbot de
+                            lo que YA escaneamos del bot de Teams "Tolkien" (TheEye) en DOS fases:
+                            (1) LEE los mensajes CRUDOS del bot vía Graph (read-only regla 6 =
+                            graphReadAllowed, reusa teamsBotPrompt/parseTeamsResponse; fallback a
+                            teams.json); (2) INTERPRETA con IA (sonnet, 1 turno, CERO herramientas,
+                            doble capa deniega TODO) quién es la persona REAL detrás de cada mensaje
+                            relayado y lo atribuye a un contacto conocido; (3) MERGE no destructivo
+                            con chatbot.json (append+dedup, preserva el seed). CONSUME TOKENS ⇒ bajo
+                            botón. Interfaz por archivos: chatbot.lock (heartbeat con fase) +
+                            chatbot.json (resultado). Lógica en src/modules/comms/chatbot-shared.js
 bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo comms:
                             por cada contacto lee sus DMs con las tools graph_* de LECTURA
                             del MCP tolkien-mordor (cwd=projectDir, settingSources headless,
                             doble capa read-only regla 6 = graphReadAllowed). CONSUME TOKENS
                             (sonnet) ⇒ bajo botón. Lógica en src/modules/comms/teams-shared.js
+                            (teamsBotPrompt/parseTeamsResponse los REUSA cwc-comms-chatbot-runner.js).
                             ATRIBUCIÓN (fix 2026-07-05): cada hilo es entre YO (self.json:
                             Nicolás/nmosquera@/gh nmosqueramordor) y el contacto. Teams exige
                             el 1:1 {yo, contacto} — RECHAZA (found:false) un DM que no me
@@ -1736,6 +1938,51 @@ bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo c
                             tablero. (La idea original de "que el bot Tolkien/TheEye confirme"
                             NO es viable: no hay NINGÚN enganche programático con OpenClaw/TheEye
                             en este repo — verificado.)
+                            BOTÓN "🤖 CHATBOT" — chatbot DERIVADO por IA (2026-07-07, pedido del
+                            usuario): hasta hoy la fuente `chatbot` (Chris relayado por el bot
+                            Tolkien/TheEye) era 100% seed/manual — no había forma de traer
+                            actualizaciones (el usuario recibió novedades de los tkts 252/251/250
+                            por ese canal y la consola nunca las ingirió). Ahora el tablero tiene
+                            un 3er botón "🤖 Chatbot" (junto a GitHub/Teams) que DERIVA la sección
+                            de lo que YA escaneamos del bot, en un RUNNER DESACOPLADO
+                            (`bin/cwc-comms-chatbot-runner.js`, lógica en `comms/chatbot-shared.js`;
+                            regla de oro + regla 6). DOS FASES: (1) LEER — por cada contacto
+                            kind:'bot' con chatId lee sus mensajes CRUDOS de Teams vía Graph
+                            (read-only doble capa = graphReadAllowed, reusa teamsBotPrompt/
+                            parseTeamsResponse de teams-shared; fallback a teams.json ya escaneado
+                            si Graph falla); (2) INTERPRETAR — corrida SDK (sonnet, 1 turno, CERO
+                            herramientas, doble capa deniega TODO) que DEDUCE por el CONTENIDO
+                            quién es la persona REAL detrás de cada mensaje del bot ("Chris
+                            reviewed…" → contacto chris) y lo atribuye a un contacto conocido
+                            (chatbotInterpretPrompt/parseChatbotInterpretation); realContactId
+                            inválido/"unknown" cae al contacto del bot (botFallbackId) para no
+                            perder nada. FASE 3 MERGE — agrupa por contacto real y FUSIONA con
+                            chatbot.json existente (mergeChatbotThreads: append + dedup por
+                            ts+texto, NUNCA pisa el seed histórico). Extensible: NO solo Chris —
+                            cualquier persona relayada que sea contacto conocido se atribuye sola.
+                            CONSUME TOKENS (Graph read + interpretación) ⇒ bajo botón con confirm,
+                            como Teams. Backend: POST /api/comms/chatbot-refresh (admin, dedup por
+                            lock `chatbot.lock` heartbeat con fase, spawnChatbotScan patrón
+                            spawnTeamsScan) responde YA; `chatbotRunning` viaja en GET / y /index;
+                            el front (board/actions.js scanChatbot) encuesta como el scan de Teams.
+                            Frontend: botón en la toolbar (board/index.js, case 'scanchatbot'),
+                            `chatbotRunning` en el store, sección 🤖 Chatbot (render.js) con
+                            "actualizando…" + invitación al botón cuando está vacía. Estado
+                            file-based: ~/.cwc-data/comms/chatbot.json (resultado fusionado) +
+                            chatbot.lock (heartbeat) + chatbot.log.
+                            CONTENIDO COMPLETO (2026-07-07, pedido del usuario: "los mensajes largos
+                            se cortan y no se muestra la totalidad"): en Comunicaciones el mensaje se
+                            muestra ENTERO. Los prompts de Teams (teamsPrompt/teamsBotPrompt, ×3)
+                            pedían `"text":"<~300 chars>"` — el modelo recortaba en el ORIGEN (los
+                            mensajes topaban en ~318 chars); ahora piden el texto COMPLETO ("no lo
+                            resumas ni recortes"). Caps de ingesta subidos 1200→8000 (parseTeamsResponse
+                            + parseChatbotInterpretation) y el display (render.js msgHtml) ya NO
+                            recorta (el `.cm-msg-b` con white-space:pre-wrap envuelve todo, sin clamp
+                            CSS — no hace falta "expandir"). mergeChatbotThreads hace UPGRADE: si un
+                            re-scan trae el MISMO mensaje con MÁS texto (des-clippeado), reemplaza la
+                            versión recortada (clave por ts+arranque, dedup tolerante al des-clippeo).
+                            Beneficio colateral: el scan de Teams (mismo prompt) también trae mensajes
+                            completos. Data vieja clippeada: se sana con un re-scan.
                             CHATEAR DIRECTO + ENVÍO A BOTS (2026-07-06, pedido del usuario
                             "poder chatear/responder rápido"): (1) botón "Responder" en cada
                             hilo (render.js data-act='reply') que hace scroll+focus al composer
@@ -1798,6 +2045,16 @@ bin/cwc-comms.js            CLI TRANSVERSAL del motor de Comunicaciones (patrón
                             contacts/contact-add/scan. Estado file-based en ~/.cwc-data/comms/
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
+bin/cwc-ticket-context-runner.js  CONTEXTO ADICIONAL de un ticket/PR (módulo VIVO
+                            `tickets/`, 2026-07-07): interpreta con IA una TRANSCRIPCIÓN de
+                            una charla (con el cliente/equipo) y destila el contexto que le
+                            sirve a quien vaya a trabajar el ítem. DESACOPLADO (regla de oro) +
+                            READ-ONLY doble capa (regla 6: sonnet, 1 turno, CERO herramientas —
+                            el texto viaja entero en el prompt). Interfaz por archivos:
+                            ~/.cwc-data/ticket-context/<id>.json (id determinístico por
+                            key+transcripción). Al terminar AUTO-GUARDA el resultado en el
+                            meta-store del ítem (decisión de Niko: auto-guardar al interpretar).
+                            Lógica en src/modules/tickets/context-analyze-shared.js
 systemd/claude-web-console.service  unidad (copia instalada: ~/.config/systemd/user/)
 docs/                       frontend-modules.md · brief-original.txt · contexto-ui.md (histórico)
 ```

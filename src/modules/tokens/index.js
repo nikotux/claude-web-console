@@ -16,9 +16,12 @@
 //   Uso. `models[].lastMtime` es el timestamp del ÚLTIMO mensaje de ESE modelo
 //   (no el mtime del archivo): así el Pac-Man "consumiendo ahora" no titila en
 //   modelos secundarios del mismo transcript.
-//   GET /api/tokens/limits   -> { limits[], subscription, updatedAt }
-//   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales), vía el
-//   endpoint OAuth de Anthropic con el token del CLI (solo lectura, ver abajo).
+//   GET /api/tokens/limits   -> { limits[], credits, subscription, updatedAt, stale? }
+//   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales) + los
+//   CRÉDITOS de uso extra (extra_usage), vía el endpoint OAuth de Anthropic con
+//   el token del CLI (solo lectura). El último resultado bueno se PERSISTE en
+//   ~/.cwc-data/plan-limits.json: ante 429/corte de red/reinicio se sirve ese
+//   snapshot marcado `stale:true` en vez de perder el dato.
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -319,6 +322,89 @@ export async function buildSummary() {
   };
 }
 
+// ===== RESET de estadísticas (baseline de costo/tokens) =====
+// El costo NO se persiste: se recalcula SIEMPRE desde los transcripts de Claude
+// Code (que no tocamos). "Resetear a cero" es guardar una FOTO del consumo
+// actual como línea de base y mostrar solo lo acumulado DESDE ese punto
+// (mostrado = crudo − baseline, recortado a ≥0). La foto vive en disco
+// (~/.cwc-data/tokens-reset.json) → sobrevive reinicios. buildSummary sigue
+// devolviendo el CRUDO (lo usa también el runner de Optimización IA); la resta
+// se aplica SOLO en la ruta /summary.
+const RESET_FILE = path.join(os.homedir(), '.cwc-data', 'tokens-reset.json');
+let resetBaseline; // undefined=sin cargar · null=no hay reset · objeto=baseline
+
+async function getBaseline() {
+  if (resetBaseline !== undefined) return resetBaseline;
+  try {
+    const obj = JSON.parse(await fs.readFile(RESET_FILE, 'utf8'));
+    resetBaseline = obj && obj.summary ? obj : null;
+  } catch {
+    resetBaseline = null;
+  }
+  return resetBaseline;
+}
+
+async function saveBaseline(base) {
+  await fs.mkdir(path.dirname(RESET_FILE), { recursive: true, mode: 0o700 });
+  const tmp = `${RESET_FILE}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(base), { mode: 0o600 });
+  await fs.rename(tmp, RESET_FILE);
+  resetBaseline = base;
+}
+
+async function clearBaseline() {
+  resetBaseline = null;
+  try { await fs.unlink(RESET_FILE); } catch { /* no existía */ }
+}
+
+// Resta b de a en cada campo (clamp ≥0). Muta `a`.
+function subFields(a, b, fields) {
+  if (!a || !b) return;
+  for (const f of fields) {
+    if (typeof a[f] === 'number' && typeof b[f] === 'number') {
+      a[f] = Math.max(0, a[f] - b[f]);
+    }
+  }
+}
+
+const BUCKET_FIELDS = ['input', 'output', 'cw1h', 'cw5m', 'cr', 'cacheWrite', 'cacheRead', 'tokens', 'cost'];
+
+// Ajusta una lista (projects/engines) restando su baseline por `matchKey`, y
+// dentro de cada item ajusta models[] por `model`. Descarta lo que quedó en 0
+// (consumido enteramente ANTES del reset).
+function adjustList(list, baseList, matchKey) {
+  const baseBy = new Map((baseList || []).map((x) => [x[matchKey], x]));
+  const out = [];
+  for (const item of list || []) {
+    const b = baseBy.get(item[matchKey]);
+    if (b) {
+      subFields(item, b, BUCKET_FIELDS);
+      const bModels = new Map((b.models || []).map((m) => [m.model, m]));
+      item.models = (item.models || [])
+        .map((m) => { subFields(m, bModels.get(m.model), BUCKET_FIELDS); return m; })
+        .filter((m) => m.tokens > 0);
+    }
+    if (item.tokens > 0) out.push(item);
+  }
+  return out;
+}
+
+// Devuelve el summary CRUDO menos la línea de base (foto tomada en el reset).
+function applyReset(raw, base) {
+  if (!base || !base.summary) return raw;
+  const b = base.summary;
+  const currentDay = new Date().toISOString().slice(0, 10);
+  const out = structuredClone(raw);
+  subFields(out.totals, b.totals, BUCKET_FIELDS);
+  // "Hoy" solo se ajusta si el reset se tomó HOY (mismo día UTC); si el reset
+  // fue un día anterior, todo el consumo de hoy es POSTERIOR al reset (resta 0).
+  if (base.day === currentDay) subFields(out.today, b.today, BUCKET_FIELDS);
+  out.projects = adjustList(out.projects, b.projects, 'name');
+  out.engines = adjustList(out.engines, b.engines, 'key');
+  out.resetAt = base.capturedAt || null;
+  return out;
+}
+
 // Cache del summary completo (evita re-escanear en ráfagas de polling).
 let summaryCache = null;
 let summaryAt = 0;
@@ -336,11 +422,38 @@ let summaryBuildPromise = null;
 // El token nunca sale hacia el cliente: el server hace de proxy.
 const CREDS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+// Persistencia a disco del ÚLTIMO resultado bueno de límites/créditos: el dato
+// viene de Anthropic pero un 429 / corte de red / reinicio del server lo perdía
+// (quedaba solo en memoria). Guardamos la última respuesta OK acá para poder
+// SERVIRLA (marcada `stale`) cuando la consulta falla, y de paso reducir las
+// llamadas reales al medidor OAuth. Escritura atómica (tmp+rename).
+const PLAN_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'plan-limits.json');
 
 const LIMIT_LABELS = {
   session: 'Sesión (5 h)',
   weekly_all: 'Semana · todos los modelos',
 };
+
+// Lee el último snapshot bueno persistido (o null si no hay/está corrupto).
+async function readPersistedLimits() {
+  try {
+    const obj = JSON.parse(await fs.readFile(PLAN_LIMITS_FILE, 'utf8'));
+    return obj && Array.isArray(obj.limits) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+// Persiste un snapshot bueno (best-effort: si falla el disco, no rompe la
+// respuesta al cliente — el dato en memoria ya se devolvió).
+async function writePersistedLimits(data) {
+  try {
+    await fs.mkdir(path.dirname(PLAN_LIMITS_FILE), { recursive: true, mode: 0o700 });
+    const tmp = `${PLAN_LIMITS_FILE}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
+    await fs.rename(tmp, PLAN_LIMITS_FILE);
+  } catch { /* best-effort */ }
+}
 
 async function fetchPlanLimits() {
   let oauth;
@@ -425,8 +538,30 @@ async function fetchPlanLimits() {
       }
     }
   }
+
+  // Créditos de uso EXTRA (el "extra usage" del plan: crédito en dólares que se
+  // consume una vez agotadas las ventanas del plan). Anthropic lo reporta en
+  // `extra_usage` — puede venir ausente o con todo en null si el plan no lo
+  // tiene habilitado; en ese caso `enabled` queda false.
+  // OJO REPRESENTACIÓN (bug 2026-07-07): los montos (`used_credits`,
+  // `monthly_limit`) vienen en la UNIDAD MÍNIMA de la moneda (centavos), con
+  // `decimal_places` diciendo cuántos decimales tiene → hay que dividir por
+  // 10^decimal_places para pasarlos a dólares ($100 llegaba como 10000). Se usa
+  // el campo, no un /100 hardcodeado. `utilization` YA viene en % (0-100).
+  const eu = data.extra_usage || {};
+  const dp = Number.isInteger(eu.decimal_places) ? eu.decimal_places : 2;
+  const factor = Math.pow(10, dp);
+  const credits = {
+    enabled: !!eu.is_enabled,
+    usedCredits: typeof eu.used_credits === 'number' ? eu.used_credits / factor : null,
+    monthlyLimit: typeof eu.monthly_limit === 'number' ? eu.monthly_limit / factor : null,
+    percent: typeof eu.utilization === 'number' ? eu.utilization : null,
+    currency: eu.currency || 'USD',
+  };
+
   return {
     limits,
+    credits,
     subscription: oauth.subscriptionType || null,
     updatedAt: new Date().toISOString(),
   };
@@ -435,7 +570,10 @@ async function fetchPlanLimits() {
 // Cache de límites: consulta remota, TTL más largo que el summary local.
 let limitsCache = null;
 let limitsAt = 0;
-const LIMITS_TTL_MS = 60000;
+// TTL más largo (2 min): el medidor OAuth de Anthropic devuelve 429 si se lo
+// consulta seguido (compartido con el propio CLI). Con el poll del pie cada 5 s,
+// esto hace que solo ~1 de cada 24 lecturas golpee de verdad a Anthropic.
+const LIMITS_TTL_MS = 120000;
 // Promesa compartida: evita fetchPlanLimits() concurrentes (p.ej. dos
 // requests casi simultáneas que pasan el check de TTL antes de que la
 // primera actualice limitsAt).
@@ -452,8 +590,10 @@ export default {
     r.get('/summary', async (req, res) => {
       const now = process.hrtime.bigint();
       const ms = Number(now) / 1e6;
+      // El summaryCache guarda el CRUDO; la resta del baseline (reset) se
+      // aplica en cada respuesta, aun con cache-hit (el baseline pudo cambiar).
       if (!req.query.fresh && summaryCache && ms - summaryAt < SUMMARY_TTL_MS) {
-        return res.json(summaryCache);
+        return res.json(applyReset(summaryCache, await getBaseline()));
       }
       try {
         if (!summaryBuildPromise) {
@@ -471,9 +611,34 @@ export default {
             });
         }
         const result = await summaryBuildPromise;
-        res.json(result);
+        res.json(applyReset(result, await getBaseline()));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
+      }
+    });
+
+    // Reset de estadísticas: toma una FOTO del consumo actual como línea de
+    // base; de ahí en más /summary muestra solo lo acumulado DESDE el reset
+    // (el costo en dólares "vuelve a cero"). {clear:true} deshace el reset y
+    // vuelve a mostrar el total histórico. Autenticado (mismo nivel de
+    // confianza que el resto del módulo Uso; muta solo estado personal).
+    r.post('/reset', async (req, res) => {
+      try {
+        if (req.body && req.body.clear) {
+          await clearBaseline();
+          return res.json({ ok: true, cleared: true });
+        }
+        // Foto FRESCA (no la cacheada) para que el "cero" sea exacto al click.
+        const raw = await buildSummary();
+        const base = {
+          capturedAt: new Date().toISOString(),
+          day: new Date().toISOString().slice(0, 10),
+          summary: raw,
+        };
+        await saveBaseline(base);
+        res.json({ ok: true, resetAt: base.capturedAt });
+      } catch (err) {
+        res.status(500).json({ error: 'No se pudo resetear las estadísticas.' });
       }
     });
 
@@ -495,6 +660,10 @@ export default {
               // desde el momento real de la construcción.
               limitsCache = result;
               limitsAt = Number(process.hrtime.bigint()) / 1e6;
+              // Persiste el último snapshot BUENO a disco (async, no bloquea
+              // la respuesta): sobrevive a reinicios del server y sirve de
+              // fallback ante un 429/corte de red posterior.
+              writePersistedLimits(result);
               return result;
             })
             .finally(() => {
@@ -504,10 +673,17 @@ export default {
         const result = await limitsFetchPromise;
         res.json(result);
       } catch (err) {
-        // Status derivado de una propiedad explícita del error (invariante
-        // 29): credenciales/token local -> 400, fallo real de Anthropic ->
-        // 502, cualquier otra cosa no reconocida -> 500 (nunca hardcodear
-        // un 4xx por defecto).
+        // FALLBACK: antes un 429/corte de red devolvía el error y el dato
+        // "desaparecía" en la UI. Ahora servimos el ÚLTIMO snapshot bueno —
+        // de la caché en memoria o, si el server se reinició, del disco —
+        // marcado `stale:true` para que el front avise "datos de hace X".
+        const fallback = limitsCache || await readPersistedLimits();
+        if (fallback) {
+          return res.json({ ...fallback, stale: true, staleReason: err.message || null });
+        }
+        // Sin ningún dato previo: recién ahí devolvemos el error real. Status
+        // derivado de una propiedad explícita del error (invariante 29):
+        // credenciales/token local -> 400, fallo de Anthropic -> 502, resto -> 500.
         const status = err.badRequest ? 400 : err.upstream ? 502 : 500;
         res.status(status).json({ error: err.message || 'No se pudieron leer los límites del plan.' });
       }

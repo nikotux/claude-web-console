@@ -15,13 +15,18 @@ import { runAdaptivePool } from '../src/modules/health/pool.js';
 import { readContacts, writeTeams, readTeams, readSelf } from '../src/modules/comms/shared.js';
 import {
   graphReadAllowed, teamsPrompt, teamsBotPrompt, parseTeamsResponse,
-  writeTeamsLock, clearTeamsLock, isTeamsRunning,
+  writeTeamsLock, clearTeamsLock, readTeamsLock,
   TEAMS_TIMEOUT_MS, TEAMS_HEARTBEAT_MS,
 } from '../src/modules/comms/teams-shared.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[comms-teams]', ...a);
 
-if (isTeamsRunning()) { log('ya hay un escaneo Teams corriendo (lock fresco): salgo.'); process.exit(0); }
+// Dedup pid-aware (patrón bugs/index.js:spawnTriage): el server RESERVA el lock
+// con el pid de ESTE hijo antes de que bootee, así que un chequeo por "lock
+// fresco" a secas se auto-cancelaba (veía su PROPIA reserva). Un lock fresco
+// AJENO ⇒ ya hay otro escaneo, salgo; si es MI reserva (pid propio) o venció, sigo.
+const _resv = readTeamsLock();
+if (_resv && _resv.pid !== process.pid) { log('ya hay otro escaneo Teams (lock fresco ajeno): salgo.'); process.exit(0); }
 
 const contacts = readContacts();
 const self = readSelf();

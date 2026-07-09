@@ -49,7 +49,9 @@ function dot(t) {
 function msgHtml(m, c) {
   const who = m.fromContact ? esc(c?.name || 'Contacto') : 'Yo';
   const cls = m.fromContact ? 'cm-msg--in' : 'cm-msg--out';
-  return `<div class="cm-msg ${cls}"><div class="cm-msg-h">${who} · ${fmtAgo(m.ts)}</div><div class="cm-msg-b">${esc(String(m.text).slice(0, 1200))}</div></div>`;
+  // Sin recorte: en Comunicaciones se muestra el mensaje COMPLETO. .cm-msg-b ya
+  // usa white-space:pre-wrap + word-break, así que el texto entero envuelve solo.
+  return `<div class="cm-msg ${cls}"><div class="cm-msg-h">${who} · ${fmtAgo(m.ts)}</div><div class="cm-msg-b">${esc(String(m.text || ''))}</div></div>`;
 }
 
 const STATUS_CHIP = {
@@ -158,10 +160,13 @@ function renderBody(state) {
   const showChatbot = !state.showArchived || chatbotList.length > 0;
   const chatbotInner = chatbotList.length
     ? chatbotList.map((t) => threadHtml(t, state)).join('')
-    : '<div class="cm-empty-inline">Sin comunicaciones del chatbot todavía. Llegan de Chris vía el bot Tolkien (TheEye) en Teams.</div>';
+    : (state.chatbotRunning
+      ? `<div class="cm-empty-inline">${icon('sparkle', { size: 13 })} Interpretando lo que el bot Tolkien te relayó…</div>`
+      : '<div class="cm-empty-inline">Sin comunicaciones del chatbot todavía. Llegan de Chris (u otros) vía el bot Tolkien (TheEye) en Teams — tocá <b>🤖 Chatbot</b> arriba para interpretarlas con IA.</div>');
+  const botLabel = state.chatbotRunning ? 'Chatbot · actualizando…' : 'Chatbot';
   const chatbotHtml = showChatbot ? `
     <details class="cm-group cm-group--bot" open>
-      <summary class="cm-gsum">🤖 <span>Chatbot</span> <span class="cm-gn">${chatbotList.length}</span></summary>
+      <summary class="cm-gsum">🤖 <span>${esc(botLabel)}</span> <span class="cm-gn">${chatbotList.length}</span></summary>
       <div class="cm-glist">${chatbotInner}</div>
     </details>` : '';
 

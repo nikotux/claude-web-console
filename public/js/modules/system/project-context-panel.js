@@ -11,8 +11,9 @@
 // Dos clases de entrada:
 //   - Proyectos completos (GET /api/projects: Tolkien y esta consola):
 //     contexto CLAUDE.md + memorias (índice MEMORY.md + notas).
-//   - Contextos de bugfixes (kind=work|pr de /api/bugfixes/context): SOLO
-//     texto libre, sin memorias (la sección Memorias no existe en su detalle).
+//   - Contextos de "Tickets & Features" (kind=work|pr de /api/tickets/context):
+//     SOLO texto libre, sin memorias (la sección Memorias no existe en su detalle).
+//     Se inyectan en cada "Continuar en el chat" de un ticket/feature/PR de la v2.
 //
 // No son copias: son los mismos archivos que Claude Code (o el prompt de
 // "Trabajar en Chat") lee de verdad — guardar acá cambia comportamiento
@@ -32,19 +33,21 @@ const PROJECT_META = {
   console: { ico: 'console', desc: 'Contexto CLAUDE.md + memorias de Mi Consola (esta web)' },
 };
 
-// "Sub-proyectos" de bugfixes: solo contexto (texto libre), sin memorias.
+// Contextos de "Tickets & Features": solo contexto (texto libre), sin memorias.
+// Se inyectan en cada "Continuar en el chat" de un ticket/feature/PR de la v2.
+// (Las keys internas conservan el prefijo `bugfix-` — no cambian el endpoint.)
 const BUGFIX_ENTRIES = [
   {
-    key: 'bugfix-work', kind: 'bugfix', bfKind: 'work', name: 'Bugfixes: Trabajo',
-    ico: 'edit', desc: 'Cómo se trabaja un bug (se inyecta en cada "Trabajar en Chat")',
-    title: 'Contexto de trabajo de bugs',
-    hint: 'Define CÓMO se trabaja un bug (verificación previa del ticket y de PRs de Chris, proceso de resolución, no enviar el PR desde el chat). Se inyecta en cada "Trabajar en Chat".',
+    key: 'bugfix-work', kind: 'bugfix', bfKind: 'work', name: 'Tickets & Features: Trabajo',
+    ico: 'edit', desc: 'Cómo se trabaja un ticket (Pensamiento Profundo, triage, gate de push)',
+    title: 'Contexto de trabajo de tickets',
+    hint: 'Define CÓMO se trabaja un ticket: el "Pensamiento Profundo" (paso 0 antes del plan), la verificación previa del ticket y de PRs de Chris, el triage BUG/FR/EXTERNA y el gate de push. Se inyecta en cada "Continuar en el chat" de un ticket/feature/PR.',
   },
   {
-    key: 'bugfix-pr', kind: 'bugfix', bfKind: 'pr', name: 'Bugfixes: PR',
-    ico: 'gitBranch', desc: 'Cómo se redactan las notas del PR (formato del cierre del chat)',
+    key: 'bugfix-pr', kind: 'bugfix', bfKind: 'pr', name: 'Tickets & Features: PR',
+    ico: 'gitBranch', desc: 'Cómo se redacta la descripción del PR (house style)',
     title: 'Contexto de redacción del PR',
-    hint: 'Define CÓMO se redactan los cambios que van a las notas del PR (el formato del cierre del chat). Se inyecta en cada "Trabajar en Chat".',
+    hint: 'Define CÓMO se redacta la descripción del PR (house style: Summary con las tres preguntas, causa raíz, verificación, variantes feature/external). Se inyecta en cada "Continuar en el chat" de un ticket/feature/PR.',
   },
 ];
 
@@ -100,7 +103,7 @@ export function mountProjectContextPanel(el, ctx) {
     root.innerHTML = `
       <div class="hp-head"><span class="hp-title">Proyectos · contexto y memorias</span></div>
       <div class="pj-list">${projects.map(card).join('')}</div>
-      <div class="hp-head hp-head--review"><span class="hp-title">Bugfixes · solo contexto</span></div>
+      <div class="hp-head hp-head--review"><span class="hp-title">Tickets &amp; Features · contexto de trabajo</span></div>
       <div class="pj-list">${bugfixes.map(card).join('')}</div>
       <p class="pj-hint">Son los archivos REALES que lee Claude en cada proyecto: guardar acá cambia el comportamiento de la próxima sesión.</p>`;
     for (const b of root.querySelectorAll('.pj-card')) {

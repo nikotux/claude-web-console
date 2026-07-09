@@ -27,11 +27,13 @@ import { isAdmin } from '../../core/auth.js';
 import * as C from './shared.js';
 import * as A from './analyze-shared.js';
 import * as TS from './teams-shared.js';
+import * as CB from './chatbot-shared.js';
 import * as GW from './gateway-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-comms-runner.js');
 const TEAMS_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-comms-teams-runner.js');
+const CHATBOT_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-comms-chatbot-runner.js');
 
 // Lanza el runner detached. Dedup SIN carrera: isRunning() + writeLock() en el
 // MISMO tick (todo sincrónico), como bugs/index.js:spawnTriage.
@@ -67,6 +69,24 @@ function spawnTeamsScan() {
   return true;
 }
 
+// Lanza el runner del CHATBOT detached (CONSUME TOKENS: Graph read + interpretación
+// IA). Deriva la sección Chatbot de lo que ya escaneamos del bot de Teams. Dedup
+// por su lock propio (heartbeat). Mismo blindaje contra fallo asíncrono del spawn.
+function spawnChatbotScan() {
+  if (CB.isChatbotRunning()) return false;
+  C.ensureDir();
+  const log = fs.openSync(CB.CHATBOT_LOG, 'a');
+  const child = spawn(process.execPath, [CHATBOT_RUNNER], { detached: true, stdio: ['ignore', log, log], env: process.env });
+  child.on('error', (err) => {
+    try { console.error('[comms] no se pudo lanzar el runner de chatbot:', String(err?.message || err)); CB.clearChatbotLock(); }
+    catch { /* nunca dejar escapar del callback */ }
+  });
+  CB.writeChatbotLock({ pid: child.pid, phase: 'arrancando' });
+  child.unref();
+  fs.closeSync(log);
+  return true;
+}
+
 export default {
   name: 'comms',
 
@@ -83,12 +103,12 @@ export default {
     const fail = (res, e) => res.status(500).json({ error: String(e?.message || e).slice(0, 200) });
 
     r.get('/', (req, res) => {
-      try { res.json({ ...C.buildStatus(), running: C.isRunning(), teamsRunning: TS.isTeamsRunning() }); }
+      try { res.json({ ...C.buildStatus(), running: C.isRunning(), teamsRunning: TS.isTeamsRunning(), chatbotRunning: CB.isChatbotRunning() }); }
       catch (e) { fail(res, e); }
     });
 
     r.get('/index', (req, res) => {
-      try { res.json({ ...C.buildIndex(), running: C.isRunning(), teamsRunning: TS.isTeamsRunning() }); }
+      try { res.json({ ...C.buildIndex(), running: C.isRunning(), teamsRunning: TS.isTeamsRunning(), chatbotRunning: CB.isChatbotRunning() }); }
       catch (e) { fail(res, e); }
     });
 
@@ -102,6 +122,15 @@ export default {
     r.post('/teams-refresh', (req, res) => {
       if (!requireAdmin(req, res)) return;
       try { const started = spawnTeamsScan(); res.json({ teamsRunning: true, started }); }
+      catch (e) { fail(res, e); }
+    });
+
+    // CHATBOT (CONSUME TOKENS: Graph read del bot + interpretación IA, regla 6).
+    // Deriva la sección "🤖 Chatbot" de lo que ya escaneamos del bot de Teams:
+    // lee sus mensajes relayados e interpreta quién es la persona real detrás.
+    r.post('/chatbot-refresh', (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      try { const started = spawnChatbotScan(); res.json({ chatbotRunning: true, started }); }
       catch (e) { fail(res, e); }
     });
 

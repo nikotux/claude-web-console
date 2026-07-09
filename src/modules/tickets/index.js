@@ -14,6 +14,10 @@ import { getPrDetail } from './sources.js';
 import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
 import { getContext, saveContext, DEFAULT_CONTEXTS } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
+import { getMeta, saveContexto, clearContexto } from './meta-store.js';
+import {
+  contextJobId, readJob, writeJob, spawnRunner, jobResult, isFreshRunning, MAX_TRANSCRIPT,
+} from './context-analyze-shared.js';
 
 // Actor de la request para los claims: usuario logueado, o "token-maestro" si
 // entró por el token admin. Cuando existan agentes con identidad propia, pasarán
@@ -43,10 +47,11 @@ export default {
         const you = actor?.username || null;
         const youAdmin = !!actor?.admin;
         const snap = getSnapshot();
+        const meta = getMeta(req.params.id); // Contexto adicional + Histórico del trabajo (nuestros)
         const cached = snap?.ticketsById?.[String(req.params.id)];
-        if (cached) return res.json({ ...withClaim(cached), you, youAdmin, cached: true, generatedAt: snap.generatedAt });
+        if (cached) return res.json({ ...withClaim(cached), meta, you, youAdmin, cached: true, generatedAt: snap.generatedAt });
         const data = await getTicketState(req.params.id);
-        res.json({ ...withClaim(data), you, youAdmin });
+        res.json({ ...withClaim(data), meta, you, youAdmin });
       } catch (err) {
         res.status(500).json({ found: false, error: String(err?.message || err).slice(0, 300) });
       }
@@ -62,11 +67,12 @@ export default {
         const youAdmin = !!actor?.admin;
         const num = String(req.params.number).replace(/[^\d]/g, '');
         const workingBy = getActiveClaim(`pr:${num}`); // claims de PR van con prefijo pr:
+        const meta = getMeta(`pr:${num}`);             // Contexto adicional + Histórico (mismo prefijo)
         const snap = getSnapshot();
         const cached = snap?.prDetailsById?.[num];
-        if (cached) return res.json({ pr: { ...cached, workingBy }, you, youAdmin, error: null, cached: true, generatedAt: snap.generatedAt });
+        if (cached) return res.json({ pr: { ...cached, workingBy, meta }, you, youAdmin, error: null, cached: true, generatedAt: snap.generatedAt });
         const live = await getPrDetail(req.params.number);
-        res.json({ ...live, pr: live.pr ? { ...live.pr, workingBy } : live.pr, you, youAdmin });
+        res.json({ ...live, pr: live.pr ? { ...live.pr, workingBy, meta } : live.pr, you, youAdmin });
       } catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
 
@@ -98,6 +104,7 @@ export default {
         res.json({
           ...d, devLane,
           needsTriage: stamp(d.needsTriage),
+          inProgress: stamp(d.inProgress), waitingClient: stamp(d.waitingClient),
           overdue: stamp(d.overdue), aging: stamp(d.aging), resolvedThisWeek: stamp(d.resolvedThisWeek),
           you, generatedAt: s.generatedAt, lastError: s.lastError || null,
         });
@@ -144,6 +151,60 @@ export default {
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
       saveContext(kind, text);
       res.json({ ok: true, kind, context: getContext(kind) });
+    });
+
+    // ===== Contexto adicional + Histórico del trabajo (meta-store por ítem) =====
+    // `key` = ticketNumber ('123') o 'pr:<n>'. Sanitizado igual que los claims.
+    const keyOf = (raw) => String(raw ?? '').replace(/[^\w:-]/g, '');
+
+    // Interpretar una TRANSCRIPCIÓN con IA → "Contexto adicional" (runner
+    // desacoplado, CONSUME TOKENS). Dedup por id determinístico (mismo texto +
+    // mismo ítem = mismo job, no re-gasta). Responde YA; el front encuesta el GET.
+    r.post('/meta/context-analyze', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const key = keyOf(req.body?.key);
+      const transcript = String(req.body?.transcript ?? '').slice(0, MAX_TRANSCRIPT);
+      if (!key) return res.status(400).json({ error: 'Falta la clave del ítem.' });
+      if (transcript.trim().length < 20) return res.status(400).json({ error: 'Pegá una transcripción (mín. 20 caracteres).' });
+      const id = contextJobId(key, transcript);
+      const existing = readJob(id);
+      if (existing && (existing.status === 'done' || isFreshRunning(existing))) {
+        return res.json({ id, status: existing.status }); // reusa (no relanza ni gasta)
+      }
+      const now = Date.now();
+      writeJob(id, {
+        id, key,
+        itemTitle: String(req.body?.itemTitle ?? '').slice(0, 300),
+        itemDesc: String(req.body?.itemDesc ?? '').slice(0, 4000),
+        transcript,
+        status: 'running', result: null, rendered: null, error: null,
+        startedAt: now, updatedAt: now,
+      });
+      spawnRunner(id);
+      res.json({ id, status: 'running' });
+    });
+    // Poll del job (solo lee disco, 0 tokens).
+    r.get('/meta/context-analyze/:jobId', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const job = jobResult(String(req.params.jobId).replace(/[^a-f0-9]/gi, ''));
+      if (!job) return res.status(404).json({ error: 'Job inexistente.' });
+      // No devolvemos la transcripción entera de vuelta (puede ser grande).
+      const { transcript, ...rest } = job;
+      res.json(rest);
+    });
+    // Guardar/editar (texto vacío = borrar) el contexto adicional a mano.
+    r.post('/meta/context', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const key = keyOf(req.body?.key);
+      if (!key) return res.status(400).json({ error: 'Falta la clave del ítem.' });
+      const text = String(req.body?.text ?? '');
+      const meta = text.trim() ? saveContexto(key, text) : clearContexto(key);
+      res.json({ ok: true, meta });
+    });
+    // Leer la metadata de un ítem (contexto + histórico) sin el snapshot completo.
+    r.get('/meta/:key', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      res.json({ meta: getMeta(keyOf(req.params.key)) });
     });
 
     router.use('/tickets', r);

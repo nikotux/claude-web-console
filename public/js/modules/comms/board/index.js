@@ -20,6 +20,7 @@ export function openCommsBoard({ dialog, icon, openChat, projectRel, onClose } =
         <button class="btn-ghost btn--sm" data-act="addcontact">${icon('plus', { size: 13 })}<span>Contacto</span></button>
         <button class="btn btn--sm" data-act="scan">${icon('refresh', { size: 13 })}<span>GitHub</span></button>
         <button class="btn-ghost btn--sm" data-act="scanteams" title="Leer mensajes directos de Teams (consume tokens)">${icon('search', { size: 13 })}<span>Teams</span></button>
+        <button class="btn-ghost btn--sm" data-act="scanchatbot" title="Interpretar con IA lo que el bot Tolkien te relayó y atribuirlo a la persona real (consume tokens)">🤖<span>Chatbot</span></button>
       </div>
     </div>
     <div class="cm-body" data-ref="body"></div>`;
@@ -51,6 +52,7 @@ export function openCommsBoard({ dialog, icon, openChat, projectRel, onClose } =
         case 'addcontact': A.addContact(); return;
         case 'scan': A.scan(); return;
         case 'scanteams': A.scanTeams(); return;
+        case 'scanchatbot': A.scanChatbot(); return;
         case 'log': A.logManual(store.get().tab); return;
         case 'send': A.sendMessage(store.get().tab); return;
         case 'reply': {
