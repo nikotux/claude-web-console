@@ -1,4 +1,4 @@
-// modules/bugs-v2/derive.js — FUNCIONES PURAS estado-de-Zoho → campos del
+// modules/tickets/derive.js — FUNCIONES PURAS estado-de-Zoho → campos del
 // dashboard One Front Door. Cero I/O, cero estado, cero IA: entra un ticket
 // normalizado (getTicketState) y sale su lane/waiting-on/reloj/aging/resolved.
 // Esto es el corazón determinístico de v2: testeable en aislamiento, imposible

@@ -1,4 +1,4 @@
-// modules/bugs-v2/views.js — agregaciones para las vistas del dashboard One
+// modules/tickets/views.js — agregaciones para las vistas del dashboard One
 // Front Door, a partir de los tickets enriquecidos (derive.enrich). Funciones
 // puras: entra la lista + now, sale el shape que consume el frontend.
 import { enrich } from './derive.js';

@@ -1,4 +1,4 @@
-// modules/bugs-v2/desk-mcp-client.js — cliente MCP PROGRAMÁTICO al server
+// modules/tickets/desk-mcp-client.js — cliente MCP PROGRAMÁTICO al server
 // tolkien-mordor, SIN agente/LLM en el medio (a diferencia del desk-runner de
 // v1 en bugfixes/desk-shared.js, que manda un sub-agente a "leer y retranscribir
 // a JSON" — ESE paso de retranscripción es la causa raíz del bug #527/#516:

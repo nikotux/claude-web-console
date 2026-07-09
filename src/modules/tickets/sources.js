@@ -1,4 +1,4 @@
-// modules/bugs-v2/sources.js — capa de LECTURA read-only de las fuentes
+// modules/tickets/sources.js — capa de LECTURA read-only de las fuentes
 // externas (por ahora Zoho Desk; GitHub/PRs para el dev-lane se integra en
 // Fase 3 reusando el patrón `gh` de v1). Sin estado en disco: sólo un cache
 // EN MEMORIA con TTL, para no re-pegarle a Zoho en cada request del dashboard.
@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { listTicketsByDepartment, getTicketState } from './desk-mcp-client.js';
 import { DEPT_TOLKIEN, DEPT_MORDOR } from './derive.js';
 import { config } from '../../core/config.js';
+import { fetchPrRich } from '../comms/pr-read-shared.js';
 
 const DEPARTMENTS = [DEPT_MORDOR, DEPT_TOLKIEN];
 const CACHE_TTL_MS = 60_000;      // "fresco": no recargar si es más nuevo que esto
@@ -104,24 +105,23 @@ export async function getDevLanePRs({ force = false } = {}) {
   return result;
 }
 
-// Detalle COMPLETO de un PR (conversaciones, checks, archivos) — on-demand,
-// cache corto por número. GitHub sí expone todo esto vía gh (a diferencia del
-// MCP de Desk con las conversaciones de tickets).
-const prDetailCache = new Map(); // number -> { at, data }
+// Detalle COMPLETO de un PR (conversaciones, checks, archivos) — on-demand.
+// Reusa el LECTOR ÚNICO de PRs de GitHub (comms/pr-read-shared.js, Fase C de la
+// centralización 2026-07-05): UN fetch + caché de archivo (~/.cwc-data/comms/
+// pr-cache/, TTL 60s) compartido con comms/bugfixes/investigate — antes v2
+// duplicaba su propio `gh pr view` + caché en memoria (misma clase de
+// duplicación que ya se pagó y resolvió una vez). Los campos que pedía v2
+// (body/baseRefName/isDraft/files) están sumados a PR_RICH_FIELDS. `force`
+// fuerza red (mapea a `fresh` de fetchPrRich, que igual reescribe la caché para
+// que otros reusen). Contrato { pr, error } IDÉNTICO al anterior.
 export async function getPrDetail(number, { force = false } = {}) {
   const key = String(number).replace(/[^\d]/g, '');
-  const cached = prDetailCache.get(key);
-  if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data;
-  let data;
   try {
-    const out = await runGh(['pr', 'view', key, '--json',
-      'number,title,body,url,headRefName,baseRefName,reviewDecision,statusCheckRollup,isDraft,additions,deletions,changedFiles,files,comments,reviews,commits,author,createdAt,updatedAt,mergeable,state']);
-    data = { pr: JSON.parse(out), error: null };
+    const pr = await fetchPrRich(key, { fresh: force });
+    return { pr, error: null };
   } catch (err) {
-    data = { pr: null, error: String(err?.message || err).slice(0, 200) };
+    return { pr: null, error: String(err?.message || err).slice(0, 200) };
   }
-  prDetailCache.set(key, { at: Date.now(), data });
-  return data;
 }
 
 export function cacheInfo() {

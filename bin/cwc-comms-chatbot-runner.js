@@ -17,6 +17,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
+import { runAdaptivePool } from '../src/modules/health/pool.js';
 import { readContacts, readSelf, readTeams, readChatbot, writeChatbot } from '../src/modules/comms/shared.js';
 import {
   graphReadAllowed, teamsBotPrompt, parseTeamsResponse, TEAMS_TIMEOUT_MS,
@@ -117,12 +118,20 @@ async function run() {
   if (!bots.length) { log('no hay contactos bot (kind:\'bot\') para escanear.'); return; }
 
   // ---- Fase 1: juntar mensajes crudos + metadata (chatId/participantes) por bot.
+  // PARALELO (regla de oro: paralelo lo que LEE, serial lo que ESCRIBE): cada
+  // fetchBotRaw es una lectura Graph aislada (read-only, regla 6 doble capa).
+  // runAdaptivePool (mismo de health F2.5, patrón teams/desk/triage) las corre a
+  // la vez; los resultados llegan FUERA DE ORDEN, así que se guardan por índice y
+  // la acumulación ordenada (raws/chatId/participants) queda SERIAL tras la
+  // barrera — determinismo idéntico al for secuencial anterior. start:2 porque
+  // cada query() consume tokens; hoy hay 1 bot pero el código ya es N.
   phase = 'leyendo'; beat();
   const raws = [];        // { from, sender, at, ts, text }
   let chatId = null;
   let participants = null;
   const teams = readTeams();
-  for (const bot of bots) {
+  const resByIdx = new Array(bots.length).fill(null);
+  await runAdaptivePool(bots.map((bot, i) => ({ bot, i })), async ({ bot, i }, ctl) => {
     log(`fase 1: leyendo el chat del bot ${bot.name}…`);
     let res = await fetchBotRaw(bot);
     // Fallback: si Graph falla, usar lo que ya está en teams.json para ese bot.
@@ -133,11 +142,19 @@ async function run() {
         res = { found: true, thread: t };
       } else {
         log(`fase 1: ${bot.name} sin mensajes (${res.note || 'no encontrado'}).`);
-        continue;
+        return;
       }
     }
-    const th = res.thread;
-    chatId = chatId || th.chatId || bot.chatId || null;
+    resByIdx[i] = { bot, thread: res.thread };
+    // Rate-limit/overload del API ⇒ pedirle al pool que baje concurrencia (parity teams-runner).
+    if (!res.found && /429|overload|rate.?limit/i.test(res.note || '')) ctl.backoff();
+    beat();
+  }, { min: 1, start: 2 });
+  // Acumulación SERIAL y determinística en el orden de la lista de bots.
+  for (const r of resByIdx) {
+    if (!r) continue;
+    const th = r.thread;
+    chatId = chatId || th.chatId || r.bot.chatId || null;
     participants = participants || (Array.isArray(th.participants) ? th.participants : null);
     for (const m of (th.messages || [])) {
       raws.push({ from: m.fromContact ? 'contact' : 'me', sender: m.author || '', at: '', ts: m.ts || 0, text: m.text || '' });

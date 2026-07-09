@@ -1,4 +1,4 @@
-// modules/bugs-v2/ticket-detail.js — ventana de DETALLE de un ticket (One Front
+// modules/tickets/ticket-detail.js — ventana de DETALLE de un ticket (One Front
 // Door). Trae todo lo que el MCP expone (propiedades, personas, tiempos,
 // descripción) desde el snapshot (GET /api/tickets/ticket/:num, sin IA) y ofrece
 // 3 acciones: continuar en el chat, verificar en GitHub (si aplica), Zoho Desk.

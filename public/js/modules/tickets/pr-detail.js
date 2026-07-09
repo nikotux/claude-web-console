@@ -1,4 +1,4 @@
-// modules/bugs-v2/pr-detail.js — ventana de DETALLE de un PR (dev-lane), gemela
+// modules/tickets/pr-detail.js — ventana de DETALLE de un PR (dev-lane), gemela
 // de ticket-detail. A diferencia de los tickets de Desk, GitHub SÍ expone todo
 // vía gh: info + conversaciones (comments + reviews) + checks (CI) + archivos.
 // Consume GET /api/tickets/pr/:number. 2 acciones: trabajar en un chat, abrir en GitHub.

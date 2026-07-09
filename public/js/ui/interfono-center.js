@@ -62,12 +62,25 @@ export function initInterfonoCenter({ isChatActive, openChat }) {
     item.el.querySelector('.ic-title-text').textContent = String(title || item.chatId);
   }
 
+  const MAX_MSGS = 50; // tope de nodos DOM por tarjeta (dato externo sin cota)
+
   function fillBody(item, title, pend) {
     setTitle(item, title);
     item.el.querySelector('.ic-count').textContent = pend.length > 1 ? ` ·${pend.length}` : '';
     const body = item.el.querySelector('.ic-body');
     body.textContent = '';
-    for (const m of pend) {
+    // Acotamos los mensajes renderizados: una sesión inactiva puede acumular
+    // muchos avisos sin cota. Mostramos los más recientes con aviso de resto,
+    // mismo patrón que diff.js/markdown.js.
+    const overflow = pend.length > MAX_MSGS;
+    const shown = overflow ? pend.slice(-MAX_MSGS) : pend;
+    if (overflow) {
+      const more = document.createElement('div');
+      more.className = 'ic-msg ic-more';
+      more.textContent = `… +${pend.length - MAX_MSGS} mensaje(s) más`;
+      body.appendChild(more);
+    }
+    for (const m of shown) {
       const row = document.createElement('div');
       row.className = 'ic-msg';
       const from = document.createElement('strong');

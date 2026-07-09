@@ -25,7 +25,20 @@ const MARK = 'cwc-bus.js';
 const cmd = (sub) => `node ${BUS} ${sub}`;
 
 let settings = {};
-try { settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); } catch { /* nuevo */ }
+try {
+  settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
+} catch (e) {
+  if (e.code !== 'ENOENT') {
+    // El archivo EXISTE pero no parsea (corrupto, escritura concurrente a
+    // mitad, edición rota). Tratarlo como "nuevo" y escribir {} pisaría hooks
+    // ajenos (observador, permisos, MCP) SIN backup fresco (el .bak solo se
+    // toma la 1ª vez). Abortar es lo seguro. ENOENT sí es un settings nuevo.
+    console.error(`ERROR: ${SETTINGS} existe pero no es JSON válido (${e.message}).`);
+    console.error('Abortado para no sobrescribir configuración ajena. Arreglalo a mano y reintentá.');
+    process.exit(1);
+  }
+  // ENOENT: settings nuevo, seguimos con {}.
+}
 
 if (fs.existsSync(SETTINGS) && !fs.existsSync(BACKUP)) {
   fs.copyFileSync(SETTINGS, BACKUP);

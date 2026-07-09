@@ -8,11 +8,17 @@
 //   alertDialog({...})   → Promise<void> (aviso con un solo botón)
 import { icon } from './icons.js';
 
-// Pila global de modales abiertos (los que crea openModal). Esc solo debe
-// cerrar el que está arriba: stopPropagation() no evita que OTROS listeners
-// registrados en el mismo nodo (document) y misma fase (capture) se disparen,
-// así que sin esta pila, un Esc cierra en cascada todos los modales apilados.
-const modalStack = [];
+// Pila global de "capas Esc" abiertas: modales (openModal) Y popups
+// descartables (ui/popup.js). Esc solo debe cerrar la que está ARRIBA:
+// stopPropagation() no evita que OTROS listeners registrados en el mismo nodo
+// (document) y misma fase (capture) se disparen, así que sin esta pila
+// compartida un Esc cierra en cascada. popup.js se suma a ESTA misma pila para
+// que un popup abierto sobre un modal no cierre a ambos con un solo Esc.
+export const escLayers = [];
+// ¿`entry` es la capa de arriba de la pila? (referencia exacta)
+export function isTopEscLayer(entry) {
+  return escLayers[escLayers.length - 1] === entry;
+}
 
 // Cáscara de modal. Devuelve { overlay, card, body, close, setTitle }.
 // Cierra con Esc, clic en el fondo o el botón ×; onClose se llama UNA vez.
@@ -39,20 +45,20 @@ export function openModal({ title = '', width = 480, onClose = null } = {}) {
     closed = true;
     overlay.remove();
     document.removeEventListener('keydown', onKey, true);
-    const idx = modalStack.indexOf(entry);
-    if (idx !== -1) modalStack.splice(idx, 1);
+    const idx = escLayers.indexOf(entry);
+    if (idx !== -1) escLayers.splice(idx, 1);
     onClose?.();
   }
   function onKey(e) {
     if (e.key !== 'Escape') return;
-    // Solo el modal de arriba de la pila reacciona a Esc; los de abajo
-    // ignoran el evento en vez de cerrarse en cascada.
-    if (modalStack[modalStack.length - 1] !== entry) return;
+    // Solo la capa de arriba de la pila reacciona a Esc; las de abajo (u otro
+    // popup encima) ignoran el evento en vez de cerrarse en cascada.
+    if (!isTopEscLayer(entry)) return;
     e.stopPropagation();
     close();
   }
   entry.close = close;
-  modalStack.push(entry);
+  escLayers.push(entry);
   document.addEventListener('keydown', onKey, true);
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
   card.querySelector('.dlg-x').addEventListener('click', close);

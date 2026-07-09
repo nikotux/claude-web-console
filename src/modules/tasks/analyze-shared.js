@@ -33,7 +33,7 @@ const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const LOG_FILE = path.join(DATA_DIR, 'tasks-analyze.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-tasks-analyze-runner.js');
 
-export const SCOPES = ['tasks', 'plans'];
+export const SCOPES = ['tasks', 'plans', 'global'];
 export const ANALYZE_TIMEOUT_MS = 4 * 60 * 1000;
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
 
@@ -99,9 +99,46 @@ function reportsContext() {
   return out;
 }
 
+// Mapea las tareas a lo esencial para el prompt (id/título/detalle/tipo/etc.).
+function tasksBrief(tasks) {
+  return tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    description: t.description || '',
+    type: t.type,
+    priority: t.priority,
+    status: t.status,
+    tags: t.tags || [],
+    planId: t.planId || null,
+  }));
+}
+// Mapea los planes con los títulos+ids de sus tareas ya asignadas.
+function plansBrief(plans, tasks) {
+  return plans.map((p) => ({
+    id: p.id,
+    title: p.title,
+    description: p.description || '',
+    status: p.status,
+    tasks: tasks.filter((t) => t.planId === p.id).map((t) => ({ id: t.id, title: t.title })),
+  }));
+}
+
 // Devuelve { context, count } para el alcance dado (o null si no hay nada que analizar).
 export function buildContext(scope) {
   const s = normScope(scope);
+  if (s === 'global') {
+    // Vista HOLÍSTICA: tareas + planes + informes juntos, para reorganizar todo
+    // (agrupar en planes, unificar, completar, crear las tareas de informes que
+    // todavía no se cargaron). El modelo ve qué tareas ya tienen plan y cuáles no.
+    const { tasks } = listTasks();
+    const plans = listPlans();
+    const reports = reportsContext();
+    if (!tasks.length && !plans.length && !reports.length) return null;
+    return {
+      context: { tasks: tasksBrief(tasks), plans: plansBrief(plans, tasks), reports },
+      count: tasks.length + plans.length,
+    };
+  }
   if (s === 'plans') {
     const { tasks } = listTasks();
     const plans = listPlans();
@@ -130,8 +167,47 @@ export function buildContext(scope) {
   return { context: { tasks: items, reports: reportsContext() }, count: tasks.length };
 }
 
+// Prompt HOLÍSTICO (scope 'global'): reorganiza tareas + planes + informes.
+function globalPrompt(context) {
+  return [
+    'Sos un asistente que REORGANIZA un tablero de tareas pendientes. Te paso en',
+    'JSON: la lista COMPLETA de TAREAS (cada una con su planId si ya pertenece a un',
+    'plan, o null si está suelta), la lista de PLANES (con las tareas que ya tienen',
+    'asignadas) y los INFORMES de audio ya procesados (con su resumen, tareas',
+    'propuestas y plan). Tu trabajo es dejar TODO ordenado, detectando:',
+    '  1. DUPLICADOS: tareas que son lo mismo → conservar UNA y quitar el resto.',
+    '  2. UNIFICABLES: tareas distintas que conviene FUSIONAR en una sola.',
+    '  3. COMPLETAR: tareas con info pobre que se enriquece con los INFORMES.',
+    '  4. AGRUPAR: tareas SUELTAS (o mal ubicadas) que son parte de un mismo',
+    '     esfuerzo → agrupalas en un plan. Si YA existe un plan adecuado, usá su id',
+    '     (planId). Si NO existe, proponé uno NUEVO con planId=null + un planTitle.',
+    '  5. CREAR-DESDE-INFORME: tareas propuestas en un INFORME que TODAVÍA no',
+    '     figuran en la lista de tareas (compará por objetivo real, no texto exacto)',
+    '     → crealas. NO repitas una tarea que ya existe.',
+    'Respondé en ESPAÑOL y ÚNICAMENTE con un bloque ```json con esta forma EXACTA:',
+    '{',
+    '  "resumen": "1-2 líneas: qué encontraste y cómo quedaría ordenado",',
+    '  "duplicados": [ { "keep": "T<n>", "remove": ["T<n>"], "why": "por qué son el mismo" } ],',
+    '  "unificables": [ { "ids": ["T<n>","T<n>"], "title": "título fusionado", "description": "detalle fusionado", "why": "por qué unir" } ],',
+    '  "completar": [ { "id": "T<n>", "description": "detalle sugerido más completo", "tags": ["tags"], "why": "de qué informe sale" } ],',
+    '  "agrupar": [ { "planId": "PLAN-<n> o null", "planTitle": "título si es plan nuevo", "planDescription": "detalle del plan nuevo", "taskIds": ["T<n>","T<n>"], "why": "qué las une" } ],',
+    '  "crearTareas": [ { "fromReport": "título del informe", "tasks": [ { "title": "título", "description": "detalle", "priority": "alta|media|baja", "type": "task" } ], "why": "por qué falta" } ]',
+    '}',
+    'Reglas: los ids de tarea son T<n> y los de plan PLAN-<n>. NO inventes ids: usá',
+    'SOLO los que aparecen en los datos (excepto en crearTareas y en planes nuevos,',
+    'donde no hay id todavía). Sé CONSERVADOR: solo marcá duplicados/unificables si',
+    'estás razonablemente seguro (ante la duda, no lo incluyas). NO propongas',
+    'eliminar algo sin dejar un reemplazo (keep). Si una categoría no tiene nada,',
+    'devolvé su array vacío. Sé específico y conciso.',
+    '',
+    '=== DATOS (JSON) ===',
+    JSON.stringify(context),
+  ].join('\n');
+}
+
 export function analyzePrompt(scope, context) {
   const s = normScope(scope);
+  if (s === 'global') return globalPrompt(context);
   const entity = s === 'plans' ? 'PLANES' : 'TAREAS';
   const idNote = s === 'plans'
     ? 'Los ids son de la forma PLAN-<n>. NO inventes ids: usá SOLO los que aparecen en los datos.'
@@ -173,6 +249,9 @@ export function analyzePrompt(scope, context) {
 // ===== Parseo defensivo del JSON de la respuesta =====
 const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
 const ID_RE = /^(T\d+|PLAN-\d+)$/;
+const TASK_ID_RE = /^T\d+$/;
+const PLAN_ID_RE = /^PLAN-\d+$/;
+const PRIOS = ['alta', 'media', 'baja'];
 const cleanId = (x) => { const s = clamp(x, 20).trim(); return ID_RE.test(s) ? s : null; };
 const arr = (x, n, mapFn) => (Array.isArray(x) ? x.slice(0, n).map(mapFn).filter(Boolean) : []);
 
@@ -205,6 +284,32 @@ export function parseAnalysis(text) {
         tags: Array.isArray(c?.tags) ? c.tags.map((x) => clamp(x, 40).trim()).filter(Boolean).slice(0, 8) : [],
         why: clamp(c?.why, 400),
       };
+    }),
+    // ---- Solo scope 'global' los completa; en tasks/plans quedan vacíos ----
+    // AGRUPAR: tareas sueltas → plan existente (planId) o nuevo (planTitle).
+    agrupar: arr(o.agrupar, 30, (g) => {
+      const taskIds = [...new Set((Array.isArray(g?.taskIds) ? g.taskIds : []).map((x) => clamp(x, 20).trim()).filter((s) => TASK_ID_RE.test(s)))];
+      if (!taskIds.length) return null;
+      const rawPlan = clamp(g?.planId, 20).trim();
+      const planId = PLAN_ID_RE.test(rawPlan) ? rawPlan : null;
+      const planTitle = clamp(g?.planTitle, 200).trim();
+      if (!planId && !planTitle) return null; // plan nuevo sin título = descartar
+      return { planId, planTitle, planDescription: clamp(g?.planDescription, 2000), taskIds, why: clamp(g?.why, 400) };
+    }),
+    // CREAR-DESDE-INFORME: tareas propuestas por informes aún no cargadas.
+    crearTareas: arr(o.crearTareas, 30, (c) => {
+      const tasks = arr(c?.tasks, 20, (t) => {
+        const title = clamp(t?.title, 200).trim();
+        if (!title) return null;
+        return {
+          title,
+          description: clamp(t?.description, 2000),
+          priority: PRIOS.includes(t?.priority) ? t.priority : 'media',
+          type: clamp(t?.type, 20).trim() || 'task',
+        };
+      });
+      if (!tasks.length) return null;
+      return { fromReport: clamp(c?.fromReport, 200).trim(), tasks, why: clamp(c?.why, 400) };
     }),
   };
 }

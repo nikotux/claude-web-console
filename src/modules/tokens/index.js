@@ -624,7 +624,12 @@ export default {
     // confianza que el resto del módulo Uso; muta solo estado personal).
     r.post('/reset', async (req, res) => {
       try {
-        if (req.body && req.body.clear) {
+        // `clear` debe ser boolean: un string ('false') es truthy en JS y
+        // dispararía el CLEAR justo cuando el caller quiso lo contrario.
+        if (req.body && req.body.clear !== undefined && typeof req.body.clear !== 'boolean') {
+          return res.status(400).json({ error: 'clear debe ser boolean.' });
+        }
+        if (req.body && req.body.clear === true) {
           await clearBaseline();
           return res.json({ ok: true, cleared: true });
         }

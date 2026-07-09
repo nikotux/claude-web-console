@@ -38,11 +38,15 @@ export default {
 
     // Un análisis completo (incluye la transcripción original y el resultado).
     r.get('/:id', (req, res) => {
-      const id = String(req.params.id);
-      if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
-      const job = readAudioJob(id);
-      if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
-      res.json({ id, title: job.title || '', transcript: job.transcript || '', ...jobResult(job) });
+      try {
+        const id = String(req.params.id);
+        if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
+        const job = readAudioJob(id);
+        if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
+        res.json({ id, title: job.title || '', transcript: job.transcript || '', ...jobResult(job) });
+      } catch (e) {
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+      }
     });
 
     // Lanza el análisis: persiste el job + spawnea el runner detached, responde
@@ -81,25 +85,33 @@ export default {
     });
 
     r.post('/:id/delete', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      const id = String(req.params.id);
-      if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
-      deleteAudioJob(id);
-      res.json({ ok: true });
+      try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+        const id = String(req.params.id);
+        if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
+        deleteAudioJob(id);
+        res.json({ ok: true });
+      } catch (e) {
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+      }
     });
 
     // Editar el título de un análisis ya creado (el que generó la IA, o uno
     // propio). Marca titleAuto=false para que un re-análisis no lo pise.
     r.post('/:id/title', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      const id = String(req.params.id);
-      if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
-      const title = String(req.body?.title ?? '').slice(0, 200).trim();
-      if (!title) return res.status(400).json({ error: 'El título no puede estar vacío.' });
-      const job = readAudioJob(id);
-      if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
-      writeAudioJob(id, { ...job, title, titleAuto: false, updatedAt: Date.now() });
-      res.json({ ok: true, title });
+      try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+        const id = String(req.params.id);
+        if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id inválido.' });
+        const title = String(req.body?.title ?? '').slice(0, 200).trim();
+        if (!title) return res.status(400).json({ error: 'El título no puede estar vacío.' });
+        const job = readAudioJob(id);
+        if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
+        writeAudioJob(id, { ...job, title, titleAuto: false, updatedAt: Date.now() });
+        res.json({ ok: true, title });
+      } catch (e) {
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+      }
     });
 
     router.use('/audio', r);

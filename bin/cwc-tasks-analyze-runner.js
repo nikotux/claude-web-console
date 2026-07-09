@@ -70,7 +70,7 @@ async function main() {
     if (!built) throw new Error('No hay datos para analizar.');
     const result = await runAnalysis(built.context);
     writeAnalysisJob(scope, { ...job, status: 'done', result, error: null, updatedAt: Date.now() });
-    log(`OK análisis ${scope}: ${result.duplicados.length} dup · ${result.unificables.length} unif · ${result.completar.length} completar`);
+    log(`OK análisis ${scope}: ${result.duplicados.length} dup · ${result.unificables.length} unif · ${result.completar.length} completar · ${result.agrupar.length} agrupar · ${result.crearTareas.length} crear`);
   } catch (err) {
     writeAnalysisJob(scope, { ...job, status: 'error', result: null, error: String(err?.message || err).slice(0, 300), updatedAt: Date.now() });
     log(`FAIL análisis ${scope}:`, err?.message || err);

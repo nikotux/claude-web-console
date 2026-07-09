@@ -69,16 +69,26 @@ async function main() {
   if (!job) { log(`job ${id} inexistente (¿se limpió antes de arrancar?).`); process.exit(0); return; }
   try {
     const result = await runAnalysis(job);
-    // Título AUTOMÁTICO: si el usuario no puso uno propio (titleAuto), usamos el
-    // que generó la IA a partir de la interpretación; el usuario puede editarlo
-    // después (POST /api/audio/:id/title, que fija titleAuto=false).
-    const title = (job.titleAuto || !job.title)
+    // Releemos el job DEL DISCO justo antes de persistir: durante los hasta
+    // 4 min de la corrida el usuario pudo (a) BORRAR el análisis — no lo
+    // recreamos, respetamos el borrado — o (b) EDITAR el título — lo
+    // preservamos en vez de pisarlo con el snapshot viejo (`job`).
+    const cur = readAudioJob(id);
+    if (!cur) { log(`job ${id} fue borrado durante el análisis; no lo recreo.`); return; }
+    // Título AUTOMÁTICO: si el usuario no puso/editó uno propio (titleAuto),
+    // usamos el que generó la IA; el usuario puede editarlo después
+    // (POST /api/audio/:id/title, que fija titleAuto=false).
+    const title = (cur.titleAuto || !cur.title)
       ? (result.title || 'Transcripción sin título')
-      : job.title;
-    writeAudioJob(id, { ...job, title, status: 'done', result, error: null, updatedAt: Date.now() });
+      : cur.title;
+    writeAudioJob(id, { ...cur, title, status: 'done', result, error: null, updatedAt: Date.now() });
     log(`OK job ${id}: "${title}" · ${result.proposedTasks.length} tarea(s), ${result.segments.length} segmento(s)`);
   } catch (err) {
-    writeAudioJob(id, { ...job, status: 'error', result: null, error: String(err?.message || err).slice(0, 300), updatedAt: Date.now() });
+    // Mismo cuidado en el camino de error: si lo borraron mientras corría, no
+    // resucitamos el job con un estado de error.
+    const cur = readAudioJob(id);
+    if (!cur) { log(`job ${id} fue borrado durante el análisis; no lo recreo.`); return; }
+    writeAudioJob(id, { ...cur, status: 'error', result: null, error: String(err?.message || err).slice(0, 300), updatedAt: Date.now() });
     log(`FAIL job ${id}:`, err?.message || err);
   }
 }

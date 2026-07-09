@@ -1,4 +1,4 @@
-// modules/bugs-v2/dashboard.js — modal del dashboard "One Front Door".
+// modules/tickets/dashboard.js — modal del dashboard "One Front Door".
 // Layout (rediseño Niko 2026-07-07): header con [buscar] [actualizar] + ✕ ·
 // buscador de ticket por número · "Por carril" como primera hilera · PESTAÑAS
 // DE PROPIETARIO (adaptan las vistas a una persona) · debajo vencidos/aging/

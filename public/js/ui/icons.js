@@ -77,10 +77,22 @@ const PATHS = {
 
 // Devuelve markup <svg>…</svg> para el nombre dado. Si no existe, un círculo
 // discreto (evita romper el layout con un ícono ausente).
+// Escapa un valor para interpolarlo seguro dentro de un atributo HTML con
+// comillas dobles. `icon()` es la función de íconos ÚNICA de toda la app: aunque
+// hoy todos los call-sites pasan `className` literal, no imponía barrera para un
+// futuro caller que derive la clase de datos externos.
+function escapeAttr(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export function icon(name, { size, className = '' } = {}) {
   const body = PATHS[name] || `<circle cx="12" cy="12" r="8"/>`;
   const px = size || 'var(--cwc-icon-size, 18px)';
-  const cls = className ? ` class="cwc-icon ${className}"` : ' class="cwc-icon"';
+  const cls = className ? ` class="cwc-icon ${escapeAttr(className)}"` : ' class="cwc-icon"';
   return `<svg${cls} viewBox="${VB}" width="${px}" height="${px}" ${COMMON} aria-hidden="true">${body}</svg>`;
 }
 

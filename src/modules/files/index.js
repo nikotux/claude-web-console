@@ -163,20 +163,25 @@ async function listDir(abs, showHidden) {
 }
 
 // Subida: destino = ?path (carpeta validada); nombre saneado y único.
+// Error de VALIDACIÓN (destino inválido, etc.): marcado para que /upload lo
+// mapee a 400 vía statusForError, distinguiéndolo de una falla interna de disco
+// (ENOSPC/EACCES/EMFILE) que debe caer a 500 (invariantes 34/38/39/41).
+const badReq = (m) => Object.assign(new Error(m), { badRequest: true });
+
 const upload = multer({
   storage: multer.diskStorage({
     destination(req, file, cb) {
       const dir = resolveWithinHome(req.query.path || '');
-      if (!dir) return cb(new Error('Ruta inválida'));
+      if (!dir) return cb(badReq('Ruta inválida'));
       // Igual que mkdir/rename/trash: statSafeSync valida que la carpeta REAL
       // (symlinks resueltos) siga dentro del home — statSync crudo seguía un
       // symlink hacia afuera y multer ESCRIBÍA fuera del home (hallazgo de
       // salud 2026-07-05, mismo vector ya cerrado en /list, /raw, /download).
       let st;
       try { st = statSafeSync(dir); }
-      catch { return cb(new Error('El destino no existe')); }
-      if (!st) return cb(new Error('Ruta inválida'));
-      if (!st.isDirectory()) return cb(new Error('El destino no es una carpeta'));
+      catch { return cb(badReq('El destino no existe')); }
+      if (!st) return cb(badReq('Ruta inválida'));
+      if (!st.isDirectory()) return cb(badReq('El destino no es una carpeta'));
       cb(null, dir);
     },
     filename(req, file, cb) {
@@ -380,7 +385,13 @@ export default {
 
     r.post('/upload', (req, res) => {
       upload.array('files', 100)(req, res, (err) => {
-        if (err) return res.status(400).json({ error: err.message });
+        if (err) {
+          // Validación (marcada badReq) y límites de multer (LIMIT_*) → 400;
+          // una falla interna de disco (ENOSPC/EACCES/EMFILE al escribir) → 500,
+          // igual que mkdir/rename/trash usan statusForError.
+          const status = (err instanceof multer.MulterError) ? 400 : statusForError(err);
+          return res.status(status).json({ error: err.message });
+        }
         res.json({ ok: true, count: req.files?.length || 0, names: (req.files || []).map((f) => f.filename) });
       });
     });
@@ -415,8 +426,27 @@ export default {
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
       const target = path.join(path.dirname(abs), n);
       if (fss.existsSync(target)) return res.status(400).json({ error: 'Ya existe un ítem con ese nombre.' });
-      try { fss.renameSync(abs, target); res.json({ ok: true, path: path.relative(config.home, target) }); }
-      catch (e) { res.status(statusForError(e)).json({ error: 'No se pudo renombrar.' }); }
+      try {
+        // TOCTOU: entre el existsSync y el rename otro request pudo crear
+        // `target`. renameSync en POSIX PISA silenciosamente un archivo de
+        // destino (no lanza EEXIST). Para un archivo regular usamos link+unlink:
+        // linkSync falla con EEXIST de forma ATÓMICA si el destino ya existe.
+        // Mismo directorio ⇒ mismo filesystem (nunca EXDEV). Para directorios/
+        // symlinks (no hardlinkeables) cae a renameSync, que sobre un dir de
+        // destino no vacío falla con ENOTEMPTY (no hay pérdida silenciosa).
+        let st;
+        try { st = fss.lstatSync(abs); } catch { return res.status(404).json({ error: 'El ítem ya no existe.' }); }
+        if (st.isFile()) {
+          fss.linkSync(abs, target);
+          fss.unlinkSync(abs);
+        } else {
+          fss.renameSync(abs, target);
+        }
+        res.json({ ok: true, path: path.relative(config.home, target) });
+      } catch (e) {
+        if (e.code === 'EEXIST') return res.status(400).json({ error: 'Ya existe un ítem con ese nombre.' });
+        res.status(statusForError(e)).json({ error: 'No se pudo renombrar.' });
+      }
     });
 
     // --- Papelera ---
@@ -477,7 +507,20 @@ export default {
 
     r.post('/trash/purge', (req, res) => {
       try {
-        purgeTrash(req.body?.id || null);
+        // OJO: `id || null` coercionaba un id falsy explícito ('' , 0) a null,
+        // que significa "purgar TODA la papelera". Distinguimos la AUSENCIA de
+        // la clave (purgar todo, intencional) de un id presente pero inválido
+        // (error del caller → 400, nunca un purge total silencioso).
+        const body = req.body || {};
+        if ('id' in body) {
+          const id = body.id;
+          if (typeof id !== 'string' || !id) {
+            return res.status(400).json({ error: 'id inválido.' });
+          }
+          purgeTrash(id);
+        } else {
+          purgeTrash(null); // sin id: purga toda la papelera
+        }
         res.json({ ok: true });
       } catch {
         res.status(500).json({ error: 'No se pudo purgar la papelera.' });

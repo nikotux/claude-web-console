@@ -1,7 +1,7 @@
-// modules/bugs-v2/bugs-v2.js — sección "Bugs v2" del sidebar. Muestra un
+// modules/tickets/tickets.js — sección "Tickets & Features" del sidebar. Muestra un
 // resumen barato del dashboard determinístico (GET /api/tickets/dashboard, sin
-// IA, sin tokens) y abre el modal con las vistas completas. Vive en PARALELO a
-// "Bugs & Features" (bugs.js, intacto) — ver plan en
+// IA, sin tokens) y abre el modal con las vistas completas. Reemplazó a
+// "Bugs & Features" v1 (archivado en _archived/) — ver plan en
 // ~/pool of documents/2026-07-06_plan-backend-deterministico-lectura-desk_v01.md.
 import { openBugsV2Dashboard } from './dashboard.js';
 

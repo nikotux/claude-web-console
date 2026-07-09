@@ -77,6 +77,12 @@ export default {
       if (admin !== undefined && typeof admin !== 'boolean') {
         return res.status(400).json({ error: 'admin debe ser boolean.' });
       }
+      // Simétrico con `admin`: si vino `password` pero no es un string usable,
+      // rechazar explícito en vez de ignorarlo en silencio (el cliente podría
+      // creer que la contraseña se actualizó cuando no fue así).
+      if (password !== undefined && (typeof password !== 'string' || !password.length)) {
+        return res.status(400).json({ error: 'password debe ser un string no vacío.' });
+      }
       const principal = principalOf(req);
       if (principal && principal.username === username) {
         return res.status(409).json({ error: 'No puedes modificar tu propio usuario.' });

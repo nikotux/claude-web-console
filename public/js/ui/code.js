@@ -18,6 +18,10 @@ const EXT_LANG = {
 };
 
 export const HL_MAX_CHARS = 20000;
+// Tope duro de contenido volcado al DOM (perf/memoria), con aviso visible de
+// truncado — mismo patrón que diff.js (DOM_MAX_LINES) y markdown.js
+// (MD_MAX_LINES). Antes fillCode volcaba el texto COMPLETO sin corte.
+export const CODE_MAX_LINES = 5000;
 
 // Lenguaje hljs a partir de la extensión de una ruta (o null si no hay
 // mapeo confiable).
@@ -28,15 +32,21 @@ export function langForPath(p) {
 
 // Llena un <pre> con código: resaltado si hay lenguaje confiable, plano si no.
 export function fillCode(pre, text, lang) {
-  const t = String(text ?? '');
-  pre.textContent = t; // fallback siempre seguro
+  const full = String(text ?? '');
+  const allLines = full.split('\n');
+  const truncated = allLines.length > CODE_MAX_LINES;
+  const t = truncated ? allLines.slice(0, CODE_MAX_LINES).join('\n') : full;
+  // Aviso de truncado (texto estático, sin metacaracteres HTML → seguro tanto
+  // como textContent como concatenado a innerHTML resaltado).
+  const note = truncated ? `\n… (${allLines.length - CODE_MAX_LINES} líneas más ocultas por límite de rendimiento)` : '';
+  pre.textContent = t + note; // fallback siempre seguro
   const hljs = window.hljs;
   if (!hljs || !lang || !t || t.length > HL_MAX_CHARS || !hljs.getLanguage(lang)) return;
   try {
-    pre.innerHTML = hljs.highlight(t, { language: lang }).value;
+    pre.innerHTML = hljs.highlight(t, { language: lang }).value + note;
     pre.classList.add('hljs');
   } catch {
-    pre.textContent = t;
+    pre.textContent = t + note;
   }
 }
 

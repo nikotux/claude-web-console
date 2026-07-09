@@ -20,9 +20,10 @@ export const PR_CACHE_TTL_MS = 60 * 1000;
 // SUPERSET: unión de los --json de prLive + investigate + comms runner. Si un
 // consumidor nuevo necesita otro campo, se agrega ACÁ (una sola fuente).
 export const PR_RICH_FIELDS = [
-  'number', 'title', 'url', 'state', 'headRefName', 'mergeable', 'reviewDecision',
+  'number', 'title', 'url', 'state', 'headRefName', 'baseRefName', 'mergeable', 'reviewDecision',
   'updatedAt', 'createdAt', 'mergedAt', 'mergedBy', 'additions', 'deletions', 'changedFiles',
   'statusCheckRollup', 'reviews', 'comments', 'commits', 'author', 'reviewRequests',
+  'body', 'isDraft', 'files',
 ].join(',');
 
 function cachePath(n) { return path.join(PR_CACHE_DIR, `${String(n).replace(/[^\d]/g, '')}.json`); }

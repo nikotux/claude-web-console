@@ -240,7 +240,9 @@ export default {
       let chats = [];               // /api/chat/list → trabajos en sesiones
       let audio = [];               // /api/audio → informes
       let reportsApi = null;        // { reload } de la pestaña Informes
-      const m = dialog.openModal({ title: 'Pendientes', width: '820px', onClose: () => { boardApi = null; } });
+      // Ventana grande, casi como el Explorador (92vw · alto 90vh): el sizing
+      // real vive en .task-board-card (style.css); pasamos 92vw como el explorador.
+      const m = dialog.openModal({ title: 'Pendientes', width: '92vw', onClose: () => { boardApi = null; } });
       m.card.classList.add('task-board-card');
       m.body.innerHTML = `
         <div class="task-board">
@@ -677,7 +679,18 @@ export default {
 
         // Orden (pedido del usuario 2026-07-06): CLASIFICACIÓN primero (resumen
         // de todo, nace abierta), después el resto del dashboard.
+        // Botón "Reorganizar todo con IA" (admin): análisis HOLÍSTICO de tareas +
+        // planes + informes (dup/unificar/completar + agrupar en planes + crear
+        // tareas de informes que faltan). Consume tokens ⇒ runner desacoplado.
+        const reorgHead = isAdmin
+          ? `<div class="task-board-head">
+              <span class="tk-pane-title">Vista general del tablero</span>
+              <div class="task-board-actions">
+                <button class="btn btn--sm" data-a="reorg" title="Reorganiza TODO con IA: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan (consume tokens)">${icon('sparkle', { size: 13 })}<span>Reorganizar todo con IA</span></button>
+              </div></div>`
+          : '';
         return `<div class="dash">
+          ${reorgHead}
           ${dashSec('🗂️ Clasificación', tasks.length + audio.length + plans.length, classif, { open: true })}
           ${dashSec('🔥 En curso', active.length + workChats.length, enCurso || dashEmpty('Nada en curso ahora.'), { open: true })}
           ${dashSec('⚠️ Necesita atención', stalled.length + highPend.length, attn || dashEmpty('Todo en orden, sin alertas.'), { open: (stalled.length + highPend.length) > 0 })}
@@ -739,6 +752,7 @@ export default {
         const filt = e.target.closest('[data-filt]');
         if (filt) { filter = filt.dataset.filt; paneEl.querySelectorAll('.task-filter').forEach((x) => x.classList.toggle('is-on', x.dataset.filt === filter)); renderList(); return; }
         if (e.target.closest('[data-a="audio"]')) { openAudioPanel(audioCtx); return; }
+        if (e.target.closest('[data-a="reorg"]')) { openAnalysis('global'); return; }
         if (e.target.closest('[data-a="analyze"]')) { openAnalysis('tasks'); return; }
         if (e.target.closest('[data-a="analyze-plans"]')) { openAnalysis('plans'); return; }
         const nb = e.target.closest('[data-a="new"]');
@@ -790,23 +804,28 @@ export default {
       // Las propuestas se aprueban de a una; aplicar reusa el CRUD existente.
       function openAnalysis(scope) {
         const isPlans = scope === 'plans';
-        const label = isPlans ? 'planes' : 'tareas';
+        const isGlobal = scope === 'global';
+        const label = isGlobal ? 'todo (tareas, planes e informes)' : isPlans ? 'planes' : 'tareas';
+        const busyTxt = isGlobal ? 'reorganizando todo' : `analizando las ${label}`;
+        // En 'global' un id puede ser tarea o plan → buscar en ambos.
         const titleOf = (id) => {
-          const arrX = isPlans ? plans : tasks;
-          const it = arrX.find((x) => x.id === id);
+          const it = (isPlans ? plans : tasks).find((x) => x.id === id)
+            || (isGlobal ? plans.find((x) => x.id === id) : null);
           return it ? it.title : id;
         };
         let polling = false;
         let dirty = false;       // aplicamos algo ⇒ recargar el tablero al cerrar
         let lastResult = null;
         const am = dialog.openModal({
-          title: `🧠 Análisis general · ${label}`, width: '640px',
+          title: isGlobal ? '🧹 Reorganizar todo con IA' : `🧠 Análisis general · ${label}`, width: '640px',
           onClose: () => { polling = false; if (dirty) boardApi?.reload(); },
         });
         am.body.innerHTML = `
           <div class="tk-analysis">
             <div class="tk-an-head">
-              <span class="tk-an-sub">Detecta duplicados, unificables y completa info faltante con los informes.</span>
+              <span class="tk-an-sub">${isGlobal
+                ? 'Analiza tareas, planes e informes juntos: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan.'
+                : 'Detecta duplicados, unificables y completa info faltante con los informes.'}</span>
               <button class="btn btn--sm" data-ref="run">${icon('sparkle', { size: 13 })}<span>Analizar</span></button>
             </div>
             <div class="tk-an-status" data-ref="status" hidden></div>
@@ -837,7 +856,9 @@ export default {
           const dup = result.duplicados || [];
           const unif = result.unificables || [];
           const comp = result.completar || [];
-          const total = dup.length + unif.length + comp.length;
+          const grp = result.agrupar || [];
+          const crea = result.crearTareas || [];
+          const total = dup.length + unif.length + comp.length + (isGlobal ? grp.length + crea.length : 0);
           const dupCards = dup.map((d, i) => propCard('dup', i,
             `🔁 Conservar <b>${esc(titleOf(d.keep))}</b>`,
             `<div class="tk-an-line">Eliminar: ${d.remove.map((id) => esc(titleOf(id))).join(', ')}</div>${d.why ? `<div class="tk-an-why">${esc(d.why)}</div>` : ''}`)).join('');
@@ -847,12 +868,22 @@ export default {
           const compCards = comp.map((c, i) => propCard('comp', i,
             `📝 Completar <b>${esc(titleOf(c.id))}</b>`,
             `${c.description ? `<div class="tk-an-desc">${esc(c.description)}</div>` : ''}${(c.tags || []).length ? `<div class="task-tags">${c.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
+          // 🗂️ Agrupar en plan (solo global): plan existente (planId) o nuevo (planTitle).
+          const grpCards = grp.map((g, i) => propCard('group', i,
+            g.planId ? `🗂️ Sumar al plan <b>${esc(titleOf(g.planId))}</b>` : `🗂️ Nuevo plan <b>${esc(g.planTitle)}</b>`,
+            `<div class="tk-an-line">${g.taskIds.map((id) => esc(titleOf(id))).join(', ')}</div>${!g.planId && g.planDescription ? `<div class="tk-an-desc">${esc(g.planDescription)}</div>` : ''}${g.why ? `<div class="tk-an-why">${esc(g.why)}</div>` : ''}`)).join('');
+          // 🎙️ Crear desde informe (solo global): tareas propuestas aún no cargadas.
+          const creaCards = crea.map((c, i) => propCard('create', i,
+            `🎙️ Crear ${c.tasks.length} tarea(s)${c.fromReport ? ` de <b>${esc(c.fromReport)}</b>` : ''}`,
+            `<div class="tk-an-line">${c.tasks.map((t) => esc(t.title)).join(' · ')}</div>${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
           resultEl.innerHTML = `
             ${result.resumen ? `<div class="tk-an-summary">${esc(result.resumen)}</div>` : ''}
-            ${total ? '' : '<div class="dash-empty">✅ Sin duplicados, unificables ni info faltante. Todo prolijo.</div>'}
+            ${total ? '' : '<div class="dash-empty">✅ Todo prolijo: nada para unificar, agrupar ni completar.</div>'}
             ${section('🔁 Duplicados', dup, dupCards, dup.length > 0)}
             ${section('🔗 Unificables', unif, unifCards, unif.length > 0)}
-            ${section('📝 Completar info', comp, compCards, comp.length > 0)}`;
+            ${section('📝 Completar info', comp, compCards, comp.length > 0)}
+            ${isGlobal ? section('🗂️ Agrupar en planes', grp, grpCards, grp.length > 0) : ''}
+            ${isGlobal ? section('🎙️ Crear desde informes', crea, creaCards, crea.length > 0) : ''}`;
         }
 
         const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -869,6 +900,17 @@ export default {
             const body = { description: p.description };
             if (!isPlans && (p.tags || []).length) body.tags = p.tags;
             await post(updUrl(p.id), body);
+          } else if (kind === 'group') {
+            // Plan destino: existente (planId) o recién creado (planTitle).
+            let planId = p.planId;
+            if (!planId) {
+              const j = await (await post('/api/tasks/plans', { title: p.planTitle, description: p.planDescription || undefined })).json();
+              planId = j?.plan?.id;
+            }
+            if (!planId) throw new Error('sin plan destino');
+            for (const id of p.taskIds) await post(`/api/tasks/${id}`, { planId });
+          } else if (kind === 'create') {
+            for (const t of p.tasks) await post('/api/tasks', t);
           }
           dirty = true;
         }
@@ -880,7 +922,8 @@ export default {
           const dis = e.target.closest('[data-dismiss]');
           if (!ap && !dis) return;
           const kind = card.dataset.kind;
-          const list = kind === 'dup' ? lastResult.duplicados : kind === 'unif' ? lastResult.unificables : lastResult.completar;
+          const LISTS = { dup: 'duplicados', unif: 'unificables', comp: 'completar', group: 'agrupar', create: 'crearTareas' };
+          const list = lastResult[LISTS[kind]];
           const p = list?.[Number(card.dataset.idx)];
           if (!p) return;
           const acts = card.querySelector('.tk-an-card-acts');
@@ -909,15 +952,15 @@ export default {
         }
         async function analyze() {
           const ok = await dialog.confirmDialog({
-            title: 'Análisis general',
-            message: `Se analizan todas las ${label} con Claude (sonnet). CONSUME TOKENS reales y puede tardar. Es de solo lectura; nada se aplica sin tu aprobación.`,
-            confirmLabel: 'Analizar',
+            title: isGlobal ? 'Reorganizar todo con IA' : 'Análisis general',
+            message: `${isGlobal ? 'Se analizan tareas, planes e informes juntos' : `Se analizan todas las ${label}`} con Claude (sonnet). CONSUME TOKENS reales y puede tardar. Es de solo lectura; nada se aplica sin tu aprobación.`,
+            confirmLabel: isGlobal ? 'Reorganizar' : 'Analizar',
           });
           if (!ok) return;
           runBtn.disabled = true;
           resultEl.innerHTML = '';
           statusEl.hidden = false; statusEl.className = 'tk-an-status';
-          statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>analizando las ${label}…</span>`;
+          statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${busyTxt}…</span>`;
           polling = true;
           try {
             const r = await post('/api/tasks/analyze', { scope });
@@ -946,7 +989,7 @@ export default {
             if (j.status === 'done' && j.result) { renderAnalysis(j.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
             else if (j.status === 'running') {
               polling = true; statusEl.hidden = false; statusEl.className = 'tk-an-status';
-              statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>analizando las ${label}…</span>`;
+              statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${busyTxt}…</span>`;
               const done = await poll();
               if (done && done.status === 'done' && done.result) { statusEl.hidden = true; renderAnalysis(done.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
               else { statusEl.hidden = true; }

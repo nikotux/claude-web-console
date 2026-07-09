@@ -1,4 +1,4 @@
-// modules/bugs-v2/refresher.js — "base de datos" con timer (pedido de Niko).
+// modules/tickets/refresher.js — "base de datos" con timer (pedido de Niko).
 // Cada REFRESH_MS pre-computa en background el SNAPSHOT completo (dashboard +
 // tickets por número con su detalle + dev-lane) leyendo Zoho/GitHub de forma
 // determinística (sin IA, sin tokens). El servidor sirve SIEMPRE del snapshot,

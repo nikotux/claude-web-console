@@ -2004,8 +2004,15 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 }
 
 /* --- Tablero de tareas (modal) --- */
-.task-board-card { width: 92vw; }
-.task-board { display: flex; flex-direction: column; gap: .6rem; }
+/* Ventana grande, al nivel del Explorador de archivos (92vw · alto 90vh). El
+   cuerpo del modal se vuelve columna flexible para que el panel de contenido
+   (.tk-pane) llene el alto y scrollee por dentro, no el modal entero. */
+.task-board-card { width: 92vw; max-width: 1200px; height: 90vh; max-height: 92vh; }
+.task-board-card .dlg-body { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+.task-board { display: flex; flex-direction: column; gap: .6rem; flex: 1; min-height: 0; }
+/* En móvil, dvh (no vh): vh se mide con la barra de URL oculta y puede pasarse
+   de la pantalla visible (gotcha del proyecto). */
+@media (max-width: 768px) { .task-board-card { height: 92dvh; max-height: 92dvh; } }
 .task-board-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .task-filters { display: flex; gap: .3rem; flex-wrap: wrap; }
 .task-filter {
@@ -2148,7 +2155,8 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .task-desc { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); white-space: pre-wrap; word-break: break-word; }
 .task-tags { display: flex; gap: .3rem; flex-wrap: wrap; }
 .task-tag {
-  font-size: var(--cwc-fs-xs); color: var(--cwc-accent-ink); background: var(--cwc-accent-bg-soft);
+  font-size: var(--cwc-fs-xs); color: var(--cwc-accent); background: var(--cwc-accent-bg-soft);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent) 30%, transparent);
   border-radius: var(--cwc-radius-sm); padding: .02rem .35rem;
 }
 .task-item-foot { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
@@ -2239,7 +2247,7 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   background: var(--cwc-bg-chip); border-radius: var(--cwc-radius-sm); padding: 0 .3rem; min-width: 1.1em; text-align: center;
 }
 .tk-tab.on .tk-tab-n { color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 14%, transparent); }
-.tk-pane { margin-top: .6rem; display: flex; flex-direction: column; gap: .5rem; max-height: 66vh; overflow-y: auto; }
+.tk-pane { margin-top: .6rem; display: flex; flex-direction: column; gap: .5rem; flex: 1; min-height: 0; overflow-y: auto; }
 
 /* ===== Panel (dashboard estilo Pad, datos locales) ===== */
 .dash { display: flex; flex-direction: column; gap: .55rem; }
@@ -2300,8 +2308,12 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .task-type { flex: none; }
 .task-plan {
   font-size: var(--cwc-fs-xs); color: var(--cwc-accent); background: var(--cwc-accent-bg);
-  border-radius: var(--cwc-radius-sm); padding: .05rem .35rem; white-space: nowrap;
+  border-radius: var(--cwc-radius-sm); padding: .05rem .35rem;
+  /* En el grid angosto (6 col) un nombre de plan largo se salía en una línea
+     continua fuera de la ficha: ahora envuelve en varias líneas DENTRO. */
+  white-space: normal; overflow-wrap: anywhere; line-height: 1.3; max-width: 100%;
 }
+.task-cardv2-foot { min-width: 0; }
 
 /* ===== Pestaña Planes ===== */
 .tk-pane-title { font-weight: 600; color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
