@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-09 17:29 — redesign/board-mobile
+- Agregar sistema de meta-tickets, análisis IA y chatbot derivado
+
 ### 2026-07-07 14:51 — redesign/board-mobile
 - Compactar UI + confirmSheet adaptativa + tickets sin triar
 
