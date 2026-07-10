@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-10 17:13 — redesign/board-mobile
+- Agregar learning module, chat attachments y AutoTux v2
+
 ### 2026-07-09 23:12 — redesign/board-mobile
 - Ampliar tablero, análisis holístico y robustez en runners
 
