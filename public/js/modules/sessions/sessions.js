@@ -19,6 +19,15 @@ import { placeFor } from '../../ui/places.js';
 const pacEl = (state, label) => pacman({ state, size: 'sm', cls: 'sess-pac', title: label });
 const pacCls = (state) => pacClass(state, { size: 'sm', cls: 'sess-pac' });
 
+// Escape para texto de OTRAS sesiones (mensajes del Interfono) antes de meterlo
+// en innerHTML del popup del badge. El resto de la tarjeta usa valores propios
+// (título, cwd) ya confiables; estos vienen de afuera.
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
 // Texto del chip .sess-model de un chat: con AutoTux ('auto') muestra el
 // nombre del router + el NIVEL real (que va cambiando solo); con una
 // elección forzada, el modelo tal cual. Fuente única para la tarjeta inicial
@@ -55,7 +64,7 @@ export default {
   name: 'sessions',
 
   mount(el, ctx) {
-    const { icon, dialog, bus, openSession, focusSession, openChatView, syncConversation } = ctx;
+    const { icon, dialog, bus, openSession, focusSession, openChatView, syncConversation, openExplorer } = ctx;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -214,7 +223,90 @@ export default {
       menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openChatMenu(c, menuBtn); });
 
       elCard.append(main, menuBtn);
+      syncInterfonoBadge(elCard, c); // señal pasiva del interfono (Fase 2)
       return elCard;
+    }
+
+    // Badge PASIVO del Interfono (rediseño 2026-07-10, Fase 2): reemplaza al
+    // popup modal "Retomar/Descartar" que aparecía en TODA ventana. Si un chat
+    // tiene mensajes de otras sesiones sin tomar, su tarjeta muestra un badge
+    // discreto (contador + ícono relay); al tocarlo, un popup con el preview y
+    // las acciones Entregar/Archivar. Sin robar foco, sin sonido, sin modal.
+    // (Re)construye el badge en su lugar sin reconstruir la tarjeta.
+    function syncInterfonoBadge(cardEl, c) {
+      const pend = c.pendingInterfono || [];
+      let badge = cardEl.querySelector('.sess-interfono');
+      if (!pend.length) { if (badge) badge.remove(); return; }
+      const preview = String(pend[0]?.text || '').slice(0, 80);
+      if (!badge) {
+        badge = document.createElement('button');
+        badge.className = 'btn-ghost btn--sm btn--icon sess-interfono';
+        // Insertar ANTES del menú ⋯ para que quede junto a él.
+        const menu = cardEl.querySelector('.sess-menu');
+        cardEl.insertBefore(badge, menu);
+        badge.addEventListener('click', (e) => { e.stopPropagation(); openInterfonoMenu(c, badge); });
+      }
+      // F4: si algún pendiente es `active` (colisión real de archivos), el badge
+      // toma el acento de ALERTA; si todo es passive, el acento frío neutro.
+      const hasActive = pend.some((m) => m.level === 'active');
+      badge.classList.toggle('sess-interfono--active', hasActive);
+      badge.dataset.chat = c.id;
+      badge.title = `${pend.length} mensaje(s) del Interfono sin tomar${hasActive ? ' (⚠ archivo tocado)' : ''}: ${preview}`;
+      badge.innerHTML = `${icon('relay', { size: 13 })}<span class="sess-interfono-n">${pend.length}</span>`;
+    }
+
+    // Popup del badge: preview de los mensajes + Entregar/Archivar. Entregar
+    // dispara un turno (puede despertar el chat) → confirm por consumo de
+    // tokens (regla de oro). Archivar solo marca entregado (0 tokens).
+    function openInterfonoMenu(c, anchor) {
+      const pend = c.pendingInterfono || [];
+      if (!pend.length) return;
+      const menu = document.createElement('div');
+      menu.className = 'cwc-popup-menu sess-interfono-pop';
+      const list = pend.slice(-6).map((m) => {
+        const from = escapeHtml(m.fromName || 'sesión');
+        const txt = escapeHtml(String(m.text || '').slice(0, 160));
+        return `<div class="sif-msg"><strong>${from}:</strong> ${txt}</div>`;
+      }).join('');
+      menu.innerHTML = `
+        <div class="sif-head">${icon('relay', { size: 13 })} Interfono · ${pend.length} mensaje(s)</div>
+        <div class="sif-body">${list}</div>
+        <div class="sif-actions">
+          <button class="btn-ghost btn--sm" data-act="dismiss">${icon('close', { size: 13 })} Archivar</button>
+          <button class="btn btn--sm" data-act="deliver">${icon('play', { size: 13 })} Entregar</button>
+        </div>`;
+      document.body.appendChild(menu);
+      positionPopup(menu, anchor);
+      const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+      menu.querySelector('[data-act="dismiss"]').addEventListener('click', async () => {
+        dismiss();
+        await interfonoAction(c, 'dismiss');
+      });
+      menu.querySelector('[data-act="deliver"]').addEventListener('click', async () => {
+        dismiss();
+        const ok = await dialog.confirmDialog({
+          title: 'Entregar al chat',
+          message: `Voy a inyectar ${pend.length} mensaje(s) del Interfono en "${c.title}" como un turno. Si el chat estaba dormido, se despierta (consume tokens).`,
+          confirmLabel: 'Entregar',
+        });
+        if (ok) await interfonoAction(c, 'deliver');
+      });
+    }
+
+    async function interfonoAction(c, action) {
+      try {
+        const res = await fetch('/api/chat/interfono', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id, action }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo procesar el mensaje.');
+      } catch (e) {
+        dialog.alertDialog({ title: 'Interfono', message: e.message });
+      } finally {
+        refresh();
+      }
     }
 
     // Menú ⋯ de una CONVERSACIÓN: mismo popup descartable que las terminales.
@@ -228,6 +320,7 @@ export default {
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
         <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
         ${isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>Reabrir para cambios</span></button>`}
+        <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>Abrir carpeta del chat</span></button>
         <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -238,7 +331,22 @@ export default {
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
       menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
+      menu.querySelector('[data-act="folder"]').addEventListener('click', () => act(() => openChatFolder(c)));
       menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    // Abre el Explorador (ventana existente, deep-link ?path=) en la carpeta de
+    // adjuntos del chat (~/.cwc-data/chat-attachments/<id>). El backend la crea
+    // si no existía (sin adjuntos aún) y devuelve la ruta relativa al home.
+    async function openChatFolder(c) {
+      try {
+        const res = await fetch(`/api/chat/folder?id=${encodeURIComponent(c.id)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.rel) throw new Error(data.error || 'No se pudo abrir la carpeta.');
+        openExplorer(data.rel);
+      } catch (e) {
+        dialog.alertDialog({ title: 'Carpeta del chat', message: e.message });
+      }
     }
 
     // Reabre el motor de una conversación para que tome cambios de código
@@ -574,6 +682,7 @@ export default {
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.
             const chatModelEl = cardEl.querySelector('.sess-model');
             if (chatModelEl) chatModelEl.textContent = chatModelLabel(c);
+            syncInterfonoBadge(cardEl, c); // señal pasiva del interfono (Fase 2)
             continue;
           }
           const s = map.get(key);

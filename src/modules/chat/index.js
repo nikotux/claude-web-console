@@ -26,30 +26,32 @@
 //         {type:'meta', slashCommands:[{name,description|null}]} (Fase 8:
 //          comandos del init, enriquecidos con el frontmatter de los SKILL.md)
 //
-// ROUTER DE MODELO AUTOMÁTICO (2026-07-06, Fase 1 — núcleo en
-// core/model-router.js): en cada turno real del usuario (sendUser),
-// _applyModelRouter() corre una heurística 0-costo (¿mensaje trivial? ¿trae
-// código? ¿es muy largo?) con histéresis de dos umbrales (sube apenas se
-// detecta algo más difícil; baja recién tras 3 turnos simples SEGUIDOS, un
-// escalón por vez — nunca de un salto) y aplica el cambio con el MISMO
-// setModel() de siempre. Techo deliberado en `opus`: subir a `fable` sigue
-// siendo manual (ver el porqué en core/model-router.js). Inerte a propósito
-// si el modelo del chat no es exactamente haiku/sonnet/opus/fable — elegir
-// `opusplan`/`default` (o no elegir nada) apaga el modo automático sin
-// necesitar un toggle nuevo en la UI. El contador de histéresis
-// (`_routerDownStreak`) se persiste junto al resto del chat (persist()/
-// rehydrate()); el NIVEL en sí NUNCA se duplica, se deriva de `this.model`.
-// FASE 2 (2026-07-06, sumada al mismo núcleo): cuando la heurística no sabe
-// qué opinar (`ambiguous:true`), _applyModelRouter consulta a Haiku
-// (classifyComplexity, patrón defensivo idéntico a extractTitle — 1 turno,
-// READ-ONLY doble capa) en SEGUNDO PLANO (fire-and-forget, `_routerClassifying`
-// evita solapes) — VERIFICADO EN CALIENTE que el solo arranque de query()
-// tarda ~2-3s antes de que Haiku conteste una palabra, así que NUNCA se
-// espera en línea: si contesta a tiempo, gobierna el modelo del PRÓXIMO
-// turno (o este mismo si el motor todavía no arrancó a responder). Además,
-// escalado REACTIVO: al terminar un turno (_setStatus('waiting')), si usó ≥6
-// tool_use de golpe (_turnToolCount, efímero, no persiste), sube un escalón
-// para el PRÓXIMO turno — señal barata de "esto pesó más de lo esperado".
+// ROUTER DE MODELO AUTOMÁTICO — AutoTux (núcleo en core/model-router.js).
+// v2 (2026-07-10, rediseño tras revisión externa + simulacros con datos reales;
+// ver docs/autotux-analisis-externo.md). v1 colapsaba en un flip-flop Sonnet↔
+// Opus (49 subidas / 13 bajadas / 0 a haiku en el log real). v2 "segura":
+//  - FABLE PROHIBIDO (fuera de la escala + guard en setModel).
+//  - Movimientos SIEMPRE ±1 (nunca saltos directos al techo).
+//  - COOLDOWN de 2 turnos tras cada cambio (anti-rebote, estilo route-flap).
+//  - NIVEL BASE (pegajoso) separado del OVERRIDE DE TURNO: un ack de CIERRE
+//    (perfecto/gracias/listo…) corre ESE turno en Haiku sin tocar el base —
+//    NUNCA un go-ahead (dale/ok/sí), que suele disparar trabajo (correr una
+//    implementación en Haiku es frágil, hallazgo del simulacro).
+//  - Escalada por EVIDENCIA de insuficiencia: corrección del usuario ("no
+//    funciona", "está mal") = sube en el acto (etiqueta de calidad gratis) ·
+//    ≥2 errores de tool o ≥10 tools con ≥1 error = sube para el próximo turno.
+//    (El auto-redo automático del turno se DESCARTÓ: disparó 0 veces en los
+//    simulacros — la corrección escala un turno antes y gratis.)
+//  - Bajada por INACTIVIDAD (idle ≥60 min ⇒ decae 1 escalón al reanudar).
+// En cada turno real (sendUser) _applyModelRouter() clasifica el TEXTO (0
+// costo) y, si el mensaje es ambiguo, consulta a Haiku EN SEGUNDO PLANO
+// (classifyRelative, fire-and-forget, patrón extractTitle — ~2-3s de arranque,
+// nunca se espera en línea; gobierna el PRÓXIMO turno). Inerte si el modelo no
+// mapea a la escala (clampLevel==-1: opusplan/default). Estado persistido
+// MÍNIMO: `_routerDownStreak` + `_routerCooldown`; el nivel se deriva de
+// `this.model`. La insuficiencia se evalúa al cerrar el turno
+// (_setStatus('waiting') → _applyInsufficiencyEscalation), contando tool_use y
+// tool_result con ok:false del turno (_turnToolCount / _turnToolErrors).
 import express from 'express';
 import fss from 'node:fs';
 import os from 'node:os';
@@ -59,8 +61,9 @@ import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
+import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
-import { decideModelForTurn, applyHysteresis, reactiveEscalation, logDecision, MODEL_LEVELS } from '../../core/model-router.js';
+import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, MODEL_LEVELS, FORBIDDEN_AUTO } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
@@ -68,11 +71,16 @@ import {
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
+import {
+  attachUpload, existingAttachments, attachPath,
+  attachRelForExplorer, chatAttachDir, classifyAttachment,
+} from './attachments.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
 // chats. Ver _archived/ARCHIVED.md.
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 import * as bus from '../../core/bus.js';
+import { logDelivery } from '../../core/interfono-log.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
@@ -187,17 +195,22 @@ async function extractTitle({ cwd, current, text }) {
 // a _autoTitle, con timeout+interrupt generoso (mismo orden que
 // AUTOTITLE_TIMEOUT_MS) solo para no dejar el proceso colgado para siempre.
 const ROUTER_CLASSIFY_TIMEOUT_MS = 20000;
-// Mismo techo que la heurística de Fase 1 (core/model-router.js): el
-// clasificador tampoco sugiere nunca 'fable' sola.
-const ROUTER_LEVEL_NAMES = ['trivial', 'normal', 'complejo']; // -> MODEL_LEVELS[0]=haiku [1]=sonnet [2]=opus
+// Clasificador RELATIVO (v2): mapea la respuesta al MOVIMIENTO del base. La
+// pregunta relativa ("dado que estás en X…") tiene deadband en 'suficiente'
+// (no mueve nada) — mucho más estable turno a turno que la clasificación
+// absoluta de v1, que alimentaba el yo-yo.
+const ROUTER_MOVE_BY_WORD = { sobrado: 'down', suficiente: null, insuficiente: 'up' };
 
-async function classifyComplexity({ cwd, text }) {
+// Devuelve 'up' | 'down' | null (suficiente/timeout/error). NUNCA sugiere fable
+// (la escala del núcleo no lo incluye; un 'up' desde opus queda inerte en
+// decideBase). READ-ONLY doble capa (regla 6): sin herramientas, solo texto.
+async function classifyRelative({ cwd, currentModel, text }) {
   const q = query({
     prompt:
-      'Clasificá la COMPLEJIDAD de este pedido para elegir qué modelo de IA debería responderlo. ' +
-      'Respondé UNA sola palabra, sin nada más: "trivial" (saludo, confirmación, charla liviana), ' +
-      '"normal" (pregunta o tarea acotada, de dificultad media) o "complejo" (requiere código, ' +
-      'análisis profundo, o tocar varias partes de un sistema).\n' +
+      `El modelo actual de esta conversación es "${currentModel}" (escala barato→caro: haiku < sonnet < opus). ` +
+      'Para el SIGUIENTE pedido del usuario, respondé UNA sola palabra, sin nada más: ' +
+      '"sobrado" (un modelo más chico alcanzaría de sobra), "suficiente" (el nivel actual está bien) ' +
+      'o "insuficiente" (hace falta un modelo más capaz: requiere código, análisis profundo o tocar varias partes).\n' +
       `Pedido: «${String(text || '').slice(0, 1000)}»`,
     options: {
       cwd,
@@ -238,8 +251,7 @@ async function classifyComplexity({ cwd, text }) {
     clearTimeout(timer);
   }
   const word = out.toLowerCase().replace(/[^a-záéíóúñ]/g, '').trim();
-  const idx = ROUTER_LEVEL_NAMES.indexOf(word);
-  return idx === -1 ? null : idx;
+  return Object.prototype.hasOwnProperty.call(ROUTER_MOVE_BY_WORD, word) ? ROUTER_MOVE_BY_WORD[word] : null;
 }
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
@@ -379,12 +391,28 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
       if (typeof c === 'string') {
         if (c.trim()) events.push({ type: 'user', text: c });
       } else if (Array.isArray(c)) {
+        // Adjuntos del turno (bloques image/document del SDK): en el replay
+        // desde el transcript NO tenemos el nombre en disco, así que se pintan
+        // como CHIPS de tipo (sin miniatura) — la imagen real sigue accesible
+        // por "Abrir carpeta del chat". Se adosan a la 1ª burbuja de texto (o a
+        // una burbuja vacía si el turno fue solo-adjunto).
+        const atts = c
+          .filter((b) => b.type === 'image' || b.type === 'document')
+          .map((b) => ({ type: b.type === 'image' ? 'image' : 'pdf' }));
+        let attsAttached = false;
+        let emittedText = false;
         for (const b of c) {
-          if (b.type === 'text' && b.text?.trim()) events.push({ type: 'user', text: b.text });
+          if (b.type === 'text' && b.text?.trim()) {
+            const ev = { type: 'user', text: b.text };
+            if (atts.length && !attsAttached) { ev.attachments = atts; attsAttached = true; }
+            events.push(ev);
+            emittedText = true;
+          }
           if (b.type === 'tool_result') {
             events.push({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000) });
           }
         }
+        if (atts.length && !emittedText) events.push({ type: 'user', text: '', attachments: atts });
       }
     } else if (o.type === 'assistant' && Array.isArray(msg.content)) {
       for (const b of msg.content) {
@@ -399,7 +427,7 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
 }
 
 class Chat {
-  constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
+  constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null }) {
     this.id = id;
     this.cwd = cwd;
     // AutoTux (2026-07-06): `modelChoice` es QUÉ ELIGIÓ LA PERSONA (auto |
@@ -422,6 +450,7 @@ class Chat {
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
+    this.learningId = learningId; // 'LT<n>' si nació de "Profundizar en chat" de un tema de Aprendizaje (write-back al cerrar)
     this.resume = resume;
     this.sessionId = resume || null;
     this.alive = false;       // motor (runner) conectado y corriendo
@@ -444,17 +473,23 @@ class Chat {
     // la pestaña del chat abierta (antes esto solo vivía en el frontend,
     // como ícono de tool call, invisible para la tarjeta de Sesiones).
     this._delegatingIds = new Set();
-    // Router de modelo automático (núcleo: core/model-router.js, Fase 1,
-    // 2026-07-06): contador de turnos "simples" seguidos para la histéresis
-    // de bajada. El NIVEL en sí no se duplica acá — se deriva de `this.model`
-    // en cada turno (decideModelForTurn), así que solo hace falta persistir
-    // este contador chico (ver _applyModelRouter/persist()/rehydrate()).
+    // Router de modelo automático — AutoTux v2 (núcleo: core/model-router.js).
+    // Estado PERSISTIDO mínimo (ver persist()/rehydrate()): contador de turnos
+    // "down" seguidos para la histéresis de bajada + turnos restantes de
+    // cooldown anti-rebote. El NIVEL no se duplica: se deriva de `this.model`.
     this._routerDownStreak = 0;
-    // Fase 2: tool_use del turno EN CURSO (para el escalado reactivo — ver
-    // _applyReactiveEscalation). Efímero a propósito: no se persiste, un
-    // reinicio del server a mitad de turno como mucho pierde la señal de ESE
-    // turno puntual, no la histéresis general.
-    this._turnToolCount = 0;
+    this._routerCooldown = 0;
+    // Efímeros (NO se persisten): señales del turno EN CURSO para la escalada
+    // por insuficiencia (_applyInsufficiencyEscalation al pasar a 'waiting').
+    this._turnToolCount = 0;   // cualquier tool_use del turno
+    this._turnToolErrors = 0;  // tool_result con ok:false (herramienta falló)
+    // Override efímero de turno (ack de cierre → Haiku SOLO este turno): al
+    // cerrarlo se restaura el base guardado. Efímero: un reinicio a mitad como
+    // mucho deja el turno en Haiku, sin afectar el base persistido.
+    this._overrideRestore = null; // nombre del modelo base a restaurar, o null
+    // Throttle del clasificador relativo: no reclasificar si ya se clasificó
+    // hace poco con el mismo nivel vigente (reduce llamadas + volatilidad).
+    this._routerClassifyThrottle = 0;
   }
 
   start() {
@@ -483,6 +518,9 @@ class Chat {
       spawnRunner({
         id: this.id, cwd: this.cwd, model: this.model,
         mode: this.permissionMode, resume: resumeId,
+        // Identidad del chat en el Interfono (Fase 0.4): handle canónico
+        // claude:<sessionId> — mismo que _busHandle(). Solo si ya lo conocemos.
+        selfHandle: resumeId ? `claude:${resumeId}` : null,
       });
     } catch (err) {
       this._push({ type: 'error', message: `No pude lanzar el motor: ${String(err?.message || err).slice(0, 200)}` });
@@ -572,8 +610,8 @@ class Chat {
         // la usa para la cuenta regresiva de expiración (PERMISSION_TIMEOUT_MS).
         if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
         if (e.type === 'tool_use') {
-          // Contador del turno en curso (Fase 2 del router de modelo — ver
-          // _applyReactiveEscalation): CUALQUIER herramienta cuenta, no solo
+          // Contador del turno en curso (AutoTux v2 — ver _endTurnRouter /
+          // insufficiencyEscalation): CUALQUIER herramienta cuenta, no solo
           // Task/Agent.
           this._turnToolCount = (this._turnToolCount || 0) + 1;
           // Estado "delegando" (ver PAC_STATES en ui/pacman.js): un tool_use
@@ -582,8 +620,12 @@ class Chat {
           // frontend, acá server-side para que /api/chat/list lo vea sin la
           // pestaña abierta).
           if (/^(Task|Agent)/i.test(e.name || '')) this._delegatingIds.add(e.id);
-        } else if (e.type === 'tool_result' && this._delegatingIds.has(e.id)) {
-          this._delegatingIds.delete(e.id);
+        } else if (e.type === 'tool_result') {
+          // AutoTux v2 (C5): una herramienta que falló (ok:false, ver runner)
+          // es evidencia barata de "el nivel se quedó corto" — la cuenta el
+          // escalado por insuficiencia al cerrar el turno.
+          if (e.ok === false) this._turnToolErrors = (this._turnToolErrors || 0) + 1;
+          if (this._delegatingIds.has(e.id)) this._delegatingIds.delete(e.id);
         }
         this._push(e);
     }
@@ -636,17 +678,34 @@ class Chat {
       fromName: String(m.fromName || 'sesión').slice(0, 60),
       text: String(m.text || '').slice(0, 400),
       ts: m.ts || null,
+      // Nivel de interrupción (Fase 4): 'active' surfacea toast; 'passive' solo
+      // badge. Mensajes viejos sin level ⇒ passive.
+      level: m.level || 'passive',
     }));
+  }
+
+  // Señal EN VIVO del interfono (rediseño 2026-07-10, Fase 3): empuja los
+  // pendientes por _broadcast, que llega SOLO a los WS de este chat = las
+  // ventanas que lo tienen abierto (scoping server-side, sin windowId). El
+  // frontend lo consume para refrescar el badge/aviso al instante en esas
+  // ventanas, sin esperar el poll de 8 s ni molestar a las demás.
+  signalInterfono() {
+    if (this.closed) return;
+    if (!this.clients.size) return; // nadie mirando: no cuesta nada saltearlo
+    this._broadcast({ type: 'interfono', pending: this.pendingInterfono() });
   }
 
   // Inyecta los mensajes pendientes como UN turno sintético (equivalente al
   // nudge send-keys de la TUI). Marca ENTREGADO antes de disparar el turno para
   // que el hook-inject de ese mismo UserPromptSubmit no re-inyecte el mismo
   // mensaje (doble). Revive el motor con resume si estaba dormido (_ensureEngine).
-  deliverInterfono(msgs) {
+  deliverInterfono(msgs, route = 'auto-deliver') {
     const h = this._busHandle();
     if (this.closed || !h || !Array.isArray(msgs) || !msgs.length) return;
     try { bus.markDelivered(msgs, [h]); } catch { /* noop */ }
+    for (const m of msgs) {
+      logDelivery({ route, msgId: m.id, from: m.from || null, to: h, kind: m.kind || 'note', level: m.level || 'passive', chatId: this.id });
+    }
     const body = msgs.map((m) => {
       const when = new Date(m.ts || Date.now()).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       return `• [${when}] ${m.fromName || 'una sesión'}: ${m.text}`;
@@ -673,9 +732,12 @@ class Chat {
     if (!msgs.length) return { ok: true }; // ya no hay nada: idempotente
     if (action === 'dismiss') {
       try { bus.markDelivered(msgs, [h]); } catch { /* noop */ }
+      for (const m of msgs) {
+        logDelivery({ route: 'popup-dismiss', msgId: m.id, from: m.from || null, to: h, kind: m.kind || 'note', level: m.level || 'passive', chatId: this.id });
+      }
       return { ok: true };
     }
-    this.deliverInterfono(msgs);
+    this.deliverInterfono(msgs, 'popup-resume');
     return { ok: true };
   }
 
@@ -866,88 +928,140 @@ class Chat {
     this.link?.send(msg);
   }
 
-  sendUser(text) {
+  // `attachments` (opcional): [{name,type,mime}] YA subidos a la carpeta del
+  // chat (existingAttachments los validó contra disco). Viajan como referencia
+  // al runner, que LEE cada archivo y arma los bloques image/document/text del
+  // SDK (chat/attachments.js buildUserContent). SIN adjuntos, el camino es
+  // idéntico al histórico (content = string).
+  sendUser(text, attachments = null) {
     if (this.closed) return;
     if (!this.alive && this.viewMode !== 'chat') return;
+    const atts = Array.isArray(attachments) && attachments.length ? attachments : null;
+    if (!String(text || '').trim() && !atts) return; // ni texto ni adjuntos: nada que enviar
+    const idleMs = Date.now() - (this.lastActivity || Date.now()); // ANTES de pisarlo: AutoTux usa el idle para decaer
     this.lastActivity = Date.now();
-    this._applyModelRouter(text); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
+    this._applyModelRouter(text, idleMs); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
     this._setStatus('working');
-    this._push({ type: 'user', text });
+    this._push({ type: 'user', text, ...(atts ? { attachments: atts } : {}) });
     this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
     // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
     this._ensureEngine().then((ok) => {
-      if (ok !== false) this.link?.send({ t: 'user', text });
+      if (ok !== false) this.link?.send({ t: 'user', text, ...(atts ? { attachments: atts } : {}) });
     });
   }
 
-  // Router de modelo automático — AutoTux (núcleo: core/model-router.js).
-  // Reusa el MISMO setModel() que ya usa el selector manual — nada de
-  // plomería de cambio de modelo nueva, solo la decisión. Inerte a propósito
-  // si `modelChoice` no es exactamente 'auto': elegir Fable/Opus/Sonnet/Haiku
-  // (u opusplan/default) desde el menú FUERZA ese único modelo y apaga el
-  // router para esta conversación (setModelChoice ya lo resuelve).
-  _applyModelRouter(text) {
+  // Router de modelo automático — AutoTux v2 (núcleo: core/model-router.js).
+  // Reusa el MISMO setModel() del selector manual — solo la DECISIÓN es nueva.
+  // Inerte si `modelChoice` !== 'auto' o si el modelo no mapea a la escala.
+  // UN solo movimiento del base por turno (evita doble decremento de cooldown).
+  _applyModelRouter(text, idleMs = 0) {
     if (this.modelChoice !== 'auto') return; // forzado a un modelo fijo: AutoTux no opina
-    const decision = decideModelForTurn({ currentModel: this.model, text, downStreak: this._routerDownStreak });
-    if (!decision) return; // el modelo actual todavía no es uno de los 4 niveles (transición rara)
+    const base0 = clampLevel(this.model);
+    if (base0 === -1) return; // opusplan/default: no gestionado
+    if (this._routerClassifyThrottle > 0) this._routerClassifyThrottle--;
 
-    if (decision.ambiguous) {
-      // Fase 2: la heurística 0-costo no supo qué opinar. Consultar a Haiku
-      // tarda VARIOS SEGUNDOS solo de arranque (verificado en caliente) — por
-      // eso corre en SEGUNDO PLANO (fire-and-forget, patrón _autoTitle) y
-      // jamás demora el turno actual; si contesta a tiempo, gobierna el
-      // PRÓXIMO turno (o este mismo si el motor todavía no arrancó a
-      // responder — setModel() ya resuelve ambos casos como siempre). Guarda
-      // simple contra solapes: un chat no clasifica dos turnos en paralelo.
-      if (this._routerClassifying) return;
-      this._routerClassifying = true;
-      classifyComplexity({ cwd: this.cwd, text })
-        .then((suggestion) => {
-          if (suggestion === null || this.closed) return;
-          const currentLevel = MODEL_LEVELS.indexOf(this.model);
-          if (currentLevel === -1) return; // el usuario pudo pasar a opusplan/default mientras tanto
-          const resolved = applyHysteresis({ currentLevel, suggestion, downStreak: this._routerDownStreak });
-          this._routerDownStreak = resolved.downStreak;
-          if (resolved.changed) {
-            const from = this.model;
-            const next = MODEL_LEVELS[resolved.level];
-            if (next && next !== from) {
-              this.setModel(next, { auto: true });
-              // Fase 3: registro para calibrar después (nunca decide nada solo).
-              logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) });
-            }
-          }
-        })
-        .catch(() => { /* best-effort: mejor no tocar nada que romper el turno */ })
-        .finally(() => { this._routerClassifying = false; });
+    const { kind } = classifySignal(text);
+
+    // Movimiento del NIVEL BASE (uno por turno). Prioridad: corrección > código/
+    // largo > bajada (ack/goahead) > bajada por inactividad (solo si ambiguo).
+    let move = 'same';
+    if (kind === 'strong_up') move = 'strong_up';
+    else if (kind === 'up') move = 'up';
+    else if (kind === 'closing' || kind === 'goahead') move = 'down';
+    else if (idleDecayMove({ baseLevel: base0, idleMs }) === 'down') move = 'down';
+
+    const r = decideBase({ baseLevel: base0, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown });
+    this._routerDownStreak = r.downStreak;
+    this._routerCooldown = r.cooldown;
+    const base = r.level; // base tras el movimiento (puede haber demotado)
+
+    // Override efímero (C4): un ack de CIERRE corre ESTE turno en Haiku sin
+    // tocar el base — se restaura al cerrar el turno (_endTurnRouter). NUNCA en
+    // go-aheads (dale/ok): correr trabajo en Haiku es frágil.
+    if (turnOverride(kind) === 0) {
+      this._overrideRestore = MODEL_LEVELS[base];
+      if (this.model !== 'haiku') {
+        this.setModel('haiku', { auto: true });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: MODEL_LEVELS[base], to: 'haiku', text: text.slice(0, 150) });
+      }
+      logTurn({ chatId: this.id, ranLevel: 0, base, override: true, toolCalls: 0, toolErrors: 0 });
       return;
     }
-    this._routerDownStreak = decision.downStreak;
-    if (decision.changed) {
+
+    // Cambio de base (subida por código/corrección, o bajada por ack/idle).
+    if (r.changed) {
       const from = this.model;
-      const next = MODEL_LEVELS[decision.level];
+      const next = MODEL_LEVELS[base];
       if (next && next !== from) {
         this.setModel(next, { auto: true });
-        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'heuristic', from, to: next, text: text.slice(0, 150) });
+        const source = kind === 'strong_up' ? 'correction'
+          : (kind === 'ambiguous' || kind === 'none') ? 'idle' // el único cambio posible acá es idle-decay
+            : 'heuristic';
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source, from, to: next, text: text.slice(0, 150) });
       }
+    } else if (kind === 'ambiguous' && this._routerClassifyThrottle === 0) {
+      // Heurística sin opinión: clasificador RELATIVO a Haiku EN SEGUNDO PLANO
+      // (fire-and-forget, patrón _autoTitle — ~2-3s de arranque, jamás demora
+      // el turno). Gobierna el PRÓXIMO turno. Throttle: no reclasificar por 2 t.
+      this._classifyRelative(text, base);
     }
+    logTurn({ chatId: this.id, ranLevel: base, base, override: false, toolCalls: 0, toolErrors: 0 });
   }
 
-  // Escalado reactivo (núcleo: core/model-router.js, Fase 2): al TERMINAR un
-  // turno (transición a 'waiting', ver _setStatus), si usó demasiadas
-  // herramientas de golpe, sube un escalón para el PRÓXIMO turno — señal
-  // barata de "esto pesó más de lo que pensábamos", cero tokens extra.
-  _applyReactiveEscalation() {
-    if (this.modelChoice !== 'auto') return; // forzado a un modelo fijo: AutoTux no opina
-    const currentLevel = MODEL_LEVELS.indexOf(this.model);
-    const decision = reactiveEscalation({ currentLevel, toolCallsInTurn: this._turnToolCount });
-    if (!decision) return;
-    this._routerDownStreak = decision.downStreak;
+  // Clasificador RELATIVO de Haiku (v2): en vez de "¿qué complejidad tiene?"
+  // (absoluto, volátil turno a turno), pregunta "dado que estás en X, ¿sobrado/
+  // suficiente/insuficiente?" — deadband natural en 'suficiente' (no mueve
+  // nada), mucho más estable. Fire-and-forget en segundo plano.
+  _classifyRelative(text, _baseAtDispatch) {
+    if (this._routerClassifying) return;
+    this._routerClassifying = true;
+    this._routerClassifyThrottle = 2; // no reclasificar los próximos 2 turnos
+    classifyRelative({ cwd: this.cwd, currentModel: this.model, text })
+      .then((move) => { // 'up' | 'down' | null (suficiente/timeout/error)
+        if (!move || this.closed) return;
+        const b = clampLevel(this.model);
+        if (b === -1) return; // el usuario pudo pasar a opusplan/default mientras tanto
+        const r = decideBase({ baseLevel: b, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown });
+        this._routerDownStreak = r.downStreak;
+        this._routerCooldown = r.cooldown;
+        if (r.changed) {
+          const from = this.model;
+          const next = MODEL_LEVELS[r.level];
+          if (next && next !== from) {
+            this.setModel(next, { auto: true });
+            logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) });
+          }
+        }
+      })
+      .catch(() => { /* best-effort: mejor no tocar nada que romper el turno */ })
+      .finally(() => { this._routerClassifying = false; });
+  }
+
+  // Cierre de turno (v2, llamado desde _setStatus('waiting')): (1) restaura el
+  // override efímero (el turno corrió en Haiku → vuelve al base); (2) escala por
+  // INSUFICIENCIA para el PRÓXIMO turno si hubo evidencia (≥2 errores de tool, o
+  // ≥10 tools con ≥1 error). NO re-corre el turno (auto-redo descartado, ver
+  // núcleo). Cumple "detectar que el modelo no alcanzó y subir".
+  _endTurnRouter() {
+    if (this._overrideRestore) {
+      const restore = this._overrideRestore;
+      this._overrideRestore = null;
+      if (this.model !== restore && MODEL_LEVELS.includes(restore)) {
+        this.setModel(restore, { auto: true }); // volver del Haiku efímero al base
+      }
+    }
+    if (this.modelChoice !== 'auto') return;
+    const base = clampLevel(this.model);
+    if (base === -1) return;
+    const dec = insufficiencyEscalation({ baseLevel: base, toolCalls: this._turnToolCount, toolErrors: this._turnToolErrors });
+    if (!dec) return;
+    this._routerDownStreak = dec.downStreak;
+    this._routerCooldown = dec.cooldown;
     const from = this.model;
-    const next = MODEL_LEVELS[decision.level];
+    const next = MODEL_LEVELS[dec.level];
     if (next && next !== from) {
       this.setModel(next, { auto: true });
-      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'reactive', from, to: next, text: `(${this._turnToolCount} tool_use en el turno)` });
+      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'insufficiency', from, to: next, text: `(${this._turnToolCount} tools, ${this._turnToolErrors} errores)` });
     }
   }
 
@@ -998,6 +1112,12 @@ class Chat {
   // pedido por la persona.
   setModel(model, { auto = false } = {}) {
     if (!VALID_MODELS.has(model)) return;
+    // AutoTux v2 (C1): defensa en profundidad — el router NUNCA debe llevar a
+    // fable solo. Un cambio MANUAL (auto:false, selector) a fable sigue OK.
+    if (auto && FORBIDDEN_AUTO.has(model)) {
+      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'guard', from: this.model, to: model, text: 'bloqueado: fable no es automático' });
+      return;
+    }
     if (this.link) {
       this._pendingModelAuto = auto; // lo consume _onRunnerEvent al llegar el eco 'model'
       // El cambio real lo confirma el runner con su evento 'model'.
@@ -1014,7 +1134,7 @@ class Chat {
   // queda en 'auto' PARA SIEMPRE (el badge nunca deja de decir "AutoTux"
   // aunque `this.model` suba/baje por debajo). Cualquier otro valor FUERZA
   // ese único modelo real y apaga el router para esta conversación
-  // (_applyModelRouter/_applyReactiveEscalation chequean modelChoice antes
+  // (_applyModelRouter/_endTurnRouter chequean modelChoice antes
   // que nada). Es el único método que debería llamar el selector del menú
   // "Cambiar modelo" — setModel() de arriba sigue siendo el bajo nivel que
   // usa tanto este método como el propio router internamente.
@@ -1069,6 +1189,24 @@ class Chat {
         } catch (err) { console.error('[chat] no pude guardar histórico del ticket:', err?.message); }
       }, 2000).unref();
     }
+    // WRITE-BACK de APRENDIZAJE (2026-07-10): si el chat nació de "💬 Profundizar
+    // en chat" de un tema (this.learningId 'LT<n>'), al cerrarlo agregamos un
+    // resumen DETERMINÍSTICO de la sesión (0 tokens) como entrada 'chat' del
+    // tema → aumenta su contexto para la próxima "Regenerar". Mismo patrón
+    // diferido/best-effort que el histórico de tickets. Flag propio para no
+    // colisionar con _historicoDone (un chat es de ticket O de tema, no ambos).
+    if (this.learningId && this.sessionId && !this._learningDone) {
+      this._learningDone = true;
+      const lid = this.learningId;
+      const cwd = this.cwd;
+      const sid = this.sessionId;
+      setTimeout(() => {
+        try {
+          const work = extractSessionWork(cwd, sid);
+          if (work) appendLearningChatContext(lid, { summary: work.summary, files: work.files });
+        } catch (err) { console.error('[chat] no pude guardar contexto de aprendizaje:', err?.message); }
+      }, 2000).unref();
+    }
     // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);
@@ -1088,8 +1226,9 @@ class Chat {
     // (interrupt, crash) deje la tarjeta pegada en "delegando" para siempre.
     if (state === 'waiting') {
       this._delegatingIds.clear();
-      this._applyReactiveEscalation(); // Fase 2 del router de modelo (ver arriba)
-      this._turnToolCount = 0; // arranca en cero el conteo del próximo turno
+      this._endTurnRouter(); // AutoTux v2: restaura override + escala por insuficiencia
+      this._turnToolCount = 0;  // arranca en cero el conteo del próximo turno
+      this._turnToolErrors = 0;
     }
     if (this.status === state) return;
     this.status = state;
@@ -1189,14 +1328,26 @@ class ChatManager {
   _deliverInterfono() {
     for (const c of this.chats.values()) {
       if (c.closed || !c.sessionId || c.viewMode !== 'chat') continue;
-      if (!(c.alive && c.status === 'waiting' && c.clients.size > 0)) continue;
-      let msgs;
-      try { msgs = bus.pendingFor([`claude:${c.sessionId}`]); } catch { continue; }
-      if (msgs.length) c.deliverInterfono(msgs);
+      const open = c.clients.size > 0;
+      const idle = c.alive && c.status === 'waiting';
+      if (open && idle) {
+        let msgs;
+        try { msgs = bus.pendingFor([`claude:${c.sessionId}`]); } catch { continue; }
+        if (msgs.length) c.deliverInterfono(msgs);
+      } else if (open) {
+        // Fase 3: chat ABIERTO pero ocupado/no-ocioso → NO auto-entregamos
+        // (esperaría a terminar el turno), pero SÍ empujamos la señal EN VIVO
+        // por _broadcast, que llega SOLO a las ventanas que tienen ESTE chat
+        // abierto (c.clients ES el primitivo "rooms" server-side: nada de
+        // broadcast global ni windowId). Las demás ventanas ni se enteran.
+        c.signalInterfono();
+      }
+      // Chat dormido / sin pestaña: nada en vivo (0 tokens fantasma); su badge
+      // pasivo en "Sesiones" lo cubre vía el poll de /api/chat/list.
     }
   }
 
-  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null }) {
     const id = `c${process.pid}-${++this._seq}`;
     // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
     // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
@@ -1208,7 +1359,7 @@ class ChatManager {
     // sesión con ese nombre. Solo en creaciones nuevas — rehydrate() usa
     // `new Chat` directo y respeta los títulos ya persistidos.
     const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
-    const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket });
+    const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
     chat.onUpdate = () => this.persist();
     chat.start();
     this.chats.set(id, chat);
@@ -1228,14 +1379,16 @@ class ChatManager {
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
         ticket: c.ticket || null,
+        learningId: c.learningId || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
         // persiste explícito porque `model` solo no alcanza para distinguir
         // "elegí Sonnet a mano" de "AutoTux bajó a Sonnet" — ver constructor.
         modelChoice: c.modelChoice || null,
-        // Router de modelo automático (core/model-router.js): el NIVEL se
-        // deriva de `model` (arriba); esto es solo el contador chico de
-        // histéresis de bajada, para no perderlo al reiniciar el server.
+        // AutoTux v2 (core/model-router.js): el NIVEL se deriva de `model`
+        // (arriba); esto es el estado MÍNIMO de histéresis — contador de turnos
+        // "down" seguidos + turnos restantes de cooldown anti-rebote.
         routerDownStreak: c._routerDownStreak || 0,
+        routerCooldown: c._routerCooldown || 0,
         // Modo TUI: la tmux oculta (cwct-) sobrevive reinicios del server, así
         // que persistimos lo necesario para RE-ADJUNTARLA al rehidratar.
         viewMode: c.viewMode === 'tui' ? 'tui' : 'chat',
@@ -1269,6 +1422,7 @@ class ChatManager {
       chat.onUpdate = () => this.persist();
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
+      if (/^LT\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.lastActivity = s.lastActivity || Date.now();
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
       // infirió un valor razonable a partir de `model`, pero solo el campo
@@ -1276,6 +1430,7 @@ class ChatManager {
       // ahora" — chats viejos sin este campo se quedan con lo que infirió).
       if (s.modelChoice) chat.modelChoice = s.modelChoice;
       chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
+      chat._routerCooldown = Number.isFinite(s.routerCooldown) ? s.routerCooldown : 0;
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
         // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
         const term = sessionManager.createBare({
@@ -1367,7 +1522,7 @@ export default {
     const r = express.Router();
 
     r.post('/create', (req, res) => {
-      const { cwd, model, permissionMode, resume, title, ticket } = req.body || {};
+      const { cwd, model, permissionMode, resume, title, ticket, learningId } = req.body || {};
       // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
       // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
       // reconoce Claude Code). Sin `model` en el pedido, el default pasa a
@@ -1393,6 +1548,9 @@ export default {
         ticket: ticket?.number
           ? { number: String(ticket.number).slice(0, 40), url: /^https?:\/\//.test(ticket.url || '') ? String(ticket.url).slice(0, 400) : null }
           : null,
+        // Vínculo a un tema de Aprendizaje: al cerrar el chat "Profundizar",
+        // deja un resumen como entrada 'chat' del tema (write-back, módulo learning).
+        learningId: /^LT\d+$/.test(String(learningId || '')) ? String(learningId) : null,
       });
       res.json({ chat: chat.info() });
     });
@@ -1574,6 +1732,67 @@ export default {
       res.json({ ok: true, chat: chat.info() });
     });
 
+    // ===== ADJUNTOS del chat (imágenes, PDF, texto, binarios) =====
+    // Subida de UN adjunto a la carpeta del chat (~/.cwc-data/chat-attachments/
+    // <id>). multer escribe a disco con límite de tamaño DURANTE el streaming
+    // (nunca buffea entero a memoria). El content del SDK lo arma el runner al
+    // enviar el mensaje (chat/attachments.js). Sube el composer al elegir/pegar/
+    // arrastrar; devuelve {name,type,mime,size} — la referencia que viaja luego.
+    r.post('/attachment', (req, res) => {
+      const chat = manager.get(req.query?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      attachUpload.single('file')(req, res, (err) => {
+        if (err) {
+          // Límites de multer (LIMIT_FILE_SIZE, etc.) y validaciones → 400;
+          // fallas de disco (ENOSPC/EACCES) → 500.
+          const code = (err.badRequest || (err.code && String(err.code).startsWith('LIMIT_'))) ? 400 : 500;
+          return res.status(code).json({ error: err.message || 'No se pudo subir el adjunto.' });
+        }
+        if (!req.file) return res.status(400).json({ error: 'Falta el archivo.' });
+        const name = req.file.filename;
+        const mime = req.file.mimetype || '';
+        res.json({ attachment: { name, type: classifyAttachment(mime, name), mime, size: req.file.size } });
+      });
+    });
+
+    // Sirve un adjunto por nombre (miniaturas de la burbuja + "abrir en pestaña").
+    // attachPath confina el nombre a la carpeta del chat (basename saneado +
+    // padre exacto). Imágenes/PDF inline; el resto forzado a descarga; nosniff.
+    r.get('/attachment', (req, res) => {
+      const chat = manager.get(req.query?.id);
+      if (!chat) return res.status(404).end();
+      const name = String(req.query?.name || '');
+      const abs = attachPath(req.query?.id, name);
+      if (!abs) return res.status(404).end();
+      const type = classifyAttachment('', name);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (type === 'image' || type === 'pdf') {
+        res.type(path.extname(abs));
+        res.setHeader('Content-Disposition', 'inline');
+      } else {
+        // Texto/binario: descarga forzada (nunca inline — evita servir HTML/SVG
+        // activo con su tipo real, mismo criterio que el gestor de archivos).
+        res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/["\r\n]/g, '_')}"`);
+        res.type('application/octet-stream');
+      }
+      res.sendFile(abs);
+    });
+
+    // Asegura la carpeta de adjuntos del chat y devuelve su ruta RELATIVA al
+    // home para el deep-link del Explorador ("Abrir carpeta del chat" del menú
+    // ⋯ de Sesiones). Crearla si no existía deja la ventana lista aunque el
+    // chat todavía no tenga adjuntos.
+    r.get('/folder', (req, res) => {
+      const chat = manager.get(req.query?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const dir = chatAttachDir(chat.id);
+      const rel = attachRelForExplorer(chat.id);
+      if (!dir || !rel) return res.status(400).json({ error: 'Id inválido.' });
+      try { fss.mkdirSync(dir, { recursive: true, mode: 0o700 }); }
+      catch { return res.status(500).json({ error: 'No se pudo crear la carpeta.' }); }
+      res.json({ rel });
+    });
+
     router.use('/chat', r);
   },
 
@@ -1589,8 +1808,12 @@ export default {
       ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
-        if (msg.type === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
-          chat.sendUser(msg.text);
+        if (msg.type === 'user' && typeof msg.text === 'string') {
+          // Adjuntos: se validan contra la carpeta del chat (existingAttachments
+          // filtra a los que existen en disco). Permite enviar solo-adjunto
+          // (texto vacío) si hay al menos uno válido.
+          const atts = existingAttachments(chat.id, msg.attachments);
+          if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts);
         } else if (msg.type === 'permission_response') {
           chat.answerPermission(msg.id, !!msg.allow, sanitizeAnswers(msg.answers));
         } else if (msg.type === 'interrupt') {

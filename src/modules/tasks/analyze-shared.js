@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listTasks, listPlans } from './store.js';
 import { listAudioJobs, readAudioJob } from '../audio/shared.js';
+import { listTopics as listLearningTopics } from '../learning/store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
@@ -133,9 +134,14 @@ export function buildContext(scope) {
     const { tasks } = listTasks();
     const plans = listPlans();
     const reports = reportsContext();
+    // Temas del Banco de conocimiento YA existentes: para NO duplicarlos al
+    // sugerir temas nuevos derivados del trabajo pendiente (puente Pendientes → Aprendizaje).
+    let learningTopics = [];
+    try { learningTopics = listLearningTopics().topics.map((t) => ({ title: t.title, area: t.area || '', status: t.status })); }
+    catch { /* módulo learning ausente: no rompe el análisis */ }
     if (!tasks.length && !plans.length && !reports.length) return null;
     return {
-      context: { tasks: tasksBrief(tasks), plans: plansBrief(plans, tasks), reports },
+      context: { tasks: tasksBrief(tasks), plans: plansBrief(plans, tasks), reports, learningTopics },
       count: tasks.length + plans.length,
     };
   }
@@ -173,8 +179,9 @@ function globalPrompt(context) {
     'Sos un asistente que REORGANIZA un tablero de tareas pendientes. Te paso en',
     'JSON: la lista COMPLETA de TAREAS (cada una con su planId si ya pertenece a un',
     'plan, o null si está suelta), la lista de PLANES (con las tareas que ya tienen',
-    'asignadas) y los INFORMES de audio ya procesados (con su resumen, tareas',
-    'propuestas y plan). Tu trabajo es dejar TODO ordenado, detectando:',
+    'asignadas), los INFORMES de audio ya procesados (con su resumen, tareas',
+    'propuestas y plan) y los TEMAS de aprendizaje que el dueño YA está estudiando',
+    '(learningTopics). Tu trabajo es dejar TODO ordenado, detectando:',
     '  1. DUPLICADOS: tareas que son lo mismo → conservar UNA y quitar el resto.',
     '  2. UNIFICABLES: tareas distintas que conviene FUSIONAR en una sola.',
     '  3. COMPLETAR: tareas con info pobre que se enriquece con los INFORMES.',
@@ -184,6 +191,12 @@ function globalPrompt(context) {
     '  5. CREAR-DESDE-INFORME: tareas propuestas en un INFORME que TODAVÍA no',
     '     figuran en la lista de tareas (compará por objetivo real, no texto exacto)',
     '     → crealas. NO repitas una tarea que ya existe.',
+    '  6. APRENDER (puente al Banco de conocimiento): mirá QUÉ se está trabajando en',
+    '     las tareas/planes/informes y sugerí TEMAS DE APRENDIZAJE nuevos que el',
+    '     dueño debería estudiar para hacerlo mejor (resolver, exponer PRs,',
+    '     implementar). SOLO temas que NO estén ya en learningTopics (compará por',
+    '     objetivo real). scope="tolkien" si es sobre el producto de la empresa,',
+    '     "console" si es sobre esta consola.',
     'Respondé en ESPAÑOL y ÚNICAMENTE con un bloque ```json con esta forma EXACTA:',
     '{',
     '  "resumen": "1-2 líneas: qué encontraste y cómo quedaría ordenado",',
@@ -191,7 +204,8 @@ function globalPrompt(context) {
     '  "unificables": [ { "ids": ["T<n>","T<n>"], "title": "título fusionado", "description": "detalle fusionado", "why": "por qué unir" } ],',
     '  "completar": [ { "id": "T<n>", "description": "detalle sugerido más completo", "tags": ["tags"], "why": "de qué informe sale" } ],',
     '  "agrupar": [ { "planId": "PLAN-<n> o null", "planTitle": "título si es plan nuevo", "planDescription": "detalle del plan nuevo", "taskIds": ["T<n>","T<n>"], "why": "qué las une" } ],',
-    '  "crearTareas": [ { "fromReport": "título del informe", "tasks": [ { "title": "título", "description": "detalle", "priority": "alta|media|baja", "type": "task" } ], "why": "por qué falta" } ]',
+    '  "crearTareas": [ { "fromReport": "título del informe", "tasks": [ { "title": "título", "description": "detalle", "priority": "alta|media|baja", "type": "task" } ], "why": "por qué falta" } ],',
+    '  "crearTemas": [ { "title": "tema de aprendizaje", "area": "área", "scope": "console|tolkien", "why": "de qué tarea/plan sale y para qué te sirve" } ]',
     '}',
     'Reglas: los ids de tarea son T<n> y los de plan PLAN-<n>. NO inventes ids: usá',
     'SOLO los que aparecen en los datos (excepto en crearTareas y en planes nuevos,',
@@ -310,6 +324,13 @@ export function parseAnalysis(text) {
       });
       if (!tasks.length) return null;
       return { fromReport: clamp(c?.fromReport, 200).trim(), tasks, why: clamp(c?.why, 400) };
+    }),
+    // CREAR-TEMA-DE-APRENDIZAJE (puente Pendientes → Banco): temas nuevos que
+    // convendría estudiar según lo que se está trabajando. Solo scope 'global'.
+    crearTemas: arr(o.crearTemas, 30, (t) => {
+      const title = clamp(t?.title, 200).trim();
+      if (!title) return null;
+      return { title, area: clamp(t?.area, 80), scope: t?.scope === 'tolkien' ? 'tolkien' : 'console', why: clamp(t?.why, 400) };
     }),
   };
 }

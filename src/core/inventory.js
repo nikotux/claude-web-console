@@ -179,12 +179,24 @@ export function aiEnginesCensus() {
   // Mapa global de constantes numéricas (const X = 20, const Y = 4 * 60000…)
   // para resolver maxTurns/timeouts definidos como const (propios o importados).
   const constMap = {};
+  // Mapa global de constantes STRING (EXPLAIN_MODEL = 'sonnet'…) para resolver
+  // `model:` definido como CONSTANTE exportada (p.ej. CONTEXT_MODEL/EXPLAIN_MODEL
+  // de los *-shared.js de learning) — mismo criterio que constMap pero string.
+  // OJO: NO escribir la-palabra-const seguida de MAYÚSCULA='str' en un comentario
+  // acá dentro: esta misma regex lo parsearía como una constante real (falso
+  // positivo que pineó de más al chat-runner en la 1ª versión). mismo criterio:
+  // sin esto esos motores quedaban 'models:[]' + modelDynamic y cada corrida de
+  // Salud/Optimización tenía que abrir el shared.js a mano para descartar riesgo.
+  const constMapStr = {};
   const texts = new Map();
   for (const f of candidates) {
     const txt = readSafe(path.join(ROOT, f));
     texts.set(f, txt);
     for (const m of txt.matchAll(/(?:export\s+)?const\s+([A-Z][A-Z0-9_]+)\s*=\s*([0-9][\d_\s*+\-.]*?)\s*;/g)) {
       constMap[m[1]] = m[2].replace(/\s+/g, ' ').trim();
+    }
+    for (const m of txt.matchAll(/(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)\s*=\s*['"]([\w.-]+)['"]/g)) {
+      constMapStr[m[1]] = { model: m[2], file: f };
     }
   }
   const resolveConst = (name) => (/^\d+$/.test(name) ? name : (constMap[name] ? `${name} (${constMap[name]})` : name));
@@ -220,9 +232,20 @@ export function aiEnginesCensus() {
     // (setModel()/modelForCwd() y demás no matchean la definición → siguen dinámicos)
     let modelResolvedVia = null;
     if (!models.length && modelDynamic) {
-      for (const fn of new Set([...txt.matchAll(/\b([A-Za-z_$][\w$]*[Mm]odel[\w$]*)\s*\(/g)].map((m) => m[1]))) {
-        const r = resolveModelFn(fn);
-        if (r) { models.push(r.model); modelResolvedVia = r.via; break; }
+      // (a) model: es una CONSTANTE string (CONTEXT_MODEL, EXPLAIN_MODEL…):
+      // resolverla contra el mapa global de consts string antes que la función.
+      const idMatch = txt.match(/\bmodel:\s*([A-Z][A-Z0-9_]*)\s*[,}\n]/);
+      if (idMatch && constMapStr[idMatch[1]]) {
+        const c = constMapStr[idMatch[1]];
+        models.push(c.model);
+        modelResolvedVia = `${idMatch[1]} en ${c.file}`;
+      }
+      // (b) model: lo pinea una función de un solo return (auditModelFor()…).
+      if (!models.length) {
+        for (const fn of new Set([...txt.matchAll(/\b([A-Za-z_$][\w$]*[Mm]odel[\w$]*)\s*\(/g)].map((m) => m[1]))) {
+          const r = resolveModelFn(fn);
+          if (r) { models.push(r.model); modelResolvedVia = r.via; break; }
+        }
       }
     }
     const maxTurns = [...new Set([...txt.matchAll(/\bmaxTurns:\s*([\w$]+)/g)].map((m) => resolveConst(m[1])))];
@@ -240,7 +263,7 @@ export function aiEnginesCensus() {
       maxTurns, timeouts, allowlists,
       layers: { preToolUse: /PreToolUse/.test(txt), canUseTool: /canUseTool/.test(txt) },
       settingSources, permissionModes,
-      queryCalls: (txt.match(/\bquery\s*\(/g) || []).length,
+      queryCalls: (txt.match(/\bquery\s*\(\s*\{/g) || []).length,
       fingerprint: fingerprintOf([f]),
     });
   }
@@ -361,6 +384,19 @@ const CANONICAL_CONVENTIONS = [
     label: 'UI con mucho texto nace COLAPSADA + agrupada en árbol',
     scope: (f) => /^public\/js\/modules\//.test(f),
     violates: null, // semántico ("¿es nuevo? ¿tiene mucho texto?"): lo caza la capa IA
+  },
+  {
+    key: 'subida-archivos-sandbox',
+    label: 'Subida de archivos del usuario SIEMPRE por carpeta validada (resolveWithinHome/attachPath/multer) — nunca fs directo con ruta del cliente',
+    // Disparador: los adjuntos del chat (chat/attachments.js) y el gestor
+    // (files/) escriben archivos del cliente a disco. La regla: el destino
+    // sale SIEMPRE de un helper de sandboxing (resolveWithinHome, clampToHome,
+    // chatAttachDir/attachPath) + basename saneado; NUNCA se concatena una
+    // ruta cruda del request a fs.writeFile/createWriteStream. Semántico
+    // (¿la ruta de destino vino de un helper de sandbox?): lo verifica la capa
+    // IA de Coherencia sobre los módulos que escriben archivos del usuario.
+    scope: (f) => /^src\/modules\/(files|chat)\//.test(f),
+    violates: null,
   },
 ];
 

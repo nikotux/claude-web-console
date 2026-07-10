@@ -31,6 +31,10 @@ export const SEED_INVARIANTS = [
     text: 'VALIDACIÓN DE RUTAS: toda ruta que venga del cliente pasa por resolveWithinHome/clampToHome (core/paths.js) ANTES de tocar disco. NUNCA validar con startsWith crudo ni concatenar rutas sin clamping (riesgo de path traversal).',
   },
   {
+    match: /src\/modules\/chat\/attachments\.js$|bin\/cwc-chat-runner\.js$/,
+    text: 'ADJUNTOS DEL CHAT (chat/attachments.js): todo nombre de archivo del cliente se reduce a un BASENAME validado (safeAttachName) y se confina a la carpeta del chat — attachPath verifica que path.dirname sea EXACTO; NUNCA se resuelve una ruta cruda del cliente. El límite de tamaño se aplica ANTES de leer el archivo a memoria (multer.fileSize al subir + fs.statSync antes del readFileSync en buildUserContent). SIN adjuntos el content del SDK sigue siendo un STRING (retrocompat); con adjuntos, un array de bloques image/document/text. Imágenes SOLO jpeg/png/gif/webp (IMAGE_MIME); los binarios NO van como bloque (la API no tiene bloque nativo) — se referencian por ruta absoluta para que el modelo los lea con Read/Bash.',
+  },
+  {
     match: /src\/core\/sdk-settings\.js$|bin\/cwc-(chat|health|triage|healthfix)-runner\.js$|src\/modules\/(health|bugfixes|bugs)\/(index|shared)\.js$/,
     text: 'settingSources: la fuente ÚNICA es settingSourcesFor (core/sdk-settings.js). Las corridas HEADLESS (salud, triage, tickets) NUNCA deben cargar settingSources con "user"; y sus tools van blindadas por DOS capas (hook PreToolUse + canUseTool) — read-only salvo las excepciones documentadas en la regla 6 (desk_* y el auto-fix con fixToolAllowed).',
   },

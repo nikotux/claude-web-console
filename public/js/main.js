@@ -358,12 +358,12 @@ function focusSession(id) {
 }
 
 // ===== Chat (Agent SDK) =====
-async function openChat({ cwd, model, mode, resume, prompt, title, ticket } = {}) {
+async function openChat({ cwd, model, mode, resume, prompt, title, ticket, learningId } = {}) {
   try {
     const res = await fetch('/api/chat/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, model, permissionMode: mode, resume, title, ticket }),
+      body: JSON.stringify({ cwd, model, permissionMode: mode, resume, title, ticket, learningId }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo crear el chat');
     const { chat } = await res.json();
@@ -478,6 +478,12 @@ permCenter = initPermCenter({
 // chat activo que el centro de permisos.
 intercomCenter = initInterfonoCenter({
   isChatActive: (chatId) => activeId === chatId && tabs.has(chatId),
+  // Rediseño 2026-07-10 (Fase 1): una ventana SOLO se entera de los mensajes de
+  // los chats que ESTA ventana tiene abiertos (en cualquier pestaña). Mata el
+  // ruido cross-ventana: un mensaje de un chat que esta ventana ni tiene abierto
+  // ya no dispara nada acá. El hueco de "ningún ventana lo tiene abierto" lo
+  // cubre la señal pasiva (badge en Sesiones) de la Fase 2.
+  isChatRelevant: (chatId) => tabs.has(chatId),
   openChat: openChatById,
 });
 

@@ -1,23 +1,38 @@
 // modules/usage/usage.js — Uso de tokens.
 //
 // En el pie: SOLO el costo de HOY (botón). Todo el detalle vive en el modal
-// "Uso" que abre ese botón: arriba los LÍMITES DEL PLAN (las ventanas de
-// claude.ai — /api/tokens/limits: % usado, % restante y reset), abajo el uso
-// local por modelo (/api/tokens/summary) con Pac-Man masticando en los
-// modelos que están consumiendo tokens AHORA (transcript tocado < 2 min).
-// El modal se auto-refresca cada 10 s mientras está abierto.
+// "Uso" que abre ese botón:
+//   • Arriba: LÍMITES DEL PLAN (ventanas de claude.ai — /api/tokens/limits: %
+//     usado, % restante, reset y el token-count nuestro de esa ventana) +
+//     créditos de uso extra (fila COLAPSABLE).
+//   • Abajo: UNA barra de controles (Día·Semana·Mes + $·tok) que maneja las DOS
+//     columnas — izquierda "General" (total del período seleccionado, por modelo)
+//     y derecha "Tendencia" (gráfica de barras apiladas por modelo):
+//       Día   → hoy por HORA · Semana → últimos 7 días · Mes → últimos 30 días.
+// Fechas/horas en hora LOCAL de Medellín (America/Bogota, ver backend time.js).
+// El histórico (semana/mes) es PERSISTENTE (/api/tokens/history) y sobrevive a la
+// poda de transcripts del CLI. El modal se auto-refresca cada 10 s.
 import { modelColor, modelName } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 
 const POLL_MS = 15000;
+const AUTO_MS = 15000; // auto-refresh del modal (silencioso)
+
+// Caché EN MEMORIA del último dato bueno. El parseo de transcripts tarda ~2 s:
+// sin esto, cada apertura del modal mostraba spinner. Con la caché el modal ABRE
+// INSTANTÁNEO con lo último conocido y refresca en segundo plano. La alimentan el
+// poll del pie (tick) y el propio modal; `series` cachea la serie por rango.
+const cache = { summary: null, limits: null, series: {} };
 
 function fmtTokens(n) {
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return String(n);
+  return String(Math.round(n || 0));
 }
 const fmtCost = (c) => `$${(c || 0).toFixed(2)}`;
+// Formatea un valor según la métrica activa ('cost' | 'tokens').
+const fmtMetric = (v, metric) => (metric === 'cost' ? fmtCost(v) : `${fmtTokens(v)} tok`);
 
 function fmtRelative(ms) {
   if (!ms) return 'sin actividad';
@@ -38,31 +53,22 @@ async function fetchSummary(fresh = false) {
   return res.json();
 }
 
-// Reset de estadísticas: toma una foto del consumo actual como línea de base
-// (el costo "vuelve a cero" y cuenta desde ahí). clear=true deshace el reset.
-async function postReset(clear = false) {
-  const res = await fetch('/api/tokens/reset', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(clear ? { clear: true } : {}),
-  });
+// Serie de tiempo por modelo (day|week|month × proyecto) para las gráficas.
+async function fetchHistory(range, project = 'all') {
+  const res = await fetch(`/api/tokens/history?range=${encodeURIComponent(range)}&project=${encodeURIComponent(project)}`);
   if (!res.ok) throw new Error();
   return res.json();
 }
 
-// ISO → "7 jul, 17:14" (fecha corta local para el aviso "desde el reset").
-function fmtResetDate(iso) {
-  try {
-    return new Date(iso).toLocaleString('es-AR',
-      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  } catch { return iso; }
-}
+// Precio de INPUT por millón de tokens (equivalente a API — coincide con pin()
+// del backend). Ordena por economía e identifica el modelo más barato/caro:
+// haiku $1 < sonnet $3 < opus $5 < fable $10. Se muestra como badge "$X/M".
+const PRICE_INPUT = { haiku: 1, sonnet: 3, opus: 5, fable: 10 };
+const priceRank = (k) => PRICE_INPUT[k] ?? 0; // mayor = más costoso
 
 // ===== Límites del PLAN (ventanas de claude.ai) =====
 // Exportadas: el bloque del pie (modules/stats/plan-limits.js) las reusa para
-// pintar las MISMAS barras de límite con idéntico criterio de color/formato
-// (fuente única — no duplicar). NO consumen tokens: solo consultan el medidor
-// OAuth de uso (GET /api/tokens/limits, con caché de 60 s en el server).
+// pintar las MISMAS barras con idéntico criterio de color/formato (fuente única).
 export async function fetchLimits(fresh = false) {
   const res = await fetch(`/api/tokens/limits${fresh ? '?fresh=1' : ''}`);
   const data = await res.json().catch(() => ({}));
@@ -70,8 +76,7 @@ export async function fetchLimits(fresh = false) {
   return data;
 }
 
-// "resetea en 1 h 40 min (10:00)" — relativo + hora local absoluta (con día
-// si no es hoy, p.ej. las ventanas semanales).
+// "resetea en 1 h 40 min (10:00)" — relativo + hora local absoluta.
 export function fmtReset(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -100,8 +105,7 @@ function fmtAgo(iso) {
   return `hace ${Math.floor(h / 24)} d`;
 }
 
-// Formatea una cantidad de crédito ya en dólares (el backend divide por
-// 10^decimal_places): $X.XX / $X.Xk. `cur` es la moneda que reporta Claude.
+// Formatea crédito ya en dólares. `cur` = moneda que reporta Claude.
 function fmtCred(n, cur = 'USD') {
   if (n == null) return '—';
   const sym = cur === 'USD' ? '$' : `${cur} `;
@@ -109,66 +113,73 @@ function fmtCred(n, cur = 'USD') {
   return `${sym}${Number(n).toFixed(2)}`;
 }
 
-export function renderLimits(el, data) {
+// Token-count NUESTRO de la ventana de un límite (Anthropic no lo expone: se
+// calcula de los transcripts). session→últimas 5 h · weekly_all→7 días ·
+// weekly_scoped→ese modelo en 7 días. Devuelve null si no hay dato.
+function windowTokFor(l, windows) {
+  if (!windows) return null;
+  if (l.kind === 'session') return windows.h5 ?? null;
+  if (l.kind === 'weekly_all') return windows.d7 ?? null;
+  if (l.kind === 'weekly_scoped' && l.modelKey) return windows.d7ByKey?.[l.modelKey]?.tokens ?? 0;
+  return null;
+}
+
+// renderLimits(el, data, opts): opts.windows = token-counts por ventana (solo el
+// modal los pasa; el pie no). Los créditos van SIEMPRE colapsados (<details>).
+export function renderLimits(el, data, opts = {}) {
+  const windows = opts.windows || null;
   const rows = (data.limits || []).map((l) => {
     const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
     const color = pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
+    const wt = windowTokFor(l, windows);
+    // Sub-línea: solo las partes con contenido (evita "· ·" cuando no hay reset).
+    const sub = [`queda ${100 - pct}%`, fmtReset(l.resetsAt), wt != null ? `≈ ${fmtTokens(wt)} tok` : '']
+      .filter(Boolean).join(' · ');
     return `
       <div class="lim-row">
         <div class="lim-top"><span class="lim-label"></span><span class="lim-pct" style="color:${color}">${pct}%</span></div>
         <span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>
-        <div class="lim-sub">queda ${100 - pct}% · ${fmtReset(l.resetsAt)}</div>
+        <div class="lim-sub">${sub}</div>
       </div>`;
   }).join('');
 
-  // Créditos de uso EXTRA (extra_usage, dato que reporta Claude). Se muestra
-  // SIEMPRE (pedido del usuario 2026-07-07: dejarlo fijo para seguimiento —
-  // sus créditos se activan más tarde y la fila cambia sola a barra/contador
-  // cuando enabled pase a true). Tres estados:
-  //   • habilitado + límite mensual → barra % + "usó $X de $Y"
-  //   • habilitado sin límite (pago por uso) → contador "$X consumidos"
-  //   • deshabilitado → fila tenue "sin créditos activos" (sin barra)
-  // Default a un bloque deshabilitado si el payload no trae `credits` (snapshot
-  // viejo / respuesta parcial): la fila queda SIEMPRE presente para seguimiento.
+  // Créditos de uso EXTRA (extra_usage). Fila COLAPSABLE (pedido del usuario
+  // 2026-07-10: contraída por defecto en el modal Y en el pie). El <summary>
+  // muestra el estado de un vistazo; el detalle se despliega al tocar.
   const c = data.credits || { enabled: false, usedCredits: null, monthlyLimit: null, percent: null };
-  let creditsHtml = '';
-  if (c) {
-    if (!c.enabled) {
-      creditsHtml = `
-        <div class="lim-row lim-credits lim-credits--off">
-          <div class="lim-top">
-            <span class="lim-label">💳 Créditos de uso</span>
-            <span class="lim-pct">—</span>
-          </div>
-          <div class="lim-sub">sin créditos activos</div>
-        </div>`;
-    } else {
-      const hasLimit = c.monthlyLimit != null;
-      const pct = c.percent != null
-        ? Math.max(0, Math.min(100, Math.round(c.percent)))
-        : (hasLimit && c.monthlyLimit > 0 && c.usedCredits != null
-          ? Math.max(0, Math.min(100, Math.round((c.usedCredits / c.monthlyLimit) * 100)))
-          : null);
-      const color = pct == null ? 'var(--cwc-ok)'
-        : pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
-      const cur = c.currency || 'USD';
-      const sub = hasLimit
-        ? `usó ${fmtCred(c.usedCredits, cur)} de ${fmtCred(c.monthlyLimit, cur)}${pct != null ? ` · queda ${100 - pct}%` : ''}`
-        : `${fmtCred(c.usedCredits, cur)} consumidos · pago por uso`;
-      creditsHtml = `
-        <div class="lim-row lim-credits">
-          <div class="lim-top">
-            <span class="lim-label">💳 Créditos de uso</span>
-            <span class="lim-pct" style="color:${color}">${pct != null ? `${pct}%` : fmtCred(c.usedCredits, cur)}</span>
-          </div>
-          ${pct != null ? `<span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>` : ''}
-          <div class="lim-sub">${sub}</div>
-        </div>`;
-    }
+  let sumLine = 'sin créditos activos';
+  let bodyLine = 'sin créditos activos';
+  let pctText = '—';
+  let barHtml = '';
+  let color = 'var(--cwc-text-dimmer)';
+  if (c.enabled) {
+    const hasLimit = c.monthlyLimit != null;
+    const pct = c.percent != null
+      ? Math.max(0, Math.min(100, Math.round(c.percent)))
+      : (hasLimit && c.monthlyLimit > 0 && c.usedCredits != null
+        ? Math.max(0, Math.min(100, Math.round((c.usedCredits / c.monthlyLimit) * 100)))
+        : null);
+    color = pct == null ? 'var(--cwc-ok)' : pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
+    const cur = c.currency || 'USD';
+    pctText = pct != null ? `${pct}%` : fmtCred(c.usedCredits, cur);
+    bodyLine = hasLimit
+      ? `usó ${fmtCred(c.usedCredits, cur)} de ${fmtCred(c.monthlyLimit, cur)}${pct != null ? ` · queda ${100 - pct}%` : ''}`
+      : `${fmtCred(c.usedCredits, cur)} consumidos · pago por uso`;
+    sumLine = bodyLine;
+    if (pct != null) barHtml = `<span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>`;
   }
+  const creditsHtml = `
+    <details class="lim-credits-det${c.enabled ? '' : ' lim-credits--off'}">
+      <summary class="lim-credits-sum">
+        <span class="lim-label">💳 Créditos de uso</span>
+        <span class="lim-pct" style="color:${color}">${pctText}</span>
+      </summary>
+      <div class="lim-credits-body">
+        ${barHtml}
+        <div class="lim-sub">${bodyLine}</div>
+      </div>
+    </details>`;
 
-  // Aviso de dato viejo: el server devolvió el último snapshot bueno porque la
-  // consulta a Anthropic falló (429 / sin red / recién reiniciado).
   const staleHtml = data.stale
     ? `<div class="lim-stale">⚠ datos guardados${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
     : '';
@@ -179,108 +190,153 @@ export function renderLimits(el, data) {
     ${rows || '<div class="lim-err">Anthropic no reportó ventanas de límite.</div>'}
     ${creditsHtml}`;
   // Etiquetas de las ventanas con textContent (traen nombres de modelo del server).
-  const labels = el.querySelectorAll('.lim-row:not(.lim-credits) .lim-label');
+  const labels = el.querySelectorAll('.lim-row .lim-label');
   (data.limits || []).forEach((l, i) => { if (labels[i]) labels[i].textContent = l.label; });
 }
 
-// Un modelo se considera "consumiendo AHORA" si su transcript se tocó hace
-// menos de 2 min (mientras Claude trabaja, el jsonl se escribe seguido).
+// Un modelo se considera "consumiendo AHORA" si su transcript se tocó hace < 2 min.
 const ACTIVE_MS = 120000;
 const isLive = (lastMtime) => !!lastMtime && Date.now() - lastMtime < ACTIVE_MS;
 
-// Emoji por motor (ancla visual del detalle). El label lo manda el server;
-// acá solo le anteponemos el ícono según la key semántica.
-const ENGINE_ICON = {
-  chat: '💬',
-  healthfix: '🔧',
-  tolkien: '🌳',
-  cli: '⌨️',
-  headless: '⚙️',
-};
-
-// Pivot motores→modelos: la lista principal son los MODELOS (acotada). El
-// detalle de cada modelo son los MOTORES que lo usaron (chat, auto-fix de
-// salud, tolkien, cli, headless), de mayor a menor uso de ESE modelo — ya no
-// carpetas/proyectos crudos.
-function buildModelView(sum) {
-  const byModel = new Map();
-  for (const src of (sum.engines || [])) {
+// Set de claves de modelo que están consumiendo AHORA (para el Pac-Man de la
+// columna General). Se deriva del summary (engines[].models[].lastMtime).
+function liveKeysFrom(sum) {
+  const set = new Set();
+  for (const src of (sum?.engines || [])) {
     for (const m of (src.models || [])) {
-      const e = byModel.get(m.key) || { key: m.key, model: m.model, tokens: 0, cost: 0, lastMtime: 0, engines: [] };
-      e.tokens += m.tokens;
-      e.cost += m.cost;
-      const last = m.lastMtime || src.lastMtime || 0;
-      e.lastMtime = Math.max(e.lastMtime, last);
-      e.engines.push({ key: src.key, label: src.label, tokens: m.tokens, cost: m.cost, lastMtime: last });
-      byModel.set(m.key, e);
+      if (isLive(m.lastMtime || src.lastMtime || 0)) set.add(m.key);
     }
   }
-  const models = [...byModel.values()].sort((a, b) => b.cost - a.cost);
-  for (const e of models) {
-    e.engines = e.engines.sort((a, b) => b.cost - a.cost); // mayor a menor uso
-  }
-  return models;
+  return set;
 }
 
-function detailFor(m) {
-  const rows = m.engines.map((eng) => `
-    <div class="tok-detail-row" title="${eng.label}">
-      <span class="tok-eng-ico">${ENGINE_ICON[eng.key] || '⚙️'}</span>
-      <span class="tok-detail-name"></span>
-      <span class="tok-detail-tok">${fmtTokens(eng.tokens)}</span>
-      <span class="tok-detail-cost">${fmtCost(eng.cost)}</span>
-    </div>`).join('');
-  return `
-    <div class="tok-detail" hidden>
-      ${rows}
-      <div class="tok-detail-foot">${m.engines.length} motor(es) que usaron este modelo · mayor a menor uso</div>
-    </div>`;
+const RANGE_LABEL = { day: 'hoy', week: 'últimos 7 días', month: 'últimos 30 días' };
+
+// ===== Columna izquierda: "General" del PERÍODO seleccionado =====
+// series.totals = { modelKey: {tokens, cost} }. Sigue al rango + a la métrica.
+function renderLeft(container, series, metric, liveKeys, range) {
+  const totals = series?.totals || {};
+  // Orden por PRECIO: más COSTOSO arriba (cima) → más ECONÓMICO abajo (base),
+  // consistente con el apilado de la gráfica (base = más barato). Pedido del
+  // usuario 2026-07-10. Empate (no debería) desempata por consumo.
+  const rows = Object.entries(totals)
+    .map(([key, v]) => ({ key, tokens: v.tokens || 0, cost: v.cost || 0 }))
+    .filter((m) => m.tokens > 0)
+    .sort((a, b) => priceRank(b.key) - priceRank(a.key) || (metric === 'cost' ? b.cost - a.cost : b.tokens - a.tokens));
+  let gTok = 0;
+  let gCost = 0;
+  for (const m of rows) { gTok += m.tokens; gCost += m.cost; }
+
+  const perModel = rows.map((m) => {
+    const live = liveKeys?.has(m.key);
+    // Badge de precio ($X/M input): identifica el modelo más caro/barato.
+    const price = PRICE_INPUT[m.key] != null ? `<span class="ul-model-price">$${PRICE_INPUT[m.key]}/M</span>` : '';
+    return `
+      <div class="ul-model">
+        <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
+        <span class="ul-model-name">${modelName(m.key, m.key)}</span>
+        ${price}
+        ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: 'consumiendo tokens ahora' }) : ''}
+        <span class="ul-model-cost">${fmtMetric(metric === 'cost' ? m.cost : m.tokens, metric)}</span>
+      </div>`;
+  }).join('') || '<div class="tok-empty">sin consumo en el período</div>';
+
+  const bigVal = metric === 'cost' ? fmtCost(gCost) : `${fmtTokens(gTok)} <span class="ul-big-unit">tok</span>`;
+  const subVal = metric === 'cost' ? `${fmtTokens(gTok)} tok` : fmtCost(gCost);
+  container.innerHTML = `
+    <div class="ul-block">
+      <div class="ul-head">📊 General · ${RANGE_LABEL[range] || ''}</div>
+      <div class="ul-big">${bigVal}</div>
+      <div class="ul-cost">${subVal}</div>
+      <div class="ul-models">${perModel}</div>
+      ${rows.length ? '<div class="ul-order">▲ más costoso · ▼ más económico ($/M)</div>' : ''}
+    </div>
+    <div class="ul-note">El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token.</div>`;
 }
 
-function renderUsage(container, sum) {
-  const models = buildModelView(sum);
-  if (!models.length) {
-    container.innerHTML = '<div class="tok-empty">sin datos</div>';
+// ===== Columna derecha: gráfica de tendencia (Chart.js) =====
+// Lee un token CSS resuelto a hex (los colores viven en tokens.css; en JS se
+// leen con getComputedStyle — no se duplican los hex).
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+const modelHex = (key) => cssVar(`--cwc-model-${key}`) || cssVar('--cwc-model-unknown') || '#8a8a8a';
+
+let chartInst = null;
+function destroyChart() {
+  if (chartInst) { chartInst.destroy(); chartInst = null; }
+}
+
+// Datasets apilados por modelo. Codificación SECUNDARIA (la paleta está en banda
+// de piso CVD): leyenda con NOMBRES + gap 2px entre segmentos + tooltip que nombra
+// el modelo. Se descartan modelos todo-en-cero (no ensucian la leyenda).
+function buildDatasets(series, metric, surface) {
+  return (series.keys || []).map((key) => ({
+    key,
+    label: modelName(key, key),
+    data: (series.points || []).map((p) => (p.models[key] ? (metric === 'cost' ? p.models[key].cost : p.models[key].tokens) : 0)),
+    backgroundColor: modelHex(key),
+    borderColor: surface,
+    borderWidth: { top: 2, right: 0, bottom: 0, left: 0 },
+    borderRadius: 3,
+    borderSkipped: false,
+    stack: 'total',
+    maxBarThickness: 34,
+  })).filter((ds) => ds.data.some((v) => v > 0));
+}
+
+// Dibuja (crea) la gráfica desde cero. Se usa al abrir y al cambiar rango/métrica.
+function drawChart(canvas, series, metric) {
+  destroyChart();
+  if (!window.Chart) {
+    canvas.parentElement.innerHTML = '<div class="tok-empty">No se pudo cargar la librería de gráficas.</div>';
     return;
   }
-  const max = models[0].cost || 1;
-  container.innerHTML = `
-    <div class="usage-totals">
-      <div class="usage-total-row"><span>Total${sum.resetAt ? ' · desde reset' : ''}</span><span class="tok-big">${fmtTokens(sum.totals.tokens)}</span><span class="tok-cost">${fmtCost(sum.totals.cost)}</span></div>
-      <div class="usage-total-row"><span>Hoy</span><span>${fmtTokens(sum.today.tokens)}</span><span class="tok-cost">${fmtCost(sum.today.cost)}</span></div>
-      ${sum.resetAt ? `<div class="usage-reset-note">contando desde ${fmtResetDate(sum.resetAt)} · <button class="usage-reset-undo" type="button">ver total histórico</button></div>` : ''}
-    </div>
-    <div class="tok-note">Tokens exactos (reportados por Anthropic en cada respuesta). El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token, así que no existe un gasto real en dólares consultable.</div>` +
-    models.map((m) => {
-      const w = Math.max(4, Math.round((m.cost / max) * 100));
-      // Pac-Man masticando = este modelo está consumiendo tokens AHORA
-      // (mismo lenguaje que las tarjetas de Sesiones); ausente = quieto.
-      const live = isLive(m.lastMtime);
-      return `
-        <div class="tok-row" data-key="${m.key}">
-          <div class="tok-row-top">
-            <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
-            <span class="tok-name">${modelName(m.key, m.model)}</span>
-            ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: 'consumiendo tokens ahora' }) : ''}
-            <span class="tok-row-cost">${fmtCost(m.cost)}</span>
-          </div>
-          <span class="tok-bar"><span class="tok-fill" style="width:${w}%;background:${modelColor(m.key)}"></span></span>
-          <div class="tok-row-sub">${fmtTokens(m.tokens)} tok · ${live ? 'consumiendo ahora' : fmtRelative(m.lastMtime)}</div>
-          ${detailFor(m)}
-        </div>`;
-    }).join('');
+  const surface = cssVar('--cwc-bg-panel') || '#0d1119';
+  const gridCol = cssVar('--cwc-divider') || '#161c28';
+  const textCol = cssVar('--cwc-text-dim') || '#7c8494';
+  const fmtVal = metric === 'cost' ? fmtCost : fmtTokens;
 
-  // Nombres de motor con textContent (nunca HTML — vienen del server).
-  const detailNames = container.querySelectorAll('.tok-detail-name');
-  let i = 0;
-  for (const m of models) for (const eng of m.engines) detailNames[i++].textContent = eng.label;
+  chartInst = new window.Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels: (series.points || []).map((p) => p.label), datasets: buildDatasets(series, metric, surface) },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 250 },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: textCol, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+        y: {
+          stacked: true, beginAtZero: true,
+          grid: { color: gridCol, drawTicks: false },
+          border: { display: false },
+          ticks: { color: textCol, font: { size: 10 }, maxTicksLimit: 5, callback: (v) => fmtVal(v) },
+        },
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: textCol, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtVal(ctx.parsed.y)}`,
+            footer: (items) => `Total: ${fmtVal(items.reduce((s, it) => s + (it.parsed.y || 0), 0))}`,
+          },
+          itemSort: (a, b) => b.parsed.y - a.parsed.y,
+        },
+      },
+    },
+  });
+}
 
-  for (const row of container.querySelectorAll('.tok-row')) {
-    row.querySelector('.tok-row-top').addEventListener('click', () => {
-      const d = row.querySelector('.tok-detail');
-      if (d) d.hidden = !d.hidden;
-    });
-  }
+// Actualiza la gráfica EN EL LUGAR (sin destruir/re-animar) para el auto-refresh
+// silencioso: reemplaza labels+datasets y update('none'). Si no hay instancia
+// (o cambió Chart), cae a dibujar de cero.
+function updateChart(canvas, series, metric) {
+  if (!chartInst || !window.Chart) { drawChart(canvas, series, metric); return; }
+  const surface = cssVar('--cwc-bg-panel') || '#0d1119';
+  chartInst.data.labels = (series.points || []).map((p) => p.label);
+  chartInst.data.datasets = buildDatasets(series, metric, surface);
+  chartInst.update('none'); // sin animación → no parpadea
 }
 
 export default {
@@ -288,7 +344,6 @@ export default {
 
   mount(el, ctx) {
     const { dialog, icon } = ctx;
-    // El botón muestra los TOKENS de hoy (el costo va al tooltip y al modal).
     el.innerHTML = `
       <button class="btn-ghost btn--sm usage-btn" title="Uso de tokens (hoy)">
         <span class="usage-lbl">hoy</span><span class="usage-val">—</span>
@@ -301,13 +356,13 @@ export default {
       if (document.hidden) return;
       try {
         const sum = await fetchSummary();
+        cache.summary = sum; // mantiene la caché caliente para que el modal abra instantáneo
         const t = sum.today.tokens || 0;
         valEl.textContent = fmtTokens(t);
         btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)} equiv. API`;
-        // Animación cuando el contador SUBE (tokens consumiéndose ahora).
         if (lastTokens != null && t > lastTokens) {
           valEl.classList.remove('tick');
-          void valEl.offsetWidth; // reinicia la animación CSS
+          void valEl.offsetWidth;
           valEl.classList.add('tick');
         }
         lastTokens = t;
@@ -321,94 +376,147 @@ export default {
       let timer = null;
       const m = dialog.openModal({
         title: 'Uso de tokens',
-        width: 520,
-        onClose: () => clearInterval(timer),
+        width: 780,
+        onClose: () => { clearInterval(timer); destroyChart(); },
       });
 
-      // Botón Actualizar en el header del modal (junto a la ×): fuerza una
-      // re-lectura fresca en el backend (?fresh=1 saltea el TTL del summary
-      // local Y el de los límites remotos).
       const reload = document.createElement('button');
       reload.className = 'btn-ghost btn--sm btn--icon usage-reload';
       reload.title = 'Actualizar (re-lee transcripts y límites ahora)';
       reload.innerHTML = icon('refresh', { size: 15 });
       m.card.querySelector('.dlg-head').insertBefore(reload, m.card.querySelector('.dlg-x'));
 
-      // Botón Reset: pone el costo/tokens en cero desde ahora (guarda una foto
-      // como línea de base; el histórico no se borra, se puede volver con "ver
-      // total histórico"). Texto explícito (no hay ícono de "reset").
-      const resetBtn = document.createElement('button');
-      resetBtn.className = 'btn-ghost btn--sm usage-reset-btn';
-      resetBtn.textContent = '↺ Reset';
-      resetBtn.title = 'Poner el costo en cero desde ahora (el histórico no se borra)';
-      m.card.querySelector('.dlg-head').insertBefore(resetBtn, reload);
-
-      // Dos secciones estables: límites del PLAN arriba (claude.ai) y el uso
-      // local abajo. Cada una carga/falla por su lado.
       m.body.innerHTML = `
         <div class="usage-lims"><div class="cwc-loading">${pacman()}límites del plan…</div></div>
-        <div class="usage-sum"><div class="cwc-loading">${pacman()}calculando…</div></div>`;
+        <div class="usage-controls">
+          <div class="uh-seg uh-seg-range" role="tablist">
+            <button class="uh-seg-btn is-active" data-range="day" type="button">Día</button>
+            <button class="uh-seg-btn" data-range="week" type="button">Semana</button>
+            <button class="uh-seg-btn" data-range="month" type="button">Mes</button>
+          </div>
+          <div class="uh-seg uh-seg-proj" role="tablist">
+            <button class="uh-seg-btn is-active" data-project="all" type="button">Todos</button>
+            <button class="uh-seg-btn" data-project="consola" type="button">Consola</button>
+            <button class="uh-seg-btn" data-project="tolkien" type="button">Tolkien</button>
+            <button class="uh-seg-btn" data-project="otros" type="button">Otros</button>
+          </div>
+          <div class="uh-seg uh-seg-metric">
+            <button class="uh-seg-btn is-active" data-metric="cost" type="button">$</button>
+            <button class="uh-seg-btn" data-metric="tokens" type="button">tok</button>
+          </div>
+        </div>
+        <div class="usage-cols">
+          <div class="usage-col-left"><div class="cwc-loading">${pacman()}calculando…</div></div>
+          <div class="usage-col-right">
+            <div class="uh-title">📈 Tendencia</div>
+            <div class="usage-chart-wrap"><canvas class="usage-chart"></canvas></div>
+          </div>
+        </div>`;
       const limsEl = m.body.querySelector('.usage-lims');
-      const sumEl = m.body.querySelector('.usage-sum');
+      const leftEl = m.body.querySelector('.usage-col-left');
+      const chartWrap = m.body.querySelector('.usage-chart-wrap');
+      const tabs = [...m.body.querySelectorAll('[data-range]')];
+      const mbtns = [...m.body.querySelectorAll('[data-metric]')];
+      const projs = [...m.body.querySelectorAll('[data-project]')];
 
-      let limsOk = false;
-      async function loadLimits(fresh) {
-        try {
-          renderLimits(limsEl, await fetchLimits(fresh));
-          limsOk = true;
-        } catch (e) {
-          // Con la persistencia del server esto casi no pasa (devuelve el
-          // último snapshot marcado `stale`). Si igual falla y ya había un
-          // render bueno, lo DEJAMOS (no borramos el dato); solo pintamos el
-          // error cuando nunca hubo nada que mostrar.
-          if (!limsOk) {
-            limsEl.innerHTML = '<div class="lim-head">Límites del plan</div><div class="lim-err"></div>';
-            limsEl.querySelector('.lim-err').textContent = e.message;
-          }
-        }
+      let range = 'day';
+      let metric = 'cost';
+      let project = 'all';
+
+      function chartCanvas() {
+        let c = chartWrap.querySelector('.usage-chart');
+        if (!c) { chartWrap.innerHTML = '<canvas class="usage-chart"></canvas>'; c = chartWrap.querySelector('.usage-chart'); }
+        return c;
       }
-      async function loadSum(fresh) {
-        // Preserva los detalles expandidos a través del auto-refresh.
-        const open = new Set([...sumEl.querySelectorAll('.tok-row')]
-          .filter((r) => r.querySelector('.tok-detail:not([hidden])'))
-          .map((r) => r.dataset.key));
-        try {
-          renderUsage(sumEl, await fetchSummary(fresh));
-          for (const key of open) {
-            sumEl.querySelector(`.tok-row[data-key="${key}"] .tok-detail`)?.removeAttribute('hidden');
-          }
-          // "ver total histórico" = deshacer el reset (borra la línea de base).
-          sumEl.querySelector('.usage-reset-undo')?.addEventListener('click', async () => {
-            try { await postReset(true); await load(true); } catch { /* noop */ }
-          });
-        } catch {
-          sumEl.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
-        }
+      // Serie del rango+proyecto actual desde la CACHÉ (null si aún no se trajo).
+      function seriesFor() {
+        if (range === 'day') return cache.summary?.hourlyToday?.[project] || null;
+        return cache.series[`${range}:${project}`] || null;
       }
-      async function load(fresh) {
+      const loaderHtml = `<div class="cwc-loading">${pacman()}cargando…</div>`;
+
+      // Pinta TODO desde la caché (0 fetch). chartMode: 'draw' crea la gráfica,
+      // 'update' la actualiza en el lugar (sin parpadeo, para el auto-refresh).
+      function paint(chartMode) {
+        if (cache.limits) renderLimits(limsEl, cache.limits, { windows: cache.summary?.windows });
+        const liveKeys = liveKeysFrom(cache.summary);
+        const s = seriesFor();
+        if (!s) { leftEl.innerHTML = loaderHtml; if (!chartInst) chartWrap.innerHTML = loaderHtml; return; }
+        renderLeft(leftEl, s, metric, liveKeys, range);
+        if (chartMode === 'update') updateChart(chartCanvas(), s, metric);
+        else drawChart(chartCanvas(), s, metric);
+      }
+
+      // Refresca la caché desde el server (silencioso) y re-pinta. `fresh` saltea
+      // el TTL (botón Actualizar). El botón muestra spin mientras carga.
+      let refreshing = false;
+      async function refresh(fresh) {
+        if (refreshing) return;
+        refreshing = true;
+        reload.classList.add('spinning');
         reload.disabled = true;
-        await Promise.all([loadSum(fresh), loadLimits(fresh)]);
-        reload.disabled = false;
+        try {
+          const jobs = [
+            fetchSummary(fresh).then((s) => { cache.summary = s; }).catch(() => {}),
+            fetchLimits(fresh).then((l) => { cache.limits = l; }).catch(() => {}),
+          ];
+          if (range !== 'day') jobs.push(fetchHistory(range, project).then((h) => { cache.series[`${range}:${project}`] = h; }).catch(() => {}));
+          await Promise.all(jobs);
+          paint('update'); // en el lugar → sin parpadeo
+          if (!cache.limits) { // límites nunca llegaron (raro: el server persiste stale)
+            limsEl.innerHTML = '<div class="lim-head">Límites del plan</div><div class="lim-err">sin datos</div>';
+          }
+        } finally {
+          refreshing = false;
+          reload.classList.remove('spinning');
+          reload.disabled = false;
+        }
       }
-      reload.addEventListener('click', () => load(true));
-      resetBtn.addEventListener('click', async () => {
-        const ok = await dialog.confirmDialog({
-          title: '↺ Reset de estadísticas',
-          message: 'Pone el costo en dólares y los tokens en CERO desde ahora. '
-            + 'El histórico real no se borra: podés volver a verlo con "ver total histórico". '
-            + '¿Resetear ahora?',
-          confirmLabel: 'Resetear',
-          cancelLabel: 'Cancelar',
-        });
-        if (!ok) return;
-        resetBtn.disabled = true;
-        try { await postReset(false); await load(true); } catch { /* noop */ }
-        resetBtn.disabled = false;
-      });
-      load(false);
-      // Refresco en vivo mientras el modal esté abierto: mantiene al día el
-      // Pac-Man "consumiendo ahora" y la cuenta regresiva de los resets.
-      timer = setInterval(() => { if (!document.hidden) load(false); }, 10000);
+
+      // Cambio de rango/proyecto: pinta al toque si está en caché; si falta
+      // (semana/mes o un proyecto no traído) muestra loader y lo trae.
+      async function showView() {
+        if (seriesFor()) { paint('draw'); return; }
+        leftEl.innerHTML = loaderHtml;
+        chartWrap.innerHTML = loaderHtml;
+        try {
+          // Día por proyecto sale del summary (hourlyToday por proyecto); si el
+          // summary aún no llegó, lo traemos.
+          if (range === 'day') { if (!cache.summary) cache.summary = await fetchSummary(false); }
+          else cache.series[`${range}:${project}`] = await fetchHistory(range, project);
+          paint('draw');
+        } catch {
+          leftEl.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
+          chartWrap.innerHTML = '<div class="tok-empty">No se pudo cargar la tendencia.</div>';
+        }
+      }
+
+      tabs.forEach((t) => t.addEventListener('click', () => {
+        if (t.classList.contains('is-active')) return;
+        tabs.forEach((x) => x.classList.toggle('is-active', x === t));
+        range = t.dataset.range;
+        showView();
+      }));
+      projs.forEach((b) => b.addEventListener('click', () => {
+        if (b.classList.contains('is-active')) return;
+        projs.forEach((x) => x.classList.toggle('is-active', x === b));
+        project = b.dataset.project;
+        showView();
+      }));
+      mbtns.forEach((b) => b.addEventListener('click', () => {
+        if (b.classList.contains('is-active')) return;
+        mbtns.forEach((x) => x.classList.toggle('is-active', x === b));
+        metric = b.dataset.metric;
+        paint('draw'); // re-dibuja con la serie cacheada (0 fetch)
+      }));
+      reload.addEventListener('click', () => refresh(true));
+
+      // APERTURA INSTANTÁNEA: pinta lo que haya en caché (el pie la mantiene
+      // caliente) y refresca en segundo plano. Sin bloquear con spinner.
+      if (cache.summary || cache.limits) paint('draw');
+      refresh(false);
+      // Auto-refresh silencioso (mismo intervalo que el pie).
+      timer = setInterval(() => { if (!document.hidden) refresh(false); }, AUTO_MS);
     });
   },
 };

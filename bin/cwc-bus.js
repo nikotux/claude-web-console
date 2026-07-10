@@ -26,6 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import * as bus from '../src/core/bus.js';
+import { logDelivery } from '../src/core/interfono-log.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const TMUX_SOCKET = process.env.CWC_TMUX_SOCKET?.trim() || 'cwc';
@@ -52,11 +53,20 @@ function currentTmuxSession() {
   } catch { return null; }
 }
 function selfIdentity(input) {
-  const claudeSid = input?.session_id || null;
+  // Identidad EXPLÍCITA por entorno (rediseño 2026-07-10, Fase 0.4): un chat del
+  // SDK que ejecuta `send` por una Bash tool no tiene $TMUX ni JSON de hook en
+  // stdin, así que su `from` quedaba null. El runner le inyecta
+  // CWC_SELF_HANDLE=claude:<sessionId> (ver runner-link.js). Se toma primero y
+  // los mecanismos de abajo quedan como fallback intactos.
+  const envHandle = (process.env.CWC_SELF_HANDLE || '').trim();
+  const explicit = /^(claude|tmux):.+/.test(envHandle) ? envHandle : null;
+  const claudeSid = input?.session_id
+    || (explicit?.startsWith('claude:') ? explicit.slice('claude:'.length) : null);
   const tmuxName = currentTmuxSession();
   const handles = [];
   if (claudeSid) handles.push(`claude:${claudeSid}`);
   if (tmuxName) handles.push(`tmux:${tmuxName}`);
+  if (explicit && !handles.includes(explicit)) handles.push(explicit);
   // Nombre amigable propio (para el "from" de los mensajes).
   let name = null;
   const dir = bus.buildDirectory();
@@ -98,6 +108,7 @@ function doSend() {
   let nudged = false;
   if (target.entry && target.entry.kind === 'tui') {
     nudged = tryNudge(target.entry, self, text);
+    if (nudged) logDelivery({ route: 'tui-nudge', msgId: msg.id, from: self.primary || null, to: target.handle, kind: 'note' });
   }
   const via = nudged ? 'entregado en vivo' : 'quedó en la bandeja (lo verá en su próximo turno)';
   console.log(`✅ Mensaje para ${target.name}: ${via}. [id ${msg.id}]`);
@@ -160,6 +171,9 @@ function doInject() {
   }
   console.log(lines.join('\n'));
 
+  for (const m of msgs) {
+    logDelivery({ route: 'hook-inject', msgId: m.id, from: m.from || null, to: self.primary || null, kind: m.kind || 'note' });
+  }
   bus.markDelivered(msgs, self.handles);
   bus.markTombstonesDelivered(tombs);
   return done(0);

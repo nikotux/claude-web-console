@@ -40,51 +40,49 @@ export function buildDashboard(rawTickets, nowMs) {
   const waitingOn = { dev: 0, requester: 0, triage: 0 };
   for (const t of open) if (t.waitingOn) waitingOn[t.waitingOn] = (waitingOn[t.waitingOn] || 0) + 1;
 
-  // 3. Overdue follow-ups (lista roja), más viejos primero
-  const overdue = open.filter((t) => t.clock.overdue)
-    .sort((a, b) => b.clock.businessHoursSinceUpdate - a.clock.businessHoursSinceUpdate).map(slim);
-
-  // 4. Aging (7+ días sin update), más viejos primero
-  const aging = open.filter((t) => t.aging.aging)
-    .sort((a, b) => b.aging.days - a.aging.days).map(slim);
-
-  // 5. Resolved this week
-  const resolvedThisWeek = tickets.filter((t) => t.resolvedThisWeek).map(slim);
-
-  // 6. Nuevos · sin triar: abiertos que esperan triage (recién creados, sin
-  //    asignar, todavía sin vencer). Es el punto ciego que dejaban las otras
-  //    listas — un ticket nuevo no es overdue (reloj sin correr) ni aging (7+
-  //    días) ni resuelto ni tiene PR, así que sólo se veía como número en "Por
-  //    carril". Más NUEVO primero (menos días de antigüedad arriba).
-  const needsTriage = open.filter((t) => t.waitingOn === 'triage')
-    .sort((a, b) => a.aging.days - b.aging.days).map(slim);
-
-  // 7 y 8. Estados de TRABAJO que antes caían en el limbo (abiertos, recién
-  //    tocados → ni vencidos ni aging, ni nuevos ni resueltos, sin PR): un
-  //    ticket se volvía invisible justo cuando MÁS se lo trabajaba. Ahora tienen
-  //    hogar propio. Más ESTANCADO primero (más horas sin update arriba).
-  //    EXCLUYEN los vencidos/aging (opción B, pedido Niko): un ticket urgente
-  //    vive SOLO en su columna de alerta (Vencidos/Aging), no se duplica acá →
-  //    cada ticket aparece en UN solo lugar. Estas columnas = "en curso sano".
-  const healthy = (t) => !t.clock.overdue && !t.aging.aging;
+  // Rediseño 2026-07-09 (pedido Niko): la vista ACTIVA tiene 3 buckets — Nuevos,
+  // Vencidos, En progreso — y cada ticket ABIERTO cae en UNO solo. Los cerrados
+  // salen de acá (viven en la vista RESUELTOS, on-demand: buildResolved).
+  //   · Vencidos = overdue (SLA 48h háb roto) O aging (7+ días sin update).
+  //     Decisión de Niko: "sin update" NO es su propia columna, entra en Vencidos.
+  //   · Nuevos = sin triar (waitingOn 'triage') que todavía no vencieron.
+  //   · En progreso = todo el resto abierto (dev + espera-cliente sanos). Absorbe
+  //     las viejas columnas "En espera cliente" y "Sin update", que desaparecen.
+  const isVencido = (t) => t.clock.overdue || t.aging.aging;
   const byStale = (a, b) => b.clock.businessHoursSinceUpdate - a.clock.businessHoursSinceUpdate;
-  const inProgress = open.filter((t) => t.waitingOn === 'dev' && healthy(t)).sort(byStale).map(slim);
-  const waitingClient = open.filter((t) => t.waitingOn === 'requester' && healthy(t)).sort(byStale).map(slim);
+  const vencidos = open.filter(isVencido)
+    .sort((a, b) => b.aging.days - a.aging.days).map(slim);
+  const nuevos = open.filter((t) => !isVencido(t) && t.waitingOn === 'triage')
+    .sort((a, b) => a.aging.days - b.aging.days).map(slim);
+  const enProgreso = open.filter((t) => !isVencido(t) && t.waitingOn !== 'triage')
+    .sort(byStale).map(slim);
 
   return {
     generatedAt: nowMs,
     counts: {
-      open: open.length, total: tickets.length, overdue: overdue.length, aging: aging.length,
-      resolvedThisWeek: resolvedThisWeek.length, needsTriage: needsTriage.length,
-      inProgress: inProgress.length, waitingClient: waitingClient.length,
+      open: open.length, total: tickets.length,
+      nuevos: nuevos.length, vencidos: vencidos.length, enProgreso: enProgreso.length,
     },
     openByLane,
     waitingOn,
-    needsTriage,
-    inProgress,
-    waitingClient,
-    overdue,
-    aging,
-    resolvedThisWeek,
+    nuevos,
+    vencidos,
+    enProgreso,
   };
+}
+
+// Vista RESUELTOS (on-demand, NO entra en el snapshot de 60s — sería carísimo
+// enriquecer todo el histórico cerrado). Recibe los tickets CERRADOS ya
+// enriquecidos (getResolvedTickets + ownerName) y devuelve el shape que consume
+// el frontend: slim + closedTime, ordenados por cierre desc, + conteo por carril
+// para los filtros. Los PRs mergeados se adjuntan aparte en el endpoint.
+export function buildResolved(rawTickets, nowMs) {
+  const tickets = rawTickets.map((t) => enrich(t, nowMs));
+  const slimmed = tickets
+    .map((t) => ({ ...slim(t), closedTime: t.closedTime || null, closedMs: Date.parse(t.closedTime || '') || 0 }))
+    .sort((a, b) => b.closedMs - a.closedMs);
+  const byLane = {};
+  for (const lane of LANES) byLane[lane] = 0;
+  for (const t of slimmed) byLane[t.lane] = (byLane[t.lane] || 0) + 1;
+  return { tickets: slimmed, byLane, count: slimmed.length };
 }

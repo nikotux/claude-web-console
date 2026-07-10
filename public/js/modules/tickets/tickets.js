@@ -42,11 +42,11 @@ export default {
       refs.sum.innerHTML = `
         <div class="bv2-sum-main">${c.open ?? 0} abiertos</div>
         <div class="bv2-sum-chips">
-          <span class="bb-chip bb-chip--danger" title="Vencidos (48h háb)">🔴 ${c.overdue ?? 0}</span>
-          <span class="bb-chip bb-chip--warn" title="Sin update 7+ días">🕐 ${c.aging ?? 0}</span>
-          <span class="bb-chip bb-chip--ok" title="Resueltos esta semana">✓ ${c.resolvedThisWeek ?? 0}</span>
+          <span class="bb-chip bb-chip--info" title="Nuevos · sin triar">🆕 ${c.nuevos ?? 0}</span>
+          <span class="bb-chip bb-chip--danger" title="Vencidos (SLA roto o 7+ días sin update)">🔴 ${c.vencidos ?? 0}</span>
+          <span class="bb-chip bb-chip--warn" title="En progreso">🔧 ${c.enProgreso ?? 0}</span>
         </div>`;
-      if (refs.dot) refs.dot.className = `sec-dot sec-dot--${(c.overdue > 0) ? 'alert' : (c.open ? 'ok' : 'idle')}`;
+      if (refs.dot) refs.dot.className = `sec-dot sec-dot--${(c.vencidos > 0) ? 'alert' : (c.open ? 'ok' : 'idle')}`;
     }
 
     async function load(force) {

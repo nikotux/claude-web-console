@@ -10,7 +10,9 @@
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { getTicketState, listDepartments } from './desk-mcp-client.js';
-import { getPrDetail } from './sources.js';
+import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolvedInfo } from './sources.js';
+import { buildResolved } from './views.js';
+import { enrich } from './derive.js';
 import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
 import { getContext, saveContext, DEFAULT_CONTEXTS } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
@@ -50,6 +52,13 @@ export default {
         const meta = getMeta(req.params.id); // Contexto adicional + Histórico del trabajo (nuestros)
         const cached = snap?.ticketsById?.[String(req.params.id)];
         if (cached) return res.json({ ...withClaim(cached), meta, you, youAdmin, cached: true, generatedAt: snap.generatedAt });
+        // Fuente de consulta uniforme (Fix 3, 2026-07-10): si es un ticket CERRADO
+        // que vive en la base de RESUELTOS, servilo de ahí (0 red) antes de golpear
+        // Zoho en vivo — así abrir un cerrado viejo no se cuelga.
+        const resolvedRaw = findResolvedTicket(req.params.id);
+        if (resolvedRaw) {
+          return res.json({ ...withClaim(enrich(resolvedRaw, Date.now())), meta, you, youAdmin, cached: true, fromResolved: true, generatedAt: resolvedInfo().at || null });
+        }
         const data = await getTicketState(req.params.id);
         res.json({ ...withClaim(data), meta, you, youAdmin });
       } catch (err) {
@@ -103,10 +112,48 @@ export default {
           : d.devLane;
         res.json({
           ...d, devLane,
-          needsTriage: stamp(d.needsTriage),
-          inProgress: stamp(d.inProgress), waitingClient: stamp(d.waitingClient),
-          overdue: stamp(d.overdue), aging: stamp(d.aging), resolvedThisWeek: stamp(d.resolvedThisWeek),
+          nuevos: stamp(d.nuevos),
+          vencidos: stamp(d.vencidos),
+          enProgreso: stamp(d.enProgreso),
           you, generatedAt: s.generatedAt, lastError: s.lastError || null,
+        });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 300) });
+      }
+    });
+
+    // Vista RESUELTOS: SÓLO LECTURA del store persistente (rediseño Niko
+    // 2026-07-10). El enriquecido lo hace el REFRESHER de fondo en el MISMO loop
+    // de 60s que el dashboard activo (refreshResolved de sources.js, store en
+    // ~/.cwc-data/tickets-resolved.json, con ownerName ya stampeado). Este
+    // endpoint NO toca Zoho/GitHub → responde INSTANTÁNEO, sin "pensando".
+    //   · ?force=1 → dispara un refresco de fondo YA (no bloquea: no lo esperamos)
+    //     y devuelve lo que hay; el front auto-refresca cuando termina.
+    //   · Si el store todavía no tuvo su 1ª pasada (arranque en frío) → loading:true
+    //     para que el front muestre "generando…" + reintente, en vez de vaciar.
+    r.get('/resolved', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      try {
+        if (req.query.force === '1' || req.query.force === 'true') {
+          refreshResolved({ force: true }).catch(() => {}); // dispara y NO espera (no bloquea el request)
+        }
+        const { tickets: rawTickets, prs: rawPrs, meta } = readResolved();
+        if (!meta.ready && !rawTickets.length && !rawPrs.length) {
+          return res.json({ loading: true, refreshing: !!meta.refreshing, error: meta.error || null });
+        }
+        const view = buildResolved(rawTickets, Date.now());
+        const tickets = view.tickets.map((t) => withClaim(t));
+        const prs = rawPrs.map((pr) => ({
+          number: pr.number, title: String(pr.title || '').slice(0, 120), url: pr.url,
+          branch: pr.headRefName || null, author: pr.author?.login || null, authorName: pr.author?.name || null,
+          mergedAt: pr.mergedAt || null, merged: true, workingBy: getActiveClaim(`pr:${pr.number}`),
+        }));
+        res.json({
+          tickets, byLane: view.byLane, prs,
+          counts: { tickets: tickets.length, prs: prs.length },
+          capped: !!meta.capped, listed: meta.listed || 0, refreshing: !!meta.refreshing,
+          ticketsError: meta.error || null, prError: null,
+          you: actorOf(req)?.username || null, generatedAt: meta.at || Date.now(),
         });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 300) });

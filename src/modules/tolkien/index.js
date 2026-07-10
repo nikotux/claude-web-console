@@ -19,12 +19,139 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
+import { isAdmin } from '../../core/auth.js';
+import { findZeroTierIp } from '../../core/zerotier.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
 const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
+
+// ───────────────── Refresh de la DB LOCAL (importers Zoho → Postgres) ─────────────────
+// Botón "Vista fresca": deja la DB LOCAL de dev como un snapshot LIMPIO y
+// ACTUAL de Zoho. NO mergea ni preserva ediciones locales — es un server de
+// pruebas y la vista debe ser siempre fresca (sin conflictos). Por eso:
+//   1) TRUNCATE de las tablas OPERATIVAS (empleados, clientes y todo lo que
+//      cuelga por FK: billing, invoices, leave, teams…) → borrón total.
+//   2) Reimporta desde cero con los importers de @tolkien/worker.
+// Se PRESERVAN login (users), config (app_config), países y holiday_lists:
+// no cascadean desde employees/clients (estos apuntan HACIA ellos, no al revés).
+// Equivale, por importer, a lo que se hace a mano:
+//   infisical run --env prod -- bash -c "DATABASE_URL=<local>; pnpm importer <n> --apply"
+// El infisical inyecta las credenciales Zoho; el DATABASE_URL local se exporta
+// DESPUÉS para pisar el de prod y garantizar que se escribe solo en local.
+// Config leída de ~/tolkien (con override por env), no hardcodeada frágil.
+const IMPORTERS = ['clients', 'employees', 'employee-client-links'];
+const DEV_DB_PASSWORD = 'tolkien_dev_only'; // password fijo de la DB de dev (ver CLAUDE.md de tolkien)
+
+function readTolkienDbPort() {
+  if (process.env.CWC_TOLKIEN_DB_PORT?.trim()) return process.env.CWC_TOLKIEN_DB_PORT.trim();
+  try {
+    const env = fs.readFileSync(path.join(CWD, '.env'), 'utf8');
+    const m = env.match(/^DB_HOST_PORT=(\d+)/m);
+    if (m) return m[1];
+  } catch { /* usa fallback */ }
+  return '5435';
+}
+
+function readInfisicalWorkspaceId() {
+  if (process.env.CWC_TOLKIEN_INFISICAL_ID?.trim()) return process.env.CWC_TOLKIEN_INFISICAL_ID.trim();
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(CWD, '.infisical.json'), 'utf8'));
+    if (j.workspaceId) return String(j.workspaceId);
+  } catch { /* usa fallback */ }
+  return '25b6c300-7686-4cf0-b8e3-ed808a529638';
+}
+
+const localDbUrl = () =>
+  `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/tolkien?schema=public`;
+
+function runCmd(cmd, args, { timeout = 120000, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { cwd: CWD, timeout, env, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        resolve({
+          code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+          killed: !!(err && (err.killed || err.signal)),
+          stdout: stdout || '',
+          stderr: stderr || '',
+        });
+      });
+  });
+}
+
+// Extrae {creates,updates,softDeletes,failed} del log pino de un importer.
+function parseImporterOutput(name, out) {
+  const lines = (out || '').split('\n');
+  let done = null;
+  let failed = false;
+  let failMsg = '';
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    if (obj.msg === 'import done') done = obj;
+    if (obj.msg === 'import failed') {
+      failed = true;
+      failMsg = obj?.err?.meta?.driverAdapterError?.cause?.originalMessage || obj?.err?.message || 'import failed';
+    }
+  }
+  return {
+    importer: name,
+    creates: done?.creates ?? 0,
+    updates: done?.updates ?? 0,
+    softDeletes: done?.softDeletes ?? 0,
+    failed: failed || !done,
+    error: failed ? failMsg.split('\n')[0].slice(0, 200) : (done ? '' : 'no completó (sin "import done")'),
+  };
+}
+
+async function refreshLocalData() {
+  const started = Date.now();
+  const url = localDbUrl();
+  const wsId = readInfisicalWorkspaceId();
+  const steps = [];
+
+  // 1) Borrón limpio de la data operativa + defensivo del índice único.
+  //    - DROP INDEX clients_name_key: Zoho tiene nombres de Customer duplicados
+  //      (p.ej. "San Francisco Bay Real Estate LLC" ×2); el índice único los
+  //      rechaza. En la DB LOCAL lo soltamos (idempotente) para no caernos por
+  //      un dato sucio de origen.
+  //    - TRUNCATE employees, clients RESTART IDENTITY CASCADE: vacía esas dos
+  //      tablas y TODO lo que cuelga por FK (billing, invoices, payments, leave,
+  //      team_members, overtime, requests, caches). NO toca users/app_config/
+  //      countries/holiday_lists (employees/clients apuntan hacia ellas). Así la
+  //      recarga es un snapshot fresco, sin restos ni ediciones locales previas.
+  const reset = await runCmd('psql', [
+    '-h', 'localhost', '-p', readTolkienDbPort(), '-U', 'tolkien', '-d', 'tolkien',
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', 'DROP INDEX IF EXISTS clients_name_key; TRUNCATE employees, clients RESTART IDENTITY CASCADE;',
+  ], { timeout: 30000, env: { ...process.env, PGPASSWORD: DEV_DB_PASSWORD } });
+  steps.push({ importer: 'reset (drop-index + truncate operativas)', creates: 0, updates: 0, softDeletes: 0, failed: reset.code !== 0, error: reset.code !== 0 ? (reset.stderr.split('\n')[0] || 'psql falló') : '' });
+  // Si el borrón falló, no reimportamos: abortamos para no dejar la DB a medias.
+  if (reset.code !== 0) {
+    return { ok: false, steps, durationMs: Date.now() - started };
+  }
+
+  // 2) Importers en orden: clients → employees → employee-client-links.
+  for (const name of IMPORTERS) {
+    const inner = `export DATABASE_URL='${url}'; pnpm --filter @tolkien/worker importer ${name} --apply`;
+    const res = await runCmd('infisical', [
+      'run', '--projectId', wsId, '--env', 'prod', '--', 'bash', '-c', inner,
+    ], { timeout: 180000 });
+    const parsed = parseImporterOutput(name, `${res.stdout}\n${res.stderr}`);
+    if (res.killed) { parsed.failed = true; parsed.error = 'timeout (excedió 180s)'; }
+    steps.push(parsed);
+  }
+
+  return {
+    ok: steps.every((s) => !s.failed),
+    steps,
+    durationMs: Date.now() - started,
+  };
+}
 
 function git(args, { timeout = 90000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -68,31 +195,48 @@ async function saveLastFetchAt(ts) {
 let lastFetchAt = loadLastFetchAt();
 
 async function status() {
-  const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  // Las 6 lecturas de git son INDEPENDIENTES entre sí (ninguna usa el
+  // resultado de otra) y son SOLO LECTURA → se disparan en paralelo con
+  // Promise.all (regla de oro del proyecto: "paralelo lo que LEE, serial lo
+  // que ESCRIBE"). Baja la latencia de GET /status, que el pie persistente de
+  // Tolkien consulta seguido. Los chequeos de error/derivación quedan idénticos
+  // (mismo orden, mismos mensajes): solo cambia el momento de ejecución, no la
+  // lógica. Un fallo de SISTEMA en cualquiera (git rechaza la Promise) propaga
+  // igual que antes; los code!==0 se evalúan en orden abajo.
+  const [branchRes, headRes, lastRes, porcelainRes, abRes, stashRes] = await Promise.all([
+    git(['rev-parse', '--abbrev-ref', 'HEAD']),
+    git(['rev-parse', '--short', 'HEAD']),
+    // Último commit: fecha ISO + autor + asunto (para el "pulso" del repo).
+    git(['log', '-1', '--format=%cI%x09%an%x09%s']),
+    git(['status', '--porcelain']),
+    // ahead/behind vs origin/main (usa lo ya fetchado; no toca la red).
+    git(['rev-list', '--left-right', '--count', 'origin/main...HEAD']),
+    git(['stash', 'list']),
+  ]);
+
   if (branchRes.code !== 0) throw new Error(`git rev-parse HEAD falló: ${branchRes.stderr || 'código ' + branchRes.code}`);
   const branch = branchRes.stdout || 'HEAD';
 
-  const headRes = await git(['rev-parse', '--short', 'HEAD']);
   if (headRes.code !== 0) throw new Error(`git rev-parse --short HEAD falló: ${headRes.stderr || 'código ' + headRes.code}`);
   const head = headRes.stdout;
 
-  // Último commit: fecha ISO + autor + asunto (para el "pulso" del repo).
-  const lastRes = await git(['log', '-1', '--format=%cI%x09%an%x09%s']);
   if (lastRes.code !== 0) throw new Error(`git log falló: ${lastRes.stderr || 'código ' + lastRes.code}`);
   const [date, author, subject] = lastRes.stdout.split('\t');
 
-  const porcelainRes = await git(['status', '--porcelain']);
   if (porcelainRes.code !== 0) throw new Error(`git status falló: ${porcelainRes.stderr || 'código ' + porcelainRes.code}`);
   const porcelain = porcelainRes.stdout;
   const dirtyCount = porcelain ? porcelain.split('\n').length : 0;
 
-  // ahead/behind vs origin/<branch> (usa lo ya fetchado; no toca la red).
-  // Nota: esta llamada puede fallar legítimamente (sin remoto "origin", rama
-  // todavía no trackeada, etc.) — no es indicio de repo roto, así que no se
+  // La ÚNICA pregunta de este panel es "¿mi copia local coincide con main?",
+  // así que se compara SIEMPRE contra origin/main, sin importar en qué rama
+  // esté parado HEAD (el detalle de PRs/ramas vive en la sección Tickets).
+  //   behind = versiones nuevas en main que todavía no tengo → accionable (pull)
+  //   ahead  = commits míos fuera de main → NO se muestra acá, es de Tickets
+  // Nota: esta llamada puede fallar legítimamente (sin remoto "origin", main
+  // todavía no fetchado, etc.) — no es indicio de repo roto, así que no se
   // propaga como error; se deja en 0/0 como antes.
   let behind = 0;
   let ahead = 0;
-  const abRes = await git(['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`]);
   if (abRes.code === 0 && abRes.stdout) {
     const [l, r] = abRes.stdout.split(/\s+/);
     behind = parseInt(l, 10) || 0;
@@ -105,7 +249,6 @@ async function status() {
   // Igual que abRes: un fallo acá (repo raro, permisos, etc.) no debe tirar
   // abajo /status. Se trata como "no hay stash pendiente" en vez de propagar
   // el error — fallback razonable, no un bug silencioso.
-  const stashRes = await git(['stash', 'list']);
   const pendingAutoStash = stashRes.code === 0 && stashRes.stdout
     ? stashRes.stdout.split('\n').some((l) => l.includes(AUTO_STASH_MSG))
     : false;
@@ -121,11 +264,41 @@ async function status() {
 
 let busy = false;
 
+// Estado del job de refresh de data. Es una operación larga (~20-40s): mantener
+// la request HTTP abierta todo ese tiempo la hace frágil sobre el túnel ZeroTier
+// (la conexión se corta y el fetch del navegador rechaza → falso "error de red").
+// Por eso: POST arranca el job en background y vuelve YA; el frontend consulta
+// GET /refresh-data/status hasta que termina. Sin requests largas.
+let dataJob = { running: false, result: null, error: null, startedAt: null, finishedAt: null };
+
 export default {
   name: 'tolkien',
 
   registerHttp(router) {
     const r = express.Router();
+
+    // Arranca el refresh en background (idempotente si ya corre). Vuelve al toque.
+    r.post('/refresh-data', (req, res) => {
+      if (dataJob.running) return res.json({ started: false, running: true });
+      dataJob = { running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null };
+      // No await: corre en background; el estado se consulta por GET /status.
+      refreshLocalData()
+        .then((result) => { dataJob.result = result; })
+        .catch((err) => { dataJob.error = err?.message || 'error desconocido'; })
+        .finally(() => { dataJob.running = false; dataJob.finishedAt = Date.now(); });
+      res.json({ started: true, running: true });
+    });
+
+    // Estado del último/actual refresh (para el polling del frontend).
+    r.get('/refresh-data/status', (req, res) => {
+      res.json({
+        running: dataJob.running,
+        result: dataJob.result,
+        error: dataJob.error,
+        startedAt: dataJob.startedAt,
+        finishedAt: dataJob.finishedAt,
+      });
+    });
 
     r.get('/status', async (req, res) => {
       try { res.json(await status()); }
@@ -242,6 +415,115 @@ export default {
       }
     });
 
+    // ───────── Acceso "un clic" al Tolkien local (inyección de sesión) ─────────
+    // Problema: el server de Tolkien corre con NEXTAUTH_URL=http://localhost:3003
+    // (su default de dev). Desde un dispositivo por ZeroTier el login se rompe
+    // (callback a localhost, host no confiable en Auth.js v5) y la landing sólo
+    // ofrece Microsoft SSO (cuyo callback de Azure no incluye la IP ZeroTier) +
+    // magic-link. El dev-login (Credentials, activo con DEV_AUTH_ENABLED=1) NO
+    // tiene botón en la landing y sufriría el mismo problema de host.
+    //
+    // Solución (SIN tocar Tolkien, sobrevive a sus updates): la CONSOLA — ya
+    // autenticada y servida por ZeroTier — hace el dev-login CONTRA localhost
+    // (donde el host SÍ coincide con NEXTAUTH_URL, así Auth.js no rechaza),
+    // captura la cookie de sesión `tolkien.session` (un JWT auto-validable, no
+    // atado a host) y redirige el navegador a la IP ZeroTier INSTALANDO esa
+    // cookie. Como las cookies van por HOST y no por puerto, la que setea la
+    // consola (:8092) vale para Tolkien (:3003) del mismo host. Un clic → adentro.
+    //
+    // Seguridad: admin-only (entra con una identidad REAL de Tolkien). Sólo
+    // funciona mientras dev-login esté activo en Tolkien. Modelo de confianza de
+    // la consola: todos los usuarios son del dueño (ver CLAUDE.md).
+    r.get('/local-enter', async (req, res) => {
+      if (!isAdmin(req)) {
+        res.status(403).type('html').send(localEnterErrPage(
+          'Acceso denegado',
+          'Sólo un administrador puede entrar al Tolkien local desde la consola.',
+        ));
+        return;
+      }
+      const port = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
+      const email = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || 'nmosquera@mordorstaffing.com');
+      const base = `http://localhost:${port}`;
+      // Acumula Set-Cookie en un "jar" dedupeando POR NOMBRE (última ocurrencia
+      // gana, como un browser/curl). Imprescindible: /api/auth/csrf devuelve DOS
+      // cookies `authjs.csrf-token` con valores distintos; re-enviar ambas hace
+      // que Auth.js rechace con MissingCSRF. El jar deja una sola.
+      const jar = {};
+      const addCookies = (setCookies) => {
+        for (const c of (setCookies || [])) {
+          const nv = c.split(';')[0];
+          const eq = nv.indexOf('=');
+          if (eq > 0) jar[nv.slice(0, eq)] = nv.slice(eq + 1);
+        }
+      };
+      const cookieHeaderOf = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+      try {
+        // 1) CSRF: tomamos el token de la COOKIE (no del JSON) para garantizar
+        // que coincide con la cookie que enviamos — la cookie es "token|hash".
+        const csrfRes = await fetch(`${base}/api/auth/csrf`, { headers: { accept: 'application/json' } });
+        if (!csrfRes.ok) throw new Error(`csrf HTTP ${csrfRes.status}`);
+        addCookies(csrfRes.headers.getSetCookie?.());
+        const csrfToken = decodeURIComponent(jar['authjs.csrf-token'] || '').split('|')[0];
+        if (!csrfToken) throw new Error('no se obtuvo el csrfToken de Tolkien');
+
+        // 2) dev-login callback: email de un usuario EXISTENTE activo de la DB.
+        const body = new URLSearchParams({
+          email, csrfToken, callbackUrl: `${base}/welcome`, json: 'true',
+        });
+        const loginRes = await fetch(`${base}/api/auth/callback/dev-login`, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookieHeaderOf() },
+          body,
+        });
+        const sessionCookieRaw = (loginRes.headers.getSetCookie?.() || [])
+          .find((c) => /^tolkien\.session=/.test(c));
+        if (!sessionCookieRaw) {
+          // Sin cookie de sesión = el login no prosperó. Causas típicas:
+          // dev-login apagado (DEV_AUTH_ENABLED≠1), email inexistente/inactivo.
+          throw new Error(
+            `el dev-login no devolvió sesión para "${email}". `
+            + 'Verificá que DEV_AUTH_ENABLED=1 en el server de Tolkien y que ese '
+            + 'email exista como usuario activo (o cambiá CWC_TOLKIEN_LOGIN_EMAIL).',
+          );
+        }
+
+        // 3) Redirigir a la IP ZeroTier INSTALANDO la sesión. La cookie es
+        // host-only (sin Domain) → el navegador la asocia al host de la consola
+        // y, como las cookies ignoran el puerto, la envía también a :3003. Sin
+        // `Secure` porque Tolkien dev sirve por HTTP. Cookie de sesión (sin
+        // Expires): se limpia al cerrar el navegador — un clic la repone.
+        const ztIp = (findZeroTierIp()?.ip) || req.hostname;
+        const nameValue = sessionCookieRaw.split(';')[0]; // "tolkien.session=<jwt>"
+        res.setHeader('Set-Cookie', `${nameValue}; Path=/; HttpOnly; SameSite=Lax`);
+        res.redirect(302, `http://${ztIp}:${port}/welcome`);
+      } catch (err) {
+        const isConn = /ECONNREFUSED|fetch failed|ENOTFOUND/i.test(err?.message || '');
+        res.status(isConn ? 502 : 500).type('html').send(localEnterErrPage(
+          'No se pudo entrar al Tolkien local',
+          isConn
+            ? `El server de Tolkien no responde en localhost:${port}. ¿Está corriendo? `
+              + '(next dev). Si usa otro puerto, seteá CWC_TOLKIEN_LOCAL_PORT.'
+            : (err?.message || 'Error desconocido en el flujo de login.'),
+        ));
+      }
+    });
+
     router.use('/tolkien', r);
   },
 };
+
+// Página de error mínima para /local-enter (se abre en pestaña nueva, así que
+// un JSON crudo sería inútil: el usuario necesita ver qué pasó).
+function localEnterErrPage(title, detail) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${esc(title)}</title>`
+    + `<style>body{font-family:system-ui,sans-serif;background:#1a1512;color:#e8e0d8;`
+    + `display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;padding:1.5rem}`
+    + `.c{max-width:32rem}h1{color:#d97757;font-size:1.2rem}p{line-height:1.5;color:#c8bcb0}`
+    + `code{background:#2a2018;padding:.1rem .3rem;border-radius:4px}</style></head>`
+    + `<body><div class="c"><h1>⚠️ ${esc(title)}</h1><p>${esc(detail)}</p></div></body></html>`;
+}

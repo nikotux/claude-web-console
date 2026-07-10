@@ -22,12 +22,22 @@
 //   el token del CLI (solo lectura). El último resultado bueno se PERSISTE en
 //   ~/.cwc-data/plan-limits.json: ante 429/corte de red/reinicio se sirve ese
 //   snapshot marcado `stale:true` en vez de perder el dato.
+//   GET /api/tokens/history?range=day|week|month -> serie de tiempo por modelo
+//   para las gráficas de tendencia del modal Uso. Sale del histórico PERSISTENTE
+//   (~/.cwc-data/usage-history.json, ver history-store.js): buildSummary calcula
+//   el desglose diario por modelo y lo snapshotea (independiente de la poda de
+//   transcripts que hace el CLI). Reemplazó al viejo POST /reset (2026-07-10):
+//   con historial persistente no hace falta "poner en cero".
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { keyOf } from '../../core/claude-model.js';
 import { runAdaptivePool } from '../health/pool.js';
+import { mergeDaily, readSeries, buildSeries } from './history-store.js';
+import { localHourKey, localHourStartMs, localTodayStr, localDateStartMs, localDayStr, localHourNow } from './time.js';
+
+const DAY_MS = 86400000;
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
@@ -88,7 +98,11 @@ function addInto(dst, src) {
 }
 
 // Parsea un jsonl deduplicando por message.id. Devuelve:
-//   rows      -> buckets por (día, modelo)
+//   rows      -> buckets por (HORA local, modelo) — clave 'YYYY-MM-DDTHH\tmodel'.
+//                Granularidad horaria (no diaria) para poder derivar las horas
+//                de HOY (gráfica día) y la ventana de 5 h sin re-parsear; el día
+//                se obtiene con hourKey.slice(0,10). Cacheable: la clave es tiempo
+//                ABSOLUTO local, no cambia con `now`.
 //   modelTs   -> timestamp (ms) del ÚLTIMO mensaje de CADA modelo (para que
 //                "consumiendo ahora" corresponda al modelo real, no al mtime
 //                del archivo — un jsonl multi-modelo lo compartía con TODOS
@@ -111,11 +125,12 @@ async function parseFile(file) {
     if (seen.has(msg.id)) continue;
     seen.add(msg.id);
     const u = msg.usage;
-    const day = (obj.timestamp || '').slice(0, 10) || 'unknown';
     const model = msg.model || 'unknown';
     const ts = Date.parse(obj.timestamp || '') || 0;
     if (ts && ts > (modelTs[model] || 0)) modelTs[model] = ts;
-    const key = `${day}\t${model}`;
+    // Bucket por HORA local (fecha derivable con slice(0,10)).
+    const hourKey = ts ? localHourKey(ts) : 'unknown';
+    const key = `${hourKey}\t${model}`;
     const b = (rows[key] ||= emptyBucket());
     b.input += u.input_tokens || 0;
     b.output += u.output_tokens || 0;
@@ -181,11 +196,37 @@ function classifyEngine(dir, sessionId, entrypoint, chatIds) {
   return { key, label: ENGINE_LABELS[key] };
 }
 
+// Proyecto de un transcript según su directorio codificado (el filtro por
+// proyecto del modal Uso, pedido del usuario 2026-07-10): la propia consola, el
+// repo de Tolkien, o "otros". Los worktrees de auto-fix (healthfix-wt-) son
+// trabajo SOBRE la consola → cuentan como 'consola'.
+function projectOf(dir) {
+  if (/claude-web-console|healthfix-wt-/.test(dir)) return 'consola';
+  if (/(^|-)tolkien(-|$)/.test(dir)) return 'tolkien';
+  return 'otros';
+}
+// Suma el mapa {modelKey:{tokens,cost}} `src` en `dst` (muta dst).
+function mergeModels(dst, src) {
+  for (const [k, v] of Object.entries(src || {})) {
+    const d = (dst[k] ||= { tokens: 0, cost: 0 });
+    d.tokens += v.tokens || 0; d.cost += v.cost || 0;
+  }
+}
+const PROJECT_KEYS = ['consola', 'tolkien', 'otros'];
+
 // Exportada a propósito: el runner de Optimización IA (bin/cwc-optimize-runner.js)
 // la usa para cruzar el censo de motores con el CONSUMO REAL (solo lectura de
 // transcripts, mismo caché por mtime+size — no toca nada).
 export async function buildSummary() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayStr();
+  const now = Date.now();
+  const fiveHAgo = now - 5 * 3600000;
+  // Acumuladores (por CLAVE semántica de modelo, anidados por PROYECTO para el
+  // filtro Consola/Tolkien/Otros):
+  //   hourlyByProj[proyecto][hora 0-23] -> { modelKey: {tokens,cost} }  (gráfica "Día")
+  //   h5tok -> tokens totales de las últimas 5 h (ventana de sesión, cuenta entera)
+  const hourlyByProj = {};
+  let h5tok = 0;
   let dirs = [];
   try {
     dirs = (await fs.readdir(PROJECTS_DIR, { withFileTypes: true }))
@@ -218,6 +259,10 @@ export async function buildSummary() {
   const todayB = emptyBucket();
   let todayCost = 0;
   const projects = [];
+  // Desglose DIARIO por PROYECTO×modelo: { 'YYYY-MM-DD': { consola: { opus:
+  // {tokens,cost}... }, tolkien: {...}, otros: {...} } }. Alimenta el histórico
+  // persistente (history-store) y el filtro por proyecto de las gráficas.
+  const daily = {};
 
   // Acumulador por MOTOR (mismo shape que un proyecto: bucket + modelStats).
   const engineMap = new Map();
@@ -228,6 +273,7 @@ export async function buildSummary() {
   };
 
   for (const dir of dirs) {
+    const proj = projectOf(dir); // consola | tolkien | otros (filtro de las gráficas)
     const projPath = path.join(PROJECTS_DIR, dir);
     let files = [];
     let lastMtime = 0;
@@ -263,9 +309,11 @@ export async function buildSummary() {
       const sessionId = path.basename(file, '.jsonl');
       const engine = engineFor(classifyEngine(dir, sessionId, entrypoint, chatIds));
       for (const [key, b] of Object.entries(rows)) {
-        const [day, model] = key.split('\t');
+        const [hourKey, model] = key.split('\t');
+        const day = hourKey === 'unknown' ? 'unknown' : hourKey.slice(0, 10);
         const c = costOf(model, b);
         const tok = b.input + b.output + b.cw1h + b.cw5m + b.cr;
+        const mkey = keyOf(model);
         // Timestamp del ÚLTIMO mensaje de ESTE modelo (no el mtime del archivo):
         // así "consumiendo ahora" corresponde al modelo real. Fallback al mtime.
         const ts = modelTs[model] || fileMtime;
@@ -279,7 +327,24 @@ export async function buildSummary() {
         es.tokens += tok; es.cost += c;
         es.lastMtime = Math.max(es.lastMtime, ts);
         addInto(engine.B, b); engine.cost += c;
-        if (day === today) { addInto(todayB, b); todayCost += c; }
+        if (day === today) {
+          addInto(todayB, b); todayCost += c;
+          // Bucket por PROYECTO×HORA local (gráfica "Día"): hourKey='YYYY-MM-DDTHH'.
+          const hr = Number(hourKey.slice(11, 13));
+          const hb = ((hourlyByProj[proj] ||= {})[hr] ||= {});
+          const hm = (hb[mkey] ||= { tokens: 0, cost: 0 });
+          hm.tokens += tok; hm.cost += c;
+        }
+        // Ventana de 5 h (token-count del límite de sesión): tokens cuyo bucket
+        // horario arranca dentro de las últimas 5 h. Cuenta ENTERA (todos los
+        // proyectos: los límites del plan son de la cuenta, no se filtran).
+        if (hourKey !== 'unknown' && localHourStartMs(hourKey) >= fiveHAgo) h5tok += tok;
+        // Acumulación por (día local, PROYECTO, modelo) para el histórico persistente.
+        if (day && day !== 'unknown') {
+          const dp = ((daily[day] ||= {})[proj] ||= {});
+          const dm = (dp[mkey] ||= { tokens: 0, cost: 0 });
+          dm.tokens += tok; dm.cost += c;
+        }
       }
     }
 
@@ -313,106 +378,95 @@ export async function buildSummary() {
     return { key: e.key, label: e.label, tokens: tok(e.B), cost: e.cost, lastMtime, models };
   }).filter((e) => e.tokens > 0).sort((a, b) => b.cost - a.cost);
 
+  // Serie horaria de HOY (gráfica "Día") POR PROYECTO: {all, consola, tolkien,
+  // otros}, cada una {keys,points,totals} — el front elige según el filtro.
+  const curHour = localHourNow();
+  const hourSeries = (hourMap) => {
+    const entries = [];
+    for (let h = 0; h <= curHour; h++) entries.push({ label: `${h}h`, models: (hourMap && hourMap[h]) || {} });
+    return buildSeries('day', entries);
+  };
+  // Mapa horario combinado (todos los proyectos) para el 'all'.
+  const allHours = {};
+  for (const p of PROJECT_KEYS) {
+    const hm = hourlyByProj[p];
+    if (!hm) continue;
+    for (const h of Object.keys(hm)) mergeModels((allHours[h] ||= {}), hm[h]);
+  }
+  const hourlyToday = {
+    all: hourSeries(allHours),
+    consola: hourSeries(hourlyByProj.consola),
+    tolkien: hourSeries(hourlyByProj.tolkien),
+    otros: hourSeries(hourlyByProj.otros),
+  };
+
+  // Ventana de 7 días (token-count de los límites semanales): total + por modelo,
+  // sumando los últimos 7 días locales de TODOS los proyectos (cuenta entera).
+  const anchor = localDateStartMs(today);
+  const d7ByKey = {};
+  let d7tok = 0;
+  for (let i = 0; i < 7; i++) {
+    const dayProjects = daily[localDayStr(anchor - i * DAY_MS)];
+    if (!dayProjects) continue;
+    for (const p of Object.keys(dayProjects)) {
+      for (const [k, v] of Object.entries(dayProjects[p])) {
+        (d7ByKey[k] ||= { tokens: 0 }).tokens += v.tokens;
+        d7tok += v.tokens;
+      }
+    }
+  }
+
   return {
     totals: { ...totals, tokens: tok(totals), cost: totalCost },
     today: { ...todayB, tokens: tok(todayB), cost: todayCost },
     projects,
     engines,
+    hourlyToday, // {all,consola,tolkien,otros} serie horaria de hoy (gráfica "Día")
+    windows: { h5: h5tok, d7: d7tok, d7ByKey }, // token-counts junto a los límites
+    daily, // desglose por día×proyecto×modelo (lo consume el histórico; no viaja al front)
     updatedAt: new Date().toISOString(),
   };
 }
 
-// ===== RESET de estadísticas (baseline de costo/tokens) =====
-// El costo NO se persiste: se recalcula SIEMPRE desde los transcripts de Claude
-// Code (que no tocamos). "Resetear a cero" es guardar una FOTO del consumo
-// actual como línea de base y mostrar solo lo acumulado DESDE ese punto
-// (mostrado = crudo − baseline, recortado a ≥0). La foto vive en disco
-// (~/.cwc-data/tokens-reset.json) → sobrevive reinicios. buildSummary sigue
-// devolviendo el CRUDO (lo usa también el runner de Optimización IA); la resta
-// se aplica SOLO en la ruta /summary.
-const RESET_FILE = path.join(os.homedir(), '.cwc-data', 'tokens-reset.json');
-let resetBaseline; // undefined=sin cargar · null=no hay reset · objeto=baseline
-
-async function getBaseline() {
-  if (resetBaseline !== undefined) return resetBaseline;
-  try {
-    const obj = JSON.parse(await fs.readFile(RESET_FILE, 'utf8'));
-    resetBaseline = obj && obj.summary ? obj : null;
-  } catch {
-    resetBaseline = null;
-  }
-  return resetBaseline;
+// Quita el desglose `daily` del summary antes de mandarlo al cliente: es un
+// insumo interno del histórico persistente (puede ser grande). Conserva
+// `hourlyToday` (≤24 puntos) y `windows` (token-counts de los límites): el modal
+// los usa para la gráfica "Día" y para el token-count junto a cada límite.
+function publicSummary(result) {
+  const { daily, ...pub } = result;
+  return pub;
 }
 
-async function saveBaseline(base) {
-  await fs.mkdir(path.dirname(RESET_FILE), { recursive: true, mode: 0o700 });
-  const tmp = `${RESET_FILE}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(base), { mode: 0o600 });
-  await fs.rename(tmp, RESET_FILE);
-  resetBaseline = base;
-}
-
-async function clearBaseline() {
-  resetBaseline = null;
-  try { await fs.unlink(RESET_FILE); } catch { /* no existía */ }
-}
-
-// Resta b de a en cada campo (clamp ≥0). Muta `a`.
-function subFields(a, b, fields) {
-  if (!a || !b) return;
-  for (const f of fields) {
-    if (typeof a[f] === 'number' && typeof b[f] === 'number') {
-      a[f] = Math.max(0, a[f] - b[f]);
-    }
-  }
-}
-
-const BUCKET_FIELDS = ['input', 'output', 'cw1h', 'cw5m', 'cr', 'cacheWrite', 'cacheRead', 'tokens', 'cost'];
-
-// Ajusta una lista (projects/engines) restando su baseline por `matchKey`, y
-// dentro de cada item ajusta models[] por `model`. Descarta lo que quedó en 0
-// (consumido enteramente ANTES del reset).
-function adjustList(list, baseList, matchKey) {
-  const baseBy = new Map((baseList || []).map((x) => [x[matchKey], x]));
-  const out = [];
-  for (const item of list || []) {
-    const b = baseBy.get(item[matchKey]);
-    if (b) {
-      subFields(item, b, BUCKET_FIELDS);
-      const bModels = new Map((b.models || []).map((m) => [m.model, m]));
-      item.models = (item.models || [])
-        .map((m) => { subFields(m, bModels.get(m.model), BUCKET_FIELDS); return m; })
-        .filter((m) => m.tokens > 0);
-    }
-    if (item.tokens > 0) out.push(item);
-  }
-  return out;
-}
-
-// Devuelve el summary CRUDO menos la línea de base (foto tomada en el reset).
-function applyReset(raw, base) {
-  if (!base || !base.summary) return raw;
-  const b = base.summary;
-  const currentDay = new Date().toISOString().slice(0, 10);
-  const out = structuredClone(raw);
-  subFields(out.totals, b.totals, BUCKET_FIELDS);
-  // "Hoy" solo se ajusta si el reset se tomó HOY (mismo día UTC); si el reset
-  // fue un día anterior, todo el consumo de hoy es POSTERIOR al reset (resta 0).
-  if (base.day === currentDay) subFields(out.today, b.today, BUCKET_FIELDS);
-  out.projects = adjustList(out.projects, b.projects, 'name');
-  out.engines = adjustList(out.engines, b.engines, 'key');
-  out.resetAt = base.capturedAt || null;
-  return out;
-}
-
-// Cache del summary completo (evita re-escanear en ráfagas de polling).
+// Cache del summary completo (evita re-escanear en ráfagas de polling). El
+// parseo de TODOS los transcripts tarda ~2 s: con TTL corto cada apertura del
+// modal lo re-disparaba. 15 s se alinea con el poll del pie (15 s) y del modal
+// → la mayoría de las lecturas caen en caché; ?fresh lo saltea (botón Actualizar).
 let summaryCache = null;
 let summaryAt = 0;
-const SUMMARY_TTL_MS = 4000;
+const SUMMARY_TTL_MS = 15000;
 // Promesa compartida: evita buildSummary() concurrentes (dos requests casi
 // simultáneas que pasan el check de TTL antes de que la primera actualice
 // summaryAt re-parsearían todos los transcripts en paralelo).
 let summaryBuildPromise = null;
+
+// buildSummary con caché de TTL + dedup de concurrentes + snapshot al histórico.
+// Fuente ÚNICA para /summary y /history?range=day (ambos necesitan el resultado
+// fresco/cacheado). ?fresh la saltea.
+async function cachedSummary(fresh) {
+  const ms = Number(process.hrtime.bigint()) / 1e6;
+  if (!fresh && summaryCache && ms - summaryAt < SUMMARY_TTL_MS) return summaryCache;
+  if (!summaryBuildPromise) {
+    summaryBuildPromise = buildSummary()
+      .then((result) => {
+        summaryCache = result;
+        summaryAt = Number(process.hrtime.bigint()) / 1e6;
+        mergeDaily(result.daily); // snapshot al histórico (throttle interno 5 min)
+        return result;
+      })
+      .finally(() => { summaryBuildPromise = null; });
+  }
+  return summaryBuildPromise;
+}
 
 // ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
 // Fuente: el endpoint OAuth de uso de Anthropic — el MISMO que consulta el
@@ -523,6 +577,9 @@ async function fetchPlanLimits() {
       kind: l.kind,
       label: LIMIT_LABELS[l.kind]
         || (l.scope?.model?.display_name ? `Semana · ${l.scope.model.display_name}` : l.kind),
+      // Clave semántica del modelo de una ventana scoped (p.ej. "Fable"→'fable'):
+      // el front la usa para mostrar el token-count de ESE modelo (windows.d7ByKey).
+      modelKey: l.scope?.model?.display_name ? keyOf(l.scope.model.display_name) : null,
       percent: l.percent,
       severity: l.severity || 'normal',
       isActive: !!l.is_active,
@@ -588,62 +645,31 @@ export default {
     // ?fresh=1 saltea el TTL del summary (botón Actualizar del modal Uso);
     // el caché por archivo (mtime+size) queda: solo re-parsea lo que cambió.
     r.get('/summary', async (req, res) => {
-      const now = process.hrtime.bigint();
-      const ms = Number(now) / 1e6;
-      // El summaryCache guarda el CRUDO; la resta del baseline (reset) se
-      // aplica en cada respuesta, aun con cache-hit (el baseline pudo cambiar).
-      if (!req.query.fresh && summaryCache && ms - summaryAt < SUMMARY_TTL_MS) {
-        return res.json(applyReset(summaryCache, await getBaseline()));
-      }
       try {
-        if (!summaryBuildPromise) {
-          summaryBuildPromise = buildSummary()
-            .then((result) => {
-              // Solo la promesa que efectivamente construyó el resultado
-              // actualiza el TTL: evita que un request concurrente que
-              // llega más tarde pise summaryAt con su propio timestamp.
-              summaryCache = result;
-              summaryAt = Number(process.hrtime.bigint()) / 1e6;
-              return result;
-            })
-            .finally(() => {
-              summaryBuildPromise = null;
-            });
-        }
-        const result = await summaryBuildPromise;
-        res.json(applyReset(result, await getBaseline()));
+        res.json(publicSummary(await cachedSummary(!!req.query.fresh)));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
       }
     });
 
-    // Reset de estadísticas: toma una FOTO del consumo actual como línea de
-    // base; de ahí en más /summary muestra solo lo acumulado DESDE el reset
-    // (el costo en dólares "vuelve a cero"). {clear:true} deshace el reset y
-    // vuelve a mostrar el total histórico. Autenticado (mismo nivel de
-    // confianza que el resto del módulo Uso; muta solo estado personal).
-    r.post('/reset', async (req, res) => {
+    // Serie de tiempo del consumo por modelo para las gráficas de tendencia:
+    //   day   → HOY por hora (de buildSummary.hourlyToday — hoy siempre en disco)
+    //   week  → últimos 7 días · month → últimos 30 días (histórico PERSISTENTE
+    //           ~/.cwc-data/usage-history.json, independiente de la poda del CLI)
+    // Devuelve {range, keys, points, totals}: `totals` (suma por modelo) alimenta
+    // la columna "General" del período. 0 tokens.
+    r.get('/history', async (req, res) => {
+      const range = ['day', 'week', 'month'].includes(req.query.range) ? req.query.range : 'week';
+      const project = ['all', 'consola', 'tolkien', 'otros'].includes(req.query.project) ? req.query.project : 'all';
       try {
-        // `clear` debe ser boolean: un string ('false') es truthy en JS y
-        // dispararía el CLEAR justo cuando el caller quiso lo contrario.
-        if (req.body && req.body.clear !== undefined && typeof req.body.clear !== 'boolean') {
-          return res.status(400).json({ error: 'clear debe ser boolean.' });
+        if (range === 'day') {
+          const sum = await cachedSummary(!!req.query.fresh);
+          const s = sum.hourlyToday[project] || sum.hourlyToday.all;
+          return res.json({ ...s, project, updatedAt: sum.updatedAt });
         }
-        if (req.body && req.body.clear === true) {
-          await clearBaseline();
-          return res.json({ ok: true, cleared: true });
-        }
-        // Foto FRESCA (no la cacheada) para que el "cero" sea exacto al click.
-        const raw = await buildSummary();
-        const base = {
-          capturedAt: new Date().toISOString(),
-          day: new Date().toISOString().slice(0, 10),
-          summary: raw,
-        };
-        await saveBaseline(base);
-        res.json({ ok: true, resetAt: base.capturedAt });
+        res.json(await readSeries(range, project));
       } catch (err) {
-        res.status(500).json({ error: 'No se pudo resetear las estadísticas.' });
+        res.status(500).json({ error: 'No se pudo leer el histórico de uso.' });
       }
     });
 

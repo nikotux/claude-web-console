@@ -106,7 +106,11 @@ export function openBugsV2Dashboard(deps = {}) {
   const modal = openModal({
     title: 'Tickets & Features · One Front Door',
     width: 'min(1180px, 94vw)',
-    onClose: () => { modalClosed = true; busyListeners.delete(reflectBusy); }, // deja de escuchar al cerrar
+    onClose: () => {
+      modalClosed = true; busyListeners.delete(reflectBusy); // deja de escuchar al cerrar
+      if (resolvedRetryTimer) { clearTimeout(resolvedRetryTimer); resolvedRetryTimer = null; }
+      if (resolvedAutoTimer) { clearInterval(resolvedAutoTimer); resolvedAutoTimer = null; }
+    },
   });
   const content = document.createElement('div');
   content.className = 'bv2-dash';
@@ -119,6 +123,19 @@ export function openBugsV2Dashboard(deps = {}) {
   let lastData = null;
   let currentYou = null;    // usuario logueado (para pintar "Tuyo" vs "en uso por X")
   const isMine = (x) => !!(x?.workingBy && currentYou && x.workingBy.by === currentYou);
+  // Vista ACTIVA vs RESUELTOS (rediseño 2026-07-09). El toggle vive en la 2ª fila
+  // de filtros; los filtros de carril/dueño/míos se aplican a AMBAS vistas. La
+  // data de Resueltos viene de un caché PERSISTENTE server-side (2026-07-10,
+  // ver sources.js) — acá sólo se guarda por sesión del modal para no re-pedirla
+  // al cambiar de pestaña de vista.
+  let viewMode = 'active';      // 'active' | 'resolved'
+  let resolvedData = null;      // { tickets, prs, byLane, counts, capped, ... }
+  let resolvedError = null;
+  let resolvedLoading = false;  // spinner de 1ª carga
+  let resolvedGenerating = false; // store aún sin 1ª pasada (arranque en frío)
+  let resolvedInFlight = false; // evita fetches solapados de /resolved
+  let resolvedRetryTimer = null;  // reintento mientras el store se genera / termina un refresco
+  let resolvedAutoTimer = null;   // auto-refresh periódico mientras se mira Resueltos
 
   // --- Botones en el header (junto a la ✕, con espacio) ---
   const head = modal.card.querySelector('.dlg-head');
@@ -143,6 +160,9 @@ export function openBugsV2Dashboard(deps = {}) {
   }
   busyListeners.add(reflectBusy);
   refreshBtn.addEventListener('click', () => {
+    // Único botón de actualizar: fuerza el refresco de la vista visible. En
+    // Resueltos dispara el refresco de FONDO (no bloquea) y conserva lo visible.
+    if (viewMode === 'resolved') { loadResolved(true, !!resolvedData); return; }
     if (manualBusy) return;               // dedup GLOBAL: un solo refresh manual a la vez
     setManualBusy(true);                  // notifica a TODOS los modales vivos (Pac-Man)
     load(true).finally(() => setManualBusy(false));
@@ -231,28 +251,39 @@ export function openBugsV2Dashboard(deps = {}) {
     const shown = f.slice(0, max).map((t) => ticketRow(t)).join('');
     return shown + (f.length > max ? `<div class="bf-sub">+ ${f.length - max} más</div>` : '');
   }
-  // PRs del dev-lane: misma card de 2 filas (título arriba; #nº + pelota + CI abajo).
-  function devLaneList(dl) {
-    if (dl?.error) return `<div class="bf-sub">gh no disponible: ${esc(dl.error)}</div>`;
-    const prs = filterPRs(dl?.prs);
-    if (!prs.length) return '<div class="bf-sub">— sin PRs —</div>';
-    return prs.map((pr) => {
+  // PRs del dev-lane: misma card de 2 filas (título arriba; #nº + estado abajo).
+  // `opts.merged` → vista Resueltos: chip verde "✅ merged" en vez de pelota/CI
+  // (un PR mergeado NO tiene CI corriendo — ese era el bug del #263).
+  function devLaneList(prs, error, opts = {}) {
+    if (error) return `<div class="bf-sub">gh no disponible: ${esc(error)}</div>`;
+    const list = filterPRs(prs);
+    if (!list.length) return `<div class="bf-sub">— ${opts.merged ? 'sin PRs mergeados' : 'sin PRs abiertos'} —</div>`;
+    return list.map((pr) => {
       prMap.set(String(pr.number), pr);
+      const statusChip = opts.merged
+        ? `<span class="bb-chip bb-chip--ok bv2-prop" title="Mergeado${pr.mergedAt ? ` · ${fmtDate(pr.mergedAt)}` : ''}">✅ merged</span>`
+        : `<span class="bb-chip ${pr.ball === 'yours' ? 'bb-chip--warn' : 'bb-chip--info'} bv2-prop" title="Pelota: ${esc(BALL_LABEL[pr.ball] || pr.ball)}">${BALL_LABEL[pr.ball] || pr.ball}</span>
+           <span class="bv2-prop" title="Estado de checks (CI)">${ciBadge(pr.ci)}</span>`;
       return `<div class="bv2-card bv2-row--click" data-pr="${esc(pr.number)}" role="button" tabindex="0" title="Ver detalle del PR">
         <div class="bv2-card-title">${esc(pr.title)}${pr.isDraft ? ' · draft' : ''}</div>
         <div class="bv2-card-meta">
           <span class="bv2-row-id">#${pr.number}</span>
-          <span class="bb-chip ${pr.ball === 'yours' ? 'bb-chip--warn' : 'bb-chip--info'} bv2-prop" title="Pelota: ${esc(BALL_LABEL[pr.ball] || pr.ball)}">${BALL_LABEL[pr.ball] || pr.ball}</span>
-          <span class="bv2-prop" title="Estado de checks (CI)">${ciBadge(pr.ci)}</span>
+          ${statusChip}
           ${lockBadge(pr)}
           ${pr._stale ? '<span class="bv2-stale" title="Dato en caché: no vino en el último refresh">◷</span>' : ''}
         </div>
       </div>`;
     }).join('');
   }
+  function fmtDate(iso) {
+    const ms = Date.parse(iso || '');
+    if (!Number.isFinite(ms)) return '';
+    return new Date(ms).toISOString().slice(0, 10);
+  }
 
-  // Personas para las pestañas: owners de tickets (vencidos/aging/resueltos) +
-  // autores de PRs, deduplicados por matching (mismo humano en Desk y GitHub).
+  // Personas para el dropdown: owners de tickets + autores de PRs, deduplicados
+  // por matching (mismo humano en Desk y GitHub). Incluye la vista Resueltos si
+  // ya se cargó, para que el filtro por dueño cubra ambas vistas.
   function collectOwners(d) {
     const persons = new Map(); // keyNorm -> label (el más largo)
     const add = (name) => {
@@ -260,16 +291,18 @@ export function openBugsV2Dashboard(deps = {}) {
       for (const [k, v] of persons) if (personMatch(name, v)) { if (name.length > v.length) persons.set(k, name); return; }
       const k = norm(name); if (k) persons.set(k, name);
     };
-    for (const t of [...(d.overdue || []), ...(d.aging || []), ...(d.resolvedThisWeek || [])]) add(t.ownerName);
+    for (const t of [...(d.nuevos || []), ...(d.vencidos || []), ...(d.enProgreso || [])]) add(t.ownerName);
     for (const pr of (d.devLane?.prs || [])) add(pr.authorName || pr.author);
+    if (resolvedData) {
+      for (const t of (resolvedData.tickets || [])) add(t.ownerName);
+      for (const pr of (resolvedData.prs || [])) add(pr.authorName || pr.author);
+    }
     return [...persons.values()].sort((a, b) => a.localeCompare(b));
   }
 
-  function render(d) {
-    lastData = d;
-    currentYou = d.you || null;
-    ticketMap.clear(); prMap.clear();
-    const lanes = Object.entries(d.openByLane).filter(([, b]) => b.total > 0).sort((a, b) => b[1].total - a[1].total);
+  // "Por carril" (resumen de abiertos) — sólo se pinta en la vista Activos.
+  function laneOverviewHtml(d) {
+    const lanes = Object.entries(d.openByLane || {}).filter(([, b]) => b.total > 0).sort((a, b) => b[1].total - a[1].total);
     const maxTotal = Math.max(1, ...lanes.map(([, b]) => b.total));
     const laneRows = lanes.map(([lane, b]) => {
       const w = Math.round((b.total / maxTotal) * 100);
@@ -277,40 +310,152 @@ export function openBugsV2Dashboard(deps = {}) {
       const on = selectedLane === lane ? ' bv2-lane--on' : '';
       return `<div class="bv2-lane bv2-lane--click${on}" data-lane="${esc(lane)}" role="button" tabindex="0" title="Filtrar por ${esc(lane)}"><span class="bv2-lane-name">${esc(LANE_LABEL[lane] || lane)}</span><span class="bv2-lane-bar"><span style="width:${w}%"></span></span><span class="bv2-lane-n">${b.total}</span><span class="bf-sub">${esc(prio)}</span></div>`;
     }).join('');
+    return `<div class="tk-card"><div class="bv2-h">Por carril · ${d.counts.open} abiertos</div>${laneRows || '<div class="bf-sub">— sin abiertos —</div>'}</div>`;
+  }
 
-    // Pestañas de CARRIL (filtro principal) + dropdown de DUEÑO (sub-filtro).
-    const laneKeys = lanes.map(([l]) => l);
+  function searchBarHtml() {
+    return `<div class="bv2-searchbar" data-ref="searchbar" hidden>
+      <input type="text" placeholder="Número de ticket (ej. 527) + Enter" data-ref="search" class="btn--sm" />
+    </div>`;
+  }
+
+  // Barra de filtros: FILA 1 = carriles · FILA 2 = Míos + Dueño + toggle de vista
+  // (Activos | Resueltos). Los carriles cubren las lanes presentes en cualquiera
+  // de las dos vistas (para poder filtrar los resueltos por carril también).
+  function filterBarHtml(d) {
+    const activeLanes = Object.entries(d.openByLane || {}).filter(([, b]) => b.total > 0).map(([l]) => l);
+    const resolvedLanes = resolvedData ? Object.entries(resolvedData.byLane || {}).filter(([, n]) => n > 0).map(([l]) => l) : [];
+    const laneKeys = [...new Set([...activeLanes, ...resolvedLanes])];
     const laneTab = (label, key) => `<button class="bv2-tab${selectedLane === key ? ' bv2-tab--on' : ''}" data-lane="${esc(key ?? '')}">${esc(label)}</button>`;
     const laneTabsHtml = [laneTab('Todos', null), ...laneKeys.map((l) => laneTab(LANE_LABEL[l] || l, l))].join('');
     const owners = collectOwners(d);
     const ownerOpts = ['<option value="">Dueño: todos</option>', ...owners.map((o) => `<option value="${esc(o)}"${selectedOwner === o ? ' selected' : ''}>${esc(o)}</option>`)].join('');
-
-    content.innerHTML = `
-      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} snapshot ${fmtAgo(d.generatedAt)} (auto 60s) · ${d.counts.total} tickets · sin IA</span></div>
-      <div class="bv2-searchbar" data-ref="searchbar" hidden>
-        <input type="text" placeholder="Número de ticket (ej. 527) + Enter" data-ref="search" class="btn--sm" />
-      </div>
-
-      <div class="tk-card">
-        <div class="bv2-h">Por carril · ${d.counts.open} abiertos</div>
-        ${laneRows || '<div class="bf-sub">— sin abiertos —</div>'}
-      </div>
-
+    return `
       <div class="bv2-filterbar">
         <div class="bv2-tabs" data-ref="tabs">${laneTabsHtml}</div>
+      </div>
+      <div class="bv2-filterbar bv2-filterbar--row2">
         <button class="bv2-tab${selectedMine ? ' bv2-tab--on' : ''}" data-ref="mine" title="Solo lo que tengo tomado">🔒 Míos</button>
         <select class="bv2-owner-select btn--sm" data-ref="owner" title="Filtrar por dueño (opcional)">${ownerOpts}</select>
-      </div>
-
-      <div class="bv2-cols7">
-        ${block(`🆕 Nuevos · sin triar · ${countBadge(applyFilter(d.needsTriage).length, d.counts.needsTriage)}`, ticketList(d.needsTriage), true)}
-        ${block(`🔧 En progreso · ${countBadge(applyFilter(d.inProgress).length, d.counts.inProgress)}`, ticketList(d.inProgress), true)}
-        ${block(`⏸️ En espera cliente · ${countBadge(applyFilter(d.waitingClient).length, d.counts.waitingClient)}`, ticketList(d.waitingClient), true)}
-        ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.overdue).length, d.counts.overdue)}`, ticketList(d.overdue), true)}
-        ${block(`🕐 Sin update 7+ días · ${countBadge(applyFilter(d.aging).length, d.counts.aging)}`, ticketList(d.aging), true)}
-        ${block(`✅ Resueltos esta semana · ${countBadge(applyFilter(d.resolvedThisWeek).length, d.counts.resolvedThisWeek)}`, ticketList(d.resolvedThisWeek), true)}
-        ${block(`🔀 Dev-lane · PRs · ${countBadge(filterPRs(d.devLane?.prs).length, (d.devLane?.prs || []).length)}`, devLaneList(d.devLane), true)}
+        <div class="bv2-viewtoggle" data-ref="viewtoggle">
+          <button class="bv2-vtab${viewMode === 'active' ? ' bv2-vtab--on' : ''}" data-view="active">🟢 Activos</button>
+          <button class="bv2-vtab${viewMode === 'resolved' ? ' bv2-vtab--on' : ''}" data-view="resolved">✅ Resueltos</button>
+        </div>
       </div>`;
+  }
+
+  // Dispatcher: re-render de la vista ACTUAL. Con `d` refresca lastData/currentYou.
+  function render(d) {
+    if (d) { lastData = d; currentYou = d.you || null; }
+    ticketMap.clear(); prMap.clear();
+    if (!lastData) return;
+    if (viewMode === 'resolved') renderResolved();
+    else renderActive();
+  }
+
+  // VISTA ACTIVOS: 3 columnas unificadas (Nuevos · Vencidos · En progreso) + PRs
+  // abiertos. Cada ticket abierto cae en UNA sola columna (ver views.buildDashboard).
+  function renderActive() {
+    const d = lastData;
+    content.innerHTML = `
+      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} snapshot ${fmtAgo(d.generatedAt)} (auto 60s) · ${d.counts.total} tickets · sin IA</span></div>
+      ${searchBarHtml()}
+      ${laneOverviewHtml(d)}
+      ${filterBarHtml(d)}
+      <div class="bv2-cols4">
+        ${block(`🆕 Nuevos · ${countBadge(applyFilter(d.nuevos).length, d.counts.nuevos)}`, ticketList(d.nuevos), true)}
+        ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.vencidos).length, d.counts.vencidos)}`, ticketList(d.vencidos), true)}
+        ${block(`🔧 En progreso · ${countBadge(applyFilter(d.enProgreso).length, d.counts.enProgreso)}`, ticketList(d.enProgreso), true)}
+        ${block(`🔀 Dev-lane · PRs abiertos · ${countBadge(filterPRs(d.devLane?.prs).length, (d.devLane?.prs || []).length)}`, devLaneList(d.devLane?.prs, d.devLane?.error), true)}
+      </div>`;
+  }
+
+  // VISTA RESUELTOS: PERSISTENTE + INCREMENTAL (pedido Niko 2026-07-10). Tickets
+  // cerrados + PRs mergeados se acumulan en disco del lado server — una vez
+  // guardado, un ítem no se vuelve a pedir a Zoho/GitHub, así que la 1ª carga
+  // tarda (enriquece todo lo que aún no está en el store) y las siguientes son
+  // casi instantáneas (sólo revisa si hay novedades). Mismos filtros de
+  // carril/dueño/míos que Activos.
+  function renderResolved() {
+    const d = lastData;
+    let body;
+    if ((resolvedLoading || resolvedGenerating) && !resolvedData) {
+      const msg = resolvedGenerating
+        ? 'generando la base de resueltos por primera vez… (se completa sola en el fondo, no hace falta que esperes acá)'
+        : 'leyendo resueltos…';
+      body = `<div class="bf-sub" style="padding:1rem;display:flex;align-items:center;gap:.5rem">${pacman({ state: 'working', size: 'pac-sm' })} ${msg}</div>`;
+    } else if (resolvedError && !resolvedData) {
+      body = `<div class="bf-err" style="padding:1rem">${esc(resolvedError)}</div>`;
+    } else if (resolvedData) {
+      const capNote = resolvedData.capped
+        ? `<div class="bf-sub" style="padding:.3rem .6rem 0">⚠️ Zoho limita ~100/depto sin paginar por consulta — el caché se va completando solo con cada revisión</div>` : '';
+      const refNote = resolvedData.refreshing
+        ? `<div class="bf-sub" style="padding:.3rem .6rem 0;display:flex;align-items:center;gap:.4rem">${pacman({ state: 'working', size: 'pac-sm' })} actualizando en el fondo…</div>` : '';
+      const errNote = resolvedData.ticketsError
+        ? `<div class="bf-sub" style="padding:.3rem .6rem 0">⚠️ ${esc(resolvedData.ticketsError)}</div>` : '';
+      body = `${capNote}${refNote}${errNote}
+        <div class="bv2-cols4">
+          ${block(`✅ Tickets resueltos · ${countBadge(applyFilter(resolvedData.tickets).length, (resolvedData.tickets || []).length)}`, ticketList(resolvedData.tickets, 60), true)}
+          ${block(`🔀 PRs mergeados · ${countBadge(filterPRs(resolvedData.prs).length, (resolvedData.prs || []).length)}`, devLaneList(resolvedData.prs, resolvedData.prError, { merged: true }), true)}
+        </div>`;
+    } else {
+      body = '<div class="bf-sub" style="padding:1rem">— sin datos —</div>';
+    }
+    const ago = resolvedData ? ` · actualizado ${fmtAgo(resolvedData.generatedAt)}` : '';
+    const cnt = resolvedData ? ` · ${resolvedData.counts?.tickets ?? 0} tickets + ${resolvedData.counts?.prs ?? 0} PRs` : '';
+    content.innerHTML = `
+      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} ✅ Resueltos · base persistente (auto)${ago}${cnt}</span></div>
+      ${searchBarHtml()}
+      ${filterBarHtml(d)}
+      ${body}`;
+  }
+
+  // Lee la vista Resueltos del caché PERSISTENTE del server (el refresher de
+  // fondo lo mantiene al día, ver sources.js). Es INSTANTÁNEO — ya no enriquece
+  // en el request. `force` dispara un refresco de fondo YA (no bloquea). `silent`
+  // = no mostrar el spinner (refresco en background, conserva lo visible).
+  async function loadResolved(force, silent) {
+    if (resolvedInFlight) return;
+    resolvedInFlight = true;
+    if (!silent && !resolvedData) { resolvedLoading = true; resolvedError = null; if (viewMode === 'resolved') renderResolved(); }
+    try {
+      const res = await fetch(`/api/tickets/resolved${force ? '?force=1' : ''}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        if (!resolvedData) resolvedError = data.error || 'Error';
+      } else if (data.loading) {
+        // Store todavía sin su 1ª pasada (arranque en frío) → "generando…" + reintento.
+        resolvedGenerating = true; resolvedError = null;
+        scheduleResolvedRetry(3000);
+      } else {
+        resolvedData = data; resolvedError = null; resolvedGenerating = false;
+        // Si hay un refresco de fondo en curso, re-leemos en unos segundos para
+        // tomar lo nuevo cuando termine (sin que tengas que tocar nada).
+        if (data.refreshing) scheduleResolvedRetry(4000);
+      }
+    } catch (e) {
+      if (!resolvedData) resolvedError = String(e?.message || e);
+    } finally {
+      resolvedInFlight = false;
+      resolvedLoading = false;
+      if (!modalClosed && viewMode === 'resolved') renderResolved();
+    }
+  }
+  function scheduleResolvedRetry(ms) {
+    if (resolvedRetryTimer || modalClosed) return;
+    resolvedRetryTimer = setTimeout(() => {
+      resolvedRetryTimer = null;
+      if (!modalClosed && viewMode === 'resolved') loadResolved(false, true);
+    }, ms);
+  }
+  // Auto-refresh periódico mientras se está mirando Resueltos (barato: el endpoint
+  // sólo lee el store). Uniforme con el auto-refresh de Activos.
+  function ensureResolvedAutoRefresh() {
+    if (resolvedAutoTimer) return;
+    resolvedAutoTimer = setInterval(() => {
+      if (modalClosed) { clearInterval(resolvedAutoTimer); resolvedAutoTimer = null; return; }
+      if (viewMode === 'resolved' && !resolvedInFlight) loadResolved(false, true);
+    }, 20000);
   }
 
   // Listener delegado: filas de ticket/PR, pestañas de carril y buscador.
@@ -319,17 +464,32 @@ export function openBugsV2Dashboard(deps = {}) {
     if (tRow) { const t = ticketMap.get(tRow.dataset.num); if (t) openTicketDetail(t, deps); return; }
     const pRow = e.target.closest('.bv2-card[data-pr]');
     if (pRow) { const pr = prMap.get(pRow.dataset.pr); if (pr) openPrDetail(pr, deps); return; }
+    const vtab = e.target.closest('.bv2-vtab');
+    if (vtab) {
+      const v = vtab.dataset.view;
+      if (v && v !== viewMode) {
+        viewMode = v;
+        render(); // pinta la vista al toque (instantáneo con lo que haya)
+        if (v === 'resolved') {
+          // Lee del store (rápido). Si ya tenemos data, refresco SILENCIOSO para
+          // no parpadear; si no, carga con spinner. Y arranca el auto-refresh.
+          loadResolved(false, !!resolvedData);
+          ensureResolvedAutoRefresh();
+        }
+      }
+      return;
+    }
     const mineBtn = e.target.closest('[data-ref="mine"]');
-    if (mineBtn) { selectedMine = !selectedMine; if (lastData) render(lastData); return; }
+    if (mineBtn) { selectedMine = !selectedMine; render(); return; }
     const tab = e.target.closest('.bv2-tab');
-    if (tab) { selectedLane = tab.dataset.lane || null; if (lastData) render(lastData); return; }
+    if (tab) { selectedLane = tab.dataset.lane || null; render(); return; }
     const laneBar = e.target.closest('.bv2-lane--click');
-    if (laneBar) { const l = laneBar.dataset.lane || null; selectedLane = selectedLane === l ? null : l; if (lastData) render(lastData); }
+    if (laneBar) { const l = laneBar.dataset.lane || null; selectedLane = selectedLane === l ? null : l; render(); }
   });
   // Sub-filtro por dueño (dropdown).
   content.addEventListener('change', (e) => {
     const sel = e.target.closest('[data-ref="owner"]');
-    if (sel) { selectedOwner = sel.value || null; if (lastData) render(lastData); }
+    if (sel) { selectedOwner = sel.value || null; render(); }
   });
   content.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
@@ -346,7 +506,10 @@ export function openBugsV2Dashboard(deps = {}) {
     try {
       const res = await fetch('/api/tickets/dashboard');
       const d = await res.json();
-      if (res.ok && d && !d.error && !d.loading && d.counts && !modalClosed) render(d);
+      if (res.ok && d && !d.error && !d.loading && d.counts && !modalClosed) {
+        if (viewMode === 'active') render(d);            // refresca la vista visible
+        else { lastData = d; currentYou = d.you || null; } // en Resueltos: guardo datos, no piso la vista
+      }
     } catch { /* conserva lo visible */ }
   }
 

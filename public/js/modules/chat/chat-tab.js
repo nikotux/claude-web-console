@@ -20,6 +20,24 @@ const CHAT_MODEL_LABEL = new Map(CHAT_MODEL_OPTIONS);
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
 
+// Adjuntos del composer: límites (espejo del backend chat/attachments.js —
+// los reales los valida el server; acá son solo para el aviso temprano).
+const MAX_ATTACHMENTS = 8;
+// Clasificación local para el chip optimista de la bandeja (mientras sube).
+// El tipo DEFINITIVO lo devuelve el server (classifyAttachment); esto es la
+// aproximación por mime/extensión para la miniatura instantánea.
+const IMG_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+const TEXT_EXT_LOCAL = ['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'yaml', 'yml', 'xml', 'js', 'mjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'sql', 'html', 'css', 'scss', 'log', 'ini', 'toml', 'yml'];
+function classifyLocal(file) {
+  const mime = (file.type || '').toLowerCase();
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  if (mime.startsWith('image/') || IMG_EXT.includes(ext)) return 'image';
+  if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (mime.startsWith('text/') || mime === 'application/json' || TEXT_EXT_LOCAL.includes(ext)) return 'text';
+  return 'binary';
+}
+const ATT_KIND_LABEL = { image: 'imagen', pdf: 'PDF', text: 'archivo', binary: 'archivo' };
+
 // REGLA DE SEGURIDAD (Fase 9 · 4): clasificador de comandos destructivos.
 // Un permiso de Bash clasificado acá nace con el detalle EXPANDIDO — el atajo
 // visual de la fila compacta es para lo rutinario, no para lo peligroso.
@@ -226,6 +244,10 @@ export class ChatTab {
     this._delegatingCount = 0;    // subagentes Task/Agent pendientes del turno actual
     this._model = null;           // modelo REAL en curso (haiku/sonnet/opus/fable/opusplan/...)
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
+    // Adjuntos pendientes de ESTE mensaje (subidos a disco, aún sin enviar).
+    // Cada uno: {name|null, type, mime, size, uploading, error?, localUrl?, origName}.
+    // Se limpian al enviar. Ver _uploadFiles/_renderTray/_submit.
+    this.pending = [];
     // Señal REAL de "historial renderizado al 100%": se resuelve al terminar
     // de procesar el PRIMER evento `history` del attach (no un timer). La
     // espera el splash de arranque (main.js) antes de destapar la app.
@@ -245,7 +267,10 @@ export class ChatTab {
           <button class="btn-ghost btn--icon chat-mode-help" title="Ayuda: modos de permisos e íconos de acciones">${icon('help', { size: 15 })}</button>
         </header>
         <div class="chat-msgs"></div>
+        <div class="chat-atttray" hidden></div>
         <div class="chat-composer">
+          <input type="file" class="chat-file-input" multiple hidden>
+          <button class="btn-ghost btn--icon chat-attach" title="Adjuntar archivo (imagen, PDF, texto…)">${icon('paperclip', { size: 16 })}</button>
           <textarea class="chat-input" rows="1" enterkeyhint="send"
             placeholder="Escribí o dictá un mensaje…"></textarea>
           <button class="btn btn--icon chat-send" title="Enviar">${icon('play', { size: 16 })}</button>
@@ -260,6 +285,9 @@ export class ChatTab {
     this.modeEl = container.querySelector('.chat-mode');
     this.aliveEl = container.querySelector('.chat-alive');
     this.modelPillEl = container.querySelector('.chat-model-pill');
+    this.attachBtn = container.querySelector('.chat-attach');
+    this.fileInput = container.querySelector('.chat-file-input');
+    this.trayEl = container.querySelector('.chat-atttray');
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
@@ -304,6 +332,31 @@ export class ChatTab {
       this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`;
       this._slashUpdate();
     });
+
+    // ===== Adjuntos (Fase 3): UN solo botón 📎 + pegar + arrastrar =====
+    // La consola detecta el tipo de cada archivo sola (no hay botones por tipo).
+    this.attachBtn.addEventListener('click', () => this.fileInput.click());
+    this.fileInput.addEventListener('change', () => {
+      this._uploadFiles(this.fileInput.files);
+      this.fileInput.value = ''; // permite re-elegir el mismo archivo
+    });
+    // Pegar (Ctrl+V): captura imágenes del portapapeles o archivos copiados.
+    this.inputEl.addEventListener('paste', (e) => {
+      const files = e.clipboardData?.files;
+      if (files && files.length) { e.preventDefault(); this._uploadFiles(files); }
+    });
+    // Arrastrar y soltar sobre el chat (composer o lista de mensajes).
+    const view = container.querySelector('.chat-view');
+    const onDragOver = (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); view.classList.add('chat-dragover'); } };
+    const onDragLeave = (e) => { if (e.target === view) view.classList.remove('chat-dragover'); };
+    const onDrop = (e) => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault(); view.classList.remove('chat-dragover');
+      this._uploadFiles(e.dataTransfer.files);
+    };
+    view.addEventListener('dragover', onDragOver);
+    view.addEventListener('dragleave', onDragLeave);
+    view.addEventListener('drop', onDrop);
   }
 
   // ===== Autocompletado de comandos slash (Fase 8) =====
@@ -469,10 +522,17 @@ export class ChatTab {
 
   _submit() {
     const text = this.inputEl.value.trim();
-    if (!text) return;
+    // Adjuntos LISTOS (subidos, con name del server). Los que fallaron no viajan.
+    const ready = this.pending.filter((p) => p.name && !p.error);
+    if (!text && !ready.length) return;
+    if (this.pending.some((p) => p.uploading)) return; // esperar a que terminen de subir
     this._slashClose();
     this._slashSuppressed = null;
-    this._send({ type: 'user', text });
+    const attachments = ready.map((p) => ({ name: p.name, type: p.type, mime: p.mime }));
+    this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
+    for (const p of this.pending) { if (p.localUrl) URL.revokeObjectURL(p.localUrl); }
+    this.pending = [];
+    this._renderTray();
     this.inputEl.value = '';
     this.inputEl.style.height = 'auto';
     this.inputEl.focus();
@@ -480,6 +540,134 @@ export class ChatTab {
 
   _send(obj) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+  }
+
+  // ===== Adjuntos (Fase 3): subida a disco + bandeja de pendientes =====
+  // Cada archivo se sube al toque a POST /api/chat/attachment (a la carpeta del
+  // chat); el chip optimista aparece mientras sube y se completa con el `name`
+  // real que asigna el server. Al enviar el mensaje viajan solo las referencias.
+  async _uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    for (const file of files) {
+      if (this.pending.length >= MAX_ATTACHMENTS) {
+        this._line('chat-error', `Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje.`);
+        break;
+      }
+      const type = classifyLocal(file);
+      const entry = {
+        name: null, type, mime: file.type || '', size: file.size,
+        uploading: true, error: null,
+        localUrl: type === 'image' ? URL.createObjectURL(file) : null,
+        origName: file.name || 'archivo',
+      };
+      this.pending.push(entry);
+      this._renderTray();
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(`/api/chat/attachment?id=${encodeURIComponent(this.id)}`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo subir.');
+        entry.name = data.attachment.name;
+        entry.type = data.attachment.type || type;
+        entry.mime = data.attachment.mime || entry.mime;
+      } catch (e) {
+        entry.error = String(e.message || e).slice(0, 140);
+      } finally {
+        entry.uploading = false;
+        this._renderTray();
+      }
+    }
+  }
+
+  _removePending(entry) {
+    const i = this.pending.indexOf(entry);
+    if (i < 0) return;
+    if (entry.localUrl) URL.revokeObjectURL(entry.localUrl);
+    this.pending.splice(i, 1);
+    this._renderTray();
+  }
+
+  _renderTray() {
+    if (!this.trayEl) return;
+    this.trayEl.innerHTML = '';
+    if (!this.pending.length) { this.trayEl.hidden = true; return; }
+    this.trayEl.hidden = false;
+    for (const p of this.pending) {
+      const chip = document.createElement('div');
+      chip.className = `chat-att${p.error ? ' chat-att--err' : ''}${p.uploading ? ' chat-att--up' : ''}`;
+      if (p.type === 'image' && (p.localUrl || p.name)) {
+        const img = document.createElement('img');
+        img.className = 'chat-att-thumb';
+        img.src = p.localUrl || `/api/chat/attachment?id=${encodeURIComponent(this.id)}&name=${encodeURIComponent(p.name)}`;
+        img.alt = p.origName;
+        chip.appendChild(img);
+      } else {
+        const ic = document.createElement('span');
+        ic.className = 'chat-att-ic';
+        ic.innerHTML = icon('fileGeneric', { size: 15 });
+        chip.appendChild(ic);
+      }
+      const label = document.createElement('span');
+      label.className = 'chat-att-name';
+      label.textContent = p.origName;
+      label.title = p.error || p.origName;
+      chip.appendChild(label);
+      const rm = document.createElement('button');
+      rm.className = 'chat-att-rm';
+      rm.type = 'button';
+      rm.title = 'Quitar';
+      rm.innerHTML = icon('close', { size: 12 });
+      rm.addEventListener('click', () => this._removePending(p));
+      chip.appendChild(rm);
+      this.trayEl.appendChild(chip);
+    }
+  }
+
+  // Previews de adjuntos DENTRO de la burbuja del usuario (vivo y replay).
+  // Con `name` → miniatura/chip real (la sirve GET /api/chat/attachment); sin
+  // `name` (replay desde el transcript) → chip de tipo, sin miniatura.
+  _attsEl(attachments) {
+    const box = document.createElement('div');
+    box.className = 'chat-atts';
+    for (const a of attachments) {
+      const type = a.type || 'binary';
+      if (type === 'image' && a.name) {
+        const img = document.createElement('img');
+        img.className = 'chat-att-img';
+        const src = `/api/chat/attachment?id=${encodeURIComponent(this.id)}&name=${encodeURIComponent(a.name)}`;
+        img.src = src;
+        img.alt = a.name;
+        img.title = a.name;
+        img.addEventListener('click', () => this._lightbox(src, a.name));
+        box.appendChild(img);
+      } else {
+        const chip = document.createElement('div');
+        chip.className = 'chat-att chat-att--msg';
+        const ic = document.createElement('span');
+        ic.className = 'chat-att-ic';
+        ic.innerHTML = icon('fileGeneric', { size: 15 });
+        chip.appendChild(ic);
+        const label = document.createElement('span');
+        label.className = 'chat-att-name';
+        label.textContent = a.name || ATT_KIND_LABEL[type] || 'adjunto';
+        chip.appendChild(label);
+        if (a.name) {
+          chip.classList.add('chat-att--link');
+          chip.addEventListener('click', () => window.open(`/api/chat/attachment?id=${encodeURIComponent(this.id)}&name=${encodeURIComponent(a.name)}`, '_blank'));
+        }
+        box.appendChild(chip);
+      }
+    }
+    return box;
+  }
+
+  _lightbox(src, name) {
+    const m = openModal({ title: name || 'Imagen', width: 'min(92vw, 900px)' });
+    const img = document.createElement('img');
+    img.src = src;
+    img.className = 'chat-lightbox-img';
+    m.body.appendChild(img);
   }
 
   // ===== Render de eventos (mismo camino para history y vivo) =====
@@ -515,7 +703,7 @@ export class ChatTab {
         this._metaSeen = true;
         if (this._slashPop) this._slashUpdate(); // refresco en vivo si está abierto
         break;
-      case 'user': this._closeStream(); this._bubble('user', m.text); break;
+      case 'user': this._closeStream(); this._bubble('user', m.text, m.attachments); break;
       case 'assistant': this._assistantFinal(m.text); break;
       case 'delta': this._stream(m.text); break;
       case 'tool_use': this._closeStream(); this._toolCard(m); break;
@@ -532,6 +720,13 @@ export class ChatTab {
       case 'permission_closed':
         this._permClose(m);
         window.dispatchEvent(new CustomEvent('cwc:perm-closed', { detail: { chatId: this.id, permId: m.id } }));
+        break;
+      // Señal EN VIVO del interfono (Fase 3): el server la empuja SOLO a las
+      // ventanas que tienen este chat abierto (c.clients). La re-emitimos
+      // global para que el centro (ui/interfono-center.js) refresque el aviso
+      // `active` al instante, sin esperar el poll de 8 s.
+      case 'interfono':
+        window.dispatchEvent(new CustomEvent('cwc:interfono', { detail: { chatId: this.id, pending: m.pending || [] } }));
         break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
@@ -582,7 +777,7 @@ export class ChatTab {
     }
   }
 
-  _bubble(kind, text) {
+  _bubble(kind, text, attachments = null) {
     const el = document.createElement('div');
     el.className = `chat-msg chat-${kind}`;
     // Mensaje que empieza con /comando: chip destacado + resto normal (solo
@@ -594,9 +789,11 @@ export class ChatTab {
       chip.textContent = cmd[1];
       el.appendChild(chip);
       if (cmd[2]) el.appendChild(document.createTextNode(cmd[2]));
-    } else {
-      el.textContent = text;
+    } else if (text) {
+      el.appendChild(document.createTextNode(text));
     }
+    // Adjuntos: miniaturas (imágenes) / chips (PDF, texto, binarios) bajo el texto.
+    if (attachments && attachments.length) el.appendChild(this._attsEl(attachments));
     this.msgsEl.appendChild(el);
     this._scroll();
     return el;

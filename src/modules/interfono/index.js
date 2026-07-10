@@ -16,6 +16,7 @@
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import * as bus from '../../core/bus.js';
+import { readDeliveries } from '../../core/interfono-log.js';
 
 export default {
   name: 'interfono',
@@ -35,6 +36,18 @@ export default {
         });
       } catch (e) {
         res.status(500).json({ error: 'No se pudo leer el estado del Interfono.', detail: String(e?.message || e) });
+      }
+    });
+
+    // BITÁCORA de entrega (rediseño 2026-07-10, Fase 2.4): materializa R6
+    // ("nada se pierde en silencio"). Solo LEE ~/.cwc-data/session-bus/
+    // delivery-log.jsonl (0 tokens). Por qué ruta llegó cada mensaje al humano.
+    r.get('/deliveries', (req, res) => {
+      try {
+        const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
+        res.json({ deliveries: readDeliveries(limit), ts: Date.now() });
+      } catch (e) {
+        res.status(500).json({ error: 'No se pudo leer la bitácora.', detail: String(e?.message || e) });
       }
     });
 

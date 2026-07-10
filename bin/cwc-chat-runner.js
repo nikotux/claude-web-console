@@ -28,6 +28,7 @@ import {
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
 import { chatQueryOptions, autoApprovesAll } from '../src/core/tool-policy.js';
+import { buildUserContent } from '../src/modules/chat/attachments.js';
 
 // ---- argv ----
 const args = {};
@@ -239,15 +240,22 @@ function handleCommand(c, msg) {
     writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, events: history });
     return;
   }
-  if (msg.t === 'user' && typeof msg.text === 'string' && msg.text.trim()) {
+  if (msg.t === 'user' && typeof msg.text === 'string'
+      && (msg.text.trim() || (Array.isArray(msg.attachments) && msg.attachments.length))) {
     lastActivity = Date.now();
     setStatus('working');
     // Va al historial (para el replay de una reconexión) pero NO en vivo: el
-    // server que lo mandó ya lo pintó localmente.
-    emit({ type: 'user', text: msg.text }, { broadcast: false });
+    // server que lo mandó ya lo pintó localmente. Los adjuntos viajan como
+    // REFERENCIA {name,type,mime} (no base64): la burbuja de replay pinta la
+    // miniatura pidiéndola por nombre a GET /api/chat/attachment.
+    const atts = Array.isArray(msg.attachments) ? msg.attachments : null;
+    emit({ type: 'user', text: msg.text, ...(atts && atts.length ? { attachments: atts } : {}) }, { broadcast: false });
+    // content = string sin adjuntos (camino histórico) o array de bloques
+    // image/document/text según el tipo de cada archivo (attachments.js LEE el
+    // disco y arma los bloques de visión / inline / referencia).
     input.push({
       type: 'user',
-      message: { role: 'user', content: msg.text },
+      message: { role: 'user', content: buildUserContent(ID, msg.text, atts) },
       parent_tool_use_id: null,
       session_id: sessionId || '',
     });

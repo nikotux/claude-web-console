@@ -11,6 +11,7 @@
 // (admin, consume tokens) abre openAudioPanel; al crear tareas desde una
 // transcripción, audio dispara `tasks-changed` y este módulo se refresca.
 import { openAudioPanel, mountReports } from '../audio/audio.js';
+import { mountLearning } from '../learning/learning.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 const STATUS = [
@@ -72,7 +73,7 @@ export default {
     el.innerHTML = `
       <header class="sec-head">
         <span class="sec-dot" data-ref="dot" title="Tareas pendientes"></span>
-        <span class="sec-title">Pendientes</span>
+        <span class="sec-title">Banco de conocimiento</span>
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="add" title="Nueva tarea">${icon('plus', { size: 14 })}</button>
       </header>
@@ -240,9 +241,10 @@ export default {
       let chats = [];               // /api/chat/list → trabajos en sesiones
       let audio = [];               // /api/audio → informes
       let reportsApi = null;        // { reload } de la pestaña Informes
+      let learningApi = null;       // { reload } de la pestaña Aprendizaje
       // Ventana grande, casi como el Explorador (92vw · alto 90vh): el sizing
       // real vive en .task-board-card (style.css); pasamos 92vw como el explorador.
-      const m = dialog.openModal({ title: 'Pendientes', width: '92vw', onClose: () => { boardApi = null; } });
+      const m = dialog.openModal({ title: 'Banco de conocimiento', width: '92vw', onClose: () => { boardApi = null; } });
       m.card.classList.add('task-board-card');
       m.body.innerHTML = `
         <div class="task-board">
@@ -255,9 +257,11 @@ export default {
         { key: 'panel', label: '📊 Panel' },
         { key: 'tareas', label: '📋 Tareas' },
         { key: 'planes', label: '🗺️ Planes' },
+        { key: 'aprendizaje', label: '🎓 Aprendizaje' },
         { key: 'informes', label: '🎙️ Informes' },
       ];
       const audioCtx = { icon, dialog, bus: ctx.bus };
+      const learningCtx = { icon, dialog, bus: ctx.bus, whoami: ctx.whoami, openChat: ctx.openChat };
 
       function renderTabs() {
         tabsEl.innerHTML = TABS.map((t) => {
@@ -390,7 +394,7 @@ export default {
         function crumbHtml() {
           const plan = !isPlan && item.planId ? plans.find((p) => p.id === item.planId) : null;
           return `<div class="tk-crumb">
-            <span class="tk-crumb-lnk" data-goto-tab="panel">🏠 Pendientes</span><span class="tk-crumb-sep">/</span>
+            <span class="tk-crumb-lnk" data-goto-tab="panel">🏠 Banco</span><span class="tk-crumb-sep">/</span>
             <span class="tk-crumb-lnk" data-goto-tab="planes">📋 Planes</span>
             ${plan ? `<span class="tk-crumb-sep">/</span><span class="tk-crumb-lnk" data-open-item="${plan.id}">${esc(plan.id)}</span>` : ''}
             <span class="tk-crumb-sep">/</span><span class="tk-crumb-cur">${item.id}</span></div>`;
@@ -714,7 +718,9 @@ export default {
         tab = next;
         renderTabs();
         reportsApi = null;
+        learningApi = null;
         if (tab === 'informes') { reportsApi = mountReports(paneEl, audioCtx); return; }
+        if (tab === 'aprendizaje') { learningApi = mountLearning(paneEl, learningCtx); return; }
         if (tab === 'panel') { paneEl.innerHTML = panelHtml(); return; }
         if (tab === 'planes') { paneEl.innerHTML = planesHtml(); return; }
         paneEl.innerHTML = tareasHtml();
@@ -727,6 +733,7 @@ export default {
         else if (tab === 'planes') paneEl.innerHTML = planesHtml();
         else if (tab === 'tareas') renderList();
         else if (tab === 'informes') reportsApi?.reload?.();
+        else if (tab === 'aprendizaje') learningApi?.reload?.();
       }
 
       async function patch(id, body) {
@@ -858,7 +865,8 @@ export default {
           const comp = result.completar || [];
           const grp = result.agrupar || [];
           const crea = result.crearTareas || [];
-          const total = dup.length + unif.length + comp.length + (isGlobal ? grp.length + crea.length : 0);
+          const temas = result.crearTemas || [];
+          const total = dup.length + unif.length + comp.length + (isGlobal ? grp.length + crea.length + temas.length : 0);
           const dupCards = dup.map((d, i) => propCard('dup', i,
             `🔁 Conservar <b>${esc(titleOf(d.keep))}</b>`,
             `<div class="tk-an-line">Eliminar: ${d.remove.map((id) => esc(titleOf(id))).join(', ')}</div>${d.why ? `<div class="tk-an-why">${esc(d.why)}</div>` : ''}`)).join('');
@@ -876,6 +884,11 @@ export default {
           const creaCards = crea.map((c, i) => propCard('create', i,
             `🎙️ Crear ${c.tasks.length} tarea(s)${c.fromReport ? ` de <b>${esc(c.fromReport)}</b>` : ''}`,
             `<div class="tk-an-line">${c.tasks.map((t) => esc(t.title)).join(' · ')}</div>${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
+          // 🎓 Temas de aprendizaje sugeridos (solo global): puente Pendientes → Banco.
+          const SCOPE_EMO = { console: '🖥️', tolkien: '🌳' };
+          const temasCards = temas.map((s, i) => propCard('createtema', i,
+            `🎓 Aprender: <b>${esc(s.title)}</b>`,
+            `<div class="tk-an-line">${s.area ? `${esc(s.area)} · ` : ''}${SCOPE_EMO[s.scope] || '🖥️'} ${esc(s.scope)}</div>${s.why ? `<div class="tk-an-why">${esc(s.why)}</div>` : ''}`)).join('');
           resultEl.innerHTML = `
             ${result.resumen ? `<div class="tk-an-summary">${esc(result.resumen)}</div>` : ''}
             ${total ? '' : '<div class="dash-empty">✅ Todo prolijo: nada para unificar, agrupar ni completar.</div>'}
@@ -883,7 +896,8 @@ export default {
             ${section('🔗 Unificables', unif, unifCards, unif.length > 0)}
             ${section('📝 Completar info', comp, compCards, comp.length > 0)}
             ${isGlobal ? section('🗂️ Agrupar en planes', grp, grpCards, grp.length > 0) : ''}
-            ${isGlobal ? section('🎙️ Crear desde informes', crea, creaCards, crea.length > 0) : ''}`;
+            ${isGlobal ? section('🎙️ Crear desde informes', crea, creaCards, crea.length > 0) : ''}
+            ${isGlobal ? section('🎓 Temas de aprendizaje sugeridos', temas, temasCards, temas.length > 0) : ''}`;
         }
 
         const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -911,6 +925,9 @@ export default {
             for (const id of p.taskIds) await post(`/api/tasks/${id}`, { planId });
           } else if (kind === 'create') {
             for (const t of p.tasks) await post('/api/tasks', t);
+          } else if (kind === 'createtema') {
+            // Puente al Banco de conocimiento: crea el tema de aprendizaje sugerido.
+            await post('/api/learning', { title: p.title, area: p.area, scope: p.scope });
           }
           dirty = true;
         }
@@ -922,7 +939,7 @@ export default {
           const dis = e.target.closest('[data-dismiss]');
           if (!ap && !dis) return;
           const kind = card.dataset.kind;
-          const LISTS = { dup: 'duplicados', unif: 'unificables', comp: 'completar', group: 'agrupar', create: 'crearTareas' };
+          const LISTS = { dup: 'duplicados', unif: 'unificables', comp: 'completar', group: 'agrupar', create: 'crearTareas', createtema: 'crearTemas' };
           const list = lastResult[LISTS[kind]];
           const p = list?.[Number(card.dataset.idx)];
           if (!p) return;

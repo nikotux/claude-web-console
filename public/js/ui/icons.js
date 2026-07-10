@@ -46,6 +46,11 @@ const PATHS = {
   play: `<polygon points="6,4 20,12 6,20"/>`,
   trash: `<polyline points="4,7 20,7"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>`,
   folder: `<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>`,
+  // Clip de adjuntar (composer del chat): un solo botón para imágenes, PDF,
+  // texto y binarios — la consola detecta el tipo sola (ver chat/attachments.js).
+  paperclip: `<path d="M20 11.5 12 19.5a4.5 4.5 0 0 1-6.4-6.4l8-8a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.2-2.2l7.3-7.3"/>`,
+  // Archivo genérico (chip de adjunto no-imagen en la burbuja).
+  fileGeneric: `<path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><polyline points="13,3 13,8 18,8"/>`,
   upload: `<line x1="12" y1="20" x2="12" y2="6"/><polyline points="6,11 12,5 18,11"/><line x1="5" y1="20" x2="19" y2="20"/>`,
   download: `<line x1="12" y1="4" x2="12" y2="14"/><polyline points="6,9 12,15 18,9"/><line x1="5" y1="20" x2="19" y2="20"/>`,
   grid: `<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>`,
@@ -68,6 +73,8 @@ const PATHS = {
   cpu: `<rect x="7" y="7" width="10" height="10" rx="1.5"/><line x1="10" y1="7" x2="10" y2="3.5"/><line x1="14" y1="7" x2="14" y2="3.5"/><line x1="10" y1="20.5" x2="10" y2="17"/><line x1="14" y1="20.5" x2="14" y2="17"/><line x1="7" y1="10" x2="3.5" y2="10"/><line x1="7" y1="14" x2="3.5" y2="14"/><line x1="20.5" y1="10" x2="17" y2="10"/><line x1="20.5" y1="14" x2="17" y2="14"/>`,
   ram: `<rect x="3" y="8" width="18" height="9" rx="1.5"/><line x1="7.5" y1="17" x2="7.5" y2="20"/><line x1="12" y1="17" x2="12" y2="20"/><line x1="16.5" y1="17" x2="16.5" y2="20"/><line x1="7.5" y1="11" x2="7.5" y2="14"/><line x1="12" y1="11" x2="12" y2="14"/><line x1="16.5" y1="11" x2="16.5" y2="14"/>`,
   disk: `<ellipse cx="12" cy="6.5" rx="8" ry="3"/><path d="M4 6.5v11c0 1.7 3.6 3 8 3s8-1.3 8-3v-11"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>`,
+  // Enlace externo (abre en pestaña nueva): caja + flecha saliente.
+  externalLink: `<path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 13.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H11"/>`,
   // Señal/interfono (motor Pac-Man, estado "delegando"): punto + ondas
   // concéntricas a ambos lados — eco del 📻 del panel Interfono. Se usa como
   // badge diminuto sobre el Pac-Man cuando está esperando la vuelta de un

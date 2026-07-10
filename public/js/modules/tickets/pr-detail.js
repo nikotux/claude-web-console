@@ -21,6 +21,13 @@ function fmtDate(iso) {
   if (!Number.isFinite(ms)) return '';
   return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
 }
+function fmtAgo(ms) {
+  if (!Number.isFinite(ms) || !ms) return null;
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return 'recién';
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  return `hace ${Math.floor(s / 3600)} h`;
+}
 function ciClass(concl) {
   const c = String(concl || '').toUpperCase();
   if (/SUCCESS|NEUTRAL|SKIPPED/.test(c)) return 'bb-chip--ok';
@@ -80,7 +87,7 @@ export function openPrDetail(prLite, deps = {}) {
   c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${icon('clock', { size: 12 })} cargando el PR desde GitHub…</div></div>`;
   const box = c.querySelector('.bv2-detail');
 
-  function render(pr, error, you = null, youAdmin = false) {
+  function render(pr, error, you = null, youAdmin = false, info = {}) {
     if (error || !pr) { box.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(error || 'No se pudo leer el PR.')}</div>`; return; }
 
     // Lock por usuario (mismo sistema que los tickets, id `pr:<number>`).
@@ -136,7 +143,16 @@ export function openPrDetail(prLite, deps = {}) {
         </div>`).join('')
       : `<div class="bf-sub">${(pr.padRefs || []).length ? `Refs: ${esc((pr.padRefs || []).join(', '))} — ` : ''}${esc(pr.padError || 'sin items de Pad')}</div>`;
 
+    // Barra de FRESCURA (Fix 2 uniformidad, 2026-07-10): fuente + antigüedad + ↻.
+    const ago = fmtAgo(info.generatedAt);
+    const srcLabel = info.cached ? 'snapshot' : 'GitHub en vivo';
+    const freshBar = `<div class="bv2-freshbar">
+      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? `actualizado ${ago}` : 'lectura en vivo'} · ${esc(srcLabel)}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="Actualizar PR">${icon('refresh', { size: 13 })}</button>
+    </div>`;
+
     box.innerHTML = `
+      ${freshBar}
       ${lockBanner}
       <div class="bv2-pr-cols">
         <div class="bv2-pr-main">
@@ -189,6 +205,7 @@ export function openPrDetail(prLite, deps = {}) {
     // 2ª columna: Contexto adicional + Histórico del trabajo (panel compartido).
     wireMetaPanel({ box, key: `pr:${pr.number}`, itemTitle: pr.title || '', itemDesc: String(pr.body || '').slice(0, 2000), onChanged: reload });
 
+    box.querySelector('[data-act="refresh"]')?.addEventListener('click', reload);
     box.querySelector('[data-act="claim"]')?.addEventListener('click', () => postClaim('claim'));
     box.querySelector('[data-act="release"]')?.addEventListener('click', () => postClaim('release'));
     box.querySelector('[data-act="force"]')?.addEventListener('click', () => postClaim('release', true));
@@ -225,7 +242,7 @@ export function openPrDetail(prLite, deps = {}) {
     try {
       const res = await fetch(`/api/tickets/pr/${encodeURIComponent(prLite.number)}`);
       const d = await res.json();
-      render(d.pr, d.error, d.you || null, d.youAdmin || false);
+      render(d.pr, d.error, d.you || null, d.youAdmin || false, { generatedAt: d.generatedAt, cached: d.cached });
     } catch (e) {
       render(null, `Error de red: ${e?.message || e}`);
     }

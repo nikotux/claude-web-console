@@ -189,8 +189,17 @@ código.
   `plan-limits.json` último snapshot BUENO de límites/créditos del plan (lo
   escribe el módulo tokens en cada respuesta OK de /api/tokens/limits; se sirve
   como fallback `stale` ante 429/corte de red/reinicio),
-  `tokens-reset.json` línea de base del RESET de estadísticas de Uso (foto del
-  consumo al resetear; /summary muestra crudo−baseline; borrarla = ver histórico),
+  `usage-history.json` HISTÓRICO PERSISTENTE de consumo por día(LOCAL Medellín)×
+  PROYECTO×modelo (days[fecha][consola|tolkien|otros][modelKey]={tokens,cost}; lo
+  escribe el módulo tokens vía history-store.js: buildSummary calcula el desglose y
+  lo snapshotea cada ~5 min — independiente de la poda de transcripts del CLI;
+  retención 400 días diaria + rollup mensual `months`; alimenta GET
+  /history?range=week|month&project — Semana=7 d, Mes=30 d — = gráficas de Tendencia
+  del modal Uso; el rango Día sale del summary, no de acá; días en formato viejo flat
+  se normalizan a {otros} al leer).
+  REEMPLAZÓ al viejo `tokens-reset.json`/POST /reset (2026-07-10): con historial
+  persistente NO hace falta "poner en cero"; si quedó un tokens-reset.json huérfano
+  de antes es inerte (ya no se lee),
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
   pendientes, `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · chatbot.json chatbot derivado por IA · comms.lock heartbeat · teams.lock · chatbot.lock heartbeat · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
@@ -206,7 +215,19 @@ código.
   append-only (create/update/status/complete/delete de tareas y planes; poda a
   300 eventos) + `tasks-analysis-<scope>.json` resultado del ANÁLISIS GENERAL IA
   del tablero (scope tasks|plans; lo escribe `bin/cwc-tasks-analyze-runner.js`) +
-  `tasks-analyze.log` de ese runner, `audio/<id>.json` jobs del análisis IA de
+  `tasks-analyze.log` de ese runner, `learning.json` registro PRIVADO de los TEMAS
+  del MÓDULO DE APRENDIZAJE (módulo learning; CRUD síncrono tmp+rename, sin runner)
+  + `learning-activity.json` su LOG append-only (poda 300) +
+  `learning-explain-<id>.json` job de "🎓 Explicame esto" (lo escribe el POST, lo
+  completa `bin/cwc-learning-explain-runner.js`) + `learning-explain.log` de ese
+  runner + `learning-context-<jobId>.json` job de "🎙️ Contexto adicional" (id
+  determinístico por tema+transcripción) + `learning-context.log` de
+  `bin/cwc-learning-context-runner.js` + `learning-analysis.json` resultado de
+  "🧠 Analizar aprendizaje" (`bin/cwc-learning-analyze-runner.js`) +
+  `learning-analyze.log` — OJO: `learning.json` guarda AMBOS temas (LT<n>,
+  ahora con contextoAdicional/explainFingerprint/explainFiles/explainVersions)
+  y RUTAS de aprendizaje (LR<n>, routes[]+routeSeq),
+  `audio/<id>.json` jobs del análisis IA de
   transcripciones (módulo audio; id determinístico por contenido, poda >30 días)
   + `audio.log` de su runner, `session-bus/` del INTERFONO entre
   sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
@@ -353,7 +374,44 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             → se registra agregándolo al array de src/core/registry.js
   terminal/                 sesiones tmux (PREFIX cwc-) + bare/TUI (BARE_PREFIX cwct-) + rehidratación
   chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
-                            runner-link.js (spawn/connect) — el motor real es bin/cwc-chat-runner.js
+                            runner-link.js (spawn/connect) · attachments.js (adjuntos) —
+                            el motor real es bin/cwc-chat-runner.js.
+                            ADJUNTOS DE ARCHIVOS (2026-07-10, pedido de Niko: "adjuntar imágenes/
+                            archivos como en claude.ai, que el modelo los interprete sin
+                            describirlos"): UN solo botón 📎 en el composer (chat-tab.js) + pegar
+                            (Ctrl+V) + arrastrar-y-soltar — la consola DETECTA el tipo sola, sin
+                            botones por tipo. Cada archivo se sube al toque a POST
+                            /api/chat/attachment?id=<chatId> (multer, escritura a disco con
+                            límite de tamaño DURANTE el streaming — nunca buffea a memoria) a la
+                            carpeta PROPIA del chat ~/.cwc-data/chat-attachments/<chatId>/ (estado
+                            de runtime, regla 4). Al enviar el mensaje viajan solo las REFERENCIAS
+                            {name,type,mime} por el WS/HTTP (no el base64); el RUNNER lee cada
+                            archivo del disco y arma el content del SDK según su tipo
+                            (chat/attachments.js buildUserContent): imagen (jpeg/png/gif/webp) →
+                            bloque `image` base64 (visión nativa) · PDF → bloque `document`
+                            base64 · TEXTO (txt/md/csv/código/json/yaml/…) → contenido INLINE en
+                            un bloque `text` (el modelo lo lee directo, sin describir) · BINARIO
+                            (docx/xlsx/zip/…) → nota con la ruta absoluta (la API no tiene bloque
+                            nativo; el modelo lo abre con Read/Bash si lo necesita). SIN adjuntos,
+                            el content sigue siendo un STRING (retrocompat TOTAL). Límites propios:
+                            4 imágenes · 8 adjuntos por mensaje · 10 MB imagen · 32 MB PDF · 20 MB
+                            otros. SEGURIDAD (invariante en health/invariants.js): todo nombre se
+                            reduce a un BASENAME validado (safeAttachName) y se confina a la
+                            carpeta del chat (attachPath exige que path.dirname sea EXACTO) — el
+                            traversal ../../.env da 404; el límite de tamaño se aplica ANTES de
+                            leer a memoria. GET /api/chat/attachment?id=&name= sirve el archivo
+                            (imágenes/PDF inline, resto descarga forzada, nosniff) para las
+                            miniaturas de la burbuja. VISTA: la burbuja del usuario muestra
+                            miniatura (imagen, click → lightbox) o chip (PDF/archivo). El
+                            transcript del SDK persiste imágenes/PDF solo, así que al reabrir el
+                            chat loadTranscriptEvents deriva CHIPS de tipo de los bloques image/
+                            document (sin miniatura — no hay nombre en disco en el replay; la
+                            imagen real sigue en la carpeta). MENÚ ⋯ de la tarjeta de Sesiones:
+                            "Abrir carpeta del chat" (sessions.js) → GET /api/chat/folder?id=
+                            asegura la carpeta y devuelve la ruta relativa al home; abre el
+                            Explorador existente (deep-link ?path=) en esa carpeta — reuso total,
+                            cero UI nueva (idea de Niko: ya tenemos explorador, no un menú de
+                            artefactos aparte).
                             README.md documenta la config que hereda el chat (Fase 8:
                             settingSources user+project, comandos slash, observador). Modelo
                             EN VIVO (POST /api/chat/model, WS set_model): con motor corriendo
@@ -495,6 +553,64 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             y dispara sessions-changed para las tarjetas). El renombre manual
                             sigue existiendo pero el próximo mensaje puede pisarlo (a
                             pedido: nombres siempre actualizados).
+                            AutoTux v2 (2026-07-10, REDISEÑO tras revisión externa +
+                            simulacros con datos reales — pedido del usuario "bajar el
+                            consumo"): SUPERSEDE la lógica de DECISIÓN de las Fases 1-3 de
+                            abajo (que quedan como historia). Núcleo reescrito en
+                            core/model-router.js; docs/autotux-analisis-externo.md tiene el
+                            diagnóstico completo. Problema medido en model-router-log.jsonl
+                            (62 decisiones): v1 colapsaba en un flip-flop Sonnet↔Opus (49
+                            subidas / 13 bajadas / 0 a haiku — "routing collapse"). CAMBIOS v2
+                            ("shape seguro", ~12-18% de ahorro validado por simulacro
+                            /tmp/autotux-sim*.js SIN riesgo de calidad): (a) FABLE PROHIBIDO —
+                            fuera de MODEL_LEVELS (ahora ['haiku','sonnet','opus']) + guard
+                            FORBIDDEN_AUTO en setModel (auto:true a fable ⇒ rechazado+log
+                            'guard'; manual sigue OK). clampLevel() mapea fable→opus (chat que
+                            vuelve de fable manual a 'auto') y opusplan/default→-1 (inerte) —
+                            fix del bug de v1 (indexOf('fable') daba -1 con la escala nueva).
+                            (b) Movimientos SIEMPRE ±1 (nunca saltos directos al techo: code
+                            fence / mensaje largo ≥1200 ahora suben UN escalón, no a Opus). (c)
+                            COOLDOWN de 2 turnos tras cada cambio (anti-rebote, estilo BGP
+                            route-flap dampening): congela señales no-fuertes; la corrección
+                            del usuario (strong_up) lo ROMPE. (d) NIVEL BASE (pegajoso,
+                            persistido vía _routerDownStreak + _routerCooldown) separado del
+                            OVERRIDE DE TURNO: un ack de CIERRE (perfecto/gracias/listo/
+                            genial/buenísimo/excelente — CLOSING_ACK_RE) corre ESE turno en
+                            Haiku sin tocar el base (turnOverride→0; _overrideRestore guarda el
+                            base; _endTurnRouter lo restaura al pasar a 'waiting'). NUNCA en
+                            go-aheads (dale/ok/sí — GOAHEAD_RE): cuentan como 'down' para el
+                            base pero NO override, porque suelen DISPARAR trabajo y correr una
+                            implementación en Haiku es frágil (hallazgo del simulacro TKT+PR).
+                            (e) Escalada por EVIDENCIA de insuficiencia, no volumen
+                            (insufficiencyEscalation, al cerrar el turno): ≥2 errores de tool
+                            (tool_result con ok:false, contados en _turnToolErrors) o ≥10 tools
+                            con ≥1 error ⇒ sube 1 escalón para el PRÓXIMO turno. La CORRECCIÓN
+                            del usuario ("no funciona"/"está mal"/"sigue fallando" —
+                            USER_CORRECTION_RE) es una etiqueta de calidad GRATIS: sube en el
+                            acto (strong_up). Esto cumple "detectar que el modelo no alcanzó y
+                            subir". EL AUTO-REDO AUTOMÁTICO DEL TURNO SE DESCARTÓ: en los
+                            simulacros disparó 0 veces (o ya estás en Opus, o la corrección
+                            escala un turno antes y gratis) — riesgo de auto-gasto sin
+                            beneficio. (f) BAJADA POR INACTIVIDAD (idleDecayMove: idle ≥60 min
+                            y base>sonnet ⇒ decae 1 escalón al reanudar). (g) CLASIFICADOR
+                            RELATIVO (classifyRelative, reemplaza classifyComplexity): para
+                            mensajes ambiguos pregunta a Haiku "dado que estás en X, ¿sobrado/
+                            suficiente/insuficiente?" (deadband en 'suficiente', mucho más
+                            estable que la clasificación absoluta de v1 que alimentaba el
+                            yo-yo) → down/same/up; en SEGUNDO PLANO (fire-and-forget, gobierna
+                            el próximo turno) + throttle (_routerClassifyThrottle: no
+                            reclasifica por 2 turnos). LOGGING: logDecision suma fuentes
+                            override/insufficiency/correction/idle/guard/classifier; logTurn
+                            (nuevo, model-router-turns.jsonl) registra CADA turno con su nivel
+                            para medir distribución + tasa de rebote (v1 solo logueaba
+                            cambios). Test determinista del núcleo: bin/cwc-test-model-router.js
+                            (42 asserts, sin SDK). Verificado en caliente: un chat 'auto' con
+                            "perfecto" corre en Haiku y restaura a Sonnet (override→restore).
+                            El requisito de un dueño de "Fable prohibido en el router" es AHORA
+                            regla dura del núcleo. — Lo de abajo (Fases 1-3) es la historia del
+                            diseño v1 que este bloque reemplaza en su LÓGICA (el andamiaje —
+                            modelChoice, badge 🤖, setModel(auto), activación implícita — sigue
+                            vigente):
                             ROUTER DE MODELO AUTOMÁTICO (2026-07-06, Fase 1, pedido del
                             usuario): decide solo si el turno necesita más o menos modelo,
                             escalando haiku→sonnet→opus→fable con MEMORIA de hilo (sube
@@ -631,6 +747,156 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             dura del proyecto para tocar configuración fuera del repo). No
                             iniciado — queda documentado acá para cuando se retome.
   files/ stats/ tmux/ admin/ health/
+  learning/                 MÓDULO DE APRENDIZAJE (pestaña "🎓 Aprendizaje" del BANCO DE
+                            CONOCIMIENTO — así se renombró la sección `tasks` en la UI, 2026-07-09,
+                            pedido de Niko; `data-module` sigue siendo `tasks`). Registro PRIVADO de
+                            los TEMAS que el dueño va aprendiendo/reforzando (instrucciones de Chris,
+                            cómo funciona el backend, GetPad, GitHub, cómo proponer un fix). 1 tarjeta
+                            = 1 tema {id LT<n>, title, area, scope (console|tolkien), status
+                            (por-aprender|reforzando|dominado), priority, tags[], notes (markdown),
+                            question, contextoEntradas[] ({id CX<n>, at, source ia|manual, text}),
+                            explanation (material de estudio IA), explainModel, explainedAt,
+                            explainFingerprint, explainFiles[], explainVersions[]}. CRUD SÍNCRONO
+                            determinístico (store.js,
+                            ~/.cwc-data/learning.json + learning-activity.json, tmp+rename, contador
+                            monotónico) → SIN runner, sobrevive reinicios (regla de oro cumplida sin
+                            runner). La ÚNICA parte que consume tokens es "🎓 Explicame esto": corrida
+                            IA que NAVEGA el CÓDIGO REAL (Read/Grep/Glob) del repo elegido por `scope`
+                            (la consola o Tolkien vía config.projectDir) y AUTO-GUARDA una explicación
+                            guiada en el tema (store.saveExplanation) como material editable/
+                            regenerable. DESACOPLADA a `bin/cwc-learning-explain-runner.js` (lógica en
+                            explain-shared.js; regla de oro) + READ-ONLY doble capa (regla 6: sonnet,
+                            maxTurns 24, timeout 6 min, settingSources: [], allowlist
+                            explainToolAllowed = Read/Grep/Glob/TodoWrite, Bash/Edit/Write/git/MCP
+                            DENEGADO en las DOS capas; NUNCA escribe). Ruta /api/learning (auth; admin
+                            SOLO en /:id/explain y /:id/context-analyze que gastan tokens): GET / · GET
+                            /activity · GET /:id (+ `explainCheck` DERIVADO, ver abajo) · POST / · POST
+                            /:id · POST /:id/delete · POST /:id/explain {force?} (spawn runner o noop,
+                            dedup lock por job) · GET /:id/explain (poll, 0 tokens) · POST /:id/context
+                            (agregar nota manual, 0 tokens) · POST /:id/context/:cid (editar entrada) ·
+                            POST /:id/context/:cid/delete (borrar entrada — literal ANTES de la
+                            paramétrica /:cid) · POST /:id/context-analyze (spawn runner) · GET
+                            /:id/context-analyze/:jobId (poll, 0 tokens). Job en
+                            ~/.cwc-data/learning-explain-<id>.json + learning-explain.log.
+                            REGENERACIÓN INTELIGENTE + CONTEXTO ADICIONAL + VENTANA POR SECCIONES
+                            (2026-07-10, pedido de Niko: "no quiero un documento — quiero secciones
+                            organizadas, y que Regenerar no arranque de cero si no hace falta"). TRES
+                            piezas nuevas:
+                            (a) 🎙️ CONTEXTO ADICIONAL — LISTA de entradas (2026-07-10, pedido de Niko:
+                            "que sea dinámico — que yo pueda sumar notas a mano además de las de la
+                            IA"): `contextoEntradas[]` es una lista donde cada entrada {id CX<n>, at,
+                            source 'ia'|'manual', text} es una tarjeta propia que NO se sobrescribe
+                            (antes era un único string `contextoAdicional` que se pisaba — MIGRADO al
+                            vuelo por normalizeTopic() en store.load: el string viejo se convierte en 1
+                            entrada CX0 'manual'). DOS orígenes: "🎙️ Interpretar una charla" pegás una
+                            transcripción y una corrida IA de TEXTO PURO (CERO herramientas, doble capa
+                            regla 6 deniega TODO — `context-shared.js` +
+                            `bin/cwc-learning-context-runner.js`, mismo patrón que
+                            `tickets/context-analyze-shared.js` pero de alcance PROPIO, sin acoplar los
+                            dos módulos) la interpreta y AGREGA una entrada 'ia'
+                            (store.addContexto{source:'ia'}); "➕ Agregar nota" suma una entrada
+                            'manual' a mano. Cada entrada se edita/borra individual
+                            (addContexto/updateContextoEntry/deleteContextoEntry; cap 30, nuevas
+                            primero). Job en ~/.cwc-data/learning-context-<jobId>.json (id
+                            determinístico por tema+texto) + learning-context.log. En el frontend se
+                            pintan como tarjetas con badge de origen (✍️ manual · 🎙️ IA) + fecha. Las
+                            📝 Notas del tema pasaron a EDITARSE INLINE (textarea directo en el detalle,
+                            sin abrir el form completo — botón ✏️). TODAS las entradas + las notas se
+                            concatenan (store.contextoText) para la huella y el prompt de "Regenerar".
+                            (b) 🔄 REGENERAR = UN SOLO BOTÓN inteligente (ya NO hay botones separados
+                            de "explicación" vs "guía paso a paso": el prompt de explainPrompt() pide
+                            TODAS las secciones de una sola pasada, incluida "Paso a paso" y "Errores
+                            comunes" — catálogo completo: En una línea · Cómo funciona por dentro ·
+                            Piezas clave · Cómo se conecta · Paso a paso · Errores comunes · Para tu
+                            caso · Para reforzar). Antes de gastar tokens, el POST /:id/explain calcula
+                            una HUELLA con `checkStaleness()` (explain-shared.js): huella de TEXTO
+                            (sha1 de notes+question+contextoAdicional, `textFingerprint`) + huella de
+                            CÓDIGO (mtime/size de los archivos que la IA reportó citar la última vez,
+                            en un bloque ```files``` aparte del ```markdown```, parseados por
+                            `parseFiles`/snapshoteados por `fileSnapshot`/comparados por
+                            `codeFingerprint`). Sin cambios en ninguna de las dos ⇒ responde
+                            `{status:'noop'}` SIN SIQUIERA SPAWNEAR EL RUNNER (0 tokens); con cambios y
+                            ya había explicación ⇒ modo `'adapt'` (se le pasa la explicación ANTERIOR
+                            completa en el prompt para que la actualice/amplíe en vez de arrancar de
+                            cero, marcando qué cambió); sin explicación previa ⇒ `'full'`. El botón
+                            fantasma "Forzar regeneración completa" (visible solo si ya hay
+                            explicación) manda `{force:true}` e ignora la huella. `GET /:id` expone
+                            `explainCheck` DERIVADO (nunca persistido) para que el detalle avise ANTES
+                            de tocar el botón si conviene regenerar. Historial: antes de sobreescribir,
+                            `saveExplanation()` empuja la versión vieja a `explainVersions[]` (cap 5) —
+                            "releer lo que ya tenía" sin perderlo, visible en el detalle como
+                            <details> "🕑 Versiones anteriores".
+                            (c) VENTANA POR SECCIONES, no un documento: el frontend
+                            (`learning.js` `splitSections`/`sectionIcon`) parte el markdown por cada
+                            `## título` y pinta CADA sección como una fila-acordeón propia con ícono
+                            (⚡🔧🧩🔗🧭⚠️🎯📌) — "En una línea" nace abierta (resumen), el resto
+                            colapsado (UI colapsable + árbol, regla del proyecto). Investigado el
+                            patrón contra NN/g e IxDF (progressive disclosure > un chorizo de texto
+                            para contenido de estudio).
+                            "💬 Profundizar en chat": botón en la fila de acciones del detalle
+                            (visible si `ctx.openChat` está disponible — `tasks.js` se lo reenvía en
+                            `learningCtx`, antes NO lo hacía) que arma un prompt con
+                            notes+contextoEntradas+explanation y abre un chat en modo `plan` (cwd
+                            'claude-web-console' o el `projectRel` de Tolkien según `scope`, mismo
+                            patrón que `ticket-detail.js`) para repasar o directamente aplicar el tema
+                            a código real. Sirve tanto para "profundizar" como para "trabajar esto" —
+                            un solo botón, a pedido explícito de Niko.
+                            WRITE-BACK AUTOMÁTICO del chat al tema (2026-07-10, pedido de Niko: "que al
+                            cerrar el chat el historial vuelva solo y aumente el contexto"): el botón
+                            pasa `learningId: t.id` a openChat → viaja por POST /api/chat/create (main.js
+                            openChat lo reenvía) → el `Chat` lo guarda (`this.learningId`, validado
+                            ^LT\d+$; persist/rehydrate para sobrevivir reinicios). Al CERRAR el chat,
+                            `Chat.close()` — MISMO patrón diferido 2s/best-effort que el histórico de
+                            tickets, con flag propio `_learningDone` — extrae un resumen DETERMINÍSTICO
+                            (0 tokens, `extractSessionWork` de tickets/meta-store, reusado) y lo AGREGA
+                            como entrada `source:'chat'` del tema vía `appendChatContext` de
+                            learning/store.js (importada en chat/index.js como appendLearningChatContext).
+                            Así la próxima "Regenerar" toma solo lo trabajado en el chat. Verificado E2E
+                            (turno haiku real por WS → cierre → entrada 💬 aparece en el tema).
+                            VENTANA DEL TEMA EN 3 PIEZAS + 2 COLUMNAS ASIMÉTRICAS (2026-07-10, pedido de
+                            Niko: la ventana era chica y a 1 columna). Modal ancho `min(1080px, 94vw)`.
+                            Estructura (`learning.js` render): (1) PIEZA SUPERIOR ancho completo = info
+                            básica (id/título/chips/foco) + 📝 Notas (editable inline) + 🎙️ Contexto
+                            adicional, ambas COLAPSABLES; (2+3) grid `.lt-detail-cols` de DOS columnas
+                            ASIMÉTRICAS (desktop ≥860px: `minmax(0,1.7fr) minmax(0,1fr)`,
+                            `align-items:start`; móvil se apilan): IZQUIERDA ANCHA `.lt-col-main` = "📖
+                            Guía" = TODA la explicación renderizada DE CORRIDO en un documento formateado
+                            (`.lt-guia-doc`, un solo `mdHtml(t.explanation)`) para leerla entera, + el
+                            botón Regenerar + versiones; DERECHA ANGOSTA `.lt-col-side` = "🧩 Secciones" =
+                            las MISMAS partes en un acordeón (`splitSections`) — NO son independientes,
+                            son las piezas que componen la Guía de la izquierda. Ambas salen del MISMO
+                            `t.explanation` (0 tokens extra; izquierda = leer de corrido, derecha =
+                            navegar/enfocar). Acciones ancho completo abajo. La entrada de contexto
+                            `source:'chat'` se pinta con badge 💬 (`.lt-cx-chat`), junto a 🎙️ IA y ✍️
+                            manual.
+                            APRENDIZAJE ASISTIDO (2026-07-10, pedido de Niko): (A) RUTAS de aprendizaje
+                            {id LR<n>, title, description, status (activa|propuesta|completada|archivada)}
+                            que AGRUPAN temas con PROGRESO % (temas dominados/total, DERIVADO al leer,
+                            nunca persistido — igual que los PLANES de tasks); el tema gana `routeId`
+                            (validado contra rutas existentes; borrar una ruta DESASIGNA sus temas). CRUD
+                            síncrono en el mismo store.json (routes[]+routeSeq): GET /routes · POST /routes
+                            · POST /routes/:id · POST /routes/:id/delete (literales ANTES de /:id). (B)
+                            "🧠 Analizar aprendizaje" (admin, consume tokens): runner DESACOPLADO
+                            `bin/cwc-learning-analyze-runner.js` (lógica en analyze-shared.js; texto puro,
+                            0 herramientas — doble capa regla 6 deniega TODO, los temas viajan en el
+                            prompt) que devuelve {resumen, duplicados, unificables, completar, agrupar (en
+                            rutas), aprenderPrimero (orden sugerido), sugerirNuevos (gaps)}. POST /analyze
+                            (spawn) · GET /analysis (poll, 0 tokens); estado en ~/.cwc-data/learning-analysis.json
+                            (dedup por corrida fresca). Propuestas NUNCA auto-aplicadas: modal con
+                            Aprobar/Descartar por ítem; aplicar reusa el CRUD (dup→delete · unif→update+delete
+                            · comp→update notes/tags · agrupar→crea ruta si nueva + asigna routeId ·
+                            sugerirNuevos→POST /). Frontend `public/js/modules/learning/learning.js`: NO es
+                            sección de sidebar propia (patrón mountReports de audio) — exporta
+                            mountLearning(container, ctx) y lo monta tasks.js como 5ª pestaña. Sección
+                            colapsable "🗺️ Rutas" (barra de progreso, filtra la grilla por ruta) + grilla
+                            de cuadritos (.lt-*) → detalle modal colapsable+árbol con la explicación en
+                            markdown (renderMarkdown) + selector de ruta en el form. PUENTE Pendientes →
+                            Banco: el botón "Reorganizar todo con IA" del tablero de Pendientes (análisis
+                            HOLÍSTICO scope 'global', tasks/analyze-shared.js) ahora recibe los temas ya
+                            existentes y devuelve además `crearTemas` — TEMAS DE APRENDIZAJE nuevos
+                            derivados de lo que se está trabajando en las tareas/planes/informes; el modal
+                            de reorganizar los muestra en "🎓 Temas de aprendizaje sugeridos" y "Crear tema"
+                            hace POST /api/learning (kind 'createtema' en applyProposal).
   tasks/                    PENDIENTES: tablero PRIVADO de tareas de este proyecto (nada sale al
                             exterior, no se pushea). Versión simplificada de "Bugs & Features":
                             1 tarjeta = 1 tarea {id T<n>, title, description, status
@@ -827,6 +1093,62 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             /api/chat/interfono {action:'deliver'} — inyecta y DESPIERTA a
                             demanda) y ✕ Descartar ({action:'dismiss'} — marca entregado sin
                             actuar). El chat consume el bus SOLO leyendo (pendingFor/markDelivered)
+                            REDISEÑO DE LA CAPA DE NOTIFICACIÓN (2026-07-10, pedido del usuario:
+                            "que el interfono funcione por backend, sin preguntarme retomar/
+                            descartar, y que solo se entere la ventana realmente afectada" — el
+                            popup modal aparecía en TODAS las ventanas del navegador y era ruido
+                            con varias sesiones abiertas). Se hizo tras análisis externo
+                            (docs/interfono-analisis-externo.md → docs/plan-rediseno-interfono-v01.md,
+                            adaptado). CUATRO fases:
+                            (F0 · IDENTIDAD + BITÁCORA) `src/core/interfono-log.js` (nuevo): bitácora
+                            append-only JSONL en ~/.cwc-data/session-bus/delivery-log.jsonl (poda a
+                            la mitad ~2 MB, patrón model-router-log; fail-open total) que registra
+                            CÓMO llegó cada mensaje al humano (ROUTES: auto-deliver/tui-nudge/
+                            hook-inject/badge/popup-shown/popup-resume/popup-dismiss/expired) —
+                            materializa "nada se pierde en silencio". `logDelivery` se llama en
+                            deliverInterfono/consumeInterfono (chat) y tryNudge/hook-inject
+                            (bin/cwc-bus.js). ADEMÁS arregla el `from: null` de los mensajes de un
+                            chat: el runner ahora hereda CWC_SELF_HANDLE=claude:<sessionId>
+                            (runner-link.spawnRunner recibe `selfHandle`; chat/index _startEngine lo
+                            pasa cuando ya hay sessionId — resume/reopen; selfIdentity de cwc-bus.js
+                            lo lee PRIMERO). El primerísimo arranque de un chat nuevo aún no tiene
+                            sessionId y cae al fallback (from null), sin regresión.
+                            (F1 · SCOPING CLIENTE) el popup global (interfono-center.js) recibe de
+                            main.js un 2º predicado `isChatRelevant = (id) => tabs.has(id)`: una
+                            ventana SOLO crea tarjeta para chats que ESA ventana tiene abiertos —
+                            mata el ruido cross-ventana (antes syncFromList creaba tarjeta en TODA
+                            ventana desde /api/chat/list y solo la ocultaba en render()).
+                            (F2 · POPUP → SEÑAL PASIVA) se retiró el modal "Retomar/Descartar" como
+                            superficie por defecto: ahora un chat con mensajes sin tomar muestra un
+                            BADGE pasivo (contador + ícono relay, `.sess-interfono`) en su tarjeta de
+                            "Sesiones" (sessions.js syncInterfonoBadge, alimentado por el
+                            pendingInterfono[] de /api/chat/list que se mantiene a propósito); al
+                            tocarlo, un popup con preview + "Entregar" (confirm por consumo de tokens
+                            antes de despertar un chat dormido) / "Archivar". El panel Sistema →
+                            Interfono suma la vista "Bitácora de entrega" (GET
+                            /api/interfono/deliveries?limit=N, solo lee el JSONL, 0 tokens). El centro
+                            de popups (interfono-center) queda SOLO para mensajes `active` (ver F4).
+                            (F3 · PUSH DIRIGIDO SERVER-SIDE) en vez de construir windowId+rooms desde
+                            cero, se REUSA el primitivo que ya existe: Chat._broadcast sobre
+                            this.clients llega SOLO a las ventanas que tienen ESE chat abierto.
+                            Chat.signalInterfono() empuja {type:'interfono', pending} por ahí; el
+                            watcher lo llama para chats ABIERTOS-pero-ocupados (los ociosos siguen
+                            con auto-entrega; los dormidos/sin-pestaña con el badge del poll).
+                            chat-tab.js re-emite el evento como window `cwc:interfono` (patrón de
+                            perm-center) y el centro lo consume para adelantar/retirar el aviso
+                            `active` al instante (el poll de 8 s queda de red de seguridad). NO se
+                            retiró pendingInterfono de /api/chat/list (desvío deliberado del plan
+                            §3.5): el badge pasivo de Sesiones lo necesita como ESTADO — un badge
+                            global en una lista NO es ruido, a diferencia del popup.
+                            (F4 · NIVELES passive/active) `bus.levelForKind(kind)` es la FUENTE ÚNICA
+                            (sin IA, R1): kind 'heads-up' (colisión real — otra sesión editó un
+                            archivo que reservabas, releelo) ⇒ `active`; todo lo demás (notes,
+                            broadcasts) ⇒ `passive`. sendMessage sella `level` (default por kind;
+                            mensajes viejos sin level ⇒ passive en los lectores). pendingInterfono
+                            expone `level`; el centro de popups SOLO surfacea `active` (scoped +
+                            relevante); el badge de Sesiones toma acento de alerta (--cwc-warn,
+                            `.sess-interfono--active`) si algún pendiente es active. La bitácora
+                            registra `level`. R3 intacta: evaluateClaim y sus umbrales NO se tocaron.
   comms/                    COMUNICACIONES: motor TRANSVERSAL file-based (patrón Interfono)
                             que recopila/indexa/contextualiza las comunicaciones con cada
                             CONTACTO (eje primario = usuario; Chris `cswenor` es el seed —
@@ -959,25 +1281,63 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             plan-limits.js) pinta el aviso "⚠ datos guardados · hace X" cuando
                             `stale`, y loadLimits del modal ya NO borra el último render bueno
                             si un refresco posterior falla — paridad con el pie).
-                            RESET de estadísticas (2026-07-07, pedido del usuario: botón para
-                            poner el costo en dólares en CERO): el costo NO se persiste, se
-                            recalcula SIEMPRE desde los transcripts de Claude Code (que no se
-                            tocan). "Resetear a cero" es guardar una FOTO del consumo actual como
-                            línea de base (~/.cwc-data/tokens-reset.json, atómica, sobrevive
-                            reinicios) y mostrar solo lo acumulado DESDE ese punto (mostrado =
-                            crudo − baseline, recortado a ≥0, por totals/today/projects/engines
-                            uniformemente para que todo quede consistente). buildSummary SIGUE
-                            devolviendo el CRUDO (lo consume también el runner de Optimización
-                            IA); la resta (applyReset) se aplica SOLO en la ruta /summary. "Hoy"
-                            solo resta el baseline si el reset se tomó el MISMO día UTC (si fue
-                            antes, todo el consumo de hoy es post-reset). POST /api/tokens/reset
-                            toma la foto (buildSummary FRESCO, no el cacheado) · {clear:true}
-                            deshace (borra la foto, vuelve el histórico). Autenticado, no admin
-                            (mismo nivel de confianza que el resto de Uso; muta solo estado
-                            personal). Front (usage.js): botón "↺ Reset" en el header del modal
-                            (con confirm) + nota "contando desde <fecha> · ver total histórico"
-                            (el link deshace) + label "Total · desde reset"; `resetAt` viaja en
-                            el summary)
+                            HISTÓRICO PERSISTENTE + rediseño del modal (2026-07-10, pedido del
+                            usuario): REEMPLAZÓ al viejo RESET (POST /reset, tokens-reset.json,
+                            applyReset — TODO eliminado). El costo NO se persiste, se recalcula
+                            siempre desde los transcripts; lo que SÍ se persiste es el desglose
+                            DIARIO por modelo, para que las gráficas de TENDENCIA sobrevivan a la
+                            poda de transcripts del CLI. HORA LOCAL: todo el consumo se calcula en
+                            America/Bogota (Medellín, UTC-5 FIJO sin DST) — helpers en
+                            src/modules/tokens/time.js (offset fijo, sin librería de zonas: corre
+                            el reloj -5 h y lee con getters UTC; FUENTE ÚNICA que comparten el
+                            parser y el histórico). parseFile bucketea por HORA local (clave
+                            'YYYY-MM-DDTHH\tmodel', cacheable = tiempo absoluto) para poder derivar
+                            las horas de HOY y la ventana de 5 h sin re-parsear; el día sale de
+                            slice(0,10). buildSummary GANA (mismo loop): `daily` ({YYYY-MM-DD local:
+                            {opus:{tokens,cost}...}}, se snapshotea a ~/.cwc-data/usage-history.json
+                            vía history-store.js/mergeDaily — UPSERT de días vivos + CONGELA los
+                            podados, throttle 5 min, atómica, retención 400 d + rollup mensual);
+                            `hourlyToday` (serie {keys,points,totals} de hoy por hora, gráfica Día);
+                            y `windows` {h5, d7, d7ByKey} = TOKEN-COUNTS de las ventanas de límite
+                            (Anthropic NO expone tokens por ventana, solo %: se calculan de NUESTROS
+                            transcripts — h5=últimas 5 h · d7=últimos 7 días · d7ByKey por modelo
+                            para las ventanas scoped tipo "Semana·Fable"). publicSummary quita solo
+                            `daily` (hourlyToday+windows SÍ viajan, son chicos). cachedSummary()
+                            centraliza TTL+dedup+snapshot (la usan /summary y /history?range=day).
+                            GET /history?range&project: day=HOY por hora (de hourlyToday — hoy
+                            siempre en disco) · week=últimos 7 días · month=últimos 30 días
+                            (readSeries del histórico); devuelve {range, keys[orden por PRECIO
+                            haiku<sonnet<opus<fable — base=más barato], points, totals, project}.
+                            FILTRO POR PROYECTO (pedido del usuario 2026-07-10): projectOf(dir)
+                            clasifica cada transcript en consola (incluye healthfix-wt-)|tolkien|
+                            otros; `daily` y `hourlyToday` quedan ANIDADOS por proyecto (hourlyToday
+                            = {all,consola,tolkien,otros}, cada uno una serie); ?project=all|consola|
+                            tolkien|otros filtra. Los `windows` (token-counts de límites) NO se
+                            filtran (los límites del plan son de la cuenta entera). MODEL_ORDER pasó
+                            a orden por PRECIO (haiku,sonnet,opus,fable) → fija el apilado de la
+                            gráfica (base=más económico).
+                            buildSeries (history-store, compartido) arma esa forma para las 3
+                            vistas. TODO en hora local, date-math sin DST (86400000 ms/día). Los
+                            límites (fetchPlanLimits) suman `modelKey` (keyOf del display_name de la
+                            ventana scoped) para mapear su token-count.
+                            MODAL rediseñado (usage.js): arriba límites del plan — cada uno con "·
+                            ≈ X tok" (windows) y la fila de créditos COLAPSABLE (<details>, contraída
+                            por defecto en el modal Y en el pie plan-limits.js). Abajo UNA barra de
+                            controles (Día/Semana/Mes + $/tok) que maneja las DOS columnas: izquierda
+                            "📊 General · <período>" (total del rango elegido, por modelo, con Pac-Man
+                            "consumiendo ahora") y derecha "📈 Tendencia" (gráfica de barras APILADAS:
+                            Día=horas de hoy · Semana=7 días · Mes=30 días). SIN "Hoy" (redundante) y
+                            SIN Reset. Gráfica con Chart.js (dependencia npm local chart.js 4.5.1, UMD
+                            en public/vendor/chartjs/chart.umd.js — patrón marked/hljs, en index.html
+                            → window.Chart; se sirve desde public/vendor/, sin ruta express). Colores
+                            = tokens --cwc-model-* con getComputedStyle; paleta en banda de PISO CVD
+                            (validado skill dataviz) → codificación SECUNDARIA: leyenda con NOMBRES +
+                            gap 2px entre segmentos + tooltip que nombra el modelo. Series todo-en-cero
+                            se filtran. El toggle $/tok re-dibuja con la serie cacheada (0 fetch); el
+                            cambio de rango sí trae datos (Día del summary, Semana/Mes de /history).
+                            Timer 10 s: refresca límites+resumen (Pac-Man+token-counts) y la gráfica
+                            solo en Día (cambia por hora); en Semana/Mes re-pinta solo la izquierda.
+                            chartInst se destruye al re-crear y en onClose (sin leaks))
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
                             stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
@@ -1597,12 +1957,43 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             selector con #terminals+3 clases que le gana al display:flex
                             del media query móvil; la TUI es .conv-tui-host y no matchea,
                             ahí la barra queda) ·
-                            usage (pie: tokens de HOY; su modal "Uso": arriba límites del
-                            plan — /api/tokens/limits, barras % con umbrales ok/warn/danger
-                            y "queda X% · resetea en …" — y abajo el consumo por modelo con
-                            Pac-Man pac-sm masticando en los que consumen AHORA (lastMtime
-                            < 2 min); auto-refresh cada 10 s mientras el modal está abierto,
-                            preservando detalles expandidos, con clearInterval en onClose)
+                            usage (pie: tokens de HOY; su modal "Uso" REDISEÑADO 2026-07-10:
+                            arriba límites del plan — /api/tokens/limits, barras % con umbrales
+                            ok/warn/danger, "queda X% · resetea en …" y "· ≈ X tok" (token-count
+                            NUESTRO de la ventana: session=5 h · weekly=7 d · scoped=ese modelo,
+                            de summary.windows — Anthropic solo da %) + fila de créditos COLAPSABLE
+                            (<details>). Abajo UNA barra de controles (Día/Semana/Mes + $/tok) que
+                            maneja las DOS columnas: 📊 General · <período> (total del rango elegido
+                            por modelo, con Pac-Man pac-sm en los que consumen AHORA lastMtime<2min)
+                            y 📈 Tendencia = gráfica de barras APILADAS por modelo (Chart.js): Día=
+                            horas de hoy · Semana=7 días · Mes=30 días. SIN "Hoy" ni Reset. Los 3
+                            filtros van en UNA fila (2026-07-10) como SEGMENTED CONTROLS (.uh-seg
+                            contenedor pastilla + .uh-seg-btn, activo con tinte acento): rango +
+                            PROYECTO (Todos/Consola/Tolkien/Otros, aplica a ambas columnas; los
+                            límites NO se filtran) + métrica anclada a la derecha; los handlers
+                            seleccionan por data-attribute ([data-range]/[data-project]/[data-metric]).
+                            ORDEN POR PRECIO/economía
+                            (2026-07-10): la lista General va de más COSTOSO arriba a más ECONÓMICO
+                            abajo (Fable→Opus→Sonnet→Haiku) con badge $X/M por modelo (PRICE_INPUT,
+                            coincide con pin() del backend) + caption "▲ más costoso · ▼ más
+                            económico"; la gráfica apila con el más barato en la BASE (keys en orden
+                            de precio del backend). El caché de series usa clave `${range}:${project}`. Todo en
+                            hora LOCAL de Medellín (backend time.js). APERTURA INSTANTÁNEA
+                            (2026-07-10, "se queda procesando" al abrir): el parseo de transcripts
+                            tarda ~2 s, así que hay una CACHÉ EN MEMORIA de módulo (`cache`
+                            {summary,limits,series}) que el poll del pie (tick) mantiene caliente; al
+                            abrir, `paint('draw')` pinta lo cacheado AL TOQUE (0 fetch, ~130 ms) y
+                            `refresh(false)` actualiza en segundo plano SIN bloquear. UN solo botón
+                            Actualizar (spin `.spinning` mientras carga; refresh(true) saltea el TTL).
+                            Auto-refresh SILENCIOSO cada 15 s (AUTO_MS): updateChart() reemplaza
+                            labels+datasets y update('none') EN EL LUGAR (sin destruir/re-animar → no
+                            parpadea); drawChart() (crear) solo al abrir y al cambiar rango/métrica.
+                            El toggle $/tok re-dibuja de la serie cacheada (0 fetch); cambiar rango
+                            trae datos solo si faltan en caché (Día del summary, Semana/Mes de
+                            /history). SUMMARY_TTL_MS subido 4 s→15 s (menos re-parseos). reexporta
+                            fetchLimits/fmtReset/renderLimits (renderLimits(el,data,{windows}) — el
+                            pie plan-limits.js lo reusa sin windows: créditos colapsables ahí también,
+                            sin token-counts); destroyChart en onClose (sin leaks de Chart.js))
 public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
                             openModal/confirmDialog/promptDialog/alertDialog/textEditorDialog +
                             confirmSheet — confirmación ADAPTATIVA 2026-07-07: en desktop delega en
@@ -1659,6 +2050,12 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             watcher lo inyecta solo y aparece como burbuja). Ancla abajo-IZQUIERDA
                             —.cwc-intercom/.ic-card en ui.css, borde --cwc-accent-cool— para no
                             pisarse con el de permisos (abajo-derecha); móvil arriba-izquierda.
+                            REDISEÑO 2026-07-10 (ver bloque completo en el módulo interfono/):
+                            este centro modal quedó SOLO para mensajes `level:'active'` (colisión
+                            real de archivos) y SOLO en ventanas relevantes (isChatRelevant =
+                            tabs.has(id), F1) — lo pasivo se movió al badge de la tarjeta de
+                            Sesiones (F2). Consume además el evento window `cwc:interfono` (push
+                            dirigido server-side, F3) para adelantar el aviso sin esperar el poll.
                             Ver la ENTREGA AL CHAT del módulo interfono/) ·
                             pacman.js (loader Pac-Man COMPARTIDO, CSS en ui.css .cwc-pacman:
                             USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
@@ -1765,6 +2162,42 @@ bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (
                             completar}. Interfaz por archivos: ~/.cwc-data/tasks-analysis-<scope>.json
                             (status running/done/error, dedup por corrida fresca, sin lock aparte).
                             Lógica compartida en src/modules/tasks/analyze-shared.js
+bin/cwc-learning-explain-runner.js "🎓 Explicame esto" del MÓDULO DE APRENDIZAJE
+                            (learning), DESACOPLADO (regla de oro). A DIFERENCIA de los runners de
+                            texto puro, éste SÍ LEE el código: NAVEGA read-only (Read/Grep/Glob,
+                            allowlist explainToolAllowed, doble capa regla 6) el repo del `scope` del
+                            tema (la consola o Tolkien vía config.projectDir), sonnet, maxTurns 24,
+                            timeout 6 min, settingSources: []. Al terminar AUTO-GUARDA la explicación
+                            guiada en el tema (store.saveExplanation). Interfaz por archivos:
+                            ~/.cwc-data/learning-explain-<id>.json (job con snapshot del tema que
+                            escribe el POST). REGENERACIÓN INTELIGENTE (2026-07-10): el job puede traer
+                            `mode` ('full'|'adapt') + `topic.previousExplanation`/`topic.reason` — en
+                            'adapt' el prompt le pasa la explicación anterior para que la actualice en
+                            vez de arrancar de cero (la DECISIÓN full/adapt/noop la toma el endpoint del
+                            server ANTES de spawnear, ver explain-shared.js checkStaleness). Al terminar
+                            también parsea el bloque ```files``` de la respuesta (parseFiles) y
+                            snapshotea esos archivos (fileSnapshot) para la próxima huella de código.
+                            Lógica en src/modules/learning/explain-shared.js
+bin/cwc-learning-context-runner.js "🎙️ Contexto adicional" de un TEMA de aprendizaje
+                            (2026-07-10, pedido de Niko), DESACOPLADO (regla de oro). Interpreta una
+                            TRANSCRIPCIÓN (charla con Chris, un chat, notas de reunión) — a diferencia
+                            del runner de explicación, éste es de TEXTO PURO: CERO herramientas, doble
+                            capa regla 6 deniega TODO (mismo patrón que
+                            tickets/context-analyze-shared.js pero de alcance PROPIO, sin acoplar los
+                            dos módulos). Al terminar AGREGA el resultado interpretado como una
+                            entrada 'ia' de la LISTA `contextoEntradas` del tema
+                            (store.addContexto{source:'ia'} — NO sobrescribe las demás), que se
+                            inyecta en el próximo "Regenerar". Interfaz por archivos:
+                            ~/.cwc-data/learning-context-<jobId>.json (id determinístico por
+                            tema+transcripción: un reintento con el mismo texto reusa el mismo job) +
+                            learning-context.log. Lógica en src/modules/learning/context-shared.js
+bin/cwc-learning-analyze-runner.js "🧠 Analizar aprendizaje" del MÓDULO DE APRENDIZAJE,
+                            DESACOPLADO (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
+                            regla 6 deniega TODO; los temas se juntan EN NODE y viajan en el prompt).
+                            Organiza TODOS los temas: duplicados/unificables/completar/agrupar-en-rutas/
+                            aprenderPrimero/sugerirNuevos. Interfaz por archivos:
+                            ~/.cwc-data/learning-analysis.json (status running/done/error, dedup por
+                            corrida fresca). Lógica en src/modules/learning/analyze-shared.js
 bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
                             y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
@@ -2124,6 +2557,15 @@ docs/                       frontend-modules.md · brief-original.txt · context
 
 ## Gotchas conocidos (te van a morder si los ignorás)
 
+- `renderMarkdown()` (public/js/ui/markdown.js) DEVUELVE UN NODO DOM ya
+  sanitizado, NO un string. Interpolarlo en un template de innerHTML
+  (`` `<div>${renderMarkdown(x)}</div>` ``) imprime literalmente
+  `[object HTMLDivElement]` (bug real 2026-07-10 en learning.js — notas/
+  explicación; el mismo patrón roto sigue en tasks/tasks.js). Dos usos
+  correctos: (a) appendChild del nodo (como chat-tab.js), o (b) si NECESITÁS
+  string para innerHTML, tomá `renderMarkdown(x).innerHTML` (learning.js usa
+  el helper `mdHtml` para eso — sigue siendo seguro porque el nodo ya pasó
+  por sanitize()).
 - En `Session` (terminal/sessions.js) la propiedad de adjuntado es
   `attachSpec`, NO `attach` (colisiona con el método `attach(ws)`).
 - NO usar `pkill -f src/server.js` (el patrón mata al propio shell). Reiniciar

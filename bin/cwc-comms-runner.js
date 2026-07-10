@@ -8,7 +8,7 @@
 import { execFile } from 'node:child_process';
 import { config } from '../src/core/config.js';
 import * as C from '../src/modules/comms/shared.js';
-import { fetchPrRich } from '../src/modules/comms/pr-read-shared.js';
+import { fetchPrRich, listPrs } from '../src/modules/comms/pr-read-shared.js';
 
 function log(...a) { try { console.log(new Date().toISOString(), '[comms-runner]', ...a); } catch { /* noop */ } }
 
@@ -121,8 +121,9 @@ function finish(code) { clearInterval(heartbeat); C.clearLock(); process.exit(co
   if (!myLogin) { try { myLogin = (await run('gh', ['api', 'user', '--jq', '.login'], GH_OPTS)).toLowerCase(); } catch { /* sin login: no filtra */ } }
   log('identidad propia:', self.name, '/ gh', myLogin || '(desconocido)');
   try {
-    const listRaw = await run('gh', ['pr', 'list', '--state', 'all', '--limit', String(C.PR_SCAN_LIMIT), '--json', 'number,title,url,state,updatedAt'], GH_OPTS);
-    let prs = JSON.parse(listRaw);
+    // Fuente única del listado (comms/pr-read-shared.js:listPrs). El detalle por
+    // PR ya usaba fetchPrRich; ahora el listado también sale del lector central.
+    let prs = await listPrs({ state: 'all', limit: Number(C.PR_SCAN_LIMIT), cwd: config.projectDir });
     // Priorizar abiertos y recientes; cap al detalle (cada view es una llamada).
     prs.sort((a, b) => {
       const ao = a.state === 'OPEN' || a.state === 'open' ? 0 : 1;

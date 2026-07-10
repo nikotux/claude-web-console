@@ -18,7 +18,10 @@
 // como burbuja en la conversación).
 import { icon } from './icons.js';
 
-export function initInterfonoCenter({ isChatActive, openChat }) {
+export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) {
+  // isChatRelevant(chatId) — ¿ESTA ventana tiene ese chat abierto? (Fase 1). Si
+  // no se pasa (compat), todo es relevante (comportamiento viejo).
+  const relevant = typeof isChatRelevant === 'function' ? isChatRelevant : () => true;
   const stack = document.createElement('div');
   stack.className = 'cwc-intercom';
   stack.hidden = true;
@@ -59,7 +62,11 @@ export function initInterfonoCenter({ isChatActive, openChat }) {
   }
 
   function setTitle(item, title) {
-    item.el.querySelector('.ic-title-text').textContent = String(title || item.chatId);
+    // title undefined (evento en vivo de Fase 3) => conservar el que ya puso el
+    // poll; solo caemos a chatId si nunca hubo título.
+    const el = item.el.querySelector('.ic-title-text');
+    if (title == null) { if (!el.textContent) el.textContent = item.chatId; return; }
+    el.textContent = String(title || item.chatId);
   }
 
   const MAX_MSGS = 50; // tope de nodos DOM por tarjeta (dato externo sin cota)
@@ -141,14 +148,43 @@ export function initInterfonoCenter({ isChatActive, openChat }) {
     for (const c of chats || []) {
       const pend = c.pendingInterfono || [];
       if (!pend.length) continue;
+      // F1: esta ventana no sirve ese chat → ni se crea la tarjeta (antes solo
+      // se ocultaba en render(), pero igual se creaba en TODA ventana).
+      if (!relevant(c.id)) continue;
+      // F2/F4: el popup modal SOLO surfacea mensajes `active` (colisión REAL de
+      // archivos). Todo lo demás (`passive`: coordinación, heads-up, broadcasts)
+      // ya vive como badge pasivo en la tarjeta de Sesiones — se retiró el
+      // "Retomar/Descartar" obligatorio que aparecía por cada mensaje. Hasta que
+      // la Fase 4 marque `level`, ningún mensaje es active → el centro queda en
+      // silencio (badge = superficie por defecto).
+      const active = pend.filter((m) => m.level === 'active');
+      if (!active.length) { if (items.has(c.id)) remove(c.id); continue; }
       seen.add(c.id);
-      upsert(c.id, c.title, pend);
+      upsert(c.id, c.title, active);
     }
     for (const [chatId, item] of items) {
       if (seen.has(chatId) || item.busy) continue;
       remove(chatId); // tomado (turno/hook/botón) o sesión ida
     }
   }
+
+  // Señal EN VIVO del server (Fase 3): un evento WS que llega SOLO a las
+  // ventanas que tienen ese chat abierto (scoping server-side, ui/chat-tab.js
+  // lo re-emite). Misma regla que el poll: solo mensajes `active` y solo si esta
+  // ventana sirve el chat. Adelanta la aparición/retiro del aviso sin esperar
+  // los 8 s del poll; el poll queda como red de seguridad.
+  window.addEventListener('cwc:interfono', (e) => {
+    const { chatId, pending } = e.detail || {};
+    if (!chatId || !relevant(chatId)) return;
+    const active = (pending || []).filter((m) => m.level === 'active');
+    // Retiro instantáneo si ya no hay nada active; refresco de una tarjeta que
+    // ya existe. La CREACIÓN se deja al poll (trae c.title legible; el evento no
+    // carga el título) — a lo sumo 8 s de latencia para una tarjeta nueva, que
+    // es rara (solo colisión real de archivos).
+    if (!active.length) { if (items.has(chatId)) remove(chatId); return; }
+    const item = items.get(chatId);
+    if (item) upsert(chatId, undefined, active);
+  });
 
   return { syncFromList, refresh: render };
 }

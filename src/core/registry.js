@@ -20,9 +20,10 @@ import projects from '../modules/projects/index.js';
 import interfono from '../modules/interfono/index.js';
 import comms from '../modules/comms/index.js';
 import tasks from '../modules/tasks/index.js';
+import learning from '../modules/learning/index.js';
 import audio from '../modules/audio/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, comms, tasks, audio];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, comms, tasks, learning, audio];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

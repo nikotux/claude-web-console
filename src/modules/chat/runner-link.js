@@ -46,7 +46,7 @@ function writeSpawnLock(id, pid) {
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
 // si no el cgroup entero (runners incluidos) moriría en cada restart.
-export function spawnRunner({ id, cwd, model, mode, resume }) {
+export function spawnRunner({ id, cwd, model, mode, resume, selfHandle }) {
   fs.mkdirSync(CHATS_DIR, { recursive: true, mode: 0o700 });
   // Chequeo+escritura sincrónicos ANTES de spawnear (ver comentario arriba).
   if (spawnLockAlive(id)) {
@@ -57,8 +57,16 @@ export function spawnRunner({ id, cwd, model, mode, resume }) {
   const args = [RUNNER, '--id', id, '--cwd', cwd, '--sock', sockPath(id), '--mode', mode || 'default'];
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
+  // Identidad del chat en el Interfono (rediseño 2026-07-10, Fase 0.4): una Bash
+  // tool que ejecute `cwc-bus.js send` hereda este env, así el mensaje sale con
+  // `from: claude:<sessionId>` real en vez de `from: null` (selfIdentity de
+  // bin/cwc-bus.js lo lee primero). Se pasa solo cuando ya conocemos el
+  // sessionId (resume/reopen — la mayoría de los chats de larga vida que
+  // coordinan); el primerísimo arranque de un chat nuevo aún no lo tiene y cae
+  // al fallback (from null), sin regresión.
+  const env = selfHandle ? { ...process.env, CWC_SELF_HANDLE: selfHandle } : process.env;
   const child = spawn(process.execPath, args, {
-    cwd, detached: true, stdio: ['ignore', log, log], env: process.env,
+    cwd, detached: true, stdio: ['ignore', log, log], env,
   });
   writeSpawnLock(id, child.pid);
   child.unref();

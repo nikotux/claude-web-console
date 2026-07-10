@@ -6,6 +6,7 @@
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeFileAtomic } from '../../core/atomic-write.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const CONTEXT_FILES = {
@@ -45,6 +46,7 @@ export function getContext(kind = 'work') {
 
 export function saveContext(kind, text) {
   if (!CONTEXT_FILES[kind]) throw new Error(`Contexto desconocido: ${kind}`);
-  fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  fss.writeFileSync(CONTEXT_FILES[kind], String(text).slice(0, 20000), { mode: 0o600 });
+  // Atómico (tmp+rename): editar el contexto desde el panel no puede dejar el
+  // .md a medias si algo falla justo ahí (lo lee cada chat de trabajo).
+  writeFileAtomic(CONTEXT_FILES[kind], String(text).slice(0, 20000));
 }

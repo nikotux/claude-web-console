@@ -30,6 +30,13 @@ function fmtClock(ms) {
   if (!Number.isFinite(ms)) return '';
   return new Date(ms).toISOString().slice(11, 16);
 }
+function fmtAgo(ms) {
+  if (!Number.isFinite(ms) || !ms) return null;
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return 'recién';
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  return `hace ${Math.floor(s / 3600)} h`;
+}
 function field(label, value) {
   if (value == null || value === '') return '';
   return `<div class="bv2-field"><span class="bv2-field-k">${esc(label)}</span><span class="bv2-field-v">${esc(value)}</span></div>`;
@@ -131,7 +138,18 @@ export function openTicketDetail(t, deps = {}) {
       return rows ? `<div class="bv2-sec-h">${esc(title)}</div><div class="bv2-fields">${rows}</div>` : '';
     }).join('');
 
+    // Barra de FRESCURA (Fix 2 uniformidad, 2026-07-10): de dónde salió el dato
+    // (snapshot / base de resueltos / Zoho en vivo) + hace cuánto + botón ↻ para
+    // forzar relectura. Uniforme con el "actualizado hace X" del dashboard.
+    const ago = fmtAgo(f.generatedAt);
+    const srcLabel = f.fromResolved ? 'base de resueltos' : (f.cached ? 'snapshot' : 'Zoho en vivo');
+    const freshBar = `<div class="bv2-freshbar">
+      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? `actualizado ${ago}` : 'lectura en vivo'} · ${esc(srcLabel)}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="Actualizar detalle">${icon('refresh', { size: 13 })}</button>
+    </div>`;
+
     box.innerHTML = `
+      ${freshBar}
       ${lockBanner}
       <div class="bv2-pr-cols">
         <div class="bv2-pr-main">
@@ -169,6 +187,7 @@ export function openTicketDetail(t, deps = {}) {
       } catch { return {}; }
     }
     const postClaim = async (action, force) => { await apiClaim(action, force); reload(); };
+    box.querySelector('[data-act="refresh"]')?.addEventListener('click', reload);
     box.querySelector('[data-act="claim"]')?.addEventListener('click', () => postClaim('claim'));
     box.querySelector('[data-act="release"]')?.addEventListener('click', () => postClaim('release'));
     box.querySelector('[data-act="force"]')?.addEventListener('click', () => postClaim('release', true));

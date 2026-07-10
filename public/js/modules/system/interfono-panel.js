@@ -19,6 +19,13 @@ const ago = (ms) => {
   return `hace ${Math.round(m / 60)}h`;
 };
 const KIND_ICON = { tui: '🖥️', 'tui-chat': '💬', chat: '💬', desconocida: '❔' };
+// Cómo llegó (o no) cada mensaje al humano (ver core/interfono-log.js ROUTES).
+const ROUTE_LABEL = {
+  'auto-deliver': '📨 auto-entregado', 'tui-nudge': '🖥️ nudge TUI',
+  'hook-inject': '🪝 inyectado', badge: '🔔 badge',
+  'popup-shown': '🪟 popup', 'popup-resume': '▶ entregado', 'popup-dismiss': '✕ archivado',
+  expired: '⌛ vencido',
+};
 
 export function mountInterfonoPanel(el, ctx) {
   const { isAdmin } = ctx;
@@ -50,6 +57,11 @@ export function mountInterfonoPanel(el, ctx) {
     <details class="if-group">
       <summary><span class="if-gtitle">Mensajes recientes</span> <span class="if-count" data-ref="msgs-n"></span></summary>
       <div class="if-list" data-ref="msgs"></div>
+    </details>
+
+    <details class="if-group">
+      <summary><span class="if-gtitle">Bitácora de entrega</span> <span class="if-count" data-ref="deliv-n"></span></summary>
+      <div class="if-list" data-ref="deliv"></div>
     </details>`;
 
   const refs = {};
@@ -115,13 +127,27 @@ export function mountInterfonoPanel(el, ctx) {
       </div>`).join('') : '<div class="hp-empty">Sin mensajes recientes.</div>';
   }
 
+  function renderDeliveries(rows) {
+    refs['deliv-n'].textContent = rows.length ? `(${rows.length})` : '(0)';
+    refs.deliv.innerHTML = rows.length ? rows.map((d) => `
+      <div class="if-item if-msg">
+        <span class="if-name">${ROUTE_LABEL[d.route] || esc(d.route)}</span>
+        <span class="if-body">${esc(d.from || '—')} → ${esc(d.to || '—')}${d.kind ? ` · ${esc(d.kind)}` : ''}</span>
+        <span class="if-sub">${ago(d.ts)}</span>
+      </div>`).join('') : '<div class="hp-empty">Sin entregas registradas.</div>';
+  }
+
   async function load() {
     try {
-      const d = await (await fetch(API)).json();
+      const [d, deliv] = await Promise.all([
+        (await fetch(API)).json(),
+        fetch(`${API}/deliveries?limit=100`).then((r) => r.json()).catch(() => ({ deliveries: [] })),
+      ]);
       if (!alive) return;
       renderDir(d.directory || []);
       renderClaims(d.claims || []);
       renderMsgs(d.messages || []);
+      renderDeliveries(deliv.deliveries || []);
     } catch {
       if (alive) refs.dir.innerHTML = '<div class="hp-empty">No se pudo leer el Interfono.</div>';
     }

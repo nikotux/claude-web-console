@@ -1,17 +1,20 @@
 // modules/tickets/sources.js — capa de LECTURA read-only de las fuentes
 // externas (por ahora Zoho Desk; GitHub/PRs para el dev-lane se integra en
-// Fase 3 reusando el patrón `gh` de v1). Sin estado en disco: sólo un cache
-// EN MEMORIA con TTL, para no re-pegarle a Zoho en cada request del dashboard.
+// Fase 3 reusando el patrón `gh` de v1). El listado ABIERTO/dev-lane sigue con
+// cache EN MEMORIA con TTL. La vista RESUELTOS (más abajo) SÍ persiste a disco
+// — ver esa sección.
 //
 // Nota de costo: el listado de Desk viene "trimmed" (sin customFields ni
 // modifiedTime/closedTime), así que para derivar lane/aging/resolved hay que
 // enriquecer cada ticket con desk_get_ticket. Se hace con concurrencia
 // limitada (pool) y se cachea el resultado enriquecido.
-import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { listTicketsByDepartment, getTicketState } from './desk-mcp-client.js';
 import { DEPT_TOLKIEN, DEPT_MORDOR } from './derive.js';
-import { config } from '../../core/config.js';
-import { fetchPrRich } from '../comms/pr-read-shared.js';
+import { fetchPrRich, listPrs } from '../comms/pr-read-shared.js';
 
 const DEPARTMENTS = [DEPT_MORDOR, DEPT_TOLKIEN];
 const CACHE_TTL_MS = 60_000;      // "fresco": no recargar si es más nuevo que esto
@@ -80,29 +83,174 @@ export async function getTickets({ force = false } = {}) {
 }
 
 // ===== Dev-lane: PRs abiertos de Tolkien (GitHub, vía gh — determinístico) =====
-// Wrapper propio de gh (v2 no depende de v1). cwd = repo Tolkien.
-function runGh(args) {
-  return new Promise((resolve, reject) => {
-    execFile('gh', args, { cwd: config.projectDir, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`gh ${args[0]}: ${String(stderr || err.message).trim().slice(0, 200)}`));
-      else resolve(String(stdout));
-    });
-  });
-}
-
+// El `gh pr list` sale del LECTOR ÚNICO comms/pr-read-shared.js:listPrs (fuente
+// canónica, coherencia 2026-07-10): antes este módulo tenía su propio wrapper
+// `runGh` duplicando la llamada del comms-runner. La caché EN MEMORIA prCache
+// (TTL 60s) sigue siendo el gate primario; listPrs solo unifica el fetch crudo.
 let prCache = null;
 export async function getDevLanePRs({ force = false } = {}) {
   if (!force && prCache && Date.now() - prCache.at < CACHE_TTL_MS) return prCache.result;
   let result;
   try {
-    const out = await runGh(['pr', 'list', '--state', 'open', '--limit', '30',
-      '--json', 'number,title,url,headRefName,reviewDecision,statusCheckRollup,isDraft,updatedAt,author']);
-    result = { prs: JSON.parse(out), error: null };
+    const prs = await listPrs({ state: 'open', limit: 30 });
+    result = { prs, error: null };
   } catch (err) {
     result = { prs: [], error: String(err?.message || err).slice(0, 200) };
   }
   prCache = { at: Date.now(), result };
   return result;
+}
+
+// ===== Vista RESUELTOS: STORE PERSISTENTE (pedido Niko 2026-07-10) =====
+// A diferencia del resto de este archivo (cache en memoria, se pierde al
+// reiniciar), Resueltos es una "base de datos" chica en disco que SE MANTIENE
+// y sólo AGREGA: un ticket cerrado no cambia nunca más (Zoho no lo reabre en la
+// práctica de este flujo) y un PR mergeado tampoco — así que una vez que algo
+// entró acá, NUNCA se vuelve a pedir a Zoho/GitHub. Sobrevive reinicios
+// (arranque instantáneo) y con el tiempo termina cubriendo MÁS histórico del
+// que cualquier listado individual puede traer (Zoho no pagina, tope ~100/depto
+// por llamada — ver nota más abajo), porque cada pasada suma lo nuevo sin
+// perder lo viejo.
+const RESOLVED_STORE_FILE = path.join(os.homedir(), '.cwc-data', 'tickets-resolved.json');
+let resolvedStore = null;        // { ticketsById: {}, prsByNumber: {} } — cargado 1 vez, en memoria de ahí en más
+function loadResolvedStore() {
+  if (resolvedStore) return resolvedStore;
+  let parsed = null;
+  try { parsed = JSON.parse(fs.readFileSync(RESOLVED_STORE_FILE, 'utf8')); } catch { /* sin store previo */ }
+  resolvedStore = {
+    ticketsById: (parsed && typeof parsed.ticketsById === 'object' && parsed.ticketsById) || {},
+    prsByNumber: (parsed && typeof parsed.prsByNumber === 'object' && parsed.prsByNumber) || {},
+  };
+  return resolvedStore;
+}
+function saveResolvedStore() {
+  // Atómico (tmp+rename): un reinicio a mitad de escritura no corrompe el store.
+  try { writeJsonAtomic(RESOLVED_STORE_FILE, resolvedStore); }
+  catch (err) { console.error('[tickets] no pude persistir resueltos:', err?.message); }
+}
+
+function sortMerged(prs) {
+  return prs.sort((a, b) => (Date.parse(b.mergedAt || '') || 0) - (Date.parse(a.mergedAt || '') || 0));
+}
+
+// ===== LECTURA INSTANTÁNEA del store (0 red — la usa el endpoint) =====
+// Rediseño 2026-07-10 (pedido Niko): la vista Resueltos ya NO enriquece dentro
+// del request (eso causaba el "pensando" de 1-2 min). El REFRESHER de fondo
+// mantiene el store al día cada 60s (ver refresher.js → refreshResolved), y el
+// endpoint sólo LEE de acá. Instantáneo, sin tocar Zoho/GitHub.
+//   `meta`: at (última pasada OK), refreshing (hay una en curso), listed/capped
+//   de la última pasada. `ready` = ya hay al menos una pasada completada.
+let resolvedMeta = { at: 0, listed: null, capped: false, refreshing: false, error: null, ready: false };
+export function readResolved() {
+  const store = loadResolvedStore();
+  return {
+    tickets: Object.values(store.ticketsById),
+    prs: sortMerged(Object.values(store.prsByNumber)),
+    meta: { ...resolvedMeta },
+  };
+}
+
+// Metadata de la última pasada (sin construir las arrays) — para el generatedAt.
+export function resolvedInfo() { return { ...resolvedMeta }; }
+
+// Busca un ticket CERRADO en el store persistido, por número humano ('527') o id
+// interno de Zoho. Lo usa el detalle de ticket para servir un cerrado que vive
+// SÓLO en la base de resueltos SIN golpear Zoho en vivo (fuente de consulta
+// uniforme con el dashboard, 0 red). Devuelve el raw enriquecible, o null.
+export function findResolvedTicket(numberOrId) {
+  const store = loadResolvedStore();
+  const key = String(numberOrId);
+  if (store.ticketsById[key]) return store.ticketsById[key];   // match por id interno
+  for (const t of Object.values(store.ticketsById)) {          // match por número humano
+    if (String(t.ticketNumber) === key) return t;
+  }
+  return null;
+}
+
+// ===== REFRESCO EN FONDO (lo llama el refresher cada 60s) =====
+// Actualiza AMBAS "tablas" del store (tickets cerrados + PRs mergeados) en una
+// sola pasada dedup'd. TTL interno: aunque el refresher lo llame cada 60s, sólo
+// vuelve a listar/pedir cada RESOLVED_CHECK_TTL_MS (los resueltos cambian lento).
+// `force` (botón ↑) saltea el TTL. Recibe `agentsById` del refresher para stampear
+// ownerName SIN una llamada extra a Desk — así el read del endpoint es 0-red.
+//
+// INCREMENTAL: enriquece SOLO los cerrados que TODAVÍA no están en el store — un
+// ticket ya guardado NUNCA se vuelve a pedir (customFields/closedTime no cambian).
+// El listado también RECONCILIA: si un guardado ahora lista como no-cerrado
+// (reabierto en Zoho), sale del store, sin gastar un get extra.
+// LÍMITE DE PLATAFORMA: el MCP desk_list_tickets NO pagina (`from`), así que cada
+// listado topa ~100/depto. El store igual va acumulando más historial con cada
+// pasada que trae cerrados nuevos.
+const RESOLVED_CHECK_TTL_MS = 120_000; // cada cuánto revisar novedades (cerrados/mergeados/reaperturas)
+const RESOLVED_ENRICH_CAP = 160;       // techo de gets NUEVOS por pasada (rate-limit de Zoho)
+let resolvedInFlight = null;
+export async function refreshResolved({ agentsById = {}, force = false } = {}) {
+  const store = loadResolvedStore();
+  // Re-stampea ownerName en TODOS los guardados con el mapa fresco (barato, 0 red):
+  // mantiene los dueños al día y sana registros viejos guardados sin ownerName.
+  for (const t of Object.values(store.ticketsById)) {
+    const owner = t.assigneeId ? agentsById[String(t.assigneeId)] : null;
+    t.ownerName = owner?.name || t.ownerName || null;
+  }
+  const fresh = !force && resolvedMeta.at > 0 && Date.now() - resolvedMeta.at < RESOLVED_CHECK_TTL_MS;
+  if (fresh) { resolvedMeta.ready = true; return readResolved(); }
+  if (resolvedInFlight) return resolvedInFlight;
+  resolvedMeta.refreshing = true;
+  resolvedInFlight = (async () => {
+    // ── Tabla 1: PRs mergeados (barato, 1 llamada gh; acumula por número) ──
+    // Vía la fuente única listPrs (comms/pr-read-shared.js); persistencia por
+    // número en el store SIN cambios.
+    let prError = null;
+    try {
+      const merged = await listPrs({ state: 'merged', limit: 200 });
+      for (const pr of merged) store.prsByNumber[String(pr.number)] = pr;
+    } catch (err) { prError = String(err?.message || err).slice(0, 200); }
+
+    // ── Tabla 2: tickets cerrados (lista 2 deptos; enriquece sólo lo nuevo) ──
+    const lists = await pool(DEPARTMENTS, DEPARTMENTS.length, (dept) => listTicketsByDepartment(dept, 100));
+    const deptsOk = lists.filter((l) => Array.isArray(l));
+    // Si NINGÚN depto respondió (timeout del MCP compartido con otras sesiones de
+    // la máquina), NO marcamos la pasada como OK: el próximo tick reintenta en vez
+    // de dejar el store "fresco" con datos incompletos por 2 minutos.
+    if (!deptsOk.length) {
+      saveResolvedStore(); // igual persistimos los PRs que sí llegaron
+      resolvedMeta = { ...resolvedMeta, refreshing: false, ready: resolvedMeta.ready || false,
+        error: 'Zoho Desk no respondió (timeout del MCP) — se reintenta en el próximo ciclo.', at: resolvedMeta.at };
+      return readResolved();
+    }
+    const stubs = lists.flat().filter((t) => t && t.id && !t.__error);
+    const listingCapped = lists.some((l) => Array.isArray(l) && l.length >= 100);
+    // Reconciliación: guardado que ya NO figura cerrado → se reabrió, sale del store.
+    for (const s of stubs) {
+      if (s.statusType !== 'Closed' && store.ticketsById[String(s.id)]) delete store.ticketsById[String(s.id)];
+    }
+    const closed = stubs.filter((s) => s.statusType === 'Closed');
+    const toEnrich = closed.filter((s) => !store.ticketsById[String(s.id)]);
+    const enrichCapped = toEnrich.length > RESOLVED_ENRICH_CAP;
+    const batch = toEnrich.slice(0, RESOLVED_ENRICH_CAP);
+    let saved = 0;
+    if (batch.length) {
+      const enriched = await pool(batch, ENRICH_CONCURRENCY, (s) => getTicketState(s.id));
+      for (const t of enriched) if (t && t.found && !t.__error && t.id != null) {
+        const owner = t.assigneeId ? agentsById[String(t.assigneeId)] : null;
+        store.ticketsById[String(t.id)] = { ...t, ownerName: owner?.name || null };
+        saved += 1;
+      }
+    }
+    saveResolvedStore();
+    resolvedMeta = {
+      at: Date.now(), listed: closed.length, capped: listingCapped || enrichCapped,
+      refreshing: false, ready: true, error: prError,
+    };
+    return readResolved();
+  })()
+    .catch((err) => {
+      resolvedMeta.refreshing = false;
+      resolvedMeta.error = String(err?.message || err).slice(0, 200);
+      return readResolved();
+    })
+    .finally(() => { resolvedInFlight = null; });
+  return resolvedInFlight;
 }
 
 // Detalle COMPLETO de un PR (conversaciones, checks, archivos) — on-demand.

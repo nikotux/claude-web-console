@@ -1,183 +1,197 @@
-// core/model-router.js — NÚCLEO del router de modelo automático del chat.
+// core/model-router.js — NÚCLEO del router de modelo automático del chat (AutoTux).
 //
 // NO es un motor: es plomería IN-PROCESS (mismo patrón que core/tool-policy.js),
 // consultada EN VIVO por Chat.sendUser() (modules/chat/index.js) en cada turno
 // real del usuario. Decide si conviene subir/bajar el modelo de la conversación
 // y aplica el cambio con el MISMO mecanismo que ya usa el selector manual
-// (Chat.setModel() → q.setModel() del SDK si el motor está vivo, o solo
-// actualiza el campo si está dormido) — cero plomería de cambio de modelo
+// (Chat.setModel() → q.setModel() del SDK) — cero plomería de cambio de modelo
 // nueva, solo la DECISIÓN.
 //
-// Origen y fundamentos (charla del 2026-07-06 con el usuario, research +
-// datos reales de ESTA consola — ver memoria del proyecto):
-//  - RouteLLM/FrugalGPT: la cascada "arrancar y escalar si hace falta" rinde
-//    mejor que predecir la complejidad de antemano. Los propios cambios
-//    manuales de `/model` de este usuario (16 casos en su historial real)
-//    confirman el MISMO patrón: escala reactivo, no anticipado.
-//  - Análisis de costo real de transcripts propios: clasificar con Haiku en
-//    CADA turno es ~0,005% del costo total — insignificante. El ahorro/valor
-//    de verdad está en decidir bien Sonnet↔Opus↔Fable para el trabajo pesado,
-//    no en cazar saludos con Haiku.
-//  - Con solo 16 cambios manuales en el historial, NO hay señal confiable para
-//    automatizar el salto a FABLE (un mensaje de "arreglá esto" y uno de
-//    "rediseño mayor" pueden verse igual de simples/largos). Por eso esta
-//    heurística de Fase 1 tiene TECHO en `opus`: subir a `fable` queda
-//    deliberadamente MANUAL (selector) hasta juntar más datos.
-//  - `opusplan` (precedente oficial de Claude Code) ya valida la idea de
-//    "la fase de la tarea decide el modelo", pero es un switch binario atado a
-//    Plan Mode, sin memoria — acá se diseña la histéresis que a ESE no le hace
-//    falta reinventar de cero.
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 (2026-07-10) — REDISEÑO tras revisión externa + simulacros con datos reales.
+// Documentos: docs/autotux-analisis-externo.md (diagnóstico) +
+// ~/pool of documents/2026-07-10_autotux-propuesta-rediseno_v01.md (propuesta).
 //
-// Alcance (Fase 1): heurística 0-costo (nada de red, nada de tokens) sobre el
-// TEXTO del turno + histéresis de dos umbrales (sube apenas se detecta algo
-// más difícil; baja recién tras varios turnos simples SEGUIDOS, un escalón
-// por vez — nunca de un salto).
+// PROBLEMA de v1 (medido en model-router-log.jsonl, 62 decisiones): el router
+// colapsaba en un flip-flop Sonnet↔Opus (49 subidas / 13 bajadas / 0 a haiku o
+// fable). Tres causas que se reforzaban:
+//   1. Saltos DIRECTOS al techo (code fence / ≥800 chars → Opus de un salto).
+//   2. Histéresis con la asimetría en la dirección equivocada: subir sin inercia
+//      + bajar lento ⇒ "trepar y quedarse".
+//   3. Un solo estado (el modelo del chat) que toda decisión mutaba ⇒ Haiku
+//      quedaba estructuralmente inalcanzable.
 //
-// Fase 2 (2026-07-06, agregada acá): dos piezas nuevas, ambas con el MISMO
-// techo en `opus` que la heurística de Fase 1 (nunca escalan solas a fable):
-//  - `applyHysteresis()` separa la histéresis de la heurística (Fase 1 la
-//    tenía mezclada adentro de `decideModelForTurn`) para que el clasificador
-//    de Haiku (que vive en modules/chat/index.js, junto a extractTitle — este
-//    núcleo se mantiene sin dependencias del SDK) pueda reusarla tal cual
-//    cuando la heurística devuelve `ambiguous:true`.
-//  - `reactiveEscalation()` es la "red de seguridad" estilo cascada
-//    (FrugalGPT): si un turno recién terminado usó MUCHAS herramientas de
-//    golpe, es señal barata y confiable de que el nivel se quedó corto — sube
-//    un escalón para el PRÓXIMO turno. No hay forma de "rehacer" el turno que
-//    ya pasó con el modelo que tenía, así que esto es prevención hacia
-//    adelante (siguiente turno), no corrección retroactiva.
+// v2 (shape "v2b segura", validado por simulacro: ~12-18% de ahorro SIN riesgo
+// de calidad — ver /tmp/autotux-sim*.js del análisis):
+//   C1. FABLE PROHIBIDO: fuera de MODEL_LEVELS + guard en el call-site. Ya no es
+//       "techo", es prohibición (pedido del dueño).
+//   C2. Todos los movimientos automáticos son ±1 escalón (nunca saltos).
+//   C3. COOLDOWN anti-rebote: tras cada cambio, 2 turnos congelados para señales
+//       no-fuertes (análogo a BGP route-flap dampening — penalizar la
+//       oscilación, no el cambio).
+//   C4. Separar NIVEL BASE (pegajoso, histéresis+cooldown) del OVERRIDE DE TURNO
+//       (Haiku SOLO ese turno, sin tocar estado). El override se limita a acks
+//       de CIERRE (perfecto/gracias/listo…) — NUNCA a go-aheads (dale/ok/sí) que
+//       suelen DISPARAR trabajo: correr una implementación en Haiku es frágil
+//       (hallazgo del simulacro).
+//   C5. Escalada por EVIDENCIA DE INSUFICIENCIA (corrección del usuario · errores
+//       de herramientas), no por conteo bruto de tools. La corrección del
+//       usuario ("no funciona", "está mal") es una etiqueta de calidad GRATIS
+//       con ground truth — sube en el acto. Esto cumple el requisito "detectar
+//       que el modelo no alcanzó y subir" SIN re-correr el turno (el auto-redo
+//       automático disparó 0 veces en los simulacros: o ya estás en Opus, o la
+//       corrección escala un turno antes y gratis; se descartó por riesgo/nulo
+//       beneficio).
+//   +  Bajada por INACTIVIDAD (idle ≥60 min ⇒ decae 1 escalón al reanudar).
 //
-// Activación implícita (sin UI nueva): SOLO se gestiona un chat si su modelo
-// ACTUAL es exactamente uno de los 4 alias de MODEL_LEVELS. Si el usuario
-// eligió `opusplan`, `default`, o todavía no eligió nada, el router queda
-// INERTE a propósito — elegir uno de los 4 alias directos desde el selector
-// ES el "prender" el modo automático; elegir opusplan/default lo apaga.
-
-// Fase 3 (2026-07-06): visibilidad + aprendizaje. `logDecision()` es un
-// registro APPEND-ONLY (patrón "invariantes propuestos" de Salud: esto es
-// SOLO observación para calibrar después con datos reales — nada de esta
-// fase se auto-aplica ni se relee para decidir en caliente) de cada cambio
-// de modelo que hizo el router (nunca de los manuales — esos ya quedan en el
-// historial normal del chat). modules/chat/index.js llama a logDecision() en
-// cada punto donde decide subir/bajar de nivel; el indicador visible del
-// nivel (badge "🤖" en el header + nota inline al cambiar solo) vive en
-// public/js/modules/chat/chat-tab.js, con el flag `auto` que viaja en el
-// evento `{type:'model', model, auto}` (Chat.setModel(model, {auto:true})).
+// Fundamentos citados (research; el razonamiento se sostiene solo): RouteLLM/
+// FrugalGPT (cascada arrancar-barato-escalar), AutoMix (auto-verificación para
+// escalar), BGP route-flap dampening (RFC 2439, cooldown). Bandit/RL descartado:
+// con ~62 decisiones no hay volumen para aprender una política sin sobreajuste.
+//
+// Activación implícita: SOLO gestiona un chat si su modelo ACTUAL mapea a la
+// escala (clampLevel != -1). opusplan/default ⇒ router inerte a propósito.
+// El estado por chat persistido sigue siendo MÍNIMO: dos contadores chicos
+// (downStreak, cooldown). El nivel se deriva de chat.model, no se duplica.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'model-router-log.jsonl');
-const LOG_MAX_BYTES = 2 * 1024 * 1024; // tope crudo — ver poda en logDecision
+const TURN_LOG_FILE = path.join(os.homedir(), '.cwc-data', 'model-router-turns.jsonl');
+const LOG_MAX_BYTES = 2 * 1024 * 1024; // tope crudo — ver poda
 
-// Registro append-only de UN cambio de modelo decidido por el router. Nunca
-// rompe el turno del chat (best-effort): un fallo de disco se ignora.
-// `entry` esperado: { chatId, sessionId, source: 'heuristic'|'classifier'|
-// 'reactive', from, to, text (extracto corto) }.
-export function logDecision(entry) {
+function appendCapped(file, obj) {
   try {
-    const dir = path.dirname(LOG_FILE);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const line = `${JSON.stringify({ ts: Date.now(), ...entry })}\n`;
-    fs.appendFileSync(LOG_FILE, line, { mode: 0o600 });
-    // Poda cruda: pasado el tope, nos quedamos con la mitad más reciente —
-    // alcanza para un log de calibración, no hace falta rotación sofisticada.
-    const size = fs.statSync(LOG_FILE).size;
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.appendFileSync(file, `${JSON.stringify({ ts: Date.now(), ...obj })}\n`, { mode: 0o600 });
+    const size = fs.statSync(file).size;
     if (size > LOG_MAX_BYTES) {
-      const lines = fs.readFileSync(LOG_FILE, 'utf8').split('\n').filter(Boolean);
+      const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
       const kept = lines.slice(-Math.floor(lines.length / 2));
-      fs.writeFileSync(LOG_FILE, `${kept.join('\n')}\n`, { mode: 0o600 });
+      fs.writeFileSync(file, `${kept.join('\n')}\n`, { mode: 0o600 });
     }
-  } catch { /* best-effort */ }
+  } catch { /* best-effort: nunca romper el turno */ }
 }
 
-// Orden barato -> caro. El índice ES el "nivel" (se deriva de chat.model, NO
-// se duplica en un estado propio — solo se persiste el contador de histéresis).
-export const MODEL_LEVELS = ['haiku', 'sonnet', 'opus', 'fable'];
+// Registro append-only de UN cambio de modelo decidido por el router. `entry`:
+// { chatId, sessionId, source: 'heuristic'|'classifier'|'reactive'|'override'|
+//   'insufficiency'|'idle'|'guard', from, to, text }.
+export function logDecision(entry) { appendCapped(LOG_FILE, entry); }
 
-// Techo de la heurística de Fase 1 (ver nota de fundamentos arriba): nunca
-// sugiere subir sola hasta 'fable' — a fable se llega a mano desde el selector.
-const HEURISTIC_CEILING = MODEL_LEVELS.indexOf('opus'); // 2
+// Registro por TURNO (para calibrar: distribución de turnos por nivel + tasa de
+// rebote — v1 solo logueaba CAMBIOS, así que Haiko 0% era invisible). Liviano.
+// { chatId, ranLevel, base, override(bool), toolCalls, toolErrors }.
+export function logTurn(entry) { appendCapped(TURN_LOG_FILE, entry); }
 
-// Turnos "simples" SEGUIDOS necesarios para bajar UN escalón. Subir es
-// inmediato (mismo turno); bajar tiene inercia — asimetría deliberada.
-const DOWN_STREAK_TO_DEMOTE = 3;
+// Escala GESTIONADA por el router, barato→caro. FABLE PROHIBIDO (v2, C1): no
+// está acá y el call-site lo bloquea (FORBIDDEN_AUTO). El índice ES el nivel.
+export const MODEL_LEVELS = ['haiku', 'sonnet', 'opus'];
+export const CEILING = MODEL_LEVELS.length - 1; // 2 = opus
+export const FORBIDDEN_AUTO = new Set(['fable']); // guard de defensa en profundidad
 
-// Confirmaciones/saludos triviales en español (con alguna variante corta en
-// inglés). Vocabulario tomado de los propios turnos "perfecto"/"reincialo"/
-// "continuemos" que aparecieron en el análisis del historial real de esta
-// consola — turnos donde el mensaje en sí no ameritaba el modelo caro que
-// estaba activo por inercia del hilo.
-const TRIVIAL_RE = /^(ok(ay)?|dale|listo|gracias|perfecto|genial|buen[ií]simo|excelente|s[ií]|no|de acuerdo|correcto|entendido|continuemos?|sigamos?|dale,?\s*gracias)[.!¡¿?]*$/i;
+// v2: subir sigue siendo rápido (1 señal) pero con COOLDOWN posterior; bajar
+// exige 2 turnos "down" seguidos (era 3 — C5 cubre el riesgo de bajar de más).
+const DOWN_STREAK_TO_DEMOTE = 2;
+const COOLDOWN_TURNS = 2;            // turnos congelados tras un cambio (anti-rebote)
+const LONG_MESSAGE_CHARS = 1200;     // era 800; longitud ≠ dificultad, ahora señal débil
+const REACTIVE_TOOL_THRESHOLD = 10;  // era 6; ahora exige ADEMÁS ≥1 error de tool
+export const IDLE_DECAY_MS = 60 * 60 * 1000; // ≥60 min dormido ⇒ decae 1 escalón
 
+// Acks de CIERRE (cierran un hilo, NO disparan trabajo) ⇒ override efímero a
+// Haiku seguro. Deliberadamente NO incluye dale/ok/sí (go-aheads).
+const CLOSING_ACK_RE = /^(perfecto|genial|gracias|buen[ií]simo|excelente|listo|entendido|de acuerdo|correcto|continuemos?|sigamos?|joya|impecable|barbaro|bárbaro)[.!¡¿?\s]*$/i;
+// Go-ahead / confirmaciones que PUEDEN disparar trabajo ⇒ cuentan para bajar el
+// base (señal 'down') pero NUNCA override (correr trabajo en Haiku es frágil).
+const GOAHEAD_RE = /^(ok(ay)?|dale|s[ií]|vale|bueno|ya|ah+ ok|de una|hac[eé]lo|seguí|segu[ií]|continu[áa]|dale,?\s*(seguí|segu[ií]|continu[áa])?)[.!¡¿?\s]*$/i;
 const CODE_FENCE_RE = /```/;
-const LONG_MESSAGE_CHARS = 800; // mensaje largo con mucho contexto: probable trabajo pesado
+// Etiqueta humana GRATIS: el usuario corrige ⇒ el modelo no alcanzó (C5).
+const USER_CORRECTION_RE = /\b(no funciona|no sirve|est[áa] mal|no era eso|eso no|no es lo que|sigue fallando|sigue sin|otra vez el error|otra vez fall|incorrecto|te equivocaste|no compil[óa]|no compila|rompiste|revert[íi]|volv[ée] atr[áa]s)\b/i;
 
-function levelIndexOf(model) {
-  return MODEL_LEVELS.indexOf(model);
+// Deriva el nivel del modelo. -1 ⇒ no gestionado (opusplan/default). fable
+// (elección manual previa que vuelve a 'auto') ⇒ se clampa a opus, NO a -1
+// (bug de v1: indexOf('fable') daba 3 con la escala vieja; con la nueva daría
+// -1 y el router quedaría inerte por accidente — se maneja explícito).
+export function clampLevel(model) {
+  const i = MODEL_LEVELS.indexOf(model);
+  if (i !== -1) return i;
+  if (model === 'fable') return CEILING;
+  return -1;
 }
 
-// Heurística 0-costo: mira SOLO el texto del turno. Devuelve un índice
-// sugerido de MODEL_LEVELS, o `null` si el mensaje es ambiguo — en ese caso
-// no se opina, el nivel actual queda intacto (ni sube ni cuenta para bajar).
-export function classifyHeuristic(text) {
+// Clasifica el TEXTO del turno en una SEÑAL (nunca un nivel absoluto):
+//  closing   → override a Haiku este turno + cuenta como 'down' para el base
+//  goahead   → 'down' para el base, SIN override
+//  strong_up → +1 inmediato, rompe cooldown (corrección del usuario)
+//  up        → +1, respeta cooldown (trae código o mensaje muy largo)
+//  ambiguous → el llamador consulta al clasificador relativo (Haiku, background)
+//  none      → texto vacío
+export function classifySignal(text) {
   const t = String(text || '').trim();
-  if (!t) return null;
-  if (t.length <= 60 && TRIVIAL_RE.test(t)) return 0; // haiku
-  if (CODE_FENCE_RE.test(t)) return HEURISTIC_CEILING; // trae código
-  if (t.length >= LONG_MESSAGE_CHARS) return HEURISTIC_CEILING; // pedido largo/con mucho contexto
-  return null; // ambiguo: no tocar nada
+  if (!t) return { kind: 'none' };
+  if (USER_CORRECTION_RE.test(t)) return { kind: 'strong_up' };   // prioridad: corrección aunque sea corta
+  if (t.length <= 80 && CLOSING_ACK_RE.test(t)) return { kind: 'closing' };
+  if (t.length <= 80 && GOAHEAD_RE.test(t)) return { kind: 'goahead' };
+  if (CODE_FENCE_RE.test(t)) return { kind: 'up' };
+  if (t.length >= LONG_MESSAGE_CHARS) return { kind: 'up' };
+  return { kind: 'ambiguous' };
 }
 
-// Aplica la histéresis dado un nivel SUGERIDO ya concreto (nunca null) — la
-// misma función sirve tanto a la heurística de Fase 1 como al clasificador de
-// Haiku de Fase 2, así las dos vías de decisión suben/bajan exactamente igual.
-export function applyHysteresis({ currentLevel, suggestion, downStreak = 0 }) {
-  if (suggestion > currentLevel) {
-    // Subir es fácil: YA, en este mismo turno.
-    return { level: suggestion, downStreak: 0, changed: true };
+// Mapea una señal a un MOVIMIENTO del base: 'up'|'down'|'strong_up'|'same'.
+export function signalToMove(kind) {
+  if (kind === 'strong_up') return 'strong_up';
+  if (kind === 'up') return 'up';
+  if (kind === 'closing' || kind === 'goahead') return 'down';
+  return 'same'; // none/ambiguous: el llamador decide
+}
+
+// Override efímero de turno: un ack de CIERRE corre este turno en Haiku (0) sin
+// tocar el estado. Cualquier otra cosa: null (sin override).
+export function turnOverride(kind) {
+  return kind === 'closing' ? 0 : null;
+}
+
+// Aplica un MOVIMIENTO ±1 al nivel base con cooldown anti-rebote. Devuelve el
+// estado nuevo { level, downStreak, cooldown, changed }. Es la ÚNICA función que
+// hace la aritmética del cooldown (el llamador no lo decrementa aparte).
+export function decideBase({ baseLevel, move, downStreak = 0, cooldown = 0 }) {
+  const dec = Math.max(0, cooldown - 1); // decae al procesar el turno
+  if (move === 'strong_up') { // corrección del usuario: rompe cooldown
+    if (baseLevel >= CEILING) return { level: baseLevel, downStreak: 0, cooldown: dec, changed: false };
+    return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
   }
-  if (suggestion < currentLevel) {
+  if (cooldown > 0) { // congelado para señales no-fuertes; el streak NO avanza
+    return { level: baseLevel, downStreak, cooldown: dec, changed: false };
+  }
+  if (move === 'up') {
+    if (baseLevel >= CEILING) return { level: baseLevel, downStreak: 0, cooldown: 0, changed: false };
+    return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
+  }
+  if (move === 'down') {
     const streak = downStreak + 1;
-    if (streak >= DOWN_STREAK_TO_DEMOTE) {
-      // Baja UN escalón por vez (nunca de un salto) tras varios turnos simples seguidos.
-      return { level: currentLevel - 1, downStreak: 0, changed: true };
+    if (baseLevel > 0 && streak >= DOWN_STREAK_TO_DEMOTE) {
+      return { level: baseLevel - 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
     }
-    return { level: currentLevel, downStreak: streak, changed: false };
+    return { level: baseLevel, downStreak: streak, cooldown: 0, changed: false };
   }
-  // suggestion === currentLevel: turno "normal" para el nivel en curso.
-  return { level: currentLevel, downStreak: 0, changed: false };
+  return { level: baseLevel, downStreak: 0, cooldown: 0, changed: false }; // 'same'
 }
 
-// Decide el nivel del PRÓXIMO turno usando SOLO la heurística 0-costo. Devuelve
-// `null` si el modelo actual no es uno de los 4 alias gestionados (opusplan/
-// default/sin elegir) — el router queda inerte adrede. Si la heurística no
-// sabe qué opinar, devuelve `ambiguous:true` (nivel/contador sin tocar) para
-// que el llamador (chat/index.js) decida si vale la pena consultar a Haiku
-// (Fase 2) antes de resolver con `applyHysteresis`.
-export function decideModelForTurn({ currentModel, text, downStreak = 0 }) {
-  const currentLevel = levelIndexOf(currentModel);
-  if (currentLevel === -1) return null;
-
-  const suggestion = classifyHeuristic(text);
-  if (suggestion === null) {
-    return { level: currentLevel, downStreak, changed: false, ambiguous: true };
-  }
-  return { ...applyHysteresis({ currentLevel, suggestion, downStreak }), ambiguous: false };
+// Escalada por INSUFICIENCIA para el PRÓXIMO turno (C5): evidencia, no volumen.
+// hardFail = ≥2 errores de tool; bigAndFailing = ≥10 tools Y ≥1 error. Devuelve
+// null si no aplica (ya en el techo, o sin evidencia).
+export function insufficiencyEscalation({ baseLevel, toolCalls = 0, toolErrors = 0 }) {
+  if (baseLevel < 0 || baseLevel >= CEILING) return null;
+  const hardFail = toolErrors >= 2;
+  const bigAndFailing = toolCalls >= REACTIVE_TOOL_THRESHOLD && toolErrors >= 1;
+  if (!hardFail && !bigAndFailing) return null;
+  return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
 }
 
-// Cuántas tool_use hacen falta en UN turno para considerarlo "pesado de
-// verdad" — umbral deliberadamente alto (evita falsos positivos en turnos con
-// 2-3 herramientas normales) y calibrable con más datos reales más adelante.
-const REACTIVE_TOOL_THRESHOLD = 6;
-
-// Escalado reactivo (Fase 2): al terminar un turno, ¿usó tantas herramientas
-// que el nivel actual se quedó corto? Devuelve `null` si no aplica (ya está en
-// el techo automático, o no llegó al umbral) — mismo shape que applyHysteresis
-// para que el llamador lo aplique igual.
-export function reactiveEscalation({ currentLevel, toolCallsInTurn }) {
-  if (currentLevel === -1 || currentLevel >= HEURISTIC_CEILING) return null;
-  if ((toolCallsInTurn || 0) < REACTIVE_TOOL_THRESHOLD) return null;
-  return { level: currentLevel + 1, downStreak: 0, changed: true };
+// ¿Corresponde una bajada por inactividad? (idle ≥ IDLE_DECAY_MS y base por
+// encima de sonnet). Devuelve 'down' o null. La sesión intensa que justificó
+// Opus probablemente terminó; si no, el 1er turno con código la sube de nuevo.
+export function idleDecayMove({ baseLevel, idleMs }) {
+  return (baseLevel > 1 && idleMs >= IDLE_DECAY_MS) ? 'down' : null;
 }

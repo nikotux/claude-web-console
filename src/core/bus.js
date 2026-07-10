@@ -173,15 +173,30 @@ export function resolveTarget(arg) {
   return { handle: hit.handle, name: hit.name, entry: hit };
 }
 
+// ===== Niveles de interrupción (rediseño 2026-07-10, Fase 4) =====
+// FUENTE ÚNICA de "qué interrumpe y qué no", sin IA (R1). Dos niveles:
+//   active  — merece atención inmediata (toast no-modal en la ventana que ve el
+//             chat). HOY solo el 'heads-up' de una colisión real: otra sesión
+//             EDITÓ un archivo que vos reservabas → tenés que releerlo. (El
+//             bloqueo duro hot/alive ya lo maneja hook-guard en la sesión que
+//             intenta editar; no genera mensaje.)
+//   passive — badge + bitácora, no interrumpe: coordinación manual (notes),
+//             broadcasts, avisos informativos.
+// Regla por defecto: kind 'heads-up' ⇒ active; todo lo demás ⇒ passive. Un
+// mensaje viejo sin `level` se trata como passive en los lectores.
+export function levelForKind(kind) {
+  return kind === 'heads-up' ? 'active' : 'passive';
+}
+
 // ===== Mensajería =====
 // Crea un mensaje. `from`/`fromName` identifican al emisor (best-effort).
-export function sendMessage({ from, fromName, to, toName, text, kind = 'note', hops = 0 }) {
+export function sendMessage({ from, fromName, to, toName, text, kind = 'note', level, hops = 0 }) {
   ensureDirs();
   const id = newId('m');
   const msg = {
     id, from: from || null, fromName: fromName || 'una sesión',
     to, toName: toName || to, text: String(text || '').slice(0, 4000),
-    kind, hops, ts: Date.now(), deliveredTo: {}, ackBy: {},
+    kind, level: level || levelForKind(kind), hops, ts: Date.now(), deliveredTo: {}, ackBy: {},
   };
   writeJson(path.join(MSG_DIR, `${id}.json`), msg);
   return msg;

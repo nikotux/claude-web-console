@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getTickets, getDevLanePRs, getPrDetail } from './sources.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { getTickets, getDevLanePRs, getPrDetail, refreshResolved } from './sources.js';
 import { listAgents, listContacts } from './desk-mcp-client.js';
 import { extractPadRefs, getPadItemsForPr } from './pad-client.js';
 import { buildDashboard } from './views.js';
@@ -28,10 +29,10 @@ function loadFromDisk() {
   try { snapshot = JSON.parse(fs.readFileSync(SNAP_FILE, 'utf8')); } catch { /* sin snapshot previo */ }
 }
 function saveToDisk() {
-  try {
-    fs.mkdirSync(path.dirname(SNAP_FILE), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(SNAP_FILE, JSON.stringify(snapshot), { mode: 0o600 });
-  } catch (err) { console.error('[tickets] no pude persistir el snapshot:', err?.message); }
+  // Atómico (tmp+rename): un reinicio a mitad de escritura no deja el snapshot
+  // corrupto (rompería el arranque hasta el 1er refresh). Antes era writeFileSync directo.
+  try { writeJsonAtomic(SNAP_FILE, snapshot); }
+  catch (err) { console.error('[tickets] no pude persistir el snapshot:', err?.message); }
 }
 
 // STORE ACUMULATIVO (pedido Niko 2026-07-07): cada pasada hace UPSERT por id y
@@ -84,9 +85,18 @@ async function computeSnapshot(prev) {
   const dashboard = buildDashboard(allRaw, now);
 
   // ── MERGE de PR summaries (dev-lane) ────────────────────────────────────
-  const prSummariesById = { ...(prev?.prSummariesById || {}) };
-  for (const k of Object.keys(prSummariesById)) prSummariesById[k] = { ...prSummariesById[k], _stale: true };
-  if (dl && Array.isArray(dl.prs)) {
+  // A DIFERENCIA de los tickets, los ABIERTOS que devuelve `gh pr list --state
+  // open` son AUTORITATIVOS: es UNA sola llamada (no un listado throttled y
+  // paginado como Zoho), así que si un fetch OK ya no trae un PR, es porque se
+  // MERGEÓ o cerró → sale del dev-lane. NO se conserva como stale: ese era el bug
+  // que dejaba un PR mergeado (p.ej. #263) colgado para siempre como "CI
+  // corriendo". Los mergeados viven ahora en la vista Resueltos (on-demand). Sólo
+  // si el fetch FALLA conservamos lo último bueno (marcado stale), para no vaciar
+  // el panel por un hipo puntual de gh.
+  const prFetchOk = dl && !dl.error && Array.isArray(dl.prs);
+  let prSummariesById;
+  if (prFetchOk) {
+    prSummariesById = {};
     for (const pr of dl.prs) {
       prSummariesById[String(pr.number)] = {
         number: pr.number, title: String(pr.title || '').slice(0, 120),
@@ -95,6 +105,9 @@ async function computeSnapshot(prev) {
         ...derivePrStatus(pr), _fetchedAt: now, _stale: false,
       };
     }
+  } else {
+    prSummariesById = { ...(prev?.prSummariesById || {}) };
+    for (const k of Object.keys(prSummariesById)) prSummariesById[k] = { ...prSummariesById[k], _stale: true };
   }
   dashboard.devLane = {
     error: dl?.error || null,
@@ -104,8 +117,11 @@ async function computeSnapshot(prev) {
   // ── MERGE de PR detail + Pad ────────────────────────────────────────────
   // Solo re-fetchea el detalle/Pad de los PRs que vinieron ESTA pasada; los que
   // no vinieron conservan su detalle previo intacto.
-  const prDetailsById = { ...(prev?.prDetailsById || {}) };
-  const freshPrs = (dl && Array.isArray(dl.prs)) ? dl.prs : [];
+  // En un fetch OK arranca VACÍO y se rellena sólo con los ABIERTOS de esta
+  // pasada (abajo) → el detalle de un PR mergeado deja de cachearse y su ficha se
+  // pide en vivo (mostrando el merge real). Si el fetch falló, conserva el previo.
+  const prDetailsById = prFetchOk ? {} : { ...(prev?.prDetailsById || {}) };
+  const freshPrs = prFetchOk ? dl.prs : [];
   await Promise.all(freshPrs.map(async (pr) => {
     try {
       const d = await getPrDetail(pr.number, { force: true });
@@ -139,6 +155,14 @@ async function computeSnapshot(prev) {
     if (raw?.ticketNumber == null) continue;
     ticketsById[String(raw.ticketNumber)] = { ...enrich(raw, now), _stale: !!raw._stale, _fetchedAt: raw._fetchedAt || null };
   }
+
+  // ── Vista RESUELTOS en el MISMO loop (pedido Niko 2026-07-10) ───────────
+  // Fire-and-forget: NO bloquea el snapshot activo (su 1ª pasada puede tardar
+  // 1-2 min enriqueciendo el histórico cerrado). Mantiene su propio store
+  // persistido (~/.cwc-data/tickets-resolved.json) con TTL/inFlight propios, y
+  // reusa el MISMO agentsById que ya calculamos acá (0 llamadas extra a Desk).
+  // El endpoint /resolved sólo LEE ese store → abre instantáneo, sin "pensando".
+  refreshResolved({ agentsById }).catch((e) => console.error('[tickets] refreshResolved:', e?.message));
 
   return { generatedAt: now, dashboard, ticketsById, prDetailsById, rawTicketsById, prSummariesById, error: null };
 }

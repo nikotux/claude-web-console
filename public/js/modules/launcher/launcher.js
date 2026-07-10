@@ -37,26 +37,27 @@ export default {
     const st = {
       type: 'chat', // chat (SDK, default) | claude (PTY) | terminal
       model: localStorage.getItem(LAST_MODEL_KEY) || 'auto',
-      dest: { rel: '', label: 'Home' },
+      dest: null,         // nada pre-seleccionado: se elige a mano (pedido del usuario 2026-07-10)
       view: 'list',       // list | browse
       browseRel: '',
-      recents: [],
       project: { rel: 'tolkien', name: 'Tolkien' },
     };
 
     async function open() {
       if (modal) return;
-      modal = dialog.openModal({ title: 'Nueva sesión', width: 440, onClose: () => { modal = null; } });
+      // Ancho angosto (360): con solo 3 tarjetas por fila + dropdown + CTA, 440
+      // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido
+      // del usuario 2026-07-10).
+      modal = dialog.openModal({ title: 'Nueva sesión', width: 360, onClose: () => { modal = null; } });
       st.view = 'list';
-      st.dest = { rel: '', label: 'Home' };
+      st.dest = null;
       render();
-      // Datos frescos en paralelo (no bloquean el primer render).
+      // Solo el estado de Tolkien (para el atajo): los recientes ya no se listan
+      // en "Abrir en" (pedido del usuario: solo Tolkien · Consola · otra carpeta).
       try {
-        const [rec, tk] = await Promise.all([
-          fetch('/api/terminal/recents').then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText)))).catch(() => ({ recents: [] })),
-          fetch('/api/tolkien/status').then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText)))).catch(() => null),
-        ]);
-        st.recents = rec.recents || [];
+        const tk = await fetch('/api/tolkien/status')
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
+          .catch(() => null);
         if (tk?.rel) st.project = { rel: tk.rel, name: tk.name || 'Proyecto' };
         if (modal) render();
       } catch { /* noop */ }
@@ -70,21 +71,27 @@ export default {
     function render() {
       if (!modal) return;
       const body = modal.body;
+      // Card genérica (ícono arriba + label abajo). Tipos y proyecto comparten
+      // la clase .ln-card para que la grilla 3×3 quede pareja (rediseño
+      // 2026-07-10: solo 3 tipos + 3 proyectos + modelo + Iniciar).
+      const typeCard = (type, ic, label) =>
+        `<button class="btn-ghost ln-type ln-card ${st.type === type ? 'active' : ''}" data-type="${type}">${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span></button>`;
       body.innerHTML = `
+        <div class="ln-sec-title">Tipo de sesión</div>
         <div class="ln-types">
-          <button class="btn-ghost ln-type ${st.type === 'chat' ? 'active' : ''}" data-type="chat">${icon('sparkle')}<span>Chat</span></button>
-          <button class="btn-ghost ln-type ${st.type === 'claude' ? 'active' : ''}" data-type="claude">${icon('keyboard')}<span>Claude (TUI)</span></button>
-          <button class="btn-ghost ln-type ${st.type === 'terminal' ? 'active' : ''}" data-type="terminal">${icon('terminal')}<span>Terminal</span></button>
+          ${typeCard('chat', 'sparkle', 'Chat')}
+          ${typeCard('claude', 'keyboard', 'Claude TUI')}
+          ${typeCard('terminal', 'terminal', 'Terminal')}
         </div>
+        <div class="ln-sec-title">Proyecto</div>
+        <div class="ln-area">${st.view === 'list' ? listHTML() : browseHTML()}</div>
         <div class="ln-model-row" ${st.type === 'terminal' ? 'hidden' : ''}>
           <label class="ln-sec-title" for="ln-model">Modelo</label>
           <select id="ln-model" class="ln-model">
             ${(st.type === 'chat' ? MODELS : TUI_MODELS).map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
-        <div class="ln-sec-title">Abrir en</div>
-        <div class="ln-area">${st.view === 'list' ? listHTML() : browseHTML()}</div>
-        <button class="btn btn--block ln-start">${icon('play', { size: 15 })}<span>Iniciar en ${st.dest.label}</span></button>`;
+        <button class="btn btn--block ln-start" ${st.dest ? '' : 'disabled'}>${icon('play', { size: 15 })}<span>${st.dest ? `Iniciar en ${st.dest.label}` : 'Elegí un destino'}</span></button>`;
 
       // Tipo
       for (const b of body.querySelectorAll('.ln-type')) {
@@ -105,131 +112,26 @@ export default {
     }
 
     function listHTML() {
-      const dest = (rel, label, sub, ic, cls = '') => `
-        <button class="btn-ghost ln-dest ${cls} ${st.dest.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
-          ${icon(ic, { size: 15 })}<span class="ln-dest-label">${label}</span><span class="ln-sub">${sub}</span>
+      const card = (rel, label, ic, cls = '') => `
+        <button class="btn-ghost ln-dest ln-card ${cls} ${st.dest?.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
+          ${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span>
         </button>`;
-      // Atajos fijos: Home + Tolkien + Mi Consola (identidad de ui/places.js;
-      // el diferenciador visual es la clase ln-dest--console de style.css).
-      const shortcuts = dest('', 'Home', '~', 'home')
-        + dest(st.project.rel, st.project.name, `~/${st.project.rel}`, 'gitBranch')
-        + dest(CONSOLE_PLACE.rel, CONSOLE_PLACE.label, `~/${CONSOLE_PLACE.rel}`, CONSOLE_PLACE.ico, 'ln-dest--console');
-      const rec = st.recents.filter((r) => r.cwd !== st.project.rel && r.cwd !== CONSOLE_PLACE.rel);
-      // Solo los 3 recientes más usados; el resto vive en el modal "Ver más"
-      // para no empujar el botón Iniciar fuera de pantalla en móvil.
-      let visible = rec.slice(0, 3);
-      // Si el destino elegido vino del modal y no está en el top 3, se lo
-      // muestra en el tercer lugar para que la selección activa se vea.
-      if (st.dest.rel && !visible.some((r) => r.cwd === st.dest.rel)) {
-        const sel = rec.find((r) => r.cwd === st.dest.rel);
-        if (sel) visible = visible.slice(0, 2).concat(sel);
-      }
-      // Un reciente que sea (o cuelgue de) un lugar conocido hereda su
-      // nombre + ícono (p.ej. una subcarpeta de Mi Consola no queda genérica).
-      const recents = visible.map((r) => {
-        const p = placeFor(r.cwd);
-        return dest(r.cwd, p?.label || baseName(r.cwd), `~/${r.cwd}`, p?.ico || 'folder', p?.cls === 'is-console' ? 'ln-dest--console' : '');
-      }).join('');
-      const more = rec.length > visible.length
-        ? `<button class="btn-ghost btn--sm ln-dests-more">${icon('chevronRight', { size: 13 })}<span>Ver más (${rec.length})</span></button>`
-        : '';
-      const resume = st.type === 'chat' ? '<div class="ln-resume" data-ref="resume"></div>' : '';
+      // Grid 3 tarjetas: Tolkien · Mi Consola · Otra carpeta (abre el navegador).
+      // Identidad de ui/places.js; el tinte de la consola es .ln-dest--console.
+      // "Otra carpeta" queda activa si el destino es una carpeta navegada (≠ los
+      // dos proyectos), para que la selección se vea al volver del navegador.
+      const other = !!st.dest && st.dest.rel !== st.project.rel && st.dest.rel !== CONSOLE_PLACE.rel;
       return `
-        <div class="ln-dests">${shortcuts}${recents}</div>
-        <div class="ln-list-actions">
-          <button class="btn-ghost btn--sm ln-browse-open">${icon('folder', { size: 14 })}<span>Elegir otra carpeta…</span></button>
-          ${more}
-        </div>
-        ${resume}`;
-    }
-
-    // "Ver más" de ubicaciones: modal emergente con todos los recientes.
-    function openDestsMore() {
-      const rec = st.recents.filter((r) => r.cwd !== st.project.rel && r.cwd !== CONSOLE_PLACE.rel);
-      const m = dialog.openModal({ title: 'Abrir en…', width: 440 });
-      const list = document.createElement('div');
-      list.className = 'ln-dests ln-dests--dlg';
-      list.innerHTML = rec.map((r) => `
-        <button class="btn-ghost ln-dest ${st.dest.rel === r.cwd ? 'active' : ''}" data-rel="${r.cwd}" data-label="${baseName(r.cwd)}">
-          ${icon('folder', { size: 15 })}<span class="ln-dest-label">${baseName(r.cwd)}</span><span class="ln-sub">~/${r.cwd}</span>
-        </button>`).join('');
-      m.body.appendChild(list);
-      for (const b of list.querySelectorAll('.ln-dest')) {
-        b.addEventListener('click', () => {
-          st.dest = { rel: b.dataset.rel, label: b.dataset.label };
-          m.close();
-          render();
-        });
-      }
-    }
-
-    function fmtAgo(ms) {
-      const s = Math.floor((Date.now() - ms) / 1000);
-      if (s < 3600) return `hace ${Math.max(1, Math.floor(s / 60))} min`;
-      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
-      return `hace ${Math.floor(s / 86400)} d`;
-    }
-
-    // Retomar una conversación pasada: guarda el modelo, cierra el lanzador
-    // (y el modal "Ver más" si está abierto) y abre el chat con resume.
-    async function resumeChat(dest, sessionId) {
-      localStorage.setItem(LAST_MODEL_KEY, st.model);
-      modal?.close();
-      // Default del lanzador: "Todo" (bypassPermissions) — pedido del usuario
-      // 2026-07-06: todo chat/sesión nuevo arranca sin pedir permisos. Los chats
-      // de bugfixes/headless NO pasan por acá (mantienen su modo explícito).
-      await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'bypassPermissions', resume: sessionId });
-    }
-
-    // Pinta botones de conversación (snippet vía textContent, nunca HTML).
-    function renderResumeItems(container, conversations, dest, onPick) {
-      container.insertAdjacentHTML('beforeend', conversations.map((c) => `
-        <button class="btn-ghost btn--sm ln-resume-item" data-sid="${c.sessionId}">
-          <span class="ln-resume-snip"></span><span class="ln-sub">${fmtAgo(c.ts)}</span>
-        </button>`).join(''));
-      const btns = container.querySelectorAll('.ln-resume-item');
-      conversations.forEach((c, i) => {
-        const b = btns[btns.length - conversations.length + i];
-        b.querySelector('.ln-resume-snip').textContent = c.snippet;
-        b.addEventListener('click', () => onPick(c));
-      });
-    }
-
-    // "Ver más": modal emergente con el historial completo (hasta 10).
-    function openResumeHistory(conversations, dest) {
-      const m = dialog.openModal({ title: `Retomar en ${dest.label}`, width: 440 });
-      const list = document.createElement('div');
-      list.className = 'ln-resume ln-resume--dlg';
-      m.body.appendChild(list);
-      renderResumeItems(list, conversations, dest, (c) => { m.close(); resumeChat(dest, c.sessionId); });
-    }
-
-    // "Retomar conversación": las 2 últimas de la carpeta seleccionada (solo
-    // chat); el resto queda detrás de "Ver más" para que la lista no empuje
-    // el botón Iniciar fuera de pantalla en móvil.
-    async function loadResume() {
-      const box = modal?.body?.querySelector('[data-ref="resume"]');
-      if (!box) return;
-      const rel = st.dest.rel;
-      try {
-        const { conversations } = await (await fetch(`/api/chat/history?cwd=${encodeURIComponent(rel)}`)).json();
-        if (!modal || st.dest.rel !== rel || !conversations.length) { box.innerHTML = ''; return; }
-        const dest = st.dest;
-        box.innerHTML = `<div class="ln-sec-title">Retomar en ${dest.label}</div>`;
-        renderResumeItems(box, conversations.slice(0, 2), dest, (c) => resumeChat(dest, c.sessionId));
-        if (conversations.length > 2) {
-          const more = document.createElement('button');
-          more.className = 'btn-ghost btn--sm ln-resume-more';
-          more.innerHTML = `${icon('chevronRight', { size: 13 })}<span>Ver más (${conversations.length})</span>`;
-          more.addEventListener('click', () => openResumeHistory(conversations, dest));
-          box.appendChild(more);
-        }
-      } catch { box.innerHTML = ''; }
+        <div class="ln-dests">
+          ${card(st.project.rel, st.project.name, 'gitBranch')}
+          ${card(CONSOLE_PLACE.rel, CONSOLE_PLACE.label, CONSOLE_PLACE.ico, 'ln-dest--console')}
+          <button class="btn-ghost ln-card ln-browse-open ${other ? 'active' : ''}">${icon('folder', { size: 22 })}<span class="ln-card-label">Otra carpeta</span></button>
+        </div>`;
     }
 
     function browseHTML() {
       return `
-        <button class="btn-ghost btn--sm ln-back">${icon('chevronLeft', { size: 13 })}<span>Atajos y recientes</span></button>
+        <button class="btn-ghost btn--sm ln-back">${icon('chevronLeft', { size: 13 })}<span>Volver a proyectos</span></button>
         <div class="ln-crumbs" data-ref="crumbs"></div>
         <div class="ln-dirs" data-ref="dirs"><div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div></div>`;
     }
@@ -241,16 +143,14 @@ export default {
           render();
         });
       }
-      body.querySelector('.ln-dests-more')?.addEventListener('click', openDestsMore);
       body.querySelector('.ln-browse-open')?.addEventListener('click', () => {
         st.view = 'browse';
-        st.browseRel = st.dest.rel;
+        st.browseRel = st.dest?.rel || '';
         render();
         browse(st.browseRel);
       });
       body.querySelector('.ln-back')?.addEventListener('click', () => { st.view = 'list'; render(); });
       if (st.view === 'browse') browse(st.browseRel);
-      if (st.view === 'list' && st.type === 'chat') loadResume();
     }
 
     // Navegador de carpetas: navegar implica seleccionar la carpeta actual.
@@ -260,8 +160,13 @@ export default {
       st.dest = { rel, label: placeFor(rel)?.label || baseName(rel) };
       const body = modal?.body;
       if (!body) return;
-      const startBtn = body.querySelector('.ln-start span');
-      if (startBtn) startBtn.textContent = `Iniciar en ${st.dest.label}`;
+      // Navegar SIEMPRE selecciona una carpeta ⇒ el botón queda habilitado.
+      const startBtn = body.querySelector('.ln-start');
+      if (startBtn) {
+        startBtn.disabled = false;
+        const sp = startBtn.querySelector('span');
+        if (sp) sp.textContent = `Iniciar en ${st.dest.label}`;
+      }
 
       // Breadcrumb
       const crumbs = body.querySelector('[data-ref="crumbs"]');
@@ -300,6 +205,7 @@ export default {
 
     async function start() {
       const dest = st.dest;
+      if (!dest) return; // botón deshabilitado sin destino; guarda por si acaso
       if (st.type !== 'terminal') localStorage.setItem(LAST_MODEL_KEY, st.model);
       modal.close();
       if (st.type === 'chat') {
