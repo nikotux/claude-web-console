@@ -164,7 +164,9 @@ export const deskWriteAllowed = (name) => {
   if (!m) return false;
   const op = m[1];
   const READ = /(get|list|search|view|read|find)/i;
-  const WRITE_OK = /^(add_comment|update_ticket|reply)/i;
+  // ANCLADO exacto (fix B3 2026-07-11): sólo las tools de escritura que el
+  // send-runner realmente usa. Sin `$` final, `add_comment_x` pasaría.
+  const WRITE_OK = /^(add_comment|update_ticket|reply)$/i;
   return READ.test(op) || WRITE_OK.test(op);
 };
 export const teamsWriteAllowed = (name) => {
@@ -174,6 +176,10 @@ export const teamsWriteAllowed = (name) => {
   if (!m) return false;
   const op = m[1];
   const READ = /(list|read|get|members|search|find)/i;
-  const WRITE_OK = /^(send_message|send|send_chat)/i; // teams_send_message / graph_send_chat…
+  // ANCLADO exacto (fix B3 2026-07-11): el `send` PELADO viejo matcheaba
+  // CUALQUIER `send_*` (p.ej. graph_send_mail / send_activity_notification) —
+  // hueco en la allowlist de ESCRITURA de la excepción de regla 6. Ahora sólo
+  // los verbos de envío reales de Teams/Graph.
+  const WRITE_OK = /^(send_message|send_chat|send_chat_message)$/i;
   return READ.test(op) || WRITE_OK.test(op);
 };

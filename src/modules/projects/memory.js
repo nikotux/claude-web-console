@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { encodeCwd } from '../../core/claude-model.js';
+import { writeFileAtomic } from '../../core/atomic-write.js';
 
 const INDEX_FILE_NAME = 'MEMORY.md';
 
@@ -59,7 +60,7 @@ export function writeContext(projectDir, text, expectedHash) {
       throw Object.assign(new Error('El contexto cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
     }
   }
-  fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
+  writeFileAtomic(path.join(projectDir, 'CLAUDE.md'), out, { mode: 0o644 }); // atómico (fix B5): CLAUDE.md real que lee Claude Code; un write cortado lo trunca
 }
 
 // ===== Contexto por SECCIONES (integridad: nunca se edita el archivo entero) =====
@@ -144,7 +145,7 @@ export function writeContextSection(projectDir, i, expectedHash, content) {
   s.text = String(content ?? '');
   const out = sections.map((x) => x.text).join('\n');
   if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contexto quedaría demasiado grande.'), { badRequest: true });
-  fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), out);
+  writeFileAtomic(path.join(projectDir, 'CLAUDE.md'), out, { mode: 0o644 }); // atómico (fix B5): CLAUDE.md real que lee Claude Code; un write cortado lo trunca
 }
 
 // Parsea "- [Título](archivo.md) — descripción" preservando el ORDEN del
@@ -233,7 +234,7 @@ export function writeNote(projectDir, file, text, expectedHash) {
     }
   }
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, out);
+  writeFileAtomic(p, out, { mode: 0o644 }); // atómico (fix B5): nota de memoria FUERA de git → pérdida irrecuperable si se trunca
 }
 
 export function readIndex(projectDir) {
@@ -256,5 +257,5 @@ export function writeIndex(projectDir, text, expectedHash) {
     }
   }
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, INDEX_FILE_NAME), out);
+  writeFileAtomic(path.join(dir, INDEX_FILE_NAME), out, { mode: 0o644 }); // atómico (fix B5): índice MEMORY.md fuera de git
 }

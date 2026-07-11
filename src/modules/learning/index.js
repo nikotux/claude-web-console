@@ -34,7 +34,7 @@ import {
   addContexto, updateContextoEntry, deleteContextoEntry, contextoText,
 } from './store.js';
 import {
-  validId, readExplainJob, writeExplainJob, isFreshRunning, jobResult,
+  readExplainJob, writeExplainJob, isFreshRunning, jobResult,
   spawnLearningExplainRunner, checkStaleness,
 } from './explain-shared.js';
 import {

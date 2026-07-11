@@ -199,8 +199,21 @@ export function buildUserContent(chatId, text, attachments) {
       blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fs.readFileSync(abs).toString('base64') } });
     } else if (type === 'text') {
       let content;
-      try { content = fs.readFileSync(abs, 'utf8'); } catch { blocks.push(refBlock(name, abs, 'archivo')); continue; }
-      if (content.length > TEXT_INLINE_MAX) content = `${content.slice(0, TEXT_INLINE_MAX)}\n… [recortado; archivo completo en ${abs}]`;
+      try {
+        if (size > TEXT_INLINE_MAX) {
+          // No leer el archivo entero a memoria (invariante "tamaño ANTES de leer",
+          // fix B3.3 2026-07-11): sólo el prefijo que vamos a inlinear. Antes se
+          // leían hasta UPLOAD_MAX (32 MB) a RAM y recién después se truncaba.
+          const fd = fs.openSync(abs, 'r');
+          try {
+            const buf = Buffer.alloc(TEXT_INLINE_MAX);
+            const n = fs.readSync(fd, buf, 0, TEXT_INLINE_MAX, 0);
+            content = `${buf.subarray(0, n).toString('utf8')}\n… [recortado; archivo completo en ${abs}]`;
+          } finally { fs.closeSync(fd); }
+        } else {
+          content = fs.readFileSync(abs, 'utf8');
+        }
+      } catch { blocks.push(refBlock(name, abs, 'archivo')); continue; }
       blocks.push({ type: 'text', text: `📎 Archivo adjunto «${name}»:\n\n\`\`\`\n${content}\n\`\`\`` });
     } else {
       blocks.push(refBlock(name, abs, 'archivo'));

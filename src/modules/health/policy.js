@@ -26,12 +26,20 @@ const CRITICAL = [
   { re: /core\/paths\.js$/, why: 'validación de rutas / path-traversal' },
   { re: /modules\/backup\//, why: 'guardas de push (regla 5: Mordor-Staffing/secretos)' },
   // NOTA (2026-07-11, B0): se quitaron `bugfixes`/`bugs` (módulos ARCHIVADOS) y el
-  // runner `triage` (bin/cwc-triage-runner.js ya no existe) — eran refs muertas
-  // (nunca matcheaban un archivo/runner real, cero cambio de comportamiento).
-  // PENDIENTE B2 (scan de health): decidir si el ciclo VIVO `tickets` y sus runners
-  // headless read-only (ticket-context, etc.) deben entrar en este gate crítico.
+  // runner `triage` (bin/cwc-triage-runner.js ya no existe) — eran refs muertas.
+  // B2 (2026-07-11): RESUELTO — se restaura la protección EQUIVALENTE para el ciclo
+  // VIVO que reemplazó a bugfixes/bugs: `tickets/context-analyze-shared.js` (define
+  // el blindaje read-only doble capa del runner de contexto) + el runner
+  // `cwc-ticket-context-runner.js`. Es una adición CONSERVADORA (solo suma
+  // protección: esos hallazgos van a chat supervisado, nunca al auto-fix), extra
+  // justificada porque el auto-fix demostró tener un hueco en su allowlist (B2 #1).
+  // PENDIENTE (Codex, review de Niko): evaluar si TODOS los módulos con runner
+  // headless read-only (learning/explain, comms/*, audio, projects, tasks) deberían
+  // entrar acá también — hoy se replica el subconjunto histórico (health + ciclo de
+  // tickets), no todos. Registrado en Pad.
   { re: /modules\/(health)\/(index|shared)\.js$/, why: 'blindaje read-only headless (regla 6)' },
-  { re: /bin\/cwc-(health|healthfix|chat)-runner\.js$/, why: 'runner desacoplado con allowlist de seguridad' },
+  { re: /modules\/tickets\/context-analyze-shared\.js$/, why: 'blindaje read-only headless del runner de contexto de tickets (regla 6)' },
+  { re: /bin\/cwc-(health|healthfix|chat|ticket-context)-runner\.js$/, why: 'runner desacoplado con allowlist de seguridad' },
 ];
 
 // Superficies COMPARTIDAS (varios fixes podrían tocarlas → serializar en paralelo).

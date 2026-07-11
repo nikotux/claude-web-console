@@ -77,6 +77,7 @@ async function fetchBotRaw(bot) {
         else if (m.type === 'result') break;
       }
     })();
+    pump.catch(() => {}); // si el timeout gana, pump queda pendiente y puede rechazar (q.close aborta) → evitar unhandledRejection (paridad send/analyze runners)
     try { await Promise.race([pump, timeout]); }
     finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   } catch (err) {

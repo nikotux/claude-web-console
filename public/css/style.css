@@ -230,6 +230,71 @@ html, body {
 /* Sin Tolkien arriba (oculto), el divisor sobre stats no tiene sentido. */
 #sidebar-right.collapsed .sidebar-footer--right [data-module="stats"] { border-top: 0; padding-top: 0; }
 
+/* ===== Widget de Actividad en Segundo Plano (ROAD-76) ===== */
+/* Vive entre Tolkien y los gauges. Compacto: dos columnas (🤖 subagentes /
+   ⚙️ procesos) + semáforo del modelo dominante. Oculto si no hay nada. */
+.cwc-activity {
+  display: flex; align-items: center; justify-content: space-between; gap: .4rem;
+  padding: .28rem .5rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--cwc-border); background: var(--cwc-bg-chip);
+  color: var(--cwc-text); font-size: var(--cwc-fs-sm); user-select: none;
+  transition: border-color .12s ease, background .12s ease;
+}
+/* En reposo (nada corriendo): atenuado, pero SIEMPRE visible para descubribilidad. */
+.cwc-activity--idle { opacity: .6; border-style: dashed; }
+.cwc-activity--idle .cwc-act-n { color: var(--cwc-text-dim); font-weight: 600; }
+.cwc-activity:hover { border-color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 8%, transparent); opacity: 1; }
+.cwc-activity:focus-visible { outline: 2px solid var(--cwc-accent); outline-offset: 1px; }
+.cwc-act-cols { display: flex; align-items: center; gap: .6rem; }
+.cwc-act-col { display: inline-flex; align-items: center; gap: .22rem; color: var(--cwc-text-dim); }
+.cwc-act-col svg { opacity: .85; }
+.cwc-act-n { font-weight: 700; color: var(--cwc-text); font-variant-numeric: tabular-nums; }
+.cwc-act-sem {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 12%, transparent), 0 0 6px 1px currentColor;
+  /* el color viene inline (modelColor); el glow lo toma de background vía filter */
+}
+/* Rail colapsado de la barra derecha: solo iconos + números, apilado. */
+#sidebar-right.collapsed .cwc-activity { flex-direction: column; gap: .25rem; padding: .3rem .2rem; }
+#sidebar-right.collapsed .cwc-act-cols { flex-direction: column; gap: .25rem; }
+
+/* ===== Modal de detalle (system/activity-modal.js) ===== */
+.act-empty { color: var(--cwc-text-dim); text-align: center; padding: 1rem .5rem; margin: 0; }
+.act-group { margin: 0 0 .5rem; }
+.act-group > summary {
+  cursor: pointer; display: flex; align-items: center; gap: .35rem;
+  font-weight: 600; font-size: var(--cwc-fs-sm); padding: .2rem 0; list-style: none;
+}
+.act-group > summary::-webkit-details-marker { display: none; }
+.act-g-label { color: var(--cwc-text); }
+.act-count {
+  font-size: var(--cwc-fs-xs); font-weight: 700; color: var(--cwc-text-dim);
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border);
+  border-radius: 999px; padding: 0 .4rem; min-width: 1.2rem; text-align: center;
+}
+.act-table { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
+.act-row { border-top: 1px solid var(--cwc-border); }
+.act-row td { padding: .34rem .4rem; vertical-align: middle; }
+.act-c-type { width: 24px; text-align: center; color: var(--cwc-text-dim); }
+.act-c-what { color: var(--cwc-text); }
+.act-phase { color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); margin-left: .35rem; }
+.act-c-sess { color: var(--cwc-text-dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-session { color: var(--cwc-accent); cursor: pointer; }
+.act-session:hover { text-decoration: underline; }
+.act-session--sys { color: var(--cwc-text-dim); cursor: default; }
+.act-c-time { color: var(--cwc-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.act-c-model { text-align: right; white-space: nowrap; }
+.act-model {
+  display: inline-block; font-size: var(--cwc-fs-xs); font-weight: 700;
+  padding: .05rem .4rem; border-radius: 999px; color: var(--m, var(--cwc-text));
+  border: 1px solid color-mix(in srgb, var(--m, var(--cwc-border)) 55%, transparent);
+  background: color-mix(in srgb, var(--m, var(--cwc-border)) 14%, transparent);
+}
+.act-model--none { color: var(--cwc-text-dim); border-color: var(--cwc-border); background: none; }
+@media (max-width: 640px) {
+  .act-c-sess { max-width: 120px; }
+}
+
 /* Pulso de Tolkien PERSISTENTE en el pie derecho: COMPACTO y SIN chevron (ya
    no es colapsable). Header en una línea fina + info densa (no se pierde dato).
    Debajo va la leyenda CPU/RAM/disco, separada por un divisor sutil. */

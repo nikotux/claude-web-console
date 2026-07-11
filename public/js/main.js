@@ -9,6 +9,7 @@ import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
 import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
+import { initActivityWidget } from './ui/activity-widget.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -34,6 +35,7 @@ const tabs = new Map(); // id -> { tab, tabButton, pane, flag, session }
 let activeId = null;
 let permCenter = null; // centro global de permisos (se inicializa más abajo)
 let intercomCenter = null; // centro global de interfono (se inicializa más abajo)
+let activityWidget = null; // widget de actividad en segundo plano (ROAD-76)
 
 const getActiveTab = () => tabs.get(activeId)?.tab || null;
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
@@ -269,14 +271,17 @@ async function pollTabStatus() {
   try {
     const ac = new AbortController();
     const killer = setTimeout(() => ac.abort(), 5000);
-    const [tmux, chats] = await Promise.all([
+    const [tmux, chats, active] = await Promise.all([
       tabs.size
         ? fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => [])
         : Promise.resolve([]),
       fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+      // Actividad en segundo plano (ROAD-76): runners/procesos vivos. 0 tokens.
+      fetch('/api/health/active-runners', { signal: ac.signal }).then((r) => r.json()).then((d) => d.processes || []).catch(() => []),
     ]).finally(() => clearTimeout(killer));
     permCenter?.syncFromList(chats);
     intercomCenter?.syncFromList(chats);
+    activityWidget?.update(active, chats);
     const byName = new Map(tmux.map((s) => [s.name, s]));
     const byChat = new Map(chats.map((c) => [c.id, c]));
     let titleChanged = false;
@@ -486,6 +491,11 @@ intercomCenter = initInterfonoCenter({
   isChatRelevant: (chatId) => tabs.has(chatId),
   openChat: openChatById,
 });
+
+// Widget de Actividad en Segundo Plano (ROAD-76): pie de la barra derecha. Se
+// alimenta en pollTabStatus (poll de 8 s) con los procesos vivos + los chats
+// delegando; al tocarlo abre el modal de detalle.
+activityWidget = initActivityWidget({ openChat: openChatById });
 
 const ctx = {
   icon,

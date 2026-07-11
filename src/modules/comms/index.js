@@ -202,6 +202,7 @@ export default {
     // GET del análisis (0 tokens, autenticados): el front encuesta hasta 'done'.
     r.get('/thread/:id/analyze/:jobId', (req, res) => {
       try {
+        if (!/^[a-z0-9_-]+$/i.test(req.params.jobId)) return res.status(404).json({ error: 'Análisis no encontrado.' });
         const job = A.readAnalyzeJob(req.params.jobId);
         if (!job) return res.status(404).json({ error: 'Análisis no encontrado.' });
         res.json({ id: req.params.jobId, ...A.jobResult(job) });
@@ -224,6 +225,7 @@ export default {
     // GET del resultado de un envío diferido (desk/teams).
     r.get('/send/:jobId', (req, res) => {
       try {
+        if (!/^[a-z0-9_-]+$/i.test(req.params.jobId)) return res.status(404).json({ error: 'Envío no encontrado.' });
         const job = GW.readSendJob(req.params.jobId);
         if (!job) return res.status(404).json({ error: 'Envío no encontrado.' });
         res.json({ id: req.params.jobId, ...GW.sendJobResult(job) });

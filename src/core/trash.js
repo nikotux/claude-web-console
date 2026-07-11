@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { resolveWithinHome } from './paths.js';
+import { writeJsonAtomic } from './atomic-write.js';
 
 export const TRASH_DIRNAME = '.cwc-trash';
 const TRASH_DIR = path.join(config.home, TRASH_DIRNAME);
@@ -24,7 +25,7 @@ function loadIndex() {
 }
 function saveIndex(items) {
   ensureDir();
-  fs.writeFileSync(INDEX, JSON.stringify({ items }, null, 2));
+  writeJsonAtomic(INDEX, { items }, { space: 2 }); // atómico (fix B5): índice de papelera durable
 }
 
 // Mueve un absoluto (ya validado dentro del home) a la papelera.

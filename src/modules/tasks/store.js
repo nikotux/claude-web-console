@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const FILE = path.join(DATA_DIR, 'tasks.json');
@@ -55,10 +56,7 @@ function load() {
 
 // Escritura atómica (tmp + rename): un corte a mitad no deja el JSON corrupto.
 function save(db) {
-  ensureDir();
-  const tmp = `${FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
-  fs.renameSync(tmp, FILE);
+  writeJsonAtomic(FILE, db); // atómico tmp-por-PID (fix B4 2026-07-11, fuente única)
 }
 
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
@@ -120,10 +118,7 @@ function loadActivity() {
   } catch { return []; }
 }
 function saveActivity(events) {
-  ensureDir();
-  const tmp = `${ACT_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ events }), { mode: 0o600 });
-  fs.renameSync(tmp, ACT_FILE);
+  writeJsonAtomic(ACT_FILE, { events }); // atómico tmp-por-PID (fix B4 2026-07-11)
 }
 let actCounter = 0;
 function appendActivity(ev) {

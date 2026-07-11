@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveWithinHome } from './paths.js';
+import { writeJsonAtomic } from './atomic-write.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, '..', '..', 'recents.json');
@@ -17,7 +18,7 @@ function load() {
   catch { return []; }
 }
 function save(recents) {
-  try { fs.writeFileSync(FILE, JSON.stringify({ recents }, null, 2)); }
+  try { writeJsonAtomic(FILE, { recents }, { space: 2 }); } // atómico (fix B5): estado durable
   catch { /* noop: los recientes no son críticos */ }
 }
 

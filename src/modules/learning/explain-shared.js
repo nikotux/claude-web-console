@@ -21,7 +21,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
-import { normScope } from './store.js';
+import { normScope, contextoText } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (la consola)
@@ -95,10 +95,13 @@ export function jobResult(job) {
 export function textFingerprint(topic) {
   const t = topic || {};
   // El contexto puede venir ya concatenado (contextoText, en el snapshot del
-  // job) o como lista (si se pasa el tema crudo) — soportamos ambos.
-  const ctx = typeof t.contextoAdicional === 'string'
-    ? t.contextoAdicional
-    : (Array.isArray(t.contextoEntradas) ? t.contextoEntradas.map((e) => e.text).join('\n\n') : '');
+  // job) o como lista (tema crudo). En AMBOS casos se serializa IGUAL que en el
+  // guardado: contextoText() (con los prefijos [nota manual]/[charla…]). Antes
+  // (fix B3 2026-07-11) la rama de lista NO ponía los prefijos → la huella nunca
+  // coincidía con explainFingerprint (que se sella sobre contextoText) → el tema
+  // salía SIEMPRE 'stale' y la regeneración inteligente (no-op 0 tokens) no
+  // funcionaba para temas con contexto.
+  const ctx = typeof t.contextoAdicional === 'string' ? t.contextoAdicional : contextoText(t);
   const s = `${t.notes || ''}\n${t.question || ''}\n${ctx}`;
   return crypto.createHash('sha1').update(s).digest('hex');
 }

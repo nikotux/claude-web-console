@@ -19,6 +19,7 @@
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 // El módulo tokens lee este MISMO archivo por su cuenta (misma convención que
@@ -38,9 +39,6 @@ export function registerLearningSession(id) {
     } catch { /* primera vez: el archivo todavía no existe */ }
     if (set.has(id)) return;
     set.add(id);
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    const tmp = `${LEARNING_IDS_FILE}.tmp`;
-    fss.writeFileSync(tmp, JSON.stringify([...set]), { mode: 0o600 });
-    fss.renameSync(tmp, LEARNING_IDS_FILE);
+    writeJsonAtomic(LEARNING_IDS_FILE, [...set]); // atómico por-PID (fix B3 2026-07-11): 3 runners escriben este mismo archivo
   } catch { /* best-effort */ }
 }

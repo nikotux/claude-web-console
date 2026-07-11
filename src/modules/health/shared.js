@@ -15,6 +15,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { invariantsFor } from './invariants.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo
@@ -304,10 +305,12 @@ export function readSolved() {
   catch { return []; }
 }
 export function writeSolved(list) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(SOLVED_FILE, JSON.stringify(list), { mode: 0o600 });
-  } catch (err) { console.error('[health] no pude escribir health-solved.json:', err?.message); }
+  // Atómico (tmp+rename, fix B2 2026-07-11): health-solved.json es memoria DURABLE
+  // ("nunca se poda"); un crash/disco-lleno a mitad de un writeFileSync directo lo
+  // truncaba y readSolved lo tragaba como [] → se perdía el historial de resueltos
+  // y la detección de recurrencia (reabría el bucle escaneo→mismo FP).
+  try { writeJsonAtomic(SOLVED_FILE, list); }
+  catch (err) { console.error('[health] no pude escribir health-solved.json:', err?.message); }
 }
 // Agrega/actualiza por firma. Si ya existía (bug recurrente), suma `count` y
 // actualiza lastResolvedAt conservando firstResolvedAt.
@@ -389,10 +392,11 @@ export function readDismissed() {
   catch { return []; }
 }
 export function writeDismissed(list) {
-  try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(DISMISSED_FILE, JSON.stringify(list), { mode: 0o600 });
-  } catch (err) { console.error('[health] no pude escribir health-dismissed.json:', err?.message); }
+  // Atómico (tmp+rename, fix B2 2026-07-11): health-dismissed.json es memoria
+  // DURABLE de los falsos positivos; si se corrompe a medias, los FP descartados
+  // reaparecen y el auditor los re-audita con sonnet en cada corrida (bucle).
+  try { writeJsonAtomic(DISMISSED_FILE, list); }
+  catch (err) { console.error('[health] no pude escribir health-dismissed.json:', err?.message); }
 }
 // Upsert por firma. Si el motor lo volvió a proponer y se re-descartó, suma count.
 export function recordDismissed(f, reason) {
@@ -577,7 +581,16 @@ export function fixToolAllowed(name, input) {
   if (['Read', 'Grep', 'Glob', 'TodoWrite', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(name)) return true;
   if (name === 'Bash') {
     const cmd = String(input?.command || '').trim();
-    return /^node\s+(--check|-c)\s+[^;&|]+(\s*&&\s*node\s+(--check|-c)\s+[^;&|]+)*$/.test(cmd);
+    // El token de RUTA de `node --check <ruta>` se acota a una allowlist de
+    // caracteres seguros: excluye espacios y TODO metacaracter de shell que
+    // permita encadenar o sustituir comandos — newline/CR, `;` `&` `|` `$`
+    // backtick `(` `)` `<` `>`, comillas y backslash. El `&&` de encadenar más
+    // verificaciones SÍ se permite (va en la ESTRUCTURA, no en el token de ruta).
+    // ENDURECIDO (fix B2 2026-07-11): la clase vieja `[^;&|]` dejaba pasar
+    // `node --check a.js\nsystemctl restart …`, `node --check $(...)` y
+    // `` node --check `id` `` — el auto-fix LEE código no confiable (posible
+    // prompt-injection) y esto derrotaba el guardrail entero de la regla 6.
+    return /^node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+(\s*&&\s*node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+)*$/.test(cmd);
   }
   return false;
 }
@@ -597,4 +610,96 @@ export function isRunning() {
     const { ts } = JSON.parse(fss.readFileSync(LOCK_FILE, 'utf8'));
     return Date.now() - ts < LOCK_FRESH_MS;
   } catch { return false; }
+}
+
+// ===== Censo VIVO de runners/motores en segundo plano (panel de Actividad) =====
+// Alimenta GET /api/health/active-runners → widget del pie de la barra derecha +
+// su modal. Es 0 tokens y SOLO LECTURA de estado en disco: escanea los archivos de
+// lock/job que YA escriben los runners desacoplados y reporta cuáles están vivos
+// AHORA. No importa los ~15 módulos (evita acoplamiento/dependencias circulares):
+// la detección de "vivo" es idéntica en todos (heartbeat/updatedAt fresco), así que
+// se centraliza acá con un REGISTRO declarativo. Si un runner nuevo aparece, se
+// suma una fila; si su lock/job nunca existe, sencillamente no se lista.
+//
+// El MODELO por runner es estático (documentado en CLAUDE.md, consistente): se usa
+// para el semáforo "modelo dominante". Un runner sin IA (p.ej. el scan de comms por
+// gh) lleva model:null y no cuenta para el dominante.
+const RUNNER_FRESH_MS = 20000;        // locks: heartbeat 3s → 20s de gracia (igual a LOCK_FRESH_MS)
+const JOB_STALE_MS = 10 * 60 * 1000;  // jobs: cota amplia (timeout máx ~6min) para no colgar filas de un job muerto
+
+// kind 'lock'  → archivo <x>.lock con {pid, ts, phase?}: vivo si ts fresco.
+// kind 'job'   → archivo <x>.json con {status:'running', startedAt, updatedAt?}: vivo si running + fresco.
+// kind 'jobglob' → varios <base><algo>.json (jobs por id) en DATA_DIR: escanea cada uno como 'job'.
+// kind 'jobdir'  → carpeta con <id>.json (jobs por id): escanea cada uno como 'job'.
+const RUNNER_REGISTRY = [
+  // --- Familia LOCK (heartbeat) --- (icon = nombre válido de public/js/ui/icons.js)
+  { key: 'health-review', kind: 'lock', file: 'health-review.lock', label: 'Revisión de salud', icon: 'checklist', model: 'sonnet' },
+  { key: 'healthfix', kind: 'lock', file: 'healthfix.lock', label: 'Auto-fix de salud', icon: 'gear', model: 'sonnet' },
+  { key: 'healthfix-batch', kind: 'lock', file: 'healthfix-batch.lock', label: 'Batch de auto-fix', icon: 'gear', model: 'sonnet' },
+  { key: 'optimize', kind: 'lock', file: 'optimize.lock', label: 'Optimización IA', icon: 'sparkle', model: 'sonnet' },
+  { key: 'coherence', kind: 'lock', file: 'coherence.lock', label: 'Coherencia', icon: 'relay', model: 'sonnet' },
+  { key: 'comms-scan', kind: 'lock', file: 'comms/comms.lock', label: 'Escaneo de comunicaciones', icon: 'externalLink', model: null },
+  { key: 'comms-teams', kind: 'lock', file: 'comms/teams.lock', label: 'Escaneo Teams', icon: 'externalLink', model: 'sonnet' },
+  { key: 'comms-chatbot', kind: 'lock', file: 'comms/chatbot.lock', label: 'Chatbot (comunicaciones)', icon: 'externalLink', model: 'sonnet' },
+  // --- Familia JOB (status:'running') ---
+  { key: 'tasks-analyze', kind: 'jobglob', base: 'tasks-analysis-', label: 'Análisis de Pendientes', icon: 'list', model: 'sonnet' },
+  { key: 'learning-explain', kind: 'jobglob', base: 'learning-explain-', label: 'Explicame esto (aprendizaje)', icon: 'sparkle', model: 'sonnet' },
+  { key: 'learning-context', kind: 'jobglob', base: 'learning-context-', label: 'Contexto (aprendizaje)', icon: 'sparkle', model: 'sonnet' },
+  { key: 'learning-analyze', kind: 'job', file: 'learning-analysis.json', label: 'Analizar aprendizaje', icon: 'sparkle', model: 'sonnet' },
+  { key: 'commitmsg', kind: 'jobdir', dir: 'commitmsg', label: 'Mensaje de commit IA', icon: 'edit', model: 'haiku' },
+  { key: 'projects-analyze', kind: 'jobdir', dir: 'projects-analyze', label: 'Guardián de contexto', icon: 'eye', model: 'haiku' },
+  { key: 'audio', kind: 'jobdir', dir: 'audio', label: 'Análisis de audio', icon: 'mic', model: 'sonnet' },
+  { key: 'comms-analyze', kind: 'jobdir', dir: 'comms/analyze', label: 'Análisis de hilo (comms)', icon: 'externalLink', model: 'haiku' },
+  { key: 'ticket-context', kind: 'jobdir', dir: 'ticket-context', label: 'Contexto de ticket', icon: 'sparkle', model: 'sonnet' },
+];
+
+// birthtime del archivo ≈ momento de spawn (los locks solo traen heartbeat `ts`,
+// no el inicio). Para jobs preferimos su startedAt (más exacto).
+function birthMs(abs) {
+  try { return fss.statSync(abs).birthtimeMs || fss.statSync(abs).ctimeMs; } catch { return null; }
+}
+// Lee un archivo de lock; devuelve {startedAt, phase} si está vivo, o null.
+function readLiveLock(abs) {
+  try {
+    const l = JSON.parse(fss.readFileSync(abs, 'utf8'));
+    if (!l || typeof l.ts !== 'number' || Date.now() - l.ts >= RUNNER_FRESH_MS) return null;
+    return { startedAt: birthMs(abs) || l.ts, phase: l.phase || l.progress || null };
+  } catch { return null; }
+}
+// Lee un archivo de job; devuelve {startedAt, phase} si status running + fresco.
+function readLiveJob(abs) {
+  try {
+    const j = JSON.parse(fss.readFileSync(abs, 'utf8'));
+    if (!j || j.status !== 'running') return null;
+    const started = j.startedAt || birthMs(abs);
+    const beat = j.updatedAt || j.startedAt || j.ts || 0;
+    if (beat && Date.now() - beat >= JOB_STALE_MS) return null; // job muerto
+    return { startedAt: started || Date.now(), phase: j.phase || null };
+  } catch { return null; }
+}
+
+// Foto de TODOS los procesos/runners vivos ahora. Cada entrada:
+// { key, label, icon, model, phase, startedAt, kind:'process' }.
+export function collectActiveRunners() {
+  const out = [];
+  for (const r of RUNNER_REGISTRY) {
+    if (r.kind === 'lock') {
+      const live = readLiveLock(path.join(DATA_DIR, r.file));
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+    } else if (r.kind === 'job') {
+      const live = readLiveJob(path.join(DATA_DIR, r.file));
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+    } else if (r.kind === 'jobglob' || r.kind === 'jobdir') {
+      const dir = r.kind === 'jobdir' ? path.join(DATA_DIR, r.dir) : DATA_DIR;
+      let names = [];
+      try { names = fss.readdirSync(dir); } catch { names = []; }
+      for (const n of names) {
+        if (!n.endsWith('.json')) continue;
+        if (r.kind === 'jobglob' && !n.startsWith(r.base)) continue;
+        const live = readLiveJob(path.join(dir, n));
+        if (live) out.push({ key: `${r.key}:${n.replace(/\.json$/, '')}`, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+      }
+    }
+  }
+  return out;
 }

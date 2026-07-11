@@ -23,6 +23,7 @@ import {
   readDismissed, recordDismissed, removeDismissed,
   readProposals, writeProposals,
   readBatch, writeBatch, writeBatchLock, isBatchRunning,
+  collectActiveRunners,
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
@@ -408,6 +409,19 @@ export default {
     // si hay una corriendo (lock fresco). El front encuesta esto en vivo.
     r.get('/review', (req, res) => {
       res.json({ ...enrichReview(readReview()), running: isRunning(), fixing: isFixing() });
+    });
+
+    // Foto EN VIVO de los procesos/runners en segundo plano (panel de Actividad
+    // en Segundo Plano). 0 tokens, solo lectura de locks/jobs en ~/.cwc-data. Los
+    // SUBAGENTES (chats delegando) NO salen de acá: el front los toma de
+    // /api/chat/list que ya encuesta. `dominantModel` = el modelo más frecuente
+    // entre los procesos con modelo (para el semáforo). Abierto a autenticados.
+    r.get('/active-runners', (req, res) => {
+      const processes = collectActiveRunners();
+      const counts = {};
+      for (const p of processes) if (p.model) counts[p.model] = (counts[p.model] || 0) + 1;
+      const dominantModel = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+      res.json({ processes, processCount: processes.length, dominantModel });
     });
 
     // Registro DURABLE de bugs resueltos (historial + recurrencias). Abierto a

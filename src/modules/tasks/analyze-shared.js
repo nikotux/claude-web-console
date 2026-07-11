@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listTasks, listPlans } from './store.js';
@@ -53,10 +54,9 @@ export function readAnalysisJob(scope) {
   catch { return null; }
 }
 export function writeAnalysisJob(scope, data) {
-  ensureDir();
-  const tmp = `${jobPath(scope)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-  fs.renameSync(tmp, jobPath(scope));
+  // atómico tmp-por-PID (fix B4 2026-07-11): lo escriben DOS procesos (server → 'running',
+  // runner → 'done'/'error') — el tmp de nombre fijo podía colisionar en el respawn por stale.
+  writeJsonAtomic(jobPath(scope), data);
 }
 
 export function isFreshRunning(job) {

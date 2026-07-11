@@ -531,7 +531,7 @@ async function readPersistedLimits() {
 async function writePersistedLimits(data) {
   try {
     await fs.mkdir(path.dirname(PLAN_LIMITS_FILE), { recursive: true, mode: 0o700 });
-    const tmp = `${PLAN_LIMITS_FILE}.tmp`;
+    const tmp = `${PLAN_LIMITS_FILE}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11)
     await fs.writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
     await fs.rename(tmp, PLAN_LIMITS_FILE);
   } catch { /* best-effort */ }

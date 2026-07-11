@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeJsonAtomic } from './atomic-write.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TITLES_FILE = path.join(__dirname, '..', '..', 'titles.json');
@@ -33,7 +34,7 @@ export function loadTitles() {
 // el valor de retorno: nunca lanza, solo loguea y devuelve el resultado.
 export function saveTitles(titles) {
   try {
-    fs.writeFileSync(TITLES_FILE, JSON.stringify({ titles }, null, 2));
+    writeJsonAtomic(TITLES_FILE, { titles }, { space: 2 }); // atómico (fix B5): estado durable
     return true;
   } catch (err) {
     // No rompe la operación (el título vive en RAM), pero el fallo se loguea:

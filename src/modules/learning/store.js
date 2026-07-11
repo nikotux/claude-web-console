@@ -33,6 +33,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const FILE = path.join(DATA_DIR, 'learning.json');
@@ -79,12 +80,12 @@ function load() {
   }
 }
 
-// Escritura atómica (tmp + rename): un corte a mitad no deja el JSON corrupto.
+// Escritura atómica (fix B3 2026-07-11: writeJsonAtomic usa tmp por-PID; el
+// `${FILE}.tmp` FIJO de antes podía entrelazarse entre el server y un runner
+// escribiendo learning.json a la vez → tmp a medias → load() caía a {topics:[]}
+// y el próximo createTopic PERDÍA todos los temas).
 function save(db) {
-  ensureDir();
-  const tmp = `${FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
-  fs.renameSync(tmp, FILE);
+  writeJsonAtomic(FILE, db);
 }
 
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
@@ -111,10 +112,7 @@ function loadActivity() {
   } catch { return []; }
 }
 function saveActivity(events) {
-  ensureDir();
-  const tmp = `${ACT_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ events }), { mode: 0o600 });
-  fs.renameSync(tmp, ACT_FILE);
+  writeJsonAtomic(ACT_FILE, { events }); // atómico por-PID (fix B3 2026-07-11)
 }
 let actCounter = 0;
 function appendActivity(ev) {

@@ -2262,7 +2262,40 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             USARLO en toda espera > ~5 s — revisión profunda de Salud, triage
                             de Bugs, subir PR, push/backup, cálculo de Uso; el spinner queda
                             para cargas breves. El del header del chat es el mismo componente
-                            con cls 'chat-alive' y estado vivo/dormido)
+                            con cls 'chat-alive' y estado vivo/dormido) ·
+                            activity-widget.js (ACTIVIDAD EN SEGUNDO PLANO, ROAD-76 del Pad
+                            `console`, 2026-07-11, pedido de Niko: "poder ver cuántos agentes/
+                            runners consumen tokens en paralelo"). Widget COMPACTO en el pie de la
+                            barra DERECHA (#activity-widget en index.html, ENTRE .tk-persist de
+                            Tolkien y el data-module="stats" de los gauges). SIEMPRE VISIBLE
+                            (pedido de Niko 2026-07-11 "actualicé y no lo veo": un widget que se
+                            esconde cuando está vacío es indescubrible): en reposo se atenúa
+                            (.cwc-activity--idle: opacity+borde punteado, 0/0, semáforo gris) y al
+                            arrancar algo se enciende. OJO: NO existe la clase .hidden en el CSS
+                            (solo el guard [hidden] de atributo) — no togglearla. Como el espacio es chico:
+                            ÍCONOS+NÚMEROS — dos columnas ✦ N subagentes (chats con delegating) · ⚙️
+                            N procesos/runners — + un SEMÁFORO (punto coloreado con modelColor del
+                            MODELO DOMINANTE corriendo ahora, ui/models.js). Clickeable → abre
+                            modules/system/activity-modal.js (openModal): TABLA DINÁMICA agrupada
+                            tipo árbol (<details> "Subagentes" / "Procesos en segundo plano") con
+                            tipo·qué·sesión-que-lo-llamó·tiempo-corriendo·modelo; el subagente
+                            linkea a su chat de origen (openChat, patrón perm-center). DINÁMICO en
+                            dos planos: el widget refresca la lista en cada poll de 8 s (si el modal
+                            está abierto, refreshActivityModal) + un timer propio de 1 s hace tictac
+                            el "tiempo corriendo". NO encuesta solo: main.js lo alimenta en
+                            pollTabStatus con initActivityWidget({openChat}).update(processes, chats)
+                            — processes del endpoint nuevo GET /api/health/active-runners (0 tokens,
+                            solo lee locks/jobs), agents derivados de /api/chat/list (delegating +
+                            delegatingCount + delegatingSince, YA en info()). El endpoint devuelve
+                            {processes, processCount, dominantModel}; su detección vive en
+                            collectActiveRunners() de health/shared.js: un REGISTRO declarativo de
+                            los ~17 runners (familias lock {pid,ts,phase} / job {status:'running',
+                            startedAt} — sub-tipos job/jobglob/jobdir) que ESCANEA los archivos de
+                            ~/.cwc-data directamente (misma lógica de frescura que cada isXRunning,
+                            centralizada — NO importa los 17 módulos: evita acoplamiento/circular).
+                            Modelo por runner = mapa estático (documentado, para el semáforo);
+                            startedAt = birthtime del lock/job ≈ spawn. Agregar un runner nuevo = una
+                            fila más en RUNNER_REGISTRY; si su lock nunca existe, no se lista)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden].
@@ -2819,6 +2852,32 @@ docs/                       frontend-modules.md · brief-original.txt · context
   MISMO gotcha que el de arriba: un chat YA VIVO no relee `~/.claude.json` — hace
   falta "Reabrir para cambios" (menú ⋯ de Sesiones) o una conversación nueva para
   que `ToolSearch` empiece a encontrar `mcp__pad__*`.
+- **SEGUNDA vía a Pad: cliente MCP del BACKEND** (`src/modules/tickets/pad-client.js`,
+  documentado 2026-07-11): distinta del MCP del chat de arriba. Es un cliente
+  `@modelcontextprotocol/sdk` (`Client` + `StreamableHTTPClientTransport`) que habla
+  con `mcp.getpad.dev` DIRECTO desde el proceso del server, SIN chat ni
+  `settingSources`. Lee el OAuth FRESCO de `~/.claude/.credentials.json → mcpOAuth`
+  en cada conexión. LIMITACIÓN conocida (comentada en el archivo): el accessToken
+  dura ~1h y lo refresca Claude Code, NO la consola → si vence y Claude Code no
+  corre, `getPadItemsForPr` falla best-effort (conserva el último snapshot). Está
+  hardcodeado a `PAD_WORKSPACE='tolkien'` (línea 66) — solo lee el workspace de
+  Tolkien. `refresher.js` lo orquesta (timer 60s, snapshot+merge acumulativo+
+  persistencia atómica) = plantilla reusable para reportes automáticos. Prueba que
+  el server SÍ puede ser cliente MCP de Pad (relevante para un futuro Pad self-host,
+  ver `docs/plan-migracion-pad-selfhost.md`).
+- **Programa "Modularización Consola" trackeado en Pad** (workspace `console`,
+  2026-07-11): el escaneo módulo-por-módulo (B0→B5: coherencia, tickets, health,
+  comms, learning, chat, tasks, tokens + 10 hojas) vive en Pad como ROAD-10 (programa)
+  + TASKs por pasada + BUGs `codex:pending` (backlog de lo diferido a re-verificar con
+  Codex cuando su cuota vuelva) + Convenciones (reglas duras) + Playbooks (codex-verify,
+  module-scan) + Roles. Hallazgo transversal del programa: el bug MÁS recurrente fue la
+  **escritura NO atómica de estado durable** — se aplicó `writeJsonAtomic`/`writeFileAtomic`
+  de `core/atomic-write.js` (tmp por-PID) en meta-store, comms, learning, chat, tasks,
+  tokens, projects/memory (CLAUDE.md/memorias) y core (session-names/recents/trash).
+  DOS huecos de seguridad reales cerrados: `fixToolAllowed` (allowlist del auto-fix
+  dejaba pasar `node --check a.js⏎<cualquier-cmd>`) y `teamsWriteAllowed` (el `^send`
+  autorizaba cualquier `graph_send_*`). Decisión de rol de Pad en `docs/evaluacion-rol-pad.md`
+  (Opción 1 cloud ahora, self-host como proyecto futuro ROAD-74).
 - Tools MCP DIFERIDAS y allowlists headless (visto 2026-07-05): el SDK puede
   diferir los schemas de las tools MCP y el modelo necesita la META-tool
   `ToolSearch` para cargarlos antes de invocarlas — solo devuelve schemas, NO

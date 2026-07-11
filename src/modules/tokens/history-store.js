@@ -59,7 +59,7 @@ async function loadHistory() {
 async function writeHistory(store) {
   try {
     await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true, mode: 0o700 });
-    const tmp = `${HISTORY_FILE}.tmp`;
+    const tmp = `${HISTORY_FILE}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11): dos escritores no comparten tmp → sin corrupción del histórico de 400 días
     await fs.writeFile(tmp, JSON.stringify(store), { mode: 0o600 });
     await fs.rename(tmp, HISTORY_FILE);
   } catch { /* best-effort */ }

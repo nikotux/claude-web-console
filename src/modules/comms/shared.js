@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 export const COMMS_DIR = path.join(DATA_DIR, 'comms');
@@ -48,11 +49,13 @@ function readJson(file, fallback) {
   try { return JSON.parse(fss.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 function writeJson(file, data) {
-  for (let i = 0; i < 2; i += 1) {
-    try { ensureDir(); fss.writeFileSync(file, JSON.stringify(data), { mode: 0o600 }); return true; }
-    catch (err) { if (i === 1) console.error('[comms] no se pudo escribir', file, err?.message); }
-  }
-  return false;
+  // Atómico (tmp+rename por-pid, fix B3 2026-07-11): TODO el estado durable de
+  // comms (outbox = ledger de auditoría, contacts, caches github/teams/chatbot)
+  // pasa por acá. Un writeFileSync directo cortado a mitad (crash/kill/disco
+  // lleno) dejaba el JSON truncado → readJson cae al fallback silencioso y el
+  // próximo append RECONSTRUYE el ledger/contactos desde cero (pérdida de datos).
+  try { writeJsonAtomic(file, data); return true; }
+  catch (err) { console.error('[comms] no se pudo escribir', file, err?.message); return false; }
 }
 
 let _seq = 0;

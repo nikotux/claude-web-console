@@ -59,6 +59,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
@@ -283,7 +284,7 @@ function registerChatSessionIds(ids) {
     }
     if (dirty) {
       fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-      fss.writeFileSync(CHAT_IDS_FILE, JSON.stringify([..._chatIdsReg]), { mode: 0o600 });
+      writeJsonAtomic(CHAT_IDS_FILE, [..._chatIdsReg]); // atómico (fix B3.3 2026-07-11): registro durable append-only
     }
   } catch { /* best-effort */ }
 }
@@ -473,6 +474,11 @@ class Chat {
     // la pestaña del chat abierta (antes esto solo vivía en el frontend,
     // como ícono de tool call, invisible para la tarjeta de Sesiones).
     this._delegatingIds = new Set();
+    // Momento (ts) en que arrancó la delegación ACTUAL (0→>0 subagentes). Lo
+    // consume el panel de Actividad en Segundo Plano (ui/activity-widget.js) para
+    // la columna "tiempo corriendo" del subagente. Efímero como _turnToolCount:
+    // no se persiste (un chat dormido no tiene subagente vivo).
+    this._delegatingSince = null;
     // Router de modelo automático — AutoTux v2 (núcleo: core/model-router.js).
     // Estado PERSISTIDO mínimo (ver persist()/rehydrate()): contador de turnos
     // "down" seguidos para la histéresis de bajada + turnos restantes de
@@ -619,13 +625,18 @@ class Chat {
           // cierra (mismo patrón de matching que TOOL_TYPE_ICONS del
           // frontend, acá server-side para que /api/chat/list lo vea sin la
           // pestaña abierta).
-          if (/^(Task|Agent)/i.test(e.name || '')) this._delegatingIds.add(e.id);
+          if (/^(Task|Agent)/i.test(e.name || '')) {
+            this._delegatingIds.add(e.id);
+            // Sella el inicio de la delegación al pasar de 0→>0 (para "tiempo corriendo").
+            if (this._delegatingIds.size === 1) this._delegatingSince = Date.now();
+          }
         } else if (e.type === 'tool_result') {
           // AutoTux v2 (C5): una herramienta que falló (ok:false, ver runner)
           // es evidencia barata de "el nivel se quedó corto" — la cuenta el
           // escalado por insuficiencia al cerrar el turno.
           if (e.ok === false) this._turnToolErrors = (this._turnToolErrors || 0) + 1;
           if (this._delegatingIds.has(e.id)) this._delegatingIds.delete(e.id);
+          if (this._delegatingIds.size === 0) this._delegatingSince = null;
         }
         this._push(e);
     }
@@ -719,6 +730,7 @@ class Chat {
     this._push({ type: 'user', text }); // visible como burbuja en la conversación
     this._ensureEngine().then((ok) => {
       if (ok !== false) this.link?.send({ t: 'user', text });
+      else this._setStatus('waiting'); // fix B3.3 2026-07-11: idem sendUser — no dejar "working" pegado si el motor no arrancó
     });
   }
 
@@ -864,7 +876,6 @@ class Chat {
   async reopen() {
     if (this.closed) return { ok: false, error: 'La conversación está cerrada.' };
     if (this.viewMode !== 'chat') return { ok: false, error: 'Solo se puede reabrir en modo Chat (una TUI se reinicia desde la terminal).' };
-    if (this.viewMode === 'switching') return { ok: false, error: 'Hay un cambio de modo en curso; probá de nuevo.' };
     // Motor dormido/caído: no hay proceso viejo que matar. Un arranque fresco
     // ya toma el código nuevo.
     if (!this.alive || !this.link) {
@@ -947,6 +958,7 @@ class Chat {
     // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
     this._ensureEngine().then((ok) => {
       if (ok !== false) this.link?.send({ t: 'user', text, ...(atts ? { attachments: atts } : {}) });
+      else this._setStatus('waiting'); // fix B3.3 2026-07-11: spawn/conexión falló → no dejar la tarjeta pegada en "working" para siempre
     });
   }
 
@@ -1043,6 +1055,11 @@ class Chat {
   // ≥10 tools con ≥1 error). NO re-corre el turno (auto-redo descartado, ver
   // núcleo). Cumple "detectar que el modelo no alcanzó y subir".
   _endTurnRouter() {
+    // Guard PRIMERO (fix B3.3 2026-07-11): si el usuario forzó un modelo a mano
+    // (modelChoice!=='auto') DURANTE un turno-override, no revertir esa elección
+    // — antes la restauración del override corría antes del guard y pisaba el
+    // modelo forzado (badge decía uno, corría otro).
+    if (this.modelChoice !== 'auto') { this._overrideRestore = null; return; }
     if (this._overrideRestore) {
       const restore = this._overrideRestore;
       this._overrideRestore = null;
@@ -1050,7 +1067,6 @@ class Chat {
         this.setModel(restore, { auto: true }); // volver del Haiku efímero al base
       }
     }
-    if (this.modelChoice !== 'auto') return;
     const base = clampLevel(this.model);
     if (base === -1) return;
     const dec = insufficiencyEscalation({ baseLevel: base, toolCalls: this._turnToolCount, toolErrors: this._turnToolErrors });
@@ -1226,6 +1242,7 @@ class Chat {
     // (interrupt, crash) deje la tarjeta pegada en "delegando" para siempre.
     if (state === 'waiting') {
       this._delegatingIds.clear();
+      this._delegatingSince = null;
       this._endTurnRouter(); // AutoTux v2: restaura override + escala por insuficiencia
       this._turnToolCount = 0;  // arranca en cero el conteo del próximo turno
       this._turnToolErrors = 0;
@@ -1277,6 +1294,10 @@ class Chat {
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
       // la pestaña del chat esté cerrada.
       delegating: this._delegatingIds.size > 0,
+      // Cuántos subagentes Task/Agent en vuelo + desde cuándo (panel de Actividad
+      // en Segundo Plano: ui/activity-widget.js / system/activity-modal.js).
+      delegatingCount: this._delegatingIds.size,
+      delegatingSince: this._delegatingSince,
       // Ticket/feature que trabaja este chat (si nació de un bug de Desk o de un
       // FEAT-n). Lo consume el panel "Bugs & Features" para pintar el Pac-Man de
       // actividad en la columna correcta sin abrir la pestaña del chat.
@@ -1395,8 +1416,7 @@ class ChatManager {
         terminalId: c.viewMode === 'tui' ? c.terminalId : null,
       }));
     try {
-      fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-      fss.writeFileSync(CHATS_FILE, JSON.stringify(open), { mode: 0o600 });
+      writeJsonAtomic(CHATS_FILE, open); // atómico (fix B3.3 2026-07-11): un writeFileSync directo cortado truncaba chats.json → rehydrate perdía TODAS las conversaciones abiertas
     } catch { /* best-effort */ }
   }
 
@@ -1821,7 +1841,7 @@ export default {
         } else if (msg.type === 'set_mode') {
           chat.setMode(msg.mode);
         } else if (msg.type === 'set_model') {
-          chat.setModel(msg.model);
+          chat.setModelChoice(msg.model); // fix B3.3 2026-07-11: rutear por setModelChoice (valida 'auto'/VALID_MODELS + persiste modelChoice), igual que POST /api/chat/model — antes setModel directo dejaba modelChoice inconsistente
         }
       });
       ws.on('close', () => chat.detach(ws));
