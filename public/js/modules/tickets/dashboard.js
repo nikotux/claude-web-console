@@ -19,6 +19,8 @@ const LANE_META = {
   bug: { emoji: '🐞', label: 'bug' }, feature: { emoji: '💡', label: 'feature' },
   hardware: { emoji: '🖥', label: 'hardware' }, access: { emoji: '🔑', label: 'access' },
   platform: { emoji: '⚙️', label: 'platform' }, onboarding: { emoji: '🌱', label: 'onboarding' },
+  'facilities-house': { emoji: '🏠', label: 'Infraestructura Casa' },
+  'facilities-office': { emoji: '🏢', label: 'Infraestructura Oficina' },
   other: { emoji: '🏷️', label: 'other' },
 };
 const laneEmoji = (l) => LANE_META[l]?.emoji || '🏷️';
@@ -325,7 +327,15 @@ export function openBugsV2Dashboard(deps = {}) {
   function filterBarHtml(d) {
     const activeLanes = Object.entries(d.openByLane || {}).filter(([, b]) => b.total > 0).map(([l]) => l);
     const resolvedLanes = resolvedData ? Object.entries(resolvedData.byLane || {}).filter(([, n]) => n > 0).map(([l]) => l) : [];
-    const laneKeys = [...new Set([...activeLanes, ...resolvedLanes])];
+    // Carriles SIEMPRE visibles aunque estén en 0 (pedido de Nico 2026-07-10): la
+    // iniciativa de Infraestructura (Casa Mark / Nueva Oficina, pedida por Chris) se
+    // muestra como pestaña fija — señal de "esto se trackea" — mientras el resto de
+    // las lanes sigue apareciendo sólo con ≥1 ticket. Se ordena por el catálogo
+    // LANE_META (así Infraestructura queda antes de 'other', no tras él).
+    const PINNED_LANES = ['facilities-house', 'facilities-office'];
+    const laneOrder = Object.keys(LANE_META);
+    const orderOf = (l) => { const i = laneOrder.indexOf(l); return i === -1 ? 999 : i; };
+    const laneKeys = [...new Set([...activeLanes, ...resolvedLanes, ...PINNED_LANES])].sort((a, b) => orderOf(a) - orderOf(b));
     const laneTab = (label, key) => `<button class="bv2-tab${selectedLane === key ? ' bv2-tab--on' : ''}" data-lane="${esc(key ?? '')}">${esc(label)}</button>`;
     const laneTabsHtml = [laneTab('Todos', null), ...laneKeys.map((l) => laneTab(LANE_LABEL[l] || l, l))].join('');
     const owners = collectOwners(d);

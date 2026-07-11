@@ -203,15 +203,20 @@ async function status() {
   // (mismo orden, mismos mensajes): solo cambia el momento de ejecución, no la
   // lógica. Un fallo de SISTEMA en cualquiera (git rechaza la Promise) propaga
   // igual que antes; los code!==0 se evalúan en orden abajo.
-  const [branchRes, headRes, lastRes, porcelainRes, abRes, stashRes] = await Promise.all([
+  const [branchRes, headRes, lastRes, porcelainRes, abRes, stashRes, mainBehindRes] = await Promise.all([
     git(['rev-parse', '--abbrev-ref', 'HEAD']),
     git(['rev-parse', '--short', 'HEAD']),
     // Último commit: fecha ISO + autor + asunto (para el "pulso" del repo).
     git(['log', '-1', '--format=%cI%x09%an%x09%s']),
     git(['status', '--porcelain']),
-    // ahead/behind vs origin/main (usa lo ya fetchado; no toca la red).
+    // ahead/behind de HEAD vs origin/main (usa lo ya fetchado; no toca la red).
     git(['rev-list', '--left-right', '--count', 'origin/main...HEAD']),
     git(['stash', 'list']),
+    // mainBehind = commits en origin/main que tu main LOCAL todavía no tiene.
+    // Es la pregunta REAL del panel ("¿mi base está fresca para pushear?"),
+    // independiente de en qué rama esté parado HEAD. Si estás en una rama
+    // feature, HEAD..origin/main mezcla "lo de Chris" con "lo tuyo"; esto no.
+    git(['rev-list', '--count', 'main..origin/main']),
   ]);
 
   if (branchRes.code !== 0) throw new Error(`git rev-parse HEAD falló: ${branchRes.stderr || 'código ' + branchRes.code}`);
@@ -253,10 +258,18 @@ async function status() {
     ? stashRes.stdout.split('\n').some((l) => l.includes(AUTO_STASH_MSG))
     : false;
 
+  // mainBehind: cuántos commits de origin/main le faltan a tu main local. Si el
+  // rev-list falla (sin rama main local, sin origin/main fetchado, etc.) se deja
+  // en 0 — fallback razonable, no propaga error (igual criterio que ahead/behind).
+  const mainBehind = mainBehindRes.code === 0 && mainBehindRes.stdout
+    ? (parseInt(mainBehindRes.stdout, 10) || 0)
+    : 0;
+
   return {
     name: config.projectName, rel: REL, branch, head,
     subject: subject || '', author: author || '', date: date || '',
-    dirty: dirtyCount > 0, dirtyCount, behind, ahead,
+    dirty: dirtyCount > 0, dirtyCount, behind, ahead, mainBehind,
+    onMain: branch === 'main',
     lastFetch: lastFetchAt,
     pendingAutoStash,
   };
@@ -326,6 +339,38 @@ export default {
       busy = true;
       const log = [];
       try {
+        // 0) Refrescar SIEMPRE las remote-tracking refs (origin/main incluido).
+        //    Así el ff de main y el mainBehind del status ven lo último de Chris.
+        const fetch = await git(['fetch', '--prune', 'origin']);
+        log.push({ step: 'fetch', code: fetch.code, out: fetch.stdout || fetch.stderr || '(ok)' });
+        if (fetch.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
+
+        const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+        const branch = branchRes.stdout || 'HEAD';
+
+        // CASO A: estás parado en una RAMA FEATURE. El objetivo #1 del panel es
+        // que tu main LOCAL == origin/main (base fresca para pushear). Lo logramos
+        // SIN checkout y SIN tocar tu rama ni tu working tree: `git fetch origin
+        // main:main` adelanta el ref local `main` SOLO si es fast-forward (git se
+        // niega si main divergió — nunca lo forzamos). Tu trabajo queda intacto.
+        if (branch !== 'main') {
+          const ff = await git(['fetch', 'origin', 'main:main']);
+          log.push({ step: 'ff-main', code: ff.code, out: ff.stdout || ff.stderr || '(ya al día)' });
+          const st = await status();
+          const mainUpdated = ff.code === 0;
+          return res.json({
+            ok: true,
+            onMain: false,
+            mainUpdated,
+            log,
+            status: st,
+            warn: mainUpdated ? undefined
+              : 'Tu main local no se pudo adelantar solo (puede tener commits propios o haber divergido de origin/main). Tu rama actual quedó intacta; revisá main a mano si hace falta.',
+          });
+        }
+
+        // CASO B: estás parado en MAIN → stash → pull --ff-only → pop (flujo
+        // cuidadoso de siempre, que nunca arriesga tus cambios sin commitear).
         const dirtyRes = await git(['status', '--porcelain']);
         if (dirtyRes.code !== 0) throw new Error(`git status falló: ${dirtyRes.stderr || 'código ' + dirtyRes.code}`);
         const dirty = dirtyRes.stdout.length > 0;
@@ -407,9 +452,138 @@ export default {
 
         const st = await status();
         const ok = pull.code === 0 && !popConflict;
-        res.json({ ok, popConflict, stashed, log, status: st });
+        res.json({ ok, onMain: true, popConflict, stashed, log, status: st });
       } catch {
         res.status(500).json({ error: 'Falló la actualización.', log });
+      } finally {
+        busy = false;
+      }
+    });
+
+    // ───────── Mis PRs abiertos (ramas que propuse, sin mergear aún) ─────────
+    // Le pregunta a GitHub (gh) cuáles de MIS PRs siguen ABIERTOS con base main
+    // — la "verdad" de qué propuse y Chris todavía no mergeó (detecta bien los
+    // squash-merges, que git local no ve). Por cada uno calcula cuántos commits
+    // de main le faltan a su rama remota (para el "poner al día"). Best-effort:
+    // si gh no está / no autenticado / falla, devuelve lista vacía + error, y el
+    // panel simplemente no muestra el indicador (no rompe nada). SOLO LECTURA.
+    r.get('/branches', async (req, res) => {
+      try {
+        const gh = await runCmd('gh', [
+          'pr', 'list', '--author', '@me', '--state', 'open', '--limit', '30',
+          '--json', 'number,title,headRefName,baseRefName,url',
+        ], { timeout: 20000 });
+        if (gh.code !== 0) {
+          return res.json({ ok: false, branches: [], error: (gh.stderr || 'gh falló').split('\n')[0].slice(0, 200) });
+        }
+        let prs = [];
+        try { prs = JSON.parse(gh.stdout || '[]'); } catch { prs = []; }
+        const current = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || '';
+        const withBase = prs.filter((p) => p && p.baseRefName === 'main');
+        // Los rev-list son lecturas independientes → en paralelo (regla de oro).
+        const branches = await Promise.all(withBase.map(async (pr) => {
+          const bh = await git(['rev-list', '--count', `origin/${pr.headRefName}..origin/main`]);
+          const behindMain = bh.code === 0 && bh.stdout ? (parseInt(bh.stdout, 10) || 0) : null;
+          return {
+            number: pr.number,
+            title: pr.title || '',
+            branch: pr.headRefName,
+            url: pr.url || '',
+            behindMain, // null = no se pudo medir (rama remota no fetchada)
+            isCurrent: pr.headRefName === current,
+          };
+        }));
+        res.json({ ok: true, branches, current });
+      } catch {
+        res.status(500).json({ ok: false, branches: [], error: 'No se pudo consultar tus PRs.' });
+      }
+    });
+
+    // ───────── Poner al día la rama ACTUAL sobre el main fresco (rebase) ─────────
+    // Rebasa la rama en la que estás parado sobre origin/main para seguir
+    // trabajando en paralelo sobre lo último de Chris. SEGURO por diseño:
+    //   • Solo rebasa la rama ACTUAL (no hace checkout de otra).
+    //   • Conflicto ⇒ `git rebase --abort` ⇒ la rama queda EXACTAMENTE como estaba.
+    //   • Cambios sin commitear ⇒ stash antes, pop después.
+    // Tras un rebase exitoso el PR necesita force-push al re-enviarlo (se avisa).
+    r.post('/rebase-branch', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede rebasar ramas.' });
+      if (busy) return res.status(409).json({ error: 'Ya hay una operación git en curso.' });
+      const branch = String(req.body?.branch || '').trim();
+      // Validación estricta del nombre de rama (nunca texto arbitrario a git).
+      if (!branch || branch.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
+        return res.status(400).json({ error: 'Nombre de rama inválido.' });
+      }
+      busy = true;
+      const log = [];
+      try {
+        const cur = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || '';
+        if (cur === 'main') {
+          return res.status(400).json({ error: 'No se rebasa main sobre sí mismo — usá Actualizar.' });
+        }
+        if (branch !== cur) {
+          return res.status(409).json({ error: `Por seguridad solo rebaso la rama en la que estás parado. Cambiate a "${branch}" primero (ahora estás en "${cur}").` });
+        }
+
+        const f = await git(['fetch', '--prune', 'origin']);
+        log.push({ step: 'fetch', code: f.code, out: f.stdout || f.stderr || '(ok)' });
+        if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
+
+        // ¿Hace falta? Si la rama ya tiene todo main, no hay nada que rebasar.
+        const bh = await git(['rev-list', '--count', 'HEAD..origin/main']);
+        const behindMain = bh.code === 0 && bh.stdout ? (parseInt(bh.stdout, 10) || 0) : 0;
+        if (behindMain === 0) {
+          return res.json({ ok: true, noop: true, log, status: await status(), message: 'Tu rama ya está al día sobre main.' });
+        }
+
+        // Working tree limpio para rebasar: si hay cambios sin commitear, stash.
+        const dirtyRes = await git(['status', '--porcelain']);
+        const dirty = dirtyRes.code === 0 && dirtyRes.stdout.length > 0;
+        let stashed = false;
+        if (dirty) {
+          const s = await git(['stash', 'push', '-u', '-m', AUTO_STASH_MSG]);
+          log.push({ step: 'stash', code: s.code, out: s.stdout || s.stderr });
+          const noLocalChanges = /No local changes/i.test(s.stdout + s.stderr);
+          if (s.code !== 0 && !noLocalChanges) {
+            return res.status(409).json({
+              ok: false, stashFailed: true, log, status: await status(),
+              error: 'No se pudo guardar tus cambios sin commitear (git stash) antes de rebasar. Abortado sin tocar nada.',
+            });
+          }
+          stashed = s.code === 0 && !noLocalChanges;
+        }
+
+        // Rebase sobre origin/main. Conflicto ⇒ abort ⇒ rama intacta.
+        const reb = await git(['rebase', 'origin/main']);
+        log.push({ step: 'rebase', code: reb.code, out: (reb.stdout || reb.stderr || '').split('\n').slice(0, 4).join(' | ') });
+        if (reb.code !== 0) {
+          const ab = await git(['rebase', '--abort']);
+          log.push({ step: 'rebase-abort', code: ab.code, out: ab.stdout || ab.stderr || '(abortado)' });
+          if (stashed) {
+            const pop = await git(['stash', 'pop']);
+            log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
+          }
+          return res.status(409).json({
+            ok: false, conflict: true, log, status: await status(),
+            error: 'El rebase tuvo conflictos con lo nuevo de main. Aborté: tu rama quedó EXACTAMENTE como estaba (nada perdido). Resolvelo a mano cuando puedas: git rebase origin/main.',
+          });
+        }
+
+        // Rebase OK. Reaplicar los cambios stasheados (si los había).
+        let popConflict = false;
+        if (stashed) {
+          const pop = await git(['stash', 'pop']);
+          log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
+          popConflict = pop.code !== 0;
+        }
+        return res.json({
+          ok: true, rebased: true, needsForcePush: true, popConflict, log, status: await status(),
+          message: popConflict
+            ? 'Rama rebasada sobre main. OJO: tus cambios sin commitear tuvieron conflicto al reaplicarse y quedaron en el stash (git stash list). El PR necesitará force-push al re-enviarlo.'
+            : 'Rama rebasada sobre main. El PR va a necesitar force-push cuando lo re-envíes.',
+        });
+      } catch {
+        return res.status(500).json({ error: 'Falló el rebase.', log });
       } finally {
         busy = false;
       }

@@ -227,6 +227,14 @@ código.
   `learning-analyze.log` — OJO: `learning.json` guarda AMBOS temas (LT<n>,
   ahora con contextoAdicional/explainFingerprint/explainFiles/explainVersions)
   y RUTAS de aprendizaje (LR<n>, routes[]+routeSeq),
+  `learning-session-ids.json` registro DURABLE append-only de los sessionIds de
+  las corridas del MÓDULO DE APRENDIZAJE (lo escriben los 3 runners de aprendizaje
+  vía `learning/session-log.js` capturando el `session_id` del msg SDK
+  `system/init`; lo lee el módulo tokens): esas corridas usan cwd = la consola,
+  así que `projectOf` las vería como 'consola' — este registro permite atribuir su
+  consumo al bucket 'aprendizaje' APARTE, para auditar tokens de ESTUDIO vs
+  DESARROLLO (no es retroactivo: transcripts de aprendizaje previos a 2026-07-10
+  quedan contados en 'consola'),
   `audio/<id>.json` jobs del análisis IA de
   transcripciones (módulo audio; id determinístico por contenido, poda >30 días)
   + `audio.log` de su runner, `session-bus/` del INTERFONO entre
@@ -294,6 +302,35 @@ Profundo ADEMÁS sigue en la memoria de Tolkien (`…tolkien/memory/pensamiento-
 y hermanas), que auto-carga en TODA sesión de Tolkien (incluidas TUI) — solapamiento
 deliberado (pedido de Niko 2026-07-08): la memoria cubre las TUI/chats manuales, el
 contexto inyectado cubre los chats abiertos desde el botón de un ticket v2.
+ESPEJO A TOLKIEN — BLINDAJE (2026-07-10, pedido de Niko: "que CUALQUIER sesión que
+vaya a hacer el push de un PR tenga SIEMPRE estas instrucciones que yo puedo editar,
+blindados a futuro"). Problema: la inyección al prompt del tablero
+(`workflowContextBlocks`) SOLO cubre los chats abiertos desde el botón de un ticket;
+una sesión abierta de otra forma (launcher / TUI / reanudada) sobre `~/tolkien` NUNCA
+veía estos contextos (caso real: la sesión del PR #266 corría solo con lo nativo de
+Tolkien). El ÚNICO mecanismo que llega a TODA sesión de un repo es el auto-carga nativo
+de Claude Code (`CLAUDE.md` + `CLAUDE.local.md` + memorias); la inyección one-shot del
+tablero es estructuralmente incapaz de garantizar. SOLUCIÓN (enfoque ESPEJO, no
+referencia — el texto viaja FÍSICO, no un "andá a leer allá" que dependa de que el
+modelo obedezca): al guardar un contexto, `saveContext` (`tickets/context-store.js`)
+además de escribir el master en `~/.cwc-data/bugfix-*.md` ESPEJA el subset work+pr a una
+SECCIÓN GESTIONADA de `~/tolkien/CLAUDE.local.md` — archivo LOCAL, ya excluido del repo
+(`.git/info/exclude`, NUNCA se comitea), que Claude Code auto-carga en CADA sesión de
+Tolkien (chat/TUI/launcher/reanudada). `syncToTolkien()` reemplaza SOLO lo que está entre
+los marcadores `<!-- cwc:tickets-context:start/end -->` (todo lo que Niko escribió a mano
+en CLAUDE.local.md — la 🛡 regla dura de PRs — queda intacto FUERA de los marcadores).
+El master (fuente de verdad, con TODO) vive en la consola; a Tolkien baja solo el subset
+necesario para trabajar tickets/features/PR. La sección lleva NOTA-en-el-documento
+("gestionado por Mi Consola, no editar a mano, local no versionado") para que un
+future-Niko no la confunda con un objeto raro. VERIFICADOR: `verifySync()` compara el
+bloque presente en CLAUDE.local.md vs el render del master → `ok|stale|missing|
+unavailable`; expuesto por `GET /api/tickets/context-sync` (0 tokens, solo lee disco) +
+`POST` (re-sincronizar a mano). El panel de Proyectos (`system/project-context-panel.js`,
+bloque `.pj-sync`) muestra el badge + botón "Re-sincronizar" + la NOTA-en-la-consola de
+dónde aterriza, ARRIBA de los contextos editables; y un check rápido de Salud
+(`checkTolkienContextSync` en `health/index.js`, id `tolkien-context`) entra en el
+semáforo global. La inyección del tablero se CONSERVA como redundancia inofensiva
+(cinturón + tirantes).
 
 ## Mapa del proyecto
 
@@ -412,6 +449,41 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Explorador existente (deep-link ?path=) en esa carpeta — reuso total,
                             cero UI nueva (idea de Niko: ya tenemos explorador, no un menú de
                             artefactos aparte).
+                            IMÁGENES QUE DEVUELVE EL ASISTENTE (2026-07-11, pedido de Niko: "que las
+                            imágenes que vos leés/generás se vean en el chat, con el mismo flujo de
+                            los adjuntos"): la dirección INVERSA de los adjuntos (asistente→humano).
+                            Problema: cuando el modelo usa `Read` sobre una imagen (un PNG del repo,
+                            un screenshot de Playwright), el SDK la devuelve como bloque `image`
+                            base64 dentro del tool_result — el runner solo extraía el TEXTO
+                            (resultText) así que el chip quedaba "sin salida" y Niko NO veía la
+                            imagen (sí la veía el modelo). SOLUCIÓN (mismo flujo que los adjuntos,
+                            dirección invertida): el RUNNER (bin/cwc-chat-runner.js `saveToolImages`)
+                            detecta los bloques `image` base64 de CADA tool_result, los MATERIALIZA
+                            en la MISMA carpeta de adjuntos del chat (chatAttachDir(ID), reusa
+                            safeAttachName/IMAGE_MIME de chat/attachments.js) con nombre
+                            `asst-<toolUseId>-<n>.<ext>`, y emite en el evento tool_result solo la
+                            REFERENCIA `images:[{name,type,mime}]` — el base64 NUNCA viaja por el WS
+                            (pesado); el front pide la miniatura a GET /api/chat/attachment como con
+                            cualquier adjunto. Topes propios: 4 imágenes por tool_result · 12 MB por
+                            imagen · solo png/jpeg/gif/webp; best-effort (si no puede escribir, el
+                            turno sigue sin miniatura). El FRONT (chat-tab.js `_toolResult`): si el
+                            evento trae `images`, inserta una tira de miniaturas clickeables
+                            (→ lightbox) DESPUÉS del `.chat-toolgroup` del chip, REUSANDO `_attsEl`
+                            (el mismo método de los adjuntos del usuario — usa this.id + el endpoint)
+                            con la clase `.chat-toolimgs` + guard por data-tool-id (un replay de
+                            hello.events al reconectar no duplica la tira). Estilo `.chat-toolimgs`
+                            en style.css (hereda .chat-att-img). SEGURIDAD: el nombre lo genera el
+                            runner y pasa por safeAttachName/attachPath (misma validación anti-
+                            traversal de los adjuntos); el endpoint sirve inline con nosniff.
+                            ALCANCE — FASE 1 = EN VIVO + reconexión al runner vivo (el evento
+                            tool_result con `images` va en el history, así que hello.events lo
+                            re-emite mientras el runner viva). Un chat DORMIDO reabierto desde el
+                            transcript del SDK (loadTranscriptEvents) NO re-deriva las miniaturas —
+                            las imágenes siguen en la carpeta del chat (accesibles por "Abrir carpeta
+                            del chat"), pero re-pintarlas en el replay del transcript es FASE 2
+                            pendiente. Verificado E2E: un chat haiku que hace Read de un PNG lo
+                            materializa en su carpeta + emite el tool_result con images; el endpoint
+                            sirve la imagen y `_attsEl` arma la miniatura correcta.
                             README.md documenta la config que hereda el chat (Fase 8:
                             settingSources user+project, comandos slash, observador). Modelo
                             EN VIVO (POST /api/chat/model, WS set_model): con motor corriendo
@@ -746,6 +818,84 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (`bin/install-autotux.js`/`uninstall-autotux.js`, como exige la regla
                             dura del proyecto para tocar configuración fuera del repo). No
                             iniciado — queda documentado acá para cuando se retome.
+                            DIAGRAMAS ```mermaid``` (2026-07-11, pedido del usuario "poder generar
+                            diagramas desde el chat"): un bloque ```` ```mermaid ```` en la respuesta
+                            del modelo se renderiza como SVG inline (flowchart/secuencia/ER/gantt/
+                            arquitectura/etc.), no como texto. SOLO frontend, cero cambios de backend
+                            — el render es 100% client-side en public/js/ui/markdown.js
+                            (enhanceMermaidBlocks, se llama tras enhanceCodeBlocks en renderMarkdown).
+                            VENDOR: `mermaid` (dependencia en package.json, patrón chart.js/marked/
+                            hljs) — a diferencia de esos tres, Mermaid v10+ SOLO distribuye ESM (sin
+                            bundle IIFE), así que se vendorea `dist/mermaid.esm.min.mjs` +
+                            `dist/chunks/mermaid.esm.min/*.mjs` (sin .map, ~3.6 MB) a
+                            public/vendor/mermaid/ y se carga con un `<script type="module">` propio
+                            en index.html (el único vendor de este proyecto cargado como módulo) que
+                            hace `import()` + `mermaid.initialize()` con el tema tomado de
+                            `getComputedStyle` sobre los tokens `--cwc-*` (nunca hex duplicado) y
+                            cuelga la instancia lista en `window.mermaid` + la promesa en
+                            `window.mermaidReady` (markdown.js espera esta promesa antes de
+                            renderizar — el script type=module se difiere, puede terminar después de
+                            que llegue el primer mensaje). SEGURIDAD: el ALLOWLIST de sanitize() de
+                            markdown.js NO se tocó (sigue sin permitir SVG/IMG crudos del modelo);
+                            el SVG que se inserta lo genera el PROPIO PARSER de Mermaid
+                            (`securityLevel:'strict'`) a partir de texto plano ya sanitizado, nunca
+                            HTML libre del modelo — mismo criterio que ya se acepta para Chart.js en
+                            el modal Uso. Degradación: sintaxis inválida, bloque de más de
+                            MERMAID_MAX_LINES (400) líneas, o vendor sin cargar ⇒ cae al bloque de
+                            código plano de siempre (nunca rompe el resto del mensaje). El código
+                            fuente del diagrama queda SIEMPRE disponible pero COLAPSADO bajo un
+                            `<details>` "Ver código Mermaid" debajo del SVG (convención "UI
+                            colapsable" del proyecto). chat-tab.js escucha el evento
+                            `cwc:mermaid-rendered` (bubbling, disparado al terminar el render async)
+                            sobre `.chat-msgs` y re-llama `_scroll()` — mismo criterio "pinea abajo"
+                            que ya usa el resto del chat, porque el diagrama aparece DESPUÉS de que
+                            el mensaje ya está en el DOM y puede crecer la burbuja. Alcance: SOLO el
+                            chat (`chat-tab.js` vía `_assistantFinal`) — Aprendizaje y Tareas siguen
+                            usando `renderMarkdown(...).innerHTML` de forma SÍNCRONA (ver gotcha de
+                            `renderMarkdown` más abajo), así que un diagrama ahí degrada al bloque de
+                            código (el render de Mermaid es async y el `.innerHTML` ya se leyó antes
+                            de que termine) — limitación conocida, no un bug nuevo.
+                            ZOOM (click → modal, `openMermaidZoom` de markdown.js): el diagrama es
+                            clickeable (`.md-mermaid--zoomable`) y abre una copia grande en el modal
+                            genérico (ui/dialog.js). GOTCHA/FIX 2026-07-11: Mermaid deja un
+                            `style="max-width:NNNpx"` INLINE en el SVG (tamaño chico para caber en la
+                            burbuja); `svg.cloneNode(true)` conserva ese atributo y un style INLINE le
+                            gana en especificidad a `.md-mermaid-zoom-body svg{max-width:none}` de
+                            style.css → el diagrama quedaba diminuto arriba a la izquierda con el modal
+                            casi vacío. Se pisa el estilo inline del clon por JS DESPUÉS de clonar
+                            (`clone.style.maxWidth='none'` + width 100%/height auto — un set por JS
+                            también es inline pero se aplica después, así gana al de mermaid). NO
+                            depender solo del CSS externo para anular estilos inline que trae el vendor.
+                            PREVIEW + AFFORDANCE "AMPLIAR" (2026-07-11, pedido de Niko: "el diagrama se
+                            ve diminuto"). CAUSA RAÍZ real (verificada en vivo con Playwright sobre una
+                            sesión con diagramas reales): un flowchart complejo tiene un viewBox grande
+                            (ej. 1948×1342) y se ESCALA para caber al ancho de la burbuja (~570px) →
+                            factor ~0.29 → el texto interno queda a ~5px, ilegible. NO es un bug de
+                            código ni se arregla con "generá el SVG más grande" (un SVG es VECTORIAL,
+                            no tiene resolución: a cualquier tamaño nominal, comprimido a 570px se ve
+                            igual de chico) — es intrínseco a meter un diagrama ancho en una burbuja
+                            angosta. El zoom (arriba) YA daba la versión legible, pero la ÚNICA pista
+                            para ampliarlo era `cursor:zoom-in` — INVISIBLE en touch/móvil (no hay
+                            hover ni cursor). SOLUCIÓN (enfoque "miniatura de adjunto", NO rasterizar a
+                            PNG — se evaluó y descartó: perdía nitidez vectorial y sumaba plomería):
+                            (a) el SVG va en un CANVAS interno `.md-mermaid-canvas` con `overflow:auto`
+                            + `max-height` (340px desktop / 240px móvil) → un diagrama grande se muestra
+                            como PREVIEW acotado (como la miniatura de una imagen adjunta) en vez de un
+                            muro que ocupa media pantalla; (b) un BADGE `.md-mermaid-zoom-btn`
+                            ("🔍 Ampliar", ícono `search` de icons.js) SIEMPRE visible pinneado a la
+                            esquina sup-derecha (hijo directo del holder `position:relative`, FUERA del
+                            canvas para no scrollear con él) — hace obvia la ampliación en móvil. El
+                            badge hace `stopPropagation` (abre el zoom UNA vez; sin él, el click
+                            burbujea al holder y se abrirían dos modales). Toda la caja sigue siendo
+                            clickeable (holder). REGLA GENERAL derivada: un diagrama/imagen que se
+                            comprime para caber NUNCA es legible inline — la respuesta es preview
+                            acotado + affordance de ampliar SIEMPRE visible (no solo hover), nunca
+                            "hacerlo más grande". Alternativas de diagrama-como-código (D2/Graphviz/
+                            PlantUML/nomnoml) se investigaron y NO aportan: mismo problema de display,
+                            mismo costo de tokens, y todas las buenas necesitan build/servidor (chocan
+                            con "todo local, render client-side") — Mermaid sigue siendo la elección; el
+                            ahorro real de tokens es usar ÁRBOL HTML/CSS o TABLAS para jerarquías/
+                            comparaciones y reservar Mermaid para flujos con ciclos.
   files/ stats/ tmux/ admin/ health/
   learning/                 MÓDULO DE APRENDIZAJE (pestaña "🎓 Aprendizaje" del BANCO DE
                             CONOCIMIENTO — así se renombró la sección `tasks` en la UI, 2026-07-09,
@@ -1311,9 +1461,23 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             FILTRO POR PROYECTO (pedido del usuario 2026-07-10): projectOf(dir)
                             clasifica cada transcript en consola (incluye healthfix-wt-)|tolkien|
                             otros; `daily` y `hourlyToday` quedan ANIDADOS por proyecto (hourlyToday
-                            = {all,consola,tolkien,otros}, cada uno una serie); ?project=all|consola|
-                            tolkien|otros filtra. Los `windows` (token-counts de límites) NO se
-                            filtran (los límites del plan son de la cuenta entera). MODEL_ORDER pasó
+                            = {all,consola,tolkien,otros,aprendizaje}, cada uno una serie);
+                            ?project=all|consola|tolkien|otros|aprendizaje filtra. BUCKET
+                            'aprendizaje' (pedido del usuario 2026-07-10, auditar ESTUDIO vs
+                            DESARROLLO): las corridas del MÓDULO DE APRENDIZAJE (explain/context/
+                            analyze) usan cwd = la consola/Tolkien, así que projectOf las vería como
+                            'consola'/'tolkien' — se separan por SESSIONID: buildSummary lee
+                            `learningIds` de ~/.cwc-data/learning-session-ids.json (lo escriben los 3
+                            runners de aprendizaje capturando el session_id del msg SDK system/init,
+                            ver learning/session-log.js) y calcula un `fproj` que MANDA sobre
+                            projectOf (learningId ⇒ 'aprendizaje', sin importar el cwd). El engine
+                            'learning' (ENGINE_LABELS, clasificado igual por learningId, PRIMERO en
+                            classifyEngine) lo desglosa además en el detalle por MOTOR (antes caía en
+                            'headless'). "Todos" (PROJECT_KEYS incluye 'aprendizaje') sigue siendo el
+                            total real de la cuenta. NO es retroactivo (transcripts previos quedan en
+                            'consola'; el histórico ya congelado no se re-separa). Los `windows`
+                            (token-counts de límites) NO se filtran (los límites del plan son de la
+                            cuenta entera). MODEL_ORDER pasó
                             a orden por PRECIO (haiku,sonnet,opus,fable) → fija el apilado de la
                             gráfica (base=más económico).
                             buildSeries (history-store, compartido) arma esa forma para las 3
@@ -1338,9 +1502,39 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Timer 10 s: refresca límites+resumen (Pac-Man+token-counts) y la gráfica
                             solo en Día (cambia por hora); en Semana/Mes re-pinta solo la izquierda.
                             chartInst se destruye al re-crear y en onClose (sin leaks))
-  tolkien/                  SOLO git del proyecto trackeado: status/fetch/update con
-                            stash→pull --ff-only→pop (nunca descarta trabajo). El contexto y
+  tolkien/                  SOLO git del proyecto trackeado: status/fetch/update. El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
+                            ACTUALIZAR = MAIN LOCAL SIEMPRE FRESCO (2026-07-10, pedido de Niko:
+                            "el botón no hacía nada"). CAUSA RAÍZ: el viejo /update hacía `pull
+                            --ff-only` sobre la RAMA ACTUAL — parado en una rama feature decía
+                            "Already up to date" y tu main local quedaba viejo, pero el semáforo
+                            comparaba HEAD vs origin/main (mezclando "lo de Chris" con "lo tuyo")
+                            así que el contador nunca bajaba. AHORA POST /update: (1) fetch
+                            --prune SIEMPRE; (2) si estás en `main` → stash→pull --ff-only→pop de
+                            siempre (flujo cuidadoso, nunca descarta trabajo); (3) si estás en una
+                            RAMA FEATURE → `git fetch origin main:main` adelanta tu main LOCAL a
+                            origin/main SIN checkout ni tocar tu rama/working tree (git rechaza el
+                            ff si main divergió → devuelve `warn`, no fuerza). status() suma
+                            `mainBehind` (commits de origin/main que tu main local no tiene — la
+                            pregunta REAL "¿mi base está fresca para pushear?", independiente de en
+                            qué rama estés) + `onMain`; el semáforo del front pasó a leer mainBehind
+                            (no HEAD..origin/main). GET /branches (nuevo, gh): mis PRs ABIERTOS
+                            base main (`gh pr list --author @me --state open`) + por cada uno cuántos
+                            commits de main le faltan a su rama (`origin/<rama>..origin/main`) — la
+                            "verdad" de qué propuse y Chris aún no mergeó (detecta squash-merges);
+                            best-effort (sin gh/auth → lista vacía, el panel no muestra el indicador).
+                            POST /rebase-branch (admin, nuevo): rebasa la rama ACTUAL sobre
+                            origin/main para seguir en paralelo sobre lo último de Chris —
+                            conflicto ⇒ `git rebase --abort` ⇒ rama EXACTAMENTE como estaba (dirty
+                            ⇒ stash antes/pop después); tras rebase OK avisa `needsForcePush`.
+                            Solo rebasa la rama en la que estás parado (no hace checkout de otra =
+                            seguro). Front (tolkien.js): línea 🌿 "N PRs sin mergear" (ícono ramas,
+                            🟡 si alguno quedó atrás de main, 🟢 si están al día/ninguno) clic →
+                            ventana openBranchesDialog con la lista (#N + título + ↓N sobre main) y
+                            el botón "Poner al día" SOLO en la rama actual atrasada; Actualizar
+                            re-consulta /branches (si Chris mergeó un PR, sale de la lista solo).
+                            La consulta gh NO va en el auto-refresh de 5 min (red): solo al montar,
+                            tras Actualizar y al abrir la ventana.
   projects/                 contexto (CLAUDE.md) y memorias EDITABLES de los proyectos
                             registrados en PROJECTS (index.js): `tolkien` (config.projectDir)
                             Y `console` (esta misma consola, su propia raíz de repo) — agregar
@@ -1819,11 +2013,18 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             bugfixes) ·
                             tolkien (tarjeta git INFORMATIVA, rediseño 2026-07-03: sin
                             Continuar/Explorar/Bugs&PRs — quedaban redundantes; muestra el
-                            PULSO del repo — #SHA · branch (⚠ si ≠ main) · al día/N detrás ·
-                            N cambios · último commit (asunto·autor·hace X) · último fetch —
-                            y UNA acción: Actualizar (⬇ ícono en el header) = stash→pull→pop,
-                            resaltada .tk-update--due si behind>0. /api/tolkien/status suma
-                            author+lastFetch. El acceso al tablero se movió a "Bugs & Features") ·
+                            PULSO del repo — #SHA · branch (⚠ si ≠ main) · main al día/↓N ·
+                            N cambios · último commit (asunto·autor·hace X) · último fetch ·
+                            🌿 N PRs sin mergear — y una acción: Actualizar (⬇ ícono en el
+                            header). SEMÁFORO + Actualizar pasaron a leer `mainBehind` (main
+                            LOCAL vs origin/main), no HEAD..origin/main — ver el bloque del
+                            módulo backend tolkien/ arriba para la CAUSA RAÍZ del "no hacía
+                            nada" y el flujo nuevo (ff de main aunque estés en rama feature).
+                            La línea 🌿 (GET /branches, gh) lista mis PRs abiertos sin mergear
+                            y su ↓N sobre main; clic → ventana con "Poner al día" (rebase,
+                            POST /rebase-branch) SOLO en la rama actual atrasada. .tk-update--due
+                            resalta si mainBehind>0. /api/tolkien/status suma mainBehind+onMain.
+                            El acceso al tablero se movió a "Bugs & Features") ·
                             bugs (sección "Bugs & Features", modules/bugs/bugs.js, ANTES
                             `tickets`: ÚNICO acceso al ciclo del bug. INFO RÁPIDA barata (sin
                             tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y
@@ -2197,7 +2398,12 @@ bin/cwc-learning-analyze-runner.js "🧠 Analizar aprendizaje" del MÓDULO DE AP
                             Organiza TODOS los temas: duplicados/unificables/completar/agrupar-en-rutas/
                             aprenderPrimero/sugerirNuevos. Interfaz por archivos:
                             ~/.cwc-data/learning-analysis.json (status running/done/error, dedup por
-                            corrida fresca). Lógica en src/modules/learning/analyze-shared.js
+                            corrida fresca). Lógica en src/modules/learning/analyze-shared.js.
+                            OJO: los 3 runners de aprendizaje (explain/context/analyze) capturan el
+                            `session_id` del msg SDK `system/init` y lo registran vía
+                            `src/modules/learning/session-log.js` (registerLearningSession →
+                            ~/.cwc-data/learning-session-ids.json) para que el módulo tokens atribuya
+                            su consumo al bucket 'aprendizaje' aparte de 'consola' (ver módulo tokens)
 bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,
                             y qué hacer?). Junta datos con gh EN NODE y el modelo los interpreta
                             SIN herramientas (read-only MÁXIMO, regla 6). Interfaz por archivos:
@@ -2592,6 +2798,27 @@ docs/                       frontend-modules.md · brief-original.txt · context
   responde `{ killed, pids }`. Al morir el runner, el server detecta el socket
   cerrado (`RunnerLink.onClose` → `Chat._engineDown`) y lo RE-LANZA con
   `--resume` en la próxima interacción: 0 historial perdido, credenciales frescas.
+- **MCP de Pad (getpad.dev) disponible en Consola** (2026-07-10, pedido del
+  usuario "integremos la mcp de pad en consola"): igual que Tolkien
+  (`~/.claude.json → projects["/home/nmosquera/tolkien"].mcpServers.pad`), el
+  proyecto Consola tiene su PROPIA entrada en scope LOCAL —
+  `~/.claude.json → projects["/home/nmosquera/claude-web-console"].mcpServers.pad`
+  = `{"type":"http","url":"https://mcp.getpad.dev"}` (agregada con
+  `claude mcp add --scope local pad --transport http https://mcp.getpad.dev`
+  parado en la raíz del repo). CERO cambios de código: `settingSourcesFor('chat')`
+  de `core/sdk-settings.js` YA incluye `'local'`, que es la fuente que el SDK usa
+  para resolver `mcpServers` — no hace falta pasar `mcpServers` a mano en
+  `chatQueryOptions()`. El token OAuth (`scope: pad:admin`, lectura+escritura) se
+  cachea en `~/.claude/.credentials.json → mcpOAuth` por `serverName+serverUrl`
+  (NO por proyecto) — por eso NO hizo falta re-loguearse: quedó "✔ Connected" al
+  toque, reusando el mismo login ya autorizado para Tolkien. Deliberadamente en
+  scope LOCAL (no en un `.mcp.json` versionado): es personal/OAuth de Nico, mismo
+  criterio que Tolkien. Alcance: SOLO chats interactivos (`settingSources:
+  ['user','project','local']`) — ningún runner headless lo carga (todos usan
+  `settingSources: []` o, los 3 de Teams/comms, `cwd=Tolkien`, nunca cwd=Consola).
+  MISMO gotcha que el de arriba: un chat YA VIVO no relee `~/.claude.json` — hace
+  falta "Reabrir para cambios" (menú ⋯ de Sesiones) o una conversación nueva para
+  que `ToolSearch` empiece a encontrar `mcp__pad__*`.
 - Tools MCP DIFERIDAS y allowlists headless (visto 2026-07-05): el SDK puede
   diferir los schemas de las tools MCP y el modelo necesita la META-tool
   `ToolSearch` para cargarlos antes de invocarlas — solo devuelve schemas, NO

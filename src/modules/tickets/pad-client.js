@@ -34,22 +34,43 @@ function readPadToken() {
   } catch { return null; }
 }
 
-let client = null;
-let clientToken = null;
+let liveClient = null;    // Client conectado, o null si no hay conexión viva
+let liveToken = null;     // token con el que se conectó liveClient (se reconecta si cambia)
+let clientPromise = null; // promesa de (re)conexión en vuelo — evita doble arranque en carreras
 
-async function getClient() {
-  const t = readPadToken();
-  if (!t?.token) throw new Error('Pad: sin token OAuth (reautenticá pad en Claude Code).');
-  if (t.expiresAt && Date.now() > t.expiresAt) throw new Error('Pad: token expirado (se renueva al usar pad en Claude Code).');
-  if (client && clientToken === t.token) return client;
-  if (client) { try { await client.close(); } catch { /* noop */ } client = null; }
+async function connectClient(t) {
   const transport = new StreamableHTTPClientTransport(new URL(t.url), {
     requestInit: { headers: { Authorization: `Bearer ${t.token}` } },
   });
   const c = new Client({ name: 'cwc-tickets-pad', version: '1.0.0' }, { capabilities: {} });
+  // Si el transport muere, soltamos la referencia para reconectar en la próxima
+  // llamada en vez de quedar con un client zombi (patrón desk-mcp-client.js).
+  transport.onclose = () => { if (liveClient === c) { liveClient = null; liveToken = null; } };
+  transport.onerror = () => { if (liveClient === c) { liveClient = null; liveToken = null; } };
   await c.connect(transport);
-  client = c; clientToken = t.token;
-  return client;
+  liveClient = c; liveToken = t.token;
+  return c;
+}
+
+// Devuelve el Client conectado. Reusa el singleton vivo SOLO si el token no
+// cambió. Si dos llamadas concurrentes piden reconectar (token nuevo o sin
+// cliente), COMPARTEN la misma promesa en vuelo — antes ambas entraban al
+// bloque de close+reconnect y se pisaban `client`/`clientToken`, dejando un
+// transport huérfano (fix B1 2026-07-11).
+async function getClient() {
+  const t = readPadToken();
+  if (!t?.token) throw new Error('Pad: sin token OAuth (reautenticá pad en Claude Code).');
+  if (t.expiresAt && Date.now() > t.expiresAt) throw new Error('Pad: token expirado (se renueva al usar pad en Claude Code).');
+  if (liveClient && liveToken === t.token) return liveClient;
+  if (!clientPromise) {
+    const stale = liveClient;
+    liveClient = null; liveToken = null;
+    clientPromise = (async () => {
+      if (stale) { try { await stale.close(); } catch { /* noop */ } }
+      return connectClient(t);
+    })().finally(() => { clientPromise = null; });
+  }
+  return clientPromise;
 }
 
 async function callTool(name, args) {
@@ -59,6 +80,10 @@ async function callTool(name, args) {
   let r;
   try { r = await Promise.race([c.callTool({ name, arguments: args }), timeout]); }
   finally { clearTimeout(timer); }
+  // Error explícito de la tool MCP (isError): lanzar en vez de intentar parsear
+  // el content de error como si fuera un item (fix B1 2026-07-11, paridad con
+  // desk-mcp-client.js). Lo captura getPadItemsForPr → { items, error }.
+  if (r.isError) throw new Error(r.content?.[0]?.text || `Error de la tool Pad: ${name}`);
   const text = r.content?.find((x) => x.type === 'text')?.text;
   try { return JSON.parse(text); } catch { return text; }
 }

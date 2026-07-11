@@ -26,6 +26,25 @@ function relatedTo(t) {
   return t.customFields?.['Related to'] ?? t.customFields?.cf_related_to ?? '';
 }
 
+// Facilities / Infraestructura (pedido de Chris vía Nico, 2026-07-10): tickets del
+// dept Mordor Staffing sobre (1) la casa de Mark y (2) la nueva oficina. DOS señales,
+// por decisión de Nico:
+//   · DEFINITIVA — la CATEGORÍA nativa de Zoho Desk ("Facilities - Mark's House" /
+//     "Facilities - New Office"), que crea a mano el admin (Julian; Zoho no lo
+//     permite por API). Cuando exista, MANDA sobre cualquier otra lane.
+//   · PUENTE — keyword en el ASUNTO, para clasificar YA los tickets que hoy entran
+//     sin categoría (se reclasifican después). Es de menor confianza → se evalúa
+//     DESPUÉS de RELATED_TO_LANE, para no robarle un ticket claro de hardware/acceso.
+const FACILITIES_HOUSE = /mark'?s?\s*house|casa\s*(de\s*)?mark/i;
+const FACILITIES_OFFICE = /new\s*office|nueva\s*oficina/i;
+
+function facilitiesByCategory(t) {
+  const cat = `${t.category ?? ''} ${t.subCategory ?? ''}`;
+  if (FACILITIES_HOUSE.test(cat)) return 'facilities-house';
+  if (FACILITIES_OFFICE.test(cat)) return 'facilities-office';
+  return null;
+}
+
 // Lane. dept Tolkien → bug (feature se distingue por triage/subject, TODO Fase 3);
 // [NEW HIRE] en subject SIEMPRE gana (onboarding). Si nada matchea → 'other'.
 export function deriveLane(t) {
@@ -33,8 +52,15 @@ export function deriveLane(t) {
     return /\bfeature\b|feature request|would be (great|nice)/i.test(t.subject || '') ? 'feature' : 'bug';
   }
   if (/\[new\s*hire\]/i.test(t.subject || '')) return 'onboarding';
+  // Facilities por CATEGORÍA de Desk (definitiva) — gana sobre Related-to.
+  const fcat = facilitiesByCategory(t);
+  if (fcat) return fcat;
   const rel = relatedTo(t);
   for (const [re, lane] of RELATED_TO_LANE) if (re.test(rel)) return lane;
+  // PUENTE: keyword en el asunto (menor confianza) — último recurso antes de 'other'.
+  const subj = t.subject || '';
+  if (FACILITIES_HOUSE.test(subj)) return 'facilities-house';
+  if (FACILITIES_OFFICE.test(subj)) return 'facilities-office';
   return 'other';
 }
 

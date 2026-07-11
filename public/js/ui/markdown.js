@@ -3,8 +3,10 @@
 // window.marked (bundle local) parsea; después sanitizamos por ALLOWLIST
 // sobre un DOM desconectado (a prueba de HTML crudo del modelo, sin depender
 // de los internals de marked ni de librerías extra). Los bloques de código se
-// resaltan con window.hljs y ganan botón de copiar.
+// resaltan con window.hljs y ganan botón de copiar. Los bloques ```mermaid```
+// se renderizan a SVG con window.mermaid (2026-07-11) — ver enhanceMermaidBlocks.
 import { icon } from './icons.js';
+import { openModal } from './dialog.js';
 
 const ALLOWED = new Set([
   'P', 'BR', 'HR', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'PRE',
@@ -78,6 +80,110 @@ function enhanceCodeBlocks(root) {
   }
 }
 
+// Tope de líneas por diagrama: un ```mermaid``` gigante (o alucinado) puede
+// generar un SVG desproporcionado que rompe el layout. Los diagramas reales
+// (flowchart, secuencia, ER, gantt) rara vez pasan de unas pocas decenas.
+const MERMAID_MAX_LINES = 400;
+let mermaidSeq = 0;
+
+// Detecta ```mermaid``` (ya pasó por sanitize: sigue siendo un <code
+// class="language-mermaid"> dentro de un <pre>, envuelto en .md-codewrap por
+// enhanceCodeBlocks) y lo renderiza a SVG con la instancia global de Mermaid.
+// El SVG lo genera EL PROPIO PARSER de Mermaid (securityLevel:'strict'), no
+// HTML crudo del modelo — no hace falta tocar el ALLOWLIST de sanitize().
+// Async y best-effort: si mermaid no cargó, la sintaxis es inválida o el
+// bloque es enorme, se deja el código fuente visible tal cual (ya lo dejó
+// enhanceCodeBlocks) y no se rompe el resto del mensaje.
+function enhanceMermaidBlocks(root) {
+  const wraps = root.querySelectorAll('.md-codewrap');
+  for (const wrap of wraps) {
+    const code = wrap.querySelector('code.language-mermaid');
+    if (!code) continue;
+    const src = code.textContent || '';
+    if (!src.trim() || src.split('\n').length > MERMAID_MAX_LINES) continue;
+
+    const pre = wrap.querySelector('pre');
+    const holder = document.createElement('div');
+    holder.className = 'md-mermaid';
+    holder.textContent = 'Generando diagrama…';
+    wrap.before(holder);
+
+    // El código fuente queda disponible pero colapsado bajo el diagrama
+    // (convención del proyecto: contenido largo nace colapsado).
+    const details = document.createElement('details');
+    details.className = 'md-mermaid-src';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Ver código Mermaid';
+    details.appendChild(summary);
+    wrap.replaceWith(details);
+    details.appendChild(wrap);
+
+    const ready = window.mermaidReady || Promise.resolve(window.mermaid || null);
+    ready.then((mermaid) => {
+      if (!mermaid) throw new Error('mermaid no disponible');
+      mermaidSeq += 1;
+      return mermaid.render(`md-mermaid-${Date.now()}-${mermaidSeq}`, src);
+    }).then(({ svg }) => {
+      // El SVG va en un canvas interno con scroll acotado (max-height en CSS):
+      // un diagrama complejo se muestra como PREVIEW/miniatura (como la
+      // miniatura de una imagen adjunta) en vez de un muro ilegible que ocupa
+      // media pantalla — se lee entero al ampliarlo. El badge queda FUERA del
+      // canvas (hijo directo del holder relativo) para no scrollear con él.
+      holder.innerHTML = '';
+      const canvas = document.createElement('div');
+      canvas.className = 'md-mermaid-canvas';
+      canvas.innerHTML = svg;
+      holder.appendChild(canvas);
+      // Click para ampliar: mismo patrón que el lightbox de imágenes del chat
+      // (chat-tab.js `_lightbox` → openModal genérico) — el navegador ya deja
+      // hacer zoom/pan nativo (pinch, Ctrl+scroll) sobre el contenido del
+      // modal, así que no hace falta un visor propio.
+      holder.classList.add('md-mermaid--zoomable');
+      holder.title = 'Click para ampliar';
+      // Badge "🔍 Ampliar" SIEMPRE visible (no depende de :hover ni del cursor
+      // zoom-in): en móvil/touch no hay hover, así que sin esto la posibilidad
+      // de ampliar era invisible — la raíz de que el diagrama "se viera chico".
+      const zoomBtn = document.createElement('button');
+      zoomBtn.type = 'button';
+      zoomBtn.className = 'md-mermaid-zoom-btn';
+      zoomBtn.innerHTML = `${icon('search', { size: 13 })}<span>Ampliar</span>`;
+      zoomBtn.setAttribute('aria-label', 'Ampliar diagrama');
+      // stopPropagation: el badge abre el zoom una sola vez (sin él, el click
+      // burbujea al holder y se abrirían dos modales).
+      zoomBtn.addEventListener('click', (e) => { e.stopPropagation(); openMermaidZoom(holder); });
+      holder.appendChild(zoomBtn);
+      holder.addEventListener('click', () => openMermaidZoom(holder));
+      holder.dispatchEvent(new CustomEvent('cwc:mermaid-rendered', { bubbles: true }));
+    }).catch(() => {
+      holder.remove();
+      details.open = false;
+      const note = document.createElement('div');
+      note.className = 'md-mermaid-error';
+      note.textContent = '⚠ No se pudo interpretar este diagrama Mermaid — código fuente abajo.';
+      details.before(note);
+    });
+  }
+}
+
+// Abre una copia grande del diagrama en el modal genérico (ui/dialog.js).
+function openMermaidZoom(holder) {
+  const svg = holder.querySelector('svg');
+  if (!svg) return;
+  const m = openModal({ title: 'Diagrama', width: 'min(94vw, 1100px)' });
+  m.body.classList.add('md-mermaid-zoom-body');
+  const clone = svg.cloneNode(true);
+  // Mermaid deja un `style="max-width:NNNpx"` INLINE en el SVG (tamaño chico
+  // para caber en la burbuja del chat). Un style inline le gana en
+  // especificidad a la regla `.md-mermaid-zoom-body svg{max-width:none}` de
+  // style.css, así que el diagrama quedaba diminuto arriba a la izquierda con
+  // el modal casi vacío. Pisamos ese estilo inline DESPUÉS de clonar (un set
+  // por JS también es inline, pero se aplica después → gana al de mermaid).
+  clone.style.maxWidth = 'none';
+  clone.style.width = '100%';
+  clone.style.height = 'auto';
+  m.body.appendChild(clone);
+}
+
 // Tope duro de líneas de entrada: el markdown es la salida de texto libre
 // del modelo, la fuente de contenido más grande e imprevisible de las tres
 // (ver DOM_MAX_LINES en diff.js y HL_MAX_CHARS en code.js). Sin esto, una
@@ -106,6 +212,7 @@ export function renderMarkdown(text) {
     el.innerHTML = marked.parse(src, { breaks: true, gfm: true });
     sanitize(el);
     enhanceCodeBlocks(el);
+    enhanceMermaidBlocks(el);
     if (truncated) {
       const trunc = document.createElement('p');
       trunc.className = 'chat-md-truncated';

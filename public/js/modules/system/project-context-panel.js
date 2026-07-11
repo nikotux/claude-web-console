@@ -125,6 +125,7 @@ export function mountProjectContextPanel(el, ctx) {
         <span class="pj-head-name">${esc(entry.name)}</span>
       </div>
       ${isProject ? `<p class="pj-dir"><code>${esc(homeShort(entry.dir))}</code></p>` : ''}
+      ${!isProject ? '<div class="pj-sync" data-ref="syncBox"><span class="hp-empty">verificando espejo con Tolkien…</span></div>' : ''}
 
       <div class="hp-head">
         <span class="hp-title">${isProject ? 'Contexto (CLAUDE.md)' : 'Contexto'}</span>
@@ -143,10 +144,11 @@ export function mountProjectContextPanel(el, ctx) {
 
     root.querySelector('[data-ref="back"]').addEventListener('click', renderList);
     root.querySelector('[data-ref="idxEdit"]')?.addEventListener('click', editIndex);
-    if (isProject) { loadContext(); loadNotes(); } else { loadBugfixContext(); }
+    if (isProject) { loadContext(); loadNotes(); } else { loadBugfixContext(); loadSync(); }
   }
 
   const ctxRow = () => root.querySelector('[data-ref="ctxRow"]');
+  const syncBox = () => root.querySelector('[data-ref="syncBox"]');
   const ctxSectionsEl = () => root.querySelector('[data-ref="ctxSections"]');
   const notesEl = () => root.querySelector('[data-ref="notes"]');
 
@@ -340,6 +342,7 @@ export function mountProjectContextPanel(el, ctx) {
       },
     });
     loadBugfixContext();
+    loadSync(); // el guardado re-espejó a Tolkien → refrescar el badge
   }
 
   async function loadBugfixContext() {
@@ -359,6 +362,43 @@ export function mountProjectContextPanel(el, ctx) {
     } catch {
       if (alive && ctxRow()) ctxRow().innerHTML = '<span class="hp-empty">No se pudo leer el contexto.</span>';
     }
+  }
+
+  // ===== Verificador del ESPEJO a Tolkien (solo sub-proyectos de Tickets&Feat) =====
+  // El subset work+pr se espeja a ~/tolkien/CLAUDE.local.md (local, no versionado)
+  // que auto-carga en TODA sesión de Tolkien. Este bloque muestra si está al día
+  // y ofrece re-sincronizar a mano. La nota explica QUÉ es y dónde aterriza.
+  const SYNC_UI = {
+    ok: { cls: 'pj-sync--ok', ico: '✅', msg: 'Espejo al día en <code>~/tolkien/CLAUDE.local.md</code>.' },
+    stale: { cls: 'pj-sync--warn', ico: '⚠️', msg: 'El espejo quedó <b>desactualizado</b> — re-sincronizá.' },
+    missing: { cls: 'pj-sync--warn', ico: '⚠️', msg: 'Falta la sección gestionada en <code>CLAUDE.local.md</code> — re-sincronizá.' },
+    unavailable: { cls: 'pj-sync--warn', ico: '❓', msg: 'No pude leer <code>~/tolkien/CLAUDE.local.md</code> (¿Tolkien presente?).' },
+  };
+  async function loadSync() {
+    const box = syncBox();
+    if (!box) return;
+    box.innerHTML = '<span class="hp-empty">verificando espejo con Tolkien…</span>';
+    let s = { status: 'unavailable' };
+    try { s = await (await fetch('/api/tickets/context-sync')).json(); } catch { /* red caída */ }
+    if (!alive || !syncBox()) return;
+    const u = SYNC_UI[s.status] || SYNC_UI.unavailable;
+    const resyncBtn = (isAdmin && s.status !== 'ok')
+      ? `<button class="btn-ghost btn--sm" data-ref="resync">Re-sincronizar</button>` : '';
+    syncBox().className = `pj-sync ${u.cls}`;
+    syncBox().innerHTML = `
+      <div class="pj-sync-line"><span class="pj-sync-ico">${u.ico}</span><span>${u.msg}</span>${resyncBtn}</div>
+      <p class="pj-sync-note">Al guardar acá, este contexto se publica como texto físico en
+        <code>~/tolkien/CLAUDE.local.md</code> (archivo <b>local, NO versionado</b>) para que
+        <b>toda</b> sesión de Tolkien lo cargue sola. La fuente completa vive en esta consola.</p>`;
+    syncBox().querySelector('[data-ref="resync"]')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Sincronizando…';
+      try {
+        const res = await fetch('/api/tickets/context-sync', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || 'No se pudo sincronizar.');
+      } catch (err) { await dialog.alertDialog({ title: 'Error', message: err.message || 'No se pudo sincronizar.' }); }
+      loadSync();
+    });
   }
 
   // ===== Memorias (solo proyectos completos) =====

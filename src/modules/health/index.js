@@ -28,6 +28,7 @@ import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
+import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
 } from './optimize-shared.js';
@@ -169,6 +170,19 @@ function checkServer() {
   return { id: 'server', label: 'Proceso del server', status: 'ok', detail: `node ${process.version} · pid ${process.pid} · up ${h}h ${m}m · ${mem} MB RSS` };
 }
 
+// El subset work+pr de "Tickets & Features" se espeja a ~/tolkien/
+// CLAUDE.local.md (auto-carga en TODA sesión de Tolkien). Este check avisa si
+// el espejo quedó viejo/ausente frente al master de la consola.
+function checkTolkienContextSync() {
+  const id = 'tolkien-context';
+  const label = 'Contexto de Tolkien sincronizado';
+  const s = verifyTolkienContextSync();
+  if (s.status === 'ok') return { id, label, status: 'ok', detail: 'CLAUDE.local.md al día con el contexto de Tickets & Features' };
+  if (s.status === 'stale') return { id, label, status: 'warn', detail: 'el espejo en CLAUDE.local.md quedó desactualizado — re-sincronizá desde Proyectos → Tickets & Features' };
+  if (s.status === 'missing') return { id, label, status: 'warn', detail: 'falta la sección gestionada en CLAUDE.local.md — guardá/re-sincronizá el contexto para regenerarla' };
+  return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
+}
+
 async function runChecks() {
   const checks = await Promise.all([
     Promise.resolve(checkServer()),
@@ -182,6 +196,7 @@ async function runChecks() {
     checkDisk(),
     Promise.resolve(checkData()),
     Promise.resolve(checkDeps()),
+    Promise.resolve(checkTolkienContextSync()),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
   return { checkedAt: Date.now(), ok: count('ok'), warn: count('warn'), fail: count('fail'), checks };

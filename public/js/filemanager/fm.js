@@ -51,6 +51,8 @@ const state = {
   view: 'grid',       // 'grid' | 'list'
   mode: 'files',      // 'files' | 'trash'
   entries: [],
+  _rendered: [],        // entries YA ordenadas, en el orden real que ve el usuario (grilla o lista)
+  sort: { key: 'mtimeMs', dir: 'desc' }, // orden por defecto: más reciente primero
   selection: new Set(), // nombres seleccionados (multi)
   anchor: null,         // ancla para selección por rango (shift)
   projectRel: 'tolkien',
@@ -115,6 +117,37 @@ function kindOf(entry) {
 const join = (rel, name) => (rel ? `${rel}/${name}` : name);
 const parentOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 
+// ---------- orden ----------
+// Carpetas siempre agrupadas arriba (convención de Explorador/Finder); dentro
+// de cada grupo se aplica el criterio elegido por el usuario (o el de por
+// defecto: más reciente primero). El mismo orden se usa en grilla Y lista.
+function sortEntries(entries) {
+  const { key, dir } = state.sort;
+  const mul = dir === 'asc' ? 1 : -1;
+  const val = (e) => {
+    if (key === 'name') return e.name.toLowerCase();
+    if (key === 'kind') return kindOf(e).toLowerCase();
+    if (key === 'size') return e.size ?? -1;
+    return e.mtimeMs || 0;
+  };
+  return [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    const av = val(a); const bv = val(b);
+    if (av < bv) return -1 * mul;
+    if (av > bv) return 1 * mul;
+    return a.name.localeCompare(b.name);
+  });
+}
+function setSort(key) {
+  if (state.sort.key === key) state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
+  else { state.sort = { key, dir: key === 'name' ? 'asc' : 'desc' }; }
+  render();
+}
+function sortArrow(key) {
+  if (state.sort.key !== key) return '';
+  return state.sort.dir === 'asc' ? ' ▲' : ' ▼';
+}
+
 // ---------- carga / render ----------
 async function load() {
   hideCtx();
@@ -140,20 +173,26 @@ function render() {
     itemsEl.innerHTML = '<div class="fm-empty">Carpeta vacía</div>';
     return;
   }
-  itemsEl.innerHTML = state.view === 'grid' ? gridHTML() : listHTML();
+  const list = sortEntries(state.entries);
+  state._rendered = list;
+  itemsEl.innerHTML = state.view === 'grid' ? gridHTML(list) : listHTML(list);
   wireItems();
+  wireSort();
 }
 
-function gridHTML() {
-  return state.entries.map((e) => `
+function gridHTML(list) {
+  return list.map((e) => `
     <div class="fm-item" data-name="${escAttr(e.name)}" data-type="${e.type}">
       ${iconFor(e)}
       <div class="fm-label">${escHtml(e.name)}</div>
     </div>`).join('');
 }
-function listHTML() {
-  const head = `<div class="fm-lrow fm-lhead"><span>Nombre</span><span>Tipo</span><span>Tamaño</span><span>Modificado</span></div>`;
-  const rows = state.entries.map((e) => `
+const SORT_COLS = [['name', 'Nombre'], ['kind', 'Tipo'], ['size', 'Tamaño'], ['mtimeMs', 'Modificado']];
+function listHTML(list) {
+  const head = `<div class="fm-lrow fm-lhead">${SORT_COLS.map(([key, label]) =>
+    `<span class="fm-sortable${state.sort.key === key ? ' fm-sort-active' : ''}" data-sort="${key}">${label}${sortArrow(key)}</span>`,
+  ).join('')}</div>`;
+  const rows = list.map((e) => `
     <div class="fm-lrow fm-item" data-name="${escAttr(e.name)}" data-type="${e.type}">
       <span class="fm-lname">${iconFor(e)}<span>${escHtml(e.name)}</span></span>
       <span>${kindOf(e)}</span>
@@ -161,6 +200,11 @@ function listHTML() {
       <span>${fmtDate(e.mtimeMs)}</span>
     </div>`).join('');
   return head + rows;
+}
+function wireSort() {
+  for (const el of itemsEl.querySelectorAll('.fm-sortable')) {
+    el.addEventListener('click', () => setSort(el.dataset.sort));
+  }
 }
 
 function wireItems() {
@@ -179,7 +223,7 @@ function wireItems() {
 
 // Selección con modificadores: Cmd/Ctrl = alternar; Shift = rango; normal = uno.
 function select(name, ev = {}) {
-  const names = state.entries.map((e) => e.name);
+  const names = (state._rendered.length ? state._rendered : state.entries).map((e) => e.name);
   if (ev.shiftKey && state.anchor) {
     const a = names.indexOf(state.anchor);
     const b = names.indexOf(name);

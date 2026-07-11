@@ -89,9 +89,13 @@ export function evaluateCoherence(census) {
   const add = (f) => findings.push({ ...f, id: findingId(f) });
   const svc = Object.fromEntries((census.services || []).map((s) => [s.key, s]));
 
-  // Regla 1: los módulos del ciclo bug/feature deberían consumir `comms`
+  // Regla 1: los módulos del ciclo de tickets/features deberían consumir `comms`
   // (necesitan el contexto de Chris/PR). Es el hallazgo que originó el módulo.
-  const WANT_COMMS = ['bugfixes', 'bugs'];
+  // NOTA (2026-07-11, B0): antes ['bugfixes','bugs'] — módulos ARCHIVADOS,
+  // reemplazados por `tickets` (One Front Door). `tickets` YA consume comms
+  // (tickets/sources.js), así que la regla queda vigente y correctamente
+  // silenciosa; si un futuro módulo del ciclo dejara de usar comms, vuelve a saltar.
+  const WANT_COMMS = ['tickets'];
   if (svc.comms?.exists) {
     const consumers = new Set(svc.comms.consumerModules || []);
     for (const m of WANT_COMMS) {
@@ -135,12 +139,12 @@ export function evaluateCoherence(census) {
     // censor ghRe de core/inventory.js matchea comillas+gh+verbo y este mismo
     // archivo se auto-detectaría como caller (FP del censor).
     ['src/modules/backup/index.js', 'repo edit (gh) del repo de la consola (dominio propio, no Tolkien)'],
-    // Ya consume fetchPrRich (refresh-prs camino principal). Los gh restantes
-    // son excepciones DOCUMENTADAS en CLAUDE.md/inline: `pr view --json state`
-    // de 1 campo (verificación en cancel/push), fallback por BRANCH sin
-    // prNumber (fetchPrRich cachea por número), `pr list` (listado, no lectura
-    // por-PR) y `pr create` (write del flujo pushPr).
-    ['src/modules/bugfixes/index.js', 'consume fetchPrRich; restos = excepciones documentadas (state 1-campo, fallback branch, pr list, pr create)'],
+    // NOTA (2026-07-11, B0): se quitó la exención de `src/modules/bugfixes/index.js`
+    // — módulo ARCHIVADO, el archivo ya no existe (nunca matcheaba census.ghCallers).
+    // El `gh` del ciclo VIVO vive ahora en tickets/ (refresher.js, sources.js). Esos
+    // usos se dejan SIN eximir A PROPÓSITO: el aviso 'fuente-unica' sigue visible
+    // hasta verificar en B1 si son legítimos (y recién ahí, si lo son, se suma su
+    // exención acá con motivo) o si duplican comms/pr-read-shared.js.
   ]);
   const ghSuspects = (census.ghCallers || []).filter((g) => !GH_CANONICAL.has(g.file) && !GH_EXEMPT.has(g.file));
   if (ghSuspects.length > 0) {
@@ -379,9 +383,9 @@ export function coherencePrompt(census, findings) {
     '   los que sean falsos positivos (p.ej. un runner corto idempotente que SÍ',
     '   sobrevive reinicios, o un módulo que ya consume el servicio por otra vía).',
     '3. Buscá MÁS incoherencias que el regex no ve: lógica DUPLICADA entre módulos',
-    '   (ej. scraping de gh en bugfixes/desk-shared.js y comms/shared.js con',
+    '   (ej. scraping de gh en tickets/sources.js y comms/shared.js con',
     '   cachés separadas), ESPEJOS back↔front que podrían divergir (ej.',
-    '   board/labels.js vs engine.js), flujos que deberían consultar un motor',
+    '   tickets/derive.js vs su front), flujos que deberían consultar un motor',
     '   transversal (comms, bus/interfono, inventory, tokens) y no lo hacen,',
     '   validación de rutas sin core/paths, settingSources sin core/sdk-settings.',
     '3b. PROPAGACIÓN DE PATRONES (importante): en `patrones` de arriba están los',
@@ -411,7 +415,7 @@ export function coherencePrompt(census, findings) {
     '{',
     '  "resumen": "3-5 líneas en criollo: qué tan bien se usan los motores/módulos entre sí, lo más valioso primero",',
     '  "propuestas": [{',
-    '    "foco": "módulo o archivo protagonista (p.ej. bugfixes, comms/shared.js)",',
+    '    "foco": "módulo o archivo protagonista (p.ej. tickets, comms/shared.js)",',
     '    "archivo": "ruta relativa del archivo principal",',
     '    "tipo": "cableado" | "dedup" | "fuente-unica" | "regla-oro" | "blindaje" | "espejo" | "adopcion" | "convencion" | "otro",',
     '    "actual": "cómo se relacionan HOY (concreto)",',

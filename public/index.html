@@ -20,6 +20,45 @@
   <script src="/vendor/marked/marked.min.js"></script>
   <!-- Chart.js (UMD local -> window.Chart) para las gráficas de tendencia del modal Uso -->
   <script src="/vendor/chartjs/chart.umd.js"></script>
+  <!-- Mermaid (solo distribuye ESM desde v10+, sin bundle IIFE como el resto de
+       estos vendors) para diagramas ```mermaid``` dentro del markdown del chat.
+       window.mermaidReady es la promesa que ui/markdown.js espera antes de
+       intentar renderizar (el script type=module se difiere, puede terminar
+       después de que llegue el primer mensaje). Tema: variables --cwc-* leídas
+       en caliente, nunca hex duplicado (convención del proyecto). -->
+  <script type="module">
+    window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
+      const css = getComputedStyle(document.documentElement);
+      const v = (name) => css.getPropertyValue(name).trim();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        themeVariables: {
+          background: v('--cwc-bg-elevated'),
+          primaryColor: v('--cwc-accent-bg'),
+          primaryTextColor: v('--cwc-text'),
+          primaryBorderColor: v('--cwc-accent'),
+          lineColor: v('--cwc-text-dim'),
+          secondaryColor: v('--cwc-bg-chip'),
+          tertiaryColor: v('--cwc-bg-hover'),
+          textColor: v('--cwc-text'),
+          fontFamily: v('--cwc-font-ui'),
+          nodeBorder: v('--cwc-border-strong'),
+          clusterBkg: v('--cwc-bg-panel'),
+          clusterBorder: v('--cwc-border'),
+          edgeLabelBackground: v('--cwc-bg-elevated'),
+          errorBkgColor: v('--cwc-danger'),
+          errorTextColor: v('--cwc-text'),
+        },
+      });
+      window.mermaid = mermaid;
+      return mermaid;
+    }).catch((err) => {
+      console.error('mermaid: no se pudo cargar el vendor', err);
+      return null;
+    });
+  </script>
 </head>
 <body>
   <!-- Splash de arranque: cubre desde el primer paint hasta que main.js

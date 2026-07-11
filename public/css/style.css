@@ -467,6 +467,30 @@ html, body {
 /* Pull resaltado cuando hay commits nuevos para traer. */
 .tk-update--due { color: var(--cwc-warn); border-color: var(--cwc-warn); }
 
+/* Línea de PRs abiertos sin mergear (ícono de ramas). Clic → ventana de detalle. */
+.tk-branches { display: inline-flex; align-items: center; gap: .2rem; border-radius: 4px; padding: 0 .15rem; }
+.tk-branches[role="button"] { cursor: pointer; }
+.tk-branches[role="button"]:hover { background: var(--cwc-bg-hover); }
+.tk-branches--ok { color: var(--cwc-ok); }
+.tk-branches--due { color: var(--cwc-warn); font-weight: 600; }
+
+/* Ventana de PRs sin mergear (openBranchesDialog). */
+.tk-brlist { display: flex; flex-direction: column; gap: .4rem; }
+.tk-br-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem;
+  padding: .5rem .55rem; border: 1px solid var(--cwc-border); border-radius: 8px; background: var(--cwc-bg-chip);
+}
+.tk-br-main { min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+.tk-br-num { font-family: var(--cwc-font-mono); font-weight: 600; color: var(--cwc-accent); text-decoration: none; }
+.tk-br-num:hover { text-decoration: underline; }
+.tk-br-cur { font-size: var(--cwc-fs-xs); color: var(--cwc-ok); margin-left: .3rem; }
+.tk-br-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 22ch; }
+.tk-br-branch { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.tk-br-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: .35rem; }
+.tk-br-state { font-size: var(--cwc-fs-xs); font-variant-numeric: tabular-nums; }
+.tk-br-state--ok { color: var(--cwc-ok); }
+.tk-br-state--due { color: var(--cwc-warn); font-weight: 600; }
+
 /* ===== Pie fijo (2 filas) ===== */
 .sidebar-footer {
   flex: none; border-top: 1px solid var(--cwc-border-strong); background: var(--cwc-bg);
@@ -621,8 +645,10 @@ html, body {
 /* Columna derecha: título + gráfica (los controles viven arriba, compartidos). */
 .uh-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); font-weight: 600; margin-bottom: .4rem; }
 /* Chart.js necesita un contenedor con altura fija (el canvas la hereda). */
-.usage-chart-wrap { position: relative; height: 250px; }
-.usage-chart-wrap .cwc-loading { height: 100%; }
+.usage-chart-wrap { position: relative; height: 250px; cursor: zoom-in; }
+.usage-chart-wrap .cwc-loading { height: 100%; cursor: default; }
+/* Copia grande del zoom (modal aparte, ver mount() de usage.js). */
+.usage-chart-wrap--zoom { height: min(70vh, 620px); cursor: default; }
 
 /* Móvil: las columnas se apilan (izquierda arriba, tendencia abajo). */
 @media (max-width: 768px) {
@@ -744,6 +770,18 @@ html, body {
 .pj-dir { margin: 0 0 .5rem; }
 .pj-dir code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .pj-total { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+/* Verificador del espejo a Tolkien (CLAUDE.local.md) en el detalle de un
+   sub-proyecto de Tickets & Features. */
+.pj-sync { margin: 0 0 .6rem; padding: .5rem .6rem; border-radius: var(--cwc-radius-sm, 6px);
+  border: 1px solid var(--cwc-border); background: var(--cwc-bg-chip); }
+.pj-sync--ok { border-color: color-mix(in srgb, var(--cwc-ok, #3a7d44) 45%, var(--cwc-border)); }
+.pj-sync--warn { border-color: color-mix(in srgb, var(--cwc-warn) 55%, var(--cwc-border)); }
+.pj-sync-line { display: flex; align-items: center; gap: .45rem; font-size: var(--cwc-fs-sm); flex-wrap: wrap; }
+.pj-sync-ico { flex: none; }
+.pj-sync-line > span:nth-child(2) { flex: 1; min-width: 0; }
+.pj-sync-line .btn-ghost { margin-left: auto; }
+.pj-sync-note { margin: .4rem 0 0; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); line-height: 1.4; }
+.pj-sync code { font-family: var(--cwc-font-mono); font-size: .92em; color: var(--cwc-text-secondary); }
 /* Secciones del contexto: indentación según nivel del encabezado (# ## ###);
    nivel 0 = preámbulo (contenido antes del primer encabezado). */
 .pj-sec--l2 .hp-detail { padding-left: .8rem; }
@@ -1246,6 +1284,39 @@ html, body {
   padding: .2rem .35rem; cursor: pointer; opacity: .7; display: inline-flex;
 }
 .md-copy:hover { opacity: 1; border-color: var(--cwc-accent); color: var(--cwc-accent); }
+/* Diagramas ```mermaid``` del chat — ver enhanceMermaidBlocks en ui/markdown.js */
+.md-mermaid {
+  position: relative;
+  margin: .45rem 0; padding: .6rem .7rem; text-align: center;
+  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md); color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
+}
+/* Canvas interno: el diagrama vive acá como PREVIEW acotado (scroll si excede).
+   El holder NO scrollea → el badge "Ampliar" queda pinneado a la esquina. */
+.md-mermaid-canvas { overflow: auto; max-height: 340px; }
+.md-mermaid svg { max-width: 100%; height: auto; }
+.md-mermaid--zoomable { cursor: zoom-in; }
+.md-mermaid--zoomable:hover { border-color: var(--cwc-accent); }
+/* Badge "🔍 Ampliar" SIEMPRE visible (affordance en móvil, sin hover/cursor) */
+.md-mermaid-zoom-btn {
+  position: absolute; top: .4rem; right: .4rem; z-index: 1;
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .18rem .45rem; font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text-secondary); cursor: zoom-in;
+  background: color-mix(in srgb, var(--cwc-bg) 82%, transparent);
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
+  backdrop-filter: blur(2px);
+}
+.md-mermaid-zoom-btn:hover { color: var(--cwc-accent); border-color: var(--cwc-accent); }
+.md-mermaid-zoom-btn .cwc-icon { flex: none; }
+@media (max-width: 768px) { .md-mermaid-canvas { max-height: 240px; } }
+.md-mermaid-zoom-body { text-align: center; }
+.md-mermaid-zoom-body svg { width: 100%; height: auto; max-width: none; }
+.md-mermaid-src { margin: .3rem 0; font-size: var(--cwc-fs-sm); }
+.md-mermaid-src summary { cursor: pointer; color: var(--cwc-text-dim); }
+.md-mermaid-src summary:hover { color: var(--cwc-text-secondary); }
+.md-mermaid-src .md-codewrap { margin-top: .3rem; }
+.md-mermaid-error { color: var(--cwc-warn); font-size: var(--cwc-fs-sm); margin: .3rem 0; }
 .chat-error { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
 .chat-closed-note { text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .4rem; }
 .chat-switch-note { text-align: center; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); padding: .4rem; }
@@ -1720,6 +1791,9 @@ html, body {
 }
 .chat-att-img:hover { border-color: var(--cwc-accent); }
 .chat-att--msg { background: color-mix(in srgb, var(--cwc-white) 6%, transparent); }
+/* Imágenes que devuelve una herramienta (Read de un PNG, screenshot) mostradas
+   bajo el grupo de tool calls — misma miniatura que los adjuntos del usuario. */
+.chat-toolimgs { margin: .1rem 0 .35rem; }
 .chat-lightbox-img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 
 /* Overlay de arrastrar-y-soltar sobre el chat. */

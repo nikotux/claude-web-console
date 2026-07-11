@@ -53,6 +53,13 @@ const CHAT_IDS_FILE = path.join(os.homedir(), '.cwc-data', 'chat-session-ids.jso
 // un ticket (clave sessionId) — recupera la atribución de chats cerrados antes
 // de que existiera el registro durable. Solo lectura.
 const BUGFIXES_FILE = path.join(os.homedir(), '.cwc-data', 'bugfixes.json');
+// Registro DURABLE de sessionIds de las corridas del MÓDULO DE APRENDIZAJE
+// (explain/context/analyze), lo escriben esos runners vía learning/session-log.js.
+// Esos transcripts corren con cwd = la consola, así que projectOf() los vería como
+// 'consola'; este registro permite atribuirlos al bucket 'aprendizaje' aparte
+// (pedido del usuario 2026-07-10: auditar tokens de ESTUDIO vs DESARROLLO de la
+// consola). Solo lectura. Mismo archivo que learning/session-log.js declara.
+const LEARNING_IDS_FILE = path.join(os.homedir(), '.cwc-data', 'learning-session-ids.json');
 
 // Precio de input por millón, por modelo; el resto se deriva del input.
 // OJO: el costo es un EQUIVALENTE a precios de API — la suscripción del CLI
@@ -181,14 +188,18 @@ function labelFor(dirName) {
 // distinguen entre sí sin instrumentar cada runner, así que quedan agrupados.
 const ENGINE_LABELS = {
   chat: 'Chat · conversaciones',
+  learning: 'Aprendizaje · estudio',
   healthfix: 'Auto-fix de salud',
   tolkien: 'Tolkien · bugfix',
   cli: 'CLI interactivo',
   headless: 'Motores headless',
 };
-function classifyEngine(dir, sessionId, entrypoint, chatIds) {
+function classifyEngine(dir, sessionId, entrypoint, chatIds, learningIds) {
   let key;
-  if (chatIds.has(sessionId)) key = 'chat';
+  // Aprendizaje primero: su transcript comparte cwd/dir con la consola, así que
+  // solo el sessionId registrado lo distingue (mismo criterio que el bucket).
+  if (learningIds.has(sessionId)) key = 'learning';
+  else if (chatIds.has(sessionId)) key = 'chat';
   else if (/healthfix-wt-/.test(dir)) key = 'healthfix';
   else if (/(^|-)tolkien(-|$)/.test(dir)) key = 'tolkien';
   else if (entrypoint === 'cli') key = 'cli';
@@ -200,6 +211,9 @@ function classifyEngine(dir, sessionId, entrypoint, chatIds) {
 // proyecto del modal Uso, pedido del usuario 2026-07-10): la propia consola, el
 // repo de Tolkien, o "otros". Los worktrees de auto-fix (healthfix-wt-) son
 // trabajo SOBRE la consola → cuentan como 'consola'.
+// OJO: el bucket 'aprendizaje' NO se detecta acá (su cwd es la consola/Tolkien,
+// directorio indistinguible) — se resuelve por sessionId en buildSummary
+// (learningIds), que prevalece sobre el resultado de esta función.
 function projectOf(dir) {
   if (/claude-web-console|healthfix-wt-/.test(dir)) return 'consola';
   if (/(^|-)tolkien(-|$)/.test(dir)) return 'tolkien';
@@ -212,7 +226,7 @@ function mergeModels(dst, src) {
     d.tokens += v.tokens || 0; d.cost += v.cost || 0;
   }
 }
-const PROJECT_KEYS = ['consola', 'tolkien', 'otros'];
+const PROJECT_KEYS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
 
 // Exportada a propósito: el runner de Optimización IA (bin/cwc-optimize-runner.js)
 // la usa para cruzar el censo de motores con el CONSUMO REAL (solo lectura de
@@ -252,6 +266,15 @@ export async function buildSummary() {
   try {
     const arr = JSON.parse(await fs.readFile(BUGFIXES_FILE, 'utf8'));
     if (Array.isArray(arr)) for (const r of arr) if (r?.sessionId) chatIds.add(r.sessionId);
+  } catch { /* noop */ }
+
+  // sessionIds de las corridas del MÓDULO DE APRENDIZAJE (explain/context/analyze):
+  // corren con cwd = la consola/Tolkien, pero se cuentan en el bucket 'aprendizaje'
+  // APARTE, no en 'consola'/'tolkien' (auditar estudio vs desarrollo). Best-effort.
+  const learningIds = new Set();
+  try {
+    const arr = JSON.parse(await fs.readFile(LEARNING_IDS_FILE, 'utf8'));
+    if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string' && id) learningIds.add(id);
   } catch { /* noop */ }
 
   const totals = emptyBucket();
@@ -307,7 +330,11 @@ export async function buildSummary() {
       lastMtime = Math.max(lastMtime, fileMtime);
       // Motor de origen de ESTE transcript (sessionId = nombre del archivo).
       const sessionId = path.basename(file, '.jsonl');
-      const engine = engineFor(classifyEngine(dir, sessionId, entrypoint, chatIds));
+      const engine = engineFor(classifyEngine(dir, sessionId, entrypoint, chatIds, learningIds));
+      // Proyecto EFECTIVO de ESTE transcript: por defecto el del directorio, pero
+      // una corrida de aprendizaje (sessionId registrado) va al bucket 'aprendizaje'
+      // aunque su cwd sea la consola/Tolkien — así 'consola' no se infla con estudio.
+      const fproj = learningIds.has(sessionId) ? 'aprendizaje' : proj;
       for (const [key, b] of Object.entries(rows)) {
         const [hourKey, model] = key.split('\t');
         const day = hourKey === 'unknown' ? 'unknown' : hourKey.slice(0, 10);
@@ -331,7 +358,7 @@ export async function buildSummary() {
           addInto(todayB, b); todayCost += c;
           // Bucket por PROYECTO×HORA local (gráfica "Día"): hourKey='YYYY-MM-DDTHH'.
           const hr = Number(hourKey.slice(11, 13));
-          const hb = ((hourlyByProj[proj] ||= {})[hr] ||= {});
+          const hb = ((hourlyByProj[fproj] ||= {})[hr] ||= {});
           const hm = (hb[mkey] ||= { tokens: 0, cost: 0 });
           hm.tokens += tok; hm.cost += c;
         }
@@ -341,7 +368,7 @@ export async function buildSummary() {
         if (hourKey !== 'unknown' && localHourStartMs(hourKey) >= fiveHAgo) h5tok += tok;
         // Acumulación por (día local, PROYECTO, modelo) para el histórico persistente.
         if (day && day !== 'unknown') {
-          const dp = ((daily[day] ||= {})[proj] ||= {});
+          const dp = ((daily[day] ||= {})[fproj] ||= {});
           const dm = (dp[mkey] ||= { tokens: 0, cost: 0 });
           dm.tokens += tok; dm.cost += c;
         }
@@ -398,6 +425,7 @@ export async function buildSummary() {
     consola: hourSeries(hourlyByProj.consola),
     tolkien: hourSeries(hourlyByProj.tolkien),
     otros: hourSeries(hourlyByProj.otros),
+    aprendizaje: hourSeries(hourlyByProj.aprendizaje),
   };
 
   // Ventana de 7 días (token-count de los límites semanales): total + por modelo,
@@ -660,7 +688,7 @@ export default {
     // la columna "General" del período. 0 tokens.
     r.get('/history', async (req, res) => {
       const range = ['day', 'week', 'month'].includes(req.query.range) ? req.query.range : 'week';
-      const project = ['all', 'consola', 'tolkien', 'otros'].includes(req.query.project) ? req.query.project : 'all';
+      const project = ['all', 'consola', 'tolkien', 'otros', 'aprendizaje'].includes(req.query.project) ? req.query.project : 'all';
       try {
         if (range === 'day') {
           const sum = await cachedSummary(!!req.query.fresh);

@@ -59,9 +59,14 @@ html, body { margin: 0; height: 100%; }
 .fm-main { flex: 1; min-width: 0; overflow: auto; position: relative; }
 
 /* ===== Vista grilla ===== */
+/* Columnas de ancho FIJO (no 1fr): con auto-fill + 1fr cada columna se
+   estira para llenar la fila en ventanas anchas, dejando los ítems muy
+   separados entre sí. Con un ancho fijo + justify-content:start quedan
+   compactos y pegados a la izquierda, como en Finder/Explorador. */
 .fm-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-  gap: .4rem; padding: 1rem; align-content: start;
+  display: grid; grid-template-columns: repeat(auto-fill, 96px);
+  justify-content: start;
+  gap: .5rem .7rem; padding: 1rem; align-content: start;
 }
 .fm-item {
   display: flex; flex-direction: column; align-items: center; gap: .35rem;
@@ -83,17 +88,28 @@ html, body { margin: 0; height: 100%; }
 .fm-item.selected .fm-label { background: var(--cwc-accent); color: var(--cwc-accent-ink); border-radius: var(--cwc-radius-sm); padding: 0 .2rem; }
 
 /* ===== Vista lista ===== */
-.fm-list { display: flex; flex-direction: column; padding: .3rem .4rem; }
+/* Solo "Nombre" es elástica (1fr): Tipo/Tamaño/Modificado quedan en ancho
+   FIJO en vez de `fr` — con `fr` cada columna se estira proporcional al
+   ancho de la ventana y el texto corto queda perdido con mucho espacio en
+   blanco alrededor (mismo problema de la grilla, versión lista). */
+/* Vista COMPACTA tipo planilla (Excel): filas finas, líneas separadoras
+   horizontales entre cada fila, íconos chicos y padding mínimo. */
+.fm-list { display: flex; flex-direction: column; padding: 0; }
 .fm-lrow {
-  display: grid; grid-template-columns: 2.2fr 1.2fr .8fr 1.4fr; align-items: center;
-  gap: .5rem; padding: .32rem .5rem; border-radius: var(--cwc-radius-sm); font-size: var(--cwc-fs-sm);
+  display: grid; grid-template-columns: minmax(0, 1fr) 130px 90px 150px; align-items: center;
+  gap: .5rem; padding: .12rem .55rem; border-radius: 0; font-size: var(--cwc-fs-sm);
+  border-bottom: 1px solid var(--cwc-border-soft); min-height: 0;
 }
-.fm-lhead { color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--cwc-border-soft); border-radius: 0; position: sticky; top: 0; background: var(--cwc-bg-elevated); }
+.fm-lhead { color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--cwc-border); position: sticky; top: 0; background: var(--cwc-bg-elevated); padding-top: .28rem; padding-bottom: .28rem; }
+.fm-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.fm-sortable:hover { color: var(--cwc-text); }
+.fm-sortable.fm-sort-active { color: var(--cwc-accent); font-weight: 600; }
 .fm-list .fm-item:hover { background: var(--cwc-bg-hover); }
 .fm-list .fm-item.selected { background: color-mix(in srgb, var(--cwc-accent) 28%, transparent); }
-.fm-lname { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.fm-lname { display: flex; align-items: center; gap: .4rem; min-width: 0; }
 .fm-lname > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-lname .fm-ic, .fm-lname svg { width: 20px; height: 20px; flex: none; }
+.fm-lname .fm-ic, .fm-lname svg { width: 15px; height: 15px; flex: none; }
+.fm-lname .fm-ic-wrap { width: 15px; height: 15px; }
 .fm-lname .fm-ext { display: none; }
 .fm-trash-actions { display: flex; gap: .3rem; justify-content: flex-end; }
 

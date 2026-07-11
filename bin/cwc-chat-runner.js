@@ -28,7 +28,9 @@ import {
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
 import { chatQueryOptions, autoApprovesAll } from '../src/core/tool-policy.js';
-import { buildUserContent } from '../src/modules/chat/attachments.js';
+import {
+  buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
+} from '../src/modules/chat/attachments.js';
 
 // ---- argv ----
 const args = {};
@@ -76,6 +78,45 @@ function writeTo(c, obj) {
 
 // Evento de UI: se guarda en el historial (para el hello de una reconexión)
 // y/o se emite en vivo a los servers conectados.
+// Imágenes que DEVUELVE una herramienta (p.ej. Read de un PNG, un screenshot
+// de Playwright): el SDK las entrega como bloques `image` base64 dentro del
+// tool_result. Las materializamos en la MISMA carpeta de adjuntos del chat que
+// usan los archivos que sube el usuario (dirección asistente→humano, mismo
+// flujo que los adjuntos) y devolvemos SOLO la referencia {name,type,mime} — el
+// base64 NUNCA viaja por el WS (pesado); el front pide la miniatura a
+// GET /api/chat/attachment. Best-effort: cualquier falla no rompe el turno.
+const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const TOOL_IMG_MAX = 4;                        // imágenes materializadas por tool_result
+const TOOL_IMG_BYTES_MAX = 12 * 1024 * 1024;   // 12 MB por imagen (tope defensivo)
+let toolImgSeq = 0;
+
+function saveToolImages(content, toolUseId) {
+  if (!Array.isArray(content)) return null;
+  const dir = chatAttachDir(ID);
+  if (!dir) return null;
+  const out = [];
+  for (const b of content) {
+    if (out.length >= TOOL_IMG_MAX) break;
+    if (b?.type !== 'image' || b?.source?.type !== 'base64') continue;
+    const mime = IMAGE_MIME[String(b.source.media_type || '').toLowerCase()];
+    const ext = mime && MIME_EXT[mime];
+    if (!ext) continue;
+    let buf;
+    try { buf = Buffer.from(b.source.data || '', 'base64'); } catch { continue; }
+    if (!buf.length || buf.length > TOOL_IMG_BYTES_MAX) continue;
+    toolImgSeq += 1;
+    const safeId = String(toolUseId || 'tool').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'tool';
+    const name = safeAttachName(`asst-${safeId}-${toolImgSeq}.${ext}`);
+    if (!name) continue;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, name), buf);
+      out.push({ name, type: 'image', mime });
+    } catch { /* best-effort: si no se pudo escribir, seguimos sin miniatura */ }
+  }
+  return out.length ? out : null;
+}
+
 function emit(event, { record = true, broadcast = true } = {}) {
   if (record) {
     history.push(event);
@@ -149,7 +190,12 @@ function onMessage(m) {
     if (Array.isArray(blocks)) {
       for (const b of blocks) {
         if (b.type === 'tool_result') {
-          emit({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000) });
+          const images = saveToolImages(b.content, b.tool_use_id);
+          emit({
+            type: 'tool_result', id: b.tool_use_id, ok: !b.is_error,
+            output: trim(resultText(b.content), 2000),
+            ...(images ? { images } : {}),
+          });
         }
       }
     }

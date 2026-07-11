@@ -285,19 +285,16 @@ function buildDatasets(series, metric, surface) {
   })).filter((ds) => ds.data.some((v) => v > 0));
 }
 
-// Dibuja (crea) la gráfica desde cero. Se usa al abrir y al cambiar rango/métrica.
-function drawChart(canvas, series, metric) {
-  destroyChart();
-  if (!window.Chart) {
-    canvas.parentElement.innerHTML = '<div class="tok-empty">No se pudo cargar la librería de gráficas.</div>';
-    return;
-  }
+// Config de Chart.js separada de la instancia — la comparten la gráfica chica
+// del modal (chartInst, singleton del módulo) y la copia grande del zoom (una
+// instancia propia, ver mount()): así abrir el zoom nunca destruye/pisa la
+// gráfica principal.
+function buildChartConfig(series, metric) {
   const surface = cssVar('--cwc-bg-panel') || '#0d1119';
   const gridCol = cssVar('--cwc-divider') || '#161c28';
   const textCol = cssVar('--cwc-text-dim') || '#7c8494';
   const fmtVal = metric === 'cost' ? fmtCost : fmtTokens;
-
-  chartInst = new window.Chart(canvas.getContext('2d'), {
+  return {
     type: 'bar',
     data: { labels: (series.points || []).map((p) => p.label), datasets: buildDatasets(series, metric, surface) },
     options: {
@@ -325,7 +322,17 @@ function drawChart(canvas, series, metric) {
         },
       },
     },
-  });
+  };
+}
+
+// Dibuja (crea) la gráfica desde cero. Se usa al abrir y al cambiar rango/métrica.
+function drawChart(canvas, series, metric) {
+  destroyChart();
+  if (!window.Chart) {
+    canvas.parentElement.innerHTML = '<div class="tok-empty">No se pudo cargar la librería de gráficas.</div>';
+    return;
+  }
+  chartInst = new window.Chart(canvas.getContext('2d'), buildChartConfig(series, metric));
 }
 
 // Actualiza la gráfica EN EL LUGAR (sin destruir/re-animar) para el auto-refresh
@@ -398,6 +405,7 @@ export default {
             <button class="uh-seg-btn is-active" data-project="all" type="button">Todos</button>
             <button class="uh-seg-btn" data-project="consola" type="button">Consola</button>
             <button class="uh-seg-btn" data-project="tolkien" type="button">Tolkien</button>
+            <button class="uh-seg-btn" data-project="aprendizaje" type="button">Aprendizaje</button>
             <button class="uh-seg-btn" data-project="otros" type="button">Otros</button>
           </div>
           <div class="uh-seg uh-seg-metric">
@@ -510,6 +518,24 @@ export default {
         paint('draw'); // re-dibuja con la serie cacheada (0 fetch)
       }));
       reload.addEventListener('click', () => refresh(true));
+
+      // Click en la gráfica → copia grande en un modal aparte (mismo patrón
+      // que el lightbox de imágenes del chat: openModal genérico + el
+      // navegador hace el zoom/pan nativo, sin visor propio). Instancia de
+      // Chart PROPIA (no toca chartInst) — se destruye al cerrar ese modal.
+      let zoomChart = null;
+      chartWrap.addEventListener('click', () => {
+        const s = seriesFor();
+        if (!s || !window.Chart) return;
+        const zm = dialog.openModal({
+          title: '📈 Tendencia',
+          width: 'min(96vw, 1400px)',
+          onClose: () => { zoomChart?.destroy(); zoomChart = null; },
+        });
+        zm.body.innerHTML = '<div class="usage-chart-wrap usage-chart-wrap--zoom"><canvas class="usage-chart"></canvas></div>';
+        const zCanvas = zm.body.querySelector('.usage-chart');
+        zoomChart = new window.Chart(zCanvas.getContext('2d'), buildChartConfig(s, metric));
+      });
 
       // APERTURA INSTANTÁNEA: pinta lo que haya en caché (el pie la mantiene
       // caliente) y refresca en segundo plano. Sin bloquear con spinner.

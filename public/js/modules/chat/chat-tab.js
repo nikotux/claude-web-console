@@ -279,6 +279,10 @@ export class ChatTab {
       </div>`;
 
     this.msgsEl = container.querySelector('.chat-msgs');
+    // Un diagrama Mermaid renderiza asíncrono (después de que su mensaje ya
+    // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
+    // criterio "siempre pinea al final" que usa _scroll() en todo el resto.
+    this.msgsEl.addEventListener('cwc:mermaid-rendered', () => this._scroll());
     this.inputEl = container.querySelector('.chat-input');
     this.sendBtn = container.querySelector('.chat-send');
     this.stopBtn = container.querySelector('.chat-stop');
@@ -939,6 +943,23 @@ export class ChatTab {
     }
     chip._output = { ok: !!m.ok, text: m.output || '' };
     chip.classList.add(m.ok ? 'done' : 'fail');
+    // Imágenes que DEVOLVIÓ la herramienta (Read de un PNG, screenshot…): el
+    // runner las materializó en la carpeta de adjuntos del chat y mandó solo
+    // las referencias {name,type,mime}. Se muestran como miniatura clickeable
+    // (→ lightbox) bajo el grupo del tool, reusando _attsEl de los adjuntos —
+    // así se VEN sin tocar nada, no escondidas en el detalle. Guard por id: un
+    // replay (hello.events al reconectar) no debe duplicar la tira.
+    if (Array.isArray(m.images) && m.images.length
+        && !this.msgsEl.querySelector(`.chat-toolimgs[data-tool-id="${CSS.escape(m.id)}"]`)) {
+      const group = chip.closest('.chat-toolgroup');
+      if (group) {
+        const strip = this._attsEl(m.images);
+        strip.classList.add('chat-toolimgs');
+        strip.dataset.toolId = m.id;
+        group.after(strip);
+        this._scroll();
+      }
+    }
     // Si justo está expandido, el detalle se refresca en vivo con la salida.
     if (chip.classList.contains('active')) {
       const det = chip.closest('.chat-toolgroup').querySelector('.ctg-detail');

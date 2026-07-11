@@ -20,6 +20,7 @@ import {
   readContextJob, writeContextJob,
 } from '../src/modules/learning/context-shared.js';
 import { addContexto } from '../src/modules/learning/store.js';
+import { registerLearningSession } from '../src/modules/learning/session-log.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = String(process.argv[2] || '');
@@ -50,6 +51,9 @@ async function interpret(job) {
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('La interpretación tardó demasiado (timeout).')), CONTEXT_TIMEOUT_MS); });
   const pump = (async () => {
     for await (const m of q) {
+      // Registra el session_id de ESTA corrida (system/init) para que el panel
+      // de Uso la atribuya al bucket 'aprendizaje', no a 'consola' (mismo cwd).
+      if (m.type === 'system' && m.subtype === 'init' && m.session_id) registerLearningSession(m.session_id);
       if (m.type === 'assistant') {
         for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
       } else if (m.type === 'result') break;

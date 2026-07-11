@@ -8,9 +8,12 @@
 // Bogota, ver time.js) — misma convención que buildSummary o los días no cierran.
 //
 // Estructura (2026-07-10, filtro por proyecto): days[fecha][proyecto][modelKey]
-//   = {tokens,cost}. proyecto ∈ 'consola'|'tolkien'|'otros' (projectOf en
-//   index.js). Días en formato VIEJO (flat days[fecha][modelKey]) se normalizan a
-//   {otros: ...} al leer (transición: se reescriben nuevos en el próximo parse).
+//   = {tokens,cost}. proyecto ∈ 'consola'|'tolkien'|'otros'|'aprendizaje' (el
+//   bucket 'aprendizaje' se resuelve por sessionId en index.js, ver learningIds).
+//   Días en formato VIEJO (flat days[fecha][modelKey]) se normalizan a {otros:
+//   ...} al leer (transición: se reescriben nuevos en el próximo parse). Días
+//   viejos sin la clave 'aprendizaje' simplemente no la tienen (no es retroactivo:
+//   su consumo de estudio ya quedó contado en 'consola').
 //
 // Contrato:
 //   • mergeDaily(daily): UPSERT de los días presentes en transcripts + CONGELA
@@ -33,7 +36,10 @@ const WRITE_THROTTLE_MS = 300000;
 // series; la columna "General" lo INVIERTE (más caro arriba). Pedido del usuario
 // 2026-07-10. Precios: haiku $1 < sonnet $3 < opus $5 < fable $10 (input $/M).
 const MODEL_ORDER = ['haiku', 'sonnet', 'opus', 'fable', 'unknown'];
-const PROJECTS = ['consola', 'tolkien', 'otros'];
+// Buckets de proyecto (documental: las funciones de abajo son genéricas sobre las
+// claves presentes en cada día, no dependen de esta lista). 'aprendizaje' se
+// separa de 'consola' para auditar tokens de estudio vs desarrollo.
+const PROJECTS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
 const DAY_MS = 86400000;
 
 let lastWriteMs = 0;
@@ -142,7 +148,7 @@ export function buildSeries(range, entries) {
 }
 
 // Serie por día filtrada por proyecto. range: 'week'=7 días · 'month'=30 días.
-// project: 'all'|'consola'|'tolkien'|'otros'.
+// project: 'all'|'consola'|'tolkien'|'otros'|'aprendizaje'.
 export async function readSeries(range = 'week', project = 'all') {
   const store = await loadHistory();
   const n = range === 'month' ? 30 : 7;

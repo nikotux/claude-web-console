@@ -3,7 +3,7 @@
 // puras: entra la lista + now, sale el shape que consume el frontend.
 import { enrich } from './derive.js';
 
-const LANES = ['bug', 'feature', 'hardware', 'access', 'platform', 'onboarding', 'other'];
+const LANES = ['bug', 'feature', 'hardware', 'access', 'platform', 'onboarding', 'facilities-house', 'facilities-office', 'other'];
 
 function slim(t) {
   return {

@@ -14,7 +14,7 @@ import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolve
 import { buildResolved } from './views.js';
 import { enrich } from './derive.js';
 import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
-import { getContext, saveContext, DEFAULT_CONTEXTS } from './context-store.js';
+import { getContext, saveContext, DEFAULT_CONTEXTS, verifySync, syncToTolkien } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
 import { getMeta, saveContexto, clearContexto } from './meta-store.js';
 import {
@@ -197,7 +197,23 @@ export default {
       const text = String(req.body?.context ?? '');
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
       saveContext(kind, text);
-      res.json({ ok: true, kind, context: getContext(kind) });
+      res.json({ ok: true, kind, context: getContext(kind), sync: verifySync() });
+    });
+
+    // Verificador del ESPEJO a Tolkien: ¿el subset work+pr en ~/tolkien/
+    // CLAUDE.local.md está al día con el master de la consola? El panel lo
+    // muestra como badge (✅ al día / ⚠️ desactualizado / ❌ falta) y el check
+    // rápido de Salud consume el MISMO estado. 0 tokens, solo lee disco.
+    r.get('/context-sync', (_req, res) => {
+      res.json(verifySync());
+    });
+    // Re-sincronizar a mano (botón "Re-sincronizar" del panel): re-renderiza el
+    // subset desde el master y lo escribe en CLAUDE.local.md.
+    r.post('/context-sync', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const r2 = syncToTolkien();
+      if (!r2.ok) return res.status(502).json({ error: `No se pudo sincronizar con Tolkien: ${r2.reason}` });
+      res.json({ ok: true, sync: verifySync() });
     });
 
     // ===== Contexto adicional + Histórico del trabajo (meta-store por ítem) =====

@@ -25,8 +25,13 @@ const CRITICAL = [
   { re: /core\/registry\.js$/, why: 'montaje de módulos (si se rompe, no arranca nada)' },
   { re: /core\/paths\.js$/, why: 'validación de rutas / path-traversal' },
   { re: /modules\/backup\//, why: 'guardas de push (regla 5: Mordor-Staffing/secretos)' },
-  { re: /modules\/(health|bugfixes|bugs)\/(index|shared)\.js$/, why: 'blindaje read-only headless (regla 6)' },
-  { re: /bin\/cwc-(health|healthfix|triage|chat)-runner\.js$/, why: 'runner desacoplado con allowlist de seguridad' },
+  // NOTA (2026-07-11, B0): se quitaron `bugfixes`/`bugs` (módulos ARCHIVADOS) y el
+  // runner `triage` (bin/cwc-triage-runner.js ya no existe) — eran refs muertas
+  // (nunca matcheaban un archivo/runner real, cero cambio de comportamiento).
+  // PENDIENTE B2 (scan de health): decidir si el ciclo VIVO `tickets` y sus runners
+  // headless read-only (ticket-context, etc.) deben entrar en este gate crítico.
+  { re: /modules\/(health)\/(index|shared)\.js$/, why: 'blindaje read-only headless (regla 6)' },
+  { re: /bin\/cwc-(health|healthfix|chat)-runner\.js$/, why: 'runner desacoplado con allowlist de seguridad' },
 ];
 
 // Superficies COMPARTIDAS (varios fixes podrían tocarlas → serializar en paralelo).
@@ -52,7 +57,7 @@ export function classifyFinding(f) {
   // Sin archivo citado: conservador según el módulo. Un hallazgo sin ruta en un
   // módulo sensible se trata como CRÍTICO (mejor pecar de cauto para el gate).
   const unit = String(f?.unit || '');
-  if (unit === 'core' || /^mod:(backup|health|bugfixes|bugs)$/.test(unit)) {
+  if (unit === 'core' || /^mod:(backup|health)$/.test(unit)) {
     return { risk: 'critical', reason: 'módulo sensible sin archivo puntual — verificá a mano', domain: [] };
   }
   return { risk: 'shared', reason: 'sin archivo citado (dominio incierto)', domain: [] };

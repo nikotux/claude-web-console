@@ -140,6 +140,8 @@ export async function getTicketState(ticketNumberOrId) {
     priority: t.priority ?? null,
     channel: t.channel ?? null,
     language: t.language ?? null,
+    category: t.category ?? null,          // Zoho Desk: categoría nativa (alimenta la lane facilities)
+    subCategory: t.subCategory ?? null,    // Zoho Desk: sub-categoría nativa
     customFields: t.customFields ?? t.cf ?? {},
     commentCount: Number(t.commentCount ?? 0),
     threadCount: Number(t.threadCount ?? 0),
