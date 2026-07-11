@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-11 08:52 — redesign/board-mobile
+- Implementar ROAD-76, auditoría B0-B5 y evaluación Pad
+
 ### 2026-07-11 05:57 — redesign/board-mobile
 - Auditoría learning, imágenes/diagramas, sync Tolkien, git workflow
 
