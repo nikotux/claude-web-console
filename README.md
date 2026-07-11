@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-11 05:57 — redesign/board-mobile
+- Auditoría learning, imágenes/diagramas, sync Tolkien, git workflow
+
 ### 2026-07-10 17:13 — redesign/board-mobile
 - Agregar learning module, chat attachments y AutoTux v2
 
