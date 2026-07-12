@@ -40,8 +40,13 @@ const FACILITIES_OFFICE = /new\s*office|nueva\s*oficina/i;
 
 function facilitiesByCategory(t) {
   const cat = `${t.category ?? ''} ${t.subCategory ?? ''}`;
-  if (FACILITIES_HOUSE.test(cat)) return 'facilities-house';
-  if (FACILITIES_OFFICE.test(cat)) return 'facilities-office';
+  // + el campo custom "Related to" (Facilities - Mark House / Facilities - New Office),
+  // que es lo que el admin/bot puebla hoy (la categoría NATIVA de Desk no se setea por API).
+  // Así ambas lanes de facilities dejan de depender del PUENTE por keyword en el subject.
+  const rel = relatedTo(t);
+  const hay = `${cat} ${rel}`;
+  if (FACILITIES_HOUSE.test(hay)) return 'facilities-house';
+  if (FACILITIES_OFFICE.test(hay)) return 'facilities-office';
   return null;
 }
 
