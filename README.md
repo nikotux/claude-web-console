@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-12 06:49 — redesign/board-mobile
+- Migrar backend a PAD LOCAL (tareas/learning/tickets) + RETRO
+
 ### 2026-07-11 08:52 — redesign/board-mobile
 - Implementar ROAD-76, auditoría B0-B5 y evaluación Pad
 
