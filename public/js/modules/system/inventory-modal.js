@@ -146,6 +146,28 @@ export function openInventory(ctx) {
     </details>`;
   }
 
+  // ===== Pad local · backbone (workspace console): el TRACKER junto al censo
+  // del CÓDIGO. Datos de GET /scan (listCollections, 0 tokens, best-effort). =====
+  function padHtml(pad) {
+    if (!pad) return '';
+    if (!pad.ok) {
+      return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+        <summary>🗂️ Pad local · backbone <span class="hp-opt-snippet">(no responde)</span></summary>
+        <p class="hp-empty">Pad local no responde (${esc(pad.error || 'sin detalle')}) — tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?</p>
+      </details>`;
+    }
+    const cols = (pad.collections || []).filter((c) => c.total > 0);
+    const rows = cols.map((c) => `
+      <tr><td>${esc(c.icon || '')} <b>${esc(c.name)}</b></td><td>${c.active}</td><td>${c.total}</td></tr>`).join('');
+    return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+      <summary>🗂️ Pad local · backbone (workspace console) · ${pad.totals?.active ?? 0} ítems vivos</summary>
+      <table class="hp-opt-table">
+        <thead><tr><th>Colección</th><th>Vivos</th><th>Total</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3">Sin colecciones.</td></tr>'}</tbody>
+      </table>
+    </details>`;
+  }
+
   function render(d) {
     const unreg = d.unregistered || [];
     const warn = unreg.length ? `<p class="hp-inv-warn">⚠️ Sin registrar en registry.js: ${esc(unreg.join(', '))}</p>` : '';
@@ -156,6 +178,7 @@ export function openInventory(ctx) {
       </div>
       ${warn}
       ${resourcesHtml(d.resources)}
+      ${padHtml(d.pad)}
       ${backendHtml(d.modules, d.counts.modules)}
       ${frontendHtml(d.frontend, d.counts.frontend)}
       ${runnersHtml(d.runners, d.counts.runners)}

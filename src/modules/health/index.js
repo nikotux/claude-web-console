@@ -19,10 +19,11 @@ import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
+  writeLock, clearLock,
   markFindingResolved,
   readDismissed, recordDismissed, removeDismissed,
   readProposals, writeProposals,
-  readBatch, writeBatch, writeBatchLock, isBatchRunning,
+  readBatch, writeBatch, writeBatchLock, clearBatchLock, isBatchRunning,
   collectActiveRunners,
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
@@ -30,6 +31,7 @@ import { classifyFinding } from './policy.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
+import * as padLocal from '../../core/pad-service-client.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
 } from './optimize-shared.js';
@@ -184,6 +186,58 @@ function checkTolkienContextSync() {
   return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
 }
 
+// Verifica el BACKBONE de Pad local (workspace `console`): hoy tasks/learning/
+// retro/tickets-meta hablan contra él y si se cae DEGRADAN EN SILENCIO — este
+// check lo hace visible en el semáforo. Además vigila que el ESPEJO de la Regla
+// dura #12 (anti-colisión entre mundos) siga presente en las Conventions de Pad:
+// señal concreta y automática de que CLAUDE.md y Pad no divergieron (Gap #3,
+// TASK-296). Todo read-only por HTTP plano (NO MCP, no toca el blindaje regla 6),
+// 0 tokens, best-effort — si Pad no responde, degrada a warn, nunca tira.
+async function checkPadBackbone() {
+  const id = 'pad-backbone';
+  const label = 'Pad local (backbone console)';
+  // OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto,
+  // a diferencia del MCP) — hay que parsearlo antes de leer priority/status.
+  const field = (it, k) => {
+    let f = it?.fields;
+    if (typeof f === 'string') { try { f = JSON.parse(f); } catch { f = {}; } }
+    return f?.[k] ?? it?.[k];
+  };
+  const r = await padLocal.listItems('conventions', { workspace: 'console' });
+  if (!r.ok) {
+    return { id, label, status: 'warn', detail: `Pad local no responde (${r.error || 'sin detalle'}) — tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?` };
+  }
+  const items = Array.isArray(r.data) ? r.data : [];
+  const musts = items.filter((c) => field(c, 'priority') === 'must' && field(c, 'status') !== 'disabled');
+  const hasAnticollision = items.some((c) => {
+    const t = `${c?.title || ''} ${c?.content || ''}`.toLowerCase();
+    return /anti-?colisi[oó]n|plan-puente|regla dura #12|regla #12/.test(t);
+  });
+  if (!hasAnticollision) {
+    return { id, label, status: 'warn', detail: 'Pad local OK pero FALTA en las Conventions el espejo de la Regla dura #12 (anti-colisión entre mundos) — CLAUDE.md y Pad divergieron; recrear la convención' };
+  }
+  return { id, label, status: 'ok', detail: `Pad local OK · ${musts.length} convención(es) must · espejo Regla #12 presente` };
+}
+
+// Estado del BACKBONE de Pad local para el Dashboard del proyecto (Gap #5,
+// 2026-07-12): 1 sola llamada HTTP (listCollections trae active_item_count +
+// item_count por colección), 0 tokens, best-effort. Da la foto del TRACKER
+// (bugs/roads/tasks/planes/temas vivos) para verla junto al censo del CÓDIGO.
+async function padBackboneStats() {
+  try {
+    const r = await padLocal.listCollections('console');
+    if (!r.ok || !Array.isArray(r.data)) return { ok: false, error: r.error || 'sin datos' };
+    const cols = r.data.map((c) => ({
+      slug: c.slug, name: c.name, icon: c.icon,
+      active: c.active_item_count ?? 0, total: c.item_count ?? 0,
+    }));
+    const totals = cols.reduce((a, c) => ({ active: a.active + c.active, total: a.total + c.total }), { active: 0, total: 0 });
+    return { ok: true, workspace: 'console', collections: cols, totals };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err).slice(0, 200) };
+  }
+}
+
 async function runChecks() {
   const checks = await Promise.all([
     Promise.resolve(checkServer()),
@@ -198,6 +252,7 @@ async function runChecks() {
     Promise.resolve(checkData()),
     Promise.resolve(checkDeps()),
     Promise.resolve(checkTolkienContextSync()),
+    checkPadBackbone(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
   return { checkedAt: Date.now(), ok: count('ok'), warn: count('warn'), fail: count('fail'), checks };
@@ -218,12 +273,19 @@ const HEALTHFIX_LOG = path.join(DATA_DIR, 'healthfix.log');
 function spawnReview(full) {
   if (isRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  // Placeholder de lock SINCRÓNICO (mismo turno JS que isRunning(), sin await de
+  // por medio): cierra la ventana TOCTOU por la que dos POST /review casi
+  // simultáneos spawneaban dos runners que se pisaban review.json (BUG-48). El
+  // runner pisa el pid:0 con su pid real al arrancar; readLock() le hace reconocer
+  // el placeholder como reserva propia y NO suicidarse (ver cwc-health-runner.js).
+  writeLock(0);
   const logFd = fss.openSync(HEALTH_LOG, 'a');
   const args = [HEALTH_RUNNER];
   if (full) args.push('--full'); // ignora la caché → re-audita TODO
   const child = spawn(process.execPath, args, {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
+  child.on('error', () => { try { clearLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva
   child.unref();
   fss.closeSync(logFd);
   return true;
@@ -249,6 +311,7 @@ function spawnFix(findingIdArg) {
   const child = spawn(process.execPath, [HEALTHFIX_RUNNER, findingIdArg], {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
+  child.on('error', () => { try { clearFixLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva ya (BUG-44), no esperar los 20s
   child.unref();
   fss.closeSync(logFd);
   return true;
@@ -268,6 +331,7 @@ function spawnOrchestrator() {
   const child = spawn(process.execPath, [ORCHESTRATOR], {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
+  child.on('error', () => { try { clearBatchLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva (BUG-44)
   child.unref();
   fss.closeSync(logFd);
   return true;
@@ -380,12 +444,14 @@ export default {
         const unregistered = inventory.modules.filter((m) => !m.registered).map((m) => m.name);
         let resources = null;
         try { resources = await systemSnapshot(); } catch { /* el dashboard igual muestra el resto */ }
+        const pad = await padBackboneStats(); // backbone de Pad local (0 tokens, best-effort)
         res.json({
           generatedAt: inventory.generatedAt,
           regenerated,
           counts: inventory.counts,
           unregistered,
           resources,
+          pad,
           modules: inventory.modules.map((m) => ({
             name: m.name,
             registered: m.registered,

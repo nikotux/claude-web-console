@@ -63,6 +63,7 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
+import { queueRetroDistill } from '../retro/shared.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, MODEL_LEVELS, FORBIDDEN_AUTO } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
@@ -451,7 +452,7 @@ class Chat {
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
-    this.learningId = learningId; // 'LT<n>' si nació de "Profundizar en chat" de un tema de Aprendizaje (write-back al cerrar)
+    this.learningId = learningId; // 'TDA-<n>' si nació de "Profundizar en chat" de un tema de Aprendizaje (write-back al cerrar)
     this.resume = resume;
     this.sessionId = resume || null;
     this.alive = false;       // motor (runner) conectado y corriendo
@@ -467,6 +468,7 @@ class Chat {
     this._engineP = null;     // promesa del arranque en curso (dedup)
     this._engineStopping = false; // cierre esperado (traspaso/sueño pedido): no anunciar 'closed'
     this._engineWaiters = [];     // callbacks al morir el motor (traspaso a TUI)
+    this._pendingModelAuto = [];  // COLA FIFO de flags auto por set_model en vuelo (BUG-24)
     this._downAnnounced = true;   // ya anunciamos la muerte de la vida actual del motor
     // Motor Pac-Man — estado "delegando" (2026-07-05): ids de tool_use Task/
     // Agent aún sin su tool_result. >0 ⇒ está esperando la vuelta de un
@@ -588,12 +590,13 @@ class Chat {
       case 'model': {
         this.model = e.model;
         // `auto` (Fase 3, indicador visible): el router marca la intención
-        // ANTES de mandar set_model al runner (_pendingModelAuto); acá se
-        // consume esa marca para taguear el eco real con el mismo origen —
-        // el frontend usa `auto` para mostrar la notita "🤖 cambió solo" vs.
-        // un cambio manual del selector (que no toca _pendingModelAuto).
-        const auto = !!this._pendingModelAuto;
-        this._pendingModelAuto = false;
+        // ANTES de mandar set_model al runner; acá se consume para taguear el eco
+        // real con el mismo origen — el frontend usa `auto` para mostrar la notita
+        // "🤖 cambió solo" vs. un cambio manual del selector.
+        // COLA FIFO (BUG-24): con un booleano único, dos set_model antes de que
+        // llegaran sus ecos se pisaban y mal-etiquetaban la nota. Consumimos el
+        // flag MÁS VIEJO (los ecos llegan en orden por el mismo WS).
+        const auto = this._pendingModelAuto.length ? this._pendingModelAuto.shift() : false;
         this._push({ ...e, auto });
         this.onUpdate?.(); // persistir el modelo confirmado por el runner
         return;
@@ -790,8 +793,15 @@ class Chat {
     return new Promise((resolve) => {
       let done = false;
       const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
-      const timer = setTimeout(() => finish(false), timeoutMs);
-      this._engineWaiters.push(() => finish(true));
+      const waiter = () => finish(true);
+      const timer = setTimeout(() => {
+        // Sacar el waiter del array al vencer (BUG-23): sin esto quedaba colgado en
+        // _engineWaiters hasta que muriera el motor (fuga acotada pero innecesaria).
+        const i = this._engineWaiters.indexOf(waiter);
+        if (i >= 0) this._engineWaiters.splice(i, 1);
+        finish(false);
+      }, timeoutMs);
+      this._engineWaiters.push(waiter);
     });
   }
 
@@ -1135,7 +1145,7 @@ class Chat {
       return;
     }
     if (this.link) {
-      this._pendingModelAuto = auto; // lo consume _onRunnerEvent al llegar el eco 'model'
+      this._pendingModelAuto.push(auto); // cola FIFO: lo consume el eco 'model' en orden (BUG-24)
       // El cambio real lo confirma el runner con su evento 'model'.
       this.link.send({ t: 'set_model', model });
     } else {
@@ -1189,38 +1199,66 @@ class Chat {
     // HISTÓRICO DEL TRABAJO (2026-07-07, módulo tickets): si el chat trabajó un
     // ticket/PR (this.ticket.number: '123' o 'pr:<n>'), al cerrarlo guardamos un
     // resumen DETERMINÍSTICO de la sesión (archivos tocados + texto de cierre del
-    // asistente, 0 tokens) en la metadata del ítem (meta-store) para que la
-    // PRÓXIMA sesión "Continuar en el chat" traiga todo el historial y se pueda
-    // seguir con contexto. DIFERIDO 2s por la misma razón que el resumen v1 (el
-    // SDK tarda en flushear el transcript). Best-effort: no bloquea el cierre.
+    // asistente, 0 tokens) en la metadata del ítem (meta-store, Pad local desde
+    // ROAD-110 Fase 3/TASK-249) para que la PRÓXIMA sesión "Continuar en el chat"
+    // traiga todo el historial y se pueda seguir con contexto. DIFERIDO 2s por la
+    // misma razón que el resumen v1 (el SDK tarda en flushear el transcript).
+    // appendHistorico es ahora ASYNC (habla con Pad local) pero sigue siendo
+    // best-effort: su propio try/catch interno ya absorbe cualquier falla, y el
+    // await de acá está protegido por el try/catch exterior por si algo
+    // inesperado escapa (mismo patrón que appendLearningChatContext, abajo).
     if (this.ticket?.number && this.sessionId && !this._historicoDone) {
       this._historicoDone = true;
       const key = this.ticket.number;
       const cwd = this.cwd;
       const sid = this.sessionId;
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
           const work = extractSessionWork(cwd, sid);
-          if (work) appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files });
+          if (work) await appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files });
         } catch (err) { console.error('[chat] no pude guardar histórico del ticket:', err?.message); }
       }, 2000).unref();
     }
     // WRITE-BACK de APRENDIZAJE (2026-07-10): si el chat nació de "💬 Profundizar
-    // en chat" de un tema (this.learningId 'LT<n>'), al cerrarlo agregamos un
-    // resumen DETERMINÍSTICO de la sesión (0 tokens) como entrada 'chat' del
+    // en chat" de un tema (this.learningId 'TDA-<n>' desde la migración a Pad
+    // local, ROAD-110 Fase 2 / TASK-232 — antes 'LT<n>'), al cerrarlo agregamos
+    // un resumen DETERMINÍSTICO de la sesión (0 tokens) como entrada 'chat' del
     // tema → aumenta su contexto para la próxima "Regenerar". Mismo patrón
     // diferido/best-effort que el histórico de tickets. Flag propio para no
     // colisionar con _historicoDone (un chat es de ticket O de tema, no ambos).
+    // appendLearningChatContext es ahora ASYNC (habla con Pad local) pero sigue
+    // siendo best-effort: su propio try/catch interno ya devuelve null ante
+    // cualquier falla, y el await de acá está protegido por el try/catch
+    // exterior por si algo inesperado escapa.
     if (this.learningId && this.sessionId && !this._learningDone) {
       this._learningDone = true;
       const lid = this.learningId;
       const cwd = this.cwd;
       const sid = this.sessionId;
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
           const work = extractSessionWork(cwd, sid);
-          if (work) appendLearningChatContext(lid, { summary: work.summary, files: work.files });
+          if (work) await appendLearningChatContext(lid, { summary: work.summary, files: work.files });
         } catch (err) { console.error('[chat] no pude guardar contexto de aprendizaje:', err?.message); }
+      }, 2000).unref();
+    }
+    // MEJORA CONTINUA (ROAD-256): al cerrar CUALQUIER chat con sesión, encolar
+    // la destilación de LECCIONES DE PROCESO (metodología/flujo) en un runner
+    // desacoplado de TEXTO PURO (regla 6). GLOBAL (no solo ticket/tema): el
+    // filtro híbrido dentro de queueRetroDistill descarta los chats triviales
+    // (lee el transcript, 0 tokens). Best-effort, diferido 2s por la misma
+    // razón que los write-backs de arriba (el SDK tarda en flushear el jsonl);
+    // flag propio para no re-encolar dentro de la misma vida del proceso.
+    if (this.sessionId && !this._retroDone) {
+      this._retroDone = true;
+      const cwd = this.cwd;
+      const sid = this.sessionId;
+      const title = this.title;
+      const ticketNumber = this.ticket?.number || null;
+      const learningId = this.learningId || null;
+      setTimeout(() => {
+        queueRetroDistill({ cwd, sessionId: sid, title, ticketNumber, learningId })
+          .catch((err) => console.error('[chat] no pude encolar mejora continua:', err?.message));
       }, 2000).unref();
     }
     // Si estaba en TUI, matar la tmux oculta para no dejar el claude huérfano.
@@ -1442,7 +1480,7 @@ class ChatManager {
       chat.onUpdate = () => this.persist();
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
-      if (/^LT\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
+      if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.lastActivity = s.lastActivity || Date.now();
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
       // infirió un valor razonable a partir de `model`, pero solo el campo
@@ -1570,7 +1608,7 @@ export default {
           : null,
         // Vínculo a un tema de Aprendizaje: al cerrar el chat "Profundizar",
         // deja un resumen como entrada 'chat' del tema (write-back, módulo learning).
-        learningId: /^LT\d+$/.test(String(learningId || '')) ? String(learningId) : null,
+        learningId: /^TDA-\d+$/.test(String(learningId || '')) ? String(learningId) : null,
       });
       res.json({ chat: chat.info() });
     });

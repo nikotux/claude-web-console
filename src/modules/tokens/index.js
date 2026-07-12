@@ -34,10 +34,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { keyOf } from '../../core/claude-model.js';
 import { runAdaptivePool } from '../health/pool.js';
-import { mergeDaily, readSeries, buildSeries } from './history-store.js';
+import {
+  mergeDaily, readSeries, buildSeries,
+  // Fuente única (BUG-21): antes DAY_MS/PROJECT_KEYS/mergeModels estaban duplicados acá.
+  DAY_MS, PROJECTS as PROJECT_KEYS, addModels as mergeModels,
+} from './history-store.js';
 import { localHourKey, localHourStartMs, localTodayStr, localDateStartMs, localDayStr, localHourNow } from './time.js';
-
-const DAY_MS = 86400000;
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
@@ -220,13 +222,6 @@ function projectOf(dir) {
   return 'otros';
 }
 // Suma el mapa {modelKey:{tokens,cost}} `src` en `dst` (muta dst).
-function mergeModels(dst, src) {
-  for (const [k, v] of Object.entries(src || {})) {
-    const d = (dst[k] ||= { tokens: 0, cost: 0 });
-    d.tokens += v.tokens || 0; d.cost += v.cost || 0;
-  }
-}
-const PROJECT_KEYS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
 
 // Exportada a propósito: el runner de Optimización IA (bin/cwc-optimize-runner.js)
 // la usa para cruzar el censo de motores con el CONSUMO REAL (solo lectura de

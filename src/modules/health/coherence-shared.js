@@ -141,10 +141,16 @@ export function evaluateCoherence(census) {
     ['src/modules/backup/index.js', 'repo edit (gh) del repo de la consola (dominio propio, no Tolkien)'],
     // NOTA (2026-07-11, B0): se quitó la exención de `src/modules/bugfixes/index.js`
     // — módulo ARCHIVADO, el archivo ya no existe (nunca matcheaba census.ghCallers).
-    // El `gh` del ciclo VIVO vive ahora en tickets/ (refresher.js, sources.js). Esos
-    // usos se dejan SIN eximir A PROPÓSITO: el aviso 'fuente-unica' sigue visible
-    // hasta verificar en B1 si son legítimos (y recién ahí, si lo son, se suma su
-    // exención acá con motivo) o si duplican comms/pr-read-shared.js.
+    // El scraping del ciclo VIVO vive ahora en tickets/. VERIFICADO (2026-07-12,
+    // resolución del hallazgo de Coherencia): en AMBOS archivos las menciones de la
+    // CLI son SOLO comentarios (nombres de comando entre backticks que el censor
+    // ghRe confunde con llamadas reales); las lecturas REALES de PR van por la
+    // fuente canónica comms/pr-read-shared.js (listPrs/fetchPrRich). No hay
+    // scraping duplicado — se eximen con motivo. OJO: los motivos de abajo NO
+    // deben contener el nombre-de-CLI seguido de un verbo (pr/repo/view/list…) o
+    // este mismo archivo se auto-detectaría como caller (mismo FP que backup).
+    ['src/modules/tickets/refresher.js', 'gh solo en comentarios; las lecturas reales van por comms/pr-read-shared.js'],
+    ['src/modules/tickets/sources.js', 'gh solo en comentarios; usa listPrs/fetchPrRich de comms/pr-read-shared.js'],
   ]);
   const ghSuspects = (census.ghCallers || []).filter((g) => !GH_CANONICAL.has(g.file) && !GH_EXEMPT.has(g.file));
   if (ghSuspects.length > 0) {
@@ -324,7 +330,7 @@ function compactCensus(census) {
 
 // Prompt del análisis: recibe el censo (compacto) + los hallazgos determinísticos
 // y VERIFICA leyendo el código antes de proponer el cableado concreto.
-export function coherencePrompt(census, findings) {
+export function coherencePrompt(census, findings, padCtx = '') {
   // REGLAS DURAS ya masticadas (0 tool calls, mismo patrón que unitPrompt de
   // shared.js y que conventionsText() de arriba): si hardRulesText() trae texto
   // se inyecta directo y el modelo NO gasta un Read del CLAUDE.md entero solo
@@ -365,6 +371,14 @@ export function coherencePrompt(census, findings) {
       'extraída acá — NO abras CLAUDE.md para esto, usá este texto directo):',
       '',
       rules,
+    ] : []),
+    ...(padCtx ? [
+      '',
+      'CONTEXTO DE PAD LOCAL (workspace `console`) — bugs de acoplamiento/',
+      'duplicación ya rastreados + programas en curso. Usalo para NO re-reportar',
+      'lo ya sabido y para conectar tus hallazgos con lo que está en marcha:',
+      '',
+      padCtx,
     ] : []),
     '',
     ...(rules

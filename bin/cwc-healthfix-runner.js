@@ -17,7 +17,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
-  writeFixLock, clearFixLock, isFixing, isRunning, fixPrompt,
+  writeFixLock, clearFixLock, readFixLock, isFixing, isRunning, fixPrompt,
   FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed,
 } from '../src/modules/health/shared.js';
 
@@ -27,7 +27,12 @@ if (!targetId) { log('falta el id del hallazgo'); process.exit(2); }
 
 // No pisar una revisión en curso (regenera findings) ni otro auto-fix.
 if (isRunning()) { log('hay una revisión corriendo: salgo.'); process.exit(0); }
-if (isFixing()) { log('ya hay un auto-fix corriendo (lock fresco): salgo.'); process.exit(0); }
+// El server reserva con un PLACEHOLDER pid:0 (spawnFix): esa es MI reserva, NO me
+// suicido con ella (BUG-51). Solo salgo si el lock fresco tiene un pid REAL ajeno.
+const _fl = readFixLock();
+if (_fl && _fl.pid && _fl.pid !== process.pid && isFixing()) {
+  log(`ya hay un auto-fix corriendo (lock fresco ajeno pid=${_fl.pid}): salgo.`); process.exit(0);
+}
 
 writeFixLock(process.pid);
 const heartbeat = setInterval(() => writeFixLock(process.pid), HEARTBEAT_MS);

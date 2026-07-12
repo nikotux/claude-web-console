@@ -245,7 +245,11 @@ class Session {
   }
 
   write(data) {
-    if (this.alive && this.proc) this.proc.write(data);
+    // try/catch como resize(): un write a un PTY que se cerró entre el check y
+    // la escritura no debe tumbar el handler del WebSocket (invariante 5).
+    if (this.alive && this.proc) {
+      try { this.proc.write(data); } catch (e) { console.error('[terminal] write falló:', e?.message); }
+    }
   }
 
   resize(cols, rows) {

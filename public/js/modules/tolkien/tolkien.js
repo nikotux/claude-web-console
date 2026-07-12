@@ -41,6 +41,7 @@ export default {
         <div class="tk-actions">
           <a class="btn-ghost btn--sm tk-link tk-link--local" href="/api/tolkien/local-enter" target="_blank" rel="noopener" title="Entrar al Tolkien local ya logueado (la consola inyecta la sesión dev-login · ZeroTier)">${icon('externalLink', { size: 13 })}<span>Tolkien local</span></a>
           <a class="btn-ghost btn--sm tk-link tk-link--oficial" href="https://app.tolkien.mordorstaffing.com" target="_blank" rel="noopener" title="Abrir la app oficial de Tolkien (producción)">${icon('externalLink', { size: 13 })}<span>Tolkien oficial</span></a>
+          <a class="btn-ghost btn--sm tk-link tk-link--pad" href="http://${location.hostname}:7777" target="_blank" rel="noopener" title="Abrir el Pad local self-hosted (workspace console) en una pestaña nueva">${icon('externalLink', { size: 13 })}<span>GetPad local</span></a>
         </div>
       </div>`;
 

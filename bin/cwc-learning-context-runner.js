@@ -76,7 +76,7 @@ async function main() {
     if (!parsed) throw new Error('No se pudo interpretar la transcripción (respuesta inválida).');
     const rendered = renderContextText(parsed);
     if (job.topicId) {
-      try { addContexto(job.topicId, { text: rendered, source: 'ia' }); }
+      try { await addContexto(job.topicId, { text: rendered, source: 'ia' }); }
       catch (e) { log('no se pudo auto-guardar en el tema (no rompe el job):', e?.message); }
     }
     writeContextJob(id, { ...job, status: 'done', result: parsed, rendered, error: null, updatedAt: Date.now() });

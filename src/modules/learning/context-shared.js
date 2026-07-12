@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -51,9 +52,7 @@ export function readContextJob(id) {
 }
 export function writeContextJob(id, data) {
   ensureDir();
-  const tmp = `${jobPath(id)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-  fs.renameSync(tmp, jobPath(id));
+  writeJsonAtomic(jobPath(id), data); // tmp-por-PID (BUG-30)
 }
 export function isContextFreshRunning(job) {
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= CONTEXT_STALE_MS;

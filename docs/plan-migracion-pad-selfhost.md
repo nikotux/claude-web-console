@@ -1,8 +1,24 @@
 # Plan de migración — Pad self-hosted como backbone (proyecto futuro)
 
-**Fecha:** 2026-07-11 · **Autor:** Nicolás Mosquera (con Claude) · **Versión:** v01 · **Estado:** 🅿️ APROBACIÓN PENDIENTE — NO ejecutar hasta que Niko dé el OK explícito. · **Alcance:** levantar Pad de forma LOCAL (self-hosted) y evaluar/migrar `tasks`/`learning` hacia él.
+**Fecha:** 2026-07-11 · **Autor:** Nicolás Mosquera (con Claude) · **Versión:** v01 · **Estado:** ✅ **EJECUTADO (Fases 1-2 completas, 2026-07-11/12)** — ver addendum abajo. · **Alcance:** levantar Pad de forma LOCAL (self-hosted) y evaluar/migrar `tasks`/`learning` hacia él.
 
 > Este documento es la Opción 2 del decision-doc `docs/evaluacion-rol-pad.md`. Se ejecuta DESPUÉS de aprobado el proyecto. Hasta entonces, Pad se usa en la nube como superficie secundaria profesionalizada (Opción 1, ya hecha).
+
+## ⚡ ADDENDUM — Ejecución real (2026-07-11/12), difiere del plan original en varios puntos
+
+El plan de abajo (v01) fue el DISEÑO original y queda como HISTORIA para entender el razonamiento — la EJECUCIÓN real difirió en varios puntos clave, resumidos acá:
+
+1. **BINARIO, no Docker.** El pedido de self-host fue denegado, ESCALADO y RE-APROBADO por un superior de Niko con la condición explícita de instalación como **binario local en una carpeta**, sin contenedores. Se usó `~/.local/bin/pad` (v0.9.2, checksum verificado) + systemd de usuario `pad-local.service` — NUNCA `docker run`.
+2. **Recursos:** `CPUQuota=200%` (2 núcleos de holgura, pedido explícito de Niko — no reserva exclusiva) + `MemoryMax=4G`/`MemoryHigh=3G` (techo sobredimensionado para crecer). Medido con un benchmark aislado y descartable en `/tmp/pad-bench` (HOME sobreescrito, reversible) ANTES de la aprobación final — los números reales fueron parte de lo que destrabó el "sí" del superior.
+3. **Bind por ZeroTier** (no solo localhost) — pedido explícito de Niko, accesible igual que la propia Consola.
+4. **MCP: transporte STDIO, no HTTP.** Hallazgo clave no anticipado en el plan original: el binario local de Pad NO expone un endpoint MCP HTTP — solo habla MCP por stdio (`pad mcp serve`, spawneado como subproceso). `pad mcp install` tampoco soporta Claude Code como agente (solo claude-desktop/cursor/windsurf) — se cableó a mano: `claude mcp add --scope local pad -- ~/.local/bin/pad mcp serve --url http://10.213.222.62:7777`.
+5. **Auth: browser-based, no token en archivo.** `pad auth login` abre un flujo OAuth-like en el navegador — Niko lo aprobó él mismo con su cuenta admin (recién creada vía el link de setup one-time), sin que la sesión de Claude tocara su password en ningún momento.
+6. **Fase 2 (migración de datos) SÍ se ejecutó** — a diferencia del plan original que hablaba de `tasks`/`learning` (los módulos file-based de Consola), lo que realmente se migró fue el **workspace de Pad `console`** (Docs/Bugs/Tasks-de-Pad/Conventions/Playbooks/Roadmap Items/Roles — 104/104 items, 1-vía, verificado conteo por conteo con 4 agentes en paralelo). `tasks`/`learning` (los módulos propios de Consola) NO se tocaron — siguen file-based, fuera de este proyecto.
+7. **Alcance del cutover — SOLO `console`, NUNCA `tolkien`.** Decisión explícita de Niko (2026-07-12): el workspace `tolkien` de Pad (usado por `src/modules/tickets/pad-client.js`) se dejó fuera — el Pad local no lo tiene y migrarlo es un proyecto aparte (impacto en equipo, Chris/otros pueden usar ese workspace en la nube). `pad-client.js` sigue sin tocarse, leyendo Tolkien desde el cloud.
+8. **Nomenclatura final:** `pad` (nombre canónico) = local self-hosted, primario. `pad-cloud-backup` = el cloud original, conservado SOLO como respaldo pasivo durante la ventana de pruebas (nunca operativo tras el cutover).
+9. **Fase 3 (adaptación técnica) se acotó** a la conexión MCP del chat (renombrada como arriba) — el cliente backend `pad-client.js` quedó explícitamente FUERA de la Fase 3 por la decisión del punto 7.
+
+Detalle completo (con decision log) en Pad mismo: `ROAD-74` del workspace `console` (ahora en el propio Pad local).
 
 ## Resumen ejecutivo
 

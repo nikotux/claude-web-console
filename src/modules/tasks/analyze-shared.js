@@ -124,21 +124,26 @@ function plansBrief(plans, tasks) {
   }));
 }
 
-// Devuelve { context, count } para el alcance dado (o null si no hay nada que analizar).
-export function buildContext(scope) {
+// Devuelve { context, count } para el alcance dado (o null si no hay nada que
+// analizar). ASYNC desde la migración a Pad local (2026-07-12): listTasks()/
+// listPlans() de store.js ahora son promesas (llaman al Pad local por HTTP) —
+// este es el SEGUNDO consumidor directo de store.js además de tasks/index.js
+// (detectado durante la migración; sus dos call sites — el endpoint POST
+// /analyze y bin/cwc-tasks-analyze-runner.js — ya lo esperan con await).
+export async function buildContext(scope) {
   const s = normScope(scope);
   if (s === 'global') {
     // Vista HOLÍSTICA: tareas + planes + informes juntos, para reorganizar todo
     // (agrupar en planes, unificar, completar, crear las tareas de informes que
     // todavía no se cargaron). El modelo ve qué tareas ya tienen plan y cuáles no.
-    const { tasks } = listTasks();
-    const plans = listPlans();
+    const { tasks } = await listTasks();
+    const plans = await listPlans();
     const reports = reportsContext();
     // Temas del Banco de conocimiento YA existentes: para NO duplicarlos al
     // sugerir temas nuevos derivados del trabajo pendiente (puente Pendientes → Aprendizaje).
     let learningTopics = [];
-    try { learningTopics = listLearningTopics().topics.map((t) => ({ title: t.title, area: t.area || '', status: t.status })); }
-    catch { /* módulo learning ausente: no rompe el análisis */ }
+    try { learningTopics = (await listLearningTopics()).topics.map((t) => ({ title: t.title, area: t.area || '', status: t.status })); }
+    catch { /* módulo learning ausente o Pad caído: no rompe el análisis */ }
     if (!tasks.length && !plans.length && !reports.length) return null;
     return {
       context: { tasks: tasksBrief(tasks), plans: plansBrief(plans, tasks), reports, learningTopics },
@@ -146,8 +151,8 @@ export function buildContext(scope) {
     };
   }
   if (s === 'plans') {
-    const { tasks } = listTasks();
-    const plans = listPlans();
+    const { tasks } = await listTasks();
+    const plans = await listPlans();
     if (!plans.length) return null;
     const items = plans.map((p) => ({
       id: p.id,
@@ -158,7 +163,7 @@ export function buildContext(scope) {
     }));
     return { context: { plans: items, reports: reportsContext() }, count: plans.length };
   }
-  const { tasks } = listTasks();
+  const { tasks } = await listTasks();
   if (!tasks.length) return null;
   const items = tasks.map((t) => ({
     id: t.id,
@@ -200,14 +205,14 @@ function globalPrompt(context) {
     'Respondé en ESPAÑOL y ÚNICAMENTE con un bloque ```json con esta forma EXACTA:',
     '{',
     '  "resumen": "1-2 líneas: qué encontraste y cómo quedaría ordenado",',
-    '  "duplicados": [ { "keep": "T<n>", "remove": ["T<n>"], "why": "por qué son el mismo" } ],',
-    '  "unificables": [ { "ids": ["T<n>","T<n>"], "title": "título fusionado", "description": "detalle fusionado", "why": "por qué unir" } ],',
-    '  "completar": [ { "id": "T<n>", "description": "detalle sugerido más completo", "tags": ["tags"], "why": "de qué informe sale" } ],',
-    '  "agrupar": [ { "planId": "PLAN-<n> o null", "planTitle": "título si es plan nuevo", "planDescription": "detalle del plan nuevo", "taskIds": ["T<n>","T<n>"], "why": "qué las une" } ],',
+    '  "duplicados": [ { "keep": "PEND-<n>", "remove": ["PEND-<n>"], "why": "por qué son el mismo" } ],',
+    '  "unificables": [ { "ids": ["PEND-<n>","PEND-<n>"], "title": "título fusionado", "description": "detalle fusionado", "why": "por qué unir" } ],',
+    '  "completar": [ { "id": "PEND-<n>", "description": "detalle sugerido más completo", "tags": ["tags"], "why": "de qué informe sale" } ],',
+    '  "agrupar": [ { "planId": "PLAN-<n> o null", "planTitle": "título si es plan nuevo", "planDescription": "detalle del plan nuevo", "taskIds": ["PEND-<n>","PEND-<n>"], "why": "qué las une" } ],',
     '  "crearTareas": [ { "fromReport": "título del informe", "tasks": [ { "title": "título", "description": "detalle", "priority": "alta|media|baja", "type": "task" } ], "why": "por qué falta" } ],',
     '  "crearTemas": [ { "title": "tema de aprendizaje", "area": "área", "scope": "console|tolkien", "why": "de qué tarea/plan sale y para qué te sirve" } ]',
     '}',
-    'Reglas: los ids de tarea son T<n> y los de plan PLAN-<n>. NO inventes ids: usá',
+    'Reglas: los ids de tarea son PEND-<n> y los de plan PLAN-<n>. NO inventes ids: usá',
     'SOLO los que aparecen en los datos (excepto en crearTareas y en planes nuevos,',
     'donde no hay id todavía). Sé CONSERVADOR: solo marcá duplicados/unificables si',
     'estás razonablemente seguro (ante la duda, no lo incluyas). NO propongas',
@@ -225,7 +230,7 @@ export function analyzePrompt(scope, context) {
   const entity = s === 'plans' ? 'PLANES' : 'TAREAS';
   const idNote = s === 'plans'
     ? 'Los ids son de la forma PLAN-<n>. NO inventes ids: usá SOLO los que aparecen en los datos.'
-    : 'Los ids son de la forma T<n>. NO inventes ids: usá SOLO los que aparecen en los datos.';
+    : 'Los ids son de la forma PEND-<n>. NO inventes ids: usá SOLO los que aparecen en los datos.';
   return [
     `Sos un asistente que ordena un tablero de ${entity} pendientes. Te paso en`,
     `JSON la lista COMPLETA de ${entity.toLowerCase()} y los INFORMES de audio ya`,
@@ -262,8 +267,8 @@ export function analyzePrompt(scope, context) {
 
 // ===== Parseo defensivo del JSON de la respuesta =====
 const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
-const ID_RE = /^(T\d+|PLAN-\d+)$/;
-const TASK_ID_RE = /^T\d+$/;
+const ID_RE = /^(PEND-\d+|PLAN-\d+)$/;
+const TASK_ID_RE = /^PEND-\d+$/;
 const PLAN_ID_RE = /^PLAN-\d+$/;
 const PRIOS = ['alta', 'media', 'baja'];
 const cleanId = (x) => { const s = clamp(x, 20).trim(); return ID_RE.test(s) ? s : null; };

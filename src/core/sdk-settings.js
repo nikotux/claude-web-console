@@ -21,8 +21,15 @@
 //    por eso además llevan el hook PreToolUse que deniega antes de los
 //    permisos). 'project' carga .mcp.json + skills; 'local' habilita el
 //    server MCP (enabledMcpjsonServers).
+//  - 'none' (interpretación PURA de texto: retro, ticket-context, audio,
+//    commitmsg, learning-*, projects-analyze…): [] — NADA de settings, skills,
+//    hooks ni MCP. Estas corridas NO usan herramientas (además llevan las dos
+//    capas de deny de la regla 6, ver core/text-only-query.js). Antes cada
+//    runner escribía el literal `settingSources: []` a mano; este kind es la
+//    fuente única para no repetirlo (y para que un grep encuentre a todos).
 export function settingSourcesFor(kind) {
   if (kind === 'chat') return ['user', 'project', 'local'];
   if (kind === 'headless') return ['project', 'local'];
+  if (kind === 'none') return [];
   throw new Error(`settingSourcesFor: tipo desconocido "${kind}"`);
 }

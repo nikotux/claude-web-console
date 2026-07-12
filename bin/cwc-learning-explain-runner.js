@@ -89,7 +89,7 @@ async function main() {
     const files = parseFiles(out);
     const snapshot = fileSnapshot(files, cwdForScope(topic.scope));
     const fingerprint = textFingerprint(topic);
-    try { saveExplanation(id, { explanation, model: EXPLAIN_MODEL, scope: topic.scope, fingerprint, files: snapshot }); }
+    try { await saveExplanation(id, { explanation, model: EXPLAIN_MODEL, scope: topic.scope, fingerprint, files: snapshot }); }
     catch (e) { log('no se pudo auto-guardar en el tema (no rompe el job):', e?.message); }
     writeExplainJob(id, { ...job, status: 'done', error: null, updatedAt: Date.now() });
     log(`OK explicación ${id}: ${explanation.length} chars, ${files.length} archivos citados.`);

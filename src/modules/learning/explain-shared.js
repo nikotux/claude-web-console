@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +53,7 @@ export function explainToolAllowed(name) {
 function ensureDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 }
-const ID_RE = /^LT\d+$/;
+const ID_RE = /^TDA-\d+$/;
 export function validId(id) {
   return ID_RE.test(String(id || ''));
 }
@@ -67,9 +68,7 @@ export function readExplainJob(id) {
 }
 export function writeExplainJob(id, data) {
   ensureDir();
-  const tmp = `${jobPath(id)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-  fs.renameSync(tmp, jobPath(id));
+  writeJsonAtomic(jobPath(id), data); // tmp-por-PID (BUG-30)
 }
 
 export function isFreshRunning(job) {
@@ -250,6 +249,9 @@ export function parseFiles(text) {
   return raw.split('\n')
     .map((l) => l.replace(/\0/g, '').trim())
     .filter(Boolean)
+    // BUG-28: solo rutas RELATIVAS seguras (sin absolutas ni '..'). La huella solo
+    // usa mtime/size, pero no seguimos rutas fuera del repo aunque el modelo las cite.
+    .filter((l) => !path.isAbsolute(l) && !l.split(/[\\/]/).includes('..'))
     .slice(0, 40)
     .map((l) => l.slice(0, 300));
 }

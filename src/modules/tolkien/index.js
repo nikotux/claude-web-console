@@ -21,6 +21,9 @@ import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
+import {
+  runCmd, spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
+} from './refresh-shared.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
@@ -28,130 +31,11 @@ const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
 
-// ───────────────── Refresh de la DB LOCAL (importers Zoho → Postgres) ─────────────────
-// Botón "Vista fresca": deja la DB LOCAL de dev como un snapshot LIMPIO y
-// ACTUAL de Zoho. NO mergea ni preserva ediciones locales — es un server de
-// pruebas y la vista debe ser siempre fresca (sin conflictos). Por eso:
-//   1) TRUNCATE de las tablas OPERATIVAS (empleados, clientes y todo lo que
-//      cuelga por FK: billing, invoices, leave, teams…) → borrón total.
-//   2) Reimporta desde cero con los importers de @tolkien/worker.
-// Se PRESERVAN login (users), config (app_config), países y holiday_lists:
-// no cascadean desde employees/clients (estos apuntan HACIA ellos, no al revés).
-// Equivale, por importer, a lo que se hace a mano:
-//   infisical run --env prod -- bash -c "DATABASE_URL=<local>; pnpm importer <n> --apply"
-// El infisical inyecta las credenciales Zoho; el DATABASE_URL local se exporta
-// DESPUÉS para pisar el de prod y garantizar que se escribe solo en local.
-// Config leída de ~/tolkien (con override por env), no hardcodeada frágil.
-const IMPORTERS = ['clients', 'employees', 'employee-client-links'];
-const DEV_DB_PASSWORD = 'tolkien_dev_only'; // password fijo de la DB de dev (ver CLAUDE.md de tolkien)
-
-function readTolkienDbPort() {
-  if (process.env.CWC_TOLKIEN_DB_PORT?.trim()) return process.env.CWC_TOLKIEN_DB_PORT.trim();
-  try {
-    const env = fs.readFileSync(path.join(CWD, '.env'), 'utf8');
-    const m = env.match(/^DB_HOST_PORT=(\d+)/m);
-    if (m) return m[1];
-  } catch { /* usa fallback */ }
-  return '5435';
-}
-
-function readInfisicalWorkspaceId() {
-  if (process.env.CWC_TOLKIEN_INFISICAL_ID?.trim()) return process.env.CWC_TOLKIEN_INFISICAL_ID.trim();
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(CWD, '.infisical.json'), 'utf8'));
-    if (j.workspaceId) return String(j.workspaceId);
-  } catch { /* usa fallback */ }
-  return '25b6c300-7686-4cf0-b8e3-ed808a529638';
-}
-
-const localDbUrl = () =>
-  `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/tolkien?schema=public`;
-
-function runCmd(cmd, args, { timeout = 120000, env = process.env } = {}) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { cwd: CWD, timeout, env, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        resolve({
-          code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
-          killed: !!(err && (err.killed || err.signal)),
-          stdout: stdout || '',
-          stderr: stderr || '',
-        });
-      });
-  });
-}
-
-// Extrae {creates,updates,softDeletes,failed} del log pino de un importer.
-function parseImporterOutput(name, out) {
-  const lines = (out || '').split('\n');
-  let done = null;
-  let failed = false;
-  let failMsg = '';
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t.startsWith('{')) continue;
-    let obj;
-    try { obj = JSON.parse(t); } catch { continue; }
-    if (obj.msg === 'import done') done = obj;
-    if (obj.msg === 'import failed') {
-      failed = true;
-      failMsg = obj?.err?.meta?.driverAdapterError?.cause?.originalMessage || obj?.err?.message || 'import failed';
-    }
-  }
-  return {
-    importer: name,
-    creates: done?.creates ?? 0,
-    updates: done?.updates ?? 0,
-    softDeletes: done?.softDeletes ?? 0,
-    failed: failed || !done,
-    error: failed ? failMsg.split('\n')[0].slice(0, 200) : (done ? '' : 'no completó (sin "import done")'),
-  };
-}
-
-async function refreshLocalData() {
-  const started = Date.now();
-  const url = localDbUrl();
-  const wsId = readInfisicalWorkspaceId();
-  const steps = [];
-
-  // 1) Borrón limpio de la data operativa + defensivo del índice único.
-  //    - DROP INDEX clients_name_key: Zoho tiene nombres de Customer duplicados
-  //      (p.ej. "San Francisco Bay Real Estate LLC" ×2); el índice único los
-  //      rechaza. En la DB LOCAL lo soltamos (idempotente) para no caernos por
-  //      un dato sucio de origen.
-  //    - TRUNCATE employees, clients RESTART IDENTITY CASCADE: vacía esas dos
-  //      tablas y TODO lo que cuelga por FK (billing, invoices, payments, leave,
-  //      team_members, overtime, requests, caches). NO toca users/app_config/
-  //      countries/holiday_lists (employees/clients apuntan hacia ellas). Así la
-  //      recarga es un snapshot fresco, sin restos ni ediciones locales previas.
-  const reset = await runCmd('psql', [
-    '-h', 'localhost', '-p', readTolkienDbPort(), '-U', 'tolkien', '-d', 'tolkien',
-    '-v', 'ON_ERROR_STOP=1',
-    '-c', 'DROP INDEX IF EXISTS clients_name_key; TRUNCATE employees, clients RESTART IDENTITY CASCADE;',
-  ], { timeout: 30000, env: { ...process.env, PGPASSWORD: DEV_DB_PASSWORD } });
-  steps.push({ importer: 'reset (drop-index + truncate operativas)', creates: 0, updates: 0, softDeletes: 0, failed: reset.code !== 0, error: reset.code !== 0 ? (reset.stderr.split('\n')[0] || 'psql falló') : '' });
-  // Si el borrón falló, no reimportamos: abortamos para no dejar la DB a medias.
-  if (reset.code !== 0) {
-    return { ok: false, steps, durationMs: Date.now() - started };
-  }
-
-  // 2) Importers en orden: clients → employees → employee-client-links.
-  for (const name of IMPORTERS) {
-    const inner = `export DATABASE_URL='${url}'; pnpm --filter @tolkien/worker importer ${name} --apply`;
-    const res = await runCmd('infisical', [
-      'run', '--projectId', wsId, '--env', 'prod', '--', 'bash', '-c', inner,
-    ], { timeout: 180000 });
-    const parsed = parseImporterOutput(name, `${res.stdout}\n${res.stderr}`);
-    if (res.killed) { parsed.failed = true; parsed.error = 'timeout (excedió 180s)'; }
-    steps.push(parsed);
-  }
-
-  return {
-    ok: steps.every((s) => !s.failed),
-    steps,
-    durationMs: Date.now() - started,
-  };
-}
+// El refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de importers Zoho)
+// vive en refresh-shared.js + el runner desacoplado bin/cwc-tolkien-refresh-runner.js
+// (regla de oro/regla 2: operación larga que debe sobrevivir a un reinicio de la
+// web). Acá solo se lo dispara y se lee su estado del disco. runCmd se importa de
+// ahí (lo reusa el gh de /branches).
 
 function git(args, { timeout = 90000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -277,12 +161,9 @@ async function status() {
 
 let busy = false;
 
-// Estado del job de refresh de data. Es una operación larga (~20-40s): mantener
-// la request HTTP abierta todo ese tiempo la hace frágil sobre el túnel ZeroTier
-// (la conexión se corta y el fetch del navegador rechaza → falso "error de red").
-// Por eso: POST arranca el job en background y vuelve YA; el frontend consulta
-// GET /refresh-data/status hasta que termina. Sin requests largas.
-let dataJob = { running: false, result: null, error: null, startedAt: null, finishedAt: null };
+// El estado del refresh de datos vive en DISCO (~/.cwc-data/tolkien-refresh.json,
+// ver refresh-shared.js), NO en una variable del proceso: así sobrevive a un
+// reinicio de la web (regla de oro/regla 2) y el front lo observa por polling.
 
 export default {
   name: 'tolkien',
@@ -290,27 +171,22 @@ export default {
   registerHttp(router) {
     const r = express.Router();
 
-    // Arranca el refresh en background (idempotente si ya corre). Vuelve al toque.
+    // Arranca el refresh en un RUNNER DESACOPLADO (idempotente si ya corre).
+    // Vuelve al toque; el estado se persiste en disco y se consulta por GET.
+    // Admin-only: escribe/trunca la DB LOCAL de Tolkien.
     r.post('/refresh-data', (req, res) => {
-      if (dataJob.running) return res.json({ started: false, running: true });
-      dataJob = { running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null };
-      // No await: corre en background; el estado se consulta por GET /status.
-      refreshLocalData()
-        .then((result) => { dataJob.result = result; })
-        .catch((err) => { dataJob.error = err?.message || 'error desconocido'; })
-        .finally(() => { dataJob.running = false; dataJob.finishedAt = Date.now(); });
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede refrescar la data local.' });
+      if (isRefreshRunning(readRefreshJob())) return res.json({ started: false, running: true });
+      // Reserva SINCRÓNICA del job 'running' en disco (antes de spawnear) para
+      // dedup + para que el GET lo vea de inmediato; el runner lo completa.
+      writeRefreshJob({ running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null });
+      spawnRefreshRunner();
       res.json({ started: true, running: true });
     });
 
-    // Estado del último/actual refresh (para el polling del frontend).
+    // Estado del último/actual refresh (para el polling del frontend) — solo lee disco.
     r.get('/refresh-data/status', (req, res) => {
-      res.json({
-        running: dataJob.running,
-        result: dataJob.result,
-        error: dataJob.error,
-        startedAt: dataJob.startedAt,
-        finishedAt: dataJob.finishedAt,
-      });
+      res.json(refreshStatus(readRefreshJob()));
     });
 
     r.get('/status', async (req, res) => {
@@ -346,6 +222,12 @@ export default {
         if (fetch.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
 
         const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+        // Igual que status(): si no se pudo determinar la rama, abortar explícito
+        // en vez de asumir 'HEAD' y bifurcar CASO A/B sobre una premisa falsa.
+        if (branchRes.code !== 0) {
+          log.push({ step: 'branch', code: branchRes.code, out: branchRes.stderr || 'git rev-parse falló' });
+          return res.status(500).json({ ok: false, error: 'No se pudo determinar la rama actual (git rev-parse falló).', log });
+        }
         const branch = branchRes.stdout || 'HEAD';
 
         // CASO A: estás parado en una RAMA FEATURE. El objetivo #1 del panel es
@@ -559,13 +441,26 @@ export default {
         if (reb.code !== 0) {
           const ab = await git(['rebase', '--abort']);
           log.push({ step: 'rebase-abort', code: ab.code, out: ab.stdout || ab.stderr || '(abortado)' });
+          const abortFailed = ab.code !== 0;
+          let popConflict = false;
           if (stashed) {
             const pop = await git(['stash', 'pop']);
             log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
+            popConflict = pop.code !== 0;
+          }
+          // El mensaje depende del RESULTADO real del abort/pop: si el abort falló
+          // la rama pudo quedar a mitad del rebase (NO "como estaba"); si el pop
+          // conflictuó, tus cambios quedaron en el stash. No asumir éxito.
+          let error;
+          if (abortFailed) {
+            error = 'El rebase tuvo conflictos y ADEMÁS falló el abort: tu rama pudo quedar a mitad del rebase. Revisá a mano: git status / git rebase --abort.';
+          } else if (popConflict) {
+            error = 'El rebase se abortó (tu rama quedó como estaba), pero al reaplicar tus cambios sin commitear (git stash pop) hubo conflicto. Resolvelos: git status — tu trabajo está en el stash (git stash list).';
+          } else {
+            error = 'El rebase tuvo conflictos con lo nuevo de main. Aborté: tu rama quedó EXACTAMENTE como estaba (nada perdido). Resolvelo a mano cuando puedas: git rebase origin/main.';
           }
           return res.status(409).json({
-            ok: false, conflict: true, log, status: await status(),
-            error: 'El rebase tuvo conflictos con lo nuevo de main. Aborté: tu rama quedó EXACTAMENTE como estaba (nada perdido). Resolvelo a mano cuando puedas: git rebase origin/main.',
+            ok: false, conflict: true, abortFailed, popConflict, log, status: await status(), error,
           });
         }
 
@@ -692,12 +587,17 @@ export default {
 // un JSON crudo sería inútil: el usuario necesita ver qué pasó).
 function localEnterErrPage(title, detail) {
   const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  // Colores desde tokens.css (convención: nada de hex hardcodeado). La página se
+  // sirve por el mismo server, así que el <link> a /css/tokens.css resuelve las
+  // var(--cwc-*); si no cargara, degrada a los defaults del navegador (es una
+  // pantalla de error de una sola vista, aceptable).
   return `<!doctype html><html lang="es"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>${esc(title)}</title>`
-    + `<style>body{font-family:system-ui,sans-serif;background:#1a1512;color:#e8e0d8;`
+    + `<link rel="stylesheet" href="/css/tokens.css">`
+    + `<style>body{font-family:system-ui,sans-serif;background:var(--cwc-bg);color:var(--cwc-text);`
     + `display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;padding:1.5rem}`
-    + `.c{max-width:32rem}h1{color:#d97757;font-size:1.2rem}p{line-height:1.5;color:#c8bcb0}`
-    + `code{background:#2a2018;padding:.1rem .3rem;border-radius:4px}</style></head>`
+    + `.c{max-width:32rem}h1{color:var(--cwc-accent);font-size:1.2rem}p{line-height:1.5;color:var(--cwc-text-dim)}`
+    + `code{background:var(--cwc-bg-elevated);padding:.1rem .3rem;border-radius:4px}</style></head>`
     + `<body><div class="c"><h1>⚠️ ${esc(title)}</h1><p>${esc(detail)}</p></div></body></html>`;
 }

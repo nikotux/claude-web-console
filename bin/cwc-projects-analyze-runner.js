@@ -5,7 +5,7 @@
 //
 // El endpoint POST /:key/context/section/:i/analyze (modules/projects/index.js)
 // solo escribe el job PENDIENTE en ~/.cwc-data/projects-analyze/<id>.json y
-// spawnea esto; acá se hace la corrida real (SDK, haiku, 1 turno, CERO
+// spawnea esto; acá se hace la corrida real (SDK, sonnet, 1 turno, CERO
 // herramientas — dos capas de denegación, el análisis solo necesita el
 // prompt) y se persiste el resultado en el MISMO archivo. El front encuesta
 // GET .../analyze/:id hasta que status deja de ser 'running'.
@@ -30,7 +30,11 @@ async function runAnalysis(before, after) {
     options: {
       cwd: ROOT,
       settingSources: [], // nada de settings/skills: análisis puro de texto
-      model: 'haiku',     // rápido y barato; el criterio viene entero en el prompt
+      model: 'sonnet',    // guardián: haiku alucinaba FP y era inconsistente entre
+                          // corridas (mismo motivo que auditModelFor() de Salud). Acá un
+                          // FALSO NEGATIVO deja pasar una edición que debilita una regla
+                          // dura como risk:"ok" — sonnet es estable. Uso de baja frecuencia
+                          // (1 turno, prompt corto), el costo extra es insignificante.
       maxTurns: 1,
       permissionMode: 'default',
       hooks: { PreToolUse: [{ hooks: [async () => deny] }] },

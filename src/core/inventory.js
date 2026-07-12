@@ -300,8 +300,10 @@ const CANON_SERVICES = [
 const CANONICAL_PATTERNS = [
   {
     key: 'parallel-pool',
-    label: 'Pool paralelo adaptativo (health/pool.js · runAdaptivePool)',
-    provider: (f) => f === 'src/modules/health/pool.js',
+    label: 'Pool paralelo adaptativo (core/pool.js · runAdaptivePool)',
+    // El proveedor se movió a core/pool.js (transversal, 2026-07-12);
+    // health/pool.js queda re-exportando, así que ambos cuentan como proveedor.
+    provider: (f) => f === 'src/core/pool.js' || f === 'src/modules/health/pool.js',
     adopts: (t) => /runAdaptivePool/.test(t),
     // Candidato: bucle for-of con await sobre I/O (NO el for-await de streams del
     // SDK), en un archivo que hace trabajo de red/SDK y no usa el pool.
@@ -320,6 +322,13 @@ const CANONICAL_PATTERNS = [
       'src/modules/backup/index.js',
       'src/modules/chat/index.js',
       'bin/cwc-chat-runner.js',
+      // Seriales POR DISEÑO (verificado 2026-07-12, hallazgo de Coherencia):
+      //  · refresh-shared.js: los importers corren en ORDEN de dependencia
+      //    (clients→employees→employee-client-links); paralelizarlos rompería las FK.
+      //  · cwc-retro-runner.js: persist() ESCRIBE lecciones en Pad una por una
+      //    (regla de oro "serial lo que ESCRIBE").
+      'src/modules/tolkien/refresh-shared.js',
+      'bin/cwc-retro-runner.js',
     ],
   },
   {

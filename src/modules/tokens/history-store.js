@@ -39,8 +39,10 @@ const MODEL_ORDER = ['haiku', 'sonnet', 'opus', 'fable', 'unknown'];
 // Buckets de proyecto (documental: las funciones de abajo son genéricas sobre las
 // claves presentes en cada día, no dependen de esta lista). 'aprendizaje' se
 // separa de 'consola' para auditar tokens de estudio vs desarrollo.
-const PROJECTS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
-const DAY_MS = 86400000;
+// Exportados como FUENTE ÚNICA (BUG-21): index.js los reusa (antes duplicaba
+// PROJECT_KEYS/DAY_MS/mergeModels idénticos → riesgo de drift).
+export const PROJECTS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
+export const DAY_MS = 86400000;
 
 let lastWriteMs = 0;
 
@@ -66,7 +68,7 @@ async function writeHistory(store) {
 }
 
 // Suma el mapa {modelKey:{tokens,cost}} `src` dentro de `dst` (muta dst).
-function addModels(dst, src) {
+export function addModels(dst, src) {
   for (const [k, v] of Object.entries(src || {})) {
     const d = (dst[k] ||= { tokens: 0, cost: 0 });
     d.tokens += v.tokens || 0;
@@ -97,8 +99,12 @@ function modelsFor(dayVal, project) {
 // UPSERT de los días de transcripts (nested {proyecto:{modelo:bucket}}) + poda.
 export async function mergeDaily(daily) {
   if (!daily || typeof daily !== 'object') return;
-  const now = Date.now();
-  if (now - lastWriteMs < WRITE_THROTTLE_MS) return;
+  // Throttle con reloj MONOTÓNICO (hrtime), NO de pared: un salto del reloj del
+  // sistema (NTP/DST) no debe congelar ni disparar el snapshot de 5 min. Mismo
+  // patrón que summaryAt/limitsAt en tokens/index.js. (El `updatedAt` sí usa la
+  // hora de pared, más abajo, porque es un timestamp para mostrar.)
+  const mono = Number(process.hrtime.bigint()) / 1e6;
+  if (mono - lastWriteMs < WRITE_THROTTLE_MS) return;
 
   const store = await loadHistory();
   for (const [day, projects] of Object.entries(daily)) {
@@ -118,8 +124,8 @@ export async function mergeDaily(daily) {
     }
   }
 
-  store.updatedAt = new Date(now).toISOString();
-  lastWriteMs = now;
+  store.updatedAt = new Date().toISOString();
+  lastWriteMs = mono;
   await writeHistory(store);
 }
 

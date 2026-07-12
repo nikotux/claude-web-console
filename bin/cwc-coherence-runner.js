@@ -19,6 +19,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { coherenceCensus } from '../src/core/inventory.js';
+import { padContext } from '../src/modules/health/shared.js';
 import {
   cohToolAllowed, evaluateCoherence, coherencePrompt, parseCoherence,
   readCoh, writeCoh, writeCohLock, clearCohLock, otherCohAlive,
@@ -49,10 +50,10 @@ const denyHook = {
   },
 };
 
-async function analyze(census, findings) {
+async function analyze(census, findings, padCtx) {
   let out = '';
   const q = query({
-    prompt: coherencePrompt(census, findings),
+    prompt: coherencePrompt(census, findings, padCtx),
     options: {
       cwd: ROOT,
       model: 'sonnet',
@@ -93,8 +94,11 @@ async function run() {
   const findings = evaluateCoherence(census);
   log(`censo: ${census.counts.modules} módulos · ${census.counts.edges} aristas · ${findings.length} hallazgo(s) determinístico(s).`);
 
+  phase = 'leyendo contexto de Pad local…'; beat();
+  const padCtx = await padContext(); // best-effort: '' si Pad local no responde
+
   phase = 'analizando la coherencia con sonnet…'; beat();
-  const out = await analyze(census, findings);
+  const out = await analyze(census, findings, padCtx);
   const parsed = parseCoherence(out);
   if (!parsed) {
     log(`respuesta no parseable (${out.length} chars). Cola: …${out.slice(-400).replace(/\n/g, ' ⏎ ')}`);

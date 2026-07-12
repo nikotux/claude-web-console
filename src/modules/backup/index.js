@@ -12,9 +12,15 @@
 //
 // HTTP (solo administradores):
 //   GET  /api/backup/list             -> { backups: [{id, date, size}] }
-//   POST /api/backup/create           -> { ok, backup }
+//   POST /api/backup/create           -> { ok, backup, pad }
 //   POST /api/backup/restore {id}     -> { ok, restarting: true }
 //   POST /api/backup/delete  {id}     -> { ok }
+//
+// BACKUP DEL PAD LOCAL (2026-07-12, ROAD-257 Fase B): cada POST /create además
+// corre `pad db backup` (best-effort, ver padDbBackup()) y deja un archivo
+// `pad-backup-<fecha>.db` en el MISMO ~/.cwc-backups — antes ~/.pad/pad.db no
+// tenía NINGUNA copia de seguridad. Si el Pad local está caído, no rompe el
+// backup del proyecto: el campo `pad.ok` de la respuesta indica si funcionó.
 //
 // Push a GitHub — ADEMÁS del commit+push, cada push exitoso:
 //   1. Actualiza la sección "## Changelog" de README.md (marcadores
@@ -71,6 +77,17 @@ const REMOTE = 'personal';
 const FORBIDDEN_URL_RE = /mordor-staffing/i;
 const SECRET_PATHS = ['.env', 'users.json', 'sessions.json', 'recents.json', 'titles.json'];
 const SECRET_DIRS = ['certs'];
+// Un secreto puede estar en la RAÍZ o ANIDADO (p.ej. sub/.env, app/certs/key.pem):
+// matcheamos también por BASENAME y por SEGMENTO de ruta (BUG-15) — la denylist
+// vieja solo cazaba rutas exactas de raíz, así que un secreto anidado se colaba en
+// la capa 2 (lo salvaban la 1 —git no-ignorado— y la 3 —selección humana—, pero
+// esta capa es defensa en profundidad y no debía tener el hueco).
+function isSecretPath(f) {
+  const base = path.basename(f);
+  const segs = String(f).split('/');
+  return SECRET_PATHS.includes(f) || SECRET_PATHS.includes(base)
+    || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`) || segs.includes(d));
+}
 
 let busy = false; // evita crear/restaurar en paralelo
 
@@ -114,7 +131,7 @@ async function repoSecretGuards(verb = 'Push') {
 
   // Ningún secreto versionado.
   const tracked = lines((await git(['ls-files'])).out);
-  const leaked = tracked.filter((f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)));
+  const leaked = tracked.filter(isSecretPath);
   if (leaked.length) return { ok: false, error: `Hay secretos versionados: ${leaked.join(', ')}. ${verb} BLOQUEADO.` };
 
   // Cada secreto que existe en disco DEBE seguir ignorado (atrapa regresión de .gitignore).
@@ -144,9 +161,7 @@ async function securityGuards() {
 function selectUntracked(requested, untrackedNow) {
   const req = Array.isArray(requested) ? requested.map(String).slice(0, 200) : [];
   const includable = req.filter((f) => untrackedNow.includes(f));
-  const blockedSecrets = includable.filter(
-    (f) => SECRET_PATHS.includes(f) || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`)),
-  );
+  const blockedSecrets = includable.filter(isSecretPath);
   return { includable, blockedSecrets };
 }
 
@@ -307,6 +322,27 @@ function tar(args) {
   });
 }
 
+// Backup del Pad LOCAL self-hosted (2026-07-12, ROAD-257 Fase B): hasta ahora
+// ~/.pad/pad.db no tenía NINGUNA copia de seguridad (la nube quedó solo como
+// respaldo pasivo de la ventana de migración, no un espejo permanente). Se
+// engancha como paso ADICIONAL best-effort del backup de siempre — mismo
+// gesto (un click), mismo directorio (~/.cwc-backups), pero un archivo aparte
+// (`pad-backup-*.db`, no se mete dentro del tar.gz del código). Si el Pad
+// local está caído o el binario no está, NO rompe el backup del proyecto:
+// solo se informa en la respuesta.
+const PAD_BIN = path.join(os.homedir(), '.local', 'bin', 'pad');
+const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+function padDbBackup() {
+  const out = path.join(BACKUP_DIR, `pad-backup-${stamp()}.db`);
+  const timeout = 30000;
+  return new Promise((resolve) => {
+    execFile(PAD_BIN, ['--url', PAD_URL, 'db', 'backup', '--cron', '-o', out], { timeout }, (err, _stdout, stderr) => {
+      if (err) return resolve({ ok: false, error: (stderr || err.message || 'pad db backup falló').trim().slice(0, 300) });
+      resolve({ ok: true, file: path.basename(out) });
+    });
+  });
+}
+
 // Reinicio tras restaurar: bajo systemd salimos con error (Restart=on-failure
 // nos relevanta); lanzado a mano, un bash desacoplado espera y relanza npm.
 function scheduleRestart() {
@@ -352,7 +388,8 @@ export default {
           return res.status(500).json({ error: `Falló el backup: ${t.stderr || 'tar error'}` });
         }
         const st = fs.statSync(out);
-        res.json({ ok: true, backup: { id, date: st.mtimeMs, size: st.size } });
+        const pad = await padDbBackup(); // best-effort, ver ROAD-257 Fase B
+        res.json({ ok: true, backup: { id, date: st.mtimeMs, size: st.size }, pad });
       } catch (e) {
         res.status(500).json({ error: `Falló el backup: ${e?.message || e}` });
       } finally {

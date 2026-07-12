@@ -49,7 +49,7 @@ export default {
         const you = actor?.username || null;
         const youAdmin = !!actor?.admin;
         const snap = getSnapshot();
-        const meta = getMeta(req.params.id); // Contexto adicional + Histórico del trabajo (nuestros)
+        const meta = await getMeta(req.params.id); // Contexto adicional + Histórico del trabajo (nuestros, Pad local)
         const cached = snap?.ticketsById?.[String(req.params.id)];
         if (cached) return res.json({ ...withClaim(cached), meta, you, youAdmin, cached: true, generatedAt: snap.generatedAt });
         // Fuente de consulta uniforme (Fix 3, 2026-07-10): si es un ticket CERRADO
@@ -76,7 +76,7 @@ export default {
         const youAdmin = !!actor?.admin;
         const num = String(req.params.number).replace(/[^\d]/g, '');
         const workingBy = getActiveClaim(`pr:${num}`); // claims de PR van con prefijo pr:
-        const meta = getMeta(`pr:${num}`);             // Contexto adicional + Histórico (mismo prefijo)
+        const meta = await getMeta(`pr:${num}`);        // Contexto adicional + Histórico (mismo prefijo, Pad local)
         const snap = getSnapshot();
         const cached = snap?.prDetailsById?.[num];
         if (cached) return res.json({ pr: { ...cached, workingBy, meta }, you, youAdmin, error: null, cached: true, generatedAt: snap.generatedAt });
@@ -256,18 +256,28 @@ export default {
       res.json(rest);
     });
     // Guardar/editar (texto vacío = borrar) el contexto adicional a mano.
-    r.post('/meta/context', (req, res) => {
+    // Async desde la migración a Pad local (ROAD-110 Fase 3): con try/catch
+    // propio (antes no hacía falta — el store file-based nunca tiraba).
+    r.post('/meta/context', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const key = keyOf(req.body?.key);
       if (!key) return res.status(400).json({ error: 'Falta la clave del ítem.' });
-      const text = String(req.body?.text ?? '');
-      const meta = text.trim() ? saveContexto(key, text) : clearContexto(key);
-      res.json({ ok: true, meta });
+      try {
+        const text = String(req.body?.text ?? '');
+        const meta = text.trim() ? await saveContexto(key, text) : await clearContexto(key);
+        res.json({ ok: true, meta });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 300) });
+      }
     });
     // Leer la metadata de un ítem (contexto + histórico) sin el snapshot completo.
-    r.get('/meta/:key', (req, res) => {
+    r.get('/meta/:key', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      res.json({ meta: getMeta(keyOf(req.params.key)) });
+      try {
+        res.json({ meta: await getMeta(keyOf(req.params.key)) });
+      } catch (err) {
+        res.status(500).json({ error: String(err?.message || err).slice(0, 300) });
+      }
     });
 
     router.use('/tickets', r);

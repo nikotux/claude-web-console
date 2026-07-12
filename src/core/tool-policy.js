@@ -26,7 +26,34 @@
 // 'default' algunas acciones NO piden permiso — eso es la allowlist del usuario,
 // no un bug de la consola.
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { settingSourcesFor } from './sdk-settings.js';
+
+// Raíz del repo de la CONSOLA (este archivo vive en src/core/ → ../.. = raíz).
+// Se usa para decidir si un chat trabaja en el MUNDO INTERNO (Mi Consola) y por
+// ende debe recibir el recordatorio de bootstrap de Pad local (workspace
+// `console`). Los chats de Tolkien (mundo externo) NO lo reciben — regla dura 12.
+const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+function isConsoleCwd(cwd) {
+  if (!cwd) return false;
+  const c = path.resolve(cwd);
+  return c === CONSOLE_ROOT || c.startsWith(CONSOLE_ROOT + path.sep);
+}
+
+// BOOTSTRAP DE PAD para chats de Consola (Gap #1, ROAD-63/TASK-295). Recordatorio
+// que se AGREGA (append) al system prompt NATIVO de Claude Code — nunca lo
+// reemplaza — SOLO en chats cuyo cwd está dentro del repo de la consola. Hace que
+// el chat cargue el contexto de Pad local y modele el trabajo como TASK/PLAN, en
+// vez de depender de que el modelo recuerde CLAUDE.md. NO es un hook global
+// (eso alcanzaría a las sesiones de Tolkien = otro mundo/workspace, regla 12).
+export const CONSOLE_PAD_BOOTSTRAP = [
+  'CONTEXTO DE MI CONSOLA — Pad LOCAL (workspace `console`).',
+  'Antes de trabajo NO trivial en este repo, cargá el estado del proyecto en Pad: `pad_set_workspace console` (o `pad_meta action=bootstrap workspace=console`) y revisá `pad_project action=dashboard`/`next` para no duplicar trabajo en curso.',
+  'Registrá lo que hagas en Pad: bug real → item BUG; trabajo de entidad (feature/migración/fase) → TASK/PLAN; decisión de arquitectura → `pad_item action=decide` con rationale. Los playbooks `module-scan`/`codex-verify` son procedimientos invocables cuando calcen.',
+  'El server MCP `pad` es el LOCAL (workspace `console`); `pad-cloud-backup` es solo respaldo, nunca operativo. La fuente de verdad de las reglas duras es el CLAUDE.md del repo.',
+  'Regla dura #12 (anti-colisión entre mundos): los dos mundos NUNCA se enlazan EN VIVO — 🏠 interno = Mi Consola + Pad `console` · 🌳 externo = Tolkien + Pad `tolkien`. Todo se resuelve PRIMERO y por completo acá; el ÚLTIMO paso es crear un PLAN NUEVO (plan-puente) para inyectar en Tolkien. Nunca al revés, nunca un sync/MCP vivo cruzando los dos Pad.',
+].join('\n');
 
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
 // romper a sus importadores; server y runner validan contra este mismo Set).
@@ -54,6 +81,12 @@ export function chatQueryOptions({ cwd, model, resume, mode, canUseTool }) {
     permissionMode: normalizeMode(mode),
     // Habilita que el modo "Todo" realmente saltee permisos. Requisito del SDK.
     allowDangerouslySkipPermissions: true,
+    // Bootstrap de Pad SOLO en chats del mundo interno (repo de la consola): se
+    // AGREGA al system prompt nativo de Claude Code (preset), nunca lo reemplaza.
+    // Chats de Tolkien (mundo externo) quedan sin override (regla dura 12).
+    ...(isConsoleCwd(cwd)
+      ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: CONSOLE_PAD_BOOTSTRAP } }
+      : {}),
     includePartialMessages: true,
     // Fase 8: skills + comandos slash + CLAUDE.md del usuario y del proyecto del
     // cwd (fuente única en core/sdk-settings.js) + invocación autónoma de skills.

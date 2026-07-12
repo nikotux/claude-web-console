@@ -48,6 +48,10 @@ const MODEL_KEYS = ['opus', 'sonnet', 'haiku', 'fable'];
 export const VALID_MODELS = new Set(['opusplan', 'fable', 'opus', 'sonnet', 'haiku', 'default']);
 export function keyOf(id) {
   const low = (id || '').toLowerCase();
+  // 'mythos' se COSTEA como fable (pin/pout de tokens usan /fable|mythos/); sin
+  // este alias, keyOf lo bucketearía en 'unknown' → costo fable, conteo unknown
+  // (BUG-20). Se mapea a 'fable' para que costeo y bucketeo coincidan.
+  if (low.includes('mythos')) return 'fable';
   for (const k of MODEL_KEYS) if (low.includes(k)) return k;
   return 'unknown';
 }

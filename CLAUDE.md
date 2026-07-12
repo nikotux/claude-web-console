@@ -30,7 +30,11 @@ código.
    (mensajería + claims anti-conflicto: `bin/cwc-bus.js` invocado por los hooks
    de Claude Code, estado 100% en archivos en `~/.cwc-data/session-bus/` —
    NADA en el proceso del server, sobrevive reinicios por construcción; el
-   módulo backend `interfono` solo LEE ese disco). La unidad systemd usa
+   módulo backend `interfono` LEE ese disco para el panel y además ofrece el
+   canal HUMANO de escritura acotada — POST /send (mensaje manual) y
+   /claim-release (liberar un claim), ambos vía `bus.sendMessage`/`bus.releaseFile`
+   de `core/bus.js`, nunca estado en el proceso; la mensajería/claims
+   AUTOMÁTICOS los generan los hooks vía `bin/cwc-bus.js`, no este módulo). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
@@ -162,6 +166,75 @@ código.
     `docs/estandar-documental.md` y aplicarlo. Los canales externos y sus
     firmas están registrados en su sección 6; canal no registrado = preguntar
     antes de publicar.
+11. **Pad LOCAL como columna vertebral operativa de CUALQUIER trabajo en este
+    repo** (pedido explícito de Niko 2026-07-12, cierre del programa de
+    autohosteo — ver el gotcha "MCP de Pad" más abajo para el detalle técnico
+    completo del cutover). Esto NO es solo "documentar" — es una práctica
+    activa que se sigue en TODA sesión que trabaje sobre Mi Consola:
+    - **Al arrancar** cualquier trabajo no trivial (bug, feature, tarea,
+      refactor), cargar contexto con `pad_set_workspace workspace=console` o
+      `pad_meta action=bootstrap workspace=console` (server MCP `pad` = el
+      LOCAL, `pad-cloud-backup` es solo respaldo pasivo, NUNCA operativo) —
+      trae de un solo golpe conventions/roles/playbooks/dashboard/actividad
+      reciente. Consultar `pad_project action=dashboard`/`next` antes de
+      arrancar algo grande, para ver qué ya está en curso y no duplicar.
+    - **Todo hallazgo/bug real** que se descubra trabajando en la consola
+      (no solo los del programa de modularización, CUALQUIERA futuro) se
+      registra como item `BUG` en la colección Bugs de Pad — no solo como
+      comentario suelto en el chat que se pierde al cerrar la sesión.
+    - **Trabajo de cierta entidad** (una migración, un módulo nuevo, una
+      fase de un proyecto) se modela como `TASK`/`ROAD` en Pad, no solo en
+      la cabeza de la sesión — así la PRÓXIMA sesión (sin memoria de ésta)
+      puede retomar con `pad_project next`/`dashboard` en vez de releer
+      transcripts.
+    - **Decisiones de arquitectura** (qué opción se eligió y por qué) se
+      registran con `pad_item action=decide` — rationale incluido — para que
+      quede auditable sin tener que reconstruir la conversación.
+    - **Los Playbooks activos son PROCEDIMIENTOS INVOCABLES, no solo texto
+      de referencia:** `module-scan` (escanear+consolidar un módulo, el loop
+      del programa de modularización) y `codex-verify` (revisión
+      independiente con Codex) se re-usan tal cual para CUALQUIER trabajo
+      futuro que calce con su propósito — no reinventar el procedimiento a
+      mano cada vez que aplica.
+    - **Las Conventions de Pad son la MISMA fuente de reglas duras que este
+      CLAUDE.md** (los 7 gotchas top del programa quedaron ahí, sincronizados
+      en espíritu — no textualmente idénticos palabra por palabra). Si una
+      convención de Pad y este archivo alguna vez divergen, este CLAUDE.md
+      manda (es la fuente de verdad del repo, regla del encabezado); avisar
+      y corregir la de Pad para que vuelvan a coincidir.
+    - **Alcance explícito, NO expandir sin OK:** esto es SOLO sobre cómo
+      TRACKEAMOS el trabajo (tracker activo en vez de pasivo). Migrar los
+      MÓDULOS PROPIOS de Consola (`tasks`/`learning`, hoy file-based en
+      `~/.cwc-data`) para que su funcionalidad real dependa de Pad es un
+      proyecto APARTE, de mayor riesgo (reescribir módulos que hoy
+      funcionan) — documentado como pendiente futuro en
+      `docs/evaluacion-rol-pad.md`, NO iniciado, requiere su propio OK
+      explícito cuando se decida abordarlo.
+12. **Anti-colisión entre mundos — resolución interna PRIMERO, puente por
+    plan** (pedido explícito de Niko 2026-07-12). Los dos mundos NUNCA
+    colisionan ni se enlazan EN VIVO: 🏠 **INTERNO** = Mi Consola + Pad
+    **LOCAL** (workspace `console`, español OK, dueño Niko) · 🌳 **EXTERNO** =
+    Tolkien + Pad **CLOUD** (workspace `tolkien`, inglés obligatorio, dueño
+    Chris). TODO trabajo se resuelve PRIMERO y por COMPLETO en el mundo
+    interno. El **ÚLTIMO paso** de esa resolución interna es la creación de un
+    **PLAN NUEVO** (artefacto entregable) destinado a inyectarse en el mundo
+    externo — NUNCA una escritura directa cruzando servidores, NUNCA un sync
+    bidireccional, NUNCA un enlace MCP vivo entre los dos Pad. Recién con ese
+    **plan-puente** cerrado, la sesión del mundo externo (Tolkien) lo ejecuta.
+    Orden ESTRICTO e irreversible: **interno → (plan-puente) → externo** —
+    nunca al revés, nunca simultáneo. PROHIBIDO: que un flujo de Consola
+    escriba directo al Pad `tolkien`; que una tarea del mundo interno dependa
+    EN RUNTIME del externo; que se ejecute en Tolkien algo que no pasó antes
+    por la resolución COMPLETA en el interno. Esto formaliza y ENDURECE la
+    tabla "dos mundos" de `ROAD-57` y convive con `R1` (gate de push) y `R7`
+    (desvío del plan → volver a Chris). Consecuencia de diseño: cualquier
+    integración futura tipo "ticket ↔ task" entre los dos Pad NO es un enlace
+    vivo — es este handoff secuencial; el único cruce permitido es el
+    plan-puente, generado a mano/por sesión, nunca por sincronización
+    automática de código. El cliente `src/modules/tickets/pad-client.js` (lee
+    el Pad CLOUD de Tolkien) y `src/core/pad-service-client.js` (habla con el
+    Pad LOCAL de Consola) son y SIGUEN siendo dos conexiones separadas por
+    diseño: ningún código puede unirlas en una operación que escriba a ambos.
 
 ## NO MODIFICAR (generado o estado de runtime)
 
@@ -209,7 +282,10 @@ código.
   análisis IA de secciones de contexto (módulo projects; poda >24 h en cada
   escritura) + `projects-analyze.log` de su runner, `commitmsg/<id>.json` jobs
   de la generación IA del mensaje de commit (módulo backup; misma poda >24 h) +
-  `commitmsg.log` de su runner, `tasks.json` registro PRIVADO de las tareas
+  `commitmsg.log` de su runner, `tolkien-refresh.json` job del refresh DESACOPLADO
+  de la DB LOCAL de Tolkien (lo reserva POST /api/tolkien/refresh-data, lo completa
+  `bin/cwc-tolkien-refresh-runner.js`; staleness 12 min) + `tolkien-refresh.log`,
+  `tasks.json` registro PRIVADO de las tareas
   pendientes + PLANES (módulo tasks; CRUD síncrono determinístico, escritura
   atómica tmp+rename — NO hay runner) + `tasks-activity.json` LOG de actividad
   append-only (create/update/status/complete/delete de tareas y planes; poda a
@@ -237,7 +313,12 @@ código.
   quedan contados en 'consola'),
   `audio/<id>.json` jobs del análisis IA de
   transcripciones (módulo audio; id determinístico por contenido, poda >30 días)
-  + `audio.log` de su runner, `session-bus/` del INTERFONO entre
+  + `audio.log` de su runner, `retro/<id>.json` jobs de la destilación de MEJORA
+  CONTINUA (ROAD-256, módulo `retro`; id sha1 del sessionId, lo encola Chat.close,
+  poda >30 días) + `retro.log` de su runner + `retro-activity.json` log local
+  append-only del registro de lecciones + `retro-curation.json` job de la
+  curaduría IA (Fase 5) + `retro-curate.log` (las lecciones EN SÍ viven en Pad
+  local, colección `mejora-continua`, no en archivo), `session-bus/` del INTERFONO entre
   sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
   reservas de archivo (1 por archivo, clave = hash de la ruta) ·
   `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
@@ -258,6 +339,26 @@ ARCHIVADO (`_archived/`, branch `redesign/board-mobile`). El módulo VIVO del ci
 de tickets/features/PRs es **`tickets/`** (Bugs v2 · "One Front Door"): dashboard
 determinístico (snapshot Zoho/GitHub cada 60 s, sin IA) con ventanas de detalle
 en MODAL — `public/js/modules/tickets/{ticket-detail,pr-detail}.js` (clases `.bv2-*`).
+
+⚡ **BACKEND MIGRADO A PAD LOCAL — patrón "dos mundos" (2026-07-12, ROAD-110 Fase
+3, parte del cutover a self-host, ver el gotcha "MCP de Pad" más abajo):**
+`meta-store.js` (las 4 funciones de I/O: `getMeta`/`saveContexto`/
+`clearContexto`/`appendHistorico` — el "Contexto adicional" + "Histórico del
+trabajo" de abajo) ya NO es file-based — habla contra el Pad LOCAL (workspace
+`console`, colección `contexto-de-tickets`/CDT). Esto es la pieza de **mundo
+INTERNO** del patrón de dos mundos: notas PROPIAS de Consola sobre un
+ticket/PR — el ticket/PR EN SÍ (Zoho Desk + GitHub) y el Pad de TOLKIEN (cloud,
+`src/modules/tickets/pad-client.js`) son el **mundo EXTERNO**, sin cambios, sin
+tocar. Como la clave de un ticket/PR es un string arbitrario ya existente
+('123', 'pr:245') y no un `ref` de Pad, la búsqueda usa
+`findItemByTitle()` de `pad-service-client.js` (list + match por título — el
+volumen de tickets trabajados es bajo, no hace falta un índice). `historico[]`
+y `contexto adicional` viajan como campos JSON del item. `extractSessionWork()`
+(extracción determinística del transcript) NO se tocó — sigue igual, no hace
+I/O de meta-store. Alcance verificado ESTRICTO: nada del gate de push, Desk,
+GitHub, claims ni snapshot de `tickets/index.js` se tocó — solo los 2-3
+call-sites puntuales que ya llamaban a estas 4 funciones. `ticket-meta.json`
+viejo queda como respaldo histórico, ya no se lee.
 
 DOS SECCIONES nuevas en la 2ª columna de esas ventanas (pedido de Niko), panel
 FRONT compartido `public/js/modules/tickets/meta-panel.js` (mismo HTML/handlers/
@@ -338,10 +439,24 @@ semáforo global. La inyección del tablero se CONSERVA como redundancia inofens
 src/server.js               bootstrap: ZeroTier wait → HTTPS bind → auth → módulos
 src/core/                   config(.env) · auth · users · wss · registry · tls ·
                             zerotier · tmux(validación) · trash · recents ·
+                            pool(runAdaptivePool — pool de concurrencia ADAPTATIVA transversal;
+                            MOVIDO acá desde health/pool.js en la coherencia 2026-07-12 porque lo
+                            consumen salud/tokens/comms/tickets; health/pool.js queda re-exportando
+                            para sus consumidores históricos. Opción `max` = techo duro de
+                            concurrencia (default = nº items) para consumidores con límite externo,
+                            p.ej. tickets/sources.js pasa max=ENRICH_CONCURRENCY por el rate-limit de
+                            Zoho) ·
+                            text-only-query(textOnlyQuery — helper ÚNICO de las corridas del SDK de
+                            TEXTO PURO/interpretación sin herramientas: encapsula settingSources:[]
+                            vía settingSourcesFor('none') + las DOS capas de deny de la regla 6
+                            [PreToolUse+canUseTool, INCONDICIONALES] + carrera de timeout + pump.
+                            Lo usan retro-runner y ticket-context-runner; NO usarlo si el runner
+                            necesita herramientas — ese arma su query con su allowlist explícita) ·
                             paths(resolveWithinHome/clampToHome — TODA validación de
                             rutas del cliente pasa por acá; nunca startsWith crudo) ·
                             sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
-                            'chat'=user+project / 'headless'=project+local sin user) ·
+                            'chat'=user+project+local / 'headless'=project+local sin user /
+                            'none'=[] para texto puro — ver text-only-query) ·
                             tool-policy(NÚCLEO de gobernanza de permisos del chat interactivo —
                             NO es motor, es plomería in-process como sdk-settings/paths: el
                             estado del modo lo persiste el server (Chat.permissionMode→chats.json)
@@ -359,7 +474,19 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             reconcilia el select con el modo real y avisa si no tomó). Las
                             allow-rules del settings.json del usuario también shadowean canUseTool:
                             en 'default' algunas acciones no piden permiso — es la allowlist del
-                            usuario, no un bug. La regla 6 (blindaje read-only headless) NO pasa
+                            usuario, no un bug. BOOTSTRAP DE PAD (2026-07-12, Gap #1 / TASK-295 de
+                            ROAD-63): chatQueryOptions inyecta CONSOLE_PAD_BOOTSTRAP como
+                            systemPrompt {type:'preset', preset:'claude_code', append} SOLO si el
+                            cwd está dentro del repo de la consola (isConsoleCwd, calculado desde
+                            import.meta.url) — le recuerda al chat cargar `pad_set_workspace console`
+                            + `pad_project dashboard/next` antes de trabajo no trivial y modelar el
+                            trabajo como TASK/PLAN (bug→BUG), en vez de depender de que el modelo
+                            recuerde CLAUDE.md. Usa preset+append (PRESERVA el prompt nativo de
+                            Claude Code; un string pelado lo REEMPLAZARÍA — catastrófico). Chats de
+                            Tolkien (mundo externo) NO lo reciben (regla dura 12: no un hook global
+                            que alcanzaría a otro workspace). Un runner vivo no lo toma hasta
+                            "Reabrir para cambios"/chat nuevo. Llevarlo a sesiones TUI = Frente B
+                            diferido. La regla 6 (blindaje read-only headless) NO pasa
                             por acá: esos runners arman sus propias allowlists) ·
                             claude-model(VALID_MODELS/encodeCwd) · claude-state(observador —
                             estado por PANE de tmux primero: cwc-observe.js captura
@@ -906,11 +1033,24 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (por-aprender|reforzando|dominado), priority, tags[], notes (markdown),
                             question, contextoEntradas[] ({id CX<n>, at, source ia|manual, text}),
                             explanation (material de estudio IA), explainModel, explainedAt,
-                            explainFingerprint, explainFiles[], explainVersions[]}. CRUD SÍNCRONO
-                            determinístico (store.js,
-                            ~/.cwc-data/learning.json + learning-activity.json, tmp+rename, contador
-                            monotónico) → SIN runner, sobrevive reinicios (regla de oro cumplida sin
-                            runner). La ÚNICA parte que consume tokens es "🎓 Explicame esto": corrida
+                            explainFingerprint, explainFiles[], explainVersions[]}.
+                            BACKEND MIGRADO A PAD LOCAL (2026-07-12, ROAD-110 Fase 2, parte del
+                            cutover a self-host — ver el gotcha "MCP de Pad" más abajo): `store.js`
+                            ya NO es file-based — sus 13 funciones de I/O son `async` y hablan contra
+                            el Pad LOCAL (`src/core/pad-service-client.js`, workspace `console`,
+                            colecciones `temas-de-aprendizaje`/TDA y `rutas-de-aprendizaje`/RDA). Un
+                            tema = 1 item TDA; `routeId` → relación `parent` hacia una RDA;
+                            `contextoEntradas`/`explanation`(+model/at/fingerprint/files/versions,
+                            empaquetado en UN campo JSON) → custom fields tipo `json` del item. El LOG
+                            de actividad (`listActivity`/`learning-activity.json`) y las funciones
+                            puras `normScope`/`contextoText` NO se tocaron — siguen exactamente igual
+                            (decisión de alcance). `learning.json` viejo queda como respaldo histórico,
+                            ya no se lee. 6 consumidores migrados: `learning/index.js`,
+                            `explain-shared.js`, `analyze-shared.js`, `tasks/analyze-shared.js`
+                            (análisis cruzado), `chat/index.js` (write-back de "Profundizar en chat" +
+                            2 regex de validación de `learningId`), y los runners
+                            context/explain/analyze. La ÚNICA parte que consume tokens es "🎓
+                            Explicame esto": corrida
                             IA que NAVEGA el CÓDIGO REAL (Read/Grep/Glob) del repo elegido por `scope`
                             (la consola o Tolkien vía config.projectDir) y AUTO-GUARDA una explicación
                             guiada en el tema (store.saveExplanation) como material editable/
@@ -1052,11 +1192,21 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             1 tarjeta = 1 tarea {id T<n>, title, description, status
                             (pendiente/en-progreso/hecha), priority (alta/media/baja), tags[],
                             source (manual|audio), sourceRef (jobId de audio), createdAt/
-                            updatedAt/doneAt}. El CRUD es SÍNCRONO y determinístico (store.js,
-                            ~/.cwc-data/tasks.json, escritura atómica tmp+rename) → NO necesita
-                            runner desacoplado: no hay corrida en el tiempo atada al proceso;
-                            sobrevive reinicios por su estado en disco (regla de oro cumplida sin
-                            runner). FASE 2 ✅ (2026-07-06): (A) PLANES que agrupan tareas con
+                            updatedAt/doneAt}.
+                            BACKEND MIGRADO A PAD LOCAL (2026-07-12, ROAD-110 Fase 1, piloto del
+                            cutover a self-host — ver el gotcha "MCP de Pad" más abajo): `store.js`
+                            ya NO es file-based — sus 13 funciones de I/O son `async` y hablan contra
+                            el Pad LOCAL (`src/core/pad-service-client.js`, workspace `console`,
+                            colecciones `pendientes`/PEND y `planes`/PLAN, SEPARADAS a propósito de la
+                            bitácora técnica del programa de modularización). `id` T<n> → `ref`
+                            PEND-<n>; `planId` → relación `parent` hacia un PLAN; `blocks[]` →
+                            relación `link_type=blocks`; `comments[]` → comentarios nativos del item.
+                            El LOG de actividad (`listActivity`/`tasks-activity.json`) NO se tocó —
+                            sigue exactamente igual (decisión de alcance, ya atómico). `tasks.json`
+                            viejo queda como respaldo histórico, ya no se lee. Migración 1-vía ya
+                            ejecutada: 61 tareas + 14 planes reales, 0 discrepancias. También migrado
+                            `tasks/analyze-shared.js` (2º consumidor de store.js, análisis IA general).
+                            FASE 2 ✅ (2026-07-06): (A) PLANES que agrupan tareas con
                             progreso % (id PLAN-<n>, secuencia planSeq; status active/proposed/
                             done/cancelled; taskCount/doneCount/pct DERIVADOS al leer, NUNCA
                             persistidos; borrar un plan DESASIGNA sus tareas, no las borra). La
@@ -1217,6 +1367,105 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             resultado con el botón raw. wrapBusReload envuelve el bus para refrescar
                             la lista de informes tras un análisis nuevo. OJO: `audio` (interpretar
                             reuniones) ≠ `--cwc-cat-audio` (categoría de archivo)
+  retro/                    MEJORA CONTINUA (ROAD-256, etiqueta UI "Mejora Continua"): meta-
+                            aprendizaje de PROCESO. Al CERRAR CUALQUIER chat (Chat.close,
+                            diferido 2s, GLOBAL — no solo ticket/tema), si supera un FILTRO
+                            HÍBRIDO determinístico (shared.js queueRetroDistill: lee el
+                            transcript jsonl con 0 tokens y exige tocó código ∨ ≥3 turnos de
+                            usuario ∨ fue ticket/tema — los chats triviales NO gastan tokens),
+                            encola una destilación de LECCIONES DE PROCESO (metodología/flujo/
+                            instrucciones para trabajar mejor — NO bugs de código, NO resumen
+                            de qué se hizo). Ejemplos: "leer la doc oficial ANTES de integrar
+                            una herramienta nueva", "testear el cambio antes de cerrarlo".
+                            CONSUME TOKENS ⇒ RUNNER DESACOPLADO (bin/cwc-retro-runner.js, regla
+                            de oro) + TEXTO PURO read-only doble capa (regla 6: sonnet, maxTurns
+                            1, settingSources [], PreToolUse deny + canUseTool deny — CERO
+                            herramientas; la transcripción condensada viaja en el prompt). El
+                            runner, tras destilar, hace el UPSERT determinístico en Pad local
+                            (NO es tool del modelo — HTTP desde Node, como audio escribe su job).
+                            STORE = Pad LOCAL (store.js, workspace 'console', colección
+                            'mejora-continua'/MC, molde de learning/store.js: async, read-modify-
+                            write). 1 lección = 1 item {status propuesta|aprobada|promovida|
+                            descartada · category regla|convencion|metodologia|procedimiento|
+                            herramienta|nota · project console|tolkien|otros · destination
+                            (sugerido) memoria|claude-md|contexto|playbook|registro · recurrence
+                            · confidence · fingerprint · sourceChats[] · content=Observación/
+                            Lección}. RECURRENCIA = PRIORIDAD: una lección repetida NO se
+                            duplica, sube su contador (dedup por fingerprint = sha1 de
+                            categoría+título normalizado). OJO (gotcha resuelto en la verificación
+                            E2E): el fingerprint por título es FRÁGIL — el modelo reformula el
+                            mismo concepto distinto y crea near-duplicados; por eso el runner le
+                            pasa al modelo las lecciones YA REGISTRADAS y le pide reusar el título
+                            EXACTO de un concepto repetido (patrón "dedup vs seen" del loop de
+                            Salud) → recién ahí el fingerprint coincide y mergea. NADA se
+                            auto-aplica: el humano APRUEBA/DESCARTA y PROMUEVE. PROMOVER (admin)
+                            enruta a un DESTINO real vía retro/promote-shared.js (ROUTER,
+                            Fase 2/ROAD-256). Destinos cableados (PROMOTE_TARGETS): (a) memoria =
+                            append de la lección a la nota mejora-continua.md en memory/ del
+                            proyecto (console=ROOT · tolkien=config.projectDir) + línea en el
+                            índice MEMORY.md, reusando projects/memory.js (whitelist + escritura
+                            atómica + guard de hash); (b) claude-md = SECCIÓN GESTIONADA dedicada
+                            con marcadores `<!-- cwc:mejora-continua:start/end -->` en el CLAUDE.md
+                            del proyecto (console) o en CLAUDE.local.md (tolkien, NO versionado →
+                            no se filtra al repo del equipo). Se RENDERIZA desde el CONJUNTO de
+                            lecciones promovidas a claude-md (idempotente, patrón syncToTolkien de
+                            tickets/context-store.js) → NUNCA toca lo de AFUERA de los marcadores
+                            (Reglas duras/Convenciones a mano — verificado E2E). markPromoted
+                            (store.js) sella status promovida + promotedTo + snapshot
+                            recurrenceAtPromotion/promotedAt (campos del schema, ya listos para el
+                            LOOP de Fase 6). La próxima sesión auto-carga el destino. DESTINOS
+                            COMPLETOS del router (PROMOTE_TARGETS): contexto (Fase 3) = apéndala al
+                            bugfix-work/pr (getContext/saveContext de tickets/context-store.js) →
+                            se inyecta en chats de ticket/PR y se ESPEJA a la CLAUDE.local.md de
+                            Tolkien (idempotente por id) · playbook (Fase 4) = crea un item DRAFT
+                            en la colección `playbooks` de Pad (pad-service-client.createItem). Solo
+                            memoria/claude-md exigen dir de proyecto (TARGETS_NEED_DIR); contexto/
+                            playbook no. CURADURÍA IA (Fase 5): runner desacoplado
+                            bin/cwc-retro-curate-runner.js (lógica curate-shared.js, TEXTO PURO
+                            regla 6; el server junta lessons + hardRulesText() en el job) que
+                            detecta duplicados (dedup SEMÁNTICO, más allá del fingerprint),
+                            contradicciones, redundantes (ya en una Regla Dura), consolidables y
+                            huecos. Propuestas NUNCA auto-aplicadas: apply reusa el CRUD
+                            (merge=mergeLessons suma recurrencia+chats y borra · dismiss=setStatus
+                            descartada · consolidate=upsertLesson+delete). LOOP QUE APRENDE (Fase
+                            6): computeEffectiveness (store.js, DERIVADO 0 tokens) sobre una
+                            lección promovida = {state, hits, ageDays} donde hits = recurrencias
+                            NUEVAS desde promotedAt → observando | efectiva (≥7d sin reincidir) |
+                            reincide (volvió a pasar pese a promovida → la UI re-ofrece promover =
+                            "⬆️ Escalar" a un destino más fuerte).
+                            Ruta /api/retro (auth; PROMOVER/CURAR requieren admin, tocan memorias/
+                            CLAUDE.md/tokens): GET / {lessons,counts} · GET /activity · GET /targets
+                            {destinos} · POST /curate (admin, spawn curaduría) · GET /curation
+                            (poll) · POST /curate/apply {action:merge|dismiss|consolidate} (admin) ·
+                            GET /:id · POST /:id/approve · POST /:id/dismiss · POST /:id/promote
+                            {target?,kind?} (admin; target ∈ memoria|claude-md|contexto|playbook) ·
+                            POST /:id/delete. OJO ORDEN: /activity, /targets, /curate, /curation,
+                            /curate/apply literales ANTES de la paramétrica /:id. Estado
+                            file-based del job en ~/.cwc-data/retro/<id>.json (id sha1 del
+                            sessionId; dedup: no re-gasta si ya done/fresco) + retro.log +
+                            retro-activity.json (log local append-only). Frontend
+                            public/js/modules/retro/retro.js: sección de sidebar IZQUIERDA
+                            (data-module="retro", tras comms) con badge de propuestas + tablero
+                            modal colapsable+árbol (.mc-* en style.css) que agrupa por estado.
+                            UX SIMPLIFICADA (2026-07-12, pedido de Niko: el tablero abrumaba con
+                            ~7 botones por lección). Modelo mental de UNA decisión por lección:
+                            grupos "🟡 Nuevas · 🔖 Guardadas para después · ✅ Adoptadas · 🗑️
+                            Descartadas". Una lección nueva muestra solo: (a) botón PRIMARIO
+                            "👍 Adoptar → <destino sugerido>" que aplica el `destination` que la IA
+                            ya sugirió (adoptBlock; el destino se resalta con NOMBRE HUMANO —
+                            TARGET_LABEL: 📓 Recordatorio · 📕 Regla permanente · 🎫 Guía tickets/PRs
+                            · 📘 Procedimiento) + un "▾" que revela los otros destinos aplicables
+                            (data-act=more togglea .mc-dests[hidden]; applicableTargets filtra:
+                            memoria/claude-md solo si el proyecto tiene dir); (b) "🔖 Guardar" (=
+                            estado 'aprobada' reetiquetado "guardar para después", POST /:id/approve);
+                            (c) "👎 Descartar". "Adoptar" ES la aprobación (el viejo botón "Aprobar"
+                            suelto se eliminó por confuso). Adoptadas: badge de efectividad (Fase 6)
+                            + "⬆️ Escalar" solo si reincide. Descartadas: "↩️ Reabrir" (POST
+                            /:id/reopen → 'propuesta') + "✕ Eliminar" (permanente, solo acá).
+                            Eliminar ya NO aparece en las demás. La CURADURÍA es mantenimiento
+                            APARTE: botón "🧹 Ordenar el registro" arriba (no por-lección). NO
+                            confundir con learning/ (🎓 Temas de aprendizaje = estudio de Niko):
+                            retro = el SISTEMA aprende a mejorar su propio proceso
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
                             claims con verdict de evaluateClaim + ts) · POST /send {to,text}
@@ -1504,6 +1753,20 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             chartInst se destruye al re-crear y en onClose (sin leaks))
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update. El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
+                            REFRESH DE DB LOCAL DESACOPLADO (2026-07-12, resolución de un hallazgo
+                            CRÍTICO de la Revisión de Salud): el botón "Vista fresca" (TRUNCATE +
+                            reimport de importers Zoho, ~20s a varios min) ANTES corría en background
+                            DENTRO del proceso del server, trackeado en una variable module-level
+                            (`dataJob`) — un reinicio de la web a mitad lo mataba sin rastro (viola la
+                            regla de oro/regla 2). AHORA la lógica vive en `tolkien/refresh-shared.js`
+                            + el RUNNER DESACOPLADO `bin/cwc-tolkien-refresh-runner.js`: POST
+                            /refresh-data (admin) reserva el job 'running' en disco
+                            (~/.cwc-data/tolkien-refresh.json, atómico) y spawnea el runner detached;
+                            GET /refresh-data/status SOLO lee ese disco (staleness 12 min). NO usa el
+                            SDK (0 tokens: comandos locales psql/infisical/pnpm — la regla 6 no
+                            aplica). `runCmd` (exec local) se movió a refresh-shared y RECHAZA ante
+                            terminación anormal (timeout/kill/spawn-fail sin código numérico), igual
+                            que `git()` — el `gh` de /branches lo importa de ahí.
                             ACTUALIZAR = MAIN LOCAL SIEMPRE FRESCO (2026-07-10, pedido de Niko:
                             "el botón no hacía nada"). CAUSA RAÍZ: el viejo /update hacía `pull
                             --ff-only` sobre la RAMA ACTUAL — parado en una rama feature decía
@@ -1986,6 +2249,9 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             pedido del usuario 2026-07-07) importa openAudioPanel de audio/audio.js
                             (pegar transcripción → Analizar → interpretación en árbol + tareas
                             propuestas + raw), y la pestaña Informes usa mountReports de audio.js) ·
+                            retro (sección "Mejora Continua": badge de propuestas + tablero modal
+                            colapsable de LECCIONES DE PROCESO destiladas al cerrar chats — ver el
+                            módulo backend `retro/` arriba; adoptar → destino sugerido/guardar/descartar) ·
                             stats · usage · system(⚙: Backup/Usuarios/
                             Proyectos/Interfono/Salud — la pestaña Interfono
                             (interfono-panel.js) es la ventana + canal humano del INTERFONO
@@ -2024,7 +2290,17 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             y su ↓N sobre main; clic → ventana con "Poner al día" (rebase,
                             POST /rebase-branch) SOLO en la rama actual atrasada. .tk-update--due
                             resalta si mainBehind>0. /api/tolkien/status suma mainBehind+onMain.
-                            El acceso al tablero se movió a "Bugs & Features") ·
+                            El acceso al tablero se movió a "Bugs & Features". La tarjeta suma
+                            un 3er acceso directo en `.tk-actions` (2026-07-12, pedido de Niko):
+                            "GetPad local" — link `<a target="_blank">` a
+                            `http://${location.hostname}:7777` (mismo host ZeroTier de la
+                            consola, puerto del `pad-local.service` self-hosted, ver el gotcha
+                            "MCP de Pad" — cutover a local arriba), color `.tk-link--pad` (verde
+                            `--cwc-ok`, distinto del terracota "local"/azul "oficial" de Tolkien
+                            para no confundir los tres). Es solo un ATAJO de UI para abrir la SPA
+                            de Pad en pestaña nueva — NO cruza datos ni viola la regla dura 12
+                            (los dos mundos siguen sin enlazarse en vivo; este botón no lee ni
+                            escribe nada, solo navega)) ·
                             bugs (sección "Bugs & Features", modules/bugs/bugs.js, ANTES
                             `tickets`: ÚNICO acceso al ciclo del bug. INFO RÁPIDA barata (sin
                             tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y
@@ -2387,6 +2663,23 @@ bin/cwc-audio-runner.js     análisis IA de UNA transcripción de audio (módulo
                             ~/.cwc-data/audio/<id>.json (job con la transcripción que escribe el
                             POST; el runner persiste el resultado en el MISMO archivo). Lógica
                             compartida en src/modules/audio/shared.js
+bin/cwc-retro-runner.js     MEJORA CONTINUA (ROAD-256): destila LECCIONES DE PROCESO de UNA
+                            sesión de chat al cerrarla (módulo `retro`), DESACOPLADO (regla de
+                            oro; sonnet, 1 turno, CERO herramientas — doble capa regla 6 deniega
+                            TODO; la transcripción condensada viaja en el prompt). Tras destilar
+                            hace el UPSERT determinístico en Pad local (dedup por fingerprint =
+                            recurrencia; le pasa las lecciones ya registradas al modelo para que
+                            reuse el título exacto de un concepto repetido = patrón "dedup vs
+                            seen"). Interfaz por archivos: ~/.cwc-data/retro/<id>.json (id sha1
+                            del sessionId; lo encola el server en Chat.close). Lógica compartida
+                            en src/modules/retro/shared.js (+ store en src/modules/retro/store.js,
+                            router de promoción en src/modules/retro/promote-shared.js)
+bin/cwc-retro-curate-runner.js CURADURÍA IA del registro de MEJORA CONTINUA (ROAD-256,
+                            Fase 5), DESACOPLADO (regla de oro; sonnet, 1 turno, TEXTO PURO — doble
+                            capa regla 6 deniega TODO; el server junta lessons+reglas duras en el
+                            job). Detecta duplicados/contradicciones/redundantes/consolidables/
+                            huecos. Un solo job en ~/.cwc-data/retro-curation.json (+
+                            retro-curate.log). Lógica en src/modules/retro/curate-shared.js
 bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
                             Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
                             server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
@@ -2717,6 +3010,13 @@ bin/cwc-comms.js            CLI TRANSVERSAL del motor de Comunicaciones (patrón
                             contacts/contact-add/scan. Estado file-based en ~/.cwc-data/comms/
 bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
+bin/cwc-tolkien-refresh-runner.js  refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de
+                            importers Zoho), DESACOPLADO (regla de oro/regla 2: operación larga que
+                            DEBE sobrevivir a un reinicio de la web). NO usa el SDK (0 tokens:
+                            comandos locales psql/infisical/pnpm — regla 6 no aplica). Interfaz por
+                            archivos: ~/.cwc-data/tolkien-refresh.json (job que reserva el POST
+                            /refresh-data; el runner persiste el resultado) + tolkien-refresh.log.
+                            Lógica en src/modules/tolkien/refresh-shared.js
 bin/cwc-ticket-context-runner.js  CONTEXTO ADICIONAL de un ticket/PR (módulo VIVO
                             `tickets/`, 2026-07-07): interpreta con IA una TRANSCRIPCIÓN de
                             una charla (con el cliente/equipo) y destila el contexto que le
@@ -2835,23 +3135,50 @@ docs/                       frontend-modules.md · brief-original.txt · context
   usuario "integremos la mcp de pad en consola"): igual que Tolkien
   (`~/.claude.json → projects["/home/nmosquera/tolkien"].mcpServers.pad`), el
   proyecto Consola tiene su PROPIA entrada en scope LOCAL —
-  `~/.claude.json → projects["/home/nmosquera/claude-web-console"].mcpServers.pad`
-  = `{"type":"http","url":"https://mcp.getpad.dev"}` (agregada con
-  `claude mcp add --scope local pad --transport http https://mcp.getpad.dev`
-  parado en la raíz del repo). CERO cambios de código: `settingSourcesFor('chat')`
-  de `core/sdk-settings.js` YA incluye `'local'`, que es la fuente que el SDK usa
-  para resolver `mcpServers` — no hace falta pasar `mcpServers` a mano en
-  `chatQueryOptions()`. El token OAuth (`scope: pad:admin`, lectura+escritura) se
-  cachea en `~/.claude/.credentials.json → mcpOAuth` por `serverName+serverUrl`
-  (NO por proyecto) — por eso NO hizo falta re-loguearse: quedó "✔ Connected" al
-  toque, reusando el mismo login ya autorizado para Tolkien. Deliberadamente en
-  scope LOCAL (no en un `.mcp.json` versionado): es personal/OAuth de Nico, mismo
-  criterio que Tolkien. Alcance: SOLO chats interactivos (`settingSources:
-  ['user','project','local']`) — ningún runner headless lo carga (todos usan
-  `settingSources: []` o, los 3 de Teams/comms, `cwd=Tolkien`, nunca cwd=Consola).
-  MISMO gotcha que el de arriba: un chat YA VIVO no relee `~/.claude.json` — hace
-  falta "Reabrir para cambios" (menú ⋯ de Sesiones) o una conversación nueva para
-  que `ToolSearch` empiece a encontrar `mcp__pad__*`.
+  `~/.claude.json → projects["/home/nmosquera/claude-web-console"].mcpServers`.
+  CERO cambios de código: `settingSourcesFor('chat')` de `core/sdk-settings.js` YA
+  incluye `'local'`, que es la fuente que el SDK usa para resolver `mcpServers` — no
+  hace falta pasar `mcpServers` a mano en `chatQueryOptions()`. Deliberadamente en
+  scope LOCAL (no en un `.mcp.json` versionado): es personal/OAuth de Nico. Alcance:
+  SOLO chats interactivos (`settingSources: ['user','project','local']`) — ningún
+  runner headless lo carga (todos usan `settingSources: []` o, los 3 de Teams/comms,
+  `cwd=Tolkien`, nunca cwd=Consola). MISMO gotcha de siempre: un chat YA VIVO no
+  relee `~/.claude.json` — hace falta "Reabrir para cambios" (menú ⋯ de Sesiones) o
+  una conversación nueva para que `ToolSearch` empiece a encontrar las tools nuevas.
+
+  **CUTOVER A SELF-HOSTED LOCAL (2026-07-11/12, ver ROAD-74 en Pad workspace
+  `console` para el detalle completo de las 4 fases).** El pedido de self-host fue
+  denegado, ESCALADO y RE-APROBADO por un superior de Niko con la condición de
+  binario local (sin Docker) + impacto de recursos medido antes de aprobar. Hoy:
+  - **`pad`** (nombre CANÓNICO, PRIMARIO) = Pad **LOCAL self-hosted** — transporte
+    **stdio** (`claude mcp add --scope local pad -- ~/.local/bin/pad mcp serve
+    --url http://10.213.222.62:7777`), NO HTTP (el binario local NO expone HTTP
+    MCP, solo el CLI habla JSON-RPC por stdio; el server web en el puerto 7777 es
+    la SPA, no un endpoint MCP). Instalado en `~/.local/bin/pad` (v0.9.2, checksum
+    verificado), servido por systemd de usuario `~/.config/systemd/user/pad-local.service`
+    (`ExecStart=%h/.local/bin/pad server start --host 10.213.222.62 --port 7777`,
+    `CPUQuota=200%` = techo de 2 núcleos con holgura, `MemoryMax=4G`/`MemoryHigh=3G`
+    = techo sobredimensionado para crecer — pedido explícito de Niko, uso real
+    medido ~50MB RAM/0% CPU idle). Bind por la IP ZeroTier (no solo loopback) para
+    que sea accesible igual que la propia Consola. Auth del CLI vía flujo
+    browser-based (`pad auth login`, Niko aprueba él mismo en su navegador — nunca
+    se tocó su password). Workspace `console` migrado 1-vía desde el cloud
+    (104/104 items: Docs/Bugs/Tasks/Conventions/Playbooks/Roadmap Items/Roles,
+    verificado conteo por conteo, jerarquía Tasks↔Roadmap re-vinculada con los refs
+    nuevos) — el cloud NUNCA se escribió durante la migración.
+  - **`pad-cloud-backup`** = el `pad` cloud original (`https://mcp.getpad.dev`,
+    HTTP), renombrado y conservado SOLO como respaldo pasivo durante la ventana de
+    pruebas + integración (pedido explícito de Niko: "el funcionamiento debe estar
+    100% local" una vez cortado, la nube nunca se usa operativamente después de
+    eso). Puede pedir reautenticación tras el rename (el OAuth de Claude Code se
+    cachea por `serverName+serverUrl`) — inocuo mientras no se use; se re-autoriza
+    solo al primer uso real si algún día hace falta un rollback.
+  - **Alcance del cutover — SOLO el workspace `console`.** El workspace `tolkien`
+    (usado por `src/modules/tickets/pad-client.js` para el dashboard de PRs, ver
+    abajo) se dejó DELIBERADAMENTE fuera (decisión explícita de Niko 2026-07-12):
+    el Pad local NO tiene ese workspace y migrarlo es un proyecto aparte (impacto en
+    equipo — Chris/otros podrían usar ese workspace en la nube). `pad-client.js`
+    sigue leyendo Tolkien desde el cloud, sin cambios.
 - **SEGUNDA vía a Pad: cliente MCP del BACKEND** (`src/modules/tickets/pad-client.js`,
   documentado 2026-07-11): distinta del MCP del chat de arriba. Es un cliente
   `@modelcontextprotocol/sdk` (`Client` + `StreamableHTTPClientTransport`) que habla
@@ -2860,11 +3187,18 @@ docs/                       frontend-modules.md · brief-original.txt · context
   en cada conexión. LIMITACIÓN conocida (comentada en el archivo): el accessToken
   dura ~1h y lo refresca Claude Code, NO la consola → si vence y Claude Code no
   corre, `getPadItemsForPr` falla best-effort (conserva el último snapshot). Está
-  hardcodeado a `PAD_WORKSPACE='tolkien'` (línea 66) — solo lee el workspace de
+  hardcodeado a `PAD_WORKSPACE='tolkien'` (línea 91) — solo lee el workspace de
   Tolkien. `refresher.js` lo orquesta (timer 60s, snapshot+merge acumulativo+
   persistencia atómica) = plantilla reusable para reportes automáticos. Prueba que
-  el server SÍ puede ser cliente MCP de Pad (relevante para un futuro Pad self-host,
-  ver `docs/plan-migracion-pad-selfhost.md`).
+  el server SÍ puede ser cliente MCP de Pad.
+  **DECISIÓN 2026-07-12 (cutover a Pad local self-hosted, ver bullet de arriba):**
+  este cliente se deja EXPLÍCITAMENTE sin tocar — sigue en HTTP contra el cloud,
+  workspace `tolkien`. El Pad local self-hosted no tiene ese workspace (solo migró
+  `console`) y además solo habla MCP por stdio (no HTTP) — adaptarlo sería una
+  reescritura de transporte + un proyecto de migración de datos de Tolkien aparte
+  (con impacto en equipo, Chris/otros pueden usar ese workspace en la nube). Niko
+  eligió explícitamente NO expandir el alcance: `docs/plan-migracion-pad-selfhost.md`
+  documenta el detalle completo de esta decisión de alcance.
 - **Programa "Modularización Consola" trackeado en Pad** (workspace `console`,
   2026-07-11): el escaneo módulo-por-módulo (B0→B5: coherencia, tickets, health,
   comms, learning, chat, tasks, tokens + 10 hojas) vive en Pad como ROAD-10 (programa)
@@ -2877,7 +3211,10 @@ docs/                       frontend-modules.md · brief-original.txt · context
   DOS huecos de seguridad reales cerrados: `fixToolAllowed` (allowlist del auto-fix
   dejaba pasar `node --check a.js⏎<cualquier-cmd>`) y `teamsWriteAllowed` (el `^send`
   autorizaba cualquier `graph_send_*`). Decisión de rol de Pad en `docs/evaluacion-rol-pad.md`
-  (Opción 1 cloud ahora, self-host como proyecto futuro ROAD-74).
+  (Opción 1 cloud, ejecutada primero) — **ACTUALIZADO 2026-07-12: el self-host de
+  ROAD-74 se re-aprobó y se ejecutó (Fases 1-2 completas, ver bullet de arriba); este
+  workspace `console` con TODO su historial (ROAD-10 incluido) vive ahora físicamente
+  en el Pad LOCAL, migrado 1-vía desde el cloud.**
 - Tools MCP DIFERIDAS y allowlists headless (visto 2026-07-05): el SDK puede
   diferir los schemas de las tools MCP y el modelo necesita la META-tool
   `ToolSearch` para cargarlos antes de invocarlas — solo devuelve schemas, NO
@@ -3107,7 +3444,15 @@ docs/                       frontend-modules.md · brief-original.txt · context
 
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
-  cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime.
+  cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
+  espejo de contexto a Tolkien (`tolkien-context`) y **`pad-backbone`**
+  (2026-07-12, Gap #3 / TASK-296): lee las Conventions del Pad LOCAL por HTTP
+  (0 tokens, NO MCP → no toca la regla 6, vía `core/pad-service-client.js`) y
+  verifica (a) que el Pad local RESPONDE —si no, warn: tasks/learning/retro/
+  tickets-meta degradan EN SILENCIO— y (b) que existe el espejo de la Regla
+  dura #12 en las Conventions (señal concreta de divergencia CLAUDE.md↔Pad).
+  OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto como
+  el MCP) — hay que `JSON.parse` antes de leer priority/status.
 - **Dashboard del proyecto** (subsección "📊 Dashboard del proyecto" de la
   pestaña Salud, 2026-07-06, pedido del usuario: antes "🔍 Censo del
   proyecto" solo mostraba conteos —"11 módulos"— sin decir CUÁLES, y sin
@@ -3130,7 +3475,17 @@ docs/                       frontend-modules.md · brief-original.txt · context
   por su cuenta (antes esos datos existían pero SOLO en el pie de página,
   invisibles desde Salud). El frontend también reusa `heat()`/`fmtBytes()`/
   `fmtUptime()` de `stats/stats.js` (recién exportados) para pintar los
-  tiles con el MISMO criterio de color que el gauge del pie.
+  tiles con el MISMO criterio de color que el gauge del pie. BACKBONE DE PAD
+  (2026-07-12, Gap #4c / TASK-300): `GET /scan` suma el campo `pad`
+  (`padBackboneStats()` de health/index.js → `listCollections` del Pad LOCAL,
+  1 llamada HTTP, 0 tokens, best-effort: counts `active`/`total` por colección);
+  `system/inventory-modal.js` (`padHtml`) lo pinta como un `<details>`
+  colapsable "🗂️ Pad local · backbone" con la tabla de colecciones (bugs/roads/
+  tasks/pendientes/planes/temas…) — así se ve el estado del TRACKER junto al
+  censo del CÓDIGO y los recursos, cerrando la foto "código + trabajo rastreado"
+  en una pantalla. Si el Pad local no responde, el tile muestra el aviso de que
+  tasks/learning/retro/tickets-meta degradan a best-effort (mismo criterio que
+  el check `pad-backbone`).
 - **Optimización IA** (subsección "🧠 Optimización IA" de la pestaña Salud,
   2026-07-04): analiza el flujo de TODOS los motores IA de la consola. La
   pestaña muestra SOLO el resumen compacto (veredicto en 1 línea + botón
@@ -3255,6 +3610,29 @@ docs/                       frontend-modules.md · brief-original.txt · context
   hardRulesText() de health/shared.js (2026-07-06, junto al bloque de
   conventionsText): sin Read de CLAUDE.md entero; fallback a la instrucción
   vieja si la extracción falla.
+- **Salud APROVECHA lo rastreado en Pad** (2026-07-12, Gap #4 / TASK-297 de
+  ROAD-63): `padContext()` de health/shared.js lee por HTTP (best-effort, 0
+  tokens, `core/pad-service-client.js`) los BUGs abiertos + los ROADs en curso
+  del Pad LOCAL (workspace `console`) y se inyecta en `optimizePrompt()` y
+  `coherencePrompt()` (junto a hardRulesText/conventionsText) — así los dos
+  motores analizan SABIENDO qué issues ya están rastreados (no los re-reportan
+  como nuevos) y alinean sus propuestas con lo que está en marcha. Los runners
+  `cwc-optimize-runner.js`/`cwc-coherence-runner.js` la llaman (fase "leyendo
+  contexto de Pad local…"); si el Pad no responde devuelve '' y el análisis
+  sigue igual (patrón commsContextFor). CORRECCIÓN CLAVE: esto NO toca el
+  blindaje read-only (regla 6) — `pad-service-client` lee por HTTP PLANO (no
+  MCP), inyectar el texto en el prompt NO es una tool call. NO se inyecta en
+  `unitPrompt` (la auditoría por-unidad) a propósito: unitFingerprint hashea el
+  prompt → invalidaría toda la caché incremental (re-audit sonnet caro). La
+  **Revisión Exhaustiva** SÍ aprovecha Pad pero SOLO en `synthesisPrompt()` (la
+  SÍNTESIS final, 1 corrida, sin fingerprint por-unidad → cero invalidación de
+  caché): el veredicto no trata como "nuevo" un hallazgo ya rastreado como BUG
+  en Pad, lo referencia por su ref (bin/cwc-health-runner.js hace el fetch
+  best-effort antes de la síntesis, TASK-298). El **Dashboard del proyecto**
+  suma un tile del backbone de Pad (ver abajo, TASK-300). Así los 4 motores de
+  Salud (Revisión · Optimización · Coherencia · Dashboard) quedan enganchados a
+  Pad, cada uno según su naturaleza. El write-back inverso (propuesta aprobada →
+  BUG/TASK en Pad) queda como follow-up NO hecho (más invasivo, decisión propia).
 - **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad
@@ -3390,3 +3768,22 @@ docs/                       frontend-modules.md · brief-original.txt · context
   los descartados para que no reaparezcan. Si en el futuro sonnet se queda corto
   en las unidades más grandes (frontend-modules ~5k líneas), el siguiente paso
   es opus SOLO en esas (editar auditModelFor) o partir la unidad.
+
+<!-- cwc:mejora-continua:start -->
+## Mejora Continua (auto)
+<!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->
+
+### Reconocer eco del propio broadcast en el interfono antes de responder
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
+
+**Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Diseñar acciones por ítem con un botón principal por defecto, no un botón por opción
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** El tablero de Mejora Continua mostraba 7 botones por lección (aprobar + 4 destinos + descartar + cerrar) y el usuario reportó explícitamente no entender qué botón usar, pidiendo simplificación.
+
+**Lección:** Cuando un ítem tiene múltiples acciones o destinos posibles, exponer un único botón de acción primaria con la opción sugerida por defecto (más un menú ▾ para las alternativas), en vez de un botón por cada opción posible — validar esto en el diseño ANTES de construir la UI completa, no después de que el usuario se confunda.
+<!-- cwc:mejora-continua:end -->

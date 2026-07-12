@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +63,7 @@ function pruneOldJobs() {
 
 export function writeCommitMsgJob(id, data) {
   ensureDir();
-  fs.writeFileSync(jobPath(id), JSON.stringify(data), { mode: 0o600 });
+  writeJsonAtomic(jobPath(id), data); // atómico tmp-por-PID (BUG-12)
   pruneOldJobs();
 }
 

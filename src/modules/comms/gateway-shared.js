@@ -127,8 +127,21 @@ import fss from 'node:fs';
 const SEND_DIR = path.join(COMMS_DIR, 'send');
 function sendJobPath(id) { return path.join(SEND_DIR, `${id}.json`); }
 export function readSendJob(id) { try { return JSON.parse(fss.readFileSync(sendJobPath(id), 'utf8')); } catch { return null; } }
+// Poda de send jobs viejos (BUG-32): son efímeros (el front encuesta y termina),
+// pero sin poda se acumulan para siempre. Se barre lo > 7 días en cada escritura.
+const SEND_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+function pruneOldSendJobs() {
+  let files = [];
+  try { files = fss.readdirSync(SEND_DIR); } catch { return; }
+  const now = Date.now();
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const full = path.join(SEND_DIR, f);
+    try { if (now - fss.statSync(full).mtimeMs > SEND_JOB_MAX_AGE_MS) fss.unlinkSync(full); } catch { /* noop */ }
+  }
+}
 export function writeSendJobRaw(id, data) {
-  try { fss.mkdirSync(SEND_DIR, { recursive: true, mode: 0o700 }); fss.writeFileSync(sendJobPath(id), JSON.stringify(data), { mode: 0o600 }); }
+  try { fss.mkdirSync(SEND_DIR, { recursive: true, mode: 0o700 }); fss.writeFileSync(sendJobPath(id), JSON.stringify(data), { mode: 0o600 }); pruneOldSendJobs(); }
   catch (err) { console.error('[comms] no pude escribir send job:', err?.message); }
 }
 let _sjseq = 0;
@@ -164,10 +177,15 @@ export const deskWriteAllowed = (name) => {
   if (!m) return false;
   const op = m[1];
   const READ = /(get|list|search|view|read|find)/i;
+  // Guard anti-escritura (BUG-34): el branch de LECTURA debe excluir cualquier op
+  // que ADEMÁS tenga un verbo de escritura — una tool de escritura que embeba
+  // 'get'/'read' (p.ej. get_and_delete) NO puede colarse como lectura. Mismo
+  // criterio que graphReadAllowed. La escritura real va SOLO por WRITE_OK.
+  const WRITE_VERB = /(add|update|create|delete|remove|reply|send|post|set|move|assign|close|merge|patch|put|write)/i;
   // ANCLADO exacto (fix B3 2026-07-11): sólo las tools de escritura que el
   // send-runner realmente usa. Sin `$` final, `add_comment_x` pasaría.
   const WRITE_OK = /^(add_comment|update_ticket|reply)$/i;
-  return READ.test(op) || WRITE_OK.test(op);
+  return (READ.test(op) && !WRITE_VERB.test(op)) || WRITE_OK.test(op);
 };
 export const teamsWriteAllowed = (name) => {
   const s = String(name);
@@ -176,10 +194,13 @@ export const teamsWriteAllowed = (name) => {
   if (!m) return false;
   const op = m[1];
   const READ = /(list|read|get|members|search|find)/i;
+  // Guard anti-escritura (BUG-34): la LECTURA excluye ops con verbo de escritura
+  // embebido (mismo criterio que graphReadAllowed); la escritura va SOLO por WRITE_OK.
+  const WRITE_VERB = /(send|create|update|write|delete|remove|post|set|add|move|assign|reply|share|save|patch|put)/i;
   // ANCLADO exacto (fix B3 2026-07-11): el `send` PELADO viejo matcheaba
   // CUALQUIER `send_*` (p.ej. graph_send_mail / send_activity_notification) —
   // hueco en la allowlist de ESCRITURA de la excepción de regla 6. Ahora sólo
   // los verbos de envío reales de Teams/Graph.
   const WRITE_OK = /^(send_message|send_chat|send_chat_message)$/i;
-  return READ.test(op) || WRITE_OK.test(op);
+  return (READ.test(op) && !WRITE_VERB.test(op)) || WRITE_OK.test(op);
 };

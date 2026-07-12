@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { invariantsFor } from './invariants.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import * as padLocal from '../../core/pad-service-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo
@@ -74,6 +75,52 @@ export function hardRulesText() {
     _hardRules = lines.slice(start, end).join('\n').trim();
   } catch { _hardRules = ''; }
   return _hardRules;
+}
+
+// CONTEXTO DE PAD LOCAL para los motores de Salud (Gap #4, TASK-297). Lee, por
+// HTTP plano (NO MCP → no toca el blindaje read-only de la regla 6), lo que el
+// proyecto YA tiene rastreado en el Pad local (workspace `console`): los BUGs
+// abiertos del mapeo/modularización + los programas (ROAD) en curso. Se inyecta
+// en los prompts de Optimización y Coherencia para que el análisis NO re-reporte
+// lo ya sabido y alinee sus propuestas con lo que está en marcha. best-effort:
+// si el Pad local no responde, devuelve '' y el análisis sigue igual (patrón
+// commsContextFor). NO se inyecta en unitPrompt (la Revisión exhaustiva) porque
+// unitFingerprint hashea el prompt → invalidaría toda la caché incremental.
+export async function padContext() {
+  // OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto,
+  // a diferencia del MCP) — parsearlo antes de leer status/module/severity.
+  const field = (it, k) => {
+    let f = it?.fields;
+    if (typeof f === 'string') { try { f = JSON.parse(f); } catch { f = {}; } }
+    return f?.[k] ?? it?.[k];
+  };
+  try {
+    const [bugsR, roadR] = await Promise.all([
+      padLocal.listItems('bugs', { workspace: 'console' }),
+      padLocal.listItems('roadmap-items', { workspace: 'console' }),
+    ]);
+    if ((!bugsR || !bugsR.ok) && (!roadR || !roadR.ok)) return '';
+    const lines = [];
+    if (bugsR?.ok) {
+      const open = (Array.isArray(bugsR.data) ? bugsR.data : [])
+        .filter((b) => ['open', 'verifying'].includes(field(b, 'status')));
+      if (open.length) {
+        lines.push(`BUGS ABIERTOS ya rastreados en Pad (${open.length}) — NO los re-reportes como hallazgos nuevos; si tu análisis toca alguno, referencialo por su ref:`);
+        for (const b of open.slice(0, 40)) {
+          lines.push(`- ${b.ref || '?'} [${field(b, 'module') || '?'} · ${field(b, 'severity') || '?'}] ${(b.title || '').slice(0, 160)}`);
+        }
+      }
+    }
+    if (roadR?.ok) {
+      const active = (Array.isArray(roadR.data) ? roadR.data : [])
+        .filter((r) => field(r, 'status') === 'in_progress');
+      if (active.length) {
+        lines.push('', `PROGRAMAS / ROADS EN CURSO en Pad (${active.length}) — alineá tus propuestas con lo que ya está en marcha:`);
+        for (const r of active.slice(0, 15)) lines.push(`- ${r.ref || '?'} ${(r.title || '').slice(0, 160)}`);
+      }
+    }
+    return lines.join('\n');
+  } catch { return ''; }
 }
 
 export const VERDICTS = new Set(['ok', 'atencion', 'critico']);
@@ -229,13 +276,24 @@ export function unitPrompt(unit) {
 
 // Síntesis final: toma TODOS los hallazgos (ya en JSON, no re-lee código) y
 // arma el veredicto ejecutivo. Barato: procesa texto, no navega el repo.
-export function synthesisPrompt(findings) {
+// padCtx (Gap #4, 2026-07-12): se inyecta SOLO acá (la síntesis corre 1 sola vez
+// al final, sin fingerprint por-unidad) — NUNCA en unitPrompt, que SÍ se cachea
+// por fingerprint: meter Pad ahí re-auditaría todo. Sirve para que el veredicto
+// NO trate como "nuevo" un hallazgo que ya está rastreado como BUG en Pad.
+export function synthesisPrompt(findings, padCtx = '') {
   return [
     'Sos el auditor de salud de Claude Web Console. Ya se auditó módulo por',
     'módulo y estos son TODOS los hallazgos (JSON):',
     '```json',
     JSON.stringify(findings),
     '```',
+    ...(padCtx ? [
+      'CONTEXTO DE PAD LOCAL (workspace `console`) — bugs YA rastreados +',
+      'programas en curso. Si un hallazgo de arriba coincide con un BUG ya',
+      'listado acá, NO lo trates como novedad: mencionalo por su ref y bajale el',
+      'tono en el resumen (ya está en el radar del proyecto):',
+      padCtx,
+    ] : []),
     'Devolvé ÚNICAMENTE un bloque ```json con:',
     '{',
     '  "verdict": "ok" | "atencion" | "critico",',
@@ -571,6 +629,14 @@ export function isFixing() {
     return Date.now() - ts < LOCK_FRESH_MS;
   } catch { return false; }
 }
+// Lee el lock de auto-fix crudo {pid, ts} (o null) — mismo rol que readLock para
+// el review: el runner distingue el PLACEHOLDER de reserva del server (pid:0,
+// spawnFix) de un lock ajeno real (pid≠0) y NO se suicida con su propia reserva
+// (BUG-51: el runner era pid-agnóstico y salía al ver su propio placeholder).
+export function readFixLock() {
+  try { return JSON.parse(fss.readFileSync(FIX_LOCK_FILE, 'utf8')); }
+  catch { return null; }
+}
 
 // ===== Allowlist del auto-fix (DOS capas, regla 6 — excepción de ESCRITURA) =====
 // Puede LEER, EDITAR/CREAR archivos y verificar SOLO con `node --check`/`node -c`.
@@ -610,6 +676,16 @@ export function isRunning() {
     const { ts } = JSON.parse(fss.readFileSync(LOCK_FILE, 'utf8'));
     return Date.now() - ts < LOCK_FRESH_MS;
   } catch { return false; }
+}
+// Lee el lock crudo {pid, ts} (o null). Lo usa el runner para distinguir el
+// PLACEHOLDER de reserva del server (pid:0, escrito por spawnReview en el mismo
+// turno JS que isRunning() para cerrar la ventana TOCTOU — BUG-48) de un lock
+// fresco de OTRO runner real (pid≠0): con pid:0 el runner PROCEDE y lo pisa con
+// su pid; con un pid ajeno fresco, sale. Sin esto, el runner se suicidaría con su
+// propio placeholder (el patrón roto que describe BUG-51 para el auto-fix).
+export function readLock() {
+  try { return JSON.parse(fss.readFileSync(LOCK_FILE, 'utf8')); }
+  catch { return null; }
 }
 
 // ===== Censo VIVO de runners/motores en segundo plano (panel de Actividad) =====

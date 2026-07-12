@@ -15,9 +15,10 @@ import os from 'node:os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, discoverUnits, unitPrompt, synthesisPrompt, parseFindings, parseSynthesis,
-  toolAllowed, readReview, writeReview, writeLock, clearLock, isRunning,
+  toolAllowed, readReview, writeReview, writeLock, clearLock, isRunning, readLock,
   readAuditCache, writeAuditCache, unitFingerprint, auditModelFor,
   UNIT_TIMEOUT_MS, SYNTH_TIMEOUT_MS, UNIT_MAX_TURNS, HEARTBEAT_MS,
+  padContext,
 } from '../src/modules/health/shared.js';
 import { runAdaptivePool } from '../src/modules/health/pool.js';
 
@@ -39,7 +40,13 @@ function isRateLimit(err) {
   return /429|rate.?limit|overloaded|too many requests|529|503/.test(m);
 }
 
-if (isRunning()) { log('ya hay una revisión corriendo (lock fresco): salgo.'); process.exit(0); }
+// El server reserva el lock con un PLACEHOLDER pid:0 (spawnReview, BUG-48) para
+// cerrar la ventana TOCTOU. Ese placeholder es MI reserva → NO me suicido con él:
+// solo salgo si el lock fresco tiene un pid REAL ajeno (otro runner de verdad).
+const _lk = readLock();
+if (_lk && _lk.pid && _lk.pid !== process.pid && isRunning()) {
+  log(`ya hay una revisión corriendo (lock fresco ajeno pid=${_lk.pid}): salgo.`); process.exit(0);
+}
 
 writeLock(process.pid);
 const heartbeat = setInterval(() => writeLock(process.pid), HEARTBEAT_MS);
@@ -182,8 +189,9 @@ async function main() {
 
   state.phase = 'Sintesis del veredicto';
   flush();
+  const padCtx = await padContext(); // best-effort: '' si el Pad local no responde
   try {
-    const text = await readOnlyRun(synthesisPrompt(state.findings), 'sonnet', SYNTH_TIMEOUT_MS, 1);
+    const text = await readOnlyRun(synthesisPrompt(state.findings, padCtx), 'sonnet', SYNTH_TIMEOUT_MS, 1);
     const synth = parseSynthesis(text);
     if (synth) { state.verdict = synth.verdict; state.summary = synth.summary; }
     else { state.verdict = state.findings.length ? 'atencion' : 'ok'; state.summary = 'No se pudo sintetizar; ver hallazgos.'; }

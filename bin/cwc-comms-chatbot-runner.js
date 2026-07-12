@@ -23,7 +23,7 @@ import {
   graphReadAllowed, teamsBotPrompt, parseTeamsResponse, TEAMS_TIMEOUT_MS,
 } from '../src/modules/comms/teams-shared.js';
 import {
-  relayBots, chatbotInterpretPrompt, parseChatbotInterpretation, mergeChatbotThreads,
+  relayBots, freshBotThread, chatbotInterpretPrompt, parseChatbotInterpretation, mergeChatbotThreads,
   writeChatbotLock, clearChatbotLock, readChatbotLock,
   CHATBOT_INTERPRET_TIMEOUT_MS, CHATBOT_HEARTBEAT_MS,
 } from '../src/modules/comms/chatbot-shared.js';
@@ -133,7 +133,18 @@ async function run() {
   const teams = readTeams();
   const resByIdx = new Array(bots.length).fill(null);
   await runAdaptivePool(bots.map((bot, i) => ({ bot, i })), async ({ bot, i }, ctl) => {
-    log(`fase 1: leyendo el chat del bot ${bot.name}…`);
+    // REUSO (Optimización IA 2026-07-12): si /teams-refresh escaneó este bot hace
+    // poco, usamos ese hilo directo (0 tokens) en vez de disparar otra corrida
+    // Graph (sonnet ×14 turnos) que trae EXACTAMENTE lo mismo. Los botones
+    // /teams-refresh y /chatbot-refresh no coordinaban caché — ahora sí.
+    const cached = freshBotThread(bot, teams);
+    if (cached) {
+      log(`fase 1: ${bot.name} — reuso teams.json fresco (${cached.messages.length} msg, sin Graph).`);
+      resByIdx[i] = { bot, thread: cached };
+      beat();
+      return;
+    }
+    log(`fase 1: leyendo el chat del bot ${bot.name} vía Graph…`);
     let res = await fetchBotRaw(bot);
     // Fallback: si Graph falla, usar lo que ya está en teams.json para ese bot.
     if (!res.found || !res.thread) {

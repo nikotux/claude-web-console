@@ -1,34 +1,64 @@
-// modules/tasks/store.js — registro PRIVADO de tareas pendientes + PLANES +
-// LOG de actividad de ESTE proyecto (nada sale al exterior; no se pushea).
-// Estado file-based en ~/.cwc-data/tasks.json (tareas + planes) y
-// ~/.cwc-data/tasks-activity.json (log append-only) → sobrevive reinicios del
-// server SIN runner (el CRUD es síncrono y determinístico, escritura atómica
-// tmp+rename, como el registro de bugfixes). Se alimenta manualmente Y desde el
-// módulo `audio` (tareas propuestas por la IA que el usuario aprueba).
+// modules/tasks/store.js — registro PRIVADO de tareas pendientes + PLANES de
+// ESTE proyecto (nada sale al exterior, no se pushea).
 //
-// FASE 2 (dashboard estilo Pad, 2026-07-06): se sumaron (A) PLANES que agrupan
-// tareas con progreso %, (B) un LOG de actividad REAL persistido (antes el
-// "Recent Activity" del panel se derivaba de timestamps, sin historial de
-// cambios), y (C) el campo `type` de la tarea (task/idea/nota/feature) para
-// clasificar. Pad sigue siendo solo el REFERENTE de diseño; los datos son 100%
-// locales.
+// MIGRACIÓN A PAD LOCAL (2026-07-12, ROAD-110 / TASK-123): la fuente de verdad
+// de tareas y planes dejó de ser el archivo ~/.cwc-data/tasks.json — ahora son
+// las colecciones `pendientes` (prefix PEND) y `planes` (prefix PLAN) del Pad
+// LOCAL self-hosted (workspace `console`), vía src/core/pad-service-client.js.
+// TODAS las funciones son ahora ASYNC (antes eran síncronas) — mismos NOMBRES y
+// mismas firmas de argumentos que antes, así que el único caller (index.js) solo
+// necesitó sumar `await`. El LOG DE ACTIVIDAD (`listActivity`/appendActivity) NO
+// se tocó a propósito (decisión de alcance del plan de migración): sigue 100%
+// local en ~/.cwc-data/tasks-activity.json, síncrono, atómico.
 //
-// Modelo de una tarea:
-//   { id, title, description, type, status, priority, tags[], planId,
-//     source, sourceRef, createdAt, updatedAt, doneAt }
+// GOTCHAS CRÍTICOS descubiertos con pruebas reales contra el server (ver también
+// los comentarios en pad-service-client.js, fuente de verdad de estos matices):
+//   1. Los campos custom del schema (status/priority/owner/estimate/dueDate/type/
+//      source/sourceRef/phase/targetDate) van SIEMPRE anidados en `fields:{...}`
+//      al crear/editar — mandarlos "planos" los ignora en silencio y aplica el
+//      default del schema. Solo `title`/`content`/`tags` van planos.
+//   2. Un PATCH de `fields` REEMPLAZA el objeto entero (no lo mergea) — por eso
+//      updateTask/updatePlan hacen SIEMPRE read-modify-write (getItem primero).
+//   3. `planId` (tarea/plan → plan) es la relación nativa "parent" de Pad
+//      (pad.setParent) — fijar un parent nuevo reemplaza el anterior solo, sin
+//      necesidad de unlink previo; y un plan archivado hace que `parent_ref`
+//      desaparezca solo de los items que apuntaban a él (no hace falta cascada
+//      manual al borrar un plan, verificado).
+//   4. `blocks[]` es la relación nativa "blocks" (pad.addLink/deleteLink) — NO
+//      viene decorada en list/get como el parent, hay que pedirla aparte con
+//      listLinks() por cada ítem (paralelizado con Promise.all).
+//   5. Borrar un comentario NO cuelga del item (`/items/:ref/comments/:cid` da
+//      404) — es un recurso propio del workspace por el UUID del comentario
+//      (`/comments/:cid`), SÍ soportado (a diferencia de lo que el plan
+//      contemplaba como posible "no soportado").
+//   6. `doneAt` no es un campo nativo de Pad: se guarda como custom field STRING
+//      (epoch ms) dentro de `fields`, igual lógica que antes (se setea al pasar
+//      a 'hecha', se limpia al salir de ese estado).
+//
+// Modelo de una tarea (shape que YA consumía el frontend, sin cambios):
+//   { id, title, description, type, status, priority, tags[], planId, owner,
+//     estimate, dueDate, blocks[], source, sourceRef, createdAt, updatedAt, doneAt }
 // Modelo de un plan:
-//   { id: 'PLAN-<n>', title, description, status, createdAt, updatedAt }
+//   { id: 'PLAN-<n>', title, description, status, owner, phase, targetDate,
+//     blocks[], createdAt, updatedAt }
 //   (+ taskCount/doneCount/pct DERIVADOS al leer, nunca persistidos)
-// Modelo de un evento de actividad:
+// Modelo de un evento de actividad (SIN CAMBIOS, sigue 100% local):
 //   { id, ts, kind, entity, refId, title, detail }
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import {
+  listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
+  listComments, addComment as padAddComment, deleteComment as padDeleteComment,
+  listLinks, addLink, deleteLink, setParent,
+} from '../../core/pad-service-client.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const FILE = path.join(DATA_DIR, 'tasks.json');
 const ACT_FILE = path.join(DATA_DIR, 'tasks-activity.json');
+
+const TASKS_COLLECTION = 'pendientes';
+const PLANS_COLLECTION = 'planes';
 
 export const STATUSES = ['pendiente', 'en-progreso', 'hecha'];
 export const PRIORITIES = ['alta', 'media', 'baja'];
@@ -40,25 +70,6 @@ function ensureDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 }
 
-function load() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return {
-      seq: Number(raw.seq) || 0,
-      planSeq: Number(raw.planSeq) || 0,
-      tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
-      plans: Array.isArray(raw.plans) ? raw.plans : [],
-    };
-  } catch {
-    return { seq: 0, planSeq: 0, tasks: [], plans: [] };
-  }
-}
-
-// Escritura atómica (tmp + rename): un corte a mitad no deja el JSON corrupto.
-function save(db) {
-  writeJsonAtomic(FILE, db); // atómico tmp-por-PID (fix B4 2026-07-11, fuente única)
-}
-
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
 const normStatus = (s) => (STATUSES.includes(s) ? s : 'pendiente');
 const normPriority = (p) => (PRIORITIES.includes(p) ? p : 'media');
@@ -68,49 +79,126 @@ function normTags(t) {
   if (!Array.isArray(t)) return [];
   return t.map((x) => clampStr(x, 40).trim()).filter(Boolean).slice(0, 10);
 }
-// Sólo acepta un planId que EXISTA (evita tareas colgando de un plan borrado).
-function validPlanId(plans, id) {
-  const s = id ? clampStr(id, 20) : null;
-  if (!s) return null;
-  return plans.some((p) => p.id === s) ? s : null;
-}
 
 // ---- Campos "estilo Pad" (2026-07-07): owner/estimate/fecha + relaciones ----
 const normDate = (d) => {
   const s = clampStr(d, 10).trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
 };
-const REL_ID_RE = /^(T\d+|PLAN-\d+)$/;
-// ids que existen (tareas + planes) para validar relaciones "blocks".
-function allIdsOf(db) {
-  const s = new Set();
-  for (const t of db.tasks) s.add(t.id);
-  for (const p of db.plans) s.add(p.id);
-  return s;
-}
-// Relación "bloquea": ids válidos, existentes, sin el propio, deduplicados.
-function normBlocks(ids, allIds, selfId) {
+const PLAN_ID_RE = /^PLAN-\d+$/;
+const REL_ID_RE = /^(PEND-\d+|PLAN-\d+)$/;
+// Candidatos de relación "bloquea": formato válido, sin el propio, deduplicados.
+// La EXISTENCIA real la valida Pad al crear el link (addLink falla si el target
+// no existe) — no hace falta traer todos los ids para chequear de antemano.
+function normBlockCandidates(ids, selfId) {
   if (!Array.isArray(ids)) return [];
   const set = new Set();
   for (const x of ids) {
     const s = clampStr(x, 20).trim();
-    if (REL_ID_RE.test(s) && s !== selfId && allIds.has(s)) set.add(s);
+    if (REL_ID_RE.test(s) && s !== selfId) set.add(s);
   }
   return [...set].slice(0, 30);
 }
 
-// ---- Comentarios por ítem (append + borrar; sin editar, a pedido) ----
-const MAX_COMMENTS = 200;
-let commentCounter = 0;
-function newComment(text) {
-  commentCounter += 1;
-  return { id: `C${Date.now()}-${commentCounter}`, ts: Date.now(), text: clampStr(text, 4000) };
+// ===== Helpers de mapeo Pad ⇄ shape del frontend =====
+function parseFields(item) {
+  const f = item?.fields;
+  if (!f) return {};
+  if (typeof f === 'object') return f;
+  try { const p = JSON.parse(f); return p && typeof p === 'object' ? p : {}; } catch { return {}; }
 }
-function findItem(db, kind, id) {
-  return kind === 'plan' ? db.plans.find((x) => x.id === id) : db.tasks.find((x) => x.id === id);
+function parseTagsField(item) {
+  const t = item?.tags;
+  if (Array.isArray(t)) return t;
+  if (typeof t === 'string') { try { const p = JSON.parse(t); return Array.isArray(p) ? p : []; } catch { return []; } }
+  return [];
+}
+function tsMs(iso) {
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : 0;
+}
+function padError(action, r) {
+  const e = new Error(`Pad local (${action}): ${r?.error || 'error desconocido'}`);
+  e.padError = true;
+  return e;
+}
+// notFound se marca SOLO ante un 404 real de Pad — cualquier otro fallo (Pad
+// caído, timeout, token vencido) es un 500 genérico, nunca un 404 engañoso.
+function notFoundOr500(action, entityLabel, r) {
+  if (r.status === 404) { const e = new Error(`${entityLabel} inexistente.`); e.notFound = true; return e; }
+  return padError(action, r);
 }
 
-// ===== LOG DE ACTIVIDAD (append-only con poda; archivo aparte) =====
+function taskFromPadItem(item, blocks = []) {
+  const f = parseFields(item);
+  return {
+    id: item.ref,
+    title: item.title || 'Sin título',
+    description: item.content || '',
+    type: normType(f.type),
+    status: normStatus(f.status),
+    priority: normPriority(f.priority),
+    tags: parseTagsField(item),
+    planId: item.parent_ref || null,
+    owner: f.owner || '',
+    estimate: f.estimate || '',
+    dueDate: f.dueDate || '',
+    blocks,
+    source: f.source === 'audio' ? 'audio' : 'manual',
+    sourceRef: f.sourceRef || null,
+    createdAt: tsMs(item.created_at),
+    updatedAt: tsMs(item.updated_at),
+    doneAt: f.doneAt ? Number(f.doneAt) : null,
+  };
+}
+
+function planFromPadItem(item, blocks = []) {
+  const f = parseFields(item);
+  return {
+    id: item.ref,
+    title: item.title || 'Plan sin título',
+    description: item.content || '',
+    status: normPlanStatus(f.status),
+    owner: f.owner || '',
+    phase: f.phase || '',
+    targetDate: f.targetDate || '',
+    blocks,
+    createdAt: tsMs(item.created_at),
+    updatedAt: tsMs(item.updated_at),
+  };
+}
+
+// Relación "blocks" de un ítem (lo que ÉL bloquea) — no viene decorada en
+// list/get, hay que pedirla aparte. Best-effort: si falla, sin bloqueos.
+async function blocksOf(ref) {
+  const r = await listLinks(ref);
+  if (!r.ok) return [];
+  return r.data
+    .filter((l) => l.link_type === 'blocks' && l.source_ref === ref)
+    .map((l) => l.target_ref);
+}
+
+// Aplica la relación "blocks" deseada (diff contra la actual: agrega lo que
+// falta, quita lo que sobra) — usado por updateTask/updatePlan.
+async function applyBlocks(ref, desiredIds) {
+  const desired = normBlockCandidates(desiredIds, ref);
+  const linksR = await listLinks(ref);
+  const currentLinks = linksR.ok ? linksR.data.filter((l) => l.link_type === 'blocks' && l.source_ref === ref) : [];
+  const currentTargets = new Set(currentLinks.map((l) => l.target_ref));
+  const desiredSet = new Set(desired);
+  for (const l of currentLinks) if (!desiredSet.has(l.target_ref)) await deleteLink(l.id);
+  for (const target of desired) if (!currentTargets.has(target)) await addLink(ref, target, 'blocks');
+}
+
+// Tareas ya mapeadas (sin blocks — no hace falta para calcular progreso de
+// planes), usadas por createPlan/updatePlan para derivar taskCount/doneCount/pct.
+async function tasksForProgress() {
+  const r = await listItems(TASKS_COLLECTION);
+  if (!r.ok) return [];
+  return r.data.map((t) => taskFromPadItem(t));
+}
+
+// ===== LOG DE ACTIVIDAD (SIN CAMBIOS: append-only local, con poda) =====
 function loadActivity() {
   try {
     const raw = JSON.parse(fs.readFileSync(ACT_FILE, 'utf8'));
@@ -118,6 +206,7 @@ function loadActivity() {
   } catch { return []; }
 }
 function saveActivity(events) {
+  ensureDir();
   writeJsonAtomic(ACT_FILE, { events }); // atómico tmp-por-PID (fix B4 2026-07-11)
 }
 let actCounter = 0;
@@ -142,76 +231,95 @@ function plansWithProgress(plans, tasks) {
   });
 }
 
-export function listPlans() {
-  const { plans, tasks } = load();
+export async function listPlans() {
+  const [plansR, tasks] = await Promise.all([listItems(PLANS_COLLECTION), tasksForProgress()]);
+  if (!plansR.ok) throw padError('listPlans', plansR);
+  const plans = await Promise.all(plansR.data.map(async (p) => planFromPadItem(p, await blocksOf(p.ref))));
   // Activos primero, luego por fecha de creación desc.
   const rank = { active: 0, proposed: 1, done: 2, cancelled: 3 };
   return plansWithProgress(plans, tasks).sort((a, b) =>
     (rank[a.status] - rank[b.status]) || ((b.createdAt || 0) - (a.createdAt || 0)));
 }
 
-export function createPlan(input = {}) {
-  const db = load();
-  db.planSeq += 1;
-  const now = Date.now();
-  const id = `PLAN-${db.planSeq}`;
-  const plan = {
-    id,
-    title: clampStr(input.title, 200).trim() || 'Plan sin título',
-    description: clampStr(input.description, 4000),
+export async function createPlan(input = {}) {
+  const title = clampStr(input.title, 200).trim() || 'Plan sin título';
+  const fields = {
     status: normPlanStatus(input.status),
     owner: clampStr(input.owner, 120),
     phase: clampStr(input.phase, 20),
     targetDate: normDate(input.targetDate),
-    comments: [],
-    blocks: normBlocks(input.blocks, allIdsOf(db), id),
-    createdAt: now,
-    updatedAt: now,
   };
-  db.plans.push(plan);
-  save(db);
-  appendActivity({ kind: 'created', entity: 'plan', refId: plan.id, title: plan.title });
-  return plansWithProgress([plan], db.tasks)[0];
+  const r = await createItem(PLANS_COLLECTION, { title, content: clampStr(input.description, 4000), fields });
+  if (!r.ok) throw padError('createPlan', r);
+  const ref = r.data.ref;
+
+  const blockIds = normBlockCandidates(input.blocks, ref);
+  const blocks = [];
+  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks'); if (lr.ok) blocks.push(target); }
+
+  appendActivity({ kind: 'created', entity: 'plan', refId: ref, title });
+  const fresh = await getItem(ref);
+  const plan = planFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
+  return plansWithProgress([plan], await tasksForProgress())[0];
 }
 
-export function updatePlan(id, patch = {}) {
-  const db = load();
-  const p = db.plans.find((x) => x.id === id);
-  if (!p) { const e = new Error('Plan inexistente.'); e.notFound = true; throw e; }
-  if (patch.title != null) p.title = clampStr(patch.title, 200).trim() || p.title;
-  if (patch.description != null) p.description = clampStr(patch.description, 4000);
-  if (patch.owner != null) p.owner = clampStr(patch.owner, 120);
-  if (patch.phase != null) p.phase = clampStr(patch.phase, 20);
-  if (patch.targetDate != null) p.targetDate = normDate(patch.targetDate);
-  if (patch.blocks != null) p.blocks = normBlocks(patch.blocks, allIdsOf(db), p.id);
+export async function updatePlan(id, patch = {}) {
+  const cur = await getItem(id);
+  if (!cur.ok) throw notFoundOr500('updatePlan', 'Plan', cur);
+  const f = parseFields(cur.data);
+  const body = {};
+  if (patch.title != null) body.title = clampStr(patch.title, 200).trim() || cur.data.title;
+  if (patch.description != null) body.content = clampStr(patch.description, 4000);
+
+  const nextFields = { ...f };
+  if (patch.owner != null) nextFields.owner = clampStr(patch.owner, 120);
+  if (patch.phase != null) nextFields.phase = clampStr(patch.phase, 20);
+  if (patch.targetDate != null) nextFields.targetDate = normDate(patch.targetDate);
   let statusChanged = null;
   if (patch.status != null) {
     const next = normPlanStatus(patch.status);
-    if (next !== p.status) { statusChanged = next; p.status = next; }
+    if (next !== normPlanStatus(f.status)) { statusChanged = next; nextFields.status = next; }
   }
-  p.updatedAt = Date.now();
-  save(db);
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'plan', refId: p.id, title: p.title, detail: statusChanged || null });
-  return plansWithProgress([p], db.tasks)[0];
+  body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
+
+  const r = await updateItem(id, body);
+  if (!r.ok) throw padError('updatePlan', r);
+
+  if (patch.blocks != null) await applyBlocks(id, patch.blocks);
+
+  const fresh = await getItem(id);
+  const blocks = await blocksOf(id);
+  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'plan', refId: id, title: fresh.data?.title, detail: statusChanged || null });
+  const plan = planFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
+  return plansWithProgress([plan], await tasksForProgress())[0];
 }
 
-export function deletePlan(id) {
-  const db = load();
-  const i = db.plans.findIndex((x) => x.id === id);
-  if (i < 0) { const e = new Error('Plan inexistente.'); e.notFound = true; throw e; }
-  const [removed] = db.plans.splice(i, 1);
-  // Desasignar (no borrar) las tareas que colgaban del plan.
-  for (const t of db.tasks) if (t.planId === removed.id) t.planId = null;
-  save(db);
-  appendActivity({ kind: 'deleted', entity: 'plan', refId: removed.id, title: removed.title });
+export async function deletePlan(id) {
+  const cur = await getItem(id);
+  if (!cur.ok) throw notFoundOr500('deletePlan', 'Plan', cur);
+  const blocks = await blocksOf(id);
+  const removed = planFromPadItem(cur.data, blocks);
+  // Archivar en Pad (soft-delete): las tareas que colgaban del plan quedan
+  // desasignadas solas (verificado: `parent_ref` desaparece de un item cuyo
+  // padre fue archivado — no hace falta cascada manual).
+  const r = await padDeleteItem(id);
+  if (!r.ok) throw padError('deletePlan', r);
+  appendActivity({ kind: 'deleted', entity: 'plan', refId: id, title: removed.title });
   return removed;
 }
 
 // ===== TAREAS =====
 // Vista pública (ordenada: sin terminar primero por prioridad, luego por fecha)
 // + conteos + planes con progreso (todo lo que el dashboard necesita).
-export function listTasks() {
-  const { tasks, plans } = load();
+export async function listTasks() {
+  const [tasksR, plansR] = await Promise.all([listItems(TASKS_COLLECTION), listItems(PLANS_COLLECTION)]);
+  if (!tasksR.ok) throw padError('listTasks', tasksR);
+  if (!plansR.ok) throw padError('listTasks:plans', plansR);
+  const [tasks, plans] = await Promise.all([
+    Promise.all(tasksR.data.map(async (t) => taskFromPadItem(t, await blocksOf(t.ref)))),
+    Promise.all(plansR.data.map(async (p) => planFromPadItem(p, await blocksOf(p.ref)))),
+  ]);
+
   const prioRank = { alta: 0, media: 1, baja: 2 };
   const statusRank = { pendiente: 0, 'en-progreso': 1, hecha: 2 };
   const sorted = [...tasks].sort((a, b) => {
@@ -224,111 +332,126 @@ export function listTasks() {
   return { tasks: sorted, counts, plans: plansWithProgress(plans, tasks) };
 }
 
-export function createTask(input = {}) {
-  const db = load();
-  db.seq += 1;
-  const now = Date.now();
+export async function createTask(input = {}) {
   const status = normStatus(input.status);
-  const id = `T${db.seq}`;
-  const task = {
-    id,
-    title: clampStr(input.title, 200).trim() || 'Sin título',
-    description: clampStr(input.description, 4000),
-    type: normType(input.type),
+  const title = clampStr(input.title, 200).trim() || 'Sin título';
+  const fields = {
     status,
     priority: normPriority(input.priority),
-    tags: normTags(input.tags),
-    planId: validPlanId(db.plans, input.planId),
+    type: normType(input.type),
     owner: clampStr(input.owner, 120),
     estimate: clampStr(input.estimate, 40),
     dueDate: normDate(input.dueDate),
-    comments: [],
-    blocks: normBlocks(input.blocks, allIdsOf(db), id),
     source: input.source === 'audio' ? 'audio' : 'manual',
-    sourceRef: input.sourceRef ? clampStr(input.sourceRef, 64) : null,
-    createdAt: now,
-    updatedAt: now,
-    doneAt: status === 'hecha' ? now : null,
+    sourceRef: input.sourceRef ? clampStr(input.sourceRef, 64) : '',
+    doneAt: status === 'hecha' ? String(Date.now()) : '',
   };
-  db.tasks.push(task);
-  save(db);
-  appendActivity({ kind: 'created', entity: 'task', refId: task.id, title: task.title });
-  return task;
+  const r = await createItem(TASKS_COLLECTION, {
+    title,
+    content: clampStr(input.description, 4000),
+    tags: normTags(input.tags),
+    fields,
+  });
+  if (!r.ok) throw padError('createTask', r);
+  const ref = r.data.ref;
+
+  const planCandidate = clampStr(input.planId, 20).trim();
+  if (planCandidate && PLAN_ID_RE.test(planCandidate)) await setParent(ref, planCandidate);
+
+  const blockIds = normBlockCandidates(input.blocks, ref);
+  const blocks = [];
+  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks'); if (lr.ok) blocks.push(target); }
+
+  appendActivity({ kind: 'created', entity: 'task', refId: ref, title });
+  const fresh = await getItem(ref);
+  return taskFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
 }
 
-export function updateTask(id, patch = {}) {
-  const db = load();
-  const t = db.tasks.find((x) => x.id === id);
-  if (!t) { const e = new Error('Tarea inexistente.'); e.notFound = true; throw e; }
-  if (patch.title != null) t.title = clampStr(patch.title, 200).trim() || t.title;
-  if (patch.description != null) t.description = clampStr(patch.description, 4000);
-  if (patch.priority != null) t.priority = normPriority(patch.priority);
-  if (patch.type != null) t.type = normType(patch.type);
-  if (patch.tags != null) t.tags = normTags(patch.tags);
-  if (patch.planId !== undefined) t.planId = validPlanId(db.plans, patch.planId);
-  if (patch.owner != null) t.owner = clampStr(patch.owner, 120);
-  if (patch.estimate != null) t.estimate = clampStr(patch.estimate, 40);
-  if (patch.dueDate != null) t.dueDate = normDate(patch.dueDate);
-  if (patch.blocks != null) t.blocks = normBlocks(patch.blocks, allIdsOf(db), t.id);
+export async function updateTask(id, patch = {}) {
+  const cur = await getItem(id);
+  if (!cur.ok) throw notFoundOr500('updateTask', 'Tarea', cur);
+  const f = parseFields(cur.data);
+  const body = {};
+  if (patch.title != null) body.title = clampStr(patch.title, 200).trim() || cur.data.title;
+  if (patch.description != null) body.content = clampStr(patch.description, 4000);
+  if (patch.tags != null) body.tags = normTags(patch.tags);
+
+  const nextFields = { ...f };
+  if (patch.priority != null) nextFields.priority = normPriority(patch.priority);
+  if (patch.type != null) nextFields.type = normType(patch.type);
+  if (patch.owner != null) nextFields.owner = clampStr(patch.owner, 120);
+  if (patch.estimate != null) nextFields.estimate = clampStr(patch.estimate, 40);
+  if (patch.dueDate != null) nextFields.dueDate = normDate(patch.dueDate);
   let statusChanged = null;
   if (patch.status != null) {
     const next = normStatus(patch.status);
-    if (next !== t.status) {
+    if (next !== normStatus(f.status)) {
       statusChanged = next;
-      t.status = next;
-      t.doneAt = next === 'hecha' ? Date.now() : null;
+      nextFields.status = next;
+      nextFields.doneAt = next === 'hecha' ? String(Date.now()) : '';
     }
   }
-  t.updatedAt = Date.now();
-  save(db);
-  if (statusChanged) appendActivity({ kind: statusChanged === 'hecha' ? 'completed' : 'status', entity: 'task', refId: t.id, title: t.title, detail: statusChanged });
-  else appendActivity({ kind: 'updated', entity: 'task', refId: t.id, title: t.title });
-  return t;
+  body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
+
+  const r = await updateItem(id, body);
+  if (!r.ok) throw padError('updateTask', r);
+
+  if (patch.planId !== undefined) {
+    if (patch.planId) {
+      const pid = clampStr(patch.planId, 20).trim();
+      if (PLAN_ID_RE.test(pid)) await setParent(id, pid);
+    } else if (cur.data.parent_link_id) {
+      await deleteLink(cur.data.parent_link_id);
+    }
+  }
+
+  if (patch.blocks != null) await applyBlocks(id, patch.blocks);
+
+  const fresh = await getItem(id);
+  const blocks = await blocksOf(id);
+  if (statusChanged) appendActivity({ kind: statusChanged === 'hecha' ? 'completed' : 'status', entity: 'task', refId: id, title: fresh.data?.title, detail: statusChanged });
+  else appendActivity({ kind: 'updated', entity: 'task', refId: id, title: fresh.data?.title });
+  return taskFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
 }
 
-export function deleteTask(id) {
-  const db = load();
-  const i = db.tasks.findIndex((x) => x.id === id);
-  if (i < 0) { const e = new Error('Tarea inexistente.'); e.notFound = true; throw e; }
-  const [removed] = db.tasks.splice(i, 1);
-  save(db);
-  appendActivity({ kind: 'deleted', entity: 'task', refId: removed.id, title: removed.title });
+export async function deleteTask(id) {
+  const cur = await getItem(id);
+  if (!cur.ok) throw notFoundOr500('deleteTask', 'Tarea', cur);
+  const blocks = await blocksOf(id);
+  const removed = taskFromPadItem(cur.data, blocks);
+  const r = await padDeleteItem(id);
+  if (!r.ok) throw padError('deleteTask', r);
+  appendActivity({ kind: 'deleted', entity: 'task', refId: id, title: removed.title });
   return removed;
 }
 
 // ===== COMENTARIOS + TIMELINE por ítem (tarea o plan) =====
-// kind = 'task' | 'plan'. Agregar un comentario también deja un evento en el log.
-export function addComment(kind, id, text) {
+// kind = 'task' | 'plan' — solo se usa para el LOG DE ACTIVIDAD local (Pad
+// direcciona el ítem por su ref, que ya es único cruzando ambas colecciones).
+// Agregar un comentario también deja un evento en el log.
+export async function addComment(kind, id, text) {
   const clean = clampStr(text, 4000).trim();
   if (!clean) { const e = new Error('El comentario está vacío.'); e.bad = true; throw e; }
-  const db = load();
-  const it = findItem(db, kind, id);
-  if (!it) { const e = new Error('Ítem inexistente.'); e.notFound = true; throw e; }
-  if (!Array.isArray(it.comments)) it.comments = [];
-  const c = newComment(clean);
-  it.comments.push(c);
-  it.comments = it.comments.slice(-MAX_COMMENTS);
-  it.updatedAt = Date.now();
-  save(db);
-  appendActivity({ kind: 'comment', entity: kind, refId: id, title: it.title, detail: clean.slice(0, 80) });
+  const r = await padAddComment(id, clean);
+  if (!r.ok) throw notFoundOr500('addComment', 'Ítem', r);
+  const c = { id: r.data.id, ts: tsMs(r.data.created_at), text: r.data.body };
+  const titleR = await getItem(id);
+  appendActivity({ kind: 'comment', entity: kind, refId: id, title: titleR.ok ? titleR.data.title : id, detail: clean.slice(0, 80) });
   return c;
 }
-export function deleteComment(kind, id, cid) {
-  const db = load();
-  const it = findItem(db, kind, id);
-  if (!it) { const e = new Error('Ítem inexistente.'); e.notFound = true; throw e; }
-  it.comments = (it.comments || []).filter((c) => c.id !== cid);
-  save(db);
+export async function deleteComment(kind, id, cid) {
+  const r = await padDeleteComment(cid);
+  if (!r.ok) throw notFoundOr500('deleteComment', 'Comentario', r);
   return true;
 }
-// Timeline del ítem: sus comentarios + los eventos del log que lo referencian
-// (excluye los eventos 'comment', que ya vienen del array de comentarios), desc.
-export function timelineFor(kind, id) {
-  const db = load();
-  const it = findItem(db, kind, id);
-  if (!it) return { events: [] };
+// Timeline del ítem: sus comentarios (Pad) + los eventos del log local que lo
+// referencian (excluye 'comment', que ya viene de Pad), desc. Best-effort: si
+// Pad no responde los comentarios, igual devuelve los eventos del log local
+// (nunca cuelga ni tira una excepción sin control).
+export async function timelineFor(kind, id) {
   const events = [];
-  for (const c of it.comments || []) events.push({ type: 'comment', ts: c.ts, cid: c.id, text: c.text });
+  const cr = await listComments(id);
+  if (cr.ok) for (const c of cr.data) events.push({ type: 'comment', ts: tsMs(c.created_at), cid: c.id, text: c.body });
   for (const ev of loadActivity()) {
     if (ev.refId === id && ev.kind !== 'comment') events.push({ type: 'event', ts: ev.ts, kind: ev.kind, detail: ev.detail || null });
   }
@@ -337,11 +460,12 @@ export function timelineFor(kind, id) {
 }
 
 // Alta EN LOTE desde una propuesta del módulo audio (el usuario ya aprobó cada
-// una en la UI). Devuelve las tareas creadas.
-export function createFromAudio(jobId, items = []) {
+// una en la UI). Devuelve las tareas creadas. Secuencial (no paralelo): mantiene
+// el orden de creación en el log de actividad, igual que antes.
+export async function createFromAudio(jobId, items = []) {
   const created = [];
   for (const it of Array.isArray(items) ? items.slice(0, 50) : []) {
-    created.push(createTask({ ...it, source: 'audio', sourceRef: jobId }));
+    created.push(await createTask({ ...it, source: 'audio', sourceRef: jobId }));
   }
   return created;
 }

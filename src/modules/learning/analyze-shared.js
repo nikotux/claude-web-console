@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listTopics, listRoutes } from './store.js';
@@ -43,9 +44,7 @@ export function readAnalysisJob() {
 }
 export function writeAnalysisJob(data) {
   ensureDir();
-  const tmp = `${FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-  fs.renameSync(tmp, FILE);
+  writeJsonAtomic(FILE, data); // tmp-por-PID (BUG-30): sin colisión del tmp de nombre fijo en respawn
 }
 export function isFreshRunning(job) {
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= ANALYZE_STALE_MS;
@@ -68,11 +67,15 @@ export function spawnLearningAnalyzeRunner() {
 }
 
 // ===== Contexto determinístico (0 tokens de recolección) =====
-// Devuelve { context, count } o null si no hay temas que analizar.
-export function buildContext() {
-  const { topics } = listTopics();
+// Devuelve { context, count } o null si no hay temas que analizar. ASYNC desde
+// la migración a Pad local (2026-07-12): listTopics()/listRoutes() de store.js
+// ahora son promesas (llaman al Pad local por HTTP). Sus dos call sites
+// (POST /analyze de index.js y bin/cwc-learning-analyze-runner.js) ya lo esperan
+// con await.
+export async function buildContext() {
+  const { topics } = await listTopics();
   if (!topics.length) return null;
-  const routes = listRoutes();
+  const routes = await listRoutes();
   const context = {
     topics: topics.map((t) => ({
       id: t.id,
@@ -112,14 +115,14 @@ export function analyzePrompt(context) {
     'Respondé en ESPAÑOL y ÚNICAMENTE con un bloque ```json con esta forma EXACTA:',
     '{',
     '  "resumen": "1-2 líneas: cómo está el banco y cómo quedaría ordenado",',
-    '  "duplicados": [ { "keep": "LT<n>", "remove": ["LT<n>"], "why": "por qué son el mismo" } ],',
-    '  "unificables": [ { "ids": ["LT<n>","LT<n>"], "title": "título fusionado", "notes": "notas fusionadas", "why": "por qué unir" } ],',
-    '  "completar": [ { "id": "LT<n>", "notes": "notas más completas sugeridas", "tags": ["tags"], "why": "qué le falta" } ],',
-    '  "agrupar": [ { "routeId": "LR<n> o null", "routeTitle": "título si es ruta nueva", "routeDescription": "detalle", "topicIds": ["LT<n>","LT<n>"], "why": "qué las une" } ],',
-    '  "aprenderPrimero": [ { "orderedIds": ["LT<n>","LT<n>"], "why": "por qué en ese orden" } ],',
+    '  "duplicados": [ { "keep": "TDA-<n>", "remove": ["TDA-<n>"], "why": "por qué son el mismo" } ],',
+    '  "unificables": [ { "ids": ["TDA-<n>","TDA-<n>"], "title": "título fusionado", "notes": "notas fusionadas", "why": "por qué unir" } ],',
+    '  "completar": [ { "id": "TDA-<n>", "notes": "notas más completas sugeridas", "tags": ["tags"], "why": "qué le falta" } ],',
+    '  "agrupar": [ { "routeId": "RDA-<n> o null", "routeTitle": "título si es ruta nueva", "routeDescription": "detalle", "topicIds": ["TDA-<n>","TDA-<n>"], "why": "qué las une" } ],',
+    '  "aprenderPrimero": [ { "orderedIds": ["TDA-<n>","TDA-<n>"], "why": "por qué en ese orden" } ],',
     '  "sugerirNuevos": [ { "title": "tema nuevo", "area": "área", "scope": "console|tolkien", "why": "por qué te falta" } ]',
     '}',
-    'Reglas: los ids de tema son LT<n> y los de ruta LR<n>. NO inventes ids: usá',
+    'Reglas: los ids de tema son TDA-<n> y los de ruta RDA-<n>. NO inventes ids: usá',
     'SOLO los que aparecen en los datos (excepto en sugerirNuevos y en rutas nuevas,',
     'donde no hay id todavía). Sé CONSERVADOR con duplicados/unificables (ante la',
     'duda, no los incluyas). NO elimines nada sin dejar un reemplazo (keep). Si una',
@@ -132,8 +135,8 @@ export function analyzePrompt(context) {
 
 // ===== Parseo defensivo =====
 const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
-const LT_RE = /^LT\d+$/;
-const LR_RE = /^LR\d+$/;
+const LT_RE = /^TDA-\d+$/;
+const LR_RE = /^RDA-\d+$/;
 const SCOPES = ['console', 'tolkien'];
 const cleanLt = (x) => { const s = clamp(x, 20).trim(); return LT_RE.test(s) ? s : null; };
 const arr = (x, n, mapFn) => (Array.isArray(x) ? x.slice(0, n).map(mapFn).filter(Boolean) : []);

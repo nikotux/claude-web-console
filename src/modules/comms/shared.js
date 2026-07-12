@@ -48,6 +48,36 @@ export function ensureDir() {
 function readJson(file, fallback) {
   try { return JSON.parse(fss.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
+
+// ===== Ledgers append-only JSONL (BUG-33) =====
+// outbox/manual los appendan VARIOS procesos (server, send-runner, CLI). El RMW
+// leer-array→push→reescribir perdía entradas ante appends concurrentes
+// (last-writer-wins). fss.appendFileSync usa O_APPEND: atómico entre procesos, sin
+// lost-update. readJsonl tolera el formato viejo {entries:[...]} y appendJsonl lo
+// migra a JSONL en el 1er append (one-time, idempotente).
+function readJsonl(file) {
+  let raw = '';
+  try { raw = fss.readFileSync(file, 'utf8'); } catch { return []; }
+  const t = raw.trim();
+  if (!t) return [];
+  if (t[0] === '{' && /"entries"\s*:/.test(t)) { // formato viejo JSON {entries:[...]}
+    try { const o = JSON.parse(t); return Array.isArray(o.entries) ? o.entries : []; } catch { return []; }
+  }
+  return t.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+}
+function appendJsonl(file, obj) {
+  try {
+    fss.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    let raw = '';
+    try { raw = fss.readFileSync(file, 'utf8'); } catch { /* no existe aún */ }
+    const t = raw.trim();
+    if (t && t[0] === '{' && /"entries"\s*:/.test(t)) { // migración one-time del formato viejo
+      const prev = readJsonl(file);
+      fss.writeFileSync(file, prev.map((e) => JSON.stringify(e)).join('\n') + (prev.length ? '\n' : ''), { mode: 0o600 });
+    }
+    fss.appendFileSync(file, `${JSON.stringify(obj)}\n`, { mode: 0o600 });
+  } catch (err) { console.error('[comms] appendJsonl:', err?.message); }
+}
 function writeJson(file, data) {
   // Atómico (tmp+rename por-pid, fix B3 2026-07-11): TODO el estado durable de
   // comms (outbox = ledger de auditoría, contacts, caches github/teams/chatbot)
@@ -123,9 +153,10 @@ export function writeSelf(self) { return writeJson(SELF_FILE, { ...DEFAULT_SELF,
 // prueba de "comms administra y ejecuta todo lo saliente". Independiente del
 // modelo de hilos: acá cae también lo que va a clientes (Desk), no solo a un
 // contacto del tablero.
-export function readOutbox() { const o = readJson(OUTBOX_FILE, null); return (o && Array.isArray(o.entries)) ? o.entries : []; }
+// Cap de DISPLAY (los últimos 500) al leer — el archivo es append-only JSONL, la
+// poda del histórico es hygiene aparte; acá solo acotamos lo que devolvemos.
+export function readOutbox() { return readJsonl(OUTBOX_FILE).slice(-500); }
 export function appendOutbox(entry) {
-  const entries = readOutbox();
   const e = {
     id: entry.id || newId('o'),
     channel: String(entry.channel || '').slice(0, 20),      // github | desk | teams
@@ -140,10 +171,7 @@ export function appendOutbox(entry) {
     dryRun: !!entry.dryRun,
     ts: entry.ts || Date.now(),
   };
-  entries.push(e);
-  // Poda blanda: conservar los últimos 500 (auditoría, no archivo histórico infinito).
-  const trimmed = entries.slice(-500);
-  writeJson(OUTBOX_FILE, { entries: trimmed });
+  appendJsonl(OUTBOX_FILE, e); // O_APPEND atómico multiproceso (BUG-33)
   return e;
 }
 
@@ -181,10 +209,8 @@ export function readChatbot() { return readJson(CHATBOT_FILE, { threads: [], sca
 export function writeChatbot(data) { return writeJson(CHATBOT_FILE, data); }
 
 // ===== Manual (lo escribe el CLI / la web) =====
-export function readManual() { const o = readJson(MANUAL_FILE, null); return (o && Array.isArray(o.entries)) ? o.entries : []; }
-export function writeManual(entries) { return writeJson(MANUAL_FILE, { entries }); }
+export function readManual() { return readJsonl(MANUAL_FILE); }
 export function appendManual(entry) {
-  const entries = readManual();
   const e = {
     id: entry.id || newId('m'),
     contactId: entry.contactId || 'chris',
@@ -197,8 +223,7 @@ export function appendManual(entry) {
     channel: String(entry.channel || 'manual').slice(0, 24),
     ts: entry.ts || Date.now(),
   };
-  entries.push(e);
-  writeManual(entries);
+  appendJsonl(MANUAL_FILE, e); // O_APPEND atómico multiproceso (BUG-33)
   return e;
 }
 

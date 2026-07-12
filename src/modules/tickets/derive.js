@@ -106,7 +106,13 @@ export function businessHoursBetween(fromMs, toMs) {
   let hours = 0;
   // Avanza hora por hora (rango típico: días; barato). Cada hora cuenta si su
   // día (en Bogotá) es hábil (lun=1 … vie=5).
-  for (let ms = fromMs; ms < toMs; ms += 3600_000) {
+  // GUARD de iteración (BUG-39): tope de seguridad ~3 años de horas para que un
+  // timestamp corrupto (p.ej. epoch 0) no dispare cientos de miles de vueltas.
+  // No cambia el resultado de NINGÚN ticket real (ninguno supera los 3 años); solo
+  // acota el caso patológico. La fórmula cerrada exacta queda pendiente de Codex.
+  const MAX_STEPS = 3 * 365 * 24;
+  let steps = 0;
+  for (let ms = fromMs; ms < toMs && steps < MAX_STEPS; ms += 3600_000, steps += 1) {
     const day = new Date(ms - BOGOTA_OFFSET_MS).getUTCDay(); // 0=dom, 6=sáb
     if (day !== 0 && day !== 6) hours += 1;
   }

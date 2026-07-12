@@ -20,9 +20,21 @@ function git(args, cwd) {
   return execFileSync('git', args, { cwd: cwd || ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
 
+// Defensa en profundidad (BUG-42): el `id` del sandbox compone rutas bajo
+// WT_BASE. Hoy los ids son hashes sha1 (seguros), pero validamos que sea un
+// token simple (sin '/', sin '..') ANTES de tocar el filesystem, para que un id
+// inesperado nunca escape de WT_BASE con path traversal.
+function assertSafeId(id) {
+  if (typeof id !== 'string' || id === '.' || id === '..' || !/^[A-Za-z0-9._-]+$/.test(id)) {
+    throw new Error(`worktree: id de sandbox inválido: ${String(id).slice(0, 40)}`);
+  }
+  return id;
+}
+
 // Crea un sandbox que refleja el estado ACTUAL (HEAD + uncommitted trackeado),
 // consolidado en un commit "base" para que el diff del fix sea SOLO el fix.
 export function createSandbox(id) {
+  assertSafeId(id);
   fss.mkdirSync(WT_BASE, { recursive: true, mode: 0o700 });
   removeSandbox(id);
   const wt = path.join(WT_BASE, id);
@@ -47,6 +59,7 @@ export function extractPatch(wt) {
 }
 
 export function removeSandbox(id) {
+  assertSafeId(id);
   const wt = path.join(WT_BASE, id);
   try { git(['worktree', 'remove', '--force', wt]); } catch { /* noop */ }
   try { fss.rmSync(wt, { recursive: true, force: true }); } catch { /* noop */ }

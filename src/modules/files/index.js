@@ -425,7 +425,7 @@ export default {
       try { pst = statSafeSync(path.dirname(abs)); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
       const target = path.join(path.dirname(abs), n);
-      if (fss.existsSync(target)) return res.status(400).json({ error: 'Ya existe un ítem con ese nombre.' });
+      if (fss.existsSync(target)) return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
       try {
         // TOCTOU: entre el existsSync y el rename otro request pudo crear
         // `target`. renameSync en POSIX PISA silenciosamente un archivo de
@@ -438,13 +438,28 @@ export default {
         try { st = fss.lstatSync(abs); } catch { return res.status(404).json({ error: 'El ítem ya no existe.' }); }
         if (st.isFile()) {
           fss.linkSync(abs, target);
-          fss.unlinkSync(abs);
+          try {
+            fss.unlinkSync(abs);
+          } catch (unlinkErr) {
+            // El link se creó pero no pudimos borrar el original: sin rollback,
+            // el archivo queda DUPLICADO (target + abs apuntando al mismo inode)
+            // y encima se reporta error. Deshacemos el link; si eso también
+            // falla, avisamos explícito del duplicado en vez de un error genérico.
+            let rolledBack = true;
+            try { fss.unlinkSync(target); } catch { rolledBack = false; }
+            return res.status(statusForError(unlinkErr)).json({
+              error: rolledBack
+                ? 'No se pudo renombrar (no se pudo quitar el original; se revirtió el cambio).'
+                : 'No se pudo renombrar: el archivo pudo quedar DUPLICADO (falló también la reversión). Revisalo a mano.',
+            });
+          }
         } else {
           fss.renameSync(abs, target);
         }
         res.json({ ok: true, path: path.relative(config.home, target) });
       } catch (e) {
-        if (e.code === 'EEXIST') return res.status(400).json({ error: 'Ya existe un ítem con ese nombre.' });
+        // Misma condición de carrera (destino ya existe) que /mkdir → mismo 409.
+        if (e.code === 'EEXIST') return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
         res.status(statusForError(e)).json({ error: 'No se pudo renombrar.' });
       }
     });

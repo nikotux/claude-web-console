@@ -55,7 +55,7 @@ export const parseOptimization = parser.parse;
 
 // Prompt del análisis: recibe el CENSO determinístico + el CONSUMO REAL ya
 // masticados (JSON) y VERIFICA leyendo el código antes de proponer.
-export function optimizePrompt(census, usage) {
+export function optimizePrompt(census, usage, padCtx = '') {
   // REGLAS DURAS ya masticadas (0 tool calls, mismo patrón que unitPrompt de
   // shared.js): si hardRulesText() trae texto se inyecta directo y el modelo
   // NO gasta un Read del CLAUDE.md entero (~1900 líneas) solo para esto; si
@@ -84,6 +84,15 @@ export function optimizePrompt(census, usage) {
       'extraída acá — NO abras CLAUDE.md para esto, usá este texto directo):',
       '',
       rules,
+    ] : []),
+    ...(padCtx ? [
+      '',
+      'CONTEXTO DE PAD LOCAL (workspace `console`) — lo que el proyecto YA tiene',
+      'rastreado (bugs conocidos, programas en curso). Usalo para NO re-reportar',
+      'lo ya sabido como si fuera nuevo y para alinear tus propuestas con lo que',
+      'está en marcha (si tocás un bug ya listado, referencialo por su ref):',
+      '',
+      padCtx,
     ] : []),
     '',
     'Método (importante — tenés un presupuesto ACOTADO de turnos, administralo:',

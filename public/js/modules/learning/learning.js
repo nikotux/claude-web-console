@@ -4,7 +4,8 @@
 // GetPad, GitHub, cómo proponer un fix). Aprendizaje ASISTIDO:
 //   · "🎓 Explicame esto" (por tema): corrida IA read-only que NAVEGA el código
 //     real y AUTO-GUARDA una explicación como material de estudio editable.
-//   · RUTAS de aprendizaje (LR<n>): agrupan temas con progreso % (temas dominados).
+//   · RUTAS de aprendizaje (RDA-<n>, backend Pad local desde 2026-07-12 ROAD-110
+//     Fase 2 — antes LR<n>): agrupan temas con progreso % (temas dominados).
 //   · "🧠 Analizar aprendizaje": IA que organiza los temas (duplicados, unificar,
 //     completar, agrupar en rutas, qué aprender primero, temas nuevos). Las
 //     propuestas NUNCA se auto-aplican: Aprobar/Descartar por ítem.

@@ -171,8 +171,10 @@ export default {
         }
       });
 
-      ws.on('close', () => session.detach(ws));
-      ws.on('error', () => session.detach(ws));
+      // try/catch en los handlers de emisores externos (invariante 5): un fallo
+      // en detach() no debe propagarse como excepción no atrapada del WS.
+      ws.on('close', () => { try { session.detach(ws); } catch (e) { console.error('[terminal] detach (close) falló:', e?.message); } });
+      ws.on('error', () => { try { session.detach(ws); } catch (e) { console.error('[terminal] detach (error) falló:', e?.message); } });
     });
   },
 };

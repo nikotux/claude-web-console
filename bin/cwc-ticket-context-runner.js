@@ -11,53 +11,29 @@
 // MISMO archivo y AUTO-GUARDA el contexto en meta-store (decisión de Niko:
 // auto-guardar al interpretar). El front encuesta el GET hasta que status deja
 // de ser 'running'. Mismo patrón que bin/cwc-audio-runner.js.
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, CONTEXT_TIMEOUT_MS, contextPrompt, parseContext, renderContextText,
   readJob, writeJob,
 } from '../src/modules/tickets/context-analyze-shared.js';
 import { saveContexto } from '../src/modules/tickets/meta-store.js';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
 async function runAnalysis(job) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'La interpretación de contexto no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: contextPrompt({ transcript: job.transcript, itemTitle: job.itemTitle, itemDesc: job.itemDesc }),
-    options: {
-      cwd: ROOT,
-      settingSources: [],   // nada de settings/skills/MCP: interpretación pura de texto
+  // Texto puro, read-only doble capa (regla 6) vía el helper único core/text-only-query.
+  const text = await textOnlyQuery(
+    contextPrompt({ transcript: job.transcript, itemTitle: job.itemTitle, itemDesc: job.itemDesc }),
+    {
       model: 'sonnet',
       maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },        // CAPA 1
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }), // CAPA 2
+      timeoutMs: CONTEXT_TIMEOUT_MS,
+      cwd: ROOT,
+      denyReason: 'La interpretación de contexto no usa herramientas.',
+      timeoutMessage: 'La interpretación tardó demasiado.',
     },
-  });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('La interpretación tardó demasiado.')), CONTEXT_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  pump.catch(() => {}); // si gana el timeout, evita unhandledRejection del pump tardío
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
+  );
   const result = parseContext(text);
   if (!result) throw new Error('No se pudo interpretar la respuesta.');
   return result;
@@ -72,7 +48,7 @@ async function main() {
     const rendered = renderContextText(result);
     // AUTO-GUARDAR en meta-store: aparece en la sección "Contexto adicional" del
     // ítem sin un paso extra (editable/borrable después desde la UI).
-    if (job.key) { try { saveContexto(job.key, rendered); } catch (e) { log('no pude auto-guardar:', e?.message); } }
+    if (job.key) { try { await saveContexto(job.key, rendered); } catch (e) { log('no pude auto-guardar:', e?.message); } }
     writeJob(id, { ...job, status: 'done', result, rendered, error: null, updatedAt: Date.now() });
     log(`OK job ${id} (key ${job.key}): ${result.puntosClave.length} punto(s), ${result.acuerdos.length} acuerdo(s)`);
   } catch (err) {

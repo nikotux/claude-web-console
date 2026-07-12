@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { runAdaptivePool } from '../../core/pool.js';
 import { listTicketsByDepartment, getTicketState } from './desk-mcp-client.js';
 import { DEPT_TOLKIEN, DEPT_MORDOR } from './derive.js';
 import { fetchPrRich, listPrs } from '../comms/pr-read-shared.js';
@@ -33,19 +34,27 @@ const RECENT_CLOSED_DAYS = 21;
 let cache = null;       // { at, tickets: [...] }
 let inFlight = null;    // promesa de carga en curso (dedup de requests concurrentes)
 
-// Pool simple de concurrencia limitada (sin dependencias). Mapea `items` con
-// `fn` corriendo hasta `n` a la vez; los errores por item no tumban el lote.
+// Pool de concurrencia limitada, adoptando el pool ADAPTATIVO canónico
+// (core/pool.js · runAdaptivePool — coherencia 2026-07-12). Mantiene el contrato
+// histórico: mapea `items` con `fn` a lo sumo `n` a la vez, DEVUELVE un array de
+// resultados EN ORDEN, y los errores por item no tumban el lote (se capturan como
+// {__error}). El techo se fija en `n` (max=start=min) para NO cambiar la carga a
+// Zoho (rate-limit): la concurrencia base es idéntica a la anterior; lo que se
+// GANA es el back-off adaptativo cuando Zoho tira 429/overload (ctl.backoff()).
+const RATE_LIMIT_RE = /429|rate.?limit|too many|overload/i;
 async function pool(items, n, fn) {
   const out = new Array(items.length);
-  let i = 0;
-  async function worker() {
-    while (i < items.length) {
-      const idx = i++;
-      try { out[idx] = await fn(items[idx], idx); }
-      catch (err) { out[idx] = { __error: String(err?.message || err), item: items[idx] }; }
+  // Índice estable por item: runAdaptivePool no garantiza orden de finalización,
+  // así que se guarda el idx original con cada item para escribir en su casillero.
+  const indexed = items.map((item, idx) => ({ item, idx }));
+  await runAdaptivePool(indexed, async ({ item, idx }, ctl) => {
+    try { out[idx] = await fn(item, idx); }
+    catch (err) {
+      const msg = String(err?.message || err);
+      if (RATE_LIMIT_RE.test(msg)) ctl.backoff(); // señal de sobrecarga → baja la concurrencia
+      out[idx] = { __error: msg, item };
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  }, { min: n, start: n, max: n });
   return out;
 }
 

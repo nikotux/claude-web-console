@@ -507,6 +507,8 @@ html, body {
 .tk-link--local:hover { background: var(--cwc-accent-bg-soft); border-color: var(--cwc-accent); }
 .tk-link--oficial { color: var(--cwc-accent-cool); border-color: color-mix(in srgb, var(--cwc-accent-cool) 45%, transparent); }
 .tk-link--oficial:hover { background: color-mix(in srgb, var(--cwc-accent-cool) 14%, transparent); border-color: var(--cwc-accent-cool); }
+.tk-link--pad { color: var(--cwc-ok); border-color: color-mix(in srgb, var(--cwc-ok) 45%, transparent); }
+.tk-link--pad:hover { background: color-mix(in srgb, var(--cwc-ok) 14%, transparent); border-color: var(--cwc-ok); }
 /* Tarjeta Tolkien informativa (rediseño icónico, 3 líneas — inspirado en la
    barra de estado de VS Code / GitHub Desktop): branch+sync · dirty+fetch ·
    pulso del último commit. Cada dato con su ícono; casi sin texto. */
@@ -839,7 +841,7 @@ html, body {
    sub-proyecto de Tickets & Features. */
 .pj-sync { margin: 0 0 .6rem; padding: .5rem .6rem; border-radius: var(--cwc-radius-sm, 6px);
   border: 1px solid var(--cwc-border); background: var(--cwc-bg-chip); }
-.pj-sync--ok { border-color: color-mix(in srgb, var(--cwc-ok, #3a7d44) 45%, var(--cwc-border)); }
+.pj-sync--ok { border-color: color-mix(in srgb, var(--cwc-ok) 45%, var(--cwc-border)); }
 .pj-sync--warn { border-color: color-mix(in srgb, var(--cwc-warn) 55%, var(--cwc-border)); }
 .pj-sync-line { display: flex; align-items: center; gap: .45rem; font-size: var(--cwc-fs-sm); flex-wrap: wrap; }
 .pj-sync-ico { flex: none; }
@@ -1832,7 +1834,7 @@ html, body {
   color: var(--cwc-text);
 }
 .chat-att--up { opacity: .6; }
-.chat-att--err { border-color: var(--cwc-danger, #c0392b); }
+.chat-att--err { border-color: var(--cwc-danger); }
 .chat-att--link { cursor: pointer; }
 .chat-att-thumb {
   width: 30px; height: 30px; object-fit: cover; flex: none;
@@ -2847,10 +2849,10 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 /* Lock por usuario (quién trabaja el ticket). Chip en filas + banner en el modal. */
 .bv2-lock { white-space: nowrap; }
 .bv2-lockbar { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; padding: .45rem .6rem; border-radius: var(--cwc-radius-sm); margin-bottom: .55rem; font-size: var(--cwc-fs-sm); border: 1px solid var(--cwc-border-soft); }
-.bv2-lockbar--other { background: color-mix(in srgb, var(--cwc-danger, #d64545) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-danger, #d64545) 35%, transparent); color: var(--cwc-text); }
-.bv2-lockbar--mine { background: color-mix(in srgb, var(--cwc-ok, #3a9d5d) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-ok, #3a9d5d) 35%, transparent); color: var(--cwc-text); }
+.bv2-lockbar--other { background: color-mix(in srgb, var(--cwc-danger) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-danger) 35%, transparent); color: var(--cwc-text); }
+.bv2-lockbar--mine { background: color-mix(in srgb, var(--cwc-ok) 12%, transparent); border-color: color-mix(in srgb, var(--cwc-ok) 35%, transparent); color: var(--cwc-text); }
 .bv2-lockbar-hint { color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); }
-.bv2-danger { color: var(--cwc-danger, #d64545); }
+.bv2-danger { color: var(--cwc-danger); }
 /* Waiting-on */
 .bv2-waits { display: flex; gap: 1rem; }
 .bv2-wait { display: flex; flex-direction: column; align-items: center; }
@@ -2931,3 +2933,27 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bv2-pad-item-h { display: flex; align-items: center; justify-content: space-between; gap: .4rem; }
 .bv2-pad-item-t { font-size: var(--cwc-fs-sm); color: var(--cwc-text); line-height: 1.35; margin-top: .15rem; }
 .bv2-pad-item-c { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); line-height: 1.4; margin-top: .25rem; white-space: pre-wrap; }
+
+/* ===== Mejora Continua (ROAD-256) — tablero de lecciones de proceso ===== */
+.mc-group { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); margin-bottom: .55rem; overflow: hidden; }
+.mc-group > summary { cursor: pointer; padding: .45rem .6rem; font-size: var(--cwc-fs-sm); font-weight: 600; background: var(--cwc-bg-elevated); display: flex; align-items: center; gap: .4rem; list-style: none; }
+.mc-group > summary::-webkit-details-marker { display: none; }
+.mc-group-body { padding: .45rem; display: flex; flex-direction: column; gap: .4rem; }
+.mc-lesson { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-panel); }
+.mc-lesson > summary { cursor: pointer; padding: .45rem .55rem; display: flex; align-items: center; gap: .4rem; list-style: none; font-size: var(--cwc-fs-sm); }
+.mc-lesson > summary::-webkit-details-marker { display: none; }
+.mc-lesson[open] > summary { border-bottom: 1px solid var(--cwc-border); }
+.mc-cat { flex: none; font-size: 1rem; }
+.mc-title { flex: 1; min-width: 0; color: var(--cwc-text); line-height: 1.3; }
+.mc-body { padding: .55rem; display: flex; flex-direction: column; gap: .5rem; }
+.mc-md { font-size: var(--cwc-fs-sm); color: var(--cwc-text); line-height: 1.45; }
+.mc-meta { font-size: var(--cwc-fs-xs); }
+.mc-acts { display: flex; flex-wrap: wrap; gap: .35rem; }
+/* Mejora Continua · curaduría IA (Fase 5) */
+.mc-cur { border: 1px solid var(--cwc-accent-cool, var(--cwc-border)); border-radius: var(--cwc-radius-sm); padding: .5rem; margin-bottom: .6rem; background: color-mix(in srgb, var(--cwc-bg-elevated) 88%, transparent); }
+.mc-cur-item { font-size: var(--cwc-fs-sm); padding: .35rem 0; border-bottom: 1px solid var(--cwc-border); display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.mc-cur-item:last-child { border-bottom: 0; }
+/* Mejora Continua · acción "Adoptar → destino ▾" (rediseño 2026-07-12) */
+.mc-adopt { display: inline-flex; align-items: stretch; gap: 2px; }
+.mc-adopt .mc-more { padding-left: .4rem; padding-right: .4rem; }
+.mc-dests { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }

@@ -24,6 +24,7 @@ import {
   readOpt, writeOpt, writeOptLock, clearOptLock, otherOptAlive,
   OPT_TIMEOUT_MS, OPT_MAX_TURNS, OPT_HEARTBEAT_MS,
 } from '../src/modules/health/optimize-shared.js';
+import { padContext } from '../src/modules/health/shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -49,10 +50,10 @@ const denyHook = {
   },
 };
 
-async function analyze(census, usage) {
+async function analyze(census, usage, padCtx) {
   let out = '';
   const q = query({
-    prompt: optimizePrompt(census, usage),
+    prompt: optimizePrompt(census, usage, padCtx),
     options: {
       cwd: ROOT,
       model: 'sonnet',
@@ -100,8 +101,11 @@ async function run() {
     usage = { engines: s.engines, today: s.today, totals: { tokens: s.totals.tokens, cost: s.totals.cost } };
   } catch (err) { log('sin consumo real (no rompe):', err?.message); }
 
+  phase = 'leyendo contexto de Pad local…'; beat();
+  const padCtx = await padContext(); // best-effort: '' si Pad local no responde
+
   phase = 'analizando con sonnet…'; beat();
-  const out = await analyze(census, usage);
+  const out = await analyze(census, usage, padCtx);
   const parsed = parseOptimization(out);
   if (!parsed) {
     // Cola del texto al log para diagnosticar (¿se quedó sin turnos? ¿fence roto?).

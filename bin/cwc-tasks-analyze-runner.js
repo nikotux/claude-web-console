@@ -66,7 +66,7 @@ async function main() {
   const job = readAnalysisJob(scope);
   if (!job) { log(`job de análisis (${scope}) inexistente.`); process.exit(0); return; }
   try {
-    const built = buildContext(scope);
+    const built = await buildContext(scope);
     if (!built) throw new Error('No hay datos para analizar.');
     const result = await runAnalysis(built.context);
     writeAnalysisJob(scope, { ...job, status: 'done', result, error: null, updatedAt: Date.now() });

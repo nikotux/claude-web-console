@@ -65,7 +65,7 @@ async function main() {
   const job = readAnalysisJob();
   if (!job) { log('job de análisis inexistente.'); process.exit(0); return; }
   try {
-    const built = buildContext();
+    const built = await buildContext();
     if (!built) throw new Error('No hay temas para analizar.');
     const result = await runAnalysis(built.context);
     writeAnalysisJob({ ...job, status: 'done', result, error: null, updatedAt: Date.now() });

@@ -26,6 +26,10 @@ function load() {
 }
 function persist() {
   try {
+    // Poda de vencidos (BUG-37): expired() los ocultaba al leer, pero sin barrido
+    // quedaban en disco para siempre. Cada persist (claim/release) limpia los que
+    // ya vencieron — hygiene barata, acotada al nº de tickets.
+    for (const k of Object.keys(claims || {})) if (expired(claims[k])) delete claims[k];
     fs.mkdirSync(path.dirname(FILE), { recursive: true, mode: 0o700 });
     const tmp = `${FILE}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(claims), { mode: 0o600 });

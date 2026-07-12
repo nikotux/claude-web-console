@@ -32,10 +32,25 @@ export const CHATBOT_LOG = path.join(COMMS_DIR, 'chatbot.log');
 export const CHATBOT_INTERPRET_TIMEOUT_MS = 150 * 1000;
 export const CHATBOT_HEARTBEAT_MS = 3000;
 export const CHATBOT_LOCK_FRESH_MS = 20000;
+// Ventana de reuso de teams.json en fase 1 del chatbot: si /teams-refresh escaneó
+// ESE bot hace menos que esto, se reusa el hilo ya guardado en vez de disparar
+// otra corrida Graph (sonnet ×14 turnos). Optimización IA 2026-07-12.
+export const CHATBOT_FRESH_TEAMS_MS = 15 * 60 * 1000;
 
 // Contactos que son bots de Teams que RELAYAN a personas (kind:'bot').
 export function relayBots(contacts) {
   return (contacts || []).filter((c) => c && c.kind === 'bot');
+}
+
+// Hilo YA escaneado y FRESCO de teams.json para un bot, o null si no hay/está
+// viejo. Evita re-leer por Graph lo que /teams-refresh acaba de traer: mismo
+// contacto (kind:'bot', mismo teamsBotPrompt), mismo dato. `teams.scannedAt` es
+// global (una marca por pasada de escaneo de Teams). Optimización IA 2026-07-12.
+export function freshBotThread(bot, teams, maxAgeMs = CHATBOT_FRESH_TEAMS_MS) {
+  if (!bot || !teams || !teams.scannedAt) return null;
+  if (Date.now() - teams.scannedAt > maxAgeMs) return null; // escaneo viejo
+  const t = (teams.threads || []).find((x) => x.contactId === bot.id);
+  return (t && (t.messages || []).length) ? t : null;
 }
 
 // ===== Fase 2: prompt de interpretación (CERO herramientas) =====
