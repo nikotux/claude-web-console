@@ -38,6 +38,10 @@ import {
 import {
   readCoh, writeCoh, isCohRunning, readCohLock, writeCohLock, COH_LOG, evaluateCoherence,
 } from './coherence-shared.js';
+import {
+  readScan, writeScan, scanStatus, isScanRunning, writeScanLock, clearScanLock,
+  spawnScanRunner, createBugFromFinding,
+} from './scan-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -745,6 +749,42 @@ export default {
         res.json({ ...readReview(), running: true, started });
       } catch (err) {
         res.status(500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+
+    // ===== ESCANEO DE SALUD UNIFICADO (2026-07-12) =====
+    // Un solo botón: corre Revisión + Optimización + Coherencia bajo UN pool +
+    // cross-check con Pad, en un orquestador desacoplado. Escribe los MISMOS
+    // archivos de resultado (review/optimization/coherence.json) + el overlay
+    // health-scan.json. Arrancar+encuestar (patrón /review).
+    r.get('/scan-all', (req, res) => {
+      res.json(scanStatus(readScan()));
+    });
+    r.post('/scan-all', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo consume tokens (requiere administrador).' });
+      if (isScanRunning()) return res.status(409).json({ error: 'Ya hay un escaneo de salud en curso.' });
+      try {
+        const mode = req.body?.full === true ? 'full' : 'incremental';
+        // Reserva SINCRÓNICA del lock (pid:0) antes del spawn — cierra la ventana
+        // TOCTOU (el runner la reclama con su pid, patrón BUG-48).
+        writeScanLock(0);
+        writeScan({ running: true, startedAt: Date.now(), updatedAt: Date.now(), mode, phase: 'arrancando', progress: null, pad: null, verdict: null, error: null });
+        spawnScanRunner(mode);
+        res.json({ ok: true, running: true, mode });
+      } catch (err) {
+        clearScanLock();
+        res.status(500).json({ error: `No se pudo lanzar el escaneo: ${String(err?.message || err).slice(0, 200)}` });
+      }
+    });
+    // Write-back: crear un BUG en Pad desde un hallazgo NUEVO confirmado (con OK
+    // del humano en el front). 0 tokens (HTTP a Pad).
+    r.post('/scan-pad-bug', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      try {
+        const ref = await createBugFromFinding(req.body?.finding || {});
+        res.json({ ok: true, ref });
+      } catch (err) {
+        res.status(502).json({ error: `No se pudo crear el BUG en Pad: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 

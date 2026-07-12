@@ -889,6 +889,29 @@ html, body {
 .hp-empty { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .3rem .1rem; }
 .hp-error { font-size: var(--cwc-fs-sm); color: var(--cwc-danger-strong); margin: .4rem 0 0; }
 .hp-running { display: flex; align-items: center; gap: .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: .5rem 0 0; }
+
+/* ===== Escaneo de Salud unificado (health-scan-modal) ===== */
+.hs-wrap { display: flex; flex-direction: column; min-height: 0; gap: .5rem; }
+.hs-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; padding-bottom: .3rem; border-bottom: 1px solid var(--cwc-border); }
+.hs-head-actions { display: flex; gap: .4rem; align-items: center; }
+.hs-tabs { display: flex; gap: .2rem; flex-wrap: wrap; }
+.hs-tab { border: 1px solid var(--cwc-border); background: transparent; color: var(--cwc-text-dim); border-radius: 999px; padding: .2rem .6rem; font-size: var(--cwc-fs-xs); cursor: pointer; }
+.hs-tab--active { background: color-mix(in srgb, var(--cwc-accent) 18%, transparent); border-color: var(--cwc-accent); color: var(--cwc-text); }
+.hs-body { flex: 1; min-height: 0; overflow: auto; padding-top: .3rem; }
+.hs-grid { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
+.hs-grid td { padding: .35rem .4rem; border-bottom: 1px solid var(--cwc-border); }
+.hs-grid td:first-child { color: var(--cwc-text-dim); white-space: nowrap; width: 8.5rem; }
+.hs-detail { display: flex; flex-direction: column; gap: .5rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.hs-padsec { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); margin: .35rem 0; padding: .2rem .5rem; }
+.hs-padsec > summary { cursor: pointer; font-size: var(--cwc-fs-sm); }
+.hs-frow { display: flex; align-items: center; gap: .4rem; padding: .3rem .1rem; border-top: 1px solid var(--cwc-border); font-size: var(--cwc-fs-xs); }
+.hs-frow--regresion { background: color-mix(in srgb, var(--cwc-warn) 8%, transparent); }
+.hs-sev { text-transform: uppercase; font-size: 9px; padding: .05rem .3rem; border-radius: 3px; background: var(--cwc-bg-elevated); color: var(--cwc-text-dim); }
+.hs-sev--critical, .hs-sev--high { background: color-mix(in srgb, var(--cwc-danger) 20%, transparent); color: var(--cwc-danger); }
+.hs-fmod { color: var(--cwc-accent); white-space: nowrap; }
+.hs-fdet { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hs-match { color: var(--cwc-text-dim); white-space: nowrap; }
+.hs-created { color: var(--cwc-ok) !important; border-color: var(--cwc-ok) !important; }
 .hp-verdict { display: flex; align-items: baseline; gap: .6rem; font-size: var(--cwc-fs-md); }
 .hp-verdict--ok b { color: var(--cwc-ok); }
 .hp-verdict--atencion b { color: var(--cwc-warn); }

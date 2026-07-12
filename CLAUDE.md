@@ -275,7 +275,9 @@ código.
   de antes es inerte (ya no se lee),
   `health-solved.json` registro de bugs, `health-audit-cache.json` caché
   incremental de salud, `health-invariant-proposals.json` invariantes propuestos
-  pendientes, `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · chatbot.json chatbot derivado por IA · comms.lock heartbeat · teams.lock · chatbot.lock heartbeat · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
+  pendientes, `health-scan.json` estado por fases del ESCANEO DE SALUD UNIFICADO +
+  `health-scan.lock` heartbeat de su orquestador + `health-scan.log` (ver
+  "Verificación de salud" · Escaneo unificado), `comms/` (motor de Comunicaciones: contacts.json · projects.json · github.json escaneo gh · manual.json registros · overrides.json · gh-cache.json · self.json identidad del dueño · chatbot.json chatbot derivado por IA · comms.lock heartbeat · teams.lock · chatbot.lock heartbeat · analyze/ análisis IA de hilos), `optimization.json` resultado de la Optimización IA +
   `optimize.lock` heartbeat de su runner, `coherence.json` resultado del Módulo
   de Coherencia (propuestas + hallazgos determinísticos persistidos) +
   `coherence.lock` heartbeat de su runner, `projects-analyze/<id>.json` jobs del
@@ -2620,6 +2622,14 @@ bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz
                             CACHÉ INCREMENTAL por ticket (triage-cache.json, fingerprint
                             status+subject del listado + TTL 12 h): sin cambios y fresco ⇒
                             reusa el triage anterior sin query() (0 tokens); --full la ignora
+bin/cwc-health-scan-runner.js  ORQUESTADOR del ESCANEO DE SALUD UNIFICADO (2026-07-12):
+                            corre Revisión + Optimización + Coherencia bajo UN pool
+                            adaptativo compartido + cross-check con Pad, en una pasada.
+                            REUSA la lógica de los 3 motores (no la reescribe) y escribe
+                            los mismos review/optimization/coherence.json + el overlay
+                            health-scan.json. Lógica en src/modules/health/scan-shared.js.
+                            Ver "Verificación de salud" (Escaneo unificado). Regla de oro +
+                            regla 6 (cada query su allowlist read-only doble capa)
 bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
                             allowlist fixToolAllowed, node --check, sin reinicio — excepción
@@ -3455,6 +3465,37 @@ docs/                       frontend-modules.md · brief-original.txt · context
 
 ## Verificación de salud
 
+- **🩺 ESCANEO DE SALUD UNIFICADO** (2026-07-12, pedido de Niko: "un solo botón que
+  corra todo"): la pestaña Salud dejó de tener 3 botones IA sueltos (Optimización /
+  Coherencia / Revisión). Ahora hay UN botón "Escaneo de Salud" que corre los TRES
+  análisis + el cross-check con Pad en UNA pasada, bajo UN pool adaptativo
+  compartido (`core/pool.js` · runAdaptivePool) — la paralelización que antes solo
+  tenía la Revisión aplicada a TODO: las ~16 unidades de la Revisión + la query de
+  Optimización + la de Coherencia entran al MISMO pool, así optim/coh corren
+  DURANTE la Revisión (gratis en tiempo de reloj). ORQUESTADOR desacoplado
+  `bin/cwc-health-scan-runner.js` + `health/scan-shared.js` (lock `health-scan.lock`
+  heartbeat pid-aware + estado `health-scan.json` por fases; reanudable, sobrevive
+  reinicio — regla de oro). REUSA la lógica de los 3 motores (prompts/parsers/
+  allowlists de shared.js/optimize-shared/coherence-shared) — NO la reescribe — y
+  escribe los MISMOS archivos de resultado (review/optimization/coherence.json), así
+  todas las acciones de aprobar/fix siguen funcionando. Blindaje regla 6 intacto
+  (cada query su allowlist read-only doble capa). Incremental por default (caché de
+  fingerprint de la Revisión) · `full` ignora cachés. CROSS-CHECK con Pad
+  (`crossCheckPad` en scan-shared, 0 tokens): cada hallazgo de la Revisión se cruza
+  contra la colección Bugs de Pad → 🆕 nuevo (candidato a BUG) · 🔗 rastreado (ya en
+  el backlog) · ⚠️ regresión (matchea un BUG fixed/wontfix → reapareció). WRITE-BACK
+  con confirmación: `POST /scan-pad-bug` crea el BUG en Pad desde un hallazgo nuevo
+  (`createBugFromFinding`). Endpoints: `POST /api/health/scan-all` (admin, spawn,
+  reserva pid:0) · `GET /scan-all` (0 tokens, lee disco + progreso) · `POST
+  /scan-pad-bug` (admin). Front: `system/health-panel.js` (Chequeos rápidos + 1
+  botón) + `system/health-scan-modal.js` (Pac-Man persistente `delegating` +
+  progreso por fase + tabs 📊 Resumen · 🔬 Revisión · 🧠 Optimización · 🔗
+  Coherencia · 📊 Dashboard · 🐛 Pad; las 4 primeras abren el modal de detalle
+  existente para accionar). Los 3 runners standalone (`cwc-health-runner`/`optimize`/
+  `coherence`) y sus `POST /review`//optimize`//coherence` SIGUEN existiendo como el
+  mecanismo subyacente (los reusan los modales de detalle); el orquestador sostiene
+  sus 4 locks durante el escaneo, así que no hay doble corrida. La sección de abajo
+  describe cada motor en detalle (siguen siendo la verdad de cómo funciona cada uno).
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
