@@ -104,7 +104,7 @@ export default {
 
     async function loadCounts() {
       try {
-        const d = await (await fetch('/api/tasks')).json();
+        const d = await (await fetch('/api/tasks/counts')).json();
         counts = d.counts || counts;
       } catch { /* noop */ }
       renderMini();

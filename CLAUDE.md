@@ -1217,15 +1217,28 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             evento {id,ts,kind,entity,refId,title,detail} — el panel "Actividad
                             reciente" lee ESTO (antes se derivaba de timestamps, sin historial).
                             Ruta /api/tasks (todo AUTENTICADO, sin admin — bloc privado del dueño):
-                            GET / {tasks,counts,plans} · GET /activity {events} · GET /plans
+                            GET / {tasks,counts,plans} · GET /counts {counts} (liviano, SIN el
+                            fan-out de blocks[] por ítem — lo usa el poll de 20s del sidebar,
+                            loadCounts() de tasks.js) · GET /activity {events} · GET /plans
                             {plans} · POST / (crear tarea) · POST /from-audio {jobId,tasks[]} ·
                             POST /plans (crear) · POST /plans/:id (editar) · POST /plans/:id/delete
                             · POST /:id (editar tarea) · POST /:id/delete · POST /analyze +
                             GET /analysis (análisis general IA, ver arriba) · comentarios/timeline
                             (ver "CAMPOS estilo Pad" abajo). OJO ORDEN: las rutas
-                            literales /plans y /activity se registran ANTES de la paramétrica /:id
+                            literales /plans, /counts y /activity se registran ANTES de la
+                            paramétrica /:id
                             (valida ^T\d+$) para que Express no las capture como id; /plans valida
-                            ^PLAN-\d+$. CAMPOS estilo Pad (2026-07-07, pedido del usuario, "nutrir
+                            ^PLAN-\d+$. RATE LIMIT DE PAD LOCAL (bug real 2026-07-12): `blocks[]` no
+                            viene decorado en list/get — listPlans()/listTasks() piden un
+                            listLinks() POR ÍTEM; sin tope, un Promise.all disparaba 60-100
+                            requests SIMULTÁNEOS contra Pad local en CADA poll de 20s (tenga o no
+                            el tablero abierto), agotando su rate limiter POR USUARIO — "too many
+                            requests" hasta en el uso manual de Pad (web/MCP) mientras tanto.
+                            Arreglado con `mapPooled()` (store.js, sobre `core/pool.js
+                            runAdaptivePool`, mismo patrón `pool()` de tickets/sources.js):
+                            concurrencia FIJA baja (LINKS_CONCURRENCY=4) + back-off si Pad devuelve
+                            429; y GET /counts evita el fan-out ENTERO cuando solo hacen falta los
+                            conteos por estado. CAMPOS estilo Pad (2026-07-07, pedido del usuario, "nutrir
                             el detalle basándonos en GetPad pero simple"): la TAREA suma
                             owner/estimate/dueDate/comments[]/blocks[]; el PLAN suma
                             owner/phase/targetDate/comments[]/blocks[]. Todo se normaliza en

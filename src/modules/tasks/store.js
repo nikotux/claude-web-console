@@ -26,7 +26,10 @@
 //      manual al borrar un plan, verificado).
 //   4. `blocks[]` es la relación nativa "blocks" (pad.addLink/deleteLink) — NO
 //      viene decorada en list/get como el parent, hay que pedirla aparte con
-//      listLinks() por cada ítem (paralelizado con Promise.all).
+//      listLinks() por cada ítem, con CONCURRENCIA ACOTADA (mapPooled, tope
+//      LINKS_CONCURRENCY) — un Promise.all sin tope sobre 60-100 ítems agotaba
+//      el rate limiter por-usuario de Pad local (bug real 2026-07-12, ver el
+//      comentario de mapPooled más abajo).
 //   5. Borrar un comentario NO cuelga del item (`/items/:ref/comments/:cid` da
 //      404) — es un recurso propio del workspace por el UUID del comentario
 //      (`/comments/:cid`), SÍ soportado (a diferencia de lo que el plan
@@ -48,6 +51,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { runAdaptivePool } from '../../core/pool.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
   listComments, addComment as padAddComment, deleteComment as padDeleteComment,
@@ -170,12 +174,35 @@ function planFromPadItem(item, blocks = []) {
 
 // Relación "blocks" de un ítem (lo que ÉL bloquea) — no viene decorada en
 // list/get, hay que pedirla aparte. Best-effort: si falla, sin bloqueos.
-async function blocksOf(ref) {
+// `ctl` (opcional) es el control de runAdaptivePool — señala back-off si Pad
+// responde 429 (ver mapPooled, más abajo).
+async function blocksOf(ref, ctl) {
   const r = await listLinks(ref);
-  if (!r.ok) return [];
+  if (!r.ok) {
+    if (r.status === 429) ctl?.backoff();
+    return [];
+  }
   return r.data
     .filter((l) => l.link_type === 'blocks' && l.source_ref === ref)
     .map((l) => l.target_ref);
+}
+
+// Concurrencia ACOTADA para el fan-out "un listLinks() por ítem" de
+// listTasks()/listPlans() (bug real 2026-07-12: sin tope, una lista de 60-100
+// tareas+planes disparaba esa cantidad de requests SIMULTÁNEOS contra Pad
+// local en CADA poll de 20s del board — agotaba su rate limiter por-usuario y
+// tiraba "too many requests" hasta en el uso manual de Pad, web/MCP, mientras
+// tanto). Mismo patrón que el `pool()` de tickets/sources.js (regla de oro:
+// paralelo lo que LEE, con tope): concurrencia FIJA baja + back-off (ctl) si
+// Pad devuelve 429.
+const LINKS_CONCURRENCY = 4;
+async function mapPooled(items, fn) {
+  const out = new Array(items.length);
+  const indexed = items.map((item, idx) => ({ item, idx }));
+  await runAdaptivePool(indexed, async ({ item, idx }, ctl) => {
+    out[idx] = await fn(item, ctl);
+  }, { min: LINKS_CONCURRENCY, start: LINKS_CONCURRENCY, max: LINKS_CONCURRENCY });
+  return out;
 }
 
 // Aplica la relación "blocks" deseada (diff contra la actual: agrega lo que
@@ -234,7 +261,7 @@ function plansWithProgress(plans, tasks) {
 export async function listPlans() {
   const [plansR, tasks] = await Promise.all([listItems(PLANS_COLLECTION), tasksForProgress()]);
   if (!plansR.ok) throw padError('listPlans', plansR);
-  const plans = await Promise.all(plansR.data.map(async (p) => planFromPadItem(p, await blocksOf(p.ref))));
+  const plans = await mapPooled(plansR.data, async (p, ctl) => planFromPadItem(p, await blocksOf(p.ref, ctl)));
   // Activos primero, luego por fecha de creación desc.
   const rank = { active: 0, proposed: 1, done: 2, cancelled: 3 };
   return plansWithProgress(plans, tasks).sort((a, b) =>
@@ -308,6 +335,23 @@ export async function deletePlan(id) {
   return removed;
 }
 
+// Conteos por estado, SIN el fan-out de blocksOf() — es lo único que necesita
+// el poll de 20s del sidebar (loadCounts() en tasks.js), que antes pegaba
+// contra listTasks() completo y pagaba 60-100 listLinks() de más por cada
+// tick, para siempre, aunque el tablero ni estuviera abierto (mismo bug real
+// 2026-07-12 de mapPooled más arriba — esta es la otra mitad: evitar el
+// trabajo, no solo acotar su concurrencia).
+export async function listCounts() {
+  const r = await listItems(TASKS_COLLECTION);
+  if (!r.ok) throw padError('listCounts', r);
+  const counts = { pendiente: 0, 'en-progreso': 0, hecha: 0, total: r.data.length };
+  for (const t of r.data) {
+    const status = normStatus(parseFields(t).status);
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return { counts };
+}
+
 // ===== TAREAS =====
 // Vista pública (ordenada: sin terminar primero por prioridad, luego por fecha)
 // + conteos + planes con progreso (todo lo que el dashboard necesita).
@@ -316,8 +360,8 @@ export async function listTasks() {
   if (!tasksR.ok) throw padError('listTasks', tasksR);
   if (!plansR.ok) throw padError('listTasks:plans', plansR);
   const [tasks, plans] = await Promise.all([
-    Promise.all(tasksR.data.map(async (t) => taskFromPadItem(t, await blocksOf(t.ref)))),
-    Promise.all(plansR.data.map(async (p) => planFromPadItem(p, await blocksOf(p.ref)))),
+    mapPooled(tasksR.data, async (t, ctl) => taskFromPadItem(t, await blocksOf(t.ref, ctl))),
+    mapPooled(plansR.data, async (p, ctl) => planFromPadItem(p, await blocksOf(p.ref, ctl))),
   ]);
 
   const prioRank = { alta: 0, media: 1, baja: 2 };

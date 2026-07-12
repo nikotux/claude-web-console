@@ -15,6 +15,7 @@
 //
 // HTTP (todo autenticado; sin admin: es un bloc privado del dueño):
 //   GET  /api/tasks                  -> { tasks, counts, plans }
+//   GET  /api/tasks/counts           -> { counts }         (liviano, sin blocks[]; lo usa el poll de 20s)
 //   GET  /api/tasks/activity         -> { events }        (log real, panel)
 //   GET  /api/tasks/plans            -> { plans }          (con progreso)
 //   POST /api/tasks                  -> { task }           (crear)
@@ -26,13 +27,13 @@
 //   POST /api/tasks/:id/delete       -> { ok }
 //   POST /api/tasks/analyze          -> { scope, status }  (admin: consume tokens)
 //   GET  /api/tasks/analysis         -> { scope, status, result, ... } (lee disco)
-// OJO ORDEN: las rutas literales /plans, /activity, /analyze y /analysis se
-// registran ANTES de la paramétrica /:id (que valida ^PEND-\d+$) para que Express
+// OJO ORDEN: las rutas literales /plans, /counts, /activity, /analyze y
+// /analysis se registran ANTES de la paramétrica /:id (que valida ^PEND-\d+$) para que Express
 // no las capture como id.
 import express from 'express';
 import { isAdmin } from '../../core/auth.js';
 import {
-  listTasks, createTask, updateTask, deleteTask, createFromAudio,
+  listTasks, listCounts, createTask, updateTask, deleteTask, createFromAudio,
   listActivity, listPlans, createPlan, updatePlan, deletePlan,
   addComment, deleteComment, timelineFor,
 } from './store.js';
@@ -60,6 +61,16 @@ export default {
     r.get('/', async (req, res) => {
       try { res.json(await listTasks()); }
       catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) || 'No se pudieron leer las tareas.' }); }
+    });
+
+    // Solo los conteos por estado (sin blocks[] de cada tarea/plan) — lo único
+    // que necesita el poll de 20s del sidebar (loadCounts() en tasks.js); pegar
+    // contra GET / entero pagaba el fan-out completo de listLinks() en CADA
+    // tick, para siempre, agotando el rate limiter de Pad local (bug real
+    // 2026-07-12, ver el comentario de listCounts() en store.js).
+    r.get('/counts', async (req, res) => {
+      try { res.json(await listCounts()); }
+      catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) || 'No se pudieron leer los conteos.' }); }
     });
 
     r.get('/activity', (req, res) => {
