@@ -59,3 +59,24 @@ export const CHAT_MODEL_OPTIONS = [
 // core/model-router.js MODEL_LEVELS). Fuera de esta lista (opusplan/default)
 // el router no tiene margen para moverse aunque modelChoice sea 'auto'.
 export const ROUTER_MANAGED_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+
+// Eje thinking effort (PEND-391 #3): opciones de ESFUERZO de razonamiento del
+// submenú "Cambiar modelo" de Sesiones. 'auto' = seguir el tier del modelo
+// (haiku→low · sonnet→medium · opus→high, effortForLevel del backend). Fuente
+// ÚNICA frontend; el backend valida contra EFFORT_LEVELS de core/model-router.js.
+export const EFFORT_OPTIONS = [
+  ['auto', 'Auto · según modelo'],
+  ['low', 'Bajo'],
+  ['medium', 'Medio'],
+  ['high', 'Alto'],
+  ['xhigh', 'Muy alto'],
+  ['max', 'Máximo'],
+];
+const EFFORT_LABEL = { low: 'Bajo', medium: 'Medio', high: 'Alto', xhigh: 'Muy alto', max: 'Máximo' };
+// Etiqueta corta del esfuerzo para chips/badges. pinned=false ⇒ derivado del
+// tier (se muestra tenue "· auto"); pinned=true ⇒ elegido a mano.
+export function effortLabel(effort, pinned) {
+  if (!effort) return '';
+  const l = EFFORT_LABEL[effort] || effort;
+  return pinned ? l : `${l} · auto`;
+}

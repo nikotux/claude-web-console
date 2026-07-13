@@ -486,6 +486,16 @@ html, body {
   margin: .7rem 0 0; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer);
   font-family: var(--cwc-font-mono); word-break: break-all;
 }
+/* Submenú modelo→esfuerzo (PEND-391 #3): dos secciones (Agente + Esfuerzo)
+   con encabezado y botones de acción. Reusa .sess-menu-list/.sess-menu-item. */
+.sess-pick-sec { margin-bottom: .6rem; }
+.sess-pick-h {
+  display: flex; align-items: center; gap: .3rem; margin: 0 0 .35rem;
+  font-size: var(--cwc-fs-xs); font-weight: 600; color: var(--cwc-text-dim);
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.sess-pick-h svg { flex: none; }
+.sess-pick-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .8rem; }
 .sess-msg { padding: .4rem .6rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); }
 .sess-msg.sess-err { color: var(--cwc-danger-strong); }
 
@@ -1105,6 +1115,29 @@ html, body {
   padding: 0 .3rem; height: var(--chat-mode-h); box-sizing: border-box; flex: none;
   white-space: nowrap;
 }
+/* Variante 2 LÍNEAS (PEND-391 #3): modelo arriba + esfuerzo abajo, MISMO tamaño
+   reducido — se apila en columna con line-height apretado; la 2ª línea va más
+   chica y tenue. La altura fija se relaja a auto para que entren las dos líneas
+   sin agrandar el chip horizontalmente. */
+.chat-model-pill--two {
+  flex-direction: column; align-items: flex-start; justify-content: center;
+  height: auto; padding: .05rem .3rem; line-height: 1.05; gap: 1px;
+}
+.chat-model-pill--two .chat-pill-l1 { font-size: var(--cwc-fs-xs); }
+.chat-model-pill--two .chat-pill-l2 {
+  font-size: 9px; font-weight: 500; opacity: .78; letter-spacing: .01em;
+}
+/* Banner de consentimiento del juez AutoMix (PEND-391 #1 / D1): pasivo, discreto,
+   con acento fresco para distinguirlo de un mensaje normal. Reusa .btn/.btn--sm. */
+.chat-redo {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  margin: .4rem 0; padding: .45rem .6rem;
+  border: 1px dashed color-mix(in srgb, var(--cwc-accent-cool) 55%, transparent);
+  border-radius: var(--cwc-radius-sm); background: color-mix(in srgb, var(--cwc-accent-cool) 8%, transparent);
+  font-size: var(--cwc-fs-sm);
+}
+.chat-redo-txt { color: var(--cwc-text-secondary); }
+.chat-redo-actions { display: flex; gap: .4rem; margin-left: auto; }
 .chat-mode[data-risk="safe"] { color: var(--cwc-text-dim); }
 .chat-mode[data-risk="ok"] { color: var(--cwc-ok); }
 .chat-mode[data-risk="warn"] { color: var(--cwc-warn); }

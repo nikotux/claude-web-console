@@ -4,8 +4,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | 1.1 |
-| **Fecha** | 2026-07-05 |
+| **Versión** | 1.2 |
+| **Fecha** | 2026-07-13 |
 | **Responsable** | Nicolás (Niko) Mosquera |
 | **Fuente de verdad** | Este archivo (`docs/estandar-documental.md`). Ninguna otra copia es autoritativa. |
 | **Ámbito** | Todo documento generado dentro de la consola Tolkien (`claude-web-console`) o desde ella hacia canales externos. |
@@ -255,6 +255,7 @@ Niko
 | GitHub Tolkien (PRs, revisor `cswenor`) | Cuenta propia del repo | Bloque fijo de PR (§3.4), sin firma adicional | Inglés | ✅ Activo |
 | Teams (bot "Tolkien") | Bot | `— Nicolás (dev team)` | Español | 🆕 PROPUESTA — plantilla mínima: mensaje ≤ 5 líneas, informativo, sin hilos de decisión (las decisiones van a minuta o correo) |
 | Interfono (bus entre sesiones) | Sesión de Claude Code | Sin firma | Español | ✅ Activo |
+| Email (Outlook / Microsoft Graph) | Buzón propio de Niko (identidad real) | Nombre real `Nicolás Mosquera` (sin `— (dev team)`) | Según audiencia (§2) | ✅ Activo — primer uso 2026-07-13 (correo TKT #603) |
 
 **Regla:** si un documento va a un canal que no está en esta tabla, detenerse y preguntar antes de publicar.
 

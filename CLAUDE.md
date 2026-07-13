@@ -808,10 +808,89 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (42 asserts, sin SDK). Verificado en caliente: un chat 'auto' con
                             "perfecto" corre en Haiku y restaura a Sonnet (override→restore).
                             El requisito de un dueño de "Fable prohibido en el router" es AHORA
-                            regla dura del núcleo. — Lo de abajo (Fases 1-3) es la historia del
-                            diseño v1 que este bloque reemplaza en su LÓGICA (el andamiaje —
-                            modelChoice, badge 🤖, setModel(auto), activación implícita — sigue
-                            vigente):
+                            regla dura del núcleo.
+                            AutoTux v3 — EJE THINKING EFFORT + JUEZ AutoMix + SUBMENÚ (2026-07-13,
+                            PEND-391 "alineación 2026", pedido de Niko "ejecutar todo"): CUATRO
+                            frentes sumados sobre v2 (el núcleo v2 sigue igual). (A) INSTRUMENTACIÓN
+                            DE CACHÉ: el runner (bin/cwc-chat-runner.js) PROPAGA cache_creation/
+                            cache_read del usage por turno (antes se descartaban; normCacheCreate
+                            normaliza el objeto {ephemeral_5m/1h} a total); logTurn se MOVIÓ de
+                            _applyModelRouter (inicio del turno, sin usage) al `case 'result'`
+                            (_logTurnAtResult) y se ENRIQUECIÓ (model, switchedFromPrev, prevModel,
+                            effort, cacheCreate, cacheRead, input, output, toolCalls) → mide si el
+                            switch de modelo INVALIDA el caché de prompt (switchedFromPrev=true ⇒
+                            cache_read≈0). REENCUADRE (#5): el objetivo del router es NO QUEMAR LA
+                            VENTANA DE RATE-LIMIT (tokens), no ahorrar $ (es suscripción) — por eso
+                            el caché importa: rebotar de tier puede COSTAR tokens. (B) EJE THINKING
+                            EFFORT: `effort` (low|medium|high|xhigh|max) es opción de query() del
+                            Agent SDK (output_config.effort) — palanca de profundidad MÁS BARATA que
+                            saltar de tier. OJO CLAVE (verificado en sdk.d.ts 0.3.198): el SDK NO
+                            expone q.setEffort() EN VIVO (solo setModel/setPermissionMode/
+                            setMaxThinkingTokens) → el effort es opción de SPAWN: se fija al nacer el
+                            runner (chatQueryOptions→runner --effort→query()); un cambio a mitad de
+                            vida se aplica al Reabrir para cambios / dormir→despertar. Default por
+                            tier (effortForLevel de core/model-router.js: haiku→low·sonnet→medium·
+                            opus→high); `this.effort` persistido (persist/rehydrate) + `_effortPinned`
+                            (la persona lo fijó a mano ⇒ AutoTux no lo re-alinea); setModel re-alinea
+                            el effort al tier si no está pinned; setEffort()/POST /api/chat/effort +
+                            POST /api/chat/model acepta {effort}. budget_tokens fijo está DEPRECADO
+                            en modelos 2026 — se usa effort, no tokens. (C) SUBMENÚ modelo→esfuerzo:
+                            el picker "Cambiar modelo" de Sesiones (sessions.js pickModelForChat)
+                            pasó a DOS secciones (Agente + Esfuerzo) con botón Aplicar que manda
+                            ambos en un POST; EFFORT_OPTIONS/effortLabel en ui/models.js (fuente
+                            única). El BADGE del header del chat (chat-tab.js _renderModelBadge) pasó
+                            a 2 LÍNEAS (modelo arriba + 🧠 esfuerzo abajo, compacto, .chat-model-pill
+                            --two). (D) JUEZ AutoMix (F3 de la investigación, "el único algoritmo IA
+                            que faltaba"): tras un turno SUSTANCIAL (≥2 tools o respuesta ≥400 chars),
+                            judgeAnswer (Haiku background, read-only doble capa como classifyRelative)
+                            evalúa si la respuesta se quedó corta; si sí, emite el evento `redo-suggest`
+                            → banner PASIVO de consentimiento en el chat ([Reintentar en <modelo>]/
+                            [Ignorar], chat-tab.js _redoSuggest, POST /api/chat/redo sube 1 escalón +
+                            reintenta el último pedido). NUNCA sube solo (el auto-redo se descartó).
+                            _maybeJudge con throttle (1 de cada 3 turnos). MÉTRICAS DE CALIBRACIÓN
+                            (#4): readTurnMetrics + GET /api/chat/router-metrics (0 tokens, lee el
+                            jsonl) = distribución por modelo, tasa de rebote, y la AUDITORÍA DE CACHÉ
+                            (buckets switched vs notSwitched). idle decay 60→30 min (decisión abierta
+                            #3, agresivo). Test determinista bin/cwc-test-model-router.js extendido a
+                            53 asserts (effortForLevel/effortForModel + idle 30min). — Lo de abajo
+                            (Fases 1-3) es la historia del diseño v1 que este bloque reemplaza en su
+                            LÓGICA (el andamiaje — modelChoice, badge 🤖, setModel(auto), activación
+                            implícita — sigue vigente):
+                            AutoTux v4 — RUTEO CACHÉ-AWARE + EFFORT EN LA DECISIÓN + CALIBRACIÓN
+                            (2026-07-13, PEND-405, pedido de Niko "ruteo inteligente con todo"): CINCO
+                            fases (F6 "AutoTux en TUI" ELIMINADA por decisión de Niko). Convierte la
+                            instrumentación de v3 en DECISIONES. Núcleo puro en core/model-router.js,
+                            test determinista 53→68 asserts. (F1+F2) EJE EFFORT EN LA DECISIÓN,
+                            CACHÉ-AWARE: ante una necesidad de subir, decideUpAxis() elige entre subir
+                            EFFORT (mismo modelo, caché intacto, más barato) o saltar de TIER — regla:
+                            señal DURA (corrección/insuficiencia) → tier salvo caché pegajoso; señal
+                            BLANDA (clasificador up/código/largo) → effort primero si hay margen. AUTO
+                            nunca pasa de 'high' (xhigh/max = manual, como fable). El router lee el
+                            cacheRead del último turno (this._lastCacheRead, de la instrumentación #2):
+                            si es ≥ CACHE_STICKY_TOKENS (15k), saltar de tier desperdiciaría ese
+                            prefijo → sesga a effort. _bumpEffortAuto(±1) sube/baja el effort respetando
+                            techo AUTO/piso; decideDownAxis baja effort antes que tier si está por
+                            encima del default del tier. Verificado E2E: chat sonnet/medium + turno
+                            up-blando (code fence) → effort:high, modelo sigue sonnet (NO salta a Opus).
+                            (F3) EFFORT EN VIVO REAL: como el SDK no tiene setEffort live, al cambiar el
+                            effort con motor VIVO y OCIOSO, _maybeReopenForEffort() reabre el runner
+                            (respawn --resume, throttle 30s) para aplicarlo YA; con motor dormido/en
+                            turno se aplica al próximo spawn. (F4) CONSCIENCIA DE RATE-LIMIT:
+                            readWindowPressure() lee plan-limits.json (0 tokens, snapshot del módulo
+                            tokens) → % máx usado de las ventanas; si ≥ WINDOW_PRESSURE_CONSERVE (75%),
+                            decideUpAxis entra en modo `conserve` (NUNCA salta de tier, solo effort —
+                            no quemar la ventana, objetivo #5). (F5) LOOP DE CALIBRACIÓN + ALT AL #6
+                            (clasificador ML, descartado por Niko como riesgoso/bloqueado por datos):
+                            (a) los 3 clasificadores Haiku (título/relativo/juez) corren a effort:low
+                            (más baratos). (b) analyzeCalibration() (determinístico, 0 tokens, patrón
+                            core/inventory.js) mina model-router-{log,turns}.jsonl → PROPUESTAS
+                            aprobables (tasa de rebote alta → subir cooldown; closing-ack→Haiku con
+                            ahorro negativo de caché → revisar) + SEÑALES APRENDIDAS (keyword→dirección)
+                            GATEADAS por suficiencia de datos (CALIB_MIN_DECISIONS=400; hoy 111 ⇒ vacío
+                            a propósito, evita sobreajuste — el motivo real por el que el #6 se
+                            descartó). learnedSignalBias(text) las consulta en la rama ambigua ANTES de
+                            gastar el clasificador Haiku (vacío hoy ⇒ sin efecto). Expuesto en GET
+                            /api/chat/router-metrics (campo `calibration`, 0 tokens).
                             ROUTER DE MODELO AUTOMÁTICO (2026-07-06, Fase 1, pedido del
                             usuario): decide solo si el turno necesita más o menos modelo,
                             escalando haiku→sonnet→opus→fable con MEMORIA de hilo (sube
@@ -3840,6 +3919,13 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Commitear directo a main en repos personales, sin branches acumulables
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** El trabajo de varias semanas (facilities, migración a Pad local, learning module) quedó apilado 62 commits en una feature branch nunca mergeada a main, dejando main desactualizado y confundiendo al usuario sobre dónde vivía realmente su trabajo.
+
+**Lección:** En el repo personal de consola (single-dev, sin flujo de PR), evitar crear feature branches de larga vida: commitear directo a main o mergear con frecuencia, para que main siempre refleje el estado real del trabajo.
 
 ### Antes de cerrar hallazgos de un análisis, cruzarlos y registrarlos contra el backlog de Pad
 _procedimiento · confianza alta · recurrencia x1_

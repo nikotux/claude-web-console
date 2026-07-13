@@ -5,6 +5,8 @@ import {
   MODEL_LEVELS, CEILING, FORBIDDEN_AUTO, IDLE_DECAY_MS,
   clampLevel, classifySignal, signalToMove, turnOverride,
   decideBase, insufficiencyEscalation, idleDecayMove,
+  EFFORT_LEVELS, effortForLevel, effortForModel,
+  effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, CACHE_STICKY_TOKENS,
 } from '../src/core/model-router.js';
 
 let pass = 0, fail = 0;
@@ -80,10 +82,50 @@ eq('muchos tools SIN error → no sube', insufficiencyEscalation({ baseLevel: 1,
 eq('1 error solo → no sube', insufficiencyEscalation({ baseLevel: 1, toolCalls: 3, toolErrors: 1 }), null);
 eq('ya en opus → no sube', insufficiencyEscalation({ baseLevel: 2, toolCalls: 20, toolErrors: 5 }), null);
 
-// --- idle decay ---
-eq('idle 61min desde opus → down', idleDecayMove({ baseLevel: 2, idleMs: IDLE_DECAY_MS + 1 }), 'down');
+// --- idle decay (D3: 30 min agresivo, decisión abierta #3 de la investigación) ---
+eq('IDLE_DECAY_MS = 30 min', IDLE_DECAY_MS, 30 * 60 * 1000);
+eq('idle 31min desde opus → down', idleDecayMove({ baseLevel: 2, idleMs: IDLE_DECAY_MS + 1 }), 'down');
 eq('idle desde sonnet → null', idleDecayMove({ baseLevel: 1, idleMs: IDLE_DECAY_MS + 1 }), null);
 eq('poco idle → null', idleDecayMove({ baseLevel: 2, idleMs: 1000 }), null);
+eq('idle 29min desde opus → null', idleDecayMove({ baseLevel: 2, idleMs: 29 * 60 * 1000 }), null);
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} model-router v2b: ${pass} pass, ${fail} fail`);
+// --- eje thinking effort (PEND-391 #3 / B2) ---
+eq('EFFORT_LEVELS', EFFORT_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max']);
+eq('effortForLevel haiku(0)→low', effortForLevel(0), 'low');
+eq('effortForLevel sonnet(1)→medium', effortForLevel(1), 'medium');
+eq('effortForLevel opus(2)→high', effortForLevel(2), 'high');
+eq('effortForLevel -1→null', effortForLevel(-1), null);
+eq('effortForModel sonnet→medium', effortForModel('sonnet'), 'medium');
+eq('effortForModel opus→high', effortForModel('opus'), 'high');
+eq('effortForModel fable→high (clampea a opus)', effortForModel('fable'), 'high');
+eq('effortForModel opusplan→null (fuera de escala)', effortForModel('opusplan'), null);
+
+// --- F1+F2 eje effort en la decisión (PEND-405) ---
+eq('AUTO_EFFORT_MAX_IDX = high(2)', AUTO_EFFORT_MAX_IDX, 2);
+eq('effortIdx medium', effortIdx('medium'), 1);
+eq('effortIdx bogus→-1', effortIdx('turbo'), -1);
+const S = CACHE_STICKY_TOKENS;
+// blanda (soft up): effort primero si hay margen
+eq('up blanda con margen effort → effort', decideUpAxis({ hard: false, level: 1, effortIndex: 1, lastCacheRead: 0 }), 'effort');
+// blanda sin margen de effort (ya en high) → model
+eq('up blanda effort al tope → model', decideUpAxis({ hard: false, level: 1, effortIndex: 2, lastCacheRead: 0 }), 'model');
+// dura sin caché pegajoso → tier
+eq('up dura sin caché → model', decideUpAxis({ hard: true, level: 1, effortIndex: 1, lastCacheRead: 0 }), 'model');
+// dura CON caché pegajoso → effort (no desperdiciar el prefijo)
+eq('up dura + caché pegajoso → effort', decideUpAxis({ hard: true, level: 1, effortIndex: 1, lastCacheRead: S + 1 }), 'effort');
+// effort pinned → siempre model
+eq('up pinned → model', decideUpAxis({ hard: false, level: 1, effortIndex: 1, lastCacheRead: S + 1, pinned: true }), 'model');
+// en el techo de modelo, con margen de effort → effort
+eq('up en opus con margen effort → effort', decideUpAxis({ hard: true, level: 2, effortIndex: 1, lastCacheRead: 0 }), 'effort');
+// sin margen en ninguno → none
+eq('up sin margen → none', decideUpAxis({ hard: false, level: 2, effortIndex: 2, lastCacheRead: 0 }), 'none');
+// F4 conserve: nunca tier, solo effort si hay margen
+eq('conserve con margen effort → effort', decideUpAxis({ hard: true, level: 1, effortIndex: 1, conserve: true }), 'effort');
+eq('conserve sin margen effort → none', decideUpAxis({ hard: true, level: 1, effortIndex: 2, conserve: true }), 'none');
+// down axis: baja effort primero si está por encima del tier
+eq('down effort>tier → effort', decideDownAxis({ level: 1, effortIndex: 2, tierEffortIndex: 1 }), 'effort');
+eq('down effort=tier → model', decideDownAxis({ level: 1, effortIndex: 1, tierEffortIndex: 1 }), 'model');
+eq('down pinned → model', decideDownAxis({ level: 1, effortIndex: 2, tierEffortIndex: 1, pinned: true }), 'model');
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} model-router v2b+v4: ${pass} pass, ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

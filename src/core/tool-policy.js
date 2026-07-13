@@ -73,11 +73,17 @@ export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
 // spawnear el motor). El flag va SIEMPRE: debe estar presente en la CREACIÓN de
 // query() para que un cambio a "Todo" (al arranque o en vivo con
 // setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
-export function chatQueryOptions({ cwd, model, resume, mode, canUseTool }) {
+export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool }) {
   return {
     cwd,
     ...(model ? { model } : {}),
     ...(resume ? { resume } : {}),
+    // Eje thinking effort (PEND-391 #3): `effort` es opción de query() del Agent
+    // SDK (low|medium|high|xhigh|max) que guía la profundidad de razonamiento
+    // JUNTO al modelo — una palanca MÁS BARATA que saltar de tier. El SDK lo
+    // manda como output_config.effort; un modelo sin soporte lo degrada solo.
+    // NO hay control en vivo (q.setEffort no existe): se fija al spawnear.
+    ...(effort ? { effort } : {}),
     permissionMode: normalizeMode(mode),
     // Habilita que el modo "Todo" realmente saltee permisos. Requisito del SDK.
     allowDangerouslySkipPermissions: true,

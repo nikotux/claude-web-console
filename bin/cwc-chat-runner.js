@@ -45,11 +45,29 @@ const MODEL = args.model || null;
 let currentModel = MODEL; // puede cambiar en vivo (set_model) o al resolverse el init del SDK
 let mode = PERMISSION_MODES.has(args.mode) ? args.mode : 'default';
 const RESUME = args.resume || null;
+// Eje thinking effort (PEND-391 #3): opción de SPAWN del Agent SDK (no hay
+// setEffort() en vivo). Whitelist estricta; cualquier otro valor => sin effort
+// (el SDK aplica el default del modelo). No confundir con 'auto'/'default' del
+// selector de modelo (esos son alias de modelo, no niveles de effort).
+const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const EFFORT = EFFORT_LEVELS.has(args.effort) ? args.effort : null;
 if (!ID || !CWD || !SOCK) {
-  console.error('[runner] uso: cwc-chat-runner --id <id> --cwd <abs> --sock <path> [--model m] [--mode m] [--resume uuid]');
+  console.error('[runner] uso: cwc-chat-runner --id <id> --cwd <abs> --sock <path> [--model m] [--mode m] [--resume uuid] [--effort low|medium|high|xhigh|max]');
   process.exit(2);
 }
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
+
+// cache_creation_input_tokens puede venir como número plano o como objeto
+// {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens} según el modelo — lo
+// normalizamos a un total (instrumentación de caché, PEND-391).
+function normCacheCreate(cc) {
+  if (cc == null) return 0;
+  if (typeof cc === 'number') return cc;
+  if (typeof cc === 'object') {
+    return (cc.ephemeral_5m_input_tokens || 0) + (cc.ephemeral_1h_input_tokens || 0);
+  }
+  return 0;
+}
 
 // Marca heredable: el claude del SDK (y sus hooks, ahora que settingSources
 // carga la config del usuario) corren con esta env. El observador
@@ -147,6 +165,7 @@ function startEngine() {
       model: MODEL,
       resume: RESUME,
       mode,
+      effort: EFFORT,
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),
   });
@@ -209,7 +228,19 @@ function onMessage(m) {
       sessionId,
       subtype: m.subtype,
       costUsd: m.total_cost_usd ?? null,
-      usage: m.usage ? { input: m.usage.input_tokens, output: m.usage.output_tokens } : null,
+      // Instrumentación de caché de prompt (PEND-391 / auditoría #2): propagamos
+      // los tokens de caché que el SDK reporta por turno (antes se descartaban).
+      // El chat los usa para MEDIR si el switch de modelo invalida el caché
+      // (cambiar de modelo => cache_read cae a 0 / cache_creation sube el turno
+      // siguiente) y si el closing-ack→Haiku da AHORRO NEGATIVO. cache_creation
+      // llega como objeto {ephemeral_5m,ephemeral_1h} en algunos modelos o como
+      // número plano — normalizamos a total sumando lo que haya.
+      usage: m.usage ? {
+        input: m.usage.input_tokens,
+        output: m.usage.output_tokens,
+        cacheCreate: normCacheCreate(m.usage.cache_creation_input_tokens),
+        cacheRead: m.usage.cache_read_input_tokens ?? 0,
+      } : null,
       ms: m.duration_ms ?? null,
     });
   }

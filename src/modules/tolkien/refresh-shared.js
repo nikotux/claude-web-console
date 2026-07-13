@@ -40,6 +40,14 @@ function readTolkienDbPort() {
   return '5435';
 }
 
+// Nombre de la DB local de Tolkien. Default `tolkien`, pero el server managed
+// :3010 usa una DB DEDICADA (`tolkien_console`) para aislarse de los otros
+// worktrees — se setea con CWC_TOLKIEN_DB_NAME en el .env de la consola. Así el
+// botón de refresh apunta SIEMPRE a la misma DB que el server que la lee.
+function readTolkienDbName() {
+  return process.env.CWC_TOLKIEN_DB_NAME?.trim() || 'tolkien';
+}
+
 function readInfisicalWorkspaceId() {
   if (process.env.CWC_TOLKIEN_INFISICAL_ID?.trim()) return process.env.CWC_TOLKIEN_INFISICAL_ID.trim();
   try {
@@ -50,7 +58,7 @@ function readInfisicalWorkspaceId() {
 }
 
 const localDbUrl = () =>
-  `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/tolkien?schema=public`;
+  `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/${readTolkienDbName()}?schema=public`;
 
 // Ejecuta un comando local. RECHAZA ante terminación ANORMAL (timeout/kill,
 // señal, o fallo de spawn sin código numérico como ENOENT/EACCES) para no
@@ -114,7 +122,7 @@ export async function refreshLocalData() {
   let reset;
   try {
     reset = await runCmd('psql', [
-      '-h', 'localhost', '-p', readTolkienDbPort(), '-U', 'tolkien', '-d', 'tolkien',
+      '-h', 'localhost', '-p', readTolkienDbPort(), '-U', 'tolkien', '-d', readTolkienDbName(),
       '-v', 'ON_ERROR_STOP=1',
       '-c', 'DROP INDEX IF EXISTS clients_name_key; TRUNCATE employees, clients RESTART IDENTITY CASCADE;',
     ], { timeout: 30000, env: { ...process.env, PGPASSWORD: DEV_DB_PASSWORD } });

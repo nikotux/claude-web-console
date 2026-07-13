@@ -46,7 +46,7 @@ function writeSpawnLock(id, pid) {
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
 // si no el cgroup entero (runners incluidos) moriría en cada restart.
-export function spawnRunner({ id, cwd, model, mode, resume, selfHandle }) {
+export function spawnRunner({ id, cwd, model, mode, resume, selfHandle, effort }) {
   fs.mkdirSync(CHATS_DIR, { recursive: true, mode: 0o700 });
   // Chequeo+escritura sincrónicos ANTES de spawnear (ver comentario arriba).
   if (spawnLockAlive(id)) {
@@ -57,6 +57,11 @@ export function spawnRunner({ id, cwd, model, mode, resume, selfHandle }) {
   const args = [RUNNER, '--id', id, '--cwd', cwd, '--sock', sockPath(id), '--mode', mode || 'default'];
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
+  // Eje thinking effort (PEND-391 #3): el effort es opción de SPAWN del Agent
+  // SDK (no hay q.setEffort() en vivo — ver la decisión de arquitectura en Pad),
+  // así que viaja como argv al nacer el runner. Un cambio de effort a mitad de
+  // vida se aplica por "Reabrir para cambios" (respawn) o al dormir/despertar.
+  if (effort) args.push('--effort', effort);
   // Identidad del chat en el Interfono (rediseño 2026-07-10, Fase 0.4): una Bash
   // tool que ejecute `cwc-bus.js send` hereda este env, así el mensaje sale con
   // `from: claude:<sessionId>` real en vez de `from: null` (selfIdentity de

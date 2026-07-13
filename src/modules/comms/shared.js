@@ -29,6 +29,29 @@ export const GITHUB_FILE = path.join(COMMS_DIR, 'github.json');   // lo escribe 
 export const GH_CACHE_FILE = path.join(COMMS_DIR, 'gh-cache.json'); // caché incremental por PR
 export const TEAMS_FILE = path.join(COMMS_DIR, 'teams.json');     // lo escribe el runner de Teams
 export const CHATBOT_FILE = path.join(COMMS_DIR, 'chatbot.json'); // Chris vía el bot Tolkien (TheEye) en Teams
+// WhatsApp (PLAN-447): daemon PERSISTENTE (bin/cwc-whatsapp-daemon.js, servicio
+// systemd propio — no un runner de un solo tiro) que mantiene viva una sesión
+// de WhatsApp Web (whatsapp-web.js, no oficial) y vuelca acá los chats en la
+// watchlist. whatsapp.json = mismo shape {threads,updatedAt,error} que teams.json.
+export const WHATSAPP_FILE = path.join(COMMS_DIR, 'whatsapp.json');
+export const WHATSAPP_WATCH_FILE = path.join(COMMS_DIR, 'whatsapp-watch.json'); // [{jid,label}] chats a espiar
+export const WHATSAPP_SESSION_DIR = path.join(DATA_DIR, 'whatsapp-session'); // LocalAuth (dato sensible)
+export const WHATSAPP_STATUS_FILE = path.join(COMMS_DIR, 'whatsapp-daemon.json'); // heartbeat {pid,ts,state,qr}
+export const WHATSAPP_QR_PNG_FILE = path.join(COMMS_DIR, 'whatsapp-qr.png'); // último QR, rasterizado
+// Canal de ESCRITURA file-based (patrón del proyecto: nada en el proceso, todo
+// en disco, sobrevive reinicios). Un envío = un archivo <id>.json en OUTBOX
+// {jid,text,ts}; el daemon lo vigila, ejecuta sock.sendMessage, escribe el
+// resultado en SENT/<id>.json {ok,error,ts} y borra el de OUTBOX. Así el server
+// (o el gateway/CLI) encola SIN tener la sesión abierta — solo el daemon la
+// tiene. El confirm gate (regla del gateway) va ARRIBA de este canal, en la UI.
+export const WHATSAPP_OUTBOX_DIR = path.join(COMMS_DIR, 'whatsapp-outbox');
+export const WHATSAPP_SENT_DIR = path.join(COMMS_DIR, 'whatsapp-sent');
+// Adjuntos RECIBIDOS (PEND-458): cuando un chat de la watchlist manda media
+// (imagen/PDF/Excel/audio), el daemon la descarga acá — carpeta por chat, un
+// archivo por mensaje. El thread en WHATSAPP_FILE guarda solo la REFERENCIA
+// {type,file,mime,caption}; el binario vive en disco (patrón chat-attachments
+// del módulo chat). Así, al "trabajar ese hilo", el contenido viaja al modelo.
+export const WHATSAPP_MEDIA_DIR = path.join(COMMS_DIR, 'whatsapp-media');
 export const MANUAL_FILE = path.join(COMMS_DIR, 'manual.json');   // lo escribe CLI/web
 export const OVERRIDES_FILE = path.join(COMMS_DIR, 'overrides.json');
 export const SELF_FILE = path.join(COMMS_DIR, 'self.json');       // identidad del dueño (yo)
@@ -200,6 +223,15 @@ export function writeGhCache(c) { return writeJson(GH_CACHE_FILE, c); }
 // ===== Teams (lo escribe el runner de Teams, consume tokens) =====
 export function readTeams() { return readJson(TEAMS_FILE, { threads: [], scannedAt: null, error: null }); }
 export function writeTeams(data) { return writeJson(TEAMS_FILE, data); }
+
+export function readWhatsapp() { return readJson(WHATSAPP_FILE, { threads: [], updatedAt: null, error: null }); }
+export function writeWhatsapp(data) { return writeJson(WHATSAPP_FILE, data); }
+export function readWhatsappWatch() {
+  const arr = readJson(WHATSAPP_WATCH_FILE, null);
+  return Array.isArray(arr) ? arr : [];
+}
+export function readWhatsappStatus() { return readJson(WHATSAPP_STATUS_FILE, null); }
+export function writeWhatsappStatus(state) { return writeJson(WHATSAPP_STATUS_FILE, state); }
 
 // ===== Chatbot (comunicaciones de Chris relayadas por el bot Tolkien/TheEye en
 // Teams). Un mensaje del bot puede ser en realidad Chris hablando ("disfrazado

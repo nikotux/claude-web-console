@@ -7,7 +7,7 @@
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
-import { modelColor, modelIcon, CHAT_MODEL_OPTIONS } from '../../ui/models.js';
+import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor } from '../../ui/places.js';
@@ -33,8 +33,11 @@ function escapeHtml(s) {
 // elección forzada, el modelo tal cual. Fuente única para la tarjeta inicial
 // y la actualización en su lugar del poll de 8s (ver más abajo).
 function chatModelLabel(c) {
-  if (c.modelChoice === 'auto') return `${modelIcon('auto')} AutoTux: ${c.model || '…'}`;
-  return c.model ? `${modelIcon(c.model)} ${c.model}` : '';
+  // Sufijo de esfuerzo (eje thinking effort): solo si la persona lo FIJÓ a mano
+  // (effortPinned) — el derivado del tier no se muestra para no ensuciar el chip.
+  const eff = c.effortPinned && c.effort ? ` · ${effortLabel(c.effort, true)}` : '';
+  if (c.modelChoice === 'auto') return `${modelIcon('auto')} AutoTux: ${c.model || '…'}${eff}`;
+  return c.model ? `${modelIcon(c.model)} ${c.model}${eff}` : '';
 }
 
 // Nombre de la tmux OCULTA que sostiene un chat en modo TUI (misma fórmula
@@ -383,39 +386,61 @@ export default {
     // contexto) si el motor está corriendo, o para el próximo arranque si
     // está dormido. Mismo diálogo que pickModel (sesiones tmux), pero pega a
     // /api/chat/model en vez de mandar /model a la terminal.
+    // Submenú modelo → esfuerzo (PEND-391 #3). DOS secciones en un modal: elegís
+    // el AGENTE (modelo) y el ESFUERZO de razonamiento, y "Aplicar" los manda
+    // juntos a POST /api/chat/model {id, model, effort}. La opción de modelo se
+    // marca contra `modelChoice` (QUÉ ELIGIÓ la persona) — con AutoTux, `c.model`
+    // es el nivel real que cambia solo, así que comparar contra ESO marcaría mal.
+    // El esfuerzo 'auto' = seguir el tier del modelo (effortPinned=false).
     function pickModelForChat(c) {
-      const m = dialog.openModal({ title: 'Modelo de esta conversación', width: 320 });
-      // La opción activa se marca contra `modelChoice` (QUÉ ELIGIÓ la
-      // persona) — con AutoTux, `c.model` sigue siendo el nivel real y
-      // cambia solo, así que comparar contra ESO marcaría mal la fila.
-      m.body.innerHTML = `
-        <div class="sess-menu-list">
-          ${CHAT_MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item${v === c.modelChoice ? ' sess-menu-item--active' : ''}" data-model="${v}"><span>${l}</span>${v === c.modelChoice ? icon('check', { size: 14 }) : ''}</button>`).join('')}
-        </div>
-        <p class="sess-plumbing">AutoTux decide el modelo solo, según la conversación. Los demás FUERZAN un único modelo fijo. Si la conversación está activa, el cambio es en vivo (no se pierde el contexto).</p>`;
-      for (const b of m.body.querySelectorAll('[data-model]')) {
-        b.addEventListener('click', async () => {
-          m.close();
-          try {
-            const res = await fetch('/api/chat/model', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: c.id, model: b.dataset.model }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo.');
-            syncConversation(data.chat);
-            await refresh();
-            // Update OPTIMISTA: con motor vivo, data.chat/list traen this.model
-            // aún STALE (se confirma por eco). Pinto el chip ya para feedback
-            // inmediato; el poll de 8s lo reconcilia cuando llega el eco.
-            const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
-            if (chip) chip.textContent = chatModelLabel(data.chat || { modelChoice: b.dataset.model, model: c.model });
-          } catch (e) {
-            dialog.alertDialog({ title: 'Modelo', message: e.message });
-          }
-        });
-      }
+      const m = dialog.openModal({ title: 'Modelo y esfuerzo', width: 340 });
+      // Selección local (se confirma con Aplicar): arranca en lo actual.
+      let selModel = c.modelChoice || 'auto';
+      let selEffort = c.effortPinned ? (c.effort || 'auto') : 'auto';
+      const renderList = (opts, sel, attr) => opts.map(([v, l]) =>
+        `<button class="btn-ghost sess-menu-item${v === sel ? ' sess-menu-item--active' : ''}" data-${attr}="${v}"><span>${l}</span>${v === sel ? icon('check', { size: 14 }) : ''}</button>`).join('');
+      const paint = () => {
+        m.body.innerHTML = `
+          <div class="sess-pick-sec">
+            <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Agente</div>
+            <div class="sess-menu-list">${renderList(CHAT_MODEL_OPTIONS, selModel, 'model')}</div>
+          </div>
+          <div class="sess-pick-sec">
+            <div class="sess-pick-h">🧠 Esfuerzo de razonamiento</div>
+            <div class="sess-menu-list">${renderList(EFFORT_OPTIONS, selEffort, 'effort')}</div>
+          </div>
+          <p class="sess-plumbing">AutoTux decide el <b>modelo</b> solo; los demás fuerzan uno fijo. El <b>esfuerzo</b> (más barato que saltar de tier) se aplica al SPAWN del motor — con la conversación activa toma efecto al reabrir o en el próximo turno tras dormir. "Auto" sigue el tier del modelo.</p>
+          <div class="sess-pick-actions">
+            <button class="btn-ghost" data-act="cancel">Cancelar</button>
+            <button class="btn" data-act="apply">Aplicar</button>
+          </div>`;
+        for (const b of m.body.querySelectorAll('[data-model]')) b.addEventListener('click', () => { selModel = b.dataset.model; paint(); });
+        for (const b of m.body.querySelectorAll('[data-effort]')) b.addEventListener('click', () => { selEffort = b.dataset.effort; paint(); });
+        m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
+        m.body.querySelector('[data-act="apply"]').addEventListener('click', apply);
+      };
+      const apply = async () => {
+        m.close();
+        try {
+          const res = await fetch('/api/chat/model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: c.id, model: selModel, effort: selEffort }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo/esfuerzo.');
+          syncConversation(data.chat);
+          await refresh();
+          // Update OPTIMISTA: con motor vivo, data.chat/list traen this.model
+          // aún STALE (se confirma por eco). Pinto el chip ya para feedback
+          // inmediato; el poll de 8s lo reconcilia cuando llega el eco.
+          const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
+          if (chip) chip.textContent = chatModelLabel(data.chat || { modelChoice: selModel, model: c.model });
+        } catch (e) {
+          dialog.alertDialog({ title: 'Modelo y esfuerzo', message: e.message });
+        }
+      };
+      paint();
     }
 
     async function switchChatMode(c) {

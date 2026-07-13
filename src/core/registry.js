@@ -18,13 +18,12 @@ import health from '../modules/health/index.js';
 import tickets from '../modules/tickets/index.js';
 import projects from '../modules/projects/index.js';
 import interfono from '../modules/interfono/index.js';
-import comms from '../modules/comms/index.js';
 import tasks from '../modules/tasks/index.js';
 import learning from '../modules/learning/index.js';
 import audio from '../modules/audio/index.js';
 import retro from '../modules/retro/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, comms, tasks, learning, audio, retro];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

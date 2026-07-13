@@ -11,7 +11,7 @@ import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
-import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS } from '../../ui/models.js';
+import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -697,6 +697,8 @@ export class ChatTab {
         }
         this._setWorking(m.status === 'working');
         this._modelChoice = m.modelChoice || null; // sin notita: solo poblar el estado al abrir/reconectar
+        this._effort = m.effort || null;           // eje thinking effort (PEND-391 #3): 2ª línea del banderín
+        this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
@@ -736,6 +738,12 @@ export class ChatTab {
       case 'status': this._setWorking(m.state === 'working'); break;
       case 'model': this._applyModel(m.model, { auto: !!m.auto }); break;
       case 'modelChoice': this._applyModelChoice(m.modelChoice); break;
+      // Eje thinking effort (PEND-391 #3): 2ª línea del banderín del header.
+      case 'effort': this._effort = m.effort || null; this._effortPinned = !m.auto; this._renderModelBadge(); break;
+      // Juez AutoMix (PEND-391 #1 / D1): banner PASIVO de consentimiento. El
+      // juez detectó que la respuesta se quedó corta y ofrece subir de modelo.
+      // NUNCA sube solo: el usuario decide [Reintentar] / [Ignorar].
+      case 'redo-suggest': this._redoSuggest(m); break;
       case 'mode':
         // Reconciliación con el modo REAL del motor (paso 2, fin del drift): el
         // select SIEMPRE refleja lo que el motor aplica de verdad. Si el usuario
@@ -1157,20 +1165,26 @@ export class ChatTab {
   _renderModelBadge() {
     const choice = this._modelChoice;
     const model = this._model;
-    if (choice === 'auto') {
+    // Banderín de 2 LÍNEAS (PEND-391 #3, pedido de Niko): 1ª línea = modelo
+    // (como siempre), 2ª línea = ESFUERZO de razonamiento — compacto, mismo
+    // tamaño reducido. Se arma en dos <span> internos (.chat-pill-l1/.chat-pill-l2).
+    const effTxt = this._effort ? effortLabel(this._effort, this._effortPinned) : '';
+    const paint = (l1, color, title) => {
       this.modelPillEl.hidden = false;
-      const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
-      this.modelPillEl.textContent = `🤖 AutoTux: ${level}`;
-      this.modelPillEl.style.color = modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown');
-      this.modelPillEl.style.borderColor = this.modelPillEl.style.color;
-      this.modelPillEl.title = `AutoTux (router de modelo automático) — nivel actual: ${level}`;
-    } else if (choice) {
-      this.modelPillEl.hidden = false;
-      this.modelPillEl.textContent = CHAT_MODEL_LABEL.get(choice) || choice;
-      const color = modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown');
       this.modelPillEl.style.color = color;
       this.modelPillEl.style.borderColor = color;
-      this.modelPillEl.title = `Modelo forzado — esta conversación solo usa ${CHAT_MODEL_LABEL.get(choice) || choice}`;
+      this.modelPillEl.title = title + (effTxt ? ` · esfuerzo: ${effTxt}` : '');
+      this.modelPillEl.innerHTML = `<span class="chat-pill-l1">${l1}</span>${effTxt ? `<span class="chat-pill-l2">🧠 ${effTxt}</span>` : ''}`;
+      this.modelPillEl.classList.toggle('chat-model-pill--two', !!effTxt);
+    };
+    if (choice === 'auto') {
+      const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
+      paint(`🤖 AutoTux: ${level}`, modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown'),
+        `AutoTux (router de modelo automático) — nivel actual: ${level}`);
+    } else if (choice) {
+      const label = CHAT_MODEL_LABEL.get(choice) || choice;
+      paint(label, modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown'),
+        `Modelo forzado — esta conversación solo usa ${label}`);
     } else {
       this.modelPillEl.hidden = true;
     }
@@ -1274,6 +1288,35 @@ export class ChatTab {
     const el = document.createElement('div');
     el.className = cls;
     el.textContent = text;
+    this.msgsEl.appendChild(el);
+    this._scroll();
+  }
+
+  // Banner de consentimiento del juez AutoMix (PEND-391 #1 / D1): pasivo, con
+  // [Reintentar en <modelo>] / [Ignorar]. Nunca sube solo. Solo dejamos UNO a la
+  // vez (si llega otro, reemplaza al anterior — el último juicio manda).
+  _redoSuggest(m) {
+    this.msgsEl.querySelector('.chat-redo')?.remove();
+    const to = m.to || 'un modelo más fuerte';
+    const el = document.createElement('div');
+    el.className = 'chat-redo';
+    el.innerHTML = `
+      <span class="chat-redo-txt">🤔 Creo que un modelo más fuerte lo haría mejor.</span>
+      <span class="chat-redo-actions">
+        <button class="btn btn--sm" data-act="redo">Reintentar en ${to}</button>
+        <button class="btn-ghost btn--sm" data-act="ignore">Ignorar</button>
+      </span>`;
+    el.querySelector('[data-act="ignore"]').addEventListener('click', () => el.remove());
+    el.querySelector('[data-act="redo"]').addEventListener('click', async () => {
+      el.remove();
+      try {
+        const res = await fetch('/api/chat/redo', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: this.id }),
+        });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'No se pudo reintentar.'); }
+      } catch (e) { this._line('chat-error', `Reintentar: ${e.message}`); }
+    });
     this.msgsEl.appendChild(el);
     this._scroll();
   }

@@ -65,7 +65,7 @@ import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { queueRetroDistill } from '../retro/shared.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
-import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, MODEL_LEVELS, FORBIDDEN_AUTO } from '../../core/model-router.js';
+import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
@@ -143,6 +143,7 @@ async function extractTitle({ cwd, current, text }) {
     options: {
       cwd,
       model: 'haiku',
+      effort: 'low', // F5(a) PEND-405: clasificadores/extracción Haiku a esfuerzo bajo — más baratos y rápidos, misma señal
       maxTurns: 1,
       permissionMode: 'default',
       settingSources: [], // sin NINGÚN setting (ni project/local): no usa herramientas — cero MCP/skills/CLAUDE.md, solo resume texto (patrón projects/analyzeChange)
@@ -217,6 +218,7 @@ async function classifyRelative({ cwd, currentModel, text }) {
     options: {
       cwd,
       model: 'haiku',
+      effort: 'low', // F5(a) PEND-405: clasificadores/extracción Haiku a esfuerzo bajo — más baratos y rápidos, misma señal
       maxTurns: 1,
       permissionMode: 'default',
       settingSources: [], // patrón projects/analyzeChange: sin herramientas, solo clasifica texto
@@ -254,6 +256,58 @@ async function classifyRelative({ cwd, currentModel, text }) {
   }
   const word = out.toLowerCase().replace(/[^a-záéíóúñ]/g, '').trim();
   return Object.prototype.hasOwnProperty.call(ROUTER_MOVE_BY_WORD, word) ? ROUTER_MOVE_BY_WORD[word] : null;
+}
+
+// Juez post-turno "AutoMix" (F3 de la investigación externa, PEND-391 #1 / D1):
+// tras un turno SUSTANCIAL evalúa con Haiku (background, read-only, MISMO
+// blindaje doble capa que classifyRelative) si la respuesta se quedó CORTA y un
+// modelo más fuerte lo haría notablemente mejor. Devuelve true (=insuficiente,
+// ofrecer subir) | false (ok) | null (timeout/error/duda). NUNCA actúa solo:
+// solo alimenta un banner de CONSENTIMIENTO [Reintentar/Ignorar] en el chat —
+// el auto-redo automático se DESCARTÓ por diseño (0 disparos en simulacro).
+const JUDGE_TIMEOUT_MS = 20000;
+async function judgeAnswer({ cwd, currentModel, userText, answerText }) {
+  const q = query({
+    prompt:
+      `Sos un juez de calidad. El modelo "${currentModel}" (escala barato→caro: haiku < sonnet < opus) ` +
+      'respondió el pedido de abajo. Decidí si la respuesta se quedó CLARAMENTE corta y un modelo MÁS CAPAZ ' +
+      'probablemente lo haría notablemente mejor (razonamiento incompleto o erróneo, evasivas, o el pedido ' +
+      'requería código/análisis profundo que no se cubrió). Respondé UNA sola palabra, sin nada más: ' +
+      '"insuficiente" (conviene reintentar con un modelo más fuerte) o "ok" (la respuesta alcanza).\n' +
+      `Pedido: «${String(userText || '').slice(0, 800)}»\n` +
+      `Respuesta: «${String(answerText || '').slice(0, 2000)}»`,
+    options: {
+      cwd, model: 'haiku', effort: 'low', maxTurns: 1, permissionMode: 'default', // F5(a): juez a esfuerzo bajo
+      settingSources: [],
+      hooks: {
+        PreToolUse: [{
+          hooks: [async () => ({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: 'Juez AutoMix: sin herramientas.',
+            },
+          })],
+        }],
+      },
+      canUseTool: async () => ({ behavior: 'deny', message: 'Juez AutoMix: sin herramientas.' }),
+    },
+  });
+  let out = '';
+  let timer = null;
+  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), JUDGE_TIMEOUT_MS); });
+  const pump = (async () => {
+    for await (const m of q) {
+      if (m.type === 'assistant') {
+        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
+      } else if (m.type === 'result') break;
+    }
+  })();
+  try { await Promise.race([pump, timeout]); } catch { try { q.interrupt?.(); } catch { /* noop */ } return null; } finally { clearTimeout(timer); }
+  const w = out.toLowerCase().replace(/[^a-z]/g, '').trim();
+  if (w.includes('insuficiente')) return true;
+  if (w.includes('ok')) return false;
+  return null;
 }
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
@@ -429,7 +483,7 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
 }
 
 class Chat {
-  constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null }) {
+  constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, effort = null }) {
     this.id = id;
     this.cwd = cwd;
     // AutoTux (2026-07-06): `modelChoice` es QUÉ ELIGIÓ LA PERSONA (auto |
@@ -449,6 +503,12 @@ class Chat {
       this.modelChoice = model || null;
       this.model = model || null;
     }
+    // Eje thinking effort (PEND-391 #3): esfuerzo de razonamiento del chat.
+    // Si la persona lo eligió (`effort` explícito) se respeta; si no, se deriva
+    // del nivel actual del modelo (haiku→low · sonnet→medium · opus→high) para
+    // que un chat 'auto' nazca con un effort coherente con su tier. Con AutoTux
+    // el default lo mantiene alineado al nivel; el usuario puede fijarlo a mano.
+    this.effort = (EFFORT_LEVELS.includes(effort) ? effort : null) || effortForModel(this.model);
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
@@ -526,6 +586,7 @@ class Chat {
       spawnRunner({
         id: this.id, cwd: this.cwd, model: this.model,
         mode: this.permissionMode, resume: resumeId,
+        effort: this.effort, // eje thinking effort (spawn-time, PEND-391 #3)
         // Identidad del chat en el Interfono (Fase 0.4): handle canónico
         // claude:<sessionId> — mismo que _busHandle(). Solo si ya lo conocemos.
         selfHandle: resumeId ? `claude:${resumeId}` : null,
@@ -605,6 +666,8 @@ class Chat {
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
         if (!hadSession && this.sessionId) this.onUpdate?.();
+        this._logTurnAtResult(e); // ANTES de _setStatus: usa _turnTool* que waiting resetea
+        this._maybeJudge();       // juez AutoMix (D1): ANTES de _setStatus (usa _turnTool* / _turnAnswerText)
         this._setStatus('waiting');
         this._push(e);
         return;
@@ -618,6 +681,11 @@ class Chat {
         // trajo (runners viejos, pre-deploy) — el centro global de permisos
         // la usa para la cuenta regresiva de expiración (PERMISSION_TIMEOUT_MS).
         if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
+        // Juez AutoMix (D1): acumulamos el texto de la respuesta del turno para
+        // que el juez post-turno pueda evaluar si se quedó corta (cap defensivo).
+        if (e.type === 'assistant' && e.text && (this._turnAnswerText || '').length < 8000) {
+          this._turnAnswerText = (this._turnAnswerText || '') + e.text;
+        }
         if (e.type === 'tool_use') {
           // Contador del turno en curso (AutoTux v2 — ver _endTurnRouter /
           // insufficiencyEscalation): CUALQUIER herramienta cuenta, no solo
@@ -961,6 +1029,11 @@ class Chat {
     if (!String(text || '').trim() && !atts) return; // ni texto ni adjuntos: nada que enviar
     const idleMs = Date.now() - (this.lastActivity || Date.now()); // ANTES de pisarlo: AutoTux usa el idle para decaer
     this.lastActivity = Date.now();
+    // Juez post-turno AutoMix (PEND-391 #1 / D1): guardamos el pedido y
+    // arrancamos en cero la acumulación de la respuesta del turno, para poder
+    // evaluar al cerrar si el modelo se quedó corto (banner de consentimiento).
+    this._lastUserText = String(text || '');
+    this._turnAnswerText = '';
     this._applyModelRouter(text, idleMs); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
     this._setStatus('working');
     this._push({ type: 'user', text, ...(atts ? { attachments: atts } : {}) });
@@ -982,7 +1055,12 @@ class Chat {
     if (base0 === -1) return; // opusplan/default: no gestionado
     if (this._routerClassifyThrottle > 0) this._routerClassifyThrottle--;
 
-    const { kind } = classifySignal(text);
+    let { kind } = classifySignal(text);
+    // F5(b): si la heurística no opina (ambiguo), consultar las SEÑALES
+    // APRENDIDAS (minadas de los logs reales, alternativa determinística al #6)
+    // ANTES de gastar el clasificador Haiku — si un patrón de "up" aprendido
+    // matchea, subimos sin llamar al modelo. Vacío hasta tener datos ⇒ sin efecto.
+    if (kind === 'ambiguous' && learnedSignalBias(text, Date.now()) === 'up') kind = 'up';
 
     // Movimiento del NIVEL BASE (uno por turno). Prioridad: corrección > código/
     // largo > bajada (ack/goahead) > bajada por inactividad (solo si ambiguo).
@@ -991,6 +1069,23 @@ class Chat {
     else if (kind === 'up') move = 'up';
     else if (kind === 'closing' || kind === 'goahead') move = 'down';
     else if (idleDecayMove({ baseLevel: base0, idleMs }) === 'down') move = 'down';
+
+    // F1+F2 (PEND-405): EJE EFFORT en la decisión. Ante una necesidad de subir,
+    // elegir entre subir effort (mismo modelo, caché intacto, más barato) o
+    // saltar de tier — sesgado por el costo de caché del último turno. Si el eje
+    // elegido es 'effort', bumpeamos el effort y NO movemos el modelo (move→same).
+    // F4: si la ventana de rate-limit está apretada (≥75% usado), `conserve`
+    // fuerza a nunca saltar de tier (solo effort) — el objetivo es no quemarla.
+    const pressure = readWindowPressure();
+    const conserve = typeof pressure === 'number' && pressure >= WINDOW_PRESSURE_CONSERVE;
+    if (move === 'up' || move === 'strong_up') {
+      const axis = decideUpAxis({ hard: move === 'strong_up', level: base0, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve });
+      if (axis === 'effort') { this._bumpEffortAuto(+1); move = 'same'; }
+      else if (axis === 'none') { move = 'same'; } // conserve + sin margen de effort: no subir
+    } else if (move === 'down') {
+      const axis = decideDownAxis({ level: base0, effortIndex: effortIdx(this.effort), tierEffortIndex: effortIdx(effortForLevel(base0)), pinned: !!this._effortPinned });
+      if (axis === 'effort') { this._bumpEffortAuto(-1); move = 'same'; }
+    }
 
     const r = decideBase({ baseLevel: base0, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown });
     this._routerDownStreak = r.downStreak;
@@ -1006,7 +1101,10 @@ class Chat {
         this.setModel('haiku', { auto: true });
         logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: MODEL_LEVELS[base], to: 'haiku', text: text.slice(0, 150) });
       }
-      logTurn({ chatId: this.id, ranLevel: 0, base, override: true, toolCalls: 0, toolErrors: 0 });
+      // El logTurn se difiere al evento `result` (donde llega el usage/caché,
+      // los tool counts reales y el modelo REAL del turno) — acá solo guardamos
+      // la decisión del router. Ver _logTurnAtResult (instrumentación #2/#4).
+      this._turnRouterMeta = { ranLevel: 0, base, override: true };
       return;
     }
 
@@ -1027,7 +1125,95 @@ class Chat {
       // el turno). Gobierna el PRÓXIMO turno. Throttle: no reclasificar por 2 t.
       this._classifyRelative(text, base);
     }
-    logTurn({ chatId: this.id, ranLevel: base, base, override: false, toolCalls: 0, toolErrors: 0 });
+    this._turnRouterMeta = { ranLevel: base, base, override: false };
+  }
+
+  // Instrumentación por-turno (PEND-391 #2 auditoría de caché / #4 calibración):
+  // se llama en el evento `result` (fin REAL del turno, con usage/caché ya
+  // disponible — a diferencia de _applyModelRouter que corre al INICIO, sin
+  // usage). Registra en model-router-turns.jsonl el nivel del router + el modelo
+  // REAL corrido + si CAMBIÓ de modelo vs el turno previo (para medir si el
+  // switch invalida el caché de prompt: switchedFromPrev=true ⇒ esperamos
+  // cache_read≈0 y cache_creation alto ese turno) + effort + tool counts + los
+  // tokens de caché reales. Corre para TODO chat (auto o forzado): el switch
+  // manual de modelo también invalida el caché, así que interesa medirlo.
+  _logTurnAtResult(e) {
+    const meta = this._turnRouterMeta || {};
+    this._turnRouterMeta = null;
+    const u = e && e.usage;
+    const prev = this._lastResultModel || null;
+    const model = this.model;
+    try {
+      logTurn({
+        chatId: this.id,
+        model,
+        modelChoice: this.modelChoice,
+        switchedFromPrev: prev != null && prev !== model,
+        prevModel: prev,
+        effort: this.effort || null,
+        ranLevel: meta.ranLevel ?? null,
+        base: meta.base ?? null,
+        override: meta.override ?? false,
+        toolCalls: this._turnToolCount || 0,
+        toolErrors: this._turnToolErrors || 0,
+        cacheCreate: u ? (u.cacheCreate || 0) : null,
+        cacheRead: u ? (u.cacheRead || 0) : null,
+        input: u ? (u.input || 0) : null,
+        output: u ? (u.output || 0) : null,
+      });
+    } catch { /* best-effort: nunca romper el turno por logging */ }
+    this._lastResultModel = model;
+    // F1 (caché-aware): recordamos cuánto leyó del caché el último turno. Si es
+    // alto, saltar de tier el próximo turno DESPERDICIARÍA ese prefijo cacheado
+    // (cuesta tokens de la ventana) → decideUpAxis sesga hacia subir effort.
+    if (u && u.cacheRead != null) this._lastCacheRead = u.cacheRead;
+  }
+
+  // Gate del juez AutoMix (D1): decide si vale gastar el juez este turno. Solo
+  // AutoTux, solo si HAY margen para subir (no en el techo opus), solo turnos
+  // SUSTANCIALES (usó ≥2 herramientas o respondió algo largo — los triviales ya
+  // los baja el override de cierre y no valen el gasto). Throttle: no juzgar más
+  // de 1 de cada 3 turnos. Fire-and-forget: NUNCA bloquea; al terminar, si el
+  // juez dice "insuficiente", emite el evento `redo-suggest` (banner de
+  // consentimiento en el front — NUNCA sube solo).
+  _maybeJudge() {
+    if (this.modelChoice !== 'auto') return;
+    const level = clampLevel(this.model);
+    if (level < 0 || level >= MODEL_LEVELS.length - 1) return; // ya en el techo
+    const substantial = (this._turnToolCount || 0) >= 2 || (this._turnAnswerText || '').length >= 400;
+    if (!substantial) return;
+    if (this._judgeThrottle > 0) { this._judgeThrottle--; return; }
+    if (this._judging) return;
+    this._judging = true;
+    this._judgeThrottle = 2; // no re-juzgar los próximos 2 turnos
+    const userText = this._lastUserText;
+    const answerText = this._turnAnswerText;
+    judgeAnswer({ cwd: this.cwd, currentModel: this.model, userText, answerText })
+      .then((insufficient) => {
+        if (insufficient !== true || this.closed || this.modelChoice !== 'auto') return;
+        const lvl = clampLevel(this.model);
+        if (lvl < 0 || lvl >= MODEL_LEVELS.length - 1) return;
+        const to = MODEL_LEVELS[lvl + 1];
+        // Banner pasivo de consentimiento: el usuario decide (Reintentar/Ignorar).
+        this._push({ type: 'redo-suggest', from: this.model, to });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'judge', from: this.model, to, text: '(juez AutoMix: respuesta insuficiente, ofrezco subir)' });
+      })
+      .catch(() => { /* best-effort: nunca romper el turno por el juez */ })
+      .finally(() => { this._judging = false; });
+  }
+
+  // Consentimiento del juez (D1): sube UN escalón y REINTENTA el último pedido.
+  // Lo dispara el botón "Reintentar en <modelo>" del banner. Solo con AutoTux y
+  // margen para subir. Reusa sendUser (que re-arma el turno + re-juzga si toca).
+  redo() {
+    if (this.modelChoice !== 'auto') return false;
+    const lvl = clampLevel(this.model);
+    if (lvl < 0 || lvl >= MODEL_LEVELS.length - 1) return false;
+    const text = this._lastUserText || '';
+    if (!text) return false;
+    this.setModel(MODEL_LEVELS[lvl + 1], { auto: true });
+    this.sendUser(text);
+    return true;
   }
 
   // Clasificador RELATIVO de Haiku (v2): en vez de "¿qué complejidad tiene?"
@@ -1081,6 +1267,15 @@ class Chat {
     if (base === -1) return;
     const dec = insufficiencyEscalation({ baseLevel: base, toolCalls: this._turnToolCount, toolErrors: this._turnToolErrors });
     if (!dec) return;
+    // F1+F2 (PEND-405): la insuficiencia es señal DURA (errores de tool ⇒ hace
+    // falta capacidad) → salta de TIER, SALVO que el caché esté pegajoso: ahí
+    // subir effort no desperdicia el prefijo cacheado (más barato en la ventana).
+    // F4: con la ventana apretada, conservar (solo effort, nunca tier).
+    const pressure = readWindowPressure();
+    const conserve = typeof pressure === 'number' && pressure >= WINDOW_PRESSURE_CONSERVE;
+    const axis = decideUpAxis({ hard: true, level: base, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve });
+    if (axis === 'effort') { this._bumpEffortAuto(+1); return; }
+    if (axis === 'none') return;
     this._routerDownStreak = dec.downStreak;
     this._routerCooldown = dec.cooldown;
     const from = this.model;
@@ -1144,6 +1339,14 @@ class Chat {
       logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'guard', from: this.model, to: model, text: 'bloqueado: fable no es automático' });
       return;
     }
+    // Eje thinking effort (PEND-391 #3): mantener el effort ALINEADO al tier del
+    // modelo si la persona no lo fijó a mano. Es spawn-time (se aplica al próximo
+    // arranque), así que no depende del eco del runner. Un modelo fuera de escala
+    // (opusplan/default/fable) conserva el effort previo (effortForModel→null).
+    if (!this._effortPinned) {
+      const eff = effortForModel(model);
+      if (eff && eff !== this.effort) { this.effort = eff; this._push({ type: 'effort', effort: eff, auto: true }); }
+    }
     if (this.link) {
       this._pendingModelAuto.push(auto); // cola FIFO: lo consume el eco 'model' en orden (BUG-24)
       // El cambio real lo confirma el runner con su evento 'model'.
@@ -1183,6 +1386,62 @@ class Chat {
     this._push({ type: 'modelChoice', modelChoice: choice });
     this.onUpdate?.();
     this.setModel(choice); // fuerza el modelo real — auto:false (elección manual)
+  }
+
+  // Fija el ESFUERZO de razonamiento (eje thinking effort, PEND-391 #3). El
+  // effort es opción de SPAWN del Agent SDK (no hay q.setEffort en vivo — ver la
+  // decisión de arquitectura en Pad), así que con motor VIVO el nuevo esfuerzo
+  // se aplica en el PRÓXIMO arranque (Reabrir para cambios / dormir→despertar);
+  // con motor dormido, directo en el próximo spawn. Fija _effortPinned para que
+  // AutoTux no lo re-alinee al nivel del modelo. 'auto'/null DESFIJA (vuelve a
+  // seguir el tier). Emite evento 'effort' para el badge del header/tarjeta.
+  setEffort(effort) {
+    if (effort === 'auto' || effort == null) {
+      this._effortPinned = false;
+      this.effort = effortForModel(this.model);
+      // auto:true ⇒ el effort volvió a DERIVARSE del tier (no es un pin manual).
+      this._push({ type: 'effort', effort: this.effort, auto: true });
+      this.onUpdate?.();
+      return;
+    }
+    if (!EFFORT_LEVELS.includes(effort)) return;
+    this._effortPinned = true;
+    this.effort = effort;
+    this._push({ type: 'effort', effort, auto: false });
+    this.onUpdate?.();
+  }
+
+  // F1+F2 (PEND-405): el router sube/baja el effort UN escalón (dir +1/-1) de
+  // forma AUTOMÁTICA, respetando el techo AUTO ('high' — xhigh/max son manuales,
+  // como fable en el eje modelo) y el piso 'low'. No toca si la persona lo fijó.
+  // Es spawn-time; F3 (_maybeReopenForEffort) lo hace efectivo en vivo si aplica.
+  _bumpEffortAuto(dir) {
+    if (this._effortPinned) return;
+    const cur = effortIdx(this.effort);
+    if (cur < 0) return;
+    let next = cur + dir;
+    if (next > AUTO_EFFORT_MAX_IDX) next = AUTO_EFFORT_MAX_IDX;
+    if (next < 0) next = 0;
+    if (next === cur) return;
+    const to = EFFORT_LEVELS[next];
+    this.effort = to;
+    this._push({ type: 'effort', effort: to, auto: true });
+    logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'effort', from: EFFORT_LEVELS[cur], to, text: dir > 0 ? '(caché-aware: subo effort en vez de saltar de tier)' : '(bajo effort antes que bajar de tier)' });
+    this.onUpdate?.();
+    this._maybeReopenForEffort(); // F3: aplicar en vivo si el motor está ocioso
+  }
+
+  // F3 (PEND-405): el effort es opción de SPAWN (el SDK no tiene setEffort en
+  // vivo), así que para que un cambio de effort tome efecto YA reabrimos el
+  // runner (respawn --resume, conserva contexto). SOLO si el motor está vivo y
+  // OCIOSO (waiting) — nunca a mitad de turno (cortaría el trabajo) — y throttled
+  // para no reabrir en ráfaga. Con motor dormido no hace falta: el próximo spawn
+  // ya toma this.effort. Best-effort: si falla, el effort igual aplica al dormir.
+  _maybeReopenForEffort() {
+    if (!this.link || this.status === 'working') return; // dormido o en turno: se aplica al próximo spawn
+    if (this._effortReopenAt && Date.now() - this._effortReopenAt < 30000) return; // throttle 30s
+    this._effortReopenAt = Date.now();
+    Promise.resolve().then(() => this.reopen()).catch(() => { /* best-effort: aplica al dormir */ });
   }
 
   close() {
@@ -1318,6 +1577,7 @@ class Chat {
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
       viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
       model: this.model, modelChoice: this.modelChoice, // para que el badge "🤖 AutoTux: X" nazca poblado
+      effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
     }));
   }
 
@@ -1326,6 +1586,7 @@ class Chat {
   info() {
     return {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model, modelChoice: this.modelChoice,
+      effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       mode: this.permissionMode, status: this.status, alive: this.alive,
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
@@ -1443,6 +1704,10 @@ class ChatManager {
         // persiste explícito porque `model` solo no alcanza para distinguir
         // "elegí Sonnet a mano" de "AutoTux bajó a Sonnet" — ver constructor.
         modelChoice: c.modelChoice || null,
+        // Eje thinking effort (PEND-391 #3): esfuerzo elegido/derivado + si la
+        // persona lo FIJÓ a mano (para que AutoTux no lo re-alinee al nivel).
+        effort: c.effort || null,
+        effortPinned: !!c._effortPinned,
         // AutoTux v2 (core/model-router.js): el NIVEL se deriva de `model`
         // (arriba); esto es el estado MÍNIMO de histéresis — contador de turnos
         // "down" seguidos + turnos restantes de cooldown anti-rebote.
@@ -1487,6 +1752,9 @@ class ChatManager {
       // explícito distingue "elegí Sonnet a mano" de "AutoTux está en Sonnet
       // ahora" — chats viejos sin este campo se quedan con lo que infirió).
       if (s.modelChoice) chat.modelChoice = s.modelChoice;
+      // Eje thinking effort: restaurar el effort persistido + si estaba fijado.
+      if (EFFORT_LEVELS.includes(s.effort)) chat.effort = s.effort;
+      chat._effortPinned = !!s.effortPinned;
       chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
       chat._routerCooldown = Number.isFinite(s.routerCooldown) ? s.routerCooldown : 0;
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
@@ -1754,6 +2022,56 @@ export default {
       const model = req.body?.model;
       if (model !== 'auto' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       chat.setModelChoice(model);
+      // Submenú modelo→esfuerzo (PEND-391 #3): el mismo POST puede fijar el
+      // effort en la misma pasada. 'auto'/null DESFIJA (vuelve a seguir el tier
+      // del modelo). setEffort se llama DESPUÉS de setModelChoice para que la
+      // elección explícita del usuario gane sobre el re-alineo automático.
+      const effort = req.body?.effort;
+      if (effort !== undefined) {
+        if (effort !== null && effort !== 'auto' && !EFFORT_LEVELS.includes(effort)) {
+          return res.status(400).json({ error: 'Esfuerzo inválido.' });
+        }
+        chat.setEffort(effort);
+      }
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // Métricas de calibración de AutoTux (PEND-391 #4, 0 tokens — solo lee el
+    // jsonl de turnos): distribución por modelo, tasa de rebote y la auditoría
+    // de caché (#2, switched vs notSwitched). Para calibrar el router con datos
+    // reales sin re-parsear transcripts.
+    r.get('/router-metrics', (req, res) => {
+      try {
+        const metrics = readTurnMetrics({ limit: Math.min(Number(req.query?.limit) || 4000, 20000) });
+        // F5(b): sumamos el análisis de calibración (propuestas aprobables +
+        // señales aprendidas gateadas por datos). 0 tokens, solo lee los jsonl.
+        const calibration = req.query?.calibrate === '0' ? undefined : analyzeCalibration();
+        res.json(calibration ? { ...metrics, calibration } : metrics);
+      } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+    });
+
+    // Consentimiento del juez AutoMix (D1): sube un escalón y reintenta el
+    // último pedido. Lo dispara el botón "Reintentar en <modelo>" del banner.
+    r.post('/redo', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const ok = chat.redo();
+      if (!ok) return res.status(400).json({ error: 'No se puede reintentar (no es AutoTux o ya está en el modelo más fuerte).' });
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // Endpoint dedicado para fijar SOLO el esfuerzo (eje thinking effort). Útil
+    // si la UI quiere cambiar el effort sin re-tocar el modelo.
+    r.post('/effort', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const effort = req.body?.effort;
+      if (effort !== null && effort !== 'auto' && !EFFORT_LEVELS.includes(effort)) {
+        return res.status(400).json({ error: 'Esfuerzo inválido.' });
+      }
+      chat.setEffort(effort);
       manager.persist();
       res.json({ ok: true, chat: chat.info() });
     });

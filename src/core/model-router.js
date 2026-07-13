@@ -82,12 +82,148 @@ export function logDecision(entry) { appendCapped(LOG_FILE, entry); }
 
 // Registro por TURNO (para calibrar: distribución de turnos por nivel + tasa de
 // rebote — v1 solo logueaba CAMBIOS, así que Haiko 0% era invisible). Liviano.
-// { chatId, ranLevel, base, override(bool), toolCalls, toolErrors }.
+// Enriquecido (PEND-391 #2/#4): { chatId, model, modelChoice, switchedFromPrev,
+// prevModel, effort, ranLevel, base, override, toolCalls, toolErrors,
+// cacheCreate, cacheRead, input, output }.
 export function logTurn(entry) { appendCapped(TURN_LOG_FILE, entry); }
+
+// Métricas de calibración (PEND-391 #4): lee model-router-turns.jsonl (0 tokens,
+// solo disco) y computa lo que la investigación pidió medir — distribución de
+// turnos por MODELO, tasa de REBOTE (turnos que cambiaron de modelo / total), y
+// la AUDITORÍA DE CACHÉ (#2): en los turnos donde el modelo CAMBIÓ vs los que
+// NO, ¿cuánto cae cache_read y cuánto sube cache_creation? Si el switch invalida
+// el caché, los turnos con switch tendrán cacheRead≈0 y cacheCreate alto — eso
+// CONFIRMA que rebotar de tier cuesta tokens de la ventana de rate-limit.
+export function readTurnMetrics({ limit = 4000 } = {}) {
+  let lines = [];
+  try {
+    lines = fs.readFileSync(TURN_LOG_FILE, 'utf8').split('\n').filter(Boolean);
+  } catch { return { turns: 0, byModel: {}, bounceRate: 0, cache: null, note: 'sin datos aún' }; }
+  const rows = lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const byModel = {};
+  let switches = 0, withUsage = 0;
+  const acc = (bucket) => ({ n: 0, cacheRead: 0, cacheCreate: 0, input: 0, output: 0, ...bucket });
+  const sw = acc(), nosw = acc();
+  for (const r of rows) {
+    const m = r.model || 'desconocido';
+    byModel[m] = (byModel[m] || 0) + 1;
+    if (r.switchedFromPrev) switches++;
+    // Solo turnos con usage real (cacheRead/cacheCreate no null) para la auditoría.
+    if (r.cacheRead != null || r.cacheCreate != null) {
+      withUsage++;
+      const b = r.switchedFromPrev ? sw : nosw;
+      b.n++; b.cacheRead += r.cacheRead || 0; b.cacheCreate += r.cacheCreate || 0;
+      b.input += r.input || 0; b.output += r.output || 0;
+    }
+  }
+  const avg = (b) => b.n ? {
+    turns: b.n,
+    avgCacheRead: Math.round(b.cacheRead / b.n),
+    avgCacheCreate: Math.round(b.cacheCreate / b.n),
+    avgInput: Math.round(b.input / b.n),
+  } : { turns: 0 };
+  return {
+    turns: rows.length,
+    byModel,
+    bounceRate: rows.length ? +(switches / rows.length).toFixed(3) : 0,
+    switches,
+    cache: withUsage ? {
+      // Auditoría de la hipótesis del caché (#2): comparar los dos buckets.
+      switched: avg(sw),      // turnos donde el modelo cambió vs el turno previo
+      notSwitched: avg(nosw), // turnos SIN cambio de modelo
+      hypothesis: 'si switched.avgCacheRead << notSwitched.avgCacheRead, el switch de modelo invalida el caché (rebotar de tier cuesta tokens de la ventana)',
+    } : { note: 'aún no hay turnos con usage de caché; se llena a medida que se usan los chats con la instrumentación nueva' },
+  };
+}
+
+// REENCUADRE (PEND-391 #5): el objetivo real del router NO es ahorrar $ (es
+// suscripción, no se factura por token) sino NO QUEMAR LA VENTANA DE
+// RATE-LIMIT (5 h / semanal de claude.ai). Por eso la métrica de calibración
+// se lee en TOKENS de la ventana (model-router-turns.jsonl), no en dólares, y
+// el caché de prompt importa: un switch de modelo lo invalida (cache_read→0),
+// así que rebotar de tier puede COSTAR tokens en vez de ahorrarlos.
 
 // Escala GESTIONADA por el router, barato→caro. FABLE PROHIBIDO (v2, C1): no
 // está acá y el call-site lo bloquea (FORBIDDEN_AUTO). El índice ES el nivel.
 export const MODEL_LEVELS = ['haiku', 'sonnet', 'opus'];
+
+// Eje thinking effort (PEND-391 #3): effort por defecto según el NIVEL de
+// AutoTux — una palanca de profundidad MÁS BARATA que saltar de tier. Un chat
+// nace/reabre con este effort (es opción de SPAWN del SDK, no hay setEffort en
+// vivo). El usuario puede pisar el effort a mano desde el submenú de Sesiones.
+const EFFORT_BY_LEVEL = ['low', 'medium', 'high']; // haiku→low · sonnet→medium · opus→high
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// AUTO nunca sube el effort más allá de 'high' solo (xhigh/max son caros y
+// quedan para elección MANUAL, mismo criterio que fable en el eje modelo).
+export const AUTO_EFFORT_MAX_IDX = 2; // 'high'
+export function effortForLevel(level) {
+  if (typeof level !== 'number' || level < 0) return null;
+  return EFFORT_BY_LEVEL[Math.min(level, EFFORT_BY_LEVEL.length - 1)];
+}
+export function effortForModel(model) {
+  const lvl = clampLevel(model); // clampLevel es function declaration (hoisted)
+  return lvl === -1 ? null : effortForLevel(lvl);
+}
+export function effortIdx(effort) {
+  const i = EFFORT_LEVELS.indexOf(effort);
+  return i === -1 ? -1 : i;
+}
+
+// ─── F1+F2 (PEND-405): eje EFFORT como decisión de ruteo, caché-aware ──────────
+// El effort es una palanca de profundidad MÁS BARATA que saltar de tier de
+// modelo, y —clave— NO invalida el caché de prompt (un cambio de modelo SÍ, lo
+// medimos en la instrumentación #2). Por eso, ante una necesidad de "subir",
+// el router elige ENTRE subir effort (mismo modelo, caché intacto) o saltar de
+// tier (más capaz pero tira el caché). Regla:
+//   - Señal DURA (corrección del usuario / insuficiencia por errores de tool):
+//     necesita CAPACIDAD real ⇒ salta de TIER (el effort no arregla un modelo
+//     que no da abasto).
+//   - Señal BLANDA (clasificador 'up' / código / mensaje largo): probamos el
+//     effort PRIMERO si hay margen (más barato); si no, tier.
+//   - Caché PEGAJOSO (el último turno leyó mucho del caché): sesga hacia effort
+//     incluso en señales duras borderline — saltar de tier desperdiciaría ese
+//     caché (cuesta tokens de la ventana de rate-limit, el objetivo real #5).
+export const CACHE_STICKY_TOKENS = 15000; // cacheRead ≥ esto ⇒ hay prefijo cacheado que vale conservar
+// Devuelve 'effort' (subir effort, mismo modelo) | 'model' (saltar tier) |
+// 'none' (sin margen en ninguno). `pinned` = la persona fijó el effort a mano
+// (no lo tocamos: siempre 'model'). effortIdx/level son índices; -1 = fuera de
+// escala (no gestionado). lastCacheRead en tokens (0 si no hay dato).
+export function decideUpAxis({ hard = false, level = -1, effortIndex = -1, lastCacheRead = 0, pinned = false, conserve = false }) {
+  const canModel = level >= 0 && level < CEILING;
+  const canEffort = !pinned && effortIndex >= 0 && effortIndex < AUTO_EFFORT_MAX_IDX;
+  if (!canEffort && !canModel) return 'none';
+  // F4: ventana de rate-limit apretada ⇒ NUNCA saltar de tier (invalida caché +
+  // opus quema más ventana). Solo subir effort si hay margen; si no, quedarse.
+  if (conserve) return canEffort ? 'effort' : 'none';
+  if (!canEffort) return 'model';
+  if (!canModel) return 'effort';
+  const sticky = lastCacheRead >= CACHE_STICKY_TOKENS;
+  if (hard) return sticky ? 'effort' : 'model';   // dura: tier salvo caché pegajoso
+  return 'effort';                                 // blanda: effort primero (barato)
+}
+
+// F4 (PEND-405): presión de la ventana de rate-limit (0 tokens — solo lee el
+// snapshot plan-limits.json que el módulo tokens persiste). Devuelve el % MÁXIMO
+// usado entre las ventanas (sesión 5h / semanal), 0..100, o null si no hay dato.
+// El router se pone conservador (decideUpAxis conserve) cuando supera el umbral,
+// porque el objetivo real (#5) es no QUEMAR esa ventana.
+const PLAN_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'plan-limits.json');
+export const WINDOW_PRESSURE_CONSERVE = 75; // ≥75% usado ⇒ conservar (effort, no tier)
+export function readWindowPressure() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(PLAN_LIMITS_FILE, 'utf8'));
+    if (!obj || !Array.isArray(obj.limits)) return null;
+    const pcts = obj.limits.map((l) => (typeof l.percent === 'number' ? l.percent : null)).filter((p) => p != null);
+    return pcts.length ? Math.max(...pcts) : null;
+  } catch { return null; }
+}
+// Simétrico para bajar: si el effort está POR ENCIMA del default del tier
+// (fue subido por el router), bajarlo PRIMERO antes de bajar de modelo — así el
+// modelo (y su caché) se conservan más tiempo. Devuelve 'effort' | 'model'.
+export function decideDownAxis({ level = -1, effortIndex = -1, tierEffortIndex = -1, pinned = false }) {
+  if (!pinned && effortIndex >= 0 && tierEffortIndex >= 0 && effortIndex > tierEffortIndex) return 'effort';
+  return 'model';
+}
 export const CEILING = MODEL_LEVELS.length - 1; // 2 = opus
 export const FORBIDDEN_AUTO = new Set(['fable']); // guard de defensa en profundidad
 
@@ -97,7 +233,11 @@ const DOWN_STREAK_TO_DEMOTE = 2;
 const COOLDOWN_TURNS = 2;            // turnos congelados tras un cambio (anti-rebote)
 const LONG_MESSAGE_CHARS = 1200;     // era 800; longitud ≠ dificultad, ahora señal débil
 const REACTIVE_TOOL_THRESHOLD = 10;  // era 6; ahora exige ADEMÁS ≥1 error de tool
-export const IDLE_DECAY_MS = 60 * 60 * 1000; // ≥60 min dormido ⇒ decae 1 escalón
+// Decisión abierta #3 de la investigación (PEND-391), resuelta a AGRESIVO: 30
+// min (antes 60). Un chat que estuvo media hora quieto en Opus casi seguro
+// terminó su sesión intensa; si no, el 1er turno con código lo re-sube. Bajar
+// esta constante ahorra ventana de rate-limit sin riesgo (la subida es barata).
+export const IDLE_DECAY_MS = 30 * 60 * 1000; // ≥30 min dormido ⇒ decae 1 escalón
 
 // Acks de CIERRE (cierran un hilo, NO disparan trabajo) ⇒ override efímero a
 // Haiku seguro. Deliberadamente NO incluye dale/ok/sí (go-aheads).
@@ -187,6 +327,113 @@ export function insufficiencyEscalation({ baseLevel, toolCalls = 0, toolErrors =
   const bigAndFailing = toolCalls >= REACTIVE_TOOL_THRESHOLD && toolErrors >= 1;
   if (!hardFail && !bigAndFailing) return null;
   return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
+}
+
+// ─── F5(b) (PEND-405): loop de calibración DETERMINÍSTICO — alternativa al #6 ──
+// En vez de entrenar un clasificador ML (riesgoso, bloqueado por datos), MINAMOS
+// determinísticamente (0 tokens, sin ML, patrón core/inventory.js) los logs
+// reales del router para: (1) PROPONER ajustes de umbrales aprobables (patrón
+// invariantes de Salud — nada se auto-aplica), y (2) derivar SEÑALES APRENDIDAS
+// (keyword→dirección) que la heurística puede consultar antes de gastar el
+// clasificador Haiku. TODO gateado por SUFICIENCIA DE DATOS: con pocos ejemplos
+// (~108 hoy) devuelve casi vacío a propósito — el punto del #6 era que hace
+// falta volumen; acá lo hacemos explícito en vez de sobreajustar.
+const CALIB_MIN_DECISIONS = 400;   // menos que esto ⇒ señales aprendidas OFF (ruido)
+const CALIB_MIN_SUPPORT = 6;       // ocurrencias mínimas de un keyword para confiar
+const STOPWORDS = new Set(['para','pero','como','esto','esta','este','que','con','los','las','del','una','uno','por','the','and','for','you','are','con','más','muy','sin','sus','han','hay','fue','ver','así','solo','todo','cada']);
+export function analyzeCalibration({ decisionsLimit = 8000, turnsLimit = 8000 } = {}) {
+  const readJsonl = (file, lim) => {
+    try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-lim).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
+    catch { return []; }
+  };
+  const decisions = readJsonl(LOG_FILE, decisionsLimit);
+  const turns = readJsonl(TURN_LOG_FILE, turnsLimit);
+  const proposals = [];
+
+  // (1) Fuentes de decisión (para ver qué domina).
+  const bySource = {};
+  for (const d of decisions) bySource[d.source || '?'] = (bySource[d.source || '?'] || 0) + 1;
+
+  // (2) Tasa de rebote (turnos que cambiaron de modelo / total con dato).
+  const switched = turns.filter((t) => t.switchedFromPrev).length;
+  const bounceRate = turns.length ? +(switched / turns.length).toFixed(3) : 0;
+  if (turns.length >= 50 && bounceRate > 0.3) {
+    proposals.push({ id: 'bounce-high', kind: 'umbral', current: 'COOLDOWN_TURNS=2', suggested: 'COOLDOWN_TURNS=3', rationale: `Tasa de rebote ${(bounceRate * 100).toFixed(0)}% (>30%): el router cambia de modelo demasiado seguido. Subir el cooldown anti-rebote lo estabiliza.`, evidence: { bounceRate, switched, turns: turns.length } });
+  }
+
+  // (3) Auditoría de caché del closing-ack→Haiku (¿ahorro NEGATIVO?): un override
+  // corre en Haiku, pero el turno SIGUIENTE re-crea el caché (switchedFromPrev).
+  const overrideTurns = turns.filter((t) => t.override);
+  const withUsage = turns.filter((t) => t.cacheRead != null);
+  if (overrideTurns.length >= 10) {
+    const swAfter = turns.filter((t) => t.switchedFromPrev && (t.cacheCreate || 0) > (t.cacheRead || 0)).length;
+    const ratio = withUsage.length ? swAfter / withUsage.length : 0;
+    if (ratio > 0.2) {
+      proposals.push({ id: 'closing-ack-cache', kind: 'flujo', current: 'closing-ack→Haiku activo', suggested: 'evaluar desactivar el override a Haiku', rationale: `Muchos turnos con switch re-crean más caché del que leen (${(ratio * 100).toFixed(0)}%): el override de cierre a Haiku podría dar AHORRO NEGATIVO (invalida el caché y el turno siguiente lo re-crea). Medir con más datos antes de tocar.`, evidence: { overrideTurns: overrideTurns.length, ratio } });
+    }
+  }
+
+  // (4) Distribución por modelo (¿algún nivel nunca se usa?).
+  const byModel = {};
+  for (const t of turns) byModel[t.model || '?'] = (byModel[t.model || '?'] || 0) + 1;
+
+  // (5) SEÑALES APRENDIDAS (keyword→dirección) — gateadas por suficiencia.
+  let learnedSignals = [];
+  const dataSufficient = decisions.length >= CALIB_MIN_DECISIONS;
+  if (dataSufficient) {
+    const upWords = {}, downWords = {};
+    for (const d of decisions) {
+      const up = d.source === 'correction' || d.source === 'insufficiency' || (d.to && d.from && MODEL_LEVELS.indexOf(d.to) > MODEL_LEVELS.indexOf(d.from));
+      const bag = up ? upWords : downWords;
+      for (const w of String(d.text || '').toLowerCase().replace(/[^a-záéíóúñ0-9\s]/g, ' ').split(/\s+/)) {
+        if (w.length < 4 || STOPWORDS.has(w)) continue;
+        bag[w] = (bag[w] || 0) + 1;
+      }
+    }
+    for (const [w, n] of Object.entries(upWords)) {
+      if (n >= CALIB_MIN_SUPPORT && (upWords[w] || 0) > 2 * (downWords[w] || 0)) {
+        learnedSignals.push({ keyword: w, dir: 'up', support: n });
+      }
+    }
+    learnedSignals = learnedSignals.sort((a, b) => b.support - a.support).slice(0, 40);
+  }
+
+  return {
+    decisions: decisions.length,
+    turns: turns.length,
+    bySource,
+    byModel,
+    bounceRate,
+    proposals,
+    learnedSignals,
+    dataSufficiency: { decisions: decisions.length, needed: CALIB_MIN_DECISIONS, sufficientForLearnedSignals: dataSufficient, note: dataSufficient ? 'hay datos para señales aprendidas' : `faltan datos: ${decisions.length}/${CALIB_MIN_DECISIONS} decisiones para activar señales aprendidas (evita sobreajuste con poco volumen — el motivo por el que el clasificador ML #6 se descartó)` },
+  };
+}
+
+// Caché TTL de las señales aprendidas (F5b): la heurística las consulta ANTES de
+// gastar el clasificador Haiku. Se refresca cada 30 min (analyzeCalibration lee
+// archivos). Con pocos datos la lista viene vacía ⇒ null ⇒ sin efecto (seguro).
+let _sigCache = { at: 0, sig: null };
+const SIG_TTL_MS = 30 * 60 * 1000;
+function getLearnedSignals(nowMs) {
+  // nowMs se pasa desde el llamador (Date.now() está prohibido en el core-workflow
+  // pero NO en runtime del server; igual lo recibimos para testeabilidad).
+  const now = nowMs || 0;
+  if (!_sigCache.sig || (now && now - _sigCache.at > SIG_TTL_MS)) {
+    try { _sigCache = { at: now, sig: analyzeCalibration().learnedSignals || [] }; }
+    catch { _sigCache = { at: now, sig: [] }; }
+  }
+  return _sigCache.sig;
+}
+// Devuelve 'up' si el texto matchea una señal aprendida 'up' con soporte, o null.
+// Solo actúa cuando HAY señales (datos suficientes); si no, null (heurística sigue
+// su curso hacia el clasificador Haiku). Alternativa determinística al #6.
+export function learnedSignalBias(text, nowMs = 0) {
+  const sig = getLearnedSignals(nowMs);
+  if (!sig || !sig.length) return null;
+  const t = String(text || '').toLowerCase();
+  for (const s of sig) { if (s.dir === 'up' && t.includes(s.keyword)) return 'up'; }
+  return null;
 }
 
 // ¿Corresponde una bajada por inactividad? (idle ≥ IDLE_DECAY_MS y base por
