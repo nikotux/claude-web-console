@@ -20,6 +20,16 @@ import {
 import { verifyUser } from './core/users.js';
 import { createWsRouter } from './core/wss.js';
 import { registerModules } from './core/registry.js';
+import { warmCache, startCacheSweep } from './core/pad-service-client.js';
+
+// Colecciones "calientes" de Pad local que la UI pide al abrir: se precargan al
+// arrancar y el barrido las mantiene frescas (RDA-347 — transporte del Banco de
+// Conocimiento y demás tableros sobre Pad local).
+const HOT_PAD_COLLECTIONS = [
+  'temas-de-aprendizaje', 'rutas-de-aprendizaje', // Banco de Conocimiento
+  'pendientes', 'planes', // tablero de tareas
+  'contexto-de-tickets', 'mejora-continua', // tickets internos + retro
+];
 
 // Helper para setear cookies de sesión: httpOnly + Secure (HTTPS) + SameSite.
 function setCookie(res, name, value, { clear = false } = {}) {
@@ -178,6 +188,15 @@ async function main() {
     console.log(`[server] Escuchando en https://${ip}:${config.port} (solo ZeroTier)`);
     console.log('[server] Acceso: abrí esa URL desde un dispositivo de la red ZeroTier');
     console.log('[server] (la primera vez, aceptá el aviso de certificado self-signed).');
+
+    // Caché de Pad local: precarga las colecciones calientes y arranca el barrido
+    // de refresco. Best-effort — si Pad local está caído, no afecta el boot.
+    warmCache(HOT_PAD_COLLECTIONS)
+      .then((r) => {
+        console.log(`[server] Pad local: precarga de caché lista (${r.warmed}/${HOT_PAD_COLLECTIONS.length} colecciones).`);
+        startCacheSweep();
+      })
+      .catch((err) => console.warn('[server] Pad local: precarga de caché falló (se sigue sin caché):', String(err?.message || err)));
   });
 }
 

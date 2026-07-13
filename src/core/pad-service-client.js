@@ -25,6 +25,30 @@ const DEFAULT_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
 const DEFAULT_WORKSPACE = process.env.CWC_PAD_WORKSPACE || 'console';
 const REQUEST_TIMEOUT_MS = 10_000;
 
+// ───────────────────────────────────────────────────────────────────────────
+// TRANSPORTE PROTEGIDO (2026-07-12, RDA-347 / TDA-348 — optimización del Banco
+// de Conocimiento). Dos capas sobre el fetch crudo, porque TODOS los módulos
+// comparten este cliente y el punto de estrangulamiento es el rate-limiter
+// POR-USUARIO de Pad local:
+//
+//  1) GATE GLOBAL — un semáforo de proceso (MAX_CONCURRENT) + back-off ante 429.
+//     Aunque un caller olvide acotar su fan-out, nunca habrá más de N requests
+//     simultáneos contra Pad, y un 429 PAUSA todo el tráfico por BACKOFF_MS y
+//     reintenta (hasta MAX_RETRIES_429). Es la red de seguridad transversal que
+//     complementa al mapPooled por-módulo (tasks 756c036).
+//  2) CACHÉ DE LECTURA — los GET se sirven de memoria (TTL corto + invalidación
+//     inmediata en cada write + barrido de refresco en background). El dashboard
+//     deja de pegarle a Pad local en cada carga (de ~25ms bajo contención a ~0ms).
+//
+// Kill switches: CWC_PAD_CACHE=0 apaga la caché; CWC_PAD_MAXCONC / CWC_PAD_BACKOFF_MS
+// / CWC_PAD_CACHE_TTL_MS ajustan los topes. Ante cualquier rareza, apagar la caché
+// deja el comportamiento idéntico al histórico (fetch directo, sin memoria).
+const MAX_CONCURRENT = Number(process.env.CWC_PAD_MAXCONC) || 6;
+const BACKOFF_MS = Number(process.env.CWC_PAD_BACKOFF_MS) || 3000;
+const MAX_RETRIES_429 = 3;
+const CACHE_ENABLED = process.env.CWC_PAD_CACHE !== '0';
+const CACHE_TTL_MS = Number(process.env.CWC_PAD_CACHE_TTL_MS) || 30_000;
+
 function readSessionToken(serverUrl) {
   try {
     const raw = JSON.parse(fs.readFileSync(CREDS, 'utf8'));
@@ -36,34 +60,103 @@ function readSessionToken(serverUrl) {
   }
 }
 
-async function request(method, urlPath, { body, url = DEFAULT_URL } = {}) {
+// --- Gate global: semáforo (MAX_CONCURRENT en vuelo) + pausa por 429 ----------
+let inFlight = 0;
+let pauseUntil = 0;
+const waiters = [];
+function acquire() {
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const wait = pauseUntil - Date.now();
+      if (wait > 0) { setTimeout(attempt, wait); return; } // esperar a que pase el back-off
+      if (inFlight < MAX_CONCURRENT) { inFlight += 1; resolve(); return; }
+      waiters.push(attempt); // sin slot: encolar; release() nos re-intenta
+    };
+    attempt();
+  });
+}
+function release() {
+  inFlight = Math.max(0, inFlight - 1);
+  const next = waiters.shift();
+  if (next) next();
+}
+function signal429() { pauseUntil = Date.now() + BACKOFF_MS; }
+
+// --- Caché de lectura: urlPath -> { data, ts }. Solo GET. --------------------
+const readCache = new Map();
+function cacheGet(urlPath) {
+  const hit = readCache.get(urlPath);
+  if (hit && (Date.now() - hit.ts) < CACHE_TTL_MS) return hit.data;
+  return undefined;
+}
+function cacheSet(urlPath, data) { readCache.set(urlPath, { data, ts: Date.now() }); }
+// Un write invalida TODAS las lecturas cacheadas de ese workspace (coarse pero
+// correcto: los writes son raros vs. los reads, y así jamás servimos algo viejo
+// tras editar). Si no se puede parsear el workspace, se limpia todo por las dudas.
+function invalidateForWrite(urlPath) {
+  const m = urlPath.match(/\/workspaces\/([^/]+)\//);
+  const ws = m ? m[1] : null;
+  if (!ws) { readCache.clear(); return; }
+  const needle = `/workspaces/${ws}/`;
+  for (const key of readCache.keys()) if (key.includes(needle)) readCache.delete(key);
+}
+
+// Fetch crudo, SIEMPRE a través del gate (semáforo + back-off/retry ante 429).
+async function doFetch(method, urlPath, { body, url }) {
   const token = readSessionToken(url);
   if (!token) return { ok: false, error: 'Pad local: sin token de sesión (correr `pad auth login` contra el server local).' };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${url}${urlPath}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    let data;
-    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!res.ok) {
-      const msg = (data && data.error && data.error.message) || `HTTP ${res.status}`;
-      return { ok: false, error: msg, status: res.status };
+  for (let attempt = 0; ; attempt += 1) {
+    await acquire();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${url}${urlPath}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (res.status === 429 && attempt < MAX_RETRIES_429) {
+        signal429(); // pausa TODO el tráfico y reintenta este request tras el back-off
+        continue;
+      }
+      if (!res.ok) {
+        const msg = (data && data.error && data.error.message) || `HTTP ${res.status}`;
+        return { ok: false, error: msg, status: res.status };
+      }
+      return { ok: true, data };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err).slice(0, 200) };
+    } finally {
+      clearTimeout(timer);
+      release();
     }
-    return { ok: true, data };
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err).slice(0, 200) };
-  } finally {
-    clearTimeout(timer);
   }
+}
+
+// Punto único de todas las operaciones. GET pasa por la caché; los writes la
+// invalidan. La forma del retorno ({ ok, data } / { ok:false, error }) no cambia.
+async function request(method, urlPath, { body, url = DEFAULT_URL } = {}) {
+  const isGet = method === 'GET';
+  if (isGet && CACHE_ENABLED) {
+    const cached = cacheGet(urlPath);
+    // Clon defensivo: el caché guarda una sola referencia; sin copiar, un caller
+    // que mute el resultado (p.ej. `.sort()` in-place) corrompería a los demás.
+    if (cached !== undefined) return { ok: true, data: structuredClone(cached), cached: true };
+  }
+  const r = await doFetch(method, urlPath, { body, url });
+  if (isGet) {
+    if (CACHE_ENABLED && r.ok) cacheSet(urlPath, r.data);
+  } else if (r.ok && CACHE_ENABLED) {
+    invalidateForWrite(urlPath);
+  }
+  return r;
 }
 
 // --- API de alto nivel (colección/ítem), workspace por defecto = 'console' ---
@@ -197,4 +290,55 @@ export async function deleteLink(linkId, { workspace = DEFAULT_WORKSPACE } = {})
 export async function isAvailable(workspace = DEFAULT_WORKSPACE) {
   const r = await listCollections(workspace);
   return r.ok;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// CACHÉ: precarga + barrido + control (RDA-347 / TDA-348).
+// Los llama server.js en el arranque. Todo best-effort: si Pad local está caído,
+// degradan en silencio (nunca tumban el boot).
+
+// Precarga (warm-up): trae al arranque las colecciones "calientes" que la UI
+// pide al abrir, para que la PRIMERA carga ya salga de memoria. Secuencial a
+// propósito (una tras otra) para no golpear a Pad local en el mismo instante en
+// que arranca todo lo demás.
+export async function warmCache(collections = [], { workspace = DEFAULT_WORKSPACE } = {}) {
+  if (!CACHE_ENABLED) return { warmed: 0 };
+  await listCollections(workspace);
+  let warmed = 0;
+  for (const c of collections) {
+    const r = await listItems(c, { workspace });
+    if (r.ok) warmed += 1;
+  }
+  return { warmed };
+}
+
+// Barrido automático: refresca en background SOLO las claves ya cacheadas (lo
+// que alguien realmente usa) para captar cambios externos (otros agentes vía
+// MCP, ediciones en otra sesión) sin que el usuario pague el fetch. Con
+// intervalMs < CACHE_TTL_MS, las entradas nunca se enfrían: siempre hay un hit
+// fresco listo. Secuencial + a través del gate: no puede saturar Pad local.
+let sweepTimer = null;
+export function startCacheSweep({ intervalMs = 20_000 } = {}) {
+  if (!CACHE_ENABLED || sweepTimer) return null;
+  sweepTimer = setInterval(async () => {
+    for (const urlPath of [...readCache.keys()]) {
+      const r = await doFetch('GET', urlPath, { url: DEFAULT_URL });
+      if (r.ok) cacheSet(urlPath, r.data);
+    }
+  }, intervalMs);
+  sweepTimer.unref?.();
+  return sweepTimer;
+}
+export function stopCacheSweep() { if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; } }
+
+// Utilidades de control/observabilidad (para un healthcheck o un panel futuro).
+export function invalidateCache() { readCache.clear(); }
+export function cacheStats() {
+  return {
+    enabled: CACHE_ENABLED,
+    entries: readCache.size,
+    inFlight,
+    maxConcurrent: MAX_CONCURRENT,
+    pausedForMs: Math.max(0, pauseUntil - Date.now()),
+  };
 }
