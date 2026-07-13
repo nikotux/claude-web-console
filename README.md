@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-14 00:17 — main
+- Agregar AutoTux v4 y daemon WhatsApp; archivar comms board
+
 ### 2026-07-12 07:24 — redesign/board-mobile
 - fix(tasks): evitar ráfaga de 429 contra Pad local en listTasks/listPlans
 - Escaneo de Salud unificado: 1 botón que corre todo (Revisión+Optim+Coherencia+Pad)
