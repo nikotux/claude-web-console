@@ -3827,17 +3827,24 @@ docs/                       frontend-modules.md · brief-original.txt · context
 ## Mejora Continua (auto)
 <!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->
 
+### Diseñar acciones por ítem con un botón principal por defecto, no un botón por opción
+_convencion · confianza alta · recurrencia x2_
+
+**Observación:** El tablero de Mejora Continua mostraba 7 botones por lección (aprobar + 4 destinos + descartar + cerrar) y el usuario reportó explícitamente no entender qué botón usar, pidiendo simplificación.
+
+**Lección:** Cuando un ítem tiene múltiples acciones o destinos posibles, exponer un único botón de acción primaria con la opción sugerida por defecto (más un menú ▾ para las alternativas), en vez de un botón por cada opción posible — validar esto en el diseño ANTES de construir la UI completa, no después de que el usuario se confunda.
+
 ### Reconocer eco del propio broadcast en el interfono antes de responder
-_procedimiento · confianza media · recurrencia x1_
+_procedimiento · confianza media · recurrencia x2_
 
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
 
-### Diseñar acciones por ítem con un botón principal por defecto, no un botón por opción
-_convencion · confianza alta · recurrencia x1_
+### Antes de cerrar hallazgos de un análisis, cruzarlos y registrarlos contra el backlog de Pad
+_procedimiento · confianza alta · recurrencia x1_
 
-**Observación:** El tablero de Mejora Continua mostraba 7 botones por lección (aprobar + 4 destinos + descartar + cerrar) y el usuario reportó explícitamente no entender qué botón usar, pidiendo simplificación.
+**Observación:** Tras resolver 14 hallazgos + propuestas de los 3 escaneos de Salud, el agente dio el trabajo por cerrado sin cruzarlo contra los 23 BUGs abiertos en Pad ni registrar los fixes como items BUG (Regla 11); el usuario tuvo que preguntar '¿Y los bugs registrados en pad?' para que se corrigiera.
 
-**Lección:** Cuando un ítem tiene múltiples acciones o destinos posibles, exponer un único botón de acción primaria con la opción sugerida por defecto (más un menú ▾ para las alternativas), en vez de un botón por cada opción posible — validar esto en el diseño ANTES de construir la UI completa, no después de que el usuario se confunda.
+**Lección:** Al cerrar cualquier tanda de fixes originados en un motor de análisis (Salud, Coherencia, Revisión), antes del resumen final: (1) cruzar los hallazgos contra el backlog abierto de Pad para no duplicar ni dejar huérfanos, y (2) crear/actualizar los items BUG correspondientes en Pad — sin esperar a que el usuario lo pida.
 <!-- cwc:mejora-continua:end -->
