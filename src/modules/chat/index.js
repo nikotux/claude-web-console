@@ -560,6 +560,16 @@ function writeHandoffManifest(destId, { fromCwd, toCwd, title, task, ref }) {
     const proj = cfg?.projects?.[path.resolve(toCwd)] || cfg?.projects?.[toCwd];
     mcps = Object.keys(proj?.mcpServers || {});
   } catch { /* sin config o sin MCPs en ese mundo */ }
+  // Artefactos de trabajo ya recolectados en el escritorio del paquete-sesión
+  // (PLAN-447): archivos que se materializaron acá con cwc-attach.js (adjuntos de
+  // WhatsApp/Outlook, documentos, etc.). Viajan con el paquete — el destino no los
+  // redescubre. Excluye el propio manifiesto y ocultos. Best-effort.
+  let artifacts = [];
+  try {
+    artifacts = fss.readdirSync(dir)
+      .filter((f) => f !== '_handoff.md' && !f.startsWith('.'))
+      .sort();
+  } catch { /* carpeta aún sin materializar nada */ }
   const md = [
     `# 📦 Manifiesto de handoff (paquete-sesión · F2)`,
     ``,
@@ -590,6 +600,11 @@ function writeHandoffManifest(destId, { fromCwd, toCwd, title, task, ref }) {
     forms.length
       ? `Cargá si aplica (memory/ de ${toW}):\n${forms.map((f) => `- \`${f}\``).join('\n')}`
       : `(sin memorias propias detectadas para este mundo)`,
+    ``,
+    `## 📁 Archivos de trabajo ya recolectados (escritorio del paquete)`,
+    artifacts.length
+      ? `Estos archivos viajaron con el paquete-sesión (carpeta de "Abrir carpeta de este chat"):\n${artifacts.map((f) => `- \`${f}\``).join('\n')}`
+      : `(todavía no se materializó ningún archivo en esta sesión)`,
     ``,
   ].join('\n');
   fss.writeFileSync(path.join(dir, '_handoff.md'), md);

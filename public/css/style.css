@@ -1042,6 +1042,36 @@ html, body {
 .hp-finding code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .hp-review .btn--block { margin-top: .5rem; }
 
+/* Panel "Variables de entorno" (pestaña Sistema) */
+.ev-hint { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: 0 0 .6rem; line-height: 1.4; }
+.ev-hint code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.ev-sec { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); padding: .6rem .7rem; margin-bottom: .6rem; }
+.ev-sec-title { font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text-secondary); margin-bottom: .4rem; }
+.ev-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin: .5rem 0 .2rem; }
+.ev-field { display: flex; flex-direction: column; gap: .15rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); margin-bottom: .4rem; }
+.ev-inp { min-height: 30px; padding: .3rem .5rem; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-input); color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
+.ev-inp:disabled { opacity: .6; }
+.ev-row { display: flex; gap: .3rem; align-items: center; margin-bottom: .3rem; }
+.ev-row .ev-inp--k { flex: 0 0 40%; }
+.ev-row .ev-inp--v { flex: 1; }
+.ev-actions { display: flex; align-items: center; gap: .6rem; margin-top: .4rem; }
+.ev-msg { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.ev-msg--ok { color: var(--cwc-ok); }
+.ev-msg--err { color: var(--cwc-danger-strong); }
+
+/* Panel "Publicar a la consola" (pestaña Sistema) */
+.pub-hint { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: 0 0 .6rem; line-height: 1.45; }
+.pub-hint code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+.pub-status { margin-top: .6rem; font-size: var(--cwc-fs-sm); display: flex; flex-direction: column; gap: .3rem; }
+.pub-status--run { flex-direction: row; align-items: center; gap: .5rem; color: var(--cwc-text-secondary); }
+.pub-status--ok { color: var(--cwc-ok); }
+.pub-status--err { color: var(--cwc-danger-strong); }
+.pub-dim { color: var(--cwc-text-dimmer); }
+.pub-gates { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--cwc-danger-strong); font-size: var(--cwc-fs-xs); }
+.pub-det { margin-top: .4rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.pub-det summary { cursor: pointer; }
+.pub-det ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+
 /* Panel de backups (pestaña) */
 .bk-msg { font-size: var(--cwc-fs-sm); margin: .5rem 0 0; color: var(--cwc-text-dim); }
 .bk-msg.ok { color: var(--cwc-ok); }
@@ -2927,8 +2957,35 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bv2-block > summary::-webkit-details-marker { display: none; }
 .bv2-block > summary:hover { background: var(--cwc-bg-hover); }
 .bv2-block > summary svg { transition: transform .15s ease; color: var(--cwc-text-dim); flex: none; }
-.bv2-block[open] > summary svg { transform: rotate(180deg); }
+/* SOLO el chevron rota al abrir — el botón ⤢ (maximize) NO debe girar. */
+.bv2-block[open] > summary .bv2-chev { transform: rotate(180deg); }
 .bv2-block-body { padding: .1rem .6rem .55rem; }
+/* Herramientas del header del bloque: botón ⤢ (expandir a tabla) + chevron. */
+.bv2-block-tools { display: inline-flex; align-items: center; gap: .25rem; flex: none; }
+.bv2-expand { display: inline-flex; align-items: center; justify-content: center; padding: .15rem; border: 0; background: transparent; color: var(--cwc-text-dim); cursor: pointer; border-radius: var(--cwc-radius-sm); }
+.bv2-expand:hover { color: var(--cwc-accent); background: var(--cwc-bg-hover); }
+/* "+N más" clickeable → abre la tabla ancha */
+.bv2-more { cursor: pointer; }
+.bv2-more:hover { color: var(--cwc-accent); text-decoration: underline; }
+/* Botón "Todos en tabla" de la barra de filtros — abre la tabla ancha con TODO
+   el filtro activo (unión de columnas). Pill con tinte acento para destacar. */
+.bv2-allbtn { flex: none; display: inline-flex; align-items: center; gap: .3rem; font-size: var(--cwc-fs-xs); padding: .22rem .6rem; border-radius: 999px; border: 1px solid var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 12%, transparent); color: var(--cwc-accent); cursor: pointer; white-space: nowrap; font-weight: 600; }
+.bv2-allbtn:hover { background: color-mix(in srgb, var(--cwc-accent) 22%, transparent); }
+.bv2-allbtn svg { flex: none; }
+
+/* Vista TABLA ancha (tipo Excel) de una columna del dashboard */
+.tkt-tblwrap { display: flex; flex-direction: column; gap: .5rem; min-height: 0; }
+.tkt-tblbar { display: flex; align-items: center; gap: .6rem; }
+.tkt-tblsearch { flex: 1; max-width: 320px; }
+.tkt-tblscroll { overflow: auto; max-height: 72vh; border: 1px solid var(--cwc-border-soft); border-radius: var(--cwc-radius-md); }
+.tkt-tbl { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
+.tkt-tbl thead th { position: sticky; top: 0; z-index: 1; background: var(--cwc-bg-panel); text-align: left; padding: .4rem .55rem; font-weight: 600; color: var(--cwc-text-dim); border-bottom: 1px solid var(--cwc-border); cursor: pointer; white-space: nowrap; user-select: none; }
+.tkt-tbl thead th:hover { color: var(--cwc-text); }
+.tkt-tbl tbody td { padding: .35rem .55rem; border-bottom: 1px solid var(--cwc-border-soft); vertical-align: top; color: var(--cwc-text-secondary); }
+.tkt-tbl tbody tr { cursor: pointer; }
+.tkt-tbl tbody tr:hover { background: var(--cwc-bg-hover); }
+.tkt-tbl th.tkt-c-num, .tkt-tbl td.tkt-c-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tkt-tbl td.tkt-c-subj { min-width: 220px; max-width: 460px; color: var(--cwc-text); }
 /* Barras "por carril" */
 .bv2-lane { display: grid; grid-template-columns: 8.5rem 1fr auto auto; align-items: center; gap: .5rem; padding: .12rem 0; }
 .bv2-lane-name { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); }

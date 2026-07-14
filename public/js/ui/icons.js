@@ -75,6 +75,9 @@ const PATHS = {
   disk: `<ellipse cx="12" cy="6.5" rx="8" ry="3"/><path d="M4 6.5v11c0 1.7 3.6 3 8 3s8-1.3 8-3v-11"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>`,
   // Enlace externo (abre en pestaña nueva): caja + flecha saliente.
   externalLink: `<path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 13.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H11"/>`,
+  // Expandir a vista amplia (flechas a las 4 esquinas) — usado por el dashboard
+  // de tickets para abrir una columna como tabla ancha tipo Excel.
+  maximize: `<polyline points="9,4 4,4 4,9"/><polyline points="15,4 20,4 20,9"/><polyline points="9,20 4,20 4,15"/><polyline points="15,20 20,20 20,15"/>`,
   // Señal/interfono (motor Pac-Man, estado "delegando"): punto + ondas
   // concéntricas a ambos lados — eco del 📻 del panel Interfono. Se usa como
   // badge diminuto sobre el Pac-Man cuando está esperando la vuelta de un

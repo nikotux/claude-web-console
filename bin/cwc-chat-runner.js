@@ -166,6 +166,7 @@ function startEngine() {
       resume: RESUME,
       mode,
       effort: EFFORT,
+      chatId: ID, // regla de carpeta de trabajo del paquete-sesión (PLAN-447)
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),
   });

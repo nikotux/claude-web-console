@@ -84,11 +84,104 @@ function ciBadge(ci) {
   if (ci === 'pending') return `<span class="bb-chip bb-chip--warn" title="CI corriendo">${icon('clock', { size: 11 })}</span>`;
   return '';
 }
-function block(title, inner, open) {
+// `expandKey` (opcional) agrega la 2ª manija del bloque: un botón ⤢ en el header
+// que abre la columna como TABLA ANCHA tipo Excel (además de la manija de colapsar
+// del propio <details>). El listener delegado del modal lo captura por data-expand.
+// El chevron lleva su propia clase para que SOLO él rote al abrir (si no, el ⤢
+// también giraría por la regla `.bv2-block[open] > summary svg`).
+function block(title, inner, open, expandKey) {
+  const exp = expandKey
+    ? `<button type="button" class="bv2-expand" data-expand="${esc(expandKey)}" title="Ver todos en tabla ancha (tipo Excel)">${icon('maximize', { size: 13 })}</button>`
+    : '';
   return `<details class="bv2-block"${open ? ' open' : ''}>
-    <summary class="bv2-block-h"><span>${title}</span>${icon('chevronDown', { size: 14 })}</summary>
+    <summary class="bv2-block-h"><span>${title}</span><span class="bv2-block-tools">${exp}${icon('chevronDown', { size: 14, className: 'bv2-chev' })}</span></summary>
     <div class="bv2-block-body">${inner}</div>
   </details>`;
+}
+
+// Columnas de la vista TABLA (tipo Excel). Cada una: cómo se pinta la celda
+// (`cell`) y cómo se ordena (`val` → clave comparable; `num` = orden numérico).
+// Usa los mismos helpers/metadata que las cards para ser coherente.
+const TABLE_COLS = [
+  { key: 'ticketNumber', label: '#', num: true, val: (t) => Number(t.ticketNumber) || 0, cell: (t) => `#${esc(t.ticketNumber)}` },
+  { key: 'subject', label: 'Asunto', cls: 'tkt-c-subj', val: (t) => String(t.subject || '').toLowerCase(), cell: (t) => esc(t.subject || '(sin asunto)') },
+  { key: 'lane', label: 'Carril', val: (t) => laneLabel(t.lane), cell: (t) => `${laneEmoji(t.lane)} ${esc(laneLabel(t.lane))}` },
+  { key: 'lifecycle', label: 'Estado', val: (t) => statusMeta(t).label, cell: (t) => { const sm = statusMeta(t); return `${sm.emoji || ''} ${esc(sm.label)}`.trim(); } },
+  { key: 'priority', label: 'Prioridad', val: (t) => t.priority || 'zzz', cell: (t) => { const p = PRIO_META[t.priority]; return p ? `${p.emoji} ${p.label}` : '—'; } },
+  { key: 'ownerName', label: 'Dueño', val: (t) => String(t.ownerName || 'zzz').toLowerCase(), cell: (t) => esc(t.ownerName || '—') },
+  { key: 'agingDays', label: 'Días', num: true, val: (t) => t.agingDays ?? 0, cell: (t) => String(t.agingDays ?? 0) },
+  { key: 'sla', label: 'SLA', num: true, val: (t) => (t.overdue ? 2 : (t.agingDays >= 7 ? 1 : 0)), cell: (t) => (t.overdue ? '🔴 SLA roto' : (t.agingDays >= 7 ? '🟠 sin update' : '🟢 al día')) },
+];
+
+// Columnas de la vista "Todos" = TABLE_COLS + una columna "Cola" al frente que
+// dice de qué bucket (Nuevos/Vencidos/En progreso) viene cada ticket (el campo
+// `_bucket` lo etiqueta openColumnTable al concatenar las 3 columnas).
+const TABLE_COLS_ALL = [
+  { key: 'bucket', label: 'Cola', val: (t) => t._bucket || '', cell: (t) => esc(t._bucket || '—') },
+  ...TABLE_COLS,
+];
+
+// Abre una columna del dashboard como TABLA ANCHA ordenable (modal propio, se
+// apila sobre el del dashboard). Datos ya en memoria (0 fetch, 0 tokens). El
+// buscador filtra por # o asunto; las filas abren el detalle del ticket existente.
+// `opts.cols` permite otro juego de columnas (p.ej. la vista "Todos" con "Cola").
+function openTicketTable(titleText, items, deps, opts = {}) {
+  const cols = opts.cols || TABLE_COLS;
+  const rows = (items || []).slice();
+  const localMap = new Map();
+  for (const t of rows) localMap.set(String(t.ticketNumber), t);
+  let sortKey = null, sortDir = -1, q = '';
+  const m = openModal({ title: `${titleText} · tabla`, width: 'min(1200px, 96vw)' });
+  const wrap = document.createElement('div');
+  wrap.className = 'tkt-tblwrap';
+  wrap.innerHTML = `
+    <div class="tkt-tblbar">
+      <input type="text" class="btn--sm tkt-tblsearch" placeholder="Filtrar por # o asunto…" data-ref="q" />
+      <span class="bf-sub" data-ref="count"></span>
+    </div>
+    <div class="tkt-tblscroll" data-ref="scroll"></div>`;
+  m.body.appendChild(wrap);
+  const scrollEl = wrap.querySelector('[data-ref="scroll"]');
+  const countEl = wrap.querySelector('[data-ref="count"]');
+  const inp = wrap.querySelector('[data-ref="q"]');
+
+  function sorted() {
+    let list = rows;
+    if (q) { const qq = q.toLowerCase(); list = list.filter((t) => String(t.ticketNumber).includes(qq) || String(t.subject || '').toLowerCase().includes(qq)); }
+    if (sortKey) {
+      const col = cols.find((c) => c.key === sortKey);
+      if (col) list = list.slice().sort((a, b) => { const va = col.val(a), vb = col.val(b); const r = col.num ? (va - vb) : String(va).localeCompare(String(vb)); return r * sortDir; });
+    }
+    return list;
+  }
+  function renderTable() {
+    const list = sorted();
+    countEl.textContent = `${list.length} de ${rows.length}`;
+    const head = cols.map((c) => {
+      const on = sortKey === c.key;
+      const arrow = on ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+      return `<th class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}" data-sort="${c.key}" title="Ordenar por ${esc(c.label)}">${esc(c.label)}${arrow}</th>`;
+    }).join('');
+    const body = list.length
+      ? list.map((t) => `<tr data-num="${esc(t.ticketNumber)}" role="button" tabindex="0" title="Ver detalle del ticket">${cols.map((c) => `<td class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}">${c.cell(t)}</td>`).join('')}</tr>`).join('')
+      : `<tr><td colspan="${cols.length}" class="bf-sub" style="padding:.8rem">— nada —</td></tr>`;
+    scrollEl.innerHTML = `<table class="tkt-tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+  scrollEl.addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (th) {
+      const k = th.dataset.sort;
+      if (sortKey === k) sortDir = -sortDir;
+      else { sortKey = k; sortDir = cols.find((c) => c.key === k)?.num ? -1 : 1; }
+      renderTable();
+      return;
+    }
+    const tr = e.target.closest('tr[data-num]');
+    if (tr) { const t = localMap.get(tr.dataset.num); if (t) openTicketDetail(t, deps); }
+  });
+  inp.addEventListener('input', () => { q = inp.value; renderTable(); });
+  renderTable();
+  return m;
 }
 
 // Estado del refresh manual COMPARTIDO entre aperturas del modal (persistente):
@@ -247,11 +340,39 @@ export function openBugsV2Dashboard(deps = {}) {
   // Muestra "filtrado / total" cuando hay filtro y difiere; si no, solo el total.
   const countBadge = (filtered, total) => (filtering() && filtered !== total ? `${filtered} <span class="bf-sub">/ ${total}</span>` : String(total));
 
-  function ticketList(items, max = 12) {
+  function ticketList(items, max = 12, expandKey) {
     const f = applyFilter(items);
     if (!f.length) return '<div class="bf-sub">— nada —</div>';
     const shown = f.slice(0, max).map((t) => ticketRow(t)).join('');
-    return shown + (f.length > max ? `<div class="bf-sub">+ ${f.length - max} más</div>` : '');
+    if (f.length <= max) return shown;
+    // "+N más" clickeable → abre la tabla ancha (la misma que el botón ⤢ del header).
+    const attr = expandKey ? ` data-expand="${esc(expandKey)}" role="button" tabindex="0"` : '';
+    return shown + `<div class="bf-sub${expandKey ? ' bv2-more' : ''}"${attr}>+ ${f.length - max} más${expandKey ? ' · ver tabla ⤢' : ''}</div>`;
+  }
+  // Resuelve una data-expand key → tabla ancha con el array YA filtrado (respeta
+  // el carril/dueño/míos activos, igual que las columnas). Datos en memoria.
+  function openColumnTable(key) {
+    // "Todos": une las 3 columnas de abiertos (o los resueltos si estás en esa
+    // vista), respetando el filtro activo. Cada ticket se etiqueta con su cola.
+    if (key === 'all') {
+      if (viewMode === 'resolved') { openTicketTable('✅ Todos los resueltos', applyFilter(resolvedData?.tickets) || [], deps); return; }
+      const tag = (arr, label) => (applyFilter(arr) || []).map((t) => ({ ...t, _bucket: label }));
+      const all = [
+        ...tag(lastData?.nuevos, '🆕 Nuevos'),
+        ...tag(lastData?.vencidos, '🔴 Vencidos'),
+        ...tag(lastData?.enProgreso, '🔧 En progreso'),
+      ];
+      openTicketTable('📋 Todos los abiertos', all, deps, { cols: TABLE_COLS_ALL });
+      return;
+    }
+    const CFG = {
+      nuevos: { title: '🆕 Nuevos', get: () => applyFilter(lastData?.nuevos) },
+      vencidos: { title: '🔴 Vencidos', get: () => applyFilter(lastData?.vencidos) },
+      enProgreso: { title: '🔧 En progreso', get: () => applyFilter(lastData?.enProgreso) },
+      resolved: { title: '✅ Tickets resueltos', get: () => applyFilter(resolvedData?.tickets) },
+    };
+    const cfg = CFG[key];
+    if (cfg) openTicketTable(cfg.title, cfg.get() || [], deps);
   }
   // PRs del dev-lane: misma card de 2 filas (título arriba; #nº + estado abajo).
   // `opts.merged` → vista Resueltos: chip verde "✅ merged" en vez de pelota/CI
@@ -340,6 +461,12 @@ export function openBugsV2Dashboard(deps = {}) {
     const laneTabsHtml = [laneTab('Todos', null), ...laneKeys.map((l) => laneTab(LANE_LABEL[l] || l, l))].join('');
     const owners = collectOwners(d);
     const ownerOpts = ['<option value="">Dueño: todos</option>', ...owners.map((o) => `<option value="${esc(o)}"${selectedOwner === o ? ' selected' : ''}>${esc(o)}</option>`)].join('');
+    // Conteo del botón "Todos en tabla": total del filtro activo (une las 3
+    // columnas en Activos, o los resueltos en esa vista). Respeta carril/dueño/míos.
+    const allCount = viewMode === 'resolved'
+      ? applyFilter(resolvedData?.tickets).length
+      : applyFilter(d.nuevos).length + applyFilter(d.vencidos).length + applyFilter(d.enProgreso).length;
+    const allLabel = filtering() ? 'Todos (filtro)' : 'Todos';
     return `
       <div class="bv2-filterbar">
         <div class="bv2-tabs" data-ref="tabs">${laneTabsHtml}</div>
@@ -347,6 +474,7 @@ export function openBugsV2Dashboard(deps = {}) {
       <div class="bv2-filterbar bv2-filterbar--row2">
         <button class="bv2-tab${selectedMine ? ' bv2-tab--on' : ''}" data-ref="mine" title="Solo lo que tengo tomado">🔒 Míos</button>
         <select class="bv2-owner-select btn--sm" data-ref="owner" title="Filtrar por dueño (opcional)">${ownerOpts}</select>
+        <button class="bv2-allbtn" data-expand="all" title="Abrir TODOS en la tabla ancha (respeta el filtro activo)">${icon('maximize', { size: 12 })}<span>${allLabel} · ${allCount}</span></button>
         <div class="bv2-viewtoggle" data-ref="viewtoggle">
           <button class="bv2-vtab${viewMode === 'active' ? ' bv2-vtab--on' : ''}" data-view="active">🟢 Activos</button>
           <button class="bv2-vtab${viewMode === 'resolved' ? ' bv2-vtab--on' : ''}" data-view="resolved">✅ Resueltos</button>
@@ -373,9 +501,9 @@ export function openBugsV2Dashboard(deps = {}) {
       ${laneOverviewHtml(d)}
       ${filterBarHtml(d)}
       <div class="bv2-cols4">
-        ${block(`🆕 Nuevos · ${countBadge(applyFilter(d.nuevos).length, d.counts.nuevos)}`, ticketList(d.nuevos), true)}
-        ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.vencidos).length, d.counts.vencidos)}`, ticketList(d.vencidos), true)}
-        ${block(`🔧 En progreso · ${countBadge(applyFilter(d.enProgreso).length, d.counts.enProgreso)}`, ticketList(d.enProgreso), true)}
+        ${block(`🆕 Nuevos · ${countBadge(applyFilter(d.nuevos).length, d.counts.nuevos)}`, ticketList(d.nuevos, 12, 'nuevos'), true, 'nuevos')}
+        ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.vencidos).length, d.counts.vencidos)}`, ticketList(d.vencidos, 12, 'vencidos'), true, 'vencidos')}
+        ${block(`🔧 En progreso · ${countBadge(applyFilter(d.enProgreso).length, d.counts.enProgreso)}`, ticketList(d.enProgreso, 12, 'enProgreso'), true, 'enProgreso')}
         ${block(`🔀 Dev-lane · PRs abiertos · ${countBadge(filterPRs(d.devLane?.prs).length, (d.devLane?.prs || []).length)}`, devLaneList(d.devLane?.prs, d.devLane?.error), true)}
       </div>`;
   }
@@ -405,7 +533,7 @@ export function openBugsV2Dashboard(deps = {}) {
         ? `<div class="bf-sub" style="padding:.3rem .6rem 0">⚠️ ${esc(resolvedData.ticketsError)}</div>` : '';
       body = `${capNote}${refNote}${errNote}
         <div class="bv2-cols4">
-          ${block(`✅ Tickets resueltos · ${countBadge(applyFilter(resolvedData.tickets).length, (resolvedData.tickets || []).length)}`, ticketList(resolvedData.tickets, 60), true)}
+          ${block(`✅ Tickets resueltos · ${countBadge(applyFilter(resolvedData.tickets).length, (resolvedData.tickets || []).length)}`, ticketList(resolvedData.tickets, 60, 'resolved'), true, 'resolved')}
           ${block(`🔀 PRs mergeados · ${countBadge(filterPRs(resolvedData.prs).length, (resolvedData.prs || []).length)}`, devLaneList(resolvedData.prs, resolvedData.prError, { merged: true }), true)}
         </div>`;
     } else {
@@ -470,6 +598,10 @@ export function openBugsV2Dashboard(deps = {}) {
 
   // Listener delegado: filas de ticket/PR, pestañas de carril y buscador.
   content.addEventListener('click', (e) => {
+    // Expandir columna → tabla ancha. preventDefault: el botón vive dentro del
+    // <summary>, sin esto el click además colapsaría/expandiría el bloque.
+    const expBtn = e.target.closest('[data-expand]');
+    if (expBtn) { e.preventDefault(); openColumnTable(expBtn.dataset.expand); return; }
     const tRow = e.target.closest('.bv2-card[data-num]');
     if (tRow) { const t = ticketMap.get(tRow.dataset.num); if (t) openTicketDetail(t, deps); return; }
     const pRow = e.target.closest('.bv2-card[data-pr]');
@@ -502,6 +634,11 @@ export function openBugsV2Dashboard(deps = {}) {
     if (sel) { selectedOwner = sel.value || null; render(); }
   });
   content.addEventListener('keydown', (e) => {
+    // Enter/Espacio sobre el "+N más" (div con role=button) → abre la tabla.
+    if (e.key === 'Enter' || e.key === ' ') {
+      const exp = e.target.closest('[data-expand]');
+      if (exp) { e.preventDefault(); openColumnTable(exp.dataset.expand); return; }
+    }
     if (e.key !== 'Enter') return;
     const inp = e.target.closest('[data-ref="search"]');
     if (!inp) return;

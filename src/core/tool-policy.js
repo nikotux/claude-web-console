@@ -29,6 +29,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settingSourcesFor } from './sdk-settings.js';
+import { chatAttachDir } from '../modules/chat/attachments.js';
 
 // Raíz del repo de la CONSOLA (este archivo vive en src/core/ → ../.. = raíz).
 // Se usa para decidir si un chat trabaja en el MUNDO INTERNO (Mi Consola) y por
@@ -55,6 +56,28 @@ export const CONSOLE_PAD_BOOTSTRAP = [
   'Regla dura #12 (anti-colisión entre mundos): los dos mundos NUNCA se enlazan EN VIVO — 🏠 interno = Mi Consola + Pad `console` · 🌳 externo = Tolkien + Pad `tolkien`. Todo se resuelve PRIMERO y por completo acá; el ÚLTIMO paso es crear un PLAN NUEVO (plan-puente) para inyectar en Tolkien. Nunca al revés, nunca un sync/MCP vivo cruzando los dos Pad.',
 ].join('\n');
 
+// REGLA DE CARPETA DE TRABAJO DEL PAQUETE-SESIÓN (PLAN-447 · pedido de Niko
+// 2026-07-14). Se AGREGA (append) al system prompt de TODO chat (cualquier mundo,
+// no solo Consola): le dice al modelo cuál es la carpeta propia de ESTA sesión —
+// la que abre "Abrir carpeta de este chat" — y la disciplina: copiar ahí TODO
+// archivo trabajable que traiga de una fuente externa (WhatsApp/Outlook/etc.),
+// nunca los temporales, con el CLI determinístico bin/cwc-attach.js. Así el
+// escritorio del paquete-sesión queda completo y VIAJA con él al cambiar de mundo.
+// No cruza mundos (Regla 12): habla solo de la carpeta de runtime propia de la
+// consola, indexada por chatId, no de recursos de otro mundo. Devuelve '' si el
+// chatId no es válido (compone sin romper).
+function sessionFolderRule(chatId) {
+  const dir = chatAttachDir(chatId);
+  if (!dir) return '';
+  return [
+    'CARPETA DE TRABAJO DE ESTA SESIÓN (escritorio del paquete-sesión).',
+    `Esta conversación tiene una carpeta propia: ${dir}`,
+    'Es la que abre "Abrir carpeta de este chat" en el menú de Sesiones y VIAJA con el paquete-sesión al cambiar de mundo.',
+    `REGLA: cuando descargues o traigas a la conversación un archivo TRABAJABLE de CUALQUIER fuente externa (adjunto de WhatsApp ya en disco, de Outlook/Teams, un documento, factura o informe) —porque el usuario lo pidió o porque es un entregable real— COPIALO a esa carpeta con: node ${CONSOLE_ROOT}/bin/cwc-attach.js ${chatId} <ruta-absoluta-del-archivo> ["nombre legible"]`,
+    'NO copies temporales ni distractores (descargas parciales, .tmp, QR de emparejamiento, scratch, algo que solo ojeás y no es entregable). Así todo el material de trabajo queda en un solo lugar, listo para manipular, y persiste con el paquete.',
+  ].join('\n');
+}
+
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
 // romper a sus importadores; server y runner validan contra este mismo Set).
 export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
@@ -73,7 +96,16 @@ export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
 // spawnear el motor). El flag va SIEMPRE: debe estar presente en la CREACIÓN de
 // query() para que un cambio a "Todo" (al arranque o en vivo con
 // setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
-export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool }) {
+export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool, chatId }) {
+  // Append al system prompt (preset claude_code = PRESERVA el prompt nativo,
+  // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
+  // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
+  // (repo de la consola) — Tolkien no lo recibe (regla 12).
+  const appends = [];
+  const folderRule = sessionFolderRule(chatId);
+  if (folderRule) appends.push(folderRule);
+  if (isConsoleCwd(cwd)) appends.push(CONSOLE_PAD_BOOTSTRAP);
+  const appendText = appends.join('\n\n');
   return {
     cwd,
     ...(model ? { model } : {}),
@@ -87,11 +119,11 @@ export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool 
     permissionMode: normalizeMode(mode),
     // Habilita que el modo "Todo" realmente saltee permisos. Requisito del SDK.
     allowDangerouslySkipPermissions: true,
-    // Bootstrap de Pad SOLO en chats del mundo interno (repo de la consola): se
-    // AGREGA al system prompt nativo de Claude Code (preset), nunca lo reemplaza.
-    // Chats de Tolkien (mundo externo) quedan sin override (regla dura 12).
-    ...(isConsoleCwd(cwd)
-      ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: CONSOLE_PAD_BOOTSTRAP } }
+    // Append compuesto (regla de carpeta de sesión + bootstrap de Pad si aplica).
+    // preset claude_code PRESERVA el prompt nativo — un string pelado lo
+    // REEMPLAZARÍA. Sin nada que agregar, no se toca el system prompt.
+    ...(appendText
+      ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: appendText } }
       : {}),
     includePartialMessages: true,
     // Fase 8: skills + comandos slash + CLAUDE.md del usuario y del proyecto del

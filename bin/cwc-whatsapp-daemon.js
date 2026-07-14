@@ -42,6 +42,7 @@ import {
   readWhatsapp, writeWhatsapp, readWhatsappWatch, writeWhatsappStatus,
 } from '../src/modules/comms/shared.js';
 import { writeJsonAtomic } from '../src/core/atomic-write.js';
+import { transcribeAudio, transcriptionAvailable } from '../src/modules/comms/whatsapp-transcribe.js';
 
 // Tipos de media que descargamos + su extensión por defecto (si el mensaje no
 // trae fileName/mimetype confiable). documentMessage suele traer fileName real.
@@ -192,9 +193,22 @@ async function downloadMedia(sock, msg, chatId) {
     let ext = info.ext;
     if (origName && path.extname(origName)) ext = path.extname(origName).slice(1);
     const file = `${safeName(msg.key.id || String(msg.messageTimestamp || 'x'))}.${ext}`;
-    fs.writeFileSync(path.join(chatDir, file), buffer, { mode: 0o600 });
+    const fullPath = path.join(chatDir, file);
+    fs.writeFileSync(fullPath, buffer, { mode: 0o600 });
     console.log(`[whatsapp] 📎 adjunto ${info.kind} guardado: ${chatId}/${file} (${buffer.length} bytes)`);
-    return { type: info.kind, file, fileName: origName || file, mime: node.mimetype || null, caption: node.caption || null, size: buffer.length };
+    const ref = { type: info.kind, file, fileName: origName || file, mime: node.mimetype || null, caption: node.caption || null, size: buffer.length };
+    // Nota de voz → transcripción LOCAL (whisper.cpp, 0 tokens). Best-effort:
+    // si whisper no está o falla, el audio queda guardado igual, sin transcript.
+    if (info.kind === 'audio' && transcriptionAvailable()) {
+      console.log(`[whatsapp] 🎙️ transcribiendo audio ${file}…`);
+      const res = await transcribeAudio(fullPath, { lang: 'es' });
+      if (res && res.text) {
+        ref.transcript = res.text;
+        if (res.txtFile) ref.transcriptFile = res.txtFile; // .txt artefacto junto al audio
+        console.log(`[whatsapp] 🎙️ transcripción: "${res.text.slice(0, 80)}${res.text.length > 80 ? '…' : ''}"`);
+      }
+    }
+    return ref;
   } catch (err) {
     console.error('[whatsapp] fallo al descargar adjunto:', err?.message);
     return { type: info.kind, error: err?.message || String(err), fileName: node.fileName || null, mime: node.mimetype || null };

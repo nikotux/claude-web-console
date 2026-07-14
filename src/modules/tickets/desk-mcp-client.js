@@ -18,9 +18,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { config } from '../../core/config.js';
+import { DEPT_TOLKIEN, DEPT_MORDOR } from './derive.js';
 
-const SERVER_ID = 'tolkien-mordor';
-const INFISICAL_PROJECT_ID = '25b6c300-7686-4cf0-b8e3-ed808a529638';
+const SERVER_ID = config.instance.client.mcpServerId;
+const INFISICAL_PROJECT_ID = config.instance.client.infisicalProjectId;
 
 let clientPromise = null; // promesa en vuelo del singleton (evita doble arranque en carreras)
 let liveClient = null;    // Client conectado, o null si no hay conexión viva
@@ -95,7 +96,7 @@ async function callTool(name, args = {}) {
 // Se resuelve listando los 2 departamentos conocidos (Tolkien = bugs/features,
 // Mordor Staffing = hw/access/onboarding/platform/client) y buscando el
 // ticketNumber. Cache en memoria con TTL corto — cero estado en disco.
-const KNOWN_DEPARTMENTS = ['813994000003710353', '813994000000006907']; // Tolkien, Mordor Staffing
+const KNOWN_DEPARTMENTS = [DEPT_TOLKIEN, DEPT_MORDOR]; // configurables por instancia (derive.js)
 const RESOLVE_CACHE_TTL_MS = 30_000;
 let resolveCache = null; // { at, byNumber: Map<string,string> }
 

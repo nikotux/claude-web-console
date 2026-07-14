@@ -22,8 +22,10 @@ import tasks from '../modules/tasks/index.js';
 import learning from '../modules/learning/index.js';
 import audio from '../modules/audio/index.js';
 import retro from '../modules/retro/index.js';
+import envVars from '../modules/env-vars/index.js';
+import publish from '../modules/publish/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, publish];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

@@ -207,7 +207,7 @@ export function openTicketDetail(t, deps = {}) {
       await deps.openChat?.({
         cwd: deps.projectRel ? deps.projectRel() : 'tolkien',
         mode: 'plan',
-        prompt: buildContext(t, sections, desc, f.meta, contexts), // sections + meta + contextos de trabajo
+        prompt: buildContext(f, sections, desc, f.meta, contexts), // `f` (recargado): trae ticketNumber/subject/webUrl aun si se abrió por buscador
         title: `TKT #${t.ticketNumber} — ${(t.subject || '').slice(0, 40)}`.slice(0, 60),
         ticket: { number: t.ticketNumber, url: t.webUrl || null },
       });
@@ -216,7 +216,11 @@ export function openTicketDetail(t, deps = {}) {
     box.querySelector('[data-act="gh"]')?.addEventListener('click', () =>
       window.open(`https://github.com/${TOLKIEN_REPO}/pulls?q=${encodeURIComponent(`is:pr ${t.ticketNumber}`)}`, '_blank', 'noopener'));
     box.querySelector('[data-act="zoho"]')?.addEventListener('click', () => {
-      if (t.webUrl) window.open(t.webUrl, '_blank', 'noopener');
+      // Leer del objeto RECARGADO `f` (siempre trae webUrl: snapshot / store de
+      // resueltos / Zoho vivo), NO del `t` exterior — que al abrir un ticket
+      // cerrado por el buscador es solo { ticketNumber } sin URL (bug 2026-07-14).
+      const url = f.webUrl || t.webUrl;
+      if (url) window.open(url, '_blank', 'noopener');
     });
   }
 

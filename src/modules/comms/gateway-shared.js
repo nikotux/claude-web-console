@@ -31,8 +31,9 @@ const SEND_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-comms-sen
 
 // Firma centralizada (antes hardcodeada en bugfixes/index.js y prompts.js).
 // Aplica SOLO a canales donde publicamos con identidad ajena (Desk/Teams): la
-// API publica como otro y el autor real tiene que quedar claro.
-export const SIGNATURE = '— Nicolás (dev team)';
+// API publica como otro y el autor real tiene que quedar claro. Configurable
+// por instancia (config.instance.identity.signature).
+export const SIGNATURE = config.instance.identity.signature;
 export function ensureSignature(text) {
   const t = String(text || '').trim();
   return t.includes(SIGNATURE) ? t : `${t}\n\n${SIGNATURE}`;
@@ -90,7 +91,7 @@ export async function sendComm({ channel, action, payload = {}, contactId = null
   const ch = String(channel || '');
   if (ch === 'github') {
     if (!GITHUB_ACTIONS.has(action)) throw new Error(`Acción GitHub no permitida: ${action}`);
-    const contact = resolveContact(contactId, payload.reviewer || 'cswenor');
+    const contact = resolveContact(contactId, payload.reviewer || config.instance.client.reviewer.github);
     let result; let ok = true; let error = null;
     try { result = await githubExecute(action, payload, dryRun); }
     catch (e) { ok = false; error = String(e?.message || e); result = null; }

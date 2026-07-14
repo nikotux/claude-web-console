@@ -155,6 +155,69 @@ export function existingAttachments(chatId, raw) {
   return out;
 }
 
+// ===== Materialización de archivos EXTERNOS al escritorio del chat =====
+// (PLAN-447 · pedido de Niko 2026-07-14): la carpeta del chat es el "escritorio
+// de trabajo" del paquete-sesión. TODO archivo TRABAJABLE que el asistente traiga
+// de una fuente externa (adjunto de WhatsApp ya descargado por el daemon a
+// comms/whatsapp-media/, adjunto de Outlook guardado a disco por graph_*, un
+// informe, una factura) se COPIA acá — un solo lugar, listo para manipular, que
+// VIAJA con el paquete al cambiar de mundo. Los TEMPORALES/distractores NO: el
+// juicio primario lo hace el asistente (materializa solo lo que decide traer),
+// esto es la RED DE SEGURIDAD determinística contra la basura evidente.
+
+// Extensiones de archivo NO-trabajable (descargas parciales, locks, scratch).
+const JUNK_EXT = new Set([
+  'tmp', 'temp', 'part', 'partial', 'crdownload', 'download', 'filepart',
+  'lock', 'swp', 'swo', 'swn', 'bak', 'old', '!qb', 'crswap', 'dwl', 'dwl2',
+]);
+
+// ¿Es un archivo que vale la pena tener en el escritorio del chat? Rechaza
+// ocultos/sistema, vacíos y las extensiones de basura de arriba. Acepta el resto
+// (documentos, imágenes, media, planillas, archivos, datos) — no enumeramos lo
+// bueno (imposible), filtramos lo evidentemente malo.
+export function isWorkableFile(name, size) {
+  const base = String(name || '');
+  if (!base || base.startsWith('.')) return false;              // ocultos / sistema
+  if (typeof size === 'number' && size <= 0) return false;      // vacíos
+  if (JUNK_EXT.has(extOf(base))) return false;                  // temporales / locks
+  if (/\.(part|tmp|crdownload|download|partial)$/i.test(base)) return false;
+  return true;
+}
+
+// Convierte un `label` legible ("Informe subwoofers") en un basename seguro,
+// conservando la extensión del origen. Sin label → el basename del origen.
+function nameFromLabel(srcBase, label) {
+  const ext = path.extname(srcBase);
+  if (!label || !String(label).trim()) return srcBase;
+  const slug = String(label).trim().replace(/[/\\\0]/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
+  return slug.toLowerCase().endsWith(ext.toLowerCase()) ? slug : `${slug}${ext}`;
+}
+
+// COPIA un archivo de disco (de cualquier fuente externa) al escritorio del chat,
+// aplicando el filtro trabajable + nombre saneado/único + confinamiento a la
+// carpeta. Devuelve {ok:true,name,type} o {ok:false,reason}. Determinística, sin
+// red ni tokens — la usa el CLI bin/cwc-attach.js (que el asistente invoca al
+// traer un archivo a la conversación) y es reusable por cualquier flujo futuro.
+export function materializeIntoChat(chatId, srcAbs, { label } = {}) {
+  const dir = chatAttachDir(chatId);
+  if (!dir) return { ok: false, reason: 'chat-id-invalido' };
+  let st;
+  try { st = fs.statSync(srcAbs); } catch { return { ok: false, reason: 'origen-inexistente' }; }
+  if (!st.isFile()) return { ok: false, reason: 'origen-no-es-archivo' };
+  const srcBase = path.basename(String(srcAbs));
+  if (!isWorkableFile(srcBase, st.size)) return { ok: false, reason: 'no-trabajable', name: srcBase };
+  const safe = safeAttachName(nameFromLabel(srcBase, label));
+  if (!safe) return { ok: false, reason: 'nombre-invalido' };
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const finalName = uniqueName(dir, safe);
+    const dst = path.join(dir, finalName);
+    if (path.dirname(dst) !== dir) return { ok: false, reason: 'ruta-fuera-de-carpeta' }; // defensa en profundidad
+    fs.copyFileSync(srcAbs, dst);
+    return { ok: true, name: finalName, type: classifyAttachment(null, finalName) };
+  } catch (e) { return { ok: false, reason: String(e?.message || e) }; }
+}
+
 const imageMimeFromName = (name) => IMAGE_EXT[extOf(name)] || null;
 
 // Bloque de texto que REFERENCIA un archivo por ruta (imágenes/PDF/binarios que

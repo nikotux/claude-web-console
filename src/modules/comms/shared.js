@@ -20,6 +20,7 @@ import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { config } from '../../core/config.js';
 
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 export const COMMS_DIR = path.join(DATA_DIR, 'comms');
@@ -126,9 +127,18 @@ function uniqueId(base, taken) {
   return id;
 }
 
-// ===== Contactos (usuarios). Chris es el primero (seed). =====
+// ===== Contactos (usuarios). El reviewer de referencia es el primero (seed),
+// configurable por instancia (config.instance.client.reviewer) — el `id`
+// ('chris' por default) es una CLAVE INTERNA que usa la lógica de negocio de
+// tickets/derive.js y tickets/dashboard.js ("de quién es la pelota"); cambiar
+// el id requeriría tocar esa lógica, no solo config (ver nota en PLAN-476). =====
 export const DEFAULT_CONTACTS = [
-  { id: 'chris', name: 'Chris', github: 'cswenor', createdAt: 0 },
+  {
+    id: config.instance.client.reviewer.contactId,
+    name: config.instance.client.reviewer.name,
+    github: config.instance.client.reviewer.github,
+    createdAt: 0,
+  },
   // Tolkien = "Mordor's AI assistant", bot de Teams (TheEye/OpenClaw). NO es
   // una persona pero al usuario le llegan mensajes ahí y debe procesarlos
   // igual (pedido 2026-07-06). Sin github/email: el scan de Teams lo busca por
@@ -164,7 +174,11 @@ export function contactName(contacts, id) {
 // ===== Identidad propia (YO): ancla para atribuir "conversación conmigo" =====
 // Sin esto el motor no sabe quién sos y podría indexar un DM de un contacto con
 // OTRA persona. Se siembra con tus datos; editable por archivo si cambia.
-export const DEFAULT_SELF = { name: 'Nicolás Mosquera', email: 'nmosquera@mordorstaffing.com', github: 'nmosqueramordor' };
+export const DEFAULT_SELF = {
+  name: config.instance.identity.name,
+  email: config.instance.identity.email,
+  github: config.instance.identity.github,
+};
 export function readSelf() {
   const o = readJson(SELF_FILE, null);
   return (o && typeof o === 'object') ? { ...DEFAULT_SELF, ...o } : { ...DEFAULT_SELF };

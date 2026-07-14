@@ -512,7 +512,7 @@ export default {
         return;
       }
       const port = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
-      const email = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || 'nmosquera@mordorstaffing.com');
+      const email = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || config.instance.identity.email);
       const base = `http://localhost:${port}`;
       // Acumula Set-Cookie en un "jar" dedupeando POR NOMBRE (última ocurrencia
       // gana, como un browser/curl). Imprescindible: /api/auth/csrf devuelve DOS

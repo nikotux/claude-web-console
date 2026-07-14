@@ -342,6 +342,31 @@ de tickets/features/PRs es **`tickets/`** (Bugs v2 · "One Front Door"): dashboa
 determinístico (snapshot Zoho/GitHub cada 60 s, sin IA) con ventanas de detalle
 en MODAL — `public/js/modules/tickets/{ticket-detail,pr-detail}.js` (clases `.bv2-*`).
 
+VISTA TABLA ANCHA — expandir columna a "Excel" (2026-07-14, PEND-487, pedido de
+Niko): las columnas del dashboard (Nuevos · Vencidos · En progreso · Resueltos)
+cortaban el listado a 12 filas (`ticketList(items, max=12)`, `dashboard.js`) con un
+cartel `+N más` MUERTO — pero el backend YA manda el array COMPLETO (`d.vencidos`,
+etc. en `lastData`, 0 fetch extra). Ahora cada bloque de tickets tiene una 2ª manija
+además del colapsar del `<details>`: un botón ⤢ (ícono `maximize` nuevo en icons.js)
+en el header + el `+N más` clickeable → `openTicketTable()` abre un MODAL ANCHO
+(`min(1200px,96vw)`) con una TABLA ORDENABLE tipo Excel (`.tkt-tbl*` en style.css):
+columnas #, Asunto, Carril, Estado, Prioridad, Dueño, Días, SLA (config `TABLE_COLS`,
+reusa laneLabel/statusMeta/PRIO_META); header sticky, click en encabezado ordena
+(num vs localeCompare), buscador filtra por #/asunto, filas → `openTicketDetail`. La
+tabla respeta el filtro de carril/dueño/míos activo (recibe `applyFilter(...)`).
+BOTÓN "TODOS" (mismo PEND-487): la fila 2 de la barra de filtros tiene un botón
+`.bv2-allbtn` (`data-expand="all"`) "Todos · N" que abre la tabla ancha con la UNIÓN de
+las 3 colas de abiertos (o los resueltos en esa vista), respetando el filtro — N es el
+conteo dinámico; el label dice "Todos (filtro)" si hay filtro activo. Ahí la tabla usa
+`TABLE_COLS_ALL` = TABLE_COLS + una columna "Cola" al frente (`_bucket`: 🆕 Nuevos/🔴
+Vencidos/🔧 En progreso) que `openColumnTable('all')` etiqueta al concatenar (clona cada
+ticket `{...t, _bucket}`, NO muta lastData). `openTicketTable` acepta `opts.cols`.
+GOTCHA: el botón ⤢ vive DENTRO del `<summary>`; el listener delegado hace
+`e.preventDefault()` en `[data-expand]` para que el click NO togglee el `<details>`, y
+el chevron lleva clase `.bv2-chev` para que SOLO él rote al abrir (la regla vieja
+`.bv2-block[open] > summary svg` también giraba el ⤢). Todo frontend, 0 backend, 0
+tokens. Los PRs (dev-lane/mergeados) NO tienen tabla (otro shape) — follow-up opcional.
+
 ⚡ **BACKEND MIGRADO A PAD LOCAL — patrón "dos mundos" (2026-07-12, ROAD-110 Fase
 3, parte del cutover a self-host, ver el gotcha "MCP de Pad" más abajo):**
 `meta-store.js` (las 4 funciones de I/O: `getMeta`/`saveContexto`/
@@ -439,7 +464,11 @@ semáforo global. La inyección del tablero se CONSERVA como redundancia inofens
 
 ```
 src/server.js               bootstrap: ZeroTier wait → HTTPS bind → auth → módulos
-src/core/                   config(.env) · auth · users · wss · registry · tls ·
+src/core/                   config(.env + config.instance) · instance-config(capa de config
+                            de INSTANCIA: identidad+cliente en ~/.cwc-data/instance.json,
+                            autogenerado; DEFAULTS genéricos vacíos (los valores reales viven en
+                            instance.json), deepMerge por union de claves — ver módulo env-vars) ·
+                            auth · users · wss · registry · tls ·
                             zerotier · tmux(validación) · trash · recents ·
                             pool(runAdaptivePool — pool de concurrencia ADAPTATIVA transversal;
                             MOVIDO acá desde health/pool.js en la coherencia 2026-07-12 porque lo
@@ -489,7 +518,22 @@ src/core/                   config(.env) · auth · users · wss · registry · 
                             que alcanzaría a otro workspace). Un runner vivo no lo toma hasta
                             "Reabrir para cambios"/chat nuevo. Llevarlo a sesiones TUI = Frente B
                             diferido. La regla 6 (blindaje read-only headless) NO pasa
-                            por acá: esos runners arman sus propias allowlists) ·
+                            por acá: esos runners arman sus propias allowlists.
+                            REGLA DE CARPETA DE TRABAJO DEL PAQUETE-SESIÓN (PLAN-447, pedido de Niko
+                            2026-07-14): chatQueryOptions ADEMÁS inyecta sessionFolderRule(chatId)
+                            —también preset+append, COMPUESTO con el bootstrap de Pad en un solo
+                            append— pero a DIFERENCIA del bootstrap de Pad va en TODO chat (cualquier
+                            mundo, no solo Consola): le dice al modelo cuál es la carpeta propia de
+                            ESA sesión (chatAttachDir(chatId) = ~/.cwc-data/chat-attachments/<id>/,
+                            la que abre "Abrir carpeta de este chat") y la DISCIPLINA: copiar ahí
+                            TODO archivo trabajable que traiga de una fuente externa (WhatsApp/
+                            Outlook/etc.) con `node <repo>/bin/cwc-attach.js <chatId> <rutaAbs>`,
+                            nunca los temporales. NO cruza mundos (regla 12): habla solo de la
+                            carpeta de runtime propia de la consola, indexada por chatId — no de
+                            recursos de otro mundo, por eso es seguro inyectarla también en chats
+                            de Tolkien. El runner pasa `chatId: ID` a chatQueryOptions; sin chatId
+                            la regla se omite (compone sin romper). Mismo gotcha del bootstrap: un
+                            runner vivo no la toma hasta reabrir/chat nuevo) ·
                             claude-model(VALID_MODELS/encodeCwd) · claude-state(observador —
                             estado por PANE de tmux primero: cwc-observe.js captura
                             $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
@@ -1761,34 +1805,99 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             relevante); el badge de Sesiones toma acento de alerta (--cwc-warn,
                             `.sess-interfono--active`) si algún pendiente es active. La bitácora
                             registra `level`. R3 intacta: evaluateClaim y sus umbrales NO se tocaron.
-  comms/                    COMUNICACIONES: motor TRANSVERSAL file-based (patrón Interfono)
-                            que recopila/indexa/contextualiza las comunicaciones con cada
-                            CONTACTO (eje primario = usuario; Chris `cswenor` es el seed —
-                            escala a muchos usuarios sumando entradas, cero código). Estado
-                            100% en ~/.cwc-data/comms/ (0 tokens, sobrevive reinicios). Ruta
-                            /api/comms. index.js SOLO lee/escribe disco + lanza el runner;
-                            shared.js: contactos/proyectos/manual/overrides + buildIndex()
-                            (merge determinístico github.json+manual.json → hilos con
-                            newFromContact/awaitingReply derivados) + lock/heartbeat. Fuentes:
-                            GitHub vía gh (runner, reviews/comentarios sobre Tolkien, 0
-                            tokens) + Teams (DMs vía MCP graph_* read-only, bajo botón, tokens)
-                            + chatbot (chatbot.json, source:'chatbot': comunicaciones de Chris
-                            RELAYADAS por el bot Tolkien/TheEye en Teams — "Chris disfrazado de
-                            Tolkien"; el bot es código nuestro en ~/tolkien apps/api/src/lib/teams,
-                            pero la fuente COMPLETA del chat es Graph MCP, no la DB de Tolkien que
-                            solo guarda el lado entrante; escáner de Graph = fase futura, hoy
-                            seedeado/registrado a mano) + manual (CLI/web). Un hilo = 1 PR ×
-                            contacto o 1 nota
-                            manual. El tablero (public/js/modules/comms/board/, gemelo de
-                            bugs/board: store/render/actions/polls) tiene pestañas primarias
-                            = CONTACTOS, agrupa por proyecto→hilo→mensajes (los hilos
-                            source:'chatbot' van en su propia sección "🤖 Chatbot" SIEMPRE
-                            visible en la vista del contacto, aparte de los grupos de proyecto),
-                            y "Hablar de
-                            esto" abre un chat asistido con el hilo inyectado (patrón
-                            doWorkOn). Escaneo bajo botón (gh, sin tokens); NO usa MCP/Desk
-                            todavía (fase futura). OJO: `comms` (comunicaciones con personas)
-                            ≠ `interfono` (mensajería entre sesiones de Claude).
+  comms/                    LIBRERÍAS COMPARTIDAS de comunicaciones (file-based, patrón
+                            Interfono; estado 100% en ~/.cwc-data/comms/, 0 tokens, sobrevive
+                            reinicios). ⚠️ El DASHBOARD de Comunicaciones (módulo backend
+                            registrado `index.js` con ruta /api/comms + el tablero frontend
+                            `public/js/modules/comms/board/`) se ELIMINÓ el 2026-07-14 (feedback
+                            de Niko: no lo usaba, un inbox-dashboard COMPITE con Teams/WhatsApp
+                            nativos y no gana — ver memoria `feedback-comms-dashboard-vs-flujo`):
+                            `index.js` → `_archived/src-modules-comms/`, el frontend →
+                            `_archived/public-js-modules/comms/`; `comms` YA NO está en
+                            registry.js ni se monta en main.js. Lo que QUEDA en `src/modules/comms/`
+                            son LIBRERÍAS SHARED que otros módulos consumen (NO es un módulo
+                            registrado): `shared.js` (constantes ~/.cwc-data/comms/*, contactos/
+                            self/overrides, buildIndex(), ledgers JSONL, y las constantes
+                            WHATSAPP_* que usa el daemon), `pr-read-shared.js` (LECTOR ÚNICO de
+                            PRs de GitHub — lo importa `tickets/sources.js`), `gateway-shared.js`
+                            (GATEWAY de envíos Desk/Teams/GitHub — lo importa el CLI
+                            `bin/cwc-comms.js`), `teams-shared.js` · `chatbot-shared.js` ·
+                            `analyze-shared.js` (usados por los runners `bin/cwc-comms-*.js`), y
+                            `whatsapp-transcribe.js` (transcripción de voz, ver abajo). El
+                            reemplazo del dashboard NO es otro inbox: es el FLUJO DE SEGUIMIENTO
+                            "trabajar un hilo de WhatsApp en un chat de la consola" (ver WhatsApp).
+                            OJO: `comms` ≠ `interfono` (mensajería entre sesiones de Claude).
+                            **WhatsApp (PLAN-447):** puente bidireccional con **Baileys** (paquete
+                            npm `baileys`, FIJADO a 6.7.23 — NUNCA el dist-tag `latest`, que es un
+                            RC 7.x con breaking changes; librería NO oficial, WebSocket NATIVO de
+                            WhatsApp, sin navegador/Chromium → ~58MB RAM). MIGRÓ desde
+                            whatsapp-web.js (BUG-455: su evento `ready` dejó de disparar por un A/B
+                            testing de WhatsApp Web 2.3000.x sobre los módulos internos que esa
+                            librería espía — bug ajeno sin fix upstream). GOTCHA del arranque
+                            (resuelto): Baileys 6.7.23 trae hardcodeada una versión vieja del
+                            protocolo → error 405 "Connection Failure"; se llama
+                            `fetchLatestBaileysVersion()` en cada arranque y se pasa `version` a
+                            makeWASocket (github.com/WhiskeySockets/Baileys#2370). Sesión emparejada
+                            por QR UNA vez (QR rasterizado a PNG en `whatsapp-qr.png` — el ASCII
+                            terminal salía ilegible; credenciales en `~/.cwc-data/whatsapp-session/`,
+                            `useMultiFileAuthState`, nunca al repo; REUTILIZA al reiniciar sin
+                            re-escanear). `markOnlineOnConnect:false` (no roba las notificaciones
+                            push del teléfono). Corre como **servicio systemd de usuario
+                            `whatsapp-bridge.service`** (proceso LARGO, regla de oro/regla 2 — NUNCA
+                            nohup: se cayó dos veces así; heartbeat `whatsapp-daemon.json`
+                            {pid,ts,state}). Watchlist `whatsapp-watch.json` [{jid,label}] = chats a
+                            persistir; el daemon loguea DISCOVERY de los NO-watchlist SIEMPRE (aun
+                            con watchlist activa) para mapear un chat nuevo mandándole un mensaje
+                            —propio o ajeno— sin apagar el monitoreo. Modos puntuales del daemon
+                            (terminan solos): `--find=n1,n2` · `--groupmeta=jid` ·
+                            `--listgroups[=filtro]` (grupos vía groupFetchAllParticipating —
+                            los grupos SÍ se listan directo; los chats individuales solo se
+                            "ven" con un mensaje nuevo). JIDs: `@g.us` grupos · `@lid` (LID nuevo
+                            de WhatsApp por privacidad) o `@s.whatsapp.net` individuales — todos
+                            sirven para leer Y enviar. Mensajes en `whatsapp.json` (threads[] con
+                            messages[] {id,ts,from,fromMe,body,attachment?}). LEER + ESCRIBIR +
+                            ADJUNTOS + VOZ, todo verificado E2E con la cuenta espejo:
+                            · 📥 RECIBIR ADJUNTOS (PEND-458): `downloadMediaMessage` → binario en
+                              `whatsapp-media/<safeName(jid)>/<msgId>.<ext>` + referencia
+                              {type,file,fileName,mime,caption,size} en el thread. Tipos:
+                              image/video/audio/document/sticker (MEDIA_KINDS). Descarga async
+                              ANTES de persistir (1 write); fallo → referencia con `error`.
+                            · 📤 ESCRIBIR (texto + adjuntos, PEND-453/459): canal file-based OUTBOX
+                              — un job `<id>.json` en `whatsapp-outbox/` {jid, text?, media?} que el
+                              daemon vigila (polling 1.5s, SERIAL para no ráfaga-ar el anti-bot),
+                              envía con sock.sendMessage (buildOutgoingContent arma text |
+                              {image|video|audio|document} leyendo el archivo local), resultado en
+                              `whatsapp-sent/<id>.json`, borra el outbox. El server/CLI encola SIN
+                              tener la sesión (solo el daemon la tiene); confirm gate va ARRIBA.
+                            · 🎙️ TRANSCRIPCIÓN DE VOZ (PEND-479, todo LOCAL, 0 tokens SDK):
+                              `whatsapp-transcribe.js` (transcribeAudio) — ffmpeg convierte el .ogg
+                              opus → WAV 16k mono → `whisper.cpp` transcribe en español. NO usa un
+                              MCP de whisper (los locales son macOS-only y solo transcriben a
+                              demanda en un chat; el daemon no es un modelo) — usa el MISMO core
+                              (whisper.cpp) directo como binario. Al transcribir: campo `transcript`
+                              en la referencia + escribe un `.txt` JUNTO al audio
+                              (`<msgId>.txt`, campo `transcriptFile`). Herramientas: whisper.cpp
+                              compilado en `~/whisper.cpp` (binario `build/bin/whisper-cli` + modelo
+                              `models/ggml-small.bin` 466MB — `small` da buen español; subir a
+                              `medium` si no alcanza) + ffmpeg del sistema (apt). Rutas overridables
+                              por env `WHISPER_BIN`/`WHISPER_MODEL`/`FFMPEG_BIN` (defaults en
+                              código, NO en .env). Best-effort: si whisper no está o falla, el audio
+                              queda igual sin transcripción. OJO: whisper.cpp + su modelo viven en
+                              `~/whisper.cpp` (FUERA del repo, como pad-local; no versionar).
+                            · 🔗 FLUJO "TRABAJAR UN HILO EN UN CHAT" (PEND-479, el reemplazo del
+                              dashboard): `bin/cwc-whatsapp-work.js <jid|substring-label> <chatId>`
+                              copia a la carpeta de trabajo de UN chat de la consola
+                              (`chatAttachDir(chatId)` = `~/.cwc-data/chat-attachments/<chatId>/`, la
+                              que abre "Abrir carpeta de este chat" y viaja con el paquete-sesión)
+                              TODOS los artefactos del hilo (audios, sus `.txt`, PDFs, imágenes) + un
+                              `<hilo>-historial.txt` con la conversación y las transcripciones
+                              inline. Determinístico, 0 tokens: reusa `materializeIntoChat()` de
+                              chat/attachments.js (mismo filtro/saneo/confinamiento que cwc-attach.js).
+                              Disparador (sin dashboard): desde un chat de la consola el usuario pide
+                              "traeme el hilo de X" y el asistente corre el CLI con el chatId actual →
+                              el hilo entero queda en la carpeta del chat (referenciada por
+                              sessionFolderRule) → lo analiza/contrasta. Es el flujo de SEGUIMIENTO
+                              que Niko validó, no un inbox.
   bugs/                     (ANTES `tickets`, renombrado 2026-07-03) backend del hub
                             "Bugs & Features" del sidebar: triage de bugs BAJO DEMANDA
                             (consume tokens; admin). Ruta HTTP /api/bugs (GET estado, POST
@@ -2377,6 +2486,67 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             filtro SECUNDARIO dentro de Tickets/Features (ya NO tienen 📦 —
                             es pestaña); se ocultan en Archivados. Cambiar de pestaña es un
                             store.set({tab}) y el re-render es seguro (no toca `expanded`).
+  env-vars/                 CAPA DE CONFIG DE INSTANCIA (identidad + cliente) — pestaña
+                            "Variables de entorno" de ⚙ Sistema (PLAN-476/PEND-377, C1
+                            fundacional del Programa Satélite). Separa del CÓDIGO lo que es
+                            propio de CADA instalación (quién sos: email/GitHub/firma · qué
+                            cliente: nombre del MCP, IDs de departamento Zoho, reviewer de
+                            referencia) para que otra persona pueda correr su PROPIA instancia
+                            sin heredar la identidad de Nico. El almacén es
+                            `core/instance-config.js` (~/.cwc-data/instance.json, atómico,
+                            AUTOGENERADO al primer arranque). Los DEFAULTS son placeholders
+                            GENÉRICOS VACÍOS (scrub 2026-07-14 al derivar el repo limpio
+                            `la-consola`): la identidad real de Nico vive en SU instance.json
+                            (ya generado antes del scrub), así que su instancia sigue
+                            byte-idéntica; una instalación nueva arranca vacía y se configura
+                            por el wizard/panel. `config.instance` compone esa capa
+                            (instance.json > DEFAULTS) vía deepMerge por UNION de claves — OJO:
+                            el deepMerge original iteraba solo las claves de `base`, así que con
+                            defaults vacíos habría PERDIDO zohoDepartments propios del
+                            instance.json; el fix (union base∪over) lo conserva. saveInstance
+                            REEMPLAZA zohoDepartments wholesale cuando el patch lo trae (el panel
+                            envía el set entero; un merge nunca borraría una clave quitada). NUNCA incluye SECRETOS (capa aparte: CWC_TOKEN en .env,
+                            credenciales en ~/.claude) ni identidad de EQUIPO (users.json, capa
+                            3, multiusuario real = C3/PEND-382, fuera de alcance). Los
+                            call-sites parametrizados leen `config.instance.*`:
+                            tickets/derive.js (zohoDepartments) · tickets/desk-mcp-client.js
+                            (mcpServerId + infisicalProjectId + KNOWN_DEPARTMENTS) ·
+                            comms/shared.js (DEFAULT_SELF + contacto seed reviewer) ·
+                            comms/gateway-shared.js (SIGNATURE + reviewer default) ·
+                            tolkien/index.js (email del login local) · tickets/context-store.js
+                            (reviewer en el prompt) · bin/cwc-comms-send-runner.js (firma). El
+                            `contactId` del reviewer ('chris') es CLAVE INTERNA de lógica de
+                            negocio (derive.js/dashboard.js "de quién es la pelota") —
+                            deliberadamente NO parametrizado (cambiarlo exige tocar lógica, no
+                            solo config). Backend admin-gated patrón projects/: GET
+                            /api/env-vars (abierto, valores activos) · POST /api/env-vars
+                            {patch} (admin, deep-merge con allowlist explícita, NUNCA acepta
+                            campos de secretos, avisa needsRestart — los valores se leen al
+                            importar los módulos, un cambio se aplica del todo al reiniciar) ·
+                            GET /file (admin, ruta del instance.json). Front:
+                            public/js/modules/system/env-vars-panel.js (secciones 🪪 Identidad
+                            y 🏢 Cliente, editable inline, deps Zoho como filas clave→ID).
+  publish/                  PUBLICAR A LA CONSOLA (PLAN-488) — pestaña admin de ⚙ Sistema que
+                            sincroniza el repo INTERNO → el repo LIMPIO `la-consola` (el que
+                            instala el compañero). Dirección ÚNICA (interno → limpio, nunca al
+                            revés; el limpio es un MIRROR generado, read-only para consumidores).
+                            shared.js: transform de limpieza DECLARATIVO (RSYNC_EXCLUDES de
+                            secretos/runtime + MIRROR_PURGE de lo interno que NUNCA debe existir
+                            en el mirror — _archived, el propio tooling de publish, CLAUDE.generic.md
+                            — porque `rsync --exclude` protege de COPIAR pero también de BORRAR, así
+                            que un resto viejo persistiría sin el rm explícito · swap CLAUDE.md ←
+                            CLAUDE.generic.md · strip del changelog interno del README · docs/ a
+                            whitelist · parche de registry.js/system.js del mirror para quitar las
+                            refs a publish) + GATES BLOQUEANTES (runGates: secretos —token maestro,
+                            .env/users/sessions/certs, material de clave— + identidad —IDENTITY_FORBIDDEN,
+                            preciso: email + firma, NO el nombre "Nico" que está en mil comentarios;
+                            si algo aparece ABORTA sin publicar). El TOOLING de publish es
+                            INTERNO: se auto-excluye del mirror (su shared.js contiene los strings
+                            que el gate busca → se auto-bloquearía). index.js: POST /api/publish
+                            (admin, reserva estado + spawn runner) · GET /api/publish (admin, lee
+                            estado, 0 tokens). Front: system/publish-panel.js (confirm fuerte por ser
+                            acción hacia afuera + Pac-Man delegating + reporte de gates/limpieza).
+                            Fuente del CLAUDE genérico versionada en la raíz: `CLAUDE.generic.md`.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md).
@@ -2809,6 +2979,77 @@ public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hid
                             para filas/controles densos; fs-lg/fs-xl SOLO para títulos prominentes.
 public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
+bin/cwc-whatsapp-daemon.js  puente WhatsApp ↔ Comunicaciones (Baileys, servicio systemd
+                            whatsapp-bridge.service, sesión emparejada, estado persistido
+                            ~/.cwc-data/comms/whatsapp*, PLAN-447 — ver el detalle completo en
+                            el módulo `comms/` arriba). Corre 24/7 como proceso largo:
+                            watchlist de chats + discovery de nuevos, recepción de mensajes +
+                            adjuntos (downloadMediaMessage → whatsapp-media/), TRANSCRIPCIÓN de
+                            voz (whisper.cpp vía whatsapp-transcribe.js), envío por el OUTBOX
+                            file-based (texto + adjuntos), heartbeat en daemon.json. Modos
+                            puntuales: --find / --groupmeta / --listgroups. NUNCA con nohup
+                            (se cae); systemd es la única forma resiliente.
+bin/cwc-whatsapp-work.js    TRAE un hilo de WhatsApp a la carpeta de trabajo de UN chat de la
+                            consola (PEND-479, el reemplazo del dashboard eliminado): dado un
+                            hilo (jid o substring de su label) y un chatId, copia a
+                            ~/.cwc-data/chat-attachments/<chatId>/ los audios + sus .txt de
+                            transcripción + PDFs + imágenes del hilo + un <hilo>-historial.txt
+                            con la conversación y las transcripciones inline. Determinístico, 0
+                            tokens: reusa materializeIntoChat() de chat/attachments.js. Es el
+                            disparador del flujo de SEGUIMIENTO "trabajar un hilo en un chat"
+                            (el asistente lo corre con el chatId actual cuando el usuario pide
+                            "traeme el hilo de X"). Uso: cwc-whatsapp-work.js <jid|label> <chatId>
+bin/cwc-attach.js           COPIA un archivo de disco (de CUALQUIER fuente externa) al
+                            ESCRITORIO DE TRABAJO de una conversación de chat —
+                            ~/.cwc-data/chat-attachments/<chatId>/, la carpeta que abre "Abrir
+                            carpeta de este chat" (PLAN-447, pedido de Niko 2026-07-14). El
+                            asistente lo invoca al TRAER un archivo trabajable a la conversación
+                            (adjunto de WhatsApp ya descargado por el daemon en
+                            comms/whatsapp-media/<jid>/, adjunto de Outlook guardado a disco por
+                            graph_*, un informe, una factura). Así TODOS los archivos de trabajo
+                            quedan en un solo lugar, listos para manipular, y VIAJAN con el
+                            paquete-sesión al cambiar de mundo (chat-attachments NO está anidado
+                            por mundo; el handoff conserva el mismo chatId). Determinístico, 0
+                            tokens: reusa materializeIntoChat() de chat/attachments.js (filtro
+                            isWorkableFile = rechaza ocultos/vacíos/temporales .tmp/.part/
+                            .crdownload/lock/… ; nombre saneado/único; confinamiento anti-traversal
+                            a la carpeta). Uso: cwc-attach.js <chatId> <rutaAbs> ["nombre legible"];
+                            exit 0 copiado · 3 filtrado por no-trabajable · 1/2 error. El modelo
+                            aprende su carpeta + la regla por el system prompt (ver
+                            core/tool-policy.js sessionFolderRule). Cómo LO SABE: la inyección de
+                            carpeta va en el system prompt de TODO chat nuevo/reabierto — un runner
+                            YA VIVO de antes del deploy NO la tiene hasta "Reabrir para cambios" o
+                            un chat nuevo (mismo gotcha del bootstrap de Pad).
+bin/cwc-setup.js            INSTALADOR guiado de una instancia INDEPENDIENTE (PLAN-476/PEND-381,
+                            C2 del Programa Satélite). Para que un compañero levante SU propia
+                            consola sin heredar identidad de nadie: (1) preflight de requisitos
+                            (Node>=20/git/openssl críticos · tmux/Claude Code/ZeroTier/node_modules
+                            warn) · (2) genera .env con token maestro (crypto.randomBytes) + puerto/
+                            home/proyecto · (3) fija la IDENTIDAD de la instancia (nombre/email/
+                            GitHub/firma) en instance.json vía saveInstance del módulo env-vars ·
+                            (4) instala/arranca el servicio systemd reescribiendo WorkingDirectory
+                            del template a la ruta REAL del repo (portable, no asume ~/claude-web-
+                            console) + enable-linger · (5) ofrece los hooks opcionales (observer/
+                            interfono/pelota, spawnea sus install-*.js) · (6) crea el 1er admin
+                            (spawnea cwc-adduser ANTES de arrancar el servicio, así lo toma al
+                            iniciar). NO importa core/config.js a propósito (haría exit sin .env).
+                            `--check` = SOLO preflight sin prompts (CI/verificación), exit 1 si
+                            falta algo crítico. Interactivo con readline.
+bin/cwc-adduser.js          crea un usuario de la consola desde la CLI (reusa createUser de
+                            core/users.js, mismo users.json/scrypt/600). NO importa config.js (corre
+                            sin .env). Uso: cwc-adduser.js <usuario> [--admin] — pide contraseña
+                            OCULTA (readline con _writeToOutput muteado); `--password-stdin` la lee
+                            de stdin (automación). El PRIMER usuario se fuerza admin. OJO: el server
+                            vivo NO relee users.json en caliente (reiniciar para que lo tome); en
+                            instalación nueva se crea antes de arrancar el servicio.
+bin/cwc-publish-runner.js   PUBLICA el repo interno → repo limpio la-consola (PLAN-488),
+                            DESACOPLADO (regla de oro): mantiene un mirror local persistente
+                            (~/.cwc-data/la-consola-mirror), hace fetch+reset al remoto → rsync del
+                            árbol interno (excludes) → transform de limpieza → GATES bloqueantes
+                            (secretos+identidad) → commit incremental (committer neutro, sin PII) →
+                            push. 0 tokens (git puro, no SDK; regla 6 no aplica). Aborta sin
+                            publicar si un gate falla. Estado en ~/.cwc-data/publish.json + publish.log.
+                            Lógica en src/modules/publish/shared.js.
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
                             DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
@@ -4038,6 +4279,13 @@ docs/                       frontend-modules.md · brief-original.txt · context
 ## Mejora Continua (auto)
 <!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->
 
+### Antes de cerrar hallazgos de un análisis, cruzarlos y registrarlos contra el backlog de Pad
+_procedimiento · confianza alta · recurrencia x2_
+
+**Observación:** Tras resolver 14 hallazgos + propuestas de los 3 escaneos de Salud, el agente dio el trabajo por cerrado sin cruzarlo contra los 23 BUGs abiertos en Pad ni registrar los fixes como items BUG (Regla 11); el usuario tuvo que preguntar '¿Y los bugs registrados en pad?' para que se corrigiera.
+
+**Lección:** Al cerrar cualquier tanda de fixes originados en un motor de análisis (Salud, Coherencia, Revisión), antes del resumen final: (1) cruzar los hallazgos contra el backlog abierto de Pad para no duplicar ni dejar huérfanos, y (2) crear/actualizar los items BUG correspondientes en Pad — sin esperar a que el usuario lo pida.
+
 ### Diseñar acciones por ítem con un botón principal por defecto, no un botón por opción
 _convencion · confianza alta · recurrencia x2_
 
@@ -4052,17 +4300,17 @@ _procedimiento · confianza media · recurrencia x2_
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
 
+### Probar una regla inyectada en tool-policy/system prompt en un chat NUEVO, no en el actual
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Tras modificar tool-policy.js para inyectar la regla de 'carpeta del chat' en todo system prompt, el propio chat en curso no la recibió (su runner ya había arrancado antes del deploy) y hubo que crear una sesión nueva para hacer la 'prueba de fuego' real.
+
+**Lección:** Cuando se cambia el system prompt o tool-policy del runner, dar por hecho que las sesiones ya abiertas NO reciben el cambio hasta 'Reabrir para cambios'; verificar el efecto siempre en un chat recién creado, y aclararlo como caveat explícito al cerrar la tarea.
+
 ### Commitear directo a main en repos personales, sin branches acumulables
 _convencion · confianza alta · recurrencia x1_
 
 **Observación:** El trabajo de varias semanas (facilities, migración a Pad local, learning module) quedó apilado 62 commits en una feature branch nunca mergeada a main, dejando main desactualizado y confundiendo al usuario sobre dónde vivía realmente su trabajo.
 
 **Lección:** En el repo personal de consola (single-dev, sin flujo de PR), evitar crear feature branches de larga vida: commitear directo a main o mergear con frecuencia, para que main siempre refleje el estado real del trabajo.
-
-### Antes de cerrar hallazgos de un análisis, cruzarlos y registrarlos contra el backlog de Pad
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** Tras resolver 14 hallazgos + propuestas de los 3 escaneos de Salud, el agente dio el trabajo por cerrado sin cruzarlo contra los 23 BUGs abiertos en Pad ni registrar los fixes como items BUG (Regla 11); el usuario tuvo que preguntar '¿Y los bugs registrados en pad?' para que se corrigiera.
-
-**Lección:** Al cerrar cualquier tanda de fixes originados en un motor de análisis (Salud, Coherencia, Revisión), antes del resumen final: (1) cruzar los hallazgos contra el backlog abierto de Pad para no duplicar ni dejar huérfanos, y (2) crear/actualizar los items BUG correspondientes en Pad — sin esperar a que el usuario lo pida.
 <!-- cwc:mejora-continua:end -->

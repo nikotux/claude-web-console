@@ -8,8 +8,12 @@
 // Mordor Staffing + Tolkien). Ver plan:
 // ~/pool of documents/2026-07-06_plan-backend-deterministico-lectura-desk_v01.md
 
-export const DEPT_TOLKIEN = '813994000003710353';       // bugs / features
-export const DEPT_MORDOR = '813994000000006907';        // hw / access / platform / onboarding / client
+import { config } from '../../core/config.js';
+
+// Configurables por instancia (config.instance.client.zohoDepartments) —
+// default = los departamentos reales de Mordor Staffing/Tolkien.
+export const DEPT_TOLKIEN = config.instance.client.zohoDepartments.tolkien; // bugs / features
+export const DEPT_MORDOR = config.instance.client.zohoDepartments.mordor;   // hw / access / platform / onboarding / client
 
 // cf_related_to (picklist real) → lane del One Front Door. Se evalúa en orden;
 // primer match gana. Los valores llegan como "Hardware (Computador - …)" etc.,

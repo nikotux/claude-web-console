@@ -395,6 +395,24 @@ device must **accept the certificate warning**.
 
 ## Installation
 
+### Guided setup (recommended for a fresh instance)
+
+After cloning and `npm install`, run the interactive installer — it checks
+requirements, generates `.env` (with a fresh master token), sets this
+instance's identity, installs the systemd service, and creates the first admin:
+
+```bash
+cd ~/claude-web-console
+npm install
+node bin/cwc-setup.js          # guided wizard
+# or just check requirements without changing anything:
+node bin/cwc-setup.js --check
+```
+
+Add extra users later with `node bin/cwc-adduser.js <username> [--admin]`.
+
+### Manual setup
+
 ```bash
 cd ~/claude-web-console
 npm install
