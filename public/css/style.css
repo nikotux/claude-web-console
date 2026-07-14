@@ -469,6 +469,17 @@ html, body {
 }
 .sess-others[open] summary { margin-bottom: .3rem; }
 .sess-others .sess-card { margin-bottom: .3rem; }
+/* F4 (PLAN-373): header de grupo por MUNDO en Sesiones. */
+.sess-world-h {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: .35rem .35rem .15rem; user-select: none;
+}
+.sess-world-h .side-count { margin-left: auto; }
+/* F3 (PLAN-373): conversación ARCHIVADA (revivible) — atenuada. */
+.sess-chat--archived { opacity: .62; }
+.sess-chat--archived:hover { opacity: 1; }
 
 /* Tarjeta de conversación (chat SDK): distinguible por ícono y borde */
 .sess-chat { border-left: 2px solid var(--cwc-accent); }

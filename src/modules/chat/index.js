@@ -83,7 +83,7 @@ import {
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 import * as bus from '../../core/bus.js';
 import { logDelivery } from '../../core/interfono-log.js';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 
@@ -482,6 +482,99 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
   return events.slice(-400);
 }
 
+// ===== Handoff de sesión entre mundos (F1 de PLAN-373 / PEND-386) =====
+// Mover una conversación de un cwd (mundo) a otro conservando TODO el contexto,
+// sin copiar/pegar ni reconstruir. Mecanismo confirmado en el spike S1:
+// forkSession nativo del SDK (UUID fresco → sin colisión de sessionId; el
+// transcript del sid ORIGINAL queda intacto en su mundo para archivarlo) +
+// relocar el .jsonl del fork al projectKey del destino (encodeCwd(cwd) = como
+// indexa el SDK, sdk.d.ts:4370) + resumir bajo el cwd destino (ahí gana SU
+// propio set de MCP/settings — deseado: en Tolkien manda Pad-tolkien). Existe en
+// UN mundo a la vez por construcción ⇒ cumple la Regla dura 12 (no enlaza, muda).
+function chatProjectDir(cwd) {
+  return path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
+}
+// Reloca el transcript (y subagentes) del fork del mundo origen al destino y
+// limpia la copia del fork en el origen (no dejar sesión huérfana en ese mundo;
+// el sessionId ORIGINAL —la conversación que se archiva— se conserva aparte).
+function relocateForkTranscript(forkSid, fromCwd, toCwd) {
+  const fromDir = chatProjectDir(fromCwd);
+  const toDir = chatProjectDir(toCwd);
+  fss.mkdirSync(toDir, { recursive: true });
+  const srcFile = path.join(fromDir, `${forkSid}.jsonl`);
+  fss.copyFileSync(srcFile, path.join(toDir, `${forkSid}.jsonl`));
+  const srcSub = path.join(fromDir, forkSid); // subagentes del fork (si hubiera)
+  if (fss.existsSync(srcSub)) fss.cpSync(srcSub, path.join(toDir, forkSid), { recursive: true });
+  try { fss.rmSync(srcFile); } catch { /* best-effort */ }
+  try { if (fss.existsSync(srcSub)) fss.rmSync(srcSub, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+// Copia los adjuntos (carpeta por chatId) del chat origen al destino (S3).
+function copyChatAttachments(fromId, toId) {
+  const src = chatAttachDir(fromId);
+  if (!fss.existsSync(src)) return;
+  fss.cpSync(src, chatAttachDir(toId), { recursive: true });
+}
+// Etiqueta humana del MUNDO de un cwd (sin acoplar el front ui/places.js): la
+// consola (CONSOLE_ROOT) = "Mi Consola", config.projectDir = "Tolkien", resto =
+// basename. Fuente backend equivalente a placeFor().
+function worldLabelFor(cwd) {
+  const abs = path.resolve(cwd || '');
+  if (abs === path.resolve(CONSOLE_ROOT)) return 'Mi Consola';
+  if (config.projectDir && abs === path.resolve(config.projectDir)) return 'Tolkien';
+  return path.basename(abs) || String(cwd || '');
+}
+// F2 v1 (PLAN-373/PEND-461) — "clon de Pad" auto-contenido, primera piedra: al
+// mudar una sesión se escribe un MANIFIESTO PORTABLE en la carpeta del chat
+// destino (~/.cwc-data/chat-attachments/<destId>/_handoff.md). Captura de dónde
+// vino, a qué mundo llegó, y APUNTA a las "formas de trabajo nombradas" del
+// mundo destino (memory/*.md) que F0-E encontró dispersas — así la sesión
+// mudada "sabe qué instrucciones tomar" en el mundo nuevo. Es un artefacto
+// self-contained (viaja con el chat), NO un enlace vivo (Regla 12). Best-effort.
+// PENDIENTE de F2 (documentado): auto-inyectar este manifiesto al primer turno
+// del destino (hoy queda accesible por "Abrir carpeta del chat" / Read).
+function writeHandoffManifest(destId, { fromCwd, toCwd, title }) {
+  const dir = chatAttachDir(destId);
+  fss.mkdirSync(dir, { recursive: true });
+  const fromW = worldLabelFor(fromCwd);
+  const toW = worldLabelFor(toCwd);
+  let forms = [];
+  try {
+    const memDir = path.join(chatProjectDir(toCwd), 'memory');
+    forms = fss.readdirSync(memDir).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
+  } catch { /* el mundo destino puede no tener memorias */ }
+  // F2(c): MCP/herramientas del mundo destino (de ~/.claude.json →
+  // projects[cwd].mcpServers). Así la sesión mudada sabe qué herramientas GANA en
+  // este mundo (p.ej. en Tolkien: pad cloud + tolkien-mordor + honcho). Best-effort.
+  let mcps = [];
+  try {
+    const cfg = JSON.parse(fss.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
+    const proj = cfg?.projects?.[path.resolve(toCwd)] || cfg?.projects?.[toCwd];
+    mcps = Object.keys(proj?.mcpServers || {});
+  } catch { /* sin config o sin MCPs en ese mundo */ }
+  const md = [
+    `# 📦 Manifiesto de handoff (paquete-sesión · F2)`,
+    ``,
+    `Esta conversación **"${title || ''}"** se MUDÓ de **${fromW}** → **${toW}** conservando todo su contexto (fork del transcript + resume).`,
+    ``,
+    `- Mundo actual: **${toW}** (\`${toCwd}\`). Acá usás las herramientas/MCP de ESTE mundo.`,
+    `- Origen: **${fromW}** (\`${fromCwd}\`) — quedó **archivado** (revivible), no borrado.`,
+    `- Regla dura 12: los mundos NO se enlazan en vivo; esta sesión existe solo en ${toW} ahora.`,
+    ``,
+    `## Herramientas / MCP de este mundo`,
+    mcps.length
+      ? `Disponibles en ${toW} (usalas con ToolSearch si hacen falta):\n${mcps.map((s) => `- \`${s}\``).join('\n')}`
+      : `(sin MCPs propios detectados para este mundo)`,
+    ``,
+    `## Formas de trabajo de este mundo`,
+    forms.length
+      ? `Cargá si aplica (memory/ de ${toW}):\n${forms.map((f) => `- \`${f}\``).join('\n')}`
+      : `(sin memorias propias detectadas para este mundo)`,
+    ``,
+  ].join('\n');
+  fss.writeFileSync(path.join(dir, '_handoff.md'), md);
+  return md;
+}
+
 class Chat {
   constructor({ id, cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, effort = null }) {
     this.id = id;
@@ -517,6 +610,8 @@ class Chat {
     this.sessionId = resume || null;
     this.alive = false;       // motor (runner) conectado y corriendo
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
+    this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
+    this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
     this.viewMode = 'chat';   // chat | switching | tui
     this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
@@ -873,6 +968,22 @@ class Chat {
     });
   }
 
+  // Duerme el motor vivo y ESPERA su muerte verificada, para que el transcript
+  // quede COMPLETO en disco antes de forkearlo (handoff). Mismo cuidado que
+  // reopen(): el runner emite 'closed' y RECIÉN ~2s después cierra el socket, así
+  // que además del _waitEngineDown esperamos el descarte REAL del link. Devuelve
+  // true si el motor quedó abajo. NO cierra la conversación.
+  async quiesce() {
+    if (!this.alive || !this.link) return true;
+    this._engineStopping = true;
+    this.link.send({ t: 'sleep' });
+    await this._waitEngineDown(SWITCH_CLOSE_MS);
+    const deadline = Date.now() + SWITCH_CLOSE_MS;
+    while (this.link && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    this._engineStopping = false;
+    return !this.link;
+  }
+
   // ===== Traspaso Chat <-> TUI (regla dura: nunca ambos a la vez) =====
   async switchMode(target) {
     if (target === this.viewMode) return { ok: true, viewMode: this.viewMode, terminalId: this.terminalId };
@@ -1038,9 +1149,19 @@ class Chat {
     this._setStatus('working');
     this._push({ type: 'user', text, ...(atts ? { attachments: atts } : {}) });
     this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
+    // F2 (PEND-461): si esta conversación llegó por un handoff, inyectamos el
+    // manifiesto UNA sola vez — SOLO en el texto que va al MODELO (no en el que
+    // se muestra al usuario ni en el que ven el router/auto-título): así la
+    // sesión mudada "sabe qué instrucciones tomar" en el mundo nuevo sin que el
+    // manifiesto ensucie la burbuja del usuario. Efímero: se consume acá.
+    let modelText = text;
+    if (this._pendingHandoffNote) {
+      modelText = `[CONTEXTO DE HANDOFF — inyectado al mudar esta sesión de mundo; leelo y seguí]\n${this._pendingHandoffNote}\n[FIN CONTEXTO DE HANDOFF]\n\n${text}`;
+      this._pendingHandoffNote = null;
+    }
     // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
     this._ensureEngine().then((ok) => {
-      if (ok !== false) this.link?.send({ t: 'user', text, ...(atts ? { attachments: atts } : {}) });
+      if (ok !== false) this.link?.send({ t: 'user', text: modelText, ...(atts ? { attachments: atts } : {}) });
       else this._setStatus('waiting'); // fix B3.3 2026-07-11: spawn/conexión falló → no dejar la tarjeta pegada en "working" para siempre
     });
   }
@@ -1532,6 +1653,41 @@ class Chat {
     this.alive = false;
   }
 
+  // F3 (PLAN-373/PEND-462): ARCHIVAR = aparcar la conversación (revivible), NO
+  // cerrarla. A diferencia de close(): NO dispara los write-backs de "terminé"
+  // (histórico/aprendizaje/mejora-continua) — no es un cierre, es un "guardado
+  // para después" (feedback a los días → revivir sin reconstruir contexto).
+  // Duerme el motor (sale con resume disponible), conserva sessionId, persiste.
+  // Lo usa el handoff (archiva el origen) y el botón "Archivar" del menú ⋯.
+  archive() {
+    if (this.archived || this.closed) return;
+    this.archived = true;
+    if (this.terminalId) {
+      const t = sessionManager.get(this.terminalId);
+      if (t) t.kill();
+      sessionManager.remove(this.terminalId);
+      this.terminalId = null;
+      this.viewMode = 'chat';
+    }
+    this._engineStopping = true;
+    this.link?.send({ t: 'sleep' });
+    this.alive = false;
+    this.lastActivity = Date.now();
+    this.onUpdate?.();
+  }
+
+  // F3: REVIVIR una conversación archivada. Lazy (0 tokens): la des-archiva y la
+  // deja dormida; el próximo mensaje (sendUser → _ensureEngine) o el "Abrir" la
+  // reviven con resume sobre la misma sesión. NO re-spawnea acá para no gastar.
+  revive() {
+    if (this.closed) return { ok: false, error: 'La conversación está cerrada.' };
+    if (!this.archived) return { ok: true };
+    this.archived = false;
+    this.lastActivity = Date.now();
+    this.onUpdate?.();
+    return { ok: true };
+  }
+
   _setStatus(state) {
     // Invariante: 'delegando' solo tiene sentido con el motor 'working'. Al
     // volver a 'waiting' (turno terminado, interrumpido, o motor caído a
@@ -1588,6 +1744,7 @@ class Chat {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model, modelChoice: this.modelChoice,
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       mode: this.permissionMode, status: this.status, alive: this.alive,
+      archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
@@ -1625,8 +1782,10 @@ class ChatManager {
         // Cerradas explícitamente: se descartan a los 90 min.
         if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
         // Dormidas sin uso 24 h: recién ahí se descarta la tarjeta (la
-        // conversación sigue retomable desde el lanzador vía transcript).
-        if (!c.closed && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
+        // conversación sigue retomable desde el lanzador vía transcript). Las
+        // ARCHIVADAS (F3) NO se podan: son revivibles a propósito (feedback días
+        // después) — sobreviven hasta que el usuario las cierre a mano.
+        if (!c.closed && !c.archived && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
           c.close();
           this.chats.delete(id);
           dirty = true;
@@ -1647,7 +1806,7 @@ class ChatManager {
   // trabajando espera a terminar; uno dormido o sin pestaña queda para el popup.
   _deliverInterfono() {
     for (const c of this.chats.values()) {
-      if (c.closed || !c.sessionId || c.viewMode !== 'chat') continue;
+      if (c.closed || c.archived || !c.sessionId || c.viewMode !== 'chat') continue;
       const open = c.clients.size > 0;
       const idle = c.alive && c.status === 'waiting';
       if (open && idle) {
@@ -1687,6 +1846,68 @@ class ChatManager {
     return chat;
   }
 
+  // Handoff de una conversación a OTRO mundo (cwd) conservando el contexto (F1
+  // de PLAN-373). fork nativo → relocar transcript → crear chat destino que
+  // resume el fork bajo el cwd destino → ARCHIVAR (cerrar) el origen. Ver los
+  // helpers de arriba y la decisión del spike S1 en PEND-386. Devuelve códigos
+  // de error listos para el endpoint (result.code).
+  async handoff(id, destCwd) {
+    const origin = this.chats.get(id);
+    if (!origin) return { ok: false, code: 404, error: 'Conversación inexistente.' };
+    if (origin.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
+    if (origin.viewMode !== 'chat') return { ok: false, code: 409, error: 'Solo se puede mudar en modo Chat (una TUI se reinicia desde la terminal).' };
+    if (!origin.sessionId || !UUID_RE.test(origin.sessionId)) {
+      return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
+    }
+    const dest = safeCwd(destCwd);
+    if (path.resolve(dest) === path.resolve(origin.cwd)) {
+      return { ok: false, code: 400, error: 'El destino es el mismo mundo/carpeta de origen.' };
+    }
+    // 1. Quiesce: motor origen ABAJO (transcript completo, sin lock del runner).
+    const down = await origin.quiesce();
+    if (!down) return { ok: false, code: 409, error: 'No se pudo cerrar el motor de origen a tiempo; probá de nuevo.' };
+    // 2. Fork nativo del SDK (UUID fresco; el transcript del sid original queda intacto).
+    let forkSid;
+    try {
+      const fk = await forkSession(origin.sessionId, { dir: origin.cwd, title: origin.title });
+      forkSid = fk?.sessionId;
+    } catch (err) {
+      return { ok: false, code: 500, error: `No se pudo forkear la sesión: ${String(err?.message || err).slice(0, 200)}` };
+    }
+    if (!forkSid || !UUID_RE.test(forkSid)) return { ok: false, code: 500, error: 'El fork no devolvió un sessionId válido.' };
+    // 3. Relocar el transcript del fork al projectKey del destino.
+    try { relocateForkTranscript(forkSid, origin.cwd, dest); }
+    catch (err) { return { ok: false, code: 500, error: `No se pudo relocar el transcript: ${String(err?.message || err).slice(0, 200)}` }; }
+    // 4. Crear el chat destino que RESUME el fork bajo el cwd destino (ahí toma
+    //    SU propio set de MCP/settings — deseado: en Tolkien gana Pad-tolkien).
+    const destChat = this.create({
+      cwd: dest,
+      model: origin.modelChoice || origin.model || 'auto',
+      permissionMode: origin.permissionMode,
+      resume: forkSid,
+      title: origin.title,
+      ticket: origin.ticket || null,
+      learningId: origin.learningId || null,
+    });
+    // Heredar el effort elegido (create() no lo toma como parámetro).
+    if (EFFORT_LEVELS.includes(origin.effort)) { destChat.effort = origin.effort; destChat._effortPinned = !!origin._effortPinned; }
+    // 5. Adjuntos del origen → destino (S3, best-effort).
+    try { copyChatAttachments(origin.id, destChat.id); } catch { /* best-effort */ }
+    // 5b. F2: manifiesto portable "clon de Pad" en la carpeta del chat destino +
+    //     lo dejamos PENDIENTE de inyección para el 1er turno del destino (así la
+    //     sesión mudada LEE el contexto sola, no solo queda en un archivo).
+    try {
+      const md = writeHandoffManifest(destChat.id, { fromCwd: origin.cwd, toCwd: dest, title: origin.title });
+      if (md) destChat._pendingHandoffNote = md;
+    } catch { /* best-effort */ }
+    // 6. Archivar el origen (F3): aparcarlo revivible (NO cerrarlo). El transcript
+    //    del sid ORIGINAL queda en disco en su mundo y la conversación se puede
+    //    revivir ante feedback días después. "Un mundo a la vez".
+    origin.archive();
+    this.persist();
+    return { ok: true, code: 200, origin: id, dest: destChat.info() };
+  }
+
   // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
   persist() {
     // Registro durable append-only: TODOS los chats del map (incluidos los
@@ -1698,6 +1919,7 @@ class ChatManager {
       .map((c) => ({
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
+        archived: !!c.archived, // F3: se rehidrata dormida y revivible
         ticket: c.ticket || null,
         learningId: c.learningId || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
@@ -1747,6 +1969,7 @@ class ChatManager {
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.lastActivity = s.lastActivity || Date.now();
+      chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
       // infirió un valor razonable a partir de `model`, pero solo el campo
       // explícito distingue "elegí Sonnet a mano" de "AutoTux está en Sonnet
@@ -2088,6 +2311,47 @@ export default {
         console.error('[chat] /reopen falló:', err);
         return res.status(500).json({ error: 'No se pudo reabrir el motor (error interno).' });
       }
+      if (!result.ok) return res.status(409).json({ error: result.error });
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // Mudar una conversación a OTRO mundo (cwd) conservando el contexto (F1 de
+    // PLAN-373 / PEND-386): fork nativo → relocar transcript → resume bajo el
+    // cwd destino → archivar el origen. `cwd` = ruta (rel al home o absoluta;
+    // clampToHome la valida). 0 tokens (fork/relocate son de disco); el motor
+    // destino arranca como cualquier chat. Devuelve el chat DESTINO nuevo.
+    r.post('/handoff', async (req, res) => {
+      const destCwd = req.body?.cwd;
+      if (typeof destCwd !== 'string' || !destCwd.trim()) {
+        return res.status(400).json({ error: 'Falta la carpeta/mundo destino.' });
+      }
+      let result;
+      try { result = await manager.handoff(req.body?.id, destCwd); }
+      catch (err) {
+        console.error('[chat] /handoff falló:', err);
+        return res.status(500).json({ error: 'No se pudo mudar la sesión (error interno).' });
+      }
+      if (!result.ok) return res.status(result.code || 409).json({ error: result.error });
+      res.json({ ok: true, chat: result.dest });
+    });
+
+    // F3: archivar (aparcar revivible) una conversación — no la cierra ni borra.
+    r.post('/archive', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      if (chat.closed) return res.status(409).json({ error: 'La conversación está cerrada.' });
+      chat.archive();
+      manager.persist();
+      res.json({ ok: true, chat: chat.info() });
+    });
+
+    // F3: revivir una conversación archivada (lazy: la des-archiva; el próximo
+    // uso la reanuda con resume). Devuelve el chat para refrescar la tarjeta.
+    r.post('/revive', (req, res) => {
+      const chat = manager.get(req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const result = chat.revive();
       if (!result.ok) return res.status(409).json({ error: result.error });
       manager.persist();
       res.json({ ok: true, chat: chat.info() });

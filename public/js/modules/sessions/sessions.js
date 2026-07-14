@@ -10,7 +10,7 @@
 import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
-import { placeFor } from '../../ui/places.js';
+import { placeFor, PLACES } from '../../ui/places.js';
 
 // Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
 // animación por estado vienen del catálogo central (ver ui.css); acá solo
@@ -175,14 +175,50 @@ export default {
       dotEl.title = total ? `${total} sesión(es) activas` : 'Sin sesiones';
       const owned = visible.filter((s) => s.owned);
       const others = visible.filter((s) => !s.owned);
+      const activeChats = chats.filter((c) => !c.archived);
+      const archivedChats = chats.filter((c) => c.archived);
 
       listEl.innerHTML = '';
-      if (!total) {
+      if (!total && !archivedChats.length) {
         listEl.innerHTML = '<div class="sess-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
         return;
       }
-      for (const c of chats) listEl.appendChild(chatCard(c, tmuxByName));
+
+      // F4 (PLAN-373/PEND-463): agrupar los chats por MUNDO (ui/places.js). Orden:
+      // lugares conocidos (Mi Consola, Tolkien) primero, "Otros" al final. El
+      // header de mundo aparece solo si hay chats en >1 mundo (con uno solo sería
+      // ruido). Cada grupo lleva ícono + label + conteo.
+      const byWorld = new Map();
+      for (const c of activeChats) {
+        const p = placeFor(c.cwd);
+        const key = p?.rel || '__otros';
+        if (!byWorld.has(key)) byWorld.set(key, { place: p, chats: [] });
+        byWorld.get(key).chats.push(c);
+      }
+      const order = [...PLACES.map((p) => p.rel), '__otros'];
+      const worldKeys = [...byWorld.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const multiWorld = worldKeys.length > 1;
+      for (const key of worldKeys) {
+        const grp = byWorld.get(key);
+        if (multiWorld) {
+          const h = document.createElement('div');
+          h.className = 'sess-world-h';
+          h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || 'Otros'}</span><span class="side-count">${grp.chats.length}</span>`;
+          listEl.appendChild(h);
+        }
+        for (const c of grp.chats) listEl.appendChild(chatCard(c, tmuxByName));
+      }
       for (const s of owned) listEl.appendChild(card(s));
+
+      // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
+      // sección colapsada. Tocar una la revive y la abre (ver chatCard).
+      if (archivedChats.length) {
+        const det = document.createElement('details');
+        det.className = 'sess-others sess-archived';
+        det.innerHTML = `<summary>${icon('folder', { size: 13 })} Archivados <span class="side-count">${archivedChats.length}</span></summary>`;
+        for (const c of archivedChats) det.appendChild(chatCard(c, tmuxByName));
+        listEl.appendChild(det);
+      }
 
       if (others.length) {
         const det = document.createElement('details');
@@ -196,7 +232,7 @@ export default {
     // ===== Tarjeta de conversación (chat SDK) =====
     function chatCard(c, tmuxByName) {
       const elCard = document.createElement('div');
-      elCard.className = 'sess-card sess-chat';
+      elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '');
       elCard.dataset.key = `chat:${c.id}`;
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
 
@@ -217,7 +253,8 @@ export default {
             <span class="sess-model">${chatModelLabel(c)}</span>
           </span>
         </span>`;
-      main.addEventListener('click', () => openChatView(c));
+      // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
+      main.addEventListener('click', () => (c.archived ? reviveChat(c, { open: true }) : openChatView(c)));
 
       const menuBtn = document.createElement('button');
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
@@ -315,27 +352,65 @@ export default {
     // Menú ⋯ de una CONVERSACIÓN: mismo popup descartable que las terminales.
     function openChatMenu(c, anchor) {
       const isTui = c.viewMode === 'tui';
+      const arch = !!c.archived; // F3: una archivada muestra "Revivir" y esconde las acciones que exigen motor vivo
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
-        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>Abrir</span></button>
-        <button class="cwc-popup-item" data-act="mode">${icon(isTui ? 'sparkle' : 'terminal', { size: 15 })}<span>${isTui ? 'Pasar a Chat' : 'Pasar a TUI'}</span></button>
+        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? 'Revivir y abrir' : 'Abrir'}</span></button>
+        ${arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>Revivir</span></button>` : ''}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>Pasar a TUI</span></button>`}
+        ${!arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>Pasar a Chat</span></button>` : ''}
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
-        <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
-        ${isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>Reabrir para cambios</span></button>`}
+        ${arch ? '' : `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>Reabrir para cambios</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>Mover a otro mundo</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>Archivar</span></button>`}
         <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>Abrir carpeta del chat</span></button>
         <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
       const act = (fn) => { dismiss(); fn(); };
-      menu.querySelector('[data-act="open"]').addEventListener('click', () => act(() => openChatView(c)));
-      menu.querySelector('[data-act="mode"]').addEventListener('click', () => act(() => switchChatMode(c)));
+      menu.querySelector('[data-act="open"]').addEventListener('click', () => act(() => (arch ? reviveChat(c, { open: true }) : openChatView(c))));
+      menu.querySelector('[data-act="revive"]')?.addEventListener('click', () => act(() => reviveChat(c)));
+      menu.querySelector('[data-act="mode"]')?.addEventListener('click', () => act(() => switchChatMode(c)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
-      menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModelForChat(c)));
+      menu.querySelector('[data-act="model"]')?.addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
+      menu.querySelector('[data-act="world"]')?.addEventListener('click', () => act(() => moveChatWorld(c)));
+      menu.querySelector('[data-act="archive"]')?.addEventListener('click', () => act(() => archiveChat(c)));
       menu.querySelector('[data-act="folder"]').addEventListener('click', () => act(() => openChatFolder(c)));
       menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    // F3: archivar (aparcar revivible) una conversación desde el menú ⋯.
+    async function archiveChat(c) {
+      try {
+        const res = await fetch('/api/chat/archive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo archivar.');
+      } catch (e) {
+        dialog.alertDialog({ title: 'Archivar', message: e.message });
+      } finally { refresh(); }
+    }
+
+    // F3: revivir una conversación archivada; con {open:true} además la abre.
+    async function reviveChat(c, { open = false } = {}) {
+      try {
+        const res = await fetch('/api/chat/revive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo revivir.');
+        if (data.chat) syncConversation(data.chat);
+        if (open) openChatView(data.chat || c);
+      } catch (e) {
+        dialog.alertDialog({ title: 'Revivir', message: e.message });
+      } finally { refresh(); }
     }
 
     // Abre el Explorador (ventana existente, deep-link ?path=) en la carpeta de
@@ -380,6 +455,52 @@ export default {
       } finally {
         refresh();
       }
+    }
+
+    // Mueve una conversación a OTRO mundo (cwd) conservando TODO el contexto (F1
+    // de PLAN-373 / PEND-386): el backend forkea la sesión, reloca el transcript
+    // y ARCHIVA el origen. Elegís el mundo destino (lugares conocidos de
+    // ui/places.js, menos el de origen). 0 tokens; el motor destino arranca al
+    // abrir la conversación nueva. "Un mundo a la vez" (Regla dura 12).
+    async function moveChatWorld(c) {
+      const originRel = placeFor(c.cwd)?.rel || null;
+      const dests = PLACES.filter((p) => p.rel !== originRel);
+      if (!dests.length) {
+        dialog.alertDialog({ title: 'Mover a otro mundo', message: 'No hay otro mundo conocido para mudar esta conversación.' });
+        return;
+      }
+      const m = dialog.openModal({ title: 'Mover a otro mundo', width: 360 });
+      m.body.innerHTML = `
+        <p class="sess-plumbing">La conversación se muda con TODO su contexto al mundo elegido: se <b>forkea</b> la sesión y el origen se <b>archiva</b>. En el destino usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).</p>
+        <div class="sess-menu-list">${dests.map((p) =>
+          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>${p.label}</span></button>`).join('')}</div>
+        <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">Cancelar</button></div>`;
+      m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
+      m.body.querySelectorAll('[data-rel]').forEach((btn) => btn.addEventListener('click', async () => {
+        const rel = btn.getAttribute('data-rel');
+        const label = dests.find((p) => p.rel === rel)?.label || rel;
+        const ok = await dialog.confirmDialog({
+          title: 'Mover a otro mundo',
+          message: `Mudar "${c.title}" a ${label}: el origen se archiva (cierra) y se abre una conversación nueva en ${label} con el mismo contexto. ¿Seguir?`,
+          confirmLabel: `Mover a ${label}`,
+        });
+        if (!ok) return;
+        m.close();
+        try {
+          const res = await fetch('/api/chat/handoff', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: c.id, cwd: rel }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'No se pudo mover la conversación.');
+          if (data.chat) { syncConversation(data.chat); openChatView(data.chat); }
+        } catch (e) {
+          dialog.alertDialog({ title: 'Mover a otro mundo', message: e.message });
+        } finally {
+          refresh();
+        }
+      }));
     }
 
     // Modelo de una CONVERSACIÓN: en vivo (q.setModel() del SDK, sin perder

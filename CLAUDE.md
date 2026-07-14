@@ -643,6 +643,66 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (el ítem se oculta con `isTui` en sessions.js; una TUI se reinicia
                             desde la terminal). Confirm en el front SOLO si status==='working'
                             (cortaría el turno en curso).
+                            MOVER A OTRO MUNDO — handoff de sesión cross-cwd (2026-07-14, F1 de
+                            PLAN-373/PEND-386 del Pad `console`, "Sesiones Portables"): mudar una
+                            conversación de un `cwd`/MUNDO a otro (🏠 Consola ↔ 🌳 Tolkien)
+                            conservando TODO el contexto, sin copiar/pegar ni reconstruir. Caso
+                            disparador: WhatsApp lee en Consola → crear tracking en Tolkien (hoy
+                            la herramienta de un mundo NO puede hablar con la del otro — Regla 12 —,
+                            así que la sesión se MUDA con su contexto en vez de enlazarse en vivo).
+                            MECANISMO (confirmado en spike + E2E, decisión registrada en PEND-386):
+                            `forkSession` NATIVO del SDK (sdk.d.ts:644 — UUID fresco, mata la
+                            colisión de sessionId; el transcript del sid ORIGINAL queda intacto
+                            en su mundo) + relocar el `.jsonl` del fork al projectKey del destino
+                            (`~/.claude/projects/<encodeCwd(cwd)>/`; el SDK indexa por projectKey =
+                            sanitized cwd, sdk.d.ts:4370) + crear un Chat destino que RESUME el
+                            fork bajo el cwd destino (ahí toma SU propio set de MCP/settings — en
+                            Tolkien gana Pad-tolkien) + ARCHIVAR (cerrar) el origen. Existe en UN
+                            mundo a la vez por construcción ⇒ cumple la Regla dura 12 (no enlaza
+                            mundos, los muda secuencialmente). `ChatManager.handoff(id, destCwd)`
+                            (index.js) orquesta: quiesce del origen (`Chat.quiesce()` — sleep +
+                            _waitEngineDown + esperar descarte REAL del link, mismo cuidado que
+                            reopen: el transcript debe estar COMPLETO antes de forkear) → fork →
+                            `relocateForkTranscript()` (mueve el .jsonl + subagentes y limpia el
+                            fork del mundo origen; el sid ORIGINAL se conserva aparte) →
+                            `create()` destino (hereda title/modelChoice/effort/ticket/learningId)
+                            → `copyChatAttachments()` (S3, adjuntos por chatId) → `origin.close()`.
+                            Endpoint POST /api/chat/handoff {id, cwd} (cwd rel-al-home o absoluto,
+                            clampToHome valida); 0 tokens (fork/relocate son de disco). UI: menú ⋯
+                            de Sesiones "Mover a otro mundo" (solo Chat, no TUI) → chooser de los
+                            mundos conocidos (ui/places.js PLACES, menos el de origen) + confirm →
+                            abre la conversación nueva. El "mundo" se infiere del cwd (no hay campo
+                            `world` explícito; `getSessionInfo` del fork reporta el cwd CONGELADO al
+                            origen — metadata cosmética, el cwd efectivo es el que se pasa a
+                            `query({cwd})` al resumir).
+                            F3 · ARCHIVAR-NO-BORRAR (2026-07-14, PEND-462): el handoff ARCHIVA el
+                            origen en vez de cerrarlo — `Chat.archive()` (aparca revivible: duerme
+                            el motor, conserva sessionId, NO dispara los write-backs de "terminé"
+                            de close()) + `Chat.revive()` (lazy, 0 tokens). Persisten (`archived`
+                            en chats.json), el reaper NO las poda, `info()` expone `archived`.
+                            Endpoints POST /api/chat/archive · /revive. UI (sessions.js): sección
+                            colapsable "Archivados" + menú ⋯ "Archivar"/"Revivir" (tocar una
+                            archivada la revive y abre). Sirve para volver a un trabajo tras
+                            feedback días después sin reconstruir contexto.
+                            F4 · DASHBOARD POR MUNDO (2026-07-14, PEND-463): sessions.js `render()`
+                            agrupa los chats por MUNDO (ui/places.js `placeFor(cwd)`: Mi Consola /
+                            Tolkien / Otros) con header por grupo (solo si hay chats en >1 mundo).
+                            F2 v1 · MANIFIESTO PORTABLE (2026-07-14, PEND-461, "clon de Pad" primer
+                            eslabón): al mudar, `writeHandoffManifest()` escribe
+                            `_handoff.md` en la carpeta del chat destino (chat-attachments/<destId>/)
+                            con de-dónde-vino, a-qué-mundo-llegó y las "formas de trabajo nombradas"
+                            (memory/*.md) del mundo destino que F0-E halló dispersas — así la sesión
+                            mudada "sabe qué instrucciones tomar". Self-contained (viaja con el chat),
+                            NO enlace vivo (Regla 12). AUTO-INYECCIÓN (2026-07-14): tras un handoff,
+                            el destino guarda `_pendingHandoffNote` (efímero, no persiste) y sendUser
+                            lo inyecta UNA vez SOLO en el texto que va al MODELO (no en el que se
+                            muestra al usuario ni en el que ven router/auto-título) — la sesión mudada
+                            LEE el manifiesto en su primer turno sin que ensucie la burbuja. Verificado
+                            E2E (WS): el manifiesto aparece en el transcript del destino. PENDIENTE de
+                            F2 (profundidad): capa estructurada tipo-Pad completa (evaluar export/import
+                            de artefacto de Pad como formato) + manifiesto de doble-mundo con MCPs/tools
+                            por mundo + sección "tareas para el otro mundo". Ver DOC-468 (mapa entre
+                            mundos) y PLAN-373 en el Pad `console`.
                             MODOS DE PERMISOS (PERMISSION_MODES en shared.js, único punto de
                             validación server+runner): default/acceptEdits/bypassPermissions/
                             plan. En la UI (chat-tab.js MODES) son etiquetas de UNA palabra
