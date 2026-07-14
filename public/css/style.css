@@ -971,6 +971,11 @@ html, body {
 .if-kind { flex: none; }
 .if-name { color: var(--cwc-text); font-weight: 500; }
 .if-sub { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); overflow-wrap: anywhere; }
+/* PLAN-469: interfono consciente de paquetes-sesión. */
+.if-pkg { font-size: var(--cwc-fs-xs); font-weight: 700; color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 12%, transparent); border-radius: 999px; padding: 0 .35rem; }
+.if-world { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; }
+.if-arch { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.if-pkg-in { font-size: var(--cwc-fs-sm); }
 .if-body { flex-basis: 100%; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); overflow-wrap: anywhere; }
 .if-badge { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); white-space: nowrap; }
 .if-claim .if-rel { margin-left: auto; }

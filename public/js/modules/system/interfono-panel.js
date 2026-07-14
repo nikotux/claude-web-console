@@ -19,6 +19,8 @@ const ago = (ms) => {
   return `hace ${Math.round(m / 60)}h`;
 };
 const KIND_ICON = { tui: '🖥️', 'tui-chat': '💬', chat: '💬', desconocida: '❔' };
+// PLAN-469 · 2a: ícono del MUNDO de cada sesión (🏠 Mi Consola · 🌳 Tolkien · 📁 otro).
+const WORLD_ICON = (w) => (w === 'Mi Consola' ? '🏠' : w === 'Tolkien' ? '🌳' : (w ? '📁' : ''));
 // Cómo llegó (o no) cada mensaje al humano (ver core/interfono-log.js ROUTES).
 const ROUTE_LABEL = {
   'auto-deliver': '📨 auto-entregado', 'tui-nudge': '🖥️ nudge TUI',
@@ -40,6 +42,7 @@ export function mountInterfonoPanel(el, ctx) {
     <div class="if-send" data-ref="send">
       <select class="if-select" data-ref="to"></select>
       <textarea class="if-text" data-ref="text" rows="2" placeholder="Mensaje a la sesión…"></textarea>
+      <input class="dlg-input if-pkg-in" data-ref="pkg" placeholder="📦 Pasar un paquete (PKG-N, opcional)">
       <button class="btn btn--sm" data-ref="do-send">${icon('play', { size: 13 })}<span>Enviar</span></button>
       <span class="if-sendmsg" data-ref="sendmsg"></span>
     </div>
@@ -73,11 +76,13 @@ export function mountInterfonoPanel(el, ctx) {
   function renderDir(dir) {
     refs['dir-n'].textContent = dir.length ? `(${dir.length})` : '(0)';
     refs.to.innerHTML = `<option value="all">📢 Todas (broadcast)</option>` +
-      dir.map((e) => `<option value="${esc(e.handle)}">${KIND_ICON[e.kind] || '•'} ${esc(e.name)}</option>`).join('');
+      dir.map((e) => `<option value="${esc(e.handle)}">${KIND_ICON[e.kind] || '•'} ${esc(e.name)}${e.packageRef ? ` · ${esc(e.packageRef)}` : ''}${e.world ? ` · ${WORLD_ICON(e.world)}` : ''}${e.archived ? ' · 📦' : ''}</option>`).join('');
     refs.dir.innerHTML = dir.length ? dir.map((e) => `
       <div class="if-item">
         <span class="if-kind">${KIND_ICON[e.kind] || '•'}</span>
-        <span class="if-name">${esc(e.name)}</span>
+        <span class="if-name">${esc(e.name)}${e.packageRef ? ` <span class="if-pkg">${esc(e.packageRef)}</span>` : ''}</span>
+        ${e.world ? `<span class="if-world" title="Mundo: ${esc(e.world)}">${WORLD_ICON(e.world)} ${esc(e.world)}</span>` : ''}
+        ${e.archived ? '<span class="if-arch">📦 archivada</span>' : ''}
         <span class="if-sub">${esc(e.cwd || '')}</span>
       </div>`).join('') : '<div class="hp-empty">No hay otras sesiones activas.</div>';
   }
@@ -121,7 +126,7 @@ export function mountInterfonoPanel(el, ctx) {
     refs['msgs-n'].textContent = msgs.length ? `(${msgs.length})` : '(0)';
     refs.msgs.innerHTML = msgs.length ? msgs.map((m) => `
       <div class="if-item if-msg">
-        <span class="if-name">${esc(m.fromName)} → ${esc(m.toName)}</span>
+        <span class="if-name">${esc(m.fromName)} → ${esc(m.toName)}${m.packageRef ? ` <span class="if-pkg">📦 ${esc(m.packageRef)}</span>` : ''}</span>
         <span class="if-body">${esc(m.text)}</span>
         <span class="if-sub">${ago(m.ts)}</span>
       </div>`).join('') : '<div class="hp-empty">Sin mensajes recientes.</div>';
@@ -157,15 +162,16 @@ export function mountInterfonoPanel(el, ctx) {
     const to = refs.to.value;
     const text = refs.text.value.trim();
     if (!text) return;
+    const packageRef = (refs.pkg?.value || '').trim(); // PLAN-469 · 4a
     refs['do-send'].disabled = true;
     refs.sendmsg.textContent = '';
     try {
       const res = await fetch(`${API}/send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ to, text }),
+        body: JSON.stringify({ to, text, ...(packageRef ? { packageRef } : {}) }),
       });
       const j = await res.json();
-      if (res.ok) { refs.text.value = ''; refs.sendmsg.textContent = `✅ enviado a ${j.toName}`; load(); }
+      if (res.ok) { refs.text.value = ''; if (refs.pkg) refs.pkg.value = ''; refs.sendmsg.textContent = `✅ enviado a ${j.toName}`; load(); }
       else refs.sendmsg.textContent = `⚠ ${j.error || 'no se pudo enviar'}`;
     } catch { refs.sendmsg.textContent = '⚠ error de red'; }
     finally { refs['do-send'].disabled = false; }

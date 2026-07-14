@@ -54,7 +54,7 @@ export default {
     // Mensaje manual desde la consola web hacia una sesión (o "all").
     r.post('/send', express.json(), (req, res) => {
       try {
-        const { to, text } = req.body || {};
+        const { to, text, packageRef } = req.body || {};
         if (!to || !text || !String(text).trim()) {
           return res.status(400).json({ error: 'Faltan destino o mensaje.' });
         }
@@ -65,6 +65,8 @@ export default {
         const msg = bus.sendMessage({
           from: 'web:console', fromName: from,
           to: target.handle, toName: target.name, text: String(text),
+          // PLAN-469 · 4a: pasar un paquete-sesión junto al mensaje (opcional).
+          packageRef: /^PKG-\d+$/i.test(String(packageRef || '')) ? String(packageRef).toUpperCase() : null,
         });
         res.json({ ok: true, id: msg.id, toName: target.name });
       } catch (e) {

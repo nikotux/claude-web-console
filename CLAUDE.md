@@ -1670,6 +1670,23 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
                             de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
                             menú ⚙ Sistema (system/interfono-panel.js).
+                            CONSCIENTE DE PAQUETES-SESIÓN (2026-07-14, PLAN-469): el interfono
+                            aprovecha la estructura de sesiones de PLAN-373. (1a) Direccionar por
+                            REF ESTABLE: `/btw PKG-5 <msg>` — `resolveTarget` de bus.js resuelve
+                            `PKG-<n>` leyendo session-packages.json → sessionId → handle (inmune a
+                            renames y a los moves entre mundos; el nombre es frágil, el ref no). (1b/
+                            2a/3a) `buildDirectory` suma a cada entrada de chat `packageRef`, `world`
+                            (worldLabelForCwd: 🏠 Mi Consola/🌳 Tolkien) y `archived` → el panel los
+                            muestra (ref, mundo, "archivada"). (4a) `sendMessage`/POST /send aceptan
+                            `packageRef` → un mensaje puede TRANSFERIR un paquete ("te paso PKG-5");
+                            chip 📦 en el mensaje + input en el composer. VERIFICADO que la base NO
+                            se rompe: el handle es `claude:<sessionId>` y el move conserva el mismo
+                            sessionId → los mensajes siguen llegando tras cambiar de mundo (el fork
+                            descartado LO HABRÍA roto). bus.js está en el allowlist de `cross-world`
+                            (usa config.projectDir para ETIQUETAR el mundo, no cruza datos).
+                            DIFERIDO (más invasivo): 2b marcar mensajes entre-mundos · 2c broadcast
+                            por mundo (`all@tolkien`, exige el mundo del receptor en pendingFor) ·
+                            3b aviso automático al mover/archivar (necesita modelo de suscriptores).
                             ENTREGA AL CHAT (2026-07-06, pedido del usuario: el chat visual es
                             la superficie PRINCIPAL de trabajo, la TUI es backup): una TUI recibe
                             el mensaje por un nudge send-keys que la despierta en vivo, pero un

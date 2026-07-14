@@ -27,9 +27,29 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { runTmux, tmuxDir } from './tmux.js';
 import { loadTitles, titleKey } from './session-names.js';
+
+// Raíz del repo de la Consola (para etiquetar el MUNDO de una sesión por su cwd,
+// PLAN-469): bus.js vive en src/core/ → '../..' = raíz.
+const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+// Etiqueta humana del MUNDO de un cwd (misma lógica que chat/index worldLabelFor):
+// Tolkien = config.projectDir · Mi Consola = dentro del repo · resto = basename.
+function worldLabelForCwd(cwd) {
+  const abs = path.resolve(cwd || '');
+  if (config.projectDir && abs === path.resolve(config.projectDir)) return 'Tolkien';
+  if (abs === CONSOLE_ROOT || abs.startsWith(CONSOLE_ROOT + path.sep)) return 'Mi Consola';
+  return cwd ? (path.basename(abs) || null) : null;
+}
+// Registro de paquetes-sesión (F2b, session-packages.json) — para direccionar por
+// ref estable PKG-N en el interfono (PLAN-469 · 1a). Lee el JSON directo, como
+// buildDirectory lee chats.json (sin importar el módulo chat, evita acoplar core).
+function readPackages() {
+  const db = readJson(path.join(config.home, '.cwc-data', 'session-packages.json'));
+  return (db && db.items && typeof db.items === 'object') ? db.items : {};
+}
 
 // ===== Rutas y constantes =====
 const ROOT = path.join(config.home, '.cwc-data', 'session-bus');
@@ -127,6 +147,7 @@ export function buildDirectory() {
       kind: isBare ? 'tui-chat' : 'tui',
       tmux: name,
       cwd: cwd || null,
+      world: worldLabelForCwd(cwd), // PLAN-469 · 2a
       pid: pid ? parseInt(pid, 10) : null,
       alive: true,
     });
@@ -143,6 +164,9 @@ export function buildDirectory() {
         name: c.title || c.id || 'chat',
         kind: 'chat',
         cwd: c.cwd || null,
+        world: worldLabelForCwd(c.cwd), // PLAN-469 · 2a
+        packageRef: c.packageRef || null, // PLAN-469 · 1b (ref estable en el panel)
+        archived: !!c.archived, // PLAN-469 · 3a (status de la sesión destino)
         claudeSid: c.sessionId,
         alive: null, // se completa con el observador al evaluar
       });
@@ -159,6 +183,16 @@ export function resolveTarget(arg) {
   if (!q) return { error: 'Falta el destino' };
   if (/^(all|todos|todas|broadcast)$/i.test(q)) return { handle: 'all', name: 'todas las sesiones' };
   if (/^(tmux|claude):/.test(q)) return { handle: q, name: q };
+  // PLAN-469 · 1a: direccionar por REF ESTABLE del paquete-sesión (PKG-N). Es
+  // inmune a renames y a los moves entre mundos (el nombre es frágil, el ref no).
+  const pkgMatch = q.match(/^(PKG-\d+)$/i);
+  if (pkgMatch) {
+    const ref = pkgMatch[1].toUpperCase();
+    const rec = readPackages()[ref];
+    if (!rec || !rec.sessionId) return { error: `No encontré el paquete ${ref} (o aún no tiene sesión).` };
+    const name = `${rec.title || ref} [${ref}]`;
+    return { handle: `claude:${rec.sessionId}`, name, entry: { ...rec, handle: `claude:${rec.sessionId}`, name } };
+  }
   const dir = buildDirectory();
   const lc = q.toLowerCase();
   let hit = dir.find((e) => e.name.toLowerCase() === lc);
@@ -190,12 +224,15 @@ export function levelForKind(kind) {
 
 // ===== Mensajería =====
 // Crea un mensaje. `from`/`fromName` identifican al emisor (best-effort).
-export function sendMessage({ from, fromName, to, toName, text, kind = 'note', level, hops = 0 }) {
+export function sendMessage({ from, fromName, to, toName, text, kind = 'note', level, hops = 0, packageRef = null }) {
   ensureDirs();
   const id = newId('m');
   const msg = {
     id, from: from || null, fromName: fromName || 'una sesión',
     to, toName: toName || to, text: String(text || '').slice(0, 4000),
+    // PLAN-469 · 4a: un mensaje puede TRANSFERIR un paquete-sesión ("te paso PKG-5")
+    // — la sesión receptora lo trae con el 🔗 del composer (F5). Validado PKG-<n>.
+    ...(/^PKG-\d+$/i.test(String(packageRef || '')) ? { packageRef: String(packageRef).toUpperCase() } : {}),
     kind, level: level || levelForKind(kind), hops, ts: Date.now(), deliveredTo: {}, ackBy: {},
   };
   writeJson(path.join(MSG_DIR, `${id}.json`), msg);

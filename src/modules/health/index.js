@@ -201,6 +201,7 @@ function checkTolkienContextSync() {
 // canónico) o se sume acá con motivo explícito. Migrar los caños viejos al paquete
 // es un proyecto per-caño aparte, no un hachazo.
 const CROSS_WORLD_ALLOW = new Set([
+  'src/core/bus.js',                       // interfono: etiqueta el MUNDO de una sesión por su cwd (PLAN-469), no cruza datos
   'src/modules/chat/index.js',             // EL canal del paquete-sesión (handoff/worldLabelFor) — canónico
   'src/modules/tickets/context-store.js',  // syncToTolkien → CLAUDE.local.md
   'src/modules/tickets/index.js',
