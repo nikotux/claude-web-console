@@ -73,6 +73,7 @@ import {
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
+import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
 import {
   attachUpload, existingAttachments, attachPath,
   attachRelForExplorer, chatAttachDir, classifyAttachment,
@@ -83,7 +84,7 @@ import {
 import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 import * as bus from '../../core/bus.js';
 import { logDelivery } from '../../core/interfono-log.js';
-import { query, forkSession } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 
@@ -494,25 +495,22 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
 function chatProjectDir(cwd) {
   return path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
 }
-// Reloca el transcript (y subagentes) del fork del mundo origen al destino y
-// limpia la copia del fork en el origen (no dejar sesión huérfana en ese mundo;
-// el sessionId ORIGINAL —la conversación que se archiva— se conserva aparte).
-function relocateForkTranscript(forkSid, fromCwd, toCwd) {
+// MOVE seguro del transcript (y subagentes) de una sesión de un mundo (projectKey)
+// a otro: copia → verifica → borra el origen (sin ventana de pérdida). La MISMA
+// sessionId pasa a vivir SOLO en el destino → move TRANSPARENTE entre mundos (la
+// conversación no se fotocopia ni deja rastro; rediseño 2026-07-14 por feedback).
+function moveTranscript(sid, fromCwd, toCwd) {
   const fromDir = chatProjectDir(fromCwd);
   const toDir = chatProjectDir(toCwd);
   fss.mkdirSync(toDir, { recursive: true });
-  const srcFile = path.join(fromDir, `${forkSid}.jsonl`);
-  fss.copyFileSync(srcFile, path.join(toDir, `${forkSid}.jsonl`));
-  const srcSub = path.join(fromDir, forkSid); // subagentes del fork (si hubiera)
-  if (fss.existsSync(srcSub)) fss.cpSync(srcSub, path.join(toDir, forkSid), { recursive: true });
-  try { fss.rmSync(srcFile); } catch { /* best-effort */ }
-  try { if (fss.existsSync(srcSub)) fss.rmSync(srcSub, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
-// Copia los adjuntos (carpeta por chatId) del chat origen al destino (S3).
-function copyChatAttachments(fromId, toId) {
-  const src = chatAttachDir(fromId);
-  if (!fss.existsSync(src)) return;
-  fss.cpSync(src, chatAttachDir(toId), { recursive: true });
+  const src = path.join(fromDir, `${sid}.jsonl`);
+  const dst = path.join(toDir, `${sid}.jsonl`);
+  fss.copyFileSync(src, dst);
+  const subSrc = path.join(fromDir, sid); // subagentes (si hubiera)
+  if (fss.existsSync(subSrc)) fss.cpSync(subSrc, path.join(toDir, sid), { recursive: true });
+  if (!fss.existsSync(dst)) throw new Error('la copia al mundo destino no quedó');
+  try { fss.rmSync(src); } catch { /* best-effort: el origen queda, pero el destino ya tiene todo */ }
+  try { if (fss.existsSync(subSrc)) fss.rmSync(subSrc, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
 // Etiqueta humana del MUNDO de un cwd (sin acoplar el front ui/places.js): la
 // consola (CONSOLE_ROOT) = "Mi Consola", config.projectDir = "Tolkien", resto =
@@ -523,6 +521,17 @@ function worldLabelFor(cwd) {
   if (config.projectDir && abs === path.resolve(config.projectDir)) return 'Tolkien';
   return path.basename(abs) || String(cwd || '');
 }
+// F2 (anti-confusión, pedido de Niko): el repo GitHub REAL de un mundo (leído del
+// .git/config, sin subprocess) — para nombrar la identidad concreta ("el GitHub de
+// Tolkien = <repo>") en el manifiesto y que nadie confunda "mi GitHub" con el del
+// otro mundo. Best-effort.
+function worldGitRepo(cwd) {
+  try {
+    const cfg = fss.readFileSync(path.join(cwd, '.git', 'config'), 'utf8');
+    const m = cfg.match(/\[remote "origin"\][\s\S]*?url\s*=\s*(.+)/);
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
 // F2 v1 (PLAN-373/PEND-461) — "clon de Pad" auto-contenido, primera piedra: al
 // mudar una sesión se escribe un MANIFIESTO PORTABLE en la carpeta del chat
 // destino (~/.cwc-data/chat-attachments/<destId>/_handoff.md). Captura de dónde
@@ -532,7 +541,7 @@ function worldLabelFor(cwd) {
 // self-contained (viaja con el chat), NO un enlace vivo (Regla 12). Best-effort.
 // PENDIENTE de F2 (documentado): auto-inyectar este manifiesto al primer turno
 // del destino (hoy queda accesible por "Abrir carpeta del chat" / Read).
-function writeHandoffManifest(destId, { fromCwd, toCwd, title }) {
+function writeHandoffManifest(destId, { fromCwd, toCwd, title, task, ref }) {
   const dir = chatAttachDir(destId);
   fss.mkdirSync(dir, { recursive: true });
   const fromW = worldLabelFor(fromCwd);
@@ -554,16 +563,28 @@ function writeHandoffManifest(destId, { fromCwd, toCwd, title }) {
   const md = [
     `# 📦 Manifiesto de handoff (paquete-sesión · F2)`,
     ``,
-    `Esta conversación **"${title || ''}"** se MUDÓ de **${fromW}** → **${toW}** conservando todo su contexto (fork del transcript + resume).`,
+    `Esta conversación **"${title || ''}"**${ref ? ` (paquete **${ref}**)` : ''} se MUDÓ de **${fromW}** → **${toW}** conservando todo su contexto.`,
     ``,
     `- Mundo actual: **${toW}** (\`${toCwd}\`). Acá usás las herramientas/MCP de ESTE mundo.`,
     `- Origen: **${fromW}** (\`${fromCwd}\`) — quedó **archivado** (revivible), no borrado.`,
     `- Regla dura 12: los mundos NO se enlazan en vivo; esta sesión existe solo en ${toW} ahora.`,
     ``,
+    ...(task && String(task).trim() ? [
+      `## 🎯 Tarea que dejaste para este mundo`,
+      String(task).trim(),
+      ``,
+    ] : []),
     `## Herramientas / MCP de este mundo`,
     mcps.length
       ? `Disponibles en ${toW} (usalas con ToolSearch si hacen falta):\n${mcps.map((s) => `- \`${s}\``).join('\n')}`
       : `(sin MCPs propios detectados para este mundo)`,
+    ``,
+    `## 🪪 Identidad de ESTE mundo (${toW}) — a prueba de confusión`,
+    `Recursos con nombre COMPARTIDO (GitHub, Pad, cuenta, repo) existen en AMBOS mundos y NO son lo mismo. En **${toW}**:`,
+    `- GitHub / repo de ${toW} = **${worldGitRepo(toCwd) || '(sin remote git detectado)'}** — NO es el de otro mundo.`,
+    `- Carpeta (cwd) = \`${toCwd}\``,
+    `- Pad / MCP / herramientas = las de ${toW} (las listadas arriba).`,
+    `**REGLA DURA anti-confusión:** cuando hables de un recurso con nombre compartido, nombralo SIEMPRE con su mundo ("el GitHub de ${toW}", "el Pad de ${toW}") — NUNCA pelado ("tu GitHub", "el Pad"). Un recurso de OTRO mundo no existe en esta sesión.`,
     ``,
     `## Formas de trabajo de este mundo`,
     forms.length
@@ -612,6 +633,7 @@ class Chat {
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
     this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
+    this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
     this.viewMode = 'chat';   // chat | switching | tui
     this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
@@ -1651,6 +1673,7 @@ class Chat {
     this._engineStopping = true;
     this.link?.send({ t: 'close' });
     this.alive = false;
+    this._syncPackage('closed', 'closed');
   }
 
   // F3 (PLAN-373/PEND-462): ARCHIVAR = aparcar la conversación (revivible), NO
@@ -1673,6 +1696,7 @@ class Chat {
     this.link?.send({ t: 'sleep' });
     this.alive = false;
     this.lastActivity = Date.now();
+    this._syncPackage('archived', 'archived');
     this.onUpdate?.();
   }
 
@@ -1684,8 +1708,24 @@ class Chat {
     if (!this.archived) return { ok: true };
     this.archived = false;
     this.lastActivity = Date.now();
+    this._syncPackage('active', 'revived');
     this.onUpdate?.();
     return { ok: true };
+  }
+
+  // F2(b): refleja el estado ACTUAL del paquete-sesión en el registro durable
+  // (packages.js). Se llama en los eventos de ciclo de vida (create/move/archive/
+  // revive/close) — no en el hot path. `status` derivado si no se pasa. Best-effort.
+  _syncPackage(status, event) {
+    if (!this.packageRef) return;
+    const st = status || (this.closed ? 'closed' : this.archived ? 'archived' : 'active');
+    try {
+      upsertPackage({
+        ref: this.packageRef, chatId: this.id, sessionId: this.sessionId,
+        cwd: this.cwd, world: worldLabelFor(this.cwd), title: this.title, status: st,
+        ...(event ? { event } : {}), // F2(b): loguea el evento en el timeline del paquete
+      });
+    } catch { /* best-effort: nunca rompe el flujo del chat */ }
   }
 
   _setStatus(state) {
@@ -1734,6 +1774,8 @@ class Chat {
       viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
       model: this.model, modelChoice: this.modelChoice, // para que el badge "🤖 AutoTux: X" nazca poblado
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
+      cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
+      packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
     }));
   }
 
@@ -1745,6 +1787,7 @@ class Chat {
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
+      packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
@@ -1840,72 +1883,70 @@ class ChatManager {
     const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
     const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
     chat.onUpdate = () => this.persist();
+    chat.packageRef = nextPackageRef(); // F2(b): ref estable del paquete (sobrevive moves)
+    chat._syncPackage('active', 'created');
     chat.start();
     this.chats.set(id, chat);
     this.persist();
     return chat;
   }
 
-  // Handoff de una conversación a OTRO mundo (cwd) conservando el contexto (F1
-  // de PLAN-373). fork nativo → relocar transcript → crear chat destino que
-  // resume el fork bajo el cwd destino → ARCHIVAR (cerrar) el origen. Ver los
-  // helpers de arriba y la decisión del spike S1 en PEND-386. Devuelve códigos
-  // de error listos para el endpoint (result.code).
-  async handoff(id, destCwd) {
-    const origin = this.chats.get(id);
-    if (!origin) return { ok: false, code: 404, error: 'Conversación inexistente.' };
-    if (origin.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
-    if (origin.viewMode !== 'chat') return { ok: false, code: 409, error: 'Solo se puede mudar en modo Chat (una TUI se reinicia desde la terminal).' };
-    if (!origin.sessionId || !UUID_RE.test(origin.sessionId)) {
+  // Handoff = MOVE TRANSPARENTE de una conversación a OTRO mundo (cwd) conservando
+  // el contexto (F1 de PLAN-373; REDISEÑO 2026-07-14 por feedback de Niko). Antes
+  // forkeaba + creaba tarjeta nueva + archivaba el origen → se sentía "fotocopia +
+  // sobra en Archivados". Ahora la MISMA conversación (misma sessionId, misma
+  // tarjeta/chat id, misma carpeta de adjuntos) cambia de mundo EN EL LUGAR: se
+  // MUEVE su transcript al projectKey del destino y se le flipea el cwd. La
+  // tarjeta salta del grupo del mundo origen al del destino (F4 agrupa por mundo)
+  // — nada queda atrás. F3 (Archivar) es una acción MANUAL aparte, no un efecto de
+  // mudar. "Un mundo a la vez" (Regla 12): tras el move el transcript existe SOLO
+  // en el destino. Devuelve result.code para el endpoint.
+  async handoff(id, destCwd, task = null) {
+    const chat = this.chats.get(id);
+    if (!chat) return { ok: false, code: 404, error: 'Conversación inexistente.' };
+    if (chat.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
+    if (chat.archived) return { ok: false, code: 409, error: 'Reviví la conversación antes de mudarla.' };
+    if (chat.viewMode !== 'chat') return { ok: false, code: 409, error: 'Solo se puede mudar en modo Chat (una TUI se reinicia desde la terminal).' };
+    if (!chat.sessionId || !UUID_RE.test(chat.sessionId)) {
       return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
     }
     const dest = safeCwd(destCwd);
-    if (path.resolve(dest) === path.resolve(origin.cwd)) {
+    const fromCwd = chat.cwd;
+    if (path.resolve(dest) === path.resolve(fromCwd)) {
       return { ok: false, code: 400, error: 'El destino es el mismo mundo/carpeta de origen.' };
     }
     // 1. Quiesce: motor origen ABAJO (transcript completo, sin lock del runner).
-    const down = await origin.quiesce();
-    if (!down) return { ok: false, code: 409, error: 'No se pudo cerrar el motor de origen a tiempo; probá de nuevo.' };
-    // 2. Fork nativo del SDK (UUID fresco; el transcript del sid original queda intacto).
-    let forkSid;
+    const down = await chat.quiesce();
+    if (!down) return { ok: false, code: 409, error: 'No se pudo cerrar el motor a tiempo; probá de nuevo.' };
+    // 2. MOVER el transcript (MISMA sessionId) al projectKey del destino
+    //    (copia→verifica→borra origen). Tras esto la sesión vive solo en el destino.
+    try { moveTranscript(chat.sessionId, fromCwd, dest); }
+    catch (err) { return { ok: false, code: 500, error: `No se pudo mover el transcript: ${String(err?.message || err).slice(0, 200)}` }; }
+    // 3. Manifiesto (misma carpeta de adjuntos: mismo chat id) + inyección al 1er turno.
     try {
-      const fk = await forkSession(origin.sessionId, { dir: origin.cwd, title: origin.title });
-      forkSid = fk?.sessionId;
-    } catch (err) {
-      return { ok: false, code: 500, error: `No se pudo forkear la sesión: ${String(err?.message || err).slice(0, 200)}` };
-    }
-    if (!forkSid || !UUID_RE.test(forkSid)) return { ok: false, code: 500, error: 'El fork no devolvió un sessionId válido.' };
-    // 3. Relocar el transcript del fork al projectKey del destino.
-    try { relocateForkTranscript(forkSid, origin.cwd, dest); }
-    catch (err) { return { ok: false, code: 500, error: `No se pudo relocar el transcript: ${String(err?.message || err).slice(0, 200)}` }; }
-    // 4. Crear el chat destino que RESUME el fork bajo el cwd destino (ahí toma
-    //    SU propio set de MCP/settings — deseado: en Tolkien gana Pad-tolkien).
-    const destChat = this.create({
-      cwd: dest,
-      model: origin.modelChoice || origin.model || 'auto',
-      permissionMode: origin.permissionMode,
-      resume: forkSid,
-      title: origin.title,
-      ticket: origin.ticket || null,
-      learningId: origin.learningId || null,
-    });
-    // Heredar el effort elegido (create() no lo toma como parámetro).
-    if (EFFORT_LEVELS.includes(origin.effort)) { destChat.effort = origin.effort; destChat._effortPinned = !!origin._effortPinned; }
-    // 5. Adjuntos del origen → destino (S3, best-effort).
-    try { copyChatAttachments(origin.id, destChat.id); } catch { /* best-effort */ }
-    // 5b. F2: manifiesto portable "clon de Pad" en la carpeta del chat destino +
-    //     lo dejamos PENDIENTE de inyección para el 1er turno del destino (así la
-    //     sesión mudada LEE el contexto sola, no solo queda en un archivo).
-    try {
-      const md = writeHandoffManifest(destChat.id, { fromCwd: origin.cwd, toCwd: dest, title: origin.title });
-      if (md) destChat._pendingHandoffNote = md;
+      const md = writeHandoffManifest(chat.id, { fromCwd, toCwd: dest, title: chat.title, task, ref: chat.packageRef });
+      if (md) chat._pendingHandoffNote = md;
     } catch { /* best-effort */ }
-    // 6. Archivar el origen (F3): aparcarlo revivible (NO cerrarlo). El transcript
-    //    del sid ORIGINAL queda en disco en su mundo y la conversación se puede
-    //    revivir ante feedback días después. "Un mundo a la vez".
-    origin.archive();
+    // 4. Flipear el mundo EN EL LUGAR: mismo chat, nuevo cwd, resume de la MISMA sid.
+    chat.cwd = dest;
+    chat.resume = chat.sessionId;
+    chat.history = loadTranscriptEvents(dest, chat.sessionId);
+    chat._syncPackage('active', 'moved'); // F2(b): mismo ref, nuevo mundo + evento en el timeline
+    // 5. Runner FRESCO bajo el cwd destino (toma los MCP/settings de ESE mundo).
+    //    quiesce ya dejó this.link en null ⇒ _ensureEngine spawnea limpio con el
+    //    cwd nuevo.
+    const ok = await chat._ensureEngine();
+    if (ok === false) return { ok: false, code: 500, error: 'La conversación se movió pero el motor no arrancó en el mundo destino (mirá ~/.cwc-data/chats/*.log).' };
+    chat._setStatus('waiting');
+    // 6. Avisar a los clientes abiertos: recargar history + anunciar el mundo nuevo.
+    for (const ws of chat.clients) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'history', events: chat.history, mode: chat.permissionMode, status: chat.status, slashCommands: chat._slashList() }));
+      }
+    }
+    chat._broadcast({ type: 'moved', cwd: dest, world: worldLabelFor(dest) });
     this.persist();
-    return { ok: true, code: 200, origin: id, dest: destChat.info() };
+    return { ok: true, code: 200, chat: chat.info() };
   }
 
   // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
@@ -1920,6 +1961,7 @@ class ChatManager {
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
+        packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
         ticket: c.ticket || null,
         learningId: c.learningId || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
@@ -1970,6 +2012,7 @@ class ChatManager {
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.lastActivity = s.lastActivity || Date.now();
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
+      if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
       // infirió un valor razonable a partir de `model`, pero solo el campo
       // explícito distingue "elegí Sonnet a mano" de "AutoTux está en Sonnet
@@ -2326,14 +2369,17 @@ export default {
       if (typeof destCwd !== 'string' || !destCwd.trim()) {
         return res.status(400).json({ error: 'Falta la carpeta/mundo destino.' });
       }
+      // F2(d): tarea/instrucción opcional para el mundo destino (va al manifiesto
+      // + se inyecta en el 1er turno). Saneada: string, tope 2000.
+      const task = typeof req.body?.task === 'string' && req.body.task.trim() ? req.body.task.trim().slice(0, 2000) : null;
       let result;
-      try { result = await manager.handoff(req.body?.id, destCwd); }
+      try { result = await manager.handoff(req.body?.id, destCwd, task); }
       catch (err) {
         console.error('[chat] /handoff falló:', err);
         return res.status(500).json({ error: 'No se pudo mudar la sesión (error interno).' });
       }
       if (!result.ok) return res.status(result.code || 409).json({ error: result.error });
-      res.json({ ok: true, chat: result.dest });
+      res.json({ ok: true, chat: result.chat });
     });
 
     // F3: archivar (aparcar revivible) una conversación — no la cierra ni borra.
@@ -2355,6 +2401,38 @@ export default {
       if (!result.ok) return res.status(409).json({ error: result.error });
       manager.persist();
       res.json({ ok: true, chat: chat.info() });
+    });
+
+    // F2(b)/F5: listar/buscar los PAQUETES-SESIÓN por ref/título/mundo (0 tokens,
+    // solo lee el registro durable session-packages.json). Habilita referenciar
+    // un paquete desde otra conversación sin importar en qué mundo esté.
+    r.get('/packages', (req, res) => {
+      res.json({ packages: searchPackages(req.query?.q || '') });
+    });
+
+    // F5: detalle de UN paquete-sesión por ref + un SNIPPET de su conversación
+    // (primer mensaje real del usuario, leído del transcript, 0 tokens). Lo usa el
+    // picker "🔗 Referenciar paquete" del chat para insertar una referencia con
+    // contexto — así podés traer un paquete de OTRO mundo a la conversación actual.
+    r.get('/package/:ref', (req, res) => {
+      const pkg = getPackage(String(req.params.ref || ''));
+      if (!pkg) return res.status(404).json({ error: 'Paquete inexistente.' });
+      let snippet = '';
+      try {
+        if (pkg.cwd && pkg.sessionId) {
+          const f = path.join(os.homedir(), '.claude', 'projects', encodeCwd(pkg.cwd), `${pkg.sessionId}.jsonl`);
+          const lines = fss.readFileSync(f, 'utf8').split('\n').slice(0, 300);
+          for (const line of lines) {
+            let o; try { o = JSON.parse(line); } catch { continue; }
+            if (o.type !== 'user' || o.message?.role !== 'user') continue;
+            const c = o.message.content;
+            const text = typeof c === 'string' ? c : Array.isArray(c) ? (c.find((b) => b.type === 'text')?.text || '') : '';
+            const t = text.trim();
+            if (t && !t.startsWith('[CONTEXTO DE HANDOFF') && !t.startsWith('<')) { snippet = t.slice(0, 180); break; }
+          }
+        }
+      } catch { /* best-effort */ }
+      res.json({ package: pkg, snippet });
     });
 
     // Interfono: el popup global responde acá. action='deliver' inyecta los

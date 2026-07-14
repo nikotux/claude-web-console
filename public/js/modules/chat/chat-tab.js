@@ -12,6 +12,7 @@ import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
+import { placeFor } from '../../ui/places.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -259,6 +260,7 @@ export class ChatTab {
         <header class="chat-head">
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
+          <span class="chat-world" title="Mundo de esta conversación" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: 'Esperando tu mensaje' })}
           <span class="chat-model-pill" title="Router de modelo automático" hidden></span>
           <select class="chat-mode" data-risk="ok" title="Modo de permisos">
@@ -271,6 +273,7 @@ export class ChatTab {
         <div class="chat-composer">
           <input type="file" class="chat-file-input" multiple hidden>
           <button class="btn-ghost btn--icon chat-attach" title="Adjuntar archivo (imagen, PDF, texto…)">${icon('paperclip', { size: 16 })}</button>
+          <button class="btn-ghost btn--icon chat-pkgref" title="Referenciar otro paquete-sesión (F5)">${icon('externalLink', { size: 16 })}</button>
           <textarea class="chat-input" rows="1" enterkeyhint="send"
             placeholder="Escribí o dictá un mensaje…"></textarea>
           <button class="btn btn--icon chat-send" title="Enviar">${icon('play', { size: 16 })}</button>
@@ -278,6 +281,7 @@ export class ChatTab {
         </div>
       </div>`;
 
+    this.worldEl = container.querySelector('.chat-world');
     this.msgsEl = container.querySelector('.chat-msgs');
     // Un diagrama Mermaid renderiza asíncrono (después de que su mensaje ya
     // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
@@ -290,6 +294,8 @@ export class ChatTab {
     this.aliveEl = container.querySelector('.chat-alive');
     this.modelPillEl = container.querySelector('.chat-model-pill');
     this.attachBtn = container.querySelector('.chat-attach');
+    this.pkgRefBtn = container.querySelector('.chat-pkgref');
+    this.pkgRefBtn?.addEventListener('click', () => this._openPackagePicker());
     this.fileInput = container.querySelector('.chat-file-input');
     this.trayEl = container.querySelector('.chat-atttray');
 
@@ -680,6 +686,8 @@ export class ChatTab {
       case 'history':
         this.msgsEl.innerHTML = '';
         this.streamEl = null;
+        this._applyWorld(m.cwd, m.world); // insignia de mundo (anti-confusión)
+        if (m.packageRef) this._packageRef = m.packageRef; // F5: para excluirse del picker
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
         for (const ev of m.events) this._onEvent(ev);
@@ -773,6 +781,12 @@ export class ChatTab {
         // Se mató el runner viejo y arrancó uno fresco sobre la misma sesión
         // (opción "Reabrir para cambios" del menú ⋯): ya toma el código nuevo.
         this._line('chat-closed-note', 'Motor reabierto — arrancó un proceso fresco que toma los cambios de código nuevos. El contexto se conserva.');
+        break;
+      case 'moved':
+        // La conversación se mudó a otro MUNDO (menú ⋯ "Mover a otro mundo", F1/
+        // PLAN-373): misma sesión, nuevo cwd; ya usa las herramientas de ese mundo.
+        this._line('chat-closed-note', `📦 Movida a ${m.world || 'otro mundo'} — ahora usás las herramientas de ese mundo. El contexto viajó completo.`);
+        this._applyWorld(m.cwd, m.world); // actualizar la insignia de mundo del header
         break;
       case 'closed':
         if (m.resumable) {
@@ -1137,6 +1151,78 @@ export class ChatTab {
   // actualiza el badge del header y, si el cambio lo decidió el router
   // (`auto:true` — nunca un cambio manual del selector de Sesiones), agrega
   // una notita inline para que quede claro que nadie lo tocó a mano.
+  // Insignia de MUNDO en el header (anti-confusión, pedido de Niko): muestra
+  // SIEMPRE en qué mundo está esta conversación (🏠 Mi Consola / 🌳 Tolkien / otro)
+  // con color de identidad (ui/places.js). Se puebla al abrir ('history') y se
+  // actualiza al mudar de mundo ('moved'). Así nunca confundís "el GitHub/Pad de
+  // este mundo" con el del otro.
+  _applyWorld(cwd, world) {
+    const el = this.worldEl;
+    if (!el) return;
+    const p = cwd ? placeFor(cwd) : null;
+    const label = p?.label || world || '';
+    if (!label) { el.hidden = true; return; }
+    el.hidden = false;
+    el.dataset.world = p?.rel || 'other';
+    el.innerHTML = `${icon(p?.ico || 'folder', { size: 12 })}<span>${label}</span>`;
+    el.title = `Mundo: ${label}${cwd ? ` · ${cwd}` : ''} — acá "GitHub/Pad/cuenta" son los de ${label}`;
+  }
+
+  // F5 (PLAN-373/PEND-464): picker para REFERENCIAR otro paquete-sesión desde
+  // este chat. Busca en GET /api/chat/packages (sin importar el mundo) y, al elegir
+  // uno, inserta en el composer una referencia con su snippet — así traés el
+  // contexto de otra sesión a la conversación actual. Lista construida con DOM +
+  // textContent (sin innerHTML de datos del usuario).
+  _openPackagePicker() {
+    const m = openModal({ title: 'Referenciar un paquete-sesión', width: 440 });
+    const q = document.createElement('input');
+    q.className = 'dlg-input chat-pkg-q';
+    q.placeholder = 'Buscar por ref (PKG-3), título o mundo…';
+    const list = document.createElement('div');
+    list.className = 'chat-pkg-list';
+    m.body.append(q, list);
+    let timer = null;
+    const render = async () => {
+      let pkgs = [];
+      try { pkgs = (await fetch(`/api/chat/packages?q=${encodeURIComponent(q.value)}`).then((r) => r.json())).packages || []; } catch { /* noop */ }
+      pkgs = pkgs.filter((p) => p.ref !== this._packageRef); // no referenciarse a sí mismo
+      list.replaceChildren();
+      if (!pkgs.length) {
+        const e = document.createElement('div');
+        e.className = 'chat-pkg-empty'; e.textContent = 'Sin paquetes.';
+        list.append(e); return;
+      }
+      for (const p of pkgs) {
+        const b = document.createElement('button');
+        b.className = 'btn-ghost chat-pkg-item';
+        const r = document.createElement('span'); r.className = 'chat-pkg-ref'; r.textContent = p.ref;
+        const t = document.createElement('span'); t.className = 'chat-pkg-title'; t.textContent = p.title || '(sin título)';
+        const meta = document.createElement('span'); meta.className = 'chat-pkg-meta'; meta.textContent = `${p.world || '?'} · ${p.status || ''}`;
+        b.append(r, t, meta);
+        b.addEventListener('click', () => this._insertPackageRef(p.ref, m));
+        list.append(b);
+      }
+    };
+    q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 180); });
+    render();
+    setTimeout(() => q.focus(), 30);
+  }
+
+  async _insertPackageRef(ref, modal) {
+    let data = {};
+    try { data = await fetch(`/api/chat/package/${encodeURIComponent(ref)}`).then((r) => r.json()); } catch { /* noop */ }
+    const p = data.package || { ref };
+    const snip = data.snippet ? `: ${data.snippet}` : '';
+    const block = `📦 Referencia al paquete ${p.ref} «${p.title || ''}» (mundo ${p.world || '?'})${snip}`;
+    modal?.close();
+    const ta = this.inputEl;
+    if (ta) {
+      ta.value = ta.value ? `${ta.value}\n${block}\n` : `${block}\n`;
+      ta.dispatchEvent(new Event('input')); // dispara el auto-grow del textarea
+      ta.focus();
+    }
+  }
+
   _applyModel(model, { auto = false } = {}) {
     const prev = this._model;
     this._model = model || null;

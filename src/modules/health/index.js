@@ -190,6 +190,60 @@ function checkTolkienContextSync() {
   return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
 }
 
+// F7 (PLAN-373/PEND-466) — AUDIT de CRUCES ENTRE MUNDOS. GRANDFATHER de los
+// cruces LEGÍTIMOS conocidos (los que hoy tocan el mundo externo Tolkien —
+// mapeados en DOC-468) + DETECCIÓN de cualquier cruce NUEVO: un archivo que
+// referencia el mundo externo (`config.projectDir` / `CLAUDE.local.md`) y NO está
+// en el allowlist. Determinístico, 0 tokens, READ-ONLY: NO bloquea nada en
+// runtime (los caños viejos siguen andando exactamente igual — apagarlos rompería
+// comms/tickets/retro). Es la forma SEGURA de "un solo canal": lo viejo se
+// grandfatherea, lo NUEVO se AVISA para que pase por el paquete-sesión (el canal
+// canónico) o se sume acá con motivo explícito. Migrar los caños viejos al paquete
+// es un proyecto per-caño aparte, no un hachazo.
+const CROSS_WORLD_ALLOW = new Set([
+  'src/modules/chat/index.js',             // EL canal del paquete-sesión (handoff/worldLabelFor) — canónico
+  'src/modules/tickets/context-store.js',  // syncToTolkien → CLAUDE.local.md
+  'src/modules/tickets/index.js',
+  'src/modules/tickets/desk-mcp-client.js',
+  'src/modules/retro/promote-shared.js',   // promueve lecciones a memoria/claude-md de Tolkien
+  'src/modules/projects/index.js',         // edita CLAUDE.md/memorias de ambos proyectos
+  'src/modules/comms/gateway-shared.js',
+  'src/modules/comms/pr-read-shared.js',
+  'src/modules/learning/explain-shared.js', // scope=tolkien lee código de Tolkien
+  'src/modules/tolkien/index.js',
+  'src/modules/tolkien/refresh-shared.js',
+  'src/modules/health/index.js',           // este audit + checkTolkienContextSync
+  'bin/cwc-comms-runner.js',
+  'bin/cwc-comms-chatbot-runner.js',
+  'bin/cwc-comms-send-runner.js',
+  'bin/cwc-comms-teams-runner.js',
+]);
+const CROSS_WORLD_RE = /config\.projectDir|CLAUDE\.local\.md/;
+function checkCrossWorld() {
+  const id = 'cross-world';
+  const label = 'Cruces entre mundos (F7)';
+  const found = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fss.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p); continue; }
+      if (!e.name.endsWith('.js')) continue;
+      const rel = path.relative(ROOT, p).split(path.sep).join('/');
+      if (CROSS_WORLD_ALLOW.has(rel)) continue;
+      let src = '';
+      try { src = fss.readFileSync(p, 'utf8'); } catch { continue; }
+      if (CROSS_WORLD_RE.test(src)) found.push(rel);
+    }
+  };
+  for (const d of ['src', 'bin']) walk(path.join(ROOT, d));
+  if (found.length) {
+    return { id, label, status: 'warn', detail: `cruce cross-mundo NUEVO fuera del paquete en: ${found.join(', ')} — pasalo por el paquete-sesión (canal canónico) o, si es legítimo, sumalo al allowlist con motivo` };
+  }
+  return { id, label, status: 'ok', detail: `${CROSS_WORLD_ALLOW.size} cruces conocidos (grandfathered) · sin cruces nuevos fuera del paquete` };
+}
+
 // Verifica el BACKBONE de Pad local (workspace `console`): hoy tasks/learning/
 // retro/tickets-meta hablan contra él y si se cae DEGRADAN EN SILENCIO — este
 // check lo hace visible en el semáforo. Además vigila que el ESPEJO de la Regla
@@ -256,6 +310,7 @@ async function runChecks() {
     Promise.resolve(checkData()),
     Promise.resolve(checkDeps()),
     Promise.resolve(checkTolkienContextSync()),
+    Promise.resolve(checkCrossWorld()),
     checkPadBackbone(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;

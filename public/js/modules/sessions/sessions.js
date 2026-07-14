@@ -471,17 +471,20 @@ export default {
       }
       const m = dialog.openModal({ title: 'Mover a otro mundo', width: 360 });
       m.body.innerHTML = `
-        <p class="sess-plumbing">La conversación se muda con TODO su contexto al mundo elegido: se <b>forkea</b> la sesión y el origen se <b>archiva</b>. En el destino usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).</p>
-        <div class="sess-menu-list">${dests.map((p) =>
-          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>${p.label}</span></button>`).join('')}</div>
+        <p class="sess-plumbing">La MISMA conversación se mueve con TODO su contexto al mundo elegido (no se copia ni queda en Archivados). Su tarjeta pasa al grupo de ese mundo y ahí usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).</p>
+        <label class="sess-plumbing" style="display:block;margin:.2rem 0 .3rem">🎯 Tarea para el mundo destino <span style="opacity:.7">(opcional; se le inyecta al llegar)</span></label>
+        <textarea class="dlg-input" data-task rows="2" placeholder="Ej: registrá estos pendientes de WhatsApp como tickets en Tolkien"></textarea>
+        <div class="sess-menu-list" style="margin-top:.5rem">${dests.map((p) =>
+          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>Mover a ${p.label}</span></button>`).join('')}</div>
         <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">Cancelar</button></div>`;
       m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
       m.body.querySelectorAll('[data-rel]').forEach((btn) => btn.addEventListener('click', async () => {
         const rel = btn.getAttribute('data-rel');
+        const task = (m.body.querySelector('[data-task]')?.value || '').trim();
         const label = dests.find((p) => p.rel === rel)?.label || rel;
         const ok = await dialog.confirmDialog({
           title: 'Mover a otro mundo',
-          message: `Mudar "${c.title}" a ${label}: el origen se archiva (cierra) y se abre una conversación nueva en ${label} con el mismo contexto. ¿Seguir?`,
+          message: `Mover "${c.title}" a ${label}: la conversación pasa a ${label} con el mismo contexto. ¿Seguir?`,
           confirmLabel: `Mover a ${label}`,
         });
         if (!ok) return;
@@ -490,11 +493,13 @@ export default {
           const res = await fetch('/api/chat/handoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: c.id, cwd: rel }),
+            body: JSON.stringify({ id: c.id, cwd: rel, ...(task ? { task } : {}) }),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || 'No se pudo mover la conversación.');
-          if (data.chat) { syncConversation(data.chat); openChatView(data.chat); }
+          // MISMA tarjeta (mismo id): syncConversation la actualiza y refresh la
+          // re-agrupa en el mundo destino. Si estaba abierta, sigue enfocada.
+          if (data.chat) syncConversation(data.chat);
         } catch (e) {
           dialog.alertDialog({ title: 'Mover a otro mundo', message: e.message });
         } finally {

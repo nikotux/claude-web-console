@@ -650,33 +650,36 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             disparador: WhatsApp lee en Consola → crear tracking en Tolkien (hoy
                             la herramienta de un mundo NO puede hablar con la del otro — Regla 12 —,
                             así que la sesión se MUDA con su contexto en vez de enlazarse en vivo).
-                            MECANISMO (confirmado en spike + E2E, decisión registrada en PEND-386):
-                            `forkSession` NATIVO del SDK (sdk.d.ts:644 — UUID fresco, mata la
-                            colisión de sessionId; el transcript del sid ORIGINAL queda intacto
-                            en su mundo) + relocar el `.jsonl` del fork al projectKey del destino
-                            (`~/.claude/projects/<encodeCwd(cwd)>/`; el SDK indexa por projectKey =
-                            sanitized cwd, sdk.d.ts:4370) + crear un Chat destino que RESUME el
-                            fork bajo el cwd destino (ahí toma SU propio set de MCP/settings — en
-                            Tolkien gana Pad-tolkien) + ARCHIVAR (cerrar) el origen. Existe en UN
-                            mundo a la vez por construcción ⇒ cumple la Regla dura 12 (no enlaza
-                            mundos, los muda secuencialmente). `ChatManager.handoff(id, destCwd)`
-                            (index.js) orquesta: quiesce del origen (`Chat.quiesce()` — sleep +
-                            _waitEngineDown + esperar descarte REAL del link, mismo cuidado que
-                            reopen: el transcript debe estar COMPLETO antes de forkear) → fork →
-                            `relocateForkTranscript()` (mueve el .jsonl + subagentes y limpia el
-                            fork del mundo origen; el sid ORIGINAL se conserva aparte) →
-                            `create()` destino (hereda title/modelChoice/effort/ticket/learningId)
-                            → `copyChatAttachments()` (S3, adjuntos por chatId) → `origin.close()`.
-                            Endpoint POST /api/chat/handoff {id, cwd} (cwd rel-al-home o absoluto,
-                            clampToHome valida); 0 tokens (fork/relocate son de disco). UI: menú ⋯
-                            de Sesiones "Mover a otro mundo" (solo Chat, no TUI) → chooser de los
-                            mundos conocidos (ui/places.js PLACES, menos el de origen) + confirm →
-                            abre la conversación nueva. El "mundo" se infiere del cwd (no hay campo
-                            `world` explícito; `getSessionInfo` del fork reporta el cwd CONGELADO al
-                            origen — metadata cosmética, el cwd efectivo es el que se pasa a
-                            `query({cwd})` al resumir).
-                            F3 · ARCHIVAR-NO-BORRAR (2026-07-14, PEND-462): el handoff ARCHIVA el
-                            origen en vez de cerrarlo — `Chat.archive()` (aparca revivible: duerme
+                            MECANISMO = MOVE TRANSPARENTE EN EL LUGAR (rediseño 2026-07-14 por
+                            feedback de Niko: la 1ª versión forkeaba + creaba tarjeta nueva +
+                            archivaba el origen, y se SENTÍA "fotocopia + sobra en Archivados" — la
+                            operación esperada es que la MISMA conversación se MUEVA, sin rastro).
+                            Ahora `ChatManager.handoff(id, destCwd)` (index.js) muta la conversación
+                            EN EL LUGAR: la MISMA `sessionId`, el MISMO chat id (misma tarjeta), la
+                            MISMA carpeta de adjuntos. Pasos: quiesce (`Chat.quiesce()` — sleep +
+                            _waitEngineDown + esperar el descarte REAL del link, mismo cuidado que
+                            reopen: el transcript debe estar COMPLETO antes de moverlo) →
+                            `moveTranscript()` (MUEVE el `.jsonl` + subagentes al projectKey del
+                            destino — `~/.claude/projects/<encodeCwd(cwd)>/`, el SDK indexa por
+                            projectKey = sanitized cwd, sdk.d.ts:4370 — con copia→verifica→borra
+                            origen: tras el move la sesión vive SOLO en el destino) → escribir
+                            manifiesto (F2) + `_pendingHandoffNote` → flipear `chat.cwd = dest` +
+                            `chat.resume = sessionId` + recargar history → `_ensureEngine()` levanta
+                            un runner FRESCO bajo el cwd destino (toma SU set de MCP/settings — en
+                            Tolkien gana Pad-tolkien) → broadcast `history` + `moved` a los clientes
+                            abiertos. NO forkea (la sid se conserva), NO crea tarjeta nueva, NO
+                            archiva nada. La tarjeta salta del grupo del mundo origen al del destino
+                            (F4 agrupa por mundo). Existe en UN mundo a la vez por construcción ⇒
+                            Regla 12 (no enlaza mundos, mueve secuencialmente). Endpoint POST
+                            /api/chat/handoff {id, cwd} devuelve el MISMO chat con el cwd nuevo; 0
+                            tokens (el move es de disco). UI: menú ⋯ de Sesiones "Mover a otro
+                            mundo" (solo Chat, no TUI) → chooser de mundos conocidos (ui/places.js
+                            PLACES, menos el de origen) + confirm; el front solo hace
+                            syncConversation+refresh (misma tarjeta, se re-agrupa sola). El "mundo"
+                            se infiere del cwd (no hay campo `world` explícito).
+                            F3 · ARCHIVAR-NO-BORRAR (2026-07-14, PEND-462; INDEPENDIENTE del move —
+                            ya NO es efecto del handoff): acción MANUAL para aparcar un chat terminado
+                            y revivirlo ante feedback días después. `Chat.archive()` (aparca revivible: duerme
                             el motor, conserva sessionId, NO dispara los write-backs de "terminé"
                             de close()) + `Chat.revive()` (lazy, 0 tokens). Persisten (`archived`
                             en chats.json), el reaper NO las poda, `info()` expone `archived`.
@@ -691,18 +694,57 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             eslabón): al mudar, `writeHandoffManifest()` escribe
                             `_handoff.md` en la carpeta del chat destino (chat-attachments/<destId>/)
                             con de-dónde-vino, a-qué-mundo-llegó y las "formas de trabajo nombradas"
-                            (memory/*.md) del mundo destino que F0-E halló dispersas — así la sesión
-                            mudada "sabe qué instrucciones tomar". Self-contained (viaja con el chat),
+                            (memory/*.md) del mundo destino que F0-E halló dispersas + los MCP del
+                            mundo destino (de ~/.claude.json) + una TAREA opcional que dejás para
+                            ese mundo (F2d: textarea en el modal de "Mover a otro mundo" → campo
+                            `task` del POST) — así la sesión mudada "sabe qué instrucciones tomar". Self-contained (viaja con el chat),
                             NO enlace vivo (Regla 12). AUTO-INYECCIÓN (2026-07-14): tras un handoff,
                             el destino guarda `_pendingHandoffNote` (efímero, no persiste) y sendUser
                             lo inyecta UNA vez SOLO en el texto que va al MODELO (no en el que se
                             muestra al usuario ni en el que ven router/auto-título) — la sesión mudada
                             LEE el manifiesto en su primer turno sin que ensucie la burbuja. Verificado
-                            E2E (WS): el manifiesto aparece en el transcript del destino. PENDIENTE de
-                            F2 (profundidad): capa estructurada tipo-Pad completa (evaluar export/import
-                            de artefacto de Pad como formato) + manifiesto de doble-mundo con MCPs/tools
-                            por mundo + sección "tareas para el otro mundo". Ver DOC-468 (mapa entre
-                            mundos) y PLAN-373 en el Pad `console`.
+                            E2E (WS): el manifiesto aparece en el transcript del destino.
+                            F2(b) · REF ESTABLE + REGISTRO tipo-Pad (2026-07-14): cada paquete-sesión
+                            tiene un `packageRef` ESTABLE (`PKG-<n>`) asignado en create() que
+                            SOBREVIVE a los moves (el mundo cambia, el ref NO) — persiste en
+                            chats.json + rehidrata. `src/modules/chat/packages.js` es el "clon de Pad"
+                            self-contained: registro DURABLE `~/.cwc-data/session-packages.json`
+                            (ítem por paquete: ref/chatId/sessionId/cwd/world/title/status), upsert
+                            change-detecting en los eventos de ciclo de vida (create/move/archive/
+                            revive/close) vía `Chat._syncPackage()` — NO en el hot path. `info()`
+                            expone `packageRef`. NO es el Pad vivo: es un JSON local. F5 (seam):
+                            `GET /api/chat/packages?q=` busca por ref/título/mundo (0 tokens).
+                            El registro es un ÍTEM ESTRUCTURADO: además de ref/mundo/status/título
+                            lleva `tags[]` y un TIMELINE (`history[]`: un evento por transición de
+                            ciclo de vida — created/moved/archived/revived/closed, con mundo+ts, cap
+                            30, apendeado por `_syncPackage(status, event)`). F5 (referencia
+                            cross-mundo, PEND-464 HECHA): botón "🔗 Referenciar paquete"
+                            (externalLink) en el composer del chat (chat-tab.js `_openPackagePicker`/
+                            `_insertPackageRef`) → picker que busca en `GET /packages` sin importar
+                            el mundo → al elegir, inserta en el composer una referencia con snippet
+                            ("📦 Referencia al paquete PKG-N «título» (mundo X): <snippet>"). Backend
+                            `GET /api/chat/package/:ref` = registro + snippet leído del transcript (0
+                            tokens); el chat conoce su propio `packageRef` (via el evento history del
+                            attach) para excluirse del picker. Lista con DOM+textContent (sin
+                            innerHTML de datos). Profundidad futura OPCIONAL: comentarios/links entre
+                            paquetes + traer el CONTEXTO completo (getSessionMessages) en vez de solo
+                            snippet. Ver DOC-468 (mapa entre mundos) y PLAN-373 en el Pad `console`.
+                            ANTI-CONFUSIÓN DE MUNDOS (2026-07-14, pedido de Niko: "Consola tiene un
+                            GitHub, Tolkien también — que nunca se confundan, a prueba de idiotas al
+                            escalar"). El sistema YA scope-ea por cwd (una sesión en Tolkien solo ve
+                            los MCP/creds de Tolkien — F0-D); el riesgo es HUMANO (creer que estás en
+                            el otro mundo). 3 piezas: (1) INSIGNIA de mundo SIEMPRE visible en el
+                            header del chat (chat-tab.js `_applyWorld` + `.chat-world` con color de
+                            identidad de ui/places.js: 🏠 Mi Consola acento · 🌳 Tolkien verde ·
+                            otro neutro; el backend manda `world`+`cwd` en el evento `history` del
+                            attach y en `moved`). (2) IDENTIDAD NOMBRADA en el manifiesto del paquete:
+                            `worldGitRepo(cwd)` (lee `.git/config`, sin subprocess) → sección "🪪
+                            Identidad de ESTE mundo" que nombra el REPO GitHub concreto del mundo
+                            destino ("GitHub de Tolkien = git@…/tolkien.git — NO es el de otro mundo").
+                            (3) REGLA DURA anti-confusión en el manifiesto: el modelo debe nombrar
+                            SIEMPRE los recursos de nombre compartido con su mundo ("el GitHub de
+                            Tolkien"), NUNCA pelado ("tu GitHub"). Para multiusuario real hace falta el
+                            modelo de ownership (C3/PEND-382, prerrequisito).
                             MODOS DE PERMISOS (PERMISSION_MODES en shared.js, único punto de
                             validación server+runner): default/acceptEdits/bypassPermissions/
                             plan. En la UI (chat-tab.js MODES) son etiquetas de UNA palabra
@@ -3646,6 +3688,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   dura #12 en las Conventions (señal concreta de divergencia CLAUDE.md↔Pad).
   OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto como
   el MCP) — hay que `JSON.parse` antes de leer priority/status.
+  Y **`cross-world`** (2026-07-14, F7 de PLAN-373/PEND-466): AUDIT determinístico
+  (0 tokens, read-only) de los CRUCES ENTRE MUNDOS. `checkCrossWorld` en
+  `health/index.js` escanea `src/`+`bin/` buscando referencias al mundo externo
+  (`config.projectDir`/`CLAUDE.local.md`, regex `CROSS_WORLD_RE`) y las compara con
+  `CROSS_WORLD_ALLOW` (los 16 cruces LEGÍTIMOS conocidos, grandfathered — mapeados
+  en DOC-468). Cualquier archivo NUEVO que cruce al mundo externo y NO esté en el
+  allowlist ⇒ warn ("pasalo por el paquete-sesión —canal canónico— o sumalo al
+  allowlist con motivo"). Es la forma SEGURA de "un solo canal" (Regla 12
+  endurecida): NO bloquea ni apaga los caños vivos en runtime (eso rompería comms/
+  tickets/retro — se descartó a propósito); GRANDFATHEREA lo existente y GATEA por
+  DETECCIÓN lo nuevo. Migrar un caño viejo al paquete es un proyecto per-caño
+  aparte. El `src/modules/chat/index.js` (handoff/worldLabelFor) está en el
+  allowlist como EL canal canónico del paquete-sesión.
 - **Dashboard del proyecto** (subsección "📊 Dashboard del proyecto" de la
   pestaña Salud, 2026-07-06, pedido del usuario: antes "🔍 Censo del
   proyecto" solo mostraba conteos —"11 módulos"— sin decir CUÁLES, y sin
