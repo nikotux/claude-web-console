@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-14 05:18 — main
+- Implementar handoff de sesiones entre mundos (F1-F4)
+- Refactor handoff: move in-place + paquete-sesión con refs
+
 ### 2026-07-14 00:17 — main
 - Agregar AutoTux v4 y daemon WhatsApp; archivar comms board
 
