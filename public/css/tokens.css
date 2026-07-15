@@ -36,6 +36,10 @@
   /* ===== Estados semánticos ===== */
   --cwc-ok: #6c9e6e;
   --cwc-warn: #c9a94e;
+  /* Variantes INTENSAS para degradados de medidor (barra de límites del plan);
+     el rojo intenso reusa --cwc-danger-strong. */
+  --cwc-ok-strong: #3fb950;
+  --cwc-warn-strong: #e3a008;
   /* info: estado NEUTRO "en revisión / esperando a alguien más" — NO es tu
      acción pendiente (warn) ni un error (danger). Azul apagado, a tono con la
      familia de estados (no es un segundo acento: el acento sigue siendo terracota). */
@@ -80,6 +84,7 @@
   /* ===== Escala tipográfica ÚNICA (5 tamaños; nada fuera de esta escala
          salvo texto decorativo dentro de íconos) ===== */
   --cwc-fs-xs: .7rem;    /* metadatos, subtítulos de fila, pies */
+  --cwc-fs-2xs: .6rem;   /* micro-meta de filas muy densas (p.ej. límites del plan) */
   --cwc-fs-sm: .78rem;   /* texto secundario, filas de lista, botones chicos */
   --cwc-fs-md: .85rem;   /* texto base de la UI, botones */
   --cwc-fs-lg: 1rem;     /* inputs, énfasis, títulos de tarjeta */

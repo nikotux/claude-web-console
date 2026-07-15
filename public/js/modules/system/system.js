@@ -11,7 +11,6 @@ import { mountHealthPanel } from './health-panel.js';
 import { mountProjectContextPanel } from './project-context-panel.js';
 import { mountInterfonoPanel } from './interfono-panel.js';
 import { mountEnvVarsPanel } from './env-vars-panel.js';
-import { mountPublishPanel } from './publish-panel.js';
 
 export default {
   name: 'system',
@@ -31,7 +30,6 @@ export default {
         ...(isAdmin
           ? [
               { label: 'Backup', mount: (c) => mountBackupPanel(c, ctx) },
-              { label: 'Publicar a la consola', mount: (c) => mountPublishPanel(c, { ...ctx, isAdmin }) },
               { label: 'Usuarios', mount: (c) => mountUsersPanel(c, ctx) },
             ]
           : []),

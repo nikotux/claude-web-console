@@ -16,12 +16,18 @@
 //   Uso. `models[].lastMtime` es el timestamp del ÚLTIMO mensaje de ESE modelo
 //   (no el mtime del archivo): así el Pac-Man "consumiendo ahora" no titila en
 //   modelos secundarios del mismo transcript.
-//   GET /api/tokens/limits   -> { limits[], credits, subscription, updatedAt, stale? }
+//   GET /api/tokens/limits   -> { limits[], credits, subscription, updatedAt, stale?, codex? }
 //   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales) + los
 //   CRÉDITOS de uso extra (extra_usage), vía el endpoint OAuth de Anthropic con
 //   el token del CLI (solo lectura). El último resultado bueno se PERSISTE en
 //   ~/.cwc-data/plan-limits.json: ante 429/corte de red/reinicio se sirve ese
 //   snapshot marcado `stale:true` en vez de perder el dato.
+//   `codex` (opcional): MISMO shape {limits[],credits,subscription} pero de
+//   CODEX CLI (OpenAI), vía el endpoint interno chatgpt.com/backend-api/wham/usage
+//   con la credencial local ~/.codex/auth.json. Best-effort (nunca rompe la
+//   respuesta), caché+persistencia propias en ~/.cwc-data/codex-limits.json. El
+//   CHAT de ChatGPT Max queda AFUERA (no tiene vía equivalente). Ver el bloque
+//   "Límites de CODEX CLI" más abajo.
 //   GET /api/tokens/history?range=day|week|month -> serie de tiempo por modelo
 //   para las gráficas de tendencia del modal Uso. Sale del histórico PERSISTENTE
 //   (~/.cwc-data/usage-history.json, ver history-store.js): buildSummary calcula
@@ -39,6 +45,8 @@ import {
   // Fuente única (BUG-21): antes DAY_MS/PROJECT_KEYS/mergeModels estaban duplicados acá.
   DAY_MS, PROJECTS as PROJECT_KEYS, addModels as mergeModels,
 } from './history-store.js';
+import { computeFlow } from './flow.js';
+import { getStream, getSeed } from './stream.js';
 import { localHourKey, localHourStartMs, localTodayStr, localDateStartMs, localDayStr, localHourNow } from './time.js';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -647,6 +655,193 @@ async function fetchPlanLimits() {
   };
 }
 
+// ===== Límites de CODEX CLI (OpenAI) ======================================
+// SEGUNDA fuente de "ventanas de límite", análoga a la de Claude pero para el
+// agente de código Codex de OpenAI. Mismo patrón de blindaje: leemos una
+// credencial LOCAL del CLI (~/.codex/auth.json), el server hace de PROXY (el
+// token nunca sale al cliente) y persistimos el último snapshot bueno para
+// servirlo `stale` ante un fallo.
+//
+// ⚠️ VÍA NO-OFICIAL: el endpoint `backend-api/wham/usage` es INTERNO de OpenAI
+// (lo consume su propio CLI open-source `openai/codex`), pero NO está en su
+// documentación pública → puede cambiar de forma sin aviso. Por eso todo el
+// camino es best-effort: si falla, la sección de Codex simplemente no aparece;
+// NUNCA tira abajo el resto de /limits (que sirve los límites de Claude). El
+// CHAT de ChatGPT Max queda deliberadamente AFUERA: no tiene ninguna vía
+// (ni oficial ni semi-oficial) equivalente (decisión de Niko 2026-07-15).
+const CODEX_CREDS_FILE = path.join(os.homedir(), '.codex', 'auth.json');
+const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+const CODEX_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'codex-limits.json');
+
+// Nombre legible del plan de OpenAI que reporta el endpoint.
+const CODEX_PLAN_LABELS = {
+  prolite: 'ChatGPT Plus',
+  pro: 'ChatGPT Pro',
+  plus: 'ChatGPT Plus',
+  team: 'ChatGPT Team',
+  enterprise: 'ChatGPT Enterprise',
+  free: 'ChatGPT Free',
+};
+
+// Etiqueta de una ventana según su tamaño en segundos (18000 = 5 h, 604800 = 7 d).
+function codexWindowLabel(seconds, fallback) {
+  if (seconds === 18000) return 'Codex · 5 h';
+  if (seconds === 604800) return 'Codex · semana';
+  if (seconds === 86400) return 'Codex · día';
+  if (typeof seconds === 'number' && seconds > 0) {
+    const h = Math.round(seconds / 3600);
+    return h >= 48 ? `Codex · ${Math.round(h / 24)} d` : `Codex · ${h} h`;
+  }
+  return fallback || 'Codex';
+}
+
+// Normaliza un `rate_limit.primary_window` (o secondary) a nuestra fila de límite.
+function codexWindowRow(win, label) {
+  if (!win || typeof win.used_percent !== 'number') return null;
+  return {
+    kind: 'codex',
+    label,
+    percent: win.used_percent,
+    // reset_at viene en SEGUNDOS unix → ISO (nuestro fmtReset del front lo espera).
+    resetsAt: typeof win.reset_at === 'number' ? new Date(win.reset_at * 1000).toISOString() : null,
+  };
+}
+
+async function readPersistedCodex() {
+  try {
+    const obj = JSON.parse(await fs.readFile(CODEX_LIMITS_FILE, 'utf8'));
+    return obj && Array.isArray(obj.limits) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writePersistedCodex(data) {
+  try {
+    await fs.mkdir(path.dirname(CODEX_LIMITS_FILE), { recursive: true, mode: 0o700 });
+    const tmp = `${CODEX_LIMITS_FILE}.tmp.${process.pid}`;
+    await fs.writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
+    await fs.rename(tmp, CODEX_LIMITS_FILE);
+  } catch { /* best-effort */ }
+}
+
+async function fetchCodexLimits() {
+  let auth;
+  try {
+    auth = JSON.parse(await fs.readFile(CODEX_CREDS_FILE, 'utf8'));
+  } catch {
+    const e = new Error('No se pudo leer ~/.codex/auth.json (¿Codex CLI instalado y autenticado?).');
+    e.badRequest = true;
+    throw e;
+  }
+  const accessToken = auth?.tokens?.access_token;
+  const accountId = auth?.tokens?.account_id;
+  if (!accessToken || !accountId) {
+    const e = new Error('Codex sin sesión (auth.json sin access_token/account_id).');
+    e.badRequest = true;
+    throw e;
+  }
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 10000);
+  let res;
+  try {
+    res = await fetch(CODEX_USAGE_URL, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'ChatGPT-Account-Id': accountId,
+        'Content-Type': 'application/json',
+      },
+      signal: ctl.signal,
+    });
+  } catch {
+    const e = new Error('No se pudo consultar a OpenAI (¿sin salida a internet?).');
+    e.upstream = true;
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+  if (!res.ok) {
+    const e = new Error(`OpenAI respondió ${res.status}.`);
+    e.upstream = true;
+    throw e;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    const e = new Error('OpenAI respondió 200 pero el cuerpo no es JSON válido.');
+    e.upstream = true;
+    throw e;
+  }
+
+  // Ventanas: la principal (primary_window) + la secundaria (si existe) del
+  // rate_limit general, más cada additional_rate_limits[] (features metrados
+  // como GPT-5.x-Codex-Spark). Cada una con su % + reset.
+  const limits = [];
+  const rl = data.rate_limit || {};
+  const primary = codexWindowRow(rl.primary_window, codexWindowLabel(rl.primary_window?.limit_window_seconds));
+  if (primary) limits.push(primary);
+  const secondary = codexWindowRow(rl.secondary_window, codexWindowLabel(rl.secondary_window?.limit_window_seconds, 'Codex · secundaria'));
+  if (secondary) limits.push(secondary);
+  for (const extra of (Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : [])) {
+    const win = extra?.rate_limit?.primary_window;
+    const row = codexWindowRow(win, `Codex · ${extra.limit_name || extra.metered_feature || 'extra'}`);
+    if (row) limits.push(row);
+  }
+
+  // Créditos (overage): el endpoint expone `credits` con balance y si está
+  // habilitado. Se normaliza al MISMO shape que los créditos de Claude para que
+  // el front los pinte con el mismo componente.
+  const cr = data.credits || {};
+  const credits = {
+    enabled: !!cr.has_credits || (typeof cr.balance === 'string' && cr.balance !== '0'),
+    usedCredits: null, // el endpoint da `balance` (restante), no consumido
+    balance: cr.balance != null ? Number(cr.balance) : null,
+    monthlyLimit: null,
+    percent: null,
+    currency: 'USD',
+  };
+
+  return {
+    limits,
+    credits,
+    subscription: CODEX_PLAN_LABELS[data.plan_type] || (data.plan_type ? `ChatGPT (${data.plan_type})` : null),
+    limitReached: !!(rl.limit_reached || data.rate_limit_reached_type),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// Caché + promesa compartida de Codex (mismo patrón que Claude).
+let codexCache = null;
+let codexAt = 0;
+let codexFetchPromise = null;
+const CODEX_TTL_MS = 120000;
+
+// Devuelve el bloque `codex` para /limits: best-effort — ante cualquier fallo
+// sirve el último snapshot bueno (`stale`) o, si nunca hubo, null (la sección
+// no se muestra). NUNCA lanza: no puede romper la respuesta de límites.
+async function getCodexBlock(fresh = false) {
+  const now = Number(process.hrtime.bigint()) / 1e6;
+  if (!fresh && codexCache && now - codexAt < CODEX_TTL_MS) return codexCache;
+  try {
+    if (!codexFetchPromise) {
+      codexFetchPromise = fetchCodexLimits()
+        .then((result) => {
+          codexCache = result;
+          codexAt = Number(process.hrtime.bigint()) / 1e6;
+          writePersistedCodex(result);
+          return result;
+        })
+        .finally(() => { codexFetchPromise = null; });
+    }
+    return await codexFetchPromise;
+  } catch (err) {
+    const fallback = codexCache || await readPersistedCodex();
+    if (fallback) return { ...fallback, stale: true, staleReason: err.message || null };
+    return null; // sin ningún dato: la sección de Codex no aparece
+  }
+}
+
 // Cache de límites: consulta remota, TTL más largo que el summary local.
 let limitsCache = null;
 let limitsAt = 0;
@@ -672,6 +867,36 @@ export default {
         res.json(publicSummary(await cachedSummary(!!req.query.fresh)));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
+      }
+    });
+
+    r.get('/flow', async (req, res) => {
+      try {
+        res.json(await computeFlow());
+      } catch (err) {
+        res.status(500).json({ error: 'No se pudo calcular el caudal de tokens.' });
+      }
+    });
+
+    // Vista Raw (PLAN-544): fragmentos de TEXTO REAL recién escritos por las
+    // sesiones (Claude+Codex), etiquetados por mundo/sesión/modelo, para que la
+    // lluvia estilo Matrix sea lo que se procesa de verdad. ?since=<seq> devuelve
+    // solo lo nuevo (multi-ventana safe). 0 tokens, solo lee bytes apendeados.
+    r.get('/stream', async (req, res) => {
+      try {
+        const since = Number.parseInt(req.query.since, 10);
+        res.json(await getStream(Number.isFinite(since) ? since : 0));
+      } catch (err) {
+        res.status(500).json({ error: 'No se pudo leer el flujo de texto.' });
+      }
+    });
+
+    // Seed de texto reciente de UNA sesión (para poblar su banda al descubrirla).
+    r.get('/stream/seed', async (req, res) => {
+      try {
+        res.json(await getSeed(String(req.query.sid || '')));
+      } catch (err) {
+        res.status(500).json({ error: 'No se pudo leer el seed.' });
       }
     });
 
@@ -702,8 +927,13 @@ export default {
       // Reloj MONOTÓNICO (como /summary): Date.now() retrocede con ajustes
       // NTP y dejaba el caché de límites "fresco" para siempre.
       const now = Number(process.hrtime.bigint()) / 1e6;
-      if (!req.query.fresh && limitsCache && now - limitsAt < LIMITS_TTL_MS) {
-        return res.json(limitsCache);
+      const fresh = !!req.query.fresh;
+      // Bloque de Codex: best-effort, EN PARALELO con la lógica de Claude — su
+      // propia caché/TTL/fallback; null si nunca hubo dato (la sección no sale).
+      // Nunca lanza, así que jamás afecta el status de esta respuesta.
+      const codexP = getCodexBlock(fresh);
+      if (!fresh && limitsCache && now - limitsAt < LIMITS_TTL_MS) {
+        return res.json({ ...limitsCache, codex: await codexP });
       }
       try {
         if (!limitsFetchPromise) {
@@ -725,7 +955,7 @@ export default {
             });
         }
         const result = await limitsFetchPromise;
-        res.json(result);
+        res.json({ ...result, codex: await codexP });
       } catch (err) {
         // FALLBACK: antes un 429/corte de red devolvía el error y el dato
         // "desaparecía" en la UI. Ahora servimos el ÚLTIMO snapshot bueno —
@@ -733,7 +963,13 @@ export default {
         // marcado `stale:true` para que el front avise "datos de hace X".
         const fallback = limitsCache || await readPersistedLimits();
         if (fallback) {
-          return res.json({ ...fallback, stale: true, staleReason: err.message || null });
+          return res.json({ ...fallback, stale: true, staleReason: err.message || null, codex: await codexP });
+        }
+        // Sin dato de Claude previo pero SÍ de Codex: devolvemos un shell con
+        // limits vacío + el bloque de Codex (no perdemos la única fuente viva).
+        const codex = await codexP;
+        if (codex) {
+          return res.json({ limits: [], credits: { enabled: false }, subscription: null, codex });
         }
         // Sin ningún dato previo: recién ahí devolvemos el error real. Status
         // derivado de una propiedad explícita del error (invariante 29):

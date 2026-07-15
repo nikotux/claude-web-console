@@ -227,6 +227,7 @@ export default {
         for (const s of others) det.appendChild(card(s));
         listEl.appendChild(det);
       }
+
     }
 
     // ===== Tarjeta de conversación (chat SDK) =====
@@ -518,52 +519,99 @@ export default {
     // marca contra `modelChoice` (QUÉ ELIGIÓ la persona) — con AutoTux, `c.model`
     // es el nivel real que cambia solo, así que comparar contra ESO marcaría mal.
     // El esfuerzo 'auto' = seguir el tier del modelo (effortPinned=false).
+    // PLAN-519 F3: selector REDISEÑADO — 2 toggles [AutoTux][Tándem] + columnas
+    // Cloud/Codex + leyenda dinámica. La ARQUITECTURA se elige arriba; Manual
+    // EMERGE de Tándem sin Codex. Mapea al backend: AutoTux→{model:'auto',
+    // fableCeiling} · Tándem→{model:'tandem',tandem:{...}} · Manual→{model:<cloud>,
+    // effort}. (Secciones apiladas en vez de 3 columnas: mejor en el modal angosto
+    // y en móvil — convención colapsable del proyecto; funcionalmente idéntico.)
     function pickModelForChat(c) {
-      const m = dialog.openModal({ title: 'Modelo y esfuerzo', width: 340 });
-      // Selección local (se confirma con Aplicar): arranca en lo actual.
-      let selModel = c.modelChoice || 'auto';
-      let selEffort = c.effortPinned ? (c.effort || 'auto') : 'auto';
-      const renderList = (opts, sel, attr) => opts.map(([v, l]) =>
-        `<button class="btn-ghost sess-menu-item${v === sel ? ' sess-menu-item--active' : ''}" data-${attr}="${v}"><span>${l}</span>${v === sel ? icon('check', { size: 14 }) : ''}</button>`).join('');
+      const m = dialog.openModal({ title: 'Modelo y protocolo', width: 460 });
+      const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable']];
+      const CODEX = [['', 'Ninguno (Manual)'], ['gpt-5.5', 'GPT-5.5'], ['gpt-5.4', 'GPT-5.4'], ['gpt-5.4-mini', 'GPT-5.4 mini'], ['gpt-5.3-codex-spark', 'GPT-5.3 Spark']];
+      const EFFS = [['low', 'Bajo'], ['medium', 'Medio'], ['high', 'Alto'], ['xhigh', 'Muy alto'], ['max', 'Máximo']];
+      const CLOUDSET = new Set(['haiku', 'sonnet', 'opus', 'fable']);
+      // Estado inicial derivado de la conversación.
+      let mode = 'autotux'; let fable = false;
+      let rModel = 'opus'; let rEffort = 'medium'; let cModel = ''; let cEffort = 'high';
+      if (c.modelChoice === 'auto') { mode = 'autotux'; fable = !!c.fableCeiling; }
+      else if (c.modelChoice === 'tandem') { mode = 'tandem'; rModel = CLOUDSET.has(c.model) ? c.model : 'opus'; rEffort = c.effort || 'medium'; cModel = c.tandemCodex?.model || 'gpt-5.5'; cEffort = c.tandemCodex?.effort || 'high'; }
+      else { mode = 'tandem'; rModel = CLOUDSET.has(c.modelChoice) ? c.modelChoice : (CLOUDSET.has(c.model) ? c.model : 'opus'); rEffort = c.effort || 'medium'; cModel = ''; }
+
+      const legend = () => {
+        if (mode === 'autotux') return { t: `🤖 Protocolo AutoTux${fable ? ' · con Fable' : ''}`, cls: 'autotux' };
+        if (cModel) return { t: '🤝 Protocolo Tándem', cls: 'tandem' };
+        return { t: '🔵 Manual', cls: 'manual' };
+      };
+      const opts = (list, sel, attr) => list.map(([v, l]) =>
+        `<button class="mp-opt${v === sel ? ' mp-opt--on' : ''}" data-${attr}="${v}">${l}${v === sel ? icon('check', { size: 12 }) : ''}</button>`).join('');
+      const effSel = (id, sel) => `<select class="mp-eff" data-eff="${id}">${EFFS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+
       const paint = () => {
+        const lg = legend();
+        let bodyH = '';
+        if (mode === 'autotux') {
+          bodyH = `
+            <div class="sess-pick-sec">
+              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Cloud · router automático</div>
+              <p class="mp-info">Sube y baja solo entre <b>Haiku · Sonnet · Opus</b> según cada turno. El esfuerzo lo maneja el router.</p>
+              <label class="mp-check"><input type="checkbox" data-fable ${fable ? 'checked' : ''}> Incluir <b>Fable</b> como techo (opcional)</label>
+            </div>
+            <div class="sess-pick-sec mp-off">
+              <div class="sess-pick-h">${icon('gear', { size: 14 })} Codex — no participa en AutoTux</div>
+            </div>`;
+        } else {
+          bodyH = `
+            <div class="sess-pick-sec">
+              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Cloud · razonador</div>
+              <div class="mp-opts">${opts(CLOUD, rModel, 'rmodel')}</div>
+              <div class="mp-effrow">Esfuerzo: ${effSel('r', rEffort)}</div>
+            </div>
+            <div class="sess-pick-sec">
+              <div class="sess-pick-h">${icon('gear', { size: 14 })} Codex · ejecutor</div>
+              <div class="mp-opts">${opts(CODEX, cModel, 'cmodel')}</div>
+              ${cModel ? `<div class="mp-effrow">Esfuerzo: ${effSel('c', cEffort)}</div>` : '<p class="mp-info">Sin Codex = <b>Manual</b> (Claude solo, sin delegación).</p>'}
+            </div>`;
+        }
         m.body.innerHTML = `
-          <div class="sess-pick-sec">
-            <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Agente</div>
-            <div class="sess-menu-list">${renderList(CHAT_MODEL_OPTIONS, selModel, 'model')}</div>
+          <div class="mp-legend mp-legend--${lg.cls}">${lg.t}</div>
+          <div class="mp-toggles">
+            <button class="mp-toggle${mode === 'autotux' ? ' mp-toggle--on' : ''}" data-mode="autotux">🤖 AutoTux</button>
+            <button class="mp-toggle${mode === 'tandem' ? ' mp-toggle--on' : ''}" data-mode="tandem">🤝 Tándem / Manual</button>
           </div>
-          <div class="sess-pick-sec">
-            <div class="sess-pick-h">🧠 Esfuerzo de razonamiento</div>
-            <div class="sess-menu-list">${renderList(EFFORT_OPTIONS, selEffort, 'effort')}</div>
-          </div>
-          <p class="sess-plumbing">AutoTux decide el <b>modelo</b> solo; los demás fuerzan uno fijo. El <b>esfuerzo</b> (más barato que saltar de tier) se aplica al SPAWN del motor — con la conversación activa toma efecto al reabrir o en el próximo turno tras dormir. "Auto" sigue el tier del modelo.</p>
+          ${bodyH}
+          <p class="sess-plumbing">AutoTux rutea el modelo solo (esfuerzo automático). Tándem: Claude razona, Codex ejecuta. Sin Codex = Manual. El cambio se aplica al reabrir la conversación o en el próximo turno tras dormir.</p>
           <div class="sess-pick-actions">
             <button class="btn-ghost" data-act="cancel">Cancelar</button>
             <button class="btn" data-act="apply">Aplicar</button>
           </div>`;
-        for (const b of m.body.querySelectorAll('[data-model]')) b.addEventListener('click', () => { selModel = b.dataset.model; paint(); });
-        for (const b of m.body.querySelectorAll('[data-effort]')) b.addEventListener('click', () => { selEffort = b.dataset.effort; paint(); });
+        m.body.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { mode = b.dataset.mode; paint(); }));
+        m.body.querySelectorAll('[data-rmodel]').forEach((b) => b.addEventListener('click', () => { rModel = b.dataset.rmodel; paint(); }));
+        m.body.querySelectorAll('[data-cmodel]').forEach((b) => b.addEventListener('click', () => { cModel = b.dataset.cmodel; paint(); }));
+        const fb = m.body.querySelector('[data-fable]'); if (fb) fb.addEventListener('change', () => { fable = fb.checked; paint(); });
+        const re = m.body.querySelector('[data-eff="r"]'); if (re) re.addEventListener('change', () => { rEffort = re.value; });
+        const ce = m.body.querySelector('[data-eff="c"]'); if (ce) ce.addEventListener('change', () => { cEffort = ce.value; });
         m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
         m.body.querySelector('[data-act="apply"]').addEventListener('click', apply);
       };
       const apply = async () => {
+        let payload;
+        if (mode === 'autotux') payload = { id: c.id, model: 'auto', fableCeiling: fable };
+        else if (cModel) payload = { id: c.id, model: 'tandem', tandem: { reasonerModel: rModel, reasonerEffort: rEffort, codexModel: cModel, codexEffort: cEffort } };
+        else payload = { id: c.id, model: rModel, effort: rEffort }; // Manual
         m.close();
         try {
           const res = await fetch('/api/chat/model', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: c.id, model: selModel, effort: selEffort }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo/esfuerzo.');
+          if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo.');
           syncConversation(data.chat);
           await refresh();
-          // Update OPTIMISTA: con motor vivo, data.chat/list traen this.model
-          // aún STALE (se confirma por eco). Pinto el chip ya para feedback
-          // inmediato; el poll de 8s lo reconcilia cuando llega el eco.
           const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
-          if (chip) chip.textContent = chatModelLabel(data.chat || { modelChoice: selModel, model: c.model });
+          if (chip) chip.textContent = chatModelLabel(data.chat || c);
         } catch (e) {
-          dialog.alertDialog({ title: 'Modelo y esfuerzo', message: e.message });
+          dialog.alertDialog({ title: 'Modelo y protocolo', message: e.message });
         }
       };
       paint();

@@ -188,8 +188,8 @@ export const CACHE_STICKY_TOKENS = 15000; // cacheRead ≥ esto ⇒ hay prefijo 
 // 'none' (sin margen en ninguno). `pinned` = la persona fijó el effort a mano
 // (no lo tocamos: siempre 'model'). effortIdx/level son índices; -1 = fuera de
 // escala (no gestionado). lastCacheRead en tokens (0 si no hay dato).
-export function decideUpAxis({ hard = false, level = -1, effortIndex = -1, lastCacheRead = 0, pinned = false, conserve = false }) {
-  const canModel = level >= 0 && level < CEILING;
+export function decideUpAxis({ hard = false, level = -1, effortIndex = -1, lastCacheRead = 0, pinned = false, conserve = false, ceiling = CEILING }) {
+  const canModel = level >= 0 && level < ceiling;
   const canEffort = !pinned && effortIndex >= 0 && effortIndex < AUTO_EFFORT_MAX_IDX;
   if (!canEffort && !canModel) return 'none';
   // F4: ventana de rate-limit apretada ⇒ NUNCA saltar de tier (invalida caché +
@@ -227,6 +227,17 @@ export function decideDownAxis({ level = -1, effortIndex = -1, tierEffortIndex =
 export const CEILING = MODEL_LEVELS.length - 1; // 2 = opus
 export const FORBIDDEN_AUTO = new Set(['fable']); // guard de defensa en profundidad
 
+// PLAN-519 F1: AutoTux con techo FABLE OPCIONAL. Cuando el usuario opta-in
+// (fableCeiling por chat), la escala de ESE chat se extiende UN nivel arriba,
+// contigua: ['haiku','sonnet','opus','fable']. Sin opt-in, es la escala base de
+// 3 (fable sigue prohibido en auto). Las funciones del router aceptan `levels`/
+// `ceiling` por parámetro (default = base) para no cambiar el comportamiento
+// existente. El effort de fable (nivel 3) cae a 'high' por el Math.min de
+// effortForLevel — AUTO nunca pasa de 'high'.
+export function levelsFor(fableCeiling) {
+  return fableCeiling ? [...MODEL_LEVELS, 'fable'] : MODEL_LEVELS;
+}
+
 // v2: subir sigue siendo rápido (1 señal) pero con COOLDOWN posterior; bajar
 // exige 2 turnos "down" seguidos (era 3 — C5 cubre el riesgo de bajar de más).
 const DOWN_STREAK_TO_DEMOTE = 2;
@@ -253,10 +264,12 @@ const USER_CORRECTION_RE = /\b(no funciona|no sirve|est[áa] mal|no era eso|eso 
 // (elección manual previa que vuelve a 'auto') ⇒ se clampa a opus, NO a -1
 // (bug de v1: indexOf('fable') daba 3 con la escala vieja; con la nueva daría
 // -1 y el router quedaría inerte por accidente — se maneja explícito).
-export function clampLevel(model) {
-  const i = MODEL_LEVELS.indexOf(model);
+export function clampLevel(model, levels = MODEL_LEVELS) {
+  const i = levels.indexOf(model);
   if (i !== -1) return i;
-  if (model === 'fable') return CEILING;
+  // fable fuera de la escala (sin opt-in): se clampa al techo de la escala dada
+  // (mismo criterio histórico: una elección manual de fable que vuelve a auto).
+  if (model === 'fable') return levels.length - 1;
   return -1;
 }
 
@@ -295,17 +308,17 @@ export function turnOverride(kind) {
 // Aplica un MOVIMIENTO ±1 al nivel base con cooldown anti-rebote. Devuelve el
 // estado nuevo { level, downStreak, cooldown, changed }. Es la ÚNICA función que
 // hace la aritmética del cooldown (el llamador no lo decrementa aparte).
-export function decideBase({ baseLevel, move, downStreak = 0, cooldown = 0 }) {
+export function decideBase({ baseLevel, move, downStreak = 0, cooldown = 0, ceiling = CEILING }) {
   const dec = Math.max(0, cooldown - 1); // decae al procesar el turno
   if (move === 'strong_up') { // corrección del usuario: rompe cooldown
-    if (baseLevel >= CEILING) return { level: baseLevel, downStreak: 0, cooldown: dec, changed: false };
+    if (baseLevel >= ceiling) return { level: baseLevel, downStreak: 0, cooldown: dec, changed: false };
     return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
   }
   if (cooldown > 0) { // congelado para señales no-fuertes; el streak NO avanza
     return { level: baseLevel, downStreak, cooldown: dec, changed: false };
   }
   if (move === 'up') {
-    if (baseLevel >= CEILING) return { level: baseLevel, downStreak: 0, cooldown: 0, changed: false };
+    if (baseLevel >= ceiling) return { level: baseLevel, downStreak: 0, cooldown: 0, changed: false };
     return { level: baseLevel + 1, downStreak: 0, cooldown: COOLDOWN_TURNS, changed: true };
   }
   if (move === 'down') {
@@ -321,8 +334,8 @@ export function decideBase({ baseLevel, move, downStreak = 0, cooldown = 0 }) {
 // Escalada por INSUFICIENCIA para el PRÓXIMO turno (C5): evidencia, no volumen.
 // hardFail = ≥2 errores de tool; bigAndFailing = ≥10 tools Y ≥1 error. Devuelve
 // null si no aplica (ya en el techo, o sin evidencia).
-export function insufficiencyEscalation({ baseLevel, toolCalls = 0, toolErrors = 0 }) {
-  if (baseLevel < 0 || baseLevel >= CEILING) return null;
+export function insufficiencyEscalation({ baseLevel, toolCalls = 0, toolErrors = 0, ceiling = CEILING }) {
+  if (baseLevel < 0 || baseLevel >= ceiling) return null;
   const hardFail = toolErrors >= 2;
   const bigAndFailing = toolCalls >= REACTIVE_TOOL_THRESHOLD && toolErrors >= 1;
   if (!hardFail && !bigAndFailing) return null;

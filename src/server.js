@@ -154,6 +154,10 @@ async function main() {
   // Gestor de archivos (subpágina): cualquier usuario autenticado.
   app.get('/archivos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'archivos.html')));
 
+  // Vista Raw (subpágina, PLAN-544): visualización solo-lectura estilo Matrix
+  // de la actividad en vivo de la consola. Cualquier usuario autenticado.
+  app.get('/raw', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'raw.html')));
+
   // Assets de terceros (xterm, hljs, addons): no cambian -> cache largo e
   // inmutable, así el navegador NO los revalida en cada carga (menos round-trips).
   app.use('/vendor', (req, res, next) => {

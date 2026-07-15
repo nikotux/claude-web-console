@@ -9,6 +9,44 @@
    menú contextual pegado del Explorador. Este guard mata esa clase de bugs. */
 [hidden] { display: none !important; }
 
+/* ===== Celda inline: Caudal de tokens ===== */
+.cwc-flow-cell {
+  display: inline-flex; align-items: center; gap: .3rem;
+  min-width: 0; white-space: nowrap; text-transform: none; letter-spacing: 0;
+}
+.cwc-flow-dot {
+  width: 5px; height: 5px; border-radius: 50%; flex: none;
+}
+.cwc-flow-dot--claude { background: var(--cwc-accent); }
+.cwc-flow-dot--codex { background: var(--cwc-accent-cool); }
+.cwc-flow-label {
+  flex: 0 0 auto; color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs); line-height: 1; white-space: nowrap;
+}
+.cwc-flow-bar {
+  flex: 0 0 auto; width: 46px; height: 3px; border-radius: 4px;
+  overflow: hidden; position: relative;
+  background: linear-gradient(90deg,
+    var(--cwc-ok) 0%, var(--cwc-warn-strong) 55%, var(--cwc-danger-strong) 100%);
+}
+.cwc-flow-mask {
+  position: absolute; top: 0; bottom: 0; right: 0; left: 0;
+  background: var(--cwc-bg-chip);
+  border-left: 1px solid color-mix(in srgb, var(--cwc-bg) 55%, transparent);
+  transition: left .08s linear;
+}
+.cwc-flow-num {
+  flex: 0 0 auto; min-width: 24px; text-align: right;
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-2xs);
+  color: var(--cwc-text-dim); font-variant-numeric: tabular-nums;
+}
+.cwc-flow-total {
+  margin-left: .05rem;
+  font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-2xs);
+  color: color-mix(in srgb, var(--cwc-text-dim) 72%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ===== Íconos (ui/icons.js) ===== */
 .cwc-icon { display: inline-block; vertical-align: middle; flex: none; }
 

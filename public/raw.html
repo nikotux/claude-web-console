@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Vista Raw — Claude Web Console</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/raw.css" />
+</head>
+<body>
+  <canvas id="raw-canvas"></canvas>
+
+  <!-- Logs de terminal legibles por sesión: el texto real escribiéndose de
+       corrido, semitransparente, tail-scroll al llegar al fondo (detrás de los
+       rótulos, delante de la lluvia). -->
+  <div id="raw-logs" class="raw-logs"></div>
+
+  <!-- Rótulos tenues por banda de sesión (posicionados por JS sobre el canvas). -->
+  <div id="raw-labels" class="raw-labels"></div>
+
+  <!-- Feed legible (abajo-izquierda). -->
+  <div id="raw-feed" class="raw-feed"></div>
+
+  <!-- Contador de tokens (abajo-derecha): odómetros persistentes de 12 dígitos
+       que trepan en tiempo real, compactos en una sola línea. -->
+  <div id="raw-counters" class="raw-counters">
+    <span id="rc-sessions" class="rc-sessions">conectando…</span>
+    <span class="rc-item rc-claude">
+      <span class="rc-label">CLAUDE</span>
+      <span class="rc-num" id="rc-claude-num">000000000000</span>
+      <span class="rc-tps" id="rc-claude-tps">0t/s</span>
+    </span>
+    <span class="rc-item rc-codex">
+      <span class="rc-label">CODEX</span>
+      <span class="rc-num" id="rc-codex-num">000000000000</span>
+      <span class="rc-tps" id="rc-codex-tps">0t/s</span>
+    </span>
+  </div>
+
+  <button id="raw-close" class="raw-close" title="Cerrar (Esc)">✕</button>
+
+  <script type="module" src="/js/rawview/raw.js"></script>
+</body>
+</html>

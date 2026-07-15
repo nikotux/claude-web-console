@@ -13,6 +13,7 @@ import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
 import { placeFor } from '../../ui/places.js';
+import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -263,6 +264,7 @@ export class ChatTab {
           <span class="chat-world" title="Mundo de esta conversación" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: 'Esperando tu mensaje' })}
           <span class="chat-model-pill" title="Router de modelo automático" hidden></span>
+          <span class="chat-flow" hidden></span>
           <select class="chat-mode" data-risk="ok" title="Modo de permisos">
             ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
           </select>
@@ -288,11 +290,20 @@ export class ChatTab {
     // criterio "siempre pinea al final" que usa _scroll() en todo el resto.
     this.msgsEl.addEventListener('cwc:mermaid-rendered', () => this._scroll());
     this.inputEl = container.querySelector('.chat-input');
+    // BUG-498: el borrador NO debe perderse en una reconexión/rebuild del pane.
+    // El value del textarea vive SOLO en el DOM; lo respaldamos en localStorage por
+    // id de chat → sobrevive incluso a un `new ChatTab` (misma clave por this.id).
+    this._draftKey = `cwc:chat-draft:${this.id}`;
+    try {
+      const d = localStorage.getItem(this._draftKey);
+      if (d) { this.inputEl.value = d; requestAnimationFrame(() => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`; }); }
+    } catch { /* localStorage no disponible: sin respaldo, no rompe */ }
     this.sendBtn = container.querySelector('.chat-send');
     this.stopBtn = container.querySelector('.chat-stop');
     this.modeEl = container.querySelector('.chat-mode');
     this.aliveEl = container.querySelector('.chat-alive');
     this.modelPillEl = container.querySelector('.chat-model-pill');
+    this.flowEl = container.querySelector('.chat-flow');
     this.attachBtn = container.querySelector('.chat-attach');
     this.pkgRefBtn = container.querySelector('.chat-pkgref');
     this.pkgRefBtn?.addEventListener('click', () => this._openPackagePicker());
@@ -341,6 +352,9 @@ export class ChatTab {
       this.inputEl.style.height = 'auto';
       this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`;
       this._slashUpdate();
+      // BUG-498: respaldar el borrador en cada tecla (barato; cubre reconexión,
+      // disable y reconstrucción total del pane).
+      try { localStorage.setItem(this._draftKey, this.inputEl.value); } catch { /* noop */ }
     });
 
     // ===== Adjuntos (Fase 3): UN solo botón 📎 + pegar + arrastrar =====
@@ -545,6 +559,7 @@ export class ChatTab {
     this._renderTray();
     this.inputEl.value = '';
     this.inputEl.style.height = 'auto';
+    try { localStorage.removeItem(this._draftKey); } catch { /* noop */ } // BUG-498: enviado OK → sin borrador
     this.inputEl.focus();
   }
 
@@ -686,7 +701,12 @@ export class ChatTab {
       case 'history':
         this.msgsEl.innerHTML = '';
         this.streamEl = null;
+        // BUG-498: una reconexión/history exitosa REVIVE el composer si un `closed`
+        // previo lo dejó deshabilitado (antes `disabled=true` no se revertía nunca).
+        if (this.inputEl) this.inputEl.disabled = false;
+        if (this.sendBtn) this.sendBtn.disabled = false;
         this._applyWorld(m.cwd, m.world); // insignia de mundo (anti-confusión)
+        this._applyFlow(m.sessionId, m.cwd);
         if (m.packageRef) this._packageRef = m.packageRef; // F5: para excluirse del picker
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
@@ -787,6 +807,7 @@ export class ChatTab {
         // PLAN-373): misma sesión, nuevo cwd; ya usa las herramientas de ese mundo.
         this._line('chat-closed-note', `📦 Movida a ${m.world || 'otro mundo'} — ahora usás las herramientas de ese mundo. El contexto viajó completo.`);
         this._applyWorld(m.cwd, m.world); // actualizar la insignia de mundo del header
+        this._applyFlow(this._flowSid, m.cwd);
         break;
       case 'closed':
         if (m.resumable) {
@@ -1168,6 +1189,23 @@ export class ChatTab {
     el.title = `Mundo: ${label}${cwd ? ` · ${cwd}` : ''} — acá "GitHub/Pad/cuenta" son los de ${label}`;
   }
 
+  _applyFlow(sessionId, cwd) {
+    if (!this.flowEl) return;
+    const sid = sessionId || this._flowSid || '';
+    const dir = cwd || this._flowCwd || '';
+    this._flowSid = sid;
+    this._flowCwd = dir;
+    if (!sid && !dir) {
+      this.flowEl.hidden = true;
+      return;
+    }
+    this.flowEl.innerHTML =
+      flowBarHtml({ engine: 'claude', session: sid, total: true, compact: true }) +
+      flowBarHtml({ engine: 'codex', cwd: dir, total: true, compact: true });
+    this.flowEl.hidden = false;
+    ensureFlowDirector();
+  }
+
   // F5 (PLAN-373/PEND-464): picker para REFERENCIAR otro paquete-sesión desde
   // este chat. Busca en GET /api/chat/packages (sin importar el mundo) y, al elegir
   // uno, inserta en el composer una referencia con su snippet — así traés el
@@ -1267,6 +1305,12 @@ export class ChatTab {
       const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
       paint(`🤖 AutoTux: ${level}`, modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown'),
         `AutoTux (router de modelo automático) — nivel actual: ${level}`);
+    } else if (choice === 'tandem') {
+      // Modelo TÁNDEM (PLAN-507): Opus razona/verifica, Codex ejecuta. Color
+      // propio (acento frío, el mismo que Codex en el panel de Uso) para
+      // distinguirlo de un modelo forzado común.
+      paint('🤝 Tándem', 'var(--cwc-accent-cool)',
+        'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código');
     } else if (choice) {
       const label = CHAT_MODEL_LABEL.get(choice) || choice;
       paint(label, modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown'),

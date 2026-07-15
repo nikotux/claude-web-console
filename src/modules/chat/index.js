@@ -57,6 +57,7 @@ import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { clampToHome } from '../../core/paths.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
@@ -65,7 +66,7 @@ import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { queueRetroDistill } from '../retro/shared.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
-import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE } from '../../core/model-router.js';
+import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
 import {
@@ -416,6 +417,17 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 // `untilMs`: corte superior (excluyente) por timestamp de línea — se usa al
 // reconectar con un runner vivo: lo anterior a su arranque sale del
 // transcript, lo posterior lo aporta el runner (sin duplicados).
+// ¿Existe ya el transcript de esta sesión en disco? Decide, al spawnear el
+// runner, entre `--session-id <uuid>` (CREAR una sesión con NUESTRO id, primer
+// arranque de un chat nuevo — BUG-496) y `--resume <uuid>` (RETOMAR una que ya
+// tiene historial). Ground-truth: mira el archivo, no una banderita que puede
+// atrasarse. El SDK prohíbe combinar sessionId+resume sin forkSession, así que
+// se pasa exactamente UNO según esto.
+function transcriptExists(cwd, sessionId) {
+  if (!sessionId) return false;
+  try { return fss.existsSync(path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), `${sessionId}.jsonl`)); }
+  catch { return false; }
+}
 function loadTranscriptEvents(cwd, sessionId, untilMs = null) {
   const file = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
   let txt;
@@ -628,6 +640,12 @@ class Chat {
     if (model === 'auto') {
       this.modelChoice = 'auto';
       this.model = 'sonnet'; // punto de partida razonable; el router lo ajusta desde acá
+    } else if (model === 'tandem') {
+      // Modelo TÁNDEM (PLAN-507): centinela propio de la consola — el motor REAL
+      // que razona/planea/verifica es Opus (effort high, fijo); la ejecución de
+      // código la delega a Codex vía la tool delegate_to_codex (ver runner).
+      this.modelChoice = 'tandem';
+      this.model = 'opus';
     } else {
       this.modelChoice = model || null;
       this.model = model || null;
@@ -637,13 +655,38 @@ class Chat {
     // del nivel actual del modelo (haiku→low · sonnet→medium · opus→high) para
     // que un chat 'auto' nazca con un effort coherente con su tier. Con AutoTux
     // el default lo mantiene alineado al nivel; el usuario puede fijarlo a mano.
-    this.effort = (EFFORT_LEVELS.includes(effort) ? effort : null) || effortForModel(this.model);
+    // Base de esfuerzo: si la persona lo eligió, se respeta. Si no: AutoTux
+    // ('auto') arranca en 'high' (pedido de Niko — es entorno de trabajo, se
+    // arranca sólido y el router lo sube/baja desde el turno 2, BUG-497); un
+    // modelo fijo deriva del tier (haiku→low·sonnet→medium·opus→high).
+    this.effort = (EFFORT_LEVELS.includes(effort) ? effort : null)
+      || (this.modelChoice === 'auto' ? 'high' : effortForModel(this.model));
+    // Tándem fija Opus + effort MEDIUM PINNED (decisión de Niko 2026-07-15: el
+    // lado Claude razona en medio; Codex ejecuta en alto): nada lo re-alinea. Se
+    // re-aplica también en setModelChoice/rehydrate.
+    if (this.modelChoice === 'tandem') { this.effort = 'medium'; this._effortPinned = true; }
+    // PLAN-519 F1: techo FABLE opt-in de AutoTux (lo fija el picker). Con true,
+    // la escala del router de ESTE chat se extiende a haiku→sonnet→opus→fable.
+    this._fableCeiling = false;
+    // PLAN-519 F2: ejecutor Codex de Tándem, configurable (default gama alta). El
+    // RAZONADOR de Tándem = this.model/this.effort (opus/medium por default).
+    this.tandemCodex = { model: 'gpt-5.5', effort: 'high' };
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
     this.learningId = learningId; // 'TDA-<n>' si nació de "Profundizar en chat" de un tema de Aprendizaje (write-back al cerrar)
     this.resume = resume;
-    this.sessionId = resume || null;
+    // sessionId DESDE EL MOMENTO CERO (BUG-496, idea de Niko): un chat nuevo
+    // nace con un UUID propio (el SDK v0.3.198 lo acepta vía --session-id) en vez
+    // de esperar al primer `system/init`. Así es persistible/durable desde el
+    // arranque → sobrevive a un reinicio del server → el limpiador de huérfanos
+    // ya no lo mata. Un chat RETOMADO usa el sessionId que trae `resume`.
+    this.sessionId = resume || randomUUID();
+    // ¿Ya arrancó (≥1 turno del usuario)? Semáforo compartido: un chat retomado
+    // ya arrancó; uno nuevo, no. Gobierna (a) no hacer hot-swap de modelo en el
+    // primer turno (BUG-497) y se persiste; el arranque --session-id/--resume lo
+    // decide transcriptExists() aparte (ground-truth de disco).
+    this._started = !!resume;
     this.alive = false;       // motor (runner) conectado y corriendo
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
@@ -713,15 +756,27 @@ class Chat {
   // runner vivo para este id (p.ej. carrera), el nuevo proceso se suicida y
   // acá simplemente nos conectamos al que quedó.
   async _startEngine() {
-    const resumeId = this.sessionId || this.resume;
+    const sid = this.sessionId || this.resume;
+    // BUG-496: si ya hay transcript en disco → RETOMAR (--resume); si no (primer
+    // arranque de un chat nuevo) → CREAR con NUESTRO UUID (--session-id). Exactamente
+    // uno (el SDK prohíbe combinarlos sin forkSession).
+    const canResume = transcriptExists(this.cwd, sid);
     try {
       spawnRunner({
         id: this.id, cwd: this.cwd, model: this.model,
-        mode: this.permissionMode, resume: resumeId,
+        mode: this.permissionMode,
+        resume: canResume ? sid : null,
+        sessionId: canResume ? null : sid,
         effort: this.effort, // eje thinking effort (spawn-time, PEND-391 #3)
+        tandem: this.modelChoice === 'tandem', // modelo TÁNDEM (PLAN-507): tool Codex + deny de escritura
+        // PLAN-519 F2: ejecutor Codex configurable (modelo+esfuerzo).
+        codexModel: this.tandemCodex?.model || null,
+        codexEffort: this.tandemCodex?.effort || null,
+
         // Identidad del chat en el Interfono (Fase 0.4): handle canónico
-        // claude:<sessionId> — mismo que _busHandle(). Solo si ya lo conocemos.
-        selfHandle: resumeId ? `claude:${resumeId}` : null,
+        // claude:<sessionId> — mismo que _busHandle(). Ahora SIEMPRE lo conocemos
+        // (sessionId nace en create()), así hasta el 1er arranque sale con from real.
+        selfHandle: sid ? `claude:${sid}` : null,
       });
     } catch (err) {
       this._push({ type: 'error', message: `No pude lanzar el motor: ${String(err?.message || err).slice(0, 200)}` });
@@ -1083,10 +1138,11 @@ class Chat {
     if (this.sessionId) this.history = loadTranscriptEvents(this.cwd, this.sessionId);
     this.viewMode = 'chat';
     await this._ensureEngine();
-    // Reenviar el history recargado + anunciar el nuevo modo.
+    // Reenviar el history recargado + anunciar el nuevo modo. Payload COMPLETO
+    // (BUG-495): conserva los banderines de modelo/mundo en el header.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this._slashList() }));
+        ws.send(JSON.stringify(this._historyPayload()));
       }
     }
     this._broadcast({ type: 'viewmode', viewMode: 'chat' });
@@ -1146,10 +1202,11 @@ class Chat {
     // quedaría el 'working'/'delegating' del turno cortado.
     this._setStatus('waiting');
     // Reenviar el history recargado a los clientes conectados + anunciar la
-    // reapertura (mismo patrón que _toChat).
+    // reapertura (mismo patrón que _toChat). Payload COMPLETO (BUG-495): sin él
+    // el header perdía los banderines de modelo y mundo al reabrir.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'history', events: this.history, mode: this.permissionMode, status: this.status, slashCommands: this._slashList() }));
+        ws.send(JSON.stringify(this._historyPayload()));
       }
     }
     this._push({ type: 'reopened' }, { record: false });
@@ -1182,7 +1239,14 @@ class Chat {
     // evaluar al cerrar si el modelo se quedó corto (banner de consentimiento).
     this._lastUserText = String(text || '');
     this._turnAnswerText = '';
-    this._applyModelRouter(text, idleMs); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
+    // BUG-497: en el PRIMER turno del usuario NO hacer hot-swap de modelo — el
+    // set_model EN VIVO sobre el motor recién nacido (query aún no inicializada)
+    // choca con el arranque del primer prompt y el turno queda colgado. Turno 1
+    // corre en la base (Sonnet·high); AutoTux ajusta desde el turno 2 (cuando el
+    // set_model en vivo ya funciona normal).
+    const firstTurn = !this._started;
+    this._applyModelRouter(text, idleMs, firstTurn); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
+    if (!this._started) { this._started = true; this.onUpdate?.(); } // ya arrancó: desde el 2º turno AutoTux gestiona normal
     this._setStatus('working');
     this._push({ type: 'user', text, ...(atts ? { attachments: atts } : {}) });
     this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
@@ -1207,9 +1271,15 @@ class Chat {
   // Reusa el MISMO setModel() del selector manual — solo la DECISIÓN es nueva.
   // Inerte si `modelChoice` !== 'auto' o si el modelo no mapea a la escala.
   // UN solo movimiento del base por turno (evita doble decremento de cooldown).
-  _applyModelRouter(text, idleMs = 0) {
+  // PLAN-519 F1: escala del router de ESTE chat (con fable como techo si opt-in).
+  _routerLevels() { return levelsFor(this._fableCeiling); }
+
+  _applyModelRouter(text, idleMs = 0, firstTurn = false) {
     if (this.modelChoice !== 'auto') return; // forzado a un modelo fijo: AutoTux no opina
-    const base0 = clampLevel(this.model);
+    if (firstTurn) return; // BUG-497: primer turno corre en la base sin hot-swap (ver sendUser)
+    const levels = this._routerLevels();       // PLAN-519 F1: escala (base o base+fable)
+    const ceiling = levels.length - 1;
+    const base0 = clampLevel(this.model, levels);
     if (base0 === -1) return; // opusplan/default: no gestionado
     if (this._routerClassifyThrottle > 0) this._routerClassifyThrottle--;
 
@@ -1237,7 +1307,7 @@ class Chat {
     const pressure = readWindowPressure();
     const conserve = typeof pressure === 'number' && pressure >= WINDOW_PRESSURE_CONSERVE;
     if (move === 'up' || move === 'strong_up') {
-      const axis = decideUpAxis({ hard: move === 'strong_up', level: base0, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve });
+      const axis = decideUpAxis({ hard: move === 'strong_up', level: base0, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve, ceiling });
       if (axis === 'effort') { this._bumpEffortAuto(+1); move = 'same'; }
       else if (axis === 'none') { move = 'same'; } // conserve + sin margen de effort: no subir
     } else if (move === 'down') {
@@ -1245,7 +1315,7 @@ class Chat {
       if (axis === 'effort') { this._bumpEffortAuto(-1); move = 'same'; }
     }
 
-    const r = decideBase({ baseLevel: base0, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown });
+    const r = decideBase({ baseLevel: base0, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown, ceiling });
     this._routerDownStreak = r.downStreak;
     this._routerCooldown = r.cooldown;
     const base = r.level; // base tras el movimiento (puede haber demotado)
@@ -1254,10 +1324,10 @@ class Chat {
     // tocar el base — se restaura al cerrar el turno (_endTurnRouter). NUNCA en
     // go-aheads (dale/ok): correr trabajo en Haiku es frágil.
     if (turnOverride(kind) === 0) {
-      this._overrideRestore = MODEL_LEVELS[base];
+      this._overrideRestore = levels[base];
       if (this.model !== 'haiku') {
         this.setModel('haiku', { auto: true });
-        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: MODEL_LEVELS[base], to: 'haiku', text: text.slice(0, 150) });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: levels[base], to: 'haiku', text: text.slice(0, 150) });
       }
       // El logTurn se difiere al evento `result` (donde llega el usage/caché,
       // los tool counts reales y el modelo REAL del turno) — acá solo guardamos
@@ -1269,7 +1339,7 @@ class Chat {
     // Cambio de base (subida por código/corrección, o bajada por ack/idle).
     if (r.changed) {
       const from = this.model;
-      const next = MODEL_LEVELS[base];
+      const next = levels[base];
       if (next && next !== from) {
         this.setModel(next, { auto: true });
         const source = kind === 'strong_up' ? 'correction'
@@ -1336,8 +1406,9 @@ class Chat {
   // consentimiento en el front — NUNCA sube solo).
   _maybeJudge() {
     if (this.modelChoice !== 'auto') return;
-    const level = clampLevel(this.model);
-    if (level < 0 || level >= MODEL_LEVELS.length - 1) return; // ya en el techo
+    const levels = this._routerLevels(); const ceiling = levels.length - 1; // PLAN-519 F1
+    const level = clampLevel(this.model, levels);
+    if (level < 0 || level >= ceiling) return; // ya en el techo
     const substantial = (this._turnToolCount || 0) >= 2 || (this._turnAnswerText || '').length >= 400;
     if (!substantial) return;
     if (this._judgeThrottle > 0) { this._judgeThrottle--; return; }
@@ -1349,9 +1420,9 @@ class Chat {
     judgeAnswer({ cwd: this.cwd, currentModel: this.model, userText, answerText })
       .then((insufficient) => {
         if (insufficient !== true || this.closed || this.modelChoice !== 'auto') return;
-        const lvl = clampLevel(this.model);
-        if (lvl < 0 || lvl >= MODEL_LEVELS.length - 1) return;
-        const to = MODEL_LEVELS[lvl + 1];
+        const lvl = clampLevel(this.model, levels);
+        if (lvl < 0 || lvl >= ceiling) return;
+        const to = levels[lvl + 1];
         // Banner pasivo de consentimiento: el usuario decide (Reintentar/Ignorar).
         this._push({ type: 'redo-suggest', from: this.model, to });
         logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'judge', from: this.model, to, text: '(juez AutoMix: respuesta insuficiente, ofrezco subir)' });
@@ -1365,11 +1436,12 @@ class Chat {
   // margen para subir. Reusa sendUser (que re-arma el turno + re-juzga si toca).
   redo() {
     if (this.modelChoice !== 'auto') return false;
-    const lvl = clampLevel(this.model);
-    if (lvl < 0 || lvl >= MODEL_LEVELS.length - 1) return false;
+    const levels = this._routerLevels(); const ceiling = levels.length - 1; // PLAN-519 F1
+    const lvl = clampLevel(this.model, levels);
+    if (lvl < 0 || lvl >= ceiling) return false;
     const text = this._lastUserText || '';
     if (!text) return false;
-    this.setModel(MODEL_LEVELS[lvl + 1], { auto: true });
+    this.setModel(levels[lvl + 1], { auto: true });
     this.sendUser(text);
     return true;
   }
@@ -1385,14 +1457,15 @@ class Chat {
     classifyRelative({ cwd: this.cwd, currentModel: this.model, text })
       .then((move) => { // 'up' | 'down' | null (suficiente/timeout/error)
         if (!move || this.closed) return;
-        const b = clampLevel(this.model);
+        const levels = this._routerLevels(); const ceiling = levels.length - 1; // PLAN-519 F1
+        const b = clampLevel(this.model, levels);
         if (b === -1) return; // el usuario pudo pasar a opusplan/default mientras tanto
-        const r = decideBase({ baseLevel: b, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown });
+        const r = decideBase({ baseLevel: b, move, downStreak: this._routerDownStreak, cooldown: this._routerCooldown, ceiling });
         this._routerDownStreak = r.downStreak;
         this._routerCooldown = r.cooldown;
         if (r.changed) {
           const from = this.model;
-          const next = MODEL_LEVELS[r.level];
+          const next = levels[r.level];
           if (next && next !== from) {
             this.setModel(next, { auto: true });
             logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) });
@@ -1414,16 +1487,17 @@ class Chat {
     // — antes la restauración del override corría antes del guard y pisaba el
     // modelo forzado (badge decía uno, corría otro).
     if (this.modelChoice !== 'auto') { this._overrideRestore = null; return; }
+    const levels = this._routerLevels(); const ceiling = levels.length - 1; // PLAN-519 F1
     if (this._overrideRestore) {
       const restore = this._overrideRestore;
       this._overrideRestore = null;
-      if (this.model !== restore && MODEL_LEVELS.includes(restore)) {
+      if (this.model !== restore && levels.includes(restore)) {
         this.setModel(restore, { auto: true }); // volver del Haiku efímero al base
       }
     }
-    const base = clampLevel(this.model);
+    const base = clampLevel(this.model, levels);
     if (base === -1) return;
-    const dec = insufficiencyEscalation({ baseLevel: base, toolCalls: this._turnToolCount, toolErrors: this._turnToolErrors });
+    const dec = insufficiencyEscalation({ baseLevel: base, toolCalls: this._turnToolCount, toolErrors: this._turnToolErrors, ceiling });
     if (!dec) return;
     // F1+F2 (PEND-405): la insuficiencia es señal DURA (errores de tool ⇒ hace
     // falta capacidad) → salta de TIER, SALVO que el caché esté pegajoso: ahí
@@ -1431,13 +1505,13 @@ class Chat {
     // F4: con la ventana apretada, conservar (solo effort, nunca tier).
     const pressure = readWindowPressure();
     const conserve = typeof pressure === 'number' && pressure >= WINDOW_PRESSURE_CONSERVE;
-    const axis = decideUpAxis({ hard: true, level: base, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve });
+    const axis = decideUpAxis({ hard: true, level: base, effortIndex: effortIdx(this.effort), lastCacheRead: this._lastCacheRead || 0, pinned: !!this._effortPinned, conserve, ceiling });
     if (axis === 'effort') { this._bumpEffortAuto(+1); return; }
     if (axis === 'none') return;
     this._routerDownStreak = dec.downStreak;
     this._routerCooldown = dec.cooldown;
     const from = this.model;
-    const next = MODEL_LEVELS[dec.level];
+    const next = levels[dec.level];
     if (next && next !== from) {
       this.setModel(next, { auto: true });
       logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'insufficiency', from, to: next, text: `(${this._turnToolCount} tools, ${this._turnToolErrors} errores)` });
@@ -1493,7 +1567,9 @@ class Chat {
     if (!VALID_MODELS.has(model)) return;
     // AutoTux v2 (C1): defensa en profundidad — el router NUNCA debe llevar a
     // fable solo. Un cambio MANUAL (auto:false, selector) a fable sigue OK.
-    if (auto && FORBIDDEN_AUTO.has(model)) {
+    // PLAN-519 F1: si el chat optó por el TECHO FABLE (fableCeiling), fable SÍ es
+    // parte de la escala automática → el guard no lo bloquea.
+    if (auto && FORBIDDEN_AUTO.has(model) && !this._fableCeiling) {
       logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'guard', from: this.model, to: model, text: 'bloqueado: fable no es automático' });
       return;
     }
@@ -1536,7 +1612,24 @@ class Chat {
         // punto de partida razonable (mismo criterio que el constructor).
         const start = MODEL_LEVELS.includes(this.model) ? this.model : 'sonnet';
         if (start !== this.model) this.setModel(start, { auto: true });
+        // Base de esfuerzo high al entrar a AutoTux (pedido de Niko, BUG-497) —
+        // salvo que la persona lo haya fijado a mano. setModel re-alinea el
+        // effort al tier, así que lo dejamos en high DESPUÉS.
+        if (!this._effortPinned && this.effort !== 'high') { this.effort = 'high'; this._push({ type: 'effort', effort: 'high', auto: true }); this.onUpdate?.(); }
       }
+      return;
+    }
+    if (choice === 'tandem') {
+      // Modelo TÁNDEM (PLAN-507): apaga el router (modelChoice!=='auto'), fija el
+      // motor razonador real = Opus y el effort = high PINNED. La ejecución de
+      // código la delega a Codex (el runner agrega la tool + deniega Edit/Write);
+      // esa parte se activa al (re)arrancar el motor con la bandera tandem.
+      this.modelChoice = 'tandem';
+      this._push({ type: 'modelChoice', modelChoice: 'tandem' });
+      this.onUpdate?.();
+      this.setModel('opus'); // motor real = opus (auto:false)
+      this._effortPinned = true;
+      if (this.effort !== 'medium') { this.effort = 'medium'; this._push({ type: 'effort', effort: 'medium', auto: false }); this.onUpdate?.(); }
       return;
     }
     if (!VALID_MODELS.has(choice)) return;
@@ -1544,6 +1637,44 @@ class Chat {
     this._push({ type: 'modelChoice', modelChoice: choice });
     this.onUpdate?.();
     this.setModel(choice); // fuerza el modelo real — auto:false (elección manual)
+  }
+
+  // PLAN-519 F1: opt-in del TECHO FABLE de AutoTux. Extiende la escala del router
+  // a haiku→sonnet→opus→fable SOLO para este chat. Efecto real solo con AutoTux
+  // ('auto'); con un modelo forzado o Tándem es inerte hasta que se elija AutoTux.
+  setFableCeiling(on) {
+    const v = !!on;
+    if (this._fableCeiling === v) return;
+    this._fableCeiling = v;
+    this._push({ type: 'fableCeiling', fableCeiling: v });
+    this.onUpdate?.();
+  }
+
+  // PLAN-519 F2: configura el modelo TÁNDEM con razonador (Cloud) + ejecutor
+  // (Codex) elegibles. El razonador es this.model/this.effort (Cloud, pinned); el
+  // ejecutor viaja en this.tandemCodex y llega al runner (createCodexToolServer).
+  // Sin args = defaults (opus/medium + gpt-5.5/high), retrocompat con el Tándem
+  // original. Whitelist inline (el runner revalida, autoritativo — no cargamos el
+  // SDK en el server).
+  configureTandem({ reasonerModel, reasonerEffort, codexModel, codexEffort } = {}) {
+    this.modelChoice = 'tandem';
+    this._push({ type: 'modelChoice', modelChoice: 'tandem' });
+    // Razonador: un modelo Cloud REAL de la escala (haiku/sonnet/opus/fable), no
+    // 'auto'/'tandem'/opusplan/default. Default opus.
+    const CLOUD = new Set(['haiku', 'sonnet', 'opus', 'fable']);
+    const rm = CLOUD.has(reasonerModel) ? reasonerModel : 'opus';
+    this.setModel(rm); // auto:false (elección de la persona)
+    this._effortPinned = true;
+    const re = EFFORT_LEVELS.includes(reasonerEffort) ? reasonerEffort : 'medium';
+    if (this.effort !== re) { this.effort = re; this._push({ type: 'effort', effort: re, auto: false }); }
+    // Ejecutor Codex.
+    const CX_MODELS = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']);
+    this.tandemCodex = {
+      model: CX_MODELS.has(codexModel) ? codexModel : 'gpt-5.5',
+      effort: EFFORT_LEVELS.includes(codexEffort) ? codexEffort : 'high',
+    };
+    this._push({ type: 'tandemCodex', tandemCodex: this.tandemCodex });
+    this.onUpdate?.();
   }
 
   // Fija el ESFUERZO de razonamiento (eje thinking effort, PEND-391 #3). El
@@ -1781,17 +1912,29 @@ class Chat {
     return this.slashCommands.length ? this.slashCommands : (slashByCwd.get(this.cwd) || []);
   }
 
-  attach(ws) {
-    this.lastActivity = Date.now(); // abrir la vista cuenta como actividad
-    this.clients.add(ws);
-    ws.send(JSON.stringify({
+  // FUENTE ÚNICA del evento `history` (BUG-495). El front repinta TODO el header
+  // con este payload, así que DEBE llevar model/modelChoice/effort/sessionId/cwd/world SIEMPRE
+  // — attach() y los reenvíos tras respawn (reopen/_toChat/moveToWorld). Antes esos
+  // 3 mandaban una versión pelada y el header perdía los banderines 🤖/🏠 al reabrir.
+  _historyPayload(extra = {}) {
+    return {
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
       viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
       model: this.model, modelChoice: this.modelChoice, // para que el badge "🤖 AutoTux: X" nazca poblado
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
+      fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
+      tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
+      sessionId: this.sessionId,
       cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
-    }));
+      ...extra,
+    };
+  }
+
+  attach(ws) {
+    this.lastActivity = Date.now(); // abrir la vista cuenta como actividad
+    this.clients.add(ws);
+    ws.send(JSON.stringify(this._historyPayload()));
   }
 
   detach(ws) { this.clients.delete(ws); }
@@ -1800,6 +1943,8 @@ class Chat {
     return {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model, modelChoice: this.modelChoice,
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
+      fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
+      tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
@@ -1954,9 +2099,10 @@ class ChatManager {
     if (ok === false) return { ok: false, code: 500, error: 'La conversación se movió pero el motor no arrancó en el mundo destino (mirá ~/.cwc-data/chats/*.log).' };
     chat._setStatus('waiting');
     // 6. Avisar a los clientes abiertos: recargar history + anunciar el mundo nuevo.
+    //    Payload COMPLETO (BUG-495): el header del destino nace con modelo+mundo.
     for (const ws of chat.clients) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'history', events: chat.history, mode: chat.permissionMode, status: chat.status, slashCommands: chat._slashList() }));
+        ws.send(JSON.stringify(chat._historyPayload()));
       }
     }
     chat._broadcast({ type: 'moved', cwd: dest, world: worldLabelFor(dest) });
@@ -1987,11 +2133,16 @@ class ChatManager {
         // persona lo FIJÓ a mano (para que AutoTux no lo re-alinee al nivel).
         effort: c.effort || null,
         effortPinned: !!c._effortPinned,
+        fableCeiling: !!c._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
+        tandemCodex: c.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
         // AutoTux v2 (core/model-router.js): el NIVEL se deriva de `model`
         // (arriba); esto es el estado MÍNIMO de histéresis — contador de turnos
         // "down" seguidos + turnos restantes de cooldown anti-rebote.
         routerDownStreak: c._routerDownStreak || 0,
         routerCooldown: c._routerCooldown || 0,
+        // BUG-497: ¿ya arrancó (≥1 turno)? Para no re-proteger el "primer turno"
+        // de una conversación que en realidad ya venía andando tras un reinicio.
+        started: !!c._started,
         // Modo TUI: la tmux oculta (cwct-) sobrevive reinicios del server, así
         // que persistimos lo necesario para RE-ADJUNTARLA al rehidratar.
         viewMode: c.viewMode === 'tui' ? 'tui' : 'chat',
@@ -2036,8 +2187,14 @@ class ChatManager {
       // Eje thinking effort: restaurar el effort persistido + si estaba fijado.
       if (EFFORT_LEVELS.includes(s.effort)) chat.effort = s.effort;
       chat._effortPinned = !!s.effortPinned;
+      chat._fableCeiling = !!s.fableCeiling; // PLAN-519 F1: techo Fable opt-in de AutoTux
+      if (s.tandemCodex && typeof s.tandemCodex === 'object') chat.tandemCodex = { model: s.tandemCodex.model || 'gpt-5.5', effort: s.tandemCodex.effort || 'high' }; // PLAN-519 F2
       chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
       chat._routerCooldown = Number.isFinite(s.routerCooldown) ? s.routerCooldown : 0;
+      // BUG-497: ¿ya arrancó? Persistido; para snapshots viejos sin el campo,
+      // ground-truth de disco (si hay transcript, arrancó). Si NO arrancó (chat
+      // nuevo sin turno rehidratado), su próximo mensaje es "primer turno".
+      chat._started = s.started != null ? !!s.started : transcriptExists(chat.cwd, chat.sessionId);
       if (s.viewMode === 'tui' && s.terminalId && bareTmuxAlive(s.terminalId)) {
         // La TUI sigue corriendo en su tmux oculta: re-adjuntar (new-session -A).
         const term = sessionManager.createBare({
@@ -2135,7 +2292,7 @@ export default {
       // reconoce Claude Code). Sin `model` en el pedido, el default pasa a
       // ser 'auto' (antes quedaba null = "lo que decida el CLI"): AutoTux es
       // ahora el predeterminado de toda conversación nueva.
-      if (model != null && model !== 'auto' && !VALID_MODELS.has(model)) {
+      if (model != null && model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) {
         return res.status(400).json({ error: 'Modelo inválido.' });
       }
       if (permissionMode != null && !PERMISSION_MODES.has(permissionMode)) {
@@ -2301,8 +2458,18 @@ export default {
       const chat = manager.get(req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const model = req.body?.model;
-      if (model !== 'auto' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
+      if (model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
+      // PLAN-519 F2: modelo TÁNDEM CONFIGURABLE — {model:'tandem', tandem:{
+      // reasonerModel,reasonerEffort,codexModel,codexEffort}}. Sin `tandem` usa
+      // defaults (retrocompat con el Tándem original opus/medium + gpt-5.5/high).
+      if (model === 'tandem') {
+        chat.configureTandem(req.body?.tandem && typeof req.body.tandem === 'object' ? req.body.tandem : {});
+        manager.persist();
+        return res.json({ ok: true, chat: chat.info() });
+      }
       chat.setModelChoice(model);
+      // PLAN-519 F1: opt-in del techo FABLE de AutoTux — {model:'auto', fableCeiling:bool}.
+      if (model === 'auto' && req.body?.fableCeiling !== undefined) chat.setFableCeiling(!!req.body.fableCeiling);
       // Submenú modelo→esfuerzo (PEND-391 #3): el mismo POST puede fijar el
       // effort en la misma pasada. 'auto'/null DESFIJA (vuelve a seguir el tier
       // del modelo). setEffort se llama DESPUÉS de setModelChoice para que la

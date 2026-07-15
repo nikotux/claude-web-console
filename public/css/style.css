@@ -303,6 +303,8 @@ html, body {
 .tk-persist .sec-head::before { display: none; }         /* fuera la flecha */
 .tk-persist .sec-head { user-select: text; }
 .tk-persist .sec-title { font-size: .62rem; }
+.tk-persist .sec-head .sec-title { flex: none; }
+.tk-persist .sec-head .tk-ver-head { margin-right: auto; }
 .tk-persist .sec-head .btn--sm { min-height: 22px; }
 .tk-persist .sec-head .btn--icon { min-width: 22px; padding: .12rem; }
 .tk-persist .tk-card { padding: 0; gap: .1rem; }
@@ -398,11 +400,7 @@ html, body {
    peleando por espacio con modo/modelo en una sola línea). El Pac-Man queda
    HERMANO de este bloque (no adentro) — con .sess-main en align-items:center
    se centra solo entre las 2 filas, sin CSS extra de posicionamiento.
-   Texto achicado a pedido (mismo día): título a --cwc-fs-sm (antes md) y
-   modelo/badges a .65rem (bajo el token --cwc-fs-xs, que ya era el piso de
-   la escala) — deliberadamente por debajo de la escala de tokens.css porque
-   acá el objetivo es densidad máxima en una columna angosta, no jerarquía
-   tipográfica; no usar este valor fuera de esta tarjeta. */
+   Texto achicado a pedido (mismo día): título a --cwc-fs-sm (antes md). */
 .sess-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .05rem; justify-content: center; }
 .sess-row1, .sess-row2 { display: flex; align-items: center; gap: .3rem; min-width: 0; }
 .sess-name {
@@ -508,6 +506,37 @@ html, body {
 .sess-pick-h svg { flex: none; }
 .sess-pick-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .8rem; }
 .sess-msg { padding: .4rem .6rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); }
+
+/* PLAN-519 F3: selector de modelo/protocolo rediseñado (2 toggles + columnas +
+   leyenda dinámica). Colores por protocolo desde tokens (nunca hex). */
+.mp-legend {
+  text-align: center; font-weight: 700; font-size: var(--cwc-fs-md);
+  padding: .35rem .5rem; border-radius: 6px; margin-bottom: .6rem;
+  border: 1px solid var(--cwc-divider);
+}
+.mp-legend--autotux { color: var(--cwc-accent); border-color: color-mix(in srgb, var(--cwc-accent) 45%, transparent); background: color-mix(in srgb, var(--cwc-accent) 10%, transparent); }
+.mp-legend--tandem { color: var(--cwc-accent-cool); border-color: color-mix(in srgb, var(--cwc-accent-cool) 45%, transparent); background: color-mix(in srgb, var(--cwc-accent-cool) 10%, transparent); }
+.mp-legend--manual { color: var(--cwc-text-dim); }
+.mp-toggles { display: flex; gap: .4rem; margin-bottom: .7rem; }
+.mp-toggle {
+  flex: 1; padding: .45rem .5rem; border-radius: 6px; cursor: pointer;
+  background: var(--cwc-bg-chip); color: var(--cwc-text-dim);
+  border: 1px solid var(--cwc-divider); font-size: var(--cwc-fs-sm); font-weight: 600;
+}
+.mp-toggle--on { color: var(--cwc-text); border-color: var(--cwc-accent-cool); background: color-mix(in srgb, var(--cwc-accent-cool) 14%, transparent); }
+.mp-opts { display: flex; flex-wrap: wrap; gap: .35rem; }
+.mp-opt {
+  display: inline-flex; align-items: center; gap: .25rem; padding: .3rem .55rem;
+  border-radius: 999px; cursor: pointer; font-size: var(--cwc-fs-sm);
+  background: var(--cwc-bg-chip); color: var(--cwc-text-dim); border: 1px solid var(--cwc-divider);
+}
+.mp-opt--on { color: var(--cwc-text); border-color: var(--cwc-accent-cool); background: color-mix(in srgb, var(--cwc-accent-cool) 16%, transparent); }
+.mp-opt svg { flex: none; }
+.mp-effrow { display: flex; align-items: center; gap: .4rem; margin-top: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
+.mp-eff { background: var(--cwc-bg-chip); color: var(--cwc-text); border: 1px solid var(--cwc-divider); border-radius: 5px; padding: .2rem .35rem; font-size: var(--cwc-fs-sm); }
+.mp-info { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin: .25rem 0; }
+.mp-check { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text); margin-top: .3rem; cursor: pointer; }
+.mp-off { opacity: .45; }
 .sess-msg.sess-err { color: var(--cwc-danger-strong); }
 
 /* ===== Tarjeta Tolkien ===== */
@@ -536,6 +565,8 @@ html, body {
 .tk-info { font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary); display: flex; flex-direction: column; gap: .18rem; }
 .tk-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
 .tk-line--dim { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.tk-line--split { display: flex; align-items: center; width: 100%; }
+.tk-line--split .tk-spacer { flex: 1 1 auto; }
 /* Cada dato: ícono + valor pegados. */
 .tk-branch, .tk-sync, .tk-dirty, .tk-fresh, .tk-commit, .tk-version { display: inline-flex; align-items: center; gap: .2rem; }
 /* Identificador de versión (SHA corto): el dato para cruzar contra GitHub.
@@ -543,6 +574,18 @@ html, body {
 .tk-version { font-family: var(--cwc-font-mono); color: var(--cwc-text); font-weight: 600; cursor: pointer; border-radius: 4px; padding: 0 .15rem; }
 .tk-version:hover { background: var(--cwc-bg-hover); }
 .tk-version.is-copied { color: var(--cwc-ok); }
+.tk-ver-head {
+  font-family: var(--cwc-font-mono);
+  font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text-dimmer);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 .15rem;
+  white-space: nowrap;
+}
+.tk-ver-head:hover { background: var(--cwc-bg-hover); color: var(--cwc-text-secondary); }
+.tk-ver-head.is-copied { color: var(--cwc-ok); }
 .tk-branch { font-family: var(--cwc-font-mono); color: var(--cwc-text); }
 .tk-branch--warn { color: var(--cwc-warn); }
 .tk-sync--ok { color: var(--cwc-ok); }
@@ -616,9 +659,12 @@ html, body {
   border-bottom: 1px solid var(--cwc-divider); padding-bottom: .3rem;
 }
 .plan-lims .lim-head { margin-bottom: .15rem; }
-.plan-lims .lim-row { padding: .12rem 0; }
-.plan-lims .lim-top { font-size: var(--cwc-fs-sm); }
-.plan-lims .lim-bar { height: 4px; margin: .15rem 0; }
+.plan-lims .lim-row { padding: .14rem 0; }
+.plan-lims .lim-line { margin-bottom: .14rem; }
+.plan-lims .lim-label { font-size: var(--cwc-fs-sm); }
+.plan-lims .lim-pct { font-size: var(--cwc-fs-lg); }
+.plan-lims .lim-bar { height: 3px; }
+.plan-lims .lim-codex { margin-top: .28rem; padding-top: .28rem; }
 .plan-lims .lim-credits { margin-top: .18rem; padding-top: .22rem; }
 .plan-lims .lim-stale { margin-bottom: .1rem; }
 
@@ -638,13 +684,65 @@ html, body {
   font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
   text-transform: uppercase; letter-spacing: .04em; margin-bottom: .25rem;
 }
-.lim-row { padding: .2rem 0; }
-.lim-top { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; font-size: var(--cwc-fs-sm); }
-.lim-label { color: var(--cwc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.lim-pct { font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
-.lim-bar { display: block; height: 5px; background: var(--cwc-bg-chip); border-radius: 2px; margin: .2rem 0; overflow: hidden; }
-.lim-fill { display: block; height: 100%; border-radius: 2px; }
-.lim-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }
+.lim-row { padding: .25rem 0; }
+/* Fila REDISEÑADA (2026-07-15): 2 líneas. L1 = SOLO texto con jerarquía por
+   tamaño/familia/color; L2 = la barra en gradiente. */
+.lim-line { display: flex; align-items: center; gap: .4rem; margin-bottom: .22rem; }
+/* Título (Sesión / Semana · …): PRIORIDAD de ancho. Envuelve a 2 líneas en el
+   punto natural en vez de recortarse — el título es lo más importante, no se corta. */
+.lim-label {
+  color: var(--cwc-text); font-size: var(--cwc-fs-sm); line-height: 1.12;
+  flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* Meta (queda X% · resetea): bloque COMPACTO de mini-líneas pegadas a la derecha
+   (borde limpio contra el %), sin huecos de justify. flex:0 0 auto → NO le roba
+   ancho al título. */
+.lim-meta {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end;
+  text-align: right; color: var(--cwc-text-dimmer); min-width: 0; max-width: 46%;
+}
+.lim-meta-l {
+  font-size: var(--cwc-fs-2xs); line-height: 1.15; white-space: nowrap;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+/* El % es el dato duro: mono, más grande, tabular, coloreado por severidad. */
+.lim-pct {
+  flex: none; font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-lg); line-height: 1;
+  font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+/* Barra base + GRADIENTE verde→rojo revelado hasta --pct. El degradé continuo
+   vive en TODO el ancho (background del track); la máscara tapa de --pct a 100%
+   → la PUNTA del relleno muestra el color de severidad REAL de ese %. El número
+   en texto (arriba) es la codificación SECUNDARIA (no solo color, CVD-safe). */
+.lim-bar { display: block; height: 4px; background: var(--cwc-bg-chip); border-radius: 3px; margin: 0; overflow: hidden; position: relative; }
+.lim-bar--grad {
+  background: linear-gradient(90deg,
+    var(--cwc-ok-strong) 0%, var(--cwc-warn-strong) 52%, var(--cwc-danger-strong) 100%);
+}
+.lim-bar--grad .lim-bar-mask {
+  position: absolute; top: 0; bottom: 0; right: 0; left: var(--pct, 0%);
+  background: var(--cwc-bg-chip);
+  border-left: 1px solid color-mix(in srgb, var(--cwc-bg) 55%, transparent);
+}
+.lim-fill { display: block; height: 100%; border-radius: 3px; }
+.lim-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin-top: .18rem; }
+/* Bloque de Codex CLI (OpenAI): separado de Claude, cabecera en acento frío
+   (azul) para no confundir los dos proveedores de un vistazo. */
+.lim-codex { margin-top: .4rem; border-top: 1px solid var(--cwc-divider); padding-top: .4rem; }
+.lim-head--codex,
+.lim-head--claude {
+  display: flex; align-items: center; gap: .4rem; justify-content: space-between;
+}
+.lim-head--codex { color: var(--cwc-accent-cool); }
+.lim-head--claude { color: var(--cwc-accent); }
+.lim-head-t { flex: 0 0 auto; text-transform: none; letter-spacing: 0; }
+.lim-head--claude .cwc-flow-cell,
+.lim-head--codex .cwc-flow-cell { flex: 1; min-width: 0; }
+.lim-head--claude .cwc-flow-bar,
+.lim-head--codex .cwc-flow-bar { flex: 1 1 auto; width: auto; }
+.lim-reached { color: var(--cwc-danger); }
+.lim-codex-cred { color: var(--cwc-text-dim); }
 .lim-err { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dimmer); padding: .2rem 0; }
 /* Créditos de uso extra: fila COLAPSABLE (<details>, contraída por defecto en
    modal Y pie). El summary muestra estado de un vistazo; el detalle se despliega. */
@@ -1059,19 +1157,6 @@ html, body {
 .ev-msg--ok { color: var(--cwc-ok); }
 .ev-msg--err { color: var(--cwc-danger-strong); }
 
-/* Panel "Publicar a la consola" (pestaña Sistema) */
-.pub-hint { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin: 0 0 .6rem; line-height: 1.45; }
-.pub-hint code { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
-.pub-status { margin-top: .6rem; font-size: var(--cwc-fs-sm); display: flex; flex-direction: column; gap: .3rem; }
-.pub-status--run { flex-direction: row; align-items: center; gap: .5rem; color: var(--cwc-text-secondary); }
-.pub-status--ok { color: var(--cwc-ok); }
-.pub-status--err { color: var(--cwc-danger-strong); }
-.pub-dim { color: var(--cwc-text-dimmer); }
-.pub-gates { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--cwc-danger-strong); font-size: var(--cwc-fs-xs); }
-.pub-det { margin-top: .4rem; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
-.pub-det summary { cursor: pointer; }
-.pub-det ul { margin: .3rem 0 0; padding-left: 1.1rem; }
-
 /* Panel de backups (pestaña) */
 .bk-msg { font-size: var(--cwc-fs-sm); margin: .5rem 0 0; color: var(--cwc-text-dim); }
 .bk-msg.ok { color: var(--cwc-ok); }
@@ -1197,6 +1282,13 @@ html, body {
 .chat-model-pill--two .chat-pill-l2 {
   font-size: 9px; font-weight: 500; opacity: .78; letter-spacing: .01em;
 }
+.chat-flow {
+  display: flex; flex-direction: column; gap: 1px; justify-content: center;
+  min-width: 90px; max-width: 160px;
+}
+.chat-flow .cwc-flow-cell { display: flex; width: 100%; gap: .25rem; align-items: center; }
+.chat-flow .cwc-flow-bar { flex: 1 1 auto; width: auto; }
+.chat-flow .cwc-flow-num, .chat-flow .cwc-flow-total { flex: 0 0 auto; }
 /* Banner de consentimiento del juez AutoMix (PEND-391 #1 / D1): pasivo, discreto,
    con acento fresco para distinguirlo de un mensaje normal. Reusa .btn/.btn--sm. */
 .chat-redo {
@@ -2053,6 +2145,7 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 @media (max-width: 768px) {
   .mobile-menu-btn { display: inline-flex; }
   .chat-alive { display: inline-flex; }
+  .chat-flow { display: none; }
   /* CONTENCIÓN de los drawers (fix scroll fantasma reportado 2026-07-07): en
      móvil ambas barras son position:absolute. Sin un ancestro posicionado se
      ubicaban contra el VIEWPORT, y el drawer derecho cerrado (translateX(100%))

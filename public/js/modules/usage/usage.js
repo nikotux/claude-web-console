@@ -14,6 +14,7 @@
 // poda de transcripts del CLI. El modal se auto-refresca cada 10 s.
 import { modelColor, modelName } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
+import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 
 const POLL_MS = 15000;
 const AUTO_MS = 15000; // auto-refresh del modal (silencioso)
@@ -77,7 +78,7 @@ export async function fetchLimits(fresh = false) {
 }
 
 // "resetea en 1 h 40 min (10:00)" — relativo + hora local absoluta.
-export function fmtReset(iso) {
+export function fmtReset(iso, compact = false) {
   if (!iso) return '';
   const d = new Date(iso);
   const diff = d - Date.now();
@@ -86,6 +87,7 @@ export function fmtReset(iso) {
   const rel = min < 60 ? `${min} min`
     : min < 48 * 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}`
     : `${Math.floor(min / 1440)} d ${Math.floor((min % 1440) / 60)} h`;
+  if (compact) return `resetea ${rel.replace(/ (min|h|d)\b/g, '$1')}`;
   const hhmm = d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
   const abs = d.toDateString() === new Date().toDateString()
     ? hhmm : `${d.toLocaleDateString('es', { weekday: 'short' })} ${hhmm}`;
@@ -124,30 +126,40 @@ function windowTokFor(l, windows) {
   return null;
 }
 
-// renderLimits(el, data, opts): opts.windows = token-counts por ventana (solo el
-// modal los pasa; el pie no). Los créditos van SIEMPRE colapsados (<details>).
-export function renderLimits(el, data, opts = {}) {
-  const windows = opts.windows || null;
-  const rows = (data.limits || []).map((l) => {
-    const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
-    const color = pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
-    const wt = windowTokFor(l, windows);
-    // Sub-línea: solo las partes con contenido (evita "· ·" cuando no hay reset).
-    const sub = [`queda ${100 - pct}%`, fmtReset(l.resetsAt), wt != null ? `≈ ${fmtTokens(wt)} tok` : '']
-      .filter(Boolean).join(' · ');
-    return `
-      <div class="lim-row">
-        <div class="lim-top"><span class="lim-label"></span><span class="lim-pct" style="color:${color}">${pct}%</span></div>
-        <span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>
-        <div class="lim-sub">${sub}</div>
-      </div>`;
-  }).join('');
+// Color por UMBRAL de severidad (para el número % en texto = codificación
+// SECUNDARIA además del color de la barra: el valor exacto nunca es solo color).
+function sevColor(pct) {
+  return pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
+}
 
-  // Créditos de uso EXTRA (extra_usage). Fila COLAPSABLE (pedido del usuario
-  // 2026-07-10: contraída por defecto en el modal Y en el pie). El <summary>
-  // muestra el estado de un vistazo; el detalle se despliega al tocar.
-  const c = data.credits || { enabled: false, usedCredits: null, monthlyLimit: null, percent: null };
-  let sumLine = 'sin créditos activos';
+// Fila de límite REDISEÑADA (2026-07-15, pedido de Niko): DOS líneas.
+//   L1 = SOLO texto — label (ui) + meta (xs, dim, truncable) + % (mono, grande,
+//        coloreado por severidad). Jerarquía por tamaño/familia/color.
+//   L2 = la BARRA con GRADIENTE verde→rojo. Técnica "gradiente fijo revelado":
+//        el degradé continuo (--cwc-ok→warn→danger) vive en TODO el ancho del
+//        track y una máscara tapa de --pct a 100% → la PUNTA del relleno muestra
+//        el color de severidad REAL de ese %, no un corte duro por umbral.
+// `metaParts` = trozos ya formateados (se juntan con " · ", ignorando vacíos).
+// El label se rellena por textContent afuera (trae nombres del server).
+function limRowHtml(pctRaw, metaParts) {
+  const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
+  const metaLines = metaParts.filter(Boolean).map((t) => `<span class="lim-meta-l">${t}</span>`).join('');
+  return `
+    <div class="lim-row">
+      <div class="lim-line">
+        <span class="lim-label"></span>
+        <span class="lim-meta">${metaLines}</span>
+        <span class="lim-pct" style="color:${sevColor(pct)}">${pct}%</span>
+      </div>
+      <span class="lim-bar lim-bar--grad" style="--pct:${pct}%"><span class="lim-bar-mask"></span></span>
+    </div>`;
+}
+
+// Créditos de uso EXTRA (extra_usage de Claude) — fila COLAPSABLE (<details>,
+// contraída por defecto). Devuelve {html, labelText} para asignar el label por
+// textContent afuera.
+function claudeCreditsHtml(credits) {
+  const c = credits || { enabled: false, usedCredits: null, monthlyLimit: null, percent: null };
   let bodyLine = 'sin créditos activos';
   let pctText = '—';
   let barHtml = '';
@@ -159,16 +171,15 @@ export function renderLimits(el, data, opts = {}) {
       : (hasLimit && c.monthlyLimit > 0 && c.usedCredits != null
         ? Math.max(0, Math.min(100, Math.round((c.usedCredits / c.monthlyLimit) * 100)))
         : null);
-    color = pct == null ? 'var(--cwc-ok)' : pct >= 90 ? 'var(--cwc-danger)' : pct >= 70 ? 'var(--cwc-warn)' : 'var(--cwc-ok)';
+    color = pct == null ? 'var(--cwc-ok)' : sevColor(pct);
     const cur = c.currency || 'USD';
     pctText = pct != null ? `${pct}%` : fmtCred(c.usedCredits, cur);
     bodyLine = hasLimit
       ? `usó ${fmtCred(c.usedCredits, cur)} de ${fmtCred(c.monthlyLimit, cur)}${pct != null ? ` · queda ${100 - pct}%` : ''}`
       : `${fmtCred(c.usedCredits, cur)} consumidos · pago por uso`;
-    sumLine = bodyLine;
-    if (pct != null) barHtml = `<span class="lim-bar"><span class="lim-fill" style="width:${pct}%;background:${color}"></span></span>`;
+    if (pct != null) barHtml = `<span class="lim-bar lim-bar--grad" style="--pct:${pct}%"><span class="lim-bar-mask"></span></span>`;
   }
-  const creditsHtml = `
+  return `
     <details class="lim-credits-det${c.enabled ? '' : ' lim-credits--off'}">
       <summary class="lim-credits-sum">
         <span class="lim-label">💳 Créditos de uso</span>
@@ -179,19 +190,73 @@ export function renderLimits(el, data, opts = {}) {
         <div class="lim-sub">${bodyLine}</div>
       </div>
     </details>`;
+}
+
+// Bloque de CODEX CLI (OpenAI): sub-cabecera + sus ventanas con las MISMAS
+// filas del rediseño. Devuelve '' si no hay dato (best-effort del backend).
+function codexBlockHtml(codex, compact = false) {
+  if (!codex || !Array.isArray(codex.limits)) return '';
+  const staleHtml = codex.stale
+    ? `<div class="lim-stale">⚠ datos guardados${codex.updatedAt ? ` · ${fmtAgo(codex.updatedAt)}` : ''}</div>`
+    : '';
+  const reachedHtml = codex.limitReached
+    ? '<div class="lim-stale lim-reached">⛔ límite alcanzado</div>' : '';
+  const rows = codex.limits.length
+    ? codex.limits.map((l) => {
+      const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
+      return limRowHtml(l.percent, [`queda ${100 - pct}%`, fmtReset(l.resetsAt, compact)]);
+    }).join('')
+    : '<div class="lim-err">OpenAI no reportó ventanas de límite.</div>';
+  // Balance de créditos (overage) si el endpoint lo trae y no es cero.
+  const bal = codex.credits && codex.credits.balance;
+  const credLine = bal != null && bal > 0
+    ? `<div class="lim-sub lim-codex-cred">💳 crédito extra: ${fmtCred(bal, codex.credits.currency)}</div>` : '';
+  return `
+    <div class="lim-codex">
+      <div class="lim-head lim-head--codex"><span class="lim-head-t">Codex</span>${flowBarHtml({ engine: 'codex', compact: true, dot: false })}</div>
+      ${staleHtml}${reachedHtml}
+      ${rows}
+      ${credLine}
+    </div>`;
+}
+
+// renderLimits(el, data, opts): opts.windows = token-counts por ventana (solo el
+// modal los pasa; el pie no). Los créditos van SIEMPRE colapsados (<details>).
+export function renderLimits(el, data, opts = {}) {
+  const windows = opts.windows || null;
+  const compact = !!opts.compact;
+  // Etiquetas que se rellenan por textContent (traen nombres del server, evita
+  // inyección). Se acumulan en ORDEN DE RENDER (Claude primero, luego Codex).
+  const labelTexts = [];
+  const rows = (data.limits || []).map((l) => {
+    const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
+    const wt = windowTokFor(l, windows);
+    labelTexts.push(l.label);
+    return limRowHtml(l.percent, [`queda ${100 - pct}%`, fmtReset(l.resetsAt, compact), wt != null ? `≈ ${fmtTokens(wt)} tok` : '']);
+  }).join('');
+
+  const creditsHtml = opts.credits === false ? '' : claudeCreditsHtml(data.credits);
 
   const staleHtml = data.stale
     ? `<div class="lim-stale">⚠ datos guardados${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
     : '';
 
+  // Codex: sus labels van DESPUÉS de los de Claude en el DOM.
+  const codexHtml = codexBlockHtml(data.codex, compact);
+  if (data.codex && Array.isArray(data.codex.limits)) {
+    for (const l of data.codex.limits) labelTexts.push(l.label);
+  }
+
   el.innerHTML = `
-    <div class="lim-head">Límites del plan${data.subscription ? ` · ${data.subscription}` : ''}</div>
+    <div class="lim-head lim-head--claude"><span class="lim-head-t">Claude</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${staleHtml}
     ${rows || '<div class="lim-err">Anthropic no reportó ventanas de límite.</div>'}
-    ${creditsHtml}`;
-  // Etiquetas de las ventanas con textContent (traen nombres de modelo del server).
+    ${creditsHtml}
+    ${codexHtml}`;
+  // Etiquetas (Claude + Codex) por textContent, en el mismo orden de render.
   const labels = el.querySelectorAll('.lim-row .lim-label');
-  (data.limits || []).forEach((l, i) => { if (labels[i]) labels[i].textContent = l.label; });
+  labelTexts.forEach((txt, i) => { if (labels[i]) labels[i].textContent = txt; });
+  ensureFlowDirector();
 }
 
 // Un modelo se considera "consumiendo AHORA" si su transcript se tocó hace < 2 min.
@@ -260,7 +325,7 @@ function renderLeft(container, series, metric, liveKeys, range) {
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
-const modelHex = (key) => cssVar(`--cwc-model-${key}`) || cssVar('--cwc-model-unknown') || '#8a8a8a';
+const modelHex = (key) => cssVar(`--cwc-model-${key}`) || cssVar('--cwc-model-unknown') || 'CanvasText';
 
 let chartInst = null;
 function destroyChart() {
@@ -290,9 +355,9 @@ function buildDatasets(series, metric, surface) {
 // instancia propia, ver mount()): así abrir el zoom nunca destruye/pisa la
 // gráfica principal.
 function buildChartConfig(series, metric) {
-  const surface = cssVar('--cwc-bg-panel') || '#0d1119';
-  const gridCol = cssVar('--cwc-divider') || '#161c28';
-  const textCol = cssVar('--cwc-text-dim') || '#7c8494';
+  const surface = cssVar('--cwc-bg-panel') || 'Canvas';
+  const gridCol = cssVar('--cwc-divider') || 'CanvasText';
+  const textCol = cssVar('--cwc-text-dim') || 'CanvasText';
   const fmtVal = metric === 'cost' ? fmtCost : fmtTokens;
   return {
     type: 'bar',
@@ -340,7 +405,7 @@ function drawChart(canvas, series, metric) {
 // (o cambió Chart), cae a dibujar de cero.
 function updateChart(canvas, series, metric) {
   if (!chartInst || !window.Chart) { drawChart(canvas, series, metric); return; }
-  const surface = cssVar('--cwc-bg-panel') || '#0d1119';
+  const surface = cssVar('--cwc-bg-panel') || 'Canvas';
   chartInst.data.labels = (series.points || []).map((p) => p.label);
   chartInst.data.datasets = buildDatasets(series, metric, surface);
   chartInst.update('none'); // sin animación → no parpadea

@@ -262,6 +262,10 @@ código.
   `plan-limits.json` último snapshot BUENO de límites/créditos del plan (lo
   escribe el módulo tokens en cada respuesta OK de /api/tokens/limits; se sirve
   como fallback `stale` ante 429/corte de red/reinicio),
+  `codex-limits.json` último snapshot BUENO de los límites de CODEX CLI (OpenAI)
+  — lo escribe el módulo tokens (writePersistedCodex) desde el endpoint interno
+  `chatgpt.com/backend-api/wham/usage`, leyendo la credencial local
+  `~/.codex/auth.json`; fallback `stale` best-effort (PEND-499, ver módulo tokens),
   `usage-history.json` HISTÓRICO PERSISTENTE de consumo por día(LOCAL Medellín)×
   PROYECTO×modelo (days[fecha][consola|tolkien|otros][modelKey]={tokens,cost}; lo
   escribe el módulo tokens vía history-store.js: buildSummary calcula el desglose y
@@ -586,6 +590,51 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
   chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
                             runner-link.js (spawn/connect) · attachments.js (adjuntos) —
                             el motor real es bin/cwc-chat-runner.js.
+                            ROBUSTEZ DE SESIÓN NUEVA Y PRIMER TURNO (2026-07-15, PLAN-494 del Pad
+                            `console`, 4 bugs — ideas de Niko): (BUG-496) un chat NACE con un
+                            sessionId propio — `create()` genera `randomUUID()` y el constructor
+                            hace `this.sessionId = resume || randomUUID()` en vez de esperar al
+                            primer `system/init`. Así es persistible desde el segundo cero →
+                            `persist()` (su filtro `c.sessionId` ahora siempre pasa) lo snapshotea →
+                            `rehydrate()` lo revive → `_cleanupOrphans()` ya no mata su runner en un
+                            reinicio del server (ANTES la sesión nueva sin mensaje moría y salía
+                            "Conversación inexistente"/fantasma). El SDK v0.3.198 acepta la opción
+                            `sessionId` de query() → `--session-id <uuid>` (CREA con nuestro id);
+                            EXCLUYE `resume` (prohibido combinarlos sin forkSession). `_startEngine`
+                            elige entre `--session-id` (primer arranque) y `--resume` (ya hay
+                            historial) con `transcriptExists(cwd, sessionId)` (ground-truth de disco,
+                            NO una banderita). Plomería: `chatQueryOptions` acepta `sessionId`
+                            (tool-policy.js, spread exclusivo con resume) · `spawnRunner` (runner-link.js)
+                            arg `--session-id` · el runner lo parsea (`SESSION_ID`) y lo pasa. Efecto
+                            colateral bueno: el handle de Interfono `claude:<sessionId>` se conoce
+                            desde create() (adiós `from: null` del primer arranque).
+                            (BUG-497) AutoTux ya NO hace hot-swap de modelo en el PRIMER turno: el
+                            `set_model` EN VIVO sobre un motor recién nacido (query aún no
+                            inicializada) chocaba con el arranque del primer prompt y el turno quedaba
+                            colgado (se veía el cambio de agente pero no ejecutaba). Semáforo
+                            `_started` (persistido, set en sendUser al 1er dispatch; en rehydrate =
+                            `s.started ?? transcriptExists`): `sendUser` calcula `firstTurn=!_started`
+                            y `_applyModelRouter(text, idle, firstTurn)` retorna temprano si firstTurn.
+                            El turno 1 corre en la BASE — que ahora es **Sonnet · effort high** (pedido
+                            de Niko: entorno de trabajo, arrancar sólido y ajustar desde el turno 2):
+                            el constructor y `setModelChoice('auto')` fijan effort 'high' para el
+                            baseline 'auto' (salvo `_effortPinned`). AutoTux sube/baja normal desde el
+                            turno 2 (cuando el set_model en vivo ya funciona). `_started` se persiste
+                            (campo `started`) y restaura.
+                            (BUG-495) los banderines de modelo (🤖) y mundo (🏠/🌳) del header ya no se
+                            pierden al REABRIR el motor: FUENTE ÚNICA `_historyPayload(extra={})` (los
+                            12 campos: model/modelChoice/effort/effortPinned/cwd/world/packageRef/…)
+                            usada por `attach()` y por los 3 reenvíos de `history` tras respawn
+                            (reopen · _toChat · moveToWorld) — antes esos 3 mandaban un payload PELADO
+                            y el front repintaba el header con campos vacíos, escondiendo los badges.
+                            (BUG-498) el borrador del composer ya no se pierde: se respalda en
+                            `localStorage` por id (`cwc:chat-draft:<id>`, chat-tab.js) — guardar al
+                            tipear, restaurar al construir la ChatTab (sobrevive al rebuild total del
+                            pane de main.js), limpiar al enviar OK; y el handler `history` re-habilita
+                            el input si un `closed` previo lo dejó `disabled`. Los 4 verificados E2E
+                            (WS + Playwright + reinicio real). NOTA: reopen dentro de ~10s del último
+                            spawn falla con "Ya se está lanzando" (spawn-lock, BUG-504) — PRE-EXISTENTE,
+                            no de PLAN-494.
                             ADJUNTOS DE ARCHIVOS (2026-07-10, pedido de Niko: "adjuntar imágenes/
                             archivos como en claude.ai, que el modelo los interprete sin
                             describirlos"): UN solo botón 📎 en el composer (chat-tab.js) + pegar
@@ -1172,6 +1221,97 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (`bin/install-autotux.js`/`uninstall-autotux.js`, como exige la regla
                             dura del proyecto para tocar configuración fuera del repo). No
                             iniciado — queda documentado acá para cuando se retome.
+                            MODELO "TÁNDEM" — razona Claude, ejecuta Codex (2026-07-15, PLAN-507/
+                            PEND-508, pedido de Niko; VERIFICADO E2E): un modelChoice NUEVO —
+                            'tandem' — que SEPARA las dos fases del desarrollo entre proveedores:
+                            RAZONAMIENTO/planeación/verificación → Claude Opus (effort MEDIUM, FIJO —
+                            Niko 2026-07-15: Claude razona en medio, Codex ejecuta en alto) ·
+                            EJECUCIÓN de código → Codex gpt-5.5 (reasoning effort alto) vía el CLI
+                            `codex exec`. Es HERMANO de 'auto'/AutoTux en la misma infra (centinela
+                            de modelChoice + core/tool-policy.js) pero su ANTÍTESIS: dupla FIJA de
+                            gama alta elegida a mano, NO ruteo dinámico. Motores fijos = decisión de
+                            Niko (máxima calidad). ESQUIVA el límite "el contexto no cruza
+                            proveedores": Claude no comparte memoria viva con Codex — le pasa un PLAN
+                            como prompt (el plan ES la transferencia). PIEZAS: (a) 'tandem' en
+                            CHAT_MODEL_OPTIONS (ui/models.js) → todos los pickers por herencia; (b)
+                            setModelChoice('tandem') + constructor (chat/index.js): modelChoice='tandem',
+                            model REAL='opus', effort='medium' PINNED — el CLI nunca ve 'tandem' (centinela
+                            propio, como 'auto'); (c) spawnRunner pasa `tandem:true` (runner-link.js →
+                            arg `--tandem 1`); (d) NUEVO src/modules/chat/codex-tool.js: fábrica
+                            createCodexToolServer({cwd}) que arma la tool IN-PROCESS `delegate_to_codex`
+                            con createSdkMcpServer()+tool() del Agent SDK (zod schema {task}). Al
+                            invocarla, spawnea `codex exec --json --skip-git-repo-check -m gpt-5.5 -c
+                            model_reasoning_effort=high -s workspace-write` con cwd = el del chat,
+                            parsea el stream JSONL (thread.started/item.completed{agent_message|
+                            file_change}/turn.completed{usage}), y devuelve resumen + `git diff` +
+                            CONTENIDO de archivos nuevos (git diff NO incluye untracked; se leen con
+                            fs, sin tocar el índice) como tool_result para que Claude VERIFIQUE; (e)
+                            runner (bin/cwc-chat-runner.js): si `--tandem 1`, agrega el mcpServer codex
+                            a chatQueryOptions Y — BLOQUEO ESTRUCTURAL — askPermission auto-DENIEGA
+                            Edit/Write/MultiEdit/NotebookEdit (TANDEM_BLOCKED) sin tarjeta, con un
+                            message que le dice a Claude que use delegate_to_codex. Esto GARANTIZA el
+                            split: una tool solo "disponible" podía ser ignorada (riesgo señalado por
+                            Niko — Claude seguiría escribiendo el código él mismo → sin ahorro). Sin
+                            herramientas de escritura, su ÚNICO camino a un archivo es Codex. Permitidas:
+                            Read/Grep/Glob (razonar) + delegate_to_codex (ejecutar) + Bash (verificar —
+                            fuga conocida: podría escribir con echo>/sed; instrucción lo prohíbe, se
+                            aprieta a allowlist si se escapa); (f) chatQueryOptions (tool-policy.js)
+                            acepta `tandem`+`mcpServers`: agrega TANDEM_INSTRUCTION al system prompt
+                            (append preset, como el bootstrap de Pad) y el mcpServer. OJO CLAVE
+                            (verificado): la tool NO va en `allowedTools` — un nombre ahí AUTO-APRUEBA
+                            la tool ANTES de canUseTool (warning CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), y
+                            queremos que la delegación saque TARJETA DE PERMISO (Niko aprueba cada una;
+                            en modo "Todo" se auto-aprueba como cualquier tool). La tool sigue
+                            DISPONIBLE por mcpServers + alwaysLoad:true (availability ≠ auto-approve);
+                            (g) badge del header (chat-tab.js): "🤝 Tándem" color acento-frío (el de
+                            Codex en Uso). Como Codex puede tardar minutos, el runner sube
+                            CLAUDE_CODE_STREAM_CLOSE_TIMEOUT (el SDK corta tools MCP a 60 s). El
+                            ECONOMÍA: no baja el TOTAL de tokens, baja la PRESIÓN de la ventana de
+                            Claude (la generación de código, 60-80% del gasto, se va a la ventana de la
+                            suscripción ChatGPT). Verificación barata (diff, no repo). PILOTO: se usa
+                            en sesiones de chat REALES bajo control de Niko (aprobar/parar/cambiar
+                            modelo); generalizar a "Trabajar en esto"/botones de Salud = PEND-512
+                            (post-piloto). Continuidad Codex entre delegaciones (codex exec resume
+                            <thread_id>) = mejora futura (hoy cada delegación es fresca; Claude re-pasa
+                            el contexto en el `task`). VERIFICADO E2E (WS real): chat tandem → Opus →
+                            "delego a Codex" → tarjeta de permiso → Codex crea el archivo en el cwd →
+                            Claude verifica con Read/Bash; Edit/Write NUNCA usadas.
+                            SELECTOR DE MODELO REDISEÑADO — protocolo DERIVADO de la selección
+                            (2026-07-15, PLAN-519, pedido de Niko; VERIFICADO E2E): la arquitectura
+                            YA NO se elige como un modelo suelto — se INFIERE de 2 toggles EXCLUYENTES
+                            [🤖 AutoTux][🤝 Tándem] + columnas Cloud/Codex, con LEYENDA dinámica. Tabla
+                            de verdad: AutoTux (modelChoice='auto') = router entre Haiku+Sonnet+Opus
+                            SIEMPRE contiguos + Fable OPCIONAL como techo (opt-in), esfuerzo automático,
+                            Codex gris · Tándem con Codex (1 Cloud razonador + 1 Codex ejecutor,
+                            configurables) · Manual EMERGE de Tándem SIN Codex (modelo Cloud forzado +
+                            effort). Toggles excluyentes → NO hay combo AutoTux+Tándem (descartado a
+                            propósito). CAMBIOS BACKEND: (F1) core/model-router.js — las funciones
+                            (clampLevel/decideBase/insufficiencyEscalation/decideUpAxis) aceptan
+                            `levels`/`ceiling` por PARÁMETRO (default = escala base de 3, comportamiento
+                            idéntico → 0 regresión, los 68 tests viejos pasan); `levelsFor(fableCeiling)`
+                            devuelve ['haiku','sonnet','opus'(,'fable')]. Chat: `_fableCeiling` (persist/
+                            rehydrate/info) + `_routerLevels()` threaded en TODO el router; el guard
+                            FORBIDDEN_AUTO se relaja SOLO con opt-in (`setFableCeiling`). Fable como techo
+                            es CONTIGUO (un nivel más arriba) → la aritmética ±1 no se tocó; NO hay
+                            "rebase a subconjunto no contiguo" (se descartó por diseño). (F2) Tándem
+                            CONFIGURABLE: el razonador = this.model/this.effort (Cloud, era opus/medium
+                            hardcodeado), el ejecutor = `this.tandemCodex {model,effort}` (era gpt-5.5/high
+                            hardcodeado) → `configureTandem({reasonerModel,reasonerEffort,codexModel,
+                            codexEffort})`; codex-tool.js createCodexToolServer acepta model/effort (whitelist
+                            CODEX_MODELS/CODEX_EFFORTS); runner arg --codex-model/--codex-effort. (F5)
+                            POST /api/chat/model acepta {model:'auto',fableCeiling} · {model:'tandem',
+                            tandem:{...}} · {model:<cloud>,effort} (Manual). Retrocompat: modelChoice string
+                            SE QUEDA (auto/tandem/forzado) + 2 campos nuevos; tandem viejo → defaults; sin
+                            migración destructiva. (F3) UI: sessions.js pickModelForChat reescrito (.mp-*
+                            en style.css) — 2 toggles + columnas + leyenda por protocolo (color por token:
+                            AutoTux acento · Tándem acento-frío · Manual tenue) + effort por chip (select) +
+                            checkbox Fable. Test determinista bin/cwc-test-model-router.js: 77 pass (68+9
+                            fable). VERIFICADO E2E: 3 protocolos por endpoint (Manual sonnet/high · AutoTux+
+                            Fable · Tándem sonnet/low+gpt-5.4/medium) + picker por Playwright (leyenda
+                            dinámica, 0 errores). El badge del header (chat-tab.js) se conserva (auto→AutoTux
+                            · tandem→🤝 Tándem · forzado→modelo). Métricas/calibración (F6): logDecision/
+                            logTurn siguen; con fable en la escala el `from`/`to` puede ser 'fable' (la
+                            calibración lo tolera, es un nombre de modelo más). Ver PLAN-519 en Pad `console`.
                             DIAGRAMAS ```mermaid``` (2026-07-11, pedido del usuario "poder generar
                             diagramas desde el chat"): un bloque ```` ```mermaid ```` en la respuesta
                             del modelo se renderiza como SVG inline (flowchart/secuencia/ER/gantt/
@@ -2002,6 +2142,49 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             plan-limits.js) pinta el aviso "⚠ datos guardados · hace X" cuando
                             `stale`, y loadLimits del modal ya NO borra el último render bueno
                             si un refresco posterior falla — paridad con el pie).
+                            CODEX CLI — SEGUNDA fuente de ventanas de límite (2026-07-15,
+                            PEND-499, pedido de Niko "trackear el uso de ChatGPT Max"): GET
+                            /api/tokens/limits suma un campo OPCIONAL `codex`
+                            {limits[],credits,subscription,limitReached,updatedAt,stale?} con el
+                            uso de CODEX CLI (el agente de código de OpenAI), MISMO shape que los
+                            límites de Claude para que el front los pinte con el mismo componente.
+                            Fuente: el endpoint INTERNO `chatgpt.com/backend-api/wham/usage` (lo
+                            consume el propio CLI open-source `openai/codex`) con la credencial
+                            LOCAL `~/.codex/auth.json` (tokens.access_token + header
+                            ChatGPT-Account-Id) — MISMO patrón de blindaje que Claude: el server
+                            hace de PROXY (el token nunca sale al cliente), caché 120 s +
+                            persistencia propia en `~/.cwc-data/codex-limits.json`
+                            (writePersistedCodex, atómica tmp+rename) con fallback `stale` ante
+                            error. `getCodexBlock()` es BEST-EFFORT y NUNCA lanza: si falla
+                            (endpoint caído, sin sesión, sin red) devuelve el último snapshot
+                            `stale` o null — la sección de Codex simplemente no aparece y JAMÁS
+                            afecta el status ni los límites de Claude (se engancha con
+                            `{...result, codex: await codexP}` en las DOS ramas del handler,
+                            éxito y fallback; si Claude cae pero Codex vive, se sirve un shell con
+                            limits vacío + el bloque de Codex). Las ventanas: primary_window +
+                            secondary_window del rate_limit + cada additional_rate_limits[]
+                            (features metrados tipo GPT-5.x-Codex-Spark); reset_at viene en
+                            SEGUNDOS unix → ISO. ⚠️ VÍA NO-OFICIAL: el endpoint es interno de
+                            OpenAI, NO está documentado públicamente → puede cambiar de forma sin
+                            aviso (por eso todo es best-effort). Precedente: es el MISMO perfil de
+                            riesgo que ya aceptamos con el medidor OAuth de Claude (leer credencial
+                            local + pegarle a un endpoint no-doc que usa el propio CLI). El CHAT de
+                            ChatGPT Max/Plus/Pro queda DELIBERADAMENTE AFUERA (decisión de Niko
+                            2026-07-15): NO tiene ninguna vía equivalente — ni oficial ni
+                            semi-oficial —, solo reverse-engineering fuera de ToS. El token de
+                            Codex dura ~10 días (mucho más margen que el de Claude). El nombre del
+                            plan sale de CODEX_PLAN_LABELS (mapea plan_type→nombre legible;
+                            'prolite'→"ChatGPT Plus"). REDISEÑO VISUAL DE LA FILA (mismo pedido):
+                            renderLimits pasó de 3 a 2 líneas por límite — L1 = SOLO texto (label
+                            ui-dim + meta xs-truncable "queda X% · resetea · ≈tok" + % en MONO
+                            grande coloreado por severidad) · L2 = la BARRA en GRADIENTE verde→
+                            ámbar→rojo continuo. Técnica "gradiente fijo revelado" (`.lim-bar--grad`
+                            + `.lim-bar-mask`): el degradé (--cwc-ok→warn 55%→danger) vive en TODO
+                            el ancho del track y una máscara tapa de `--pct` a 100% → la PUNTA del
+                            relleno muestra el color de severidad REAL de ese %, no un corte duro
+                            por umbral. El número % en texto es la codificación SECUNDARIA (no solo
+                            color → CVD-safe, validado con la skill dataviz). `limRowHtml()` es el
+                            helper de fila COMPARTIDO (Claude + Codex + créditos, fuente única).
                             HISTÓRICO PERSISTENTE + rediseño del modal (2026-07-10, pedido del
                             usuario): REEMPLAZÓ al viejo RESET (POST /reset, tokens-reset.json,
                             applyReset — TODO eliminado). El costo NO se persiste, se recalcula
@@ -2073,6 +2256,38 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Timer 10 s: refresca límites+resumen (Pac-Man+token-counts) y la gráfica
                             solo en Día (cambia por hora); en Semana/Mes re-pinta solo la izquierda.
                             chartInst se destruye al re-crear y en onClose (sin leaks))
+                            CAUDAL EN VIVO — "Manguera de tokens" (2026-07-15, PEND-516, pedido de
+                            Niko): GET /api/tokens/flow (autenticado, 0 tokens) devuelve el CAUDAL
+                            reciente {claude:{tps,tokens60,lastTs}, codex:{tps,tokens60,lastTs},
+                            updatedAt} para alimentar una visualización animada de agua (ver
+                            ui/token-flow.js). Lógica en src/modules/tokens/flow.js: lee SOLO los
+                            bytes recién APENDEADOS a los logs locales (cursor por byte-offset,
+                            in-memory, sin costo de tokens ni escritura a disco) — Claude de
+                            ~/.claude/projects/**/*.jsonl (message.usage input+output+cache, dedup
+                            por message.id) y Codex de ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+                            (event_msg type=token_count → last_token_usage.total_tokens, ya es delta
+                            por turno). BASELINE crítico: al ver un archivo por primera vez fija el
+                            cursor al tamaño actual SIN parsear el histórico (solo cuenta lo que se
+                            apende después de arrancar; el primer poll da ceros). Ledger rodante de
+                            120 s; tps = tokens de los últimos 10 s / 10; solo escanea archivos con
+                            mtime < 5 min. Es efímero (nada persiste; un reinicio arranca de baseline).
+                            TEXTO EN VIVO — GET /api/tokens/stream (2026-07-15, PLAN-544, para la
+                            Vista Raw): HERMANO de flow.js (src/modules/tokens/stream.js) — MISMO
+                            mecanismo cursor+baseline por bytes apendeados, pero en vez de CONTAR
+                            tokens EXTRAE el TEXTO REAL que las sesiones escriben (Claude: bloques
+                            text/thinking/tool_use de message.content; Codex: deltas de
+                            agent_message/agent_reasoning). CURSORES PROPIOS (Map aparte del de
+                            flow.js): NO comparte estado con el contador — aísla el riesgo (flow.js
+                            alimenta la manguera que Niko ya usa; no se toca). Cada fragmento se
+                            etiqueta {source,sessionId,world,model,text,seq}: el `world` (console/
+                            tolkien/otros) sale del nombre del dir del transcript en Claude (regex
+                            sobre encodeCwd) y del session_meta.cwd en Codex (parcial: si el rollout
+                            no lo graba, world=null → 'codex?'). Buffer rodante en memoria (400
+                            fragmentos, texto por-fragmento capado a 2000 chars — es muestreo para
+                            la lluvia, no volcado); `?since=<seq>` devuelve solo lo nuevo (multi-
+                            ventana safe, sin cursor por-cliente). 0 tokens, SOLO-LECTURA, efímero.
+                            Baseline igual que flow.js (primer poll vacío, la lluvia no vomita el
+                            histórico). Lo consume public/js/rawview/raw.js (ver raw.html en el mapa).
   tolkien/                  SOLO git del proyecto trackeado: status/fetch/update. El contexto y
                             las memorias editables NO viven acá — ver módulo `projects/`.
                             REFRESH DE DB LOCAL DESACOPLADO (2026-07-12, resolución de un hallazgo
@@ -2526,27 +2741,6 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             GET /file (admin, ruta del instance.json). Front:
                             public/js/modules/system/env-vars-panel.js (secciones 🪪 Identidad
                             y 🏢 Cliente, editable inline, deps Zoho como filas clave→ID).
-  publish/                  PUBLICAR A LA CONSOLA (PLAN-488) — pestaña admin de ⚙ Sistema que
-                            sincroniza el repo INTERNO → el repo LIMPIO `la-consola` (el que
-                            instala el compañero). Dirección ÚNICA (interno → limpio, nunca al
-                            revés; el limpio es un MIRROR generado, read-only para consumidores).
-                            shared.js: transform de limpieza DECLARATIVO (RSYNC_EXCLUDES de
-                            secretos/runtime + MIRROR_PURGE de lo interno que NUNCA debe existir
-                            en el mirror — _archived, el propio tooling de publish, CLAUDE.generic.md
-                            — porque `rsync --exclude` protege de COPIAR pero también de BORRAR, así
-                            que un resto viejo persistiría sin el rm explícito · swap CLAUDE.md ←
-                            CLAUDE.generic.md · strip del changelog interno del README · docs/ a
-                            whitelist · parche de registry.js/system.js del mirror para quitar las
-                            refs a publish) + GATES BLOQUEANTES (runGates: secretos —token maestro,
-                            .env/users/sessions/certs, material de clave— + identidad —IDENTITY_FORBIDDEN,
-                            preciso: email + firma, NO el nombre "Nico" que está en mil comentarios;
-                            si algo aparece ABORTA sin publicar). El TOOLING de publish es
-                            INTERNO: se auto-excluye del mirror (su shared.js contiene los strings
-                            que el gate busca → se auto-bloquearía). index.js: POST /api/publish
-                            (admin, reserva estado + spawn runner) · GET /api/publish (admin, lee
-                            estado, 0 tokens). Front: system/publish-panel.js (confirm fuerte por ser
-                            acción hacia afuera + Pac-Man delegating + reporte de gates/limpieza).
-                            Fuente del CLAUDE genérico versionada en la raíz: `CLAUDE.generic.md`.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md).
@@ -2562,7 +2756,12 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             oculto) y compacto, leyenda densa branch · ↓N por traer · dirty ·
                             fresh · último commit + botones fetch/update) y la leyenda
                             CPU/RAM/disco (data-module="stats") DEBAJO, separada por un
-                            divisor. Los gauges se movieron del pie IZQUIERDO al DERECHO
+                            divisor. El widget "Actividad en Segundo Plano" (#activity-widget /
+                            ui/activity-widget.js, ROAD-76) fue ELIMINADO/desconectado de la UI
+                            a pedido de Niko (2026-07-15): activity-widget.js y
+                            modules/system/activity-modal.js quedan como código huérfano inerte,
+                            y el front ya no consume GET /api/health/active-runners. Los gauges se
+                            movieron del pie IZQUIERDO al DERECHO
                             (pedido 2026-07-07): en el rail colapsado derecho Tolkien se oculta
                             (only-expanded) y los gauges quedan como anillos-ícono compactos
                             (#sidebar-right.collapsed .gauge-ring), mismo tratamiento que tenían
@@ -2924,7 +3123,12 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             con cls 'chat-alive' y estado vivo/dormido) ·
                             activity-widget.js (ACTIVIDAD EN SEGUNDO PLANO, ROAD-76 del Pad
                             `console`, 2026-07-11, pedido de Niko: "poder ver cuántos agentes/
-                            runners consumen tokens en paralelo"). Widget COMPACTO en el pie de la
+                            runners consumen tokens en paralelo"). ELIMINADO/desconectado de la UI
+                            a pedido de Niko (2026-07-15): ya no existe #activity-widget en
+                            index.html, main.js ya no importa initActivityWidget ni consume
+                            GET /api/health/active-runners, y activity-widget.js +
+                            modules/system/activity-modal.js quedan como código huérfano inerte.
+                            Diseño histórico desconectado: widget COMPACTO en el pie de la
                             barra DERECHA (#activity-widget en index.html, ENTRE .tk-persist de
                             Tolkien y el data-module="stats" de los gauges). SIEMPRE VISIBLE
                             (pedido de Niko 2026-07-11 "actualicé y no lo veo": un widget que se
@@ -2954,7 +3158,27 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             centralizada — NO importa los 17 módulos: evita acoplamiento/circular).
                             Modelo por runner = mapa estático (documentado, para el semáforo);
                             startedAt = birthtime del lock/job ≈ spawn. Agregar un runner nuevo = una
-                            fila más en RUNNER_REGISTRY; si su lock nunca existe, no se lista)
+                            fila más en RUNNER_REGISTRY; si su lock nunca existe, no se lista) ·
+                            token-flow.js (visualización "Manguera de tokens" del caudal de tokens:
+                            DIRECTOR DOM con un solo rAF que anima todas las celdas .cwc-flow-cell
+                            del documento leyendo el store compartido; suavizado por data-flow-key,
+                            robusto al re-render. El store ref-counted pollea GET /api/tokens/flow
+                            cada ~400 ms y el backend devuelve claude/codex globales + bySession/byCwd
+                            con acumuladores. Helper flowBarHtml({engine,session?,cwd?,total?,compact?,dot?})
+                            genera una celda autocontenida con punto de identidad
+                            Claude=--cwc-accent / Codex=--cwc-accent-cool, barra de 3px con la misma
+                            técnica de gradiente fijo revelado que límites del plan y número t/s. Las
+                            barras GLOBALES viven a la derecha de los headers "Claude"/"Codex" de
+                            los límites del plan en renderLimits; se extienden a todo el ancho
+                            disponible, sin punto (el texto ya identifica), y se limpiaron los textos
+                            "✦ Claude · Max" / "🤖 Codex CLI · ChatGPT Plus" a solo "Claude"/"Codex".
+                            Se eliminaron el widget de la barra derecha, el botón 💧, el modal
+                            dedicado y la sección de caudal del modal Uso. Las tarjetas de Sesiones
+                            quedan revertidas a título + modelo; las 2 barras de caudal POR SESIÓN
+                            viven en el header del chat activo (.chat-flow): Claude por sessionId →
+                            bySession y Codex por cwd → byCwd, con tps + acumulado. El sessionId
+                            viaja ahora en _historyPayload junto a cwd/world para poblar esa barra
+                            al abrir/reconectar.)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden].
@@ -2979,6 +3203,108 @@ public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hid
                             para filas/controles densos; fs-lg/fs-xl SOLO para títulos prominentes.
 public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
+public/raw.html + js/rawview/raw.js + css/raw.css   Vista Raw (PLAN-544, pedido
+                            personal de Niko 2026-07-15): botón "🔴 Vista Raw" (ícono
+                            `pulse`, junto a Explorador en `.footer-acct` de
+                            index.html) que abre `/raw` en pestaña nueva —
+                            página standalone SIN `main.js` (molde de
+                            `archivos.html`), SOLO-LECTURA. Visualización estilo
+                            Matrix/hacker Y2K donde la lluvia ES EL TEXTO REAL
+                            que las sesiones están escribiendo (no glifos
+                            decorativos — pedido explícito de Niko: "como en
+                            Matrix, el código que cae ES el mundo"). CODIFICACIÓN
+                            DE IDENTIDAD (v2, ver el eje completo en el comentario
+                            de PLAN-544): TONO/hue = MUNDO (🖥️ Consola cálido ~18°
+                            · 🌳 Tolkien verde ~140° · Otros/Codex-desconocido
+                            frío ~190-210°) · MATIZ/shade = SESIÓN (jitter+
+                            lightness estables por `hash(sessionId)`, así todas
+                            las sesiones de un mundo son del mismo color pero de
+                            sombra distinta) · TEXTURA = PROVEEDOR (el output
+                            real de Claude=lenguaje vs Codex=código ya se ve
+                            distinto gratis; el char REAL sale con glow más
+                            brillante que el relleno) · BRILLO+densidad = tps.
+                            Cada sesión ocupa una BANDA contigua de columnas
+                            repartidas INTERCALADAS a lo ancho, con un rótulo
+                            tenue arriba (`🖥️ consola · opus · <sid4>`); las
+                            columnas sin dueño caen como relleno ambiente gris.
+                            La lluvia es TEXTURA/pulso (legible a medias); lo
+                            LEGIBLE vive en la franja del feed (abajo, líneas
+                            color-coded por mundo que se desvanecen ~7s).
+                            DINÁMICA v3 (feedback de Niko: la v2 "se sentía
+                            wallpaper, desconectada de los flujos"): de lava-lamp
+                            a MONITOR CARDÍACO — cada banda tiene su propia
+                            ENERGÍA (0..1, decae hacia un piso según estado): en
+                            reposo cae lenta/tenue casi congelada, trabajando
+                            cae rápida/brillante/densa (verificado: banda
+                            working ~5-6× el brillo de una en reposo). Motor de
+                            lluvia por-columna con TIEMPO REAL (velocidad =
+                            lerp(idle,fast,energía), no un step global). Piezas:
+                            IGNICIÓN al nacer (destello) + DISOLUCIÓN al morir ·
+                            CABEZA blanca incandescente (cursor tipeando) +
+                            RIPPLE (columnas frescas caen) en cada fragmento
+                            nuevo · el ESTADO manda el modo — la banda enciende
+                            al abrir la sesión aunque aún no escriba, delegando
+                            RESPIRA (pulso sinusoidal); el rótulo lleva glifo de
+                            estado (▶ working · ⟳ delegando · ◦ vivo · » texto
+                            headless · · muriendo) · ambiente gris recede fuerte.
+                            DATOS: TRES endpoints por polling ~0.8s —
+                            `GET /api/tokens/flow` (tps → HUD), `GET
+                            /api/tokens/stream?since=<seq>` (fragmentos de TEXTO
+                            REAL {source,sessionId,world,model,text,seq}, ver
+                            `tokens/stream.js`) y `GET /api/chat/list` (estado
+                            por sesión: se une por `sessionId` — status/alive/
+                            delegating/cwd→world; una sesión de chat VIVA crea
+                            banda aunque no haya escrito; las dormidas no).
+                            LOGS DE TERMINAL POR BANDA (última adición de Niko):
+                            bajo el rótulo de cada sesión, un panel legible
+                            (`.raw-log`, DOM sobre el canvas) con el texto real
+                            escribiéndose DE CORRIDO (máquina de escribir, ~90ms,
+                            más rápida a más energía) que hace tail-scroll y al
+                            llegar al fondo RECICLA en loop (cursor circular sobre
+                            `sess.log`) → siempre hay texto de consola fluyendo en
+                            cada banda. Semitransparente (opacity 0.4) para no
+                            tapar la lluvia de fondo. SEED: para que una banda
+                            ociosa desde que se abrió la vista no arranque vacía,
+                            al descubrir una sesión el front pide `GET
+                            /api/tokens/stream/seed?sid=<id>` — lee la COLA del
+                            transcript de esa sesión (getSeed de stream.js,
+                            extractor propio SIN tocar cursores/dedup del
+                            streaming; solo Claude, Codex no) y siembra su log.
+                            LAYOUT v5 (ajustes de Niko): márgenes 0 en TODO
+                            (`* { margin:0; padding:0 }`, offsets a borde) → la
+                            vista usa el 100% de la ventana; RESPONSIVE completo
+                            (resize debounced 120ms → resizeCanvas recomputa
+                            canvas+columnas+bandas+rótulos+paneles; label/log
+                            clampean su `left` a `canvas.width` para no
+                            desbordar en ventanas angostas). Las BANDAS se
+                            reparten BORDE A BORDE (banda 0 pegada a la izquierda,
+                            la última a la derecha, huecos parejos en el medio —
+                            no centradas en su franja, así el contenido arranca
+                            desde el borde sin margen). ODÓMETRO DE TOKENS
+                            abajo-derecha (`#raw-counters`, UNA sola línea
+                            compacta: sesiones + Claude + Codex, dígitos 16px):
+                            dos contadores
+                            PERSISTENTES (localStorage `cwc:rawcount:*`) de 12
+                            DÍGITOS (zero-pad) Claude/Codex que TREPAN en tiempo
+                            real integrando el tps de `/flow` por frame (+ salto
+                            hacia arriba si la acumulación real por deltas de
+                            `bySession/byCwd` se adelanta; monotónico). Es un
+                            contador de CAUDAL (estimación viva "ver subir los
+                            tokens"), no facturación exacta — para eso está el
+                            panel Uso. Ruta `/raw` en server.js (mismo
+                            patrón que `/archivos`, detrás del middleware de
+                            auth). Cierre con `Esc`/✕ → `window.close()` (solo
+                            funciona si la pestaña se abrió por click real
+                            —`target="_blank"`—, no programáticamente:
+                            comportamiento de navegador, no bug). Paleta propia
+                            en `raw.css`, deliberadamente fuera de `tokens.css`
+                            (excepción documentada: página temática "easter egg"
+                            aislada en su propio archivo, no hex sueltos en CSS
+                            compartido; los colores de mundo/sesión son HSL
+                            calculados en JS). Verificado E2E (Playwright): bandas
+                            terracota=Consola / verde=Tolkien con texto real
+                            cayendo + rótulos + feed. Plan y ejes de diseño en Pad
+                            `console`: PLAN-544.
 bin/cwc-whatsapp-daemon.js  puente WhatsApp ↔ Comunicaciones (Baileys, servicio systemd
                             whatsapp-bridge.service, sesión emparejada, estado persistido
                             ~/.cwc-data/comms/whatsapp*, PLAN-447 — ver el detalle completo en
@@ -3042,14 +3368,6 @@ bin/cwc-adduser.js          crea un usuario de la consola desde la CLI (reusa cr
                             de stdin (automación). El PRIMER usuario se fuerza admin. OJO: el server
                             vivo NO relee users.json en caliente (reiniciar para que lo tome); en
                             instalación nueva se crea antes de arrancar el servicio.
-bin/cwc-publish-runner.js   PUBLICA el repo interno → repo limpio la-consola (PLAN-488),
-                            DESACOPLADO (regla de oro): mantiene un mirror local persistente
-                            (~/.cwc-data/la-consola-mirror), hace fetch+reset al remoto → rsync del
-                            árbol interno (excludes) → transform de limpieza → GATES bloqueantes
-                            (secretos+identidad) → commit incremental (committer neutro, sin PII) →
-                            push. 0 tokens (git puro, no SDK; regla 6 no aplica). Aborta sin
-                            publicar si un gate falla. Estado en ~/.cwc-data/publish.json + publish.log.
-                            Lógica en src/modules/publish/shared.js.
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
                             DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query

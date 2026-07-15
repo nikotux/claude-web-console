@@ -32,6 +32,7 @@ export default {
       <header class="sec-head">
         <span class="sec-dot" data-ref="dot" title="Estado del repo"></span>
         <span class="sec-title">Tolkien</span>
+        <span class="tk-ver-head" data-ref="ver" role="button" tabindex="0" title="Versión actual — clic para copiar"></span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="Buscar cambios en GitHub (fetch)">${icon('refresh', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Descargar cambios (pull: stash → pull → pop)">${icon('download', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refreshData" title="Vista fresca: borrar data local + recargar de Zoho">${icon('disk', { size: 14 })}</button>
@@ -48,6 +49,16 @@ export default {
     const refs = {};
     for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
+    function copySha(v) {
+      const sha = v.dataset.sha || v.textContent.replace(/^#/, '');
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(sha).then(() => {
+          v.classList.add('is-copied');
+          setTimeout(() => v.classList.remove('is-copied'), 1200);
+        }).catch(() => {});
+      }
+    }
+
     // Clic en el SHA → copiar al portapapeles (para cruzar la versión con GitHub).
     // Delegado en el contenedor: sobrevive a los re-render de refs.info.
     refs.info.addEventListener('click', (e) => {
@@ -60,13 +71,16 @@ export default {
       // Clic en el SHA → copiar al portapapeles.
       const v = e.target.closest && e.target.closest('.tk-version');
       if (!v) return;
-      const sha = v.dataset.sha || v.textContent.replace(/^#/, '');
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(sha).then(() => {
-          v.classList.add('is-copied');
-          setTimeout(() => v.classList.remove('is-copied'), 1200);
-        }).catch(() => {});
-      }
+      copySha(v);
+    });
+    refs.ver?.addEventListener('click', () => {
+      if (refs.ver.dataset.sha) copySha(refs.ver);
+    });
+    refs.ver?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (!refs.ver.dataset.sha) return;
+      e.preventDefault();
+      copySha(refs.ver);
     });
     // Teclado: Enter/Espacio sobre el contador de ramas.
     refs.info.addEventListener('keydown', (e) => {
@@ -129,31 +143,34 @@ export default {
         ? `Actualizar: traer ${mb} commit(s) nuevos de main (deja tu main local = GitHub)`
         : 'Actualizar: dejar tu main local = GitHub (stash → pull → pop si estás en main)';
 
-      if (!st) { refs.info.innerHTML = busy ? '<span class="cwc-spinner"></span>' : '…'; return; }
+      if (!st) {
+        if (refs.ver) {
+          refs.ver.textContent = '';
+          refs.ver.dataset.sha = '';
+        }
+        refs.info.innerHTML = busy ? '<span class="cwc-spinner"></span>' : '…';
+        return;
+      }
 
-      // Línea 1: #SHA (versión actual, clic-para-copiar) + branch (⚠ si ≠ main)
-      // + estado de sync vs main (✓ al día | ↓N por traer).
-      const version = st.head
-        ? `<span class="tk-version" data-sha="${esc(st.head)}" role="button" tabindex="0" title="Versión actual (SHA ${esc(st.head)}) — clic para copiar y cruzar con GitHub">#${esc(st.head)}</span>`
+      if (refs.ver) {
+        if (st.head) {
+          refs.ver.textContent = '#' + st.head;
+          refs.ver.dataset.sha = st.head;
+          refs.ver.style.display = '';
+        } else {
+          refs.ver.textContent = '';
+          refs.ver.dataset.sha = '';
+        }
+      }
+
+      // Línea 1: branch (solo ⚠ si ≠ main) + estado de sync vs main
+      // (✓ al día | ↓N por traer).
+      const branch = (st.branch && st.branch !== 'main')
+        ? `<span class="tk-branch tk-branch--warn" title="branch actual — no es main">${icon('gitBranch', { size: 12 })}${esc(st.branch)}</span>`
         : '';
-      const branch = `<span class="tk-branch${st.branch && st.branch !== 'main' ? ' tk-branch--warn' : ''}" title="branch actual${st.branch && st.branch !== 'main' ? ' — no es main' : ''}">${icon('gitBranch', { size: 12 })}${esc(st.branch || 'main')}</span>`;
       const sync = mb > 0
         ? `<span class="tk-sync tk-sync--due" title="Tu main local está ${mb} commit(s) atrás de GitHub">↓${mb} main</span>`
         : `<span class="tk-sync tk-sync--ok" title="Tu main local está al día con GitHub">${icon('check', { size: 12 })}main al día</span>`;
-
-      // Línea 2: sin-commitear (ícono+nº, solo si dirty) + frescura del fetch.
-      const dirty = st.dirty
-        ? `<span class="tk-dirty" title="${st.dirtyCount} archivo(s) sin commitear en el árbol de trabajo — nota local, NO afecta si estás al día con main">${icon('edit', { size: 12 })}${st.dirtyCount}</span>`
-        : '';
-      const fetched = st.lastFetch
-        ? `<span class="tk-fresh" title="Último chequeo del remoto">${icon('clock', { size: 12 })}${fmtAgo(st.lastFetch)}</span>`
-        : '';
-      const line2 = (dirty || fetched) ? `<div class="tk-line tk-line--dim">${dirty}${fetched}</div>` : '';
-
-      // Línea 3: pulso — último commit (hora + autor corto; asunto en tooltip).
-      const commit = st.subject
-        ? `<div class="tk-line tk-line--dim tk-commit" title="${esc(st.subject)}">${icon('gitCommit', { size: 12 })}${fmtAgo(st.date)} · ${esc(shortAuthor(st.author))}</div>`
-        : '';
 
       // Línea 4: mis PRs abiertos sin mergear (ramas que propuse y Chris aún no
       // mergeó). Ícono de ramas; 🟡 si alguno quedó atrás de main (necesita
@@ -165,21 +182,21 @@ export default {
           const brs = branchesData.branches || [];
           const anyBehind = brs.some((b) => (b.behindMain || 0) > 0);
           if (brs.length === 0) {
-            branchLine = `<div class="tk-line tk-line--dim tk-branches tk-branches--ok" title="No tenés PRs abiertos esperando merge — Chris mergeó todo lo que propusiste">${icon('gitBranch', { size: 12 })}0 PRs sin mergear</div>`;
+            branchLine = `<span class="tk-branches tk-branches--ok" title="No tenés PRs abiertos esperando merge — Chris mergeó todo lo que propusiste">${icon('gitBranch', { size: 12 })}0 PRs sin mergear</span>`;
           } else {
             const lbl = `${brs.length} PR${brs.length > 1 ? 's' : ''} sin mergear`;
             const titleList = brs.map((b) => `#${b.number} ${b.branch}${b.behindMain > 0 ? ` (↓${b.behindMain} sobre main)` : ''}`).join(' · ');
-            branchLine = `<div class="tk-line tk-line--dim tk-branches ${anyBehind ? 'tk-branches--due' : 'tk-branches--ok'}" role="button" tabindex="0" title="${esc(titleList)} — clic para ver y poner al día">${icon('gitBranch', { size: 12 })}${lbl}${anyBehind ? ' ⚠' : ''}</div>`;
+            branchLine = `<span class="tk-branches ${anyBehind ? 'tk-branches--due' : 'tk-branches--ok'}" role="button" tabindex="0" title="${esc(titleList)} — clic para ver y poner al día">${icon('gitBranch', { size: 12 })}${lbl}${anyBehind ? ' ⚠' : ''}</span>`;
           }
         } else if (branchesData.error) {
-          branchLine = `<div class="tk-line tk-line--dim tk-branches" title="No se pudo consultar tus PRs con gh: ${esc(branchesData.error)}">${icon('gitBranch', { size: 12 })}PRs n/d</div>`;
+          branchLine = `<span class="tk-branches" title="No se pudo consultar tus PRs con gh: ${esc(branchesData.error)}">${icon('gitBranch', { size: 12 })}PRs n/d</span>`;
         }
       }
 
       const dataNote = dataBusy
         ? `<div class="tk-line tk-line--dim"><span class="cwc-spinner"></span> actualizando data local…</div>`
         : '';
-      refs.info.innerHTML = `<div class="tk-line tk-line1">${version}${branch}${sync}</div>${line2}${commit}${branchLine}${dataNote}`;
+      refs.info.innerHTML = `<div class="tk-line tk-line1 tk-line--split">${branch}${sync}<span class="tk-spacer"></span>${branchLine}</div>${dataNote}`;
     }
 
     async function loadStatus() {

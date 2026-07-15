@@ -47,6 +47,7 @@ export function modelIcon(key) {
 // plan / Sonnet)").
 export const CHAT_MODEL_OPTIONS = [
   ['auto', 'AutoTux'],
+  ['tandem', 'Tándem (Opus + Codex)'],
   ['opusplan', 'Opus plan'],
   ['fable', 'Fable'],
   ['opus', 'Opus'],

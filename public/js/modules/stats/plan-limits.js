@@ -26,7 +26,7 @@ export default {
       if (document.hidden) return;
       try {
         const data = await fetchLimits(); // sin fresh: reusa el caché de 60 s
-        renderLimits(el, data);
+        renderLimits(el, data, { credits: false, compact: true });
         firstOk = true;
       } catch {
         // Sin datos aún (token vencido / sin red): mostramos una nota discreta

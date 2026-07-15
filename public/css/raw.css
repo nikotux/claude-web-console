@@ -1,0 +1,173 @@
+/* Vista Raw — paleta propia (verde fósforo / negro), deliberadamente fuera
+   del sistema de tokens.css: página temática "easter egg" aparte del diseño
+   general de la app, aislada en este único archivo (PLAN-544). Márgenes 0 en
+   todo: la vista aprovecha el 100% de la ventana, borde a borde. */
+
+:root {
+  --raw-green: #3cff6e;
+  --raw-green-dim: #0f4a24;
+  --raw-cyan: #5b8fc7;
+  --raw-bg: #010402;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: var(--raw-bg);
+  overflow: hidden;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+#raw-canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  background: var(--raw-bg);
+}
+
+/* Logs de terminal por sesión: texto real escribiéndose de corrido,
+   semitransparente para no tapar la lluvia, tail-scroll al llegar al fondo. */
+.raw-logs {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.raw-log {
+  position: absolute;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.4;               /* transparente: la lluvia de fondo se sigue viendo */
+  text-shadow: 0 0 3px currentColor;
+}
+
+/* Rótulos de banda de sesión: fila superior tenue, pegada al borde. */
+.raw-labels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.raw-label {
+  position: absolute;
+  top: 2px;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  padding: 1px 5px;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(1, 6, 3, 0.62);
+  border-left: 2px solid currentColor;
+  text-shadow: 0 0 5px currentColor;
+  opacity: 0.85;
+}
+
+/* Feed legible: pegado a la esquina inferior izquierda. */
+.raw-feed {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: min(520px, 52vw);
+  max-height: 42vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  padding: 3px 6px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.raw-line {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 8px;
+  color: var(--raw-green);
+  background: rgba(2, 12, 6, 0.55);
+  border-left: 2px solid var(--raw-green-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.raw-line--in { opacity: 0.92; transform: translateY(0); }
+.raw-line--out { opacity: 0; }
+
+/* Contador de tokens: esquina inferior derecha, en UNA sola línea compacta. */
+.raw-counters {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  padding: 3px 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  white-space: nowrap;
+  background: linear-gradient(to top left, rgba(1, 6, 3, 0.72), transparent);
+  pointer-events: none;
+  user-select: none;
+}
+
+.rc-sessions {
+  font-size: 10px;
+  color: color-mix(in srgb, var(--raw-green) 70%, #fff);
+  opacity: 0.7;
+  text-shadow: 0 0 4px var(--raw-green);
+}
+
+.rc-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.rc-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  opacity: 0.65;
+}
+
+.rc-num {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 7px currentColor;
+}
+
+.rc-tps {
+  font-size: 9px;
+  opacity: 0.65;
+}
+
+.rc-claude { color: var(--raw-green); }
+.rc-codex { color: var(--raw-cyan); }
+
+.raw-close {
+  position: fixed;
+  top: 4px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--raw-green-dim);
+  background: rgba(2, 12, 6, 0.55);
+  color: var(--raw-green);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.raw-close:hover { background: rgba(60, 255, 110, 0.12); }

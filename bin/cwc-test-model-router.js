@@ -7,6 +7,7 @@ import {
   decideBase, insufficiencyEscalation, idleDecayMove,
   EFFORT_LEVELS, effortForLevel, effortForModel,
   effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, CACHE_STICKY_TOKENS,
+  levelsFor,
 } from '../src/core/model-router.js';
 
 let pass = 0, fail = 0;
@@ -127,5 +128,24 @@ eq('down effort>tier → effort', decideDownAxis({ level: 1, effortIndex: 2, tie
 eq('down effort=tier → model', decideDownAxis({ level: 1, effortIndex: 1, tierEffortIndex: 1 }), 'model');
 eq('down pinned → model', decideDownAxis({ level: 1, effortIndex: 2, tierEffortIndex: 1, pinned: true }), 'model');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} model-router v2b+v4: ${pass} pass, ${fail} fail`);
+// --- PLAN-519 F1: techo Fable opcional (escala contigua de 4) ---
+const F = levelsFor(true);   // ['haiku','sonnet','opus','fable']
+const B = levelsFor(false);  // ['haiku','sonnet','opus']
+eq('levelsFor(false) = base 3', B.length, 3);
+eq('levelsFor(true) = 4 con fable', F.join(','), 'haiku,sonnet,opus,fable');
+// clampLevel con la escala extendida ubica fable en el techo (3)
+eq('clamp fable con techo → 3', clampLevel('fable', F), 3);
+eq('clamp opus con techo fable → 2', clampLevel('opus', F), 2);
+// decideBase: en opus (2) con ceiling 3 (fable), un 'up' SÍ sube a 3
+eq('base opus + up + ceiling fable → sube a 3', decideBase({ baseLevel: 2, move: 'up', ceiling: 3 }).level, 3);
+// sin techo fable (ceiling 2), opus es el tope: 'up' NO sube
+eq('base opus + up + ceiling opus → queda 2', decideBase({ baseLevel: 2, move: 'up', ceiling: 2 }).level, 2);
+// decideUpAxis: en opus (2) con ceiling fable (3) y margen → puede saltar de tier
+eq('upAxis opus + ceiling fable → model', decideUpAxis({ hard: true, level: 2, effortIndex: 2, lastCacheRead: 0, ceiling: 3 }), 'model');
+// insufficiencyEscalation: en opus (2) con ceiling fable (3) → escala a 3
+eq('insuf opus + ceiling fable → escala', insufficiencyEscalation({ baseLevel: 2, toolErrors: 2, ceiling: 3 })?.level, 3);
+// sin techo fable, en opus (2) con ceiling 2 → no escala (null)
+eq('insuf opus + ceiling opus → null', insufficiencyEscalation({ baseLevel: 2, toolErrors: 2, ceiling: 2 }), null);
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} model-router v2b+v4 +F1: ${pass} pass, ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

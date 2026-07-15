@@ -31,6 +31,7 @@ import { chatQueryOptions, autoApprovesAll } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
+import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
 
 // ---- argv ----
 const args = {};
@@ -45,12 +46,29 @@ const MODEL = args.model || null;
 let currentModel = MODEL; // puede cambiar en vivo (set_model) o al resolverse el init del SDK
 let mode = PERMISSION_MODES.has(args.mode) ? args.mode : 'default';
 const RESUME = args.resume || null;
+// BUG-496: sessionId FORZADO — CREA la conversación con NUESTRO UUID (chat nuevo,
+// durable desde el segundo cero) en vez de esperar al `system/init`. Exactamente
+// uno con RESUME (el SDK prohíbe combinarlos sin forkSession). Lo decide el server.
+const SESSION_ID = args['session-id'] || null;
 // Eje thinking effort (PEND-391 #3): opción de SPAWN del Agent SDK (no hay
 // setEffort() en vivo). Whitelist estricta; cualquier otro valor => sin effort
 // (el SDK aplica el default del modelo). No confundir con 'auto'/'default' del
 // selector de modelo (esos son alias de modelo, no niveles de effort).
 const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const EFFORT = EFFORT_LEVELS.has(args.effort) ? args.effort : null;
+// Modelo TÁNDEM (PLAN-507): Claude razona/planea, Codex ejecuta. En este modo se
+// AGREGA la tool delegate_to_codex y se DENIEGAN las tools de escritura (abajo).
+const TANDEM = args.tandem === '1';
+// PLAN-519 F2: ejecutor Codex de Tándem configurable (modelo+esfuerzo). Sin arg
+// = defaults de gama alta (createCodexToolServer valida contra su whitelist).
+const CODEX_MODEL = args['codex-model'] || null;
+const CODEX_EFFORT = args['codex-effort'] || null;
+// Una corrida de Codex (tool MCP in-process) puede durar minutos; el SDK corta
+// las tools MCP a 60 s por defecto (sdk.d.ts:441). Subimos el tope antes de query().
+if (TANDEM) process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT || '600000';
+// Herramientas de escritura que Tándem le niega a Claude: sin ellas, su único
+// camino para tocar un archivo es delegate_to_codex → el split es estructural.
+const TANDEM_BLOCKED = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 if (!ID || !CWD || !SOCK) {
   console.error('[runner] uso: cwc-chat-runner --id <id> --cwd <abs> --sock <path> [--model m] [--mode m] [--resume uuid] [--effort low|medium|high|xhigh|max]');
   process.exit(2);
@@ -79,7 +97,7 @@ process.env.CWC_CHAT_RUNNER = '1';
 
 // ---- estado ----
 const startedAt = Date.now();
-let sessionId = RESUME;
+let sessionId = RESUME || SESSION_ID; // BUG-496: nace conocido (forzado o retomado)
 let slashCommands = []; // lista del system/init (depende del cwd; Fase 8)
 let status = 'waiting';
 let lastActivity = Date.now();
@@ -164,9 +182,13 @@ function startEngine() {
       cwd: CWD,
       model: MODEL,
       resume: RESUME,
+      sessionId: SESSION_ID, // BUG-496: primer arranque de un chat nuevo (excluye resume)
       mode,
       effort: EFFORT,
       chatId: ID, // regla de carpeta de trabajo del paquete-sesión (PLAN-447)
+      // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
+      tandem: TANDEM,
+      ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT }) } } : {}),
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),
   });
@@ -248,6 +270,17 @@ function onMessage(m) {
 }
 
 function askPermission(toolName, toolInput, ctx) {
+  // BLOQUEO ESTRUCTURAL DE TÁNDEM (PLAN-507): en este modo Claude no edita
+  // código — se le niega Edit/Write/MultiEdit/NotebookEdit SIN tarjeta (auto-deny
+  // silencioso) para forzarlo a delegar en Codex vía delegate_to_codex. El
+  // `message` le explica al modelo por qué y qué usar en su lugar. Esto es lo
+  // que GARANTIZA el split (una tool solo "disponible" podría ser ignorada).
+  if (TANDEM && TANDEM_BLOCKED.has(toolName)) {
+    return Promise.resolve({
+      behavior: 'deny',
+      message: 'Modo Tándem: Claude no edita archivos. Usá la herramienta delegate_to_codex con un plan concreto para que Codex haga el cambio.',
+    });
+  }
   return new Promise((resolve) => {
     const id = `p${++permSeq}`;
     const timer = setTimeout(() => {

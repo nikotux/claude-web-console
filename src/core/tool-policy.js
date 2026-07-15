@@ -78,6 +78,21 @@ function sessionFolderRule(chatId) {
   ].join('\n');
 }
 
+// MODO TÁNDEM (PLAN-507): instrucción que se AGREGA al system prompt cuando la
+// conversación corre el modelo Tándem. Claude razona/planea pero NO edita código
+// (el runner le deniega Edit/Write); su único brazo de ejecución es la tool
+// `delegate_to_codex`. El bloqueo estructural (deny) es el que GARANTIZA el split;
+// esta instrucción evita que Claude gaste turnos intentando editar.
+export const TANDEM_INSTRUCTION = [
+  'MODO TÁNDEM — vos (Claude) RAZONÁS, PLANEÁS y VERIFICÁS; la EJECUCIÓN de código la hace CODEX.',
+  'En este modo NO tenés herramientas de edición: Edit/Write/MultiEdit/NotebookEdit están DESHABILITADAS a propósito. Para CUALQUIER cambio de código llamá la herramienta `delegate_to_codex` con un plan CONCRETO (archivos, cambios exactos, criterios de aceptación).',
+  'Codex implementa y te devuelve el diff. Vos lo VERIFICÁS (leé el diff; usá Bash para node --check / tests si hace falta) y, si algo está mal, volvés a llamar a `delegate_to_codex` con las correcciones.',
+  'Bash es SOLO para inspección y verificación (leer, correr checks/tests), NUNCA para escribir archivos — todo cambio pasa por Codex.',
+].join('\n');
+
+// Nombre completo (namespaced) de la tool del servidor MCP in-process de Codex.
+export const TANDEM_TOOL = 'mcp__codex__delegate_to_codex';
+
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
 // romper a sus importadores; server y runner validan contra este mismo Set).
 export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
@@ -96,20 +111,26 @@ export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
 // spawnear el motor). El flag va SIEMPRE: debe estar presente en la CREACIÓN de
 // query() para que un cambio a "Todo" (al arranque o en vivo con
 // setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
-export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool, chatId }) {
+export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, canUseTool, chatId, tandem, mcpServers }) {
   // Append al system prompt (preset claude_code = PRESERVA el prompt nativo,
   // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
   // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
-  // (repo de la consola) — Tolkien no lo recibe (regla 12).
+  // (repo de la consola) — Tolkien no lo recibe (regla 12), (3) la instrucción
+  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex).
   const appends = [];
   const folderRule = sessionFolderRule(chatId);
   if (folderRule) appends.push(folderRule);
   if (isConsoleCwd(cwd)) appends.push(CONSOLE_PAD_BOOTSTRAP);
+  if (tandem) appends.push(TANDEM_INSTRUCTION);
   const appendText = appends.join('\n\n');
   return {
     cwd,
     ...(model ? { model } : {}),
-    ...(resume ? { resume } : {}),
+    // BUG-496: EXACTAMENTE uno. `sessionId` CREA la conversación con NUESTRO UUID
+    // (chat nuevo, durable desde el segundo cero); `resume` RETOMA una existente.
+    // El SDK prohíbe combinarlos sin forkSession, así que sessionId tiene prioridad
+    // y excluye resume (el server manda solo uno — ver Chat._startEngine).
+    ...(sessionId ? { sessionId } : (resume ? { resume } : {})),
     // Eje thinking effort (PEND-391 #3): `effort` es opción de query() del Agent
     // SDK (low|medium|high|xhigh|max) que guía la profundidad de razonamiento
     // JUNTO al modelo — una palanca MÁS BARATA que saltar de tier. El SDK lo
@@ -129,7 +150,15 @@ export function chatQueryOptions({ cwd, model, resume, mode, effort, canUseTool,
     // Fase 8: skills + comandos slash + CLAUDE.md del usuario y del proyecto del
     // cwd (fuente única en core/sdk-settings.js) + invocación autónoma de skills.
     settingSources: settingSourcesFor('chat'),
+    // OJO (verificado E2E 2026-07-15): un nombre en `allowedTools` AUTO-APRUEBA
+    // esa tool ANTES de canUseTool (warning CLAUDE_SDK_CAN_USE_TOOL_SHADOWED). Por
+    // eso NO metemos la tool de Codex acá — así la delegación cae en canUseTool y
+    // sale la TARJETA DE PERMISO (Niko aprueba cada delegación; en modo "Todo" se
+    // auto-aprueba como cualquier tool). La tool sigue DISPONIBLE vía mcpServers +
+    // alwaysLoad:true (availability), independiente de allowedTools (auto-approve).
     allowedTools: ['Skill'],
+    // Servidores MCP in-process (solo Tándem hoy: { codex: <sdk server> }).
+    ...(mcpServers ? { mcpServers } : {}),
     canUseTool,
   };
 }
