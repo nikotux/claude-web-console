@@ -10,8 +10,9 @@ import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
 
-const FILE = path.join(os.homedir(), '.cwc-data', 'session-packages.json');
+const FILE = path.join(resolveDataDir(), 'session-packages.json');
 
 function load() {
   try {

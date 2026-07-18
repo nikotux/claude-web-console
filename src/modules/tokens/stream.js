@@ -183,7 +183,16 @@ async function scanClaude(now) {
       const sessionId = path.basename(f.name, '.jsonl');
       for (const obj of await readAppendedLines(path.join(dir, f.name))) {
         const t = claudeText(obj, now);
-        if (t) pushFragment({ source: 'claude', sessionId, world, model: t.model, text: t.text });
+        if (!t) continue;
+        const isSub = obj.isSidechain === true;
+        pushFragment({
+          source: 'claude',
+          sessionId: isSub ? `${sessionId}~sub` : sessionId,
+          world,
+          model: t.model,
+          text: t.text,
+          sub: isSub,
+        });
       }
     }
   }

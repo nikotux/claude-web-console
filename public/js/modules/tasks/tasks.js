@@ -14,6 +14,7 @@ import { openAudioPanel, mountReports } from '../audio/audio.js';
 import { mountLearning } from '../learning/learning.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderMarkdown } from '../../ui/markdown.js';
+import { readCache, writeCache } from '../../ui/cache-store.js';
 const STATUS = [
   { key: 'pendiente', label: 'Pendiente', emoji: '⚪' },
   { key: 'en-progreso', label: 'En progreso', emoji: '🔵' },
@@ -103,9 +104,13 @@ export default {
     }
 
     async function loadCounts() {
+      // Cache-then-network: pinta los últimos contadores conocidos al instante.
+      const cached = readCache('tasks-counts');
+      if (cached) { counts = cached.data; renderMini(); }
       try {
         const d = await (await fetch('/api/tasks/counts')).json();
         counts = d.counts || counts;
+        writeCache('tasks-counts', counts);
       } catch { /* noop */ }
       renderMini();
     }
@@ -342,6 +347,15 @@ export default {
         const isPlan = kind === 'plan';
         let item = itemArg;
         let dirty = false; // aplicamos algo ⇒ recargar el tablero al cerrar
+        // Los blocks/blockedBy ya NO vienen en la lista (BUG-620): se piden lazy
+        // solo para el ítem abierto (1 request en vez del fan-out de ~121).
+        let itemLinks = { blocks: [], blockedBy: [] };
+        async function loadLinks() {
+          try {
+            const url = isPlan ? `/api/tasks/plans/${item.id}/links` : `/api/tasks/${item.id}/links`;
+            itemLinks = await (await fetch(url)).json();
+          } catch { itemLinks = { blocks: [], blockedBy: [] }; }
+        }
         const headIco = isPlan ? planStatusOf(item.status).emoji : typeOf(item.type).emoji;
         const dm = dialog.openModal({ title: `${headIco} ${item.id}`, width: '660px', onClose: () => { if (dirty) boardApi?.reload(); } });
         dm.card.classList.add('tk-detail-card');
@@ -353,7 +367,7 @@ export default {
           await fn(); dirty = true; await boardApi.reload();
           const fresh = (isPlan ? plans : tasks).find((x) => x.id === item.id);
           if (!fresh) { dm.close(); return; }
-          item = fresh; renderBody();
+          item = fresh; renderBody(); loadLinks().then(renderBody);
         };
 
         function propRow(label, val) { return `<div class="tk-prop"><span class="tk-prop-k">${label}</span><span class="tk-prop-v">${val}</span></div>`; }
@@ -379,8 +393,8 @@ export default {
           ].join('');
         }
         function relHtml() {
-          const blocks = item.blocks || [];
-          const bby = blockedByIds(item.id);
+          const blocks = itemLinks.blocks || [];
+          const bby = itemLinks.blockedBy || [];
           const childOf = !isPlan && item.planId ? item.planId : null;
           const children = isPlan ? tasks.filter((t) => t.planId === item.id) : [];
           const doneCh = children.filter((t) => t.status === 'hecha').length;
@@ -415,8 +429,8 @@ export default {
         }
 
         function renderBody() {
-          const blocks = item.blocks || [];
-          const hasRel = blocks.length || blockedByIds(item.id).length || (!isPlan && item.planId) || (isPlan && tasks.some((t) => t.planId === item.id));
+          const blocks = itemLinks.blocks || [];
+          const hasRel = blocks.length || (itemLinks.blockedBy || []).length || (!isPlan && item.planId) || (isPlan && tasks.some((t) => t.planId === item.id));
           const tags = !isPlan && (item.tags || []).length ? `<div class="task-tags">${item.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : '';
           dm.body.innerHTML = `
             <div class="tk-detail">
@@ -459,9 +473,9 @@ export default {
         dm.body.addEventListener('click', async (e) => {
           // Quitar relación (antes que open-item: el ✕ vive dentro del chip).
           const rr = e.target.closest('[data-rel-remove]');
-          if (rr) { const id = rr.dataset.relRemove; await mutate(() => patchItem({ blocks: (item.blocks || []).filter((x) => x !== id) })); return; }
+          if (rr) { const id = rr.dataset.relRemove; await mutate(() => patchItem({ blocks: (itemLinks.blocks || []).filter((x) => x !== id) })); return; }
           const ra = e.target.closest('[data-rel-add]');
-          if (ra) { const chosen = await pickRelationship([item.id, ...(item.blocks || [])]); if (chosen) await mutate(() => patchItem({ blocks: [...(item.blocks || []), chosen] })); return; }
+          if (ra) { const chosen = await pickRelationship([item.id, ...(itemLinks.blocks || [])]); if (chosen) await mutate(() => patchItem({ blocks: [...(itemLinks.blocks || []), chosen] })); return; }
           // Comentarios.
           const cs = e.target.closest('[data-comment-send]');
           if (cs) {
@@ -500,7 +514,7 @@ export default {
           }
         });
 
-        renderBody();
+        renderBody(); loadLinks().then(renderBody);
       }
       const openTaskDetail = (t) => openDetail('task', t);
       const openPlanDetail = (p) => openDetail('plan', p);

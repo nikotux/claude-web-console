@@ -21,6 +21,7 @@
 // timeout de 5 min: sobreviven a un server caído y se responden al reconectar.
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -72,6 +73,28 @@ const TANDEM_BLOCKED = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 if (!ID || !CWD || !SOCK) {
   console.error('[runner] uso: cwc-chat-runner --id <id> --cwd <abs> --sock <path> [--model m] [--mode m] [--resume uuid] [--effort low|medium|high|xhigh|max]');
   process.exit(2);
+}
+// ── Blindaje anticonsumo multi-tenant (PLAN-592/TASK-612): un runner de INQUILINO
+// NUNCA debe correr con las creds del server (quemaría los tokens del admin). El
+// server ya nos spawnea con env LIMPIO + HOME per-user (runner-link.userRunnerEnv);
+// esto es la CAPA fail-closed de defensa en profundidad: si por un bug el
+// aislamiento no llegó, ABORTAMOS antes de tocar query() en vez de caer a la cuenta
+// del server. Config-free (el runner de inquilino corre sin CWC_TOKEN, no importa core/*).
+const OWNER = args.owner || null;
+const HOST_USER = process.env.CWC_HOST_USER || os.userInfo().username;
+if (OWNER && OWNER !== HOST_USER) {
+  const home = process.env.HOME || '';
+  // El HOME del inquilino debe ser su root aislado: ~/.cwc-users/<owner>.
+  const expected = path.sep + path.join('.cwc-users', OWNER);
+  const isolatedHome = !!home && home.endsWith(expected);
+  // Debe existir una fuente de creds PROPIA del inquilino (token en env o su
+  // .credentials.json en su HOME). Sin ella el SDK caería vía getpwuid al server.
+  const hasOwnCreds = !!process.env.CLAUDE_CODE_OAUTH_TOKEN
+    || fs.existsSync(path.join(home, '.claude', '.credentials.json'));
+  if (!isolatedHome || !hasOwnCreds) {
+    console.error(`[runner] FAIL-CLOSED anticonsumo: inquilino ${OWNER} sin aislamiento válido (HOME=${home}, credsPropias=${hasOwnCreds}). No arranco para no usar la cuenta del server.`);
+    process.exit(3);
+  }
 }
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 

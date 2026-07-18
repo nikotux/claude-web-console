@@ -180,5 +180,5 @@ export function mountInterfonoPanel(el, ctx) {
   refs.reload.addEventListener('click', load);
   refs['do-send'].addEventListener('click', doSend);
   load();
-  const timer = setInterval(() => { if (alive) load(); }, 5000);
+  const timer = setInterval(() => { if (alive && !document.hidden) load(); }, 5000);
 }

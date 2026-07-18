@@ -656,3 +656,14 @@ if (isMobile()) {
   }
   pollTabStatus();
 })();
+
+// Service Worker (Capa 1): cachea los estáticos de la app en el navegador
+// para acelerar cargas/reconexiones. Se auto-invalida por BUILD_ID en cada
+// deploy (ver public/sw.js + la ruta /sw.js del server). Registro
+// no-bloqueante y best-effort: si falla, la app funciona igual sin caché.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .catch((err) => console.warn('[sw] no se pudo registrar', err));
+  });
+}

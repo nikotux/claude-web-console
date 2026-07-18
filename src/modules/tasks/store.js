@@ -176,8 +176,8 @@ function planFromPadItem(item, blocks = []) {
 // list/get, hay que pedirla aparte. Best-effort: si falla, sin bloqueos.
 // `ctl` (opcional) es el control de runAdaptivePool — señala back-off si Pad
 // responde 429 (ver mapPooled, más abajo).
-async function blocksOf(ref, ctl) {
-  const r = await listLinks(ref);
+async function blocksOf(ref, ctl, ctx = null) {
+  const r = await listLinks(ref, { ctx });
   if (!r.ok) {
     if (r.status === 429) ctl?.backoff();
     return [];
@@ -185,6 +185,18 @@ async function blocksOf(ref, ctl) {
   return r.data
     .filter((l) => l.link_type === 'blocks' && l.source_ref === ref)
     .map((l) => l.target_ref);
+}
+
+// Links de UN ítem para el detalle (lazy): "bloquea a" (saliente) +
+// "bloqueado por" (entrante), ambos de UNA sola llamada listLinks(ref).
+// Reemplaza el fan-out que listTasks hacía por CADA ítem (BUG-620).
+// Best-effort: si falla, sin relaciones.
+export async function linksFor(ref, ctx = null) {
+  const r = await listLinks(ref, { ctx });
+  if (!r.ok) return { blocks: [], blockedBy: [] };
+  const blocks = r.data.filter((l) => l.link_type === 'blocks' && l.source_ref === ref).map((l) => l.target_ref);
+  const blockedBy = r.data.filter((l) => l.link_type === 'blocks' && l.target_ref === ref).map((l) => l.source_ref);
+  return { blocks, blockedBy };
 }
 
 // Concurrencia ACOTADA para el fan-out "un listLinks() por ítem" de
@@ -207,20 +219,20 @@ async function mapPooled(items, fn) {
 
 // Aplica la relación "blocks" deseada (diff contra la actual: agrega lo que
 // falta, quita lo que sobra) — usado por updateTask/updatePlan.
-async function applyBlocks(ref, desiredIds) {
+async function applyBlocks(ref, desiredIds, ctx = null) {
   const desired = normBlockCandidates(desiredIds, ref);
-  const linksR = await listLinks(ref);
+  const linksR = await listLinks(ref, { ctx });
   const currentLinks = linksR.ok ? linksR.data.filter((l) => l.link_type === 'blocks' && l.source_ref === ref) : [];
   const currentTargets = new Set(currentLinks.map((l) => l.target_ref));
   const desiredSet = new Set(desired);
-  for (const l of currentLinks) if (!desiredSet.has(l.target_ref)) await deleteLink(l.id);
-  for (const target of desired) if (!currentTargets.has(target)) await addLink(ref, target, 'blocks');
+  for (const l of currentLinks) if (!desiredSet.has(l.target_ref)) await deleteLink(l.id, { ctx });
+  for (const target of desired) if (!currentTargets.has(target)) await addLink(ref, target, 'blocks', { ctx });
 }
 
 // Tareas ya mapeadas (sin blocks — no hace falta para calcular progreso de
 // planes), usadas por createPlan/updatePlan para derivar taskCount/doneCount/pct.
-async function tasksForProgress() {
-  const r = await listItems(TASKS_COLLECTION);
+async function tasksForProgress(ctx = null) {
+  const r = await listItems(TASKS_COLLECTION, { ctx });
   if (!r.ok) return [];
   return r.data.map((t) => taskFromPadItem(t));
 }
@@ -258,17 +270,17 @@ function plansWithProgress(plans, tasks) {
   });
 }
 
-export async function listPlans() {
-  const [plansR, tasks] = await Promise.all([listItems(PLANS_COLLECTION), tasksForProgress()]);
+export async function listPlans(ctx = null) {
+  const [plansR, tasks] = await Promise.all([listItems(PLANS_COLLECTION, { ctx }), tasksForProgress(ctx)]);
   if (!plansR.ok) throw padError('listPlans', plansR);
-  const plans = await mapPooled(plansR.data, async (p, ctl) => planFromPadItem(p, await blocksOf(p.ref, ctl)));
+  const plans = await mapPooled(plansR.data, async (p, ctl) => planFromPadItem(p, await blocksOf(p.ref, ctl, ctx)));
   // Activos primero, luego por fecha de creación desc.
   const rank = { active: 0, proposed: 1, done: 2, cancelled: 3 };
   return plansWithProgress(plans, tasks).sort((a, b) =>
     (rank[a.status] - rank[b.status]) || ((b.createdAt || 0) - (a.createdAt || 0)));
 }
 
-export async function createPlan(input = {}) {
+export async function createPlan(input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Plan sin título';
   const fields = {
     status: normPlanStatus(input.status),
@@ -276,22 +288,22 @@ export async function createPlan(input = {}) {
     phase: clampStr(input.phase, 20),
     targetDate: normDate(input.targetDate),
   };
-  const r = await createItem(PLANS_COLLECTION, { title, content: clampStr(input.description, 4000), fields });
+  const r = await createItem(PLANS_COLLECTION, { title, content: clampStr(input.description, 4000), fields }, { ctx });
   if (!r.ok) throw padError('createPlan', r);
   const ref = r.data.ref;
 
   const blockIds = normBlockCandidates(input.blocks, ref);
   const blocks = [];
-  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks'); if (lr.ok) blocks.push(target); }
+  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks', { ctx }); if (lr.ok) blocks.push(target); }
 
   appendActivity({ kind: 'created', entity: 'plan', refId: ref, title });
-  const fresh = await getItem(ref);
+  const fresh = await getItem(ref, { ctx });
   const plan = planFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
-  return plansWithProgress([plan], await tasksForProgress())[0];
+  return plansWithProgress([plan], await tasksForProgress(ctx))[0];
 }
 
-export async function updatePlan(id, patch = {}) {
-  const cur = await getItem(id);
+export async function updatePlan(id, patch = {}, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updatePlan', 'Plan', cur);
   const f = parseFields(cur.data);
   const body = {};
@@ -309,27 +321,27 @@ export async function updatePlan(id, patch = {}) {
   }
   body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
 
-  const r = await updateItem(id, body);
+  const r = await updateItem(id, body, { ctx });
   if (!r.ok) throw padError('updatePlan', r);
 
-  if (patch.blocks != null) await applyBlocks(id, patch.blocks);
+  if (patch.blocks != null) await applyBlocks(id, patch.blocks, ctx);
 
-  const fresh = await getItem(id);
-  const blocks = await blocksOf(id);
+  const fresh = await getItem(id, { ctx });
+  const blocks = await blocksOf(id, null, ctx);
   appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'plan', refId: id, title: fresh.data?.title, detail: statusChanged || null });
   const plan = planFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
-  return plansWithProgress([plan], await tasksForProgress())[0];
+  return plansWithProgress([plan], await tasksForProgress(ctx))[0];
 }
 
-export async function deletePlan(id) {
-  const cur = await getItem(id);
+export async function deletePlan(id, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deletePlan', 'Plan', cur);
-  const blocks = await blocksOf(id);
+  const blocks = await blocksOf(id, null, ctx);
   const removed = planFromPadItem(cur.data, blocks);
   // Archivar en Pad (soft-delete): las tareas que colgaban del plan quedan
   // desasignadas solas (verificado: `parent_ref` desaparece de un item cuyo
   // padre fue archivado — no hace falta cascada manual).
-  const r = await padDeleteItem(id);
+  const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deletePlan', r);
   appendActivity({ kind: 'deleted', entity: 'plan', refId: id, title: removed.title });
   return removed;
@@ -341,8 +353,8 @@ export async function deletePlan(id) {
 // tick, para siempre, aunque el tablero ni estuviera abierto (mismo bug real
 // 2026-07-12 de mapPooled más arriba — esta es la otra mitad: evitar el
 // trabajo, no solo acotar su concurrencia).
-export async function listCounts() {
-  const r = await listItems(TASKS_COLLECTION);
+export async function listCounts(ctx = null) {
+  const r = await listItems(TASKS_COLLECTION, { ctx });
   if (!r.ok) throw padError('listCounts', r);
   const counts = { pendiente: 0, 'en-progreso': 0, hecha: 0, total: r.data.length };
   for (const t of r.data) {
@@ -355,14 +367,17 @@ export async function listCounts() {
 // ===== TAREAS =====
 // Vista pública (ordenada: sin terminar primero por prioridad, luego por fecha)
 // + conteos + planes con progreso (todo lo que el dashboard necesita).
-export async function listTasks() {
-  const [tasksR, plansR] = await Promise.all([listItems(TASKS_COLLECTION), listItems(PLANS_COLLECTION)]);
+export async function listTasks(ctx = null) {
+  const [tasksR, plansR] = await Promise.all([listItems(TASKS_COLLECTION, { ctx }), listItems(PLANS_COLLECTION, { ctx })]);
   if (!tasksR.ok) throw padError('listTasks', tasksR);
   if (!plansR.ok) throw padError('listTasks:plans', plansR);
-  const [tasks, plans] = await Promise.all([
-    mapPooled(tasksR.data, async (t, ctl) => taskFromPadItem(t, await blocksOf(t.ref, ctl))),
-    mapPooled(plansR.data, async (p, ctl) => planFromPadItem(p, await blocksOf(p.ref, ctl))),
-  ]);
+  // Los blocks[] (relación "bloquea a") NO se traen acá: eran un fan-out N+1
+  // (1 listLinks por ítem → ~121 requests → hasta 15s bajo el rate-limit de
+  // Pad local) y SOLO se usan al abrir el detalle de UN ítem. Ahora se piden
+  // lazy vía linksFor() / GET /:id/links. El render del tablero no usa blocks
+  // (BUG-620). taskFromPadItem/planFromPadItem ya defaultean blocks=[].
+  const tasks = tasksR.data.map((t) => taskFromPadItem(t));
+  const plans = plansR.data.map((p) => planFromPadItem(p));
 
   const prioRank = { alta: 0, media: 1, baja: 2 };
   const statusRank = { pendiente: 0, 'en-progreso': 1, hecha: 2 };
@@ -376,7 +391,7 @@ export async function listTasks() {
   return { tasks: sorted, counts, plans: plansWithProgress(plans, tasks) };
 }
 
-export async function createTask(input = {}) {
+export async function createTask(input = {}, ctx = null) {
   const status = normStatus(input.status);
   const title = clampStr(input.title, 200).trim() || 'Sin título';
   const fields = {
@@ -395,24 +410,24 @@ export async function createTask(input = {}) {
     content: clampStr(input.description, 4000),
     tags: normTags(input.tags),
     fields,
-  });
+  }, { ctx });
   if (!r.ok) throw padError('createTask', r);
   const ref = r.data.ref;
 
   const planCandidate = clampStr(input.planId, 20).trim();
-  if (planCandidate && PLAN_ID_RE.test(planCandidate)) await setParent(ref, planCandidate);
+  if (planCandidate && PLAN_ID_RE.test(planCandidate)) await setParent(ref, planCandidate, { ctx });
 
   const blockIds = normBlockCandidates(input.blocks, ref);
   const blocks = [];
-  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks'); if (lr.ok) blocks.push(target); }
+  for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks', { ctx }); if (lr.ok) blocks.push(target); }
 
   appendActivity({ kind: 'created', entity: 'task', refId: ref, title });
-  const fresh = await getItem(ref);
+  const fresh = await getItem(ref, { ctx });
   return taskFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
 }
 
-export async function updateTask(id, patch = {}) {
-  const cur = await getItem(id);
+export async function updateTask(id, patch = {}, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateTask', 'Tarea', cur);
   const f = parseFields(cur.data);
   const body = {};
@@ -437,33 +452,33 @@ export async function updateTask(id, patch = {}) {
   }
   body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
 
-  const r = await updateItem(id, body);
+  const r = await updateItem(id, body, { ctx });
   if (!r.ok) throw padError('updateTask', r);
 
   if (patch.planId !== undefined) {
     if (patch.planId) {
       const pid = clampStr(patch.planId, 20).trim();
-      if (PLAN_ID_RE.test(pid)) await setParent(id, pid);
+      if (PLAN_ID_RE.test(pid)) await setParent(id, pid, { ctx });
     } else if (cur.data.parent_link_id) {
-      await deleteLink(cur.data.parent_link_id);
+      await deleteLink(cur.data.parent_link_id, { ctx });
     }
   }
 
-  if (patch.blocks != null) await applyBlocks(id, patch.blocks);
+  if (patch.blocks != null) await applyBlocks(id, patch.blocks, ctx);
 
-  const fresh = await getItem(id);
-  const blocks = await blocksOf(id);
+  const fresh = await getItem(id, { ctx });
+  const blocks = await blocksOf(id, null, ctx);
   if (statusChanged) appendActivity({ kind: statusChanged === 'hecha' ? 'completed' : 'status', entity: 'task', refId: id, title: fresh.data?.title, detail: statusChanged });
   else appendActivity({ kind: 'updated', entity: 'task', refId: id, title: fresh.data?.title });
   return taskFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
 }
 
-export async function deleteTask(id) {
-  const cur = await getItem(id);
+export async function deleteTask(id, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteTask', 'Tarea', cur);
-  const blocks = await blocksOf(id);
+  const blocks = await blocksOf(id, null, ctx);
   const removed = taskFromPadItem(cur.data, blocks);
-  const r = await padDeleteItem(id);
+  const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteTask', r);
   appendActivity({ kind: 'deleted', entity: 'task', refId: id, title: removed.title });
   return removed;
@@ -473,18 +488,18 @@ export async function deleteTask(id) {
 // kind = 'task' | 'plan' — solo se usa para el LOG DE ACTIVIDAD local (Pad
 // direcciona el ítem por su ref, que ya es único cruzando ambas colecciones).
 // Agregar un comentario también deja un evento en el log.
-export async function addComment(kind, id, text) {
+export async function addComment(kind, id, text, ctx = null) {
   const clean = clampStr(text, 4000).trim();
   if (!clean) { const e = new Error('El comentario está vacío.'); e.bad = true; throw e; }
-  const r = await padAddComment(id, clean);
+  const r = await padAddComment(id, clean, { ctx });
   if (!r.ok) throw notFoundOr500('addComment', 'Ítem', r);
   const c = { id: r.data.id, ts: tsMs(r.data.created_at), text: r.data.body };
-  const titleR = await getItem(id);
+  const titleR = await getItem(id, { ctx });
   appendActivity({ kind: 'comment', entity: kind, refId: id, title: titleR.ok ? titleR.data.title : id, detail: clean.slice(0, 80) });
   return c;
 }
-export async function deleteComment(kind, id, cid) {
-  const r = await padDeleteComment(cid);
+export async function deleteComment(kind, id, cid, ctx = null) {
+  const r = await padDeleteComment(cid, { ctx });
   if (!r.ok) throw notFoundOr500('deleteComment', 'Comentario', r);
   return true;
 }
@@ -492,9 +507,9 @@ export async function deleteComment(kind, id, cid) {
 // referencian (excluye 'comment', que ya viene de Pad), desc. Best-effort: si
 // Pad no responde los comentarios, igual devuelve los eventos del log local
 // (nunca cuelga ni tira una excepción sin control).
-export async function timelineFor(kind, id) {
+export async function timelineFor(kind, id, ctx = null) {
   const events = [];
-  const cr = await listComments(id);
+  const cr = await listComments(id, { ctx });
   if (cr.ok) for (const c of cr.data) events.push({ type: 'comment', ts: tsMs(c.created_at), cid: c.id, text: c.body });
   for (const ev of loadActivity()) {
     if (ev.refId === id && ev.kind !== 'comment') events.push({ type: 'event', ts: ev.ts, kind: ev.kind, detail: ev.detail || null });
@@ -506,10 +521,10 @@ export async function timelineFor(kind, id) {
 // Alta EN LOTE desde una propuesta del módulo audio (el usuario ya aprobó cada
 // una en la UI). Devuelve las tareas creadas. Secuencial (no paralelo): mantiene
 // el orden de creación en el log de actividad, igual que antes.
-export async function createFromAudio(jobId, items = []) {
+export async function createFromAudio(jobId, items = [], ctx = null) {
   const created = [];
   for (const it of Array.isArray(items) ? items.slice(0, 50) : []) {
-    created.push(await createTask({ ...it, source: 'audio', sourceRef: jobId }));
+    created.push(await createTask({ ...it, source: 'audio', sourceRef: jobId }, ctx));
   }
   return created;
 }

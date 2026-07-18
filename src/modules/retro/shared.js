@@ -158,7 +158,7 @@ function classifyProject(cwd) {
 
 // Encola una destilación al cerrar un chat, SI supera el filtro híbrido.
 // Best-effort total: cualquier falla se traga (nunca bloquea el cierre del chat).
-export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId } = {}) {
+export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId, owner } = {}) {
   if (!cwd || !sessionId) return;
   const sig = readTranscript(cwd, sessionId);
   if (!sig) return;
@@ -173,6 +173,7 @@ export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, l
     id,
     status: 'running',
     startedAt: Date.now(),
+    owner: owner || null,
     context: sig.condensed,
     meta: {
       title: String(title || '').slice(0, 120),

@@ -21,6 +21,7 @@ import {
 } from '../src/modules/learning/context-shared.js';
 import { addContexto } from '../src/modules/learning/store.js';
 import { registerLearningSession } from '../src/modules/learning/session-log.js';
+import { padContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = String(process.argv[2] || '');
@@ -70,13 +71,14 @@ async function interpret(job) {
 async function main() {
   const job = readContextJob(id);
   if (!job) { log(`job de contexto (${id}) inexistente.`); process.exit(0); return; }
+  const ctx = padContextForUser(job.owner || null);
   try {
     const out = await interpret(job);
     const parsed = parseContext(out);
     if (!parsed) throw new Error('No se pudo interpretar la transcripción (respuesta inválida).');
     const rendered = renderContextText(parsed);
     if (job.topicId) {
-      try { await addContexto(job.topicId, { text: rendered, source: 'ia' }); }
+      try { await addContexto(job.topicId, { text: rendered, source: 'ia' }, ctx); }
       catch (e) { log('no se pudo auto-guardar en el tema (no rompe el job):', e?.message); }
     }
     writeContextJob(id, { ...job, status: 'done', result: parsed, rendered, error: null, updatedAt: Date.now() });

@@ -43,7 +43,8 @@ const REQUEST_TIMEOUT_MS = 10_000;
 // Kill switches: CWC_PAD_CACHE=0 apaga la caché; CWC_PAD_MAXCONC / CWC_PAD_BACKOFF_MS
 // / CWC_PAD_CACHE_TTL_MS ajustan los topes. Ante cualquier rareza, apagar la caché
 // deja el comportamiento idéntico al histórico (fetch directo, sin memoria).
-const MAX_CONCURRENT = Number(process.env.CWC_PAD_MAXCONC) || 6;
+const MAX_CONCURRENT = Number(process.env.CWC_PAD_MAXCONC) || 6;             // tope POR-USUARIO (por token)
+const GLOBAL_MAX = Number(process.env.CWC_PAD_GLOBAL_MAXCONC) || Math.max(MAX_CONCURRENT * 4, MAX_CONCURRENT); // tope AGREGADO (todos los usuarios juntos)
 const BACKOFF_MS = Number(process.env.CWC_PAD_BACKOFF_MS) || 3000;
 const MAX_RETRIES_429 = 3;
 const CACHE_ENABLED = process.env.CWC_PAD_CACHE !== '0';
@@ -60,27 +61,74 @@ function readSessionToken(serverUrl) {
   }
 }
 
-// --- Gate global: semáforo (MAX_CONCURRENT en vuelo) + pausa por 429 ----------
-let inFlight = 0;
-let pauseUntil = 0;
-const waiters = [];
-function acquire() {
+// Resuelve la identidad de la operación: si opts.ctx viene (inquilino), usa su
+// url/token/workspace; si no, cae al HOST (token de Niko de ~/.pad + 'console').
+// RETROCOMPAT: sin ctx, idéntico al comportamiento histórico.
+function resolveCtx(opts = {}) {
+  const ctx = opts.ctx || null;
+  const url = (ctx && ctx.url) || DEFAULT_URL;
+  const token = (ctx && ctx.token) || readSessionToken(url);
+  const workspace = (ctx && ctx.workspace) || opts.workspace || DEFAULT_WORKSPACE;
+  return { url, token, workspace };
+}
+
+// --- Gate POR-USUARIO (TASK-670): segmentado por clave = url + token. Cada
+// inquilino tiene su propio bucket de rate-limit en el Pad; con un gate global
+// el back-off de un usuario ruidoso PENALIZABA a todos. Ahora un 429 pausa SOLO
+// la cola de ESE usuario. Encima hay un cap AGREGADO (GLOBAL_MAX) que acota el
+// total en vuelo de todos juntos, para proteger al host/Pad aunque N usuarios
+// disparen a la vez. Retrocompat: el host (token de ~/.pad) es una clave mas.
+function gateKey(url, token) { return String(url) + '::' + (token || 'anon'); }
+const gates = new Map(); // key -> { inFlight, pauseUntil, waiters }
+function gateFor(key) {
+  let g = gates.get(key);
+  if (!g) { g = { inFlight: 0, pauseUntil: 0, waiters: [] }; gates.set(key, g); }
+  return g;
+}
+// Cap agregado (sin back-off propio: el back-off es siempre por-usuario).
+let globalInFlight = 0;
+const globalWaiters = [];
+function acquireGlobal() {
   return new Promise((resolve) => {
     const attempt = () => {
-      const wait = pauseUntil - Date.now();
-      if (wait > 0) { setTimeout(attempt, wait); return; } // esperar a que pase el back-off
-      if (inFlight < MAX_CONCURRENT) { inFlight += 1; resolve(); return; }
-      waiters.push(attempt); // sin slot: encolar; release() nos re-intenta
+      if (globalInFlight < GLOBAL_MAX) { globalInFlight += 1; resolve(); return; }
+      globalWaiters.push(attempt);
     };
     attempt();
   });
 }
-function release() {
-  inFlight = Math.max(0, inFlight - 1);
-  const next = waiters.shift();
+function releaseGlobal() {
+  globalInFlight = Math.max(0, globalInFlight - 1);
+  const next = globalWaiters.shift();
   if (next) next();
 }
-function signal429() { pauseUntil = Date.now() + BACKOFF_MS; }
+// Adquiere PRIMERO el slot por-usuario (respeta su semaforo + su back-off) y
+// LUEGO el slot agregado. Un 429 de otro usuario nunca frena esta cola.
+async function acquire(key) {
+  const g = gateFor(key);
+  await new Promise((resolve) => {
+    const attempt = () => {
+      const wait = g.pauseUntil - Date.now();
+      if (wait > 0) { setTimeout(attempt, wait); return; } // back-off de ESTE usuario
+      if (g.inFlight < MAX_CONCURRENT) { g.inFlight += 1; resolve(); return; }
+      g.waiters.push(attempt); // sin slot propio: encolar; release(key) reintenta
+    };
+    attempt();
+  });
+  await acquireGlobal();
+}
+function release(key) {
+  releaseGlobal();
+  const g = gates.get(key);
+  if (!g) return;
+  g.inFlight = Math.max(0, g.inFlight - 1);
+  const next = g.waiters.shift();
+  if (next) next();
+  // GC: bucket vacio y sin back-off vigente -> liberar la entrada del mapa (evita
+  // fuga de memoria con muchos usuarios efimeros). Un gate pausado se conserva.
+  if (g.inFlight === 0 && g.waiters.length === 0 && g.pauseUntil <= Date.now()) gates.delete(key);
+}
+function signal429(key) { gateFor(key).pauseUntil = Date.now() + BACKOFF_MS; }
 
 // --- Caché de lectura: urlPath -> { data, ts }. Solo GET. --------------------
 const readCache = new Map();
@@ -102,11 +150,11 @@ function invalidateForWrite(urlPath) {
 }
 
 // Fetch crudo, SIEMPRE a través del gate (semáforo + back-off/retry ante 429).
-async function doFetch(method, urlPath, { body, url }) {
-  const token = readSessionToken(url);
+async function doFetch(method, urlPath, { body, url, token } = {}) {
   if (!token) return { ok: false, error: 'Pad local: sin token de sesión (correr `pad auth login` contra el server local).' };
+  const key = gateKey(url, token); // gate segmentado por usuario (url+token)
   for (let attempt = 0; ; attempt += 1) {
-    await acquire();
+    await acquire(key);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -123,7 +171,7 @@ async function doFetch(method, urlPath, { body, url }) {
       let data;
       try { data = text ? JSON.parse(text) : null; } catch { data = text; }
       if (res.status === 429 && attempt < MAX_RETRIES_429) {
-        signal429(); // pausa TODO el tráfico y reintenta este request tras el back-off
+        signal429(key); // pausa SOLO la cola de ESTE usuario y reintenta tras el back-off
         continue;
       }
       if (!res.ok) {
@@ -135,14 +183,14 @@ async function doFetch(method, urlPath, { body, url }) {
       return { ok: false, error: String(err?.message || err).slice(0, 200) };
     } finally {
       clearTimeout(timer);
-      release();
+      release(key);
     }
   }
 }
 
 // Punto único de todas las operaciones. GET pasa por la caché; los writes la
 // invalidan. La forma del retorno ({ ok, data } / { ok:false, error }) no cambia.
-async function request(method, urlPath, { body, url = DEFAULT_URL } = {}) {
+async function request(method, urlPath, { body, url = DEFAULT_URL, token } = {}) {
   const isGet = method === 'GET';
   if (isGet && CACHE_ENABLED) {
     const cached = cacheGet(urlPath);
@@ -150,7 +198,7 @@ async function request(method, urlPath, { body, url = DEFAULT_URL } = {}) {
     // que mute el resultado (p.ej. `.sort()` in-place) corrompería a los demás.
     if (cached !== undefined) return { ok: true, data: structuredClone(cached), cached: true };
   }
-  const r = await doFetch(method, urlPath, { body, url });
+  const r = await doFetch(method, urlPath, { body, url, token });
   if (isGet) {
     if (CACHE_ENABLED && r.ok) cacheSet(urlPath, r.data);
   } else if (r.ok && CACHE_ENABLED) {
@@ -161,8 +209,11 @@ async function request(method, urlPath, { body, url = DEFAULT_URL } = {}) {
 
 // --- API de alto nivel (colección/ítem), workspace por defecto = 'console' ---
 
-export async function listCollections(workspace = DEFAULT_WORKSPACE) {
-  return request('GET', `/api/v1/workspaces/${workspace}/collections`);
+export async function listCollections(opts = {}) {
+  // Compat histórica: listCollections('console') sigue funcionando como antes.
+  if (typeof opts === 'string') opts = { workspace: opts };
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('GET', `/api/v1/workspaces/${workspace}/collections`, { url, token });
 }
 
 // OJO verificado 2026-07-12 (migración tasks/store.js): `all=true` NO es "incluir
@@ -172,13 +223,15 @@ export async function listCollections(workspace = DEFAULT_WORKSPACE) {
 // solo excluye los soft-deleted (`deleted_at` seteado). Para un listado completo
 // de una colección, USAR EL DEFAULT (no pasar `all: true`) hasta que se entienda
 // mejor la semántica real de ese flag en el server.
-export async function listItems(collectionSlug, { workspace = DEFAULT_WORKSPACE, all = false } = {}) {
-  const qs = all ? '?all=true' : '';
-  return request('GET', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}/items${qs}`);
+export async function listItems(collectionSlug, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  const qs = opts.all ? '?all=true' : '';
+  return request('GET', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}/items${qs}`, { url, token });
 }
 
-export async function getItem(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}`);
+export async function getItem(ref, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}`, { url, token });
 }
 
 // Buscar UN item de una colección por su TÍTULO EXACTO — para módulos cuya
@@ -191,7 +244,9 @@ export async function getItem(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
 // conviene pedir un endpoint de filtro server-side en vez de escalar esto.
 // Devuelve null si no hay match O si Pad falla (best-effort, nunca tira).
 export async function findItemByTitle(collectionSlug, title, opts = {}) {
-  const r = await listItems(collectionSlug, opts);
+  const { url, token, workspace } = resolveCtx(opts);
+  const qs = opts.all ? '?all=true' : '';
+  const r = await request('GET', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}/items${qs}`, { url, token });
   if (!r.ok) return null;
   return r.data.find((it) => it.title === title) || null;
 }
@@ -204,8 +259,9 @@ export async function findItemByTitle(collectionSlug, title, opts = {}) {
 // silenciosamente y aplica los defaults del schema — sin error, sin pista. Los
 // únicos campos que SÍ van planos (no dentro de `fields`) son los nativos del
 // item: `title`, `content` (cuerpo markdown) y `tags` (array de strings).
-export async function createItem(collectionSlug, fields, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('POST', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}/items`, { body: fields });
+export async function createItem(collectionSlug, fields, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('POST', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}/items`, { body: fields, url, token });
 }
 
 // OJO CRÍTICO #2 (verificado 2026-07-12): a diferencia de `title`/`content`/`tags`
@@ -215,29 +271,34 @@ export async function createItem(collectionSlug, fields, { workspace = DEFAULT_W
 // repitan (vuelven al default del schema). Todo caller que actualice `fields`
 // debe hacer read-modify-write: leer el item con `getItem`, mergear sus `fields`
 // actuales con el patch, y mandar el objeto COMPLETO de vuelta.
-export async function updateItem(ref, fields, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('PATCH', `/api/v1/workspaces/${workspace}/items/${ref}`, { body: fields });
+export async function updateItem(ref, fields, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('PATCH', `/api/v1/workspaces/${workspace}/items/${ref}`, { body: fields, url, token });
 }
 
-export async function deleteItem(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('DELETE', `/api/v1/workspaces/${workspace}/items/${ref}`);
+export async function deleteItem(ref, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('DELETE', `/api/v1/workspaces/${workspace}/items/${ref}`, { url, token });
 }
 
 // --- Comentarios (usados por el timeline de un ítem) ---
 
-export async function listComments(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}/comments`);
+export async function listComments(ref, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}/comments`, { url, token });
 }
 
-export async function addComment(ref, text, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('POST', `/api/v1/workspaces/${workspace}/items/${ref}/comments`, { body: { body: text } });
+export async function addComment(ref, text, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('POST', `/api/v1/workspaces/${workspace}/items/${ref}/comments`, { body: { body: text }, url, token });
 }
 
 // Borrar un comentario. OJO verificado 2026-07-12: el endpoint NO cuelga del item
 // (no es /items/:ref/comments/:cid, eso da 404) — es un recurso propio del
 // workspace direccionado por el UUID del comentario: /workspaces/:ws/comments/:cid.
-export async function deleteComment(commentId, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('DELETE', `/api/v1/workspaces/${workspace}/comments/${commentId}`);
+export async function deleteComment(commentId, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('DELETE', `/api/v1/workspaces/${workspace}/comments/${commentId}`, { url, token });
 }
 
 // --- Relaciones (blocks/blocked-by/parent — reemplaza el array `blocks[]`/`planId`
@@ -247,17 +308,20 @@ export async function deleteComment(commentId, { workspace = DEFAULT_WORKSPACE }
 // posterior). El único camino real para "parent" también es este mismo endpoint de
 // links con link_type='parent'. resolveId() hace la traducción ref→UUID una vez,
 // para que el resto del código siga hablando en refs humanos.
-const idCache = new Map(); // ref -> uuid, cache chica en memoria (los ids no cambian)
-async function resolveId(ref, opts) {
-  if (idCache.has(ref)) return idCache.get(ref);
+const idCache = new Map(); // workspace::ref -> uuid, cache chica en memoria (los ids no cambian)
+export async function resolveId(ref, opts = {}) {
+  const { workspace } = resolveCtx(opts);
+  const cacheKey = `${workspace}::${ref}`;
+  if (idCache.has(cacheKey)) return idCache.get(cacheKey);
   const r = await getItem(ref, opts);
   if (!r.ok || !r.data?.id) return null;
-  idCache.set(ref, r.data.id);
+  idCache.set(cacheKey, r.data.id);
   return r.data.id;
 }
 
-export async function listLinks(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}/links`);
+export async function listLinks(ref, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('GET', `/api/v1/workspaces/${workspace}/items/${ref}/links`, { url, token });
 }
 
 // targetRef y ref van como REFS HUMANOS (ej. 'PLAN-3', 'PEND-9') — se resuelven a
@@ -266,9 +330,11 @@ export async function listLinks(ref, { workspace = DEFAULT_WORKSPACE } = {}) {
 export async function addLink(ref, targetRef, linkType = 'blocks', opts = {}) {
   const targetId = await resolveId(targetRef, opts);
   if (!targetId) return { ok: false, error: `Pad: no se encontró el item destino ${targetRef}` };
-  const { workspace = DEFAULT_WORKSPACE } = opts;
+  const { url, token, workspace } = resolveCtx(opts);
   return request('POST', `/api/v1/workspaces/${workspace}/items/${ref}/links`, {
     body: { target_id: targetId, link_type: linkType },
+    url,
+    token,
   });
 }
 
@@ -276,19 +342,27 @@ export async function addLink(ref, targetRef, linkType = 'blocks', opts = {}) {
 // con link_type='parent', mismo mecanismo que blocks. Verificado 2026-07-12: fijar
 // un parent NUEVO reemplaza el anterior automáticamente (no hace falta unlink previo).
 export async function setParent(ref, parentRef, opts = {}) {
-  return addLink(ref, parentRef, 'parent', opts);
+  const targetId = await resolveId(parentRef, opts);
+  if (!targetId) return { ok: false, error: `Pad: no se encontró el item destino ${parentRef}` };
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('POST', `/api/v1/workspaces/${workspace}/items/${ref}/links`, {
+    body: { target_id: targetId, link_type: 'parent' },
+    url,
+    token,
+  });
 }
 
 // Quitar un link (blocks o parent) por su id (el `id` que devuelve addLink/listLinks,
 // NO un ref humano). Igual patrón que deleteComment: recurso propio del workspace.
-export async function deleteLink(linkId, { workspace = DEFAULT_WORKSPACE } = {}) {
-  return request('DELETE', `/api/v1/workspaces/${workspace}/links/${linkId}`);
+export async function deleteLink(linkId, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('DELETE', `/api/v1/workspaces/${workspace}/links/${linkId}`, { url, token });
 }
 
 // Chequeo barato de disponibilidad (para decidir fallback sin pagar el timeout completo
 // en cada operación real — usarlo en un healthcheck periódico, no en el hot path).
-export async function isAvailable(workspace = DEFAULT_WORKSPACE) {
-  const r = await listCollections(workspace);
+export async function isAvailable() {
+  const r = await listCollections(DEFAULT_WORKSPACE);
   return r.ok;
 }
 
@@ -301,12 +375,12 @@ export async function isAvailable(workspace = DEFAULT_WORKSPACE) {
 // pide al abrir, para que la PRIMERA carga ya salga de memoria. Secuencial a
 // propósito (una tras otra) para no golpear a Pad local en el mismo instante en
 // que arranca todo lo demás.
-export async function warmCache(collections = [], { workspace = DEFAULT_WORKSPACE } = {}) {
+export async function warmCache(collections = []) {
   if (!CACHE_ENABLED) return { warmed: 0 };
-  await listCollections(workspace);
+  await listCollections(DEFAULT_WORKSPACE);
   let warmed = 0;
   for (const c of collections) {
-    const r = await listItems(c, { workspace });
+    const r = await listItems(c, { workspace: DEFAULT_WORKSPACE });
     if (r.ok) warmed += 1;
   }
   return { warmed };
@@ -322,7 +396,7 @@ export function startCacheSweep({ intervalMs = 20_000 } = {}) {
   if (!CACHE_ENABLED || sweepTimer) return null;
   sweepTimer = setInterval(async () => {
     for (const urlPath of [...readCache.keys()]) {
-      const r = await doFetch('GET', urlPath, { url: DEFAULT_URL });
+      const r = await doFetch('GET', urlPath, { url: DEFAULT_URL, token: readSessionToken(DEFAULT_URL) });
       if (r.ok) cacheSet(urlPath, r.data);
     }
   }, intervalMs);
@@ -334,11 +408,16 @@ export function stopCacheSweep() { if (sweepTimer) { clearInterval(sweepTimer); 
 // Utilidades de control/observabilidad (para un healthcheck o un panel futuro).
 export function invalidateCache() { readCache.clear(); }
 export function cacheStats() {
+  const now = Date.now();
+  let pausedForMs = 0;
+  for (const g of gates.values()) pausedForMs = Math.max(pausedForMs, g.pauseUntil - now);
   return {
     enabled: CACHE_ENABLED,
     entries: readCache.size,
-    inFlight,
-    maxConcurrent: MAX_CONCURRENT,
-    pausedForMs: Math.max(0, pauseUntil - Date.now()),
+    inFlight: globalInFlight,        // total agregado en vuelo
+    maxConcurrent: MAX_CONCURRENT,   // tope por-usuario
+    globalMax: GLOBAL_MAX,           // tope agregado
+    gates: gates.size,               // nro de buckets por-usuario activos
+    pausedForMs: Math.max(0, pausedForMs),
   };
 }

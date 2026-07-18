@@ -34,6 +34,11 @@ const FAST_VEL = 30;            // filas/s a energía plena
 const AMBIENT_VEL = 1.0;        // columnas sin dueño
 const FADE_ALPHA = 0.085;
 const FONT_SIZE = 16;
+const TERM_POLL_MS = 3000;
+const PROC_POLL_MS = 1500;
+const HEALTH_POLL_MS = 60000;
+const HEALTH_SERVICES = { systemd: 'Consola web', 'pad-backbone': 'Pad local', tmux: 'tmux' };
+const SHELL_GLYPHS = '$#~/\\|<>[](){};:=+-*.,_% abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 const IDLE_GLYPHS =
   'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン' +
@@ -44,6 +49,8 @@ const WORLD = {
   tolkien: { hue: 140, label: 'tolkien', ico: '🌳' },
   otros: { hue: 210, label: 'otros', ico: '·' },
   unknown: { hue: 190, label: 'codex?', ico: '🤖' },
+  terminal: { hue: 130, label: 'bash', ico: '▸' },
+  proc: { hue: 45, label: 'proc', ico: '⚙' },
 };
 
 const canvas = document.getElementById('raw-canvas');
@@ -51,6 +58,7 @@ const ctx = canvas.getContext('2d');
 const feedEl = document.getElementById('raw-feed');
 const labelsEl = document.getElementById('raw-labels');
 const logsEl = document.getElementById('raw-logs');
+const procsEl = document.getElementById('raw-procs');
 const closeBtn = document.getElementById('raw-close');
 const rcSessions = document.getElementById('rc-sessions');
 const rcClaudeNum = document.getElementById('rc-claude-num');
@@ -59,7 +67,10 @@ const rcCodexNum = document.getElementById('rc-codex-num');
 const rcCodexTps = document.getElementById('rc-codex-tps');
 
 const logPanels = new Map(); // sessionId -> <div.raw-log>
+const labelPanels = new Map(); // sessionId -> <div.raw-label>
 const seeded = new Set();    // sesiones ya sembradas con su texto reciente
+let stripHealth = [];   // servicios desde /api/health/checks (LED por status)
+let stripDaemons = [];  // procesos-servicio desde /active-runners (WhatsApp)
 
 let totalCols = 0;
 let cols = [];          // { y, headRow, headCh, headReal }
@@ -113,7 +124,10 @@ function sessionHSL(sid, world, kind) {
   if (kind === 'idle') return `hsl(${hue}, ${sat}%, ${light}%)`;
   return `hsl(${hue}, ${Math.min(90, sat + 18)}%, ${Math.min(86, light + 24)}%)`; // label
 }
-function idleGlyph() { return IDLE_GLYPHS[(Math.random() * IDLE_GLYPHS.length) | 0]; }
+function idleGlyph(source) {
+  const set = source === 'term' ? SHELL_GLYPHS : IDLE_GLYPHS;
+  return set[(Math.random() * set.length) | 0];
+}
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -139,15 +153,22 @@ function relayout() {
   bands = [];
   bandBySid = new Map();
   if (active.length) {
-    const slot = totalCols / active.length;
-    const bandW = Math.max(3, Math.min(6, Math.floor(slot * 0.55)));
+    const weights = active.map((sid) => {
+      const s = state.sessions.get(sid);
+      return s && s.isSub ? 0.6 : 1;
+    });
+    const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+    let acc = 0;
     active.forEach((sid, i) => {
-      // Reparto borde a borde: banda 0 pegada a la IZQUIERDA, la última a la
-      // derecha, huecos parejos en el medio (sin margen a los costados).
-      let start = active.length === 1 ? 0 : Math.round((i * (totalCols - bandW)) / (active.length - 1));
-      start = Math.max(0, Math.min(totalCols - bandW, start));
-      for (let c = start; c < start + bandW && c < totalCols; c++) owner[c] = sid;
-      const b = { sid, start, width: bandW };
+      // Slot proporcional al peso (subagente = banda más angosta), borde a borde.
+      const s0 = Math.floor((acc / totalW) * totalCols);
+      acc += weights[i];
+      const s1 = Math.floor((acc / totalW) * totalCols);
+      const gut = active.length > 1 ? Math.min(4, Math.max(1, Math.floor((s1 - s0) * 0.12))) : 0;
+      const start = s0;
+      const width = Math.max(3, (s1 - s0) - gut);
+      for (let c = start; c < start + width && c < totalCols; c++) owner[c] = sid;
+      const b = { sid, start, width };
       bands.push(b);
       bandBySid.set(sid, b);
     });
@@ -160,14 +181,15 @@ function relayout() {
 // Preserva el contenido tipeado entre relayouts (solo reposiciona).
 function syncLogPanels() {
   const slotPx = bands.length ? canvas.width / bands.length : canvas.width;
-  const panelW = Math.max(60, Math.min(230, slotPx - 14));
+  const panelW = Math.max(60, slotPx - 16);
   const top = 22; // pegado bajo el rótulo (márgenes 0)
   const height = Math.max(80, window.innerHeight - top - 118); // deja aire para feed/contador
   const present = new Set();
   for (const b of bands) {
     present.add(b.sid);
     let el = logPanels.get(b.sid);
-    if (!el) { el = document.createElement('div'); el.className = 'raw-log'; logsEl.appendChild(el); logPanels.set(b.sid, el); }
+    let born = false;
+    if (!el) { el = document.createElement('div'); el.className = 'raw-log'; logsEl.appendChild(el); logPanels.set(b.sid, el); born = true; }
     const s = state.sessions.get(b.sid);
     const left = Math.min(b.start * FONT_SIZE, Math.max(0, canvas.width - panelW)); // clamp al borde
     el.style.left = `${left}px`;
@@ -175,9 +197,16 @@ function syncLogPanels() {
     el.style.width = `${panelW}px`;
     el.style.height = `${height}px`;
     if (s) el.style.color = sessionHSL(b.sid, s.world, 'idle');
+    if (born) requestAnimationFrame(() => el.classList.add('raw-log--in'));
+    else if (el._out) { el._out = false; clearTimeout(el._outT); el.classList.remove('raw-log--out'); el.classList.add('raw-log--in'); }
   }
   for (const [sid, el] of logPanels) {
-    if (!present.has(sid)) { el.remove(); logPanels.delete(sid); }
+    if (!present.has(sid) && !el._out) {
+      el._out = true;
+      el.classList.remove('raw-log--in');
+      el.classList.add('raw-log--out');
+      el._outT = setTimeout(() => { el.remove(); logPanels.delete(sid); }, 520);
+    }
   }
   for (const b of bands) seedSession(b.sid); // poblar bandas ociosas con su texto reciente
 }
@@ -185,6 +214,7 @@ function syncLogPanels() {
 // Trae UNA vez el texto reciente de una sesión para que su banda no arranque vacía.
 async function seedSession(sid) {
   if (seeded.has(sid)) return;
+  if (/[:~]/.test(sid)) { seeded.add(sid); return; }
   seeded.add(sid);
   const r = await fetchJson(`/api/tokens/stream/seed?sid=${encodeURIComponent(sid)}`);
   const s = state.sessions.get(sid);
@@ -216,19 +246,46 @@ function statusGlyph(sess) {
   if (sess.chatAlive) return '◦';
   return '»';
 }
+function bandLabel(s, sid) {
+  const wk = worldKey(s.world);
+  if (s.source === 'term') {
+    const nm = s.title || sid.replace(/^term:/, '').replace(/^cwc-/, '');
+    return `▸ ${nm.slice(0, 22)}`;
+  }
+  if (s.source === 'proc') return `⚙ ${s.procLabel || 'proc'}`;
+  if (s.isSub) {
+    const parent = state.sessions.get(sid.replace(/~sub$/, ''));
+    const pname = (parent && parent.title) || sid.slice(0, 4);
+    return `↳ ${WORLD[wk].ico} ${pname.slice(0, 20)} · sub`;
+  }
+  const name = s.title || `${WORLD[wk].label} · ${sid.slice(0, 4)}`;
+  return `${statusGlyph(s)} ${WORLD[wk].ico} ${name.slice(0, 24)} · ${s.model || s.source}`;
+}
 function layoutLabels() {
-  labelsEl.innerHTML = '';
+  const present = new Set();
   for (const b of bands) {
     const s = state.sessions.get(b.sid);
     if (!s) continue;
+    present.add(b.sid);
     const wk = worldKey(s.world);
-    const el = document.createElement('div');
-    el.className = 'raw-label';
+    let el = labelPanels.get(b.sid);
+    let born = false;
+    if (!el) { el = document.createElement('div'); el.className = 'raw-label'; labelsEl.appendChild(el); labelPanels.set(b.sid, el); born = true; }
+    else if (el._out) { el._out = false; clearTimeout(el._outT); el.classList.remove('raw-label--out'); }
     el.style.left = `${Math.min(b.start * FONT_SIZE, Math.max(0, canvas.width - 210))}px`;
     el.style.color = sessionHSL(b.sid, s.world, 'label');
     el.style.borderLeftColor = sessionHSL(b.sid, s.world, 'idle');
-    el.textContent = `${statusGlyph(s)} ${WORLD[wk].ico} ${WORLD[wk].label} · ${s.model || s.source} · ${b.sid.slice(0, 4)}`;
-    labelsEl.appendChild(el);
+    const txt = bandLabel(s, b.sid);
+    if (el.textContent !== txt) el.textContent = txt;
+    if (born) requestAnimationFrame(() => el.classList.add('raw-label--in'));
+  }
+  for (const [sid, el] of labelPanels) {
+    if (!present.has(sid) && !el._out) {
+      el._out = true;
+      el.classList.remove('raw-label--in');
+      el.classList.add('raw-label--out');
+      el._outT = setTimeout(() => { el.remove(); labelPanels.delete(sid); }, 520);
+    }
   }
 }
 
@@ -262,6 +319,13 @@ function effEnergy(sess, ts) {
   return e;
 }
 
+// visibilidad 0..1: ramp de aparición (igniting) y disolución (dying) para el fade real de la lluvia.
+function sessVis(sess, ts) {
+  if (sess.phase === 'igniting') return Math.min(1, (ts - sess.bornAt) / IGNITE_MS);
+  if (sess.phase === 'dying') return Math.max(0, 1 - (performance.now() - sess.dyingAt) / DIE_MS);
+  return 1;
+}
+
 function cell(colX, row, ch, style) {
   ctx.fillStyle = style;
   ctx.fillText(ch, colX * FONT_SIZE, row * FONT_SIZE);
@@ -276,6 +340,8 @@ function drawFrame(dt, ts) {
     if (!col) continue;
     const sid = owner[i];
     const sess = sid ? state.sessions.get(sid) : null;
+    const vis = sess ? sessVis(sess, ts) : 1;
+    ctx.globalAlpha = vis;
     const e = sess ? effEnergy(sess, ts) : 0.04;
     const vel = (sess ? IDLE_VEL : AMBIENT_VEL) + (FAST_VEL - (sess ? IDLE_VEL : AMBIENT_VEL)) * e;
 
@@ -295,7 +361,7 @@ function drawFrame(dt, ts) {
       let ch, real = false;
       if (sess) {
         const r = nextChar(sess);
-        if (r != null) { ch = r; real = true; } else ch = idleGlyph();
+        if (r != null) { ch = r; real = true; } else ch = idleGlyph(sess.source);
       } else ch = idleGlyph();
       const headColor = sess
         ? (e > 0.22 ? sessionHSL(sid, sess.world, 'head') : sessionHSL(sid, sess.world, real ? 'real' : 'idle'))
@@ -309,6 +375,7 @@ function drawFrame(dt, ts) {
     if (col.y * FONT_SIZE > canvas.height) {
       if (Math.random() > 0.985 - e * 0.02) { col.y = Math.random() * -12; col.headRow = -1; }
     }
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -372,7 +439,7 @@ function rippleBand(sid) {
 
 function ingestFragment(f) {
   const { s, born } = upsertSession(f.sessionId, {
-    source: f.source, world: f.world, model: f.model || undefined,
+    source: f.source, world: f.world, model: f.model || undefined, isSub: f.sub === true,
   });
   s.lastTextTs = Date.now();
   s.buf += (s.buf ? '  ·  ' : '') + f.text;
@@ -490,6 +557,7 @@ async function pollOnce() {
           status: c.status === 'working' ? 'working' : (c.status || 'waiting'),
           chatAlive: true, delegating: !!c.delegating,
           world: worldFromCwd(c.cwd), model: c.model || c.modelChoice || undefined,
+          title: c.title || undefined,
         });
         if (born) structuralChange = true;
       } else if (existed) {
@@ -515,6 +583,99 @@ async function pollOnce() {
   if (structuralChange) relayout(); else layoutLabels(); // labels reflejan estado aunque no cambie el layout
   updateSessionsLine();
 }
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
+}
+
+function renderStrip() {
+  procsEl.innerHTML = '';
+  const items = [...stripHealth, ...stripDaemons];
+  for (const it of items) {
+    const el = document.createElement('div'); el.className = 'raw-proc';
+    const dot = document.createElement('span');
+    dot.className = 'raw-proc-dot' + (it.status === 'fail' ? ' raw-proc-dot--fail' : it.status === 'warn' ? ' raw-proc-dot--warn' : '');
+    const lab = document.createElement('span'); lab.className = 'raw-proc-lab'; lab.textContent = it.label;
+    const meta = document.createElement('span'); meta.className = 'raw-proc-meta'; meta.textContent = it.meta || '';
+    el.append(dot, lab, meta);
+    procsEl.appendChild(el);
+  }
+  procsEl.style.display = items.length ? '' : 'none';
+}
+
+// A: procesos. role 'sdk' se ignora (ya llueve por transcript); 'job' llueve su
+// fase como banda; 'service' va a la tira de latidos.
+async function pollProcs() {
+  if (state.stopped) return;
+  const r = await fetchJson('/api/health/active-runners');
+  const services = [];
+  const jobIds = new Set();
+  let changed = false;
+  for (const p of (r && r.processes) || []) {
+    if (p.role === 'sdk') continue;
+    if (p.role === 'service') { services.push(p); continue; }
+    const id = 'proc:' + p.key;
+    jobIds.add(id);
+    const { s, born } = upsertSession(id, { source: 'proc', world: 'proc', model: p.model || undefined });
+    s.chatAlive = true; s.status = 'working'; s.lastTextTs = Date.now(); s.procLabel = p.label;
+    const line = `${p.label} · ${p.phase || 'corriendo'}`;
+    if (s._procLine !== line) { s._procLine = line; s.log = line; s.buf = (line + '   ').repeat(8); s.read = 0; s.energy = Math.min(1.1, s.energy + 0.2); }
+    if (born) changed = true;
+  }
+  for (const [sid, s] of state.sessions) {
+    if (s.source === 'proc' && !jobIds.has(sid)) { s.chatAlive = false; s.lastTextTs = 0; }
+  }
+  stripDaemons = services.map((p) => ({ label: p.label, meta: `${p.phase ? p.phase + ' · ' : ''}${fmtElapsed(p.startedAt)}`, status: 'ok' }));
+  renderStrip();
+  if (pruneSessions()) changed = true;
+  if (changed) relayout(); else layoutLabels();
+}
+
+// C: terminales bash (capture-pane). Excluye isClaude (ya llueve por transcript).
+async function pollTerminals() {
+  if (state.stopped) return;
+  const r = await fetchJson('/api/tmux/raw-feed');
+  const present = new Set();
+  let changed = false;
+  for (const t of (r && r.terminals) || []) {
+    if (t.isClaude) continue;
+    const id = 'term:' + t.name;
+    present.add(id);
+    const { s, born } = upsertSession(id, { source: 'term', world: 'terminal', model: 'bash', title: t.customTitle || undefined });
+    s.chatAlive = true; s.status = t.attached ? 'working' : 'waiting'; s.lastTextTs = Date.now();
+    if (t.text && t.text !== s._pane) {
+      s._pane = t.text;
+      s.log = t.text.slice(-LOG_CAP);
+      s.buf = t.text.slice(-PENDING_CAP); s.read = 0;
+      s.energy = Math.min(1.1, s.energy + 0.25);
+    }
+    if (born) changed = true;
+  }
+  for (const [sid, s] of state.sessions) {
+    if (s.source === 'term' && !present.has(sid)) { s.chatAlive = false; s.lastTextTs = 0; }
+  }
+  if (pruneSessions()) changed = true;
+  if (changed) relayout(); else layoutLabels();
+}
+
+function scheduleProcs() { if (state.stopped) return; pollProcs().finally(() => { if (!state.stopped) setTimeout(scheduleProcs, PROC_POLL_MS); }); }
+function scheduleTerminals() { if (state.stopped) return; pollTerminals().finally(() => { if (!state.stopped) setTimeout(scheduleTerminals, TERM_POLL_MS); }); }
+
+// Servicios (signos vitales) desde los chequeos rápidos: 0 tokens pero /checks es
+// pesado (corre node --check de todo) → poll lento (60s). LED por status.
+async function pollHealth() {
+  if (state.stopped) return;
+  const r = await fetchJson('/api/health/checks');
+  const checks = (r && r.checks) || [];
+  stripHealth = checks
+    .filter((c) => HEALTH_SERVICES[c.id])
+    .map((c) => ({ label: HEALTH_SERVICES[c.id], meta: c.status === 'ok' ? '' : String(c.detail || c.status).slice(0, 22), status: c.status }));
+  renderStrip();
+}
+function scheduleHealth() { if (state.stopped) return; pollHealth().finally(() => { if (!state.stopped) setTimeout(scheduleHealth, HEALTH_POLL_MS); }); }
 
 function schedulePoll() {
   if (state.stopped) return;
@@ -543,3 +704,6 @@ resizeCanvas();
 requestAnimationFrame(loop);
 setInterval(typewriterTick, LOG_TICK_MS);
 schedulePoll();
+scheduleProcs();
+scheduleTerminals();
+scheduleHealth();

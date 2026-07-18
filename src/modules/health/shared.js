@@ -704,29 +704,40 @@ const RUNNER_FRESH_MS = 20000;        // locks: heartbeat 3s → 20s de gracia (
 const JOB_STALE_MS = 10 * 60 * 1000;  // jobs: cota amplia (timeout máx ~6min) para no colgar filas de un job muerto
 
 // kind 'lock'  → archivo <x>.lock con {pid, ts, phase?}: vivo si ts fresco.
+// kind 'heartbeat' → lock/heartbeat con freshMs configurable.
 // kind 'job'   → archivo <x>.json con {status:'running', startedAt, updatedAt?}: vivo si running + fresco.
+// kind 'jobflag' → archivo <x>.json con {running:true}: vivo si running + mtime fresco.
 // kind 'jobglob' → varios <base><algo>.json (jobs por id) en DATA_DIR: escanea cada uno como 'job'.
 // kind 'jobdir'  → carpeta con <id>.json (jobs por id): escanea cada uno como 'job'.
 const RUNNER_REGISTRY = [
   // --- Familia LOCK (heartbeat) --- (icon = nombre válido de public/js/ui/icons.js)
-  { key: 'health-review', kind: 'lock', file: 'health-review.lock', label: 'Revisión de salud', icon: 'checklist', model: 'sonnet' },
-  { key: 'healthfix', kind: 'lock', file: 'healthfix.lock', label: 'Auto-fix de salud', icon: 'gear', model: 'sonnet' },
-  { key: 'healthfix-batch', kind: 'lock', file: 'healthfix-batch.lock', label: 'Batch de auto-fix', icon: 'gear', model: 'sonnet' },
-  { key: 'optimize', kind: 'lock', file: 'optimize.lock', label: 'Optimización IA', icon: 'sparkle', model: 'sonnet' },
-  { key: 'coherence', kind: 'lock', file: 'coherence.lock', label: 'Coherencia', icon: 'relay', model: 'sonnet' },
-  { key: 'comms-scan', kind: 'lock', file: 'comms/comms.lock', label: 'Escaneo de comunicaciones', icon: 'externalLink', model: null },
-  { key: 'comms-teams', kind: 'lock', file: 'comms/teams.lock', label: 'Escaneo Teams', icon: 'externalLink', model: 'sonnet' },
-  { key: 'comms-chatbot', kind: 'lock', file: 'comms/chatbot.lock', label: 'Chatbot (comunicaciones)', icon: 'externalLink', model: 'sonnet' },
+  { key: 'health-review', kind: 'lock', file: 'health-review.lock', label: 'Revisión de salud', icon: 'checklist', model: 'sonnet', role: 'sdk' },
+  { key: 'healthfix', kind: 'lock', file: 'healthfix.lock', label: 'Auto-fix de salud', icon: 'gear', model: 'sonnet', role: 'sdk' },
+  { key: 'healthfix-batch', kind: 'lock', file: 'healthfix-batch.lock', label: 'Batch de auto-fix', icon: 'gear', model: 'sonnet', role: 'sdk' },
+  { key: 'optimize', kind: 'lock', file: 'optimize.lock', label: 'Optimización IA', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'coherence', kind: 'lock', file: 'coherence.lock', label: 'Coherencia', icon: 'relay', model: 'sonnet', role: 'sdk' },
+  { key: 'comms-scan', kind: 'lock', file: 'comms/comms.lock', label: 'Escaneo de comunicaciones', icon: 'externalLink', model: null, role: 'job' },
+  { key: 'comms-teams', kind: 'lock', file: 'comms/teams.lock', label: 'Escaneo Teams', icon: 'externalLink', model: 'sonnet', role: 'sdk' },
+  { key: 'comms-chatbot', kind: 'lock', file: 'comms/chatbot.lock', label: 'Chatbot (comunicaciones)', icon: 'externalLink', model: 'sonnet', role: 'sdk' },
   // --- Familia JOB (status:'running') ---
-  { key: 'tasks-analyze', kind: 'jobglob', base: 'tasks-analysis-', label: 'Análisis de Pendientes', icon: 'list', model: 'sonnet' },
-  { key: 'learning-explain', kind: 'jobglob', base: 'learning-explain-', label: 'Explicame esto (aprendizaje)', icon: 'sparkle', model: 'sonnet' },
-  { key: 'learning-context', kind: 'jobglob', base: 'learning-context-', label: 'Contexto (aprendizaje)', icon: 'sparkle', model: 'sonnet' },
-  { key: 'learning-analyze', kind: 'job', file: 'learning-analysis.json', label: 'Analizar aprendizaje', icon: 'sparkle', model: 'sonnet' },
-  { key: 'commitmsg', kind: 'jobdir', dir: 'commitmsg', label: 'Mensaje de commit IA', icon: 'edit', model: 'haiku' },
-  { key: 'projects-analyze', kind: 'jobdir', dir: 'projects-analyze', label: 'Guardián de contexto', icon: 'eye', model: 'haiku' },
-  { key: 'audio', kind: 'jobdir', dir: 'audio', label: 'Análisis de audio', icon: 'mic', model: 'sonnet' },
-  { key: 'comms-analyze', kind: 'jobdir', dir: 'comms/analyze', label: 'Análisis de hilo (comms)', icon: 'externalLink', model: 'haiku' },
-  { key: 'ticket-context', kind: 'jobdir', dir: 'ticket-context', label: 'Contexto de ticket', icon: 'sparkle', model: 'sonnet' },
+  { key: 'tasks-analyze', kind: 'jobglob', base: 'tasks-analysis-', label: 'Análisis de Pendientes', icon: 'list', model: 'sonnet', role: 'sdk' },
+  { key: 'learning-explain', kind: 'jobglob', base: 'learning-explain-', label: 'Explicame esto (aprendizaje)', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'learning-context', kind: 'jobglob', base: 'learning-context-', label: 'Contexto (aprendizaje)', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'learning-analyze', kind: 'job', file: 'learning-analysis.json', label: 'Analizar aprendizaje', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'commitmsg', kind: 'jobdir', dir: 'commitmsg', label: 'Mensaje de commit IA', icon: 'edit', model: 'haiku', role: 'sdk' },
+  { key: 'projects-analyze', kind: 'jobdir', dir: 'projects-analyze', label: 'Guardián de contexto', icon: 'eye', model: 'haiku', role: 'sdk' },
+  { key: 'audio', kind: 'jobdir', dir: 'audio', label: 'Análisis de audio', icon: 'mic', model: 'sonnet', role: 'sdk' },
+  { key: 'comms-analyze', kind: 'jobdir', dir: 'comms/analyze', label: 'Análisis de hilo (comms)', icon: 'externalLink', model: 'haiku', role: 'sdk' },
+  { key: 'ticket-context', kind: 'jobdir', dir: 'ticket-context', label: 'Contexto de ticket', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  // --- Silenciosos / determinísticos que antes no se registraban ---
+  { key: 'tolkien-refresh', kind: 'jobflag', file: 'tolkien-refresh.json', label: 'Refresh DB Tolkien', icon: 'gitBranch', model: null, role: 'job' },
+  { key: 'whatsapp', kind: 'heartbeat', file: 'comms/whatsapp-daemon.json', freshMs: 300000, label: 'WhatsApp (daemon)', icon: 'externalLink', model: null, role: 'service' },
+  { key: 'retro', kind: 'jobdir', dir: 'retro', label: 'Mejora continua', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'retro-curate', kind: 'job', file: 'retro-curation.json', label: 'Curaduría mejora continua', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
+  { key: 'health-scan', kind: 'lock', file: 'health-scan.lock', label: 'Escaneo de salud', icon: 'checklist', model: 'sonnet', role: 'sdk' },
+  { key: 'desk', kind: 'lock', file: 'desk.lock', label: 'Consulta Zoho Desk', icon: 'externalLink', model: 'sonnet', role: 'sdk' },
+  { key: 'investigate', kind: 'lock', file: 'investigate.lock', label: 'Investigar PR', icon: 'eye', model: 'sonnet', role: 'sdk' },
+  { key: 'ticket-investigate', kind: 'lock', file: 'ticket-investigate.lock', label: 'Investigar ticket', icon: 'eye', model: 'sonnet', role: 'sdk' },
 ];
 
 // birthtime del archivo ≈ momento de spawn (los locks solo traen heartbeat `ts`,
@@ -735,11 +746,11 @@ function birthMs(abs) {
   try { return fss.statSync(abs).birthtimeMs || fss.statSync(abs).ctimeMs; } catch { return null; }
 }
 // Lee un archivo de lock; devuelve {startedAt, phase} si está vivo, o null.
-function readLiveLock(abs) {
+function readLiveLock(abs, freshMs = RUNNER_FRESH_MS) {
   try {
     const l = JSON.parse(fss.readFileSync(abs, 'utf8'));
-    if (!l || typeof l.ts !== 'number' || Date.now() - l.ts >= RUNNER_FRESH_MS) return null;
-    return { startedAt: birthMs(abs) || l.ts, phase: l.phase || l.progress || null };
+    if (!l || typeof l.ts !== 'number' || Date.now() - l.ts >= freshMs) return null;
+    return { startedAt: birthMs(abs) || l.ts, phase: l.phase || l.progress || l.state || null, state: l.state || null };
   } catch { return null; }
 }
 // Lee un archivo de job; devuelve {startedAt, phase} si status running + fresco.
@@ -753,18 +764,35 @@ function readLiveJob(abs) {
     return { startedAt: started || Date.now(), phase: j.phase || null };
   } catch { return null; }
 }
+// Job con shape {running:true} (p.ej. tolkien-refresh.json): vivo si running + mtime fresco.
+function readLiveJobFlag(abs) {
+  try {
+    const j = JSON.parse(fss.readFileSync(abs, 'utf8'));
+    if (!j || j.running !== true) return null;
+    let mtime = 0;
+    try { mtime = fss.statSync(abs).mtimeMs; } catch {}
+    if (mtime && Date.now() - mtime >= 15 * 60 * 1000) return null; // job colgado
+    return { startedAt: birthMs(abs) || mtime || Date.now(), phase: 'corriendo' };
+  } catch { return null; }
+}
 
 // Foto de TODOS los procesos/runners vivos ahora. Cada entrada:
-// { key, label, icon, model, phase, startedAt, kind:'process' }.
+// { key, label, icon, model, phase, startedAt, role, kind:'process' }.
 export function collectActiveRunners() {
   const out = [];
   for (const r of RUNNER_REGISTRY) {
     if (r.kind === 'lock') {
       const live = readLiveLock(path.join(DATA_DIR, r.file));
-      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, role: r.role || 'sdk', kind: 'process' });
+    } else if (r.kind === 'heartbeat') {
+      const live = readLiveLock(path.join(DATA_DIR, r.file), r.freshMs);
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, role: r.role || 'sdk', kind: 'process' });
     } else if (r.kind === 'job') {
       const live = readLiveJob(path.join(DATA_DIR, r.file));
-      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, role: r.role || 'sdk', kind: 'process' });
+    } else if (r.kind === 'jobflag') {
+      const live = readLiveJobFlag(path.join(DATA_DIR, r.file));
+      if (live) out.push({ key: r.key, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, role: r.role || 'sdk', kind: 'process' });
     } else if (r.kind === 'jobglob' || r.kind === 'jobdir') {
       const dir = r.kind === 'jobdir' ? path.join(DATA_DIR, r.dir) : DATA_DIR;
       let names = [];
@@ -773,7 +801,7 @@ export function collectActiveRunners() {
         if (!n.endsWith('.json')) continue;
         if (r.kind === 'jobglob' && !n.startsWith(r.base)) continue;
         const live = readLiveJob(path.join(dir, n));
-        if (live) out.push({ key: `${r.key}:${n.replace(/\.json$/, '')}`, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, kind: 'process' });
+        if (live) out.push({ key: `${r.key}:${n.replace(/\.json$/, '')}`, label: r.label, icon: r.icon, model: r.model, phase: live.phase, startedAt: live.startedAt, role: r.role || 'sdk', kind: 'process' });
       }
     }
   }

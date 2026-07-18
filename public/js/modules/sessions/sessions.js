@@ -10,7 +10,8 @@
 import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
-import { placeFor, PLACES } from '../../ui/places.js';
+import { placeFor, PLACES, LIMBO_PLACE } from '../../ui/places.js';
+import { readCache, writeCache } from '../../ui/cache-store.js';
 
 // Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
 // animación por estado vienen del catálogo central (ver ui.css); acá solo
@@ -154,11 +155,17 @@ export default {
     }
 
     async function refresh() {
-      listEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
+      // Cache-then-network: pinta la última lista conocida al instante (evita el
+      // 'cargando…' en cada apertura/reconexión) y refresca por detrás.
+      const cached = readCache('sessions');
+      if (cached) { try { render(cached.data); } catch { /* noop */ } }
+      else listEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
       try {
-        render(await fetchAll());
+        const data = await fetchAll();
+        writeCache('sessions', data);
+        render(data);
       } catch {
-        listEl.innerHTML = '<div class="sess-msg sess-err">No se pudieron listar las sesiones.</div>';
+        if (!cached) listEl.innerHTML = '<div class="sess-msg sess-err">No se pudieron listar las sesiones.</div>';
       }
     }
 
@@ -190,19 +197,21 @@ export default {
       // ruido). Cada grupo lleva ícono + label + conteo.
       const byWorld = new Map();
       for (const c of activeChats) {
-        const p = placeFor(c.cwd);
-        const key = p?.rel || '__otros';
+        // 🌗 sesión-Limbo (alto riesgo, herramientas de ambos mundos): grupo
+        // PROPIO, sin importar el cwd — así se identifica de un vistazo.
+        const p = c.limbo ? LIMBO_PLACE : placeFor(c.cwd);
+        const key = c.limbo ? '__limbo' : (p?.rel || '__otros');
         if (!byWorld.has(key)) byWorld.set(key, { place: p, chats: [] });
         byWorld.get(key).chats.push(c);
       }
-      const order = [...PLACES.map((p) => p.rel), '__otros'];
+      const order = ['__limbo', ...PLACES.map((p) => p.rel), '__otros'];
       const worldKeys = [...byWorld.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
       const multiWorld = worldKeys.length > 1;
       for (const key of worldKeys) {
         const grp = byWorld.get(key);
         if (multiWorld) {
           const h = document.createElement('div');
-          h.className = 'sess-world-h';
+          h.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
           h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || 'Otros'}</span><span class="side-count">${grp.chats.length}</span>`;
           listEl.appendChild(h);
         }

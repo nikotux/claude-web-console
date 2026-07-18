@@ -1,0 +1,21 @@
+[Unit]
+Description=Pad (getpad.dev) - instancia local self-hosted
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/pad server start --host 10.213.222.62 --port 7777
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+; Holgura de recursos (SP9-3 / PLAN-595, 2026-07-17): caps SUBIDOS para N
+; inquilinos cargando el Pad. Es TECHO, no reserva exclusiva — el uso real
+; medido es ~50MB RAM / 0% CPU idle; se le da margen amplio para crecer sin
+; fricción, conservando un tope para que un pico/runaway no acapare la máquina
+; (host: 8 núcleos, 62 GiB RAM). Antes: CPUQuota=200% MemoryMax=4G MemoryHigh=3G.
+CPUQuota=400%
+MemoryMax=8G
+MemoryHigh=6G
+
+[Install]
+WantedBy=default.target

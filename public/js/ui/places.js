@@ -13,6 +13,11 @@ export const PLACES = [
   { rel: 'tolkien', label: 'Tolkien', ico: 'gitBranch', cls: '' },
 ];
 
+// 🌗 LIMBO — no es un lugar por cwd (una sesión-Limbo corre en cwd Tolkien),
+// es un ESTADO de la sesión (chat.limbo): alto riesgo, herramientas de ambos
+// mundos. sessions.js la agrupa aparte usando este descriptor.
+export const LIMBO_PLACE = { rel: '__limbo', label: '🌗 Limbo (alto riesgo)', ico: 'relay', cls: 'is-limbo' };
+
 export function placeFor(p) {
   const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
   return PLACES.find((x) => x.rel === rel) || null;

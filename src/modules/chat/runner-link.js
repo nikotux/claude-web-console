@@ -5,6 +5,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { userRunnerEnv, hostUser, userClaudeDir, readUserOauthToken } from '../../core/user-space.js';
 import { CHATS_DIR, sockPath, logPath } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,7 +47,7 @@ function writeSpawnLock(id, pid) {
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
 // si no el cgroup entero (runners incluidos) moriría en cada restart.
-export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandle, effort, tandem, codexModel, codexEffort }) {
+export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandle, effort, tandem, codexModel, codexEffort, owner, oauthToken }) {
   fs.mkdirSync(CHATS_DIR, { recursive: true, mode: 0o700 });
   // Chequeo+escritura sincrónicos ANTES de spawnear (ver comentario arriba).
   if (spawnLockAlive(id)) {
@@ -77,7 +78,29 @@ export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandl
   // sessionId (resume/reopen — la mayoría de los chats de larga vida que
   // coordinan); el primerísimo arranque de un chat nuevo aún no lo tiene y cae
   // al fallback (from null), sin regresión.
-  const env = selfHandle ? { ...process.env, CWC_SELF_HANDLE: selfHandle } : process.env;
+  // Blindaje anticonsumo cruzado (multi-tenant, PLAN-592): el HOST (admin dueño
+  // de la máquina) conserva el entorno COMPLETO — necesita git push/ssh y sus
+  // creds SON las del server. Un INQUILINO arranca con un env LIMPIO y aislado
+  // (HOME → su root propio en ~/.cwc-users/<id>), sin heredar ~/.claude del server.
+  const ownerId = owner || hostUser();
+  // Multi-tenant (PLAN-592/TASK-612): el runner recibe su dueño esperado para el
+  // self-check fail-closed anticonsumo (verifica que corre aislado, no con las
+  // creds del server).
+  args.push('--owner', ownerId);
+  let env;
+  if (ownerId === hostUser()) {
+    env = { ...process.env }; // host: retrocompat total
+  } else {
+    // Token del inquilino: el pasado explícito, o el que dejó su onboarding.
+    const token = oauthToken || readUserOauthToken(ownerId);
+    env = userRunnerEnv(ownerId, { oauthToken: token }); // inquilino: env limpio aislado
+    // fail-closed: sin token NI creds propias en su .claude, NO arrancar
+    // (jamás caer a las creds del server → eso quemaría los tokens del admin).
+    if (!token && !fs.existsSync(path.join(userClaudeDir(ownerId), '.credentials.json'))) {
+      throw new Error(`El usuario ${ownerId} no tiene credenciales de Claude configuradas (completá el onboarding).`);
+    }
+  }
+  if (selfHandle) env.CWC_SELF_HANDLE = selfHandle;
   const child = spawn(process.execPath, args, {
     cwd, detached: true, stdio: ['ignore', log, log], env,
   });

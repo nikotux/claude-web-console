@@ -18,11 +18,11 @@
 // argumento: NO hay estado global de "cuál proyecto" acá, así que sirve por
 // igual para el proyecto trackeado (Tolkien) y para esta propia consola.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { encodeCwd } from '../../core/claude-model.js';
 import { writeFileAtomic } from '../../core/atomic-write.js';
+import { userClaudeDir, hostUser } from '../../core/user-space.js';
 
 const INDEX_FILE_NAME = 'MEMORY.md';
 
@@ -31,17 +31,22 @@ const INDEX_FILE_NAME = 'MEMORY.md';
 const NOTE_RE = /^[A-Za-z0-9_-]+\.md$/;
 const MAX_SIZE = 400 * 1024; // generoso: el CLAUDE.md más grande (Tolkien) ya pesa ~22KB
 
-function memoryDirFor(projectDir) {
-  return path.join(os.homedir(), '.claude', 'projects', encodeCwd(projectDir), 'memory');
+function memoryDirFor(projectDir, userId) {
+  return path.join(userClaudeDir(userId || hostUser()), 'projects', encodeCwd(projectDir), 'memory');
 }
 
-function safeNotePath(projectDir, file) {
+function safeNotePath(projectDir, file, userId) {
   if (!NOTE_RE.test(file || '')) throw Object.assign(new Error('Nombre de nota inválido.'), { badRequest: true });
-  return path.join(memoryDirFor(projectDir), file);
+  return path.join(memoryDirFor(projectDir, userId), file);
 }
 
 export function readContext(projectDir) {
   try { return fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf8'); }
+  catch { return ''; }
+}
+
+export function readTextFile(filePath) {
+  try { return fs.readFileSync(filePath, 'utf8'); }
   catch { return ''; }
 }
 
@@ -99,8 +104,8 @@ export function splitContextSections(text) {
 }
 
 // Índice de secciones para la lista (sin el texto completo de cada una).
-export function listContextSections(projectDir) {
-  const src = readContext(projectDir);
+export function listSectionsOfFile(filePath) {
+  const src = readTextFile(filePath);
   const sections = splitContextSections(src).map((s, i) => ({
     i,
     title: s.title,
@@ -112,8 +117,8 @@ export function listContextSections(projectDir) {
   return { totalLines: src ? src.split('\n').length : 0, totalSize: Buffer.byteLength(src), sections };
 }
 
-export function readContextSection(projectDir, i) {
-  const sections = splitContextSections(readContext(projectDir));
+export function readSectionOfFile(filePath, i) {
+  const sections = splitContextSections(readTextFile(filePath));
   const idx = Number(i);
   const s = sections[idx];
   if (!Number.isInteger(idx) || !s) throw Object.assign(new Error('Sección inexistente.'), { badRequest: true });
@@ -123,16 +128,16 @@ export function readContextSection(projectDir, i) {
 // Empalma `content` en la sección i. `expectedHash` = hash del texto que el
 // cliente ABRIÓ: si la sección ya no existe o cambió, error con .conflict
 // (la ruta lo mapea a 409) — nunca se pisa una edición ajena a ciegas.
-export function writeContextSection(projectDir, i, expectedHash, content) {
-  const src = readContext(projectDir);
+export function writeSectionOfFile(filePath, i, expectedHash, content) {
+  const src = readTextFile(filePath);
   const sections = splitContextSections(src);
   const idx = Number(i);
   const s = sections[idx];
   if (!Number.isInteger(idx) || !s) {
-    throw Object.assign(new Error('La sección ya no existe (el contexto cambió). Recargá la lista.'), { conflict: true });
+    throw Object.assign(new Error('La sección ya no existe (el contenido cambió). Recargá la lista.'), { conflict: true });
   }
   if (hashOf(s.text) !== String(expectedHash || '')) {
-    throw Object.assign(new Error('El contexto cambió desde que abriste esta sección (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
+    throw Object.assign(new Error('El contenido cambió desde que abriste esta sección (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
   }
   // Verificación defensiva del INVARIANTE documentado (CLAUDE.md): split/join
   // debe reconstruir el original byte a byte ANTES de mutar la sección editada.
@@ -140,12 +145,25 @@ export function writeContextSection(projectDir, i, expectedHash, content) {
   // resto del archivo sin que nadie lo note: abortamos en vez de escribir.
   const roundTrip = sections.map((x) => x.text).join('\n');
   if (roundTrip !== src) {
-    throw new Error('Integridad de secciones violada: splitContextSections no reconstruye el archivo original. Guardado abortado para no corromper CLAUDE.md.');
+    throw new Error('Integridad de secciones violada: splitContextSections no reconstruye el archivo original. Guardado abortado.');
   }
   s.text = String(content ?? '');
   const out = sections.map((x) => x.text).join('\n');
-  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contexto quedaría demasiado grande.'), { badRequest: true });
-  writeFileAtomic(path.join(projectDir, 'CLAUDE.md'), out, { mode: 0o644 }); // atómico (fix B5): CLAUDE.md real que lee Claude Code; un write cortado lo trunca
+  if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contenido quedaría demasiado grande.'), { badRequest: true });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileAtomic(filePath, out, { mode: 0o644 });
+}
+
+export function listContextSections(projectDir) {
+  return listSectionsOfFile(path.join(projectDir, 'CLAUDE.md'));
+}
+
+export function readContextSection(projectDir, i) {
+  return readSectionOfFile(path.join(projectDir, 'CLAUDE.md'), i);
+}
+
+export function writeContextSection(projectDir, i, expectedHash, content) {
+  return writeSectionOfFile(path.join(projectDir, 'CLAUDE.md'), i, expectedHash, content);
 }
 
 // Parsea "- [Título](archivo.md) — descripción" preservando el ORDEN del
@@ -182,8 +200,8 @@ function describeNote(memoryDir, file, meta, orphan) {
 // Overview para la pestaña: el índice tal cual (para poder editarlo) + la
 // lista de notas resuelta contra el disco, en el ORDEN del índice y con las
 // huérfanas (en disco pero no listadas) al final.
-export function listMemory(projectDir) {
-  const memoryDir = memoryDirFor(projectDir);
+export function listMemory(projectDir, userId) {
+  const memoryDir = memoryDirFor(projectDir, userId);
   let indexText = '';
   let indexExists = false;
   try { indexText = fs.readFileSync(path.join(memoryDir, INDEX_FILE_NAME), 'utf8'); indexExists = true; }
@@ -205,15 +223,15 @@ export function listMemory(projectDir) {
   return { indexExists, index: indexText, indexHash: hashOf(indexText), files };
 }
 
-export function readNote(projectDir, file) {
-  return fs.readFileSync(safeNotePath(projectDir, file), 'utf8');
+export function readNote(projectDir, file, userId) {
+  return fs.readFileSync(safeNotePath(projectDir, file, userId), 'utf8');
 }
 
 // Lectura tolerante para comparar contra `expectedHash`: una nota que todavía
 // no existe en disco vale '' (mismo criterio que readContext), así el chequeo
 // funciona igual para notas nuevas que para ediciones.
-function readNoteSafe(projectDir, file) {
-  try { return fs.readFileSync(safeNotePath(projectDir, file), 'utf8'); }
+function readNoteSafe(projectDir, file, userId) {
+  try { return fs.readFileSync(safeNotePath(projectDir, file, userId), 'utf8'); }
   catch { return ''; }
 }
 
@@ -223,12 +241,12 @@ function readNoteSafe(projectDir, file) {
 // cambió el archivo entre que se abrió y se guardó, y rechaza con .conflict
 // en vez de pisar en silencio. Sin hash, guarda como siempre (compatibilidad
 // con llamadores programáticos existentes).
-export function writeNote(projectDir, file, text, expectedHash) {
-  const p = safeNotePath(projectDir, file);
+export function writeNote(projectDir, file, text, expectedHash, userId) {
+  const p = safeNotePath(projectDir, file, userId);
   const out = String(text ?? '');
   if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('La nota es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
   if (expectedHash) {
-    const current = readNoteSafe(projectDir, file);
+    const current = readNoteSafe(projectDir, file, userId);
     if (hashOf(current) !== String(expectedHash)) {
       throw Object.assign(new Error('La nota cambió desde que la abriste (otra sesión la editó). Recargá y reintentá.'), { conflict: true });
     }
@@ -237,8 +255,8 @@ export function writeNote(projectDir, file, text, expectedHash) {
   writeFileAtomic(p, out, { mode: 0o644 }); // atómico (fix B5): nota de memoria FUERA de git → pérdida irrecuperable si se trunca
 }
 
-export function readIndex(projectDir) {
-  try { return fs.readFileSync(path.join(memoryDirFor(projectDir), INDEX_FILE_NAME), 'utf8'); }
+export function readIndex(projectDir, userId) {
+  try { return fs.readFileSync(path.join(memoryDirFor(projectDir, userId), INDEX_FILE_NAME), 'utf8'); }
   catch { return ''; }
 }
 
@@ -246,12 +264,12 @@ export function readIndex(projectDir) {
 // también lo escribe Claude Code en vivo a partir de feedback real de las
 // conversaciones, así que un admin editando el índice acá puede pisarle esa
 // escritura en silencio sin este chequeo.
-export function writeIndex(projectDir, text, expectedHash) {
-  const dir = memoryDirFor(projectDir);
+export function writeIndex(projectDir, text, expectedHash, userId) {
+  const dir = memoryDirFor(projectDir, userId);
   const out = String(text ?? '');
   if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El índice de memorias es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
   if (expectedHash) {
-    const current = readIndex(projectDir);
+    const current = readIndex(projectDir, userId);
     if (hashOf(current) !== String(expectedHash)) {
       throw Object.assign(new Error('El índice de memorias cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
     }

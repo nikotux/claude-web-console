@@ -235,6 +235,137 @@ código.
     el Pad CLOUD de Tolkien) y `src/core/pad-service-client.js` (habla con el
     Pad LOCAL de Consola) son y SIGUEN siendo dos conexiones separadas por
     diseño: ningún código puede unirlas en una operación que escriba a ambos.
+13. **🌗 Limbo — tercer espacio neutral entre mundos** (acuñado por Niko
+    2026-07-15; detalle completo en `CONVE-554` del Pad `console`). Para
+    proyectos que MAPEAN datos de AMBOS mundos + fuentes futuras (p.ej. el
+    dashboard "Seguimientos" de trabajo humano-accionable de Niko, `PLAN-553`)
+    existe un TERCER espacio NEUTRAL, "Limbo": no pertenece a ningún mundo
+    pero sirve a ambos a la vez. NO afloja la Regla 12 — la REFUERZA: un mundo
+    nunca toca al otro; ambos PROYECTAN sombras read-only hacia Limbo, y Limbo
+    nunca alcanza de vuelta salvo encarnado en una sesión. Sus 3 leyes: (1)
+    **entrada read-only desde ambos mundos** — Limbo lee/importa, jamás muta la
+    fuente; (2) **sin escritura de vuelta automática** — Limbo nunca escribe a
+    un mundo por su cuenta, ni sincroniza los dos Pad, ni dispara acciones
+    externas; (3) **salida SOLO por sesión con instrucciones de viaje** — toda
+    escritura/actualización a un mundo sale encarnada en un paquete-sesión que
+    lleva su manifiesto de handoff/plan-puente, ejecutado en el destino CON
+    aprobación. Limbo se HOSPEDA físicamente en la infra de Consola
+    (`~/.cwc-data/…`) pero su data NO es "de la consola" en propiedad — es
+    sombra agregada de ambos mundos; la consola es anfitrión, no dueño. El
+    dashboard es la VENTANA a Limbo, no Limbo mismo. Formaliza y nombra el
+    patrón ya disperso (`tickets/desk-mcp-client.js` + `pad-client.js`
+    proyectando read-only; handoff de paquetes-sesión llevando travel
+    instructions). EVOLUCIÓN — **SESIÓN-LIMBO** (2026-07-16, PLAN-553): además
+    del staging de datos, existe la SESIÓN-LIMBO: una sesión GOBERNADA con
+    herramientas de AMBOS mundos. Reglas: (1) LEE las fuentes de ambos mundos
+    (Desk/correo/Teams del externo vía MCP Tolkien; WhatsApp del interno vía
+    Read del archivo indexado `~/.cwc-data/comms/whatsapp.json`); (2) ESCRIBE
+    SOLO al sistema de tickets (Desk: create/update/comment) y SIEMPRE con
+    aprobación del humano; (3) NUNCA sincroniza los dos Pad ni escribe fuera del
+    ticket; (4) efímera, propósito = triangular las fuentes → actualizar el
+    ticket (columna vertebral). La lanzan los botones "Actualizaciones" y
+    "Trabajar seleccionados" del dashboard Seguimientos (cwd = Tolkien, que ya
+    trae Desk+correo+Teams+write). Reconcilia con la Regla 12: leer multi-fuente
+    es la Ley 1 (read-only); escribir solo a tickets con OK es un write acotado
+    a UN destino con aprobación (Ley 3), sin sync de Pads → no es un puente
+    bidireccional vivo. Detalle en `CONVE-554`.
+
+## Multi-tenant (multiusuario en una consola)
+
+Modelo aprobado por Niko (`PLAN-500`, master; `PLAN-593`/SP1 fija principios e
+invariantes; retro completa en `DOC-502`/`DOC-609`). En construcción por
+sub-planes (SP1…SP10). Esta sección es la FUENTE DE VERDAD del modelo — una IA
+sin contexto previo debe entender acá qué se puede/debe/no-debe tocar (Regla 8).
+
+**Modelo — UN server, N usuarios LÓGICOS (no de SO).** La consola que ya corre
+(puerto + ZeroTier listos) MULTIPLEXA varios usuarios; no se instalan consolas
+separadas (el enfoque de instancia-separada de `PLAN-476` FALLÓ: ~6h de
+reparación remota — login/puerto/MCPs rotos, la sesión abría "como la compu de
+Nico" heredando `~/.claude` y rutas del host). Cada usuario tiene una RAÍZ
+propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
+`workspace/` — helpers en `src/core/user-space.js` (`userSpace`/`userDataDir`/
+`userClaudeDir`/`userFileRoot`/`userPadDir`/`readUserOauthToken`/
+`readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
+HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
+`config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.
+No hay usuarios de SO ni sudo/setuid: el aislamiento se logra apuntando cada
+runner a un directorio de config por-usuario (decisión 🅰, `decision-1784076518`).
+
+**Blindaje anticonsumo (regla dura, FAIL-CLOSED, `decision-1784080554`).** Es el
+riesgo #1 de seguridad/costo y HOY el default estaba roto (el runner heredaba
+`process.env` → toda sesión usaba el `~/.claude` de Nico). El runner de un
+INQUILINO se spawnea con un env LIMPIO por allowlist (`userRunnerEnv`, JAMÁS
+`...process.env`) + `HOME=~/.cwc-users/<owner>` + `CLAUDE_CODE_OAUTH_TOKEN` del
+dueño (de `claude setup-token`, NUNCA copiar `credentials.json` — está roto,
+`PEND-380`). Sin credencial propia del dueño NO arranca — NUNCA cae a la cuenta
+del server. Self-check al arrancar: si es inquilino (owner ≠ host) y su
+HOME/creds no están aislados, ABORTA (exit 3) antes de `query()`. Tope 20
+sesiones concurrentes por usuario (host acaparamiento: ~0.5-0.8 GB/sesión).
+
+**Regla de NO-CRUCE por usuario×mundo (Regla 12 escalada a per-user,
+`decision-1784204001`).** La "confianza plena entre autenticados" del WS (viejo
+gotcha) queda DEROGADA para no-admins: cada usuario ve/adjunta SOLO lo suyo
+(chats/sesiones/datos/Pad/espacios), el admin ve todo. En `chat/index.js` esto
+lo aplican `list(principal)` (filtro de visibilidad: `owner === username` salvo
+admin) y `ownedChat(req, id)` (guard: ajeno o inexistente ⇒ null ⇒ 404, sin
+revelar que existe); el cwd se clampa con `safeCwd(cwd, owner)` =
+`clampToRoot(userFileRoot(owner || hostUser()), cwd)`, JAMÁS al home global.
+Además, los dos mundos POR usuario (🏠 "Mi espacio" — "Mi Consola" renombrada
+para no-admins; el admin conserva "Mi Consola" real, el repo · 🌳 su clon de
+Tolkien) tampoco se cruzan entre sí.
+
+**Datos por usuario.** `~/.cwc-data` se parte por usuario: el server inyecta
+`CWC_DATA_DIR=userDataDir(owner)` en el env del runner del inquilino y todo
+estado user-scoped resuelve su dir con `resolveDataDir()` (`src/core/data-dir.js`,
+honra `CWC_DATA_DIR`). PROHIBIDO hardcodear `path.join(os.homedir(), '.cwc-data')`
+para estado de usuario — se colaría al root del host y cruzaría inquilinos.
+
+**Pad por usuario (`decision-1784076526`, `DOC-633`).** Pad LOCAL multi-cuenta
+(modelo Postgres-like: UN motor, datos aislados por cuenta/workspace — NO un Pad
+por usuario). Una operación de Pad en nombre de un inquilino usa SU token
+(`readUserPadToken`) y SU workspace (`userPadWorkspace` = `tenant-<userId>`),
+derivados por `padContextForUser`/`reqPadContext` (`src/core/pad-context.js`).
+NUNCA se escribe data de un inquilino con la credencial ÚNICA del host (token de
+`~/.pad`) ni en el workspace `console`. Sin token propio provisionado (aún), el
+ctx viaja con `token:null` y la op falla limpio (403) SIN contaminar `console`
+(hay lazy-provisioning en background). El host conserva `console`+`~/.pad` por
+retrocompat.
+
+**File-spaces.** `userFileRoot(userId)` confina al inquilino a su `workspace/`
+(el explorador se clampa a esa raíz); el host conserva su home completo. El
+paquete-sesión (`PLAN-373`) gana `owner` (userId): el paquete sabe de quién es →
+el runner arranca con SUS creds/MCPs/cwd.
+
+**Onboarding self-service por TOKEN (`decision-1784088119`, `DOC-526`).** El
+admin NO transporta credenciales: emite un token de onboarding (Bearer ACOTADO,
+solo el flujo de instalación; no expira por desconexión, progreso persistido
+server-side) que el usuario ingresa en el login → wizard de tarjetas donde
+conecta su cuenta de Claude (`setup-token`), sus MCPs y sus espacios. El wizard
+NUNCA renderiza una terminal (xterm) al usuario final (`decision-1784092575`,
+SP10): los procesos reales corren en el BACKEND como runners desacoplados
+(regla de oro) y el front consume estado por poll; el input (link/código) se
+escribe directo al stdin del hijo. Tras cada paso sensible, una verificación con
+`textOnlyQuery` (`src/core/text-only-query.js`, regla 6) interpreta el resultado
+y propone una acción si hay error (nunca auto-ejecuta). `cwc-adduser` CLI queda
+como bootstrap del 1er súper-admin.
+
+**Invariantes de código anti-regresión (`src/modules/health/invariants.js`,
+SEED hand-authored — `PLAN-592`/B-A + `PLAN-593`/SP1).** Un refactor futuro NO
+puede reintroducir el fallback a la cuenta del server ni datos globales sin
+scope de usuario: el auditor de Salud inyecta estos textos a las unidades que
+matchean y los verifica sí o sí. Las 4 familias:
+
+| Familia | Match (archivos) | Qué blinda |
+|---|---|---|
+| **Blindaje anticonsumo** (B-A) | `chat/runner-link.js` · `core/user-space.js` · `bin/cwc-chat-runner.js` | env limpio (`userRunnerEnv`, jamás `...process.env`), HOME/OAuth del dueño, fail-closed, self-check owner==whoami, `resolveDataDir()` honra `CWC_DATA_DIR` |
+| **A · Ownership por usuario** | `chat/index.js` · `terminal/sessions.js` | list/attach/read filtran por `owner` (`list(principal)`/`ownedChat`); `safeCwd` clampa a `userFileRoot(owner)`; confianza-plena-WS derogada para no-admins |
+| **B · Dato user-scoped nunca global** | `core/data-dir.js` · `modules/(chat\|tasks\|learning\|retro\|tickets)/` | todo estado de usuario resuelve su dir con `resolveDataDir()`; prohibido hardcodear `~/.cwc-data` del host |
+| **C · Pad per-usuario** | `core/pad-service-client.js` · `core/pad-context.js` · `core/user-space.js` | op de Pad de un inquilino usa `readUserPadToken`+`userPadWorkspace` (`tenant-<id>`); nunca la credencial del host ni `console`; fail-closed |
+
+OJO: `terminal/sessions.js` aún NO es owner-scoped — su entrada en la familia A
+es un contrato FORWARD (cuando gane multi-tenant, el mismo filtro por dueño debe
+aplicar). Un archivo puede matchear varias familias (p.ej. `user-space.js` cae en
+B-A y C) y recibe todos los textos — es correcto.
 
 ## NO MODIFICAR (generado o estado de runtime)
 
@@ -3305,6 +3436,40 @@ public/raw.html + js/rawview/raw.js + css/raw.css   Vista Raw (PLAN-544, pedido
                             terracota=Consola / verde=Tolkien con texto real
                             cayendo + rótulos + feed. Plan y ejes de diseño en Pad
                             `console`: PLAN-544.
+                            AMPLIACIÓN v4 — "muestra TODO el background" (PLAN-544,
+                            pedido de Niko 2026-07-15): además de chats/Codex, la
+                            Vista Raw ahora cubre 3 fuentes más, cada naturaleza con su
+                            representación (diseño "Híbrido IV"): (B) SUBAGENTES —
+                            `stream.js` separa las líneas `isSidechain:true` del
+                            transcript en una sesión propia `<sid>~sub` (flag `sub:true`);
+                            el front les da BANDA propia más ANGOSTA (peso 0.6 en el
+                            reparto de `relayout`) con rótulo `↳`. Subagentes concurrentes
+                            del mismo padre se funden en UNA banda (no se pueden separar
+                            desde bytes apendeados). (C) TERMINALES bash — nuevo endpoint
+                            `GET /api/tmux/raw-feed` (auth, 0 tokens) devuelve las sesiones
+                            tmux OWNED vivas + su `capture-pane` reciente; excluye las
+                            `cwct-` (TUI ocultas de chat, ya llueven por transcript) y las
+                            `isClaude` (con estado del observador). El front les da banda
+                            VERDE-shell fija (mundo sintético `terminal`, hue 130) con
+                            charset ASCII (`SHELL_GLYPHS`) y rótulo `▸ bash`. (A) PROCESOS
+                            silenciosos/determinísticos — `RUNNER_REGISTRY` de
+                            `health/shared.js` se extendió con los que no dejan transcript
+                            (tolkien-refresh vía kind `jobflag` {running:true}, WhatsApp
+                            daemon vía kind `heartbeat` con `freshMs`, + health-scan/desk/
+                            investigate/retro) y cada entrada lleva `role` ∈ sdk|job|service.
+                            El front consume `GET /api/health/active-runners` (ya existía) y
+                            enruta por `role`: `sdk` se IGNORA (ya llueve por su transcript,
+                            evita duplicar), `job` (transitorio, p.ej. refresh-Tolkien) cae
+                            como BANDA ámbar que llueve su fase (mundo sintético `proc`, hue
+                            45), `service` (permanente, p.ej. WhatsApp) va a una TIRA de
+                            latidos arriba-derecha (`#raw-procs`, LED que pulsa — un servicio
+                            24/7 no "llueve", late). Regla de diseño: el que produce texto
+                            (subagente/terminal/job) LLUEVE su texto real; el que solo existe
+                            (servicio) LATE. Pollers propios en raw.js: `pollProcs` (1.5s) y
+                            `pollTerminals` (3s, throttle por el capture-pane). Verificado E2E
+                            con Playwright (mock de las 3 fuentes). Capa de PROFUNDIDAD DE
+                            CAMPO (desaturar/achicar lo automático para que los chats salten)
+                            queda como pulido futuro, no implementado.
 bin/cwc-whatsapp-daemon.js  puente WhatsApp ↔ Comunicaciones (Baileys, servicio systemd
                             whatsapp-bridge.service, sesión emparejada, estado persistido
                             ~/.cwc-data/comms/whatsapp*, PLAN-447 — ver el detalle completo en
@@ -3873,6 +4038,19 @@ docs/                       frontend-modules.md · brief-original.txt · context
   `tmuxArgs` de sessions.js). Ids de sesión NUNCA texto arbitrario del cliente.
 - **Comentarios y commits en español**, estilo del repo (mensajes descriptivos,
   un tema por commit).
+- **Ruteo de ejecución Tándem (SIEMPRE que planees+ejecutes):** todo plan de
+  ejecución se desglosa en tareas atómicas y CADA una sale con su ruteo
+  {ejecutor Claude|Tándem|Codex · modelo · esfuerzo} calculado por la NATURALEZA
+  de la tarea — diseño/prompt/contrato → Claude (opus/sonnet, high);
+  escribir código → Tándem (sonnet razona/verifica + Codex ejecuta en high);
+  cableado trivial → Claude (haiku, low); verificación E2E → Claude
+  (sonnet/opus, high). Se persiste en la colección Tasks del Pad `console`
+  (campos `model`/`effort`/`executor`), cada TASK colgada de su PLAN padre; al
+  presentar el plan se muestra el ahorro (tareas a Codex vs Claude). Objetivo:
+  sacar la generación de código de la ventana de Claude. Detalle: `CONVE-558` +
+  playbook `rutear` (`PLAYB-559`). Aplica en AMBOS mundos; al externo (Tolkien)
+  se inyecta por plan-puente (`PLAN-560`), nunca escritura directa en vivo
+  (Regla 12 / Limbo).
 
 ## Gotchas conocidos (te van a morder si los ignorás)
 

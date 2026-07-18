@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seguimientos · Mi Consola</title>
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/ui.css">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: var(--cwc-bg); color: var(--cwc-text); }
+  #app { padding: .75rem 1rem 3rem; }
+  .sg-head { position: sticky; top: 0; background: var(--cwc-bg); padding-bottom: .4rem; z-index: 6; }
+  .sg-titlebar { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+  .sg-titlebar h1 { font-size: 1.15rem; margin: .35rem 0; }
+  .sg-counts { color: var(--cwc-text-dim); font-size: .82rem; }
+  .sg-actions { margin-left: auto; display: flex; gap: .4rem; flex-wrap: wrap; }
+  .sg-actions button { background: var(--cwc-bg-chip); color: var(--cwc-text); border: 1px solid var(--cwc-border); border-radius: 7px; padding: .35rem .6rem; font-size: .82rem; cursor: pointer; }
+  .sg-actions button[disabled] { opacity: .5; cursor: default; }
+  .sg-actions .sg-mini { padding: .3rem .45rem; font-size: .78rem; }
+  #sg-ask { width: 100%; box-sizing: border-box; background: var(--cwc-bg-input); color: var(--cwc-text); border: 1px solid var(--cwc-border); border-radius: 6px; padding: .5rem; font-size: .9rem; }
+  #sg-bulk:not([disabled]) { background: var(--cwc-accent); border-color: var(--cwc-accent); color: var(--cwc-accent-ink); font-weight: 600; }
+
+  .sg-tablewrap { overflow-x: auto; border: 1px solid var(--cwc-border); border-radius: 8px; }
+  .sg-table { border-collapse: collapse; width: 100%; font-size: .82rem; }
+  .sg-table th, .sg-table td { border-bottom: 1px solid var(--cwc-border); border-right: 1px solid var(--cwc-border); padding: .3rem .5rem; text-align: left; vertical-align: top; }
+  .sg-table thead tr:first-child th { position: sticky; top: 0; background: var(--cwc-bg-panel); cursor: pointer; user-select: none; white-space: nowrap; z-index: 2; }
+  .sg-table thead tr:first-child th:hover { color: var(--cwc-accent); }
+  .sg-frow th { background: var(--cwc-bg-panel); padding: .2rem .3rem; }
+  .sg-frow input, .sg-frow select { width: 100%; box-sizing: border-box; background: var(--cwc-bg-input); color: var(--cwc-text); border: 1px solid var(--cwc-border); border-radius: 5px; font-size: .74rem; padding: .12rem .3rem; }
+  .sg-table tbody tr { cursor: pointer; }
+  .sg-table tbody tr:hover { background: var(--cwc-bg-hover); }
+  .sg-selrow { background: var(--cwc-accent-bg) !important; }
+  .sg-cb, .sg-cbh { text-align: center; width: 30px; }
+  .sg-empty { color: var(--cwc-text-dim); padding: 1.5rem; text-align: center; }
+
+  .sg-modal { position: fixed; inset: 0; background: var(--cwc-scrim, rgba(0,0,0,.6)); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
+  .sg-modal-card { background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border); border-radius: 12px; width: min(580px, 94vw); max-height: 88vh; overflow: auto; }
+  .sg-modal-h { display: flex; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--cwc-border); }
+  .sg-modal-h .sg-x { background: transparent; border: none; color: var(--cwc-text); cursor: pointer; font-size: 1.05rem; }
+  .sg-modal-body { padding: .8rem 1rem; display: flex; flex-direction: column; gap: .45rem; font-size: .87rem; line-height: 1.35; }
+  .sg-modal-foot { padding: .75rem 1rem; border-top: 1px solid var(--cwc-border); }
+  .sg-modal-foot button { background: var(--cwc-accent); color: var(--cwc-accent-ink); border: none; border-radius: 7px; padding: .4rem .8rem; font-size: .85rem; cursor: pointer; font-weight: 600; }
+  .sg-modal-wide { width: min(720px, 96vw); }
+  .sg-sect { font-weight: 600; font-size: .82rem; color: var(--cwc-accent); margin: .6rem 0 .1rem; border-bottom: 1px solid var(--cwc-border); padding-bottom: .15rem; }
+  .sg-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .1rem .9rem; }
+  .sg-kv { display: flex; justify-content: space-between; gap: .5rem; font-size: .82rem; padding: .12rem 0; border-bottom: 1px dotted var(--cwc-border); }
+  .sg-kv span { color: var(--cwc-text-dim); white-space: nowrap; }
+  .sg-kv b { text-align: right; }
+  .sg-desc { font-size: .84rem; white-space: pre-wrap; background: var(--cwc-bg-input); border: 1px solid var(--cwc-border); border-radius: 6px; padding: .5rem .6rem; max-height: 200px; overflow: auto; }
+  .sg-dim { color: var(--cwc-text-dim); font-size: .78rem; }
+</style>
+</head>
+<body>
+  <div id="app">Cargando…</div>
+  <script src="/js/seguimientos/seguimientos.js" type="module"></script>
+</body>
+</html>

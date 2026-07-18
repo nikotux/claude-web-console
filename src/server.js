@@ -7,6 +7,8 @@
 //   4) Monta los módulos vía el registry.
 import express from 'express';
 import compression from 'compression';
+import { execSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +23,7 @@ import { verifyUser } from './core/users.js';
 import { createWsRouter } from './core/wss.js';
 import { registerModules } from './core/registry.js';
 import { warmCache, startCacheSweep } from './core/pad-service-client.js';
+import { publicRouter as onboardPublicRouter } from './modules/onboard/index.js';
 
 // Colecciones "calientes" de Pad local que la UI pide al abrir: se precargan al
 // arrancar y el barrido las mantiene frescas (RDA-347 — transporte del Banco de
@@ -57,6 +60,41 @@ function clearFails(ip) { loginFails.delete(ip); }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+// BUILD_ID: identidad de la versión desplegada. Se usa para invalidar el
+// caché del Service Worker en cada deploy (git pull in-place conserva los
+// nombres de archivo, así que el navegador necesita otra señal de cambio).
+// Hash corto de git HEAD; si git no está, cae al mtime de este archivo.
+const BUILD_ID = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', {
+      cwd: path.join(__dirname, '..'), encoding: 'utf8',
+    }).trim();
+  } catch {
+    try { return String(Math.floor(statSync(fileURLToPath(import.meta.url)).mtimeMs)); }
+    catch { return String(Date.now()); }
+  }
+})();
+
+// Fuente del Service Worker con el BUILD_ID ya inyectado (se lee UNA vez al
+// arrancar; el placeholder __BUILD_ID__ vive en public/sw.js).
+const SW_SOURCE = (() => {
+  try {
+    return readFileSync(path.join(PUBLIC_DIR, 'sw.js'), 'utf8')
+      .replace(/__BUILD_ID__/g, BUILD_ID);
+  } catch { return null; }
+})();
+
+// index.html con el BUILD_ID inyectado (se lee UNA vez al arrancar). Expone
+// window.__CWC_BUILD__ de forma SÍNCRONA para que la caché cache-then-network
+// (Capa 2, ui/cache-store.js) pueda invalidar respuestas de un deploy viejo
+// ANTES del primer paint.
+const INDEX_HTML = (() => {
+  try {
+    return readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
+      .replace(/__BUILD_ID__/g, BUILD_ID);
+  } catch { return null; }
+})();
 
 async function main() {
   const { ip, iface } = await waitForZeroTier(config.ztIface);
@@ -124,11 +162,19 @@ async function main() {
 
   app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
   app.get('/js/login.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'login.js')));
+  // Onboarding PÚBLICO (SP7): página del wizard + su JS, servidos SIN auth (el
+  // usuario nuevo no tiene cuenta; el flujo se gatea por el token de invitación).
+  app.get('/onboard', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'onboard.html')));
+  app.get('/js/onboard/onboard.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'onboard', 'onboard.js')));
   // TODO el CSS que usa login.html debe ser público: si falta uno acá, el 401
   // devuelve JSON y el navegador lo rechaza por MIME (login sin estilos).
   app.get('/css/style.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'style.css')));
   app.get('/css/tokens.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'tokens.css')));
   app.get('/css/ui.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'ui.css')));
+
+  // Onboarding PÚBLICO (SP7): un usuario nuevo no tiene cuenta — estos endpoints
+  // se gatean por el TOKEN de invitación, no por login. Montados ANTES del gate.
+  app.use('/api/onboard/public', onboardPublicRouter);
 
   // --- A partir de acá, TODO exige token ---
   // Páginas HTML sin token -> redirect a /login. API/otros -> 401.
@@ -157,6 +203,32 @@ async function main() {
   // Vista Raw (subpágina, PLAN-544): visualización solo-lectura estilo Matrix
   // de la actividad en vivo de la consola. Cualquier usuario autenticado.
   app.get('/raw', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'raw.html')));
+
+  // Dashboard "Seguimientos" (subpágina, PLAN-553 · primer habitante de Limbo):
+  // trabajo humano-accionable de Niko. Cualquier usuario autenticado.
+  app.get('/seguimientos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'seguimientos.html')));
+
+  // App shell (index.html) con el BUILD_ID inyectado. Cache-Control: no-cache
+  // porque es una navegación que el Service Worker deja pasar a la red siempre
+  // (ver public/sw.js) — así el BUILD_ID que ve el cliente es siempre el actual.
+  app.get(['/', '/index.html'], (req, res, next) => {
+    if (!INDEX_HTML) return next(); // fallback a express.static si falló la lectura
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(INDEX_HTML);
+  });
+
+  // Service Worker (Capa 1 de caché de navegador): se sirve con el BUILD_ID
+  // inyectado y SIN caché HTTP (es el único pedido que queremos que el
+  // navegador revalide siempre — es chico). Service-Worker-Allowed: / permite
+  // que controle todo el origen aunque se sirva desde /sw.js.
+  app.get('/sw.js', (req, res) => {
+    if (!SW_SOURCE) return res.status(404).end();
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.send(SW_SOURCE);
+  });
 
   // Assets de terceros (xterm, hljs, addons): no cambian -> cache largo e
   // inmutable, así el navegador NO los revalida en cada carga (menos round-trips).

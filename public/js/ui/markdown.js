@@ -118,7 +118,9 @@ function enhanceMermaidBlocks(root) {
     wrap.replaceWith(details);
     details.appendChild(wrap);
 
-    const ready = window.mermaidReady || Promise.resolve(window.mermaid || null);
+    // Dispara la carga LAZY de Mermaid recién ahora que hay un bloque real
+    // (PEND-621). Fallback al comportamiento viejo si el loader no existe.
+    const ready = window.__loadMermaid ? window.__loadMermaid() : (window.mermaidReady || Promise.resolve(window.mermaid || null));
     ready.then((mermaid) => {
       if (!mermaid) throw new Error('mermaid no disponible');
       mermaidSeq += 1;

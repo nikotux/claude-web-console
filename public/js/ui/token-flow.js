@@ -2,7 +2,7 @@
 // Un solo rAF anima todas las celdas .cwc-flow-cell presentes en el documento.
 
 export const MAX_TPS = 8000;
-export const POLL_MS = 400;
+export const POLL_MS = 700; // (PEND-622) 400→700: corta ~40% de requests; el lerp 0.15 tolera el intervalo mayor sin que la animación lo note
 
 export let latest = {
   claude: { tps: 0, tokens60: 0, lastTs: null },
@@ -131,8 +131,13 @@ export function ensureFlowDirector() {
   subscribeFlow();
 
   function frame(now) {
-    const flow = getLatestFlow();
     const cells = document.querySelectorAll('.cwc-flow-cell');
+    // Sin celdas visibles (todos los chats cerrados): NO animar a 60fps.
+    // Chequear esporádicamente (2/s) si aparece una nueva y recién ahí volver
+    // al rAF pleno (PEND-622). Evita mantener vivo el hilo de animación +
+    // querySelectorAll por frame para siempre.
+    if (!cells.length) { setTimeout(() => requestAnimationFrame(frame), 500); return; }
+    const flow = getLatestFlow();
     const updateNums = now - lastNumAt >= 200;
 
     if (updateNums) lastNumAt = now;

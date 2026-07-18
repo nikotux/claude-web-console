@@ -11,17 +11,18 @@ import {
   readRetroJob, writeRetroJob,
 } from '../src/modules/retro/shared.js';
 import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
+import { padContextForUser } from '../src/core/pad-context.js';
 import { textOnlyQuery } from '../src/core/text-only-query.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
-async function distill(job) {
+async function distill(job, ctx) {
   // dedup "vs seen": pasamos las lecciones ya registradas para que el modelo
   // reuse el título exacto de un concepto repetido (best-effort — si Pad falla
   // igual destila, solo pierde la guía de recurrencia).
   let existing = [];
-  try { const r = await listLessons(); existing = (r.lessons || []).map((l) => ({ category: l.category, title: l.title })); }
+  try { const r = await listLessons(ctx); existing = (r.lessons || []).map((l) => ({ category: l.category, title: l.title })); }
   catch (err) { log('no pude traer lecciones existentes para dedup:', err?.message || err); }
   // Texto puro, read-only doble capa (regla 6) vía el helper único core/text-only-query.
   const text = await textOnlyQuery(retroPrompt(job, existing), {
@@ -37,7 +38,7 @@ async function distill(job) {
   return parsed.lessons;
 }
 
-async function persist(lessons, job) {
+async function persist(lessons, job, ctx) {
   const src = { sessionId: job.meta?.sessionId || null, title: job.meta?.title || '', at: Date.now() };
   let created = 0;
   let merged = 0;
@@ -45,7 +46,7 @@ async function persist(lessons, job) {
     try {
       const project = l.project || job.meta?.project || 'otros';
       const fingerprint = computeFingerprint(l.category, l.title);
-      const r = await upsertLesson({ ...l, project, fingerprint, sourceChat: src });
+      const r = await upsertLesson({ ...l, project, fingerprint, sourceChat: src }, ctx);
       if (r?.created) created += 1; else merged += 1;
     } catch (err) { log('no pude guardar lección:', err?.message || err); }
   }
@@ -56,9 +57,10 @@ async function main() {
   if (!id) { log('falta el id del job.'); process.exit(1); return; }
   const job = readRetroJob(id);
   if (!job) { log(`job ${id} inexistente (¿se limpió antes de arrancar?).`); process.exit(0); return; }
+  const ctx = padContextForUser(job.owner || null);
   try {
-    const lessons = await distill(job);
-    const summary = await persist(lessons, job);
+    const lessons = await distill(job, ctx);
+    const summary = await persist(lessons, job, ctx);
     const cur = readRetroJob(id);
     if (!cur) { log(`job ${id} fue borrado durante la corrida; no lo recreo.`); return; }
     writeRetroJob(id, { ...cur, status: 'done', result: summary, error: null, updatedAt: Date.now() });

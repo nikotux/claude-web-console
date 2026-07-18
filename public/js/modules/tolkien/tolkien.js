@@ -15,6 +15,7 @@
 // stash→pull→pop si estás en main) · 💽 data. La línea 🌿 abre la ventana de PRs
 // con "Poner al día" (rebase de la rama actual sobre main). El auto-fetch cada
 // 5 min mantiene fresco el "detrás" (la consulta gh de /branches NO va ahí).
+import { readCache, writeCache } from '../../ui/cache-store.js';
 
 export default {
   name: 'tolkien',
@@ -200,8 +201,14 @@ export default {
     }
 
     async function loadStatus() {
-      try { current = await (await fetch('/api/tolkien/status')).json(); render(); }
-      catch { /* noop */ }
+      // Cache-then-network: pinta el último estado del repo al instante.
+      const cached = readCache('tolkien-status');
+      if (cached) { current = cached.data; render(); }
+      try {
+        current = await (await fetch('/api/tolkien/status')).json();
+        writeCache('tolkien-status', current);
+        render();
+      } catch { /* noop */ }
     }
 
     // Consulta mis PRs abiertos (gh). Cuesta una llamada de red a GitHub, así

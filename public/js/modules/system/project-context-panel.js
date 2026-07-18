@@ -22,6 +22,7 @@
 import { icon } from '../../ui/icons.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderDiff } from '../../ui/diff.js';
+import { CHAT_MODEL_OPTIONS, EFFORT_OPTIONS } from '../../ui/models.js';
 
 const PROJECTS_API = '/api/projects';
 const BUGFIX_API = '/api/tickets/context'; // migrado de v1 a Tickets & Features
@@ -50,6 +51,29 @@ const BUGFIX_ENTRIES = [
     hint: 'Define CÓMO se redacta la descripción del PR (house style: Summary con las tres preguntas, causa raíz, verificación, variantes feature/external). Se inyecta en cada "Continuar en el chat" de un ticket/feature/PR.',
   },
 ];
+
+// Tarjetas del panel de personalización per-user (SP8, PLAN-594). Cada una
+// consume /api/projects/me/*. `persoKind` selecciona su detalle.
+const PERSO_ENTRIES = [
+  {
+    key: 'perso-global', kind: 'perso', persoKind: 'global', name: 'Comportamiento', ico: 'sparkle',
+    desc: 'Tu CLAUDE.md GLOBAL: cómo reacciona la IA (visual, Relato Anclado, la pelota)',
+  },
+  {
+    key: 'perso-hooks', kind: 'perso', persoKind: 'hooks', name: 'Hooks', ico: 'gear',
+    desc: 'Activá/desactivá observador, interfono y la pelota (settings.json)',
+  },
+  {
+    key: 'perso-prefs', kind: 'perso', persoKind: 'prefs', name: 'Defaults de modelo', ico: 'console',
+    desc: 'Modelo/AutoTux, esfuerzo y modo de permisos por defecto de tus chats nuevos',
+  },
+  {
+    key: 'perso-identity', kind: 'perso', persoKind: 'identity', name: 'Identidad', ico: 'edit',
+    desc: 'Tu nombre, email, GitHub y firma',
+  },
+];
+
+const PERM_LABELS = [['default', 'Preguntar'], ['acceptEdits', 'Aceptar ediciones'], ['bypassPermissions', 'Todo (sin preguntar)'], ['plan', 'Solo plan']];
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
@@ -82,6 +106,13 @@ export function mountProjectContextPanel(el, ctx) {
   let indexHash = '';
 
   const projectApi = (suffix) => `${PROJECTS_API}/${encodeURIComponent(current.key)}${suffix}`;
+  // Base de la API de secciones: proyecto → /api/projects/<key>/context ;
+  // personalización 'global' → /api/projects/me/global. Misma forma de sub-rutas
+  // (/sections, /section/:i, /section/:i/analyze[/:id]).
+  const sectionsBase = () => (current?.kind === 'perso'
+    ? `${PROJECTS_API}/me/global`
+    : `${PROJECTS_API}/${encodeURIComponent(current.key)}/context`);
+  const sectionsUrl = (suffix) => sectionsBase() + suffix;
 
   // ===== Vista LISTA: tarjetas agrupadas =====
   function card(e) {
@@ -100,11 +131,14 @@ export function mountProjectContextPanel(el, ctx) {
     current = null;
     const projects = entries.filter((e) => e.kind === 'project');
     const bugfixes = entries.filter((e) => e.kind === 'bugfix');
+    const perso = entries.filter((e) => e.kind === 'perso');
     root.innerHTML = `
       <div class="hp-head"><span class="hp-title">Proyectos · contexto y memorias</span></div>
       <div class="pj-list">${projects.map(card).join('')}</div>
       <div class="hp-head hp-head--review"><span class="hp-title">Tickets &amp; Features · contexto de trabajo</span></div>
       <div class="pj-list">${bugfixes.map(card).join('')}</div>
+      <div class="hp-head hp-head--review"><span class="hp-title">🎛️ Personalización (tu espacio)</span></div>
+      <div class="pj-list">${perso.map(card).join('')}</div>
       <p class="pj-hint">Son los archivos REALES que lee Claude en cada proyecto: guardar acá cambia el comportamiento de la próxima sesión.</p>`;
     for (const b of root.querySelectorAll('.pj-card')) {
       b.addEventListener('click', () => {
@@ -116,6 +150,10 @@ export function mountProjectContextPanel(el, ctx) {
 
   // ===== Vista DETALLE: volver + contexto (+ memorias si aplica) =====
   function renderDetail(entry) {
+    if (entry.kind === 'perso') {
+      renderPersoDetail(entry);
+      return;
+    }
     current = entry;
     const isProject = entry.kind === 'project';
     root.innerHTML = `
@@ -145,6 +183,111 @@ export function mountProjectContextPanel(el, ctx) {
     root.querySelector('[data-ref="back"]').addEventListener('click', renderList);
     root.querySelector('[data-ref="idxEdit"]')?.addEventListener('click', editIndex);
     if (isProject) { loadContext(); loadNotes(); } else { loadBugfixContext(); loadSync(); }
+  }
+
+  function renderPersoDetail(entry) {
+    current = entry;
+    root.innerHTML = `
+      <div class="pj-head">
+        <button class="btn-ghost btn--sm" data-ref="back">${icon('chevronLeft', { size: 14 })}<span>Personalización</span></button>
+        <span class="pj-head-ico">${icon(entry.ico, { size: 15 })}</span>
+        <span class="pj-head-name">${esc(entry.name)}</span>
+      </div>
+      <div data-ref="persoBody"><span class="cwc-spinner"></span></div>`;
+    root.querySelector('[data-ref="back"]').addEventListener('click', renderList);
+    const bodyEl = root.querySelector('[data-ref="persoBody"]');
+    if (entry.persoKind === 'global') renderGlobalDetail(bodyEl);
+    else if (entry.persoKind === 'hooks') renderHooksDetail(bodyEl);
+    else if (entry.persoKind === 'prefs') renderPrefsDetail(bodyEl);
+    else renderIdentityDetail(bodyEl);
+  }
+
+  function renderGlobalDetail(bodyEl) {
+    bodyEl.innerHTML = `
+      <p class="pj-hint">Es tu <code>~/.claude/CLAUDE.md</code> GLOBAL — auto-cargado en TODA sesión. Editás por secciones; al guardar, una revisión con IA te muestra qué cambia.</p>
+      <div class="hp-head"><span class="hp-title">Comportamiento (CLAUDE.md global)</span><span class="pj-total" data-ref="ctxTotal"></span></div>
+      <div class="bk-list" data-ref="ctxSections"><span class="cwc-spinner"></span></div>`;
+    loadContext(); // usa sectionsBase()/sectionsUrl() → /api/projects/me/global
+  }
+
+  async function renderHooksDetail(bodyEl) {
+    bodyEl.innerHTML = '<span class="cwc-spinner"></span>';
+    let hooks = [];
+    try { hooks = (await (await fetch(`${PROJECTS_API}/me/hooks`)).json()).hooks || []; }
+    catch { bodyEl.innerHTML = '<div class="bk-empty">No se pudo leer los hooks.</div>'; return; }
+    if (!alive) return;
+    bodyEl.innerHTML = `
+      <p class="pj-hint">Activá/desactivá comportamientos de Claude Code. <b>Ojo:</b> una sesión ya abierta toma el cambio al reabrirla.</p>
+      <div class="bk-list">${hooks.map((h) => `
+        <div class="bk-row" data-hook="${esc(h.id)}">
+          <span class="hp-detail"><b>${esc(h.name)}</b><br><span class="hp-sev">${h.enabled ? 'Activado' : 'Desactivado'}</span></span>
+          <span class="bk-actions"><button class="btn${h.enabled ? '' : '-ghost'} btn--sm" data-act="toggle">${h.enabled ? 'Desactivar' : 'Activar'}</button></span>
+        </div>`).join('')}</div>`;
+    for (const row of bodyEl.querySelectorAll('[data-hook]')) {
+      row.querySelector('[data-act="toggle"]').addEventListener('click', async (e) => {
+        const btn = e.currentTarget; btn.disabled = true;
+        const id = row.dataset.hook;
+        const cur = hooks.find((x) => x.id === id);
+        try {
+          const res = await fetch(`${PROJECTS_API}/me/hooks/${encodeURIComponent(id)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !cur.enabled }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(d.error || 'No se pudo cambiar.');
+        } catch (err) { await dialog.alertDialog({ title: 'Hooks', message: err.message || 'No se pudo cambiar.' }); }
+        renderHooksDetail(bodyEl); // recargar estado
+      });
+    }
+  }
+
+  async function renderPrefsDetail(bodyEl) {
+    bodyEl.innerHTML = '<span class="cwc-spinner"></span>';
+    let prefs = {};
+    try { prefs = (await (await fetch(`${PROJECTS_API}/me/prefs`)).json()).prefs || {}; }
+    catch { bodyEl.innerHTML = '<div class="bk-empty">No se pudo leer las preferencias.</div>'; return; }
+    if (!alive) return;
+    const opt = (pairs, sel, emptyLabel) =>
+      `<option value="">${esc(emptyLabel)}</option>` +
+      pairs.map(([v, l]) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    bodyEl.innerHTML = `
+      <p class="pj-hint">Defaults de tus chats NUEVOS. Un chat que elija modelo explícito igual manda. Vacío = default del sistema.</p>
+      <div class="bk-list">
+        <div class="bk-row"><span class="hp-detail"><b>Modelo / AutoTux</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultModelChoice">${opt(CHAT_MODEL_OPTIONS, prefs.defaultModelChoice, '— sistema (AutoTux) —')}</select></span></div>
+        <div class="bk-row"><span class="hp-detail"><b>Esfuerzo</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultEffort">${opt(EFFORT_OPTIONS, prefs.defaultEffort, '— según modelo —')}</select></span></div>
+        <div class="bk-row"><span class="hp-detail"><b>Modo de permisos</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultPermissionMode">${opt(PERM_LABELS, prefs.defaultPermissionMode, '— sistema (Preguntar) —')}</select></span></div>
+      </div>
+      <div class="dlg-actions"><button class="btn" data-ref="savePrefs">Guardar preferencias</button></div>
+      <p class="hp-empty" data-ref="prefsMsg"></p>`;
+    bodyEl.querySelector('[data-ref="savePrefs"]').addEventListener('click', async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      const patch = {};
+      for (const s of bodyEl.querySelectorAll('[data-pref]')) patch[s.dataset.pref] = s.value; // '' = borrar (backend lo interpreta)
+      try {
+        const res = await fetch(`${PROJECTS_API}/me/prefs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || 'No se pudo guardar.');
+        bodyEl.querySelector('[data-ref="prefsMsg"]').textContent = 'Guardado ✅';
+      } catch (err) { bodyEl.querySelector('[data-ref="prefsMsg"]').textContent = err.message || 'No se pudo guardar.'; }
+      btn.disabled = false;
+    });
+  }
+
+  async function renderIdentityDetail(bodyEl) {
+    bodyEl.innerHTML = '<span class="cwc-spinner"></span>';
+    let data = {};
+    try { data = await (await fetch(`${PROJECTS_API}/me/identity`)).json(); }
+    catch { bodyEl.innerHTML = '<div class="bk-empty">No se pudo leer la identidad.</div>'; return; }
+    if (!alive) return;
+    const id = data.identity || {};
+    const row = (label, val) => `<div class="bk-row"><span class="hp-detail"><b>${esc(label)}</b><br><span class="hp-sev">${esc(val || '(vacío)')}</span></span></div>`;
+    bodyEl.innerHTML = `
+      ${data.editable ? '' : '<p class="pj-hint">⚠️ Mostrando la identidad del sistema en modo LECTURA. La edición per-user la habilita SP2 (identidad por-usuario).</p>'}
+      <div class="bk-list">
+        ${row('Nombre', id.name)}
+        ${row('Email', id.email)}
+        ${row('GitHub', id.github)}
+        ${row('Firma', id.signature)}
+      </div>`;
   }
 
   const ctxRow = () => root.querySelector('[data-ref="ctxRow"]');
@@ -217,7 +360,7 @@ export function mountProjectContextPanel(el, ctx) {
           // disco — un reinicio del server a mitad del análisis ya no lo
           // pierde. Se toleran fetch fallidos consecutivos (deploy en el
           // medio) antes de caer al diff local.
-          const res = await fetch(projectApi(`/context/section/${sec.i}/analyze`), {
+          const res = await fetch(sectionsUrl(`/section/${sec.i}/analyze`), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: newText, hash: sec.hash }),
           });
@@ -229,7 +372,7 @@ export function mountProjectContextPanel(el, ctx) {
             if (closed) return; // el usuario cerró el modal: dejar de encuestar
             await new Promise((r) => setTimeout(r, 2000));
             try {
-              const poll = await fetch(projectApi(`/context/section/${sec.i}/analyze/${jobId}`));
+              const poll = await fetch(sectionsUrl(`/section/${sec.i}/analyze/${jobId}`));
               const pd = await poll.json().catch(() => ({}));
               if (!poll.ok) throw new Error(pd.error || 'Falló el análisis.');
               data = pd;
@@ -264,7 +407,7 @@ export function mountProjectContextPanel(el, ctx) {
   async function editSection(i) {
     let sec;
     try {
-      const res = await fetch(projectApi(`/context/section/${i}`));
+      const res = await fetch(sectionsUrl(`/section/${i}`));
       sec = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(sec.error || 'No se pudo leer la sección.');
     } catch (e) {
@@ -280,7 +423,7 @@ export function mountProjectContextPanel(el, ctx) {
       onSave: async (text) => {
         if (text === sec.text) return; // sin cambios: cerrar sin gastar análisis
         const confirmed = await reviewChange(sec, text, async () => {
-          const res = await fetch(projectApi(`/context/section/${i}`), {
+          const res = await fetch(sectionsUrl(`/section/${i}`), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content: text, hash: sec.hash }),
           });
@@ -299,7 +442,7 @@ export function mountProjectContextPanel(el, ctx) {
     if (!box) return;
     box.innerHTML = '<span class="cwc-spinner"></span>';
     try {
-      const data = await (await fetch(projectApi('/context/sections'))).json();
+      const data = await (await fetch(sectionsUrl('/sections'))).json();
       if (!alive || !ctxSectionsEl()) return;
       const totalEl = root.querySelector('[data-ref="ctxTotal"]');
       if (totalEl) totalEl.textContent = `${data.totalLines} líneas · ${fmtSize(data.totalSize)}`;
@@ -313,7 +456,7 @@ export function mountProjectContextPanel(el, ctx) {
             <b>${esc(s.title)}</b><br>
             <span class="hp-sev">${s.lines} líneas · ${fmtSize(s.size)}</span>
           </span>
-          ${isAdmin ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-act="edit" title="Editar SOLO esta sección">${icon('edit', { size: 13 })}</button></span>` : ''}
+          ${isAdmin || current?.kind === 'perso' ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-act="edit" title="Editar SOLO esta sección">${icon('edit', { size: 13 })}</button></span>` : ''}
         </div>`).join('');
       for (const row of ctxSectionsEl().querySelectorAll('[data-i]')) {
         row.querySelector('[data-act="edit"]')?.addEventListener('click', () => editSection(row.dataset.i));
@@ -493,6 +636,7 @@ export function mountProjectContextPanel(el, ctx) {
         desc: PROJECT_META[p.key]?.desc || homeShort(p.dir),
       })),
       ...BUGFIX_ENTRIES,
+      ...PERSO_ENTRIES,
     ];
     if (!alive) return;
     if (!entries.length) {

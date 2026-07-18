@@ -134,8 +134,8 @@ function lessonFromPadItem(item) {
   };
 }
 
-export async function listLessons() {
-  const r = await listItems(COLLECTION);   // sin all:true (ver gotcha del cliente)
+export async function listLessons(ctx = null) {
+  const r = await listItems(COLLECTION, { ctx });   // sin all:true (ver gotcha del cliente)
   if (!r.ok) throw padError('listLessons', r);
   const lessons = r.data.map(lessonFromPadItem);
   const order = { propuesta: 0, aprobada: 1, promovida: 2, descartada: 3 };
@@ -145,9 +145,9 @@ export async function listLessons() {
   return { lessons, counts };
 }
 
-export async function getLesson(id) {
+export async function getLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
-  const r = await getItem(id);
+  const r = await getItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('getLesson', 'Lección', r);
   return lessonFromPadItem(r.data);
 }
@@ -156,7 +156,7 @@ export async function getLesson(id) {
 // recurrencia + registra el chat de origen (NO duplica, NO resucita el estado:
 // una lección ya descartada sigue descartada pero su contador crece = señal de
 // "esto sigue pasando"). Lo llama el runner tras destilar.
-export async function upsertLesson(input = {}) {
+export async function upsertLesson(input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Lección sin título';
   const category = oneOf(input.category, CATS, 'nota');
   const fingerprint = input.fingerprint || computeFingerprint(category, title);
@@ -168,7 +168,7 @@ export async function upsertLesson(input = {}) {
   // creen duplicados del mismo fingerprint (ver withUpsertLock).
   return withUpsertLock(async () => {
     let existing = null;
-    const lr = await listItems(COLLECTION);
+    const lr = await listItems(COLLECTION, { ctx });
     if (lr.ok) existing = lr.data.find((it) => parseFields(it).fingerprint === fingerprint) || null;
 
     if (existing) {
@@ -176,10 +176,10 @@ export async function upsertLesson(input = {}) {
       const rec = (parseInt(f.recurrence, 10) || 1) + 1;
       const chats = parseJsonField(f.sourceChats, []);
       if (src && !chats.some((c) => c.sessionId && c.sessionId === src.sessionId)) chats.unshift(src);
-      const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50) } });
+      const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50) } }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
       appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` });
-      const fresh = await getItem(existing.ref);
+      const fresh = await getItem(existing.ref, { ctx });
       return { created: false, lesson: lessonFromPadItem(fresh.ok ? fresh.data : existing) };
     }
 
@@ -196,25 +196,25 @@ export async function upsertLesson(input = {}) {
         fingerprint,
         sourceChats: src ? [src] : [],
       },
-    });
+    }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
     appendActivity({ kind: 'nueva', refId: r.data.ref, title });
-    const fresh = await getItem(r.data.ref);
+    const fresh = await getItem(r.data.ref, { ctx });
     return { created: true, lesson: lessonFromPadItem(fresh.ok ? fresh.data : r.data) };
   });
 }
 
-export async function setStatus(id, status) {
+export async function setStatus(id, status, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   const st = oneOf(status, STATUSES, null);
   if (!st) throw Object.assign(new Error('Estado inválido.'), { badRequest: true });
-  const cur = await getItem(id);
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('setStatus', 'Lección', cur);
   const f = parseFields(cur.data);
-  const r = await updateItem(id, { fields: { ...f, status: st } });   // read-modify-write: fields completo
+  const r = await updateItem(id, { fields: { ...f, status: st } }, { ctx });   // read-modify-write: fields completo
   if (!r.ok) throw padError('setStatus', r);
   appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
@@ -223,10 +223,10 @@ export async function setStatus(id, status) {
 // (Fase 6: para medir después si la lección "funcionó" — dejó de recurrir). NO
 // escribe el destino en sí (eso lo hace promote-shared.js); solo el estado.
 const PROMOTE_TO = ['memoria', 'claude-md', 'contexto', 'playbook'];
-export async function markPromoted(id, target) {
+export async function markPromoted(id, target, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   if (!PROMOTE_TO.includes(target)) throw Object.assign(new Error('Destino de promoción inválido.'), { badRequest: true });
-  const cur = await getItem(id);
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('markPromoted', 'Lección', cur);
   const f = parseFields(cur.data);
   const rec = parseInt(f.recurrence, 10) || 1;
@@ -235,19 +235,19 @@ export async function markPromoted(id, target) {
       ...f, status: 'promovida', promotedTo: target,
       promotedAt: String(Date.now()), recurrenceAtPromotion: String(rec),
     },
-  });
+  }, { ctx });
   if (!r.ok) throw padError('markPromoted', r);
   appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
 // Fusiona lecciones (Fase 5, curaduría): conserva keepId sumándole la
 // recurrencia + los chats de origen de las mergeIds, y borra las mergeIds.
 // La recurrencia acumulada preserva la señal de prioridad al deduplicar.
-export async function mergeLessons(keepId, mergeIds = []) {
+export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
   if (!MC_ID_RE.test(keepId)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
-  const keepR = await getItem(keepId);
+  const keepR = await getItem(keepId, { ctx });
   if (!keepR.ok) throw notFoundOr500('mergeLessons', 'Lección', keepR);
   const kf = parseFields(keepR.data);
   const chats = parseJsonField(kf.sourceChats, []);
@@ -255,13 +255,13 @@ export async function mergeLessons(keepId, mergeIds = []) {
   let mergedCount = 0;
   for (const mid of mergeIds) {
     if (!MC_ID_RE.test(mid) || mid === keepId) continue;
-    const mR = await getItem(mid);
+    const mR = await getItem(mid, { ctx });
     if (!mR.ok) continue;
     const mf = parseFields(mR.data);
     // Borrar PRIMERO y absorber SOLO si el item realmente desapareció: si el
     // delete falla, el item sigue existiendo con su recurrencia, así que sumarla
     // acá la duplicaría (contada en keepId Y en el item que quedó vivo).
-    const d = await padDeleteItem(mid);
+    const d = await padDeleteItem(mid, { ctx });
     if (!d.ok) continue;
     mergedCount += 1;
     addRec += (parseInt(mf.recurrence, 10) || 1);
@@ -270,16 +270,16 @@ export async function mergeLessons(keepId, mergeIds = []) {
     }
   }
   const newRec = (parseInt(kf.recurrence, 10) || 1) + addRec;
-  const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50) } });
+  const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50) } }, { ctx });
   if (!r.ok) throw padError('mergeLessons', r);
   appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` });
-  const fresh = await getItem(keepId);
+  const fresh = await getItem(keepId, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data);
 }
 
-export async function deleteLesson(id) {
+export async function deleteLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
-  const r = await padDeleteItem(id);
+  const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('deleteLesson', 'Lección', r);
   appendActivity({ kind: 'borrada', refId: id, title: id });
   return { ok: true };

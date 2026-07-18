@@ -166,8 +166,8 @@ function routeFromPadItem(item) {
 
 // Temas ya mapeados, usados por listRoutes/createRoute/updateRoute para
 // derivar topicCount/doneCount/pct.
-async function topicsForProgress() {
-  const r = await listItems(TOPICS_COLLECTION);
+async function topicsForProgress(ctx = null) {
+  const r = await listItems(TOPICS_COLLECTION, { ctx });
   if (!r.ok) return [];
   return r.data.map(topicFromPadItem);
 }
@@ -205,8 +205,8 @@ function routesWithProgress(routes, topics) {
   });
 }
 
-export async function listRoutes() {
-  const [routesR, topics] = await Promise.all([listItems(ROUTES_COLLECTION), topicsForProgress()]);
+export async function listRoutes(ctx = null) {
+  const [routesR, topics] = await Promise.all([listItems(ROUTES_COLLECTION, { ctx }), topicsForProgress(ctx)]);
   if (!routesR.ok) throw padError('listRoutes', routesR);
   const routes = routesR.data.map(routeFromPadItem);
   const rank = { activa: 0, propuesta: 1, completada: 2, archivada: 3 };
@@ -214,20 +214,20 @@ export async function listRoutes() {
     (rank[a.status] - rank[b.status]) || ((b.createdAt || 0) - (a.createdAt || 0)));
 }
 
-export async function createRoute(input = {}) {
+export async function createRoute(input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Ruta sin título';
   const fields = { status: normRouteStatus(input.status) };
-  const r = await createItem(ROUTES_COLLECTION, { title, content: clampStr(input.description, 4000), fields });
+  const r = await createItem(ROUTES_COLLECTION, { title, content: clampStr(input.description, 4000), fields }, { ctx });
   if (!r.ok) throw padError('createRoute', r);
   const ref = r.data.ref;
   appendActivity({ kind: 'created', entity: 'route', refId: ref, title });
-  const fresh = await getItem(ref);
+  const fresh = await getItem(ref, { ctx });
   const route = routeFromPadItem(fresh.ok ? fresh.data : r.data);
-  return routesWithProgress([route], await topicsForProgress())[0];
+  return routesWithProgress([route], await topicsForProgress(ctx))[0];
 }
 
-export async function updateRoute(id, patch = {}) {
-  const cur = await getItem(id);
+export async function updateRoute(id, patch = {}, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateRoute', 'Ruta', cur);
   const f = parseFields(cur.data);
   const body = {};
@@ -242,24 +242,24 @@ export async function updateRoute(id, patch = {}) {
   }
   body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
 
-  const r = await updateItem(id, body);
+  const r = await updateItem(id, body, { ctx });
   if (!r.ok) throw padError('updateRoute', r);
 
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'route', refId: id, title: fresh.data?.title, detail: statusChanged || null });
   const route = routeFromPadItem(fresh.ok ? fresh.data : cur.data);
-  return routesWithProgress([route], await topicsForProgress())[0];
+  return routesWithProgress([route], await topicsForProgress(ctx))[0];
 }
 
-export async function deleteRoute(id) {
-  const cur = await getItem(id);
+export async function deleteRoute(id, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteRoute', 'Ruta', cur);
   const removed = routeFromPadItem(cur.data);
   // Archivar en Pad (soft-delete): los temas que colgaban de la ruta quedan
   // desasignados solos (verificado en la migración de tasks: `parent_ref`
   // desaparece de un item cuyo padre fue archivado) — no hace falta cascada
   // manual.
-  const r = await padDeleteItem(id);
+  const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteRoute', r);
   appendActivity({ kind: 'deleted', entity: 'route', refId: id, title: removed.title });
   return removed;
@@ -268,8 +268,8 @@ export async function deleteRoute(id) {
 // ===== TEMAS =====
 // Vista pública (ordenada: sin dominar primero por prioridad, luego por fecha)
 // + conteos + rutas con progreso (todo lo que la pestaña Aprendizaje necesita).
-export async function listTopics() {
-  const [topicsR, routesR] = await Promise.all([listItems(TOPICS_COLLECTION), listItems(ROUTES_COLLECTION)]);
+export async function listTopics(ctx = null) {
+  const [topicsR, routesR] = await Promise.all([listItems(TOPICS_COLLECTION, { ctx }), listItems(ROUTES_COLLECTION, { ctx })]);
   if (!topicsR.ok) throw padError('listTopics', topicsR);
   if (!routesR.ok) throw padError('listTopics:routes', routesR);
   const topics = topicsR.data.map(topicFromPadItem);
@@ -287,13 +287,13 @@ export async function listTopics() {
   return { topics: sorted, counts, routes: routesWithProgress(routes, topics) };
 }
 
-export async function getTopic(id) {
-  const r = await getItem(id);
+export async function getTopic(id, ctx = null) {
+  const r = await getItem(id, { ctx });
   if (!r.ok) return null;
   return topicFromPadItem(r.data);
 }
 
-export async function createTopic(input = {}) {
+export async function createTopic(input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Tema sin título';
   const fields = {
     area: clampStr(input.area, 80),
@@ -310,20 +310,20 @@ export async function createTopic(input = {}) {
     content: clampStr(input.notes, 8000),
     tags: normTags(input.tags),
     fields,
-  });
+  }, { ctx });
   if (!r.ok) throw padError('createTopic', r);
   const ref = r.data.ref;
 
   const routeCandidate = clampStr(input.routeId, 20).trim();
-  if (routeCandidate && ROUTE_ID_RE.test(routeCandidate)) await setParent(ref, routeCandidate);
+  if (routeCandidate && ROUTE_ID_RE.test(routeCandidate)) await setParent(ref, routeCandidate, { ctx });
 
   appendActivity({ kind: 'created', refId: ref, title });
-  const fresh = await getItem(ref);
+  const fresh = await getItem(ref, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : r.data);
 }
 
-export async function updateTopic(id, patch = {}) {
-  const cur = await getItem(id);
+export async function updateTopic(id, patch = {}, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateTopic', 'Tema', cur);
   const f = parseFields(cur.data);
   const body = {};
@@ -349,19 +349,19 @@ export async function updateTopic(id, patch = {}) {
   }
   body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
 
-  const r = await updateItem(id, body);
+  const r = await updateItem(id, body, { ctx });
   if (!r.ok) throw padError('updateTopic', r);
 
   if (patch.routeId !== undefined) {
     if (patch.routeId) {
       const rid = clampStr(patch.routeId, 20).trim();
-      if (ROUTE_ID_RE.test(rid)) await setParent(id, rid);
+      if (ROUTE_ID_RE.test(rid)) await setParent(id, rid, { ctx });
     } else if (cur.data.parent_link_id) {
-      await deleteLink(cur.data.parent_link_id);
+      await deleteLink(cur.data.parent_link_id, { ctx });
     }
   }
 
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   appendActivity({ kind: statusChanged ? 'status' : 'updated', refId: id, title: fresh.data?.title, detail: statusChanged || null });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
@@ -375,8 +375,8 @@ export async function updateTopic(id, patch = {}) {
 // regeneración inteligente (ver explain-shared.js checkStaleness).
 const MAX_EXPLAIN_VERSIONS = 5;
 const MAX_EXPLAIN_FILES = 40;
-export async function saveExplanation(id, { explanation, model, scope, fingerprint, files } = {}) {
-  const cur = await getItem(id);
+export async function saveExplanation(id, { explanation, model, scope, fingerprint, files } = {}, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('saveExplanation', 'Tema', cur);
   const f = parseFields(cur.data);
   const exp = parseJsonField(f.explanation, {});
@@ -396,10 +396,10 @@ export async function saveExplanation(id, { explanation, model, scope, fingerpri
 
   const nextFields = { ...f, explanation: nextExp };
   if (scope) nextFields.scope = normScope(scope);
-  const r = await updateItem(id, { fields: nextFields });
+  const r = await updateItem(id, { fields: nextFields }, { ctx });
   if (!r.ok) throw padError('saveExplanation', r);
   appendActivity({ kind: 'explained', refId: id, title: cur.data.title, detail: nextExp.model || null });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
@@ -425,20 +425,20 @@ let cxCounter = 0;
 // AGREGA una entrada (no sobrescribe). source 'ia' (charla interpretada),
 // 'manual' (nota escrita a mano) o 'chat' (resumen de un chat "Profundizar"
 // al cerrarlo). Las más nuevas van primero; cap 30.
-export async function addContexto(id, { text, source } = {}) {
+export async function addContexto(id, { text, source } = {}, ctx = null) {
   const clean = clampStr(text, CONTEXT_ENTRY_MAX).trim();
   if (!clean) { const e = new Error('La entrada de contexto está vacía.'); e.badInput = true; throw e; }
-  const cur = await getItem(id);
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('addContexto', 'Tema', cur);
   const f = parseFields(cur.data);
   const list = parseJsonField(f.contextoEntradas, []);
   cxCounter += 1;
   const entry = { id: `CX${Date.now()}-${process.pid.toString(36)}-${cxCounter}`, at: Date.now(), source: CONTEXT_SOURCES.includes(source) ? source : 'manual', text: clean };
   const nextList = [entry, ...list].slice(0, MAX_CONTEXT_ENTRIES);
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } });
+  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
   if (!r.ok) throw padError('addContexto', r);
   appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: entry.source });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
@@ -447,20 +447,20 @@ export async function addContexto(id, { text, source } = {}) {
 // 'chat' del tema, para que aumente el contexto de la próxima "Regenerar".
 // Best-effort: devuelve null si no hay nada útil o si Pad falla (no debe
 // romper el cierre del chat).
-export async function appendChatContext(id, { summary, files } = {}) {
+export async function appendChatContext(id, { summary, files } = {}, ctx = null) {
   const parts = [];
   if (summary && String(summary).trim()) parts.push(String(summary).trim());
   if (Array.isArray(files) && files.length) parts.push(`Archivos tocados: ${files.slice(0, 20).join(', ')}`);
   const text = parts.join('\n\n').trim();
   if (!text) return null;
-  try { return await addContexto(id, { text, source: 'chat' }); }
+  try { return await addContexto(id, { text, source: 'chat' }, ctx); }
   catch { return null; }
 }
 
-export async function updateContextoEntry(id, entryId, text) {
+export async function updateContextoEntry(id, entryId, text, ctx = null) {
   const clean = clampStr(text, CONTEXT_ENTRY_MAX).trim();
   if (!clean) { const e = new Error('La entrada de contexto está vacía.'); e.badInput = true; throw e; }
-  const cur = await getItem(id);
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateContextoEntry', 'Tema', cur);
   const f = parseFields(cur.data);
   const list = parseJsonField(f.contextoEntradas, []);
@@ -468,33 +468,33 @@ export async function updateContextoEntry(id, entryId, text) {
   if (!entry) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
   entry.text = clean;
   entry.at = Date.now();
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: list } });
+  const r = await updateItem(id, { fields: { ...f, contextoEntradas: list } }, { ctx });
   if (!r.ok) throw padError('updateContextoEntry', r);
   appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'edit' });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
-export async function deleteContextoEntry(id, entryId) {
-  const cur = await getItem(id);
+export async function deleteContextoEntry(id, entryId, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteContextoEntry', 'Tema', cur);
   const f = parseFields(cur.data);
   const list = parseJsonField(f.contextoEntradas, []);
   const before = list.length;
   const nextList = list.filter((x) => x.id !== entryId);
   if (nextList.length === before) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } });
+  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
   if (!r.ok) throw padError('deleteContextoEntry', r);
   appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'delete' });
-  const fresh = await getItem(id);
+  const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
-export async function deleteTopic(id) {
-  const cur = await getItem(id);
+export async function deleteTopic(id, ctx = null) {
+  const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteTopic', 'Tema', cur);
   const removed = topicFromPadItem(cur.data);
-  const r = await padDeleteItem(id);
+  const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteTopic', r);
   appendActivity({ kind: 'deleted', refId: id, title: removed.title });
   return removed;

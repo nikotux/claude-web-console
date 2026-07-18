@@ -23,6 +23,25 @@ const LEARNED_FILE = path.join(__dirname, 'invariants-learned.json');
 // Seeds hand-authored (RegExp ricas). Los aprendidos se suman aparte.
 export const SEED_INVARIANTS = [
   {
+    match: /src\/modules\/chat\/runner-link\.js$|src\/core\/user-space\.js$|bin\/cwc-chat-runner\.js$/,
+    text: 'BLINDAJE ANTICONSUMO MULTI-TENANT (PLAN-592): el runner de un INQUILINO NUNCA hereda el entorno del server — spawnRunner arma el env por allowlist con userRunnerEnv (env LIMPIO, jamás `...process.env`) + HOME=~/.cwc-users/<owner> + el OAuth token del dueño; sin creds propias NO arranca (fail-closed, nunca cae al ~/.claude del server). El runner además hace un self-check al arrancar: si es inquilino (owner != host) y su HOME/creds no están aislados, ABORTA (exit 3) antes de query(). Ningún dato user-scoped de .cwc-data del inquilino se resuelve al root del server: resolveDataDir() (core/data-dir.js) honra CWC_DATA_DIR. Debilitar cualquiera de estas capas quemaría los tokens del admin.',
+  },
+  {
+    // Familia A · NO-CRUCE / ownership por usuario×mundo (PLAN-500/PLAN-593 SP1).
+    match: /src\/modules\/chat\/index\.js$|src\/modules\/terminal\/sessions\.js$/,
+    text: 'NO-CRUCE POR USUARIO (multi-tenant, PLAN-500/PLAN-593; Regla 12 escalada a per-user): toda list/attach/read de conversaciones y sesiones filtra por `owner`. Un NO-admin ve/adjunta SOLO lo suyo (`chat.owner === principal.username`) y un admin ve todo — es EXACTAMENTE lo que hacen `list(principal)` (filtro de visibilidad) y `ownedChat(req, id)` (guard: ajeno o inexistente ⇒ null ⇒ 404, sin revelar que existe) en chat/index.js. Ese guard NUNCA se relaja para un no-admin. El cwd se clampa con `safeCwd(cwd, owner)` = `clampToRoot(userFileRoot(owner || hostUser()), cwd)` — al workspace del inquilino, JAMÁS al home global. El viejo modelo de "confianza plena entre autenticados" (gotcha WS de CLAUDE.md) queda DEROGADO para no-admins: cualquier endpoint/handler nuevo (chat o sesión tmux) que enumere o adjunte recursos DEBE pasar por el mismo filtro por dueño; reintroducir un listado sin `owner` es una regresión de aislamiento.',
+  },
+  {
+    // Familia B · dato user-scoped NUNCA global (PLAN-500/PLAN-592/PLAN-593 SP1).
+    match: /src\/core\/data-dir\.js$|src\/modules\/(chat|tasks|learning|retro|tickets)\//,
+    text: 'DATO USER-SCOPED NUNCA GLOBAL (multi-tenant, PLAN-500/PLAN-592): toda lectura/escritura de estado propio de un usuario resuelve su directorio con `resolveDataDir()` (core/data-dir.js), que honra `CWC_DATA_DIR` — el server inyecta `CWC_DATA_DIR = userDataDir(owner)` en el env del runner del inquilino (userRunnerEnv). PROHIBIDO hardcodear `path.join(os.homedir(), ".cwc-data")` (o `config.home + "/.cwc-data"`) para estado user-scoped: eso lo colaría al root del host y cruzaría datos entre inquilinos. Un módulo nuevo que persista datos de usuario (chat/tasks/learning/retro/tickets) debe derivar su base de resolveDataDir(), no del home del proceso.',
+  },
+  {
+    // Familia C · Pad per-usuario, sin credencial compartida (PLAN-500/PLAN-593 SP1).
+    match: /src\/core\/pad-service-client\.js$|src\/core\/pad-context\.js$|src\/core\/user-space\.js$/,
+    text: 'PAD PER-USUARIO, SIN CREDENCIAL COMPARTIDA (multi-tenant, PLAN-500; ver DOC-633): una operación de Pad EN NOMBRE de un inquilino usa SU token (`readUserPadToken(userId, url)`) y SU workspace (`userPadWorkspace(userId)` = `tenant-<userId>`) — derivados por `padContextForUser`/`reqPadContext` (core/pad-context.js) como `{url, token, workspace}`. NUNCA se escribe data de un inquilino con la credencial ÚNICA del host (token de ~/.pad) ni en el workspace `console`. FAIL-CLOSED: si el token propio aún no está provisionado (readUserPadToken ⇒ null), el ctx viaja con `token:null` y la operación falla limpio (403/sin token) SIN caer al host ni contaminar `console`; el host (principal admin sin ctx de inquilino) sí conserva su `console`+~/.pad por retrocompat. Reintroducir un default al token/workspace del host para un inquilino es una regresión de aislamiento.',
+  },
+  {
     match: /src\/modules\/chat\/(index|shared)\.js$/,
     text: 'SIMETRÍA de estado en chat/index.js: todo `case` del switch de eventos que muta estado persistente de la conversación (mode, model, etc.) debe llamar a onUpdate()/persist() IGUAL que sus gemelos. Ej histórico: `case "mode"` debía llamar onUpdate() como `case "model"` — si un camino guarda y su gemelo no, es un bug.',
   },

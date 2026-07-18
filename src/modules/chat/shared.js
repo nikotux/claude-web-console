@@ -3,6 +3,7 @@
 // Unix por conversación y la traducción de tool calls a eventos de UI.
 import os from 'node:os';
 import path from 'node:path';
+import { resolveDataDir } from '../../core/data-dir.js';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Modos de permiso del chat: la FUENTE ÚNICA vive en el núcleo core/tool-policy.js
@@ -16,7 +17,7 @@ export const SLEEP_MS = 45 * 60 * 1000; // inactiva => el runner se auto-duerme
 export const HISTORY_MAX = 600;
 
 // Cada conversación tiene su runner con socket Unix + log propios acá.
-export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+export const DATA_DIR = resolveDataDir();
 export const CHATS_DIR = path.join(DATA_DIR, 'chats');
 export const sockPath = (id) => path.join(CHATS_DIR, `${id}.sock`);
 export const logPath = (id) => path.join(CHATS_DIR, `${id}.log`);

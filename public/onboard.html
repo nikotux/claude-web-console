@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Claude Web Console — Configurá tu cuenta</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/ui.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    /* Wizard público de onboarding: standalone, sin main.js ni autenticación. */
+    #onboard-root {
+      width: min(92vw, 480px);
+    }
+
+    .ob-head {
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+    }
+
+    .ob-title {
+      margin: 0;
+      font-size: var(--cwc-fs-xl);
+      color: var(--cwc-text);
+    }
+
+    .ob-hint {
+      margin: 0;
+      font-size: var(--cwc-fs-md);
+      line-height: 1.45;
+      color: var(--cwc-text-dim);
+    }
+
+    .ob-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: .35rem;
+      margin: .2rem 0 .4rem;
+    }
+
+    .ob-step {
+      height: .35rem;
+      border-radius: var(--cwc-radius-sm);
+      background: var(--cwc-bg-chip);
+      border: 1px solid var(--cwc-border);
+    }
+
+    .ob-step.is-active {
+      background: var(--cwc-accent);
+      border-color: var(--cwc-accent);
+    }
+
+    .ob-form {
+      display: flex;
+      flex-direction: column;
+      gap: .7rem;
+    }
+
+    .ob-field {
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+    }
+
+    .ob-label {
+      font-size: var(--cwc-fs-sm);
+      color: var(--cwc-text-secondary);
+    }
+
+    .ob-actions {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      flex-wrap: wrap;
+    }
+
+    .ob-actions .btn,
+    .ob-actions .btn-ghost,
+    .ob-copy.btn-ghost {
+      width: auto;
+      padding: .55rem .8rem;
+      font-size: var(--cwc-fs-md);
+      border-radius: var(--cwc-radius-md);
+      border: 1px solid var(--cwc-border-strong);
+    }
+
+    .ob-actions .btn {
+      background: var(--cwc-accent);
+      color: var(--cwc-accent-ink);
+      border-color: var(--cwc-accent);
+    }
+
+    .ob-actions .btn-ghost,
+    .ob-copy.btn-ghost {
+      background: var(--cwc-bg-chip);
+      color: var(--cwc-text);
+      border-color: var(--cwc-border-strong);
+    }
+
+    .ob-actions .btn:disabled,
+    .ob-actions .btn-ghost:disabled,
+    .ob-copy.btn-ghost:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+
+    .ob-error,
+    .ob-ok {
+      margin: 0;
+      font-size: var(--cwc-fs-md);
+      line-height: 1.4;
+    }
+
+    .ob-error {
+      color: var(--cwc-danger);
+    }
+
+    .ob-ok {
+      color: var(--cwc-ok);
+    }
+
+    .ob-note {
+      margin: 0;
+      padding: .55rem .65rem;
+      border: 1px solid var(--cwc-border-strong);
+      border-radius: var(--cwc-radius-md);
+      background: var(--cwc-bg-panel);
+      color: var(--cwc-text-secondary);
+      font-size: var(--cwc-fs-sm);
+      line-height: 1.45;
+    }
+
+    .ob-url {
+      display: block;
+      padding: .65rem;
+      border: 1px solid var(--cwc-border-strong);
+      border-radius: var(--cwc-radius-md);
+      background: var(--cwc-bg);
+      color: var(--cwc-accent);
+      font-size: var(--cwc-fs-sm);
+      line-height: 1.45;
+      word-break: break-all;
+      text-decoration: none;
+    }
+
+    .ob-url:hover {
+      text-decoration: underline;
+    }
+
+    .ob-list {
+      margin: 0;
+      padding-left: 1.25rem;
+      color: var(--cwc-text-secondary);
+      font-size: var(--cwc-fs-md);
+      line-height: 1.45;
+    }
+
+    .ob-list li {
+      margin: 0 0 .7rem;
+    }
+
+    .ob-code-row {
+      display: flex;
+      gap: .5rem;
+      flex-wrap: wrap;
+      margin-top: .55rem;
+    }
+
+    .ob-code-row input {
+      min-width: 0;
+      flex: 1 1 180px;
+    }
+
+    .ob-spinner-line {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      color: var(--cwc-text-secondary);
+      font-size: var(--cwc-fs-md);
+    }
+
+    .ob-spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid var(--cwc-border-strong);
+      border-top-color: var(--cwc-accent);
+      animation: ob-spin .8s linear infinite;
+      flex: none;
+    }
+
+    @keyframes ob-spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body class="login-body">
+  <div id="onboard-root" class="login-card"></div>
+  <script src="/js/onboard/onboard.js"></script>
+</body>
+</html>

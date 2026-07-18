@@ -15,6 +15,7 @@
 import { modelColor, modelName } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
+import { readCache, writeCache } from '../../ui/cache-store.js';
 
 const POLL_MS = 15000;
 const AUTO_MS = 15000; // auto-refresh del modal (silencioso)
@@ -322,8 +323,13 @@ function renderLeft(container, series, metric, liveKeys, range) {
 // ===== Columna derecha: gráfica de tendencia (Chart.js) =====
 // Lee un token CSS resuelto a hex (los colores viven en tokens.css; en JS se
 // leen con getComputedStyle — no se duplican los hex).
+// El CSSStyleDeclaration de getComputedStyle es un objeto VIVO (refleja
+// cambios de tema sin re-llamar), así que se cachea una sola vez y se reusa
+// — antes se llamaba getComputedStyle ~10-15 veces por dibujo de gráfica.
+let _rootStyle = null;
 function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (!_rootStyle) _rootStyle = getComputedStyle(document.documentElement);
+  return _rootStyle.getPropertyValue(name).trim();
 }
 const modelHex = (key) => cssVar(`--cwc-model-${key}`) || cssVar('--cwc-model-unknown') || 'CanvasText';
 
@@ -423,12 +429,16 @@ export default {
     const btn = el.querySelector('.usage-btn');
     const valEl = el.querySelector('.usage-val');
     let lastTokens = null;
+    // Cache-then-network: pinta el 'hoy' persistido al instante (antes arrancaba en '—').
+    const cachedSum = readCache('usage-summary');
+    if (cachedSum?.data?.today) { cache.summary = cachedSum.data; valEl.textContent = fmtTokens(cachedSum.data.today.tokens || 0); }
 
     async function tick() {
       if (document.hidden) return;
       try {
         const sum = await fetchSummary();
         cache.summary = sum; // mantiene la caché caliente para que el modal abra instantáneo
+        writeCache('usage-summary', sum);
         const t = sum.today.tokens || 0;
         valEl.textContent = fmtTokens(t);
         btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)} equiv. API`;

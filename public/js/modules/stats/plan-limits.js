@@ -11,6 +11,7 @@
 // server hace que solo ~1 de cada 12 lecturas golpee a Anthropic; el resto es
 // instantáneo. Pausa con la pestaña en segundo plano (patrón de stats.js).
 import { fetchLimits, renderLimits } from '../usage/usage.js';
+import { readCache, writeCache } from '../../ui/cache-store.js';
 
 const POLL_MS = 5000;
 
@@ -22,10 +23,14 @@ export default {
     // (p.ej. only-expanded) que NO hay que pisar.
     el.classList.add('plan-lims');
     let firstOk = false;
+    // Cache-then-network: pinta las últimas barras conocidas al instante.
+    const cachedLim = readCache('plan-limits');
+    if (cachedLim) { try { renderLimits(el, cachedLim.data, { credits: false, compact: true }); firstOk = true; } catch { /* noop */ } }
     async function tick() {
       if (document.hidden) return;
       try {
         const data = await fetchLimits(); // sin fresh: reusa el caché de 60 s
+        writeCache('plan-limits', data);
         renderLimits(el, data, { credits: false, compact: true });
         firstOk = true;
       } catch {

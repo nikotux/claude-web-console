@@ -23,6 +23,7 @@ import {
 } from '../src/modules/learning/explain-shared.js';
 import { saveExplanation } from '../src/modules/learning/store.js';
 import { registerLearningSession } from '../src/modules/learning/session-log.js';
+import { padContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = String(process.argv[2] || '');
@@ -77,6 +78,7 @@ async function explain(topic, opts) {
 async function main() {
   const job = readExplainJob(id);
   if (!job) { log(`job de explicación (${id}) inexistente.`); process.exit(0); return; }
+  const ctx = padContextForUser(job.owner || null);
   const topic = job.topic;
   if (!topic) {
     writeExplainJob(id, { ...job, status: 'error', error: 'Sin datos del tema.', updatedAt: Date.now() });
@@ -89,7 +91,7 @@ async function main() {
     const files = parseFiles(out);
     const snapshot = fileSnapshot(files, cwdForScope(topic.scope));
     const fingerprint = textFingerprint(topic);
-    try { await saveExplanation(id, { explanation, model: EXPLAIN_MODEL, scope: topic.scope, fingerprint, files: snapshot }); }
+    try { await saveExplanation(id, { explanation, model: EXPLAIN_MODEL, scope: topic.scope, fingerprint, files: snapshot }, ctx); }
     catch (e) { log('no se pudo auto-guardar en el tema (no rompe el job):', e?.message); }
     writeExplainJob(id, { ...job, status: 'done', error: null, updatedAt: Date.now() });
     log(`OK explicación ${id}: ${explanation.length} chars, ${files.length} archivos citados.`);

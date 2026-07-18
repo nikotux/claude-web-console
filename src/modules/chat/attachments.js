@@ -26,8 +26,9 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import multer from 'multer';
+import { resolveDataDir } from '../../core/data-dir.js';
 
-export const ATTACH_ROOT = path.join(os.homedir(), '.cwc-data', 'chat-attachments');
+export const ATTACH_ROOT = path.join(resolveDataDir(), 'chat-attachments');
 
 // Id de chat: `c<pid>-<seq>` (ver ChatManager.create). Whitelist estricta.
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;

@@ -475,6 +475,13 @@ html, body {
   padding: .35rem .35rem .15rem; user-select: none;
 }
 .sess-world-h .side-count { margin-left: auto; }
+/* 🌗 grupo SESIÓN-LIMBO (alto riesgo, herramientas de ambos mundos): resaltado. */
+.sess-world-h.sess-limbo-h {
+  color: var(--cwc-danger);
+  border-left: 2px solid var(--cwc-danger);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--cwc-danger) 9%, transparent);
+}
 /* F3 (PLAN-373): conversación ARCHIVADA (revivible) — atenuada. */
 .sess-chat--archived { opacity: .62; }
 .sess-chat--archived:hover { opacity: 1; }

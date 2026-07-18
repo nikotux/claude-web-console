@@ -3,29 +3,32 @@
 // trackeado (Tolkien) Y esta propia consola. Alimenta la pestaña "Proyectos"
 // del menú Sistema.
 //
-// PROJECTS es la única lista de proyectos soportados — agregar uno nuevo es
-// sumar una entrada acá (clave estable, no expone rutas crudas del cliente).
+// Los proyectos visibles se resuelven por request según el principal:
+// host/admin ve los repos reales; cada inquilino ve su workspace y, si existe,
+// su clon aislado de Tolkien.
 //
-// HTTP (patrón admin-gating igual al contexto editable de bugfixes: GET
-// abierto a cualquier autenticado, POST admin):
+// HTTP: GET abierto a cualquier autenticado según proyectos visibles; POST
+// permitido a admin o self-edit del espacio propio del inquilino:
 //   GET  /api/projects                                -> [{key, name, dir}]
 //   GET  /api/projects/:key/context                   -> { content } (CLAUDE.md real)
-//   POST /api/projects/:key/context {content}         -> guarda (admin)
+//   POST /api/projects/:key/context {content}         -> guarda
 //   GET  /api/projects/:key/memory                     -> { indexExists, index, files[] }
 //   GET  /api/projects/:key/memory/index               -> { content } (MEMORY.md crudo)
-//   POST /api/projects/:key/memory/index {content}      -> guarda el índice (admin)
+//   POST /api/projects/:key/memory/index {content}      -> guarda el índice
 //   GET  /api/projects/:key/memory/note/:file           -> { file, content }
-//   POST /api/projects/:key/memory/note/:file {content} -> guarda la nota (admin)
+//   POST /api/projects/:key/memory/note/:file {content} -> guarda la nota
 //
 // Nota (regla 4 de CLAUDE.md): esto SÍ toca archivos fuera del propio módulo
 // (CLAUDE.md y las memorias de Tolkien Y de esta consola) — es el propósito
 // explícito de esta pantalla, no un efecto colateral. Ver excepción
 // documentada en CLAUDE.md.
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
+import { userWorkspace, hostUser } from '../../core/user-space.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
   listContextSections, readContextSection, writeContextSection, hashOf,
@@ -33,26 +36,52 @@ import {
 import {
   analyzeJobId, readAnalyzeJob, writeAnalyzeJob, spawnAnalyzeRunner, jobResult, isFreshRunning,
 } from './analyze-shared.js';
+import { mountPersonalization } from './personalization.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_DIR = path.resolve(__dirname, '..', '..', '..'); // raíz de este mismo repo
 
 const displayName = (n) => (n ? n[0].toUpperCase() + n.slice(1) : 'Tolkien');
 
-const PROJECTS = {
-  tolkien: { name: displayName(config.projectName), dir: config.projectDir },
-  // "Mi Consola" = nombre CANÓNICO de este proyecto en toda la UI (pedido del
-  // usuario 2026-07-05; identidad frontend en ui/places.js + ícono `console`).
-  console: { name: 'Mi Consola', dir: CONSOLE_DIR },
-};
+// Resuelve el set de proyectos visible para un principal (role-aware).
+// admin/host -> repos reales (Mi Consola + Tolkien). inquilino -> "Mi espacio"
+// (su workspace) + su clon de Tolkien SOLO si existe (aislamiento: nunca el
+// Tolkien del host). Cada entrada lleva `userId` (dueño, para scopear memorias)
+// y `own` (true = espacio propio del inquilino -> self-edit permitido).
+function projectsFor(principal) {
+  const username = principal?.username || null;
+  const admin = !!principal?.admin;
+  if (admin || !username) {
+    // host/admin (incl. principal por token): comportamiento actual intacto.
+    const host = hostUser();
+    return {
+      tolkien: { name: displayName(config.projectName), dir: config.projectDir, userId: host, own: false },
+      console: { name: 'Mi Consola', dir: CONSOLE_DIR, userId: host, own: false },
+    };
+  }
+  const out = {
+    'mi-espacio': { name: 'Mi espacio', dir: userWorkspace(username), userId: username, own: true },
+  };
+  const tolkienClone = path.join(userWorkspace(username), 'tolkien');
+  try { if (fs.existsSync(tolkienClone)) out.tolkien = { name: displayName(config.projectName), dir: tolkienClone, userId: username, own: true }; }
+  catch { /* sin clon: se omite (aislamiento) */ }
+  return out;
+}
 
 function project(req, res) {
-  // hasOwnProperty: una key heredada de Object.prototype ('toString',
-  // 'constructor'…) sería truthy en PROJECTS[key] y saltearía el 404.
+  const set = projectsFor(principalOf(req));
   const key = req.params.key;
-  const p = Object.prototype.hasOwnProperty.call(PROJECTS, key) ? PROJECTS[key] : null;
+  const p = Object.prototype.hasOwnProperty.call(set, key) ? set[key] : null;
   if (!p) { res.status(404).json({ error: `Proyecto desconocido: ${key}` }); return null; }
-  return p;
+  return { key, ...p };
+}
+
+// Escritura permitida si es admin (repos compartidos console/tolkien del host)
+// o si el proyecto es el espacio PROPIO del inquilino (self-edit; userId saneado).
+function canWrite(req, p) {
+  if (isAdmin(req)) return true;
+  const pr = principalOf(req);
+  return !!(p.own && pr && pr.username && pr.username === p.userId);
 }
 
 // ===== Análisis con IA de un cambio de contexto (guardián del CLAUDE.md) =====
@@ -73,11 +102,14 @@ export default {
 
     r.get('/', (req, res) => {
       try {
-        res.json(Object.entries(PROJECTS).map(([key, p]) => ({ key, name: p.name, dir: p.dir })));
+        const set = projectsFor(principalOf(req));
+        res.json(Object.entries(set).map(([key, p]) => ({ key, name: p.name, dir: p.dir })));
       } catch {
         res.status(500).json({ error: 'No se pudo listar los proyectos.' });
       }
     });
+
+    mountPersonalization(r);
 
     // ===== Contexto (CLAUDE.md) =====
     r.get('/:key/context', (req, res) => {
@@ -93,7 +125,7 @@ export default {
     // siempre (compatibilidad con llamadores programáticos existentes).
     r.post('/:key/context', (req, res) => {
       const p = project(req, res); if (!p) return;
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
       try {
         writeContext(p.dir, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
@@ -118,7 +150,7 @@ export default {
 
     r.post('/:key/context/section/:i', (req, res) => {
       const p = project(req, res); if (!p) return;
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
       try {
         writeContextSection(p.dir, req.params.i, req.body?.hash, String(req.body?.content ?? ''));
         res.json({ ok: true });
@@ -137,7 +169,7 @@ export default {
     // MISMO job en vez de spawnear otro runner y gastar tokens de nuevo.
     r.post('/:key/context/section/:i/analyze', (req, res) => {
       const p = project(req, res); if (!p) return;
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
       try {
         const sec = readContextSection(p.dir, req.params.i);
         if (sec.hash !== String(req.body?.hash || '')) {
@@ -181,13 +213,13 @@ export default {
     // ===== Memorias (MEMORY.md + notas individuales) =====
     r.get('/:key/memory', (req, res) => {
       const p = project(req, res); if (!p) return;
-      try { res.json(listMemory(p.dir)); }
+      try { res.json(listMemory(p.dir, p.userId)); }
       catch { res.status(500).json({ error: 'No se pudo leer la memoria.' }); }
     });
 
     r.get('/:key/memory/index', (req, res) => {
       const p = project(req, res); if (!p) return;
-      try { const content = readIndex(p.dir); res.json({ content, hash: hashOf(content) }); }
+      try { const content = readIndex(p.dir, p.userId); res.json({ content, hash: hashOf(content) }); }
       catch { res.status(500).json({ error: 'No se pudo leer el índice.' }); }
     });
 
@@ -197,9 +229,9 @@ export default {
     // ediciones concurrentes de sesiones de Claude Code (ver memory.js:writeIndex).
     r.post('/:key/memory/index', (req, res) => {
       const p = project(req, res); if (!p) return;
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
       try {
-        writeIndex(p.dir, String(req.body?.content ?? ''), req.body?.hash);
+        writeIndex(p.dir, String(req.body?.content ?? ''), req.body?.hash, p.userId);
         res.json({ ok: true });
       } catch (e) {
         res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar el índice.' });
@@ -209,7 +241,7 @@ export default {
     r.get('/:key/memory/note/:file', (req, res) => {
       const p = project(req, res); if (!p) return;
       try {
-        const content = readNote(p.dir, req.params.file);
+        const content = readNote(p.dir, req.params.file, p.userId);
         res.json({ file: req.params.file, content, hash: hashOf(content) });
       } catch (e) { res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo leer la nota.' }); }
     });
@@ -219,9 +251,9 @@ export default {
     // memory.js:writeNote).
     r.post('/:key/memory/note/:file', (req, res) => {
       const p = project(req, res); if (!p) return;
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
       try {
-        writeNote(p.dir, req.params.file, String(req.body?.content ?? ''), req.body?.hash);
+        writeNote(p.dir, req.params.file, String(req.body?.content ?? ''), req.body?.hash, p.userId);
         res.json({ ok: true });
       } catch (e) {
         res.status(e.conflict ? 409 : (e.badRequest ? 400 : 500)).json({ error: e.message || 'No se pudo guardar la nota.' });

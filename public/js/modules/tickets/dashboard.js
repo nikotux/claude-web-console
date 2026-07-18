@@ -179,7 +179,14 @@ function openTicketTable(titleText, items, deps, opts = {}) {
     const tr = e.target.closest('tr[data-num]');
     if (tr) { const t = localMap.get(tr.dataset.num); if (t) openTicketDetail(t, deps); }
   });
-  inp.addEventListener('input', () => { q = inp.value; renderTable(); });
+  // Debounce: no reconstruir la tabla entera en CADA tecla (reflow caro con
+  // muchas filas). Se re-renderiza ~140 ms después de la última pulsación.
+  let filterTimer = null;
+  inp.addEventListener('input', () => {
+    q = inp.value;
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(renderTable, 140);
+  });
   renderTable();
   return m;
 }
@@ -592,6 +599,7 @@ export function openBugsV2Dashboard(deps = {}) {
     if (resolvedAutoTimer) return;
     resolvedAutoTimer = setInterval(() => {
       if (modalClosed) { clearInterval(resolvedAutoTimer); resolvedAutoTimer = null; return; }
+      if (document.hidden) return; // pausa en segundo plano (uniforme con el resto de pollers)
       if (viewMode === 'resolved' && !resolvedInFlight) loadResolved(false, true);
     }, 20000);
   }

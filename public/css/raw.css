@@ -44,9 +44,12 @@ html, body {
   line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
-  opacity: 0.4;               /* transparente: la lluvia de fondo se sigue viendo */
+  opacity: 0;                 /* aparece con .raw-log--in */
   text-shadow: 0 0 3px currentColor;
+  transition: left 0.5s ease, top 0.5s ease, width 0.5s ease, height 0.5s ease, opacity 0.5s ease;
 }
+.raw-log--in { opacity: 0.4; }   /* transparente: la lluvia de fondo se sigue viendo */
+.raw-log--out { opacity: 0; }
 
 /* Rótulos de banda de sesión: fila superior tenue, pegada al borde. */
 .raw-labels {
@@ -70,8 +73,11 @@ html, body {
   background: rgba(1, 6, 3, 0.62);
   border-left: 2px solid currentColor;
   text-shadow: 0 0 5px currentColor;
-  opacity: 0.85;
+  opacity: 0;                 /* aparece con .raw-label--in */
+  transition: left 0.5s ease, opacity 0.5s ease;
 }
+.raw-label--in { opacity: 0.85; }
+.raw-label--out { opacity: 0; }
 
 /* Feed legible: pegado a la esquina inferior izquierda. */
 .raw-feed {
@@ -171,3 +177,42 @@ html, body {
   cursor: pointer;
 }
 .raw-close:hover { background: rgba(60, 255, 110, 0.12); }
+
+/* Tira de procesos-servicio (latidos): arriba-derecha, bajo el botón cerrar.
+   Un servicio permanente no "llueve" — late. */
+.raw-procs {
+  position: fixed;
+  top: 40px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-end;
+  pointer-events: none;
+  user-select: none;
+}
+.raw-proc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  padding: 2px 7px;
+  background: rgba(1, 6, 3, 0.6);
+  border-right: 2px solid var(--raw-green-dim);
+  color: color-mix(in srgb, var(--raw-green) 78%, #fff);
+  text-shadow: 0 0 4px var(--raw-green);
+  white-space: nowrap;
+}
+.raw-proc-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--raw-green);
+  box-shadow: 0 0 6px var(--raw-green);
+  animation: raw-proc-pulse 1.6s ease-in-out infinite;
+}
+@keyframes raw-proc-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+.raw-proc-dot--warn { background: #e0a83a; box-shadow: 0 0 6px #e0a83a; }
+.raw-proc-dot--fail { background: #e0563a; box-shadow: 0 0 6px #e0563a; }
+.raw-proc-meta { opacity: 0.6; font-size: 9px; }

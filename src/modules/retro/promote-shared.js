@@ -81,10 +81,10 @@ function renderManagedBlock(lessons) {
   return `${MARK_START}\n## Mejora Continua (auto)\n<!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->\n\n${body}\n${MARK_END}`;
 }
 
-async function promoteToClaudeMd(project) {
+async function promoteToClaudeMd(project, ctx = null) {
   const file = claudeFileFor(project);
   if (!file) throw Object.assign(new Error(`El proyecto "${project}" no tiene CLAUDE.md promovible (solo console/tolkien).`), { badRequest: true });
-  const { lessons } = await listLessons();
+  const { lessons } = await listLessons(ctx);
   const mine = lessons.filter((l) => l.project === project && l.promotedTo === 'claude-md' && l.status === 'promovida');
   const block = renderManagedBlock(mine);
   let existing = '';
@@ -121,29 +121,29 @@ function promoteToContext(lesson, kind) {
 // Crea un item DRAFT en la colección 'playbooks' del workspace console. El
 // cuerpo del playbook nace de la lección; queda para que un humano lo refine y
 // le ponga invocation_slug en Pad.
-async function promoteToPlaybook(lesson) {
+async function promoteToPlaybook(lesson, ctx = null) {
   const content = `> Borrador generado desde la lección de Mejora Continua ${lesson.id}. Refiná los pasos y, si aplica, asignale un invocation_slug en Pad.\n\n## Cuándo\n_${lesson.category}_\n\n## Procedimiento\n${lesson.body}`;
   const r = await createItem('playbooks', {
     title: lesson.title,
     content,
     fields: { status: 'draft', trigger: 'manual', scope: 'all' },
-  });
+  }, { ctx });
   if (!r.ok) throw Object.assign(new Error(`Pad local (crear playbook): ${r.error || 'error'}`), { padError: true });
 }
 
 // Dispatcher. `lesson` ya debe estar marcada promovida (markPromoted corre
 // ANTES, así claude-md la incluye al renderizar desde el conjunto).
-export async function promote(project, target, lesson, opts = {}) {
+export async function promote(project, target, lesson, opts = {}, ctx = null) {
   if (target === 'memoria') {
     const dir = projectDirFor(project);
     if (!dir) throw Object.assign(new Error(`El proyecto "${project}" no tiene memoria promovible (solo console/tolkien).`), { badRequest: true });
     promoteToMemory(dir, lesson);
   } else if (target === 'claude-md') {
-    await promoteToClaudeMd(project);
+    await promoteToClaudeMd(project, ctx);
   } else if (target === 'contexto') {
     promoteToContext(lesson, opts.kind);
   } else if (target === 'playbook') {
-    await promoteToPlaybook(lesson);
+    await promoteToPlaybook(lesson, ctx);
   } else {
     throw Object.assign(new Error(`Destino "${target}" no está disponible.`), { badRequest: true });
   }

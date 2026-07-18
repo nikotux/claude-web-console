@@ -30,7 +30,8 @@
 // a ser async (habla con Pad local) — todas las rutas de acá suman `await` y los
 // ids cambiaron de formato LT<n>/LR<n> a TDA-<n>/RDA-<n> (ver store.js).
 import express from 'express';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
+import { reqPadContext } from '../../core/pad-context.js';
 import {
   listTopics, getTopic, createTopic, updateTopic, deleteTopic, listActivity,
   listRoutes, createRoute, updateRoute, deleteRoute,
@@ -60,7 +61,8 @@ export default {
     const r = express.Router();
 
     r.get('/', async (req, res) => {
-      try { res.json(await listTopics()); }
+      const ctx = reqPadContext(req);
+      try { res.json(await listTopics(ctx)); }
       catch { res.status(500).json({ error: 'No se pudieron leer los temas.' }); }
     });
 
@@ -72,38 +74,43 @@ export default {
     });
 
     r.post('/', async (req, res) => {
+      const ctx = reqPadContext(req);
       try {
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'El tema necesita un título.' });
-        res.json({ topic: await createTopic(b) });
+        res.json({ topic: await createTopic(b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // ----- Rutas de aprendizaje (literales ANTES que la paramétrica /:id) -----
     r.get('/routes', async (req, res) => {
-      try { res.json({ routes: await listRoutes() }); }
+      const ctx = reqPadContext(req);
+      try { res.json({ routes: await listRoutes(ctx) }); }
       catch { res.status(500).json({ error: 'No se pudieron leer las rutas.' }); }
     });
 
     r.post('/routes', async (req, res) => {
+      const ctx = reqPadContext(req);
       try {
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'La ruta necesita un título.' });
-        res.json({ route: await createRoute(b) });
+        res.json({ route: await createRoute(b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/routes/:id/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ROUTE_RE.test(id)) return res.status(400).json({ error: 'Id de ruta inválido.' });
-      try { await deleteRoute(id); res.json({ ok: true }); }
+      try { await deleteRoute(id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/routes/:id', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ROUTE_RE.test(id)) return res.status(400).json({ error: 'Id de ruta inválido.' });
-      try { res.json({ route: await updateRoute(id, req.body || {}) }); }
+      try { res.json({ route: await updateRoute(id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
@@ -138,13 +145,14 @@ export default {
     // {force:true} en el body ignora todo esto y fuerza 'full' ("Forzar
     // regeneración completa"). Admin porque consume tokens (salvo el no-op).
     r.post('/:id/explain', async (req, res) => {
+      const ctx = reqPadContext(req);
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       try {
         const existing = readExplainJob(id);
         if (existing && isFreshRunning(existing)) return res.json({ id, ...jobResult(existing) });
-        const topic = await getTopic(id);
+        const topic = await getTopic(id, ctx);
         if (!topic) return res.status(404).json({ error: 'Tema inexistente.' });
         const force = !!req.body?.force;
         const check = checkStaleness(topic);
@@ -154,6 +162,7 @@ export default {
         const mode = (!force && topic.explanation) ? 'adapt' : 'full';
         writeExplainJob(id, {
           id, status: 'running', error: null, mode,
+          owner: principalOf(req)?.username || null,
           topic: {
             title: topic.title, area: topic.area, scope: topic.scope,
             notes: topic.notes, question: topic.question, contextoAdicional: contextoText(topic),
@@ -179,40 +188,44 @@ export default {
     // ----- Contexto adicional: LISTA de entradas (charlas IA + notas manuales) -----
     // Todo 0 tokens (edición determinística). AGREGAR una nota manual:
     r.post('/:id/context', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       try {
-        const topic = await addContexto(id, { text: String(req.body?.text ?? ''), source: 'manual' });
+        const topic = await addContexto(id, { text: String(req.body?.text ?? ''), source: 'manual' }, ctx);
         res.json({ topic });
       } catch (e) { res.status(e.notFound ? 404 : e.badInput ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // Borrar UNA entrada (literal /delete ANTES de la edición paramétrica).
     r.post('/:id/context/:cid/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id); const cid = String(req.params.cid);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
-      try { res.json({ topic: await deleteContextoEntry(id, cid) }); }
+      try { res.json({ topic: await deleteContextoEntry(id, cid, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // Editar UNA entrada.
     r.post('/:id/context/:cid', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id); const cid = String(req.params.cid);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
-      try { res.json({ topic: await updateContextoEntry(id, cid, String(req.body?.text ?? '')) }); }
+      try { res.json({ topic: await updateContextoEntry(id, cid, String(req.body?.text ?? ''), ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : e.badInput ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // Interpretar una transcripción con IA (consume tokens): dispara el runner
     // desacoplado, dedup por job determinístico (mismo tema+texto = mismo job).
     r.post('/:id/context-analyze', async (req, res) => {
+      const ctx = reqPadContext(req);
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       const transcript = String(req.body?.transcript ?? '').slice(0, MAX_TRANSCRIPT);
       if (transcript.trim().length < 20) return res.status(400).json({ error: 'Pegá una transcripción (mín. 20 caracteres).' });
       try {
-        const topic = await getTopic(id);
+        const topic = await getTopic(id, ctx);
         if (!topic) return res.status(404).json({ error: 'Tema inexistente.' });
         const jobId = contextJobId(id, transcript);
         const existing = readContextJob(jobId);
@@ -222,6 +235,7 @@ export default {
         const now = Date.now();
         writeContextJob(jobId, {
           id: jobId, topicId: id, itemTitle: topic.title, itemDesc: topic.notes,
+          owner: principalOf(req)?.username || null,
           transcript, status: 'running', result: null, rendered: null, error: null,
           startedAt: now, updatedAt: now,
         });
@@ -239,24 +253,27 @@ export default {
     });
 
     r.post('/:id/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
-      try { await deleteTopic(id); res.json({ ok: true }); }
+      try { await deleteTopic(id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
-      try { res.json({ topic: await updateTopic(id, req.body || {}) }); }
+      try { res.json({ topic: await updateTopic(id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.get('/:id', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       try {
-        const topic = await getTopic(id);
+        const topic = await getTopic(id, ctx);
         if (!topic) return res.status(404).json({ error: 'Tema inexistente.' });
         // explainCheck es DERIVADO (no se persiste): le dice al front si conviene
         // regenerar antes de que el usuario toque el botón.

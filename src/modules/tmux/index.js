@@ -31,6 +31,13 @@ const FMT = [
   '#{pane_current_path}',
 ].join('\t');
 
+function worldFromCwd(cwd) {
+  if (!cwd) return 'otros';
+  if (/tolkien/i.test(cwd)) return 'tolkien';
+  if (/claude-web-console/i.test(cwd)) return 'console';
+  return 'otros';
+}
+
 // Mapa sesión→panes del socket (para el estado por pane del observador).
 // Best-effort: si list-panes falla, se devuelve un mapa vacío y el estado cae
 // al mapeo por carpeta de siempre.
@@ -163,6 +170,43 @@ export default {
         res.json({ sessions: all });
       } catch {
         res.status(500).json({ error: 'No se pudo listar sesiones.' });
+      }
+    });
+
+    // Feed para la Vista Raw: sesiones tmux OWNED vivas + su texto de pane
+    // reciente (capture-pane). Excluye las vistas TUI ocultas de chats (cwct-)
+    // porque ya salen por su transcript. `isClaude` = tiene estado del observador
+    // (corre Claude Code) → el frontend las omite para no duplicar; las bash sí
+    // se muestran. Tope de 20 para no spawnear demasiados capture-pane.
+    r.get('/raw-feed', (req, res) => {
+      try {
+        const titles = loadTitles();
+        const out = [];
+        for (const sock of listSockets()) {
+          let sessions;
+          try { sessions = listSessionsForSocket(sock, { throwOnError: true }); } catch { continue; }
+          for (const s of sessions) {
+            if (!s.owned) continue;
+            if (s.name.startsWith('cwct-')) continue; // TUI oculta de chat → ya llueve por transcript
+            if (out.length >= 20) break;
+            if (!isValidSessionName(s.name)) continue;
+            let text = '';
+            try { text = runTmux(sock.path, ['capture-pane', '-p', '-t', s.name, '-S', '-30'], { throwOnError: false }) || ''; } catch { text = ''; }
+            out.push({
+              name: s.name,
+              socketName: s.socketName,
+              cwd: s.cwd,
+              world: worldFromCwd(s.cwd),
+              isClaude: !!s.state,
+              attached: s.attached,
+              customTitle: titles[titleKey(s.socketName, s.name)] || null,
+              text: text.slice(-4000),
+            });
+          }
+        }
+        res.json({ terminals: out });
+      } catch {
+        res.status(500).json({ error: 'No se pudo obtener el feed de terminales.' });
       }
     });
 

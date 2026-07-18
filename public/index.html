@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
+  <script>window.__CWC_BUILD__='__BUILD_ID__';</script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Claude Web Console</title>
   <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
@@ -20,44 +21,47 @@
   <script src="/vendor/marked/marked.min.js"></script>
   <!-- Chart.js (UMD local -> window.Chart) para las gráficas de tendencia del modal Uso -->
   <script src="/vendor/chartjs/chart.umd.js"></script>
-  <!-- Mermaid (solo distribuye ESM desde v10+, sin bundle IIFE como el resto de
-       estos vendors) para diagramas ```mermaid``` dentro del markdown del chat.
-       window.mermaidReady es la promesa que ui/markdown.js espera antes de
-       intentar renderizar (el script type=module se difiere, puede terminar
-       después de que llegue el primer mensaje). Tema: variables --cwc-* leídas
-       en caliente, nunca hex duplicado (convención del proyecto). -->
   <script type="module">
-    window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
-      const css = getComputedStyle(document.documentElement);
-      const v = (name) => css.getPropertyValue(name).trim();
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme: 'base',
-        themeVariables: {
-          background: v('--cwc-bg-elevated'),
-          primaryColor: v('--cwc-accent-bg'),
-          primaryTextColor: v('--cwc-text'),
-          primaryBorderColor: v('--cwc-accent'),
-          lineColor: v('--cwc-text-dim'),
-          secondaryColor: v('--cwc-bg-chip'),
-          tertiaryColor: v('--cwc-bg-hover'),
-          textColor: v('--cwc-text'),
-          fontFamily: v('--cwc-font-ui'),
-          nodeBorder: v('--cwc-border-strong'),
-          clusterBkg: v('--cwc-bg-panel'),
-          clusterBorder: v('--cwc-border'),
-          edgeLabelBackground: v('--cwc-bg-elevated'),
-          errorBkgColor: v('--cwc-danger'),
-          errorTextColor: v('--cwc-text'),
-        },
+    // Mermaid (3.7MB) se carga LAZY: solo cuando aparece el primer bloque
+    // ```mermaid``` real (ui/markdown.js llama window.__loadMermaid()). Antes
+    // se importaba en CADA carga de página aunque la sesión no viera ningún
+    // diagrama (PEND-621). Memoizado: la 1ra detección dispara el import, el
+    // resto reusa la misma promesa.
+    window.__loadMermaid = () => {
+      if (window.mermaidReady) return window.mermaidReady;
+      window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
+        const css = getComputedStyle(document.documentElement);
+        const v = (name) => css.getPropertyValue(name).trim();
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          themeVariables: {
+            background: v('--cwc-bg-elevated'),
+            primaryColor: v('--cwc-accent-bg'),
+            primaryTextColor: v('--cwc-text'),
+            primaryBorderColor: v('--cwc-accent'),
+            lineColor: v('--cwc-text-dim'),
+            secondaryColor: v('--cwc-bg-chip'),
+            tertiaryColor: v('--cwc-bg-hover'),
+            textColor: v('--cwc-text'),
+            fontFamily: v('--cwc-font-ui'),
+            nodeBorder: v('--cwc-border-strong'),
+            clusterBkg: v('--cwc-bg-panel'),
+            clusterBorder: v('--cwc-border'),
+            edgeLabelBackground: v('--cwc-bg-elevated'),
+            errorBkgColor: v('--cwc-danger'),
+            errorTextColor: v('--cwc-text'),
+          },
+        });
+        window.mermaid = mermaid;
+        return mermaid;
+      }).catch((err) => {
+        console.error('mermaid: no se pudo cargar el vendor', err);
+        return null;
       });
-      window.mermaid = mermaid;
-      return mermaid;
-    }).catch((err) => {
-      console.error('mermaid: no se pudo cargar el vendor', err);
-      return null;
-    });
+      return window.mermaidReady;
+    };
   </script>
 </head>
 <body>
@@ -136,6 +140,7 @@
             <span id="acct-user" class="acct-user only-expanded"></span>
             <a href="/archivos" class="btn-ghost btn--sm btn--icon" data-icon="folder" title="Explorador"></a>
             <a href="/raw" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="pulse" title="Vista Raw"></a>
+            <a href="/seguimientos" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="list" title="Seguimientos"></a>
             <span data-module="system"></span>
           </div>
         </footer>

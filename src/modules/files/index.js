@@ -1,6 +1,6 @@
 // modules/files/index.js — módulo de archivos (árbol, visor Y gestor completo).
 //
-// Interfaz estándar de módulo. Rutas HTTP (todas validan contra el home):
+// Interfaz estándar de módulo. Rutas HTTP (todas validan contra el root del request):
 //   GET  /api/files/list?path=&hidden=      -> entradas (con mtime)
 //   GET  /api/files/read?path=              -> contenido de texto (visor)
 //   GET  /api/files/download?path=          -> descarga un archivo
@@ -18,11 +18,13 @@ import archiver from 'archiver';
 import fs from 'node:fs/promises';
 import fss from 'node:fs';
 import path from 'node:path';
+import { principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
-import { resolveWithinHome } from '../../core/paths.js';
+import { resolveWithinRoot } from '../../core/paths.js';
 import {
   moveToTrash, listTrash, restoreFromTrash, purgeTrash, autoPurge, TRASH_DIRNAME,
 } from '../../core/trash.js';
+import { userFileRoot, hostUser } from '../../core/user-space.js';
 
 const ALWAYS_HIDDEN = new Set(['node_modules', '.git', 'dist', TRASH_DIRNAME]);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
@@ -68,23 +70,36 @@ function safeAttachmentName(name) {
   return n || 'file';
 }
 
-// resolveWithinHome() valida la ruta SOLO como string (no resuelve symlinks):
-// un symlink dentro del home que apunte AFUERA pasaba la validación y statSync
-// (que SÍ sigue symlinks) servía el contenido externo (hallazgo de salud
-// 2026-07-04). Este helper cierra el escape: fs.realpathSync resuelve TODOS
-// los symlinks (incluso en directorios intermedios) y se exige que la ruta
-// REAL siga cayendo dentro del home REAL antes de servir/descargar/archivar.
+// Root de archivos del usuario que hace el request: host → home completo
+// (retrocompat); inquilino → su workspace (confinado, sin acceso al home ajeno).
+function reqFileRoot(req) {
+  const username = (principalOf(req).username) || hostUser();
+  return userFileRoot(username);
+}
+
+// La resolución contra root valida la ruta SOLO como string (no resuelve
+// symlinks): un symlink dentro del root que apunte AFUERA pasaba la validación
+// y statSync (que SÍ sigue symlinks) servía el contenido externo (hallazgo de
+// salud 2026-07-04). Este helper cierra el escape: fs.realpathSync resuelve
+// TODOS los symlinks (incluso en directorios intermedios) y se exige que la
+// ruta REAL siga cayendo dentro del root REAL antes de servir/descargar/archivar.
 // Devuelve el stat (siguiendo el symlink, ya validado) o null si escapa;
 // propaga el throw (ENOENT) si la ruta no existe — mismo contrato que statSync.
-let cachedHomeReal = null;
-function homeReal() {
-  if (!cachedHomeReal) cachedHomeReal = fss.realpathSync(config.home);
-  return cachedHomeReal;
+// Cache del realpath por root (evita un realpathSync por request para el mismo root).
+const rootRealCache = new Map();
+function rootReal(root) {
+  let r = rootRealCache.get(root);
+  if (!r) { r = fss.realpathSync(root); rootRealCache.set(root, r); }
+  return r;
 }
-function statSafeSync(abs) {
+// Igual que antes pero contra el ROOT del usuario (no el home global): resuelve
+// TODOS los symlinks y exige que la ruta REAL caiga dentro del root REAL. Cierra
+// el escape por symlink hacia AFUERA del espacio del usuario. root default =
+// config.home (retrocompat para cualquier llamada interna sin req).
+function statSafeSync(abs, root = config.home) {
   const real = fss.realpathSync(abs); // ENOENT si no existe
-  const relFromHome = path.relative(homeReal(), real);
-  if (relFromHome.startsWith('..') || path.isAbsolute(relFromHome)) return null;
+  const relFromRoot = path.relative(rootReal(root), real);
+  if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) return null;
   return fss.statSync(abs);
 }
 
@@ -171,21 +186,23 @@ const badReq = (m) => Object.assign(new Error(m), { badRequest: true });
 const upload = multer({
   storage: multer.diskStorage({
     destination(req, file, cb) {
-      const dir = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const dir = resolveWithinRoot(root, req.query.path || '');
       if (!dir) return cb(badReq('Ruta inválida'));
       // Igual que mkdir/rename/trash: statSafeSync valida que la carpeta REAL
-      // (symlinks resueltos) siga dentro del home — statSync crudo seguía un
-      // symlink hacia afuera y multer ESCRIBÍA fuera del home (hallazgo de
+      // (symlinks resueltos) siga dentro del root — statSync crudo seguía un
+      // symlink hacia afuera y multer ESCRIBÍA fuera del root (hallazgo de
       // salud 2026-07-05, mismo vector ya cerrado en /list, /raw, /download).
       let st;
-      try { st = statSafeSync(dir); }
+      try { st = statSafeSync(dir, root); }
       catch { return cb(badReq('El destino no existe')); }
       if (!st) return cb(badReq('Ruta inválida'));
       if (!st.isDirectory()) return cb(badReq('El destino no es una carpeta'));
       cb(null, dir);
     },
     filename(req, file, cb) {
-      const dir = resolveWithinHome(req.query.path || '') || config.home;
+      const root = reqFileRoot(req);
+      const dir = resolveWithinRoot(root, req.query.path || '') || root;
       const raw = path.basename(file.originalname).replace(/[/\\]/g, '_') || 'archivo';
       cb(null, uniqueName(dir, raw));
     },
@@ -205,37 +222,39 @@ export default {
     const r = express.Router();
 
     r.get('/list', async (req, res) => {
-      const abs = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       const showHidden = req.query.hidden === '1';
       try {
         // statSafeSync (no lstat crudo): lstat resuelve los symlinks INTERMEDIOS
-        // de la ruta, así que un symlink del home hacia afuera permitía listar
+        // de la ruta, así que un symlink del root hacia afuera permitía listar
         // directorios externos (hallazgo de salud 2026-07-05). Mismo patrón que
         // /raw y /download.
         let st;
-        try { st = statSafeSync(abs); }
+        try { st = statSafeSync(abs, root); }
         catch { return res.status(404).json({ error: 'No se pudo listar el directorio.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isDirectory()) return res.status(400).json({ error: 'No es un directorio.' });
-        res.json({ path: path.relative(config.home, abs), entries: await listDir(abs, showHidden) });
+        res.json({ path: path.relative(root, abs), entries: await listDir(abs, showHidden) });
       } catch (e) {
         res.status(statusForError(e)).json({ error: 'No se pudo listar el directorio.' });
       }
     });
 
     r.get('/read', async (req, res) => {
-      const abs = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         // Igual que en /list: statSafeSync cierra el escape por symlink
         // (evil → /etc ⇒ /read?path=evil/passwd servía /etc/passwd).
         let st;
-        try { st = statSafeSync(abs); }
+        try { st = statSafeSync(abs, root); }
         catch { return res.status(404).json({ error: 'No se pudo leer el archivo.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo.' });
-        const meta = { path: path.relative(config.home, abs), name: path.basename(abs), size: st.size };
+        const meta = { path: path.relative(root, abs), name: path.basename(abs), size: st.size };
         if (st.size > MAX_READ_BYTES) return res.json({ ...meta, tooLarge: true, content: '' });
         const buf = await fs.readFile(abs);
         if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return res.json({ ...meta, binary: true, content: '' });
@@ -251,12 +270,13 @@ export default {
     // como descarga (attachment) para que el navegador no la ejecute/renderice
     // en el mismo origen que la consola. Ver nota de seguridad más arriba.
     r.get('/raw', (req, res) => {
-      const abs = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
         try {
-          st = statSafeSync(abs);
+          st = statSafeSync(abs, root);
         } catch { return res.status(404).json({ error: 'No existe.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo.' });
@@ -297,11 +317,12 @@ export default {
     });
 
     r.get('/download', (req, res) => {
-      const abs = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
-        try { st = statSafeSync(abs); }
+        try { st = statSafeSync(abs, root); }
         catch { return res.status(404).json({ error: 'No existe.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo (usá zip para carpetas).' });
@@ -314,11 +335,12 @@ export default {
     });
 
     r.get('/download-zip', (req, res) => {
-      const abs = resolveWithinHome(req.query.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
-        try { st = statSafeSync(abs); } catch { return res.status(404).json({ error: 'No existe.' }); }
+        try { st = statSafeSync(abs, root); } catch { return res.status(404).json({ error: 'No existe.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isDirectory()) return res.status(400).json({ error: 'No es una carpeta.' });
         const name = path.basename(abs) || 'home';
@@ -348,13 +370,14 @@ export default {
       if (!paths.length) return res.status(400).json({ error: 'Sin selección.' });
       if (paths.length > MAX_ZIP_ITEMS) return res.status(400).json({ error: `Demasiados ítems (máx. ${MAX_ZIP_ITEMS}).` });
       try {
+        const root = reqFileRoot(req);
         const items = [];
         const usedNames = new Set();
         for (const rel of paths) {
-          const abs = resolveWithinHome(rel);
+          const abs = resolveWithinRoot(root, rel);
           if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
           try {
-            const st = statSafeSync(abs);
+            const st = statSafeSync(abs, root);
             if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
             const isDir = st.isDirectory();
             const name = uniqueZipName(usedNames, path.basename(abs));
@@ -397,15 +420,16 @@ export default {
     });
 
     r.post('/mkdir', (req, res) => {
-      const parent = resolveWithinHome(req.body?.path || '');
+      const root = reqFileRoot(req);
+      const parent = resolveWithinRoot(root, req.body?.path || '');
       const n = safeName(req.body?.name);
       if (!parent) return res.status(400).json({ error: 'Ruta inválida.' });
       if (!n) return res.status(400).json({ error: 'Nombre inválido.' });
-      // Igual que en /raw y /download: resolveWithinHome solo valida el string,
+      // Igual que en /raw y /download: la resolución solo valida el string,
       // así que confirmamos que la carpeta padre REAL (symlinks resueltos)
-      // sigue dentro del home antes de crear nada ahí.
+      // sigue dentro del root antes de crear nada ahí.
       let pst;
-      try { pst = statSafeSync(parent); } catch { return res.status(400).json({ error: 'La carpeta no existe.' }); }
+      try { pst = statSafeSync(parent, root); } catch { return res.status(400).json({ error: 'La carpeta no existe.' }); }
       if (!pst || !pst.isDirectory()) return res.status(400).json({ error: 'Ruta inválida.' });
       try { fss.mkdirSync(path.join(parent, n)); res.json({ ok: true }); }
       catch (e) {
@@ -415,14 +439,15 @@ export default {
     });
 
     r.post('/rename', (req, res) => {
-      const abs = resolveWithinHome(req.body?.path || '');
+      const root = reqFileRoot(req);
+      const abs = resolveWithinRoot(root, req.body?.path || '');
       const n = safeName(req.body?.newName);
-      if (!abs || path.resolve(abs) === config.home) return res.status(400).json({ error: 'Ruta inválida.' });
+      if (!abs || path.resolve(abs) === root) return res.status(400).json({ error: 'Ruta inválida.' });
       if (!n) return res.status(400).json({ error: 'Nombre inválido.' });
       // Defensa contra symlink de escape: la carpeta contenedora REAL debe
-      // seguir dentro del home antes de tocar la entrada de directorio.
+      // seguir dentro del root antes de tocar la entrada de directorio.
       let pst;
-      try { pst = statSafeSync(path.dirname(abs)); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
+      try { pst = statSafeSync(path.dirname(abs), root); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
       const target = path.join(path.dirname(abs), n);
       if (fss.existsSync(target)) return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
@@ -456,7 +481,7 @@ export default {
         } else {
           fss.renameSync(abs, target);
         }
-        res.json({ ok: true, path: path.relative(config.home, target) });
+        res.json({ ok: true, path: path.relative(root, target) });
       } catch (e) {
         // Misma condición de carrera (destino ya existe) que /mkdir → mismo 409.
         if (e.code === 'EEXIST') return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
@@ -466,14 +491,15 @@ export default {
 
     // --- Papelera ---
     r.post('/trash', (req, res) => {
+      const root = reqFileRoot(req);
       const rel = req.body?.path || '';
-      const abs = resolveWithinHome(rel);
-      if (!abs || path.resolve(abs) === config.home) return res.status(400).json({ error: 'Ruta inválida.' });
-      // Misma defensa: la carpeta contenedora REAL debe seguir dentro del home
+      const abs = resolveWithinRoot(root, rel);
+      if (!abs || path.resolve(abs) === root) return res.status(400).json({ error: 'Ruta inválida.' });
+      // Misma defensa: la carpeta contenedora REAL debe seguir dentro del root
       // antes de mover la entrada (si no, un symlink intermedio podría hacer
-      // que se mueva contenido externo hacia adentro del home).
+      // que se mueva contenido externo hacia adentro del root).
       let pst;
-      try { pst = statSafeSync(path.dirname(abs)); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
+      try { pst = statSafeSync(path.dirname(abs), root); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
       try { res.json({ ok: true, id: moveToTrash(abs, rel) }); }
       catch (e) { res.status(statusForError(e)).json({ error: 'No se pudo mover a la papelera.' }); }
@@ -486,15 +512,16 @@ export default {
 
     r.post('/trash/restore', (req, res) => {
       try {
+        const root = reqFileRoot(req);
         // Defensa contra symlink de escape: a diferencia de mkdir/rename/trash
         // (que validan la carpeta contenedora REAL antes de mutar), restoreFromTrash
         // hacía mkdirSync+renameSync directo sobre un target derivado de
-        // resolveWithinHome (validación de string, no de symlinks). Si el
+        // una resolución de string (validación de string, no de symlinks). Si el
         // `originalRel` guardado pasó a apuntar dentro de un symlink hacia
-        // afuera del home entre el trash y el restore, la restauración movería
-        // contenido fuera del home. Igual que statSafeSync: subimos hasta el
+        // afuera del root entre el trash y el restore, la restauración movería
+        // contenido fuera del root. Igual que statSafeSync: subimos hasta el
         // ancestro existente más cercano de la carpeta destino y confirmamos
-        // que su ruta REAL sigue dentro del home real antes de crear/mover nada.
+        // que su ruta REAL sigue dentro del root real antes de crear/mover nada.
         const finalRel = restoreFromTrash(req.body?.id, (containerDir) => {
           let cur = containerDir;
           while (!fss.existsSync(cur)) {
@@ -503,9 +530,9 @@ export default {
             cur = parent;
           }
           const real = fss.realpathSync(cur);
-          const relFromHome = path.relative(homeReal(), real);
-          if (relFromHome.startsWith('..') || path.isAbsolute(relFromHome)) {
-            const err = new Error('La carpeta destino escapa del home.');
+          const relFromRoot = path.relative(rootReal(root), real);
+          if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
+            const err = new Error('La carpeta destino escapa del root.');
             err.badRequest = true;
             throw err;
           }

@@ -1476,7 +1476,15 @@ export class ChatTab {
   }
 
   _scroll() {
-    this.msgsEl.scrollTop = this.msgsEl.scrollHeight;
+    // Coalesce: durante el streaming llegan muchos _scroll() por segundo; sin
+    // esto cada token forzaría un reflow (lee scrollHeight). Con rAF se hace a
+    // lo sumo UNA vez por frame.
+    if (this._scrollPending) return;
+    this._scrollPending = true;
+    requestAnimationFrame(() => {
+      this._scrollPending = false;
+      this.msgsEl.scrollTop = this.msgsEl.scrollHeight;
+    });
   }
 
   focus() {

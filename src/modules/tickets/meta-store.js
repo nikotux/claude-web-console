@@ -80,8 +80,8 @@ function padError(action, r) {
 // Lectura null-safe de la metadata de un ítem (findItemByTitle ya devuelve
 // null best-effort si Pad falla o no hay match → blankEntry() en ambos
 // casos, igual que el `{}` silencioso de la versión file-based).
-export async function getMeta(id) {
-  const item = await findItemByTitle(COLLECTION, keyOf(id));
+export async function getMeta(id, ctx = null) {
+  const item = await findItemByTitle(COLLECTION, keyOf(id), { ctx });
   if (!item) return blankEntry();
   return entryFromItem(item);
 }
@@ -89,33 +89,33 @@ export async function getMeta(id) {
 // Guardar/editar el contexto adicional (texto interpretado por la IA o
 // edición manual del usuario). Auto-guardado por el runner al terminar la
 // interpretación. Read-modify-write: nunca pisa el `historico` existente.
-export async function saveContexto(id, text) {
+export async function saveContexto(id, text, ctx = null) {
   const key = keyOf(id);
   const clean = String(text || '').slice(0, CONTEXT_MAX);
   const at = Date.now();
-  const item = await findItemByTitle(COLLECTION, key);
+  const item = await findItemByTitle(COLLECTION, key, { ctx });
   if (!item) {
     const r = await createItem(COLLECTION, {
       title: key,
       fields: { ticketKey: key, contexto: { text: clean, at }, historico: [] },
-    });
+    }, { ctx });
     if (!r.ok) throw padError('saveContexto', r);
-    return getMeta(id);
+    return getMeta(id, ctx);
   }
   const nextFields = { ...parseFields(item), ticketKey: key, contexto: { text: clean, at } };
-  const r = await updateItem(item.ref, { fields: nextFields });
+  const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
   if (!r.ok) throw padError('saveContexto', r);
-  return getMeta(id);
+  return getMeta(id, ctx);
 }
 
-export async function clearContexto(id) {
+export async function clearContexto(id, ctx = null) {
   const key = keyOf(id);
-  const item = await findItemByTitle(COLLECTION, key);
+  const item = await findItemByTitle(COLLECTION, key, { ctx });
   if (!item) return blankEntry(); // nada que borrar: no crea un ítem vacío
   const nextFields = { ...parseFields(item), ticketKey: key, contexto: null };
-  const r = await updateItem(item.ref, { fields: nextFields });
+  const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
   if (!r.ok) throw padError('clearContexto', r);
-  return getMeta(id);
+  return getMeta(id, ctx);
 }
 
 // Agregar una entrada al histórico del trabajo (al cerrar un chat del ítem).
@@ -123,7 +123,7 @@ export async function clearContexto(id) {
 // el cierre de un chat) — el propio try/catch de acá absorbe cualquier falla
 // de Pad; el caller (chat/index.js) además envuelve el await en su propio
 // try/catch como red de seguridad adicional.
-export async function appendHistorico(id, { sessionId, resumen, files }) {
+export async function appendHistorico(id, { sessionId, resumen, files }, ctx = null) {
   if (!resumen && !(files && files.length)) return; // nada útil que guardar
   const key = keyOf(id);
   const entry = {
@@ -133,19 +133,19 @@ export async function appendHistorico(id, { sessionId, resumen, files }) {
     files: Array.isArray(files) ? files.slice(0, 60).map((f) => String(f).slice(0, 300)) : [],
   };
   try {
-    const item = await findItemByTitle(COLLECTION, key);
+    const item = await findItemByTitle(COLLECTION, key, { ctx });
     if (!item) {
       const r = await createItem(COLLECTION, {
         title: key,
         fields: { ticketKey: key, contexto: null, historico: [entry] },
-      });
+      }, { ctx });
       if (!r.ok) console.error('[tickets] no pude crear item de histórico en Pad:', r.error);
       return;
     }
     const f = parseFields(item);
     const historico = Array.isArray(f.historico) ? [...f.historico, entry] : [entry];
     if (historico.length > HISTORY_MAX) historico.splice(0, historico.length - HISTORY_MAX);
-    const r = await updateItem(item.ref, { fields: { ...f, ticketKey: key, historico } });
+    const r = await updateItem(item.ref, { fields: { ...f, ticketKey: key, historico } }, { ctx });
     if (!r.ok) console.error('[tickets] no pude actualizar histórico en Pad:', r.error);
   } catch (err) {
     console.error('[tickets] no pude persistir histórico en Pad:', err?.message || err);

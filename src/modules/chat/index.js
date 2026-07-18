@@ -59,7 +59,12 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
-import { clampToHome } from '../../core/paths.js';
+import { principalOf } from '../../core/auth.js';
+import { padContextForUser } from '../../core/pad-context.js';
+import { clampToHome, clampToRoot } from '../../core/paths.js';
+import { userFileRoot, userClaudeDir, hostUser } from '../../core/user-space.js';
+import { readPrefs } from '../../core/user-prefs.js';
+import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
@@ -86,6 +91,11 @@ import { uniqueName, registerNameProvider } from '../../core/session-names.js';
 import * as bus from '../../core/bus.js';
 import { logDelivery } from '../../core/interfono-log.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
+
+// SP9-5 (TASK-671): tope de sesiones VIVAS concurrentes por usuario (equidad
+// multi-tenant). Los admin quedan exentos (ver el handler POST /create). Config
+// por env; un inquilino que llega al tope debe cerrar/archivar una para abrir otra.
+const MAX_SESSIONS_PER_USER = Number(process.env.CWC_MAX_SESSIONS_PER_USER) || 20;
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
 
@@ -313,7 +323,7 @@ async function judgeAnswer({ cwd, currentModel, userText, answerText }) {
 }
 
 // Persistencia de conversaciones abiertas (para sobrevivir reinicios del server).
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+const DATA_DIR = resolveDataDir();
 const CHATS_FILE = path.join(DATA_DIR, 'chats.json');
 
 // Registro DURABLE append-only de TODOS los sessionIds que ALGUNA VEZ
@@ -351,8 +361,10 @@ const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
 const SWITCH_CTRLC_MS = 8000; // T2: esperar a que `claude` salga tras Ctrl-C x2
 const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 
-// Anti traversal: resuelve contra el home y cae a él si escapa (core/paths.js).
-const safeCwd = clampToHome;
+// Clampea el cwd de un chat al root de archivos de SU dueño (host → home
+// completo; inquilino → su workspace). Sin owner ⇒ host (retrocompat: las
+// llamadas viejas de 1 argumento siguen clampeando al home).
+const safeCwd = (cwd, owner) => clampToRoot(userFileRoot(owner || hostUser()), cwd);
 
 // ===== Comandos slash (Fase 8) =====
 // El system/init del SDK llega recién con el PRIMER mensaje de cada
@@ -692,6 +704,8 @@ class Chat {
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
     this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
+    this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
+    this.owner = null;        // multi-tenant (N6): username del usuario dueño (de principalOf al crear). null = host/admin. Persiste. Gobierna el aislamiento del runner (runner-link.spawnRunner).
     this.viewMode = 'chat';   // chat | switching | tui
     this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
@@ -777,6 +791,7 @@ class Chat {
         // claude:<sessionId> — mismo que _busHandle(). Ahora SIEMPRE lo conocemos
         // (sessionId nace en create()), así hasta el 1er arranque sale con from real.
         selfHandle: sid ? `claude:${sid}` : null,
+        owner: this.owner, // multi-tenant (N6): host → entorno completo; inquilino → env limpio aislado + su token
       });
     } catch (err) {
       this._push({ type: 'error', message: `No pude lanzar el motor: ${String(err?.message || err).slice(0, 200)}` });
@@ -1760,10 +1775,12 @@ class Chat {
       const key = this.ticket.number;
       const cwd = this.cwd;
       const sid = this.sessionId;
+      const owner = this.owner || null;
       setTimeout(async () => {
         try {
           const work = extractSessionWork(cwd, sid);
-          if (work) await appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files });
+          const ctx = padContextForUser(owner);
+          if (work) await appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files }, ctx);
         } catch (err) { console.error('[chat] no pude guardar histórico del ticket:', err?.message); }
       }, 2000).unref();
     }
@@ -1783,10 +1800,12 @@ class Chat {
       const lid = this.learningId;
       const cwd = this.cwd;
       const sid = this.sessionId;
+      const owner = this.owner || null;
       setTimeout(async () => {
         try {
           const work = extractSessionWork(cwd, sid);
-          if (work) await appendLearningChatContext(lid, { summary: work.summary, files: work.files });
+          const ctx = padContextForUser(owner);
+          if (work) await appendLearningChatContext(lid, { summary: work.summary, files: work.files }, ctx);
         } catch (err) { console.error('[chat] no pude guardar contexto de aprendizaje:', err?.message); }
       }, 2000).unref();
     }
@@ -1804,8 +1823,9 @@ class Chat {
       const title = this.title;
       const ticketNumber = this.ticket?.number || null;
       const learningId = this.learningId || null;
+      const owner = this.owner || null;
       setTimeout(() => {
-        queueRetroDistill({ cwd, sessionId: sid, title, ticketNumber, learningId })
+        queueRetroDistill({ cwd, sessionId: sid, title, ticketNumber, learningId, owner })
           .catch((err) => console.error('[chat] no pude encolar mejora continua:', err?.message));
       }, 2000).unref();
     }
@@ -1948,6 +1968,8 @@ class Chat {
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
+      limbo: this.limbo, // 🌗 sesión-Limbo → grupo "Limbo" (alto riesgo) en Sesiones
+      owner: this.owner || null, // multi-tenant (N6)
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
@@ -2029,7 +2051,7 @@ class ChatManager {
     }
   }
 
-  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, limbo = false, owner = null }) {
     const id = `c${process.pid}-${++this._seq}`;
     // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
     // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
@@ -2044,6 +2066,8 @@ class ChatManager {
     const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
     chat.onUpdate = () => this.persist();
     chat.packageRef = nextPackageRef(); // F2(b): ref estable del paquete (sobrevive moves)
+    chat.limbo = !!limbo; // 🌗 sesión-Limbo (alto riesgo, ambos mundos) — dashboard Seguimientos
+    chat.owner = owner || null; // multi-tenant (N6): dueño de la conversación → aislamiento del runner
     chat._syncPackage('active', 'created');
     chat.start();
     this.chats.set(id, chat);
@@ -2070,7 +2094,7 @@ class ChatManager {
     if (!chat.sessionId || !UUID_RE.test(chat.sessionId)) {
       return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
     }
-    const dest = safeCwd(destCwd);
+    const dest = safeCwd(destCwd, chat.owner);
     const fromCwd = chat.cwd;
     if (path.resolve(dest) === path.resolve(fromCwd)) {
       return { ok: false, code: 400, error: 'El destino es el mismo mundo/carpeta de origen.' };
@@ -2123,6 +2147,8 @@ class ChatManager {
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
         packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
+        limbo: c.limbo || false, // 🌗 sesión-Limbo (alto riesgo)
+        owner: c.owner || null, // multi-tenant (N6)
         ticket: c.ticket || null,
         learningId: c.learningId || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
@@ -2168,7 +2194,7 @@ class ChatManager {
     for (const s of saved) {
       if (!s?.sessionId || !UUID_RE.test(s.sessionId) || this.chats.has(s.id)) continue;
       const chat = new Chat({
-        id: s.id, cwd: safeCwd(s.cwd), model: s.model || null,
+        id: s.id, cwd: safeCwd(s.cwd, s.owner), model: s.model || null,
         permissionMode: PERMISSION_MODES.has(s.permissionMode) ? s.permissionMode : 'default',
         resume: s.sessionId,
       });
@@ -2179,6 +2205,8 @@ class ChatManager {
       chat.lastActivity = s.lastActivity || Date.now();
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
+      chat.owner = s.owner || null; // multi-tenant (N6)
+      if (s.limbo) chat.limbo = true; // 🌗 sesión-Limbo (alto riesgo)
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
       // infirió un valor razonable a partir de `model`, pero solo el campo
       // explícito distingue "elegí Sonnet a mano" de "AutoTux está en Sonnet
@@ -2264,10 +2292,42 @@ class ChatManager {
   }
 
   get(id) { return this.chats.get(id); }
-  list() { return [...this.chats.values()].filter((c) => !c.closed).map((c) => c.info()); }
+
+  // SP9-5 (TASK-671): cuenta las conversaciones VIVAS (no cerradas ni archivadas)
+  // de un dueño, para el tope de sesiones por-usuario. Una TUI (alive=false) también
+  // ocupa recursos → cuenta igual (solo excluye closed/archived).
+  countLiveByOwner(owner) {
+    let n = 0;
+    for (const c of this.chats.values()) {
+      if (!c.closed && !c.archived && c.owner === owner) n += 1;
+    }
+    return n;
+  }
+
+  list(principal) {
+    const all = [...this.chats.values()].filter((c) => !c.closed);
+    const visible = (principal && principal.admin)
+      ? all
+      : all.filter((c) => c.owner === (principal ? principal.username : null));
+    return visible.map((c) => c.info());
+  }
 }
 
 const manager = new ChatManager();
+// Resuelve un chat SOLO si el usuario del request es su dueño (o es admin).
+// Un no-dueño (o inexistente) devuelve null → el handler responde 404, sin
+// revelar que el chat existe. Núcleo del filtrado por dueño (N6-B multi-tenant).
+function ownedChat(req, id) {
+  const chat = manager.get(id);
+  if (!chat) return null;
+  const p = principalOf(req);
+  if (p.admin) return chat;                    // admin ve/opera todo
+  if (chat.owner === p.username) return chat;  // el dueño
+  return null;                                 // ajeno → como si no existiera
+}
+// Expuesto para el dashboard "Seguimientos" (F3): lanzar una SESIÓN de
+// resolución con el contexto de un frente (bucle session-céntrico de PLAN-553).
+export { manager };
 
 // Proveedor de nombres para el uniquificador (core/session-names.js): los
 // títulos de las conversaciones ABIERTAS (los cerrados liberan su nombre).
@@ -2301,10 +2361,24 @@ export default {
       if (resume != null && !UUID_RE.test(resume)) {
         return res.status(400).json({ error: 'Sesión a retomar inválida.' });
       }
+      const principal = principalOf(req);
+      const owner = principal.username;
+      // SP9-5 (TASK-671): tope de sesiones vivas por-usuario (admin exento).
+      if (!principal.admin) {
+        const live = manager.countLiveByOwner(owner);
+        if (live >= MAX_SESSIONS_PER_USER) {
+          return res.status(429).json({ error: `Llegaste al máximo de ${MAX_SESSIONS_PER_USER} sesiones abiertas. Cerrá o archivá alguna para abrir otra.` });
+        }
+      }
+      const prefs = readPrefs(owner);
+      // Default per-user cuando el body NO especifica (el body explícito gana).
+      let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'auto');
+      if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'auto'; // defensivo
+      const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
       const chat = manager.create({
-        cwd: safeCwd(cwd),
-        model: model || 'auto',
-        permissionMode: permissionMode || 'default',
+        cwd: safeCwd(cwd, owner),
+        model: modelChoice,
+        permissionMode: modeChoice,
         resume: resume || null,
         title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
         // Vínculo al bug de Desk: al cerrar la conversación deja el registro
@@ -2315,17 +2389,23 @@ export default {
         // Vínculo a un tema de Aprendizaje: al cerrar el chat "Profundizar",
         // deja un resumen como entrada 'chat' del tema (write-back, módulo learning).
         learningId: /^TDA-\d+$/.test(String(learningId || '')) ? String(learningId) : null,
+        owner,
       });
+      // Default de effort per-user: sólo para modelo FIJO (auto/tandem lo manejan solos).
+      if (prefs.defaultEffort && prefs.defaultEffort !== 'auto' && modelChoice !== 'auto' && modelChoice !== 'tandem') {
+        try { chat.setEffort(prefs.defaultEffort); } catch { /* best-effort */ }
+      }
       res.json({ chat: chat.info() });
     });
 
-    r.get('/list', (req, res) => res.json({ chats: manager.list() }));
+    r.get('/list', (req, res) => res.json({ chats: manager.list(principalOf(req)) }));
 
     // Conversaciones PASADAS de una carpeta (para "Retomar" del lanzador:
     // muestra 2 y el resto vive en el modal "Ver más", hasta 10 en total).
     r.get('/history', (req, res) => {
-      const cwdAbs = safeCwd(req.query.cwd || '');
-      const dir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwdAbs));
+      const cwdAbs = safeCwd(req.query.cwd || '', principalOf(req).username);
+      const _owner = principalOf(req).username || hostUser();
+      const dir = path.join(userClaudeDir(_owner), 'projects', encodeCwd(cwdAbs));
       let files = [];
       try {
         files = fss.readdirSync(dir)
@@ -2364,7 +2444,7 @@ export default {
     // aprobar/denegar desde cualquier pantalla). Mismo camino que el WS
     // (answerPermission → runner 'perm'); el runner ignora ids ya resueltos.
     r.post('/permission', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const permId = String(req.body?.permId || '');
       if (!/^p\d{1,10}$/.test(permId)) return res.status(400).json({ error: 'Permiso inválido.' });
@@ -2377,7 +2457,7 @@ export default {
     });
 
     r.post('/close', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       chat.close();
       manager.persist();
@@ -2418,13 +2498,13 @@ export default {
         return res.status(409).json({ error: 'No pude cerrar Claude en la terminal (sigue corriendo). No se abre el chat: cerralo a mano y reintentá.' });
       }
       // La TUI murió verificada: abrir la conversación sobre la MISMA sesión.
-      const chat = manager.create({ cwd: term.cwd, model: null, permissionMode: 'default', resume: sessionId });
+      const chat = manager.create({ cwd: term.cwd, model: null, permissionMode: 'default', resume: sessionId, owner: principalOf(req).username });
       res.json({ ok: true, chat: chat.info() });
     });
 
     // Renombrar conversación (para la tarjeta y la cabecera).
     r.post('/title', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const title = String(req.body?.title ?? '').trim().slice(0, 60);
       chat.title = title || path.basename(chat.cwd) || '~';
@@ -2434,7 +2514,7 @@ export default {
 
     // Traspaso Chat <-> TUI de UNA conversación (secuencial y verificado).
     r.post('/mode', async (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const target = req.body?.mode;
       if (target !== 'chat' && target !== 'tui') {
@@ -2455,7 +2535,7 @@ export default {
     // Cambia la ELECCIÓN de modelo de una conversación — AutoTux (router,
     // 'auto') o un modelo FORZADO (en vivo o para el próximo arranque).
     r.post('/model', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const model = req.body?.model;
       if (model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
@@ -2502,7 +2582,7 @@ export default {
     // Consentimiento del juez AutoMix (D1): sube un escalón y reintenta el
     // último pedido. Lo dispara el botón "Reintentar en <modelo>" del banner.
     r.post('/redo', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const ok = chat.redo();
       if (!ok) return res.status(400).json({ error: 'No se puede reintentar (no es AutoTux o ya está en el modelo más fuerte).' });
@@ -2513,7 +2593,7 @@ export default {
     // Endpoint dedicado para fijar SOLO el esfuerzo (eje thinking effort). Útil
     // si la UI quiere cambiar el effort sin re-tocar el modelo.
     r.post('/effort', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const effort = req.body?.effort;
       if (effort !== null && effort !== 'auto' && !EFFORT_LEVELS.includes(effort)) {
@@ -2527,7 +2607,7 @@ export default {
     // Reabre el motor de una conversación (mata el runner viejo y re-spawnea
     // uno fresco sobre la misma sesión) para que tome cambios de código nuevos.
     r.post('/reopen', async (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       let result;
       try {
@@ -2547,6 +2627,8 @@ export default {
     // clampToHome la valida). 0 tokens (fork/relocate son de disco); el motor
     // destino arranca como cualquier chat. Devuelve el chat DESTINO nuevo.
     r.post('/handoff', async (req, res) => {
+      const _pre = ownedChat(req, req.body?.id);
+      if (!_pre) return res.status(404).json({ error: 'Conversación inexistente.' });
       const destCwd = req.body?.cwd;
       if (typeof destCwd !== 'string' || !destCwd.trim()) {
         return res.status(400).json({ error: 'Falta la carpeta/mundo destino.' });
@@ -2566,7 +2648,7 @@ export default {
 
     // F3: archivar (aparcar revivible) una conversación — no la cierra ni borra.
     r.post('/archive', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       if (chat.closed) return res.status(409).json({ error: 'La conversación está cerrada.' });
       chat.archive();
@@ -2577,7 +2659,7 @@ export default {
     // F3: revivir una conversación archivada (lazy: la des-archiva; el próximo
     // uso la reanuda con resume). Devuelve el chat para refrescar la tarjeta.
     r.post('/revive', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const result = chat.revive();
       if (!result.ok) return res.status(409).json({ error: result.error });
@@ -2621,7 +2703,7 @@ export default {
     // mensajes pendientes como un turno (despierta el chat si estaba dormido);
     // action='dismiss' los marca entregados sin actuar (limpia el aviso).
     r.post('/interfono', (req, res) => {
-      const chat = manager.get(req.body?.id);
+      const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const action = req.body?.action;
       if (action !== 'deliver' && action !== 'dismiss') {
@@ -2639,7 +2721,7 @@ export default {
     // enviar el mensaje (chat/attachments.js). Sube el composer al elegir/pegar/
     // arrastrar; devuelve {name,type,mime,size} — la referencia que viaja luego.
     r.post('/attachment', (req, res) => {
-      const chat = manager.get(req.query?.id);
+      const chat = ownedChat(req, req.query?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       attachUpload.single('file')(req, res, (err) => {
         if (err) {
@@ -2659,7 +2741,7 @@ export default {
     // attachPath confina el nombre a la carpeta del chat (basename saneado +
     // padre exacto). Imágenes/PDF inline; el resto forzado a descarga; nosniff.
     r.get('/attachment', (req, res) => {
-      const chat = manager.get(req.query?.id);
+      const chat = ownedChat(req, req.query?.id);
       if (!chat) return res.status(404).end();
       const name = String(req.query?.name || '');
       const abs = attachPath(req.query?.id, name);
@@ -2683,7 +2765,7 @@ export default {
     // ⋯ de Sesiones). Crearla si no existía deja la ventana lista aunque el
     // chat todavía no tenga adjuntos.
     r.get('/folder', (req, res) => {
-      const chat = manager.get(req.query?.id);
+      const chat = ownedChat(req, req.query?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const dir = chatAttachDir(chat.id);
       const rel = attachRelForExplorer(chat.id);
@@ -2701,6 +2783,12 @@ export default {
       const chat = manager.get(url.searchParams.get('id'));
       if (!chat) {
         ws.send(JSON.stringify({ type: 'error', message: 'Conversación inexistente.' }));
+        ws.close();
+        return;
+      }
+      const p = principalOf(req);
+      if (!p.admin && chat.owner !== p.username) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Conversación inexistente.' })); // no revela existencia
         ws.close();
         return;
       }

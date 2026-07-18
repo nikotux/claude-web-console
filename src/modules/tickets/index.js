@@ -9,6 +9,7 @@
 // sin golpear Zoho en cada apertura.
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { reqPadContext } from '../../core/pad-context.js';
 import { getTicketState, listDepartments } from './desk-mcp-client.js';
 import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolvedInfo } from './sources.js';
 import { buildResolved } from './views.js';
@@ -45,11 +46,12 @@ export default {
     r.get('/ticket/:id', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
+        const ctx = reqPadContext(req);
         const actor = actorOf(req);
         const you = actor?.username || null;
         const youAdmin = !!actor?.admin;
         const snap = getSnapshot();
-        const meta = await getMeta(req.params.id); // Contexto adicional + Histórico del trabajo (nuestros, Pad local)
+        const meta = await getMeta(req.params.id, ctx); // Contexto adicional + Histórico del trabajo (nuestros, Pad local)
         const cached = snap?.ticketsById?.[String(req.params.id)];
         if (cached) return res.json({ ...withClaim(cached), meta, you, youAdmin, cached: true, generatedAt: snap.generatedAt });
         // Fuente de consulta uniforme (Fix 3, 2026-07-10): si es un ticket CERRADO
@@ -71,12 +73,13 @@ export default {
     r.get('/pr/:number', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
+        const ctx = reqPadContext(req);
         const actor = actorOf(req);
         const you = actor?.username || null;
         const youAdmin = !!actor?.admin;
         const num = String(req.params.number).replace(/[^\d]/g, '');
         const workingBy = getActiveClaim(`pr:${num}`); // claims de PR van con prefijo pr:
-        const meta = await getMeta(`pr:${num}`);        // Contexto adicional + Histórico (mismo prefijo, Pad local)
+        const meta = await getMeta(`pr:${num}`, ctx);   // Contexto adicional + Histórico (mismo prefijo, Pad local)
         const snap = getSnapshot();
         const cached = snap?.prDetailsById?.[num];
         if (cached) return res.json({ pr: { ...cached, workingBy, meta }, you, youAdmin, error: null, cached: true, generatedAt: snap.generatedAt });
@@ -237,6 +240,7 @@ export default {
       const now = Date.now();
       writeJob(id, {
         id, key,
+        owner: principalOf(req)?.username || null,
         itemTitle: String(req.body?.itemTitle ?? '').slice(0, 300),
         itemDesc: String(req.body?.itemDesc ?? '').slice(0, 4000),
         transcript,
@@ -263,8 +267,9 @@ export default {
       const key = keyOf(req.body?.key);
       if (!key) return res.status(400).json({ error: 'Falta la clave del ítem.' });
       try {
+        const ctx = reqPadContext(req);
         const text = String(req.body?.text ?? '');
-        const meta = text.trim() ? await saveContexto(key, text) : await clearContexto(key);
+        const meta = text.trim() ? await saveContexto(key, text, ctx) : await clearContexto(key, ctx);
         res.json({ ok: true, meta });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 300) });
@@ -274,7 +279,8 @@ export default {
     r.get('/meta/:key', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        res.json({ meta: await getMeta(keyOf(req.params.key)) });
+        const ctx = reqPadContext(req);
+        res.json({ meta: await getMeta(keyOf(req.params.key), ctx) });
       } catch (err) {
         res.status(500).json({ error: String(err?.message || err).slice(0, 300) });
       }

@@ -16,6 +16,7 @@ import {
   readJob, writeJob,
 } from '../src/modules/tickets/context-analyze-shared.js';
 import { saveContexto } from '../src/modules/tickets/meta-store.js';
+import { padContextForUser } from '../src/core/pad-context.js';
 import { textOnlyQuery } from '../src/core/text-only-query.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
@@ -43,12 +44,13 @@ async function main() {
   if (!id) { log('falta el id del job.'); process.exit(1); return; }
   const job = readJob(id);
   if (!job) { log(`job ${id} inexistente (¿se limpió antes de arrancar?).`); process.exit(0); return; }
+  const ctx = padContextForUser(job.owner || null);
   try {
     const result = await runAnalysis(job);
     const rendered = renderContextText(result);
     // AUTO-GUARDAR en meta-store: aparece en la sección "Contexto adicional" del
     // ítem sin un paso extra (editable/borrable después desde la UI).
-    if (job.key) { try { await saveContexto(job.key, rendered); } catch (e) { log('no pude auto-guardar:', e?.message); } }
+    if (job.key) { try { await saveContexto(job.key, rendered, ctx); } catch (e) { log('no pude auto-guardar:', e?.message); } }
     writeJob(id, { ...job, status: 'done', result, rendered, error: null, updatedAt: Date.now() });
     log(`OK job ${id} (key ${job.key}): ${result.puntosClave.length} punto(s), ${result.acuerdos.length} acuerdo(s)`);
   } catch (err) {

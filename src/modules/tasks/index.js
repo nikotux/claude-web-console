@@ -32,10 +32,11 @@
 // no las capture como id.
 import express from 'express';
 import { isAdmin } from '../../core/auth.js';
+import { reqPadContext } from '../../core/pad-context.js';
 import {
   listTasks, listCounts, createTask, updateTask, deleteTask, createFromAudio,
   listActivity, listPlans, createPlan, updatePlan, deletePlan,
-  addComment, deleteComment, timelineFor,
+  addComment, deleteComment, timelineFor, linksFor,
 } from './store.js';
 import {
   normScope, buildContext, readAnalysisJob, writeAnalysisJob,
@@ -59,7 +60,8 @@ export default {
     const r = express.Router();
 
     r.get('/', async (req, res) => {
-      try { res.json(await listTasks()); }
+      const ctx = reqPadContext(req);
+      try { res.json(await listTasks(ctx)); }
       catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) || 'No se pudieron leer las tareas.' }); }
     });
 
@@ -69,7 +71,8 @@ export default {
     // tick, para siempre, agotando el rate limiter de Pad local (bug real
     // 2026-07-12, ver el comentario de listCounts() en store.js).
     r.get('/counts', async (req, res) => {
-      try { res.json(await listCounts()); }
+      const ctx = reqPadContext(req);
+      try { res.json(await listCounts(ctx)); }
       catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) || 'No se pudieron leer los conteos.' }); }
     });
 
@@ -81,7 +84,8 @@ export default {
     });
 
     r.get('/plans', async (req, res) => {
-      try { res.json({ plans: await listPlans() }); }
+      const ctx = reqPadContext(req);
+      try { res.json({ plans: await listPlans(ctx) }); }
       catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) || 'No se pudieron leer los planes.' }); }
     });
 
@@ -129,98 +133,127 @@ export default {
     });
 
     r.post('/', async (req, res) => {
+      const ctx = reqPadContext(req);
       try {
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'La tarea necesita un título.' });
-        res.json({ task: await createTask(b) });
+        res.json({ task: await createTask(b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/from-audio', async (req, res) => {
+      const ctx = reqPadContext(req);
       try {
         const jobId = String(req.body?.jobId || '').slice(0, 64) || null;
-        const created = await createFromAudio(jobId, req.body?.tasks);
+        const created = await createFromAudio(jobId, req.body?.tasks, ctx);
         res.json({ created });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // ----- Planes (rutas literales ANTES que la paramétrica /:id) -----
     r.post('/plans', async (req, res) => {
+      const ctx = reqPadContext(req);
       try {
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'El plan necesita un título.' });
-        res.json({ plan: await createPlan(b) });
+        res.json({ plan: await createPlan(b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/plans/:id/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { await deletePlan(id); res.json({ ok: true }); }
+      try { await deletePlan(id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.get('/plans/:id/timeline', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json(await timelineFor('plan', id)); }
+      try { res.json(await timelineFor('plan', id, ctx)); }
       catch { res.status(500).json({ error: 'No se pudo leer el timeline.' }); }
     });
 
+    r.get('/plans/:id/links', async (req, res) => {
+      const ctx = reqPadContext(req);
+      const id = String(req.params.id);
+      if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
+      try { res.json(await linksFor(id, ctx)); }
+      catch { res.status(500).json({ error: 'No se pudieron leer los links.' }); }
+    });
+
     r.post('/plans/:id/comment/:cid/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id); const cid = String(req.params.cid);
       if (!PLAN_ID_RE.test(id) || !CID_RE.test(cid)) return res.status(400).json({ error: 'Id inválido.' });
-      try { await deleteComment('plan', id, cid); res.json({ ok: true }); }
+      try { await deleteComment('plan', id, cid, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/plans/:id/comment', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json({ comment: await addComment('plan', id, req.body?.text) }); }
+      try { res.json({ comment: await addComment('plan', id, req.body?.text, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : e.bad ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/plans/:id', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json({ plan: await updatePlan(id, req.body || {}) }); }
+      try { res.json({ plan: await updatePlan(id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // ----- Tareas (paramétricas al final) -----
     r.get('/:id/timeline', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json(await timelineFor('task', id)); }
+      try { res.json(await timelineFor('task', id, ctx)); }
       catch { res.status(500).json({ error: 'No se pudo leer el timeline.' }); }
     });
 
+    r.get('/:id/links', async (req, res) => {
+      const ctx = reqPadContext(req);
+      const id = String(req.params.id);
+      if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
+      try { res.json(await linksFor(id, ctx)); }
+      catch { res.status(500).json({ error: 'No se pudieron leer los links.' }); }
+    });
+
     r.post('/:id/comment/:cid/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id); const cid = String(req.params.cid);
       if (!ID_RE.test(id) || !CID_RE.test(cid)) return res.status(400).json({ error: 'Id inválido.' });
-      try { await deleteComment('task', id, cid); res.json({ ok: true }); }
+      try { await deleteComment('task', id, cid, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id/comment', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json({ comment: await addComment('task', id, req.body?.text) }); }
+      try { res.json({ comment: await addComment('task', id, req.body?.text, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : e.bad ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id/delete', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { await deleteTask(id); res.json({ ok: true }); }
+      try { await deleteTask(id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id', async (req, res) => {
+      const ctx = reqPadContext(req);
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json({ task: await updateTask(id, req.body || {}) }); }
+      try { res.json({ task: await updateTask(id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 

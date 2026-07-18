@@ -17,6 +17,7 @@
 // OJO ORDEN: las literales /activity y /targets van ANTES de la paramétrica /:id.
 import express from 'express';
 import { isAdmin } from '../../core/auth.js';
+import { reqPadContext } from '../../core/pad-context.js';
 import { hardRulesText } from '../health/shared.js';
 import {
   listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted,
@@ -42,7 +43,10 @@ export default {
     const r = express.Router();
 
     r.get('/', async (req, res) => {
-      try { res.json(await listLessons()); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json(await listLessons(ctx));
+      }
       catch (e) { sendErr(res, e); }
     });
 
@@ -60,6 +64,7 @@ export default {
     r.post('/curate', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'La curaduría consume tokens (requiere administrador).' });
       try {
+        const ctx = reqPadContext(req);
         if (isCurateRunning(readCurationJob())) return res.json({ status: 'running' });
         // Reserva SINCRÓNICA del lock (mismo tick que el check) para cerrar la
         // ventana TOCTOU: el `await listLessons()` (HTTP a Pad) de por medio
@@ -68,7 +73,7 @@ export default {
         // después traemos las lecciones y completamos el `context`.
         writeCurationJob({ status: 'running', startedAt: Date.now(), context: null, result: null, error: null });
         try {
-          const { lessons } = await listLessons();
+          const { lessons } = await listLessons(ctx);
           const active = lessons.filter((l) => l.status !== 'descartada')
             .map((l) => ({ id: l.id, title: l.title, category: l.category, project: l.project, status: l.status, recurrence: l.recurrence, body: l.body }));
           if (active.length < 2) {
@@ -94,19 +99,20 @@ export default {
     r.post('/curate/apply', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
+        const ctx = reqPadContext(req);
         const b = req.body || {};
         const action = String(b.action || '');
         if (action === 'merge') {
-          return res.json({ lesson: await mergeLessons(String(b.keep || ''), Array.isArray(b.merge) ? b.merge : []) });
+          return res.json({ lesson: await mergeLessons(String(b.keep || ''), Array.isArray(b.merge) ? b.merge : [], ctx) });
         }
         if (action === 'dismiss') {
-          return res.json({ lesson: await setStatus(String(b.id || ''), 'descartada') });
+          return res.json({ lesson: await setStatus(String(b.id || ''), 'descartada', ctx) });
         }
         if (action === 'consolidate') {
-          const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' });
+          const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' }, ctx);
           for (const mid of (Array.isArray(b.ids) ? b.ids : [])) {
             if (mid === created.lesson.id) continue; // si el dedup reusó una fuente, NO borres la consolidada (bug de pérdida de datos)
-            try { await deleteLesson(mid); } catch { /* noop */ }
+            try { await deleteLesson(mid, ctx); } catch { /* noop */ }
           }
           return res.json({ lesson: created.lesson });
         }
@@ -115,30 +121,43 @@ export default {
     });
 
     r.get('/:id', async (req, res) => {
-      try { res.json({ lesson: await getLesson(req.params.id) }); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json({ lesson: await getLesson(req.params.id, ctx) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
     r.post('/:id/approve', async (req, res) => {
-      try { res.json({ lesson: await setStatus(req.params.id, 'aprobada') }); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json({ lesson: await setStatus(req.params.id, 'aprobada', ctx) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
     r.post('/:id/dismiss', async (req, res) => {
-      try { res.json({ lesson: await setStatus(req.params.id, 'descartada') }); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json({ lesson: await setStatus(req.params.id, 'descartada', ctx) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
     // Volver una lección (guardada/descartada) al estado 'propuesta'.
     r.post('/:id/reopen', async (req, res) => {
-      try { res.json({ lesson: await setStatus(req.params.id, 'propuesta') }); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json({ lesson: await setStatus(req.params.id, 'propuesta', ctx) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
     r.post('/:id/promote', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Promover requiere administrador.' });
       try {
-        const l = await getLesson(req.params.id);
+        const ctx = reqPadContext(req);
+        const l = await getLesson(req.params.id, ctx);
         const asked = String(req.body?.target || '').trim();
         // target explícito si es válido; si no, el destino sugerido si está
         // cableado; si no, memoria (el más inocuo).
@@ -152,11 +171,11 @@ export default {
         // Marcar primero (snapshot Fase 6) → así claude-md la incluye al render.
         // Si escribir el destino falla DESPUÉS de marcar, revertimos el status
         // para no dejarla 'promovida' sin haberla escrito (y que se pueda reintentar).
-        const marked = await markPromoted(l.id, target);
+        const marked = await markPromoted(l.id, target, ctx);
         try {
-          await promote(marked.project, target, marked, { kind: String(req.body?.kind || 'work') });
+          await promote(marked.project, target, marked, { kind: String(req.body?.kind || 'work') }, ctx);
         } catch (err) {
-          try { await setStatus(l.id, l.status); } catch { /* best-effort */ }
+          try { await setStatus(l.id, l.status, ctx); } catch { /* best-effort */ }
           throw err;
         }
         res.json({ lesson: marked });
@@ -164,7 +183,10 @@ export default {
     });
 
     r.post('/:id/delete', async (req, res) => {
-      try { res.json(await deleteLesson(req.params.id)); }
+      try {
+        const ctx = reqPadContext(req);
+        res.json(await deleteLesson(req.params.id, ctx));
+      }
       catch (e) { sendErr(res, e); }
     });
 

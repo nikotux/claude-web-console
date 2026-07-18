@@ -49,16 +49,40 @@ export default {
     // (p.ej. only-expanded) que NO hay que pisar.
     el.classList.add('gauges-row');
     const ic = ctx?.icon || (() => '');
+    let built = false;
+    // Parcheo in-place de UN gauge ya construido: solo toca relleno/%/anillo,
+    // sin reconstruir el subtree (evita reparsear HTML + SVG cada 2,5s).
+    function patchGauge(mini, label, pct) {
+      const p = Math.round(pct);
+      const h = heat(pct);
+      const fill = mini.querySelector('.gauge-fill');
+      if (fill) { fill.style.width = `${p}%`; fill.className = `gauge-fill ${h}`; }
+      const val = mini.querySelector('.gauge-val');
+      if (val) val.textContent = `${p}%`;
+      const ring = mini.querySelector('.gauge-ring');
+      if (ring) { ring.style.setProperty('--pct', p); ring.className = `gauge-ring ${h}`; }
+      mini.title = `${label} ${p}%`;
+    }
     async function tick() {
       if (document.hidden) return;
       try {
         const res = await fetch('/api/stats');
         if (!res.ok) return;
         const s = await res.json();
-        el.innerHTML =
-          gauge(ic, 'CPU', 'cpu', s.cpu.pct) +
-          gauge(ic, 'RAM', 'ram', s.mem.pct) +
-          gauge(ic, 'DSK', 'disk', s.disk.pct);
+        const minis = el.querySelectorAll('.gauge-mini');
+        if (!built || minis.length !== 3) {
+          // Primera vez (o estructura perdida): construir el subtree una vez.
+          el.innerHTML =
+            gauge(ic, 'CPU', 'cpu', s.cpu.pct) +
+            gauge(ic, 'RAM', 'ram', s.mem.pct) +
+            gauge(ic, 'DSK', 'disk', s.disk.pct);
+          built = true;
+        } else {
+          // Ticks siguientes: parchear en su lugar (sin rebuild).
+          patchGauge(minis[0], 'CPU', s.cpu.pct);
+          patchGauge(minis[1], 'RAM', s.mem.pct);
+          patchGauge(minis[2], 'DSK', s.disk.pct);
+        }
         el.title = `${s.hostname} · RAM ${fmtBytes(s.mem.used)}/${fmtBytes(s.mem.total)} · carga ${s.load[0].toFixed(2)} · up ${fmtUptime(s.uptime)}`;
       } catch { /* reintenta al próximo tick */ }
     }
