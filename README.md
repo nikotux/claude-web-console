@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-19 01:59 — main
+- Aislar datos y credenciales por usuario en multi-tenant
+
 ### 2026-07-15 19:25 — main
 - Implementar interfono consciente de paquetes-sesión (PLAN-469)
 - Agregar tabla de tickets, WhatsApp, config instancia y publish
