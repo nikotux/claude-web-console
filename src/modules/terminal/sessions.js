@@ -56,11 +56,15 @@ export function killBareTmux(id) {
 }
 
 class Session {
-  constructor({ id, cwd, title, attach = null, bare = false, command = null }) {
+  constructor({ id, cwd, title, attach = null, bare = false, command = null, owner = null }) {
     this.id = id;
     this.tmuxName = (bare ? BARE_PREFIX : PREFIX) + id;
     this.cwd = cwd || config.home;
     this.title = title || 'terminal';
+    // multi-tenant (BUG-680): username del dueño (de principalOf al crear).
+    // null = host/admin (retrocompat). Gobierna la visibilidad en list() y el
+    // guard de ownership del WS. Espejo de Chat.owner.
+    this.owner = owner;
     // Si viene `attachSpec` = { socket, session }, esta sesión NO crea una tmux
     // propia: envuelve (adjunta) a una sesión tmux existente de cualquier
     // socket. No lleva prefijo cwc y NO se rehidrata al reiniciar Node.
@@ -262,7 +266,7 @@ class Session {
   }
 
   info() {
-    return { id: this.id, title: this.title, cwd: this.cwd, alive: this.alive, bare: this.bare };
+    return { id: this.id, title: this.title, cwd: this.cwd, alive: this.alive, bare: this.bare, owner: this.owner };
   }
 }
 
@@ -326,9 +330,9 @@ class SessionManager {
     return count;
   }
 
-  create({ cwd, runClaude = false, model = null, title, attach = null } = {}) {
+  create({ cwd, runClaude = false, model = null, title, attach = null, owner = null } = {}) {
     const id = this._nextId();
-    const session = new Session({ id, cwd, title, attach });
+    const session = new Session({ id, cwd, title, attach, owner });
     try {
       session.spawn({ runClaude, model });
     } catch (e) {
@@ -368,8 +372,17 @@ class SessionManager {
 
   // Las sesiones "bare" (vistas TUI de conversaciones) NO se listan: se
   // reconstruyen desde /api/chat/list, no como pestañas PTY sueltas.
-  list() {
-    return [...this.sessions.values()].filter((s) => !s.bare).map((s) => s.info());
+  // multi-tenant (BUG-680): filtra por dueño salvo admin, espejo de
+  // Chat.list(principal). Las sesiones rehidratadas tras un reinicio de Node
+  // quedan con owner=null (tmux no lo persiste) → solo el admin las ve
+  // (fail-closed: un inquilino nunca ve una sesión ajena ni la rehidratada).
+  list(principal) {
+    const visible = [...this.sessions.values()].filter((s) => {
+      if (s.bare) return false;
+      if (principal && principal.admin) return true;
+      return s.owner === (principal ? principal.username : null);
+    });
+    return visible.map((s) => s.info());
   }
 
   remove(id) {

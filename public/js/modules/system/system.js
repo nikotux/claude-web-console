@@ -2,7 +2,9 @@
 //
 // Botón ⚙ en el pie → modal con pestañas: Backup · Usuarios (solo admins) ·
 // Proyectos (contexto + memorias de Tolkien Y de esta consola, con selector;
-// visible a todos, edición admin) · Salud y Salir siempre al pie. Los
+// visible a todos, edición admin) · Skills (censo read-only de SKILL.md +
+// Playbooks de Pad, agrupado por mundo — ver módulo backend `skills`) ·
+// Variables de entorno · Interfono · Salud y Salir siempre al pie. Los
 // paneles reutilizan la lógica existente de los módulos backup/admin, solo
 // cambia dónde viven.
 import { mountBackupPanel } from './backup-panel.js';
@@ -11,6 +13,7 @@ import { mountHealthPanel } from './health-panel.js';
 import { mountProjectContextPanel } from './project-context-panel.js';
 import { mountInterfonoPanel } from './interfono-panel.js';
 import { mountEnvVarsPanel } from './env-vars-panel.js';
+import { mountSkillsPanel } from './skills-panel.js';
 
 export default {
   name: 'system',
@@ -34,6 +37,7 @@ export default {
             ]
           : []),
         { label: 'Proyectos', mount: (c) => mountProjectContextPanel(c, { ...ctx, isAdmin }) },
+        { label: 'Skills', mount: (c) => mountSkillsPanel(c, { ...ctx, isAdmin }) },
         { label: 'Variables de entorno', mount: (c) => mountEnvVarsPanel(c, { ...ctx, isAdmin }) },
         { label: 'Interfono', mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
         { label: 'Salud', mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },

@@ -213,6 +213,7 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/learning/explain-shared.js', // scope=tolkien lee código de Tolkien
   'src/modules/tolkien/index.js',
   'src/modules/tolkien/refresh-shared.js',
+  'src/modules/skills/index.js',           // censo READ-ONLY de .claude/skills/ de Tolkien (pestaña Skills), no cruza datos
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync
   'bin/cwc-comms-runner.js',
   'bin/cwc-comms-chatbot-runner.js',

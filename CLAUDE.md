@@ -192,10 +192,20 @@ código.
       quede auditable sin tener que reconstruir la conversación.
     - **Los Playbooks activos son PROCEDIMIENTOS INVOCABLES, no solo texto
       de referencia:** `module-scan` (escanear+consolidar un módulo, el loop
-      del programa de modularización) y `codex-verify` (revisión
-      independiente con Codex) se re-usan tal cual para CUALQUIER trabajo
-      futuro que calce con su propósito — no reinventar el procedimiento a
-      mano cada vez que aplica.
+      del programa de modularización), `codex-verify` (revisión
+      independiente con Codex) y `rutear` (ruteo Claude/Tándem/Codex de un
+      plan, CONVE-558) se re-usan tal cual para CUALQUIER trabajo futuro que
+      calce con su propósito — no reinventar el procedimiento a mano cada vez
+      que aplica. Los tres (2026-07-19), junto con `agrupar`/`orquestar`/`pad`
+      del Orquestador Interno, viven ADEMÁS como **skills de Claude Code**
+      (`.claude/skills/<nombre>/SKILL.md` en este repo) — el mismo
+      procedimiento pero auto-descubrible por descripción/gatillo sin tener
+      que invocar `pad_playbook run` a mano. Pad sigue siendo la FUENTE DE
+      VERDAD (`PLAYB-<n>`): un cambio al procedimiento se edita ahí primero y
+      se resincroniza a mano al `SKILL.md` (cada archivo lo referencia en su
+      pie). Candidatos a sumar: playbooks activos con `invocation_slug` que
+      aún no tengan su `SKILL.md` — ver la lista completa con
+      `pad_playbook action=list workspace=console`.
     - **Las Conventions de Pad son la MISMA fuente de reglas duras que este
       CLAUDE.md** (los 7 gotchas top del programa quedaron ahí, sincronizados
       en espíritu — no textualmente idénticos palabra por palabra). Si una
@@ -2872,6 +2882,18 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             GET /file (admin, ruta del instance.json). Front:
                             public/js/modules/system/env-vars-panel.js (secciones 🪪 Identidad
                             y 🏢 Cliente, editable inline, deps Zoho como filas clave→ID).
+  skills/                   CENSO READ-ONLY de skills de Claude Code (2026-07-19, pestaña
+                            "Skills" de ⚙ Sistema, PEND-684). GET /api/skills (0 tokens IA, todo
+                            determinístico): escanea `.claude/skills/*/SKILL.md` de 🏠 Mi Consola
+                            (este repo) · 🌳 Tolkien (config.projectDir — cruce sumado a
+                            CROSS_WORLD_ALLOW del check `cross-world` de salud) · 🌐 Global
+                            (~/.claude/skills), y los cruza con la colección `playbooks` del Pad
+                            LOCAL (pad-service-client, workspace `console`) por el pie "Fuente de
+                            verdad: `PLAYB-<n>`" que ya usan module-scan/codex-verify/rutear.
+                            Expone además `padOnly` = playbooks `active`+`invocation_slug` sin
+                            SKILL.md espejado (coherente con la lección MC-683: los draft/sin-slug
+                            no cuentan como candidatos). Ver detalle completo del diseño en el
+                            bloque de `system.js` más abajo.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md).
@@ -2984,7 +3006,40 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             Proyectos" (volver), dir del proyecto, Contexto y (solo proyectos
                             completos) Memorias — el detalle de un bugfix NI renderiza la
                             sección Memorias. Visible a todos (autenticados), edición gateada por
-                            isAdmin en el frontend Y en el backend; la pestaña Salud es SOLO
+                            isAdmin en el frontend Y en el backend. La pestaña Skills (2026-07-19,
+                            módulo backend `skills` — GET /api/skills, frontend
+                            `system/skills-panel.js`, mountSkillsPanel) es un CENSO READ-ONLY (0
+                            tokens IA, todo determinístico) de las skills de Claude Code
+                            (`.claude/skills/*/SKILL.md`) cruzadas con la colección `playbooks` del
+                            Pad LOCAL (vía `pad-service-client.listItems('playbooks')`, workspace
+                            `console`) — agrupadas por MUNDO: 🏠 Mi Consola (`.claude/skills` de
+                            este repo, `CONSOLE_ROOT` resuelto por `import.meta.url`) · 🌳 Tolkien
+                            (`config.projectDir/.claude/skills` — cruce READ-ONLY legítimo, sumado
+                            al `CROSS_WORLD_ALLOW` del check `cross-world` de salud) · 🌐 Global
+                            (`~/.claude/skills`, scope usuario). El cruce con Pad es por el pie
+                            convencional "Fuente de verdad: `PLAYB-<n>` en Pad `console`" que ya
+                            usan module-scan/codex-verify/rutear (frontmatter parseado con la MISMA
+                            técnica minimal-regex que `skillDescription()` de chat/index.js, sin
+                            YAML real): badge ✅ `<ref>` si el playbook existe, ⚠ "ref rota" si el
+                            SKILL.md referencia un PLAYB-n que no está en Pad, "— sin Pad" si no
+                            hay pie (agrupar/orquestar/pad/handoff no lo tienen — no es un problema,
+                            solo informativo). Sección aparte "🆕 Candidatos de Pad sin SKILL.md" =
+                            playbooks `status:active` CON `invocation_slug` que NINGÚN SKILL.md
+                            referencia todavía (coherente con la lección de Mejora Continua MC-683:
+                            "solo promover a skill un playbook activo con invocation_slug; los
+                            draft o sin slug se gradúan antes" — los borradores de Mejora Continua
+                            NO aparecen acá). UI: reusa CASI SIN CSS NUEVO el look de tarjeta
+                            colapsable de `health-review-modal.js` (`.hr-collapsible`/
+                            `.hr-finding`/`.hr-f-*`) — 2 modificadores nuevos
+                            (`.hr-finding--linked`/`.hr-sev--linked` verde ·
+                            `.hr-finding--orphan`/`.hr-sev--orphan` ámbar) para el estado de
+                            sincronía con Pad, mismo patrón visual que un hallazgo de Salud. Solo
+                            lectura a propósito (decisión explícita del usuario): sin crear/editar
+                            SKILL.md ni playbooks desde acá — un paso 2 futuro podría sumar "crear
+                            el SKILL.md faltante de un candidato" sobre esta misma base. Best-effort
+                            ante Pad local caído (`padAvailable:false`): muestra igual los SKILL.md,
+                            solo sin badges de vínculo. Registrado en Pad como `PEND-684`.
+                            La pestaña Salud es SOLO
                             salud: chequeos rápidos + revisión profunda + subsección "🧠
                             Optimización IA" (resumen compacto + botón → sub-ventana
                             optimize-modal.js: censo de motores gratis + análisis bajo botón

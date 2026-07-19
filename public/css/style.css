@@ -2295,6 +2295,9 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-finding--high { border-left-color: var(--cwc-danger); }
 .hr-finding--medium { border-left-color: var(--cwc-warn); }
 .hr-finding--low { border-left-color: var(--cwc-text-dimmer); }
+/* Estado de sincronía con Pad (pestaña Skills, no es severidad). */
+.hr-finding--linked { border-left-color: var(--cwc-ok); }
+.hr-finding--orphan { border-left-color: var(--cwc-warn); }
 .hr-f-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; cursor: pointer; }
 /* Chevron de la tarjeta colapsable + plegado del cuerpo. */
 .hr-chev { display: inline-flex; color: var(--cwc-text-dim); transition: transform .15s ease; flex: none; }
@@ -2308,6 +2311,8 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-sev--high { background: var(--cwc-danger); color: var(--cwc-white); }
 .hr-sev--medium { color: var(--cwc-warn); border: 1px solid var(--cwc-warn); }
 .hr-sev--low { color: var(--cwc-text-dim); border: 1px solid var(--cwc-border-strong); }
+.hr-sev--linked { color: var(--cwc-ok); border: 1px solid var(--cwc-ok); }
+.hr-sev--orphan { color: var(--cwc-warn); border: 1px solid var(--cwc-warn); }
 .hr-kind { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
 .hr-f-area { font-weight: 600; font-size: var(--cwc-fs-sm); flex: 1; min-width: 0; }
 .hr-f-mod { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); }

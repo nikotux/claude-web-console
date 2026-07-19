@@ -15,7 +15,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sessionManager } from './sessions.js';
 import { config } from '../../core/config.js';
-import { clampToHome } from '../../core/paths.js';
+import { clampToRoot } from '../../core/paths.js';
+import { principalOf } from '../../core/auth.js';
+import { userFileRoot, hostUser } from '../../core/user-space.js';
 import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd } from '../../core/claude-state.js';
@@ -35,8 +37,21 @@ function applyClipboardOpts() {
   }
 }
 
-// Anti traversal: resuelve contra el home y cae a él si escapa (core/paths.js).
-const safeCwd = clampToHome;
+// Anti traversal + confinamiento por dueño (BUG-680): el host (admin/token,
+// owner null) conserva su home completo; un inquilino queda clampeado a SU
+// workspace. Espejo EXACTO de safeCwd(cwd, owner) de chat/index.js.
+const safeCwd = (cwd, owner) => clampToRoot(userFileRoot(owner || hostUser()), cwd);
+
+// Resuelve una sesión SOLO si el request es de su dueño (o admin). Ajena/
+// inexistente → null → 404, sin revelar existencia. Espejo de ownedChat.
+function ownedSession(req, id) {
+  const session = sessionManager.get(id);
+  if (!session) return null;
+  const p = principalOf(req);
+  if (p.admin) return session;
+  if (session.owner === p.username) return session;
+  return null;
+}
 
 export default {
   name: 'terminal',
@@ -54,13 +69,13 @@ export default {
     const r = express.Router();
 
     r.get('/sessions', (req, res) => {
-      res.json({ sessions: sessionManager.list() });
+      res.json({ sessions: sessionManager.list(principalOf(req)) });
     });
 
     // Modelo de Claude en uso por esta sesión (para el banderín del rail).
     // Preferimos el observador (tiempo real); transcript como fallback.
     r.get('/model', (req, res) => {
-      const session = sessionManager.get(req.query.id);
+      const session = ownedSession(req, req.query.id);
       if (!session) return res.status(404).json({ error: 'Sesión inexistente.' });
       const st = stateForCwd(session.cwd);
       res.json({ model: st?.model || modelForCwd(session.cwd) });
@@ -68,6 +83,8 @@ export default {
 
     r.post('/sessions', (req, res) => {
       const { cwd, runClaude, title, attach, model } = req.body || {};
+      // multi-tenant (BUG-680): dueño del request (null = host/admin/token).
+      const owner = principalOf(req).username;
       // Si sessionManager.create() llega a completar, guardamos el id acá
       // para poder limpiarla si algo posterior (persistencia de título,
       // recientes) falla — evita sesión huérfana viva pero invisible al cliente.
@@ -84,6 +101,7 @@ export default {
           const session = sessionManager.create({
             attach: { socket: socketPath, session: attach.session },
             title: title || attach.session,
+            owner,
           });
           createdId = session.id;
           return res.json({ session: session.info() });
@@ -98,7 +116,7 @@ export default {
           return res.status(400).json({ error: 'runClaude debe ser booleano.' });
         }
 
-        const cwdAbs = cwd ? safeCwd(cwd) : config.home;
+        const cwdAbs = safeCwd(cwd, owner);
         // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
         // customTitle || basename(cwd) — si el basename ya está en uso (por
         // otra tmux O una conversación de chat), se persiste "tolkien 1" como
@@ -111,6 +129,7 @@ export default {
           runClaude: !!runClaude,
           model: model || null,
           title,
+          owner,
         });
         createdId = session.id;
         if (cardName !== baseName) {
@@ -119,7 +138,9 @@ export default {
           saveTitles(titles);
         }
         // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
-        recordRecent(path.relative(config.home, cwdAbs));
+        // Solo el host: el cwd de un inquilino (~/.cwc-users/<u>/workspace) cae
+        // dentro de home y se filtraría al launcher del host (recents es global).
+        if (!owner) recordRecent(path.relative(config.home, cwdAbs));
         res.json({ session: session.info() });
       } catch (err) {
         console.error('[terminal] Error creando sesión:', err);
@@ -150,6 +171,16 @@ export default {
       const session = id && sessionManager.get(id);
 
       if (!session || !session.alive) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Sesión inexistente o terminada.' }));
+        ws.close();
+        return;
+      }
+
+      // multi-tenant (BUG-680): guard de ownership, espejo del WS de chat.
+      // No revela existencia (mismo mensaje que "inexistente"). El handshake ya
+      // pasó por isAuthenticated (core/wss.js), así que principalOf no es null.
+      const p = principalOf(req);
+      if (!p.admin && session.owner !== p.username) {
         ws.send(JSON.stringify({ type: 'error', message: 'Sesión inexistente o terminada.' }));
         ws.close();
         return;
