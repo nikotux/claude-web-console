@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-19 16:29 — main
+- Rediseño PLAN-752: módulo Salud con UI colapsable inline
+
 ### 2026-07-19 14:33 — main
 - Añadir pestaña Skills y multi-tenant en terminal
 - Feedback de clientes, i18n Fase 1, panel MCP y mejoras en métricas
