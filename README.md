@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-19 16:51 — main
+- Integrar marca Mordor Staffing en login y splash
+
 ### 2026-07-19 16:29 — main
 - Rediseño PLAN-752: módulo Salud con UI colapsable inline
 
