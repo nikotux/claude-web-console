@@ -5217,6 +5217,20 @@ _procedimiento · confianza media · recurrencia x2_
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
 
+### Verificar que cada subsistema tenga su propio mecanismo de cierre al unificar una acción 'resolver todo'
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** El botón 'Resolver todo' del rediseño de Salud se armó pensando solo en los hallazgos de Revisión (que ya tenían un CLI de resolución); las propuestas de Optimización/Coherencia no tenían equivalente y quedaron sin cerrar su ciclo pending→aceptada/rechazada hasta que el usuario lo notó al abrir esas pestañas.
+
+**Lección:** Antes de dar por completa una función que agrupa varios tipos de ítems con ciclos de vida propios (hallazgos, propuestas, etc.), listar explícitamente el mecanismo de cierre de CADA tipo — no solo el más visible o el primero implementado — y verificar que todos queden simétricos antes de cerrar la tarea.
+
+### No duplicar el cómputo de un estado derivado (veredicto/resumen) entre endpoints gemelos
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** El badge de Salud quedó clavado en CRÍTICO pese a que los 26 hallazgos estaban resueltos: existía una lógica 'liveVerdict' que recalculaba el veredicto real ya usada en /review, pero /scan-all nunca la adoptó y seguía sirviendo el verdict congelado de la corrida IA original.
+
+**Lección:** Cuando dos rutas/endpoints exponen el mismo dato derivado de un estado mutable (ej. un veredicto agregado), extraer el cómputo a una única función compartida que ambas llamen, en vez de mantener copias que puedan desincronizarse en silencio. Al agregar una lógica de recálculo 'en vivo' a un endpoint, revisar si hay un endpoint hermano exponiendo el mismo tipo de dato y aplicarle la misma corrección.
+
 ### Actualizar el mapa de módulos en CLAUDE.md al agregar un módulo backend nuevo
 _procedimiento · confianza media · recurrencia x1_
 

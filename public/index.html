@@ -7,6 +7,7 @@
   <title>Claude Web Console</title>
   <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
   <link rel="stylesheet" href="/vendor/hljs/theme.css" />
+  <link rel="icon" type="image/png" href="/img/mordor-iso.png" />
   <link rel="stylesheet" href="/css/tokens.css" />
   <link rel="stylesheet" href="/css/ui.css" />
   <link rel="stylesheet" href="/css/style.css" />
@@ -71,6 +72,8 @@
        cargue cualquier módulo JS); las clases vienen de ui.css, garantizado
        al primer paint porque los <link> de CSS son render-blocking. -->
   <div id="boot-splash">
+    <img id="boot-logo" src="/img/mordor-logo.png" alt="Mordor Staffing" />
+    <span id="boot-sub">Consola interna</span>
     <span class="cwc-pacman is-working"><span class="pac-man"></span><span class="pac-track"><i class="pac-dot"></i><i class="pac-dot"></i><i class="pac-dot"></i></span></span>
     <div id="boot-bar"><span id="boot-bar-fill"></span></div>
     <div class="boot-line"><span id="boot-pct">10%</span><span id="boot-msg">cargando…</span></div>

@@ -14,6 +14,9 @@ html, body {
   width: min(92vw, 360px); box-shadow: var(--cwc-shadow-md);
   display: flex; flex-direction: column; gap: .8rem;
 }
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: .35rem; margin-bottom: .3rem; text-align: center; }
+.login-logo { width: min(78%, 230px); height: auto; display: block; }
+.login-sub { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .12em; }
 .login-card h1 { font-size: var(--cwc-fs-xl); margin: 0; }
 .login-hint { font-size: var(--cwc-fs-md); color: var(--cwc-text-dim); margin: 0; }
 .login-card input {
@@ -65,6 +68,8 @@ html, body {
 }
 #boot-splash .cwc-pacman { transform: scale(2.2); } /* tamaño splash sin duplicar medidas */
 #boot-splash.done { opacity: 0; pointer-events: none; }
+#boot-logo { width: min(60vw, 280px); height: auto; display: block; }
+#boot-sub { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); text-transform: uppercase; letter-spacing: .14em; margin-top: -.4rem; }
 /* Barra de progreso: el % salta por hitos reales (window.__bootPct); la
    transición de width interpola suave entre hito e hito. Dorada como el
    Pac-Man (--cwc-warn), no terracota: es "proceso corriendo". */

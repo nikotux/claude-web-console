@@ -172,6 +172,12 @@ async function main() {
   app.get('/css/tokens.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'tokens.css')));
   app.get('/css/ui.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'ui.css')));
 
+  // Imágenes de marca (Mordor Staffing): públicas porque el login se sirve
+  // ANTES del gate de auth (mismo criterio que el CSS de arriba). Cubren
+  // también el splash de index.html (que es post-auth) sin ruta extra.
+  app.get('/img/mordor-logo.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'mordor-logo.png')));
+  app.get('/img/mordor-iso.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'mordor-iso.png')));
+
   // Onboarding PÚBLICO (SP7): un usuario nuevo no tiene cuenta — estos endpoints
   // se gatean por el TOKEN de invitación, no por login. Montados ANTES del gate.
   app.use('/api/onboard/public', onboardPublicRouter);
