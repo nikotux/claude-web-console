@@ -3,6 +3,7 @@
 // Los colores viven en tokens.css (--cwc-model-<key>); el backend envía solo
 // la key semántica (opus|sonnet|haiku|fable|unknown). Este helper resuelve
 // color y nombre en todo el frontend — nunca hex hardcodeados.
+import { t } from './i18n.js';
 
 export function modelColor(key) {
   return `var(--cwc-model-${key || 'unknown'})`;
@@ -78,6 +79,10 @@ const EFFORT_LABEL = { low: 'Bajo', medium: 'Medio', high: 'Alto', xhigh: 'Muy a
 // tier (se muestra tenue "· auto"); pinned=true ⇒ elegido a mano.
 export function effortLabel(effort, pinned) {
   if (!effort) return '';
-  const l = EFFORT_LABEL[effort] || effort;
-  return pinned ? l : `${l} · auto`;
+  // t() en tiempo de render (call-time): traduce aunque EFFORT_LABEL sea un
+  // const de nivel-módulo (los arrays de opciones se evalúan al importar, antes
+  // de cargar el diccionario, por eso quedan en español; esta función corre al
+  // pintar badges/chips y sí toma el idioma activo).
+  const l = t(`core.effort.${effort}`, EFFORT_LABEL[effort] || effort);
+  return pinned ? l : `${l} · ${t('core.effort.autoSuffix', 'auto')}`;
 }

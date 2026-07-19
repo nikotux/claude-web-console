@@ -1,0 +1,17 @@
+{
+  "launcher.newSession": "New session",
+  "launcher.projectFallback": "Project",
+  "launcher.sessionType": "Session type",
+  "launcher.type.chat": "Chat",
+  "launcher.type.claudeTui": "Claude TUI",
+  "launcher.type.terminal": "Terminal",
+  "launcher.section.project": "Project",
+  "launcher.model": "Model",
+  "launcher.startIn": "Start in {dest}",
+  "launcher.pickDest": "Pick a destination",
+  "launcher.otherFolder": "Other folder",
+  "launcher.backToProjects": "Back to projects",
+  "launcher.loading": "loading…",
+  "launcher.noSubfolders": "No subfolders — you can start here.",
+  "launcher.listError": "Couldn't list this folder."
+}

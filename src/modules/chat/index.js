@@ -2233,7 +2233,7 @@ class ChatManager {
         });
         chat.terminalId = term.id;
         chat.viewMode = 'tui';
-        chat.history = loadTranscriptEvents(chat.cwd, s.sessionId);
+        chat.history = loadTranscriptEvents(chat.cwd, s.sessionId).slice(-HISTORY_MAX);
       } else {
         // ¿El runner sobrevivió? (crash del server con turno en curso)
         const link = await tryConnectRunner(chat.id);
@@ -2252,7 +2252,7 @@ class ChatManager {
           console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
         } else {
           link?.close();
-          chat.history = loadTranscriptEvents(chat.cwd, s.sessionId); // dormida
+          chat.history = loadTranscriptEvents(chat.cwd, s.sessionId).slice(-HISTORY_MAX); // dormida
         }
       }
       this.chats.set(s.id, chat);

@@ -14,6 +14,7 @@ import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
 import { placeFor } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
+import { t } from '../../ui/i18n.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -39,6 +40,7 @@ function classifyLocal(file) {
   return 'binary';
 }
 const ATT_KIND_LABEL = { image: 'imagen', pdf: 'PDF', text: 'archivo', binary: 'archivo' };
+const ATT_KIND_I18N = { image: ['chat.att.image', 'imagen'], pdf: ['chat.att.pdf', 'PDF'], text: ['chat.att.file', 'archivo'], binary: ['chat.att.file', 'archivo'] };
 
 // REGLA DE SEGURIDAD (Fase 9 · 4): clasificador de comandos destructivos.
 // Un permiso de Bash clasificado acá nace con el detalle EXPANDIDO — el atajo
@@ -116,7 +118,7 @@ export function buildAskQuestionBody(questions, { onSubmit, onCancel }) {
     const otherInput = document.createElement('input');
     otherInput.type = 'text';
     otherInput.className = 'askq-other';
-    otherInput.placeholder = 'Otra respuesta…';
+    otherInput.placeholder = t('chat.askq.otherPlaceholder', 'Otra respuesta…');
 
     (Array.isArray(q.options) ? q.options : []).forEach((o) => {
       const b = document.createElement('button');
@@ -171,7 +173,7 @@ export function buildAskQuestionBody(questions, { onSubmit, onCancel }) {
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.className = 'btn-ghost btn--sm askq-cancel';
-  cancel.innerHTML = `${icon('close', { size: 13 })} Cancelar`;
+  cancel.innerHTML = `${icon('close', { size: 13 })} ${t('chat.common.cancel', 'Cancelar')}`;
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'btn btn--sm askq-submit';
@@ -183,7 +185,7 @@ export function buildAskQuestionBody(questions, { onSubmit, onCancel }) {
   const refresh = () => {
     const done = answered();
     submit.disabled = done < qs.length;
-    submit.innerHTML = `${icon('check', { size: 13 })} Enviar${qs.length > 1 ? ` (${done}/${qs.length})` : ''}`;
+    submit.innerHTML = `${icon('check', { size: 13 })} ${t('chat.common.send', 'Enviar')}${qs.length > 1 ? ` (${done}/${qs.length})` : ''}`;
   };
   const buildAnswers = () => {
     const answers = {};
@@ -211,12 +213,13 @@ export function buildAskQuestionBody(questions, { onSubmit, onCancel }) {
 // safe=plan (no toca nada) · ok=pregunta todo · warn=edita solo · danger=
 // bypassPermissions del SDK (acepta ABSOLUTAMENTE todo, con confirm previo).
 const MODES = [
-  ['default', 'Preguntar', 'ok'],
-  ['acceptEdits', 'Ediciones', 'warn'],
-  ['bypassPermissions', 'Todo', 'danger'],
-  ['plan', 'Plan', 'safe'],
+  ['default', 'Preguntar', 'ok', 'chat.mode.ask'],
+  ['acceptEdits', 'Ediciones', 'warn', 'chat.mode.edits'],
+  ['bypassPermissions', 'Todo', 'danger', 'chat.mode.all'],
+  ['plan', 'Plan', 'safe', 'chat.mode.plan'],
 ];
 const riskOf = (mode) => (MODES.find(([v]) => v === mode) || [])[2] || 'ok';
+const modeLabel = (mode) => { const e = MODES.find(([v]) => v === mode); return e ? t(e[3], e[1]) : mode; };
 
 export class ChatTab {
   constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
@@ -259,27 +262,26 @@ export class ChatTab {
     container.innerHTML = `
       <div class="chat-view">
         <header class="chat-head">
-          <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="Abrir panel lateral">${icon('menu', { size: 16 })}</button>
+          <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="${t('chat.header.menuTitle', 'Abrir panel lateral')}">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
-          <span class="chat-world" title="Mundo de esta conversación" hidden></span>
-          ${pacman({ state: 'waiting', cls: 'chat-alive', title: 'Esperando tu mensaje' })}
-          <span class="chat-model-pill" title="Router de modelo automático" hidden></span>
+          <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
+          ${pacman({ state: 'waiting', cls: 'chat-alive', title: t('chat.pac.waitingTitle', 'Esperando tu mensaje') })}
+          <span class="chat-model-pill" title="${t('chat.header.modelPillTitle', 'Router de modelo automático')}" hidden></span>
           <span class="chat-flow" hidden></span>
-          <select class="chat-mode" data-risk="ok" title="Modo de permisos">
-            ${MODES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+          <select class="chat-mode" data-risk="ok" title="${t('chat.header.modeTitle', 'Modo de permisos')}">
+            ${MODES.map(([v, l, , k]) => `<option value="${v}">${t(k, l)}</option>`).join('')}
           </select>
-          <button class="btn-ghost btn--icon chat-mode-help" title="Ayuda: modos de permisos e íconos de acciones">${icon('help', { size: 15 })}</button>
+          <button class="btn-ghost btn--icon chat-mode-help" title="${t('chat.header.helpTitle', 'Ayuda: modos de permisos e íconos de acciones')}">${icon('help', { size: 15 })}</button>
         </header>
         <div class="chat-msgs"></div>
         <div class="chat-atttray" hidden></div>
         <div class="chat-composer">
           <input type="file" class="chat-file-input" multiple hidden>
-          <button class="btn-ghost btn--icon chat-attach" title="Adjuntar archivo (imagen, PDF, texto…)">${icon('paperclip', { size: 16 })}</button>
-          <button class="btn-ghost btn--icon chat-pkgref" title="Referenciar otro paquete-sesión (F5)">${icon('externalLink', { size: 16 })}</button>
-          <textarea class="chat-input" rows="1" enterkeyhint="send"
-            placeholder="Escribí o dictá un mensaje…"></textarea>
-          <button class="btn btn--icon chat-send" title="Enviar">${icon('play', { size: 16 })}</button>
-          <button class="btn-ghost btn--icon chat-stop" title="Detener" hidden>${icon('close', { size: 16 })}</button>
+          <button class="btn-ghost btn--icon chat-attach" title="${t('chat.composer.attachTitle', 'Adjuntar archivo (imagen, PDF, texto…)')}">${icon('paperclip', { size: 16 })}</button>
+          <button class="btn-ghost btn--icon chat-pkgref" title="${t('chat.composer.pkgrefTitle', 'Referenciar otro paquete-sesión (F5)')}">${icon('externalLink', { size: 16 })}</button>
+          <textarea class="chat-input" rows="1" enterkeyhint="send" placeholder="${t('chat.composer.inputPlaceholder', 'Escribí o dictá un mensaje…')}"></textarea>
+          <button class="btn btn--icon chat-send" title="${t('chat.common.send', 'Enviar')}">${icon('play', { size: 16 })}</button>
+          <button class="btn-ghost btn--icon chat-stop" title="${t('chat.composer.stopTitle', 'Detener')}" hidden>${icon('close', { size: 16 })}</button>
         </div>
       </div>`;
 
@@ -321,9 +323,9 @@ export class ChatTab {
     // aborta la operación; Parar envía el interrupt.
     this.stopBtn.addEventListener('click', async () => {
       const ok = await confirmSheet({
-        title: 'Detener respuesta',
-        message: '¿Parar la respuesta en curso? Se interrumpe lo que Claude está generando.',
-        confirmLabel: 'Parar', cancelLabel: 'Cancelar', danger: true,
+        title: t('chat.stop.title', 'Detener respuesta'),
+        message: t('chat.stop.message', '¿Parar la respuesta en curso? Se interrumpe lo que Claude está generando.'),
+        confirmLabel: t('chat.stop.confirm', 'Parar'), cancelLabel: t('chat.common.cancel', 'Cancelar'), danger: true,
       });
       if (ok) this._send({ type: 'interrupt' });
     });
@@ -458,8 +460,8 @@ export class ChatTab {
       const empty = document.createElement('div');
       empty.className = 'chat-slash-empty';
       empty.textContent = !all.length
-        ? (this._metaSeen ? 'Esta conversación no expone comandos.' : 'Cargando comandos… (llegan con el primer mensaje)')
-        : 'Sin coincidencias.';
+        ? (this._metaSeen ? t('chat.slash.noCommands', 'Esta conversación no expone comandos.') : t('chat.slash.loading', 'Cargando comandos… (llegan con el primer mensaje)'))
+        : t('chat.slash.noMatches', 'Sin coincidencias.');
       pop.appendChild(empty);
       return;
     }
@@ -520,7 +522,17 @@ export class ChatTab {
     this._slashUpdate();
   }
 
+  // Abre el WebSocket de la conversación. IDEMPOTENTE: llamarla más de una vez
+  // NO abre un segundo socket. El arranque (lazy-connect) conecta la conversación
+  // recién al mostrarla, y puede pedir conectar la MISMA pestaña varias veces
+  // (setActive) — el guard `_wsWanted` lo hace inofensivo. La reconexión
+  // automática reusa `_open()` directo, sin volver a pasar por el guard.
   connect() {
+    if (this._wsWanted) return;
+    this._wsWanted = true;
+    this._open();
+  }
+  _open() {
     const url = `wss://${location.host}/ws/chat?id=${encodeURIComponent(this.id)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -539,7 +551,7 @@ export class ChatTab {
     };
     ws.onclose = () => {
       if (this.closedByUser) return;
-      this.reconnectTimer = setTimeout(() => this.connect(), 1500);
+      this.reconnectTimer = setTimeout(() => this._open(), 1500);
     };
     ws.onerror = () => ws.close();
   }
@@ -575,7 +587,7 @@ export class ChatTab {
     const files = Array.from(fileList || []);
     for (const file of files) {
       if (this.pending.length >= MAX_ATTACHMENTS) {
-        this._line('chat-error', `Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje.`);
+        this._line('chat-error', t('chat.attach.max', 'Máximo {max} adjuntos por mensaje.', { max: MAX_ATTACHMENTS }));
         break;
       }
       const type = classifyLocal(file);
@@ -592,7 +604,7 @@ export class ChatTab {
         fd.append('file', file);
         const res = await fetch(`/api/chat/attachment?id=${encodeURIComponent(this.id)}`, { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo subir.');
+        if (!res.ok) throw new Error(data.error || t('chat.attach.uploadFail', 'No se pudo subir.'));
         entry.name = data.attachment.name;
         entry.type = data.attachment.type || type;
         entry.mime = data.attachment.mime || entry.mime;
@@ -641,7 +653,7 @@ export class ChatTab {
       const rm = document.createElement('button');
       rm.className = 'chat-att-rm';
       rm.type = 'button';
-      rm.title = 'Quitar';
+      rm.title = t('chat.attach.remove', 'Quitar');
       rm.innerHTML = icon('close', { size: 12 });
       rm.addEventListener('click', () => this._removePending(p));
       chip.appendChild(rm);
@@ -675,7 +687,8 @@ export class ChatTab {
         chip.appendChild(ic);
         const label = document.createElement('span');
         label.className = 'chat-att-name';
-        label.textContent = a.name || ATT_KIND_LABEL[type] || 'adjunto';
+        const _k = ATT_KIND_I18N[type];
+        label.textContent = a.name || (_k ? t(_k[0], _k[1]) : '') || t('chat.att.attachment', 'adjunto');
         chip.appendChild(label);
         if (a.name) {
           chip.classList.add('chat-att--link');
@@ -688,7 +701,7 @@ export class ChatTab {
   }
 
   _lightbox(src, name) {
-    const m = openModal({ title: name || 'Imagen', width: 'min(92vw, 900px)' });
+    const m = openModal({ title: name || t('chat.lightbox.title', 'Imagen'), width: 'min(92vw, 900px)' });
     const img = document.createElement('img');
     img.src = src;
     img.className = 'chat-lightbox-img';
@@ -778,9 +791,9 @@ export class ChatTab {
         // pidió un modo y el motor reporta OTRO, el cambio NO tomó: avisamos
         // claro y no dejamos el select mintiendo un modo que no está vigente.
         if (this._pendingMode && m.mode !== this._pendingMode) {
-          const want = (MODES.find(([v]) => v === this._pendingMode) || [, this._pendingMode])[1];
-          const real = (MODES.find(([v]) => v === m.mode) || [, m.mode])[1];
-          this._line('chat-error', `No se pudo activar el modo “${want}”: sigue en “${real}”. Si esta conversación viene de antes, cerrala y reabrila para aplicar el cambio.`);
+          const want = modeLabel(this._pendingMode);
+          const real = modeLabel(m.mode);
+          this._line('chat-error', t('chat.mode.switchFail', 'No se pudo activar el modo “{want}”: sigue en “{real}”. Si esta conversación viene de antes, cerrala y reabrila para aplicar el cambio.', { want, real }));
           this._pendingMode = null;
         } else if (m.mode === this._pendingMode) {
           this._pendingMode = null; // confirmado por el motor
@@ -789,23 +802,23 @@ export class ChatTab {
         break;
       case 'viewmode':
         if (m.viewMode === 'switching') {
-          this._line('chat-switch-note', 'Cambiando a Terminal (TUI)…');
+          this._line('chat-switch-note', t('chat.viewmode.switching', 'Cambiando a Terminal (TUI)…'));
         } else if (m.error) {
           this._line('chat-error', m.error);
         }
         // El shell reconstruye la vista si el modo efectivo cambió.
         this.onViewMode?.(m);
         break;
-      case 'error': this._line('chat-error', `Error: ${m.message}`); break;
+      case 'error': this._line('chat-error', t('chat.event.error', 'Error: {message}', { message: m.message })); break;
       case 'reopened':
         // Se mató el runner viejo y arrancó uno fresco sobre la misma sesión
         // (opción "Reabrir para cambios" del menú ⋯): ya toma el código nuevo.
-        this._line('chat-closed-note', 'Motor reabierto — arrancó un proceso fresco que toma los cambios de código nuevos. El contexto se conserva.');
+        this._line('chat-closed-note', t('chat.event.reopened', 'Motor reabierto — arrancó un proceso fresco que toma los cambios de código nuevos. El contexto se conserva.'));
         break;
       case 'moved':
         // La conversación se mudó a otro MUNDO (menú ⋯ "Mover a otro mundo", F1/
         // PLAN-373): misma sesión, nuevo cwd; ya usa las herramientas de ese mundo.
-        this._line('chat-closed-note', `📦 Movida a ${m.world || 'otro mundo'} — ahora usás las herramientas de ese mundo. El contexto viajó completo.`);
+        this._line('chat-closed-note', t('chat.event.moved', '📦 Movida a {world} — ahora usás las herramientas de ese mundo. El contexto viajó completo.', { world: m.world || t('chat.event.otherWorld', 'otro mundo') }));
         this._applyWorld(m.cwd, m.world); // actualizar la insignia de mundo del header
         this._applyFlow(this._flowSid, m.cwd);
         break;
@@ -813,9 +826,9 @@ export class ChatTab {
         if (m.resumable) {
           // El motor se durmió (inactividad); la conversación sigue viva:
           // el próximo mensaje la retoma. No se bloquea nada.
-          this._line('chat-closed-note', 'Conversación dormida por inactividad — tu próximo mensaje la retoma.');
+          this._line('chat-closed-note', t('chat.event.dormant', 'Conversación dormida por inactividad — tu próximo mensaje la retoma.'));
         } else {
-          this._line('chat-closed-note', 'Conversación cerrada en el servidor.');
+          this._line('chat-closed-note', t('chat.event.closed', 'Conversación cerrada en el servidor.'));
           this.inputEl.disabled = true;
           this.sendBtn.disabled = true;
         }
@@ -942,14 +955,14 @@ export class ChatTab {
         // (Read/Write de un .js, .css, etc.); logs/errores quedan planos.
         fillCode(pre, chip._output.text, chip._output.ok ? langForPath(chip._summary) : null);
       } else {
-        pre.textContent = '(sin salida)';
+        pre.textContent = t('chat.tool.noOutput', '(sin salida)');
       }
       body.appendChild(pre);
     }
     if (!body.childNodes.length) {
       const note = document.createElement('div');
       note.className = 'ctg-empty';
-      note.textContent = '(sin detalle)';
+      note.textContent = t('chat.tool.noDetail', '(sin detalle)');
       body.appendChild(note);
     }
     return body;
@@ -1035,8 +1048,8 @@ export class ChatTab {
         <button type="button" class="chat-toolchip cp-chip">
           ${icon('terminal', { size: 14 })}${icon(toolTypeIcon(m.tool), { size: 13, className: 'ct-type' })}${icon('chevronDown', { size: 12, className: 'cp-chev' })}
         </button>
-        <button class="btn-ghost btn--sm cp-deny" data-allow="0">${icon('close', { size: 13 })} Denegar</button>
-        <button class="btn btn--sm cp-allow" data-allow="1">${icon('check', { size: 13 })} Permitir</button>
+        <button class="btn-ghost btn--sm cp-deny" data-allow="0">${icon('close', { size: 13 })} ${t('chat.perm.deny', 'Denegar')}</button>
+        <button class="btn btn--sm cp-allow" data-allow="1">${icon('check', { size: 13 })} ${t('chat.perm.allow', 'Permitir')}</button>
       </div>
       <div class="chat-perm-detail" hidden></div>`;
     // El tooltip NUNCA parafrasea: tool + inicio real del comando (server).
@@ -1076,7 +1089,7 @@ export class ChatTab {
     head.className = 'askq-head';
     head.innerHTML = icon('help', { size: 14 });
     const label = document.createElement('span');
-    label.textContent = 'Pregunta del asistente';
+    label.textContent = t('chat.askq.assistantQuestion', 'Pregunta del asistente');
     head.appendChild(label);
     el.appendChild(head);
 
@@ -1104,7 +1117,7 @@ export class ChatTab {
     else {
       const pre = document.createElement('pre');
       pre.className = 'ct-cmd';
-      pre.textContent = d?.command || el._summary || '(sin detalle)';
+      pre.textContent = d?.command || el._summary || t('chat.tool.noDetail', '(sin detalle)');
       body.appendChild(pre);
     }
     return body;
@@ -1121,7 +1134,7 @@ export class ChatTab {
     chip.type = 'button';
     chip.className = `chat-toolchip chat-permchip ${m.allow ? 'ok' : 'no'}`;
     chip.innerHTML = `${icon(m.allow ? 'check' : 'close', { size: 13 })}<span class="ct-name"></span>`;
-    chip.querySelector('.ct-name').textContent = m.allow ? 'Permitido' : 'Denegado';
+    chip.querySelector('.ct-name').textContent = m.allow ? t('chat.perm.allowed', 'Permitido') : t('chat.perm.denied', 'Denegado');
     chip.title = `${el._tool || ''} ${el._summary || ''}`.trim();
     chip._detail = el._detail || (el._summary ? { command: el._summary } : null);
     chip._summary = el._summary || '';
@@ -1148,9 +1161,9 @@ export class ChatTab {
     const mode = this.modeEl.value;
     if (mode === 'bypassPermissions') {
       const ok = await confirmDialog({
-        title: 'Aceptar todo',
-        message: 'En este modo Claude ejecuta TODA acción (comandos, ediciones, red…) sin pedir permiso, hasta que lo cambies. Es el modo más riesgoso: usalo solo si confiás plenamente en la tarea.',
-        confirmLabel: 'Aceptar todo',
+        title: t('chat.bypass.title', 'Aceptar todo'),
+        message: t('chat.bypass.message', 'En este modo Claude ejecuta TODA acción (comandos, ediciones, red…) sin pedir permiso, hasta que lo cambies. Es el modo más riesgoso: usalo solo si confiás plenamente en la tarea.'),
+        confirmLabel: t('chat.bypass.confirm', 'Aceptar todo'),
         danger: true,
       });
       if (!ok) { this._applyMode(this._mode || 'default'); return; }
@@ -1186,7 +1199,8 @@ export class ChatTab {
     el.hidden = false;
     el.dataset.world = p?.rel || 'other';
     el.innerHTML = `${icon(p?.ico || 'folder', { size: 12 })}<span>${label}</span>`;
-    el.title = `Mundo: ${label}${cwd ? ` · ${cwd}` : ''} — acá "GitHub/Pad/cuenta" son los de ${label}`;
+    const _path = cwd ? ` · ${cwd}` : '';
+    el.title = t('chat.world.title', 'Mundo: {label}{path} — acá "GitHub/Pad/cuenta" son los de {label}', { label, path: _path });
   }
 
   _applyFlow(sessionId, cwd) {
@@ -1212,10 +1226,10 @@ export class ChatTab {
   // contexto de otra sesión a la conversación actual. Lista construida con DOM +
   // textContent (sin innerHTML de datos del usuario).
   _openPackagePicker() {
-    const m = openModal({ title: 'Referenciar un paquete-sesión', width: 440 });
+    const m = openModal({ title: t('chat.pkg.pickerTitle', 'Referenciar un paquete-sesión'), width: 440 });
     const q = document.createElement('input');
     q.className = 'dlg-input chat-pkg-q';
-    q.placeholder = 'Buscar por ref (PKG-3), título o mundo…';
+    q.placeholder = t('chat.pkg.searchPlaceholder', 'Buscar por ref (PKG-3), título o mundo…');
     const list = document.createElement('div');
     list.className = 'chat-pkg-list';
     m.body.append(q, list);
@@ -1227,16 +1241,16 @@ export class ChatTab {
       list.replaceChildren();
       if (!pkgs.length) {
         const e = document.createElement('div');
-        e.className = 'chat-pkg-empty'; e.textContent = 'Sin paquetes.';
+        e.className = 'chat-pkg-empty'; e.textContent = t('chat.pkg.empty', 'Sin paquetes.');
         list.append(e); return;
       }
       for (const p of pkgs) {
         const b = document.createElement('button');
         b.className = 'btn-ghost chat-pkg-item';
         const r = document.createElement('span'); r.className = 'chat-pkg-ref'; r.textContent = p.ref;
-        const t = document.createElement('span'); t.className = 'chat-pkg-title'; t.textContent = p.title || '(sin título)';
+        const titleEl = document.createElement('span'); titleEl.className = 'chat-pkg-title'; titleEl.textContent = p.title || t('chat.pkg.noTitle', '(sin título)');
         const meta = document.createElement('span'); meta.className = 'chat-pkg-meta'; meta.textContent = `${p.world || '?'} · ${p.status || ''}`;
-        b.append(r, t, meta);
+        b.append(r, titleEl, meta);
         b.addEventListener('click', () => this._insertPackageRef(p.ref, m));
         list.append(b);
       }
@@ -1251,7 +1265,7 @@ export class ChatTab {
     try { data = await fetch(`/api/chat/package/${encodeURIComponent(ref)}`).then((r) => r.json()); } catch { /* noop */ }
     const p = data.package || { ref };
     const snip = data.snippet ? `: ${data.snippet}` : '';
-    const block = `📦 Referencia al paquete ${p.ref} «${p.title || ''}» (mundo ${p.world || '?'})${snip}`;
+    const block = t('chat.pkg.refBlock', '📦 Referencia al paquete {ref} «{title}» (mundo {world}){snip}', { ref: p.ref, title: p.title || '', world: p.world || '?', snip });
     modal?.close();
     const ta = this.inputEl;
     if (ta) {
@@ -1266,7 +1280,7 @@ export class ChatTab {
     this._model = model || null;
     this._renderModelBadge();
     if (auto && prev && this._modelChoice === 'auto' && prev !== model) {
-      this._line('chat-switch-note', `🤖 AutoTux cambió el modelo a ${modelName(model)} sin que hagas nada.`);
+      this._line('chat-switch-note', t('chat.model.autoSwitch', '🤖 AutoTux cambió el modelo a {model} sin que hagas nada.', { model: modelName(model) }));
     }
   }
 
@@ -1297,24 +1311,24 @@ export class ChatTab {
       this.modelPillEl.hidden = false;
       this.modelPillEl.style.color = color;
       this.modelPillEl.style.borderColor = color;
-      this.modelPillEl.title = title + (effTxt ? ` · esfuerzo: ${effTxt}` : '');
+      this.modelPillEl.title = title + (effTxt ? t('chat.model.effortSuffix', ' · esfuerzo: {eff}', { eff: effTxt }) : '');
       this.modelPillEl.innerHTML = `<span class="chat-pill-l1">${l1}</span>${effTxt ? `<span class="chat-pill-l2">🧠 ${effTxt}</span>` : ''}`;
       this.modelPillEl.classList.toggle('chat-model-pill--two', !!effTxt);
     };
     if (choice === 'auto') {
       const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
-      paint(`🤖 AutoTux: ${level}`, modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown'),
-        `AutoTux (router de modelo automático) — nivel actual: ${level}`);
+      paint(t('chat.model.autoBadge', '🤖 AutoTux: {level}', { level }), modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown'),
+        t('chat.model.autoTitle', 'AutoTux (router de modelo automático) — nivel actual: {level}', { level }));
     } else if (choice === 'tandem') {
       // Modelo TÁNDEM (PLAN-507): Opus razona/verifica, Codex ejecuta. Color
       // propio (acento frío, el mismo que Codex en el panel de Uso) para
       // distinguirlo de un modelo forzado común.
-      paint('🤝 Tándem', 'var(--cwc-accent-cool)',
-        'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código');
+      paint(t('chat.model.tandemBadge', '🤝 Tándem'), 'var(--cwc-accent-cool)',
+        t('chat.model.tandemTitle', 'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código'));
     } else if (choice) {
       const label = CHAT_MODEL_LABEL.get(choice) || choice;
       paint(label, modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown'),
-        `Modelo forzado — esta conversación solo usa ${label}`);
+        t('chat.model.forcedTitle', 'Modelo forzado — esta conversación solo usa {label}', { label }));
     } else {
       this.modelPillEl.hidden = true;
     }
@@ -1337,67 +1351,51 @@ export class ChatTab {
         <span class="mh-leg-icons">${pacman({ state, size: 'sm', title: name })}</span>
         <b>${name}</b><span>${desc}</span>
       </div>`;
-    const m = openModal({ title: 'Ayuda del chat', width: 480 });
+    const m = openModal({ title: t('chat.help.title', 'Ayuda del chat'), width: 480 });
     m.body.innerHTML = `
       <div class="mode-help">
-        <div class="mh-sec">Modos de permisos</div>
+        <div class="mh-sec">${t('chat.help.modesSection', 'Modos de permisos')}</div>
         <div class="mh-item">
-          <b>Preguntar</b>
-          <p>El modo estándar. Claude pide permiso antes de CADA acción que toque
-          tu sistema (editar archivos, correr comandos): aparece una tarjeta y
-          vos aprobás o denegás una por una.</p>
+          <b>${t('chat.mode.ask', 'Preguntar')}</b>
+          <p>${t('chat.help.askDesc', 'El modo estándar. Claude pide permiso antes de CADA acción que toque tu sistema (editar archivos, correr comandos): aparece una tarjeta y vos aprobás o denegás una por una.')}</p>
         </div>
         <div class="mh-item">
-          <b>Ediciones</b>
-          <p>Claude puede editar y crear archivos sin preguntar; todo lo demás
-          (comandos de terminal, red, etc.) sigue pidiendo permiso. Cómodo
-          cuando ya confiás en el rumbo del trabajo.</p>
+          <b>${t('chat.mode.edits', 'Ediciones')}</b>
+          <p>${t('chat.help.editsDesc', 'Claude puede editar y crear archivos sin preguntar; todo lo demás (comandos de terminal, red, etc.) sigue pidiendo permiso. Cómodo cuando ya confiás en el rumbo del trabajo.')}</p>
         </div>
         <div class="mh-item">
-          <b class="mh-danger">Todo</b>
-          <p>Aceptación avanzada: Claude ejecuta ABSOLUTAMENTE todo sin pedir
-          permiso — comandos, ediciones, red. Es el modo más riesgoso (por eso
-          pide confirmación al activarlo); usalo solo cuando confiás plenamente
-          en la tarea y quieras cero fricción.</p>
+          <b class="mh-danger">${t('chat.mode.all', 'Todo')}</b>
+          <p>${t('chat.help.allDesc', 'Aceptación avanzada: Claude ejecuta ABSOLUTAMENTE todo sin pedir permiso — comandos, ediciones, red. Es el modo más riesgoso (por eso pide confirmación al activarlo); usalo solo cuando confiás plenamente en la tarea y quieras cero fricción.')}</p>
         </div>
         <div class="mh-item">
-          <b>Plan</b>
-          <p>Claude no toca nada: solo lee el proyecto y arma un plan de
-          trabajo. Ideal para explorar una idea o ver qué haría antes de
-          soltarle la mano.</p>
+          <b>${t('chat.mode.plan', 'Plan')}</b>
+          <p>${t('chat.help.planDesc', 'Claude no toca nada: solo lee el proyecto y arma un plan de trabajo. Ideal para explorar una idea o ver qué haría antes de soltarle la mano.')}</p>
         </div>
-        <p class="mh-foot">Podés cambiar de modo en cualquier momento; aplica
-        desde la próxima acción. El color del selector marca el riesgo:
-        verde = controlado · amarillo = medio · rojo = acepta todo.</p>
+        <p class="mh-foot">${t('chat.help.modesFoot', 'Podés cambiar de modo en cualquier momento; aplica desde la próxima acción. El color del selector marca el riesgo: verde = controlado · amarillo = medio · rojo = acepta todo.')}</p>
 
-        <div class="mh-sec">Íconos de acciones</div>
-        <p class="mh-intro">Cada acción de Claude aparece en el hilo como un
-        chip de dos íconos: la consola (ejecutó una herramienta) + el tipo.
-        Tocá el chip para ver el detalle completo; el borde marca el
-        resultado (verde ok · rojo error).</p>
+        <div class="mh-sec">${t('chat.help.iconsSection', 'Íconos de acciones')}</div>
+        <p class="mh-intro">${t('chat.help.iconsIntro', 'Cada acción de Claude aparece en el hilo como un chip de dos íconos: la consola (ejecutó una herramienta) + el tipo. Tocá el chip para ver el detalle completo; el borde marca el resultado (verde ok · rojo error).')}</p>
         <div class="mh-legend">
-          ${leg('play', 'Bash', 'corre un comando')}
-          ${leg('edit', 'Edit / Write', 'edita o crea archivos')}
-          ${leg('eye', 'Read', 'lee archivos')}
-          ${leg('search', 'Grep / Glob', 'busca en el proyecto')}
-          ${leg('download', 'Web', 'consulta la web')}
-          ${leg('list', 'Todo', 'lista de tareas del agente')}
-          ${leg('sparkle', 'Task', 'lanza un subagente')}
-          ${leg('gear', 'Otras', 'cualquier otra herramienta')}
+          ${leg('play', 'Bash', t('chat.help.legBashDesc', 'corre un comando'))}
+          ${leg('edit', 'Edit / Write', t('chat.help.legEditDesc', 'edita o crea archivos'))}
+          ${leg('eye', 'Read', t('chat.help.legReadDesc', 'lee archivos'))}
+          ${leg('search', 'Grep / Glob', t('chat.help.legGrepDesc', 'busca en el proyecto'))}
+          ${leg('download', 'Web', t('chat.help.legWebDesc', 'consulta la web'))}
+          ${leg('list', 'Todo', t('chat.help.legTodoDesc', 'lista de tareas del agente'))}
+          ${leg('sparkle', 'Task', t('chat.help.legTaskDesc', 'lanza un subagente'))}
+          ${leg('gear', t('chat.help.legOtherName', 'Otras'), t('chat.help.legOtherDesc', 'cualquier otra herramienta'))}
         </div>
 
-        <div class="mh-sec">Estados del Pac-Man</div>
-        <p class="mh-intro">El mismo Pac-Man aparece acá arriba y en las
-        tarjetas de Sesiones — el color Y el movimiento te dicen qué está
-        haciendo la conversación en cada momento:</p>
+        <div class="mh-sec">${t('chat.help.pacSection', 'Estados del Pac-Man')}</div>
+        <p class="mh-intro">${t('chat.help.pacIntro', 'El mismo Pac-Man aparece acá arriba y en las tarjetas de Sesiones — el color Y el movimiento te dicen qué está haciendo la conversación en cada momento:')}</p>
         <div class="mh-legend">
-          ${pacLeg('working', 'Trabajando', 'dorado, mordisco rápido: un turno corriendo ahora')}
-          ${pacLeg('delegating', 'Delegando', 'violeta con el ícono del interfono: esperando que vuelva un subagente (Task) u otro proceso')}
-          ${pacLeg('queued', 'En cola', 'ámbar que respira: esperando su turno detrás de otro paso')}
-          ${pacLeg('waiting', 'Tu turno', 'verde, parpadeo lento: esperando tu mensaje o tu decisión')}
-          ${pacLeg('stale', 'Sin señales', 'ámbar apagado y quieto: se perdió el rastro, no se sabe si sigue activo')}
-          ${pacLeg('error', 'Falló', 'rojo y quieto: se detuvo por un error')}
-          ${pacLeg('dormant', 'Dormido', 'gris y quieto: nada activo ni delegado — el único estado sin animación')}
+          ${pacLeg('working', t('chat.help.pacWorkingName', 'Trabajando'), t('chat.help.pacWorkingDesc', 'dorado, mordisco rápido: un turno corriendo ahora'))}
+          ${pacLeg('delegating', t('chat.help.pacDelegatingName', 'Delegando'), t('chat.help.pacDelegatingDesc', 'violeta con el ícono del interfono: esperando que vuelva un subagente (Task) u otro proceso'))}
+          ${pacLeg('queued', t('chat.help.pacQueuedName', 'En cola'), t('chat.help.pacQueuedDesc', 'ámbar que respira: esperando su turno detrás de otro paso'))}
+          ${pacLeg('waiting', t('chat.help.pacWaitingName', 'Tu turno'), t('chat.help.pacWaitingDesc', 'verde, parpadeo lento: esperando tu mensaje o tu decisión'))}
+          ${pacLeg('stale', t('chat.help.pacStaleName', 'Sin señales'), t('chat.help.pacStaleDesc', 'ámbar apagado y quieto: se perdió el rastro, no se sabe si sigue activo'))}
+          ${pacLeg('error', t('chat.help.pacErrorName', 'Falló'), t('chat.help.pacErrorDesc', 'rojo y quieto: se detuvo por un error'))}
+          ${pacLeg('dormant', t('chat.help.pacDormantName', 'Dormido'), t('chat.help.pacDormantDesc', 'gris y quieto: nada activo ni delegado — el único estado sin animación'))}
         </div>
       </div>`;
   }
@@ -1427,14 +1425,14 @@ export class ChatTab {
   // vez (si llega otro, reemplaza al anterior — el último juicio manda).
   _redoSuggest(m) {
     this.msgsEl.querySelector('.chat-redo')?.remove();
-    const to = m.to || 'un modelo más fuerte';
+    const to = m.to || t('chat.redo.strongerModel', 'un modelo más fuerte');
     const el = document.createElement('div');
     el.className = 'chat-redo';
     el.innerHTML = `
-      <span class="chat-redo-txt">🤔 Creo que un modelo más fuerte lo haría mejor.</span>
+      <span class="chat-redo-txt">${t('chat.redo.text', '🤔 Creo que un modelo más fuerte lo haría mejor.')}</span>
       <span class="chat-redo-actions">
-        <button class="btn btn--sm" data-act="redo">Reintentar en ${to}</button>
-        <button class="btn-ghost btn--sm" data-act="ignore">Ignorar</button>
+        <button class="btn btn--sm" data-act="redo">${t('chat.redo.retry', 'Reintentar en {to}', { to })}</button>
+        <button class="btn-ghost btn--sm" data-act="ignore">${t('chat.redo.ignore', 'Ignorar')}</button>
       </span>`;
     el.querySelector('[data-act="ignore"]').addEventListener('click', () => el.remove());
     el.querySelector('[data-act="redo"]').addEventListener('click', async () => {
@@ -1444,8 +1442,8 @@ export class ChatTab {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: this.id }),
         });
-        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'No se pudo reintentar.'); }
-      } catch (e) { this._line('chat-error', `Reintentar: ${e.message}`); }
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || t('chat.redo.failMsg', 'No se pudo reintentar.')); }
+      } catch (e) { this._line('chat-error', t('chat.redo.failLine', 'Reintentar: {message}', { message: e.message })); }
     });
     this.msgsEl.appendChild(el);
     this._scroll();
@@ -1471,8 +1469,8 @@ export class ChatTab {
     const state = !this._working ? 'waiting' : (this._delegatingCount > 0 ? 'delegating' : 'working');
     this.container.querySelector('.chat-view').classList.toggle('working', this._working);
     this.aliveEl.className = pacClass(state, { cls: 'chat-alive' });
-    this.aliveEl.title = state === 'delegating' ? 'Delegando a un subagente…'
-      : state === 'working' ? 'Trabajando…' : 'Esperando tu mensaje';
+    this.aliveEl.title = state === 'delegating' ? t('chat.pac.delegatingTitle', 'Delegando a un subagente…')
+      : state === 'working' ? t('chat.pac.workingTitle', 'Trabajando…') : t('chat.pac.waitingTitle', 'Esperando tu mensaje');
   }
 
   _scroll() {

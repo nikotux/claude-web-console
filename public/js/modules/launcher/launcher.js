@@ -8,6 +8,8 @@
 // Flujos: Home = 2 taps · reciente = 3 taps · carpeta nueva = navegar + Iniciar.
 import { placeFor } from '../../ui/places.js';
 import { CHAT_MODEL_OPTIONS } from '../../ui/models.js';
+import { pacman } from '../../ui/pacman.js';
+import { t } from '../../ui/i18n.js';
 
 const LAST_MODEL_KEY = 'cwc:lastModel';
 // "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
@@ -29,7 +31,7 @@ export default {
 
     // Botón compacto: misma altura/diseño que el ☰ de colapsar (rail-btn),
     // con tipografía acorde. Va al lado del toggle en la cabecera derecha.
-    el.innerHTML = `<button class="btn sb-new-btn" id="ln-open">${icon('plus', { size: 16 })}<span>Nueva sesión</span></button>`;
+    el.innerHTML = `<button class="btn sb-new-btn" id="ln-open">${icon('plus', { size: 16 })}<span>${t('launcher.newSession', 'Nueva sesión')}</span></button>`;
     el.querySelector('#ln-open').addEventListener('click', open);
     bus.addEventListener('open-launcher', open);
 
@@ -48,7 +50,7 @@ export default {
       // Ancho angosto (360): con solo 3 tarjetas por fila + dropdown + CTA, 440
       // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido
       // del usuario 2026-07-10).
-      modal = dialog.openModal({ title: 'Nueva sesión', width: 360, onClose: () => { modal = null; } });
+      modal = dialog.openModal({ title: t('launcher.newSession', 'Nueva sesión'), width: 360, onClose: () => { modal = null; } });
       st.view = 'list';
       st.dest = null;
       render();
@@ -58,7 +60,7 @@ export default {
         const tk = await fetch('/api/tolkien/status')
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
           .catch(() => null);
-        if (tk?.rel) st.project = { rel: tk.rel, name: tk.name || 'Proyecto' };
+        if (tk?.rel) st.project = { rel: tk.rel, name: tk.name || t('launcher.projectFallback', 'Proyecto') };
         if (modal) render();
       } catch { /* noop */ }
     }
@@ -77,21 +79,21 @@ export default {
       const typeCard = (type, ic, label) =>
         `<button class="btn-ghost ln-type ln-card ${st.type === type ? 'active' : ''}" data-type="${type}">${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span></button>`;
       body.innerHTML = `
-        <div class="ln-sec-title">Tipo de sesión</div>
+        <div class="ln-sec-title">${t('launcher.sessionType', 'Tipo de sesión')}</div>
         <div class="ln-types">
-          ${typeCard('chat', 'sparkle', 'Chat')}
-          ${typeCard('claude', 'keyboard', 'Claude TUI')}
-          ${typeCard('terminal', 'terminal', 'Terminal')}
+          ${typeCard('chat', 'sparkle', t('launcher.type.chat', 'Chat'))}
+          ${typeCard('claude', 'keyboard', t('launcher.type.claudeTui', 'Claude TUI'))}
+          ${typeCard('terminal', 'terminal', t('launcher.type.terminal', 'Terminal'))}
         </div>
-        <div class="ln-sec-title">Proyecto</div>
+        <div class="ln-sec-title">${t('launcher.section.project', 'Proyecto')}</div>
         <div class="ln-area">${st.view === 'list' ? listHTML() : browseHTML()}</div>
         <div class="ln-model-row" ${st.type === 'terminal' ? 'hidden' : ''}>
-          <label class="ln-sec-title" for="ln-model">Modelo</label>
+          <label class="ln-sec-title" for="ln-model">${t('launcher.model', 'Modelo')}</label>
           <select id="ln-model" class="ln-model">
             ${(st.type === 'chat' ? MODELS : TUI_MODELS).map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
-        <button class="btn btn--block ln-start" ${st.dest ? '' : 'disabled'}>${icon('play', { size: 15 })}<span>${st.dest ? `Iniciar en ${st.dest.label}` : 'Elegí un destino'}</span></button>`;
+        <button class="btn btn--block ln-start" ${st.dest ? '' : 'disabled'}>${icon('play', { size: 15 })}<span>${st.dest ? t('launcher.startIn', 'Iniciar en {dest}', { dest: st.dest.label }) : t('launcher.pickDest', 'Elegí un destino')}</span></button>`;
 
       // Tipo
       for (const b of body.querySelectorAll('.ln-type')) {
@@ -125,15 +127,15 @@ export default {
         <div class="ln-dests">
           ${card(st.project.rel, st.project.name, 'gitBranch')}
           ${card(CONSOLE_PLACE.rel, CONSOLE_PLACE.label, CONSOLE_PLACE.ico, 'ln-dest--console')}
-          <button class="btn-ghost ln-card ln-browse-open ${other ? 'active' : ''}">${icon('folder', { size: 22 })}<span class="ln-card-label">Otra carpeta</span></button>
+          <button class="btn-ghost ln-card ln-browse-open ${other ? 'active' : ''}">${icon('folder', { size: 22 })}<span class="ln-card-label">${t('launcher.otherFolder', 'Otra carpeta')}</span></button>
         </div>`;
     }
 
     function browseHTML() {
       return `
-        <button class="btn-ghost btn--sm ln-back">${icon('chevronLeft', { size: 13 })}<span>Volver a proyectos</span></button>
+        <button class="btn-ghost btn--sm ln-back">${icon('chevronLeft', { size: 13 })}<span>${t('launcher.backToProjects', 'Volver a proyectos')}</span></button>
         <div class="ln-crumbs" data-ref="crumbs"></div>
-        <div class="ln-dirs" data-ref="dirs"><div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div></div>`;
+        <div class="ln-dirs" data-ref="dirs"><div class="cwc-loading">${pacman({ size: 'sm' })}${t('launcher.loading', 'cargando…')}</div></div>`;
     }
 
     function wireArea(body) {
@@ -165,7 +167,7 @@ export default {
       if (startBtn) {
         startBtn.disabled = false;
         const sp = startBtn.querySelector('span');
-        if (sp) sp.textContent = `Iniciar en ${st.dest.label}`;
+        if (sp) sp.textContent = t('launcher.startIn', 'Iniciar en {dest}', { dest: st.dest.label });
       }
 
       // Breadcrumb
@@ -194,12 +196,12 @@ export default {
         const dirs = entries.filter((e) => e.type === 'dir');
         dirsEl.innerHTML = dirs.length
           ? dirs.map((d) => `<button class="ln-dir" data-name="${d.name}">${icon('folder', { size: 14 })}<span>${d.name}</span></button>`).join('')
-          : '<div class="ln-hint">Sin subcarpetas — podés iniciar acá.</div>';
+          : `<div class="ln-hint">${t('launcher.noSubfolders', 'Sin subcarpetas — podés iniciar acá.')}</div>`;
         for (const b of dirsEl.querySelectorAll('.ln-dir')) {
           b.addEventListener('click', () => browse(rel ? `${rel}/${b.dataset.name}` : b.dataset.name));
         }
       } catch {
-        dirsEl.innerHTML = '<div class="ln-hint">No se pudo listar esta carpeta.</div>';
+        dirsEl.innerHTML = `<div class="ln-hint">${t('launcher.listError', 'No se pudo listar esta carpeta.')}</div>`;
       }
     }
 

@@ -1411,8 +1411,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Claude (la generación de código, 60-80% del gasto, se va a la ventana de la
                             suscripción ChatGPT). Verificación barata (diff, no repo). PILOTO: se usa
                             en sesiones de chat REALES bajo control de Niko (aprobar/parar/cambiar
-                            modelo); generalizar a "Trabajar en esto"/botones de Salud = PEND-512
-                            (post-piloto). Continuidad Codex entre delegaciones (codex exec resume
+                            modelo). PRIMER botón de Salud con Tándem opt-in (2026-07-19): el
+                            auto-fix (`bin/cwc-healthfix-runner.js --tandem`, ver "Verificación de
+                            salud" § TÁNDEM opt-in en el auto-fix) reusa TAL CUAL
+                            `createCodexToolServer` con una allowlist headless propia
+                            (`fixToolAllowedTandem`) que bloquea Edit/Write/MultiEdit/NotebookEdit
+                            — mismo split estructural que el chat, sin tarjeta de permiso (el
+                            auto-fix YA corre sin supervisión). Generalizar a "Trabajar en esto" de
+                            Tickets & Features sigue como PEND-512 (post-piloto), NO hecho.
+                            Continuidad Codex entre delegaciones (codex exec resume
                             <thread_id>) = mejora futura (hoy cada delegación es fresca; Claude re-pasa
                             el contexto en el `task`). VERIFICADO E2E (WS real): chat tandem → Opus →
                             "delego a Codex" → tarjeta de permiso → Codex crea el archivo en el cwd →
@@ -1986,7 +1993,67 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Eliminar ya NO aparece en las demás. La CURADURÍA es mantenimiento
                             APARTE: botón "🧹 Ordenar el registro" arriba (no por-lección). NO
                             confundir con learning/ (🎓 Temas de aprendizaje = estudio de Niko):
-                            retro = el SISTEMA aprende a mejorar su propio proceso
+                            retro = el SISTEMA aprende a mejorar su propio proceso.
+                            "💬 FEEDBACK DE CHRIS" (2026-07-19, pedido de Niko): categoría NUEVA
+                            `feedback-cliente` de la MISMA colección Pad (`mejora-continua`) — NO un
+                            módulo aparte — para reusar tal cual el dedup por recurrencia y el destino
+                            `contexto` (al adoptar una, se apendea a bugfix-work.md → se inyecta SOLA
+                            en TODO chat de ticket/PR futuro, sin depender de que "se parezca" a otro
+                            por archivos/tags como hace la Biblioteca de Soluciones de bugfixes). A
+                            diferencia de una lección de proceso, ésta es retroalimentación PUNTUAL de
+                            un cliente/revisor sobre un bug/PR — llegada por correo, Teams o una
+                            llamada — y suma el campo `sourceRefs[]` (TKT-n/PR-n/FEAT-n normalizados,
+                            `normRefs`/`store.js`) para poder agrupar/filtrar "todo lo que dijo Chris
+                            sobre el TKT-519" (chip clickeable en el tablero, `data-ref-filter`; el
+                            schema de la colección en Pad se actualizó a mano vía `pad_collection
+                            update` para sumar la opción `feedback-cliente` al campo `category` y el
+                            campo `sourceRefs` — un `category` no listado ahí lo RECHAZA el server de
+                            Pad con 500, aunque el `oneOf()` de `store.js` ya lo validara del lado
+                            Node). DOS vías de ingesta, ambas DESACOPLADAS (regla de oro) y TEXTO PURO
+                            read-only (regla 6 — CERO herramientas vía `core/text-only-query.js`,
+                            igual que la destilación de proceso): (a) MANUAL — composer "💬 Feedback de
+                            Chris" del tablero: pegás el texto (+ ticket opcional) →
+                            `POST /api/retro/feedback` → `bin/cwc-retro-feedback-runner.js`
+                            (`retro/feedback-shared.js`) interpreta y puede extraer VARIAS piezas de
+                            feedback de un mismo pegado; (b) AUTOMÁTICA — botón "📧 Traer feedback de
+                            correo" (admin, confirm, consume tokens): `POST /api/retro/email-refresh` →
+                            `bin/cwc-retro-email-runner.js` (`retro/email-shared.js`) escanea el correo
+                            del contacto `chris` (reusa `comms/shared.js` readContacts/readSelf — el
+                            email ya vive ahí, no se duplica el contacto) vía el MISMO MCP de Graph que
+                            ya usa Teams (`graph_read_email`/`graph_read_email_body` — el scope
+                            Mail.Read/Mail.Send YA está concedido en la app de Entra de Tolkien,
+                            verificado 2026-07-19: NO hizo falta ningún consentimiento nuevo).
+                            Allowlist EXPLÍCITA POR NOMBRE (`emailReadAllowed`, no por verbo como
+                            `graphReadAllowed` de Teams — la mailbox es más sensible): SOLO
+                            `graph_read_email`/`graph_read_email_body` pasan; `graph_send_email`/
+                            `graph_reply_email`/`graph_create_draft`/adjuntos quedan denegados en las
+                            DOS capas aunque el MCP los tenga. `bin/cwc-retro-email-runner.js` está en
+                            `CROSS_WORLD_ALLOW` (health/index.js, check `cross-world`): cruza a
+                            `config.projectDir` de Tolkien de donde cuelga el MCP, igual que el
+                            escaneo de Teams — no enlaza los Pad. Estado en
+                            `~/.cwc-data/retro-feedback-<id>.json` (job manual) y
+                            `retro-email-scan.json` + `retro-email.lock` (heartbeat pid-aware, patrón
+                            triage/Teams — dedup: `spawnRetroEmailRunner` reserva el lock con el pid
+                            REAL del hijo en el mismo tick del spawn). GOTCHA verificado en la
+                            construcción: si Pad rechaza TODOS los ítems al persistir (p.ej. un campo
+                            no en el schema), el job NO puede quedar 'done' con "0 nuevas" en
+                            silencio — TODOS los runners de esta familia revisan
+                            `created+merged===0` con `items.length>0` y lanzan error para que se vea
+                            el fallo real.
+                            (c) AUTOMÁTICA por TEAMS (mismo pedido, 2026-07-19): botón "📨 Traer
+                            feedback de Teams" → `POST /api/retro/teams-refresh` →
+                            `bin/cwc-retro-teams-runner.js` (`retro/teams-feedback-shared.js`) — MISMA
+                            estructura que la de correo, pero REUSA TAL CUAL el allowlist ya probado en
+                            producción `graphReadAllowed` de `comms/teams-shared.js` (verbo-based:
+                            list/read/get/members/presence/detail/view/info sobre graph_*/teams_* — no
+                            uno explícito por nombre como el de correo, porque el patrón de Teams ya es
+                            el aceptado) para leer el DM 1:1 con el contacto `chris`. Una sola query
+                            lee Y destila en el mismo paso (a diferencia del escaneo de Teams de
+                            Comunicaciones, que solo lee). Estado en `~/.cwc-data/retro-teams-scan.json`
+                            + `retro-teams.lock`; `bin/cwc-retro-teams-runner.js` sumado a
+                            `CROSS_WORLD_ALLOW`. Las TRES piezas (manual/correo/Teams) caen en la MISMA
+                            lista del tablero (ícono 💬, chip de ticket) — se aprueban/adoptan/
+                            descartan con el mismo flujo de siempre, nada se auto-aplica.
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
                             claims con verdict de evaluateClaim + ts) · POST /send {to,text}
@@ -2379,6 +2446,40 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             vistas. TODO en hora local, date-math sin DST (86400000 ms/día). Los
                             límites (fetchPlanLimits) suman `modelKey` (keyOf del display_name de la
                             ventana scoped) para mapear su token-count.
+                            PUNTO DE REFERENCIA de la barra "Sesión (5h)" (2026-07-19, pedido de Niko:
+                            el % crudo de Anthropic no dice si vas rápido o lento — se veía "todo o
+                            nada" sin contexto). Alcance ACORDADO: SOLO `kind==='session'`, ni Semana
+                            ni Codex. Dos piezas, ambas en `usage.js` (fuente única, reusada por el pie
+                            `plan-limits.js`):
+                            (a) TICK de ritmo esperado + ALERTA de agotamiento (`paceInfo()`, 100%
+                            frontend, matemática pura desde `resetsAt` + duración fija de 5h — cero
+                            fetch nuevo): un tick vertical en la barra marca "acá deberías estar si
+                            gastaras parejo hasta el reset"; si tu ritmo ACTUAL (no el promedio)
+                            proyecta que llegás a 100% antes del reset, aparece "⏳ se agota ~HH:MM"
+                            en rojo. Se omite si `isActive:false` (sesión sin arrancar, dato que YA
+                            traía el backend pero no se usaba). Como usa matemática pura, SÍ aparece
+                            también en el pie compacto (`plan-lims`), no solo en el modal.
+                            (b) Comparación contra tu HISTORIAL — "1.4× tu ritmo habitual"
+                            (`paceRatioText()`, SOLO en el modal: necesita `windows` del summary, que
+                            el pie no pasa). Backend: `buildSummary()` (tokens/index.js) suma
+                            `h5cost` (costo $ equivalente acumulado en la ventana rodante de 5h,
+                            aparte de `h5tok`) y calcula `h5CostBaseline` = promedio de COSTO de los
+                            últimos días COMPLETOS del histórico persistente (`readSeries('week',
+                            'all')`, excluye hoy que está a medias; <3 días de historial ⇒ `null`, el
+                            front no muestra el comparativo) escalado a un bloque de 5h.
+                            OJO — es COSTO, NO tokens crudos (bug atrapado en la propia verificación
+                            2026-07-19): un token de cache read pesa ~10x menos en `pin()/pout()` que
+                            uno nuevo y puede ser el 90%+ del conteo crudo de una sesión con contexto
+                            reusado (caso real verificado: 95% cache reads con el % de cupo de
+                            Anthropic bajo) — comparar TOKENS crudos contra el % real de Anthropic
+                            infla el ratio artificialmente (se midió 2.7× con tokens vs 2.1× con
+                            costo, mismo momento). El costo YA es la métrica que el resto del módulo
+                            usa como "equivalente a precios de API"; es la aproximación más cercana
+                            que tenemos a cómo Anthropic pesa el cupo internamente (que no exponen).
+                            El ratio NO pretende igualar el % de cupo — es un eje INDEPENDIENTE
+                            ("¿hoy laburé más que lo normal PARA MÍ?"), separado del tick/alerta que
+                            sí usa el % real de Anthropic end-to-end. `windows` gana `h5Cost`/
+                            `h5CostBaseline`/`h5BaselineDays`.
                             MODAL rediseñado (usage.js): arriba límites del plan — cada uno con "·
                             ≈ X tok" (windows) y la fila de créditos COLAPSABLE (<details>, contraída
                             por defecto en el modal Y en el pie plan-limits.js). Abajo UNA barra de
@@ -2894,6 +2995,45 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             SKILL.md espejado (coherente con la lección MC-683: los draft/sin-slug
                             no cuentan como candidatos). Ver detalle completo del diseño en el
                             bloque de `system.js` más abajo.
+  mcps/                     CENSO + ESTADO EN VIVO de los servidores MCP de Claude Code (2026-07-19,
+                            pestaña "Conexiones" del grupo ⚙️ Configuración del menú Sistema,
+                            PLAN-695). Hermano de `skills` pero ACCIONABLE: además de las
+                            características muestra un semáforo de conexión y permite (re)conectar
+                            DESDE LA VENTANA. GET /api/mcps (autenticados, 0 tokens IA): corre
+                            `claude mcp list` con el cwd de cada mundo (🏠 Consola = CONSOLE_ROOT ·
+                            🌳 Tolkien = config.projectDir — los MCP son per-project, scope local en
+                            ~/.claude.json), parsea `<name>: <endpoint> - <estado>` (✔ Connected /
+                            ! Needs authentication / ⏸ Pending / ⚠ scope conflict → semáforo
+                            ok/warn/info/danger) y cruza con ~/.claude.json + el .mcp.json del repo
+                            (SOLO LECTURA) para transporte/scope/args. Es un subprocess CLI
+                            determinístico (como tolkien/refresh corre psql/git; NO es corrida del
+                            SDK → la regla 6 no aplica). Caché en memoria 60 s + ?fresh=1. OJO regex
+                            del parseo: el status arranca por símbolo (✔✘!⏸) SIN \b (un word-boundary
+                            tras ✔+espacio nunca matchea — bug corregido en construcción). ACCIONES
+                            (admin; Regla 4: NUNCA editan ~/.claude.json a mano — van por la vía CLI
+                            oficial `claude mcp`, que gestiona su propio archivo, igual que el
+                            onboarding usa `claude setup-token`): POST /mcps/refresh (re-verificar) ·
+                            POST /mcps/logout {world,name} (`claude mcp logout`, limpia OAuth) ·
+                            reciclar runners lo hace el FRONT vía /api/admin/restart-runners (existente).
+                            El enable/disable de servers .mcp.json se DESCARTÓ (editaría ~/.claude.json
+                            a mano). FASE 2 · RECONEXIÓN OAuth GUIADA (login-shared.js +
+                            bin/cwc-mcp-login-runner.js): `claude mcp login <name>` EXIGE TTY (stdin
+                            no-terminal aborta) → runner PTY (node-pty, mismo patrón que
+                            cwc-onboard-runner.js). Captura la URL de authorize que imprime, espera
+                            que el usuario pegue la URL de redirect (localhost:.../callback?code=…) →
+                            la escribe al stdin del pty → detecta éxito. Estado en archivos
+                            ~/.cwc-data/mcp-login/<world>-<name>.json (sobrevive reinicio, Regla 2).
+                            Endpoints POST /mcps/login (spawn, dedup por job fresco no-terminal) ·
+                            POST /mcps/login-code {id,value} · GET /mcps/login/:id (poll). El cwd del
+                            mundo lo resuelve login-shared en el server y lo pasa por --cwd al runner
+                            (que NO importa config.js). Frontend public/js/modules/system/mcps-panel.js
+                            (calco de skills-panel: reusa .hr-* + semáforo emoji 🟢🟡🟠🔴; modal OAuth
+                            guiado con URL clickeable + input de redirect + poll). login-shared.js
+                            usa config.projectDir → sumado a CROSS_WORLD_ALLOW del check `cross-world`
+                            (cruce READ-ONLY, no enlaza los Pad). Verificado E2E (Playwright desktop +
+                            375px): 7 MCP reales de ambos mundos con semáforo correcto; runner pty
+                            capturó la URL de authorize en vivo (intercambio final no ejercido para no
+                            completar un OAuth real).
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md).
@@ -2987,7 +3127,43 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             retro (sección "Mejora Continua": badge de propuestas + tablero modal
                             colapsable de LECCIONES DE PROCESO destiladas al cerrar chats — ver el
                             módulo backend `retro/` arriba; adoptar → destino sugerido/guardar/descartar) ·
-                            stats · usage · system(⚙: Backup/Usuarios/
+                            stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
+                            master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
+                            .sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·
+                            Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Interfono) ·
+                            🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
+                            grupos→items aplanados con índice global; en DESKTOP (≥720px) rail de
+                            grupos a la izquierda + panel a la derecha (arranca en el 1er ítem); en
+                            MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
+                            índice, tocás un ítem → el panel ocupa todo con "‹ Sistema" (.sys-back)
+                            para volver. isMobile()=matchMedia(max-width:719px) decide auto-select
+                            desktop vs índice móvil. CSS .sys-* en style.css (reemplazó .sys-tabs/
+                            .sys-tab/.sys-body). La pestaña Conexiones = mountMcpsPanel (módulo `mcps`,
+                            ver arriba). La pestaña Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
+                            traducción de contenido en Fase 2 vía Orquestador Interno) es la primera pieza
+                            de INTERNACIONALIZACIÓN de la consola: `language-panel.js` (self-service, NO
+                            admin-gated — es preferencia PERSONAL de cuenta, no config del sistema) deja
+                            elegir Español/English → POST /api/account/lang (`core/users.js` suma el campo
+                            `lang` por usuario, `getUserLang`/`setUserLang`, default 'es') → recarga la
+                            página. Núcleo en `public/js/ui/i18n.js`: `t(key, fallbackEs, vars)` es el
+                            ÚNICO punto de entrada para strings visibles al usuario en código NUEVO — el
+                            ESPAÑOL NO vive en un archivo aparte, vive como el propio `fallbackEs` inline
+                            en el código (nunca se desincroniza, y en 'es' no hay NADA que cargar); solo el
+                            INGLÉS vive en `public/i18n/en/<módulo>.json`, namespaced 1:1 con
+                            `public/js/modules/<módulo>` (+ `core` para lo compartido de `ui/`) — clave
+                            del reparto en Fase 2: cada módulo escribe SOLO su propio JSON + sus propios
+                            `.js`, cero colisión entre bloques del orquestador. `applyI18n(root)` barre
+                            `data-i18n`/`data-i18n-title` del HTML estático (demo real en
+                            `public/index.html`: botón "Enviar" del dictado + tooltips Explorador/Vista
+                            Raw/Seguimientos). `main.js` carga el diccionario del idioma ANTES de montar
+                            módulos (`initI18n(whoami().lang)` + `applyI18n(document)`, hito de boot 28%
+                            entre "vendors" 15% y "montando módulos" 35%). Clave faltante o módulo sin
+                            diccionario todavía ⇒ cae al fallback ES, nunca rompe (mismo criterio
+                            "degradar, no explotar" de whisper/Pad caído). Fase 2 (traducir TODO el
+                            contenido actual, ~15 módulos/~16.700 líneas) NO está hecha — el mecanismo
+                            está listo y probado E2E, pero casi toda la UI sigue mostrando el fallback ES
+                            hasta que se ejecute. CONVENCIÓN para código nuevo: ver "## Convenciones" más
+                            abajo. Backup/Usuarios/
                             Proyectos/Interfono/Salud — la pestaña Interfono
                             (interfono-panel.js) es la ventana + canal humano del INTERFONO
                             entre sesiones (GET/POST /api/interfono): sesiones activas,
@@ -3364,7 +3540,27 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             viven en el header del chat activo (.chat-flow): Claude por sessionId →
                             bySession y Codex por cwd → byCwd, con tps + acumulado. El sessionId
                             viaja ahora en _historyPayload junto a cwd/world para poblar esa barra
-                            al abrir/reconectar.)
+                            al abrir/reconectar.
+                            PESO DEL CACHE READ EN EL CAUDAL (2026-07-19, pedido de Niko: "la barra
+                            de Claude siempre está en 0 o full, nunca intermedia"). CAUSA RAÍZ (mismo
+                            villano que la barra de Sesión 5h): flow.js (extractClaudeEvent) sumaba el
+                            cache_read a peso COMPLETO. En cada paso del agente Claude RE-LEE todo el
+                            contexto cacheado (100-200k tokens), así que el caudal era ~95% relecturas
+                            → medido 29-38k tps crudos vs MAX_TPS 8000 → barra CLAVADA en 100%. FIX:
+                            el cache read pesa CACHE_READ_WEIGHT=0.1 (alineado con pin/pout del costo;
+                            input+output+cache_creation quedan a peso 1 = input procesado por primera
+                            vez). Codex igual (extractCodexEvent): su `input_tokens` YA INCLUYE
+                            `cached_input_tokens` (verificado: input 21808 ⊇ cached 20864, total=
+                            input+output) → se descuenta el cache del input y se re-suma ×0.1; si no,
+                            `total_tokens` contaría el cache a peso completo y Codex se saturaría igual.
+                            Con el peso, el caudal ponderado GLOBAL pica ~7k en actividad alta →
+                            MAX_TPS se recalibró 8000→10000 (token-flow.js) para dar cabeza a picos
+                            multi-chat sin clavarse; la curva sqrt de pressureFromTps deja un caudal
+                            típico de 1 chat (~1-3k) en la zona media visible (32-55%). Verificado
+                            E2E: caudal crudo 29-38k→100% siempre ANTES; DESPUÉS backend ponderado
+                            0/3.5k/7.2k con variación real → barra pintó fill 26% con 680 tps
+                            (intermedio, ya no clavada). El `tokens60` acumulado queda ponderado
+                            también (coherente con el resto de la app que cuenta cache read ×0.1).)
 public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 public/css/tokens.css       TODAS las variables (--cwc-*); CERO hex fuera de acá
 public/css/ui.css           .btn/.btn-ghost, .dlg-*, .cwc-popup-menu, guard [hidden].
@@ -3680,6 +3876,32 @@ bin/cwc-retro-curate-runner.js CURADURÍA IA del registro de MEJORA CONTINUA (RO
                             job). Detecta duplicados/contradicciones/redundantes/consolidables/
                             huecos. Un solo job en ~/.cwc-data/retro-curation.json (+
                             retro-curate.log). Lógica en src/modules/retro/curate-shared.js
+bin/cwc-retro-feedback-runner.js "💬 Feedback de Chris" — ingesta MANUAL (pegar correo/
+                            Teams/llamada) para Mejora Continua, DESACOPLADO (regla de oro; sonnet, 1
+                            turno, TEXTO PURO, doble capa regla 6 deniega TODO). Interpreta el texto
+                            pegado en una o varias lecciones categoría 'feedback-cliente' + destino
+                            'contexto'. Job en ~/.cwc-data/retro-feedback-<id>.json (id determinístico
+                            por texto+ticket) + retro-feedback.log. Lógica en
+                            src/modules/retro/feedback-shared.js
+bin/cwc-retro-email-runner.js "💬 Feedback de Chris" — ESCANEO AUTOMÁTICO de correo
+                            (Microsoft Graph) para Mejora Continua, DESACOPLADO (regla de oro; sonnet,
+                            READ-ONLY doble capa regla 6 con allowlist EXPLÍCITA POR NOMBRE —
+                            emailReadAllowed— que permite SOLO graph_read_email/graph_read_email_body,
+                            nunca send/reply/draft). Escanea el correo del contacto 'chris' (reusa
+                            comms/shared.js) vía el MISMO MCP de Graph de Tolkien que ya usa Teams
+                            (scope Mail.Read ya concedido, sin consentimiento nuevo); cwd=Tolkien
+                            (CROSS_WORLD_ALLOW). Estado en ~/.cwc-data/retro-email-scan.json +
+                            retro-email.lock (heartbeat pid-aware, dedup patrón triage/Teams). Lógica
+                            en src/modules/retro/email-shared.js
+bin/cwc-retro-teams-runner.js "💬 Feedback de Chris" — ESCANEO AUTOMÁTICO de Microsoft
+                            Teams (DM con 'chris') para Mejora Continua, DESACOPLADO (regla de oro;
+                            sonnet, READ-ONLY doble capa regla 6 con `graphReadAllowed` REUSADO tal
+                            cual de comms/teams-shared.js — el mismo allowlist ya probado del escaneo
+                            de Teams de Comunicaciones, no uno nuevo). Una sola query lee el DM 1:1 con
+                            el contacto Y destila el feedback en el mismo paso. Estado en
+                            ~/.cwc-data/retro-teams-scan.json + retro-teams.lock (heartbeat pid-aware,
+                            mismo dedup que el runner de correo). Lógica en
+                            src/modules/retro/teams-feedback-shared.js
 bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
                             Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
                             server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
@@ -4087,6 +4309,22 @@ docs/                       frontend-modules.md · brief-original.txt · context
   `[data-module="<n>"]` en index.html + registrarlo en main.js. (Mirá el
   inventario `~/.cwc-data/inventory.md` para el estado actual: módulos ya
   registrados, `registry.js:línea`, endpoints existentes.)
+- **Strings visibles al usuario en frontend NUEVO ⇒ siempre por `t()` (PLAN
+  i18n, 2026-07-19):** `import { t } from '../../ui/i18n.js'` y envolver TODO
+  texto que el usuario vaya a leer — `t('modulo.contexto.algo', 'Texto en
+  español')`. El español va SIEMPRE como segundo argumento (`fallbackEs`)
+  INLINE en el código — nunca en un archivo aparte: es lo que se ve mientras
+  Fase 2 no tradujo ese módulo, y evita que el ES del código y el de un
+  diccionario se desincronicen. La traducción al inglés (opcional, si el
+  módulo ya la tiene) vive en `public/i18n/en/<módulo>.json` — mismo
+  namespace que `public/js/modules/<módulo>` (`core` para lo compartido de
+  `ui/`) — clave `<módulo>.<contexto>.<algo>`, independiente del texto (para
+  que editar el español no rompa la traducción). HTML estático (index.html):
+  `data-i18n="key"` (barre `textContent`) / `data-i18n-title="key"` (barre
+  `title`), aplicado por `applyI18n(root)` al bootear. Clave faltante o
+  módulo sin diccionario ⇒ cae al fallback ES sola, nunca rompe el render.
+  Ver el bloque del módulo `system` (pestaña "🌐 Idioma") en el mapa de abajo
+  para el detalle completo del mecanismo.
 - **Admin-gating:** endpoints sensibles con `isAdmin(req)` de `core/auth.js`
   (patrón en backup/index.js).
 - **tmux:** siempre a través de helpers con validación (`core/tmux.js`,
@@ -4424,8 +4662,12 @@ docs/                       frontend-modules.md · brief-original.txt · context
   reales en #boot-msg (bootMsg) y desmonta con __bootHide en el `finally`
   del IIFE de arranque. La barra de progreso (#boot-bar + window.__bootPct)
   salta por HITOS REALES, no por timer: 10 HTML+CSS pintados · 15 vendors
-  del <head> bajados (script inline) · 35 módulos montados · 60 sesiones
-  listadas · 80 esperando historial del chat activo · 100 al destapar; la
+  del <head> bajados (script inline) · 28 idioma cargado (PLAN i18n,
+  2026-07-19: initI18n(whoami().lang)+applyI18n(document), ANTES de montar
+  módulos para que arranquen ya en el idioma correcto) · 35 módulos montados
+  · 60 restaurando sesiones (antes del fetch) · 72 con el CONTEO real
+  ("restaurando N sesiones…") · 85 esperando historial del chat activo · 100 al
+  destapar; la
   transición CSS de width interpola entre hitos. Si se agrega una fase al
   boot, asignarle su hito acá y en bootMsg(texto, pct). Antes de destapar, si el tab ACTIVO es un chat, el
   boot espera `tab.ready` (promesa del ChatTab resuelta al terminar de
@@ -4434,6 +4676,31 @@ docs/                       frontend-modules.md · brief-original.txt · context
   vacío unos segundos tras caer el splash. No agrega velocidad real: es
   percepción; la espera del HTML inicial solo la mejora cache/compresión
   (pendiente).
+- LAZY-CONNECT de conversaciones en el arranque (2026-07-19, PEND-747, pedido
+  de Niko: "el arranque se demora según cuántos chats tengo"). CAUSA RAÍZ: al
+  restaurar, `addTab` abría un WebSocket por CADA chat y cada `attach` bajaba
+  su historial completo (`_historyPayload`, hasta HISTORY_MAX=600 eventos) — con
+  N chats abiertos eran N conexiones + N historiales descargados/renderizados en
+  paralelo EN EL CAMINO CRÍTICO del splash (O(n)), aunque el usuario solo mire
+  UNO. FIX: una conversación (vista Chat) conecta su WS —y recién ahí el server
+  le manda el historial— al MOSTRARSE por primera vez, no al arranque. Piezas:
+  (1) `ChatTab.connect()` es IDEMPOTENTE (`_wsWanted` + `_open()`; la reconexión
+  automática reusa `_open()` directo) — reactivar una pestaña no reabre socket;
+  (2) `buildConversationInner` NO conecta la vista Chat (sí las TUI/PTY, que no
+  eran el problema — atacan tmux, no descargan historial); (3) `setActive`
+  conecta la conversación activa al mostrarla, y `applyConversationMode` (toggle
+  de modo) también si quedó visible; (4) `addTab` gana la opción `activate`
+  (default true) — el boot loop agrega TODAS las pestañas con `activate:false` y
+  activa UNA sola (la del `?focus=` o la última) → solo ESA conecta al arranque.
+  Resultado O(1): medido con 49 chats reales, el boot abre 1 WS (antes 49) en
+  ~880 ms, el chat activo carga su historial completo, y enfocar otra pestaña
+  conecta +1 WS bajo demanda (verificado E2E con Playwright). Los caminos de
+  abrir/retomar a mano (openChat/openChatView/click en tarjeta) siguen activando
+  —y por ende conectando— enseguida, sin cambio de UX. COMPLEMENTO server-side:
+  `rehydrate()` acota `chat.history` a HISTORY_MAX en las DOS ramas que antes lo
+  dejaban sin cap (TUI reconectada · chat dormido), igual que la 3ª (runner
+  vivo) — así el payload del hito 85 queda acotado aunque el transcript en disco
+  sea gigante.
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
@@ -4688,8 +4955,65 @@ docs/                       frontend-modules.md · brief-original.txt · context
   best-effort antes de la síntesis, TASK-298). El **Dashboard del proyecto**
   suma un tile del backbone de Pad (ver abajo, TASK-300). Así los 4 motores de
   Salud (Revisión · Optimización · Coherencia · Dashboard) quedan enganchados a
-  Pad, cada uno según su naturaleza. El write-back inverso (propuesta aprobada →
-  BUG/TASK en Pad) queda como follow-up NO hecho (más invasivo, decisión propia).
+  Pad, cada uno según su naturaleza.
+- **Pad WRITE-BACK de propuestas aprobadas** (2026-07-19, pedido de Niko: "que
+  los motores se hablen entre sí a través de Pad"): cierra el write-back
+  inverso que quedaba pendiente arriba. `health/pad-writeback-shared.js`
+  (`createTaskFromProposal(p, kind)`) — al APROBAR una propuesta de
+  Optimización o Coherencia (`POST /optimize-proposal` · `/coherence-proposal`,
+  `action:'accept'`), el endpoint crea la TAREA en la colección `pendientes` de
+  Pad (el mismo tablero de Pendientes de Niko; título/detalle/tipo armados
+  desde la propuesta, `tags:[kind]`) — best-effort: si Pad no responde, la
+  aprobación sigue igual, solo sin `padRef`. El ref vuelve en la respuesta del
+  POST y el frontend (`optimize-modal.js`/`coherence-modal.js` `applyProposal`)
+  lo inyecta como ÚLTIMO PASO del prompt del chat supervisado: "ejecutá `node
+  bin/cwc-health-proposal-done.js <ref>`" — mini-runner determinístico (0
+  tokens, patrón `cwc-health-resolve.js`) que hace `getItem`+`updateItem`
+  (read-modify-write: `fields` se REEMPLAZA entero en un PATCH) para marcar la
+  tarea `status:'hecha'`. Circuito completo: proponer → aprobar (crea la
+  tarea) → trabajar en el chat → el chat cierra el ciclo marcándola hecha —
+  sin depender de que alguien se acuerde de registrarla a mano (la lección de
+  Mejora Continua "cruzar y registrar contra el backlog de Pad" quedó resuelta
+  de raíz para este camino). CROSS-CHECK DETERMINÍSTICO en Coherencia (mismo
+  pedido, complementa el `padContext()` de texto libre con un match matemático):
+  `coherenceCrossCheckText(findings)` (coherence-shared.js) reusa `crossCheckPad`
+  (scan-shared.js, el mismo matching por jaccard de términos del Escaneo
+  Unificado) sobre los hallazgos determinísticos de `evaluateCoherence()` antes
+  de armar el prompt — el runner (`cwc-coherence-runner.js`) concatena su texto
+  al `padCtx`. Optimización NO lo suma (sus "propuestas" no son hallazgos con
+  área/detalle citable, el cross-check no aplica igual de bien). Alcance
+  deliberado: esto es LECTURA de contexto + ESCRITURA de la tarea al aprobar —
+  NO es un canal vivo donde los 3 motores se leen entre sí EN LA MISMA corrida
+  (eso seguiría siendo una reescritura mayor, no pedida).
+- **TÁNDEM opt-in en el auto-fix de Salud** (2026-07-19, mismo pedido de Niko:
+  "que usen Tándem, una parte la hace Claude y otra Codex"): hasta hoy Tándem
+  (PLAN-507) era EXCLUSIVO del chat interactivo — el único motor de Salud que
+  ESCRIBE código sin supervisión (`bin/cwc-healthfix-runner.js`, excepción de
+  la regla 6) no lo tenía. Ahora es un TOGGLE opt-in en el modal de Revisión
+  Exhaustiva ("🤝 «Automático» usa Tándem", visible solo si hay hallazgos
+  auto-resolubles) — el comportamiento POR DEFECTO no cambia. Con el toggle
+  activo, `POST /finding-fix` manda `tandem:true` → `spawnFix(id, tandem)`
+  agrega `--tandem` al spawn del runner. El runner reusa TAL CUAL
+  `createCodexToolServer` de `chat/codex-tool.js` (mismo mcpServer in-process
+  `delegate_to_codex` que usa el chat Tándem) y una allowlist NUEVA
+  `fixToolAllowedTandem` (health/shared.js): permite
+  Read/Grep/Glob/TodoWrite/`mcp__codex__delegate_to_codex` (constante
+  `TANDEM_TOOL` de `core/tool-policy.js`, para no duplicar el string) +
+  Bash SOLO `node --check` (idéntico a siempre) — **DENIEGA Edit/Write/
+  MultiEdit/NotebookEdit**: el único camino de Claude para tocar un archivo es
+  delegar en Codex, igual que el bloqueo estructural del chat Tándem
+  (`askPermission`/`TANDEM_BLOCKED` de `cwc-chat-runner.js`). Sube
+  `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (una delegación puede durar minutos, el
+  SDK corta tools MCP a 60 s por defecto) — mismo ajuste que el chat. El
+  `node --check` post-fix se mantiene igual sin importar quién escribió el
+  diff (Claude o Codex). Riesgo: como el auto-fix YA corre sin humano mirando
+  (excepción documentada de la regla 6), delegar la escritura a Codex NO sube
+  el nivel de riesgo — solo cambia QUIÉN escribe el diff; sigue siendo
+  revertible con git y el usuario reinicia al revisar. Alcance deliberado:
+  SOLO el auto-fix de a UNO (`autoFix`) — el orquestador de batch "Resolver
+  seguros" (`cwc-healthfix-orchestrator.js`) queda FUERA (más invasivo, no
+  pedido); el toggle se resetea al reabrir el modal (elección puntual, no una
+  config global persistida).
 - **Revisión EXHAUSTIVA** (`POST /api/health/review`, admin, CONSUME TOKENS):
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad
@@ -4850,6 +5174,20 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Actualizar el mapa de módulos en CLAUDE.md al agregar un módulo backend nuevo
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** Tras montar src/modules/skills/index.js en el registry, la sesión actualizó el mapa del proyecto en CLAUDE.md y el comentario de cabecera de system.js como paso final antes de cerrar.
+
+**Lección:** Todo módulo backend nuevo registrado en registry.js debe reflejarse también en el mapa de módulos de CLAUDE.md (y en el comentario de cabecera del archivo que lo monta en UI) antes de dar la tarea por cerrada.
+
+### Registrar cruces legítimos entre mundos en CROSS_WORLD_ALLOW con motivo
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** El check de Salud 'cruces entre mundos' marcó el nuevo módulo de skills por leer .claude/skills de Tolkien desde Consola; se resolvió sumándolo a CROSS_WORLD_ALLOW con motivo, igual que projects/index.js, en vez de dejarlo como warning.
+
+**Lección:** Cuando un módulo nuevo necesita acceso legítimo a carpetas de otro mundo, documentarlo explícitamente en CROSS_WORLD_ALLOW con su motivo antes de cerrar la tarea, siguiendo el precedente de módulos similares.
 
 ### Probar una regla inyectada en tool-policy/system prompt en un chat NUEVO, no en el actual
 _procedimiento · confianza alta · recurrencia x1_

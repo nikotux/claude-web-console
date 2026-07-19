@@ -9,13 +9,15 @@
 // de Tolkien (requiere ticket/TASK + OK de Chris). Ver plan en pool of documents.
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { icon } from '../../ui/icons.js';
+import { pacman } from '../../ui/pacman.js';
 import { metaSideHtml, wireMetaPanel, metaPromptBlocks, fetchWorkflowContexts, workflowContextBlocks } from './meta-panel.js';
+import { t } from '../../ui/i18n.js';
 
 const LANE_LABEL = {
   bug: '🐞 bug', feature: '💡 feature', hardware: '🖥 hardware', access: '🔑 access',
   platform: '⚙️ platform', onboarding: '🌱 onboarding', other: '· other',
 };
-const WAIT_LABEL = { dev: 'dev', requester: 'solicitante', triage: 'triage/decisión' };
+const WAIT_LABEL = { dev: 'dev', requester: t('tickets.ticket.waitRequester', 'solicitante'), triage: t('tickets.ticket.waitTriage', 'triage/decisión') };
 const TOLKIEN_REPO = 'Mordor-Staffing/tolkien';
 
 function esc(s) {
@@ -33,9 +35,9 @@ function fmtClock(ms) {
 function fmtAgo(ms) {
   if (!Number.isFinite(ms) || !ms) return null;
   const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return 'recién';
-  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-  return `hace ${Math.floor(s / 3600)} h`;
+  if (s < 60) return t('tickets.common.justNow', 'recién');
+  if (s < 3600) return t('tickets.common.agoMin', 'hace {n} min', { n: Math.floor(s / 60) });
+  return t('tickets.common.agoHours', 'hace {n} h', { n: Math.floor(s / 3600) });
 }
 function field(label, value) {
   if (value == null || value === '') return '';
@@ -70,12 +72,12 @@ function buildContext(t, sections, desc, meta, contexts) {
   return lines.join('\n');
 }
 
-export function openTicketDetail(t, deps = {}) {
-  const modal = openModal({ title: `#${t.ticketNumber} · ${(t.subject || '').slice(0, 44)}`, width: 'min(980px, 95vw)' });
+export function openTicketDetail(ticket, deps = {}) {
+  const modal = openModal({ title: `#${ticket.ticketNumber} · ${(ticket.subject || '').slice(0, 44)}`, width: 'min(980px, 95vw)' });
   const c = modal.body;
-  c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${icon('clock', { size: 12 })} cargando detalle del ticket…</div></div>`;
+  c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${pacman({ size: 'sm' })} ${t('tickets.ticket.loading', 'cargando detalle del ticket…')}</div></div>`;
   const box = c.querySelector('.bv2-detail');
-  const isDev = t.lane === 'bug' || t.lane === 'feature';
+  const isDev = ticket.lane === 'bug' || ticket.lane === 'feature';
 
   function render(f) {
     const cf = f.customFields || {};
@@ -88,8 +90,8 @@ export function openTicketDetail(t, deps = {}) {
     // Reloj derivado (Zoho no tiene SLA: dueDate suele venir null).
     const bh = f.clock?.businessHoursSinceUpdate ?? 0;
     const target = f.clock?.target ?? 48;
-    const dueText = f.statusType === 'Closed' ? 'resuelto' : (f.clock?.overdue ? `⚠️ vencido hace ${bh - target}h háb` : `en ${Math.max(0, target - bh)}h háb`);
-    const ownerStr = f.ownerName ? `${f.ownerName}${f.ownerEmail ? ` · ${f.ownerEmail}` : ''}` : (f.assigneeId ? 'sin resolver' : 'sin asignar');
+    const dueText = f.statusType === 'Closed' ? t('tickets.ticket.resolved', 'resuelto') : (f.clock?.overdue ? t('tickets.ticket.overdueBy', '⚠️ vencido hace {n}h háb', { n: bh - target }) : t('tickets.ticket.dueIn', 'en {n}h háb', { n: Math.max(0, target - bh) }));
+    const ownerStr = f.ownerName ? `${f.ownerName}${f.ownerEmail ? ` · ${f.ownerEmail}` : ''}` : (f.assigneeId ? t('tickets.ticket.unresolved', 'sin resolver') : t('tickets.ticket.unassigned', 'sin asignar'));
     const reporterStr = f.contactName ? `${f.contactName}${f.contactEmail ? ` · ${f.contactEmail}` : ''}` : (f.contactEmail || '—');
 
     // Estado del lock (hard lock por usuario). `workingBy`/`you` vienen del backend.
@@ -101,36 +103,36 @@ export function openTicketDetail(t, deps = {}) {
     const lockBanner = w
       ? `<div class="bv2-lockbar ${mine ? 'bv2-lockbar--mine' : 'bv2-lockbar--other'}">
           ${icon(mine ? 'check' : 'clock', { size: 13 })}
-          <span>${mine ? 'Lo estás trabajando vos' : `🔒 En uso por <b>${esc(w.label || w.by)}</b>`}${w.at ? ` · desde las ${fmtClock(w.at)}` : ''}</span>
-          ${lockedByOther ? '<span class="bv2-lockbar-hint">no podés trabajarlo hasta que lo suelte</span>' : ''}
+          <span>${mine ? t('tickets.ticket.workingByYou', 'Lo estás trabajando vos') : t('tickets.ticket.inUseBy', '🔒 En uso por <b>{name}</b>', { name: esc(w.label || w.by) })}${w.at ? t('tickets.ticket.sinceTime', ' · desde las {time}', { time: fmtClock(w.at) }) : ''}</span>
+          ${lockedByOther ? `<span class="bv2-lockbar-hint">${t('tickets.ticket.lockedHint', 'no podés trabajarlo hasta que lo suelte')}</span>` : ''}
         </div>`
       : '';
     // Botones de claim según el estado. Locked-by-other: "Robar" (con confirmación,
     // cualquier usuario) + "Forzar liberación" solo admin.
     const claimActs = mine
-      ? `<button class="btn-ghost btn--sm" data-act="release">${icon('close', { size: 13 })}<span>Soltar</span></button>`
+      ? `<button class="btn-ghost btn--sm" data-act="release">${icon('close', { size: 13 })}<span>${t('tickets.ticket.release', 'Soltar')}</span></button>`
       : lockedByOther
-        ? `<button class="btn-ghost btn--sm bv2-danger" data-act="steal">${icon('play', { size: 13 })}<span>Robar</span></button>${youAdmin ? `<button class="btn-ghost btn--sm bv2-danger" data-act="force">${icon('close', { size: 13 })}<span>Forzar liberación</span></button>` : ''}`
-        : `<button class="btn-ghost btn--sm" data-act="claim">${icon('play', { size: 13 })}<span>Tomar</span></button>`;
+        ? `<button class="btn-ghost btn--sm bv2-danger" data-act="steal">${icon('play', { size: 13 })}<span>${t('tickets.common.steal', 'Robar')}</span></button>${youAdmin ? `<button class="btn-ghost btn--sm bv2-danger" data-act="force">${icon('close', { size: 13 })}<span>${t('tickets.common.forceRelease', 'Forzar liberación')}</span></button>` : ''}`
+        : `<button class="btn-ghost btn--sm" data-act="claim">${icon('play', { size: 13 })}<span>${t('tickets.common.claim', 'Tomar')}</span></button>`;
 
     // FUENTE ÚNICA: estas secciones alimentan TANTO la tarjeta (render) COMO el
     // contexto que se exporta al chat. Agregar un [label, value] acá lo hace
     // aparecer en los dos lados automáticamente (pedido de Niko: auto-extensible).
     const sections = [
-      ['Propiedades', [
-        ['Carril', LANE_LABEL[t.lane] || t.lane],
-        ['Estado', f.status], ['Prioridad', f.priority_norm || f.priority],
-        ['Esperando a', t.waitingOn ? (WAIT_LABEL[t.waitingOn] || t.waitingOn) : null],
-        ['País', country], ['Tipo', ttype], ['Relacionado a', related],
-        ['Cliente', client], ['Producto', product], ['Canal', f.channel],
+      [t('tickets.ticket.field.properties', 'Propiedades'), [
+        [t('tickets.ticket.field.lane', 'Carril'), LANE_LABEL[ticket.lane] || ticket.lane],
+        [t('tickets.ticket.field.status', 'Estado'), f.status], [t('tickets.ticket.field.priority', 'Prioridad'), f.priority_norm || f.priority],
+        [t('tickets.ticket.field.waitingOn', 'Esperando a'), ticket.waitingOn ? (WAIT_LABEL[ticket.waitingOn] || ticket.waitingOn) : null],
+        [t('tickets.ticket.field.country', 'País'), country], [t('tickets.ticket.field.type', 'Tipo'), ttype], [t('tickets.ticket.field.relatedTo', 'Relacionado a'), related],
+        [t('tickets.ticket.field.client', 'Cliente'), client], [t('tickets.ticket.field.product', 'Producto'), product], [t('tickets.ticket.field.channel', 'Canal'), f.channel],
       ]],
-      ['Personas', [['Propietario', ownerStr], ['Reporter', reporterStr]]],
-      ['Tiempos', [
-        ['Creado', fmtDate(f.createdTime)], ['Últ. update', fmtDate(f.modifiedTime)],
-        ['Vence (48h háb)', dueText],
-        ['Sin update', (f.aging?.days ?? t.agingDays) != null ? `${f.aging?.days ?? t.agingDays}d` : null],
-        ['On hold desde', f.onholdTime ? fmtDate(f.onholdTime) : null],
-        ['Cerrado', f.closedTime ? fmtDate(f.closedTime) : null],
+      [t('tickets.ticket.field.people', 'Personas'), [[t('tickets.ticket.field.owner', 'Propietario'), ownerStr], ['Reporter', reporterStr]]],
+      [t('tickets.ticket.field.times', 'Tiempos'), [
+        [t('tickets.ticket.field.created', 'Creado'), fmtDate(f.createdTime)], [t('tickets.ticket.field.lastUpdate', 'Últ. update'), fmtDate(f.modifiedTime)],
+        [t('tickets.ticket.field.due', 'Vence (48h háb)'), dueText],
+        [t('tickets.ticket.field.noUpdate', 'Sin update'), (f.aging?.days ?? ticket.agingDays) != null ? `${f.aging?.days ?? ticket.agingDays}d` : null],
+        [t('tickets.ticket.field.onHoldSince', 'On hold desde'), f.onholdTime ? fmtDate(f.onholdTime) : null],
+        [t('tickets.ticket.field.closed', 'Cerrado'), f.closedTime ? fmtDate(f.closedTime) : null],
       ]],
     ];
     const sectionsHtml = sections.map(([title, fields]) => {
@@ -142,10 +144,10 @@ export function openTicketDetail(t, deps = {}) {
     // (snapshot / base de resueltos / Zoho en vivo) + hace cuánto + botón ↻ para
     // forzar relectura. Uniforme con el "actualizado hace X" del dashboard.
     const ago = fmtAgo(f.generatedAt);
-    const srcLabel = f.fromResolved ? 'base de resueltos' : (f.cached ? 'snapshot' : 'Zoho en vivo');
+    const srcLabel = f.fromResolved ? t('tickets.ticket.srcResolved', 'base de resueltos') : (f.cached ? 'snapshot' : t('tickets.ticket.srcLive', 'Zoho en vivo'));
     const freshBar = `<div class="bv2-freshbar">
-      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? `actualizado ${ago}` : 'lectura en vivo'} · ${esc(srcLabel)}</span>
-      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="Actualizar detalle">${icon('refresh', { size: 13 })}</button>
+      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? t('tickets.common.updatedAgo', 'actualizado {ago}', { ago }) : t('tickets.common.liveRead', 'lectura en vivo')} · ${esc(srcLabel)}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="${t('tickets.ticket.refreshTitle', 'Actualizar detalle')}">${icon('refresh', { size: 13 })}</button>
     </div>`;
 
     box.innerHTML = `
@@ -154,34 +156,34 @@ export function openTicketDetail(t, deps = {}) {
       <div class="bv2-pr-cols">
         <div class="bv2-pr-main">
           <div class="bv2-detail-meta">
-            <span class="bb-chip">${esc(LANE_LABEL[t.lane] || t.lane)}</span>
-            <span class="bb-chip">${esc(f.status || t.status || '')}</span>
-            ${t.waitingOn ? `<span class="bb-chip bb-chip--info">espera: ${esc(WAIT_LABEL[t.waitingOn] || t.waitingOn)}</span>` : ''}
+            <span class="bb-chip">${esc(LANE_LABEL[ticket.lane] || ticket.lane)}</span>
+            <span class="bb-chip">${esc(f.status || ticket.status || '')}</span>
+            ${ticket.waitingOn ? `<span class="bb-chip bb-chip--info">${t('tickets.ticket.waitChip', 'espera: {v}', { v: esc(WAIT_LABEL[ticket.waitingOn] || ticket.waitingOn) })}</span>` : ''}
             ${f.priority_norm ? `<span class="bb-chip">${esc(f.priority_norm)}</span>` : ''}
-            ${(f.aging?.days ?? t.agingDays) != null ? `<span class="bb-chip ${t.overdue ? 'bb-chip--danger' : 'bb-chip--warn'}">${f.aging?.days ?? t.agingDays}d sin update</span>` : ''}
+            ${(f.aging?.days ?? ticket.agingDays) != null ? `<span class="bb-chip ${ticket.overdue ? 'bb-chip--danger' : 'bb-chip--warn'}">${t('tickets.ticket.daysNoUpdate', '{n}d sin update', { n: f.aging?.days ?? ticket.agingDays })}</span>` : ''}
           </div>
           ${sectionsHtml}
-          <div class="bv2-sec-h">Descripción</div>
-          <div class="bv2-detail-desc">${desc || '<span class="bf-sub">(sin descripción)</span>'}</div>
-          <div class="bv2-note">${icon('help', { size: 11 })} Las conversaciones e historial de actividad se ven en Zoho Desk (el MCP aún no los expone — pendiente).</div>
+          <div class="bv2-sec-h">${t('tickets.ticket.description', 'Descripción')}</div>
+          <div class="bv2-detail-desc">${desc || `<span class="bf-sub">${t('tickets.ticket.noDescription', '(sin descripción)')}</span>`}</div>
+          <div class="bv2-note">${icon('help', { size: 11 })} ${t('tickets.ticket.convNote', 'Las conversaciones e historial de actividad se ven en Zoho Desk (el MCP aún no los expone — pendiente).')}</div>
           <div class="bv2-detail-acts">
             ${claimActs}
-            <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ' disabled title="En uso por otro usuario"' : ''}>${icon('play', { size: 13 })}<span>Continuar en el chat</span></button>
-            ${isDev ? `<button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>Verificar en GitHub</span></button>` : ''}
-            <button class="btn-ghost btn--sm" data-act="zoho">${icon('upload', { size: 13 })}<span>Conversaciones en Zoho Desk</span></button>
+            <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ` disabled title="${t('tickets.common.inUseByOther', 'En uso por otro usuario')}"` : ''}>${icon('play', { size: 13 })}<span>${t('tickets.ticket.continueChat', 'Continuar en el chat')}</span></button>
+            ${isDev ? `<button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>${t('tickets.ticket.verifyGithub', 'Verificar en GitHub')}</span></button>` : ''}
+            <button class="btn-ghost btn--sm" data-act="zoho">${icon('upload', { size: 13 })}<span>${t('tickets.ticket.zohoConv', 'Conversaciones en Zoho Desk')}</span></button>
           </div>
         </div>
         <aside class="bv2-pr-side">${metaSideHtml(f.meta)}</aside>
       </div>`;
     // 2ª columna: Contexto adicional + Histórico del trabajo (panel compartido).
-    wireMetaPanel({ box, key: t.ticketNumber, itemTitle: t.subject || '', itemDesc: stripHtml(desc || ''), onChanged: reload });
+    wireMetaPanel({ box, key: ticket.ticketNumber, itemTitle: ticket.subject || '', itemDesc: stripHtml(desc || ''), onChanged: reload });
 
     // POST a /claim o /release. Devuelve el JSON; no re-renderiza (lo hace el caller).
     async function apiClaim(action, force) {
       try {
         const res = await fetch(`/api/tickets/${action}`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id: t.ticketNumber, ...(force ? { force: true } : {}) }),
+          body: JSON.stringify({ id: ticket.ticketNumber, ...(force ? { force: true } : {}) }),
         });
         return await res.json().catch(() => ({}));
       } catch { return {}; }
@@ -193,9 +195,9 @@ export function openTicketDetail(t, deps = {}) {
     box.querySelector('[data-act="force"]')?.addEventListener('click', () => postClaim('release', true));
     box.querySelector('[data-act="steal"]')?.addEventListener('click', async () => {
       const okConfirm = await confirmDialog({
-        title: 'Robar el ticket',
-        message: `Este ticket lo está trabajando ${w?.label || w?.by}. ¿Tomarlo igual? Va a perder el lock y pasás a ser vos quien lo trabaja.`,
-        confirmLabel: 'Robar', danger: true,
+        title: t('tickets.ticket.stealTitle', 'Robar el ticket'),
+        message: t('tickets.ticket.stealMsg', 'Este ticket lo está trabajando {name}. ¿Tomarlo igual? Va a perder el lock y pasás a ser vos quien lo trabaja.', { name: w?.label || w?.by }),
+        confirmLabel: t('tickets.common.steal', 'Robar'), danger: true,
       });
       if (okConfirm) postClaim('claim', true);
     });
@@ -208,28 +210,28 @@ export function openTicketDetail(t, deps = {}) {
         cwd: deps.projectRel ? deps.projectRel() : 'tolkien',
         mode: 'plan',
         prompt: buildContext(f, sections, desc, f.meta, contexts), // `f` (recargado): trae ticketNumber/subject/webUrl aun si se abrió por buscador
-        title: `TKT #${t.ticketNumber} — ${(t.subject || '').slice(0, 40)}`.slice(0, 60),
-        ticket: { number: t.ticketNumber, url: t.webUrl || null },
+        title: `TKT #${ticket.ticketNumber} — ${(ticket.subject || '').slice(0, 40)}`.slice(0, 60),
+        ticket: { number: ticket.ticketNumber, url: ticket.webUrl || null },
       });
       modal.close();
     });
     box.querySelector('[data-act="gh"]')?.addEventListener('click', () =>
-      window.open(`https://github.com/${TOLKIEN_REPO}/pulls?q=${encodeURIComponent(`is:pr ${t.ticketNumber}`)}`, '_blank', 'noopener'));
+      window.open(`https://github.com/${TOLKIEN_REPO}/pulls?q=${encodeURIComponent(`is:pr ${ticket.ticketNumber}`)}`, '_blank', 'noopener'));
     box.querySelector('[data-act="zoho"]')?.addEventListener('click', () => {
       // Leer del objeto RECARGADO `f` (siempre trae webUrl: snapshot / store de
       // resueltos / Zoho vivo), NO del `t` exterior — que al abrir un ticket
       // cerrado por el buscador es solo { ticketNumber } sin URL (bug 2026-07-14).
-      const url = f.webUrl || t.webUrl;
+      const url = f.webUrl || ticket.webUrl;
       if (url) window.open(url, '_blank', 'noopener');
     });
   }
 
   async function reload() {
-    let full = t;
+    let full = ticket;
     try {
-      const res = await fetch(`/api/tickets/ticket/${encodeURIComponent(t.ticketNumber)}`);
+      const res = await fetch(`/api/tickets/ticket/${encodeURIComponent(ticket.ticketNumber)}`);
       const d = await res.json();
-      if (d && d.found) full = { ...t, ...d };
+      if (d && d.found) full = { ...ticket, ...d };
       if (d) { full = { ...full, workingBy: d.workingBy ?? null, you: d.you ?? null, youAdmin: d.youAdmin ?? false }; }
     } catch { /* si falla, renderizamos con lo del dashboard */ }
     render(full);

@@ -8,6 +8,7 @@
 // `key` = ticketNumber ('123' — tickets y features) o 'pr:<n>' (PRs).
 import { icon } from '../../ui/icons.js';
 import { confirmDialog } from '../../ui/dialog.js';
+import { t } from '../../ui/i18n.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -26,36 +27,36 @@ export function metaSideHtml(meta) {
   const ctxHtml = ctx
     ? `<div class="tkm-ctx-text">${esc(ctx)}</div>
        <div class="tkm-ctx-acts">
-         <button class="btn-ghost btn--sm" data-act="ctx-edit">${icon('edit', { size: 12 })}<span>Editar</span></button>
-         <button class="btn-ghost btn--sm" data-act="ctx-clear">${icon('close', { size: 12 })}<span>Borrar</span></button>
+         <button class="btn-ghost btn--sm" data-act="ctx-edit">${icon('edit', { size: 12 })}<span>${t('tickets.meta.edit', 'Editar')}</span></button>
+         <button class="btn-ghost btn--sm" data-act="ctx-clear">${icon('close', { size: 12 })}<span>${t('tickets.meta.delete', 'Borrar')}</span></button>
        </div>
-       ${m.contextoAt ? `<div class="bf-sub">act. ${fmtDate(m.contextoAt)}</div>` : ''}`
-    : '<div class="bf-sub">Sin contexto adicional. Pegá una transcripción de una charla y la IA la interpreta.</div>';
+       ${m.contextoAt ? `<div class="bf-sub">${t('tickets.meta.updatedShort', 'act. {d}', { d: fmtDate(m.contextoAt) })}</div>` : ''}`
+    : `<div class="bf-sub">${t('tickets.meta.noContext', 'Sin contexto adicional. Pegá una transcripción de una charla y la IA la interpreta.')}</div>`;
 
   const histHtml = hist.length
     ? hist.slice().reverse().map((h) => `<details class="tkm-hist-item">
-        <summary>${icon('clock', { size: 11 })} ${fmtDate(h.at)}${h.files?.length ? ` · ${h.files.length} arch.` : ''}</summary>
-        ${h.resumen ? `<div class="tkm-hist-sum">${esc(h.resumen)}</div>` : '<div class="bf-sub">(sin resumen)</div>'}
+        <summary>${icon('clock', { size: 11 })} ${fmtDate(h.at)}${h.files?.length ? ` · ${h.files.length} ${t('tickets.common.filesAbbr', 'arch.')}` : ''}</summary>
+        ${h.resumen ? `<div class="tkm-hist-sum">${esc(h.resumen)}</div>` : `<div class="bf-sub">${t('tickets.meta.noSummary', '(sin resumen)')}</div>`}
         ${h.files?.length ? `<div class="tkm-hist-files">${h.files.map((f) => `<code>${esc(f)}</code>`).join('')}</div>` : ''}
       </details>`).join('')
-    : '<div class="bf-sub">Todavía no se trabajó este ítem en un chat. Al cerrar una sesión de trabajo se guarda el resumen acá.</div>';
+    : `<div class="bf-sub">${t('tickets.meta.noHistory', 'Todavía no se trabajó este ítem en un chat. Al cerrar una sesión de trabajo se guarda el resumen acá.')}</div>`;
 
   // Contenido interno (SIN <aside>): cada ventana lo ubica en su columna derecha
   // — ticket-detail lo envuelve en un aside propio; pr-detail lo suma al aside
   // del Pad ya existente.
   return `
     <div class="tkm-side">
-      <div class="bv2-sec-h">${icon('sparkle', { size: 12 })} Contexto adicional</div>
+      <div class="bv2-sec-h">${icon('sparkle', { size: 12 })} ${t('tickets.meta.contextHeading', 'Contexto adicional')}</div>
       <div class="tkm-ctx" data-ref="ctxbox">${ctxHtml}</div>
       <details class="tkm-add">
-        <summary>${icon('play', { size: 11 })} Interpretar una charla / transcripción</summary>
-        <textarea class="tkm-ta" data-ref="ta" rows="5" placeholder="Pegá acá la transcripción de la conversación con el cliente o el equipo…"></textarea>
+        <summary>${icon('play', { size: 11 })} ${t('tickets.meta.interpretSummary', 'Interpretar una charla / transcripción')}</summary>
+        <textarea class="tkm-ta" data-ref="ta" rows="5" placeholder="${t('tickets.meta.transcriptPlaceholder', 'Pegá acá la transcripción de la conversación con el cliente o el equipo…')}"></textarea>
         <div class="tkm-add-acts">
-          <button class="btn-ghost btn--sm" data-act="ctx-analyze">${icon('sparkle', { size: 12 })}<span>Interpretar con IA</span></button>
+          <button class="btn-ghost btn--sm" data-act="ctx-analyze">${icon('sparkle', { size: 12 })}<span>${t('tickets.meta.interpretAi', 'Interpretar con IA')}</span></button>
           <span class="tkm-status bf-sub" data-ref="status"></span>
         </div>
       </details>
-      <div class="bv2-sec-h">${icon('clock', { size: 12 })} Histórico del trabajo · ${hist.length}</div>
+      <div class="bv2-sec-h">${icon('clock', { size: 12 })} ${t('tickets.meta.historyHeading', 'Histórico del trabajo · {n}', { n: hist.length })}</div>
       <div class="tkm-hist">${histHtml}</div>
     </div>`;
 }
@@ -68,7 +69,7 @@ export function wireMetaPanel({ box, key, itemTitle = '', itemDesc = '', onChang
   const btn = box.querySelector('[data-act="ctx-analyze"]');
 
   box.querySelector('[data-act="ctx-clear"]')?.addEventListener('click', async () => {
-    const ok = await confirmDialog({ title: 'Borrar contexto adicional', message: '¿Seguro? Se elimina el contexto adicional guardado de este ítem.', confirmLabel: 'Borrar', danger: true });
+    const ok = await confirmDialog({ title: t('tickets.meta.clearTitle', 'Borrar contexto adicional'), message: t('tickets.meta.clearMsg', '¿Seguro? Se elimina el contexto adicional guardado de este ítem.'), confirmLabel: t('tickets.meta.delete', 'Borrar'), danger: true });
     if (!ok) return;
     try { await fetch('/api/tickets/meta/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, text: '' }) }); } catch { /* noop */ }
     onChanged?.();
@@ -79,7 +80,7 @@ export function wireMetaPanel({ box, key, itemTitle = '', itemDesc = '', onChang
     const cur = box.querySelector('.tkm-ctx-text')?.textContent || '';
     const ta = box.querySelector('[data-ref="ta"]');
     const details = box.querySelector('.tkm-add');
-    if (ta && details) { details.open = true; ta.value = cur; ta.dataset.editing = '1'; if (btn) btn.querySelector('span').textContent = 'Guardar edición'; ta.focus(); }
+    if (ta && details) { details.open = true; ta.value = cur; ta.dataset.editing = '1'; if (btn) btn.querySelector('span').textContent = t('tickets.meta.saveEdit', 'Guardar edición'); ta.focus(); }
   });
 
   box.querySelector('[data-act="ctx-analyze"]')?.addEventListener('click', async () => {
@@ -87,30 +88,30 @@ export function wireMetaPanel({ box, key, itemTitle = '', itemDesc = '', onChang
     const text = (ta?.value || '').trim();
     // Edición manual del texto ya guardado → guardar directo, sin IA ni tokens.
     if (ta?.dataset.editing === '1') {
-      setStatus('Guardando…');
-      try { await fetch('/api/tickets/meta/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, text }) }); } catch { setStatus('Error de red.'); return; }
+      setStatus(t('tickets.meta.saving', 'Guardando…'));
+      try { await fetch('/api/tickets/meta/context', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, text }) }); } catch { setStatus(t('tickets.meta.netError', 'Error de red.')); return; }
       onChanged?.();
       return;
     }
-    if (text.length < 20) { setStatus('Pegá una transcripción (mín. 20 caracteres).'); return; }
-    const ok = await confirmDialog({ title: 'Interpretar con IA', message: 'Corre una interpretación con IA (consume tokens) y se guarda como Contexto adicional del ítem. ¿Seguir?', confirmLabel: 'Interpretar' });
+    if (text.length < 20) { setStatus(t('tickets.meta.pasteMin', 'Pegá una transcripción (mín. 20 caracteres).')); return; }
+    const ok = await confirmDialog({ title: t('tickets.meta.interpretAi', 'Interpretar con IA'), message: t('tickets.meta.interpretMsg', 'Corre una interpretación con IA (consume tokens) y se guarda como Contexto adicional del ítem. ¿Seguir?'), confirmLabel: t('tickets.meta.interpret', 'Interpretar') });
     if (!ok) return;
-    setStatus('Interpretando…');
+    setStatus(t('tickets.meta.interpreting', 'Interpretando…'));
     if (btn) btn.disabled = true;
     let res;
     try {
       res = await (await fetch('/api/tickets/meta/context-analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, transcript: text, itemTitle, itemDesc }) })).json();
-    } catch { setStatus('Error de red.'); if (btn) btn.disabled = false; return; }
-    if (!res?.id) { setStatus(res?.error || 'No se pudo iniciar.'); if (btn) btn.disabled = false; return; }
+    } catch { setStatus(t('tickets.meta.netError', 'Error de red.')); if (btn) btn.disabled = false; return; }
+    if (!res?.id) { setStatus(res?.error || t('tickets.meta.cantStart', 'No se pudo iniciar.')); if (btn) btn.disabled = false; return; }
     if (res.status === 'done') { onChanged?.(); return; }
     let n = 0;
     const poll = async () => {
       n += 1;
       let job = null;
       try { job = await (await fetch(`/api/tickets/meta/context-analyze/${res.id}`)).json(); } catch { /* red intermitente: reintenta */ }
-      if (job?.status === 'done') { setStatus('Listo ✓'); onChanged?.(); return; }
-      if (job?.status === 'error') { setStatus(job.error || 'Falló la interpretación.'); if (btn) btn.disabled = false; return; }
-      if (n > 150) { setStatus('Tardó demasiado.'); if (btn) btn.disabled = false; return; }
+      if (job?.status === 'done') { setStatus(t('tickets.meta.done', 'Listo ✓')); onChanged?.(); return; }
+      if (job?.status === 'error') { setStatus(job.error || t('tickets.meta.interpretFailed', 'Falló la interpretación.')); if (btn) btn.disabled = false; return; }
+      if (n > 150) { setStatus(t('tickets.meta.timeout', 'Tardó demasiado.')); if (btn) btn.disabled = false; return; }
       setTimeout(poll, 2000);
     };
     setTimeout(poll, 2000);

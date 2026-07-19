@@ -14,9 +14,20 @@
 //   POST /api/retro/:id/dismiss     -> { lesson }   (status 'descartada')
 //   POST /api/retro/:id/promote {target?} -> { lesson }   (ADMIN; target ∈ memoria|claude-md)
 //   POST /api/retro/:id/delete      -> { ok }
-// OJO ORDEN: las literales /activity y /targets van ANTES de la paramétrica /:id.
+//
+// "Feedback de Chris" (2026-07-19, categoría 'feedback-cliente' de la MISMA
+// colección — ver store.js): retroalimentación puntual de un cliente/revisor
+// sobre un ticket/PR, NO una lección de proceso. Dos vías de ingesta, ambas
+// ADMIN (consumen tokens, runner desacoplado):
+//   POST /api/retro/feedback {text, ticketRef?}      -> { id, status }  (pegado manual)
+//   GET  /api/retro/feedback/:jobId                  -> { status, result, error }
+//   POST /api/retro/email-refresh                    -> { status }     (escaneo Graph del contacto 'chris')
+//   GET  /api/retro/email-scan                       -> { items, scannedAt, running, ... }
+//   POST /api/retro/teams-refresh                     -> { status }     (escaneo del DM de Teams con 'chris')
+//   GET  /api/retro/teams-scan                        -> { items, scannedAt, running, ... }
+// OJO ORDEN: las literales /activity, /targets, /feedback, /email-*, /teams-* van ANTES de la paramétrica /:id.
 import express from 'express';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import { reqPadContext } from '../../core/pad-context.js';
 import { hardRulesText } from '../health/shared.js';
 import {
@@ -28,6 +39,12 @@ import {
   readCurationJob, writeCurationJob, isFreshRunning as isCurateRunning,
   jobResult as curationResult, spawnRetroCurateRunner,
 } from './curate-shared.js';
+import {
+  feedbackJobId, readFeedbackJob, writeFeedbackJob, isFeedbackFreshRunning,
+  feedbackJobResult, spawnRetroFeedbackRunner,
+} from './feedback-shared.js';
+import { readEmailScan, isEmailScanRunning, spawnRetroEmailRunner } from './email-shared.js';
+import { readTeamsFeedbackScan, isTeamsFeedbackScanRunning, spawnRetroTeamsRunner } from './teams-feedback-shared.js';
 
 function sendErr(res, e) {
   if (e?.badRequest) return res.status(400).json({ error: e.message });
@@ -57,6 +74,65 @@ export default {
 
     r.get('/targets', (req, res) => {
       try { res.json({ targets: PROMOTE_TARGETS }); }
+      catch (e) { sendErr(res, e); }
+    });
+
+    // ===== Feedback de Chris: ingesta MANUAL (pegar correo/Teams/llamada) =====
+    r.post('/feedback', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Registrar feedback consume tokens (requiere administrador).' });
+      try {
+        const b = req.body || {};
+        const text = String(b.text || '').trim();
+        if (!text) return res.status(400).json({ error: 'Falta el texto a interpretar.' });
+        const ticketRef = String(b.ticketRef || '').trim().slice(0, 24) || null;
+        const id = feedbackJobId(text, ticketRef);
+        const existing = readFeedbackJob(id);
+        if (existing && (existing.status === 'done' || isFeedbackFreshRunning(existing))) {
+          return res.json({ id, ...feedbackJobResult(existing) });
+        }
+        const owner = principalOf(req)?.username || null;
+        writeFeedbackJob(id, {
+          id, status: 'running', startedAt: Date.now(), owner,
+          text: text.slice(0, 20000), ticketRef, project: String(b.project || '').trim() || null,
+          result: null, error: null,
+        });
+        spawnRetroFeedbackRunner(id);
+        res.json({ id, status: 'running' });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    r.get('/feedback/:jobId', (req, res) => {
+      try { res.json({ id: req.params.jobId, ...feedbackJobResult(readFeedbackJob(req.params.jobId)) }); }
+      catch (e) { sendErr(res, e); }
+    });
+
+    // ===== Feedback de Chris: ingesta AUTOMÁTICA de correo (Graph) =====
+    r.post('/email-refresh', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de correo consume tokens (requiere administrador).' });
+      try {
+        if (isEmailScanRunning()) return res.json({ status: 'running' });
+        spawnRetroEmailRunner();
+        res.json({ status: 'running' });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    r.get('/email-scan', (req, res) => {
+      try { res.json({ ...readEmailScan(), running: isEmailScanRunning() }); }
+      catch (e) { sendErr(res, e); }
+    });
+
+    // ===== Feedback de Chris: ingesta AUTOMÁTICA de Teams (Graph) =====
+    r.post('/teams-refresh', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de Teams consume tokens (requiere administrador).' });
+      try {
+        if (isTeamsFeedbackScanRunning()) return res.json({ status: 'running' });
+        spawnRetroTeamsRunner();
+        res.json({ status: 'running' });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    r.get('/teams-scan', (req, res) => {
+      try { res.json({ ...readTeamsFeedbackScan(), running: isTeamsFeedbackScanRunning() }); }
       catch (e) { sendErr(res, e); }
     });
 

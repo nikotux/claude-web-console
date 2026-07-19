@@ -15,27 +15,28 @@ import { mountLearning } from '../learning/learning.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { t } from '../../ui/i18n.js';
 const STATUS = [
-  { key: 'pendiente', label: 'Pendiente', emoji: '⚪' },
-  { key: 'en-progreso', label: 'En progreso', emoji: '🔵' },
-  { key: 'hecha', label: 'Hecha', emoji: '✅' },
+  { key: 'pendiente', get label() { return t('tasks.status.pendiente', 'Pendiente'); }, emoji: '⚪' },
+  { key: 'en-progreso', get label() { return t('tasks.status.en-progreso', 'En progreso'); }, emoji: '🔵' },
+  { key: 'hecha', get label() { return t('tasks.status.hecha', 'Hecha'); }, emoji: '✅' },
 ];
 const PRIO = [
-  { key: 'alta', label: 'Alta', emoji: '🔴' },
-  { key: 'media', label: 'Media', emoji: '🟡' },
-  { key: 'baja', label: 'Baja', emoji: '🟢' },
+  { key: 'alta', get label() { return t('tasks.prio.alta', 'Alta'); }, emoji: '🔴' },
+  { key: 'media', get label() { return t('tasks.prio.media', 'Media'); }, emoji: '🟡' },
+  { key: 'baja', get label() { return t('tasks.prio.baja', 'Baja'); }, emoji: '🟢' },
 ];
 const TYPE = [
-  { key: 'task', label: 'Tarea', emoji: '🔹' },
-  { key: 'idea', label: 'Idea', emoji: '💡' },
-  { key: 'nota', label: 'Nota', emoji: '📝' },
-  { key: 'feature', label: 'Feature', emoji: '✨' },
+  { key: 'task', get label() { return t('tasks.type.task', 'Tarea'); }, emoji: '🔹' },
+  { key: 'idea', get label() { return t('tasks.type.idea', 'Idea'); }, emoji: '💡' },
+  { key: 'nota', get label() { return t('tasks.type.nota', 'Nota'); }, emoji: '📝' },
+  { key: 'feature', get label() { return t('tasks.type.feature', 'Feature'); }, emoji: '✨' },
 ];
 const PLAN_STATUS = [
-  { key: 'active', label: 'Activo', emoji: '🟢' },
-  { key: 'proposed', label: 'Propuesto', emoji: '💭' },
-  { key: 'done', label: 'Completado', emoji: '✅' },
-  { key: 'cancelled', label: 'Cancelado', emoji: '🚫' },
+  { key: 'active', get label() { return t('tasks.planStatus.active', 'Activo'); }, emoji: '🟢' },
+  { key: 'proposed', get label() { return t('tasks.planStatus.proposed', 'Propuesto'); }, emoji: '💭' },
+  { key: 'done', get label() { return t('tasks.planStatus.done', 'Completado'); }, emoji: '✅' },
+  { key: 'cancelled', get label() { return t('tasks.planStatus.cancelled', 'Cancelado'); }, emoji: '🚫' },
 ];
 const statusOf = (k) => STATUS.find((s) => s.key === k) || STATUS[0];
 const prioOf = (k) => PRIO.find((p) => p.key === k) || PRIO[1];
@@ -49,10 +50,10 @@ function fmtDate(ms) {
   const d = new Date(ms);
   const day = d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
   const s = Math.floor((Date.now() - ms) / 1000);
-  let ago = 'recién';
-  if (s >= 86400) ago = `hace ${Math.floor(s / 86400)} d`;
-  else if (s >= 3600) ago = `hace ${Math.floor(s / 3600)} h`;
-  else if (s >= 60) ago = `hace ${Math.floor(s / 60)} min`;
+  let ago = t('tasks.time.justNow', 'recién');
+  if (s >= 86400) ago = t('tasks.time.daysAgo', 'hace {n} d', { n: Math.floor(s / 86400) });
+  else if (s >= 3600) ago = t('tasks.time.hoursAgo', 'hace {n} h', { n: Math.floor(s / 3600) });
+  else if (s >= 60) ago = t('tasks.time.minsAgo', 'hace {n} min', { n: Math.floor(s / 60) });
   return `${day} · ${ago}`;
 }
 // Fecha objetivo/vencimiento (guardada como YYYY-MM-DD) → "13 may 2026".
@@ -73,15 +74,15 @@ export default {
 
     el.innerHTML = `
       <header class="sec-head">
-        <span class="sec-dot" data-ref="dot" title="Tareas pendientes"></span>
-        <span class="sec-title">Banco de conocimiento</span>
+        <span class="sec-dot" data-ref="dot" title="${t('tasks.sidebar.dotTitle', 'Tareas pendientes')}"></span>
+        <span class="sec-title">${t('tasks.sidebar.title', 'Banco de conocimiento')}</span>
         <span class="side-count" data-ref="count"></span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="add" title="Nueva tarea">${icon('plus', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="add" title="${t('tasks.sidebar.addTitle', 'Nueva tarea')}">${icon('plus', { size: 14 })}</button>
       </header>
       <div class="tk-card">
-        <div class="task-mini" data-ref="mini">cargando…</div>
+        <div class="task-mini" data-ref="mini">${t('tasks.common.loading', 'cargando…')}</div>
         <div class="tk-actions">
-          <button class="btn-ghost btn--sm btn--block" data-ref="board">${icon('checklist', { size: 13 })}<span>Abrir tablero</span></button>
+          <button class="btn-ghost btn--sm btn--block" data-ref="board">${icon('checklist', { size: 13 })}<span>${t('tasks.sidebar.openBoard', 'Abrir tablero')}</span></button>
         </div>
       </div>`;
 
@@ -96,11 +97,11 @@ export default {
       if (refs.dot) {
         const dstate = pend > 0 ? 'warn' : (counts.total ? 'ok' : 'idle');
         refs.dot.className = `sec-dot sec-dot--${dstate}`;
-        refs.dot.title = counts.total ? `${pend} pendiente(s) · ${prog} en progreso · ${done} hecha(s)` : 'Sin tareas';
+        refs.dot.title = counts.total ? t('tasks.sidebar.dotCounts', '{pend} pendiente(s) · {prog} en progreso · {done} hecha(s)', { pend, prog, done }) : t('tasks.sidebar.noTasks', 'Sin tareas');
       }
       refs.mini.innerHTML = counts.total
         ? `<span class="task-chip">⚪ ${pend}</span><span class="task-chip">🔵 ${prog}</span><span class="task-chip">✅ ${done}</span>`
-        : '<span class="bf-sub">Sin tareas · creá la primera con ＋</span>';
+        : `<span class="bf-sub">${t('tasks.sidebar.emptyHint', 'Sin tareas · creá la primera con ＋')}</span>`;
     }
 
     async function loadCounts() {
@@ -122,39 +123,39 @@ export default {
         let settled = false;
         const finish = (v) => { if (settled) return; settled = true; resolve(v); };
         const isEdit = !!existing;
-        const t = existing || { title: '', description: '', type: 'task', priority: 'media', status: 'pendiente', tags: [], planId: null, owner: '', estimate: '', dueDate: '' };
-        const m = dialog.openModal({ title: isEdit ? `Editar ${t.id}` : 'Nueva tarea', width: '520px', onClose: () => finish(null) });
-        const planOpts = `<option value="">— sin plan —</option>${plans.map((p) => `<option value="${p.id}"${p.id === t.planId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}`;
+        const tk = existing || { title: '', description: '', type: 'task', priority: 'media', status: 'pendiente', tags: [], planId: null, owner: '', estimate: '', dueDate: '' };
+        const m = dialog.openModal({ title: isEdit ? t('tasks.form.editTitle', 'Editar {id}', { id: tk.id }) : t('tasks.form.newTitle', 'Nueva tarea'), width: '520px', onClose: () => finish(null) });
+        const planOpts = `<option value="">${t('tasks.form.noPlan', '— sin plan —')}</option>${plans.map((p) => `<option value="${p.id}"${p.id === tk.planId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}`;
         m.body.innerHTML = `
           <div class="task-form">
-            <label class="task-fld"><span>Título</span>
-              <input type="text" data-f="title" maxlength="200" placeholder="Qué hay que hacer" value="${esc(t.title)}" /></label>
-            <label class="task-fld"><span>Detalle (Markdown)</span>
-              <textarea data-f="description" rows="4" maxlength="4000" placeholder="Contexto, por qué, notas… (soporta Markdown)">${esc(t.description)}</textarea></label>
+            <label class="task-fld"><span>${t('tasks.form.title', 'Título')}</span>
+              <input type="text" data-f="title" maxlength="200" placeholder="${t('tasks.form.phTitle', 'Qué hay que hacer')}" value="${esc(tk.title)}" /></label>
+            <label class="task-fld"><span>${t('tasks.form.detail', 'Detalle (Markdown)')}</span>
+              <textarea data-f="description" rows="4" maxlength="4000" placeholder="${t('tasks.form.phDetail', 'Contexto, por qué, notas… (soporta Markdown)')}">${esc(tk.description)}</textarea></label>
             <div class="task-form-row">
-              <label class="task-fld"><span>Tipo</span>
-                <select data-f="type">${TYPE.map((x) => `<option value="${x.key}"${x.key === (t.type || 'task') ? ' selected' : ''}>${x.emoji} ${x.label}</option>`).join('')}</select></label>
-              <label class="task-fld"><span>Prioridad</span>
-                <select data-f="priority">${PRIO.map((p) => `<option value="${p.key}"${p.key === t.priority ? ' selected' : ''}>${p.emoji} ${p.label}</option>`).join('')}</select></label>
-              <label class="task-fld"><span>Estado</span>
-                <select data-f="status">${STATUS.map((s) => `<option value="${s.key}"${s.key === t.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
+              <label class="task-fld"><span>${t('tasks.form.type', 'Tipo')}</span>
+                <select data-f="type">${TYPE.map((x) => `<option value="${x.key}"${x.key === (tk.type || 'task') ? ' selected' : ''}>${x.emoji} ${x.label}</option>`).join('')}</select></label>
+              <label class="task-fld"><span>${t('tasks.form.priority', 'Prioridad')}</span>
+                <select data-f="priority">${PRIO.map((p) => `<option value="${p.key}"${p.key === tk.priority ? ' selected' : ''}>${p.emoji} ${p.label}</option>`).join('')}</select></label>
+              <label class="task-fld"><span>${t('tasks.form.status', 'Estado')}</span>
+                <select data-f="status">${STATUS.map((s) => `<option value="${s.key}"${s.key === tk.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
             </div>
             <div class="task-form-row">
-              <label class="task-fld"><span>Owner</span>
-                <input type="text" data-f="owner" maxlength="120" placeholder="Quién es responsable" value="${esc(t.owner || '')}" /></label>
-              <label class="task-fld"><span>Estimación</span>
-                <input type="text" data-f="estimate" maxlength="40" placeholder="ej: 1d, 4h" value="${esc(t.estimate || '')}" /></label>
-              <label class="task-fld"><span>Fecha objetivo</span>
-                <input type="date" data-f="dueDate" value="${esc(t.dueDate || '')}" /></label>
+              <label class="task-fld"><span>${t('tasks.form.owner', 'Owner')}</span>
+                <input type="text" data-f="owner" maxlength="120" placeholder="${t('tasks.form.phOwner', 'Quién es responsable')}" value="${esc(tk.owner || '')}" /></label>
+              <label class="task-fld"><span>${t('tasks.form.estimate', 'Estimación')}</span>
+                <input type="text" data-f="estimate" maxlength="40" placeholder="${t('tasks.form.phEstimate', 'ej: 1d, 4h')}" value="${esc(tk.estimate || '')}" /></label>
+              <label class="task-fld"><span>${t('tasks.form.targetDate', 'Fecha objetivo')}</span>
+                <input type="date" data-f="dueDate" value="${esc(tk.dueDate || '')}" /></label>
             </div>
-            <label class="task-fld"><span>Plan</span>
+            <label class="task-fld"><span>${t('tasks.form.plan', 'Plan')}</span>
               <select data-f="planId">${planOpts}</select></label>
-            <label class="task-fld"><span>Tags (coma)</span>
-              <input type="text" data-f="tags" placeholder="cliente, urgente" value="${esc((t.tags || []).join(', '))}" /></label>
+            <label class="task-fld"><span>${t('tasks.form.tags', 'Tags (coma)')}</span>
+              <input type="text" data-f="tags" placeholder="${t('tasks.form.phTags', 'cliente, urgente')}" value="${esc((tk.tags || []).join(', '))}" /></label>
           </div>
           <div class="dlg-actions">
-            <button class="btn-ghost" data-a="cancel">Cancelar</button>
-            <button class="btn" data-a="save">${isEdit ? 'Guardar' : 'Crear'}</button>
+            <button class="btn-ghost" data-a="cancel">${t('tasks.common.cancel', 'Cancelar')}</button>
+            <button class="btn" data-a="save">${isEdit ? t('tasks.common.save', 'Guardar') : t('tasks.common.create', 'Crear')}</button>
           </div>`;
         const get = (f) => m.body.querySelector(`[data-f="${f}"]`).value;
         m.body.querySelector('[data-a="cancel"]').addEventListener('click', () => m.close());
@@ -186,29 +187,29 @@ export default {
         const finish = (v) => { if (settled) return; settled = true; resolve(v); };
         const isEdit = !!existing;
         const p = existing || { title: '', description: '', status: 'active', owner: '', phase: '', targetDate: '' };
-        const m = dialog.openModal({ title: isEdit ? `Editar ${p.id}` : 'Nuevo plan', width: '520px', onClose: () => finish(null) });
+        const m = dialog.openModal({ title: isEdit ? t('tasks.planForm.editTitle', 'Editar {id}', { id: p.id }) : t('tasks.planForm.newTitle', 'Nuevo plan'), width: '520px', onClose: () => finish(null) });
         m.body.innerHTML = `
           <div class="task-form">
-            <label class="task-fld"><span>Título</span>
-              <input type="text" data-f="title" maxlength="200" placeholder="Nombre del plan" value="${esc(p.title)}" /></label>
-            <label class="task-fld"><span>Detalle (Markdown)</span>
-              <textarea data-f="description" rows="3" maxlength="4000" placeholder="Objetivo del plan… (soporta Markdown)">${esc(p.description)}</textarea></label>
+            <label class="task-fld"><span>${t('tasks.form.title', 'Título')}</span>
+              <input type="text" data-f="title" maxlength="200" placeholder="${t('tasks.planForm.phTitle', 'Nombre del plan')}" value="${esc(p.title)}" /></label>
+            <label class="task-fld"><span>${t('tasks.form.detail', 'Detalle (Markdown)')}</span>
+              <textarea data-f="description" rows="3" maxlength="4000" placeholder="${t('tasks.planForm.phDetail', 'Objetivo del plan… (soporta Markdown)')}">${esc(p.description)}</textarea></label>
             <div class="task-form-row">
-              <label class="task-fld"><span>Estado</span>
+              <label class="task-fld"><span>${t('tasks.form.status', 'Estado')}</span>
                 <select data-f="status">${PLAN_STATUS.map((s) => `<option value="${s.key}"${s.key === p.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
-              <label class="task-fld"><span>Fase</span>
-                <input type="text" data-f="phase" maxlength="20" placeholder="ej: 1, 4" value="${esc(p.phase || '')}" /></label>
+              <label class="task-fld"><span>${t('tasks.planForm.phase', 'Fase')}</span>
+                <input type="text" data-f="phase" maxlength="20" placeholder="${t('tasks.planForm.phPhase', 'ej: 1, 4')}" value="${esc(p.phase || '')}" /></label>
             </div>
             <div class="task-form-row">
-              <label class="task-fld"><span>Owner</span>
-                <input type="text" data-f="owner" maxlength="120" placeholder="Responsable" value="${esc(p.owner || '')}" /></label>
-              <label class="task-fld"><span>Fecha objetivo</span>
+              <label class="task-fld"><span>${t('tasks.form.owner', 'Owner')}</span>
+                <input type="text" data-f="owner" maxlength="120" placeholder="${t('tasks.planForm.phOwner', 'Responsable')}" value="${esc(p.owner || '')}" /></label>
+              <label class="task-fld"><span>${t('tasks.form.targetDate', 'Fecha objetivo')}</span>
                 <input type="date" data-f="targetDate" value="${esc(p.targetDate || '')}" /></label>
             </div>
           </div>
           <div class="dlg-actions">
-            <button class="btn-ghost" data-a="cancel">Cancelar</button>
-            <button class="btn" data-a="save">${isEdit ? 'Guardar' : 'Crear'}</button>
+            <button class="btn-ghost" data-a="cancel">${t('tasks.common.cancel', 'Cancelar')}</button>
+            <button class="btn" data-a="save">${isEdit ? t('tasks.common.save', 'Guardar') : t('tasks.common.create', 'Crear')}</button>
           </div>`;
         const get = (f) => m.body.querySelector(`[data-f="${f}"]`).value;
         m.body.querySelector('[data-a="cancel"]').addEventListener('click', () => m.close());
@@ -249,7 +250,7 @@ export default {
       let learningApi = null;       // { reload } de la pestaña Aprendizaje
       // Ventana grande, casi como el Explorador (92vw · alto 90vh): el sizing
       // real vive en .task-board-card (style.css); pasamos 92vw como el explorador.
-      const m = dialog.openModal({ title: 'Banco de conocimiento', width: '92vw', onClose: () => { boardApi = null; } });
+      const m = dialog.openModal({ title: t('tasks.board.title', 'Banco de conocimiento'), width: '92vw', onClose: () => { boardApi = null; } });
       m.card.classList.add('task-board-card');
       m.body.innerHTML = `
         <div class="task-board">
@@ -259,11 +260,11 @@ export default {
       const tabsEl = m.body.querySelector('[data-ref="tabs"]');
       const paneEl = m.body.querySelector('[data-ref="pane"]');
       const TABS = [
-        { key: 'panel', label: '📊 Panel' },
-        { key: 'tareas', label: '📋 Tareas' },
-        { key: 'planes', label: '🗺️ Planes' },
-        { key: 'aprendizaje', label: '🎓 Aprendizaje' },
-        { key: 'informes', label: '🎙️ Informes' },
+        { key: 'panel', label: `📊 ${t('tasks.tabs.panel', 'Panel')}` },
+        { key: 'tareas', label: `📋 ${t('tasks.tabs.tasks', 'Tareas')}` },
+        { key: 'planes', label: `🗺️ ${t('tasks.tabs.plans', 'Planes')}` },
+        { key: 'aprendizaje', label: `🎓 ${t('tasks.tabs.learning', 'Aprendizaje')}` },
+        { key: 'informes', label: `🎙️ ${t('tasks.tabs.reports', 'Informes')}` },
       ];
       const audioCtx = { icon, dialog, bus: ctx.bus };
       const learningCtx = { icon, dialog, bus: ctx.bus, whoami: ctx.whoami, openChat: ctx.openChat };
@@ -282,20 +283,20 @@ export default {
       // ---------- pestaña Tareas: cuadritos en columnas (estilo Bugs v2) ----------
       // Cada tarjeta nace CONTRAÍDA (solo lo esencial); al hacer clic se abre el
       // DETALLE en una ventana nueva (modal) — pedido del usuario 2026-07-06.
-      function taskCardV2(t) {
-        const st = statusOf(t.status);
-        const pr = prioOf(t.priority);
-        const ty = typeOf(t.type);
-        const plan = t.planId ? plans.find((p) => p.id === t.planId) : null;
-        const src = t.source === 'audio' ? '🎙️ ' : '';
-        return `<div class="task-cardv2 task-cardv2--${t.status}" data-open="${t.id}" role="button" tabindex="0" title="Abrir ${t.id}">
+      function taskCardV2(tk) {
+        const st = statusOf(tk.status);
+        const pr = prioOf(tk.priority);
+        const ty = typeOf(tk.type);
+        const plan = tk.planId ? plans.find((p) => p.id === tk.planId) : null;
+        const src = tk.source === 'audio' ? '🎙️ ' : '';
+        return `<div class="task-cardv2 task-cardv2--${tk.status}" data-open="${tk.id}" role="button" tabindex="0" title="${t('tasks.card.openTitle', 'Abrir {id}', { id: tk.id })}">
           <div class="task-cardv2-top">
             <span class="task-type" title="${ty.label}">${ty.emoji}</span>
-            <span class="task-cardv2-id">${t.id}</span>
-            <span class="task-prio task-prio--${t.priority}" title="Prioridad ${pr.label}">${pr.emoji}</span>
+            <span class="task-cardv2-id">${tk.id}</span>
+            <span class="task-prio task-prio--${tk.priority}" title="${t('tasks.card.prioTitle', 'Prioridad {label}', { label: pr.label })}">${pr.emoji}</span>
             <span class="task-cardv2-status" title="${st.label}">${st.emoji}</span>
           </div>
-          <div class="task-cardv2-title">${src}${esc(t.title)}</div>
+          <div class="task-cardv2-title">${src}${esc(tk.title)}</div>
           ${plan ? `<div class="task-cardv2-foot"><span class="task-plan">🗺️ ${esc(plan.title)}</span></div>` : ''}
         </div>`;
       }
@@ -307,14 +308,14 @@ export default {
       const relLabel = (id) => { const r = itemRaw(id); return r ? r.title : id; };
       const relIco = (id) => (id.startsWith('PLAN-') ? '🗺️' : '🔹');
       const blockedByIds = (id) => [...tasks, ...plans].filter((x) => (x.blocks || []).includes(id)).map((x) => x.id);
-      const relChip = (id, removable) => `<span class="tk-rel" data-open-item="${id}" title="${esc(relLabel(id))}">${relIco(id)} <span class="tk-rel-id">${esc(id)}</span> <span class="tk-rel-t">${esc(relLabel(id))}</span>${removable ? `<button class="tk-rel-x" data-rel-remove="${id}" title="Quitar">✕</button>` : ''}</span>`;
+      const relChip = (id, removable) => `<span class="tk-rel" data-open-item="${id}" title="${esc(relLabel(id))}">${relIco(id)} <span class="tk-rel-id">${esc(id)}</span> <span class="tk-rel-t">${esc(relLabel(id))}</span>${removable ? `<button class="tk-rel-x" data-rel-remove="${id}" title="${t('tasks.rel.removeTitle', 'Quitar')}">✕</button>` : ''}</span>`;
       const ACT_ICO = { created: '➕', completed: '✅', status: '🔄', updated: '✏️', deleted: '🗑️' };
       const evText = (ev) => {
-        if (ev.kind === 'created') return 'Creado';
-        if (ev.kind === 'completed') return 'Completado';
-        if (ev.kind === 'status') return `Estado → ${ev.detail || ''}`;
-        if (ev.kind === 'updated') return 'Actualizado';
-        if (ev.kind === 'deleted') return 'Eliminado';
+        if (ev.kind === 'created') return t('tasks.ev.created', 'Creado');
+        if (ev.kind === 'completed') return t('tasks.ev.completed', 'Completado');
+        if (ev.kind === 'status') return t('tasks.ev.status', 'Estado → {detail}', { detail: ev.detail || '' });
+        if (ev.kind === 'updated') return t('tasks.ev.updated', 'Actualizado');
+        if (ev.kind === 'deleted') return t('tasks.ev.deleted', 'Eliminado');
         return ev.kind || '';
       };
 
@@ -323,16 +324,16 @@ export default {
         return new Promise((resolve) => {
           let done = false; const fin = (v) => { if (done) return; done = true; resolve(v); };
           const items = allItems().filter((x) => !excludeIds.includes(x.id));
-          const pm = dialog.openModal({ title: 'Vincular · bloquea a…', width: '440px', onClose: () => fin(null) });
+          const pm = dialog.openModal({ title: t('tasks.rel.pickTitle', 'Vincular · bloquea a…'), width: '440px', onClose: () => fin(null) });
           pm.body.innerHTML = `
-            <input class="tk-rel-search" data-ref="s" placeholder="Buscar por id o título…" />
+            <input class="tk-rel-search" data-ref="s" placeholder="${t('tasks.rel.searchPh', 'Buscar por id o título…')}" />
             <div class="tk-rel-picklist" data-ref="l"></div>`;
           const s = pm.body.querySelector('[data-ref="s"]');
           const l = pm.body.querySelector('[data-ref="l"]');
           const draw = (q = '') => {
             const ql = q.toLowerCase();
             const rows = items.filter((x) => !ql || x.id.toLowerCase().includes(ql) || x.title.toLowerCase().includes(ql)).slice(0, 60);
-            l.innerHTML = rows.length ? rows.map((x) => `<button class="tk-rel-pick" data-id="${x.id}">${x.kind === 'plan' ? '🗺️' : '🔹'} <b>${esc(x.id)}</b> ${esc(x.title)}</button>`).join('') : '<div class="dash-empty">Nada coincide.</div>';
+            l.innerHTML = rows.length ? rows.map((x) => `<button class="tk-rel-pick" data-id="${x.id}">${x.kind === 'plan' ? '🗺️' : '🔹'} <b>${esc(x.id)}</b> ${esc(x.title)}</button>`).join('') : `<div class="dash-empty">${t('tasks.rel.noMatch', 'Nada coincide.')}</div>`;
           };
           draw();
           s.addEventListener('input', () => draw(s.value));
@@ -375,21 +376,21 @@ export default {
           if (isPlan) {
             const st = planStatusOf(item.status);
             return [
-              propRow('Estado', `${st.emoji} ${st.label}`),
-              propRow('Fase', item.phase ? esc(item.phase) : '—'),
-              propRow('Fecha objetivo', item.targetDate ? fmtDay(item.targetDate) : '—'),
-              propRow('Owner', item.owner ? esc(item.owner) : '—'),
-              propRow('Progreso', `${item.doneCount || 0}/${item.taskCount || 0} · ${item.pct || 0}%`),
+              propRow(t('tasks.form.status', 'Estado'), `${st.emoji} ${st.label}`),
+              propRow(t('tasks.prop.phase', 'Fase'), item.phase ? esc(item.phase) : '—'),
+              propRow(t('tasks.form.targetDate', 'Fecha objetivo'), item.targetDate ? fmtDay(item.targetDate) : '—'),
+              propRow(t('tasks.form.owner', 'Owner'), item.owner ? esc(item.owner) : '—'),
+              propRow(t('tasks.prop.progress', 'Progreso'), `${item.doneCount || 0}/${item.taskCount || 0} · ${item.pct || 0}%`),
             ].join('');
           }
           const st = statusOf(item.status); const pr = prioOf(item.priority); const ty = typeOf(item.type);
           return [
-            propRow('Estado', `${st.emoji} ${st.label}`),
-            propRow('Prioridad', `${pr.emoji} ${pr.label}`),
-            propRow('Tipo', `${ty.emoji} ${ty.label}`),
-            propRow('Owner', item.owner ? esc(item.owner) : '—'),
-            propRow('Estimación', item.estimate ? esc(item.estimate) : '—'),
-            propRow('Fecha objetivo', item.dueDate ? fmtDay(item.dueDate) : '—'),
+            propRow(t('tasks.form.status', 'Estado'), `${st.emoji} ${st.label}`),
+            propRow(t('tasks.form.priority', 'Prioridad'), `${pr.emoji} ${pr.label}`),
+            propRow(t('tasks.form.type', 'Tipo'), `${ty.emoji} ${ty.label}`),
+            propRow(t('tasks.form.owner', 'Owner'), item.owner ? esc(item.owner) : '—'),
+            propRow(t('tasks.form.estimate', 'Estimación'), item.estimate ? esc(item.estimate) : '—'),
+            propRow(t('tasks.form.targetDate', 'Fecha objetivo'), item.dueDate ? fmtDay(item.dueDate) : '—'),
           ].join('');
         }
         function relHtml() {
@@ -399,33 +400,33 @@ export default {
           const children = isPlan ? tasks.filter((t) => t.planId === item.id) : [];
           const doneCh = children.filter((t) => t.status === 'hecha').length;
           const rows = [];
-          if (!isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Parte del plan</span><div class="tk-rel-chips">${childOf ? relChip(childOf, false) : '<span class="dash-empty">Sin plan</span>'}</div></div>`);
-          if (isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Hijos ${doneCh}/${children.length}</span><div class="tk-rel-chips">${children.length ? children.map((t) => relChip(t.id, false)).join('') : '<span class="dash-empty">Sin tareas asignadas</span>'}</div></div>`);
-          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Bloquea a</span><div class="tk-rel-chips">${blocks.length ? blocks.map((id) => relChip(id, true)).join('') : ''}<button class="btn-ghost btn--sm tk-rel-add" data-rel-add title="Vincular">＋</button></div></div>`);
-          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">Bloqueado por</span><div class="tk-rel-chips">${bby.length ? bby.map((id) => relChip(id, false)).join('') : '<span class="dash-empty">—</span>'}</div></div>`);
+          if (!isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">${t('tasks.rel.partOf', 'Parte del plan')}</span><div class="tk-rel-chips">${childOf ? relChip(childOf, false) : `<span class="dash-empty">${t('tasks.rel.noPlanShort', 'Sin plan')}</span>`}</div></div>`);
+          if (isPlan) rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">${t('tasks.rel.children', 'Hijos {done}/{total}', { done: doneCh, total: children.length })}</span><div class="tk-rel-chips">${children.length ? children.map((tk) => relChip(tk.id, false)).join('') : `<span class="dash-empty">${t('tasks.rel.noChildren', 'Sin tareas asignadas')}</span>`}</div></div>`);
+          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">${t('tasks.rel.blocks', 'Bloquea a')}</span><div class="tk-rel-chips">${blocks.length ? blocks.map((id) => relChip(id, true)).join('') : ''}<button class="btn-ghost btn--sm tk-rel-add" data-rel-add title="${t('tasks.rel.addTitle', 'Vincular')}">＋</button></div></div>`);
+          rows.push(`<div class="tk-rel-row"><span class="tk-rel-lbl">${t('tasks.rel.blockedBy', 'Bloqueado por')}</span><div class="tk-rel-chips">${bby.length ? bby.map((id) => relChip(id, false)).join('') : '<span class="dash-empty">—</span>'}</div></div>`);
           return rows.join('');
         }
         function crumbHtml() {
           const plan = !isPlan && item.planId ? plans.find((p) => p.id === item.planId) : null;
           return `<div class="tk-crumb">
-            <span class="tk-crumb-lnk" data-goto-tab="panel">🏠 Banco</span><span class="tk-crumb-sep">/</span>
-            <span class="tk-crumb-lnk" data-goto-tab="planes">📋 Planes</span>
+            <span class="tk-crumb-lnk" data-goto-tab="panel">🏠 ${t('tasks.crumb.bank', 'Banco')}</span><span class="tk-crumb-sep">/</span>
+            <span class="tk-crumb-lnk" data-goto-tab="planes">📋 ${t('tasks.tabs.plans', 'Planes')}</span>
             ${plan ? `<span class="tk-crumb-sep">/</span><span class="tk-crumb-lnk" data-open-item="${plan.id}">${esc(plan.id)}</span>` : ''}
             <span class="tk-crumb-sep">/</span><span class="tk-crumb-cur">${item.id}</span></div>`;
         }
         function actsHtml() {
           if (isPlan) {
-            return `<button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
-              <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>Eliminar</span></button>`;
+            return `<button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>${t('tasks.common.edit', 'Editar')}</span></button>
+              <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>${t('tasks.common.delete', 'Eliminar')}</span></button>`;
           }
           const advanceBtn = item.status === 'pendiente'
-            ? '<button class="btn btn--sm" data-da="advance">▶ En progreso</button>'
+            ? `<button class="btn btn--sm" data-da="advance">${t('tasks.detail.advanceToProgress', '▶ En progreso')}</button>`
             : item.status === 'en-progreso'
-              ? '<button class="btn btn--sm" data-da="advance">✅ Marcar hecha</button>'
-              : '<button class="btn-ghost btn--sm" data-da="reopen">↩ Reabrir</button>';
+              ? `<button class="btn btn--sm" data-da="advance">${t('tasks.detail.markDone', '✅ Marcar hecha')}</button>`
+              : `<button class="btn-ghost btn--sm" data-da="reopen">${t('tasks.detail.reopen', '↩ Reabrir')}</button>`;
           return `${advanceBtn}
-            <button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
-            <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>Eliminar</span></button>`;
+            <button class="btn-ghost btn--sm" data-da="edit">${icon('edit', { size: 13 })}<span>${t('tasks.common.edit', 'Editar')}</span></button>
+            <button class="btn-ghost btn--sm" data-da="del">${icon('trash', { size: 13 })}<span>${t('tasks.common.delete', 'Eliminar')}</span></button>`;
         }
 
         function renderBody() {
@@ -436,12 +437,12 @@ export default {
             <div class="tk-detail">
               ${crumbHtml()}
               <div class="tk-detail-title">${esc(item.title)}</div>
-              <div class="tk-detail-sub">${icon('clock', { size: 11 })} Creada ${fmtDate(item.createdAt)}${item.updatedAt && item.updatedAt !== item.createdAt ? ` · ✏️ ${fmtDate(item.updatedAt)}` : ''}${item.source === 'audio' ? ' · 🎙️ desde audio' : ''}</div>
+              <div class="tk-detail-sub">${icon('clock', { size: 11 })} ${t('tasks.detail.created', 'Creada {date}', { date: fmtDate(item.createdAt) })}${item.updatedAt && item.updatedAt !== item.createdAt ? ` · ✏️ ${fmtDate(item.updatedAt)}` : ''}${item.source === 'audio' ? ` · 🎙️ ${t('tasks.detail.fromAudio', 'desde audio')}` : ''}</div>
               <div class="tk-detail-acts">${actsHtml()}</div>
-              <details class="tk-sec" open><summary class="tk-sec-h">⚙️ Propiedades</summary><div class="tk-sec-b"><div class="tk-props">${propsHtml()}</div>${tags}</div></details>
-              <details class="tk-sec" open><summary class="tk-sec-h">📝 Descripción</summary><div class="tk-sec-b">${item.description ? `<div class="tk-md">${renderMarkdown(item.description)}</div>` : '<div class="dash-empty">Sin descripción.</div>'}</div></details>
-              <details class="tk-sec"${hasRel ? ' open' : ''}><summary class="tk-sec-h">🔗 Relaciones</summary><div class="tk-sec-b tk-rels">${relHtml()}</div></details>
-              <details class="tk-sec"><summary class="tk-sec-h">🕑 Timeline y comentarios</summary><div class="tk-sec-b" data-ref="timeline">cargando…</div></details>
+              <details class="tk-sec" open><summary class="tk-sec-h">${t('tasks.sec.properties', '⚙️ Propiedades')}</summary><div class="tk-sec-b"><div class="tk-props">${propsHtml()}</div>${tags}</div></details>
+              <details class="tk-sec" open><summary class="tk-sec-h">${t('tasks.sec.description', '📝 Descripción')}</summary><div class="tk-sec-b">${item.description ? `<div class="tk-md">${renderMarkdown(item.description)}</div>` : `<div class="dash-empty">${t('tasks.detail.noDescription', 'Sin descripción.')}</div>`}</div></details>
+              <details class="tk-sec"${hasRel ? ' open' : ''}><summary class="tk-sec-h">${t('tasks.sec.relations', '🔗 Relaciones')}</summary><div class="tk-sec-b tk-rels">${relHtml()}</div></details>
+              <details class="tk-sec"><summary class="tk-sec-h">${t('tasks.sec.timeline', '🕑 Timeline y comentarios')}</summary><div class="tk-sec-b" data-ref="timeline">${t('tasks.common.loading', 'cargando…')}</div></details>
             </div>`;
           loadTimeline();
         }
@@ -456,16 +457,16 @@ export default {
           } catch { /* noop */ }
           const rows = events.map((ev) => {
             if (ev.type === 'comment') {
-              return `<div class="tk-tl tk-tl--c"><span class="tk-tl-ico">💬</span><div class="tk-tl-body"><div class="tk-tl-txt">${esc(ev.text)}</div><div class="tk-tl-meta">${fmtDate(ev.ts)} <button class="tk-tl-del" data-comment-del="${ev.cid}" title="Borrar comentario">✕</button></div></div></div>`;
+              return `<div class="tk-tl tk-tl--c"><span class="tk-tl-ico">💬</span><div class="tk-tl-body"><div class="tk-tl-txt">${esc(ev.text)}</div><div class="tk-tl-meta">${fmtDate(ev.ts)} <button class="tk-tl-del" data-comment-del="${ev.cid}" title="${t('tasks.timeline.delComment', 'Borrar comentario')}">✕</button></div></div></div>`;
             }
             return `<div class="tk-tl"><span class="tk-tl-ico">${ACT_ICO[ev.kind] || '•'}</span><div class="tk-tl-body"><div class="tk-tl-txt">${esc(evText(ev))}</div><div class="tk-tl-meta">${fmtDate(ev.ts)}</div></div></div>`;
           }).join('');
           box.innerHTML = `
             <div class="tk-tl-composer">
-              <textarea class="tk-tl-input" data-ref="cinput" rows="2" placeholder="Escribí un comentario… (Ctrl+Enter para enviar)"></textarea>
-              <button class="btn btn--sm" data-comment-send>Comentar</button>
+              <textarea class="tk-tl-input" data-ref="cinput" rows="2" placeholder="${t('tasks.timeline.commentPh', 'Escribí un comentario… (Ctrl+Enter para enviar)')}"></textarea>
+              <button class="btn btn--sm" data-comment-send>${t('tasks.timeline.comment', 'Comentar')}</button>
             </div>
-            <div class="tk-tl-list">${rows || '<div class="dash-empty">Sin actividad todavía.</div>'}</div>`;
+            <div class="tk-tl-list">${rows || `<div class="dash-empty">${t('tasks.timeline.noActivity', 'Sin actividad todavía.')}</div>`}</div>`;
           const ta = box.querySelector('[data-ref="cinput"]');
           ta?.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); box.querySelector('[data-comment-send]')?.click(); } });
         }
@@ -508,7 +509,12 @@ export default {
           if (a === 'reopen') { await mutate(() => patchItem({ status: 'pendiente' })); return; }
           if (a === 'edit') { const p = isPlan ? await planForm(item) : await taskForm(item, plans); if (p) await mutate(() => patchItem(p)); return; }
           if (a === 'del') {
-            const ok = await dialog.confirmDialog({ title: isPlan ? 'Eliminar plan' : 'Eliminar tarea', message: isPlan ? `¿Eliminar el plan “${item.title}”? Las tareas quedan SIN plan.` : `¿Eliminar “${item.title}”? No se puede deshacer.`, confirmLabel: 'Eliminar', danger: true });
+            const ok = await dialog.confirmDialog({
+              title: isPlan ? t('tasks.confirm.delPlanTitle', 'Eliminar plan') : t('tasks.confirm.delTaskTitle', 'Eliminar tarea'),
+              message: isPlan ? t('tasks.confirm.delPlanMsg', '¿Eliminar el plan “{title}”? Las tareas quedan SIN plan.', { title: item.title }) : t('tasks.confirm.delTaskMsg', '¿Eliminar “{title}”? No se puede deshacer.', { title: item.title }),
+              confirmLabel: t('tasks.common.delete', 'Eliminar'),
+              danger: true,
+            });
             if (ok) { await fetch(isPlan ? `/api/tasks/plans/${item.id}/delete` : `/api/tasks/${item.id}/delete`, { method: 'POST' }); dirty = true; await boardApi.reload(); dm.close(); }
             return;
           }
@@ -521,20 +527,20 @@ export default {
 
       function tareasHtml() {
         const FILT = [
-          { key: 'activas', label: 'Activas' },
-          { key: 'todas', label: 'Todas' },
-          { key: 'hecha', label: '✅ Hechas' },
+          { key: 'activas', label: t('tasks.filter.active', 'Activas') },
+          { key: 'todas', label: t('tasks.filter.all', 'Todas') },
+          { key: 'hecha', label: t('tasks.filter.done', '✅ Hechas') },
         ];
         return `
           <div class="task-board-head">
             <div class="task-filters">${FILT.map((f) => `<button class="task-filter${f.key === filter ? ' is-on' : ''}" data-filt="${f.key}">${f.label}</button>`).join('')}</div>
             <div class="task-board-actions">
-              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze" title="Análisis general con IA: duplicados, unificables y completar info (consume tokens)">${icon('sparkle', { size: 13 })}<span>Análisis general</span></button>` : ''}
-              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="audio" title="Analizar una transcripción de audio (consume tokens)">${icon('mic', { size: 13 })}<span>Audio</span></button>` : ''}
-              <button class="btn btn--sm" data-a="new">${icon('plus', { size: 13 })}<span>Nueva</span></button>
+              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze" title="${t('tasks.actions.analyzeTitle', 'Análisis general con IA: duplicados, unificables y completar info (consume tokens)')}">${icon('sparkle', { size: 13 })}<span>${t('tasks.actions.analyze', 'Análisis general')}</span></button>` : ''}
+              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="audio" title="${t('tasks.actions.audioTitle', 'Analizar una transcripción de audio (consume tokens)')}">${icon('mic', { size: 13 })}<span>${t('tasks.actions.audio', 'Audio')}</span></button>` : ''}
+              <button class="btn btn--sm" data-a="new">${icon('plus', { size: 13 })}<span>${t('tasks.actions.new', 'Nueva')}</span></button>
             </div>
           </div>
-          <div class="task-grid" data-ref="list">cargando…</div>`;
+          <div class="task-grid" data-ref="list">${t('tasks.common.loading', 'cargando…')}</div>`;
       }
 
       function renderList() {
@@ -543,7 +549,7 @@ export default {
         const shown = tasks.filter((t) => filter === 'todas' ? true : filter === 'hecha' ? t.status === 'hecha' : t.status !== 'hecha');
         listEl.innerHTML = shown.length
           ? shown.map(taskCardV2).join('')
-          : '<div class="task-empty">Nada por acá. Creá una tarea con “Nueva”.</div>';
+          : `<div class="task-empty">${t('tasks.list.empty', 'Nada por acá. Creá una tarea con “Nueva”.')}</div>`;
       }
 
       // ---------- pestaña Planes ----------
@@ -555,7 +561,7 @@ export default {
         const own = tasks.filter((t) => t.planId === p.id);
         const subtasks = own.length
           ? own.map((t) => `<div class="plan-task"><span>${statusOf(t.status).emoji}</span><span class="dash-item-title">${esc(t.title)}</span></div>`).join('')
-          : '<div class="dash-empty">Sin tareas asignadas. Asigná tareas a este plan desde el campo “Plan” de cada tarea.</div>';
+          : `<div class="dash-empty">${t('tasks.plan.noTasks', 'Sin tareas asignadas. Asigná tareas a este plan desde el campo “Plan” de cada tarea.')}</div>`;
         return `<details class="plan-item" data-id="${p.id}">
           <summary class="plan-sum">
             <span class="plan-status" title="${st.label}">${st.emoji}</span>
@@ -567,9 +573,9 @@ export default {
             ${p.description ? `<div class="task-desc">${esc(p.description)}</div>` : ''}
             <div class="plan-tasks">${subtasks}</div>
             <div class="plan-actions">
-              <button class="btn-ghost btn--sm" data-pact="open" data-id="${p.id}">${icon('checklist', { size: 13 })}<span>Abrir</span></button>
-              <button class="btn-ghost btn--sm" data-pact="edit" data-id="${p.id}">${icon('edit', { size: 13 })}<span>Editar</span></button>
-              <button class="btn-ghost btn--sm" data-pact="del" data-id="${p.id}">${icon('trash', { size: 13 })}<span>Eliminar</span></button>
+              <button class="btn-ghost btn--sm" data-pact="open" data-id="${p.id}">${icon('checklist', { size: 13 })}<span>${t('tasks.common.open', 'Abrir')}</span></button>
+              <button class="btn-ghost btn--sm" data-pact="edit" data-id="${p.id}">${icon('edit', { size: 13 })}<span>${t('tasks.common.edit', 'Editar')}</span></button>
+              <button class="btn-ghost btn--sm" data-pact="del" data-id="${p.id}">${icon('trash', { size: 13 })}<span>${t('tasks.common.delete', 'Eliminar')}</span></button>
             </div>
           </div>
         </details>`;
@@ -577,13 +583,13 @@ export default {
       function planesHtml() {
         return `
           <div class="task-board-head">
-            <span class="tk-pane-title">Planes que agrupan tareas con progreso</span>
+            <span class="tk-pane-title">${t('tasks.plan.paneTitle', 'Planes que agrupan tareas con progreso')}</span>
             <div class="task-board-actions">
-              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze-plans" title="Análisis general de planes con IA: duplicados, unificables y completar info (consume tokens)">${icon('sparkle', { size: 13 })}<span>Análisis general</span></button>` : ''}
-              <button class="btn btn--sm" data-a="newplan">${icon('plus', { size: 13 })}<span>Nuevo plan</span></button>
+              ${isAdmin ? `<button class="btn-ghost btn--sm" data-a="analyze-plans" title="${t('tasks.plan.analyzeTitle', 'Análisis general de planes con IA: duplicados, unificables y completar info (consume tokens)')}">${icon('sparkle', { size: 13 })}<span>${t('tasks.actions.analyze', 'Análisis general')}</span></button>` : ''}
+              <button class="btn btn--sm" data-a="newplan">${icon('plus', { size: 13 })}<span>${t('tasks.plan.new', 'Nuevo plan')}</span></button>
             </div>
           </div>
-          <div class="plan-list">${plans.length ? plans.map(planCard).join('') : '<div class="task-empty">Todavía no hay planes. Creá uno con “Nuevo plan” y asigná tareas desde su campo “Plan”.</div>'}</div>`;
+          <div class="plan-list">${plans.length ? plans.map(planCard).join('') : `<div class="task-empty">${t('tasks.plan.empty', 'Todavía no hay planes. Creá uno con “Nuevo plan” y asigná tareas desde su campo “Plan”.')}</div>`}</div>`;
       }
 
       // ---------- pestaña Panel (dashboard derivado) ----------
@@ -606,11 +612,13 @@ export default {
         </div>`;
       }
       function chatLine(c) {
-        const state = c.delegating ? '🟣 delegando' : '🟠 trabajando';
+        // Pac-Man real (motor compartido) en vez de un emoji estático: mismo
+        // dato `c.delegating` que usa la tarjeta de Sesiones (sessions.js).
+        const state = `${pacman({ state: c.delegating ? 'delegating' : 'working', size: 'sm' })} ${c.delegating ? t('tasks.panel.delegating', 'delegando') : t('tasks.panel.working', 'trabajando')}`;
         const tk = c.ticketNumber ? ` · ${esc(String(c.ticketNumber))}` : '';
         return `<div class="dash-item dash-item--chat">
           <span class="dash-item-ico">💻</span>
-          <span class="dash-item-title">${esc(c.title || 'Sesión')}</span>
+          <span class="dash-item-title">${esc(c.title || t('tasks.panel.session', 'Sesión'))}</span>
           <span class="dash-item-meta">${state}${tk}</span>
         </div>`;
       }
@@ -629,8 +637,8 @@ export default {
         const stalled = active.filter((t) => (now - (t.updatedAt || t.createdAt)) > STALE_MS);
         const highPend = pend.filter((t) => t.priority === 'alta');
         const attn = [
-          ...stalled.map((t) => `<div class="dash-item dash-item--warn"><span class="dash-item-ico">⚠️</span><span class="dash-item-title">${esc(t.title)}</span><span class="dash-item-meta">en progreso, sin cambios ${fmtDate(t.updatedAt || t.createdAt)}</span></div>`),
-          ...highPend.map((t) => `<div class="dash-item dash-item--warn"><span class="dash-item-ico">🔴</span><span class="dash-item-title">${esc(t.title)}</span><span class="dash-item-meta">alta prioridad, sin arrancar</span></div>`),
+          ...stalled.map((tk) => `<div class="dash-item dash-item--warn"><span class="dash-item-ico">⚠️</span><span class="dash-item-title">${esc(tk.title)}</span><span class="dash-item-meta">${t('tasks.panel.stalledMeta', 'en progreso, sin cambios {date}', { date: fmtDate(tk.updatedAt || tk.createdAt) })}</span></div>`),
+          ...highPend.map((tk) => `<div class="dash-item dash-item--warn"><span class="dash-item-ico">🔴</span><span class="dash-item-title">${esc(tk.title)}</span><span class="dash-item-meta">${t('tasks.panel.highPrioMeta', 'alta prioridad, sin arrancar')}</span></div>`),
         ].join('');
 
         // ⏭️ Up Next: activas por prioridad + antigüedad
@@ -656,24 +664,24 @@ export default {
         const classif = `
           <div class="dash-coll">
             <div class="dash-coll-card">
-              <div class="dash-coll-h">📋 Tareas <span>${tasks.length}</span></div>
+              <div class="dash-coll-h">📋 ${t('tasks.panel.collTasks', 'Tareas')} <span>${tasks.length}</span></div>
               <div class="dash-coll-b">
-                <span class="dash-pill">⚪ ${pend.length} pend.</span>
-                <span class="dash-pill">🔵 ${active.length} en curso</span>
-                <span class="dash-pill">✅ ${done.length} hechas</span>
+                <span class="dash-pill">${t('tasks.panel.pillPend', '⚪ {n} pend.', { n: pend.length })}</span>
+                <span class="dash-pill">${t('tasks.panel.pillActive', '🔵 {n} en curso', { n: active.length })}</span>
+                <span class="dash-pill">${t('tasks.panel.pillDone', '✅ {n} hechas', { n: done.length })}</span>
               </div>
             </div>
             <div class="dash-coll-card">
-              <div class="dash-coll-h">🗺️ Planes <span>${plans.length}</span></div>
-              <div class="dash-coll-b"><span class="dash-pill">${activePlans.length} activos</span></div>
+              <div class="dash-coll-h">🗺️ ${t('tasks.panel.collPlans', 'Planes')} <span>${plans.length}</span></div>
+              <div class="dash-coll-b"><span class="dash-pill">${t('tasks.panel.pillActivePlans', '{n} activos', { n: activePlans.length })}</span></div>
             </div>
             <div class="dash-coll-card">
-              <div class="dash-coll-h">🎙️ Informes <span>${audio.length}</span></div>
-              <div class="dash-coll-b"><span class="dash-pill">${proposed} tarea(s) propuestas</span></div>
+              <div class="dash-coll-h">🎙️ ${t('tasks.panel.collReports', 'Informes')} <span>${audio.length}</span></div>
+              <div class="dash-coll-b"><span class="dash-pill">${t('tasks.panel.pillProposed', '{n} tarea(s) propuestas', { n: proposed })}</span></div>
             </div>
             <div class="dash-coll-card">
-              <div class="dash-coll-h">💻 Sesiones <span>${chats.length}</span></div>
-              <div class="dash-coll-b"><span class="dash-pill">${workChats.length} trabajando ahora</span></div>
+              <div class="dash-coll-h">💻 ${t('tasks.panel.collSessions', 'Sesiones')} <span>${chats.length}</span></div>
+              <div class="dash-coll-b"><span class="dash-pill">${t('tasks.panel.pillWorking', '{n} trabajando ahora', { n: workChats.length })}</span></div>
             </div>
           </div>
           ${typePills ? `<div class="dash-tags">${typePills}</div>` : ''}
@@ -682,16 +690,20 @@ export default {
         // 🕑 Actividad reciente: LOG REAL persistido (tareas/planes) + audios
         const ICO = { created: '➕', completed: '✅', status: '🔄', updated: '✏️', deleted: '🗑️' };
         const actText = (ev) => {
-          const who = ev.entity === 'plan' ? 'el plan ' : '';
-          if (ev.kind === 'created') return `Creaste ${who}${ev.entity !== 'plan' && ev.refId ? `${ev.refId} ` : ''}“${ev.title}”`;
-          if (ev.kind === 'completed') return `Completaste “${ev.title}”`;
-          if (ev.kind === 'status') return `${ev.refId || ''} → ${ev.detail || ''} · “${ev.title}”`;
-          if (ev.kind === 'updated') return `Actualizaste ${who}“${ev.title}”`;
-          if (ev.kind === 'deleted') return `Eliminaste ${who}“${ev.title}”`;
-          return ev.title || '';
+          const isPlanEv = ev.entity === 'plan';
+          const title = ev.title || '';
+          if (ev.kind === 'created') {
+            if (isPlanEv) return t('tasks.act.createdPlan', 'Creaste el plan “{title}”', { title });
+            return t('tasks.act.createdTask', 'Creaste {ref}“{title}”', { ref: ev.refId ? `${ev.refId} ` : '', title });
+          }
+          if (ev.kind === 'completed') return t('tasks.act.completed', 'Completaste “{title}”', { title });
+          if (ev.kind === 'status') return t('tasks.act.status', '{ref} → {detail} · “{title}”', { ref: ev.refId || '', detail: ev.detail || '', title });
+          if (ev.kind === 'updated') return isPlanEv ? t('tasks.act.updatedPlan', 'Actualizaste el plan “{title}”', { title }) : t('tasks.act.updatedTask', 'Actualizaste “{title}”', { title });
+          if (ev.kind === 'deleted') return isPlanEv ? t('tasks.act.deletedPlan', 'Eliminaste el plan “{title}”', { title }) : t('tasks.act.deletedTask', 'Eliminaste “{title}”', { title });
+          return title;
         };
         const acts = activity.map((ev) => ({ ts: ev.ts, ico: ICO[ev.kind] || '•', txt: actText(ev) }));
-        for (const j of audio) acts.push({ ts: j.createdAt, ico: '🎙️', txt: `Analizaste el audio “${j.title}”${j.proposedCount ? ` (${j.proposedCount} tarea/s)` : ''}` });
+        for (const j of audio) acts.push({ ts: j.createdAt, ico: '🎙️', txt: `${t('tasks.act.analyzedAudio', 'Analizaste el audio “{title}”', { title: j.title })}${j.proposedCount ? t('tasks.act.tasksSuffix', ' ({n} tarea/s)', { n: j.proposedCount }) : ''}` });
         acts.sort((a, b) => (b.ts || 0) - (a.ts || 0));
         const recent = acts.slice(0, 14).map((a) => `<div class="dash-act"><span class="dash-act-ico">${a.ico}</span><span class="dash-act-txt">${esc(a.txt)}</span><span class="dash-act-ts">${fmtDate(a.ts)}</span></div>`).join('');
 
@@ -702,19 +714,19 @@ export default {
         // tareas de informes que faltan). Consume tokens ⇒ runner desacoplado.
         const reorgHead = isAdmin
           ? `<div class="task-board-head">
-              <span class="tk-pane-title">Vista general del tablero</span>
+              <span class="tk-pane-title">${t('tasks.panel.overviewTitle', 'Vista general del tablero')}</span>
               <div class="task-board-actions">
-                <button class="btn btn--sm" data-a="reorg" title="Reorganiza TODO con IA: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan (consume tokens)">${icon('sparkle', { size: 13 })}<span>Reorganizar todo con IA</span></button>
+                <button class="btn btn--sm" data-a="reorg" title="${t('tasks.panel.reorgTitle', 'Reorganiza TODO con IA: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan (consume tokens)')}">${icon('sparkle', { size: 13 })}<span>${t('tasks.panel.reorg', 'Reorganizar todo con IA')}</span></button>
               </div></div>`
           : '';
         return `<div class="dash">
           ${reorgHead}
-          ${dashSec('🗂️ Clasificación', tasks.length + audio.length + plans.length, classif, { open: true })}
-          ${dashSec('🔥 En curso', active.length + workChats.length, enCurso || dashEmpty('Nada en curso ahora.'), { open: true })}
-          ${dashSec('⚠️ Necesita atención', stalled.length + highPend.length, attn || dashEmpty('Todo en orden, sin alertas.'), { open: (stalled.length + highPend.length) > 0 })}
-          ${dashSec('⏭️ Seguí por acá', Math.min(3, active.length + pend.length), upnext || dashEmpty('No hay tareas activas.'), { open: true })}
-          ${dashSec('📊 Planes activos', activePlans.length, plansBars || dashEmpty('Sin planes activos. Creá uno en la pestaña Planes.'), { open: activePlans.length > 0 })}
-          ${dashSec('🕑 Actividad reciente', Math.min(14, acts.length), recent || dashEmpty('Sin actividad todavía.'))}
+          ${dashSec(t('tasks.panel.secClassif', '🗂️ Clasificación'), tasks.length + audio.length + plans.length, classif, { open: true })}
+          ${dashSec(t('tasks.panel.secInProgress', '🔥 En curso'), active.length + workChats.length, enCurso || dashEmpty(t('tasks.panel.emptyInProgress', 'Nada en curso ahora.')), { open: true })}
+          ${dashSec(t('tasks.panel.secAttention', '⚠️ Necesita atención'), stalled.length + highPend.length, attn || dashEmpty(t('tasks.panel.emptyAttention', 'Todo en orden, sin alertas.')), { open: (stalled.length + highPend.length) > 0 })}
+          ${dashSec(t('tasks.panel.secUpNext', '⏭️ Seguí por acá'), Math.min(3, active.length + pend.length), upnext || dashEmpty(t('tasks.panel.emptyUpNext', 'No hay tareas activas.')), { open: true })}
+          ${dashSec(t('tasks.panel.secActivePlans', '📊 Planes activos'), activePlans.length, plansBars || dashEmpty(t('tasks.panel.emptyActivePlans', 'Sin planes activos. Creá uno en la pestaña Planes.')), { open: activePlans.length > 0 })}
+          ${dashSec(t('tasks.panel.secRecent', '🕑 Actividad reciente'), Math.min(14, acts.length), recent || dashEmpty(t('tasks.panel.emptyRecent', 'Sin actividad todavía.')))}
         </div>`;
       }
 
@@ -792,7 +804,12 @@ export default {
           if (pact.dataset.pact === 'open') { openPlanDetail(p); return; }
           if (pact.dataset.pact === 'edit') { const upd = await planForm(p); if (upd) { await fetch(`/api/tasks/plans/${pid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(upd) }); await boardApi.reload(); } return; }
           if (pact.dataset.pact === 'del') {
-            const ok = await dialog.confirmDialog({ title: 'Eliminar plan', message: `¿Eliminar el plan “${p.title}”? Las tareas quedan SIN plan (no se borran).`, confirmLabel: 'Eliminar', danger: true });
+            const ok = await dialog.confirmDialog({
+              title: t('tasks.confirm.delPlanTitle', 'Eliminar plan'),
+              message: t('tasks.confirm.delPlanMsg2', '¿Eliminar el plan “{title}”? Las tareas quedan SIN plan (no se borran).', { title: p.title }),
+              confirmLabel: t('tasks.common.delete', 'Eliminar'),
+              danger: true,
+            });
             if (ok) { await fetch(`/api/tasks/plans/${pid}/delete`, { method: 'POST' }); await boardApi.reload(); }
             return;
           }
@@ -801,13 +818,18 @@ export default {
         const act = e.target.closest('[data-act]');
         if (!act) return;
         const id = act.dataset.id;
-        const t = tasks.find((x) => x.id === id);
-        if (!t) return;
-        if (act.dataset.act === 'advance') return patch(id, { status: t.status === 'pendiente' ? 'en-progreso' : 'hecha' });
+        const tt = tasks.find((x) => x.id === id);
+        if (!tt) return;
+        if (act.dataset.act === 'advance') return patch(id, { status: tt.status === 'pendiente' ? 'en-progreso' : 'hecha' });
         if (act.dataset.act === 'reopen') return patch(id, { status: 'pendiente' });
-        if (act.dataset.act === 'edit') { const p = await taskForm(t, plans); if (p) return patch(id, p); return; }
+        if (act.dataset.act === 'edit') { const p = await taskForm(tt, plans); if (p) return patch(id, p); return; }
         if (act.dataset.act === 'del') {
-          const ok = await dialog.confirmDialog({ title: 'Eliminar tarea', message: `¿Eliminar “${t.title}”? No se puede deshacer.`, confirmLabel: 'Eliminar', danger: true });
+          const ok = await dialog.confirmDialog({
+            title: t('tasks.confirm.delTaskTitle', 'Eliminar tarea'),
+            message: t('tasks.confirm.delTaskMsg', '¿Eliminar “{title}”? No se puede deshacer.', { title: tt.title }),
+            confirmLabel: t('tasks.common.delete', 'Eliminar'),
+            danger: true,
+          });
           if (ok) { await fetch(`/api/tasks/${id}/delete`, { method: 'POST' }); await boardApi.reload(); }
           return;
         }
@@ -826,8 +848,8 @@ export default {
       function openAnalysis(scope) {
         const isPlans = scope === 'plans';
         const isGlobal = scope === 'global';
-        const label = isGlobal ? 'todo (tareas, planes e informes)' : isPlans ? 'planes' : 'tareas';
-        const busyTxt = isGlobal ? 'reorganizando todo' : `analizando las ${label}`;
+        const label = isGlobal ? t('tasks.analysis.scopeAll', 'todo (tareas, planes e informes)') : isPlans ? t('tasks.analysis.scopePlans', 'planes') : t('tasks.analysis.scopeTasks', 'tareas');
+        const busyTxt = isGlobal ? t('tasks.analysis.busyReorg', 'reorganizando todo') : t('tasks.analysis.busyAnalyze', 'analizando las {label}', { label });
         // En 'global' un id puede ser tarea o plan → buscar en ambos.
         const titleOf = (id) => {
           const it = (isPlans ? plans : tasks).find((x) => x.id === id)
@@ -838,16 +860,16 @@ export default {
         let dirty = false;       // aplicamos algo ⇒ recargar el tablero al cerrar
         let lastResult = null;
         const am = dialog.openModal({
-          title: isGlobal ? '🧹 Reorganizar todo con IA' : `🧠 Análisis general · ${label}`, width: '640px',
+          title: isGlobal ? t('tasks.analysis.titleReorg', '🧹 Reorganizar todo con IA') : t('tasks.analysis.title', '🧠 Análisis general · {label}', { label }), width: '640px',
           onClose: () => { polling = false; if (dirty) boardApi?.reload(); },
         });
         am.body.innerHTML = `
           <div class="tk-analysis">
             <div class="tk-an-head">
               <span class="tk-an-sub">${isGlobal
-                ? 'Analiza tareas, planes e informes juntos: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan.'
-                : 'Detecta duplicados, unificables y completa info faltante con los informes.'}</span>
-              <button class="btn btn--sm" data-ref="run">${icon('sparkle', { size: 13 })}<span>Analizar</span></button>
+                ? t('tasks.analysis.subReorg', 'Analiza tareas, planes e informes juntos: unifica duplicados, agrupa tareas en planes, completa info y crea las tareas de informes que faltan.')
+                : t('tasks.analysis.subAnalyze', 'Detecta duplicados, unificables y completa info faltante con los informes.')}</span>
+              <button class="btn btn--sm" data-ref="run">${icon('sparkle', { size: 13 })}<span>${t('tasks.analysis.run', 'Analizar')}</span></button>
             </div>
             <div class="tk-an-status" data-ref="status" hidden></div>
             <div class="tk-an-result" data-ref="result"></div>
@@ -861,8 +883,8 @@ export default {
             <div class="tk-an-card-h">${headHtml}</div>
             ${bodyHtml}
             <div class="tk-an-card-acts">
-              <button class="btn-ghost btn--sm" data-dismiss>Descartar</button>
-              <button class="btn btn--sm" data-ap>Aprobar</button>
+              <button class="btn-ghost btn--sm" data-dismiss>${t('tasks.analysis.dismiss', 'Descartar')}</button>
+              <button class="btn btn--sm" data-ap>${t('tasks.analysis.approve', 'Aprobar')}</button>
             </div>
             <div class="tk-an-card-state" hidden></div>
           </div>`;
@@ -870,7 +892,7 @@ export default {
         function section(title, items, cards, open) {
           return `<details class="tk-an-sec"${open ? ' open' : ''}>
             <summary class="tk-an-sec-h">${title} <span class="tk-an-n">${items.length}</span></summary>
-            <div class="tk-an-sec-b">${items.length ? cards : '<div class="dash-empty">Nada por acá.</div>'}</div></details>`;
+            <div class="tk-an-sec-b">${items.length ? cards : `<div class="dash-empty">${t('tasks.analysis.sectionEmpty', 'Nada por acá.')}</div>`}</div></details>`;
         }
         function renderAnalysis(result) {
           lastResult = result;
@@ -882,36 +904,36 @@ export default {
           const temas = result.crearTemas || [];
           const total = dup.length + unif.length + comp.length + (isGlobal ? grp.length + crea.length + temas.length : 0);
           const dupCards = dup.map((d, i) => propCard('dup', i,
-            `🔁 Conservar <b>${esc(titleOf(d.keep))}</b>`,
-            `<div class="tk-an-line">Eliminar: ${d.remove.map((id) => esc(titleOf(id))).join(', ')}</div>${d.why ? `<div class="tk-an-why">${esc(d.why)}</div>` : ''}`)).join('');
+            `🔁 ${t('tasks.analysis.keep', 'Conservar')} <b>${esc(titleOf(d.keep))}</b>`,
+            `<div class="tk-an-line">${t('tasks.analysis.removeLbl', 'Eliminar:')} ${d.remove.map((id) => esc(titleOf(id))).join(', ')}</div>${d.why ? `<div class="tk-an-why">${esc(d.why)}</div>` : ''}`)).join('');
           const unifCards = unif.map((u, i) => propCard('unif', i,
-            `🔗 Unir ${u.ids.length} en uno`,
-            `<div class="tk-an-line">${u.ids.map((id) => esc(titleOf(id))).join(' + ')} → <b>${esc(u.title || '(mismo título)')}</b></div>${u.description ? `<div class="tk-an-desc">${esc(u.description)}</div>` : ''}${u.why ? `<div class="tk-an-why">${esc(u.why)}</div>` : ''}`)).join('');
+            `🔗 ${t('tasks.analysis.unifHead', 'Unir {n} en uno', { n: u.ids.length })}`,
+            `<div class="tk-an-line">${u.ids.map((id) => esc(titleOf(id))).join(' + ')} → <b>${esc(u.title || t('tasks.analysis.sameTitle', '(mismo título)'))}</b></div>${u.description ? `<div class="tk-an-desc">${esc(u.description)}</div>` : ''}${u.why ? `<div class="tk-an-why">${esc(u.why)}</div>` : ''}`)).join('');
           const compCards = comp.map((c, i) => propCard('comp', i,
-            `📝 Completar <b>${esc(titleOf(c.id))}</b>`,
+            `📝 ${t('tasks.analysis.completeVerb', 'Completar')} <b>${esc(titleOf(c.id))}</b>`,
             `${c.description ? `<div class="tk-an-desc">${esc(c.description)}</div>` : ''}${(c.tags || []).length ? `<div class="task-tags">${c.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
           // 🗂️ Agrupar en plan (solo global): plan existente (planId) o nuevo (planTitle).
           const grpCards = grp.map((g, i) => propCard('group', i,
-            g.planId ? `🗂️ Sumar al plan <b>${esc(titleOf(g.planId))}</b>` : `🗂️ Nuevo plan <b>${esc(g.planTitle)}</b>`,
+            g.planId ? `🗂️ ${t('tasks.analysis.addToPlan', 'Sumar al plan')} <b>${esc(titleOf(g.planId))}</b>` : `🗂️ ${t('tasks.plan.new', 'Nuevo plan')} <b>${esc(g.planTitle)}</b>`,
             `<div class="tk-an-line">${g.taskIds.map((id) => esc(titleOf(id))).join(', ')}</div>${!g.planId && g.planDescription ? `<div class="tk-an-desc">${esc(g.planDescription)}</div>` : ''}${g.why ? `<div class="tk-an-why">${esc(g.why)}</div>` : ''}`)).join('');
           // 🎙️ Crear desde informe (solo global): tareas propuestas aún no cargadas.
           const creaCards = crea.map((c, i) => propCard('create', i,
-            `🎙️ Crear ${c.tasks.length} tarea(s)${c.fromReport ? ` de <b>${esc(c.fromReport)}</b>` : ''}`,
+            `🎙️ ${t('tasks.analysis.createTasks', 'Crear {n} tarea(s)', { n: c.tasks.length })}${c.fromReport ? ` ${t('tasks.analysis.from', 'de')} <b>${esc(c.fromReport)}</b>` : ''}`,
             `<div class="tk-an-line">${c.tasks.map((t) => esc(t.title)).join(' · ')}</div>${c.why ? `<div class="tk-an-why">${esc(c.why)}</div>` : ''}`)).join('');
           // 🎓 Temas de aprendizaje sugeridos (solo global): puente Pendientes → Banco.
           const SCOPE_EMO = { console: '🖥️', tolkien: '🌳' };
           const temasCards = temas.map((s, i) => propCard('createtema', i,
-            `🎓 Aprender: <b>${esc(s.title)}</b>`,
+            `🎓 ${t('tasks.analysis.learn', 'Aprender:')} <b>${esc(s.title)}</b>`,
             `<div class="tk-an-line">${s.area ? `${esc(s.area)} · ` : ''}${SCOPE_EMO[s.scope] || '🖥️'} ${esc(s.scope)}</div>${s.why ? `<div class="tk-an-why">${esc(s.why)}</div>` : ''}`)).join('');
           resultEl.innerHTML = `
             ${result.resumen ? `<div class="tk-an-summary">${esc(result.resumen)}</div>` : ''}
-            ${total ? '' : '<div class="dash-empty">✅ Todo prolijo: nada para unificar, agrupar ni completar.</div>'}
-            ${section('🔁 Duplicados', dup, dupCards, dup.length > 0)}
-            ${section('🔗 Unificables', unif, unifCards, unif.length > 0)}
-            ${section('📝 Completar info', comp, compCards, comp.length > 0)}
-            ${isGlobal ? section('🗂️ Agrupar en planes', grp, grpCards, grp.length > 0) : ''}
-            ${isGlobal ? section('🎙️ Crear desde informes', crea, creaCards, crea.length > 0) : ''}
-            ${isGlobal ? section('🎓 Temas de aprendizaje sugeridos', temas, temasCards, temas.length > 0) : ''}`;
+            ${total ? '' : `<div class="dash-empty">${t('tasks.analysis.allClean', '✅ Todo prolijo: nada para unificar, agrupar ni completar.')}</div>`}
+            ${section(t('tasks.analysis.secDup', '🔁 Duplicados'), dup, dupCards, dup.length > 0)}
+            ${section(t('tasks.analysis.secUnif', '🔗 Unificables'), unif, unifCards, unif.length > 0)}
+            ${section(t('tasks.analysis.secComp', '📝 Completar info'), comp, compCards, comp.length > 0)}
+            ${isGlobal ? section(t('tasks.analysis.secGroup', '🗂️ Agrupar en planes'), grp, grpCards, grp.length > 0) : ''}
+            ${isGlobal ? section(t('tasks.analysis.secCreate', '🎙️ Crear desde informes'), crea, creaCards, crea.length > 0) : ''}
+            ${isGlobal ? section(t('tasks.analysis.secTemas', '🎓 Temas de aprendizaje sugeridos'), temas, temasCards, temas.length > 0) : ''}`;
         }
 
         const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -959,15 +981,15 @@ export default {
           if (!p) return;
           const acts = card.querySelector('.tk-an-card-acts');
           const stateEl = card.querySelector('.tk-an-card-state');
-          if (dis) { card.classList.add('tk-an-card--dismissed'); acts?.remove(); stateEl.hidden = false; stateEl.textContent = 'Descartada'; return; }
+          if (dis) { card.classList.add('tk-an-card--dismissed'); acts?.remove(); stateEl.hidden = false; stateEl.textContent = t('tasks.analysis.stateDismissed', 'Descartada'); return; }
           acts.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-          stateEl.hidden = false; stateEl.textContent = 'Aplicando…';
+          stateEl.hidden = false; stateEl.textContent = t('tasks.analysis.applying', 'Aplicando…');
           try {
             await applyProposal(kind, p);
-            card.classList.add('tk-an-card--done'); acts.remove(); stateEl.textContent = '✓ Aplicada';
+            card.classList.add('tk-an-card--done'); acts.remove(); stateEl.textContent = t('tasks.analysis.applied', '✓ Aplicada');
           } catch {
             acts.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-            stateEl.textContent = '✕ Error al aplicar';
+            stateEl.textContent = t('tasks.analysis.applyError', '✕ Error al aplicar');
           }
         });
 
@@ -983,9 +1005,9 @@ export default {
         }
         async function analyze() {
           const ok = await dialog.confirmDialog({
-            title: isGlobal ? 'Reorganizar todo con IA' : 'Análisis general',
-            message: `${isGlobal ? 'Se analizan tareas, planes e informes juntos' : `Se analizan todas las ${label}`} con Claude (sonnet). CONSUME TOKENS reales y puede tardar. Es de solo lectura; nada se aplica sin tu aprobación.`,
-            confirmLabel: isGlobal ? 'Reorganizar' : 'Analizar',
+            title: isGlobal ? t('tasks.analysis.confirmTitleReorg', 'Reorganizar todo con IA') : t('tasks.analysis.confirmTitle', 'Análisis general'),
+            message: `${isGlobal ? t('tasks.analysis.confirmMsgReorgPre', 'Se analizan tareas, planes e informes juntos') : t('tasks.analysis.confirmMsgAnalyzePre', 'Se analizan todas las {label}', { label })}${t('tasks.analysis.confirmMsgTail', ' con Claude (sonnet). CONSUME TOKENS reales y puede tardar. Es de solo lectura; nada se aplica sin tu aprobación.')}`,
+            confirmLabel: isGlobal ? t('tasks.analysis.confirmReorg', 'Reorganizar') : t('tasks.analysis.run', 'Analizar'),
           });
           if (!ok) return;
           runBtn.disabled = true;
@@ -996,15 +1018,15 @@ export default {
           try {
             const r = await post('/api/tasks/analyze', { scope });
             const started = await r.json();
-            if (!r.ok) throw new Error(started.error || 'No se pudo iniciar el análisis.');
+            if (!r.ok) throw new Error(started.error || t('tasks.analysis.errStart', 'No se pudo iniciar el análisis.'));
             const j = started.status === 'done' ? started : await poll();
-            if (!j) throw new Error('El análisis se interrumpió. Reintentá.');
-            if (j.status === 'error') throw new Error(j.error || 'El análisis falló.');
+            if (!j) throw new Error(t('tasks.analysis.errInterrupted', 'El análisis se interrumpió. Reintentá.'));
+            if (j.status === 'error') throw new Error(j.error || t('tasks.analysis.errFailed', 'El análisis falló.'));
             statusEl.hidden = true;
             renderAnalysis(j.result);
-            runBtn.querySelector('span').textContent = 'Volver a analizar';
+            runBtn.querySelector('span').textContent = t('tasks.analysis.reanalyze', 'Volver a analizar');
           } catch (err) {
-            statusEl.className = 'tk-an-status tk-an-status--err'; statusEl.textContent = err.message || 'Error al analizar.';
+            statusEl.className = 'tk-an-status tk-an-status--err'; statusEl.textContent = err.message || t('tasks.analysis.errGeneric', 'Error al analizar.');
           } finally {
             runBtn.disabled = false; polling = false;
           }
@@ -1017,12 +1039,12 @@ export default {
         (async () => {
           try {
             const j = await (await fetch(`/api/tasks/analysis?scope=${scope}`)).json();
-            if (j.status === 'done' && j.result) { renderAnalysis(j.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
+            if (j.status === 'done' && j.result) { renderAnalysis(j.result); runBtn.querySelector('span').textContent = t('tasks.analysis.reanalyze', 'Volver a analizar'); }
             else if (j.status === 'running') {
               polling = true; statusEl.hidden = false; statusEl.className = 'tk-an-status';
               statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${busyTxt}…</span>`;
               const done = await poll();
-              if (done && done.status === 'done' && done.result) { statusEl.hidden = true; renderAnalysis(done.result); runBtn.querySelector('span').textContent = 'Volver a analizar'; }
+              if (done && done.status === 'done' && done.result) { statusEl.hidden = true; renderAnalysis(done.result); runBtn.querySelector('span').textContent = t('tasks.analysis.reanalyze', 'Volver a analizar'); }
               else { statusEl.hidden = true; }
             }
           } catch { /* noop */ }

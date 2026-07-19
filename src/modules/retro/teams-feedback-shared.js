@@ -1,0 +1,125 @@
+// modules/retro/teams-feedback-shared.js — ingesta AUTOMÁTICA de "Feedback de
+// Chris" desde MICROSOFT TEAMS (2026-07-19), hermana de email-shared.js.
+// Reusa TAL CUAL el lector read-only ya probado de comms/teams-shared.js
+// (graphReadAllowed — el MISMO allowlist que ya usa el escaneo de Teams del
+// módulo Comunicaciones, verbo-based: list/read/get/search/members/presence/
+// detail/view/info sobre graph_*/teams_*) en vez de reinventar uno — a
+// diferencia de email-shared.js (mailbox más sensible ⇒ allowlist explícita
+// por nombre), el patrón de Teams ya es el aceptado en producción.
+//
+// CONSUME TOKENS ⇒ bajo botón (admin), RUNNER DESACOPLADO
+// (bin/cwc-retro-teams-runner.js, regla de oro).
+import fss from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, '..', '..', '..');
+const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+export const TEAMS_FB_SCAN_FILE = path.join(DATA_DIR, 'retro-teams-scan.json');
+export const TEAMS_FB_LOCK_FILE = path.join(DATA_DIR, 'retro-teams.lock');
+export const TEAMS_FB_LOG_FILE = path.join(DATA_DIR, 'retro-teams.log');
+const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-teams-runner.js');
+
+export const TEAMS_FB_TIMEOUT_MS = 5 * 60 * 1000;
+export const TEAMS_FB_HEARTBEAT_MS = 3000;
+export const TEAMS_FB_LOCK_FRESH_MS = 20000;
+
+function ensureDir() { try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
+
+export function readTeamsFeedbackScan() {
+  try { return JSON.parse(fss.readFileSync(TEAMS_FB_SCAN_FILE, 'utf8')); } catch { return { items: [], lastProcessedAt: null, scannedAt: 0, error: null }; }
+}
+export function writeTeamsFeedbackScan(data) { ensureDir(); writeJsonAtomic(TEAMS_FB_SCAN_FILE, data); }
+
+export function writeTeamsFbLock(state) {
+  try { ensureDir(); fss.writeFileSync(TEAMS_FB_LOCK_FILE, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 }); }
+  catch { /* noop */ }
+}
+export function clearTeamsFbLock() { try { fss.unlinkSync(TEAMS_FB_LOCK_FILE); } catch { /* noop */ } }
+export function readTeamsFbLock() {
+  try {
+    const l = JSON.parse(fss.readFileSync(TEAMS_FB_LOCK_FILE, 'utf8'));
+    if (Date.now() - l.ts >= TEAMS_FB_LOCK_FRESH_MS) return null;
+    return l;
+  } catch { return null; }
+}
+export function isTeamsFeedbackScanRunning() { return !!readTeamsFbLock(); }
+
+// Reserva SINCRÓNICA del lock con el pid REAL del hijo (mismo patrón que
+// email-shared.js/spawnRetroEmailRunner — ver ahí el porqué del orden).
+export function spawnRetroTeamsRunner() {
+  ensureDir();
+  const logFd = fss.openSync(TEAMS_FB_LOG_FILE, 'a');
+  const child = spawn(process.execPath, [RUNNER], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+  });
+  writeTeamsFbLock({ pid: child.pid });
+  child.on('error', (err) => {
+    try { fss.appendFileSync(TEAMS_FB_LOG_FILE, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+    try { clearTeamsFbLock(); } catch { /* noop */ }
+  });
+  child.unref();
+  fss.closeSync(logFd);
+}
+
+// Prompt de UNA sola pasada: leer el DM 1:1 con el contacto Y destilar
+// feedback de desarrollo, igual de conservador que feedbackPrompt/emailScanPrompt.
+export function teamsFeedbackPrompt(contact, self, sinceIso) {
+  const name = contact.name || contact.id;
+  const cEmail = contact.email ? ` (email ${contact.email})` : '';
+  const meName = self?.name || 'yo';
+  const meEmail = self?.email ? ` (email ${self.email})` : '';
+  const sinceLine = sinceIso
+    ? `Priorizá mensajes de DESPUÉS de ${sinceIso} (los anteriores probablemente ya se procesaron), pero si algo relevante quedó sin leer antes, igual incluilo.`
+    : '';
+  return [
+    'Es SOLO LECTURA de Microsoft Teams: usá EXCLUSIVAMENTE las tools graph_*/teams_*',
+    'de LECTURA (list/read/get/members). NUNCA envíes ni modifiques nada.',
+    '',
+    `Buscá el chat DIRECTO 1:1 de Teams entre ${meName}${meEmail} y "${name}"${cEmail}`,
+    `(mismo criterio que el escaneo de Comunicaciones: confirmá que los DOS miembros`,
+    `somos exactamente ${meName} y ${name}). Leé los mensajes recientes. ${sinceLine}`,
+    '',
+    'De esos mensajes, identificá los que sean FEEDBACK sobre un bug/ticket/PR de',
+    'nuestro sistema de desarrollo (comentarios de revisión, correcciones pedidas,',
+    'preferencias sobre cómo resolver algo) — ignorá charla trivial/administrativa.',
+    'Para cada mensaje relevante, extraé si menciona un ticket/PR (formato "TKT-519",',
+    '"#245", "FEAT-3") y destilá el feedback en una lección ACCIONABLE concreta (NO un',
+    'resumen del mensaje).',
+    '',
+    'Respondé ÚNICAMENTE con un bloque JSON (nada de texto fuera):',
+    '```json',
+    '{"found":true,"items":[{"msgAt":"<fecha ISO>","refs":["TKT-519"],"title":"...","lesson":"...","observation":"...","confidence":"media"}],"lastProcessedAt":"<fecha ISO del más reciente que revisaste, o null>"}',
+    '```',
+    `Si no existe el DM 1:1 con ${name}, o no hay mensajes relevantes:`,
+    '{"found":false,"items":[],"lastProcessedAt":null,"note":"<por qué en 1 línea>"}.',
+    'Máximo 20 mensajes. Sé conservador: solo feedback REAL y accionable, no ruido.',
+  ].filter(Boolean).join('\n');
+}
+
+const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
+const CONFS = ['alta', 'media', 'baja'];
+const pick = (v, list, def) => (list.includes(v) ? v : def);
+
+export function parseTeamsFeedback(text) {
+  const fences = [...String(text || '').matchAll(/```json\s*([\s\S]*?)```/gi)];
+  const raw = fences.length ? fences[fences.length - 1][1] : (String(text || '').match(/\{[\s\S]*\}/) || [])[0];
+  if (!raw) return null;
+  let o;
+  try { o = JSON.parse(raw); } catch { return null; }
+  if (o?.found === false) return { items: [], lastProcessedAt: null, note: clamp(o?.note, 200) };
+  const items = Array.isArray(o?.items) ? o.items.slice(0, 20).map((it) => ({
+    msgAt: clamp(it?.msgAt, 40),
+    refs: Array.isArray(it?.refs) ? it.refs.map((r) => clamp(r, 24)).filter(Boolean).slice(0, 10) : [],
+    title: clamp(it?.title, 200).trim(),
+    lesson: clamp(it?.lesson, 2000),
+    observation: clamp(it?.observation, 2000),
+    confidence: pick(it?.confidence, CONFS, 'media'),
+  })).filter((it) => it.title && it.lesson) : [];
+  const lastProcessedAt = clamp(o?.lastProcessedAt, 40) || null;
+  return { items, lastProcessedAt, note: clamp(o?.note, 200) };
+}

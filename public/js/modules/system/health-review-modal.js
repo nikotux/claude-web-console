@@ -8,16 +8,39 @@
 // accionable abre un CHAT supervisado en la consola con el detalle
 // precargado (la revisión NUNCA modifica código sola — regla 6).
 import { icon } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
 const API = '/api/health';
 const POLL_MS = 2500;
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const VERDICT_LABEL = { ok: 'Todo en orden', atencion: 'Requiere atención', critico: 'CRÍTICO' };
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
-const SEV_LABEL = { critical: 'crítico', high: 'alto', medium: 'medio', low: 'bajo' };
-const KIND_LABEL = { bug: '🐛 bug', regla: '📏 regla', mejora: '✨ mejora' };
 const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' ' + new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '—');
+
+function verdictLabel(verdict) {
+  return {
+    ok: t('system.healthReview.verdictOk', 'Todo en orden'),
+    atencion: t('system.healthReview.verdictAttention', 'Requiere atención'),
+    critico: t('system.healthReview.verdictCritical', 'CRÍTICO'),
+  }[verdict];
+}
+
+function severityLabel(severity) {
+  return {
+    critical: t('system.healthReview.severityCritical', 'crítico'),
+    high: t('system.healthReview.severityHigh', 'alto'),
+    medium: t('system.healthReview.severityMedium', 'medio'),
+    low: t('system.healthReview.severityLow', 'bajo'),
+  }[severity];
+}
+
+function kindLabel(kind) {
+  return {
+    bug: `🐛 ${t('system.healthReview.kindBug', 'bug')}`,
+    regla: `📏 ${t('system.healthReview.kindRule', 'regla')}`,
+    mejora: `✨ ${t('system.healthReview.kindImprovement', 'mejora')}`,
+  }[kind];
+}
 
 // Abre esta sub-ventana. `ctx` trae dialog + openChat (para trabajar un hallazgo).
 export function openHealthReview(ctx, { isAdmin }) {
@@ -25,7 +48,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   // En pantallas chicas todo nace COLAPSADO (vista general; detalle a demanda);
   // en desktop, expandido (hay lugar). Se evalúa una vez al abrir.
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  const m = dialog.openModal({ title: 'Revisión exhaustiva de salud', width: 900 });
+  const m = dialog.openModal({ title: t('system.healthReview.modalTitle', 'Revisión exhaustiva de salud'), width: 900 });
   m.card.classList.add('dlg-card--health');
   const wrap = document.createElement('div');
   wrap.className = 'hr-wrap';
@@ -37,6 +60,12 @@ export function openHealthReview(ctx, { isAdmin }) {
   let batchState = null; // estado del batch de resolución (Fase B), polea GET /batch
   let proposals = []; // invariantes propuestos pendientes de aprobación (F5)
   let lastData = null; // último estado renderizado (para parches optimistas)
+  // TÁNDEM opt-in (2026-07-19): toggle persistido SOLO en memoria de esta
+  // sub-ventana (se resetea al reabrir, a propósito — es una elección puntual,
+  // no una config global). Afecta SOLO al "Automático" de a UNO (autoFix): el
+  // batch/"Resolver seguros" sigue con su orquestador de siempre (fuera de
+  // alcance de este cambio).
+  let useTandem = false;
   const origOnClose = m.close;
   m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
@@ -45,7 +74,7 @@ export function openHealthReview(ctx, { isAdmin }) {
   // toca server/auth/registry/…) O severidad crítica del bug (los más delicados
   // van a chat supervisado). Espeja el gate REAL del backend (health/index.js).
   const isBlocked = (f) => f.policy?.risk === 'critical' || String(f.severity) === 'critical';
-  const blockReason = (f) => (f.policy?.risk === 'critical' ? (f.policy.reason || 'superficie crítica') : 'severidad crítica del bug');
+  const blockReason = (f) => (f.policy?.risk === 'critical' ? (f.policy.reason || t('system.healthReview.criticalSurface', 'superficie crítica')) : t('system.healthReview.criticalBugSeverity', 'severidad crítica del bug'));
   // Item del batch (Fase B) correspondiente a este hallazgo, si hay batch vivo.
   const batchItemOf = (f) => (batchState?.items || []).find((x) => x.id === f.id);
 
@@ -58,14 +87,14 @@ export function openHealthReview(ctx, { isAdmin }) {
     // "falso positivo" en el error. Se muestra como descartado, no como error.
     const status = (it.status === 'failed' && /falso positivo/i.test(it.error || '')) ? 'dismissed' : it.status;
     switch (status) {
-      case 'pending': return `<span class="hr-badge hr-badge--queue" title="En cola para resolver">${pacman({ state: 'queued' })}<span>en cola</span></span>`;
-      case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="Resolviendo ahora (delegado a su propio sandbox aislado)">${pacman({ state: 'delegating' })}<span>resolviendo</span></span>`;
-      case 'ready': return `<span class="hr-badge hr-badge--fixing" title="Fix listo en el sandbox — en cola para la integración serial al código real">${pacman({ state: 'queued' })}<span>listo p/ integrar</span></span>`;
-      case 'integrated': return '<span class="hr-badge hr-badge--ok">✅ resuelto</span>';
-      case 'conflict': return `<span class="hr-badge hr-badge--fail" title="Conflicto al integrar (quedó sin aplicar): ${esc(it.error || '')}">🔴 conflicto</span>`;
-      case 'check-failed': return `<span class="hr-badge hr-badge--fail" title="No pasó node --check al integrar: ${esc(it.error || '')}">🔴 falló el check</span>`;
-      case 'dismissed': return `<span class="hr-badge hr-badge--dismiss" title="El modelo revisó el código y NO era un bug (falso positivo): ${esc(it.error || '')}">⊘ no era bug</span>`;
-      case 'failed': return `<span class="hr-badge hr-badge--fail" title="Era real pero no se pudo arreglar: ${esc(it.error || 'error')}">🔴 error</span>`;
+      case 'pending': return `<span class="hr-badge hr-badge--queue" title="${t('system.healthReview.queueTitle', 'En cola para resolver')}">${pacman({ state: 'queued' })}<span>${t('system.healthReview.queued', 'en cola')}</span></span>`;
+      case 'fixing': return `<span class="hr-badge hr-badge--fixing" title="${t('system.healthReview.fixingTitle', 'Resolviendo ahora (delegado a su propio sandbox aislado)')}">${pacman({ state: 'delegating' })}<span>${t('system.healthReview.fixing', 'resolviendo')}</span></span>`;
+      case 'ready': return `<span class="hr-badge hr-badge--fixing" title="${t('system.healthReview.readyTitle', 'Fix listo en el sandbox — en cola para la integración serial al código real')}">${pacman({ state: 'queued' })}<span>${t('system.healthReview.readyToIntegrate', 'listo p/ integrar')}</span></span>`;
+      case 'integrated': return `<span class="hr-badge hr-badge--ok">✅ ${t('system.healthReview.resolvedLower', 'resuelto')}</span>`;
+      case 'conflict': return `<span class="hr-badge hr-badge--fail" title="${t('system.healthReview.conflictTitle', 'Conflicto al integrar (quedó sin aplicar): {error}', { error: esc(it.error || '') })}">🔴 ${t('system.healthReview.conflict', 'conflicto')}</span>`;
+      case 'check-failed': return `<span class="hr-badge hr-badge--fail" title="${t('system.healthReview.checkFailedTitle', 'No pasó node --check al integrar: {error}', { error: esc(it.error || '') })}">🔴 ${t('system.healthReview.checkFailed', 'falló el check')}</span>`;
+      case 'dismissed': return `<span class="hr-badge hr-badge--dismiss" title="${t('system.healthReview.dismissedTitle', 'El modelo revisó el código y NO era un bug (falso positivo): {error}', { error: esc(it.error || '') })}">⊘ ${t('system.healthReview.notABug', 'no era bug')}</span>`;
+      case 'failed': return `<span class="hr-badge hr-badge--fail" title="${t('system.healthReview.failedTitle', 'Era real pero no se pudo arreglar: {error}', { error: esc(it.error || t('system.healthReview.genericError', 'error')) })}">🔴 ${t('system.healthReview.genericError', 'error')}</span>`;
       default: return '';
     }
   }
@@ -74,15 +103,15 @@ export function openHealthReview(ctx, { isAdmin }) {
   // Con batch vivo, el estado por-ítem (Pac-Man) manda sobre el fixStatus grueso.
   function statusBadge(f) {
     const parts = [];
-    if (isBlocked(f)) parts.push(`<span class="hr-badge hr-badge--crit" title="No se auto-resuelve (${esc(blockReason(f))}) — solo chat supervisado">🔒 ${String(f.severity) === 'critical' ? 'crítico' : 'protegido'}</span>`);
-    if (f.recurrent) parts.push(`<span class="hr-badge hr-badge--rec" title="Ya se había resuelto antes (${f.recurrent.times}×) y volvió a aparecer — candidato a análisis exhaustivo">🔁 recurrente${f.recurrent.times > 1 ? ` ×${f.recurrent.times}` : ''}</span>`);
+    if (isBlocked(f)) parts.push(`<span class="hr-badge hr-badge--crit" title="${t('system.healthReview.noAutoResolveTitle', 'No se auto-resuelve ({reason}) — solo chat supervisado', { reason: esc(blockReason(f)) })}">🔒 ${String(f.severity) === 'critical' ? t('system.healthReview.severityCritical', 'crítico') : t('system.healthReview.protected', 'protegido')}</span>`);
+    if (f.recurrent) parts.push(`<span class="hr-badge hr-badge--rec" title="${t('system.healthReview.recurrentTitle', 'Ya se había resuelto antes ({times}×) y volvió a aparecer — candidato a análisis exhaustivo', { times: f.recurrent.times })}">🔁 ${t('system.healthReview.recurrent', 'recurrente')}${f.recurrent.times > 1 ? ` ×${f.recurrent.times}` : ''}</span>`);
     const it = batchItemOf(f);
     if (it) {
       parts.push(batchItemBadge(it)); // estado por-ítem del batch (Pac-Man en vivo)
-    } else if (f.fixStatus === 'fixing') parts.push('<span class="hr-badge hr-badge--fixing">🔧 resolviendo…</span>');
-    else if (f.fixStatus === 'resolved') parts.push('<span class="hr-badge hr-badge--ok">✅ resuelto</span>');
-    else if (f.fixStatus === 'dismissed') parts.push(`<span class="hr-badge hr-badge--dismiss" title="Revisado y descartado: no era un bug (falso positivo)${f.knownFalsePositive ? ' · ya conocido de antes' : ''}">⊘ no era bug</span>`);
-    else if (f.fixStatus === 'failed') parts.push('<span class="hr-badge hr-badge--fail">⚠ falló</span>');
+    } else if (f.fixStatus === 'fixing') parts.push(`<span class="hr-badge hr-badge--fixing">🔧 ${t('system.healthReview.resolvingEllipsis', 'resolviendo…')}</span>`);
+    else if (f.fixStatus === 'resolved') parts.push(`<span class="hr-badge hr-badge--ok">✅ ${t('system.healthReview.resolvedLower', 'resuelto')}</span>`);
+    else if (f.fixStatus === 'dismissed') parts.push(`<span class="hr-badge hr-badge--dismiss" title="${t('system.healthReview.reviewedDismissedTitle', 'Revisado y descartado: no era un bug (falso positivo)')}${f.knownFalsePositive ? ` · ${t('system.healthReview.knownBefore', 'ya conocido de antes')}` : ''}">⊘ ${t('system.healthReview.notABug', 'no era bug')}</span>`);
+    else if (f.fixStatus === 'failed') parts.push(`<span class="hr-badge hr-badge--fail">⚠ ${t('system.healthReview.failed', 'falló')}</span>`);
     return parts.join(' ');
   }
 
@@ -93,26 +122,26 @@ export function openHealthReview(ctx, { isAdmin }) {
   //    (runner autónomo; la tarjeta se actualiza sola). Falló ⇒ + reintentar.
   function actions(f) {
     if (!(isAdmin && openChat)) return '';
-    if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman({ state: 'delegating' })}<span>resolviendo automáticamente…</span></div>`;
-    if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ Resuelto${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
+    if (f.fixStatus === 'fixing') return `<div class="hr-f-actions hr-f-fixing">${pacman({ state: 'delegating' })}<span>${t('system.healthReview.resolvingAutomatically', 'resolviendo automáticamente…')}</span></div>`;
+    if (f.fixStatus === 'resolved') return `<div class="hr-f-resolved">✅ ${t('system.healthReview.resolved', 'Resuelto')}${f.fixSummary ? `: ${esc(f.fixSummary)}` : ''}</div>`;
     if (f.fixStatus === 'dismissed') {
-      return `<div class="hr-f-dismiss">⊘ No era un bug (falso positivo)${f.dismissReason ? `: ${esc(f.dismissReason)}` : ''}</div>
-        <div class="hr-f-actions"><button class="btn-ghost btn--sm" data-act="restore" title="Se descartó mal: sacalo del registro de falsos positivos y volvé a ponerlo en la cola por resolver">${icon('refresh', { size: 13 })}<span>Restaurar a la cola</span></button></div>`;
+      return `<div class="hr-f-dismiss">⊘ ${t('system.healthReview.notABugFalsePositive', 'No era un bug (falso positivo)')}${f.dismissReason ? `: ${esc(f.dismissReason)}` : ''}</div>
+        <div class="hr-f-actions"><button class="btn-ghost btn--sm" data-act="restore" title="${t('system.healthReview.restoreTitle', 'Se descartó mal: sacalo del registro de falsos positivos y volvé a ponerlo en la cola por resolver')}">${icon('refresh', { size: 13 })}<span>${t('system.healthReview.restoreToQueue', 'Restaurar a la cola')}</span></button></div>`;
     }
-    const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ Auto-fix falló: ${esc(f.fixError)}</div>` : '';
+    const failLine = f.fixStatus === 'failed' && f.fixError ? `<div class="hr-f-fail">⚠ ${t('system.healthReview.autoFixFailed', 'Auto-fix falló:')} ${esc(f.fixError)}</div>` : '';
     // GATE de política: superficie crítica O severidad crítica bloquean
     // "Automático" (queda solo "En chat"). Espeja el gate del backend.
     const critical = isBlocked(f);
     const critNote = critical
-      ? `<div class="hr-f-crit">⚠️ No se auto-resuelve (${esc(blockReason(f))}) — hacelo <b>En chat</b>, supervisado.</div>`
+      ? `<div class="hr-f-crit">⚠️ ${t('system.healthReview.noAutoResolveNote', 'No se auto-resuelve ({reason}) — hacelo', { reason: esc(blockReason(f)) })} <b>${t('system.healthReview.inChat', 'En chat')}</b>, ${t('system.healthReview.supervised', 'supervisado')}.</div>`
       : '';
     const autoBtn = critical
-      ? `<button class="btn btn--sm" data-act="autofix" disabled title="No se auto-resuelve: ${esc(blockReason(f))}. Usá 'En chat'.">${icon('gear', { size: 13 })}<span>Automático 🔒</span></button>`
-      : `<button class="btn btn--sm" data-act="autofix" title="Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? 'Reintentar auto' : 'Automático'}</span></button>`;
+      ? `<button class="btn btn--sm" data-act="autofix" disabled title="${t('system.healthReview.noAutoResolveUseChatTitle', "No se auto-resuelve: {reason}. Usá 'En chat'.", { reason: esc(blockReason(f)) })}">${icon('gear', { size: 13 })}<span>${t('system.healthReview.automaticLocked', 'Automático 🔒')}</span></button>`
+      : `<button class="btn btn--sm" data-act="autofix" title="${t('system.healthReview.autoFixTitle', 'Lo resuelve un runner autónomo: edita y verifica con node --check, sin supervisión; NO reinicia el servicio. La tarjeta se actualiza sola.')}">${icon('gear', { size: 13 })}<span>${f.fixStatus === 'failed' ? t('system.healthReview.retryAuto', 'Reintentar auto') : t('system.healthReview.automatic', 'Automático')}</span></button>`;
     return `${failLine}${critNote}<div class="hr-f-actions">
-      <button class="btn-ghost btn--sm" data-act="chat" title="Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)">${icon('sparkle', { size: 13 })}<span>En chat</span></button>
+      <button class="btn-ghost btn--sm" data-act="chat" title="${t('system.healthReview.chatTitle', 'Abre un chat supervisado para resolverlo (acepta ediciones; frena y te avisa en alto riesgo)')}">${icon('sparkle', { size: 13 })}<span>${t('system.healthReview.inChat', 'En chat')}</span></button>
       ${autoBtn}
-      <button class="btn-ghost btn--sm" data-act="markresolved" title="Marcalo como resuelto en el tablero SIN tocar código (red de seguridad: si ya lo arreglaste en un chat, dejá la lista al día)">${icon('check', { size: 13 })}<span>Marcar resuelto</span></button>
+      <button class="btn-ghost btn--sm" data-act="markresolved" title="${t('system.healthReview.markResolvedTitle', 'Marcalo como resuelto en el tablero SIN tocar código (red de seguridad: si ya lo arreglaste en un chat, dejá la lista al día)')}">${icon('check', { size: 13 })}<span>${t('system.healthReview.markResolved', 'Marcar resuelto')}</span></button>
     </div>`;
   }
 
@@ -126,8 +155,8 @@ export function openHealthReview(ctx, { isAdmin }) {
       <div class="hr-finding hr-finding--${esc(sev)}${collapsed}" data-idx="${f._i}" data-id="${esc(f.id || '')}">
         <div class="hr-f-head" data-toggle="1">
           <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
-          <span class="hr-sev hr-sev--${esc(sev)}">${SEV_LABEL[sev] || sev}</span>
-          <span class="hr-kind">${KIND_LABEL[f.kind] || f.kind || ''}</span>
+          <span class="hr-sev hr-sev--${esc(sev)}">${severityLabel(sev) || sev}</span>
+          <span class="hr-kind">${kindLabel(f.kind) || f.kind || ''}</span>
           <span class="hr-f-area">${esc(f.area)}</span>
           <span class="hr-f-mod">${esc(f.module || '')}</span>
           ${statusBadge(f)}
@@ -154,7 +183,7 @@ export function openHealthReview(ctx, { isAdmin }) {
           : u.status === 'done' ? 'hr-unit--done'
             : u.status === 'error' ? 'hr-unit--error' : '';
       const n = (u.status === 'done' || u.status === 'cached') && u.findings ? `<span class="hr-unit-n">${u.findings}</span>` : '';
-      const tip = u.status === 'cached' ? ' · sin cambios (reusado)' : u.error ? ` · ${esc(u.error)}` : '';
+      const tip = u.status === 'cached' ? ` · ${t('system.healthReview.unchangedReused', 'sin cambios (reusado)')}` : u.error ? ` · ${esc(u.error)}` : '';
       return `<span class="hr-unit ${cls}" title="${esc(u.label)}${tip}"><span class="hr-unit-dot"></span>${esc(u.label.replace(/^Módulo /, ''))}${n}</span>`;
     }).join('');
 
@@ -176,55 +205,58 @@ export function openHealthReview(ctx, { isAdmin }) {
     const autoables = activos.filter((f) => !isBlocked(f) && f.fixStatus !== 'fixing');
     const nAuto = autoables.length;
     const resumen = [
-      `${all.length} hallazgo(s)`,
-      resueltos.length ? `✅ ${resueltos.length} resuelto(s)` : '',
-      descartados.length ? `⊘ ${descartados.length} no eran bug` : '',
-      nFixing ? `🔧 ${nFixing} resolviendo` : '',
-      `${nOpen} sin resolver`,
+      t('system.healthReview.findingsCount', '{count} hallazgo(s)', { count: all.length }),
+      resueltos.length ? `✅ ${t('system.healthReview.resolvedCount', '{count} resuelto(s)', { count: resueltos.length })}` : '',
+      descartados.length ? `⊘ ${t('system.healthReview.notBugCount', '{count} no eran bug', { count: descartados.length })}` : '',
+      nFixing ? `🔧 ${t('system.healthReview.resolvingCount', '{count} resolviendo', { count: nFixing })}` : '',
+      t('system.healthReview.unresolvedCount', '{count} sin resolver', { count: nOpen }),
     ].filter(Boolean).join(' · ');
 
     wrap.innerHTML = `
       <div class="hr-progress">
-        ${running ? pacman() : ''}
+        ${running ? pacman({ state: 'delegating' }) : ''}
         <div class="hr-bar"><span class="hr-bar-fill" style="width:${pct}%"></span></div>
-        <span class="hr-phase">${running ? `${done}/${total} · ${esc(d.phase || 'analizando…')}` : `${done}/${total} completado`}</span>
+        <span class="hr-phase">${running ? `${done}/${total} · ${esc(d.phase || t('system.healthReview.analyzingEllipsis', 'analizando…'))}` : t('system.healthReview.completedProgress', '{done}/{total} completado', { done, total })}</span>
       </div>
-      ${units ? `<details class="hr-collapsible"${(isMobile && !running) ? '' : ' open'}><summary>Módulos analizados (${d.units?.length || 0})</summary><div class="hr-units">${units}</div></details>` : ''}
-      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.liveVerdict || d.verdict)}"><b>${VERDICT_LABEL[d.liveVerdict || d.verdict] || d.liveVerdict || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
-      ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>Resumen del análisis</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
+      ${units ? `<details class="hr-collapsible"${(isMobile && !running) ? '' : ' open'}><summary>${t('system.healthReview.analyzedModules', 'Módulos analizados ({count})', { count: d.units?.length || 0 })}</summary><div class="hr-units">${units}</div></details>` : ''}
+      ${d.verdict ? `<div class="hr-verdict hr-verdict--${esc(d.liveVerdict || d.verdict)}"><b>${verdictLabel(d.liveVerdict || d.verdict) || d.liveVerdict || d.verdict}</b><span class="hr-phase">${resumen}</span></div>` : ''}
+      ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>${t('system.healthReview.analysisSummary', 'Resumen del análisis')}</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
       ${batchBannerHtml()}
+      ${!running && !batchState?.running && isAdmin && nAuto ? `<label class="hr-tandem-toggle" title="${t('system.healthReview.tandemTitle', 'Con Tándem activo, el botón «Automático» de cada hallazgo ya no edita el código él mismo: delega la escritura del fix a Codex (gpt-5.5, esfuerzo alto) y Claude solo diagnostica/verifica. No afecta a «Resolver seguros» (batch).')}">
+        <input type="checkbox" id="hr-tandem-chk"${useTandem ? ' checked' : ''}> 🤝 ${t('system.healthReview.tandemLabel', '«Automático» usa Tándem (Codex ejecuta el fix)')}
+      </label>` : ''}
       ${!running && !batchState?.running && isAdmin ? `<div class="hr-actions-row">
-        <button class="btn btn--block" data-ref="start" title="Analiza SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan). Rápido y barato.">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? 'Analizar cambios' : 'Iniciar análisis profundo'}</span></button>
-        ${d.verdict || d.findings?.length ? `<button class="btn-ghost btn--block" data-ref="startfull" title="Re-analiza TODOS los módulos desde cero, ignorando la caché (más lento y más tokens)">${icon('refresh', { size: 14 })}<span>Completo</span></button>` : ''}
-        ${nAuto ? `<button class="btn btn--block hr-resolve-auto" data-ref="resolveauto" title="Resuelve los ${nAuto} hallazgos NO críticos en PARALELO (sandboxes aislados) + integración serial con node --check. No reinicia. Los críticos van solo por chat.">${icon('gear', { size: 14 })}<span>Resolver seguros (${nAuto})</span></button>` : ''}
-        ${nOpen ? `<button class="btn-ghost btn--block hr-resolve-all" data-ref="resolveall" title="Abre UN chat supervisado que trabaja todos los hallazgos sin resolver">${icon('sparkle', { size: 14 })}<span>Resolver todo en chat</span></button>` : ''}
+        <button class="btn btn--block" data-ref="start" title="${t('system.healthReview.analyzeChangesTitle', 'Analiza SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan). Rápido y barato.')}">${icon('gear', { size: 14 })}<span>${d.verdict || d.findings?.length ? t('system.healthReview.analyzeChanges', 'Analizar cambios') : t('system.healthReview.startDeepAnalysis', 'Iniciar análisis profundo')}</span></button>
+        ${d.verdict || d.findings?.length ? `<button class="btn-ghost btn--block" data-ref="startfull" title="${t('system.healthReview.fullAnalysisTitle', 'Re-analiza TODOS los módulos desde cero, ignorando la caché (más lento y más tokens)')}">${icon('refresh', { size: 14 })}<span>${t('system.healthReview.full', 'Completo')}</span></button>` : ''}
+        ${nAuto ? `<button class="btn btn--block hr-resolve-auto" data-ref="resolveauto" title="${t('system.healthReview.resolveSafeTitle', 'Resuelve los {count} hallazgos NO críticos en PARALELO (sandboxes aislados) + integración serial con node --check. No reinicia. Los críticos van solo por chat.', { count: nAuto })}">${icon('gear', { size: 14 })}<span>${t('system.healthReview.resolveSafeCount', 'Resolver seguros ({count})', { count: nAuto })}</span></button>` : ''}
+        ${nOpen ? `<button class="btn-ghost btn--block hr-resolve-all" data-ref="resolveall" title="${t('system.healthReview.resolveAllTitle', 'Abre UN chat supervisado que trabaja todos los hallazgos sin resolver')}">${icon('sparkle', { size: 14 })}<span>${t('system.healthReview.resolveAllInChat', 'Resolver todo en chat')}</span></button>` : ''}
       </div>` : ''}
       <div class="hr-findings">
         ${activos.length ? activos.map(findingCard).join('')
-    : running ? '<div class="hr-empty">Analizando módulos…</div>'
-      : all.length ? '<div class="hr-empty">Todo resuelto 🎉 (ver "Resueltos" abajo)</div>'
-        : '<div class="hr-empty">Sin hallazgos: el sistema está sano ✅</div>'}
+    : running ? `<div class="hr-empty">${t('system.healthReview.analyzingModules', 'Analizando módulos…')}</div>`
+      : all.length ? `<div class="hr-empty">${t('system.healthReview.allResolved', 'Todo resuelto 🎉 (ver "Resueltos" abajo)')}</div>`
+        : `<div class="hr-empty">${t('system.healthReview.noFindingsHealthy', 'Sin hallazgos: el sistema está sano ✅')}</div>`}
       </div>
-      ${resueltos.length ? `<details class="hr-collapsible hr-resolved-sec"><summary>✅ Resueltos en esta revisión (${resueltos.length})</summary>${resueltos.map(findingCard).join('')}</details>` : ''}
-      ${descartados.length ? `<details class="hr-collapsible hr-dismiss-sec"><summary>⊘ Descartados · falsos positivos (${descartados.length}) — no se vuelven a escanear</summary>${descartados.map(findingCard).join('')}</details>` : ''}
-      ${(isAdmin && proposals.length) ? `<details class="hr-collapsible hr-prop-sec" open><summary>🧠 Invariantes propuestos (${proposals.length}) — para aprobar</summary>
+      ${resueltos.length ? `<details class="hr-collapsible hr-resolved-sec"><summary>✅ ${t('system.healthReview.resolvedInReview', 'Resueltos en esta revisión ({count})', { count: resueltos.length })}</summary>${resueltos.map(findingCard).join('')}</details>` : ''}
+      ${descartados.length ? `<details class="hr-collapsible hr-dismiss-sec"><summary>⊘ ${t('system.healthReview.dismissedFalsePositives', 'Descartados · falsos positivos ({count}) — no se vuelven a escanear', { count: descartados.length })}</summary>${descartados.map(findingCard).join('')}</details>` : ''}
+      ${(isAdmin && proposals.length) ? `<details class="hr-collapsible hr-prop-sec" open><summary>🧠 ${t('system.healthReview.proposedInvariants', 'Invariantes propuestos ({count}) — para aprobar', { count: proposals.length })}</summary>
         <div class="hr-prop-list">${proposals.map((pr) => `
           <div class="hr-prop" data-prop="${esc(pr.id)}">
             <p class="hr-prop-text">${esc(pr.text)}</p>
-            <div class="hr-prop-meta"><code>${esc(pr.match || '—')}</code>${pr.fromFinding?.module ? ` · de: ${esc(pr.fromFinding.module)}` : ''}</div>
+            <div class="hr-prop-meta"><code>${esc(pr.match || '—')}</code>${pr.fromFinding?.module ? ` · ${t('system.healthReview.fromLabel', 'de:')} ${esc(pr.fromFinding.module)}` : ''}</div>
             <div class="hr-prop-actions">
-              <button class="btn-ghost btn--sm" data-prop-act="reject" title="Descartar la propuesta">${icon('close', { size: 13 })}<span>Descartar</span></button>
-              <button class="btn btn--sm" data-prop-act="approve" title="Sumarlo a los invariantes verificados (invariants-learned.json)">${icon('check', { size: 13 })}<span>Aprobar</span></button>
+              <button class="btn-ghost btn--sm" data-prop-act="reject" title="${t('system.healthReview.discardProposalTitle', 'Descartar la propuesta')}">${icon('close', { size: 13 })}<span>${t('system.healthReview.discard', 'Descartar')}</span></button>
+              <button class="btn btn--sm" data-prop-act="approve" title="${t('system.healthReview.approveInvariantTitle', 'Sumarlo a los invariantes verificados (invariants-learned.json)')}">${icon('check', { size: 13 })}<span>${t('system.healthReview.approve', 'Aprobar')}</span></button>
             </div>
           </div>`).join('')}</div>
       </details>` : ''}
-      ${solvedLog.length ? `<details class="hr-collapsible hr-solved-sec"><summary>📓 Registro de resueltos (${solvedLog.length})</summary>
+      ${solvedLog.length ? `<details class="hr-collapsible hr-solved-sec"><summary>📓 ${t('system.healthReview.solvedLog', 'Registro de resueltos ({count})', { count: solvedLog.length })}</summary>
         <div class="hr-solved-list">${solvedLog.map((s) => `
           <div class="hr-solved-item">
             <span class="hr-solved-area">${esc(s.area || s.file || '—')}</span>
             <span class="hr-solved-mod">${esc(s.module || '')}</span>
-            ${s.count > 1 ? `<span class="hr-badge hr-badge--rec" title="Se resolvió ${s.count} veces (recurrente)">🔁 ×${s.count}</span>` : ''}
+            ${s.count > 1 ? `<span class="hr-badge hr-badge--rec" title="${t('system.healthReview.resolvedTimesTitle', 'Se resolvió {count} veces (recurrente)', { count: s.count })}">🔁 ×${s.count}</span>` : ''}
             <span class="hr-solved-date">${fmtDate(s.lastResolvedAt)}</span>
           </div>`).join('')}</div>
       </details>` : ''}`;
@@ -241,6 +273,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       card.querySelector('[data-act="markresolved"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) markResolved(f); });
       card.querySelector('[data-act="restore"]')?.addEventListener('click', (e) => { e.stopPropagation(); if (f) restoreDismiss(f); });
     }
+    wrap.querySelector('#hr-tandem-chk')?.addEventListener('change', (e) => { useTandem = e.target.checked; });
     wrap.querySelector('[data-ref="start"]')?.addEventListener('click', () => startReview(false));
     wrap.querySelector('[data-ref="startfull"]')?.addEventListener('click', () => startReview(true));
     wrap.querySelector('[data-ref="resolveauto"]')?.addEventListener('click', () => batchResolve(autoables));
@@ -255,11 +288,11 @@ export function openHealthReview(ctx, { isAdmin }) {
   // caché y re-auditar TODO; default = INCREMENTAL (solo lo que cambió).
   async function startReview(full = false) {
     const ok = await dialog.confirmDialog({
-      title: full ? 'Análisis completo' : 'Análisis de cambios',
+      title: full ? t('system.healthReview.fullAnalysis', 'Análisis completo') : t('system.healthReview.changeAnalysis', 'Análisis de cambios'),
       message: full
-        ? 'Re-audita TODOS los módulos desde cero (ignora la caché). Módulo por módulo con Claude. Tarda varios minutos y CONSUME MÁS TOKENS. Solo lectura.'
-        : 'Audita SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan de la caché). Rápido y barato. Solo lectura.',
-      confirmLabel: full ? 'Análisis completo' : 'Analizar cambios',
+        ? t('system.healthReview.fullAnalysisMessage', 'Re-audita TODOS los módulos desde cero (ignora la caché). Módulo por módulo con Claude. Tarda varios minutos y CONSUME MÁS TOKENS. Solo lectura.')
+        : t('system.healthReview.changeAnalysisMessage', 'Audita SOLO los módulos que cambiaron desde la última revisión (los sin cambios se reusan de la caché). Rápido y barato. Solo lectura.'),
+      confirmLabel: full ? t('system.healthReview.fullAnalysis', 'Análisis completo') : t('system.healthReview.analyzeChanges', 'Analizar cambios'),
     });
     if (!ok) return;
     let d = {};
@@ -276,61 +309,61 @@ export function openHealthReview(ctx, { isAdmin }) {
   // edita solo (acceptEdits), pero FRENA y pide confirmación en lo de alto
   // riesgo — ahí aparece la alerta (tarjeta de permiso) en el chat.
   const RESOLVE_RULES = [
-    'Cómo resolver:',
-    '1. Verificá leyendo el código citado que el hallazgo es REAL (la auditoría puede equivocarse). Si es falso positivo, avisame y no toques nada.',
-    '2. Implementá el fix MÍNIMO. Podés editar archivos directamente (estás en modo Aceptar ediciones).',
-    '3. FRENÁ y pedime confirmación ANTES de cualquier acción de ALTO RIESGO: borrar datos, git push, reiniciar servicios, comandos destructivos (rm, kill, systemctl…). No las ejecutes sin mi OK.',
-    '4. Al terminar, resumí qué cambiaste, en qué archivos y cómo verificarlo.',
+    t('system.healthReview.resolveRulesHeader', 'Cómo resolver:'),
+    t('system.healthReview.resolveRule1', '1. Verificá leyendo el código citado que el hallazgo es REAL (la auditoría puede equivocarse). Si es falso positivo, avisame y no toques nada.'),
+    t('system.healthReview.resolveRule2', '2. Implementá el fix MÍNIMO. Podés editar archivos directamente (estás en modo Aceptar ediciones).'),
+    t('system.healthReview.resolveRule3', '3. FRENÁ y pedime confirmación ANTES de cualquier acción de ALTO RIESGO: borrar datos, git push, reiniciar servicios, comandos destructivos (rm, kill, systemctl…). No las ejecutes sin mi OK.'),
+    t('system.healthReview.resolveRule4', '4. Al terminar, resumí qué cambiaste, en qué archivos y cómo verificarlo.'),
   ].join('\n');
 
   // Un hallazgo → chat autónomo con SU contexto.
   async function resolveInChat(f) {
     const prompt = [
-      'Revisión de salud de la consola (Claude Web Console) detectó este hallazgo. Resolvelo de forma autónoma.',
+      t('system.healthReview.resolvePromptIntro', 'Revisión de salud de la consola (Claude Web Console) detectó este hallazgo. Resolvelo de forma autónoma.'),
       '',
-      `Módulo: ${f.module || '—'}`,
-      `Severidad: ${SEV_LABEL[f.severity] || f.severity} · Tipo: ${f.kind || '—'}`,
-      `Qué falla: ${f.area}`,
-      f.file ? `Archivo: ${f.file}` : '',
+      `${t('system.healthReview.moduleLabel', 'Módulo:')} ${f.module || '—'}`,
+      `${t('system.healthReview.severityLabel', 'Severidad:')} ${severityLabel(f.severity) || f.severity} · ${t('system.healthReview.typeLabel', 'Tipo:')} ${f.kind || '—'}`,
+      `${t('system.healthReview.whatFailsLabel', 'Qué falla:')} ${f.area}`,
+      f.file ? `${t('system.healthReview.fileLabel', 'Archivo:')} ${f.file}` : '',
       '',
-      `Detalle: ${f.detail}`,
-      f.suggestedFix ? `Fix sugerido por la auditoría: ${f.suggestedFix}` : '',
+      `${t('system.healthReview.detailLabel', 'Detalle:')} ${f.detail}`,
+      f.suggestedFix ? `${t('system.healthReview.suggestedAuditFixLabel', 'Fix sugerido por la auditoría:')} ${f.suggestedFix}` : '',
       '',
       RESOLVE_RULES,
       '',
-      '5. IMPORTANTE — cuando hayas terminado y VERIFICADO el fix, marcá este hallazgo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando):',
-      `   node bin/cwc-health-resolve.js ${f.id} "<resumen corto de qué arreglaste>"`,
-      '   Hacelo SOLO si de verdad lo resolviste. Si resultó un falso positivo o no lo pudiste arreglar, NO ejecutes ese comando y avisame.',
+      t('system.healthReview.resolveRule5Important', '5. IMPORTANTE — cuando hayas terminado y VERIFICADO el fix, marcá este hallazgo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando):'),
+      t('system.healthReview.resolveCommand', '   node bin/cwc-health-resolve.js {id} "<resumen corto de qué arreglaste>"', { id: f.id }),
+      t('system.healthReview.resolveCommandCaution', '   Hacelo SOLO si de verdad lo resolviste. Si resultó un falso positivo o no lo pudiste arreglar, NO ejecutes ese comando y avisame.'),
     ].filter((l) => l !== null && l !== undefined).join('\n');
     m.close();
-    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver: ${f.area}`.slice(0, 40) });
+    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `${t('system.healthReview.resolveTitle', 'Resolver')}: ${f.area}`.slice(0, 40) });
   }
 
   // Todos los hallazgos → UN chat autónomo que los trabaja en orden.
   async function resolveAll(findings) {
     if (!findings.length) return;
     const ok = await dialog.confirmDialog({
-      title: 'Resolver todo (autónomo)',
-      message: `Se abre UN chat que va a resolver los ${findings.length} hallazgo(s) uno por uno, editando el código de la consola de forma autónoma (modo Aceptar ediciones). Frenará y te pedirá confirmación en cada decisión de alto riesgo.\n\nLo ves en vivo y podés detenerlo cuando quieras.`,
-      confirmLabel: `Resolver ${findings.length} hallazgo(s)`,
+      title: t('system.healthReview.resolveAllDialogTitle', 'Resolver todo (autónomo)'),
+      message: t('system.healthReview.resolveAllDialogMessage', 'Se abre UN chat que va a resolver los {count} hallazgo(s) uno por uno, editando el código de la consola de forma autónoma (modo Aceptar ediciones). Frenará y te pedirá confirmación en cada decisión de alto riesgo.\n\nLo ves en vivo y podés detenerlo cuando quieras.', { count: findings.length }),
+      confirmLabel: t('system.healthReview.resolveFindingsCount', 'Resolver {count} hallazgo(s)', { count: findings.length }),
     });
     if (!ok) return;
-    const lista = findings.map((f, i) => `${i + 1}. [${SEV_LABEL[f.severity] || f.severity}] ${f.area}${f.module ? ` (${f.module})` : ''}${f.file ? ` — ${f.file}` : ''}  (id=${f.id})\n   ${f.detail}${f.suggestedFix ? `\n   Fix sugerido: ${f.suggestedFix}` : ''}`).join('\n\n');
+    const lista = findings.map((f, i) => `${i + 1}. [${severityLabel(f.severity) || f.severity}] ${f.area}${f.module ? ` (${f.module})` : ''}${f.file ? ` — ${f.file}` : ''}  (id=${f.id})\n   ${f.detail}${f.suggestedFix ? `\n   ${t('system.healthReview.suggestedFixLabel', 'Fix sugerido:')} ${f.suggestedFix}` : ''}`).join('\n\n');
     const prompt = [
-      `La revisión de salud de la consola (Claude Web Console) encontró ${findings.length} hallazgo(s). Resolvelos de forma autónoma, UNO POR UNO, en el orden de la lista (severidad de mayor a menor).`,
+      t('system.healthReview.resolveAllPromptIntro', 'La revisión de salud de la consola (Claude Web Console) encontró {count} hallazgo(s). Resolvelos de forma autónoma, UNO POR UNO, en el orden de la lista (severidad de mayor a menor).', { count: findings.length }),
       '',
       lista,
       '',
       RESOLVE_RULES,
       '',
-      'Trabajá secuencial: verificá, arreglá y pasá al siguiente. Avisá al terminar cada uno y hacé un resumen final con todo lo cambiado.',
+      t('system.healthReview.resolveAllSequential', 'Trabajá secuencial: verificá, arreglá y pasá al siguiente. Avisá al terminar cada uno y hacé un resumen final con todo lo cambiado.'),
       '',
-      'IMPORTANTE — apenas termines y VERIFIQUES cada hallazgo, marcalo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando), usando el id que figura en la lista de arriba:',
-      '   node bin/cwc-health-resolve.js <id> "<resumen corto de qué arreglaste>"',
-      'Hacelo por CADA hallazgo que de verdad resolviste. Si alguno es falso positivo o no lo pudiste arreglar, NO lo marques y avisame.',
+      t('system.healthReview.resolveAllImportant', 'IMPORTANTE — apenas termines y VERIFIQUES cada hallazgo, marcalo como resuelto en el tablero de Salud ejecutando EXACTAMENTE (te pediré OK para el comando), usando el id que figura en la lista de arriba:'),
+      t('system.healthReview.resolveAllCommand', '   node bin/cwc-health-resolve.js <id> "<resumen corto de qué arreglaste>"'),
+      t('system.healthReview.resolveAllCaution', 'Hacelo por CADA hallazgo que de verdad resolviste. Si alguno es falso positivo o no lo pudiste arreglar, NO lo marques y avisame.'),
     ].join('\n');
     m.close();
-    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `Resolver ${findings.length} hallazgos de salud`.slice(0, 50) });
+    await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: t('system.healthReview.resolveHealthFindingsTitle', 'Resolver {count} hallazgos de salud', { count: findings.length }).slice(0, 50) });
   }
 
   // Resolución AUTÓNOMA de UN hallazgo: dispara el runner detached y arranca a
@@ -340,10 +373,10 @@ export function openHealthReview(ctx, { isAdmin }) {
     try {
       const res = await fetch(`${API}/finding-fix`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: f.id }),
+        body: JSON.stringify({ id: f.id, tandem: useTandem }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar el auto-fix.');
+      if (!res.ok) throw new Error(data.error || t('system.healthReview.autoFixLaunchError', 'No se pudo lanzar el auto-fix.'));
       // Parche optimista: marca 'fixing' ya mismo (el runner lo confirma enseguida).
       if (lastData?.findings) {
         const t = lastData.findings.find((x) => x.id === f.id);
@@ -352,7 +385,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       clearTimeout(pollTimer);
       poll();
     } catch (err) {
-      await dialog.alertDialog({ title: 'Resolver automático', message: err.message });
+      await dialog.alertDialog({ title: t('system.healthReview.autoResolveTitle', 'Resolver automático'), message: err.message });
     }
   }
 
@@ -361,25 +394,25 @@ export function openHealthReview(ctx, { isAdmin }) {
   // si ya lo arreglaste en un chat y querés reflejarlo sin esperar otra revisión.
   async function markResolved(f) {
     const ok = await dialog.confirmDialog({
-      title: 'Marcar resuelto',
-      message: `¿Marcar "${f.area}" como resuelto? No toca código: solo lo saca de la lista de "sin resolver" y lo registra como resuelto. Usalo si ya lo arreglaste (p. ej. en un chat).`,
-      confirmLabel: 'Marcar resuelto',
+      title: t('system.healthReview.markResolved', 'Marcar resuelto'),
+      message: t('system.healthReview.markResolvedMessage', '¿Marcar "{area}" como resuelto? No toca código: solo lo saca de la lista de "sin resolver" y lo registra como resuelto. Usalo si ya lo arreglaste (p. ej. en un chat).', { area: f.area }),
+      confirmLabel: t('system.healthReview.markResolved', 'Marcar resuelto'),
     });
     if (!ok) return;
     try {
       const res = await fetch(`${API}/finding-resolve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: f.id, summary: 'Marcado como resuelto a mano (resuelto en chat).' }),
+        body: JSON.stringify({ id: f.id, summary: t('system.healthReview.manualResolvedSummary', 'Marcado como resuelto a mano (resuelto en chat).') }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo marcar como resuelto.');
+      if (!res.ok) throw new Error(data.error || t('system.healthReview.markResolvedError', 'No se pudo marcar como resuelto.'));
       // Parche optimista: baja a "Resueltos" ya mismo; el poll/refresh lo confirma.
       if (lastData?.findings) {
         const t = lastData.findings.find((x) => x.id === f.id);
         if (t) { t.fixStatus = 'resolved'; t.resolvedAt = Date.now(); render(lastData); }
       }
     } catch (err) {
-      await dialog.alertDialog({ title: 'Marcar resuelto', message: err.message });
+      await dialog.alertDialog({ title: t('system.healthReview.markResolved', 'Marcar resuelto'), message: err.message });
     }
   }
 
@@ -392,7 +425,7 @@ export function openHealthReview(ctx, { isAdmin }) {
         body: JSON.stringify({ id: f.id }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo restaurar.');
+      if (!res.ok) throw new Error(data.error || t('system.healthReview.restoreError', 'No se pudo restaurar.'));
       if (lastData?.findings) {
         const t = lastData.findings.find((x) => x.id === f.id);
         if (t) { delete t.fixStatus; delete t.knownFalsePositive; delete t.dismissReason; render(lastData); }
@@ -400,7 +433,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       clearTimeout(pollTimer);
       fetchState().then(() => render(lastData));
     } catch (err) {
-      await dialog.alertDialog({ title: 'Restaurar', message: err.message });
+      await dialog.alertDialog({ title: t('system.healthReview.restore', 'Restaurar'), message: err.message });
     }
   }
 
@@ -411,10 +444,10 @@ export function openHealthReview(ctx, { isAdmin }) {
     const c = b.items.reduce((a, it) => { a[it.status] = (a[it.status] || 0) + 1; return a; }, {});
     const warn = (c.conflict || 0) + (c['check-failed'] || 0);
     if (b.running) {
-      return `<div class="hr-batch hr-batch--run">${pacman({ state: 'delegating' })}<span>Resolviendo ${b.items.length} en paralelo (aislado)${b.phase ? ` · ${esc(b.phase)}` : ''} — ✅ ${c.integrated || 0}${warn ? ` · ⚠ ${warn}` : ''}${c.failed ? ` · ✗ ${c.failed}` : ''}</span></div>`;
+      return `<div class="hr-batch hr-batch--run">${pacman({ state: 'delegating' })}<span>${t('system.healthReview.batchRunning', 'Resolviendo {count} en paralelo (aislado)', { count: b.items.length })}${b.phase ? ` · ${esc(b.phase)}` : ''} — ✅ ${c.integrated || 0}${warn ? ` · ⚠ ${warn}` : ''}${c.failed ? ` · ✗ ${c.failed}` : ''}</span></div>`;
     }
     if (b.finishedAt) {
-      return `<div class="hr-batch">Último batch: ✅ ${c.integrated || 0} integrado(s)${c.conflict ? ` · ⚠ ${c.conflict} conflicto` : ''}${c['check-failed'] ? ` · ⚠ ${c['check-failed']} check` : ''}${c.failed ? ` · ✗ ${c.failed} fallo` : ''}. Los no integrados quedan abiertos (retry o "En chat").</div>`;
+      return `<div class="hr-batch">${t('system.healthReview.lastBatch', 'Último batch:')} ✅ ${t('system.healthReview.integratedCount', '{count} integrado(s)', { count: c.integrated || 0 })}${c.conflict ? ` · ⚠ ${t('system.healthReview.conflictCount', '{count} conflicto', { count: c.conflict })}` : ''}${c['check-failed'] ? ` · ⚠ ${t('system.healthReview.checkCount', '{count} check', { count: c['check-failed'] })}` : ''}${c.failed ? ` · ✗ ${t('system.healthReview.failureCount', '{count} fallo', { count: c.failed })}` : ''}. ${t('system.healthReview.unintegratedRemainOpen', 'Los no integrados quedan abiertos (retry o "En chat").')}</div>`;
     }
     return '';
   }
@@ -424,9 +457,9 @@ export function openHealthReview(ctx, { isAdmin }) {
   async function batchResolve(findings) {
     if (!findings.length) return;
     const ok = await dialog.confirmDialog({
-      title: `Resolver seguros (${findings.length})`,
-      message: `Se resuelven los ${findings.length} hallazgos NO críticos de forma autónoma: cada uno en su propio sandbox aislado EN PARALELO, y después se integran al código UNO POR UNO con node --check (los que choquen quedan sin aplicar). NO reinicia el servicio — revisás con git y reiniciás vos.\n\nLos hallazgos críticos NO entran (van solo por "En chat").`,
-      confirmLabel: `Resolver ${findings.length}`,
+      title: t('system.healthReview.resolveSafeCount', 'Resolver seguros ({count})', { count: findings.length }),
+      message: t('system.healthReview.resolveSafeMessage', 'Se resuelven los {count} hallazgos NO críticos de forma autónoma: cada uno en su propio sandbox aislado EN PARALELO, y después se integran al código UNO POR UNO con node --check (los que choquen quedan sin aplicar). NO reinicia el servicio — revisás con git y reiniciás vos.\n\nLos hallazgos críticos NO entran (van solo por "En chat").', { count: findings.length }),
+      confirmLabel: t('system.healthReview.resolveCount', 'Resolver {count}', { count: findings.length }),
     });
     if (!ok) return;
     try {
@@ -435,11 +468,11 @@ export function openHealthReview(ctx, { isAdmin }) {
         body: JSON.stringify({ ids: findings.map((f) => f.id) }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo lanzar el batch.');
+      if (!res.ok) throw new Error(data.error || t('system.healthReview.batchLaunchError', 'No se pudo lanzar el batch.'));
       clearTimeout(pollTimer);
       poll();
     } catch (err) {
-      await dialog.alertDialog({ title: 'Resolver seguros', message: err.message });
+      await dialog.alertDialog({ title: t('system.healthReview.resolveSafe', 'Resolver seguros'), message: err.message });
     }
   }
 
@@ -465,11 +498,11 @@ export function openHealthReview(ctx, { isAdmin }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo procesar la propuesta.');
+      if (!res.ok) throw new Error(data.error || t('system.healthReview.proposalProcessError', 'No se pudo procesar la propuesta.'));
       const d = await fetchState();
       if (d) render(d);
     } catch (err) {
-      await dialog.alertDialog({ title: 'Invariante propuesto', message: err.message });
+      await dialog.alertDialog({ title: t('system.healthReview.proposedInvariantTitle', 'Invariante propuesto'), message: err.message });
     }
   }
   // Hay que seguir poleando si corre la revisión O hay un auto-fix en curso.

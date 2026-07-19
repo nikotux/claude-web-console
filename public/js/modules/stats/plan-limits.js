@@ -12,6 +12,7 @@
 // instantáneo. Pausa con la pestaña en segundo plano (patrón de stats.js).
 import { fetchLimits, renderLimits } from '../usage/usage.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { t } from '../../ui/i18n.js';
 
 const POLL_MS = 5000;
 
@@ -36,7 +37,7 @@ export default {
       } catch {
         // Sin datos aún (token vencido / sin red): mostramos una nota discreta
         // solo si nunca llegó a pintar; si ya había datos, dejamos los viejos.
-        if (!firstOk) el.innerHTML = '<div class="lim-head">Límites del plan</div><div class="lim-err">sin datos</div>';
+        if (!firstOk) el.innerHTML = `<div class="lim-head">${t('stats.limits.title', 'Límites del plan')}</div><div class="lim-err">${t('stats.limits.noData', 'sin datos')}</div>`;
       }
     }
     tick();

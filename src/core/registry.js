@@ -26,8 +26,9 @@ import envVars from '../modules/env-vars/index.js';
 import seguimientos from '../modules/seguimientos/index.js';
 import onboard from '../modules/onboard/index.js';
 import skills from '../modules/skills/index.js';
+import mcps from '../modules/mcps/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

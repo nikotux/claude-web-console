@@ -227,6 +227,15 @@ async function readCodexCwd(file) {
   return cwd;
 }
 
+// Peso del cache READ en el caudal (2026-07-19): 0.1, alineado con el precio
+// (pin/pout: cache read ×0.1). En cada paso del agente Claude RE-LEE todo el
+// contexto cacheado (100-200k tokens); contarlo a peso completo hacía que el
+// caudal fuera 95% relecturas y saturara el techo por ~4x (medido: 29-38k tps
+// crudos vs MAX_TPS 8000 → barra clavada en 100%). Ponderarlo por lo que
+// realmente pesa deja ver el TRABAJO real (input+output+cache_creation = input
+// procesado por primera vez, peso 1). Mismo villano que la barra de Sesión.
+const CACHE_READ_WEIGHT = 0.1;
+
 function extractClaudeEvent(obj, now) {
   if (obj?.type !== 'assistant') return null;
   const msg = obj.message;
@@ -236,7 +245,7 @@ function extractClaudeEvent(obj, now) {
   const tokens = numeric(u.input_tokens)
     + numeric(u.output_tokens)
     + numeric(u.cache_creation_input_tokens)
-    + numeric(u.cache_read_input_tokens);
+    + numeric(u.cache_read_input_tokens) * CACHE_READ_WEIGHT;
   seenClaudeIds.set(id, Date.parse(obj.timestamp || '') || now);
   return {
     ts: Date.parse(obj.timestamp || '') || now,
@@ -248,9 +257,16 @@ function extractCodexEvent(obj, now) {
   if (obj?.type !== 'event_msg' || obj.payload?.type !== 'token_count') return null;
   const usage = obj.payload?.info?.last_token_usage;
   if (!usage) return null;
-  const tokens = typeof usage.total_tokens === 'number'
-    ? numeric(usage.total_tokens)
-    : numeric(usage.input_tokens) + numeric(usage.output_tokens);
+  // Mismo criterio que Claude: el cache read pesa 0.1. En Codex `input_tokens`
+  // YA INCLUYE `cached_input_tokens` (verificado: input 21808 ⊇ cached 20864, y
+  // total = input+output), así que se descuenta el cache del input y se re-suma
+  // ponderado — si no, `total_tokens` contaría el cache a peso completo y la
+  // barra de Codex se saturaría igual que la de Claude.
+  const cached = numeric(usage.cached_input_tokens);
+  const inputNew = Math.max(0, numeric(usage.input_tokens) - cached);
+  const tokens = inputNew
+    + numeric(usage.output_tokens)
+    + cached * CACHE_READ_WEIGHT;
   return {
     ts: Date.parse(obj.timestamp || '') || now,
     tokens,

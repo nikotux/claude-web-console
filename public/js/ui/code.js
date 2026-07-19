@@ -6,6 +6,7 @@
 // autodetección sobre salidas de consola mete falsos positivos y el resaltado
 // de textos enormes es lento. Si no se puede, queda texto plano: nunca rompe.
 // Seguridad: hljs ESCAPA el input, su .value es HTML seguro para innerHTML.
+import { t } from './i18n.js';
 
 const EXT_LANG = {
   js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
@@ -38,7 +39,7 @@ export function fillCode(pre, text, lang) {
   const t = truncated ? allLines.slice(0, CODE_MAX_LINES).join('\n') : full;
   // Aviso de truncado (texto estático, sin metacaracteres HTML → seguro tanto
   // como textContent como concatenado a innerHTML resaltado).
-  const note = truncated ? `\n… (${allLines.length - CODE_MAX_LINES} líneas más ocultas por límite de rendimiento)` : '';
+  const note = truncated ? `\n${t('core.trunc.linesHidden', '… ({n} líneas más ocultas por límite de rendimiento)', { n: allLines.length - CODE_MAX_LINES })}` : '';
   pre.textContent = t + note; // fallback siempre seguro
   const hljs = window.hljs;
   if (!hljs || !lang || !t || t.length > HL_MAX_CHARS || !hljs.getLanguage(lang)) return;

@@ -1,0 +1,5 @@
+{
+  "terminal.msg.session_ended": "[session ended]",
+  "terminal.msg.error": "[error] {message}",
+  "terminal.msg.reconnecting": "[reconnecting...]"
+}

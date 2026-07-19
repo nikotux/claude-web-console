@@ -11,6 +11,7 @@
 // /api/chat/list).
 import { openModal } from '../../ui/dialog.js';
 import { icon, hydrateIcons } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
 import { modelColor, modelName } from '../../ui/models.js';
 
 const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
@@ -50,15 +51,15 @@ function rowHtml(item) {
   const isAgent = item.kind === 'agent';
   const ico = isAgent ? 'sparkle' : (item.icon || 'gear');
   const what = isAgent
-    ? `Subagente${item.count > 1 ? ` ×${item.count}` : ''}`
-    : (item.label || item.key || 'Proceso');
+    ? `${t('system.activity.subagent', 'Subagente')}${item.count > 1 ? ` ×${item.count}` : ''}`
+    : (item.label || item.key || t('system.activity.process', 'Proceso'));
   const phase = item.phase ? `<span class="act-phase">${esc(item.phase)}</span>` : '';
   const session = isAgent
     ? `<a class="act-session" role="button" tabindex="0" data-chat="${esc(item.chatId)}">${esc(item.session || item.chatId || '')}</a>`
-    : '<span class="act-session act-session--sys">sistema</span>';
+    : `<span class="act-session act-session--sys">${t('system.activity.systemSession', 'sistema')}</span>`;
   return `
     <tr class="act-row act-row--${isAgent ? 'agent' : 'proc'}">
-      <td class="act-c-type" title="${isAgent ? 'Subagente' : 'Proceso en segundo plano'}">${icon(ico, { size: 15 })}</td>
+      <td class="act-c-type" title="${isAgent ? t('system.activity.subagentTitle', 'Subagente') : t('system.activity.backgroundProcessTitle', 'Proceso en segundo plano')}">${icon(ico, { size: 15 })}</td>
       <td class="act-c-what">${esc(what)}${phase}</td>
       <td class="act-c-sess">${session}</td>
       <td class="act-c-time" data-start="${item.startedAt || ''}">${fmtAgo(item.startedAt)}</td>
@@ -79,10 +80,10 @@ function renderInto(modal, data, opts) {
   const procs = data?.processes || [];
   const body = modal.body;
   if (!agents.length && !procs.length) {
-    body.innerHTML = '<p class="act-empty">Nada corriendo en segundo plano ahora mismo. 🟢</p>';
+    body.innerHTML = `<p class="act-empty">${t('system.activity.empty', 'Nada corriendo en segundo plano ahora mismo.')} 🟢</p>`;
     return;
   }
-  body.innerHTML = groupHtml('sparkle', 'Subagentes', agents) + groupHtml('gear', 'Procesos en segundo plano', procs);
+  body.innerHTML = groupHtml('sparkle', t('system.activity.groupSubagents', 'Subagentes'), agents) + groupHtml('gear', t('system.activity.groupBackgroundProcesses', 'Procesos en segundo plano'), procs);
   hydrateIcons(body);
   // Ir al chat de origen de un subagente (patrón perm-center openChat).
   body.querySelectorAll('.act-session[data-chat]').forEach((a) => {
@@ -103,7 +104,7 @@ function tickTimes(body) {
 export function openActivityModal(data, opts = {}) {
   if (handle) { handle.render(data); return handle; }
   const modal = openModal({
-    title: 'Actividad en segundo plano',
+    title: t('system.activity.modalTitle', 'Actividad en segundo plano'),
     width: 620,
     onClose: () => { if (handle?.timer) clearInterval(handle.timer); handle = null; },
   });

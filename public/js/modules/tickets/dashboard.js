@@ -11,6 +11,7 @@ import { icon } from '../../ui/icons.js';
 import { pacman } from '../../ui/pacman.js';
 import { openTicketDetail } from './ticket-detail.js';
 import { openPrDetail } from './pr-detail.js';
+import { t } from '../../ui/i18n.js';
 
 // Carriles: emoji + label SEPARADOS. En la card se muestra SOLO el emoji (chip
 // sin texto); el label vive en las pestañas de filtro (que hacen de leyenda) y
@@ -19,21 +20,21 @@ const LANE_META = {
   bug: { emoji: '🐞', label: 'bug' }, feature: { emoji: '💡', label: 'feature' },
   hardware: { emoji: '🖥', label: 'hardware' }, access: { emoji: '🔑', label: 'access' },
   platform: { emoji: '⚙️', label: 'platform' }, onboarding: { emoji: '🌱', label: 'onboarding' },
-  'facilities-house': { emoji: '🏠', label: 'Infraestructura Casa' },
-  'facilities-office': { emoji: '🏢', label: 'Infraestructura Oficina' },
+  'facilities-house': { emoji: '🏠', label: t('tickets.dash.laneFacilitiesHouse', 'Infraestructura Casa') },
+  'facilities-office': { emoji: '🏢', label: t('tickets.dash.laneFacilitiesOffice', 'Infraestructura Oficina') },
   other: { emoji: '🏷️', label: 'other' },
 };
 const laneEmoji = (l) => LANE_META[l]?.emoji || '🏷️';
 const laneLabel = (l) => LANE_META[l]?.label || l || 'other';
 // Compat con laneRows/laneTab: "emoji label" para las pestañas y barras.
 const LANE_LABEL = Object.fromEntries(Object.entries(LANE_META).map(([k, v]) => [k, `${v.emoji} ${v.label}`]));
-const BALL_LABEL = { yours: '🟡 tuya', chris: '🔵 Chris' };
+const BALL_LABEL = { yours: t('tickets.dash.ballYours', '🟡 tuya'), chris: '🔵 Chris' };
 
 // Prioridad como chip de PROPIEDAD (lleva su valor: emoji de color + P1/2/3).
 const PRIO_META = {
-  P1: { emoji: '🔴', label: 'P1', chip: 'bb-chip--danger', desc: 'Prioridad alta' },
-  P2: { emoji: '🟠', label: 'P2', chip: 'bb-chip--warn', desc: 'Prioridad media' },
-  P3: { emoji: '🟡', label: 'P3', chip: 'bb-chip--muted', desc: 'Prioridad baja' },
+  P1: { emoji: '🔴', label: 'P1', chip: 'bb-chip--danger', desc: t('tickets.dash.prioHigh', 'Prioridad alta') },
+  P2: { emoji: '🟠', label: 'P2', chip: 'bb-chip--warn', desc: t('tickets.dash.prioMed', 'Prioridad media') },
+  P3: { emoji: '🟡', label: 'P3', chip: 'bb-chip--muted', desc: t('tickets.dash.prioLow', 'Prioridad baja') },
 };
 // Iniciales del dueño para el chip 👤 (ej. "Giovanna Rincon" → "GR").
 function initials(name) {
@@ -49,11 +50,11 @@ function initials(name) {
 // tener dos departamentos. Cada estado tiene emoji + label corto + color de chip;
 // el status CRUDO de Zoho se conserva en el tooltip para no perder fidelidad.
 const STATUS_META = {
-  new:         { label: 'Nuevo',          emoji: '🆕', chip: 'bb-chip--info' },
-  triaged:     { label: 'Asignado',       emoji: '📌', chip: 'bb-chip--cool' },
-  in_progress: { label: 'En progreso',    emoji: '🔧', chip: 'bb-chip--warn' },
-  waiting:     { label: 'Espera cliente', emoji: '⏸️', chip: 'bb-chip--muted' },
-  closed:      { label: 'Resuelto',       emoji: '✅', chip: 'bb-chip--ok' },
+  new:         { label: t('tickets.dash.statusNew', 'Nuevo'),          emoji: '🆕', chip: 'bb-chip--info' },
+  triaged:     { label: t('tickets.dash.statusTriaged', 'Asignado'),       emoji: '📌', chip: 'bb-chip--cool' },
+  in_progress: { label: t('tickets.dash.statusInProgress', 'En progreso'),    emoji: '🔧', chip: 'bb-chip--warn' },
+  waiting:     { label: t('tickets.dash.statusWaiting', 'Espera cliente'), emoji: '⏸️', chip: 'bb-chip--muted' },
+  closed:      { label: t('tickets.dash.statusClosed', 'Resuelto'),       emoji: '✅', chip: 'bb-chip--ok' },
 };
 function statusMeta(t) {
   const m = STATUS_META[t.lifecycle];
@@ -91,7 +92,7 @@ function ciBadge(ci) {
 // también giraría por la regla `.bv2-block[open] > summary svg`).
 function block(title, inner, open, expandKey) {
   const exp = expandKey
-    ? `<button type="button" class="bv2-expand" data-expand="${esc(expandKey)}" title="Ver todos en tabla ancha (tipo Excel)">${icon('maximize', { size: 13 })}</button>`
+    ? `<button type="button" class="bv2-expand" data-expand="${esc(expandKey)}" title="${t('tickets.dash.expandTitle', 'Ver todos en tabla ancha (tipo Excel)')}">${icon('maximize', { size: 13 })}</button>`
     : '';
   return `<details class="bv2-block"${open ? ' open' : ''}>
     <summary class="bv2-block-h"><span>${title}</span><span class="bv2-block-tools">${exp}${icon('chevronDown', { size: 14, className: 'bv2-chev' })}</span></summary>
@@ -103,21 +104,21 @@ function block(title, inner, open, expandKey) {
 // (`cell`) y cómo se ordena (`val` → clave comparable; `num` = orden numérico).
 // Usa los mismos helpers/metadata que las cards para ser coherente.
 const TABLE_COLS = [
-  { key: 'ticketNumber', label: '#', num: true, val: (t) => Number(t.ticketNumber) || 0, cell: (t) => `#${esc(t.ticketNumber)}` },
-  { key: 'subject', label: 'Asunto', cls: 'tkt-c-subj', val: (t) => String(t.subject || '').toLowerCase(), cell: (t) => esc(t.subject || '(sin asunto)') },
-  { key: 'lane', label: 'Carril', val: (t) => laneLabel(t.lane), cell: (t) => `${laneEmoji(t.lane)} ${esc(laneLabel(t.lane))}` },
-  { key: 'lifecycle', label: 'Estado', val: (t) => statusMeta(t).label, cell: (t) => { const sm = statusMeta(t); return `${sm.emoji || ''} ${esc(sm.label)}`.trim(); } },
-  { key: 'priority', label: 'Prioridad', val: (t) => t.priority || 'zzz', cell: (t) => { const p = PRIO_META[t.priority]; return p ? `${p.emoji} ${p.label}` : '—'; } },
-  { key: 'ownerName', label: 'Dueño', val: (t) => String(t.ownerName || 'zzz').toLowerCase(), cell: (t) => esc(t.ownerName || '—') },
-  { key: 'agingDays', label: 'Días', num: true, val: (t) => t.agingDays ?? 0, cell: (t) => String(t.agingDays ?? 0) },
-  { key: 'sla', label: 'SLA', num: true, val: (t) => (t.overdue ? 2 : (t.agingDays >= 7 ? 1 : 0)), cell: (t) => (t.overdue ? '🔴 SLA roto' : (t.agingDays >= 7 ? '🟠 sin update' : '🟢 al día')) },
+  { key: 'ticketNumber', label: '#', num: true, val: (row) => Number(row.ticketNumber) || 0, cell: (row) => `#${esc(row.ticketNumber)}` },
+  { key: 'subject', label: t('tickets.dash.colSubject', 'Asunto'), cls: 'tkt-c-subj', val: (row) => String(row.subject || '').toLowerCase(), cell: (row) => esc(row.subject || t('tickets.dash.noSubject', '(sin asunto)')) },
+  { key: 'lane', label: t('tickets.dash.colLane', 'Carril'), val: (row) => laneLabel(row.lane), cell: (row) => `${laneEmoji(row.lane)} ${esc(laneLabel(row.lane))}` },
+  { key: 'lifecycle', label: t('tickets.dash.colStatus', 'Estado'), val: (row) => statusMeta(row).label, cell: (row) => { const sm = statusMeta(row); return `${sm.emoji || ''} ${esc(sm.label)}`.trim(); } },
+  { key: 'priority', label: t('tickets.dash.colPriority', 'Prioridad'), val: (row) => row.priority || 'zzz', cell: (row) => { const p = PRIO_META[row.priority]; return p ? `${p.emoji} ${p.label}` : '—'; } },
+  { key: 'ownerName', label: t('tickets.dash.colOwner', 'Dueño'), val: (row) => String(row.ownerName || 'zzz').toLowerCase(), cell: (row) => esc(row.ownerName || '—') },
+  { key: 'agingDays', label: t('tickets.dash.colDays', 'Días'), num: true, val: (row) => row.agingDays ?? 0, cell: (row) => String(row.agingDays ?? 0) },
+  { key: 'sla', label: 'SLA', num: true, val: (row) => (row.overdue ? 2 : (row.agingDays >= 7 ? 1 : 0)), cell: (row) => (row.overdue ? t('tickets.dash.slaBroken', '🔴 SLA roto') : (row.agingDays >= 7 ? t('tickets.dash.slaNoUpdate', '🟠 sin update') : t('tickets.dash.slaOk', '🟢 al día'))) },
 ];
 
 // Columnas de la vista "Todos" = TABLE_COLS + una columna "Cola" al frente que
 // dice de qué bucket (Nuevos/Vencidos/En progreso) viene cada ticket (el campo
 // `_bucket` lo etiqueta openColumnTable al concatenar las 3 columnas).
 const TABLE_COLS_ALL = [
-  { key: 'bucket', label: 'Cola', val: (t) => t._bucket || '', cell: (t) => esc(t._bucket || '—') },
+  { key: 'bucket', label: t('tickets.dash.colQueue', 'Cola'), val: (row) => row._bucket || '', cell: (row) => esc(row._bucket || '—') },
   ...TABLE_COLS,
 ];
 
@@ -131,12 +132,12 @@ function openTicketTable(titleText, items, deps, opts = {}) {
   const localMap = new Map();
   for (const t of rows) localMap.set(String(t.ticketNumber), t);
   let sortKey = null, sortDir = -1, q = '';
-  const m = openModal({ title: `${titleText} · tabla`, width: 'min(1200px, 96vw)' });
+  const m = openModal({ title: `${titleText} · ${t('tickets.dash.tableSuffix', 'tabla')}`, width: 'min(1200px, 96vw)' });
   const wrap = document.createElement('div');
   wrap.className = 'tkt-tblwrap';
   wrap.innerHTML = `
     <div class="tkt-tblbar">
-      <input type="text" class="btn--sm tkt-tblsearch" placeholder="Filtrar por # o asunto…" data-ref="q" />
+      <input type="text" class="btn--sm tkt-tblsearch" placeholder="${t('tickets.dash.tableFilter', 'Filtrar por # o asunto…')}" data-ref="q" />
       <span class="bf-sub" data-ref="count"></span>
     </div>
     <div class="tkt-tblscroll" data-ref="scroll"></div>`;
@@ -156,15 +157,15 @@ function openTicketTable(titleText, items, deps, opts = {}) {
   }
   function renderTable() {
     const list = sorted();
-    countEl.textContent = `${list.length} de ${rows.length}`;
+    countEl.textContent = t('tickets.dash.tableCount', '{a} de {b}', { a: list.length, b: rows.length });
     const head = cols.map((c) => {
       const on = sortKey === c.key;
       const arrow = on ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
-      return `<th class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}" data-sort="${c.key}" title="Ordenar por ${esc(c.label)}">${esc(c.label)}${arrow}</th>`;
+      return `<th class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}" data-sort="${c.key}" title="${t('tickets.dash.sortBy', 'Ordenar por {col}', { col: esc(c.label) })}">${esc(c.label)}${arrow}</th>`;
     }).join('');
     const body = list.length
-      ? list.map((t) => `<tr data-num="${esc(t.ticketNumber)}" role="button" tabindex="0" title="Ver detalle del ticket">${cols.map((c) => `<td class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}">${c.cell(t)}</td>`).join('')}</tr>`).join('')
-      : `<tr><td colspan="${cols.length}" class="bf-sub" style="padding:.8rem">— nada —</td></tr>`;
+      ? list.map((row) => `<tr data-num="${esc(row.ticketNumber)}" role="button" tabindex="0" title="${t('tickets.dash.rowTitle', 'Ver detalle del ticket')}">${cols.map((c) => `<td class="${c.cls || ''}${c.num ? ' tkt-c-num' : ''}">${c.cell(row)}</td>`).join('')}</tr>`).join('')
+      : `<tr><td colspan="${cols.length}" class="bf-sub" style="padding:.8rem">${t('tickets.common.nothing', '— nada —')}</td></tr>`;
     scrollEl.innerHTML = `<table class="tkt-tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
   }
   scrollEl.addEventListener('click', (e) => {
@@ -244,9 +245,9 @@ export function openBugsV2Dashboard(deps = {}) {
   const headActions = document.createElement('div');
   headActions.className = 'bv2-head-actions';
   headActions.innerHTML = `
-    <button class="btn-ghost btn--sm btn--icon" data-ref="legend" title="Leyenda de íconos">${icon('help', { size: 15 })}</button>
-    <button class="btn-ghost btn--sm btn--icon" data-ref="search-toggle" title="Buscar ticket por número">${icon('search', { size: 15 })}</button>
-    <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Actualizar (fuerza refresh)">${icon('refresh', { size: 15 })}</button>`;
+    <button class="btn-ghost btn--sm btn--icon" data-ref="legend" title="${t('tickets.dash.legendTitle', 'Leyenda de íconos')}">${icon('help', { size: 15 })}</button>
+    <button class="btn-ghost btn--sm btn--icon" data-ref="search-toggle" title="${t('tickets.dash.searchTitle', 'Buscar ticket por número')}">${icon('search', { size: 15 })}</button>
+    <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('tickets.dash.refreshTitle', 'Actualizar (fuerza refresh)')}">${icon('refresh', { size: 15 })}</button>`;
   head.insertBefore(headActions, head.querySelector('.dlg-x'));
   const refreshBtn = headActions.querySelector('[data-ref="refresh"]');
   const refreshIcon = refreshBtn.innerHTML;
@@ -285,56 +286,56 @@ export function openBugsV2Dashboard(deps = {}) {
       .map((v) => row(`<span class="bb-chip ${v.chip} bv2-ic">${v.emoji}</span>`, v.label)).join('');
     const propRows = [
       ...Object.values(PRIO_META).map((v) => row(`<span class="bb-chip ${v.chip} bv2-prop">${v.emoji} ${v.label}</span>`, v.desc)),
-      row('<span class="bb-chip bb-chip--info bv2-prop">👤 GR</span>', 'Dueño asignado (iniciales del agente)'),
+      row('<span class="bb-chip bb-chip--info bv2-prop">👤 GR</span>', t('tickets.dash.ownerAssigned', 'Dueño asignado (iniciales del agente)')),
     ].join('');
-    const m = openModal({ title: 'Leyenda de íconos', width: 420 });
+    const m = openModal({ title: t('tickets.dash.legendTitle', 'Leyenda de íconos'), width: 420 });
     m.body.innerHTML = `
       <div class="bv2-legend">
-        <div class="bv2-leg-group"><div class="bv2-leg-h">🏷️ Carril</div>${laneRows}</div>
-        <div class="bv2-leg-group"><div class="bv2-leg-h">🚦 Estado</div>${statusRows}</div>
-        <div class="bv2-leg-group"><div class="bv2-leg-h">🔖 Propiedades</div>${propRows}</div>
+        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legLane', '🏷️ Carril')}</div>${laneRows}</div>
+        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legStatus', '🚦 Estado')}</div>${statusRows}</div>
+        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legProps', '🔖 Propiedades')}</div>${propRows}</div>
       </div>`;
   }
 
   // Badge de "en uso": 🔒 verde si es tuyo, ámbar si lo trabaja otro.
-  function lockBadge(t) {
-    const w = t.workingBy;
+  function lockBadge(item) {
+    const w = item.workingBy;
     if (!w) return '';
     const mine = currentYou && w.by === currentYou;
     const cls = mine ? 'bb-chip--ok' : 'bb-chip--warn';
-    const txt = mine ? 'Tuyo' : `🔒 ${w.label || w.by}`;
-    return `<span class="bb-chip ${cls} bv2-lock" title="En uso por ${esc(w.label || w.by)}">${esc(txt)}</span>`;
+    const txt = mine ? t('tickets.dash.yours', 'Tuyo') : `🔒 ${w.label || w.by}`;
+    return `<span class="bb-chip ${cls} bv2-lock" title="${t('tickets.common.inUseByName', 'En uso por {name}', { name: esc(w.label || w.by) })}">${esc(txt)}</span>`;
   }
   function fmtAgo(ms) {
-    if (!ms) return 'recién';
+    if (!ms) return t('tickets.common.justNow', 'recién');
     const s = Math.floor((Date.now() - ms) / 1000);
-    if (s < 60) return 'recién';
-    if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-    return `hace ${Math.floor(s / 3600)} h`;
+    if (s < 60) return t('tickets.common.justNow', 'recién');
+    if (s < 3600) return t('tickets.common.agoMin', 'hace {n} min', { n: Math.floor(s / 60) });
+    return t('tickets.common.agoHours', 'hace {n} h', { n: Math.floor(s / 3600) });
   }
 
   // Card de DOS filas: (1) título completo del ticket; (2) #nº + chips de
   // clasificación SOLO-ícono (carril · estado) + chips de PROPIEDAD con su valor
   // (prioridad · dueño · antigüedad). La leyenda de todos los íconos vive en el
   // botón "?" del header. Prioridad/dueño se omiten si el ticket no los tiene.
-  function ticketRow(t) {
-    ticketMap.set(String(t.ticketNumber), t);
-    const sm = statusMeta(t);
-    const prio = PRIO_META[t.priority];
-    const own = initials(t.ownerName);
+  function ticketRow(ticket) {
+    ticketMap.set(String(ticket.ticketNumber), ticket);
+    const sm = statusMeta(ticket);
+    const prio = PRIO_META[ticket.priority];
+    const own = initials(ticket.ownerName);
     const chips = [
-      `<span class="bb-chip bv2-ic" title="Carril: ${esc(laneLabel(t.lane))}">${laneEmoji(t.lane)}</span>`,
-      `<span class="bb-chip ${sm.chip} bv2-ic" title="Estado: ${esc(sm.label)}${t.status ? ` (Zoho: ${esc(t.status)})` : ''}">${sm.emoji || esc(sm.label)}</span>`,
+      `<span class="bb-chip bv2-ic" title="${t('tickets.dash.laneTip', 'Carril: {v}', { v: esc(laneLabel(ticket.lane)) })}">${laneEmoji(ticket.lane)}</span>`,
+      `<span class="bb-chip ${sm.chip} bv2-ic" title="${t('tickets.dash.statusTip', 'Estado:')} ${esc(sm.label)}${ticket.status ? t('tickets.dash.zohoSuffix', ' (Zoho: {v})', { v: esc(ticket.status) }) : ''}">${sm.emoji || esc(sm.label)}</span>`,
       prio ? `<span class="bb-chip ${prio.chip} bv2-prop" title="${esc(prio.desc)}">${prio.emoji} ${prio.label}</span>` : '',
-      own ? `<span class="bb-chip bb-chip--info bv2-prop" title="Dueño: ${esc(t.ownerName)}">👤 ${esc(own)}</span>` : '',
+      own ? `<span class="bb-chip bb-chip--info bv2-prop" title="${t('tickets.dash.ownerTip', 'Dueño: {v}', { v: esc(ticket.ownerName) })}">👤 ${esc(own)}</span>` : '',
     ].filter(Boolean).join('');
-    return `<div class="bv2-card bv2-row--click" data-num="${esc(t.ticketNumber)}" role="button" tabindex="0" title="Ver detalle del ticket">
-      <div class="bv2-card-title">${esc(t.subject || '(sin asunto)')}</div>
+    return `<div class="bv2-card bv2-row--click" data-num="${esc(ticket.ticketNumber)}" role="button" tabindex="0" title="${t('tickets.dash.rowTitle', 'Ver detalle del ticket')}">
+      <div class="bv2-card-title">${esc(ticket.subject || t('tickets.dash.noSubject', '(sin asunto)'))}</div>
       <div class="bv2-card-meta">
-        <span class="bv2-row-id">#${esc(t.ticketNumber)}</span>
+        <span class="bv2-row-id">#${esc(ticket.ticketNumber)}</span>
         ${chips}
-        ${lockBadge(t)}
-        ${t.stale ? '<span class="bv2-stale" title="Dato en caché: no vino en el último refresh, se conserva el último conocido">◷</span>' : ''}
+        ${lockBadge(ticket)}
+        ${ticket.stale ? `<span class="bv2-stale" title="${t('tickets.dash.staleTip', 'Dato en caché: no vino en el último refresh, se conserva el último conocido')}">◷</span>` : ''}
       </div>
     </div>`;
   }
@@ -349,12 +350,12 @@ export function openBugsV2Dashboard(deps = {}) {
 
   function ticketList(items, max = 12, expandKey) {
     const f = applyFilter(items);
-    if (!f.length) return '<div class="bf-sub">— nada —</div>';
+    if (!f.length) return `<div class="bf-sub">${t('tickets.common.nothing', '— nada —')}</div>`;
     const shown = f.slice(0, max).map((t) => ticketRow(t)).join('');
     if (f.length <= max) return shown;
     // "+N más" clickeable → abre la tabla ancha (la misma que el botón ⤢ del header).
     const attr = expandKey ? ` data-expand="${esc(expandKey)}" role="button" tabindex="0"` : '';
-    return shown + `<div class="bf-sub${expandKey ? ' bv2-more' : ''}"${attr}>+ ${f.length - max} más${expandKey ? ' · ver tabla ⤢' : ''}</div>`;
+    return shown + `<div class="bf-sub${expandKey ? ' bv2-more' : ''}"${attr}>${t('tickets.common.moreCount', '+ {n} más', { n: f.length - max })}${expandKey ? t('tickets.dash.seeTable', ' · ver tabla ⤢') : ''}</div>`;
   }
   // Resuelve una data-expand key → tabla ancha con el array YA filtrado (respeta
   // el carril/dueño/míos activos, igual que las columnas). Datos en memoria.
@@ -362,21 +363,21 @@ export function openBugsV2Dashboard(deps = {}) {
     // "Todos": une las 3 columnas de abiertos (o los resueltos si estás en esa
     // vista), respetando el filtro activo. Cada ticket se etiqueta con su cola.
     if (key === 'all') {
-      if (viewMode === 'resolved') { openTicketTable('✅ Todos los resueltos', applyFilter(resolvedData?.tickets) || [], deps); return; }
+      if (viewMode === 'resolved') { openTicketTable(t('tickets.dash.allResolved', '✅ Todos los resueltos'), applyFilter(resolvedData?.tickets) || [], deps); return; }
       const tag = (arr, label) => (applyFilter(arr) || []).map((t) => ({ ...t, _bucket: label }));
       const all = [
-        ...tag(lastData?.nuevos, '🆕 Nuevos'),
-        ...tag(lastData?.vencidos, '🔴 Vencidos'),
-        ...tag(lastData?.enProgreso, '🔧 En progreso'),
+        ...tag(lastData?.nuevos, t('tickets.dash.bucketNew', '🆕 Nuevos')),
+        ...tag(lastData?.vencidos, t('tickets.dash.bucketOverdue', '🔴 Vencidos')),
+        ...tag(lastData?.enProgreso, t('tickets.dash.bucketInProgress', '🔧 En progreso')),
       ];
-      openTicketTable('📋 Todos los abiertos', all, deps, { cols: TABLE_COLS_ALL });
+      openTicketTable(t('tickets.dash.allOpen', '📋 Todos los abiertos'), all, deps, { cols: TABLE_COLS_ALL });
       return;
     }
     const CFG = {
-      nuevos: { title: '🆕 Nuevos', get: () => applyFilter(lastData?.nuevos) },
-      vencidos: { title: '🔴 Vencidos', get: () => applyFilter(lastData?.vencidos) },
-      enProgreso: { title: '🔧 En progreso', get: () => applyFilter(lastData?.enProgreso) },
-      resolved: { title: '✅ Tickets resueltos', get: () => applyFilter(resolvedData?.tickets) },
+      nuevos: { title: t('tickets.dash.bucketNew', '🆕 Nuevos'), get: () => applyFilter(lastData?.nuevos) },
+      vencidos: { title: t('tickets.dash.bucketOverdue', '🔴 Vencidos'), get: () => applyFilter(lastData?.vencidos) },
+      enProgreso: { title: t('tickets.dash.bucketInProgress', '🔧 En progreso'), get: () => applyFilter(lastData?.enProgreso) },
+      resolved: { title: t('tickets.dash.resolvedTickets', '✅ Tickets resueltos'), get: () => applyFilter(resolvedData?.tickets) },
     };
     const cfg = CFG[key];
     if (cfg) openTicketTable(cfg.title, cfg.get() || [], deps);
@@ -385,22 +386,22 @@ export function openBugsV2Dashboard(deps = {}) {
   // `opts.merged` → vista Resueltos: chip verde "✅ merged" en vez de pelota/CI
   // (un PR mergeado NO tiene CI corriendo — ese era el bug del #263).
   function devLaneList(prs, error, opts = {}) {
-    if (error) return `<div class="bf-sub">gh no disponible: ${esc(error)}</div>`;
+    if (error) return `<div class="bf-sub">${t('tickets.dash.ghUnavailable', 'gh no disponible: {err}', { err: esc(error) })}</div>`;
     const list = filterPRs(prs);
-    if (!list.length) return `<div class="bf-sub">— ${opts.merged ? 'sin PRs mergeados' : 'sin PRs abiertos'} —</div>`;
+    if (!list.length) return `<div class="bf-sub">— ${opts.merged ? t('tickets.dash.noMergedPrs', 'sin PRs mergeados') : t('tickets.dash.noOpenPrs', 'sin PRs abiertos')} —</div>`;
     return list.map((pr) => {
       prMap.set(String(pr.number), pr);
       const statusChip = opts.merged
-        ? `<span class="bb-chip bb-chip--ok bv2-prop" title="Mergeado${pr.mergedAt ? ` · ${fmtDate(pr.mergedAt)}` : ''}">✅ merged</span>`
-        : `<span class="bb-chip ${pr.ball === 'yours' ? 'bb-chip--warn' : 'bb-chip--info'} bv2-prop" title="Pelota: ${esc(BALL_LABEL[pr.ball] || pr.ball)}">${BALL_LABEL[pr.ball] || pr.ball}</span>
-           <span class="bv2-prop" title="Estado de checks (CI)">${ciBadge(pr.ci)}</span>`;
-      return `<div class="bv2-card bv2-row--click" data-pr="${esc(pr.number)}" role="button" tabindex="0" title="Ver detalle del PR">
+        ? `<span class="bb-chip bb-chip--ok bv2-prop" title="${t('tickets.dash.merged', 'Mergeado')}${pr.mergedAt ? ` · ${fmtDate(pr.mergedAt)}` : ''}">✅ merged</span>`
+        : `<span class="bb-chip ${pr.ball === 'yours' ? 'bb-chip--warn' : 'bb-chip--info'} bv2-prop" title="${t('tickets.dash.ballTip', 'Pelota: {v}', { v: esc(BALL_LABEL[pr.ball] || pr.ball) })}">${BALL_LABEL[pr.ball] || pr.ball}</span>
+           <span class="bv2-prop" title="${t('tickets.dash.ciTip', 'Estado de checks (CI)')}">${ciBadge(pr.ci)}</span>`;
+      return `<div class="bv2-card bv2-row--click" data-pr="${esc(pr.number)}" role="button" tabindex="0" title="${t('tickets.dash.prRowTitle', 'Ver detalle del PR')}">
         <div class="bv2-card-title">${esc(pr.title)}${pr.isDraft ? ' · draft' : ''}</div>
         <div class="bv2-card-meta">
           <span class="bv2-row-id">#${pr.number}</span>
           ${statusChip}
           ${lockBadge(pr)}
-          ${pr._stale ? '<span class="bv2-stale" title="Dato en caché: no vino en el último refresh">◷</span>' : ''}
+          ${pr._stale ? `<span class="bv2-stale" title="${t('tickets.dash.staleTipShort', 'Dato en caché: no vino en el último refresh')}">◷</span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -436,16 +437,16 @@ export function openBugsV2Dashboard(deps = {}) {
     const maxTotal = Math.max(1, ...lanes.map(([, b]) => b.total));
     const laneRows = lanes.map(([lane, b]) => {
       const w = Math.round((b.total / maxTotal) * 100);
-      const prio = [b.P1 && `P1·${b.P1}`, b.P2 && `P2·${b.P2}`, b.P3 && `P3·${b.P3}`, b.unset && `sin·${b.unset}`].filter(Boolean).join(' ');
+      const prio = [b.P1 && `P1·${b.P1}`, b.P2 && `P2·${b.P2}`, b.P3 && `P3·${b.P3}`, b.unset && `${t('tickets.dash.prioUnset', 'sin')}·${b.unset}`].filter(Boolean).join(' ');
       const on = selectedLane === lane ? ' bv2-lane--on' : '';
-      return `<div class="bv2-lane bv2-lane--click${on}" data-lane="${esc(lane)}" role="button" tabindex="0" title="Filtrar por ${esc(lane)}"><span class="bv2-lane-name">${esc(LANE_LABEL[lane] || lane)}</span><span class="bv2-lane-bar"><span style="width:${w}%"></span></span><span class="bv2-lane-n">${b.total}</span><span class="bf-sub">${esc(prio)}</span></div>`;
+      return `<div class="bv2-lane bv2-lane--click${on}" data-lane="${esc(lane)}" role="button" tabindex="0" title="${t('tickets.dash.filterByLane', 'Filtrar por {v}', { v: esc(lane) })}"><span class="bv2-lane-name">${esc(LANE_LABEL[lane] || lane)}</span><span class="bv2-lane-bar"><span style="width:${w}%"></span></span><span class="bv2-lane-n">${b.total}</span><span class="bf-sub">${esc(prio)}</span></div>`;
     }).join('');
-    return `<div class="tk-card"><div class="bv2-h">Por carril · ${d.counts.open} abiertos</div>${laneRows || '<div class="bf-sub">— sin abiertos —</div>'}</div>`;
+    return `<div class="tk-card"><div class="bv2-h">${t('tickets.dash.byLaneHeading', 'Por carril · {n} abiertos', { n: d.counts.open })}</div>${laneRows || `<div class="bf-sub">${t('tickets.dash.noOpen', '— sin abiertos —')}</div>`}</div>`;
   }
 
   function searchBarHtml() {
     return `<div class="bv2-searchbar" data-ref="searchbar" hidden>
-      <input type="text" placeholder="Número de ticket (ej. 527) + Enter" data-ref="search" class="btn--sm" />
+      <input type="text" placeholder="${t('tickets.dash.searchPlaceholder', 'Número de ticket (ej. 527) + Enter')}" data-ref="search" class="btn--sm" />
     </div>`;
   }
 
@@ -465,26 +466,26 @@ export function openBugsV2Dashboard(deps = {}) {
     const orderOf = (l) => { const i = laneOrder.indexOf(l); return i === -1 ? 999 : i; };
     const laneKeys = [...new Set([...activeLanes, ...resolvedLanes, ...PINNED_LANES])].sort((a, b) => orderOf(a) - orderOf(b));
     const laneTab = (label, key) => `<button class="bv2-tab${selectedLane === key ? ' bv2-tab--on' : ''}" data-lane="${esc(key ?? '')}">${esc(label)}</button>`;
-    const laneTabsHtml = [laneTab('Todos', null), ...laneKeys.map((l) => laneTab(LANE_LABEL[l] || l, l))].join('');
+    const laneTabsHtml = [laneTab(t('tickets.common.all', 'Todos'), null), ...laneKeys.map((l) => laneTab(LANE_LABEL[l] || l, l))].join('');
     const owners = collectOwners(d);
-    const ownerOpts = ['<option value="">Dueño: todos</option>', ...owners.map((o) => `<option value="${esc(o)}"${selectedOwner === o ? ' selected' : ''}>${esc(o)}</option>`)].join('');
+    const ownerOpts = [`<option value="">${t('tickets.dash.ownerAll', 'Dueño: todos')}</option>`, ...owners.map((o) => `<option value="${esc(o)}"${selectedOwner === o ? ' selected' : ''}>${esc(o)}</option>`)].join('');
     // Conteo del botón "Todos en tabla": total del filtro activo (une las 3
     // columnas en Activos, o los resueltos en esa vista). Respeta carril/dueño/míos.
     const allCount = viewMode === 'resolved'
       ? applyFilter(resolvedData?.tickets).length
       : applyFilter(d.nuevos).length + applyFilter(d.vencidos).length + applyFilter(d.enProgreso).length;
-    const allLabel = filtering() ? 'Todos (filtro)' : 'Todos';
+    const allLabel = filtering() ? t('tickets.dash.allFiltered', 'Todos (filtro)') : t('tickets.common.all', 'Todos');
     return `
       <div class="bv2-filterbar">
         <div class="bv2-tabs" data-ref="tabs">${laneTabsHtml}</div>
       </div>
       <div class="bv2-filterbar bv2-filterbar--row2">
-        <button class="bv2-tab${selectedMine ? ' bv2-tab--on' : ''}" data-ref="mine" title="Solo lo que tengo tomado">🔒 Míos</button>
-        <select class="bv2-owner-select btn--sm" data-ref="owner" title="Filtrar por dueño (opcional)">${ownerOpts}</select>
-        <button class="bv2-allbtn" data-expand="all" title="Abrir TODOS en la tabla ancha (respeta el filtro activo)">${icon('maximize', { size: 12 })}<span>${allLabel} · ${allCount}</span></button>
+        <button class="bv2-tab${selectedMine ? ' bv2-tab--on' : ''}" data-ref="mine" title="${t('tickets.dash.mineTitle', 'Solo lo que tengo tomado')}">${t('tickets.dash.mine', '🔒 Míos')}</button>
+        <select class="bv2-owner-select btn--sm" data-ref="owner" title="${t('tickets.dash.ownerFilterTitle', 'Filtrar por dueño (opcional)')}">${ownerOpts}</select>
+        <button class="bv2-allbtn" data-expand="all" title="${t('tickets.dash.allExpandTitle', 'Abrir TODOS en la tabla ancha (respeta el filtro activo)')}">${icon('maximize', { size: 12 })}<span>${allLabel} · ${allCount}</span></button>
         <div class="bv2-viewtoggle" data-ref="viewtoggle">
-          <button class="bv2-vtab${viewMode === 'active' ? ' bv2-vtab--on' : ''}" data-view="active">🟢 Activos</button>
-          <button class="bv2-vtab${viewMode === 'resolved' ? ' bv2-vtab--on' : ''}" data-view="resolved">✅ Resueltos</button>
+          <button class="bv2-vtab${viewMode === 'active' ? ' bv2-vtab--on' : ''}" data-view="active">${t('tickets.dash.viewActive', '🟢 Activos')}</button>
+          <button class="bv2-vtab${viewMode === 'resolved' ? ' bv2-vtab--on' : ''}" data-view="resolved">${t('tickets.dash.viewResolved', '✅ Resueltos')}</button>
         </div>
       </div>`;
   }
@@ -503,15 +504,15 @@ export function openBugsV2Dashboard(deps = {}) {
   function renderActive() {
     const d = lastData;
     content.innerHTML = `
-      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} snapshot ${fmtAgo(d.generatedAt)} (auto 60s) · ${d.counts.total} tickets · sin IA</span></div>
+      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} ${t('tickets.dash.snapshotHead', 'snapshot {ago} (auto 60s) · {n} tickets · sin IA', { ago: fmtAgo(d.generatedAt), n: d.counts.total })}</span></div>
       ${searchBarHtml()}
       ${laneOverviewHtml(d)}
       ${filterBarHtml(d)}
       <div class="bv2-cols4">
-        ${block(`🆕 Nuevos · ${countBadge(applyFilter(d.nuevos).length, d.counts.nuevos)}`, ticketList(d.nuevos, 12, 'nuevos'), true, 'nuevos')}
-        ${block(`🔴 Vencidos · ${countBadge(applyFilter(d.vencidos).length, d.counts.vencidos)}`, ticketList(d.vencidos, 12, 'vencidos'), true, 'vencidos')}
-        ${block(`🔧 En progreso · ${countBadge(applyFilter(d.enProgreso).length, d.counts.enProgreso)}`, ticketList(d.enProgreso, 12, 'enProgreso'), true, 'enProgreso')}
-        ${block(`🔀 Dev-lane · PRs abiertos · ${countBadge(filterPRs(d.devLane?.prs).length, (d.devLane?.prs || []).length)}`, devLaneList(d.devLane?.prs, d.devLane?.error), true)}
+        ${block(`${t('tickets.dash.bucketNew', '🆕 Nuevos')} · ${countBadge(applyFilter(d.nuevos).length, d.counts.nuevos)}`, ticketList(d.nuevos, 12, 'nuevos'), true, 'nuevos')}
+        ${block(`${t('tickets.dash.bucketOverdue', '🔴 Vencidos')} · ${countBadge(applyFilter(d.vencidos).length, d.counts.vencidos)}`, ticketList(d.vencidos, 12, 'vencidos'), true, 'vencidos')}
+        ${block(`${t('tickets.dash.bucketInProgress', '🔧 En progreso')} · ${countBadge(applyFilter(d.enProgreso).length, d.counts.enProgreso)}`, ticketList(d.enProgreso, 12, 'enProgreso'), true, 'enProgreso')}
+        ${block(`${t('tickets.dash.devLane', '🔀 Dev-lane · PRs abiertos')} · ${countBadge(filterPRs(d.devLane?.prs).length, (d.devLane?.prs || []).length)}`, devLaneList(d.devLane?.prs, d.devLane?.error), true)}
       </div>`;
   }
 
@@ -526,30 +527,30 @@ export function openBugsV2Dashboard(deps = {}) {
     let body;
     if ((resolvedLoading || resolvedGenerating) && !resolvedData) {
       const msg = resolvedGenerating
-        ? 'generando la base de resueltos por primera vez… (se completa sola en el fondo, no hace falta que esperes acá)'
-        : 'leyendo resueltos…';
+        ? t('tickets.dash.resolvedGenerating', 'generando la base de resueltos por primera vez… (se completa sola en el fondo, no hace falta que esperes acá)')
+        : t('tickets.dash.resolvedLoading', 'leyendo resueltos…');
       body = `<div class="bf-sub" style="padding:1rem;display:flex;align-items:center;gap:.5rem">${pacman({ state: 'working', size: 'pac-sm' })} ${msg}</div>`;
     } else if (resolvedError && !resolvedData) {
       body = `<div class="bf-err" style="padding:1rem">${esc(resolvedError)}</div>`;
     } else if (resolvedData) {
       const capNote = resolvedData.capped
-        ? `<div class="bf-sub" style="padding:.3rem .6rem 0">⚠️ Zoho limita ~100/depto sin paginar por consulta — el caché se va completando solo con cada revisión</div>` : '';
+        ? `<div class="bf-sub" style="padding:.3rem .6rem 0">${t('tickets.dash.capNote', '⚠️ Zoho limita ~100/depto sin paginar por consulta — el caché se va completando solo con cada revisión')}</div>` : '';
       const refNote = resolvedData.refreshing
-        ? `<div class="bf-sub" style="padding:.3rem .6rem 0;display:flex;align-items:center;gap:.4rem">${pacman({ state: 'working', size: 'pac-sm' })} actualizando en el fondo…</div>` : '';
+        ? `<div class="bf-sub" style="padding:.3rem .6rem 0;display:flex;align-items:center;gap:.4rem">${pacman({ state: 'working', size: 'pac-sm' })} ${t('tickets.dash.refreshingBg', 'actualizando en el fondo…')}</div>` : '';
       const errNote = resolvedData.ticketsError
         ? `<div class="bf-sub" style="padding:.3rem .6rem 0">⚠️ ${esc(resolvedData.ticketsError)}</div>` : '';
       body = `${capNote}${refNote}${errNote}
         <div class="bv2-cols4">
-          ${block(`✅ Tickets resueltos · ${countBadge(applyFilter(resolvedData.tickets).length, (resolvedData.tickets || []).length)}`, ticketList(resolvedData.tickets, 60, 'resolved'), true, 'resolved')}
-          ${block(`🔀 PRs mergeados · ${countBadge(filterPRs(resolvedData.prs).length, (resolvedData.prs || []).length)}`, devLaneList(resolvedData.prs, resolvedData.prError, { merged: true }), true)}
+          ${block(`${t('tickets.dash.resolvedTickets', '✅ Tickets resueltos')} · ${countBadge(applyFilter(resolvedData.tickets).length, (resolvedData.tickets || []).length)}`, ticketList(resolvedData.tickets, 60, 'resolved'), true, 'resolved')}
+          ${block(`${t('tickets.dash.mergedPrs', '🔀 PRs mergeados')} · ${countBadge(filterPRs(resolvedData.prs).length, (resolvedData.prs || []).length)}`, devLaneList(resolvedData.prs, resolvedData.prError, { merged: true }), true)}
         </div>`;
     } else {
-      body = '<div class="bf-sub" style="padding:1rem">— sin datos —</div>';
+      body = `<div class="bf-sub" style="padding:1rem">${t('tickets.dash.noData', '— sin datos —')}</div>`;
     }
-    const ago = resolvedData ? ` · actualizado ${fmtAgo(resolvedData.generatedAt)}` : '';
-    const cnt = resolvedData ? ` · ${resolvedData.counts?.tickets ?? 0} tickets + ${resolvedData.counts?.prs ?? 0} PRs` : '';
+    const ago = resolvedData ? t('tickets.common.updatedAgoSuffix', ' · actualizado {ago}', { ago: fmtAgo(resolvedData.generatedAt) }) : '';
+    const cnt = resolvedData ? t('tickets.dash.resolvedCount', ' · {t} tickets + {p} PRs', { t: resolvedData.counts?.tickets ?? 0, p: resolvedData.counts?.prs ?? 0 }) : '';
     content.innerHTML = `
-      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} ✅ Resueltos · base persistente (auto)${ago}${cnt}</span></div>
+      <div class="bv2-head"><span class="bf-sub">${icon('clock', { size: 11 })} ${t('tickets.dash.resolvedHead', '✅ Resueltos · base persistente (auto)')}${ago}${cnt}</span></div>
       ${searchBarHtml()}
       ${filterBarHtml(d)}
       ${body}`;
@@ -567,7 +568,7 @@ export function openBugsV2Dashboard(deps = {}) {
       const res = await fetch(`/api/tickets/resolved${force ? '?force=1' : ''}`);
       const data = await res.json();
       if (!res.ok || data.error) {
-        if (!resolvedData) resolvedError = data.error || 'Error';
+        if (!resolvedData) resolvedError = data.error || t('tickets.common.error', 'Error');
       } else if (data.loading) {
         // Store todavía sin su 1ª pasada (arranque en frío) → "generando…" + reintento.
         resolvedGenerating = true; resolvedError = null;
@@ -669,15 +670,15 @@ export function openBugsV2Dashboard(deps = {}) {
   }
 
   async function load(force) {
-    content.innerHTML = `<div class="bf-sub" style="padding:1rem">${icon('clock', { size: 12 })} leyendo…</div>`;
+    content.innerHTML = `<div class="bf-sub" style="padding:1rem">${icon('clock', { size: 12 })} ${t('tickets.dash.reading', 'leyendo…')}</div>`;
     try {
       const res = await fetch(`/api/tickets/dashboard${force ? '?force=1' : ''}`);
       const d = await res.json();
-      if (!res.ok || d.error) { content.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(d.error || 'Error')}</div>`; return; }
-      if (d.loading) { content.innerHTML = `<div class="bf-sub" style="padding:1rem">${icon('clock', { size: 12 })} generando el primer snapshot (~7 s)…</div>`; setTimeout(() => load(false), 3000); return; }
+      if (!res.ok || d.error) { content.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(d.error || t('tickets.common.error', 'Error'))}</div>`; return; }
+      if (d.loading) { content.innerHTML = `<div class="bf-sub" style="padding:1rem">${icon('clock', { size: 12 })} ${t('tickets.dash.firstSnapshot', 'generando el primer snapshot (~7 s)…')}</div>`; setTimeout(() => load(false), 3000); return; }
       render(d);
     } catch (e) {
-      content.innerHTML = `<div class="bf-err" style="padding:1rem">Error: ${esc(e?.message || e)}</div>`;
+      content.innerHTML = `<div class="bf-err" style="padding:1rem">${t('tickets.common.errorMsg', 'Error: {msg}', { msg: esc(e?.message || e) })}</div>`;
     }
   }
 

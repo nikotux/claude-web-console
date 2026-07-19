@@ -7,6 +7,7 @@
 // sintaxis (ui/code.js, línea a línea: markup balanceado por línea); el
 // tinte de fondo +/− sigue marcando el cambio, como en un editor.
 import { langForPath, highlightLine } from './code.js';
+import { t } from './i18n.js';
 
 const HL_MAX_LINES = 400; // diffs enormes: sin sintaxis (perf)
 const DOM_MAX_LINES = 1000; // tope duro de nodos DOM por bloque (perf/memoria)
@@ -47,7 +48,7 @@ export function renderDiff({ file, old: oldStr, new: newStr } = {}) {
     if (truncated) {
       const trunc = document.createElement('div');
       trunc.className = 'cwc-diff-line cwc-diff-truncated';
-      trunc.textContent = `… (${allLines.length - DOM_MAX_LINES} líneas más ocultas por límite de rendimiento)`;
+      trunc.textContent = t('core.trunc.linesHidden', '… ({n} líneas más ocultas por límite de rendimiento)', { n: allLines.length - DOM_MAX_LINES });
       b.appendChild(trunc);
     }
     el.appendChild(b);

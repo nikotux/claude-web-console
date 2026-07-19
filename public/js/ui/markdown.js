@@ -7,6 +7,7 @@
 // se renderizan a SVG con window.mermaid (2026-07-11) — ver enhanceMermaidBlocks.
 import { icon } from './icons.js';
 import { openModal } from './dialog.js';
+import { t } from './i18n.js';
 
 const ALLOWED = new Set([
   'P', 'BR', 'HR', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'PRE',
@@ -65,7 +66,7 @@ function enhanceCodeBlocks(root) {
     wrap.appendChild(pre);
     const btn = document.createElement('button');
     btn.className = 'md-copy';
-    btn.title = 'Copiar código';
+    btn.title = t('core.markdown.copyCode', 'Copiar código');
     btn.innerHTML = icon('clipboard', { size: 13 });
     let revertTimer = null; // clicks rápidos: un solo timeout vivo
     btn.addEventListener('click', async () => {
@@ -105,7 +106,7 @@ function enhanceMermaidBlocks(root) {
     const pre = wrap.querySelector('pre');
     const holder = document.createElement('div');
     holder.className = 'md-mermaid';
-    holder.textContent = 'Generando diagrama…';
+    holder.textContent = t('core.markdown.generatingDiagram', 'Generando diagrama…');
     wrap.before(holder);
 
     // El código fuente queda disponible pero colapsado bajo el diagrama
@@ -113,7 +114,7 @@ function enhanceMermaidBlocks(root) {
     const details = document.createElement('details');
     details.className = 'md-mermaid-src';
     const summary = document.createElement('summary');
-    summary.textContent = 'Ver código Mermaid';
+    summary.textContent = t('core.markdown.viewMermaid', 'Ver código Mermaid');
     details.appendChild(summary);
     wrap.replaceWith(details);
     details.appendChild(wrap);
@@ -141,15 +142,15 @@ function enhanceMermaidBlocks(root) {
       // hacer zoom/pan nativo (pinch, Ctrl+scroll) sobre el contenido del
       // modal, así que no hace falta un visor propio.
       holder.classList.add('md-mermaid--zoomable');
-      holder.title = 'Click para ampliar';
+      holder.title = t('core.markdown.clickToZoom', 'Click para ampliar');
       // Badge "🔍 Ampliar" SIEMPRE visible (no depende de :hover ni del cursor
       // zoom-in): en móvil/touch no hay hover, así que sin esto la posibilidad
       // de ampliar era invisible — la raíz de que el diagrama "se viera chico".
       const zoomBtn = document.createElement('button');
       zoomBtn.type = 'button';
       zoomBtn.className = 'md-mermaid-zoom-btn';
-      zoomBtn.innerHTML = `${icon('search', { size: 13 })}<span>Ampliar</span>`;
-      zoomBtn.setAttribute('aria-label', 'Ampliar diagrama');
+      zoomBtn.innerHTML = `${icon('search', { size: 13 })}<span>${t('core.markdown.zoom', 'Ampliar')}</span>`;
+      zoomBtn.setAttribute('aria-label', t('core.markdown.zoomDiagram', 'Ampliar diagrama'));
       // stopPropagation: el badge abre el zoom una sola vez (sin él, el click
       // burbujea al holder y se abrirían dos modales).
       zoomBtn.addEventListener('click', (e) => { e.stopPropagation(); openMermaidZoom(holder); });
@@ -161,7 +162,7 @@ function enhanceMermaidBlocks(root) {
       details.open = false;
       const note = document.createElement('div');
       note.className = 'md-mermaid-error';
-      note.textContent = '⚠ No se pudo interpretar este diagrama Mermaid — código fuente abajo.';
+      note.textContent = t('core.markdown.mermaidError', '⚠ No se pudo interpretar este diagrama Mermaid — código fuente abajo.');
       details.before(note);
     });
   }
@@ -171,7 +172,7 @@ function enhanceMermaidBlocks(root) {
 function openMermaidZoom(holder) {
   const svg = holder.querySelector('svg');
   if (!svg) return;
-  const m = openModal({ title: 'Diagrama', width: 'min(94vw, 1100px)' });
+  const m = openModal({ title: t('core.markdown.diagram', 'Diagrama'), width: 'min(94vw, 1100px)' });
   m.body.classList.add('md-mermaid-zoom-body');
   const clone = svg.cloneNode(true);
   // Mermaid deja un `style="max-width:NNNpx"` INLINE en el SVG (tamaño chico
@@ -205,7 +206,7 @@ export function renderMarkdown(text) {
     el.textContent = src;
     if (truncated) {
       el.appendChild(document.createTextNode(
-        `\n… (${allLines.length - MD_MAX_LINES} líneas más ocultas por límite de rendimiento)`
+        `\n${t('core.trunc.linesHidden', '… ({n} líneas más ocultas por límite de rendimiento)', { n: allLines.length - MD_MAX_LINES })}`
       ));
     }
     return el;
@@ -218,7 +219,7 @@ export function renderMarkdown(text) {
     if (truncated) {
       const trunc = document.createElement('p');
       trunc.className = 'chat-md-truncated';
-      trunc.textContent = `… (${allLines.length - MD_MAX_LINES} líneas más ocultas por límite de rendimiento)`;
+      trunc.textContent = t('core.trunc.linesHidden', '… ({n} líneas más ocultas por límite de rendimiento)', { n: allLines.length - MD_MAX_LINES });
       el.appendChild(trunc);
     }
   } catch {

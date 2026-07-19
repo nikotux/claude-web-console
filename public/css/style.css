@@ -732,8 +732,17 @@ html, body {
   background: var(--cwc-bg-chip);
   border-left: 1px solid color-mix(in srgb, var(--cwc-bg) 55%, transparent);
 }
+/* Tick de RITMO ESPERADO (2026-07-19, solo fila "Sesión 5h"): dónde deberías
+   estar si gastaras parejo hasta el reset — por ENCIMA de la máscara (z-index)
+   para que se vea aunque caiga en la zona todavía no consumida. */
+.lim-bar-pace {
+  position: absolute; top: -1px; bottom: -1px; left: 0; width: 2px;
+  background: var(--cwc-text); opacity: .6; z-index: 1;
+}
 .lim-fill { display: block; height: 100%; border-radius: 3px; }
 .lim-sub { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin-top: .18rem; }
+/* Línea de contexto de ritmo (alerta de agotamiento y/o vs. tu historial). */
+.lim-pace-line { font-size: var(--cwc-fs-2xs); color: var(--cwc-text-dimmer); margin-top: .2rem; }
 /* Bloque de Codex CLI (OpenAI): separado de Claude, cabecera en acento frío
    (azul) para no confundir los dos proveedores de un vistazo. */
 .lim-codex { margin-top: .4rem; border-top: 1px solid var(--cwc-divider); padding-top: .4rem; }
@@ -920,9 +929,49 @@ html, body {
 .ln-hint { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); margin: .5rem 0 0; padding: .3rem; }
 
 /* ===== Menú Sistema ===== */
-.sys-tabs { display: flex; gap: .35rem; margin-bottom: .7rem; }
-.sys-tab.active { border-color: var(--cwc-accent); color: var(--cwc-accent); background: var(--cwc-accent-bg); }
-.sys-body { min-height: 120px; }
+/* Master-detail: rail de grupos+items (izq) + panel (der). En móvil el shell
+   pasa a drill-down (índice → contenido → volver) vía [data-view]. */
+.sys-shell { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: .9rem; align-items: start; min-height: 340px; }
+.sys-rail { display: flex; flex-direction: column; gap: .7rem; }
+.sys-group-h {
+  font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .04em;
+  color: var(--cwc-text-dim); margin: .1rem 0 .25rem .1rem;
+}
+.sys-item {
+  display: flex; align-items: center; gap: .45rem; width: 100%; text-align: left;
+  padding: .35rem .5rem; border-radius: var(--cwc-radius-sm); background: transparent;
+  border: 1px solid transparent; color: var(--cwc-text); cursor: pointer;
+  font-size: var(--cwc-fs-sm);
+}
+.sys-item:hover { background: color-mix(in srgb, var(--cwc-accent) 8%, transparent); }
+.sys-item.active { border-color: var(--cwc-accent); color: var(--cwc-accent); background: var(--cwc-accent-bg); }
+.sys-item-ic { flex: none; }
+.sys-item-lb { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sys-panel { min-width: 0; }
+.sys-panel-body { min-height: 120px; }
+.sys-back { display: none; }
+
+/* Panel "Conexiones (MCP)" */
+.mcp-topbar { display: flex; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 .7rem; }
+.mcp-acts { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+.mcp-dot { flex: none; }
+.mcp-oauth-steps { margin: .2rem 0 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: .7rem; font-size: var(--cwc-fs-sm); }
+.mcp-oauth-link { display: inline-flex; align-items: center; gap: .3rem; color: var(--cwc-accent); }
+.mcp-oauth .dlg-input { width: 100%; margin: .3rem 0; }
+
+@media (max-width: 719px) {
+  .sys-shell { display: block; }
+  .sys-item { padding: .55rem .5rem; }
+  .sys-item::after { content: '›'; margin-left: auto; color: var(--cwc-text-dim); font-size: 1.1em; }
+  .sys-panel { display: none; }
+  .sys-back {
+    display: inline-flex; align-items: center; gap: .3rem; margin-bottom: .6rem;
+    background: none; border: none; color: var(--cwc-accent); cursor: pointer;
+    font-size: var(--cwc-fs-sm); padding: .2rem 0;
+  }
+  .sys-shell[data-view="content"] .sys-rail { display: none; }
+  .sys-shell[data-view="content"] .sys-panel { display: block; }
+}
 .sys-foot {
   display: flex; align-items: center; justify-content: space-between; gap: .6rem;
   border-top: 1px solid var(--cwc-divider); margin-top: .8rem; padding-top: .6rem;
@@ -1163,6 +1212,16 @@ html, body {
 .ev-msg { font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); }
 .ev-msg--ok { color: var(--cwc-ok); }
 .ev-msg--err { color: var(--cwc-danger-strong); }
+
+/* Panel "Idioma" (pestaña Sistema, PLAN i18n) */
+.lg-opts { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .6rem; }
+.lg-opt { display: flex; align-items: center; gap: .5rem; min-height: 38px; padding: .4rem .7rem; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-input); color: var(--cwc-text); font-size: var(--cwc-fs-sm); cursor: pointer; text-align: left; }
+.lg-opt:hover { border-color: var(--cwc-accent); }
+.lg-opt--active { border-color: var(--cwc-accent); background: color-mix(in srgb, var(--cwc-accent) 10%, var(--cwc-bg-input)); }
+.lg-opt-flag { font-size: 1.1em; }
+.lg-opt-lb { flex: 1; }
+.lg-opt-cur { color: var(--cwc-accent); display: flex; }
+.lg-note { margin-top: .4rem; font-style: italic; }
 
 /* Panel de backups (pestaña) */
 .bk-msg { font-size: var(--cwc-fs-sm); margin: .5rem 0 0; color: var(--cwc-text-dim); }
@@ -2281,6 +2340,9 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-collapsible[open] > summary::before { transform: rotate(90deg); }
 .hr-collapsible[open] > summary { border-bottom: 1px solid var(--cwc-divider); margin-bottom: .4rem; }
 .hr-collapsible .hr-units { padding-bottom: .4rem; }
+/* Toggle Tándem del auto-fix (2026-07-19): Claude verifica, Codex ejecuta. */
+.hr-tandem-toggle { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-sm); color: var(--cwc-text-dim); margin-bottom: .4rem; cursor: pointer; }
+.hr-tandem-toggle input { accent-color: var(--cwc-accent-cool); }
 /* Fila de acciones (analizar + resolver todo) — apiladas en móvil. */
 .hr-actions-row { display: flex; gap: .5rem; }
 .hr-actions-row .btn { flex: 1; }
@@ -3211,6 +3273,10 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .mc-cur { border: 1px solid var(--cwc-accent-cool, var(--cwc-border)); border-radius: var(--cwc-radius-sm); padding: .5rem; margin-bottom: .6rem; background: color-mix(in srgb, var(--cwc-bg-elevated) 88%, transparent); }
 .mc-cur-item { font-size: var(--cwc-fs-sm); padding: .35rem 0; border-bottom: 1px solid var(--cwc-border); display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .mc-cur-item:last-child { border-bottom: 0; }
+/* Mejora Continua · historial de feedback por ticket (2026-07-19) */
+.mc-fbh-item { font-size: var(--cwc-fs-sm); padding: .3rem 0; border-bottom: 1px solid var(--cwc-border); display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
+.mc-fbh-item:last-child { border-bottom: 0; }
+.mc-fbh-title { flex: 1 1 auto; min-width: 0; }
 /* Mejora Continua · acción "Adoptar → destino ▾" (rediseño 2026-07-12) */
 .mc-adopt { display: inline-flex; align-items: stretch; gap: 2px; }
 .mc-adopt .mc-more { padding-left: .4rem; padding-right: .4rem; }

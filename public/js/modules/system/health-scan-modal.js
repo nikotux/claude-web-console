@@ -8,6 +8,7 @@
 // persistente con progreso por fase + la tab 🐛 Pad (nuevo/rastreado/regresión +
 // crear BUG con confirmación).
 import { icon } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { openHealthReview } from './health-review-modal.js';
 import { openOptimize } from './optimize-modal.js';
@@ -20,17 +21,41 @@ const fmtDate = (ms) => {
   const d = new Date(ms);
   return `${d.toLocaleDateString('es', { day: '2-digit', month: 'short' })} · ${d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}`;
 };
-const VERDICT_LABEL = { ok: 'Todo en orden', atencion: 'Requiere atención', critico: 'CRÍTICO' };
-const ST = { pending: '⏳ pendiente', running: '⟳ corriendo', done: '✓ listo', error: '✕ error' };
+function verdictLabel(verdict) {
+  return {
+    ok: t('system.healthScan.verdictOk', 'Todo en orden'),
+    atencion: t('system.healthScan.verdictAttention', 'Requiere atención'),
+    critico: t('system.healthScan.verdictCritical', 'CRÍTICO'),
+  }[verdict];
+}
+
+function statusLabel(status) {
+  return {
+    pending: `⏳ ${t('system.healthScan.statusPending', 'pendiente')}`,
+    running: `⟳ ${t('system.healthScan.statusRunning', 'corriendo')}`,
+    done: `✓ ${t('system.healthScan.statusDone', 'listo')}`,
+    error: `✕ ${t('system.healthScan.statusError', 'error')}`,
+  }[status];
+}
 
 const TABS = [
-  ['resumen', '📊 Resumen'], ['revision', '🔬 Revisión'], ['optim', '🧠 Optimización'],
-  ['coher', '🔗 Coherencia'], ['dash', '📊 Dashboard'], ['pad', '🐛 Pad'],
+  'resumen', 'revision', 'optim', 'coher', 'dash', 'pad',
 ];
+
+function tabLabel(tab) {
+  return {
+    resumen: `📊 ${t('system.healthScan.tabSummary', 'Resumen')}`,
+    revision: `🔬 ${t('system.healthScan.tabReview', 'Revisión')}`,
+    optim: `🧠 ${t('system.healthScan.tabOptimization', 'Optimización')}`,
+    coher: `🔗 ${t('system.healthScan.tabCoherence', 'Coherencia')}`,
+    dash: `📊 ${t('system.healthScan.tabDashboard', 'Dashboard')}`,
+    pad: `🐛 ${t('system.healthScan.tabPad', 'Pad')}`,
+  }[tab];
+}
 
 export function openHealthScan(ctx, { isAdmin }) {
   const { dialog } = ctx;
-  const m = dialog.openModal({ title: '🩺 Escaneo de Salud', width: 920 });
+  const m = dialog.openModal({ title: `🩺 ${t('system.healthScan.modalTitle', 'Escaneo de Salud')}`, width: 920 });
   m.card.classList.add('dlg-card--health');
   let alive = true; let pollTimer = null; let activeTab = 'resumen'; let last = null;
   const origClose = m.close;
@@ -42,34 +67,34 @@ export function openHealthScan(ctx, { isAdmin }) {
   m.body.appendChild(wrap);
 
   async function launch(full) {
-    if (!isAdmin) { await dialog.alertDialog({ title: 'Escaneo', message: 'Solo un administrador puede lanzar el escaneo (consume tokens).' }); return; }
+    if (!isAdmin) { await dialog.alertDialog({ title: t('system.healthScan.shortTitle', 'Escaneo'), message: t('system.healthScan.adminOnly', 'Solo un administrador puede lanzar el escaneo (consume tokens).') }); return; }
     const ok = await dialog.confirmDialog({
-      title: 'Escaneo de Salud',
-      message: `Corre Revisión${full ? ' COMPLETA (ignora caché)' : ' (incremental)'} + Optimización + Coherencia + verificación de Pad en una sola pasada.\n\nConsume tokens. ¿Arrancar?`,
-      confirmText: 'Arrancar',
+      title: t('system.healthScan.modalTitle', 'Escaneo de Salud'),
+      message: t('system.healthScan.launchMessage', 'Corre Revisión{mode} + Optimización + Coherencia + verificación de Pad en una sola pasada.\n\nConsume tokens. ¿Arrancar?', { mode: full ? t('system.healthScan.fullModeSuffix', ' COMPLETA (ignora caché)') : t('system.healthScan.incrementalModeSuffix', ' (incremental)') }),
+      confirmText: t('system.healthScan.start', 'Arrancar'),
     });
     if (!ok) return;
     try {
       const r = await fetch(`${API}/scan-all`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ full }) });
-      if (!r.ok) { const e = await r.json().catch(() => ({})); await dialog.alertDialog({ title: 'Escaneo', message: e.error || 'No se pudo lanzar.' }); return; }
+      if (!r.ok) { const e = await r.json().catch(() => ({})); await dialog.alertDialog({ title: t('system.healthScan.shortTitle', 'Escaneo'), message: e.error || t('system.healthScan.launchFailed', 'No se pudo lanzar.') }); return; }
       poll();
-    } catch (e) { await dialog.alertDialog({ title: 'Escaneo', message: String(e.message || e) }); }
+    } catch (e) { await dialog.alertDialog({ title: t('system.healthScan.shortTitle', 'Escaneo'), message: String(e.message || e) }); }
   }
 
   async function createBug(finding, btn) {
     const ok = await dialog.confirmDialog({
-      title: 'Crear BUG en Pad',
-      message: `Crear un BUG en Pad (workspace console) desde este hallazgo?\n\n${finding.area || finding.detail || ''}`,
-      confirmText: 'Crear',
+      title: t('system.healthScan.createBugTitle', 'Crear BUG en Pad'),
+      message: t('system.healthScan.createBugMessage', 'Crear un BUG en Pad (workspace console) desde este hallazgo?\n\n{detail}', { detail: finding.area || finding.detail || '' }),
+      confirmText: t('system.healthScan.create', 'Crear'),
     });
     if (!ok) return;
-    btn.disabled = true; btn.textContent = '…';
+    btn.disabled = true; btn.textContent = t('system.healthScan.ellipsis', '…');
     try {
       const r = await fetch(`${API}/scan-pad-bug`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ finding }) });
       const j = await r.json();
-      if (r.ok) { btn.textContent = `✓ ${j.ref || 'creado'}`; btn.classList.add('hs-created'); }
-      else { btn.disabled = false; btn.textContent = 'Crear BUG'; await dialog.alertDialog({ title: 'Pad', message: j.error || 'Error' }); }
-    } catch (e) { btn.disabled = false; btn.textContent = 'Crear BUG'; await dialog.alertDialog({ title: 'Pad', message: String(e.message || e) }); }
+      if (r.ok) { btn.textContent = `✓ ${j.ref || t('system.healthScan.created', 'creado')}`; btn.classList.add('hs-created'); }
+      else { btn.disabled = false; btn.textContent = t('system.healthScan.createBug', 'Crear BUG'); await dialog.alertDialog({ title: t('system.healthScan.padTitle', 'Pad'), message: j.error || t('system.healthScan.genericError', 'Error') }); }
+    } catch (e) { btn.disabled = false; btn.textContent = t('system.healthScan.createBug', 'Crear BUG'); await dialog.alertDialog({ title: t('system.healthScan.padTitle', 'Pad'), message: String(e.message || e) }); }
   }
 
   function headerHtml(d) {
@@ -78,27 +103,27 @@ export function openHealthScan(ctx, { isAdmin }) {
     const p = d?.progress || {};
     let progress = '';
     if (running) {
-      const rev = p.review ? `Revisión ${p.review.done ?? 0}/${p.review.total ?? '?'}` : 'Revisión …';
-      const opt = `Optim ${ST[p.optimize?.status] || '⏳'}`;
-      const coh = `Coherencia ${ST[p.coherence?.status] || '⏳'}`;
-      const phase = d.phase ? ` · fase: ${esc(d.phase)}` : '';
+      const rev = p.review ? t('system.healthScan.reviewProgress', 'Revisión {done}/{total}', { done: p.review.done ?? 0, total: p.review.total ?? '?' }) : t('system.healthScan.reviewPending', 'Revisión …');
+      const opt = `${t('system.healthScan.optimShort', 'Optim')} ${statusLabel(p.optimize?.status) || '⏳'}`;
+      const coh = `${t('system.healthScan.coherenceLabel', 'Coherencia')} ${statusLabel(p.coherence?.status) || '⏳'}`;
+      const phase = d.phase ? ` · ${t('system.healthScan.phaseLabel', 'fase:')} ${esc(d.phase)}` : '';
       progress = `<p class="hp-running">${pacman({ state: 'delegating' })} ${esc([rev, opt, coh].join(' · '))}${phase}</p>`;
     }
     const badge = running
-      ? '<span class="hp-verdict hp-verdict--atencion" style="display:inline-block"><b>Escaneando…</b></span>'
-      : (verdict ? `<span class="hp-verdict hp-verdict--${esc(verdict)}" style="display:inline-block"><b>${VERDICT_LABEL[verdict] || 'Sin veredicto'}</b><span class="hp-when">${d.finishedAt ? fmtDate(d.finishedAt) : ''}</span></span>` : '<span class="hp-when">Sin escaneo previo</span>');
+      ? `<span class="hp-verdict hp-verdict--atencion" style="display:inline-block"><b>${t('system.healthScan.scanning', 'Escaneando…')}</b></span>`
+      : (verdict ? `<span class="hp-verdict hp-verdict--${esc(verdict)}" style="display:inline-block"><b>${verdictLabel(verdict) || t('system.healthScan.noVerdict', 'Sin veredicto')}</b><span class="hp-when">${d.finishedAt ? fmtDate(d.finishedAt) : ''}</span></span>` : `<span class="hp-when">${t('system.healthScan.noPreviousScan', 'Sin escaneo previo')}</span>`);
     const launchBtns = running
-      ? '<span class="hp-when">en curso…</span>'
-      : `<button class="btn btn--sm" data-act="run">${icon('gear', { size: 13 })}<span>Escaneo incremental</span></button>
-         <button class="btn-ghost btn--sm" data-act="runfull">Completo</button>`;
+      ? `<span class="hp-when">${t('system.healthScan.inProgress', 'en curso…')}</span>`
+      : `<button class="btn btn--sm" data-act="run">${icon('gear', { size: 13 })}<span>${t('system.healthScan.incrementalScan', 'Escaneo incremental')}</span></button>
+         <button class="btn-ghost btn--sm" data-act="runfull">${t('system.healthScan.fullScan', 'Completo')}</button>`;
     return `<div class="hs-head">${badge}<span class="hs-head-actions">${launchBtns}</span></div>${progress}`;
   }
 
   function tabsHtml() {
-    return `<div class="hs-tabs">${TABS.map(([k, l]) => `<button class="hs-tab ${k === activeTab ? 'hs-tab--active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>`;
+    return `<div class="hs-tabs">${TABS.map((k) => `<button class="hs-tab ${k === activeTab ? 'hs-tab--active' : ''}" data-tab="${k}">${tabLabel(k)}</button>`).join('')}</div>`;
   }
 
-  function detailTab(title, summary, openLabel, act) {
+  function detailTab(summary, openLabel, act) {
     return `<div class="hs-detail">
       <p>${summary}</p>
       <button class="btn btn--block" data-act="${act}">${icon('search', { size: 14 })}<span>${openLabel}</span></button>
@@ -107,32 +132,32 @@ export function openHealthScan(ctx, { isAdmin }) {
 
   function bodyHtml(d) {
     if (activeTab === 'resumen') {
-      if (!d || (!d.verdict && !d.running)) return '<p class="hp-empty">Todavía no se corrió un Escaneo de Salud. Usá el botón de arriba — corre los 4 análisis en una pasada.</p>';
+      if (!d || (!d.verdict && !d.running)) return `<p class="hp-empty">${t('system.healthScan.notRun', 'Todavía no se corrió un Escaneo de Salud. Usá el botón de arriba — corre los 4 análisis en una pasada.')}</p>`;
       const p = d.progress || {};
       const pad = d.pad;
       return `<div class="hs-summary">
         <table class="hs-grid"><tbody>
-          <tr><td>🔬 Revisión</td><td>${p.review ? `${p.review.done ?? 0}/${p.review.total ?? '?'} unidades${p.review.reused ? ` (${p.review.reused} cacheadas)` : ''}` : '—'}</td></tr>
-          <tr><td>🧠 Optimización</td><td>${ST[p.optimize?.status] || '—'}${p.optimize?.count != null ? ` · ${p.optimize.count} propuesta(s)` : ''}</td></tr>
-          <tr><td>🔗 Coherencia</td><td>${ST[p.coherence?.status] || '—'}${p.coherence?.count != null ? ` · ${p.coherence.count} propuesta(s)` : ''}</td></tr>
-          <tr><td>🐛 Pad</td><td>${pad ? `${pad.nuevo?.length || 0} nuevo(s) · ${pad.rastreado?.length || 0} rastreado(s) · ${pad.regresion?.length || 0} regresión(es) · ${pad.openCount ?? '?'} BUG abiertos` : '—'}</td></tr>
+          <tr><td>🔬 ${t('system.healthScan.reviewLabel', 'Revisión')}</td><td>${p.review ? `${p.review.done ?? 0}/${p.review.total ?? '?'} ${t('system.healthScan.units', 'unidades')}${p.review.reused ? ` (${t('system.healthScan.cachedCount', '{count} cacheadas', { count: p.review.reused })})` : ''}` : '—'}</td></tr>
+          <tr><td>🧠 ${t('system.healthScan.optimizationLabel', 'Optimización')}</td><td>${statusLabel(p.optimize?.status) || '—'}${p.optimize?.count != null ? ` · ${t('system.healthScan.proposalsCount', '{count} propuesta(s)', { count: p.optimize.count })}` : ''}</td></tr>
+          <tr><td>🔗 ${t('system.healthScan.coherenceLabel', 'Coherencia')}</td><td>${statusLabel(p.coherence?.status) || '—'}${p.coherence?.count != null ? ` · ${t('system.healthScan.proposalsCount', '{count} propuesta(s)', { count: p.coherence.count })}` : ''}</td></tr>
+          <tr><td>🐛 ${t('system.healthScan.padLabel', 'Pad')}</td><td>${pad ? `${t('system.healthScan.padStats', '{newCount} nuevo(s) · {trackedCount} rastreado(s) · {regressionCount} regresión(es) · {openCount} BUG abiertos', { newCount: pad.nuevo?.length || 0, trackedCount: pad.rastreado?.length || 0, regressionCount: pad.regresion?.length || 0, openCount: pad.openCount ?? '?' })}` : '—'}</td></tr>
         </tbody></table>
         ${d.error ? `<p class="hp-empty">⚠️ ${esc(d.error)}</p>` : ''}
-        <p class="hp-when">Modo: ${esc(d.mode || 'incremental')} · el detalle accionable de cada motor está en su tab.</p>
+        <p class="hp-when">${esc(t('system.healthScan.modeDetail', 'Modo: {mode} · el detalle accionable de cada motor está en su tab.', { mode: d.mode || 'incremental' }))}</p>
       </div>`;
     }
-    if (activeTab === 'revision') return detailTab('Revisión', 'Hallazgos por módulo, veredicto y acciones (auto-fix / resolver en chat / marcar resuelto).', 'Abrir detalle de Revisión →', 'open-rev');
-    if (activeTab === 'optim') return detailTab('Optimización', 'Censo de motores IA + propuestas de optimización aprobables.', 'Abrir detalle de Optimización →', 'open-opt');
-    if (activeTab === 'coher') return detailTab('Coherencia', 'Grafo de dependencias, hallazgos determinísticos y propuestas de cableado.', 'Abrir detalle de Coherencia →', 'open-coh');
-    if (activeTab === 'dash') return detailTab('Dashboard', 'Censo del proyecto + recursos del servidor (núcleos/CPU/RAM/disco) + backbone de Pad.', 'Abrir Dashboard →', 'open-dash');
+    if (activeTab === 'revision') return detailTab(t('system.healthScan.reviewDetail', 'Hallazgos por módulo, veredicto y acciones (auto-fix / resolver en chat / marcar resuelto).'), t('system.healthScan.openReviewDetail', 'Abrir detalle de Revisión →'), 'open-rev');
+    if (activeTab === 'optim') return detailTab(t('system.healthScan.optimizationDetail', 'Censo de motores IA + propuestas de optimización aprobables.'), t('system.healthScan.openOptimizationDetail', 'Abrir detalle de Optimización →'), 'open-opt');
+    if (activeTab === 'coher') return detailTab(t('system.healthScan.coherenceDetail', 'Grafo de dependencias, hallazgos determinísticos y propuestas de cableado.'), t('system.healthScan.openCoherenceDetail', 'Abrir detalle de Coherencia →'), 'open-coh');
+    if (activeTab === 'dash') return detailTab(t('system.healthScan.dashboardDetail', 'Censo del proyecto + recursos del servidor (núcleos/CPU/RAM/disco) + backbone de Pad.'), t('system.healthScan.openDashboard', 'Abrir Dashboard →'), 'open-dash');
     if (activeTab === 'pad') return padTab(d?.pad);
     return '';
   }
 
   function findingRow(f, kind) {
     const sev = f.severity || 'medium';
-    const match = f.match ? `<span class="hs-match" title="matchea ${esc(f.match.ref)} (${f.match.score}%)">${esc(f.match.ref)}</span>` : '';
-    const create = kind === 'nuevo' ? '<button class="btn-ghost btn--sm" data-newbug>Crear BUG</button>' : '';
+    const match = f.match ? `<span class="hs-match" title="${esc(t('system.healthScan.matchesTitle', 'matchea {ref} ({score}%)', { ref: f.match.ref, score: f.match.score }))}">${esc(f.match.ref)}</span>` : '';
+    const create = kind === 'nuevo' ? `<button class="btn-ghost btn--sm" data-newbug>${t('system.healthScan.createBug', 'Crear BUG')}</button>` : '';
     return `<div class="hs-frow hs-frow--${kind}" data-fkey="${esc(JSON.stringify(f)).replace(/"/g, '&quot;')}">
       <span class="hs-sev hs-sev--${esc(sev)}">${esc(sev)}</span>
       <span class="hs-fmod">${esc(f.module || '?')}</span>
@@ -142,8 +167,8 @@ export function openHealthScan(ctx, { isAdmin }) {
   }
 
   function padTab(pad) {
-    if (!pad) return '<p class="hp-empty">El cross-check con Pad corre al final del escaneo — todavía no hay datos.</p>';
-    if (pad.available === false) return `<p class="hp-empty">Pad local no respondió (${esc(pad.error || '')}). El escaneo sigue igual; reintentá cuando esté arriba.</p>`;
+    if (!pad) return `<p class="hp-empty">${t('system.healthScan.noPadYet', 'El cross-check con Pad corre al final del escaneo — todavía no hay datos.')}</p>`;
+    if (pad.available === false) return `<p class="hp-empty">${esc(t('system.healthScan.padUnavailable', 'Pad local no respondió ({error}). El escaneo sigue igual; reintentá cuando esté arriba.', { error: pad.error || '' }))}</p>`;
     const sec = (title, arr, kind, hint) => `
       <details class="hs-padsec" ${kind === 'nuevo' || kind === 'regresion' ? 'open' : ''}>
         <summary>${title} <b>${arr.length}</b></summary>
@@ -151,10 +176,10 @@ export function openHealthScan(ctx, { isAdmin }) {
         ${arr.length ? arr.map((f) => findingRow(f, kind)).join('') : '<p class="hp-when" style="padding:.2rem">—</p>'}
       </details>`;
     return `<div class="hs-pad">
-      <p class="hp-when">Cross-check de los hallazgos de la Revisión contra la colección Bugs de Pad (workspace console). ${pad.openCount ?? '?'} BUG abiertos hoy.</p>
-      ${sec('🆕 Nuevos (no rastreados)', pad.nuevo || [], 'nuevo', 'No matchean ningún BUG. Podés crearlos en Pad con confirmación.')}
-      ${sec('⚠️ Regresiones', pad.regresion || [], 'regresion', 'Matchean un BUG fixed/wontfix → reaparecieron. Revisar.')}
-      ${sec('🔗 Ya rastreados', pad.rastreado || [], 'rastreado', 'Ya están en el backlog de Pad — no hace falta re-crearlos.')}
+      <p class="hp-when">${t('system.healthScan.padCrossCheckSummary', 'Cross-check de los hallazgos de la Revisión contra la colección Bugs de Pad (workspace console). {count} BUG abiertos hoy.', { count: pad.openCount ?? '?' })}</p>
+      ${sec(`🆕 ${t('system.healthScan.newBugsTitle', 'Nuevos (no rastreados)')}`, pad.nuevo || [], 'nuevo', t('system.healthScan.newBugsHint', 'No matchean ningún BUG. Podés crearlos en Pad con confirmación.'))}
+      ${sec(`⚠️ ${t('system.healthScan.regressionsTitle', 'Regresiones')}`, pad.regresion || [], 'regresion', t('system.healthScan.regressionsHint', 'Matchean un BUG fixed/wontfix → reaparecieron. Revisar.'))}
+      ${sec(`🔗 ${t('system.healthScan.trackedTitle', 'Ya rastreados')}`, pad.rastreado || [], 'rastreado', t('system.healthScan.trackedHint', 'Ya están en el backlog de Pad — no hace falta re-crearlos.'))}
     </div>`;
   }
 
@@ -182,7 +207,7 @@ export function openHealthScan(ctx, { isAdmin }) {
       last = d; render();
       if (d.running) pollTimer = setTimeout(poll, 3000);
     } catch {
-      if (alive) { wrap.innerHTML = '<p class="hp-empty">No se pudo leer el estado del escaneo.</p>'; }
+      if (alive) { wrap.innerHTML = `<p class="hp-empty">${t('system.healthScan.readError', 'No se pudo leer el estado del escaneo.')}</p>`; }
     }
   }
 

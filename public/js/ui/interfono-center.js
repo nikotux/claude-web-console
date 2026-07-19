@@ -17,6 +17,7 @@
 // chat ACTIVO (si está abierto+ocioso el watcher lo inyecta solo, y aparece
 // como burbuja en la conversación).
 import { icon } from './icons.js';
+import { t } from './i18n.js';
 
 export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) {
   // isChatRelevant(chatId) — ¿ESTA ventana tiene ese chat abierto? (Fase 1). Si
@@ -42,13 +43,13 @@ export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) 
     const el = document.createElement('div');
     el.className = 'ic-card';
     el.innerHTML = `
-      <button type="button" class="ic-title" title="Ir a la conversación">
+      <button type="button" class="ic-title" title="${t('core.common.goToConversation', 'Ir a la conversación')}">
         ${icon('relay', { size: 13 })}<span class="ic-title-text"></span><span class="ic-count"></span>
       </button>
       <div class="ic-body"></div>
       <div class="ic-actions">
-        <button class="btn-ghost btn--sm ic-dismiss">${icon('close', { size: 13 })} Descartar</button>
-        <button class="btn btn--sm ic-resume">${icon('play', { size: 13 })} Retomar</button>
+        <button class="btn-ghost btn--sm ic-dismiss">${icon('close', { size: 13 })} ${t('core.interfono.dismiss', 'Descartar')}</button>
+        <button class="btn btn--sm ic-resume">${icon('play', { size: 13 })} ${t('core.interfono.resume', 'Retomar')}</button>
       </div>
       <div class="ic-error" hidden></div>`;
     item = { el, chatId, busy: false, sig };
@@ -84,7 +85,7 @@ export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) 
     if (overflow) {
       const more = document.createElement('div');
       more.className = 'ic-msg ic-more';
-      more.textContent = `… +${pend.length - MAX_MSGS} mensaje(s) más`;
+      more.textContent = t('core.interfono.moreMessages', '… +{n} mensaje(s) más', { n: pend.length - MAX_MSGS });
       body.appendChild(more);
     }
     for (const m of shown) {
@@ -92,7 +93,7 @@ export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) 
       row.className = 'ic-msg';
       const from = document.createElement('strong');
       from.className = 'ic-from';
-      from.textContent = `${m.fromName || 'una sesión'}: `;
+      from.textContent = `${m.fromName || t('core.interfono.aSession', 'una sesión')}: `;
       const txt = document.createElement('span');
       txt.textContent = String(m.text || '');
       row.appendChild(from);
@@ -112,7 +113,7 @@ export function initInterfonoCenter({ isChatActive, isChatRelevant, openChat }) 
         body: JSON.stringify({ id: item.chatId, action }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo procesar el mensaje.');
+      if (!res.ok) throw new Error(data.error || t('core.interfono.actError', 'No se pudo procesar el mensaje.'));
       remove(item.chatId);
     } catch (err) {
       item.busy = false;

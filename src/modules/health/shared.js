@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { invariantsFor } from './invariants.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import * as padLocal from '../../core/pad-service-client.js';
+import { TANDEM_TOOL } from '../../core/tool-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo
@@ -659,6 +660,21 @@ export function fixToolAllowed(name, input) {
     return /^node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+(\s*&&\s*node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+)*$/.test(cmd);
   }
   return false;
+}
+
+// ===== Allowlist del auto-fix en modo TÁNDEM (opt-in, 2026-07-19) =====
+// Mismo espíritu que fixToolAllowed, pero para cuando el toggle "Usar Tándem"
+// está activo (PLAN-507): Claude diagnostica/verifica, la ESCRITURA real la hace
+// Codex vía `delegate_to_codex` — igual que el bloqueo estructural del chat
+// Tándem (bin/cwc-chat-runner.js `askPermission`/TANDEM_BLOCKED). Se DENIEGA
+// Edit/Write/MultiEdit/NotebookEdit (Claude no toca archivos directo) y se suma
+// la tool `delegate_to_codex` a la allowlist; Bash sigue acotado a
+// `node --check` (misma verificación de siempre, tanto si la corrió Claude como
+// si el diff lo trajo Codex).
+export function fixToolAllowedTandem(name, input) {
+  if (['Read', 'Grep', 'Glob', 'TodoWrite', TANDEM_TOOL].includes(name)) return true;
+  if (name === 'Bash') return fixToolAllowed(name, input);
+  return false; // Edit/Write/MultiEdit/NotebookEdit quedan FUERA a propósito
 }
 
 // ===== Lock de "revisión corriendo" (heartbeat del runner) =====

@@ -20,7 +20,13 @@ export const MC_ID_RE = /^MC-\d+$/;
 const ACTIVITY_FILE = path.join(os.homedir(), '.cwc-data', 'retro-activity.json');
 const ACTIVITY_MAX = 300;
 
-const CATS = ['regla', 'convencion', 'metodologia', 'procedimiento', 'herramienta', 'nota'];
+// 'feedback-cliente' (2026-07-19): retroalimentación puntual de un cliente/
+// revisor (típicamente Chris, por mail/Teams/llamada) sobre un ticket/PR — NO
+// es una lección de proceso, es una preferencia/corrección concreta. Vive acá
+// (no en un módulo aparte) para reusar TAL CUAL el destino 'contexto' (se
+// inyecta solo en todo chat de bug futuro al adoptarla) y el dedup por
+// recurrencia (misma queja repetida = prioridad).
+const CATS = ['regla', 'convencion', 'metodologia', 'procedimiento', 'herramienta', 'nota', 'feedback-cliente'];
 const DESTS = ['memoria', 'claude-md', 'contexto', 'playbook', 'registro'];
 const PROJS = ['console', 'tolkien', 'otros'];
 const CONFS = ['alta', 'media', 'baja'];
@@ -84,6 +90,26 @@ export function computeFingerprint(category, title) {
   return crypto.createHash('sha1').update(`${oneOf(category, CATS, 'nota')}|${norm(title)}`).digest('hex').slice(0, 16);
 }
 
+// Normaliza refs de ticket/PR/feature ("tkt-519", "#245", "feat 3" → "TKT-519",
+// "PR-245", "FEAT-3") para el campo sourceRefs de una lección 'feedback-cliente'
+// — permite agrupar/navegar "todo lo que dijo Chris sobre el TKT-519".
+const REF_RE = /^(TKT|PR|FEAT)-?(\d+)$/i;
+function normRef(s) {
+  let t = String(s || '').trim().toUpperCase().replace(/^#/, 'TKT-').replace(/\s+/g, '-');
+  const m = t.match(REF_RE);
+  if (m) return `${m[1]}-${m[2]}`;
+  t = t.replace(/[^A-Z0-9-]/g, '').slice(0, 24);
+  return t || null;
+}
+export function normRefs(arr) {
+  const out = [];
+  for (const s of (Array.isArray(arr) ? arr : [])) {
+    const r = normRef(s);
+    if (r && !out.includes(r)) out.push(r);
+  }
+  return out.slice(0, 20);
+}
+
 function bodyOf(observation, lesson) {
   const o = clampStr(observation, 2000).trim();
   const l = clampStr(lesson, 2000).trim();
@@ -123,6 +149,7 @@ function lessonFromPadItem(item) {
     confidence: oneOf(f.confidence, CONFS, 'media'),
     fingerprint: f.fingerprint || '',
     sourceChats: parseJsonField(f.sourceChats, []),
+    sourceRefs: parseJsonField(f.sourceRefs, []),
     body: item.content || '',
     // Fase 2/6: destino REAL al que se promovió + snapshot para medir efectividad.
     promotedTo: (f.promotedTo && f.promotedTo !== 'ninguno') ? f.promotedTo : '',
@@ -163,6 +190,7 @@ export async function upsertLesson(input = {}, ctx = null) {
   const src = input.sourceChat && typeof input.sourceChat === 'object'
     ? { sessionId: clampStr(input.sourceChat.sessionId, 80) || null, title: clampStr(input.sourceChat.title, 120), at: Number(input.sourceChat.at) || Date.now() }
     : null;
+  const refs = normRefs(input.sourceRefs);
 
   // El read-find-create/update va bajo lock para que dos runners concurrentes no
   // creen duplicados del mismo fingerprint (ver withUpsertLock).
@@ -176,7 +204,8 @@ export async function upsertLesson(input = {}, ctx = null) {
       const rec = (parseInt(f.recurrence, 10) || 1) + 1;
       const chats = parseJsonField(f.sourceChats, []);
       if (src && !chats.some((c) => c.sessionId && c.sessionId === src.sessionId)) chats.unshift(src);
-      const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50) } }, { ctx });
+      const mergedRefs = normRefs([...parseJsonField(f.sourceRefs, []), ...refs]);
+      const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50), sourceRefs: mergedRefs } }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
       appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` });
       const fresh = await getItem(existing.ref, { ctx });
@@ -195,6 +224,7 @@ export async function upsertLesson(input = {}, ctx = null) {
         confidence: oneOf(input.confidence, CONFS, 'media'),
         fingerprint,
         sourceChats: src ? [src] : [],
+        sourceRefs: refs,
       },
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
@@ -251,6 +281,7 @@ export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
   if (!keepR.ok) throw notFoundOr500('mergeLessons', 'Lección', keepR);
   const kf = parseFields(keepR.data);
   const chats = parseJsonField(kf.sourceChats, []);
+  let refs = parseJsonField(kf.sourceRefs, []);
   let addRec = 0;
   let mergedCount = 0;
   for (const mid of mergeIds) {
@@ -268,9 +299,10 @@ export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
     for (const c of parseJsonField(mf.sourceChats, [])) {
       if (!chats.some((x) => x.sessionId && x.sessionId === c.sessionId)) chats.push(c);
     }
+    refs = normRefs([...refs, ...parseJsonField(mf.sourceRefs, [])]);
   }
   const newRec = (parseInt(kf.recurrence, 10) || 1) + addRec;
-  const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50) } }, { ctx });
+  const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50), sourceRefs: refs } }, { ctx });
   if (!r.ok) throw padError('mergeLessons', r);
   appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` });
   const fresh = await getItem(keepId, { ctx });

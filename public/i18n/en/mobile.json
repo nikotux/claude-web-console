@@ -1,0 +1,4 @@
+{
+  "mobile.paste.title": "Clipboard",
+  "mobile.paste.error": "Could not read the clipboard (permission denied or unavailable)."
+}

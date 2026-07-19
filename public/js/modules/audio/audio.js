@@ -11,16 +11,28 @@
 // runner detached y el modal ENCUESTA GET /api/audio/:id (resiliente a cambios
 // de pestaña / reinicios del server — patrón triage/health/desk-live).
 import { pacman } from '../../ui/pacman.js';
+import { t } from '../../ui/i18n.js';
 
 const SEG = {
-  accion: { emoji: '🎯', label: 'Acción' },
-  plan: { emoji: '🗺️', label: 'Plan' },
-  decision: { emoji: '✅', label: 'Decisión' },
-  problema: { emoji: '⚠️', label: 'Problema' },
-  pregunta: { emoji: '❓', label: 'Pregunta' },
-  info: { emoji: 'ℹ️', label: 'Info' },
+  accion: { emoji: '🎯' },
+  plan: { emoji: '🗺️' },
+  decision: { emoji: '✅' },
+  problema: { emoji: '⚠️' },
+  pregunta: { emoji: '❓' },
+  info: { emoji: 'ℹ️' },
 };
 const segOf = (t) => SEG[t] || SEG.info;
+const segLabel = (type) => {
+  const labels = {
+    accion: t('audio.seg.accion', 'Acción'),
+    plan: t('audio.seg.plan', 'Plan'),
+    decision: t('audio.seg.decision', 'Decisión'),
+    problema: t('audio.seg.problema', 'Problema'),
+    pregunta: t('audio.seg.pregunta', 'Pregunta'),
+    info: t('audio.seg.info', 'Info'),
+  };
+  return labels[type] || labels.info;
+};
 const PRIO_EMOJI = { alta: '🔴', media: '🟡', baja: '🟢' };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -28,10 +40,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 function fmtAgo(ms) {
   if (!ms) return '';
   const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return 'recién';
-  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-  if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
-  return `hace ${Math.floor(s / 86400)} d`;
+  if (s < 60) return t('audio.ago.justNow', 'recién');
+  if (s < 3600) return t('audio.ago.min', 'hace {n} min', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('audio.ago.hour', 'hace {n} h', { n: Math.floor(s / 3600) });
+  return t('audio.ago.day', 'hace {n} d', { n: Math.floor(s / 86400) });
 }
 
 // Pinta un resultado ya interpretado dentro de `container`. bus (opcional) se
@@ -55,27 +67,27 @@ async function renderResult(container, job, id, bus, dialog) {
   const segments = (res.segments || []).map((s) => {
     const so = segOf(s.type);
     return `<li class="au-seg au-seg--${s.type}">
-      <span class="au-seg-type" title="${so.label}">${so.emoji}</span>
+      <span class="au-seg-type" title="${segLabel(s.type)}">${so.emoji}</span>
       <span class="au-seg-body"><span class="au-seg-who">${esc(s.who || '?')}:</span> ${esc(s.text)}
       ${s.why ? `<span class="au-seg-why">↳ ${esc(s.why)}</span>` : ''}</span></li>`;
   }).join('');
   const plan = (res.plan || []).map((p) =>
     `<li><strong>${esc(p.step)}</strong>${p.why ? `<span class="au-why"> — ${esc(p.why)}</span>` : ''}</li>`).join('');
   const proposed = res.proposedTasks || [];
-  const allCreated = proposed.length > 0 && proposed.every((t) => createdTitles.has(t.title));
-  const tasks = proposed.map((t, i) => {
-    const already = createdTitles.has(t.title);
+  const allCreated = proposed.length > 0 && proposed.every((task) => createdTitles.has(task.title));
+  const tasks = proposed.map((task, i) => {
+    const already = createdTitles.has(task.title);
     return `
     <div class="au-task${already ? ' au-task--done' : ''}" data-i="${i}">
       <div class="au-task-top">
-        <span class="au-task-prio">${PRIO_EMOJI[t.priority] || '🟡'}</span>
-        <span class="au-task-title">${esc(t.title)}</span>
+        <span class="au-task-prio">${PRIO_EMOJI[task.priority] || '🟡'}</span>
+        <span class="au-task-title">${esc(task.title)}</span>
         ${already
-          ? '<span class="au-task-already" title="Ya está en Pendientes">✓ Ya creada</span>'
-          : `<button class="btn-ghost btn--sm au-task-add" data-i="${i}">＋ Crear tarea</button>`}
+          ? `<span class="au-task-already" title="${t('audio.task.alreadyTitle', 'Ya está en Pendientes')}">${t('audio.task.alreadyCreated', '✓ Ya creada')}</span>`
+          : `<button class="btn-ghost btn--sm au-task-add" data-i="${i}">${t('audio.task.add', '＋ Crear tarea')}</button>`}
       </div>
-      ${t.description ? `<div class="au-task-desc">${esc(t.description)}</div>` : ''}
-      ${(t.tags || []).length ? `<div class="task-tags">${t.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}
+      ${task.description ? `<div class="au-task-desc">${esc(task.description)}</div>` : ''}
+      ${(task.tags || []).length ? `<div class="task-tags">${task.tags.map((x) => `<span class="task-tag">${esc(x)}</span>`).join('')}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -85,36 +97,36 @@ async function renderResult(container, job, id, bus, dialog) {
   // al abrir un informe); si faltara, se muestra solo el JSON.
   const rawJson = JSON.stringify(res, null, 2);
   const rawBlock = `
-    <details class="au-raw"><summary>🧾 Raw · crudo del procesamiento</summary>
+    <details class="au-raw"><summary>${t('audio.raw.summary', '🧾 Raw · crudo del procesamiento')}</summary>
       ${job.transcript ? `<div class="au-raw-blk">
-        <div class="au-raw-h">Transcripción original · ${job.transcript.length} chars</div>
+        <div class="au-raw-h">${t('audio.raw.transcript', 'Transcripción original · {n} chars', { n: job.transcript.length })}</div>
         <pre class="au-raw-pre">${esc(job.transcript)}</pre></div>` : ''}
       <div class="au-raw-blk">
-        <div class="au-raw-h">Resultado interpretado · JSON</div>
+        <div class="au-raw-h">${t('audio.raw.json', 'Resultado interpretado · JSON')}</div>
         <pre class="au-raw-pre">${esc(rawJson)}</pre></div>
     </details>`;
 
   // Título del informe (lo genera la IA): editable inline con ✏️.
   const titleBar = id ? `<div class="au-titlebar">
-      <span class="au-title-txt">${esc(job.title || 'Sin título')}</span>
-      <button class="btn-ghost btn--sm btn--icon au-title-edit" title="Editar título">✏️</button>
+      <span class="au-title-txt">${esc(job.title || t('audio.title.none', 'Sin título'))}</span>
+      <button class="btn-ghost btn--sm btn--icon au-title-edit" title="${t('audio.title.edit', 'Editar título')}">✏️</button>
     </div>` : '';
   container.innerHTML = `
     ${titleBar}
     ${res.summary ? `<div class="au-summary">${esc(res.summary)}</div>` : ''}
     ${proposed.length ? `
       <div class="au-block au-tasks-block">
-        <div class="au-block-head"><span>➕ Tareas propuestas (${proposed.length})</span>
+        <div class="au-block-head"><span>${t('audio.tasks.proposed', '➕ Tareas propuestas ({n})', { n: proposed.length })}</span>
           <div class="au-block-acts">
-            <button class="btn-ghost btn--sm" data-ref="toplan" title="Crear un plan con estas tareas">🗺️ Pasar a plan</button>
-            <button class="btn btn--sm" data-ref="addall"${allCreated ? ' disabled' : ''}>${allCreated ? '✓ Creadas' : 'Crear todas'}</button>
+            <button class="btn-ghost btn--sm" data-ref="toplan" title="${t('audio.tasks.toPlanTitle', 'Crear un plan con estas tareas')}">${t('audio.tasks.toPlan', '🗺️ Pasar a plan')}</button>
+            <button class="btn btn--sm" data-ref="addall"${allCreated ? ' disabled' : ''}>${allCreated ? t('audio.tasks.created', '✓ Creadas') : t('audio.tasks.createAll', 'Crear todas')}</button>
           </div></div>
         <div class="au-tasks">${tasks}</div>
-      </div>` : '<div class="au-none">La IA no propuso tareas de este audio.</div>'}
-    <details class="au-block" open><summary>🗣️ Segmentos (${res.segments?.length || 0})</summary>
+      </div>` : `<div class="au-none">${t('audio.tasks.none', 'La IA no propuso tareas de este audio.')}</div>`}
+    <details class="au-block" open><summary>${t('audio.segments.title', '🗣️ Segmentos ({n})', { n: res.segments?.length || 0 })}</summary>
       <ul class="au-segs">${segments || '<li class="bf-sub">—</li>'}</ul></details>
-    ${res.plan?.length ? `<details class="au-block"><summary>🗺️ Plan (${res.plan.length})</summary><ol class="au-plan">${plan}</ol></details>` : ''}
-    ${speakers ? `<details class="au-block"><summary>👥 Hablantes (${res.speakers.length})</summary><ul class="au-speakers">${speakers}</ul></details>` : ''}
+    ${res.plan?.length ? `<details class="au-block"><summary>${t('audio.plan.title', '🗺️ Plan ({n})', { n: res.plan.length })}</summary><ol class="au-plan">${plan}</ol></details>` : ''}
+    ${speakers ? `<details class="au-block"><summary>${t('audio.speakers.title', '👥 Hablantes ({n})', { n: res.speakers.length })}</summary><ul class="au-speakers">${speakers}</ul></details>` : ''}
     ${rawBlock}`;
 
   const createTasks = async (items) => {
@@ -127,16 +139,16 @@ async function renderResult(container, job, id, bus, dialog) {
   };
   container.querySelectorAll('.au-task-add').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const t = res.proposedTasks[Number(btn.dataset.i)];
-      btn.disabled = true; btn.textContent = '✓ Creada';
-      await createTasks([t]);
+      const task = res.proposedTasks[Number(btn.dataset.i)];
+      btn.disabled = true; btn.textContent = t('audio.task.createdOne', '✓ Creada');
+      await createTasks([task]);
     });
   });
   const addAll = container.querySelector('[data-ref="addall"]');
   if (addAll) addAll.addEventListener('click', async () => {
-    addAll.disabled = true; addAll.textContent = '✓ Creadas';
+    addAll.disabled = true; addAll.textContent = t('audio.tasks.created', '✓ Creadas');
     await createTasks(res.proposedTasks || []);
-    container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = '✓ Creada'; });
+    container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = t('audio.task.createdOne', '✓ Creada'); });
   });
 
   // "Pasar a plan": crea un PLAN (título del audio) + todas las tareas propuestas
@@ -148,13 +160,13 @@ async function renderResult(container, job, id, bus, dialog) {
     if (!items.length) return;
     if (dialog?.confirmDialog) {
       const ok = await dialog.confirmDialog({
-        title: 'Pasar a plan',
-        message: `Se crea el plan “${job.title || 'Audio'}” y ${items.length} tarea(s) asignada(s). ¿Continuar?`,
-        confirmLabel: 'Crear plan',
+        title: t('audio.toPlan.confirmTitle', 'Pasar a plan'),
+        message: t('audio.toPlan.confirmMsg', 'Se crea el plan “{title}” y {n} tarea(s) asignada(s). ¿Continuar?', { title: job.title || 'Audio', n: items.length }),
+        confirmLabel: t('audio.toPlan.confirmLabel', 'Crear plan'),
       });
       if (!ok) return;
     }
-    toPlan.disabled = true; toPlan.textContent = '⏳ creando…';
+    toPlan.disabled = true; toPlan.textContent = t('audio.toPlan.creating', '⏳ creando…');
     try {
       const pr = await fetch('/api/tasks/plans', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -166,10 +178,10 @@ async function renderResult(container, job, id, bus, dialog) {
         body: JSON.stringify({ jobId: id, tasks: items.map((t) => ({ ...t, planId: plan?.id || null })) }),
       });
       bus?.dispatchEvent?.(new Event('tasks-changed'));
-      toPlan.textContent = '✓ Plan creado';
-      container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = '✓ Creada'; });
-      if (addAll) { addAll.disabled = true; addAll.textContent = '✓ Creadas'; }
-    } catch { toPlan.disabled = false; toPlan.textContent = '🗺️ Pasar a plan'; }
+      toPlan.textContent = t('audio.toPlan.done', '✓ Plan creado');
+      container.querySelectorAll('.au-task-add').forEach((b) => { b.disabled = true; b.textContent = t('audio.task.createdOne', '✓ Creada'); });
+      if (addAll) { addAll.disabled = true; addAll.textContent = t('audio.tasks.created', '✓ Creadas'); }
+    } catch { toPlan.disabled = false; toPlan.textContent = t('audio.tasks.toPlan', '🗺️ Pasar a plan'); }
   });
 
   // Edición INLINE del título (clic en ✏️ → input → Enter/blur guarda, Esc cancela).
@@ -194,11 +206,11 @@ async function renderResult(container, job, id, bus, dialog) {
           } catch { /* noop */ }
         }
       }
-      const ns = document.createElement('span'); ns.className = 'au-title-txt'; ns.textContent = val || 'Sin título';
+      const ns = document.createElement('span'); ns.className = 'au-title-txt'; ns.textContent = val || t('audio.title.none', 'Sin título');
       input.replaceWith(ns);
       // Reflejar en el header del informe (pestaña Informes) si está montado.
       const sumT = container.closest('.au-report')?.querySelector('.au-report-title');
-      if (sumT) sumT.textContent = val || 'Sin título';
+      if (sumT) sumT.textContent = val || t('audio.title.none', 'Sin título');
     };
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
@@ -214,21 +226,19 @@ export function openAudioPanel(ctx) {
   const { icon, dialog, bus } = ctx;
   let jobs = [];
 
-  const m = dialog.openModal({ title: 'Extracción de audio', width: '780px' });
+  const m = dialog.openModal({ title: t('audio.panel.title', 'Extracción de audio'), width: '780px' });
   m.card.classList.add('au-card');
   m.body.innerHTML = `
     <div class="au-panel">
-      <div class="au-intro">Pegá la transcripción del audio (ya pasada a texto). La IA interpreta
-        <strong>quién dijo qué y por qué</strong>, le pone un <strong>título</strong>, arma un plan y
-        propone tareas para Pendientes. El título se puede editar después.</div>
-      <textarea class="au-input" data-ref="ta" rows="8" placeholder="Pegá acá la transcripción…"></textarea>
+      <div class="au-intro">${t('audio.panel.intro', 'Pegá la transcripción del audio (ya pasada a texto). La IA interpreta <strong>quién dijo qué y por qué</strong>, le pone un <strong>título</strong>, arma un plan y propone tareas para Pendientes. El título se puede editar después.')}</div>
+      <textarea class="au-input" data-ref="ta" rows="8" placeholder="${t('audio.panel.placeholder', 'Pegá acá la transcripción…')}"></textarea>
       <div class="au-actions">
         <span class="au-hint" data-ref="hint"></span>
-        <button class="btn" data-ref="run">${icon('sparkle', { size: 14 })}<span>Analizar</span></button>
+        <button class="btn" data-ref="run">${icon('sparkle', { size: 14 })}<span>${t('audio.panel.analyze', 'Analizar')}</span></button>
       </div>
       <div class="au-status" data-ref="status" hidden></div>
       <div class="au-result" data-ref="result"></div>
-      <details class="au-history" data-ref="histbox" hidden><summary>🕑 Análisis anteriores</summary>
+      <details class="au-history" data-ref="histbox" hidden><summary>${t('audio.history.title', '🕑 Análisis anteriores')}</summary>
         <div class="au-hist-list" data-ref="hist"></div></details>
     </div>`;
   const q = (r) => m.body.querySelector(`[data-ref="${r}"]`);
@@ -239,11 +249,11 @@ export function openAudioPanel(ctx) {
     const box = q('histbox'); const hist = q('hist');
     if (!jobs.length) { box.hidden = true; return; }
     box.hidden = false;
-    box.querySelector('summary').textContent = `🕑 Análisis anteriores (${jobs.length})`;
+    box.querySelector('summary').textContent = t('audio.history.titleCount', '🕑 Análisis anteriores ({n})', { n: jobs.length });
     hist.innerHTML = jobs.map((j) => `
       <button class="au-hist-item" data-id="${j.id}">
         <span class="au-hist-title">${esc(j.title)}</span>
-        <span class="au-hist-meta">${j.status === 'done' ? `${j.proposedCount} tarea(s)` : j.status === 'running' ? '⏳' : '✕'} · ${fmtAgo(j.createdAt)}</span>
+        <span class="au-hist-meta">${j.status === 'done' ? `${t('audio.history.tasks', '{n} tarea(s)', { n: j.proposedCount })}` : j.status === 'running' ? '⏳' : '✕'} · ${fmtAgo(j.createdAt)}</span>
       </button>`).join('');
     hist.querySelectorAll('.au-hist-item').forEach((b) =>
       b.addEventListener('click', () => openExisting(b.dataset.id)));
@@ -268,18 +278,18 @@ export function openAudioPanel(ctx) {
 
   async function analyze() {
     const transcript = ta.value.trim();
-    if (transcript.length < 10) { statusEl.hidden = false; statusEl.className = 'au-status au-status--err'; statusEl.textContent = 'Pegá la transcripción primero.'; return; }
+    if (transcript.length < 10) { statusEl.hidden = false; statusEl.className = 'au-status au-status--err'; statusEl.textContent = t('audio.analyze.needTranscript', 'Pegá la transcripción primero.'); return; }
     const ok = await dialog.confirmDialog({
-      title: 'Analizar audio',
-      message: 'Se interpreta la transcripción con Claude (sonnet). CONSUME TOKENS reales y puede tardar hasta ~2 min. Es de solo lectura.',
-      confirmLabel: 'Analizar',
+      title: t('audio.analyze.confirmTitle', 'Analizar audio'),
+      message: t('audio.analyze.confirmMsg', 'Se interpreta la transcripción con Claude (sonnet). CONSUME TOKENS reales y puede tardar hasta ~2 min. Es de solo lectura.'),
+      confirmLabel: t('audio.analyze.confirmLabel', 'Analizar'),
     });
     if (!ok) return;
     runBtn.disabled = true;
     resultEl.innerHTML = '';
     statusEl.hidden = false;
     statusEl.className = 'au-status';
-    statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>interpretando el audio…</span>`;
+    statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${t('audio.analyze.interpreting', 'interpretando el audio…')}</span>`;
     polling = true;
     try {
       const res = await fetch('/api/audio/analyze', {
@@ -287,16 +297,16 @@ export function openAudioPanel(ctx) {
         body: JSON.stringify({ transcript }),
       });
       const started = await res.json();
-      if (!res.ok) throw new Error(started.error || 'No se pudo iniciar el análisis.');
+      if (!res.ok) throw new Error(started.error || t('audio.analyze.startErr', 'No se pudo iniciar el análisis.'));
       const job = started.status === 'done' ? started : await pollJob(started.id);
-      if (!job) throw new Error('El análisis se interrumpió. Reintentá.');
-      if (job.status === 'error') throw new Error(job.error || 'El análisis falló.');
+      if (!job) throw new Error(t('audio.analyze.interrupted', 'El análisis se interrumpió. Reintentá.'));
+      if (job.status === 'error') throw new Error(job.error || t('audio.analyze.failed', 'El análisis falló.'));
       statusEl.hidden = true;
       renderResult(resultEl, job, started.id || job.id, bus, dialog);
       await loadJobs();
     } catch (e) {
       statusEl.className = 'au-status au-status--err';
-      statusEl.textContent = e.message || 'Error al analizar.';
+      statusEl.textContent = e.message || t('audio.analyze.error', 'Error al analizar.');
     } finally {
       runBtn.disabled = false;
       polling = false;
@@ -304,15 +314,15 @@ export function openAudioPanel(ctx) {
   }
 
   async function openExisting(id) {
-    statusEl.hidden = false; statusEl.className = 'au-status'; statusEl.innerHTML = 'cargando…';
+    statusEl.hidden = false; statusEl.className = 'au-status'; statusEl.innerHTML = t('audio.common.loading', 'cargando…');
     resultEl.innerHTML = '';
     try {
       const job = await (await fetch(`/api/audio/${id}`)).json();
       ta.value = job.transcript || '';
       statusEl.hidden = true;
       if (job.status === 'done') renderResult(resultEl, job, id, bus, dialog);
-      else if (job.status === 'error') { statusEl.hidden = false; statusEl.className = 'au-status au-status--err'; statusEl.textContent = job.error || 'Ese análisis falló.'; }
-    } catch { statusEl.className = 'au-status au-status--err'; statusEl.textContent = 'No se pudo cargar.'; }
+      else if (job.status === 'error') { statusEl.hidden = false; statusEl.className = 'au-status au-status--err'; statusEl.textContent = job.error || t('audio.open.failed', 'Ese análisis falló.'); }
+    } catch { statusEl.className = 'au-status au-status--err'; statusEl.textContent = t('audio.open.loadErr', 'No se pudo cargar.'); }
   }
 
   runBtn.addEventListener('click', analyze);
@@ -333,24 +343,24 @@ export function mountReports(container, ctx) {
   container.innerHTML = `
     <div class="au-reports">
       <div class="au-reports-head">
-        <span class="au-reports-title">Informes de audio</span>
-        <button class="btn btn--sm" data-ref="new" title="Analizar una transcripción de audio (consume tokens)">${icon('mic', { size: 13 })}<span>Analizar audio</span></button>
+        <span class="au-reports-title">${t('audio.reports.title', 'Informes de audio')}</span>
+        <button class="btn btn--sm" data-ref="new" title="${t('audio.reports.newTitle', 'Analizar una transcripción de audio (consume tokens)')}">${icon('mic', { size: 13 })}<span>${t('audio.reports.new', 'Analizar audio')}</span></button>
       </div>
-      <div class="au-reports-list" data-ref="list">cargando…</div>
+      <div class="au-reports-list" data-ref="list">${t('audio.common.loading', 'cargando…')}</div>
     </div>`;
   const listEl = container.querySelector('[data-ref="list"]');
 
   function reportRow(j) {
     const meta = j.status === 'done'
-      ? `${j.proposedCount} tarea(s) · ${j.chars || 0} chars`
-      : j.status === 'running' ? '⏳ en curso' : '✕ error';
+      ? t('audio.reports.metaTasks', '{n} tarea(s) · {chars} chars', { n: j.proposedCount, chars: j.chars || 0 })
+      : j.status === 'running' ? t('audio.reports.running', '⏳ en curso') : t('audio.reports.error', '✕ error');
     return `<details class="au-report" data-id="${esc(j.id)}">
       <summary class="au-report-sum">
         <span class="au-report-ico">🎙️</span>
         <span class="au-report-title">${esc(j.title)}</span>
         <span class="au-report-meta">${meta} · ${fmtAgo(j.createdAt)}</span>
       </summary>
-      <div class="au-report-body">cargando…</div>
+      <div class="au-report-body">${t('audio.common.loading', 'cargando…')}</div>
     </details>`;
   }
 
@@ -358,7 +368,7 @@ export function mountReports(container, ctx) {
     let jobs = [];
     try { jobs = (await (await fetch('/api/audio')).json()).jobs || []; } catch { /* noop */ }
     if (!jobs.length) {
-      listEl.innerHTML = '<div class="au-none">Todavía no analizaste ningún audio. Usá “Analizar audio” para crear el primer informe.</div>';
+      listEl.innerHTML = `<div class="au-none">${t('audio.reports.empty', 'Todavía no analizaste ningún audio. Usá “Analizar audio” para crear el primer informe.')}</div>`;
       return;
     }
     listEl.innerHTML = jobs.map(reportRow).join('');
@@ -367,13 +377,13 @@ export function mountReports(container, ctx) {
         if (!det.open || det.dataset.loaded) return;
         det.dataset.loaded = '1';
         const body = det.querySelector('.au-report-body');
-        body.innerHTML = '<div class="au-status">cargando…</div>';
+        body.innerHTML = `<div class="au-status">${t('audio.common.loading', 'cargando…')}</div>`;
         try {
           const job = await (await fetch(`/api/audio/${det.dataset.id}`)).json();
           if (job.status === 'done') renderResult(body, job, det.dataset.id, bus, dialog);
-          else if (job.status === 'error') { body.innerHTML = `<div class="au-status au-status--err">${esc(job.error || 'Ese análisis falló.')}</div>`; }
-          else body.innerHTML = '<div class="au-status">El análisis sigue en curso. Volvé a abrir en un rato.</div>';
-        } catch { body.innerHTML = '<div class="au-status au-status--err">No se pudo cargar el informe.</div>'; }
+          else if (job.status === 'error') { body.innerHTML = `<div class="au-status au-status--err">${esc(job.error || t('audio.open.failed', 'Ese análisis falló.'))}</div>`; }
+          else body.innerHTML = `<div class="au-status">${t('audio.reports.stillRunning', 'El análisis sigue en curso. Volvé a abrir en un rato.')}</div>`;
+        } catch { body.innerHTML = `<div class="au-status au-status--err">${t('audio.reports.loadErr', 'No se pudo cargar el informe.')}</div>`; }
       });
     });
   }

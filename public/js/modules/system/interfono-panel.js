@@ -8,62 +8,70 @@
 //   4) Reservas de archivo (claims) con semáforo 🔴🟡🟢 + liberar (admin).
 // Solo LEE (0 tokens); el tráfico real lo generan los hooks de las sesiones.
 import { icon } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
+import { pacman } from '../../ui/pacman.js';
 
 const API = '/api/interfono';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ago = (ms) => {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (s < 60) return `hace ${s}s`;
+  if (s < 60) return t('system.interfono.agoSeconds', 'hace {n}s', { n: s });
   const m = Math.round(s / 60);
-  if (m < 60) return `hace ${m}min`;
-  return `hace ${Math.round(m / 60)}h`;
+  if (m < 60) return t('system.interfono.agoMinutes', 'hace {n}min', { n: m });
+  return t('system.interfono.agoHours', 'hace {n}h', { n: Math.round(m / 60) });
 };
 const KIND_ICON = { tui: '🖥️', 'tui-chat': '💬', chat: '💬', desconocida: '❔' };
 // PLAN-469 · 2a: ícono del MUNDO de cada sesión (🏠 Mi Consola · 🌳 Tolkien · 📁 otro).
 const WORLD_ICON = (w) => (w === 'Mi Consola' ? '🏠' : w === 'Tolkien' ? '🌳' : (w ? '📁' : ''));
 // Cómo llegó (o no) cada mensaje al humano (ver core/interfono-log.js ROUTES).
-const ROUTE_LABEL = {
-  'auto-deliver': '📨 auto-entregado', 'tui-nudge': '🖥️ nudge TUI',
-  'hook-inject': '🪝 inyectado', badge: '🔔 badge',
-  'popup-shown': '🪟 popup', 'popup-resume': '▶ entregado', 'popup-dismiss': '✕ archivado',
-  expired: '⌛ vencido',
-};
+function routeLabel(route) {
+  return {
+    'auto-deliver': `📨 ${t('system.interfono.routeAutoDelivered', 'auto-entregado')}`,
+    'tui-nudge': `🖥️ ${t('system.interfono.routeTuiNudge', 'nudge TUI')}`,
+    'hook-inject': `🪝 ${t('system.interfono.routeHookInjected', 'inyectado')}`,
+    badge: `🔔 ${t('system.interfono.routeBadge', 'badge')}`,
+    'popup-shown': `🪟 ${t('system.interfono.routePopup', 'popup')}`,
+    'popup-resume': `▶ ${t('system.interfono.routeDelivered', 'entregado')}`,
+    'popup-dismiss': `✕ ${t('system.interfono.routeArchived', 'archivado')}`,
+    expired: `⌛ ${t('system.interfono.routeExpired', 'vencido')}`,
+  }[route];
+}
 
 export function mountInterfonoPanel(el, ctx) {
   const { isAdmin } = ctx;
 
   el.innerHTML = `
     <div class="if-head">
-      <span class="hp-title">📻 Interfono entre sesiones</span>
-      <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="Refrescar">${icon('refresh', { size: 13 })}</button>
+      <span class="hp-title">📻 ${t('system.interfono.title', 'Interfono entre sesiones')}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="${t('system.interfono.refresh', 'Refrescar')}">${icon('refresh', { size: 13 })}</button>
     </div>
-    <p class="if-hint">Las sesiones de Claude se avisan y evitan pisarse solas. Acá lo ves y podés escribirles vos.</p>
+    <p class="if-hint">${t('system.interfono.hint', 'Las sesiones de Claude se avisan y evitan pisarse solas. Acá lo ves y podés escribirles vos.')}</p>
 
     <div class="if-send" data-ref="send">
       <select class="if-select" data-ref="to"></select>
-      <textarea class="if-text" data-ref="text" rows="2" placeholder="Mensaje a la sesión…"></textarea>
-      <input class="dlg-input if-pkg-in" data-ref="pkg" placeholder="📦 Pasar un paquete (PKG-N, opcional)">
-      <button class="btn btn--sm" data-ref="do-send">${icon('play', { size: 13 })}<span>Enviar</span></button>
+      <textarea class="if-text" data-ref="text" rows="2" placeholder="${t('system.interfono.messagePlaceholder', 'Mensaje a la sesión…')}"></textarea>
+      <input class="dlg-input if-pkg-in" data-ref="pkg" placeholder="📦 ${t('system.interfono.packagePlaceholder', 'Pasar un paquete (PKG-N, opcional)')}">
+      <button class="btn btn--sm" data-ref="do-send">${icon('play', { size: 13 })}<span>${t('system.interfono.send', 'Enviar')}</span></button>
       <span class="if-sendmsg" data-ref="sendmsg"></span>
     </div>
 
     <details class="if-group" open>
-      <summary><span class="if-gtitle">Sesiones activas</span> <span class="if-count" data-ref="dir-n"></span></summary>
-      <div class="if-list" data-ref="dir"><span class="cwc-spinner"></span></div>
+      <summary><span class="if-gtitle">${t('system.interfono.activeSessions', 'Sesiones activas')}</span> <span class="if-count" data-ref="dir-n"></span></summary>
+      <div class="if-list" data-ref="dir">${pacman({ size: 'sm' })}</div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">Reservas de archivo</span> <span class="if-count" data-ref="claims-n"></span></summary>
+      <summary><span class="if-gtitle">${t('system.interfono.fileClaims', 'Reservas de archivo')}</span> <span class="if-count" data-ref="claims-n"></span></summary>
       <div class="if-list" data-ref="claims"></div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">Mensajes recientes</span> <span class="if-count" data-ref="msgs-n"></span></summary>
+      <summary><span class="if-gtitle">${t('system.interfono.recentMessages', 'Mensajes recientes')}</span> <span class="if-count" data-ref="msgs-n"></span></summary>
       <div class="if-list" data-ref="msgs"></div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">Bitácora de entrega</span> <span class="if-count" data-ref="deliv-n"></span></summary>
+      <summary><span class="if-gtitle">${t('system.interfono.deliveryLog', 'Bitácora de entrega')}</span> <span class="if-count" data-ref="deliv-n"></span></summary>
       <div class="if-list" data-ref="deliv"></div>
     </details>`;
 
@@ -75,25 +83,25 @@ export function mountInterfonoPanel(el, ctx) {
 
   function renderDir(dir) {
     refs['dir-n'].textContent = dir.length ? `(${dir.length})` : '(0)';
-    refs.to.innerHTML = `<option value="all">📢 Todas (broadcast)</option>` +
+    refs.to.innerHTML = `<option value="all">📢 ${t('system.interfono.allBroadcast', 'Todas (broadcast)')}</option>` +
       dir.map((e) => `<option value="${esc(e.handle)}">${KIND_ICON[e.kind] || '•'} ${esc(e.name)}${e.packageRef ? ` · ${esc(e.packageRef)}` : ''}${e.world ? ` · ${WORLD_ICON(e.world)}` : ''}${e.archived ? ' · 📦' : ''}</option>`).join('');
     refs.dir.innerHTML = dir.length ? dir.map((e) => `
       <div class="if-item">
         <span class="if-kind">${KIND_ICON[e.kind] || '•'}</span>
         <span class="if-name">${esc(e.name)}${e.packageRef ? ` <span class="if-pkg">${esc(e.packageRef)}</span>` : ''}</span>
-        ${e.world ? `<span class="if-world" title="Mundo: ${esc(e.world)}">${WORLD_ICON(e.world)} ${esc(e.world)}</span>` : ''}
-        ${e.archived ? '<span class="if-arch">📦 archivada</span>' : ''}
+        ${e.world ? `<span class="if-world" title="${t('system.interfono.worldTitle', 'Mundo')}: ${esc(e.world)}">${WORLD_ICON(e.world)} ${esc(e.world)}</span>` : ''}
+        ${e.archived ? `<span class="if-arch">📦 ${t('system.interfono.archivedSession', 'archivada')}</span>` : ''}
         <span class="if-sub">${esc(e.cwd || '')}</span>
-      </div>`).join('') : '<div class="hp-empty">No hay otras sesiones activas.</div>';
+      </div>`).join('') : `<div class="hp-empty">${t('system.interfono.noActiveSessions', 'No hay otras sesiones activas.')}</div>`;
   }
 
   function renderClaims(claims) {
     refs['claims-n'].textContent = claims.length ? `(${claims.length})` : '(0)';
-    if (!claims.length) { refs.claims.innerHTML = '<div class="hp-empty">Nadie está reservando archivos.</div>'; return; }
+    if (!claims.length) { refs.claims.innerHTML = `<div class="hp-empty">${t('system.interfono.noClaims', 'Nadie está reservando archivos.')}</div>`; return; }
     refs.claims.innerHTML = claims.map((c) => {
       const v = c.verdict || {};
       const rel = isAdmin
-        ? `<button class="btn-ghost btn--sm if-rel" data-file="${esc(c.file)}" data-handle="${esc(c.handle)}">Liberar</button>` : '';
+        ? `<button class="btn-ghost btn--sm if-rel" data-file="${esc(c.file)}" data-handle="${esc(c.handle)}">${t('system.interfono.release', 'Liberar')}</button>` : '';
       return `
         <div class="if-item if-claim">
           <span class="if-badge">${esc(v.label || '')}</span>
@@ -112,10 +120,10 @@ export function mountInterfonoPanel(el, ctx) {
           });
           if (res.ok) { load(); return; }
           const j = await res.json().catch(() => ({}));
-          if (refs.sendmsg) refs.sendmsg.textContent = `⚠ ${j.error || 'no se pudo liberar'}`;
+          if (refs.sendmsg) refs.sendmsg.textContent = `⚠ ${j.error || t('system.interfono.releaseError', 'no se pudo liberar')}`;
           b.disabled = false;
         } catch {
-          if (refs.sendmsg) refs.sendmsg.textContent = '⚠ error de red';
+          if (refs.sendmsg) refs.sendmsg.textContent = `⚠ ${t('system.interfono.networkError', 'error de red')}`;
           b.disabled = false;
         }
       });
@@ -129,17 +137,17 @@ export function mountInterfonoPanel(el, ctx) {
         <span class="if-name">${esc(m.fromName)} → ${esc(m.toName)}${m.packageRef ? ` <span class="if-pkg">📦 ${esc(m.packageRef)}</span>` : ''}</span>
         <span class="if-body">${esc(m.text)}</span>
         <span class="if-sub">${ago(m.ts)}</span>
-      </div>`).join('') : '<div class="hp-empty">Sin mensajes recientes.</div>';
+      </div>`).join('') : `<div class="hp-empty">${t('system.interfono.noRecentMessages', 'Sin mensajes recientes.')}</div>`;
   }
 
   function renderDeliveries(rows) {
     refs['deliv-n'].textContent = rows.length ? `(${rows.length})` : '(0)';
     refs.deliv.innerHTML = rows.length ? rows.map((d) => `
       <div class="if-item if-msg">
-        <span class="if-name">${ROUTE_LABEL[d.route] || esc(d.route)}</span>
+        <span class="if-name">${routeLabel(d.route) || esc(d.route)}</span>
         <span class="if-body">${esc(d.from || '—')} → ${esc(d.to || '—')}${d.kind ? ` · ${esc(d.kind)}` : ''}</span>
         <span class="if-sub">${ago(d.ts)}</span>
-      </div>`).join('') : '<div class="hp-empty">Sin entregas registradas.</div>';
+      </div>`).join('') : `<div class="hp-empty">${t('system.interfono.noDeliveries', 'Sin entregas registradas.')}</div>`;
   }
 
   async function load() {
@@ -154,7 +162,7 @@ export function mountInterfonoPanel(el, ctx) {
       renderMsgs(d.messages || []);
       renderDeliveries(deliv.deliveries || []);
     } catch {
-      if (alive) refs.dir.innerHTML = '<div class="hp-empty">No se pudo leer el Interfono.</div>';
+      if (alive) refs.dir.innerHTML = `<div class="hp-empty">${t('system.interfono.readError', 'No se pudo leer el Interfono.')}</div>`;
     }
   }
 
@@ -171,9 +179,9 @@ export function mountInterfonoPanel(el, ctx) {
         body: JSON.stringify({ to, text, ...(packageRef ? { packageRef } : {}) }),
       });
       const j = await res.json();
-      if (res.ok) { refs.text.value = ''; if (refs.pkg) refs.pkg.value = ''; refs.sendmsg.textContent = `✅ enviado a ${j.toName}`; load(); }
-      else refs.sendmsg.textContent = `⚠ ${j.error || 'no se pudo enviar'}`;
-    } catch { refs.sendmsg.textContent = '⚠ error de red'; }
+      if (res.ok) { refs.text.value = ''; if (refs.pkg) refs.pkg.value = ''; refs.sendmsg.textContent = `✅ ${t('system.interfono.sentTo', 'enviado a {name}', { name: j.toName })}`; load(); }
+      else refs.sendmsg.textContent = `⚠ ${j.error || t('system.interfono.sendError', 'no se pudo enviar')}`;
+    } catch { refs.sendmsg.textContent = `⚠ ${t('system.interfono.networkError', 'error de red')}`; }
     finally { refs['do-send'].disabled = false; }
   }
 

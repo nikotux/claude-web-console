@@ -12,10 +12,12 @@
 //   POST /api/tmux/title { socket, session, title } -> nombre humano custom
 import express from 'express';
 import path from 'node:path';
+import { principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd, stateForPane } from '../../core/claude-state.js';
+import { sessionManager, PREFIX, BARE_PREFIX } from '../terminal/sessions.js';
 // Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux, que es
 // plomería y sostiene la rehidratación): persisten en titles.json vía el core
 // compartido (core/session-names.js — también los usa el módulo terminal para
@@ -36,6 +38,24 @@ function worldFromCwd(cwd) {
   if (/tolkien/i.test(cwd)) return 'tolkien';
   if (/claude-web-console/i.test(cwd)) return 'console';
   return 'otros';
+}
+
+// Ownership guard (BUG-685, espejo de ownedSession de terminal/index.js): un
+// inquilino no-admin SOLO puede operar (kill/set-model/title) sobre SU sesión de
+// la consola. Admin/host (owner null) → todo (retrocompat: controla todos los
+// sockets). Para un no-admin exige: socket cwc + sesión de la consola (cwc-/cwct-)
+// cuya Session.owner coincida. Otro socket, sesión ajena, o sin dueño conocido
+// (p.ej. rehidratada tras un reinicio → owner=null) → false (fail-closed).
+function ownsSession(req, socketName, session) {
+  const p = principalOf(req);
+  if (p.admin) return true;
+  if (socketName !== config.tmuxSocket) return false;
+  let id = null;
+  if (session.startsWith(BARE_PREFIX)) id = session.slice(BARE_PREFIX.length);
+  else if (session.startsWith(PREFIX)) id = session.slice(PREFIX.length);
+  else return false;
+  const s = sessionManager.get(id);
+  return !!s && s.owner === p.username;
 }
 
 // Mapa sesión→panes del socket (para el estado por pane del observador).
@@ -216,6 +236,11 @@ export default {
       const socketPath = validateSocketPath(socket);
       if (!socketPath) return res.status(400).json({ error: 'Socket inválido.' });
       if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
+      // multi-tenant (BUG-685): solo el dueño (o admin) puede operar sobre la
+      // sesión. Ajena/desconocida → 404 sin revelar existencia (espejo de ownedSession).
+      if (!ownsSession(req, path.basename(socketPath), session)) {
+        return res.status(404).json({ error: 'Sesión inexistente.' });
+      }
       try {
         const clean = String(title || '').trim().slice(0, 60);
         const titles = loadTitles();
@@ -241,6 +266,11 @@ export default {
       const socketPath = validateSocketPath(socket);
       if (!socketPath) return res.status(400).json({ error: 'Socket inválido.' });
       if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
+      // multi-tenant (BUG-685): solo el dueño (o admin) puede operar sobre la
+      // sesión. Ajena/desconocida → 404 sin revelar existencia (espejo de ownedSession).
+      if (!ownsSession(req, path.basename(socketPath), session)) {
+        return res.status(404).json({ error: 'Sesión inexistente.' });
+      }
       if (!VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       // -l = literal (no interpretar el texto como nombres de tecla); luego Enter.
       // throwOnError: sin él runTmux traga el fallo y responderíamos ok:true
@@ -267,6 +297,11 @@ export default {
       const socketPath = validateSocketPath(socket);
       if (!socketPath) return res.status(400).json({ error: 'Socket inválido.' });
       if (!isValidSessionName(session)) return res.status(400).json({ error: 'Nombre de sesión inválido.' });
+      // multi-tenant (BUG-685): solo el dueño (o admin) puede operar sobre la
+      // sesión. Ajena/desconocida → 404 sin revelar existencia (espejo de ownedSession).
+      if (!ownsSession(req, path.basename(socketPath), session)) {
+        return res.status(404).json({ error: 'Sesión inexistente.' });
+      }
       try {
         runTmux(socketPath, ['kill-session', '-t', session], { throwOnError: true });
         res.json({ ok: true });

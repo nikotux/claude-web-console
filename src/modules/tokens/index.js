@@ -244,6 +244,7 @@ export async function buildSummary() {
   //   h5tok -> tokens totales de las últimas 5 h (ventana de sesión, cuenta entera)
   const hourlyByProj = {};
   let h5tok = 0;
+  let h5cost = 0;
   let dirs = [];
   try {
     dirs = (await fs.readdir(PROJECTS_DIR, { withFileTypes: true }))
@@ -368,7 +369,16 @@ export async function buildSummary() {
         // Ventana de 5 h (token-count del límite de sesión): tokens cuyo bucket
         // horario arranca dentro de las últimas 5 h. Cuenta ENTERA (todos los
         // proyectos: los límites del plan son de la cuenta, no se filtran).
-        if (hourKey !== 'unknown' && localHourStartMs(hourKey) >= fiveHAgo) h5tok += tok;
+        // h5cost SUMA APARTE en $ equivalente (pin/pout, YA descuenta cache read
+        // ×0.1): el ritmo-vs-historial (más abajo) compara COSTO, no tokens
+        // crudos — un token de cache read pesa ~10x menos que uno nuevo y puede
+        // ser el 90%+ del conteo crudo de una sesión con contexto reusado
+        // (verificado 2026-07-19: 95% cache reads un día con % de cupo bajo),
+        // así que comparar tokens crudos contra el % real de Anthropic exagera
+        // muchísimo el ritmo. El costo es la métrica que YA usa el resto de la
+        // app como "equivalente a precios de API" — más cerca de lo que Anthropic
+        // pesa internamente para el cupo que un conteo de tokens plano.
+        if (hourKey !== 'unknown' && localHourStartMs(hourKey) >= fiveHAgo) { h5tok += tok; h5cost += c; }
         // Acumulación por (día local, PROYECTO, modelo) para el histórico persistente.
         if (day && day !== 'unknown') {
           const dp = ((daily[day] ||= {})[fproj] ||= {});
@@ -447,13 +457,31 @@ export async function buildSummary() {
     }
   }
 
+  // BASELINE de la ventana de sesión (5h, 2026-07-19, pedido de Niko: punto de
+  // referencia para la barra "Sesión (5h)" — "¿voy más rápido o más lento que mi
+  // ritmo habitual?"). Sale del HISTÓRICO PERSISTENTE (usage-history.json, no del
+  // `daily` recién parseado: los transcripts viejos los poda el CLI, el histórico
+  // no). Promedio de los últimos días COMPLETOS (excluye hoy, que está a medias),
+  // escalado a un bloque de 5h. En COSTO ($ equivalente), no tokens crudos (ver
+  // el comentario de h5cost arriba). Con <3 días de historial no hay base
+  // confiable → h5CostBaseline queda null y el front no muestra el comparativo.
+  const h5BaselineWeek = await readSeries('week', 'all');
+  const h5BaselineFullDays = h5BaselineWeek.points.slice(0, -1); // últimos 6, sin hoy
+  const h5BaselineDays = h5BaselineFullDays.length;
+  const h5CostBaseline = h5BaselineDays >= 3
+    ? (h5BaselineFullDays.reduce((s, p) => s + p.cost, 0) / h5BaselineDays) * (5 / 24)
+    : null;
+
   return {
     totals: { ...totals, tokens: tok(totals), cost: totalCost },
     today: { ...todayB, tokens: tok(todayB), cost: todayCost },
     projects,
     engines,
     hourlyToday, // {all,consola,tolkien,otros} serie horaria de hoy (gráfica "Día")
-    windows: { h5: h5tok, d7: d7tok, d7ByKey }, // token-counts junto a los límites
+    // token-counts junto a los límites; h5Cost/h5CostBaseline = costo equivalente
+    // REAL vs. ESPERADO en un bloque de 5h según tu ritmo habitual (null si no
+    // hay suficiente historial todavía).
+    windows: { h5: h5tok, d7: d7tok, d7ByKey, h5Cost: h5cost, h5CostBaseline, h5BaselineDays },
     daily, // desglose por día×proyecto×modelo (lo consume el histórico; no viaja al front)
     updatedAt: new Date().toISOString(),
   };

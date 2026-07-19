@@ -29,6 +29,7 @@ import fss from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../../core/inventory.js';
 import { hardRulesText } from './shared.js';
+import { crossCheckPad } from './scan-shared.js';
 import {
   DATA_DIR, sha, readOnlyToolAllowed, makeLock, makeResultStore, makeProposalParser,
 } from './proposal-runner-shared.js';
@@ -312,6 +313,32 @@ export function evaluateCoherence(census) {
   }
 
   return findings;
+}
+
+// CROSS-CHECK DETERMINÍSTICO con Pad (2026-07-19, "que los motores se hablen
+// entre sí a través de Pad"): reusa crossCheckPad (scan-shared.js, mismo
+// matching por jaccard de términos que usa el Escaneo Unificado) sobre los
+// hallazgos determinísticos de evaluateCoherence() — más confiable que el
+// texto libre de padContext() (el modelo PUEDE ignorar un texto libre; este
+// match es matemático). Adapta el shape {categoria,foco,detalle,severidad} de
+// coherencia al {area,detail,file,severity,module} que espera crossCheckPad.
+// best-effort: si Pad no responde, devuelve '' y el prompt sigue igual.
+export async function coherenceCrossCheckText(findings = []) {
+  const mapped = findings.map((f) => ({
+    area: f.foco, detail: f.detalle, file: null, module: f.foco, severity: f.severidad === 'alto' ? 'high' : 'medium',
+  }));
+  const cc = await crossCheckPad(mapped);
+  if (!cc.available || (!cc.rastreado.length && !cc.regresion.length)) return '';
+  const lines = ['CRUCE DETERMINÍSTICO contra Pad (match por similitud de términos, ver crossCheckPad):'];
+  if (cc.rastreado.length) {
+    lines.push(`- ${cc.rastreado.length} hallazgo(s) YA rastreado(s) como BUG abierto — NO los propongas de nuevo, referencialos:`);
+    for (const r of cc.rastreado.slice(0, 15)) lines.push(`  · ${r.match.ref} (${r.match.score}%) — ${r.area}`);
+  }
+  if (cc.regresion.length) {
+    lines.push(`- ${cc.regresion.length} hallazgo(s) que matchean un BUG YA CERRADO (posible regresión — volvió pese a estar resuelto):`);
+    for (const r of cc.regresion.slice(0, 15)) lines.push(`  · ${r.match.ref} (${r.match.score}%) — ${r.area}`);
+  }
+  return lines.join('\n');
 }
 
 // Vista compacta del censo para el prompt (evita mandar el grafo entero).

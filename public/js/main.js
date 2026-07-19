@@ -9,6 +9,7 @@ import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
 import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
+import { initI18n, applyI18n } from './ui/i18n.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -68,7 +69,13 @@ function setActive(id) {
     const on = tid === id;
     entry.pane.classList.toggle('active', on);
     entry.tabButton.classList.toggle('active', on);
-    if (on) entry.tab.focus();
+    if (on) {
+      // Lazy-connect: una conversación (vista Chat) abre su WebSocket —y recién
+      // ahí el server le baja el historial— al MOSTRARSE por primera vez, no al
+      // arranque. connect() es idempotente, así que reactivarla no reconecta.
+      if (entry.type === 'chat' && entry.viewMode === 'chat') entry.tab?.connect?.();
+      entry.tab.focus();
+    }
   }
   // El popup del chat que quedó activo se suprime (su tarjeta inline ya está a
   // la vista); el del que dejó de estarlo reaparece.
@@ -76,7 +83,7 @@ function setActive(id) {
   intercomCenter?.refresh();
 }
 
-function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
+function addTab(session, { type = 'pty', initialPrompt = null, activate = true } = {}) {
   const pane = document.createElement('div');
   pane.className = 'terminal-pane';
   terminalsEl.appendChild(pane);
@@ -114,7 +121,10 @@ function addTab(session, { type = 'pty', initialPrompt = null } = {}) {
   chip.addEventListener('click', () => setActive(session.id));
   close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(session.id); });
 
-  setActive(session.id);
+  // El arranque agrega TODAS las pestañas con activate:false y activa UNA sola
+  // al final (lazy-connect): así solo esa conversación conecta su WS. Los demás
+  // caminos (abrir/retomar a mano) activan enseguida como siempre.
+  if (activate) setActive(session.id);
   updateModelFlag(session.id);
 }
 
@@ -158,7 +168,10 @@ function buildConversationInner(entry, info, initialPrompt = null) {
       initialPrompt, // solo en la primera construcción (no en toggles/recarga)
     });
   }
-  entry.tab.connect();
+  // Las vistas TUI/PTY conectan al construirse; una vista Chat conecta de forma
+  // DIFERIDA (lazy) al mostrarse — ver setActive. Así el arranque no abre N
+  // WebSockets ni baja N historiales de conversaciones que no estás mirando.
+  if (entry.viewMode !== 'chat') entry.tab.connect();
   updateConvChipMode(entry);
 }
 
@@ -205,7 +218,11 @@ function applyConversationMode(entry, info) {
   const wasActive = activeId === entry.session.id;
   try { entry.tab?.dispose(); } catch { /* noop */ }
   buildConversationInner(entry, entry.session);
-  if (wasActive) entry.tab.focus();
+  if (wasActive) {
+    // Reconstruida y visible: si es vista Chat, conectarla ahora (lazy).
+    if (entry.viewMode === 'chat') entry.tab.connect();
+    entry.tab.focus();
+  }
 }
 
 // El server anunció (por WS) un cambio de modo (p.ej. desde otro dispositivo).
@@ -512,6 +529,17 @@ const bootMsg = (t, pct) => {
   if (pct != null) window.__bootPct?.(pct);
 };
 
+// ===== Idioma de interfaz (PLAN i18n, 2026-07-19) =====
+// Se carga ANTES de montar módulos para que arranquen ya en el idioma
+// correcto (sin parpadeo ES→EN). `whoami` se re-resuelve más abajo con
+// `.then()` para el pie de página — awaitearla acá también es gratis (la
+// promesa ya está en vuelo o resuelta; top-level await es válido en un
+// <script type="module">).
+bootMsg('cargando idioma…', 28);
+const meForLang = await whoami;
+await initI18n(meForLang?.lang || 'es');
+applyI18n(document);
+
 // ===== Montaje de módulos (espejo del registry backend) =====
 bootMsg('montando módulos…', 35);
 for (const mod of MODULES) {
@@ -634,20 +662,29 @@ if (isMobile()) {
       fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
     ]);
     const live = existing.filter((s) => s.alive);
-    live.forEach((s) => addTab(s));
-    chats.forEach((c) => addTab(c, { type: 'chat' }));
+    // B — progreso honesto: mostrar cuánto se restaura DE VERDAD, no un salto seco.
+    const total = live.length + chats.length;
+    if (total) bootMsg(`restaurando ${total} ${total === 1 ? 'sesión' : 'sesiones'}…`, 72);
+    // A — lazy-connect: agregamos TODAS las pestañas SIN activarlas (activate:false),
+    // así ninguna conversación abre su WebSocket ni baja su historial todavía.
+    // Recién activamos UNA (la del ?focus= o la última) → solo ESA conecta al
+    // arranque: O(1) en vez de O(n) conversaciones abiertas.
+    live.forEach((s) => addTab(s, { activate: false }));
+    chats.forEach((c) => addTab(c, { type: 'chat', activate: false }));
     const focus = new URLSearchParams(location.search).get('focus');
-    if (focus && tabs.has(focus)) setActive(focus);
+    const initial = (focus && tabs.has(focus)) ? focus : ([...tabs.keys()].pop() || null);
+    if (initial) setActive(initial);
     if (focus) history.replaceState(null, '', '/');
     if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
     // Si el tab ACTIVO es un chat, esperar a que su historial esté renderizado
     // DE VERDAD (promesa `ready` del ChatTab, resuelta al procesar el primer
     // `history` del attach — no un timer) antes de destapar: sin esto el
-    // splash caía y el chat aparecía vacío unos segundos. Tope de 8 s por si
-    // el WS no conecta (la red inline del HTML fuerza a los 12 s igual).
+    // splash caía y el chat aparecía vacío unos segundos. Con lazy-connect su WS
+    // ya se abrió en setActive. Tope de 8 s por si el WS no conecta (la red
+    // inline del HTML fuerza a los 12 s igual).
     const act = tabs.get(activeId);
     if (act?.type === 'chat' && act.tab?.ready) {
-      bootMsg('cargando la conversación…', 80);
+      bootMsg('cargando la conversación…', 85);
       await Promise.race([act.tab.ready, new Promise((r) => setTimeout(r, 8000))]);
     }
   } finally {

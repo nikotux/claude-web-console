@@ -4,6 +4,7 @@
 // "Bugs & Features" v1 (archivado en _archived/) — ver plan en
 // ~/pool of documents/2026-07-06_plan-backend-deterministico-lectura-desk_v01.md.
 import { openBugsV2Dashboard } from './dashboard.js';
+import { t } from '../../ui/i18n.js';
 
 export default {
   name: 'tickets',
@@ -21,12 +22,12 @@ export default {
       <header class="sec-head">
         <span class="sec-dot sec-dot--idle" data-ref="dot" title="Tickets & Features"></span>
         <span class="sec-title">Tickets &amp; Features</span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Leer Zoho (determinístico, sin tokens)">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('tickets.sidebar.refreshTitle', 'Leer Zoho (determinístico, sin tokens)')}">${icon('refresh', { size: 14 })}</button>
       </header>
       <div class="tk-card bf-card">
-        <div class="bv2-sum" data-ref="sum"><span class="bf-sub">sin cargar</span></div>
+        <div class="bv2-sum" data-ref="sum"><span class="bf-sub">${t('tickets.sidebar.notLoaded', 'sin cargar')}</span></div>
         <div class="tk-actions">
-          <button class="btn-ghost btn--sm btn--block" data-ref="open" hidden>${icon('grid', { size: 13 })}<span>Ver dashboard</span></button>
+          <button class="btn-ghost btn--sm btn--block" data-ref="open" hidden>${icon('grid', { size: 13 })}<span>${t('tickets.sidebar.openDashboard', 'Ver dashboard')}</span></button>
         </div>
       </div>`;
 
@@ -34,17 +35,17 @@ export default {
     for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
     function render() {
-      if (busy) { refs.sum.innerHTML = `<span class="bf-sub">${icon('clock', { size: 11 })} leyendo…</span>`; return; }
-      if (!data) { refs.sum.innerHTML = '<span class="bf-sub">sin cargar · tocá ↻</span>'; return; }
+      if (busy) { refs.sum.innerHTML = `<span class="bf-sub">${icon('clock', { size: 11 })} ${t('tickets.sidebar.reading', 'leyendo…')}</span>`; return; }
+      if (!data) { refs.sum.innerHTML = `<span class="bf-sub">${t('tickets.sidebar.notLoadedTap', 'sin cargar · tocá ↻')}</span>`; return; }
       if (data.error) { refs.sum.innerHTML = `<span class="bf-err">${escapeHtml(data.error)}</span>`; return; }
-      if (data.loading) { refs.sum.innerHTML = `<span class="bf-sub">${icon('clock', { size: 11 })} generando snapshot…</span>`; return; }
+      if (data.loading) { refs.sum.innerHTML = `<span class="bf-sub">${icon('clock', { size: 11 })} ${t('tickets.sidebar.generating', 'generando snapshot…')}</span>`; return; }
       const c = data.counts || {};
       refs.sum.innerHTML = `
-        <div class="bv2-sum-main">${c.open ?? 0} abiertos</div>
+        <div class="bv2-sum-main">${t('tickets.sidebar.openCount', '{n} abiertos', { n: c.open ?? 0 })}</div>
         <div class="bv2-sum-chips">
-          <span class="bb-chip bb-chip--info" title="Nuevos · sin triar">🆕 ${c.nuevos ?? 0}</span>
-          <span class="bb-chip bb-chip--danger" title="Vencidos (SLA roto o 7+ días sin update)">🔴 ${c.vencidos ?? 0}</span>
-          <span class="bb-chip bb-chip--warn" title="En progreso">🔧 ${c.enProgreso ?? 0}</span>
+          <span class="bb-chip bb-chip--info" title="${t('tickets.sidebar.newTitle', 'Nuevos · sin triar')}">🆕 ${c.nuevos ?? 0}</span>
+          <span class="bb-chip bb-chip--danger" title="${t('tickets.sidebar.overdueTitle', 'Vencidos (SLA roto o 7+ días sin update)')}">🔴 ${c.vencidos ?? 0}</span>
+          <span class="bb-chip bb-chip--warn" title="${t('tickets.sidebar.inProgressTitle', 'En progreso')}">🔧 ${c.enProgreso ?? 0}</span>
         </div>`;
       if (refs.dot) refs.dot.className = `sec-dot sec-dot--${(c.vencidos > 0) ? 'alert' : (c.open ? 'ok' : 'idle')}`;
     }
@@ -87,7 +88,7 @@ export default {
         // sin forzar) — el backend ya se re-computa solo en background.
         setInterval(() => { if (!document.hidden && !busy) load(false); }, 60_000);
       } else {
-        refs.sum.innerHTML = '<span class="bf-sub">requiere admin</span>';
+        refs.sum.innerHTML = `<span class="bf-sub">${t('tickets.sidebar.adminRequired', 'requiere admin')}</span>`;
       }
     });
   },

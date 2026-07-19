@@ -4,6 +4,8 @@
 //   - render de xterm con addon fit (resize) y web-links.
 //   - WebSocket: binario = salida del PTY; texto JSON = control.
 //   - reconexión automática con re-adjuntado (el PTY sobrevive en el server).
+import { t } from '../../ui/i18n.js';
+
 const { Terminal } = window;
 const FitAddonNS = window.FitAddon;
 const WebLinksNS = window.WebLinksAddon;
@@ -160,10 +162,10 @@ export class TerminalTab {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'exit') {
-            this.term.write('\r\n\x1b[33m[sesión terminada]\x1b[0m\r\n');
+            this.term.write(`\r\n\x1b[33m${t('terminal.msg.session_ended', '[sesión terminada]')}\x1b[0m\r\n`);
             this.closedByUser = true;
           } else if (msg.type === 'error') {
-            this.term.write(`\r\n\x1b[31m[error] ${msg.message}\x1b[0m\r\n`);
+            this.term.write(`\r\n\x1b[31m${t('terminal.msg.error', '[error] {message}', { message: msg.message })}\x1b[0m\r\n`);
           }
         } catch { /* noop */ }
       } else {
@@ -175,7 +177,7 @@ export class TerminalTab {
     ws.onclose = () => {
       if (this.closedByUser) return;
       // Reconexión: el PTY sigue vivo en el servidor, nos re-adjuntamos.
-      this.term.write('\r\n\x1b[90m[reconectando...]\x1b[0m\r\n');
+      this.term.write(`\r\n\x1b[90m${t('terminal.msg.reconnecting', '[reconectando...]')}\x1b[0m\r\n`);
       this.reconnectTimer = setTimeout(() => this.connect(), 1500);
     };
 

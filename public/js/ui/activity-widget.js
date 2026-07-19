@@ -14,6 +14,7 @@
 // /api/chat/list, que ya se consulta). 0 estado en el server.
 import { icon, hydrateIcons } from './icons.js';
 import { modelColor, modelName } from './models.js';
+import { t } from './i18n.js';
 import { openActivityModal, refreshActivityModal, activityModalOpen } from '../modules/system/activity-modal.js';
 
 const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
@@ -49,13 +50,15 @@ export function initActivityWidget({ openChat } = {}) {
     el.hidden = false;
     el.classList.toggle('cwc-activity--idle', total === 0);
     const dom = dominantModel();
-    el.title = `${nAg} subagente(s) · ${nPr} proceso(s) en segundo plano${dom ? ` · modelo dominante: ${modelName(dom)}` : ''} — tocá para ver el detalle`;
+    const domSuffix = dom ? t('core.activity.dominantSuffix', ' · modelo dominante: {m}', { m: modelName(dom) }) : '';
+    el.title = t('core.activity.summary', '{n} subagente(s) · {p} proceso(s) en segundo plano', { n: nAg, p: nPr })
+      + domSuffix + t('core.activity.tapDetail', ' — tocá para ver el detalle');
     el.innerHTML = `
       <div class="cwc-act-cols">
-        <span class="cwc-act-col" title="${nAg} subagente(s) en chats">${icon('sparkle', { size: 14 })}<b class="cwc-act-n">${nAg}</b></span>
-        <span class="cwc-act-col" title="${nPr} proceso(s) en segundo plano">${icon('gear', { size: 14 })}<b class="cwc-act-n">${nPr}</b></span>
+        <span class="cwc-act-col" title="${t('core.activity.subagentsTitle', '{n} subagente(s) en chats', { n: nAg })}">${icon('sparkle', { size: 14 })}<b class="cwc-act-n">${nAg}</b></span>
+        <span class="cwc-act-col" title="${t('core.activity.processesTitle', '{n} proceso(s) en segundo plano', { n: nPr })}">${icon('gear', { size: 14 })}<b class="cwc-act-n">${nPr}</b></span>
       </div>
-      <span class="cwc-act-sem" style="background:${dom ? modelColor(dom) : 'var(--cwc-model-unknown)'}" title="${dom ? `Modelo dominante: ${modelName(dom)}` : 'Sin modelo IA activo'}"></span>`;
+      <span class="cwc-act-sem" style="background:${dom ? modelColor(dom) : 'var(--cwc-model-unknown)'}" title="${dom ? t('core.activity.dominantModel', 'Modelo dominante: {m}', { m: modelName(dom) }) : t('core.activity.noModel', 'Sin modelo IA activo')}"></span>`;
     hydrateIcons(el);
   }
 

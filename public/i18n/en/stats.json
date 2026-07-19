@@ -1,0 +1,9 @@
+{
+  "stats.gauge.cpu": "CPU",
+  "stats.gauge.ram": "RAM",
+  "stats.gauge.disk": "DSK",
+  "stats.tooltip.load": "load",
+  "stats.tooltip.up": "up",
+  "stats.limits.title": "Plan limits",
+  "stats.limits.noData": "no data"
+}

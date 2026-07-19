@@ -3,6 +3,8 @@
 // CPU / RAM / Disco en UNA fila de mini-gauges; hostname, carga y uptime van
 // al tooltip (dato de plomería → no ocupa espacio visual). Poll 2.5 s,
 // pausado con la pestaña en segundo plano.
+import { t } from '../../ui/i18n.js';
+
 const POLL_MS = 2500;
 
 // Exportados (además de uso local acá): el dashboard de Salud
@@ -73,17 +75,17 @@ export default {
         if (!built || minis.length !== 3) {
           // Primera vez (o estructura perdida): construir el subtree una vez.
           el.innerHTML =
-            gauge(ic, 'CPU', 'cpu', s.cpu.pct) +
-            gauge(ic, 'RAM', 'ram', s.mem.pct) +
-            gauge(ic, 'DSK', 'disk', s.disk.pct);
+            gauge(ic, t('stats.gauge.cpu', 'CPU'), 'cpu', s.cpu.pct) +
+            gauge(ic, t('stats.gauge.ram', 'RAM'), 'ram', s.mem.pct) +
+            gauge(ic, t('stats.gauge.disk', 'DSK'), 'disk', s.disk.pct);
           built = true;
         } else {
           // Ticks siguientes: parchear en su lugar (sin rebuild).
-          patchGauge(minis[0], 'CPU', s.cpu.pct);
-          patchGauge(minis[1], 'RAM', s.mem.pct);
-          patchGauge(minis[2], 'DSK', s.disk.pct);
+          patchGauge(minis[0], t('stats.gauge.cpu', 'CPU'), s.cpu.pct);
+          patchGauge(minis[1], t('stats.gauge.ram', 'RAM'), s.mem.pct);
+          patchGauge(minis[2], t('stats.gauge.disk', 'DSK'), s.disk.pct);
         }
-        el.title = `${s.hostname} · RAM ${fmtBytes(s.mem.used)}/${fmtBytes(s.mem.total)} · carga ${s.load[0].toFixed(2)} · up ${fmtUptime(s.uptime)}`;
+        el.title = `${s.hostname} · RAM ${fmtBytes(s.mem.used)}/${fmtBytes(s.mem.total)} · ${t('stats.tooltip.load', 'carga')} ${s.load[0].toFixed(2)} · ${t('stats.tooltip.up', 'up')} ${fmtUptime(s.uptime)}`;
       } catch { /* reintenta al próximo tick */ }
     }
     tick();

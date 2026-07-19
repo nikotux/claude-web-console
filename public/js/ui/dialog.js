@@ -7,6 +7,7 @@
 //   promptDialog({...})  → Promise<string|null>
 //   alertDialog({...})   → Promise<void> (aviso con un solo botón)
 import { icon } from './icons.js';
+import { t } from './i18n.js';
 
 // Pila global de "capas Esc" abiertas: modales (openModal) Y popups
 // descartables (ui/popup.js). Esc solo debe cerrar la que está ARRIBA:
@@ -31,7 +32,7 @@ export function openModal({ title = '', width = 480, onClose = null } = {}) {
   card.innerHTML = `
     <header class="dlg-head">
       <span class="dlg-title"></span>
-      <button class="btn-ghost btn--sm btn--icon dlg-x" title="Cerrar">${icon('close', { size: 15 })}</button>
+      <button class="btn-ghost btn--sm btn--icon dlg-x" title="${t('core.dialog.close', 'Cerrar')}">${icon('close', { size: 15 })}</button>
     </header>
     <div class="dlg-body"></div>`;
   card.querySelector('.dlg-title').textContent = title;
@@ -73,8 +74,8 @@ export function openModal({ title = '', width = 480, onClose = null } = {}) {
 
 // Confirmación. danger=true pinta el botón principal en rojo.
 export function confirmDialog({
-  title = 'Confirmar', message = '', confirmLabel = 'Confirmar',
-  cancelLabel = 'Cancelar', danger = false,
+  title = t('core.dialog.confirm', 'Confirmar'), message = '', confirmLabel = t('core.dialog.confirm', 'Confirmar'),
+  cancelLabel = t('core.dialog.cancel', 'Cancelar'), danger = false,
 } = {}) {
   return new Promise((resolve) => {
     const m = openModal({ title, width: 400, onClose: () => resolve(false) });
@@ -103,8 +104,8 @@ export function confirmDialog({
 // grip + swipe-down para cancelar). Devuelve Promise<boolean> igual que
 // confirmDialog. confirmLabel es la acción (p.ej. "Parar"), cancelLabel aborta.
 export function confirmSheet({
-  title = 'Confirmar', message = '', confirmLabel = 'Confirmar',
-  cancelLabel = 'Cancelar', danger = false,
+  title = t('core.dialog.confirm', 'Confirmar'), message = '', confirmLabel = t('core.dialog.confirm', 'Confirmar'),
+  cancelLabel = t('core.dialog.cancel', 'Cancelar'), danger = false,
 } = {}) {
   const mobile = window.matchMedia('(max-width: 768px)').matches;
   if (!mobile) return confirmDialog({ title, message, confirmLabel, cancelLabel, danger });
@@ -176,7 +177,7 @@ export function confirmSheet({
 // Entrada de texto. Devuelve el string o null si se cancela.
 export function promptDialog({
   title = '', message = '', value = '', placeholder = '',
-  confirmLabel = 'Aceptar', cancelLabel = 'Cancelar',
+  confirmLabel = t('core.dialog.accept', 'Aceptar'), cancelLabel = t('core.dialog.cancel', 'Cancelar'),
 } = {}) {
   return new Promise((resolve) => {
     const m = openModal({ title, width: 400, onClose: () => resolve(null) });
@@ -214,7 +215,7 @@ export function promptDialog({
 }
 
 // Aviso simple (reemplaza alert()).
-export function alertDialog({ title = 'Aviso', message = '', okLabel = 'Entendido' } = {}) {
+export function alertDialog({ title = t('core.dialog.notice', 'Aviso'), message = '', okLabel = t('core.dialog.understood', 'Entendido') } = {}) {
   return new Promise((resolve) => {
     const m = openModal({ title, width: 420, onClose: () => resolve() });
     const msg = document.createElement('p');
@@ -235,7 +236,7 @@ export function alertDialog({ title = 'Aviso', message = '', okLabel = 'Entendid
 // Editor de texto plano en modal (p.ej. los contextos editables de bugfixes).
 // `onSave(texto)` puede ser async: si tira, el error se muestra en el propio
 // modal sin cerrarlo; si resuelve, se cierra. Devuelve true si se guardó.
-export function textEditorDialog({ title = 'Editar', hint = '', value = '', width = 640, saveLabel = 'Guardar', onSave } = {}) {
+export function textEditorDialog({ title = t('core.dialog.edit', 'Editar'), hint = '', value = '', width = 640, saveLabel = t('core.dialog.save', 'Guardar'), onSave } = {}) {
   return new Promise((resolve) => {
     let saved = false;
     const m = openModal({ title, width, onClose: () => resolve(saved) });
@@ -245,7 +246,7 @@ export function textEditorDialog({ title = 'Editar', hint = '', value = '', widt
       <textarea class="dlg-editor-text" spellcheck="false"></textarea>
       <p class="dlg-editor-err" hidden></p>
       <div class="dlg-actions">
-        <button class="btn-ghost btn--sm" data-ref="cancel">Cancelar</button>
+        <button class="btn-ghost btn--sm" data-ref="cancel">${t('core.dialog.cancel', 'Cancelar')}</button>
         <button class="btn btn--sm" data-ref="save"></button>
       </div>`;
     if (hint) box.querySelector('.dlg-editor-hint').textContent = hint;
@@ -264,7 +265,7 @@ export function textEditorDialog({ title = 'Editar', hint = '', value = '', widt
         saved = true;
         m.close();
       } catch (e) {
-        err.textContent = e?.message || 'No se pudo guardar.';
+        err.textContent = e?.message || t('core.dialog.saveError', 'No se pudo guardar.');
         err.hidden = false;
         save.disabled = false;
       }

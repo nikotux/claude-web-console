@@ -1,7 +1,15 @@
 // ui/token-flow.js — store + director DOM para el caudal de tokens.
 // Un solo rAF anima todas las celdas .cwc-flow-cell presentes en el documento.
+import { t } from './i18n.js';
 
-export const MAX_TPS = 8000;
+// Techo del caudal (tps) que mapea a "barra full". RECALIBRADO 2026-07-19 tras
+// ponderar el cache read ×0.1 en el backend (flow.js): antes el caudal crudo era
+// 95% relecturas de cache y picaba en 29-38k → saturaba este techo por ~4x (barra
+// siempre en 100%). Con el peso, el caudal ponderado real (GLOBAL, suma de todos
+// los chats) pica ~7k en actividad alta → 10k deja cabeza para picos multi-chat
+// sin clavarse, y con la curva sqrt un caudal típico de 1 chat (~1-3k) cae en la
+// zona media visible (32-55%). El caudal por sesión individual usa el mismo techo.
+export const MAX_TPS = 10000;
 export const POLL_MS = 700; // (PEND-622) 400→700: corta ~40% de requests; el lerp 0.15 tolera el intervalo mayor sin que la animación lo note
 
 export let latest = {
@@ -121,7 +129,7 @@ export function flowBarHtml(opts = {}) {
       ${label ? `<span class="cwc-flow-label">${escAttr(label)}</span>` : ''}
       <span class="cwc-flow-bar"><span class="cwc-flow-mask"></span></span>
       <span class="cwc-flow-num" data-flow-num>0</span>
-      ${opts.total ? '<span class="cwc-flow-total" data-flow-total title="tokens acumulados en la sesión (aprox.)">0</span>' : ''}
+      ${opts.total ? `<span class="cwc-flow-total" data-flow-total title="${escAttr(t('core.flow.totalTitle', 'tokens acumulados en la sesión (aprox.)'))}">0</span>` : ''}
     </span>`;
 }
 

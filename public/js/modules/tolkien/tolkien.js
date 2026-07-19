@@ -16,6 +16,8 @@
 // con "Poner al día" (rebase de la rama actual sobre main). El auto-fetch cada
 // 5 min mantiene fresco el "detrás" (la consulta gh de /branches NO va ahí).
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { pacman } from '../../ui/pacman.js';
+import { t } from '../../ui/i18n.js';
 
 export default {
   name: 'tolkien',
@@ -31,19 +33,19 @@ export default {
 
     el.innerHTML = `
       <header class="sec-head">
-        <span class="sec-dot" data-ref="dot" title="Estado del repo"></span>
+        <span class="sec-dot" data-ref="dot" title="${t('tolkien.header.repoStatus', 'Estado del repo')}"></span>
         <span class="sec-title">Tolkien</span>
-        <span class="tk-ver-head" data-ref="ver" role="button" tabindex="0" title="Versión actual — clic para copiar"></span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="Buscar cambios en GitHub (fetch)">${icon('refresh', { size: 14 })}</button>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="Descargar cambios (pull: stash → pull → pop)">${icon('download', { size: 14 })}</button>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="refreshData" title="Vista fresca: borrar data local + recargar de Zoho">${icon('disk', { size: 14 })}</button>
+        <span class="tk-ver-head" data-ref="ver" role="button" tabindex="0" title="${t('tolkien.header.versionCopy', 'Versión actual — clic para copiar')}"></span>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="${t('tolkien.header.fetchTitle', 'Buscar cambios en GitHub (fetch)')}">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="${t('tolkien.header.updateTitle', 'Descargar cambios (pull: stash → pull → pop)')}">${icon('download', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="refreshData" title="${t('tolkien.header.refreshDataTitle', 'Vista fresca: borrar data local + recargar de Zoho')}">${icon('disk', { size: 14 })}</button>
       </header>
       <div class="tk-card">
-        <div class="tk-info" data-ref="info">cargando…</div>
+        <div class="tk-info" data-ref="info">${t('tolkien.info.loading', 'cargando…')}</div>
         <div class="tk-actions">
-          <a class="btn-ghost btn--sm tk-link tk-link--local" href="/api/tolkien/local-enter" target="_blank" rel="noopener" title="Entrar al Tolkien local ya logueado (la consola inyecta la sesión dev-login · ZeroTier)">${icon('externalLink', { size: 13 })}<span>Tolkien local</span></a>
-          <a class="btn-ghost btn--sm tk-link tk-link--oficial" href="https://app.tolkien.mordorstaffing.com" target="_blank" rel="noopener" title="Abrir la app oficial de Tolkien (producción)">${icon('externalLink', { size: 13 })}<span>Tolkien oficial</span></a>
-          <a class="btn-ghost btn--sm tk-link tk-link--pad" href="http://${location.hostname}:7777" target="_blank" rel="noopener" title="Abrir el Pad local self-hosted (workspace console) en una pestaña nueva">${icon('externalLink', { size: 13 })}<span>GetPad local</span></a>
+          <a class="btn-ghost btn--sm tk-link tk-link--local" href="/api/tolkien/local-enter" target="_blank" rel="noopener" title="${t('tolkien.links.localTitle', 'Entrar al Tolkien local ya logueado (la consola inyecta la sesión dev-login · ZeroTier)')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.local', 'Tolkien local')}</span></a>
+          <a class="btn-ghost btn--sm tk-link tk-link--oficial" href="https://app.tolkien.mordorstaffing.com" target="_blank" rel="noopener" title="${t('tolkien.links.oficialTitle', 'Abrir la app oficial de Tolkien (producción)')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.oficial', 'Tolkien oficial')}</span></a>
+          <a class="btn-ghost btn--sm tk-link tk-link--pad" href="http://${location.hostname}:7777" target="_blank" rel="noopener" title="${t('tolkien.links.padTitle', 'Abrir el Pad local self-hosted (workspace console) en una pestaña nueva')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.pad', 'GetPad local')}</span></a>
         </div>
       </div>`;
 
@@ -99,10 +101,10 @@ export default {
       const ms = iso ? (typeof iso === 'number' ? iso : Date.parse(iso)) : 0;
       if (!ms) return '';
       const s = Math.floor((Date.now() - ms) / 1000);
-      if (s < 60) return 'recién';
-      if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
-      return `hace ${Math.floor(s / 86400)} d`;
+      if (s < 60) return t('tolkien.ago.justNow', 'recién');
+      if (s < 3600) return t('tolkien.ago.min', 'hace {n} min', { n: Math.floor(s / 60) });
+      if (s < 86400) return t('tolkien.ago.hour', 'hace {n} h', { n: Math.floor(s / 3600) });
+      return t('tolkien.ago.day', 'hace {n} d', { n: Math.floor(s / 86400) });
     }
 
     // Autor corto: "Christopher Swenor" -> "C. Swenor" (reconocible sin ocupar
@@ -122,7 +124,7 @@ export default {
       if (refs.refreshData) {
         refs.refreshData.disabled = busy || dataBusy;
         refs.refreshData.classList.toggle('is-busy', dataBusy);
-        refs.refreshData.title = dataBusy ? 'Recargando data local…' : 'Vista fresca: borrar data local + recargar de Zoho';
+        refs.refreshData.title = dataBusy ? t('tolkien.header.refreshDataBusy', 'Recargando data local…') : t('tolkien.header.refreshDataTitle', 'Vista fresca: borrar data local + recargar de Zoho');
       }
       // Semáforo (visible colapsado): amarillo si hay commits por traer o
       // cambios sin commitear; verde si está al día y limpio; tenue sin datos.
@@ -135,21 +137,21 @@ export default {
         // NO influye: es ruido local. 🟢 main al día · 🟡 hay commits por traer.
         const dstate = !st ? 'idle' : (mb > 0 ? 'warn' : 'ok');
         refs.dot.className = `sec-dot sec-dot--${dstate}`;
-        refs.dot.title = !st ? 'Sin datos'
-          : (mb > 0 ? `Tu main local está ${mb} commit(s) atrás de GitHub` : 'Tu main local está al día con GitHub');
+        refs.dot.title = !st ? t('tolkien.dot.noData', 'Sin datos')
+          : (mb > 0 ? t('tolkien.dot.behind', 'Tu main local está {mb} commit(s) atrás de GitHub', { mb }) : t('tolkien.dot.upToDate', 'Tu main local está al día con GitHub'));
       }
       // El pull resalta cuando hay commits de main nuevos para traer.
       refs.update.classList.toggle('tk-update--due', !!st && mb > 0);
       refs.update.title = st && mb > 0
-        ? `Actualizar: traer ${mb} commit(s) nuevos de main (deja tu main local = GitHub)`
-        : 'Actualizar: dejar tu main local = GitHub (stash → pull → pop si estás en main)';
+        ? t('tolkien.update.dueTitle', 'Actualizar: traer {mb} commit(s) nuevos de main (deja tu main local = GitHub)', { mb })
+        : t('tolkien.update.title', 'Actualizar: dejar tu main local = GitHub (stash → pull → pop si estás en main)');
 
       if (!st) {
         if (refs.ver) {
           refs.ver.textContent = '';
           refs.ver.dataset.sha = '';
         }
-        refs.info.innerHTML = busy ? '<span class="cwc-spinner"></span>' : '…';
+        refs.info.innerHTML = busy ? pacman({ size: 'sm' }) : '…';
         return;
       }
 
@@ -167,11 +169,11 @@ export default {
       // Línea 1: branch (solo ⚠ si ≠ main) + estado de sync vs main
       // (✓ al día | ↓N por traer).
       const branch = (st.branch && st.branch !== 'main')
-        ? `<span class="tk-branch tk-branch--warn" title="branch actual — no es main">${icon('gitBranch', { size: 12 })}${esc(st.branch)}</span>`
+        ? `<span class="tk-branch tk-branch--warn" title="${t('tolkien.branch.notMainTitle', 'branch actual — no es main')}">${icon('gitBranch', { size: 12 })}${esc(st.branch)}</span>`
         : '';
       const sync = mb > 0
-        ? `<span class="tk-sync tk-sync--due" title="Tu main local está ${mb} commit(s) atrás de GitHub">↓${mb} main</span>`
-        : `<span class="tk-sync tk-sync--ok" title="Tu main local está al día con GitHub">${icon('check', { size: 12 })}main al día</span>`;
+        ? `<span class="tk-sync tk-sync--due" title="${t('tolkien.dot.behind', 'Tu main local está {mb} commit(s) atrás de GitHub', { mb })}">${t('tolkien.sync.due', '↓{mb} main', { mb })}</span>`
+        : `<span class="tk-sync tk-sync--ok" title="${t('tolkien.dot.upToDate', 'Tu main local está al día con GitHub')}">${icon('check', { size: 12 })}${t('tolkien.sync.upToDate', 'main al día')}</span>`;
 
       // Línea 4: mis PRs abiertos sin mergear (ramas que propuse y Chris aún no
       // mergeó). Ícono de ramas; 🟡 si alguno quedó atrás de main (necesita
@@ -183,19 +185,19 @@ export default {
           const brs = branchesData.branches || [];
           const anyBehind = brs.some((b) => (b.behindMain || 0) > 0);
           if (brs.length === 0) {
-            branchLine = `<span class="tk-branches tk-branches--ok" title="No tenés PRs abiertos esperando merge — Chris mergeó todo lo que propusiste">${icon('gitBranch', { size: 12 })}0 PRs sin mergear</span>`;
+            branchLine = `<span class="tk-branches tk-branches--ok" title="${t('tolkien.branches.zeroTitle', 'No tenés PRs abiertos esperando merge — Chris mergeó todo lo que propusiste')}">${icon('gitBranch', { size: 12 })}${t('tolkien.branches.zero', '0 PRs sin mergear')}</span>`;
           } else {
-            const lbl = `${brs.length} PR${brs.length > 1 ? 's' : ''} sin mergear`;
-            const titleList = brs.map((b) => `#${b.number} ${b.branch}${b.behindMain > 0 ? ` (↓${b.behindMain} sobre main)` : ''}`).join(' · ');
-            branchLine = `<span class="tk-branches ${anyBehind ? 'tk-branches--due' : 'tk-branches--ok'}" role="button" tabindex="0" title="${esc(titleList)} — clic para ver y poner al día">${icon('gitBranch', { size: 12 })}${lbl}${anyBehind ? ' ⚠' : ''}</span>`;
+            const lbl = t('tolkien.branches.unmergedLabel', '{n} PR{s} sin mergear', { n: brs.length, s: brs.length > 1 ? 's' : '' });
+            const titleList = brs.map((b) => `#${b.number} ${b.branch}${b.behindMain > 0 ? t('tolkien.branches.overMain', ' (↓{n} sobre main)', { n: b.behindMain }) : ''}`).join(' · ');
+            branchLine = `<span class="tk-branches ${anyBehind ? 'tk-branches--due' : 'tk-branches--ok'}" role="button" tabindex="0" title="${esc(titleList)}${t('tolkien.branches.clickHint', ' — clic para ver y poner al día')}">${icon('gitBranch', { size: 12 })}${lbl}${anyBehind ? ' ⚠' : ''}</span>`;
           }
         } else if (branchesData.error) {
-          branchLine = `<span class="tk-branches" title="No se pudo consultar tus PRs con gh: ${esc(branchesData.error)}">${icon('gitBranch', { size: 12 })}PRs n/d</span>`;
+          branchLine = `<span class="tk-branches" title="${t('tolkien.branches.errorTitle', 'No se pudo consultar tus PRs con gh: {error}', { error: esc(branchesData.error) })}">${icon('gitBranch', { size: 12 })}${t('tolkien.branches.na', 'PRs n/d')}</span>`;
         }
       }
 
       const dataNote = dataBusy
-        ? `<div class="tk-line tk-line--dim"><span class="cwc-spinner"></span> actualizando data local…</div>`
+        ? `<div class="tk-line tk-line--dim">${pacman({ state: 'delegating', size: 'sm' })} ${t('tolkien.info.refreshingData', 'actualizando data local…')}</div>`
         : '';
       refs.info.innerHTML = `<div class="tk-line tk-line1 tk-line--split">${branch}${sync}<span class="tk-spacer"></span>${branchLine}</div>${dataNote}`;
     }
@@ -228,9 +230,9 @@ export default {
 
     async function doRebase(branch) {
       const ok = await dialog.confirmDialog({
-        title: 'Poner esta rama al día sobre main',
-        message: `Se rebasa "${branch}" sobre el último main de GitHub para seguir trabajando en paralelo.\n\n• Si hay conflicto se ABORTA y tu rama queda EXACTAMENTE como está (nada se pierde).\n• Tras el rebase, el PR va a necesitar force-push cuando lo re-envíes.`,
-        confirmLabel: 'Rebasar',
+        title: t('tolkien.rebase.confirmTitle', 'Poner esta rama al día sobre main'),
+        message: t('tolkien.rebase.confirmMsg', 'Se rebasa "{branch}" sobre el último main de GitHub para seguir trabajando en paralelo.\n\n• Si hay conflicto se ABORTA y tu rama queda EXACTAMENTE como está (nada se pierde).\n• Tras el rebase, el PR va a necesitar force-push cuando lo re-envíes.', { branch }),
+        confirmLabel: t('tolkien.rebase.confirmLabel', 'Rebasar'),
       });
       if (!ok) return false;
       try {
@@ -243,18 +245,18 @@ export default {
         if (data.status) current = data.status;
         if (!res.ok || data.error) {
           await dialog.alertDialog({
-            title: data.conflict ? 'Conflicto al rebasar' : 'No se pudo rebasar',
-            message: `${data.error || 'Error inesperado.'}\n\n${fmtLog(data.log)}`,
+            title: data.conflict ? t('tolkien.rebase.conflictTitle', 'Conflicto al rebasar') : t('tolkien.rebase.failTitle', 'No se pudo rebasar'),
+            message: `${data.error || t('tolkien.rebase.unexpectedError', 'Error inesperado.')}\n\n${fmtLog(data.log)}`,
           });
           return false;
         }
         await dialog.alertDialog({
-          title: data.noop ? 'Nada que hacer' : '✅ Rama al día',
-          message: `${data.message || 'Listo.'}\n\n${fmtLog(data.log)}`,
+          title: data.noop ? t('tolkien.rebase.noopTitle', 'Nada que hacer') : t('tolkien.rebase.okTitle', '✅ Rama al día'),
+          message: `${data.message || t('tolkien.rebase.done', 'Listo.')}\n\n${fmtLog(data.log)}`,
         });
         return true;
       } catch {
-        await dialog.alertDialog({ title: 'Tolkien', message: 'No se pudo rebasar (error de red o del servidor).' });
+        await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.rebase.netError', 'No se pudo rebasar (error de red o del servidor).') });
         return false;
       } finally {
         render();
@@ -263,26 +265,26 @@ export default {
 
     function openBranchesDialog() {
       const brs = (branchesData?.branches) || [];
-      const m = dialog.openModal({ title: '🌿 PRs abiertos sin mergear', width: 460 });
+      const m = dialog.openModal({ title: t('tolkien.branchDialog.title', '🌿 PRs abiertos sin mergear'), width: 460 });
       const wrap = document.createElement('div');
       wrap.innerHTML = `
-        <p class="dlg-msg" style="margin-bottom:.6rem">Ramas que propusiste y Chris todavía no mergeó. <b>Poner al día</b> aparece solo en la <b>rama actual</b> cuando quedó atrás de main (por seguridad solo se rebasea la rama en la que estás parado).</p>
+        <p class="dlg-msg" style="margin-bottom:.6rem">${t('tolkien.branchDialog.intro', 'Ramas que propusiste y Chris todavía no mergeó. <b>Poner al día</b> aparece solo en la <b>rama actual</b> cuando quedó atrás de main (por seguridad solo se rebasea la rama en la que estás parado).')}</p>
         <div class="tk-brlist">${brs.map((b) => {
           const behind = b.behindMain;
           const state = behind == null ? '<span class="tk-br-state">?</span>'
-            : behind > 0 ? `<span class="tk-br-state tk-br-state--due">↓${behind} sobre main</span>`
-              : `<span class="tk-br-state tk-br-state--ok">al día</span>`;
-          const cur = b.isCurrent ? '<span class="tk-br-cur" title="Estás parado acá">● actual</span>' : '';
+            : behind > 0 ? `<span class="tk-br-state tk-br-state--due">${t('tolkien.branchDialog.behind', '↓{behind} sobre main', { behind })}</span>`
+              : `<span class="tk-br-state tk-br-state--ok">${t('tolkien.branchDialog.upToDate', 'al día')}</span>`;
+          const cur = b.isCurrent ? `<span class="tk-br-cur" title="${t('tolkien.branchDialog.currentTitle', 'Estás parado acá')}">${t('tolkien.branchDialog.current', '● actual')}</span>` : '';
           const num = b.url
             ? `<a href="${esc(b.url)}" target="_blank" rel="noopener" class="tk-br-num">#${b.number}</a>`
             : `<span class="tk-br-num">#${b.number}</span>`;
           const btn = (b.isCurrent && behind > 0)
-            ? `<button class="btn btn--sm tk-br-rebase" data-branch="${esc(b.branch)}">Poner al día</button>` : '';
+            ? `<button class="btn btn--sm tk-br-rebase" data-branch="${esc(b.branch)}">${t('tolkien.branchDialog.rebaseBtn', 'Poner al día')}</button>` : '';
           return `<div class="tk-br-row">
             <div class="tk-br-main">${num} ${cur}<div class="tk-br-title" title="${esc(b.title)}">${esc(b.title)}</div><div class="tk-br-branch">${esc(b.branch)}</div></div>
             <div class="tk-br-side">${state}${btn}</div>
           </div>`;
-        }).join('') || '<p class="dlg-msg">No hay PRs abiertos. 🎉</p>'}</div>`;
+        }).join('') || `<p class="dlg-msg">${t('tolkien.branchDialog.empty', 'No hay PRs abiertos. 🎉')}</p>`}</div>`;
       m.body.appendChild(wrap);
       wrap.addEventListener('click', async (e) => {
         const btn = e.target.closest && e.target.closest('.tk-br-rebase');
@@ -304,25 +306,25 @@ export default {
         if (data.status) current = data.status;
         if (!res.ok || data.error) {
           await dialog.alertDialog({
-            title: 'No se pudo buscar cambios',
-            message: data.error || 'No se pudo comprobar el estado remoto (respuesta inválida del servidor).',
+            title: t('tolkien.fetch.failTitle', 'No se pudo buscar cambios'),
+            message: data.error || t('tolkien.fetch.failMsg', 'No se pudo comprobar el estado remoto (respuesta inválida del servidor).'),
           });
         }
       } catch {
-        await dialog.alertDialog({ title: 'Tolkien', message: 'No se pudo buscar cambios (error de red o del servidor).' });
+        await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.fetch.netError', 'No se pudo buscar cambios (error de red o del servidor).') });
       } finally { busy = false; render(); }
     }
 
     const fmtLog = (log) => Array.isArray(log)
-      ? log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || '(ok)'}`).join('\n')
+      ? log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || t('tolkien.common.ok', '(ok)')}`).join('\n')
       : '';
 
     async function doUpdate() {
       if (busy) return;
       const ok = await dialog.confirmDialog({
-        title: 'Actualizar Tolkien',
-        message: 'Se trae lo último de GitHub (stash → pull → stash pop).\nTus cambios locales quedan a salvo si algo falla.',
-        confirmLabel: 'Actualizar',
+        title: t('tolkien.updateAction.confirmTitle', 'Actualizar Tolkien'),
+        message: t('tolkien.updateAction.confirmMsg', 'Se trae lo último de GitHub (stash → pull → stash pop).\nTus cambios locales quedan a salvo si algo falla.'),
+        confirmLabel: t('tolkien.updateAction.confirmLabel', 'Actualizar'),
       });
       if (!ok) return;
       busy = true; render();
@@ -332,22 +334,22 @@ export default {
         if (data.status) current = data.status;
         if (!res.ok || data.error) {
           await dialog.alertDialog({
-            title: 'No se pudo actualizar',
-            message: `${data.error || 'No se pudo actualizar (respuesta inválida del servidor).'}\n\n${fmtLog(data.log)}`,
+            title: t('tolkien.updateAction.failTitle', 'No se pudo actualizar'),
+            message: `${data.error || t('tolkien.updateAction.failMsg', 'No se pudo actualizar (respuesta inválida del servidor).')}\n\n${fmtLog(data.log)}`,
           });
         } else if (data.popConflict) {
           await dialog.alertDialog({
-            title: 'Actualizado, con conflicto',
-            message: `Hubo conflicto al reaplicar tus cambios: quedaron en el stash (git stash list).\n\n${fmtLog(data.log)}`,
+            title: t('tolkien.updateAction.conflictTitle', 'Actualizado, con conflicto'),
+            message: `${t('tolkien.updateAction.conflictMsg', 'Hubo conflicto al reaplicar tus cambios: quedaron en el stash (git stash list).')}\n\n${fmtLog(data.log)}`,
           });
         } else if (data.warn) {
           // Caso raro: estás en una rama feature y tu main local no pudo
           // adelantar solo (divergió o tiene commits propios). Tu rama quedó
           // intacta; solo avisamos.
-          await dialog.alertDialog({ title: 'Actualizado (con aviso)', message: `${data.warn}\n\n${fmtLog(data.log)}` });
+          await dialog.alertDialog({ title: t('tolkien.updateAction.warnTitle', 'Actualizado (con aviso)'), message: `${data.warn}\n\n${fmtLog(data.log)}` });
         }
       } catch {
-        await dialog.alertDialog({ title: 'Tolkien', message: 'No se pudo actualizar (error de red o del servidor).' });
+        await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.updateAction.netError', 'No se pudo actualizar (error de red o del servidor).') });
       } finally {
         busy = false; render();
         // Chris pudo haber mergeado un PR mientras tanto: refrescamos la lista.
@@ -358,9 +360,9 @@ export default {
     async function doRefreshData() {
       if (dataBusy || busy) return;
       const ok = await dialog.confirmDialog({
-        title: 'Vista fresca (borrar + recargar)',
-        message: 'Deja tu DB LOCAL como un snapshot LIMPIO y actual de Zoho:\n\n1) BORRA las tablas operativas (empleados, clientes, billing, invoices, PTO, teams…).\n2) Reimporta de cero (clients → employees → links).\n\n⚠️ Se pierden TODAS las ediciones locales de esos datos (es la idea: sin merge, sin conflictos). Se preservan login y config. No toca prod ni tu código.',
-        confirmLabel: 'Borrar y recargar',
+        title: t('tolkien.refreshData.confirmTitle', 'Vista fresca (borrar + recargar)'),
+        message: t('tolkien.refreshData.confirmMsg', 'Deja tu DB LOCAL como un snapshot LIMPIO y actual de Zoho:\n\n1) BORRA las tablas operativas (empleados, clientes, billing, invoices, PTO, teams…).\n2) Reimporta de cero (clients → employees → links).\n\n⚠️ Se pierden TODAS las ediciones locales de esos datos (es la idea: sin merge, sin conflictos). Se preservan login y config. No toca prod ni tu código.'),
+        confirmLabel: t('tolkien.refreshData.confirmLabel', 'Borrar y recargar'),
       });
       if (!ok) return;
       dataBusy = true; render();
@@ -383,27 +385,27 @@ export default {
           await new Promise((r) => setTimeout(r, 2000));
         }
         if (status && status.running) {
-          throw new Error('El refresh sigue corriendo tras 5 min — revisá el server.');
+          throw new Error(t('tolkien.refreshData.stillRunning', 'El refresh sigue corriendo tras 5 min — revisá el server.'));
         }
         if (status && status.error) {
-          await dialog.alertDialog({ title: 'No se pudo actualizar la data', message: status.error });
+          await dialog.alertDialog({ title: t('tolkien.refreshData.failTitle', 'No se pudo actualizar la data'), message: status.error });
         } else {
           const data = (status && status.result) || {};
           const REAL_IMPORTERS = ['clients', 'employees', 'employee-client-links'];
           const summary = (data.steps || [])
             .map((s) => {
-              if (s.failed) return `✗ ${s.importer}: ${s.error || 'falló'}`;
-              if (!REAL_IMPORTERS.includes(s.importer)) return `✓ ${s.importer}: listo`;
-              return `✓ ${s.importer}: +${s.creates} nuevos · ${s.updates} act. · ${s.softDeletes} baja`;
+              if (s.failed) return `✗ ${s.importer}: ${s.error || t('tolkien.refreshData.stepFailed', 'falló')}`;
+              if (!REAL_IMPORTERS.includes(s.importer)) return `✓ ${s.importer}: ${t('tolkien.refreshData.stepDone', 'listo')}`;
+              return t('tolkien.refreshData.stepSummary', '✓ {importer}: +{creates} nuevos · {updates} act. · {softDeletes} baja', { importer: s.importer, creates: s.creates, updates: s.updates, softDeletes: s.softDeletes });
             })
             .join('\n');
           await dialog.alertDialog({
-            title: data.ok ? '✅ Data local actualizada' : '⚠️ Actualización con errores',
-            message: `${summary || 'Sin detalle.'}\n\n(${Math.round((data.durationMs || 0) / 1000)}s)`,
+            title: data.ok ? t('tolkien.refreshData.okTitle', '✅ Data local actualizada') : t('tolkien.refreshData.errTitle', '⚠️ Actualización con errores'),
+            message: `${summary || t('tolkien.refreshData.noDetail', 'Sin detalle.')}\n\n(${Math.round((data.durationMs || 0) / 1000)}s)`,
           });
         }
       } catch (err) {
-        await dialog.alertDialog({ title: 'Tolkien', message: err?.message || 'No se pudo actualizar la data (error de red o del servidor).' });
+        await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: err?.message || t('tolkien.refreshData.netError', 'No se pudo actualizar la data (error de red o del servidor).') });
       } finally {
         dataBusy = false; render();
       }

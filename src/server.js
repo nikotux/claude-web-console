@@ -19,7 +19,7 @@ import {
   isAuthenticated, isAdmin, principalOf, tokenMatches, COOKIE_NAME,
   createSession, destroySession, sessionIdOf, SESSION_COOKIE,
 } from './core/auth.js';
-import { verifyUser } from './core/users.js';
+import { verifyUser, getUserLang, setUserLang } from './core/users.js';
 import { createWsRouter } from './core/wss.js';
 import { registerModules } from './core/registry.js';
 import { warmCache, startCacheSweep } from './core/pad-service-client.js';
@@ -189,7 +189,31 @@ async function main() {
   app.use('/api', apiRouter);
 
   // Identidad del principal actual (la app la usa para mostrar/ocultar admin).
-  app.get('/api/whoami', (req, res) => res.json(principalOf(req)));
+  // `lang` (PLAN i18n, 2026-07-19): preferencia personal, solo tiene sentido
+  // para type 'user' (tiene registro persistente); el token maestro no tiene
+  // perfil propio, así que queda fijo en 'es'.
+  app.get('/api/whoami', (req, res) => {
+    const p = principalOf(req);
+    if (p) p.lang = p.type === 'user' ? getUserLang(p.username) : 'es';
+    res.json(p);
+  });
+
+  // Self-service: CADA usuario elige SU idioma de interfaz (no admin-gated,
+  // es una preferencia personal — mismo criterio que "Variables de entorno"
+  // sería admin porque es config del SISTEMA; esto es config de la CUENTA).
+  app.post('/api/account/lang', (req, res) => {
+    const p = principalOf(req);
+    if (!p) return res.status(401).json({ error: 'No autorizado.' });
+    if (p.type !== 'user') {
+      return res.status(400).json({ error: 'El token maestro no tiene perfil de usuario persistente.' });
+    }
+    try {
+      setUserLang(p.username, req.body?.lang);
+      return res.json({ ok: true, lang: getUserLang(p.username) });
+    } catch (e) {
+      return res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'Error.' });
+    }
+  });
 
   // Página de administración de usuarios: solo administradores (o token maestro).
   app.get(['/admin', '/admin.html'], (req, res) => {

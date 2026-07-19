@@ -18,6 +18,7 @@
 // está a la vista); main.js llama refresh() al cambiar de pestaña.
 import { icon } from './icons.js';
 import { renderDiff } from './diff.js';
+import { t } from './i18n.js';
 import { toolTypeIcon, isDestructiveCommand, buildAskQuestionBody } from '../modules/chat/chat-tab.js';
 
 // Gracia anti-parpadeo: un item recién llegado por WS puede no figurar aún en
@@ -57,15 +58,15 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     const el = document.createElement('div');
     el.className = 'pc-card';
     el.innerHTML = `
-      <button type="button" class="pc-title" title="Ir a la conversación">
+      <button type="button" class="pc-title" title="${t('core.common.goToConversation', 'Ir a la conversación')}">
         ${icon('sparkle', { size: 13 })}<span class="pc-title-text"></span><span class="pc-count"></span>
       </button>
       <div class="chat-perm-row">
         <button type="button" class="chat-toolchip cp-chip">
           ${icon('terminal', { size: 14 })}${icon(toolTypeIcon(perm.tool), { size: 13, className: 'ct-type' })}${icon('chevronDown', { size: 12, className: 'cp-chev' })}
         </button>
-        <button class="btn-ghost btn--sm cp-deny">${icon('close', { size: 13 })} Denegar</button>
-        <button class="btn btn--sm cp-allow">${icon('check', { size: 13 })} Permitir</button>
+        <button class="btn-ghost btn--sm cp-deny">${icon('close', { size: 13 })} ${t('core.perm.deny', 'Denegar')}</button>
+        <button class="btn btn--sm cp-allow">${icon('check', { size: 13 })} ${t('core.perm.allow', 'Permitir')}</button>
       </div>
       <div class="pc-detail" hidden></div>
       <div class="pc-error" hidden></div>`;
@@ -104,7 +105,7 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     const el = document.createElement('div');
     el.className = 'pc-card pc-askq';
     el.innerHTML = `
-      <button type="button" class="pc-title" title="Ir a la conversación">
+      <button type="button" class="pc-title" title="${t('core.common.goToConversation', 'Ir a la conversación')}">
         ${icon('help', { size: 13 })}<span class="pc-title-text"></span><span class="pc-count"></span>
       </button>
       <div class="pc-error" hidden></div>`;
@@ -148,7 +149,7 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
     else {
       const pre = document.createElement('pre');
       pre.className = 'ct-cmd';
-      pre.textContent = d?.command || item.summary || '(sin detalle)';
+      pre.textContent = d?.command || item.summary || t('core.perm.noDetail', '(sin detalle)');
       body.appendChild(pre);
     }
     return body;
@@ -168,7 +169,7 @@ export function initPermCenter({ isChatActive, chatTitle, openChat }) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'No se pudo responder el permiso.');
+      if (!res.ok) throw new Error(data.error || t('core.perm.answerError', 'No se pudo responder el permiso.'));
       remove(keyOf(item.chatId, item.permId));
     } catch (err) {
       // Ya respondido/expirado en otro lado ⇒ la tarjeta sobra igual.

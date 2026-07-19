@@ -10,6 +10,7 @@
 //      con las tabs (Revisión/Optimización/Coherencia/Dashboard/Pad), el Pac-Man
 //      persistente y el lanzador.
 import { icon } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { openHealthScan } from './health-scan-modal.js';
 
@@ -19,22 +20,28 @@ const fmtDate = (ms) => {
   const d = new Date(ms);
   return `${d.toLocaleDateString('es', { day: '2-digit', month: 'short' })} · ${d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}`;
 };
-const VERDICT_LABEL = { ok: 'Todo en orden', atencion: 'Requiere atención', critico: 'CRÍTICO' };
+function verdictLabel(v) {
+  return {
+    ok: t('system.health.verdictOk', 'Todo en orden'),
+    atencion: t('system.health.verdictAttention', 'Requiere atención'),
+    critico: t('system.health.verdictCritical', 'CRÍTICO'),
+  }[v];
+}
 
 export function mountHealthPanel(el, ctx) {
   const { isAdmin } = ctx;
 
   el.innerHTML = `
     <div class="hp-head">
-      <span class="hp-title">Chequeos rápidos</span>
-      <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="Refrescar chequeos">${icon('refresh', { size: 13 })}</button>
+      <span class="hp-title">${t('system.health.quickChecksTitle', 'Chequeos rápidos')}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="${t('system.health.refreshChecksTitle', 'Refrescar chequeos')}">${icon('refresh', { size: 13 })}</button>
     </div>
     <div class="hp-checks" data-ref="checks"><span class="cwc-spinner"></span></div>
 
     <div class="hp-head hp-head--review">
-      <span class="hp-title">🩺 Escaneo de Salud</span>
+      <span class="hp-title">🩺 ${t('system.health.healthScanTitle', 'Escaneo de Salud')}</span>
     </div>
-    <div class="hp-review" data-ref="scan">cargando…</div>`;
+    <div class="hp-review" data-ref="scan">${t('system.health.loading', 'cargando…')}</div>`;
 
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
@@ -54,9 +61,9 @@ export function mountHealthPanel(el, ctx) {
           <span class="hp-label">${esc(c.label)}</span>
           <span class="hp-detail">${esc(c.detail)}</span>
         </div>`).join('') + `
-        <div class="hp-sum">${data.ok} ok${data.warn ? ` · ${data.warn} aviso(s)` : ''}${data.fail ? ` · ${data.fail} FALLA(s)` : ''}</div>`;
+        <div class="hp-sum">${data.ok} ${t('system.health.okSuffix', 'ok')}${data.warn ? ` · ${data.warn} ${t('system.health.warningsSuffix', 'aviso(s)')}` : ''}${data.fail ? ` · ${data.fail} ${t('system.health.failuresSuffix', 'FALLA(s)')}` : ''}</div>`;
     } catch {
-      if (alive) refs.checks.innerHTML = '<div class="hp-empty">No se pudieron correr los chequeos.</div>';
+      if (alive) refs.checks.innerHTML = `<div class="hp-empty">${t('system.health.checksError', 'No se pudieron correr los chequeos.')}</div>`;
     } finally {
       refs.reload.disabled = false;
     }
@@ -69,21 +76,21 @@ export function mountHealthPanel(el, ctx) {
     if (d && (verdict || d.running)) {
       const shown = verdict || 'atencion';
       const p = d.progress || {};
-      const rev = p.review ? `Revisión ${p.review.done ?? 0}/${p.review.total ?? '?'}` : '';
-      const opt = p.optimize ? `Optim ${p.optimize.status || '—'}` : '';
-      const coh = p.coherence ? `Coherencia ${p.coherence.status || '—'}` : '';
-      const pad = d.pad ? ` · Pad: ${d.pad.nuevo?.length || 0}🆕 ${d.pad.regresion?.length || 0}⚠️` : '';
+      const rev = p.review ? t('system.health.reviewProgress', 'Revisión {done}/{total}', { done: p.review.done ?? 0, total: p.review.total ?? '?' }) : '';
+      const opt = p.optimize ? t('system.health.optimizeProgress', 'Optim {status}', { status: p.optimize.status || '—' }) : '';
+      const coh = p.coherence ? t('system.health.coherenceProgress', 'Coherencia {status}', { status: p.coherence.status || '—' }) : '';
+      const pad = d.pad ? ` · ${t('system.health.padLabel', 'Pad')}: ${d.pad.nuevo?.length || 0}🆕 ${d.pad.regresion?.length || 0}⚠️` : '';
       parts.push(`
         <div class="hp-verdict hp-verdict--${esc(shown)}">
-          <b>${d.running ? 'Escaneando…' : (VERDICT_LABEL[shown] || 'Sin veredicto')}</b>
+          <b>${d.running ? t('system.health.scanning', 'Escaneando…') : (verdictLabel(shown) || t('system.health.noVerdict', 'Sin veredicto'))}</b>
           <span class="hp-when">${d.finishedAt ? fmtDate(d.finishedAt) : (d.startedAt ? fmtDate(d.startedAt) : '')}</span>
         </div>`);
       if (d.running) parts.push(`<p class="hp-running">${pacman({ state: 'delegating' })} ${esc([rev, opt, coh].filter(Boolean).join(' · '))}${esc(pad)}</p>`);
-      else if (d.pad) parts.push(`<p class="hp-when" style="padding:.2rem .1rem">🐛 Pad: ${d.pad.nuevo?.length || 0} nuevo(s) · ${d.pad.rastreado?.length || 0} rastreado(s) · ${d.pad.regresion?.length || 0} regresión(es)</p>`);
+      else if (d.pad) parts.push(`<p class="hp-when" style="padding:.2rem .1rem">🐛 ${t('system.health.padLabel', 'Pad')}: ${d.pad.nuevo?.length || 0} ${t('system.health.padNew', 'nuevo(s)')} · ${d.pad.rastreado?.length || 0} ${t('system.health.padTracked', 'rastreado(s)')} · ${d.pad.regresion?.length || 0} ${t('system.health.padRegression', 'regresión(es)')}</p>`);
     } else {
-      parts.push('<p class="hp-empty">Todavía no se corrió un Escaneo de Salud. Corre Revisión + Optimización + Coherencia + verificación de Pad en una sola pasada.</p>');
+      parts.push(`<p class="hp-empty">${t('system.health.notRun', 'Todavía no se corrió un Escaneo de Salud. Corre Revisión + Optimización + Coherencia + verificación de Pad en una sola pasada.')}</p>`);
     }
-    parts.push(`<button class="btn btn--block" data-ref="open">${icon('gear', { size: 14 })}<span>${d?.running ? 'Ver escaneo en curso' : 'Abrir Escaneo de Salud →'}</span></button>`);
+    parts.push(`<button class="btn btn--block" data-ref="open">${icon('gear', { size: 14 })}<span>${d?.running ? t('system.health.viewRunningScan', 'Ver escaneo en curso') : t('system.health.openScan', 'Abrir Escaneo de Salud →')}</span></button>`);
     refs.scan.innerHTML = parts.join('');
     refs.scan.querySelector('[data-ref="open"]')?.addEventListener('click', () => {
       openHealthScan(ctx, { isAdmin });
@@ -98,7 +105,7 @@ export function mountHealthPanel(el, ctx) {
       renderScan(d);
       if (d.running) setTimeout(loadScan, 5000); // mantener el resumen fresco mientras corre
     } catch {
-      if (alive) refs.scan.innerHTML = '<p class="hp-empty">No se pudo leer el estado del escaneo.</p>';
+      if (alive) refs.scan.innerHTML = `<p class="hp-empty">${t('system.health.scanReadError', 'No se pudo leer el estado del escaneo.')}</p>`;
     }
   }
 

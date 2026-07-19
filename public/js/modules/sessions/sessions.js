@@ -12,6 +12,7 @@ import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor, PLACES, LIMBO_PLACE } from '../../ui/places.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { t } from '../../ui/i18n.js';
 
 // Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
 // animación por estado vienen del catálogo central (ver ui.css); acá solo
@@ -72,10 +73,10 @@ export default {
 
     el.innerHTML = `
       <header class="sec-head">
-        <span class="sec-dot" data-ref="dot" title="Estado del módulo"></span>
-        <span class="sec-title">Sesiones</span>
+        <span class="sec-dot" data-ref="dot" title="${t('sessions.dot.moduleTitle', 'Estado del módulo')}"></span>
+        <span class="sec-title">${t('sessions.title', 'Sesiones')}</span>
         <span class="side-count" data-ref="count"></span>
-        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="Refrescar">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('sessions.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
       </header>
       <div class="sess-list" data-ref="list"></div>`;
 
@@ -104,10 +105,10 @@ export default {
     function fmtAgo(ms) {
       if (!ms) return '';
       const s = Math.floor((Date.now() - ms) / 1000);
-      if (s < 60) return 'hace instantes';
-      if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-      if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
-      return `hace ${Math.floor(s / 86400)} d`;
+      if (s < 60) return t('sessions.ago.now', 'hace instantes');
+      if (s < 3600) return t('sessions.ago.min', 'hace {n} min', { n: Math.floor(s / 60) });
+      if (s < 86400) return t('sessions.ago.hour', 'hace {n} h', { n: Math.floor(s / 3600) });
+      return t('sessions.ago.day', 'hace {n} d', { n: Math.floor(s / 86400) });
     }
 
     // Estado → estado del motor Pac-Man + texto del punto. Sin datos de
@@ -115,11 +116,11 @@ export default {
     // "esperándote", el caso más común); sin modelo = shell (dormant).
     function dotInfo(s) {
       const st = s.state?.status;
-      if (st === 'working') return { state: 'working', label: `trabajando · ${fmtAgo(s.state.ts)}` };
-      if (st === 'waiting') return { state: 'waiting', label: `esperando input · ${fmtAgo(s.state.ts)}` };
-      if (st === 'stale') return { state: 'stale', label: `sin señales · ${fmtAgo(s.state.ts)}` };
-      if (s.model) return { state: 'waiting', label: 'Claude presente' };
-      return { state: 'dormant', label: 'shell (sin Claude)' };
+      if (st === 'working') return { state: 'working', label: t('sessions.dot.working', 'trabajando · {ago}', { ago: fmtAgo(s.state.ts) }) };
+      if (st === 'waiting') return { state: 'waiting', label: t('sessions.dot.waiting', 'esperando input · {ago}', { ago: fmtAgo(s.state.ts) }) };
+      if (st === 'stale') return { state: 'stale', label: t('sessions.dot.stale', 'sin señales · {ago}', { ago: fmtAgo(s.state.ts) }) };
+      if (s.model) return { state: 'waiting', label: t('sessions.dot.present', 'Claude presente') };
+      return { state: 'dormant', label: t('sessions.dot.shell', 'shell (sin Claude)') };
     }
 
     // Estado de una tarjeta de CONVERSACIÓN: en modo TUI el motor SDK está
@@ -131,16 +132,26 @@ export default {
       if (c.viewMode === 'tui' && c.terminalId) {
         const bare = tmuxByName.get(bareNameOf(c.terminalId));
         const st = bare?.state?.status;
-        if (st === 'working') return { state: 'working', label: `trabajando (TUI) · ${fmtAgo(bare.state.ts)}` };
-        if (st === 'stale') return { state: 'stale', label: `sin señales (TUI) · ${fmtAgo(bare.state.ts)}` };
-        return { state: 'waiting', label: bare ? `esperando input (TUI) · ${fmtAgo(bare.state.ts)}` : 'en modo TUI' };
+        if (st === 'working') return { state: 'working', label: t('sessions.dot.workingTui', 'trabajando (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
+        if (st === 'stale') return { state: 'stale', label: t('sessions.dot.staleTui', 'sin señales (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
+        return { state: 'waiting', label: bare ? t('sessions.dot.waitingTui', 'esperando input (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) : t('sessions.dot.tuiMode', 'en modo TUI') };
       }
       // Delegando a un subagente (Task tool): más específico que "trabajando"
       // a secas, así que manda sobre c.status==='working' cuando aplica.
-      if (c.delegating) return { state: 'delegating', label: 'delegando a un subagente…' };
-      return c.status === 'working'
-        ? { state: 'working', label: 'trabajando' }
-        : { state: 'waiting', label: 'esperando input' };
+      if (c.delegating) {
+        const n = c.delegatingCount || 0;
+        return { state: 'delegating', label: n > 1 ? t('sessions.dot.delegatingN', 'delegando a {n} subagentes…', { n }) : t('sessions.dot.delegating', 'delegando a un subagente…') };
+      }
+      if (c.status === 'working') return { state: 'working', label: t('sessions.dot.workingShort', 'trabajando') };
+      // Distinguir VIVO-esperándote (motor corriendo, tu turno real → verde) de
+      // DORMIDO (motor apagado, no pasa nada → gris). Antes TODO lo no-working
+      // caía en verde "esperando input", así que 40+ chats dormidos mentían en
+      // verde y solo se veían 2 estados. `alive` viene de /api/chat/list.
+      if (c.alive) {
+        const perms = (c.pendingPerms || []).length;
+        return { state: 'waiting', label: perms ? t('sessions.dot.waitingPerm', 'esperando tu permiso ({n})', { n: perms }) : t('sessions.dot.waitingLive', 'esperando tu input') };
+      }
+      return { state: 'dormant', label: t('sessions.dot.dormant', 'dormido · tocá para retomar') };
     }
 
     async function fetchAll() {
@@ -159,13 +170,13 @@ export default {
       // 'cargando…' en cada apertura/reconexión) y refresca por detrás.
       const cached = readCache('sessions');
       if (cached) { try { render(cached.data); } catch { /* noop */ } }
-      else listEl.innerHTML = '<div class="cwc-loading"><span class="cwc-spinner"></span>cargando…</div>';
+      else listEl.innerHTML = `<div class="cwc-loading"><span class="cwc-spinner"></span>${t('sessions.loading', 'cargando…')}</div>`;
       try {
         const data = await fetchAll();
         writeCache('sessions', data);
         render(data);
       } catch {
-        if (!cached) listEl.innerHTML = '<div class="sess-msg sess-err">No se pudieron listar las sesiones.</div>';
+        if (!cached) listEl.innerHTML = `<div class="sess-msg sess-err">${t('sessions.listError', 'No se pudieron listar las sesiones.')}</div>`;
       }
     }
 
@@ -179,7 +190,7 @@ export default {
       countEl.textContent = total ? String(total) : '';
       // Semáforo (visible colapsado): verde si hay sesiones, tenue si no hay.
       dotEl.className = 'sec-dot ' + (total ? 'sec-dot--ok' : 'sec-dot--idle');
-      dotEl.title = total ? `${total} sesión(es) activas` : 'Sin sesiones';
+      dotEl.title = total ? t('sessions.count.active', '{n} sesión(es) activas', { n: total }) : t('sessions.count.none', 'Sin sesiones');
       const owned = visible.filter((s) => s.owned);
       const others = visible.filter((s) => !s.owned);
       const activeChats = chats.filter((c) => !c.archived);
@@ -187,7 +198,7 @@ export default {
 
       listEl.innerHTML = '';
       if (!total && !archivedChats.length) {
-        listEl.innerHTML = '<div class="sess-msg">Sin sesiones. Creá una con “Nueva sesión”.</div>';
+        listEl.innerHTML = `<div class="sess-msg">${t('sessions.empty', 'Sin sesiones. Creá una con “Nueva sesión”.')}</div>`;
         return;
       }
 
@@ -212,7 +223,7 @@ export default {
         if (multiWorld) {
           const h = document.createElement('div');
           h.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
-          h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || 'Otros'}</span><span class="side-count">${grp.chats.length}</span>`;
+          h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || t('sessions.world.other', 'Otros')}</span><span class="side-count">${grp.chats.length}</span>`;
           listEl.appendChild(h);
         }
         for (const c of grp.chats) listEl.appendChild(chatCard(c, tmuxByName));
@@ -224,7 +235,7 @@ export default {
       if (archivedChats.length) {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
-        det.innerHTML = `<summary>${icon('folder', { size: 13 })} Archivados <span class="side-count">${archivedChats.length}</span></summary>`;
+        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${archivedChats.length}</span></summary>`;
         for (const c of archivedChats) det.appendChild(chatCard(c, tmuxByName));
         listEl.appendChild(det);
       }
@@ -232,7 +243,7 @@ export default {
       if (others.length) {
         const det = document.createElement('details');
         det.className = 'sess-others';
-        det.innerHTML = `<summary>Otras sesiones tmux <span class="side-count">${others.length}</span></summary>`;
+        det.innerHTML = `<summary>${t('sessions.otherTmux', 'Otras sesiones tmux')} <span class="side-count">${others.length}</span></summary>`;
         for (const s of others) det.appendChild(card(s));
         listEl.appendChild(det);
       }
@@ -257,7 +268,7 @@ export default {
             <span class="sess-type-ic">${icon(isTui ? 'terminal' : 'sparkle', { size: 12 })}</span>
             ${placeBadge(c.cwd)}
             <span class="sess-name">${c.title}</span>
-            <span class="sess-mode" title="${isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'}">${isTui ? 'TUI' : ''}</span>
+            <span class="sess-mode" title="${isTui ? t('sessions.mode.terminal', 'En modo Terminal (TUI)') : t('sessions.mode.chat', 'En modo Chat')}">${isTui ? 'TUI' : ''}</span>
           </span>
           <span class="sess-row2">
             <span class="sess-model">${chatModelLabel(c)}</span>
@@ -269,7 +280,7 @@ export default {
       const menuBtn = document.createElement('button');
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
-      menuBtn.title = 'Opciones';
+      menuBtn.title = t('sessions.options', 'Opciones');
       menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openChatMenu(c, menuBtn); });
 
       elCard.append(main, menuBtn);
@@ -301,7 +312,7 @@ export default {
       const hasActive = pend.some((m) => m.level === 'active');
       badge.classList.toggle('sess-interfono--active', hasActive);
       badge.dataset.chat = c.id;
-      badge.title = `${pend.length} mensaje(s) del Interfono sin tomar${hasActive ? ' (⚠ archivo tocado)' : ''}: ${preview}`;
+      badge.title = t('sessions.interfono.badge', '{n} mensaje(s) del Interfono sin tomar{active}: {preview}', { n: pend.length, active: hasActive ? t('sessions.interfono.touched', ' (⚠ archivo tocado)') : '', preview });
       badge.innerHTML = `${icon('relay', { size: 13 })}<span class="sess-interfono-n">${pend.length}</span>`;
     }
 
@@ -314,16 +325,16 @@ export default {
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu sess-interfono-pop';
       const list = pend.slice(-6).map((m) => {
-        const from = escapeHtml(m.fromName || 'sesión');
+        const from = escapeHtml(m.fromName || t('sessions.interfono.session', 'sesión'));
         const txt = escapeHtml(String(m.text || '').slice(0, 160));
         return `<div class="sif-msg"><strong>${from}:</strong> ${txt}</div>`;
       }).join('');
       menu.innerHTML = `
-        <div class="sif-head">${icon('relay', { size: 13 })} Interfono · ${pend.length} mensaje(s)</div>
+        <div class="sif-head">${icon('relay', { size: 13 })} ${t('sessions.interfono.head', 'Interfono · {n} mensaje(s)', { n: pend.length })}</div>
         <div class="sif-body">${list}</div>
         <div class="sif-actions">
-          <button class="btn-ghost btn--sm" data-act="dismiss">${icon('close', { size: 13 })} Archivar</button>
-          <button class="btn btn--sm" data-act="deliver">${icon('play', { size: 13 })} Entregar</button>
+          <button class="btn-ghost btn--sm" data-act="dismiss">${icon('close', { size: 13 })} ${t('sessions.interfono.dismiss', 'Archivar')}</button>
+          <button class="btn btn--sm" data-act="deliver">${icon('play', { size: 13 })} ${t('sessions.interfono.deliver', 'Entregar')}</button>
         </div>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -335,9 +346,9 @@ export default {
       menu.querySelector('[data-act="deliver"]').addEventListener('click', async () => {
         dismiss();
         const ok = await dialog.confirmDialog({
-          title: 'Entregar al chat',
-          message: `Voy a inyectar ${pend.length} mensaje(s) del Interfono en "${c.title}" como un turno. Si el chat estaba dormido, se despierta (consume tokens).`,
-          confirmLabel: 'Entregar',
+          title: t('sessions.interfono.deliverTitle', 'Entregar al chat'),
+          message: t('sessions.interfono.deliverMsg', 'Voy a inyectar {n} mensaje(s) del Interfono en "{title}" como un turno. Si el chat estaba dormido, se despierta (consume tokens).', { n: pend.length, title: c.title }),
+          confirmLabel: t('sessions.interfono.deliver', 'Entregar'),
         });
         if (ok) await interfonoAction(c, 'deliver');
       });
@@ -351,9 +362,9 @@ export default {
           body: JSON.stringify({ id: c.id, action }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo procesar el mensaje.');
+        if (!res.ok) throw new Error(data.error || t('sessions.interfono.actionError', 'No se pudo procesar el mensaje.'));
       } catch (e) {
-        dialog.alertDialog({ title: 'Interfono', message: e.message });
+        dialog.alertDialog({ title: t('sessions.interfono.title', 'Interfono'), message: e.message });
       } finally {
         refresh();
       }
@@ -366,17 +377,17 @@ export default {
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
-        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? 'Revivir y abrir' : 'Abrir'}</span></button>
-        ${arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>Revivir</span></button>` : ''}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>Pasar a TUI</span></button>`}
-        ${!arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>Pasar a Chat</span></button>` : ''}
-        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
-        ${arch ? '' : `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>`}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>Reabrir para cambios</span></button>`}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>Mover a otro mundo</span></button>`}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>Archivar</span></button>`}
-        <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>Abrir carpeta del chat</span></button>
-        <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>Cerrar conversación</span></button>`;
+        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? t('sessions.menu.reviveOpen', 'Revivir y abrir') : t('sessions.menu.open', 'Abrir')}</span></button>
+        ${arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.revive', 'Revivir')}</span></button>` : ''}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>${t('sessions.menu.toTui', 'Pasar a TUI')}</span></button>`}
+        ${!arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
+        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>
+        ${arch ? '' : `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>`}
+        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>`}
+        <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.folder', 'Abrir carpeta del chat')}</span></button>
+        <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>${t('sessions.menu.close', 'Cerrar conversación')}</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
@@ -401,9 +412,9 @@ export default {
           body: JSON.stringify({ id: c.id }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo archivar.');
+        if (!res.ok) throw new Error(data.error || t('sessions.archive.error', 'No se pudo archivar.'));
       } catch (e) {
-        dialog.alertDialog({ title: 'Archivar', message: e.message });
+        dialog.alertDialog({ title: t('sessions.archive.title', 'Archivar'), message: e.message });
       } finally { refresh(); }
     }
 
@@ -415,11 +426,11 @@ export default {
           body: JSON.stringify({ id: c.id }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo revivir.');
+        if (!res.ok) throw new Error(data.error || t('sessions.revive.error', 'No se pudo revivir.'));
         if (data.chat) syncConversation(data.chat);
         if (open) openChatView(data.chat || c);
       } catch (e) {
-        dialog.alertDialog({ title: 'Revivir', message: e.message });
+        dialog.alertDialog({ title: t('sessions.revive.title', 'Revivir'), message: e.message });
       } finally { refresh(); }
     }
 
@@ -430,10 +441,10 @@ export default {
       try {
         const res = await fetch(`/api/chat/folder?id=${encodeURIComponent(c.id)}`);
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.rel) throw new Error(data.error || 'No se pudo abrir la carpeta.');
+        if (!res.ok || !data.rel) throw new Error(data.error || t('sessions.folder.error', 'No se pudo abrir la carpeta.'));
         openExplorer(data.rel);
       } catch (e) {
-        dialog.alertDialog({ title: 'Carpeta del chat', message: e.message });
+        dialog.alertDialog({ title: t('sessions.folder.title', 'Carpeta del chat'), message: e.message });
       }
     }
 
@@ -444,9 +455,9 @@ export default {
     async function reopenChat(c) {
       if (c.status === 'working') {
         const ok = await dialog.confirmDialog({
-          title: 'Reabrir para cambios',
-          message: `"${c.title}" está trabajando ahora: reabrir el motor corta el turno en curso. La conversación y su contexto se conservan.`,
-          confirmLabel: 'Reabrir igual',
+          title: t('sessions.reopen.title', 'Reabrir para cambios'),
+          message: t('sessions.reopen.msg', '"{title}" está trabajando ahora: reabrir el motor corta el turno en curso. La conversación y su contexto se conservan.', { title: c.title }),
+          confirmLabel: t('sessions.reopen.confirm', 'Reabrir igual'),
           danger: true,
         });
         if (!ok) return;
@@ -458,10 +469,10 @@ export default {
           body: JSON.stringify({ id: c.id }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo reabrir el motor.');
+        if (!res.ok) throw new Error(data.error || t('sessions.reopen.error', 'No se pudo reabrir el motor.'));
         if (data.chat) syncConversation(data.chat);
       } catch (e) {
-        dialog.alertDialog({ title: 'Reabrir para cambios', message: e.message });
+        dialog.alertDialog({ title: t('sessions.reopen.title', 'Reabrir para cambios'), message: e.message });
       } finally {
         refresh();
       }
@@ -476,26 +487,26 @@ export default {
       const originRel = placeFor(c.cwd)?.rel || null;
       const dests = PLACES.filter((p) => p.rel !== originRel);
       if (!dests.length) {
-        dialog.alertDialog({ title: 'Mover a otro mundo', message: 'No hay otro mundo conocido para mudar esta conversación.' });
+        dialog.alertDialog({ title: t('sessions.world.title', 'Mover a otro mundo'), message: t('sessions.world.noDests', 'No hay otro mundo conocido para mudar esta conversación.') });
         return;
       }
-      const m = dialog.openModal({ title: 'Mover a otro mundo', width: 360 });
+      const m = dialog.openModal({ title: t('sessions.world.title', 'Mover a otro mundo'), width: 360 });
       m.body.innerHTML = `
-        <p class="sess-plumbing">La MISMA conversación se mueve con TODO su contexto al mundo elegido (no se copia ni queda en Archivados). Su tarjeta pasa al grupo de ese mundo y ahí usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).</p>
-        <label class="sess-plumbing" style="display:block;margin:.2rem 0 .3rem">🎯 Tarea para el mundo destino <span style="opacity:.7">(opcional; se le inyecta al llegar)</span></label>
-        <textarea class="dlg-input" data-task rows="2" placeholder="Ej: registrá estos pendientes de WhatsApp como tickets en Tolkien"></textarea>
+        <p class="sess-plumbing">${t('sessions.world.info', 'La MISMA conversación se mueve con TODO su contexto al mundo elegido (no se copia ni queda en Archivados). Su tarjeta pasa al grupo de ese mundo y ahí usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).')}</p>
+        <label class="sess-plumbing" style="display:block;margin:.2rem 0 .3rem">${t('sessions.world.taskLabel', '🎯 Tarea para el mundo destino')} <span style="opacity:.7">${t('sessions.world.taskOpt', '(opcional; se le inyecta al llegar)')}</span></label>
+        <textarea class="dlg-input" data-task rows="2" placeholder="${t('sessions.world.taskPlaceholder', 'Ej: registrá estos pendientes de WhatsApp como tickets en Tolkien')}"></textarea>
         <div class="sess-menu-list" style="margin-top:.5rem">${dests.map((p) =>
-          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>Mover a ${p.label}</span></button>`).join('')}</div>
-        <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">Cancelar</button></div>`;
+          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>${t('sessions.world.moveTo', 'Mover a {label}', { label: p.label })}</span></button>`).join('')}</div>
+        <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">${t('sessions.cancel', 'Cancelar')}</button></div>`;
       m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
       m.body.querySelectorAll('[data-rel]').forEach((btn) => btn.addEventListener('click', async () => {
         const rel = btn.getAttribute('data-rel');
         const task = (m.body.querySelector('[data-task]')?.value || '').trim();
         const label = dests.find((p) => p.rel === rel)?.label || rel;
         const ok = await dialog.confirmDialog({
-          title: 'Mover a otro mundo',
-          message: `Mover "${c.title}" a ${label}: la conversación pasa a ${label} con el mismo contexto. ¿Seguir?`,
-          confirmLabel: `Mover a ${label}`,
+          title: t('sessions.world.title', 'Mover a otro mundo'),
+          message: t('sessions.world.confirmMsg', 'Mover "{title}" a {label}: la conversación pasa a {label} con el mismo contexto. ¿Seguir?', { title: c.title, label }),
+          confirmLabel: t('sessions.world.moveTo', 'Mover a {label}', { label }),
         });
         if (!ok) return;
         m.close();
@@ -506,12 +517,12 @@ export default {
             body: JSON.stringify({ id: c.id, cwd: rel, ...(task ? { task } : {}) }),
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'No se pudo mover la conversación.');
+          if (!res.ok) throw new Error(data.error || t('sessions.world.error', 'No se pudo mover la conversación.'));
           // MISMA tarjeta (mismo id): syncConversation la actualiza y refresh la
           // re-agrupa en el mundo destino. Si estaba abierta, sigue enfocada.
           if (data.chat) syncConversation(data.chat);
         } catch (e) {
-          dialog.alertDialog({ title: 'Mover a otro mundo', message: e.message });
+          dialog.alertDialog({ title: t('sessions.world.title', 'Mover a otro mundo'), message: e.message });
         } finally {
           refresh();
         }
@@ -535,10 +546,10 @@ export default {
     // effort}. (Secciones apiladas en vez de 3 columnas: mejor en el modal angosto
     // y en móvil — convención colapsable del proyecto; funcionalmente idéntico.)
     function pickModelForChat(c) {
-      const m = dialog.openModal({ title: 'Modelo y protocolo', width: 460 });
+      const m = dialog.openModal({ title: t('sessions.model.title', 'Modelo y protocolo'), width: 460 });
       const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable']];
-      const CODEX = [['', 'Ninguno (Manual)'], ['gpt-5.5', 'GPT-5.5'], ['gpt-5.4', 'GPT-5.4'], ['gpt-5.4-mini', 'GPT-5.4 mini'], ['gpt-5.3-codex-spark', 'GPT-5.3 Spark']];
-      const EFFS = [['low', 'Bajo'], ['medium', 'Medio'], ['high', 'Alto'], ['xhigh', 'Muy alto'], ['max', 'Máximo']];
+      const CODEX = [['', t('sessions.model.codexNone', 'Ninguno (Manual)')], ['gpt-5.5', 'GPT-5.5'], ['gpt-5.4', 'GPT-5.4'], ['gpt-5.4-mini', 'GPT-5.4 mini'], ['gpt-5.3-codex-spark', 'GPT-5.3 Spark']];
+      const EFFS = [['low', t('sessions.eff.low', 'Bajo')], ['medium', t('sessions.eff.medium', 'Medio')], ['high', t('sessions.eff.high', 'Alto')], ['xhigh', t('sessions.eff.xhigh', 'Muy alto')], ['max', t('sessions.eff.max', 'Máximo')]];
       const CLOUDSET = new Set(['haiku', 'sonnet', 'opus', 'fable']);
       // Estado inicial derivado de la conversación.
       let mode = 'autotux'; let fable = false;
@@ -548,9 +559,9 @@ export default {
       else { mode = 'tandem'; rModel = CLOUDSET.has(c.modelChoice) ? c.modelChoice : (CLOUDSET.has(c.model) ? c.model : 'opus'); rEffort = c.effort || 'medium'; cModel = ''; }
 
       const legend = () => {
-        if (mode === 'autotux') return { t: `🤖 Protocolo AutoTux${fable ? ' · con Fable' : ''}`, cls: 'autotux' };
-        if (cModel) return { t: '🤝 Protocolo Tándem', cls: 'tandem' };
-        return { t: '🔵 Manual', cls: 'manual' };
+        if (mode === 'autotux') return { t: t('sessions.model.legendAutotux', '🤖 Protocolo AutoTux{fable}', { fable: fable ? t('sessions.model.withFable', ' · con Fable') : '' }), cls: 'autotux' };
+        if (cModel) return { t: t('sessions.model.legendTandem', '🤝 Protocolo Tándem'), cls: 'tandem' };
+        return { t: t('sessions.model.legendManual', '🔵 Manual'), cls: 'manual' };
       };
       const opts = (list, sel, attr) => list.map(([v, l]) =>
         `<button class="mp-opt${v === sel ? ' mp-opt--on' : ''}" data-${attr}="${v}">${l}${v === sel ? icon('check', { size: 12 }) : ''}</button>`).join('');
@@ -562,37 +573,37 @@ export default {
         if (mode === 'autotux') {
           bodyH = `
             <div class="sess-pick-sec">
-              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Cloud · router automático</div>
-              <p class="mp-info">Sube y baja solo entre <b>Haiku · Sonnet · Opus</b> según cada turno. El esfuerzo lo maneja el router.</p>
-              <label class="mp-check"><input type="checkbox" data-fable ${fable ? 'checked' : ''}> Incluir <b>Fable</b> como techo (opcional)</label>
+              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} ${t('sessions.model.cloudAuto', 'Cloud · router automático')}</div>
+              <p class="mp-info">${t('sessions.model.autoInfo', 'Sube y baja solo entre <b>Haiku · Sonnet · Opus</b> según cada turno. El esfuerzo lo maneja el router.')}</p>
+              <label class="mp-check"><input type="checkbox" data-fable ${fable ? 'checked' : ''}> ${t('sessions.model.fableCheck', 'Incluir <b>Fable</b> como techo (opcional)')}</label>
             </div>
             <div class="sess-pick-sec mp-off">
-              <div class="sess-pick-h">${icon('gear', { size: 14 })} Codex — no participa en AutoTux</div>
+              <div class="sess-pick-h">${icon('gear', { size: 14 })} ${t('sessions.model.codexOff', 'Codex — no participa en AutoTux')}</div>
             </div>`;
         } else {
           bodyH = `
             <div class="sess-pick-sec">
-              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} Cloud · razonador</div>
+              <div class="sess-pick-h">${icon('sparkle', { size: 14 })} ${t('sessions.model.cloudReasoner', 'Cloud · razonador')}</div>
               <div class="mp-opts">${opts(CLOUD, rModel, 'rmodel')}</div>
-              <div class="mp-effrow">Esfuerzo: ${effSel('r', rEffort)}</div>
+              <div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('r', rEffort)}</div>
             </div>
             <div class="sess-pick-sec">
-              <div class="sess-pick-h">${icon('gear', { size: 14 })} Codex · ejecutor</div>
+              <div class="sess-pick-h">${icon('gear', { size: 14 })} ${t('sessions.model.codexExec', 'Codex · ejecutor')}</div>
               <div class="mp-opts">${opts(CODEX, cModel, 'cmodel')}</div>
-              ${cModel ? `<div class="mp-effrow">Esfuerzo: ${effSel('c', cEffort)}</div>` : '<p class="mp-info">Sin Codex = <b>Manual</b> (Claude solo, sin delegación).</p>'}
+              ${cModel ? `<div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('c', cEffort)}</div>` : `<p class="mp-info">${t('sessions.model.manualInfo', 'Sin Codex = <b>Manual</b> (Claude solo, sin delegación).')}</p>`}
             </div>`;
         }
         m.body.innerHTML = `
           <div class="mp-legend mp-legend--${lg.cls}">${lg.t}</div>
           <div class="mp-toggles">
-            <button class="mp-toggle${mode === 'autotux' ? ' mp-toggle--on' : ''}" data-mode="autotux">🤖 AutoTux</button>
-            <button class="mp-toggle${mode === 'tandem' ? ' mp-toggle--on' : ''}" data-mode="tandem">🤝 Tándem / Manual</button>
+            <button class="mp-toggle${mode === 'autotux' ? ' mp-toggle--on' : ''}" data-mode="autotux">${t('sessions.model.toggleAutotux', '🤖 AutoTux')}</button>
+            <button class="mp-toggle${mode === 'tandem' ? ' mp-toggle--on' : ''}" data-mode="tandem">${t('sessions.model.toggleTandem', '🤝 Tándem / Manual')}</button>
           </div>
           ${bodyH}
-          <p class="sess-plumbing">AutoTux rutea el modelo solo (esfuerzo automático). Tándem: Claude razona, Codex ejecuta. Sin Codex = Manual. El cambio se aplica al reabrir la conversación o en el próximo turno tras dormir.</p>
+          <p class="sess-plumbing">${t('sessions.model.footer', 'AutoTux rutea el modelo solo (esfuerzo automático). Tándem: Claude razona, Codex ejecuta. Sin Codex = Manual. El cambio se aplica al reabrir la conversación o en el próximo turno tras dormir.')}</p>
           <div class="sess-pick-actions">
-            <button class="btn-ghost" data-act="cancel">Cancelar</button>
-            <button class="btn" data-act="apply">Aplicar</button>
+            <button class="btn-ghost" data-act="cancel">${t('sessions.cancel', 'Cancelar')}</button>
+            <button class="btn" data-act="apply">${t('sessions.model.apply', 'Aplicar')}</button>
           </div>`;
         m.body.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { mode = b.dataset.mode; paint(); }));
         m.body.querySelectorAll('[data-rmodel]').forEach((b) => b.addEventListener('click', () => { rModel = b.dataset.rmodel; paint(); }));
@@ -614,13 +625,13 @@ export default {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo.');
+          if (!res.ok) throw new Error(data.error || t('sessions.model.error', 'No se pudo cambiar el modelo.'));
           syncConversation(data.chat);
           await refresh();
           const chip = listEl.querySelector(`[data-key="chat:${c.id}"] .sess-model`);
           if (chip) chip.textContent = chatModelLabel(data.chat || c);
         } catch (e) {
-          dialog.alertDialog({ title: 'Modelo y protocolo', message: e.message });
+          dialog.alertDialog({ title: t('sessions.model.title', 'Modelo y protocolo'), message: e.message });
         }
       };
       paint();
@@ -634,18 +645,18 @@ export default {
           body: JSON.stringify({ id: c.id, mode: c.viewMode === 'tui' ? 'chat' : 'tui' }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo cambiar de modo.');
+        if (!res.ok) throw new Error(data.error || t('sessions.mode.error', 'No se pudo cambiar de modo.'));
         syncConversation(data.chat); // si la pestaña está abierta, reconstruye la vista
         refresh();
       } catch (e) {
-        dialog.alertDialog({ title: 'Cambio de modo', message: e.message });
+        dialog.alertDialog({ title: t('sessions.mode.title', 'Cambio de modo'), message: e.message });
       }
     }
 
     async function renameChat(c) {
       const name = await dialog.promptDialog({
-        title: 'Renombrar conversación',
-        message: 'Nombre para mostrar (vacío = volver al nombre de la carpeta).',
+        title: t('sessions.renameChat.title', 'Renombrar conversación'),
+        message: t('sessions.rename.msg', 'Nombre para mostrar (vacío = volver al nombre de la carpeta).'),
         value: c.title || '',
       });
       if (name === null) return;
@@ -656,10 +667,10 @@ export default {
           body: JSON.stringify({ id: c.id, title: name }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo renombrar.');
+        if (!res.ok) throw new Error(data.error || t('sessions.rename.error', 'No se pudo renombrar.'));
         syncConversation(data.chat);
       } catch (e) {
-        dialog.alertDialog({ title: 'Renombrar conversación', message: e.message });
+        dialog.alertDialog({ title: t('sessions.renameChat.title', 'Renombrar conversación'), message: e.message });
       } finally {
         refresh();
       }
@@ -667,9 +678,9 @@ export default {
 
     async function closeChat(c) {
       const ok = await dialog.confirmDialog({
-        title: 'Cerrar conversación',
-        message: `Se cierra "${c.title}" (el historial queda en el transcript para retomar en el futuro).`,
-        confirmLabel: 'Cerrar',
+        title: t('sessions.close.title', 'Cerrar conversación'),
+        message: t('sessions.close.msg', 'Se cierra "{title}" (el historial queda en el transcript para retomar en el futuro).', { title: c.title }),
+        confirmLabel: t('sessions.close.confirm', 'Cerrar'),
         danger: true,
       });
       if (!ok) return;
@@ -681,7 +692,7 @@ export default {
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          dialog.alertDialog({ title: 'Cerrar conversación', message: data.error || 'No se pudo cerrar la conversación.' });
+          dialog.alertDialog({ title: t('sessions.close.title', 'Cerrar conversación'), message: data.error || t('sessions.close.error', 'No se pudo cerrar la conversación.') });
         }
       } finally {
         refresh();
@@ -713,7 +724,7 @@ export default {
       const menuBtn = document.createElement('button');
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
-      menuBtn.title = 'Opciones';
+      menuBtn.title = t('sessions.options', 'Opciones');
       menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(s, menuBtn); });
 
       elCard.append(main, menuBtn);
@@ -739,10 +750,10 @@ export default {
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
-        ${canAdopt ? `<button class="cwc-popup-item" data-act="adopt">${icon('sparkle', { size: 15 })}<span>Pasar a Chat</span></button>` : ''}
-        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>Renombrar</span></button>
-        <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>Cambiar modelo</span></button>
-        <button class="cwc-popup-item danger" data-act="kill">${icon('trash', { size: 15 })}<span>Matar sesión</span></button>`;
+        ${canAdopt ? `<button class="cwc-popup-item" data-act="adopt">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
+        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>
+        <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>
+        <button class="cwc-popup-item danger" data-act="kill">${icon('trash', { size: 15 })}<span>${t('sessions.menu.kill', 'Matar sesión')}</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
@@ -757,9 +768,9 @@ export default {
     // server) y abre la conversación sobre la MISMA sesión.
     async function adoptToChat(s) {
       const ok = await dialog.confirmDialog({
-        title: 'Pasar a Chat',
-        message: `Se cierra el Claude que corre en la terminal "${displayName(s)}" (Ctrl-C×2, verificado) y la conversación continúa como Chat con toda su memoria. La terminal queda como shell.`,
-        confirmLabel: 'Pasar a Chat',
+        title: t('sessions.adopt.title', 'Pasar a Chat'),
+        message: t('sessions.adopt.msg', 'Se cierra el Claude que corre en la terminal "{name}" (Ctrl-C×2, verificado) y la conversación continúa como Chat con toda su memoria. La terminal queda como shell.', { name: displayName(s) }),
+        confirmLabel: t('sessions.adopt.title', 'Pasar a Chat'),
       });
       if (!ok) return;
       try {
@@ -769,11 +780,11 @@ export default {
           body: JSON.stringify({ terminalId: s.name.replace(/^cwc-/, '') }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'No se pudo pasar a Chat.');
+        if (!res.ok) throw new Error(data.error || t('sessions.adopt.error', 'No se pudo pasar a Chat.'));
         openChatView(data.chat);
         refresh();
       } catch (e) {
-        dialog.alertDialog({ title: 'Pasar a Chat', message: e.message });
+        dialog.alertDialog({ title: t('sessions.adopt.title', 'Pasar a Chat'), message: e.message });
       }
     }
 
@@ -790,8 +801,8 @@ export default {
 
     async function rename(s) {
       const name = await dialog.promptDialog({
-        title: 'Renombrar sesión',
-        message: 'Nombre para mostrar (vacío = volver al nombre de la carpeta).',
+        title: t('sessions.rename.title', 'Renombrar sesión'),
+        message: t('sessions.rename.msg', 'Nombre para mostrar (vacío = volver al nombre de la carpeta).'),
         value: s.customTitle || '',
         placeholder: displayName(s),
       });
@@ -804,7 +815,7 @@ export default {
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          dialog.alertDialog({ title: 'Renombrar sesión', message: data.error || 'No se pudo renombrar la sesión.' });
+          dialog.alertDialog({ title: t('sessions.rename.title', 'Renombrar sesión'), message: data.error || t('sessions.rename.errorSess', 'No se pudo renombrar la sesión.') });
         }
       } finally {
         refresh();
@@ -812,12 +823,12 @@ export default {
     }
 
     function pickModel(s) {
-      const m = dialog.openModal({ title: 'Modelo de esta sesión', width: 320 });
+      const m = dialog.openModal({ title: t('sessions.pickModel.title', 'Modelo de esta sesión'), width: 320 });
       m.body.innerHTML = `
         <div class="sess-menu-list">
-          ${TUI_MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${l}</span></button>`).join('')}
+          ${TUI_MODEL_OPTIONS.map(([v, l]) => `<button class="btn-ghost sess-menu-item" data-model="${v}"><span>${t('sessions.pickModel.model.' + v, l)}</span></button>`).join('')}
         </div>
-        <p class="sess-plumbing">Se envía /model a la sesión (solo tiene efecto si corre Claude Code). AutoTux todavía no gestiona sesiones de terminal.</p>`;
+        <p class="sess-plumbing">${t('sessions.pickModel.note', 'Se envía /model a la sesión (solo tiene efecto si corre Claude Code). AutoTux todavía no gestiona sesiones de terminal.')}</p>`;
       for (const b of m.body.querySelectorAll('[data-model]')) {
         b.addEventListener('click', async () => {
           m.close();
@@ -829,10 +840,10 @@ export default {
             });
             if (!res.ok) {
               const d = await res.json().catch(() => ({}));
-              dialog.alertDialog({ title: 'Modelo', message: d.error || 'No se pudo cambiar el modelo.' });
+              dialog.alertDialog({ title: t('sessions.model.short', 'Modelo'), message: d.error || t('sessions.model.error', 'No se pudo cambiar el modelo.') });
             }
           } catch {
-            dialog.alertDialog({ title: 'Modelo', message: 'No se pudo cambiar el modelo.' });
+            dialog.alertDialog({ title: t('sessions.model.short', 'Modelo'), message: t('sessions.model.error', 'No se pudo cambiar el modelo.') });
           }
         });
       }
@@ -840,11 +851,11 @@ export default {
 
     async function kill(s) {
       const ok = await dialog.confirmDialog({
-        title: 'Matar sesión',
+        title: t('sessions.kill.title', 'Matar sesión'),
         message: s.owned
-          ? `Se cierra definitivamente "${displayName(s)}" y todo lo que corra adentro.`
-          : `"${displayName(s)}" es una sesión externa (${plumbing(s)}). Matarla puede interrumpir algo que estés usando por fuera.`,
-        confirmLabel: 'Matar',
+          ? t('sessions.kill.msgOwned', 'Se cierra definitivamente "{name}" y todo lo que corra adentro.', { name: displayName(s) })
+          : t('sessions.kill.msgExternal', '"{name}" es una sesión externa ({plumbing}). Matarla puede interrumpir algo que estés usando por fuera.', { name: displayName(s), plumbing: plumbing(s) }),
+        confirmLabel: t('sessions.kill.confirm', 'Matar'),
         danger: true,
       });
       if (!ok) return;
@@ -856,7 +867,7 @@ export default {
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          dialog.alertDialog({ title: 'Sesiones', message: d.error || 'No se pudo matar la sesión.' });
+          dialog.alertDialog({ title: t('sessions.title', 'Sesiones'), message: d.error || t('sessions.kill.error', 'No se pudo matar la sesión.') });
         }
       } finally {
         refresh();
@@ -884,7 +895,7 @@ export default {
             const icEl = cardEl.querySelector('.sess-type-ic');
             if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
             const modeEl = cardEl.querySelector('.sess-mode');
-            if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? 'En modo Terminal (TUI)' : 'En modo Chat'; }
+            if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? t('sessions.mode.terminal', 'En modo Terminal (TUI)') : t('sessions.mode.chat', 'En modo Chat'); }
             // Refrescar el chip de modelo: con motor vivo el cambio de modelo se
             // confirma por eco (this.model queda stale un instante), así que sin
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.

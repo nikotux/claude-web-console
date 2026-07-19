@@ -14,16 +14,29 @@
 // ⇒ `dismissed` + registro durable health-dismissed.json (corta el bucle
 // escaneo→mismo FP→escaneo, igual que el orquestador de batch). Falla/timeout ⇒
 // `failed` con el motivo. La tarjeta del front polea review.json y se actualiza.
+//
+// MODO TÁNDEM opt-in (2026-07-19, --tandem 1): Claude sigue diagnosticando y
+// VERIFICANDO, pero la ESCRITURA real del fix la hace Codex vía la tool MCP
+// `delegate_to_codex` (mismo patrón que el chat Tándem — createCodexToolServer
+// de chat/codex-tool.js, reusada tal cual). fixToolAllowedTandem DENIEGA
+// Edit/Write/MultiEdit/NotebookEdit: el único camino de Claude para tocar un
+// archivo es delegar. `node --check` verifica el resultado igual que siempre,
+// sin importar quién escribió el diff.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   ROOT, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
   writeFixLock, clearFixLock, readFixLock, isFixing, isRunning, fixPrompt,
-  FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed,
+  FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed, fixToolAllowedTandem,
 } from '../src/modules/health/shared.js';
+import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const targetId = process.argv[2];
+const TANDEM = process.argv[3] === '--tandem';
 if (!targetId) { log('falta el id del hallazgo'); process.exit(2); }
+// Una delegación a Codex puede durar minutos; el SDK corta las tools MCP a 60s
+// por defecto (mismo ajuste que bin/cwc-chat-runner.js en modo Tándem).
+if (TANDEM) process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT || '600000';
 
 // No pisar una revisión en curso (regenera findings) ni otro auto-fix.
 if (isRunning()) { log('hay una revisión corriendo: salgo.'); process.exit(0); }
@@ -57,17 +70,25 @@ async function main() {
   const f = { ...marked };
   log(`auto-fix arrancando: ${f.area} (${f.module || '—'})`);
 
+  const denyReason = TANDEM
+    ? 'Auto-fix Tándem: no editás vos — delegá con delegate_to_codex.'
+    : 'Auto-fix: solo lectura/edición + node --check.';
   const deny = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse', permissionDecision: 'deny',
-      permissionDecisionReason: 'Auto-fix: solo lectura/edición + node --check.',
+      permissionDecisionReason: denyReason,
     },
   };
+  const allowed = TANDEM ? fixToolAllowedTandem : fixToolAllowed;
   // Prompt COMPARTIDO con el orquestador de batch (fixPrompt de shared.js):
   // misma rama FIXNONE de falso positivo — antes el runner tenía una copia
   // inline divergente ("FIXFAIL falso positivo") y el FP quedaba 'failed' en
-  // vez de 'dismissed', re-auditándose en cada revisión.
-  const prompt = fixPrompt(f);
+  // vez de 'dismissed', re-auditándose en cada revisión. En Tándem se suma la
+  // instrucción de delegar (la allowlist YA fuerza el split; esto explica el
+  // porqué para que Claude no insista con Edit/Write).
+  const prompt = TANDEM
+    ? `${fixPrompt(f)}\n\nMODO TÁNDEM: no tenés Edit/Write/MultiEdit — para aplicar el fix, describí el cambio EXACTO en un plan concreto y usá la herramienta delegate_to_codex. Verificá el diff que te devuelve antes de dar FIXOK.`
+    : fixPrompt(f);
 
   let out = '';
   try {
@@ -79,10 +100,11 @@ async function main() {
         maxTurns: FIX_MAX_TURNS,
         permissionMode: 'default',
         settingSources: [],
-        hooks: { PreToolUse: [{ hooks: [async (input) => (fixToolAllowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
-        canUseTool: async (name, input) => (fixToolAllowed(name, input)
+        ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: ROOT }) } } : {}),
+        hooks: { PreToolUse: [{ hooks: [async (input) => (allowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
+        canUseTool: async (name, input) => (allowed(name, input)
           ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: 'Auto-fix: solo lectura/edición + node --check.' }),
+          : { behavior: 'deny', message: denyReason }),
       },
     });
     let timer = null;

@@ -4,7 +4,9 @@
 // Consume GET /api/tickets/pr/:number. 2 acciones: trabajar en un chat, abrir en GitHub.
 import { openModal, confirmDialog } from '../../ui/dialog.js';
 import { icon } from '../../ui/icons.js';
+import { pacman } from '../../ui/pacman.js';
 import { metaSideHtml, wireMetaPanel, metaPromptBlocks, fetchWorkflowContexts, workflowContextBlocks } from './meta-panel.js';
+import { t } from '../../ui/i18n.js';
 
 const TOLKIEN_CWD = 'tolkien';
 
@@ -24,9 +26,9 @@ function fmtDate(iso) {
 function fmtAgo(ms) {
   if (!Number.isFinite(ms) || !ms) return null;
   const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return 'recién';
-  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
-  return `hace ${Math.floor(s / 3600)} h`;
+  if (s < 60) return t('tickets.common.justNow', 'recién');
+  if (s < 3600) return t('tickets.common.agoMin', 'hace {n} min', { n: Math.floor(s / 60) });
+  return t('tickets.common.agoHours', 'hace {n} h', { n: Math.floor(s / 3600) });
 }
 function ciClass(concl) {
   const c = String(concl || '').toUpperCase();
@@ -84,11 +86,11 @@ function buildPrContext(pr, conv, checks, files, contexts) {
 export function openPrDetail(prLite, deps = {}) {
   const modal = openModal({ title: `PR #${prLite.number} · ${(prLite.title || '').slice(0, 44)}`, width: 'min(980px, 95vw)' });
   const c = modal.body;
-  c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${icon('clock', { size: 12 })} cargando el PR desde GitHub…</div></div>`;
+  c.innerHTML = `<div class="bv2-detail"><div class="bf-sub" style="padding:.6rem">${pacman({ size: 'sm' })} ${t('tickets.pr.loading', 'cargando el PR desde GitHub…')}</div></div>`;
   const box = c.querySelector('.bv2-detail');
 
   function render(pr, error, you = null, youAdmin = false, info = {}) {
-    if (error || !pr) { box.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(error || 'No se pudo leer el PR.')}</div>`; return; }
+    if (error || !pr) { box.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(error || t('tickets.pr.readError', 'No se pudo leer el PR.'))}</div>`; return; }
 
     // Lock por usuario (mismo sistema que los tickets, id `pr:<number>`).
     const w = pr.workingBy || null;
@@ -98,15 +100,15 @@ export function openPrDetail(prLite, deps = {}) {
     const lockBanner = w
       ? `<div class="bv2-lockbar ${mine ? 'bv2-lockbar--mine' : 'bv2-lockbar--other'}">
           ${icon(mine ? 'check' : 'clock', { size: 13 })}
-          <span>${mine ? 'Lo estás trabajando vos' : `🔒 En uso por <b>${esc(w.label || w.by)}</b>`}${w.at ? ` · desde las ${fmtClock(w.at)}` : ''}</span>
-          ${lockedByOther ? '<span class="bv2-lockbar-hint">no podés trabajarlo hasta que lo suelte o lo robes</span>' : ''}
+          <span>${mine ? t('tickets.ticket.workingByYou', 'Lo estás trabajando vos') : t('tickets.ticket.inUseBy', '🔒 En uso por <b>{name}</b>', { name: esc(w.label || w.by) })}${w.at ? t('tickets.ticket.sinceTime', ' · desde las {time}', { time: fmtClock(w.at) }) : ''}</span>
+          ${lockedByOther ? `<span class="bv2-lockbar-hint">${t('tickets.pr.lockedHint', 'no podés trabajarlo hasta que lo suelte o lo robes')}</span>` : ''}
         </div>`
       : '';
     const claimActs = mine
-      ? `<button class="btn-ghost btn--sm" data-act="release">${icon('close', { size: 13 })}<span>Soltar</span></button>`
+      ? `<button class="btn-ghost btn--sm" data-act="release">${icon('close', { size: 13 })}<span>${t('tickets.ticket.release', 'Soltar')}</span></button>`
       : lockedByOther
-        ? `<button class="btn-ghost btn--sm bv2-danger" data-act="steal">${icon('play', { size: 13 })}<span>Robar</span></button>${youAdmin ? `<button class="btn-ghost btn--sm bv2-danger" data-act="force">${icon('close', { size: 13 })}<span>Forzar liberación</span></button>` : ''}`
-        : `<button class="btn-ghost btn--sm" data-act="claim">${icon('play', { size: 13 })}<span>Tomar</span></button>`;
+        ? `<button class="btn-ghost btn--sm bv2-danger" data-act="steal">${icon('play', { size: 13 })}<span>${t('tickets.common.steal', 'Robar')}</span></button>${youAdmin ? `<button class="btn-ghost btn--sm bv2-danger" data-act="force">${icon('close', { size: 13 })}<span>${t('tickets.common.forceRelease', 'Forzar liberación')}</span></button>` : ''}`
+        : `<button class="btn-ghost btn--sm" data-act="claim">${icon('play', { size: 13 })}<span>${t('tickets.common.claim', 'Tomar')}</span></button>`;
 
     async function apiClaim(action, force) {
       try {
@@ -121,7 +123,7 @@ export function openPrDetail(prLite, deps = {}) {
 
     // Conversaciones = comments + reviews, en orden cronológico.
     const conv = [
-      ...(pr.comments || []).map((x) => ({ who: x.author?.login || '?', when: x.createdAt, kind: 'comentario', state: null, body: x.body || '' })),
+      ...(pr.comments || []).map((x) => ({ who: x.author?.login || '?', when: x.createdAt, kind: t('tickets.pr.kindComment', 'comentario'), state: null, body: x.body || '' })),
       ...(pr.reviews || []).map((x) => ({ who: x.author?.login || '?', when: x.submittedAt || x.createdAt, kind: 'review', state: x.state || null, body: x.body || '' })),
     ].filter((x) => x.body || x.state).sort((a, b) => Date.parse(a.when || 0) - Date.parse(b.when || 0));
 
@@ -139,16 +141,16 @@ export function openPrDetail(prLite, deps = {}) {
           ${it.parentRef ? `<div class="bf-sub">↳ ${esc(it.parentRef)}${it.parentTitle ? ` · ${esc(it.parentTitle)}` : ''}</div>` : ''}
           ${it.content ? `<div class="bv2-pad-item-c">${esc(it.content).slice(0, 320)}${it.content.length > 320 ? '…' : ''}</div>` : ''}
           ${(it.tags || []).length ? `<div class="bf-sub">${it.tags.map((t) => `#${esc(t)}`).join(' ')}</div>` : ''}
-          ${it.updatedAt ? `<div class="bf-sub">act. ${fmtDate(it.updatedAt)}</div>` : ''}
+          ${it.updatedAt ? `<div class="bf-sub">${t('tickets.meta.updatedShort', 'act. {d}', { d: fmtDate(it.updatedAt) })}</div>` : ''}
         </div>`).join('')
-      : `<div class="bf-sub">${(pr.padRefs || []).length ? `Refs: ${esc((pr.padRefs || []).join(', '))} — ` : ''}${esc(pr.padError || 'sin items de Pad')}</div>`;
+      : `<div class="bf-sub">${(pr.padRefs || []).length ? t('tickets.pr.refs', 'Refs: {refs} — ', { refs: esc((pr.padRefs || []).join(', ')) }) : ''}${esc(pr.padError || t('tickets.pr.noPadItems', 'sin items de Pad'))}</div>`;
 
     // Barra de FRESCURA (Fix 2 uniformidad, 2026-07-10): fuente + antigüedad + ↻.
     const ago = fmtAgo(info.generatedAt);
-    const srcLabel = info.cached ? 'snapshot' : 'GitHub en vivo';
+    const srcLabel = info.cached ? 'snapshot' : t('tickets.pr.srcLive', 'GitHub en vivo');
     const freshBar = `<div class="bv2-freshbar">
-      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? `actualizado ${ago}` : 'lectura en vivo'} · ${esc(srcLabel)}</span>
-      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="Actualizar PR">${icon('refresh', { size: 13 })}</button>
+      <span class="bf-sub">${icon('clock', { size: 11 })} ${ago ? t('tickets.common.updatedAgo', 'actualizado {ago}', { ago }) : t('tickets.common.liveRead', 'lectura en vivo')} · ${esc(srcLabel)}</span>
+      <button class="btn-ghost btn--sm btn--icon" data-act="refresh" title="${t('tickets.pr.refreshTitle', 'Actualizar PR')}">${icon('refresh', { size: 13 })}</button>
     </div>`;
 
     box.innerHTML = `
@@ -157,48 +159,48 @@ export function openPrDetail(prLite, deps = {}) {
       <div class="bv2-pr-cols">
         <div class="bv2-pr-main">
           <div class="bv2-detail-meta">
-            <span class="bb-chip ${reviewClass(pr.reviewDecision)}">${esc(pr.reviewDecision || 'sin review')}</span>
+            <span class="bb-chip ${reviewClass(pr.reviewDecision)}">${esc(pr.reviewDecision || t('tickets.pr.noReview', 'sin review'))}</span>
             <span class="bb-chip">${esc(pr.headRefName || '')} → ${esc(pr.baseRefName || 'main')}</span>
             <span class="bb-chip ${/CONFLICT/i.test(pr.mergeable) ? 'bb-chip--danger' : ''}">${esc(pr.mergeable || '')}</span>
-            <span class="bb-chip">+${pr.additions ?? 0}/-${pr.deletions ?? 0} · ${pr.changedFiles ?? files.length} arch.</span>
+            <span class="bb-chip">+${pr.additions ?? 0}/-${pr.deletions ?? 0} · ${pr.changedFiles ?? files.length} ${t('tickets.common.filesAbbr', 'arch.')}</span>
             ${pr.isDraft ? '<span class="bb-chip bb-chip--warn">draft</span>' : ''}
           </div>
 
-          ${pr.body ? `<div class="bv2-sec-h">Descripción del PR</div>
+          ${pr.body ? `<div class="bv2-sec-h">${t('tickets.pr.prDescription', 'Descripción del PR')}</div>
           <div class="bv2-detail-desc">${esc(pr.body).slice(0, 6000)}</div>` : ''}
 
           <div class="bv2-sec-h">Checks (CI) · ${checks.length}</div>
           <div class="bv2-detail-meta">
-            ${checks.length ? checks.map((k) => `<span class="bb-chip ${ciClass(k.conclusion || k.state)}" title="${esc(k.workflowName || '')}">${esc(k.name || '?')}: ${esc((k.conclusion || k.status || '').toLowerCase())}</span>`).join('') : '<span class="bf-sub">— sin checks —</span>'}
+            ${checks.length ? checks.map((k) => `<span class="bb-chip ${ciClass(k.conclusion || k.state)}" title="${esc(k.workflowName || '')}">${esc(k.name || '?')}: ${esc((k.conclusion || k.status || '').toLowerCase())}</span>`).join('') : `<span class="bf-sub">${t('tickets.pr.noChecks', '— sin checks —')}</span>`}
           </div>
 
-          <div class="bv2-sec-h">Conversaciones · ${conv.length}</div>
+          <div class="bv2-sec-h">${t('tickets.pr.conversations', 'Conversaciones')} · ${conv.length}</div>
           <div class="bv2-conv">
             ${conv.length ? conv.map((m) => `<div class="bv2-conv-item">
               <div class="bv2-conv-head"><b>${esc(m.who)}</b> ${m.state ? `<span class="bb-chip ${reviewClass(m.state)}">${esc(m.state)}</span>` : `<span class="bf-sub">${m.kind}</span>`} <span class="bf-sub">${fmtDate(m.when)}</span></div>
               ${m.body ? `<div class="bv2-conv-body">${esc(m.body).slice(0, 800)}</div>` : ''}
-            </div>`).join('') : '<div class="bf-sub">— sin comentarios ni reviews —</div>'}
+            </div>`).join('') : `<div class="bf-sub">${t('tickets.pr.noConv', '— sin comentarios ni reviews —')}</div>`}
           </div>
 
-          <div class="bv2-sec-h">Archivos cambiados · ${files.length}</div>
+          <div class="bv2-sec-h">${t('tickets.pr.changedFiles', 'Archivos cambiados')} · ${files.length}</div>
           <div class="bv2-files">
             ${files.length ? files.slice(0, 40).map((fl) => `<div class="bv2-file">
               <span class="bv2-file-path">${esc(fl.path)}</span>
               <span class="bv2-file-stat"><span class="bv2-add">+${fl.additions ?? 0}</span> <span class="bv2-del">-${fl.deletions ?? 0}</span></span>
-            </div>`).join('') + (files.length > 40 ? `<div class="bf-sub">+ ${files.length - 40} más</div>` : '') : '<div class="bf-sub">— sin archivos —</div>'}
+            </div>`).join('') + (files.length > 40 ? `<div class="bf-sub">${t('tickets.common.moreCount', '+ {n} más', { n: files.length - 40 })}</div>` : '') : `<div class="bf-sub">${t('tickets.pr.noFiles', '— sin archivos —')}</div>`}
           </div>
 
           <div class="bv2-detail-acts">
             ${claimActs}
-            <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ' disabled title="En uso por otro usuario"' : ''}>${icon('play', { size: 13 })}<span>Trabajar esto en un chat</span></button>
-            <button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>Abrir en GitHub</span></button>
+            <button class="btn-ghost btn--sm" data-act="chat"${lockedByOther ? ` disabled title="${t('tickets.common.inUseByOther', 'En uso por otro usuario')}"` : ''}>${icon('play', { size: 13 })}<span>${t('tickets.pr.workInChat', 'Trabajar esto en un chat')}</span></button>
+            <button class="btn-ghost btn--sm" data-act="gh">${icon('gitBranch', { size: 13 })}<span>${t('tickets.pr.openGithub', 'Abrir en GitHub')}</span></button>
           </div>
         </div>
 
         <aside class="bv2-pr-side">
           <div class="bv2-sec-h">Pad · ${(pr.padItems || []).length}${pr.padStale ? ' · ⚠️' : ''}</div>
           <div class="bv2-pad-list">${padHtml}</div>
-          <div class="bv2-note">${icon('help', { size: 11 })} Pad ${pr.padFetchedAt ? `act. ${fmtDate(pr.padFetchedAt)}` : '(sin traer)'} · token OAuth (~1h). <b>Pendiente:</b> refresh propio.</div>
+          <div class="bv2-note">${icon('help', { size: 11 })} Pad ${pr.padFetchedAt ? t('tickets.meta.updatedShort', 'act. {d}', { d: fmtDate(pr.padFetchedAt) }) : t('tickets.pr.padNotFetched', '(sin traer)')}${t('tickets.pr.padNoteTail', ' · token OAuth (~1h). <b>Pendiente:</b> refresh propio.')}</div>
           ${metaSideHtml(pr.meta)}
         </aside>
       </div>`;
@@ -211,9 +213,9 @@ export function openPrDetail(prLite, deps = {}) {
     box.querySelector('[data-act="force"]')?.addEventListener('click', () => postClaim('release', true));
     box.querySelector('[data-act="steal"]')?.addEventListener('click', async () => {
       const okConfirm = await confirmDialog({
-        title: 'Robar el PR',
-        message: `Este PR lo está trabajando ${w?.label || w?.by}. ¿Tomarlo igual? Pasás a ser vos quien lo trabaja.`,
-        confirmLabel: 'Robar', danger: true,
+        title: t('tickets.pr.stealTitle', 'Robar el PR'),
+        message: t('tickets.pr.stealMsg', 'Este PR lo está trabajando {name}. ¿Tomarlo igual? Pasás a ser vos quien lo trabaja.', { name: w?.label || w?.by }),
+        confirmLabel: t('tickets.common.steal', 'Robar'), danger: true,
       });
       if (okConfirm) postClaim('claim', true);
     });
@@ -244,7 +246,7 @@ export function openPrDetail(prLite, deps = {}) {
       const d = await res.json();
       render(d.pr, d.error, d.you || null, d.youAdmin || false, { generatedAt: d.generatedAt, cached: d.cached });
     } catch (e) {
-      render(null, `Error de red: ${e?.message || e}`);
+      render(null, t('tickets.common.netErrorMsg', 'Error de red: {msg}', { msg: e?.message || e }));
     }
   }
   reload();

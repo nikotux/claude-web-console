@@ -10,6 +10,7 @@
 // - Dictado: campo de texto (con IME/composición) + Enviar. El teclado móvil
 //   dicta mucho mejor sobre un input normal que inyectando en xterm.
 import { alertDialog } from '../../ui/dialog.js';
+import { t } from '../../ui/i18n.js';
 
 const SEQ = {
   esc: '\x1b', tab: '\t', shifttab: '\x1b[Z',
@@ -88,7 +89,7 @@ export function initAuxBar({ getActiveTab }) {
       const text = await navigator.clipboard.readText();
       if (text) (getActiveTab()?.pasteText ? getActiveTab().pasteText(text) : send(text));
     } catch {
-      alertDialog({ title: 'Portapapeles', message: 'No se pudo leer el portapapeles (permiso denegado o no disponible).' });
+      alertDialog({ title: t('mobile.paste.title', 'Portapapeles'), message: t('mobile.paste.error', 'No se pudo leer el portapapeles (permiso denegado o no disponible).') });
     }
     refocus();
   });

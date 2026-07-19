@@ -1,0 +1,59 @@
+{
+  "core.explorer": "File explorer",
+  "core.rawView": "Raw View",
+  "core.followUps": "Follow-ups",
+  "core.dictateSend": "Send",
+
+  "core.dialog.close": "Close",
+  "core.dialog.confirm": "Confirm",
+  "core.dialog.cancel": "Cancel",
+  "core.dialog.accept": "OK",
+  "core.dialog.notice": "Notice",
+  "core.dialog.understood": "Got it",
+  "core.dialog.edit": "Edit",
+  "core.dialog.save": "Save",
+  "core.dialog.saveError": "Could not save.",
+
+  "core.i18n.saveLangError": "Could not save the language.",
+
+  "core.common.goToConversation": "Go to conversation",
+
+  "core.perm.deny": "Deny",
+  "core.perm.allow": "Allow",
+  "core.perm.noDetail": "(no detail)",
+  "core.perm.answerError": "Could not respond to the permission.",
+
+  "core.interfono.dismiss": "Dismiss",
+  "core.interfono.resume": "Resume",
+  "core.interfono.moreMessages": "… +{n} more message(s)",
+  "core.interfono.aSession": "a session",
+  "core.interfono.actError": "Could not process the message.",
+
+  "core.markdown.copyCode": "Copy code",
+  "core.markdown.generatingDiagram": "Generating diagram…",
+  "core.markdown.viewMermaid": "View Mermaid code",
+  "core.markdown.clickToZoom": "Click to zoom",
+  "core.markdown.zoom": "Zoom",
+  "core.markdown.zoomDiagram": "Zoom diagram",
+  "core.markdown.mermaidError": "⚠ Could not render this Mermaid diagram — source code below.",
+  "core.markdown.diagram": "Diagram",
+
+  "core.trunc.linesHidden": "… ({n} more lines hidden due to performance limit)",
+
+  "core.flow.totalTitle": "tokens accumulated in the session (approx.)",
+
+  "core.effort.low": "Low",
+  "core.effort.medium": "Medium",
+  "core.effort.high": "High",
+  "core.effort.xhigh": "Very high",
+  "core.effort.max": "Maximum",
+  "core.effort.autoSuffix": "auto",
+
+  "core.activity.summary": "{n} subagent(s) · {p} background process(es)",
+  "core.activity.dominantSuffix": " · dominant model: {m}",
+  "core.activity.tapDetail": " — tap to see the detail",
+  "core.activity.subagentsTitle": "{n} subagent(s) in chats",
+  "core.activity.processesTitle": "{n} background process(es)",
+  "core.activity.dominantModel": "Dominant model: {m}",
+  "core.activity.noModel": "No active AI model"
+}

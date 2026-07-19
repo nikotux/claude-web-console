@@ -15,6 +15,7 @@
 // ctx = { icon, dialog, bus, whoami }.
 import { renderMarkdown } from '../../ui/markdown.js';
 import { pacman } from '../../ui/pacman.js';
+import { t } from '../../ui/i18n.js';
 
 // renderMarkdown() devuelve un NODO DOM (ya sanitizado en su interior); para
 // interpolarlo en un template de innerHTML necesitamos su HTML como string
@@ -23,29 +24,30 @@ import { pacman } from '../../ui/pacman.js';
 const mdHtml = (s) => renderMarkdown(s).innerHTML;
 
 const STATUS = [
-  { key: 'por-aprender', label: 'Por aprender', emoji: '🔴' },
-  { key: 'reforzando', label: 'Reforzando', emoji: '🟡' },
-  { key: 'dominado', label: 'Dominado', emoji: '🟢' },
+  { key: 'por-aprender', k: 'learning.status.porAprender', label: 'Por aprender', emoji: '🔴' },
+  { key: 'reforzando', k: 'learning.status.reforzando', label: 'Reforzando', emoji: '🟡' },
+  { key: 'dominado', k: 'learning.status.dominado', label: 'Dominado', emoji: '🟢' },
 ];
 const PRIO = [
-  { key: 'alta', label: 'Alta', emoji: '🔴' },
-  { key: 'media', label: 'Media', emoji: '🟡' },
-  { key: 'baja', label: 'Baja', emoji: '🟢' },
+  { key: 'alta', k: 'learning.prio.alta', label: 'Alta', emoji: '🔴' },
+  { key: 'media', k: 'learning.prio.media', label: 'Media', emoji: '🟡' },
+  { key: 'baja', k: 'learning.prio.baja', label: 'Baja', emoji: '🟢' },
 ];
 const SCOPE = [
-  { key: 'console', label: 'Mi Consola', emoji: '🖥️' },
-  { key: 'tolkien', label: 'Tolkien', emoji: '🌳' },
+  { key: 'console', k: 'learning.scope.console', label: 'Mi Consola', emoji: '🖥️' },
+  { key: 'tolkien', k: 'learning.scope.tolkien', label: 'Tolkien', emoji: '🌳' },
 ];
 const ROUTE_STATUS = [
-  { key: 'activa', label: 'Activa', emoji: '🟢' },
-  { key: 'propuesta', label: 'Propuesta', emoji: '💭' },
-  { key: 'completada', label: 'Completada', emoji: '✅' },
-  { key: 'archivada', label: 'Archivada', emoji: '🗃️' },
+  { key: 'activa', k: 'learning.routeStatus.activa', label: 'Activa', emoji: '🟢' },
+  { key: 'propuesta', k: 'learning.routeStatus.propuesta', label: 'Propuesta', emoji: '💭' },
+  { key: 'completada', k: 'learning.routeStatus.completada', label: 'Completada', emoji: '✅' },
+  { key: 'archivada', k: 'learning.routeStatus.archivada', label: 'Archivada', emoji: '🗃️' },
 ];
 const statusOf = (k) => STATUS.find((s) => s.key === k) || STATUS[0];
 const prioOf = (k) => PRIO.find((p) => p.key === k) || PRIO[1];
 const scopeOf = (k) => SCOPE.find((s) => s.key === k) || SCOPE[0];
 const routeStatusOf = (k) => ROUTE_STATUS.find((s) => s.key === k) || ROUTE_STATUS[0];
+const LB = (e) => t(e.k, e.label);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -78,10 +80,10 @@ function splitSections(md) {
 function fmtAgo(ms) {
   if (!ms) return '';
   const s = Math.floor((Date.now() - ms) / 1000);
-  if (s >= 86400) return `hace ${Math.floor(s / 86400)} d`;
-  if (s >= 3600) return `hace ${Math.floor(s / 3600)} h`;
-  if (s >= 60) return `hace ${Math.floor(s / 60)} min`;
-  return 'recién';
+  if (s >= 86400) return t('learning.ago.days', 'hace {n} d', { n: Math.floor(s / 86400) });
+  if (s >= 3600) return t('learning.ago.hours', 'hace {n} h', { n: Math.floor(s / 3600) });
+  if (s >= 60) return t('learning.ago.mins', 'hace {n} min', { n: Math.floor(s / 60) });
+  return t('learning.ago.now', 'recién');
 }
 
 async function api(url, opts) {
@@ -109,20 +111,20 @@ export function mountLearning(container, ctx) {
     <div class="lt-wrap">
       <div class="lt-head">
         <div class="lt-filters" data-ref="filters">
-          <button class="lt-fchip on" data-filter="activos">Aprendiendo</button>
-          <button class="lt-fchip" data-filter="dominados">Dominados</button>
-          <button class="lt-fchip" data-filter="todos">Todos</button>
+          <button class="lt-fchip on" data-filter="activos">${t('learning.filter.learning', 'Aprendiendo')}</button>
+          <button class="lt-fchip" data-filter="dominados">${t('learning.filter.mastered', 'Dominados')}</button>
+          <button class="lt-fchip" data-filter="todos">${t('learning.filter.all', 'Todos')}</button>
         </div>
-        <button class="btn-ghost btn--sm" data-ref="analyze" title="Analizar el aprendizaje con IA: organiza, agrupa en rutas y sugiere qué aprender (consume tokens)" style="display:none">${icon('sparkle', { size: 13 })}<span>Analizar</span></button>
-        <button class="btn btn--sm" data-ref="new" title="Agregar un tema para aprender">${icon('plus', { size: 13 })}<span>Nuevo tema</span></button>
+        <button class="btn-ghost btn--sm" data-ref="analyze" title="${t('learning.analyze.tip', 'Analizar el aprendizaje con IA: organiza, agrupa en rutas y sugiere qué aprender (consume tokens)')}" style="display:none">${icon('sparkle', { size: 13 })}<span>${t('learning.analyze.btn', 'Analizar')}</span></button>
+        <button class="btn btn--sm" data-ref="new" title="${t('learning.new.tip', 'Agregar un tema para aprender')}">${icon('plus', { size: 13 })}<span>${t('learning.new.btn', 'Nuevo tema')}</span></button>
       </div>
-      <div class="lt-intro">🎓 Temas que vas aprendiendo/reforzando. Agrupalos en <b>rutas</b>, tocá “🎓 Explicame esto” para un repaso que <b>lee el código real</b>, y usá “Analizar” para que la IA organice todo y sugiera qué estudiar.</div>
+      <div class="lt-intro">${t('learning.intro', '🎓 Temas que vas aprendiendo/reforzando. Agrupalos en <b>rutas</b>, tocá "🎓 Explicame esto" para un repaso que <b>lee el código real</b>, y usá "Analizar" para que la IA organice todo y sugiera qué estudiar.')}</div>
       <details class="lt-routes-sec" data-ref="routessec">
-        <summary><span data-ref="routestitle">🗺️ Rutas de aprendizaje</span></summary>
+        <summary><span data-ref="routestitle">${t('learning.routes.title', '🗺️ Rutas de aprendizaje')}</span></summary>
         <div class="lt-routes" data-ref="routes"></div>
-        <button class="btn-ghost btn--sm" data-ref="newroute">${icon('plus', { size: 12 })}<span>Nueva ruta</span></button>
+        <button class="btn-ghost btn--sm" data-ref="newroute">${icon('plus', { size: 12 })}<span>${t('learning.routes.new', 'Nueva ruta')}</span></button>
       </details>
-      <div class="lt-grid" data-ref="grid">cargando…</div>
+      <div class="lt-grid" data-ref="grid">${t('learning.grid.loading', 'cargando…')}</div>
     </div>`;
 
   const gridEl = container.querySelector('[data-ref="grid"]');
@@ -140,28 +142,28 @@ export function mountLearning(container, ctx) {
     return topics.filter((t) => t.status !== 'dominado');
   }
 
-  function card(t) {
-    const st = statusOf(t.status);
-    const sc = scopeOf(t.scope);
-    const rt = t.routeId ? routeById(t.routeId) : null;
-    return `<div class="lt-card" data-id="${esc(t.id)}" role="button" tabindex="0">
+  function card(topic) {
+    const st = statusOf(topic.status);
+    const sc = scopeOf(topic.scope);
+    const rt = topic.routeId ? routeById(topic.routeId) : null;
+    return `<div class="lt-card" data-id="${esc(topic.id)}" role="button" tabindex="0">
       <div class="lt-card-top">
-        <span class="lt-dot" title="${esc(st.label)}">${st.emoji}</span>
-        <span class="lt-scope" title="${esc(sc.label)}">${sc.emoji}</span>
-        ${t.explanation ? '<span class="lt-expbadge" title="Ya tiene explicación guiada">📖</span>' : ''}
-        ${(t.contextoEntradas || []).length ? '<span class="lt-expbadge" title="Tiene contexto adicional (charlas/notas)">🎙️</span>' : ''}
+        <span class="lt-dot" title="${esc(LB(st))}">${st.emoji}</span>
+        <span class="lt-scope" title="${esc(LB(sc))}">${sc.emoji}</span>
+        ${topic.explanation ? `<span class="lt-expbadge" title="${t('learning.card.hasGuide', 'Ya tiene explicación guiada')}">📖</span>` : ''}
+        ${(topic.contextoEntradas || []).length ? `<span class="lt-expbadge" title="${t('learning.card.hasContext', 'Tiene contexto adicional (charlas/notas)')}">🎙️</span>` : ''}
       </div>
-      <div class="lt-card-title">${esc(t.title)}</div>
-      ${t.area ? `<div class="lt-card-area">${esc(t.area)}</div>` : ''}
-      ${rt ? `<div class="lt-card-route" title="Ruta">🗺️ ${esc(rt.title)}</div>` : ''}
-      ${(t.tags || []).length ? `<div class="lt-card-tags">${t.tags.slice(0, 4).map((x) => `<span class="lt-tag">${esc(x)}</span>`).join('')}</div>` : ''}
+      <div class="lt-card-title">${esc(topic.title)}</div>
+      ${topic.area ? `<div class="lt-card-area">${esc(topic.area)}</div>` : ''}
+      ${rt ? `<div class="lt-card-route" title="${t('learning.card.route', 'Ruta')}">🗺️ ${esc(rt.title)}</div>` : ''}
+      ${(topic.tags || []).length ? `<div class="lt-card-tags">${topic.tags.slice(0, 4).map((x) => `<span class="lt-tag">${esc(x)}</span>`).join('')}</div>` : ''}
     </div>`;
   }
 
   function renderRoutes() {
-    routesTitleEl.textContent = `🗺️ Rutas de aprendizaje${routes.length ? ` (${routes.length})` : ''}`;
+    routesTitleEl.textContent = `${t('learning.routes.title', '🗺️ Rutas de aprendizaje')}${routes.length ? ` (${routes.length})` : ''}`;
     if (!routes.length) {
-      routesEl.innerHTML = '<div class="lt-muted">Sin rutas todavía. Agrupá temas relacionados en un camino de estudio (o dejá que “Analizar” lo proponga).</div>';
+      routesEl.innerHTML = `<div class="lt-muted">${t('learning.routes.empty', 'Sin rutas todavía. Agrupá temas relacionados en un camino de estudio (o dejá que "Analizar" lo proponga).')}</div>`;
       return;
     }
     routesEl.innerHTML = routes.map((r) => {
@@ -169,10 +171,10 @@ export function mountLearning(container, ctx) {
       const active = filter === `route:${r.id}`;
       return `<div class="lt-route${active ? ' on' : ''}" data-route="${esc(r.id)}">
         <div class="lt-route-h">
-          <span class="lt-route-title" role="button" tabindex="0" data-routefilter="${esc(r.id)}" title="Ver sus temas">${rs.emoji} ${esc(r.title)}</span>
+          <span class="lt-route-title" role="button" tabindex="0" data-routefilter="${esc(r.id)}" title="${t('learning.route.viewTopics', 'Ver sus temas')}">${rs.emoji} ${esc(r.title)}</span>
           <span class="lt-route-meta">${r.doneCount}/${r.topicCount} · ${r.pct}%</span>
-          <button class="btn-ghost btn--sm btn--icon" data-routeedit="${esc(r.id)}" title="Editar ruta">${icon('edit', { size: 12 })}</button>
-          <button class="btn-ghost btn--sm btn--icon lt-danger" data-routedel="${esc(r.id)}" title="Eliminar ruta">${icon('trash', { size: 12 })}</button>
+          <button class="btn-ghost btn--sm btn--icon" data-routeedit="${esc(r.id)}" title="${t('learning.route.edit', 'Editar ruta')}">${icon('edit', { size: 12 })}</button>
+          <button class="btn-ghost btn--sm btn--icon lt-danger" data-routedel="${esc(r.id)}" title="${t('learning.route.delete', 'Eliminar ruta')}">${icon('trash', { size: 12 })}</button>
         </div>
         <div class="lt-route-bar"><span style="width:${r.pct}%"></span></div>
       </div>`;
@@ -181,9 +183,9 @@ export function mountLearning(container, ctx) {
 
   function renderGrid() {
     const vis = visibleTopics();
-    const filterNote = filter.startsWith('route:') ? `<div class="lt-filternote">Mostrando temas de la ruta <b>${esc(routeById(filter.slice(6))?.title || '')}</b> · <span class="lt-clearfilter" role="button" tabindex="0">ver todos</span></div>` : '';
+    const filterNote = filter.startsWith('route:') ? `<div class="lt-filternote">${t('learning.filternote.prefix', 'Mostrando temas de la ruta')} <b>${esc(routeById(filter.slice(6))?.title || '')}</b> · <span class="lt-clearfilter" role="button" tabindex="0">${t('learning.filternote.seeAll', 'ver todos')}</span></div>` : '';
     if (!vis.length) {
-      gridEl.innerHTML = `${filterNote}<div class="lt-none">${topics.length ? 'Nada en este filtro.' : 'Todavía no cargaste ningún tema. Usá “Nuevo tema” para empezar (ej: “Cómo funciona GetPad”, “Cómo proponer un fix en un PR”).'}</div>`;
+      gridEl.innerHTML = `${filterNote}<div class="lt-none">${topics.length ? t('learning.grid.noneInFilter', 'Nada en este filtro.') : t('learning.grid.empty', 'Todavía no cargaste ningún tema. Usá "Nuevo tema" para empezar (ej: "Cómo funciona GetPad", "Cómo proponer un fix en un PR").')}</div>`;
     } else {
       gridEl.innerHTML = filterNote + vis.map(card).join('');
     }
@@ -207,12 +209,12 @@ export function mountLearning(container, ctx) {
       routes = d.routes || [];
       renderRoutes();
       renderGrid();
-    } catch { gridEl.innerHTML = '<div class="lt-none">No se pudieron leer los temas.</div>'; }
+    } catch { gridEl.innerHTML = `<div class="lt-none">${t('learning.load.error', 'No se pudieron leer los temas.')}</div>`; }
   }
 
   // ===== Formularios =====
   function routeOptions(sel) {
-    return `<option value="">— sin ruta —</option>${routes.map((r) => `<option value="${r.id}"${r.id === sel ? ' selected' : ''}>${esc(r.title)}</option>`).join('')}`;
+    return `<option value="">${t('learning.form.noRoute', '— sin ruta —')}</option>${routes.map((r) => `<option value="${r.id}"${r.id === sel ? ' selected' : ''}>${esc(r.title)}</option>`).join('')}`;
   }
 
   function topicForm(existing) {
@@ -220,34 +222,34 @@ export function mountLearning(container, ctx) {
       let settled = false;
       const finish = (v) => { if (settled) return; settled = true; resolve(v); };
       const isEdit = !!existing;
-      const t = existing || { title: '', area: '', scope: 'console', status: 'por-aprender', priority: 'media', tags: [], routeId: null, notes: '', question: '' };
-      const m = dialog.openModal({ title: isEdit ? `Editar ${t.id}` : 'Nuevo tema', width: '540px', onClose: () => finish(null) });
+      const topic = existing || { title: '', area: '', scope: 'console', status: 'por-aprender', priority: 'media', tags: [], routeId: null, notes: '', question: '' };
+      const m = dialog.openModal({ title: isEdit ? t('learning.form.editTitle', 'Editar {id}', { id: topic.id }) : t('learning.form.newTopic', 'Nuevo tema'), width: '540px', onClose: () => finish(null) });
       m.body.innerHTML = `
         <div class="task-form">
-          <label class="task-fld"><span>Tema</span>
-            <input type="text" data-f="title" maxlength="200" placeholder="Ej: Cómo funciona GetPad" value="${esc(t.title)}" /></label>
+          <label class="task-fld"><span>${t('learning.form.topic', 'Tema')}</span>
+            <input type="text" data-f="title" maxlength="200" placeholder="${t('learning.form.topicPh', 'Ej: Cómo funciona GetPad')}" value="${esc(topic.title)}" /></label>
           <div class="task-form-row">
-            <label class="task-fld"><span>Área</span>
-              <input type="text" data-f="area" maxlength="80" placeholder="Ej: Backend Tolkien, GitHub/PRs" value="${esc(t.area || '')}" /></label>
-            <label class="task-fld"><span>Alcance (qué código navega la IA)</span>
-              <select data-f="scope">${SCOPE.map((s) => `<option value="${s.key}"${s.key === (t.scope || 'console') ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
+            <label class="task-fld"><span>${t('learning.form.area', 'Área')}</span>
+              <input type="text" data-f="area" maxlength="80" placeholder="${t('learning.form.areaPh', 'Ej: Backend Tolkien, GitHub/PRs')}" value="${esc(topic.area || '')}" /></label>
+            <label class="task-fld"><span>${t('learning.form.scope', 'Alcance (qué código navega la IA)')}</span>
+              <select data-f="scope">${SCOPE.map((s) => `<option value="${s.key}"${s.key === (topic.scope || 'console') ? ' selected' : ''}>${s.emoji} ${LB(s)}</option>`).join('')}</select></label>
           </div>
           <div class="task-form-row">
-            <label class="task-fld"><span>Estado</span>
-              <select data-f="status">${STATUS.map((s) => `<option value="${s.key}"${s.key === t.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
-            <label class="task-fld"><span>Prioridad</span>
-              <select data-f="priority">${PRIO.map((p) => `<option value="${p.key}"${p.key === t.priority ? ' selected' : ''}>${p.emoji} ${p.label}</option>`).join('')}</select></label>
-            <label class="task-fld"><span>Ruta</span>
-              <select data-f="routeId">${routeOptions(t.routeId)}</select></label>
+            <label class="task-fld"><span>${t('learning.form.status', 'Estado')}</span>
+              <select data-f="status">${STATUS.map((s) => `<option value="${s.key}"${s.key === topic.status ? ' selected' : ''}>${s.emoji} ${LB(s)}</option>`).join('')}</select></label>
+            <label class="task-fld"><span>${t('learning.form.priority', 'Prioridad')}</span>
+              <select data-f="priority">${PRIO.map((p) => `<option value="${p.key}"${p.key === topic.priority ? ' selected' : ''}>${p.emoji} ${LB(p)}</option>`).join('')}</select></label>
+            <label class="task-fld"><span>${t('learning.form.route', 'Ruta')}</span>
+              <select data-f="routeId">${routeOptions(topic.routeId)}</select></label>
           </div>
-          <label class="task-fld"><span>Pregunta puntual (opcional)</span>
-            <input type="text" data-f="question" maxlength="1000" placeholder="Qué querés entender exactamente" value="${esc(t.question || '')}" /></label>
-          <label class="task-fld"><span>Notas / contexto (Markdown)</span>
-            <textarea data-f="notes" rows="5" maxlength="8000" placeholder="Instrucciones de Chris, detalles previos, lo que ya sabés… (soporta Markdown)">${esc(t.notes || '')}</textarea></label>
+          <label class="task-fld"><span>${t('learning.form.question', 'Pregunta puntual (opcional)')}</span>
+            <input type="text" data-f="question" maxlength="1000" placeholder="${t('learning.form.questionPh', 'Qué querés entender exactamente')}" value="${esc(topic.question || '')}" /></label>
+          <label class="task-fld"><span>${t('learning.form.notes', 'Notas / contexto (Markdown)')}</span>
+            <textarea data-f="notes" rows="5" maxlength="8000" placeholder="${t('learning.form.notesPh', 'Instrucciones de Chris, detalles previos, lo que ya sabés… (soporta Markdown)')}">${esc(topic.notes || '')}</textarea></label>
         </div>
         <div class="dlg-actions">
-          <button class="btn-ghost" data-a="cancel">Cancelar</button>
-          <button class="btn" data-a="save">${isEdit ? 'Guardar' : 'Crear'}</button>
+          <button class="btn-ghost" data-a="cancel">${t('learning.form.cancel', 'Cancelar')}</button>
+          <button class="btn" data-a="save">${isEdit ? t('learning.form.save', 'Guardar') : t('learning.form.create', 'Crear')}</button>
         </div>`;
       const get = (f) => m.body.querySelector(`[data-f="${f}"]`).value;
       m.body.querySelector('[data-a="cancel"]').addEventListener('click', () => m.close());
@@ -270,19 +272,19 @@ export function mountLearning(container, ctx) {
       const finish = (v) => { if (settled) return; settled = true; resolve(v); };
       const isEdit = !!existing;
       const r = existing || { title: '', description: '', status: 'activa' };
-      const m = dialog.openModal({ title: isEdit ? `Editar ${r.id}` : 'Nueva ruta', width: '480px', onClose: () => finish(null) });
+      const m = dialog.openModal({ title: isEdit ? t('learning.routeForm.editTitle', 'Editar {id}', { id: r.id }) : t('learning.routeForm.newRoute', 'Nueva ruta'), width: '480px', onClose: () => finish(null) });
       m.body.innerHTML = `
         <div class="task-form">
-          <label class="task-fld"><span>Título de la ruta</span>
-            <input type="text" data-f="title" maxlength="200" placeholder="Ej: Dominar el ciclo de un PR" value="${esc(r.title)}" /></label>
-          <label class="task-fld"><span>Estado</span>
-            <select data-f="status">${ROUTE_STATUS.map((s) => `<option value="${s.key}"${s.key === r.status ? ' selected' : ''}>${s.emoji} ${s.label}</option>`).join('')}</select></label>
-          <label class="task-fld"><span>Descripción (Markdown)</span>
-            <textarea data-f="description" rows="3" maxlength="4000" placeholder="Qué cubre esta ruta">${esc(r.description || '')}</textarea></label>
+          <label class="task-fld"><span>${t('learning.routeForm.title', 'Título de la ruta')}</span>
+            <input type="text" data-f="title" maxlength="200" placeholder="${t('learning.routeForm.titlePh', 'Ej: Dominar el ciclo de un PR')}" value="${esc(r.title)}" /></label>
+          <label class="task-fld"><span>${t('learning.routeForm.status', 'Estado')}</span>
+            <select data-f="status">${ROUTE_STATUS.map((s) => `<option value="${s.key}"${s.key === r.status ? ' selected' : ''}>${s.emoji} ${LB(s)}</option>`).join('')}</select></label>
+          <label class="task-fld"><span>${t('learning.routeForm.desc', 'Descripción (Markdown)')}</span>
+            <textarea data-f="description" rows="3" maxlength="4000" placeholder="${t('learning.routeForm.descPh', 'Qué cubre esta ruta')}">${esc(r.description || '')}</textarea></label>
         </div>
         <div class="dlg-actions">
-          <button class="btn-ghost" data-a="cancel">Cancelar</button>
-          <button class="btn" data-a="save">${isEdit ? 'Guardar' : 'Crear'}</button>
+          <button class="btn-ghost" data-a="cancel">${t('learning.form.cancel', 'Cancelar')}</button>
+          <button class="btn" data-a="save">${isEdit ? t('learning.form.save', 'Guardar') : t('learning.form.create', 'Crear')}</button>
         </div>`;
       const get = (f) => m.body.querySelector(`[data-f="${f}"]`).value;
       m.body.querySelector('[data-a="cancel"]').addEventListener('click', () => m.close());
@@ -298,7 +300,7 @@ export function mountLearning(container, ctx) {
   // ===== Detalle del tema =====
   async function openDetail(id) {
     let dirty = false, pollTimer = null, alive = true;
-    const m = dialog.openModal({ title: '🎓 Tema', width: 'min(1080px, 94vw)', onClose: () => { alive = false; if (pollTimer) clearTimeout(pollTimer); if (dirty) load(); } });
+    const m = dialog.openModal({ title: t('learning.detail.title', '🎓 Tema'), width: 'min(1080px, 94vw)', onClose: () => { alive = false; if (pollTimer) clearTimeout(pollTimer); if (dirty) load(); } });
 
     async function fresh() {
       try { return (await api(`/api/learning/${id}`)).topic; }
@@ -306,110 +308,110 @@ export function mountLearning(container, ctx) {
     }
 
     async function render() {
-      const t = await fresh();
+      const topic = await fresh();
       if (!alive) return;
-      if (!t) { m.body.innerHTML = '<div class="lt-none">El tema ya no existe.</div>'; return; }
-      const st = statusOf(t.status); const pr = prioOf(t.priority); const sc = scopeOf(t.scope);
-      const rt = t.routeId ? routeById(t.routeId) : null;
-      const nextStatus = t.status === 'por-aprender' ? 'reforzando' : t.status === 'reforzando' ? 'dominado' : null;
-      const advLabel = t.status === 'por-aprender' ? '🟡 Marcar “reforzando”' : t.status === 'reforzando' ? '🟢 Marcar “dominado”' : null;
+      if (!topic) { m.body.innerHTML = `<div class="lt-none">${t('learning.detail.gone', 'El tema ya no existe.')}</div>`; return; }
+      const st = statusOf(topic.status); const pr = prioOf(topic.priority); const sc = scopeOf(topic.scope);
+      const rt = topic.routeId ? routeById(topic.routeId) : null;
+      const nextStatus = topic.status === 'por-aprender' ? 'reforzando' : topic.status === 'reforzando' ? 'dominado' : null;
+      const advLabel = topic.status === 'por-aprender' ? t('learning.detail.markReinforcing', '🟡 Marcar "reforzando"') : topic.status === 'reforzando' ? t('learning.detail.markMastered', '🟢 Marcar "dominado"') : null;
 
-      const sections = splitSections(t.explanation);
+      const sections = splitSections(topic.explanation);
       // GUÍA (columna izquierda ANCHA): toda la explicación renderizada DE
       // CORRIDO en un solo documento formateado, para leerla entera.
-      const guiaBody = !t.explanation
-        ? '<div class="lt-exp-empty">Todavía no generaste la guía de este tema. "Regenerar" analiza TODO de una pasada — código real + tus notas + el contexto adicional — y arma la guía completa.</div>'
-        : `<div class="lt-exp-md lt-guia-doc">${mdHtml(t.explanation)}</div>`;
+      const guiaBody = !topic.explanation
+        ? `<div class="lt-exp-empty">${t('learning.guide.empty', 'Todavía no generaste la guía de este tema. "Regenerar" analiza TODO de una pasada — código real + tus notas + el contexto adicional — y arma la guía completa.')}</div>`
+        : `<div class="lt-exp-md lt-guia-doc">${mdHtml(topic.explanation)}</div>`;
       // SECCIONES (columna derecha ANGOSTA): las MISMAS partes, separadas en un
       // acordeón para saltar/enfocar. Son las piezas que componen la Guía.
-      const seccionesBody = !t.explanation
-        ? '<div class="lt-muted">Las secciones aparecen al generar la guía — son las piezas que la componen.</div>'
+      const seccionesBody = !topic.explanation
+        ? `<div class="lt-muted">${t('learning.sections.emptyGuide', 'Las secciones aparecen al generar la guía — son las piezas que la componen.')}</div>`
         : sections.length > 1
           ? sections.map((s, i) => `
               <details class="lt-exp-sec"${i === 0 ? ' open' : ''}>
-                <summary>${sectionIcon(s.title)} ${esc(s.title || 'Sección')}</summary>
+                <summary>${sectionIcon(s.title)} ${esc(s.title || t('learning.sections.fallbackName', 'Sección'))}</summary>
                 <div class="lt-exp-sec-body">${mdHtml(s.body)}</div>
               </details>`).join('')
-          : '<div class="lt-muted">La guía no tiene secciones separables (regeneralá para que las arme).</div>';
-      const versions = t.explainVersions || [];
+          : `<div class="lt-muted">${t('learning.sections.noSeparable', 'La guía no tiene secciones separables (regeneralá para que las arme).')}</div>`;
+      const versions = topic.explainVersions || [];
       const histHtml = versions.length
-        ? `<details class="lt-exp-hist"><summary>🕑 Versiones anteriores (${versions.length})</summary>
+        ? `<details class="lt-exp-hist"><summary>${t('learning.versions.title', '🕑 Versiones anteriores ({n})', { n: versions.length })}</summary>
             <div class="lt-exp-hist-list">${versions.map((v, i) => `
               <details class="lt-exp-hist-item"><summary>v-${versions.length - i} · ${esc(v.model || '')} · ${fmtAgo(v.at)}</summary>
               <div class="lt-exp-sec-body">${mdHtml(v.explanation)}</div></details>`).join('')}
             </div></details>`
         : '';
       const checkNote = (() => {
-        const c = t.explainCheck;
-        if (!t.explanation || !c) return '';
-        if (!c.stale) return '<div class="lt-exp-fresh">🟢 Al día — sin cambios de notas, contexto ni código desde la última vez.</div>';
-        const why = c.reason === 'code' ? 'el código citado cambió' : 'hay notas/contexto nuevos';
-        return `<div class="lt-exp-stalenote">🟡 Hay cambios (${esc(why)}) — "Regenerar" va a ADAPTAR la guía, no empezar de cero.</div>`;
+        const c = topic.explainCheck;
+        if (!topic.explanation || !c) return '';
+        if (!c.stale) return `<div class="lt-exp-fresh">${t('learning.check.fresh', '🟢 Al día — sin cambios de notas, contexto ni código desde la última vez.')}</div>`;
+        const why = c.reason === 'code' ? t('learning.check.whyCode', 'el código citado cambió') : t('learning.check.whyNotes', 'hay notas/contexto nuevos');
+        return `<div class="lt-exp-stalenote">${t('learning.check.stale', '🟡 Hay cambios ({why}) — "Regenerar" va a ADAPTAR la guía, no empezar de cero.', { why: esc(why) })}</div>`;
       })();
-      const foot = t.explanation ? `<div class="lt-exp-foot">📖 Guía${t.explainModel ? ` · ${esc(t.explainModel)}` : ''}${t.explainedAt ? ` · ${fmtAgo(t.explainedAt)}` : ''}.</div>` : '';
+      const foot = topic.explanation ? `<div class="lt-exp-foot">${t('learning.guide.foot', '📖 Guía')}${topic.explainModel ? ` · ${esc(topic.explainModel)}` : ''}${topic.explainedAt ? ` · ${fmtAgo(topic.explainedAt)}` : ''}.</div>` : '';
       const explainBtn = isAdmin
-        ? `<button class="btn btn--sm" data-a="explain">${icon('sparkle', { size: 13 })}<span>${t.explanation ? '🔄 Regenerar' : '🎓 Generar guía completa'}</span></button>`
-        : '<span class="lt-adminnote">Pedile a un admin que genere la guía (consume tokens).</span>';
-      const forceLink = (isAdmin && t.explanation)
-        ? '<span class="lt-force-link" data-a="explainforce" role="button" tabindex="0">Forzar regeneración completa</span>'
+        ? `<button class="btn btn--sm" data-a="explain">${icon('sparkle', { size: 13 })}<span>${topic.explanation ? t('learning.explain.regenerate', '🔄 Regenerar') : t('learning.explain.generateFull', '🎓 Generar guía completa')}</span></button>`
+        : `<span class="lt-adminnote">${t('learning.explain.adminNote', 'Pedile a un admin que genere la guía (consume tokens).')}</span>`;
+      const forceLink = (isAdmin && topic.explanation)
+        ? `<span class="lt-force-link" data-a="explainforce" role="button" tabindex="0">${t('learning.explain.forceFull', 'Forzar regeneración completa')}</span>`
         : '';
 
       // Origen de cada entrada de contexto: 🎙️ IA · 💬 chat · ✍️ manual.
-      const cxBadge = (src) => (src === 'ia' ? '🎙️ IA' : src === 'chat' ? '💬 chat' : '✍️ manual');
+      const cxBadge = (src) => (src === 'ia' ? t('learning.cx.ia', '🎙️ IA') : src === 'chat' ? t('learning.cx.chat', '💬 chat') : t('learning.cx.manual', '✍️ manual'));
       const cxBadgeCls = (src) => (src === 'ia' ? ' lt-cx-ia' : src === 'chat' ? ' lt-cx-chat' : '');
-      const ctxEntries = Array.isArray(t.contextoEntradas) ? t.contextoEntradas : [];
+      const ctxEntries = Array.isArray(topic.contextoEntradas) ? topic.contextoEntradas : [];
       const ctxInner = ctxEntries.length
         ? ctxEntries.map((e) => `<div class="lt-cx-item" data-cx="${esc(e.id)}">
             <div class="lt-cx-head">
               <span class="lt-cx-badge${cxBadgeCls(e.source)}">${cxBadge(e.source)}</span>
               <span class="lt-cx-when">${fmtAgo(e.at)}</span>
               <span class="lt-cx-acts">
-                <button class="btn-ghost btn--sm btn--icon" data-a="cxedit" data-cx="${esc(e.id)}" title="Editar entrada">${icon('edit', { size: 12 })}</button>
-                <button class="btn-ghost btn--sm btn--icon lt-danger" data-a="cxdel" data-cx="${esc(e.id)}" title="Borrar entrada">${icon('trash', { size: 12 })}</button>
+                <button class="btn-ghost btn--sm btn--icon" data-a="cxedit" data-cx="${esc(e.id)}" title="${t('learning.cx.editEntry', 'Editar entrada')}">${icon('edit', { size: 12 })}</button>
+                <button class="btn-ghost btn--sm btn--icon lt-danger" data-a="cxdel" data-cx="${esc(e.id)}" title="${t('learning.cx.delEntry', 'Borrar entrada')}">${icon('trash', { size: 12 })}</button>
               </span>
             </div>
             <div class="lt-cx-text">${esc(e.text)}</div>
           </div>`).join('')
-        : '<div class="lt-muted">Sin contexto adicional todavía. Sumá una nota manual, pegá una transcripción, o abrí “💬 Profundizar en chat” (al cerrarlo, su resumen vuelve solo acá) — todo se incorpora a la próxima guía.</div>';
+        : `<div class="lt-muted">${t('learning.cx.empty', 'Sin contexto adicional todavía. Sumá una nota manual, pegá una transcripción, o abrí "💬 Profundizar en chat" (al cerrarlo, su resumen vuelve solo acá) — todo se incorpora a la próxima guía.')}</div>`;
 
       m.body.innerHTML = `
         <div class="lt-detail">
           <!-- PIEZA 1 (ancho completo): info básica del tema + contexto -->
-          <div class="lt-d-head"><span class="lt-d-id">${esc(t.id)}</span><h3 class="lt-d-title">${esc(t.title)}</h3></div>
+          <div class="lt-d-head"><span class="lt-d-id">${esc(topic.id)}</span><h3 class="lt-d-title">${esc(topic.title)}</h3></div>
           <div class="lt-d-props">
-            <span class="lt-chip">${st.emoji} ${esc(st.label)}</span>
-            <span class="lt-chip">Prioridad ${pr.emoji} ${esc(pr.label)}</span>
-            <span class="lt-chip">${sc.emoji} ${esc(sc.label)}</span>
-            ${t.area ? `<span class="lt-chip">📂 ${esc(t.area)}</span>` : ''}
+            <span class="lt-chip">${st.emoji} ${esc(LB(st))}</span>
+            <span class="lt-chip">${t('learning.detail.priority', 'Prioridad')} ${pr.emoji} ${esc(LB(pr))}</span>
+            <span class="lt-chip">${sc.emoji} ${esc(LB(sc))}</span>
+            ${topic.area ? `<span class="lt-chip">📂 ${esc(topic.area)}</span>` : ''}
             ${rt ? `<span class="lt-chip">🗺️ ${esc(rt.title)}</span>` : ''}
           </div>
-          ${(t.tags || []).length ? `<div class="lt-card-tags">${t.tags.map((x) => `<span class="lt-tag">${esc(x)}</span>`).join('')}</div>` : ''}
-          ${t.question ? `<div class="lt-d-q">❓ <b>Foco:</b> ${esc(t.question)}</div>` : ''}
-          <details class="lt-sec"><summary>📝 Notas / contexto</summary>
+          ${(topic.tags || []).length ? `<div class="lt-card-tags">${topic.tags.map((x) => `<span class="lt-tag">${esc(x)}</span>`).join('')}</div>` : ''}
+          ${topic.question ? `<div class="lt-d-q">❓ <b>${t('learning.detail.focus', 'Foco:')}</b> ${esc(topic.question)}</div>` : ''}
+          <details class="lt-sec"><summary>${t('learning.notes.title', '📝 Notas / contexto')}</summary>
             <div class="lt-sec-body">
               <div class="lt-notes-view" data-ref="notesview">
-                <div class="lt-notes-md">${t.notes ? mdHtml(t.notes) : '<div class="lt-muted">Sin notas. Tocá ✏️ para escribir lo que ya sabés, instrucciones de Chris, etc.</div>'}</div>
-                <button class="btn-ghost btn--sm" data-a="notesedit">${icon('edit', { size: 12 })}<span>${t.notes ? 'Editar' : 'Escribir notas'}</span></button>
+                <div class="lt-notes-md">${topic.notes ? mdHtml(topic.notes) : `<div class="lt-muted">${t('learning.notes.empty', 'Sin notas. Tocá ✏️ para escribir lo que ya sabés, instrucciones de Chris, etc.')}</div>`}</div>
+                <button class="btn-ghost btn--sm" data-a="notesedit">${icon('edit', { size: 12 })}<span>${topic.notes ? t('learning.notes.edit', 'Editar') : t('learning.notes.write', 'Escribir notas')}</span></button>
               </div>
               <div class="lt-notes-edit" data-ref="notesedit" hidden>
-                <textarea class="tkm-ta" data-ref="notesta" rows="5" placeholder="Notas del tema (soporta Markdown)…">${esc(t.notes || '')}</textarea>
+                <textarea class="tkm-ta" data-ref="notesta" rows="5" placeholder="${t('learning.notes.ph', 'Notas del tema (soporta Markdown)…')}">${esc(topic.notes || '')}</textarea>
                 <div class="tkm-add-acts">
-                  <button class="btn btn--sm" data-a="notessave">${icon('edit', { size: 12 })}<span>Guardar</span></button>
-                  <button class="btn-ghost btn--sm" data-a="notescancel">Cancelar</button>
+                  <button class="btn btn--sm" data-a="notessave">${icon('edit', { size: 12 })}<span>${t('learning.notes.save', 'Guardar')}</span></button>
+                  <button class="btn-ghost btn--sm" data-a="notescancel">${t('learning.notes.cancel', 'Cancelar')}</button>
                   <span class="tkm-status" data-ref="notesstatus"></span>
                 </div>
               </div>
             </div></details>
-          <details class="lt-sec"><summary>🎙️ Contexto adicional${ctxEntries.length ? ` (${ctxEntries.length})` : ''}</summary>
+          <details class="lt-sec"><summary>${t('learning.cx.title', '🎙️ Contexto adicional')}${ctxEntries.length ? ` (${ctxEntries.length})` : ''}</summary>
             <div class="lt-sec-body">
               <div class="tkm-ctx lt-cx-list">${ctxInner}</div>
               <div class="lt-cx-addbar">
-                <button class="btn-ghost btn--sm" data-a="cxnote">${icon('plus', { size: 12 })}<span>Agregar nota</span></button>
+                <button class="btn-ghost btn--sm" data-a="cxnote">${icon('plus', { size: 12 })}<span>${t('learning.cx.addNote', 'Agregar nota')}</span></button>
                 <details class="tkm-add">
-                  <summary>${icon('play', { size: 11 })} Interpretar una charla / transcripción</summary>
-                  <textarea class="tkm-ta" data-ref="ctxta" rows="5" placeholder="Pegá acá la transcripción de la charla…"></textarea>
+                  <summary>${icon('play', { size: 11 })} ${t('learning.cx.interpretTalk', 'Interpretar una charla / transcripción')}</summary>
+                  <textarea class="tkm-ta" data-ref="ctxta" rows="5" placeholder="${t('learning.cx.transcriptPh', 'Pegá acá la transcripción de la charla…')}"></textarea>
                   <div class="tkm-add-acts">
-                    <button class="btn-ghost btn--sm" data-a="ctxanalyze">${icon('sparkle', { size: 12 })}<span>Interpretar con IA</span></button>
+                    <button class="btn-ghost btn--sm" data-a="ctxanalyze">${icon('sparkle', { size: 12 })}<span>${t('learning.cx.interpretAI', 'Interpretar con IA')}</span></button>
                     <span class="tkm-status" data-ref="ctxstatus"></span>
                   </div>
                 </details>
@@ -419,7 +421,7 @@ export function mountLearning(container, ctx) {
           <!-- PIEZAS 2 y 3 (2 columnas asimétricas): Guía (ancha) + Secciones (angosta) -->
           <div class="lt-detail-cols">
             <section class="lt-col-main">
-              <div class="lt-col-h">📖 Guía</div>
+              <div class="lt-col-h">${t('learning.col.guide', '📖 Guía')}</div>
               <div class="lt-exp-status" data-ref="expstatus"></div>
               ${checkNote}
               <div class="lt-guia" data-ref="guia">${guiaBody}</div>
@@ -428,20 +430,20 @@ export function mountLearning(container, ctx) {
               <div class="lt-exp-actions">${explainBtn}${forceLink}</div>
             </section>
             <aside class="lt-col-side">
-              <div class="lt-col-h">🧩 Secciones${sections.length > 1 ? ` (${sections.length})` : ''}</div>
+              <div class="lt-col-h">${t('learning.col.sections', '🧩 Secciones')}${sections.length > 1 ? ` (${sections.length})` : ''}</div>
               <div class="lt-secciones" data-ref="secciones">${seccionesBody}</div>
             </aside>
           </div>
 
           <!-- Acciones (ancho completo) -->
           <div class="lt-d-actions">
-            ${ctx.openChat ? `<button class="btn-ghost btn--sm" data-a="chat">${icon('sparkle', { size: 13 })}<span>💬 Profundizar en chat</span></button>` : ''}
+            ${ctx.openChat ? `<button class="btn-ghost btn--sm" data-a="chat">${icon('sparkle', { size: 13 })}<span>${t('learning.detail.deepDive', '💬 Profundizar en chat')}</span></button>` : ''}
             ${advLabel ? `<button class="btn-ghost btn--sm" data-a="advance">${advLabel}</button>` : ''}
-            <button class="btn-ghost btn--sm" data-a="edit">${icon('edit', { size: 13 })}<span>Editar</span></button>
-            <button class="btn-ghost btn--sm lt-danger" data-a="delete">${icon('trash', { size: 13 })}<span>Eliminar</span></button>
+            <button class="btn-ghost btn--sm" data-a="edit">${icon('edit', { size: 13 })}<span>${t('learning.detail.edit', 'Editar')}</span></button>
+            <button class="btn-ghost btn--sm lt-danger" data-a="delete">${icon('trash', { size: 13 })}<span>${t('learning.detail.delete', 'Eliminar')}</span></button>
           </div>
         </div>`;
-      wire(t, nextStatus);
+      wire(topic, nextStatus);
     }
 
     function buildChatPrompt(t) {
@@ -455,42 +457,42 @@ export function mountLearning(container, ctx) {
       return lines.join('\n');
     }
 
-    function wire(t, nextStatus) {
+    function wire(topic, nextStatus) {
       const statusEl = m.body.querySelector('[data-ref="expstatus"]');
       const ctxStatusEl = m.body.querySelector('[data-ref="ctxstatus"]');
       const setCtxStatus = (s) => { if (ctxStatusEl) ctxStatusEl.textContent = s || ''; };
       const q = (a) => m.body.querySelector(`[data-a="${a}"]`);
-      const post = async (body) => { await api(`/api/learning/${t.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); dirty = true; await load(); render(); };
-      const errBox = (e) => dialog.confirmDialog?.({ title: 'Error', message: String(e.message), confirmLabel: 'Ok' });
+      const post = async (body) => { await api(`/api/learning/${topic.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); dirty = true; await load(); render(); };
+      const errBox = (e) => dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(e.message), confirmLabel: t('learning.ok', 'Ok') });
 
-      q('edit')?.addEventListener('click', async () => { const patch = await topicForm(t); if (patch) post(patch).catch(errBox); });
+      q('edit')?.addEventListener('click', async () => { const patch = await topicForm(topic); if (patch) post(patch).catch(errBox); });
       q('advance')?.addEventListener('click', () => { if (nextStatus) post({ status: nextStatus }).catch(errBox); });
       q('delete')?.addEventListener('click', async () => {
-        const ok = await dialog.confirmDialog({ title: 'Eliminar tema', message: `¿Eliminar “${t.title}”? Se pierde también su explicación guiada. No se puede deshacer.`, confirmLabel: 'Eliminar', danger: true });
+        const ok = await dialog.confirmDialog({ title: t('learning.delTopic.title', 'Eliminar tema'), message: t('learning.delTopic.msg', '¿Eliminar "{title}"? Se pierde también su explicación guiada. No se puede deshacer.', { title: topic.title }), confirmLabel: t('learning.delTopic.confirm', 'Eliminar'), danger: true });
         if (!ok) return;
-        try { await api(`/api/learning/${t.id}/delete`, { method: 'POST' }); dirty = true; m.close(); } catch (e) { errBox(e); }
+        try { await api(`/api/learning/${topic.id}/delete`, { method: 'POST' }); dirty = true; m.close(); } catch (e) { errBox(e); }
       });
       q('chat')?.addEventListener('click', async () => {
         await ctx.openChat?.({
-          cwd: t.scope === 'tolkien' ? tolkienRel : 'claude-web-console',
+          cwd: topic.scope === 'tolkien' ? tolkienRel : 'claude-web-console',
           mode: 'plan',
-          prompt: buildChatPrompt(t),
-          title: `🎓 ${t.title}`.slice(0, 60),
-          learningId: t.id, // write-back: al cerrar el chat, su resumen vuelve como entrada 💬 del tema
+          prompt: buildChatPrompt(topic),
+          title: `🎓 ${topic.title}`.slice(0, 60),
+          learningId: topic.id, // write-back: al cerrar el chat, su resumen vuelve como entrada 💬 del tema
         });
       });
 
       // ----- Explicación (regeneración inteligente: un solo botón) -----
       const runExplain = async (force) => {
         const msg = force
-          ? `Vas a REGENERAR desde CERO la explicación de "${t.title}" (ignora lo que ya tenía). Consume tokens y puede tardar 1-2 min.`
-          : `La IA revisa si hay cambios (notas, contexto adicional o código citado) desde la última vez y ${t.explanation ? 'ADAPTA' : 'genera'} la explicación de "${t.title}" — solo gasta tokens si hace falta.`;
-        const ok = await dialog.confirmDialog({ title: '🎓 Regenerar explicación', message: msg, confirmLabel: force ? 'Forzar regeneración' : 'Regenerar' });
+          ? t('learning.regen.forceMsg', 'Vas a REGENERAR desde CERO la explicación de "{title}" (ignora lo que ya tenía). Consume tokens y puede tardar 1-2 min.', { title: topic.title })
+          : t('learning.regen.adaptMsg', 'La IA revisa si hay cambios (notas, contexto adicional o código citado) desde la última vez y {verb} la explicación de "{title}" — solo gasta tokens si hace falta.', { verb: topic.explanation ? t('learning.regen.verbAdapt', 'ADAPTA') : t('learning.regen.verbGenerate', 'genera'), title: topic.title });
+        const ok = await dialog.confirmDialog({ title: t('learning.regen.title', '🎓 Regenerar explicación'), message: msg, confirmLabel: force ? t('learning.regen.forceBtn', 'Forzar regeneración') : t('learning.regen.btn', 'Regenerar') });
         if (!ok) return;
         try {
-          const r = await api(`/api/learning/${t.id}/explain`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force }) });
-          if (r.status === 'noop') { statusEl.innerHTML = `<div class="lt-exp-fresh">🟢 ${esc(r.reason || 'Sin cambios, no hizo falta regenerar.')}</div>`; return; }
-          poll(t.id, statusEl, r.mode);
+          const r = await api(`/api/learning/${topic.id}/explain`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force }) });
+          if (r.status === 'noop') { statusEl.innerHTML = `<div class="lt-exp-fresh">🟢 ${esc(r.reason || t('learning.regen.noopFallback', 'Sin cambios, no hizo falta regenerar.'))}</div>`; return; }
+          poll(topic.id, statusEl, r.mode);
         } catch (e) { statusEl.innerHTML = `<div class="lt-exp-err">${esc(String(e.message))}</div>`; }
       };
       q('explain')?.addEventListener('click', () => runExplain(false));
@@ -511,12 +513,12 @@ export function mountLearning(container, ctx) {
       q('notescancel')?.addEventListener('click', () => {
         if (notesEditBox) notesEditBox.hidden = true;
         if (notesView) notesView.hidden = false;
-        if (notesTa) notesTa.value = t.notes || '';
+        if (notesTa) notesTa.value = topic.notes || '';
       });
       q('notessave')?.addEventListener('click', async () => {
-        if (notesStatus) notesStatus.textContent = 'Guardando…';
-        try { await api(`/api/learning/${t.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ notes: notesTa?.value || '' }) }); dirty = true; render(); }
-        catch (e) { if (notesStatus) notesStatus.textContent = e.message || 'Error de red.'; }
+        if (notesStatus) notesStatus.textContent = t('learning.notes.saving', 'Guardando…');
+        try { await api(`/api/learning/${topic.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ notes: notesTa?.value || '' }) }); dirty = true; render(); }
+        catch (e) { if (notesStatus) notesStatus.textContent = e.message || t('learning.netError', 'Error de red.'); }
       });
 
       // ----- Contexto adicional: LISTA de entradas -----
@@ -524,10 +526,10 @@ export function mountLearning(container, ctx) {
       // Agregar una nota MANUAL (entrada ✍️ nueva).
       q('cxnote')?.addEventListener('click', async () => {
         const ok = await dialog.textEditorDialog?.({
-          title: '✍️ Agregar nota', hint: 'Nota de contexto para este tema (se suma a la lista y entra en la próxima explicación). Soporta Markdown.', saveLabel: 'Agregar',
+          title: t('learning.addNote.title', '✍️ Agregar nota'), hint: t('learning.addNote.hint', 'Nota de contexto para este tema (se suma a la lista y entra en la próxima explicación). Soporta Markdown.'), saveLabel: t('learning.addNote.save', 'Agregar'),
           onSave: async (text) => {
-            if (!String(text).trim()) throw new Error('La nota está vacía.');
-            await api(`/api/learning/${t.id}/context`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+            if (!String(text).trim()) throw new Error(t('learning.addNote.empty', 'La nota está vacía.'));
+            await api(`/api/learning/${topic.id}/context`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
           },
         });
         if (ok) { dirty = true; render(); }
@@ -537,44 +539,44 @@ export function mountLearning(container, ctx) {
         const cid = b.dataset.cx;
         const cur = ctxEntries.find((e) => e.id === cid)?.text || '';
         const ok = await dialog.textEditorDialog?.({
-          title: '✏️ Editar entrada', hint: 'Editá el texto de esta entrada de contexto.', value: cur, saveLabel: 'Guardar',
+          title: t('learning.editEntry.title', '✏️ Editar entrada'), hint: t('learning.editEntry.hint', 'Editá el texto de esta entrada de contexto.'), value: cur, saveLabel: t('learning.editEntry.save', 'Guardar'),
           onSave: async (text) => {
-            if (!String(text).trim()) throw new Error('La entrada está vacía.');
-            await api(`/api/learning/${t.id}/context/${cid}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+            if (!String(text).trim()) throw new Error(t('learning.editEntry.empty', 'La entrada está vacía.'));
+            await api(`/api/learning/${topic.id}/context/${cid}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
           },
         });
         if (ok) { dirty = true; render(); }
       }));
       m.body.querySelectorAll('[data-a="cxdel"]').forEach((b) => b.addEventListener('click', async () => {
         const cid = b.dataset.cx;
-        const ok = await dialog.confirmDialog({ title: 'Borrar entrada', message: '¿Borrar esta entrada de contexto? No se puede deshacer.', confirmLabel: 'Borrar', danger: true });
+        const ok = await dialog.confirmDialog({ title: t('learning.delEntry.title', 'Borrar entrada'), message: t('learning.delEntry.msg', '¿Borrar esta entrada de contexto? No se puede deshacer.'), confirmLabel: t('learning.delEntry.confirm', 'Borrar'), danger: true });
         if (!ok) return;
-        try { await api(`/api/learning/${t.id}/context/${cid}/delete`, { method: 'POST' }); dirty = true; render(); }
+        try { await api(`/api/learning/${topic.id}/context/${cid}/delete`, { method: 'POST' }); dirty = true; render(); }
         catch (e) { errBox(e); }
       }));
       // Interpretar una transcripción con IA → AGREGA una entrada 🎙️ nueva.
       q('ctxanalyze')?.addEventListener('click', async () => {
         const ta = m.body.querySelector('[data-ref="ctxta"]');
         const text = (ta?.value || '').trim();
-        if (text.length < 20) { setCtxStatus('Pegá una transcripción (mín. 20 caracteres).'); return; }
-        const ok = await dialog.confirmDialog({ title: 'Interpretar con IA', message: 'Corre una interpretación con IA (consume tokens) y se AGREGA como una entrada de Contexto adicional del tema. ¿Seguir?', confirmLabel: 'Interpretar' });
+        if (text.length < 20) { setCtxStatus(t('learning.cx.minChars', 'Pegá una transcripción (mín. 20 caracteres).')); return; }
+        const ok = await dialog.confirmDialog({ title: t('learning.cx.confirmTitle', 'Interpretar con IA'), message: t('learning.cx.confirmMsg', 'Corre una interpretación con IA (consume tokens) y se AGREGA como una entrada de Contexto adicional del tema. ¿Seguir?'), confirmLabel: t('learning.cx.confirmBtn', 'Interpretar') });
         if (!ok) return;
-        setCtxStatus('Interpretando…');
+        setCtxStatus(t('learning.cx.interpreting', 'Interpretando…'));
         if (ctxBtn) ctxBtn.disabled = true;
         let res;
-        try { res = await api(`/api/learning/${t.id}/context-analyze`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ transcript: text }) }); }
-        catch (e) { setCtxStatus(e.message || 'Error de red.'); if (ctxBtn) ctxBtn.disabled = false; return; }
+        try { res = await api(`/api/learning/${topic.id}/context-analyze`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ transcript: text }) }); }
+        catch (e) { setCtxStatus(e.message || t('learning.netError', 'Error de red.')); if (ctxBtn) ctxBtn.disabled = false; return; }
         if (res.status === 'done') { dirty = true; render(); return; }
         let n = 0;
         const pollCtx = async () => {
           if (!alive) return;
           n += 1;
           let job = null;
-          try { job = await api(`/api/learning/${t.id}/context-analyze/${res.id}`); } catch { /* reintentar */ }
+          try { job = await api(`/api/learning/${topic.id}/context-analyze/${res.id}`); } catch { /* reintentar */ }
           if (!alive) return;
-          if (job?.status === 'done') { setCtxStatus('Listo ✓'); dirty = true; render(); return; }
-          if (job?.status === 'error') { setCtxStatus(job.error || 'Falló la interpretación.'); if (ctxBtn) ctxBtn.disabled = false; return; }
-          if (n > 150) { setCtxStatus('Tardó demasiado.'); if (ctxBtn) ctxBtn.disabled = false; return; }
+          if (job?.status === 'done') { setCtxStatus(t('learning.cx.done', 'Listo ✓')); dirty = true; render(); return; }
+          if (job?.status === 'error') { setCtxStatus(job.error || t('learning.cx.failFallback', 'Falló la interpretación.')); if (ctxBtn) ctxBtn.disabled = false; return; }
+          if (n > 150) { setCtxStatus(t('learning.cx.tooLong', 'Tardó demasiado.')); if (ctxBtn) ctxBtn.disabled = false; return; }
           setTimeout(pollCtx, 2000);
         };
         setTimeout(pollCtx, 2000);
@@ -583,8 +585,8 @@ export function mountLearning(container, ctx) {
 
     function poll(topicId, statusEl, mode) {
       if (statusEl) {
-        const label = mode === 'adapt' ? 'Adaptando la explicación con los cambios nuevos…' : 'Generando la explicación completa (navega el código real)…';
-        statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${esc(label)} Puede tardar 1-2 min.</span>`;
+        const label = mode === 'adapt' ? t('learning.poll.adapt', 'Adaptando la explicación con los cambios nuevos…') : t('learning.poll.full', 'Generando la explicación completa (navega el código real)…');
+        statusEl.innerHTML = `${pacman({ state: 'delegating' })} <span>${esc(label)}${t('learning.poll.mayTake', ' Puede tardar 1-2 min.')}</span>`;
       }
       const tick = async () => {
         if (!alive) return;
@@ -592,7 +594,7 @@ export function mountLearning(container, ctx) {
         try { j = await api(`/api/learning/${topicId}/explain`); } catch { /* reintentar */ }
         if (!alive) return;
         if (j && j.status === 'done') { dirty = true; render(); return; }
-        if (j && j.status === 'error') { if (statusEl) statusEl.innerHTML = `<div class="lt-exp-err">${esc(j.error || 'La explicación falló.')}</div>`; return; }
+        if (j && j.status === 'error') { if (statusEl) statusEl.innerHTML = `<div class="lt-exp-err">${esc(j.error || t('learning.poll.failFallback', 'La explicación falló.'))}</div>`; return; }
         pollTimer = setTimeout(tick, 2500);
       };
       pollTimer = setTimeout(tick, 2000);
@@ -602,11 +604,11 @@ export function mountLearning(container, ctx) {
 
   // ===== Análisis IA del aprendizaje =====
   async function openAnalysis() {
-    const ok = await dialog.confirmDialog({ title: '🧠 Analizar aprendizaje', message: 'La IA va a revisar TODOS tus temas y sugerir cómo organizarlos: duplicados, unificar, completar, agrupar en rutas, qué aprender primero y temas nuevos. Consume tokens. Las propuestas NO se aplican solas: vos aprobás cada una.', confirmLabel: 'Analizar' });
+    const ok = await dialog.confirmDialog({ title: t('learning.analysis.confirmTitle', '🧠 Analizar aprendizaje'), message: t('learning.analysis.confirmMsg', 'La IA va a revisar TODOS tus temas y sugerir cómo organizarlos: duplicados, unificar, completar, agrupar en rutas, qué aprender primero y temas nuevos. Consume tokens. Las propuestas NO se aplican solas: vos aprobás cada una.'), confirmLabel: t('learning.analysis.confirmBtn', 'Analizar') });
     if (!ok) return;
-    const m = dialog.openModal({ title: '🧠 Análisis del aprendizaje', width: '720px', onClose: () => { alive = false; if (pollTimer) clearTimeout(pollTimer); if (dirty) load(); } });
+    const m = dialog.openModal({ title: t('learning.analysis.modalTitle', '🧠 Análisis del aprendizaje'), width: '720px', onClose: () => { alive = false; if (pollTimer) clearTimeout(pollTimer); if (dirty) load(); } });
     let pollTimer = null, alive = true, dirty = false;
-    m.body.innerHTML = `<div class="lt-an-status">${pacman({ state: 'delegating' })} <span>Analizando tus temas…</span></div>`;
+    m.body.innerHTML = `<div class="lt-an-status">${pacman({ state: 'delegating' })} <span>${t('learning.analysis.running', 'Analizando tus temas…')}</span></div>`;
     try { await api('/api/learning/analyze', { method: 'POST' }); }
     catch (e) { m.body.innerHTML = `<div class="lt-exp-err">${esc(String(e.message))}</div>`; return; }
 
@@ -616,7 +618,7 @@ export function mountLearning(container, ctx) {
       try { j = await api('/api/learning/analysis'); } catch { /* reintentar */ }
       if (!alive) return;
       if (j && j.status === 'done') { renderResult(j.result); return; }
-      if (j && j.status === 'error') { m.body.innerHTML = `<div class="lt-exp-err">${esc(j.error || 'El análisis falló.')}</div>`; return; }
+      if (j && j.status === 'error') { m.body.innerHTML = `<div class="lt-exp-err">${esc(j.error || t('learning.analysis.failFallback', 'El análisis falló.'))}</div>`; return; }
       pollTimer = setTimeout(tick, 2500);
     };
     pollTimer = setTimeout(tick, 2000);
@@ -628,30 +630,30 @@ export function mountLearning(container, ctx) {
 
     function renderResult(r) {
       if (!alive) return;
-      if (!r) { m.body.innerHTML = '<div class="lt-none">Sin resultado.</div>'; return; }
+      if (!r) { m.body.innerHTML = `<div class="lt-none">${t('learning.analysis.noResult', 'Sin resultado.')}</div>`; return; }
       const tById = (id) => topics.find((x) => x.id === id);
       const tName = (id) => esc(tById(id)?.title || id);
       let html = `<div class="lt-an-resumen">${esc(r.resumen || '')}</div>`;
-      html += section('🔁 Duplicados', r.duplicados, (d, i) => `<div class="lt-an-item" data-kind="dup" data-i="${i}">
-        <div class="lt-an-txt">Conservar <b>${tName(d.keep)}</b>, quitar ${d.remove.map(tName).map((x) => `“${x}”`).join(', ')}. <span class="lt-an-why">${esc(d.why)}</span></div>
-        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>Aplicar</button><button class="btn-ghost btn--sm" data-dis>Descartar</button></div></div>`);
-      html += section('🔗 Unificables', r.unificables, (u, i) => `<div class="lt-an-item" data-kind="unif" data-i="${i}">
-        <div class="lt-an-txt">Fusionar ${u.ids.map(tName).map((x) => `“${x}”`).join(' + ')} → <b>${esc(u.title)}</b>. <span class="lt-an-why">${esc(u.why)}</span></div>
-        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>Aplicar</button><button class="btn-ghost btn--sm" data-dis>Descartar</button></div></div>`);
-      html += section('✍️ Completar info', r.completar, (c, i) => `<div class="lt-an-item" data-kind="comp" data-i="${i}">
-        <div class="lt-an-txt"><b>${tName(c.id)}</b>: ${esc((c.notes || '').slice(0, 160))}${c.tags?.length ? ` · tags: ${c.tags.map(esc).join(', ')}` : ''} <span class="lt-an-why">${esc(c.why)}</span></div>
-        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>Aplicar</button><button class="btn-ghost btn--sm" data-dis>Descartar</button></div></div>`);
-      html += section('🗺️ Agrupar en rutas', r.agrupar, (g, i) => `<div class="lt-an-item" data-kind="grp" data-i="${i}">
-        <div class="lt-an-txt">${g.routeId ? `A la ruta <b>${esc(routeById(g.routeId)?.title || g.routeId)}</b>` : `Nueva ruta <b>${esc(g.routeTitle)}</b>`}: ${g.topicIds.map(tName).map((x) => `“${x}”`).join(', ')}. <span class="lt-an-why">${esc(g.why)}</span></div>
-        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>Aplicar</button><button class="btn-ghost btn--sm" data-dis>Descartar</button></div></div>`);
+      html += section(t('learning.analysis.dupTitle', '🔁 Duplicados'), r.duplicados, (d, i) => `<div class="lt-an-item" data-kind="dup" data-i="${i}">
+        <div class="lt-an-txt">${t('learning.analysis.dupKeep', 'Conservar')} <b>${tName(d.keep)}</b>, ${t('learning.analysis.dupRemove', 'quitar')} ${d.remove.map(tName).map((x) => `“${x}”`).join(', ')}. <span class="lt-an-why">${esc(d.why)}</span></div>
+        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>${t('learning.analysis.apply', 'Aplicar')}</button><button class="btn-ghost btn--sm" data-dis>${t('learning.analysis.dismiss', 'Descartar')}</button></div></div>`);
+      html += section(t('learning.analysis.unifTitle', '🔗 Unificables'), r.unificables, (u, i) => `<div class="lt-an-item" data-kind="unif" data-i="${i}">
+        <div class="lt-an-txt">${t('learning.analysis.unifMerge', 'Fusionar')} ${u.ids.map(tName).map((x) => `“${x}”`).join(' + ')} → <b>${esc(u.title)}</b>. <span class="lt-an-why">${esc(u.why)}</span></div>
+        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>${t('learning.analysis.apply', 'Aplicar')}</button><button class="btn-ghost btn--sm" data-dis>${t('learning.analysis.dismiss', 'Descartar')}</button></div></div>`);
+      html += section(t('learning.analysis.compTitle', '✍️ Completar info'), r.completar, (c, i) => `<div class="lt-an-item" data-kind="comp" data-i="${i}">
+        <div class="lt-an-txt"><b>${tName(c.id)}</b>: ${esc((c.notes || '').slice(0, 160))}${c.tags?.length ? ` · ${t('learning.analysis.compTags', 'tags:')} ${c.tags.map(esc).join(', ')}` : ''} <span class="lt-an-why">${esc(c.why)}</span></div>
+        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>${t('learning.analysis.apply', 'Aplicar')}</button><button class="btn-ghost btn--sm" data-dis>${t('learning.analysis.dismiss', 'Descartar')}</button></div></div>`);
+      html += section(t('learning.analysis.grpTitle', '🗺️ Agrupar en rutas'), r.agrupar, (g, i) => `<div class="lt-an-item" data-kind="grp" data-i="${i}">
+        <div class="lt-an-txt">${g.routeId ? `${t('learning.analysis.grpToRoute', 'A la ruta')} <b>${esc(routeById(g.routeId)?.title || g.routeId)}</b>` : `${t('learning.analysis.grpNewRoute', 'Nueva ruta')} <b>${esc(g.routeTitle)}</b>`}: ${g.topicIds.map(tName).map((x) => `“${x}”`).join(', ')}. <span class="lt-an-why">${esc(g.why)}</span></div>
+        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>${t('learning.analysis.apply', 'Aplicar')}</button><button class="btn-ghost btn--sm" data-dis>${t('learning.analysis.dismiss', 'Descartar')}</button></div></div>`);
       if (r.aprenderPrimero?.length) {
-        html += `<details class="lt-sec" open><summary>🎯 Qué aprender primero</summary><div class="lt-sec-body">${r.aprenderPrimero.map((a) => `<div class="lt-an-order">${a.orderedIds.map((id, k) => `<span class="lt-an-step">${k + 1}. ${tName(id)}</span>`).join(' → ')}<div class="lt-an-why">${esc(a.why)}</div></div>`).join('')}</div></details>`;
+        html += `<details class="lt-sec" open><summary>${t('learning.analysis.learnFirst', '🎯 Qué aprender primero')}</summary><div class="lt-sec-body">${r.aprenderPrimero.map((a) => `<div class="lt-an-order">${a.orderedIds.map((id, k) => `<span class="lt-an-step">${k + 1}. ${tName(id)}</span>`).join(' → ')}<div class="lt-an-why">${esc(a.why)}</div></div>`).join('')}</div></details>`;
       }
-      html += section('➕ Temas nuevos sugeridos', r.sugerirNuevos, (s, i) => `<div class="lt-an-item" data-kind="new" data-i="${i}">
+      html += section(t('learning.analysis.newTitle', '➕ Temas nuevos sugeridos'), r.sugerirNuevos, (s, i) => `<div class="lt-an-item" data-kind="new" data-i="${i}">
         <div class="lt-an-txt"><b>${esc(s.title)}</b>${s.area ? ` · ${esc(s.area)}` : ''} · ${scopeOf(s.scope).emoji} <span class="lt-an-why">${esc(s.why)}</span></div>
-        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>Crear tema</button><button class="btn-ghost btn--sm" data-dis>Descartar</button></div></div>`);
+        <div class="lt-an-acts"><button class="btn btn--sm" data-ap>${t('learning.analysis.createTopic', 'Crear tema')}</button><button class="btn-ghost btn--sm" data-dis>${t('learning.analysis.dismiss', 'Descartar')}</button></div></div>`);
       const empty = !r.duplicados.length && !r.unificables.length && !r.completar.length && !r.agrupar.length && !r.sugerirNuevos.length && !r.aprenderPrimero?.length;
-      m.body.innerHTML = `<div class="lt-an">${html}${empty ? '<div class="lt-muted">La IA no encontró nada para reorganizar. Tu banco ya está prolijo. 🎉</div>' : ''}</div>`;
+      m.body.innerHTML = `<div class="lt-an">${html}${empty ? `<div class="lt-muted">${t('learning.analysis.empty', 'La IA no encontró nada para reorganizar. Tu banco ya está prolijo. 🎉')}</div>` : ''}</div>`;
       wireResult(r);
     }
 
@@ -659,7 +661,7 @@ export function mountLearning(container, ctx) {
       m.body.querySelectorAll('.lt-an-item').forEach((el) => {
         const kind = el.dataset.kind; const i = Number(el.dataset.i);
         const done = (label) => { el.querySelector('.lt-an-acts').innerHTML = `<span class="lt-an-done">✓ ${label}</span>`; };
-        el.querySelector('[data-dis]')?.addEventListener('click', () => done('Descartado'));
+        el.querySelector('[data-dis]')?.addEventListener('click', () => done(t('learning.analysis.dismissed', 'Descartado')));
         el.querySelector('[data-ap]')?.addEventListener('click', async () => {
           try {
             if (kind === 'dup') { const d = r.duplicados[i]; for (const id of d.remove) await api(`/api/learning/${id}/delete`, { method: 'POST' }); }
@@ -667,8 +669,8 @@ export function mountLearning(container, ctx) {
             else if (kind === 'comp') { const c = r.completar[i]; await api(`/api/learning/${c.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ notes: c.notes, tags: c.tags }) }); }
             else if (kind === 'grp') { const g = r.agrupar[i]; let routeId = g.routeId; if (!routeId) { const nr = (await api('/api/learning/routes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: g.routeTitle, description: g.routeDescription }) })).route; routeId = nr.id; } for (const id of g.topicIds) await api(`/api/learning/${id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ routeId }) }); }
             else if (kind === 'new') { const s = r.sugerirNuevos[i]; await api('/api/learning', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: s.title, area: s.area, scope: s.scope }) }); }
-            dirty = true; done('Aplicado');
-          } catch (e) { dialog.confirmDialog?.({ title: 'Error', message: String(e.message), confirmLabel: 'Ok' }); }
+            dirty = true; done(t('learning.analysis.applied', 'Aplicado'));
+          } catch (e) { dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(e.message), confirmLabel: t('learning.ok', 'Ok') }); }
         });
       });
     }
@@ -684,21 +686,21 @@ export function mountLearning(container, ctx) {
     const rf = e.target.closest('[data-routefilter]');
     if (rf) { filter = `route:${rf.dataset.routefilter}`; syncFilterChips(); renderRoutes(); renderGrid(); return; }
     const ed = e.target.closest('[data-routeedit]');
-    if (ed) { const r = routeById(ed.dataset.routeedit); const patch = await routeForm(r); if (patch) { try { await api(`/api/learning/routes/${r.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); await load(); } catch (er) { dialog.confirmDialog?.({ title: 'Error', message: String(er.message), confirmLabel: 'Ok' }); } } return; }
+    if (ed) { const r = routeById(ed.dataset.routeedit); const patch = await routeForm(r); if (patch) { try { await api(`/api/learning/routes/${r.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); await load(); } catch (er) { dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(er.message), confirmLabel: t('learning.ok', 'Ok') }); } } return; }
     const dl = e.target.closest('[data-routedel]');
-    if (dl) { const r = routeById(dl.dataset.routedel); const okd = await dialog.confirmDialog({ title: 'Eliminar ruta', message: `¿Eliminar la ruta “${r.title}”? Sus temas quedan SIN ruta (no se borran).`, confirmLabel: 'Eliminar', danger: true }); if (okd) { try { await api(`/api/learning/routes/${r.id}/delete`, { method: 'POST' }); if (filter === `route:${r.id}`) filter = 'activos'; await load(); } catch (er) { dialog.confirmDialog?.({ title: 'Error', message: String(er.message), confirmLabel: 'Ok' }); } } }
+    if (dl) { const r = routeById(dl.dataset.routedel); const okd = await dialog.confirmDialog({ title: t('learning.delRoute.title', 'Eliminar ruta'), message: t('learning.delRoute.msg', '¿Eliminar la ruta "{title}"? Sus temas quedan SIN ruta (no se borran).', { title: r.title }), confirmLabel: t('learning.delRoute.confirm', 'Eliminar'), danger: true }); if (okd) { try { await api(`/api/learning/routes/${r.id}/delete`, { method: 'POST' }); if (filter === `route:${r.id}`) filter = 'activos'; await load(); } catch (er) { dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(er.message), confirmLabel: t('learning.ok', 'Ok') }); } } }
   });
   container.querySelector('[data-ref="newroute"]').addEventListener('click', async () => {
     const payload = await routeForm(null);
     if (!payload) return;
     try { await api('/api/learning/routes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); await load(); }
-    catch (e) { dialog.confirmDialog?.({ title: 'Error', message: String(e.message), confirmLabel: 'Ok' }); }
+    catch (e) { dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(e.message), confirmLabel: t('learning.ok', 'Ok') }); }
   });
   container.querySelector('[data-ref="new"]').addEventListener('click', async () => {
     const payload = await topicForm(null);
     if (!payload) return;
     try { await api('/api/learning', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); await load(); }
-    catch (e) { dialog.confirmDialog?.({ title: 'Error', message: String(e.message), confirmLabel: 'Ok' }); }
+    catch (e) { dialog.confirmDialog?.({ title: t('learning.error.title', 'Error'), message: String(e.message), confirmLabel: t('learning.ok', 'Ok') }); }
   });
   adminBtnEl.addEventListener('click', openAnalysis);
 

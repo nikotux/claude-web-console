@@ -97,6 +97,22 @@ export function setAdmin(username, admin) {
   persist();
 }
 
+// Idioma de interfaz (PLAN i18n, 2026-07-19): preferencia PERSONAL, self-service
+// (no admin-gated) — cada usuario elige el suyo. Default 'es' si nunca lo tocó.
+const VALID_LANGS = ['es', 'en'];
+
+export function getUserLang(username) {
+  return users.get(username)?.lang === 'en' ? 'en' : 'es';
+}
+
+export function setUserLang(username, lang) {
+  const u = users.get(username);
+  if (!u) throw badRequest('Usuario inexistente.');
+  if (!VALID_LANGS.includes(lang)) throw badRequest('Idioma inválido.');
+  u.lang = lang;
+  persist();
+}
+
 export function deleteUser(username) {
   if (!users.delete(username)) throw badRequest('Usuario inexistente.');
   persist();

@@ -23,7 +23,7 @@ import { padContext } from '../src/modules/health/shared.js';
 import {
   cohToolAllowed, evaluateCoherence, coherencePrompt, parseCoherence,
   readCoh, writeCoh, writeCohLock, clearCohLock, otherCohAlive,
-  COH_TIMEOUT_MS, COH_MAX_TURNS, COH_HEARTBEAT_MS,
+  COH_TIMEOUT_MS, COH_MAX_TURNS, COH_HEARTBEAT_MS, coherenceCrossCheckText,
 } from '../src/modules/health/coherence-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -95,7 +95,12 @@ async function run() {
   log(`censo: ${census.counts.modules} módulos · ${census.counts.edges} aristas · ${findings.length} hallazgo(s) determinístico(s).`);
 
   phase = 'leyendo contexto de Pad local…'; beat();
-  const padCtx = await padContext(); // best-effort: '' si Pad local no responde
+  // padContext() = texto libre (bugs abiertos/roads); coherenceCrossCheckText()
+  // = match DETERMINÍSTICO (jaccard, mismo motor que el Escaneo Unificado) de
+  // los hallazgos de ESTA corrida contra Pad — más confiable que solo texto
+  // libre. Ambos best-effort, se concatenan si vinieron datos.
+  const [padCtxBase, crossCheck] = await Promise.all([padContext(), coherenceCrossCheckText(findings)]);
+  const padCtx = [padCtxBase, crossCheck].filter(Boolean).join('\n\n');
 
   phase = 'analizando la coherencia con sonnet…'; beat();
   const out = await analyze(census, findings, padCtx);

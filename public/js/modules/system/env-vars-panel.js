@@ -9,6 +9,8 @@
 // Patrón: GET abierto a cualquier autenticado (solo lectura si no es admin),
 // POST admin (mismo criterio que project-context-panel.js).
 import { icon } from '../../ui/icons.js';
+import { t } from '../../ui/i18n.js';
+import { pacman } from '../../ui/pacman.js';
 
 const API = '/api/env-vars';
 
@@ -16,13 +18,13 @@ export function mountEnvVarsPanel(el, ctx) {
   const { isAdmin } = ctx;
   let data = null;
 
-  el.innerHTML = `<p class="ev-msg" data-ref="loading">Cargando…</p>`;
+  el.innerHTML = `<p class="ev-msg" data-ref="loading">${pacman({ size: 'sm' })} ${t('system.envVars.loading', 'Cargando…')}</p>`;
 
   async function load() {
     try {
       const r = await fetch(API, { cache: 'no-store' });
       data = await r.json();
-      if (!r.ok) throw new Error(data?.error || 'Error al cargar.');
+      if (!r.ok) throw new Error(data?.error || t('system.envVars.loadError', 'Error al cargar.'));
       render();
     } catch (e) {
       el.innerHTML = `<p class="ev-msg ev-msg--err">${String(e.message || e)}</p>`;
@@ -32,9 +34,9 @@ export function mountEnvVarsPanel(el, ctx) {
   function depRows(deps) {
     return Object.entries(deps || {}).map(([k, v]) => `
       <div class="ev-row" data-dep-row>
-        <input type="text" class="ev-inp ev-inp--k" value="${esc(k)}" placeholder="clave" ${isAdmin ? '' : 'disabled'} />
-        <input type="text" class="ev-inp ev-inp--v" value="${esc(v)}" placeholder="ID de departamento" ${isAdmin ? '' : 'disabled'} />
-        ${isAdmin ? `<button class="btn-ghost btn--icon btn--sm" data-act="rmdep" title="Quitar">${icon('trash', { size: 13 })}</button>` : ''}
+        <input type="text" class="ev-inp ev-inp--k" value="${esc(k)}" placeholder="${t('system.envVars.depKeyPlaceholder', 'clave')}" ${isAdmin ? '' : 'disabled'} />
+        <input type="text" class="ev-inp ev-inp--v" value="${esc(v)}" placeholder="${t('system.envVars.depIdPlaceholder', 'ID de departamento')}" ${isAdmin ? '' : 'disabled'} />
+        ${isAdmin ? `<button class="btn-ghost btn--icon btn--sm" data-act="rmdep" title="${t('system.envVars.remove', 'Quitar')}">${icon('trash', { size: 13 })}</button>` : ''}
       </div>`).join('');
   }
 
@@ -42,34 +44,33 @@ export function mountEnvVarsPanel(el, ctx) {
     const { identity, client } = data;
     el.innerHTML = `
       <p class="ev-hint">
-        Config propia de ESTA instalación — identidad (email/GitHub/firma) y datos del
-        cliente/proyecto (MCP, departamentos Zoho). Vive en <code>~/.cwc-data/instance.json</code>,
-        fuera del repo. Los <b>secretos</b> (token, credenciales) NO están acá: siguen en <code>.env</code>.
+        ${t('system.envVars.hintBeforePath', 'Config propia de ESTA instalación — identidad (email/GitHub/firma) y datos del cliente/proyecto (MCP, departamentos Zoho). Vive en')} <code>~/.cwc-data/instance.json</code>,
+        ${t('system.envVars.hintAfterPath', 'fuera del repo. Los')} <b>${t('system.envVars.secretsWord', 'secretos')}</b> ${t('system.envVars.hintSecrets', '(token, credenciales) NO están acá: siguen en')} <code>.env</code>.
       </p>
 
       <div class="ev-sec">
-        <div class="ev-sec-title">🪪 Identidad</div>
-        <label class="ev-field">Nombre<input type="text" class="ev-inp" data-f="identity.name" value="${esc(identity.name)}" ${dis()} /></label>
-        <label class="ev-field">Email<input type="text" class="ev-inp" data-f="identity.email" value="${esc(identity.email)}" ${dis()} /></label>
-        <label class="ev-field">GitHub<input type="text" class="ev-inp" data-f="identity.github" value="${esc(identity.github)}" ${dis()} /></label>
-        <label class="ev-field">Firma (para notas publicadas con identidad ajena, ej. Desk)<input type="text" class="ev-inp" data-f="identity.signature" value="${esc(identity.signature)}" ${dis()} /></label>
+        <div class="ev-sec-title">🪪 ${t('system.envVars.identityTitle', 'Identidad')}</div>
+        <label class="ev-field">${t('system.envVars.nameLabel', 'Nombre')}<input type="text" class="ev-inp" data-f="identity.name" value="${esc(identity.name)}" ${dis()} /></label>
+        <label class="ev-field">${t('system.envVars.emailLabel', 'Email')}<input type="text" class="ev-inp" data-f="identity.email" value="${esc(identity.email)}" ${dis()} /></label>
+        <label class="ev-field">${t('system.envVars.githubLabel', 'GitHub')}<input type="text" class="ev-inp" data-f="identity.github" value="${esc(identity.github)}" ${dis()} /></label>
+        <label class="ev-field">${t('system.envVars.signatureLabel', 'Firma (para notas publicadas con identidad ajena, ej. Desk)')}<input type="text" class="ev-inp" data-f="identity.signature" value="${esc(identity.signature)}" ${dis()} /></label>
       </div>
 
       <div class="ev-sec">
-        <div class="ev-sec-title">🏢 Cliente / proyecto</div>
-        <label class="ev-field">Nombre del server MCP (tickets/Desk)<input type="text" class="ev-inp" data-f="client.mcpServerId" value="${esc(client.mcpServerId)}" ${dis()} /></label>
-        <label class="ev-field">ID de proyecto Infisical (si aplica)<input type="text" class="ev-inp" data-f="client.infisicalProjectId" value="${esc(client.infisicalProjectId || '')}" ${dis()} /></label>
-        <div class="ev-sub">Reviewer / contacto de referencia</div>
-        <label class="ev-field">Nombre<input type="text" class="ev-inp" data-f="client.reviewer.name" value="${esc(client.reviewer?.name || '')}" ${dis()} /></label>
-        <label class="ev-field">GitHub<input type="text" class="ev-inp" data-f="client.reviewer.github" value="${esc(client.reviewer?.github || '')}" ${dis()} /></label>
-        <div class="ev-sub">Departamentos de Zoho Desk (clave → ID)</div>
+        <div class="ev-sec-title">🏢 ${t('system.envVars.clientProjectTitle', 'Cliente / proyecto')}</div>
+        <label class="ev-field">${t('system.envVars.mcpServerLabel', 'Nombre del server MCP (tickets/Desk)')}<input type="text" class="ev-inp" data-f="client.mcpServerId" value="${esc(client.mcpServerId)}" ${dis()} /></label>
+        <label class="ev-field">${t('system.envVars.infisicalProjectLabel', 'ID de proyecto Infisical (si aplica)')}<input type="text" class="ev-inp" data-f="client.infisicalProjectId" value="${esc(client.infisicalProjectId || '')}" ${dis()} /></label>
+        <div class="ev-sub">${t('system.envVars.reviewerTitle', 'Reviewer / contacto de referencia')}</div>
+        <label class="ev-field">${t('system.envVars.nameLabel', 'Nombre')}<input type="text" class="ev-inp" data-f="client.reviewer.name" value="${esc(client.reviewer?.name || '')}" ${dis()} /></label>
+        <label class="ev-field">${t('system.envVars.githubLabel', 'GitHub')}<input type="text" class="ev-inp" data-f="client.reviewer.github" value="${esc(client.reviewer?.github || '')}" ${dis()} /></label>
+        <div class="ev-sub">${t('system.envVars.zohoDepartmentsTitle', 'Departamentos de Zoho Desk (clave → ID)')}</div>
         <div data-ref="deps">${depRows(client.zohoDepartments)}</div>
-        ${isAdmin ? `<button class="btn-ghost btn--sm" data-act="adddep">+ Agregar departamento</button>` : ''}
+        ${isAdmin ? `<button class="btn-ghost btn--sm" data-act="adddep">+ ${t('system.envVars.addDepartment', 'Agregar departamento')}</button>` : ''}
       </div>
 
       ${isAdmin ? `
         <div class="ev-actions">
-          <button class="btn" data-ref="save">${icon('check', { size: 14 })}<span>Guardar</span></button>
+          <button class="btn" data-ref="save">${icon('check', { size: 14 })}<span>${t('system.envVars.save', 'Guardar')}</span></button>
           <span class="ev-msg" data-ref="msg" hidden></span>
         </div>` : ''}
     `;
@@ -122,7 +123,7 @@ export function mountEnvVarsPanel(el, ctx) {
       },
     };
     msg.hidden = false;
-    msg.textContent = 'Guardando…';
+    msg.textContent = t('system.envVars.saving', 'Guardando…');
     msg.className = 'ev-msg';
     try {
       const r = await fetch(API, {
@@ -131,11 +132,11 @@ export function mountEnvVarsPanel(el, ctx) {
         body: JSON.stringify(patch),
       });
       const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || 'Error al guardar.');
+      if (!r.ok) throw new Error(j?.error || t('system.envVars.saveError', 'Error al guardar.'));
       data = { identity: j.identity, client: j.client };
       msg.textContent = j.needsRestart
-        ? '✅ Guardado. Reiniciá el servicio para que algunos motores tomen el cambio.'
-        : '✅ Guardado.';
+        ? `✅ ${t('system.envVars.savedRestart', 'Guardado. Reiniciá el servicio para que algunos motores tomen el cambio.')}`
+        : `✅ ${t('system.envVars.saved', 'Guardado.')}`;
       msg.className = 'ev-msg ev-msg--ok';
     } catch (e) {
       msg.textContent = String(e.message || e);

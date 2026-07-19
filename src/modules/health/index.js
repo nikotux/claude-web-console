@@ -42,6 +42,7 @@ import {
   readScan, writeScan, scanStatus, isScanRunning, writeScanLock, clearScanLock,
   spawnScanRunner, createBugFromFinding,
 } from './scan-shared.js';
+import { createTaskFromProposal } from './pad-writeback-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -214,11 +215,16 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/tolkien/index.js',
   'src/modules/tolkien/refresh-shared.js',
   'src/modules/skills/index.js',           // censo READ-ONLY de .claude/skills/ de Tolkien (pestaña Skills), no cruza datos
+  'src/modules/mcps/login-shared.js',      // censo/estado READ-ONLY de MCP de Tolkien (pestaña Conexiones) + login OAuth guiado (claude mcp, vía CLI); no enlaza los Pad ni cruza datos
+  'src/core/workspace-provision.js',       // clon read-only del repo de Tolkien por-inquilino (decisión 🆕1 de PLAN-500) — provisiona un checkout, no enlaza los Pad
+  'src/modules/seguimientos/index.js',     // dashboard LIMBO (Regla dura #13 / PLAN-553): config.projectDir = cwd de la sesión-Limbo; aduana read-only + escritura solo a tickets con OK — no enlaza los Pad
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync
   'bin/cwc-comms-runner.js',
   'bin/cwc-comms-chatbot-runner.js',
   'bin/cwc-comms-send-runner.js',
   'bin/cwc-comms-teams-runner.js',
+  'bin/cwc-retro-email-runner.js',          // "Feedback de Chris" (retro): lee correo vía el MISMO MCP de Graph de Tolkien que ya usa Teams (allowlist read-only propia), no enlaza los Pad
+  'bin/cwc-retro-teams-runner.js',          // "Feedback de Chris" (retro): lee el DM de Teams con Chris, mismo MCP/allowlist que el escaneo de Teams de Comunicaciones, no enlaza los Pad
 ]);
 const CROSS_WORLD_RE = /config\.projectDir|CLAUDE\.local\.md/;
 function checkCrossWorld() {
@@ -364,12 +370,14 @@ function spawnReview(full) {
 // entre el chequeo y la escritura): cierra la ventana de carrera sin depender
 // de que el hijo llegue a tiempo. Devuelve false si ya había una revisión o un
 // auto-fix en curso (no spawnea nada en ese caso).
-function spawnFix(findingIdArg) {
+function spawnFix(findingIdArg, tandem = false) {
   if (isRunning() || isFixing()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeFixLock(0); // placeholder inmediato; el runner lo pisa con su pid real al arrancar (heartbeat)
   const logFd = fss.openSync(HEALTHFIX_LOG, 'a');
-  const child = spawn(process.execPath, [HEALTHFIX_RUNNER, findingIdArg], {
+  const args = [HEALTHFIX_RUNNER, findingIdArg];
+  if (tandem) args.push('--tandem'); // opt-in (2026-07-19): Codex ejecuta, Claude verifica
+  const child = spawn(process.execPath, args, {
     detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
   });
   child.on('error', () => { try { clearFixLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva ya (BUG-44), no esperar los 20s
@@ -629,7 +637,9 @@ export default {
         // JS, sin await de por medio): es la guarda REAL contra la carrera; el
         // isFixing() de arriba es solo un short-circuit rápido para el caso
         // común (evita el mkdir/spawn si ya sabemos que hay uno corriendo).
-        if (!spawnFix(id)) {
+        // `tandem` (opt-in, 2026-07-19): el toggle del front — Claude verifica,
+        // Codex escribe el diff (bin/cwc-healthfix-runner.js --tandem).
+        if (!spawnFix(id, req.body?.tandem === true)) {
           return res.status(409).json({ error: 'Ya hay una resolución automática en curso (una a la vez).' });
         }
         res.json({ ok: true });
@@ -733,8 +743,12 @@ export default {
     });
 
     // Decisión sobre UNA propuesta: accept (el front abre el chat supervisado
-    // que la aplica) o reject. NUNCA se aplica nada desde acá — solo se marca.
-    r.post('/optimize-proposal', (req, res) => {
+    // que la aplica) o reject. NUNCA se aplica CÓDIGO desde acá — solo se marca.
+    // PAD WRITE-BACK (2026-07-19): al aceptar, se crea la TAREA en Pad
+    // (`pendientes`, best-effort — si Pad no responde la aprobación sigue
+    // igual, solo sin padRef) para que el circuito de seguimiento se cierre sin
+    // depender de que alguien se acuerde de registrarla a mano.
+    r.post('/optimize-proposal', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const id = String(req.body?.id || '');
       const action = req.body?.action;
@@ -744,8 +758,13 @@ export default {
       if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
       p.status = action === 'accept' ? 'accepted' : 'rejected';
       p.decidedAt = Date.now();
+      let padRef = null;
+      if (action === 'accept') {
+        try { padRef = await createTaskFromProposal(p, 'optimize'); p.padRef = padRef; }
+        catch (err) { console.error('[health] no pude crear tarea en Pad (optimize):', err?.message); }
+      }
       writeOpt(st);
-      res.json({ ok: true });
+      res.json({ ok: true, padRef });
     });
 
     // ===== Coherencia (grafo de dependencias + cableado entre motores) =====
@@ -778,8 +797,9 @@ export default {
     });
 
     // Decisión sobre UNA propuesta de coherencia: accept (el front abre el chat
-    // supervisado que la aplica) o reject. NUNCA se aplica nada desde acá.
-    r.post('/coherence-proposal', (req, res) => {
+    // supervisado que la aplica) o reject. NUNCA se aplica CÓDIGO desde acá.
+    // PAD WRITE-BACK (2026-07-19, mismo patrón que optimize-proposal arriba).
+    r.post('/coherence-proposal', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const id = String(req.body?.id || '');
       const action = req.body?.action;
@@ -789,8 +809,13 @@ export default {
       if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
       p.status = action === 'accept' ? 'accepted' : 'rejected';
       p.decidedAt = Date.now();
+      let padRef = null;
+      if (action === 'accept') {
+        try { padRef = await createTaskFromProposal(p, 'coherence'); p.padRef = padRef; }
+        catch (err) { console.error('[health] no pude crear tarea en Pad (coherence):', err?.message); }
+      }
       writeCoh(st);
-      res.json({ ok: true });
+      res.json({ ok: true, padRef });
     });
 
     // Lanza la revisión exhaustiva (runner detached, LENTA, consume tokens).

@@ -16,6 +16,7 @@ import { modelColor, modelName } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { t } from '../../ui/i18n.js';
 
 const POLL_MS = 15000;
 const AUTO_MS = 15000; // auto-refresh del modal (silencioso)
@@ -37,15 +38,15 @@ const fmtCost = (c) => `$${(c || 0).toFixed(2)}`;
 const fmtMetric = (v, metric) => (metric === 'cost' ? fmtCost(v) : `${fmtTokens(v)} tok`);
 
 function fmtRelative(ms) {
-  if (!ms) return 'sin actividad';
+  if (!ms) return t('usage.rel.none', 'sin actividad');
   const diffS = Math.floor((Date.now() - ms) / 1000);
-  if (diffS < 60) return 'hace instantes';
+  if (diffS < 60) return t('usage.rel.moments', 'hace instantes');
   const min = Math.floor(diffS / 60);
-  if (min < 60) return `hace ${min} min`;
+  if (min < 60) return t('usage.rel.min', 'hace {n} min', { n: min });
   const h = Math.floor(min / 60);
-  if (h < 24) return `hace ${h} h`;
+  if (h < 24) return t('usage.rel.hours', 'hace {n} h', { n: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `hace ${d} d`;
+  if (d < 30) return t('usage.rel.days', 'hace {n} d', { n: d });
   return new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' });
 }
 
@@ -74,7 +75,7 @@ const priceRank = (k) => PRICE_INPUT[k] ?? 0; // mayor = más costoso
 export async function fetchLimits(fresh = false) {
   const res = await fetch(`/api/tokens/limits${fresh ? '?fresh=1' : ''}`);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'No se pudieron leer los límites.');
+  if (!res.ok) throw new Error(data.error || t('usage.limits.readError', 'No se pudieron leer los límites.'));
   return data;
 }
 
@@ -83,16 +84,16 @@ export function fmtReset(iso, compact = false) {
   if (!iso) return '';
   const d = new Date(iso);
   const diff = d - Date.now();
-  if (diff <= 0) return 'reseteando…';
+  if (diff <= 0) return t('usage.reset.resetting', 'reseteando…');
   const min = Math.ceil(diff / 60000);
   const rel = min < 60 ? `${min} min`
     : min < 48 * 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}`
     : `${Math.floor(min / 1440)} d ${Math.floor((min % 1440) / 60)} h`;
-  if (compact) return `resetea ${rel.replace(/ (min|h|d)\b/g, '$1')}`;
+  if (compact) return t('usage.reset.compact', 'resetea {rel}', { rel: rel.replace(/ (min|h|d)\b/g, '$1') });
   const hhmm = d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
   const abs = d.toDateString() === new Date().toDateString()
     ? hhmm : `${d.toLocaleDateString('es', { weekday: 'short' })} ${hhmm}`;
-  return `resetea en ${rel} (${abs})`;
+  return t('usage.reset.full', 'resetea en {rel} ({abs})', { rel, abs });
 }
 
 // "hace 3 min" a partir del updatedAt del snapshot (para el aviso de dato viejo).
@@ -100,12 +101,12 @@ function fmtAgo(iso) {
   if (!iso) return '';
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (!(s >= 0)) return '';
-  if (s < 60) return 'hace instantes';
+  if (s < 60) return t('usage.rel.moments', 'hace instantes');
   const min = Math.floor(s / 60);
-  if (min < 60) return `hace ${min} min`;
+  if (min < 60) return t('usage.rel.min', 'hace {n} min', { n: min });
   const h = Math.floor(min / 60);
-  if (h < 24) return `hace ${h} h`;
-  return `hace ${Math.floor(h / 24)} d`;
+  if (h < 24) return t('usage.rel.hours', 'hace {n} h', { n: h });
+  return t('usage.rel.days', 'hace {n} d', { n: Math.floor(h / 24) });
 }
 
 // Formatea crédito ya en dólares. `cur` = moneda que reporta Claude.
@@ -127,6 +128,54 @@ function windowTokFor(l, windows) {
   return null;
 }
 
+// ===== Punto de referencia de la ventana "Sesión (5h)" (2026-07-19) =====
+// Anthropic solo reporta el % crudo de la ventana — sin decir en qué punto del
+// tiempo estás ni si eso es mucho o poco PARA VOS. Estas dos piezas cierran ese
+// hueco, ambas SOLO para `kind==='session'` (alcance acordado con Niko: Semana y
+// Codex quedan afuera por ahora):
+//   (a) marca de RITMO ESPERADO — tick en la barra: "acá deberías estar si
+//       gastaras parejo hasta el reset". Matemática pura (resetsAt + duración
+//       fija de 5h), cero fetch nuevo.
+//   (b) ALERTA de agotamiento — si tu ritmo ACTUAL (no el promedio) proyecta
+//       que llegás a 100% antes del reset. Misma matemática pura.
+// La comparación contra tu HISTORIAL (windows.h5Baseline, del backend) se arma
+// aparte en paceRatioText() más abajo.
+const SESSION_WINDOW_MS = 5 * 3600000;
+const PACE_MIN_ELAPSED_MS = 5 * 60000; // <5 min transcurridos: ruido, no proyectar
+
+function paceInfo(l) {
+  if (l.kind !== 'session' || !l.resetsAt || l.isActive === false) return null;
+  const resetMs = new Date(l.resetsAt).getTime();
+  if (!Number.isFinite(resetMs)) return null;
+  const now = Date.now();
+  const remainingMs = Math.max(0, resetMs - now);
+  const elapsedMs = Math.min(SESSION_WINDOW_MS, Math.max(0, SESSION_WINDOW_MS - remainingMs));
+  const expectedPct = Math.max(0, Math.min(100, (elapsedMs / SESSION_WINDOW_MS) * 100));
+  let etaExhaustMs = null;
+  if (elapsedMs >= PACE_MIN_ELAPSED_MS && l.percent > 0 && remainingMs > 0) {
+    const ratePerMs = l.percent / elapsedMs; // %/ms al ritmo ACTUAL
+    const msTo100 = (100 - l.percent) / ratePerMs;
+    if (msTo100 >= 0 && msTo100 < remainingMs) etaExhaustMs = now + msTo100;
+  }
+  return { expectedPct, etaExhaustMs };
+}
+
+// "1.4×" / "0.7×" tu ritmo habitual, a partir de windows.h5Cost/h5CostBaseline
+// (backend, promedio de los últimos días completos escalado a un bloque de 5h).
+// En COSTO equivalente, NO tokens crudos: un token de cache read pesa ~10x
+// menos que uno nuevo y puede ser el grueso del conteo crudo de una sesión con
+// contexto reusado — comparar tokens crudos contra el % real de Anthropic
+// exagera el ritmo (verificado 2026-07-19: 95% cache reads con % de cupo bajo).
+// null si el backend no mandó baseline todavía (poco historial: <3 días).
+function paceRatioText(windows) {
+  const h5 = windows?.h5Cost;
+  const base = windows?.h5CostBaseline;
+  if (h5 == null || base == null || base <= 0) return null;
+  const ratio = h5 / base;
+  const color = ratio >= 1.6 ? 'var(--cwc-danger)' : ratio >= 1.3 ? 'var(--cwc-warn)' : 'var(--cwc-text-dimmer)';
+  return { text: t('usage.pace.ratio', '{ratio}× tu ritmo habitual', { ratio: ratio.toFixed(1) }), color };
+}
+
 // Color por UMBRAL de severidad (para el número % en texto = codificación
 // SECUNDARIA además del color de la barra: el valor exacto nunca es solo color).
 function sevColor(pct) {
@@ -142,9 +191,19 @@ function sevColor(pct) {
 //        el color de severidad REAL de ese %, no un corte duro por umbral.
 // `metaParts` = trozos ya formateados (se juntan con " · ", ignorando vacíos).
 // El label se rellena por textContent afuera (trae nombres del server).
-function limRowHtml(pctRaw, metaParts) {
+// `pace` (opcional, solo la fila "Sesión (5h)"): { expectedPct, etaText, ratioText,
+// ratioColor } — agrega el tick de ritmo esperado en la barra + una 3ª línea de
+// contexto (alerta de agotamiento y/o comparación contra tu historial). Ver
+// paceInfo()/paceRatioText() más arriba.
+function limRowHtml(pctRaw, metaParts, pace = null) {
   const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
   const metaLines = metaParts.filter(Boolean).map((t) => `<span class="lim-meta-l">${t}</span>`).join('');
+  const tickHtml = pace && Number.isFinite(pace.expectedPct)
+    ? `<span class="lim-bar-pace" style="left:${Math.max(0, Math.min(100, pace.expectedPct))}%" title="${t('usage.pace.tickTitle', 'Ritmo esperado si gastaras parejo hasta el reset')}"></span>`
+    : '';
+  const paceLineParts = [pace?.etaText, pace?.ratioText].filter(Boolean);
+  const paceLineHtml = paceLineParts.length
+    ? `<div class="lim-pace-line">${paceLineParts.join(' · ')}</div>` : '';
   return `
     <div class="lim-row">
       <div class="lim-line">
@@ -152,7 +211,8 @@ function limRowHtml(pctRaw, metaParts) {
         <span class="lim-meta">${metaLines}</span>
         <span class="lim-pct" style="color:${sevColor(pct)}">${pct}%</span>
       </div>
-      <span class="lim-bar lim-bar--grad" style="--pct:${pct}%"><span class="lim-bar-mask"></span></span>
+      <span class="lim-bar lim-bar--grad" style="--pct:${pct}%">${tickHtml}<span class="lim-bar-mask"></span></span>
+      ${paceLineHtml}
     </div>`;
 }
 
@@ -161,7 +221,7 @@ function limRowHtml(pctRaw, metaParts) {
 // textContent afuera.
 function claudeCreditsHtml(credits) {
   const c = credits || { enabled: false, usedCredits: null, monthlyLimit: null, percent: null };
-  let bodyLine = 'sin créditos activos';
+  let bodyLine = t('usage.credits.none', 'sin créditos activos');
   let pctText = '—';
   let barHtml = '';
   let color = 'var(--cwc-text-dimmer)';
@@ -176,14 +236,14 @@ function claudeCreditsHtml(credits) {
     const cur = c.currency || 'USD';
     pctText = pct != null ? `${pct}%` : fmtCred(c.usedCredits, cur);
     bodyLine = hasLimit
-      ? `usó ${fmtCred(c.usedCredits, cur)} de ${fmtCred(c.monthlyLimit, cur)}${pct != null ? ` · queda ${100 - pct}%` : ''}`
-      : `${fmtCred(c.usedCredits, cur)} consumidos · pago por uso`;
+      ? `${t('usage.credits.usedOf', 'usó {used} de {limit}', { used: fmtCred(c.usedCredits, cur), limit: fmtCred(c.monthlyLimit, cur) })}${pct != null ? ` · ${t('usage.remaining', 'queda {n}%', { n: 100 - pct })}` : ''}`
+      : t('usage.credits.payg', '{used} consumidos · pago por uso', { used: fmtCred(c.usedCredits, cur) });
     if (pct != null) barHtml = `<span class="lim-bar lim-bar--grad" style="--pct:${pct}%"><span class="lim-bar-mask"></span></span>`;
   }
   return `
     <details class="lim-credits-det${c.enabled ? '' : ' lim-credits--off'}">
       <summary class="lim-credits-sum">
-        <span class="lim-label">💳 Créditos de uso</span>
+        <span class="lim-label">${t('usage.credits.label', '💳 Créditos de uso')}</span>
         <span class="lim-pct" style="color:${color}">${pctText}</span>
       </summary>
       <div class="lim-credits-body">
@@ -198,23 +258,23 @@ function claudeCreditsHtml(credits) {
 function codexBlockHtml(codex, compact = false) {
   if (!codex || !Array.isArray(codex.limits)) return '';
   const staleHtml = codex.stale
-    ? `<div class="lim-stale">⚠ datos guardados${codex.updatedAt ? ` · ${fmtAgo(codex.updatedAt)}` : ''}</div>`
+    ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${codex.updatedAt ? ` · ${fmtAgo(codex.updatedAt)}` : ''}</div>`
     : '';
   const reachedHtml = codex.limitReached
-    ? '<div class="lim-stale lim-reached">⛔ límite alcanzado</div>' : '';
+    ? `<div class="lim-stale lim-reached">${t('usage.codex.reached', '⛔ límite alcanzado')}</div>` : '';
   const rows = codex.limits.length
     ? codex.limits.map((l) => {
       const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
-      return limRowHtml(l.percent, [`queda ${100 - pct}%`, fmtReset(l.resetsAt, compact)]);
+      return limRowHtml(l.percent, [t('usage.remaining', 'queda {n}%', { n: 100 - pct }), fmtReset(l.resetsAt, compact)]);
     }).join('')
-    : '<div class="lim-err">OpenAI no reportó ventanas de límite.</div>';
+    : `<div class="lim-err">${t('usage.codex.noWindows', 'OpenAI no reportó ventanas de límite.')}</div>`;
   // Balance de créditos (overage) si el endpoint lo trae y no es cero.
   const bal = codex.credits && codex.credits.balance;
   const credLine = bal != null && bal > 0
-    ? `<div class="lim-sub lim-codex-cred">💳 crédito extra: ${fmtCred(bal, codex.credits.currency)}</div>` : '';
+    ? `<div class="lim-sub lim-codex-cred">${t('usage.codex.extraCredit', '💳 crédito extra: {amount}', { amount: fmtCred(bal, codex.credits.currency) })}</div>` : '';
   return `
     <div class="lim-codex">
-      <div class="lim-head lim-head--codex"><span class="lim-head-t">Codex</span>${flowBarHtml({ engine: 'codex', compact: true, dot: false })}</div>
+      <div class="lim-head lim-head--codex"><span class="lim-head-t">${t('usage.codex.head', 'Codex')}</span>${flowBarHtml({ engine: 'codex', compact: true, dot: false })}</div>
       ${staleHtml}${reachedHtml}
       ${rows}
       ${credLine}
@@ -233,13 +293,26 @@ export function renderLimits(el, data, opts = {}) {
     const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
     const wt = windowTokFor(l, windows);
     labelTexts.push(l.label);
-    return limRowHtml(l.percent, [`queda ${100 - pct}%`, fmtReset(l.resetsAt, compact), wt != null ? `≈ ${fmtTokens(wt)} tok` : '']);
+    // Punto de referencia SOLO en la fila "Sesión (5h)" (alcance acordado): tick
+    // de ritmo esperado + alerta de agotamiento (paceInfo) + comparación contra
+    // tu historial (paceRatioText, viaja aparte porque no depende de isActive).
+    let pace = null;
+    if (l.kind === 'session') {
+      const info = paceInfo(l);
+      const ratio = paceRatioText(windows);
+      const etaText = info?.etaExhaustMs != null
+        ? `<span style="color:var(--cwc-danger)">${t('usage.pace.eta', '⏳ se agota ~{time}', { time: new Date(info.etaExhaustMs).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) })}</span>`
+        : '';
+      const ratioText = ratio ? `<span style="color:${ratio.color}">${ratio.text}</span>` : '';
+      pace = { expectedPct: info?.expectedPct ?? null, etaText, ratioText };
+    }
+    return limRowHtml(l.percent, [t('usage.remaining', 'queda {n}%', { n: 100 - pct }), fmtReset(l.resetsAt, compact), wt != null ? t('usage.approxTok', '≈ {tok} tok', { tok: fmtTokens(wt) }) : ''], pace);
   }).join('');
 
   const creditsHtml = opts.credits === false ? '' : claudeCreditsHtml(data.credits);
 
   const staleHtml = data.stale
-    ? `<div class="lim-stale">⚠ datos guardados${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
+    ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
     : '';
 
   // Codex: sus labels van DESPUÉS de los de Claude en el DOM.
@@ -249,9 +322,9 @@ export function renderLimits(el, data, opts = {}) {
   }
 
   el.innerHTML = `
-    <div class="lim-head lim-head--claude"><span class="lim-head-t">Claude</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
+    <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.claude.head', 'Claude')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${staleHtml}
-    ${rows || '<div class="lim-err">Anthropic no reportó ventanas de límite.</div>'}
+    ${rows || `<div class="lim-err">${t('usage.claude.noWindows', 'Anthropic no reportó ventanas de límite.')}</div>`}
     ${creditsHtml}
     ${codexHtml}`;
   // Etiquetas (Claude + Codex) por textContent, en el mismo orden de render.
@@ -276,7 +349,13 @@ function liveKeysFrom(sum) {
   return set;
 }
 
-const RANGE_LABEL = { day: 'hoy', week: 'últimos 7 días', month: 'últimos 30 días' };
+function rangeLabel(range) {
+  return {
+    day: t('usage.range.day', 'hoy'),
+    week: t('usage.range.week', 'últimos 7 días'),
+    month: t('usage.range.month', 'últimos 30 días'),
+  }[range] || '';
+}
 
 // ===== Columna izquierda: "General" del PERÍODO seleccionado =====
 // series.totals = { modelKey: {tokens, cost} }. Sigue al rango + a la métrica.
@@ -302,22 +381,22 @@ function renderLeft(container, series, metric, liveKeys, range) {
         <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
         <span class="ul-model-name">${modelName(m.key, m.key)}</span>
         ${price}
-        ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: 'consumiendo tokens ahora' }) : ''}
+        ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: t('usage.left.liveTitle', 'consumiendo tokens ahora') }) : ''}
         <span class="ul-model-cost">${fmtMetric(metric === 'cost' ? m.cost : m.tokens, metric)}</span>
       </div>`;
-  }).join('') || '<div class="tok-empty">sin consumo en el período</div>';
+  }).join('') || `<div class="tok-empty">${t('usage.left.empty', 'sin consumo en el período')}</div>`;
 
-  const bigVal = metric === 'cost' ? fmtCost(gCost) : `${fmtTokens(gTok)} <span class="ul-big-unit">tok</span>`;
-  const subVal = metric === 'cost' ? `${fmtTokens(gTok)} tok` : fmtCost(gCost);
+  const bigVal = metric === 'cost' ? fmtCost(gCost) : `${fmtTokens(gTok)} <span class="ul-big-unit">${t('usage.unit.tok', 'tok')}</span>`;
+  const subVal = metric === 'cost' ? `${fmtTokens(gTok)} ${t('usage.unit.tok', 'tok')}` : fmtCost(gCost);
   container.innerHTML = `
     <div class="ul-block">
-      <div class="ul-head">📊 General · ${RANGE_LABEL[range] || ''}</div>
+      <div class="ul-head">${t('usage.left.head', '📊 General · {range}', { range: rangeLabel(range) })}</div>
       <div class="ul-big">${bigVal}</div>
       <div class="ul-cost">${subVal}</div>
       <div class="ul-models">${perModel}</div>
-      ${rows.length ? '<div class="ul-order">▲ más costoso · ▼ más económico ($/M)</div>' : ''}
+      ${rows.length ? `<div class="ul-order">${t('usage.left.order', '▲ más costoso · ▼ más económico ($/M)')}</div>` : ''}
     </div>
-    <div class="ul-note">El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token.</div>`;
+    <div class="ul-note">${t('usage.left.note', 'El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token.')}</div>`;
 }
 
 // ===== Columna derecha: gráfica de tendencia (Chart.js) =====
@@ -400,7 +479,7 @@ function buildChartConfig(series, metric) {
 function drawChart(canvas, series, metric) {
   destroyChart();
   if (!window.Chart) {
-    canvas.parentElement.innerHTML = '<div class="tok-empty">No se pudo cargar la librería de gráficas.</div>';
+    canvas.parentElement.innerHTML = `<div class="tok-empty">${t('usage.chart.libError', 'No se pudo cargar la librería de gráficas.')}</div>`;
     return;
   }
   chartInst = new window.Chart(canvas.getContext('2d'), buildChartConfig(series, metric));
@@ -423,8 +502,8 @@ export default {
   mount(el, ctx) {
     const { dialog, icon } = ctx;
     el.innerHTML = `
-      <button class="btn-ghost btn--sm usage-btn" title="Uso de tokens (hoy)">
-        <span class="usage-lbl">hoy</span><span class="usage-val">—</span>
+      <button class="btn-ghost btn--sm usage-btn" title="${t('usage.btn.title', 'Uso de tokens (hoy)')}">
+        <span class="usage-lbl">${t('usage.btn.today', 'hoy')}</span><span class="usage-val">—</span>
       </button>`;
     const btn = el.querySelector('.usage-btn');
     const valEl = el.querySelector('.usage-val');
@@ -439,15 +518,15 @@ export default {
         const sum = await fetchSummary();
         cache.summary = sum; // mantiene la caché caliente para que el modal abra instantáneo
         writeCache('usage-summary', sum);
-        const t = sum.today.tokens || 0;
-        valEl.textContent = fmtTokens(t);
-        btn.title = `Hoy: ${fmtTokens(t)} tokens · ${fmtCost(sum.today.cost)} equiv. API`;
-        if (lastTokens != null && t > lastTokens) {
+        const tk = sum.today.tokens || 0;
+        valEl.textContent = fmtTokens(tk);
+        btn.title = t('usage.btn.titleFull', 'Hoy: {tok} tokens · {cost} equiv. API', { tok: fmtTokens(tk), cost: fmtCost(sum.today.cost) });
+        if (lastTokens != null && tk > lastTokens) {
           valEl.classList.remove('tick');
           void valEl.offsetWidth;
           valEl.classList.add('tick');
         }
-        lastTokens = t;
+        lastTokens = tk;
       } catch { /* reintenta */ }
     }
     tick();
@@ -457,41 +536,41 @@ export default {
     btn.addEventListener('click', async () => {
       let timer = null;
       const m = dialog.openModal({
-        title: 'Uso de tokens',
+        title: t('usage.modal.title', 'Uso de tokens'),
         width: 780,
         onClose: () => { clearInterval(timer); destroyChart(); },
       });
 
       const reload = document.createElement('button');
       reload.className = 'btn-ghost btn--sm btn--icon usage-reload';
-      reload.title = 'Actualizar (re-lee transcripts y límites ahora)';
+      reload.title = t('usage.modal.reload', 'Actualizar (re-lee transcripts y límites ahora)');
       reload.innerHTML = icon('refresh', { size: 15 });
       m.card.querySelector('.dlg-head').insertBefore(reload, m.card.querySelector('.dlg-x'));
 
       m.body.innerHTML = `
-        <div class="usage-lims"><div class="cwc-loading">${pacman()}límites del plan…</div></div>
+        <div class="usage-lims"><div class="cwc-loading">${pacman()}${t('usage.modal.limsLoading', 'límites del plan…')}</div></div>
         <div class="usage-controls">
           <div class="uh-seg uh-seg-range" role="tablist">
-            <button class="uh-seg-btn is-active" data-range="day" type="button">Día</button>
-            <button class="uh-seg-btn" data-range="week" type="button">Semana</button>
-            <button class="uh-seg-btn" data-range="month" type="button">Mes</button>
+            <button class="uh-seg-btn is-active" data-range="day" type="button">${t('usage.seg.day', 'Día')}</button>
+            <button class="uh-seg-btn" data-range="week" type="button">${t('usage.seg.week', 'Semana')}</button>
+            <button class="uh-seg-btn" data-range="month" type="button">${t('usage.seg.month', 'Mes')}</button>
           </div>
           <div class="uh-seg uh-seg-proj" role="tablist">
-            <button class="uh-seg-btn is-active" data-project="all" type="button">Todos</button>
-            <button class="uh-seg-btn" data-project="consola" type="button">Consola</button>
-            <button class="uh-seg-btn" data-project="tolkien" type="button">Tolkien</button>
-            <button class="uh-seg-btn" data-project="aprendizaje" type="button">Aprendizaje</button>
-            <button class="uh-seg-btn" data-project="otros" type="button">Otros</button>
+            <button class="uh-seg-btn is-active" data-project="all" type="button">${t('usage.proj.all', 'Todos')}</button>
+            <button class="uh-seg-btn" data-project="consola" type="button">${t('usage.proj.consola', 'Consola')}</button>
+            <button class="uh-seg-btn" data-project="tolkien" type="button">${t('usage.proj.tolkien', 'Tolkien')}</button>
+            <button class="uh-seg-btn" data-project="aprendizaje" type="button">${t('usage.proj.aprendizaje', 'Aprendizaje')}</button>
+            <button class="uh-seg-btn" data-project="otros" type="button">${t('usage.proj.otros', 'Otros')}</button>
           </div>
           <div class="uh-seg uh-seg-metric">
             <button class="uh-seg-btn is-active" data-metric="cost" type="button">$</button>
-            <button class="uh-seg-btn" data-metric="tokens" type="button">tok</button>
+            <button class="uh-seg-btn" data-metric="tokens" type="button">${t('usage.unit.tok', 'tok')}</button>
           </div>
         </div>
         <div class="usage-cols">
-          <div class="usage-col-left"><div class="cwc-loading">${pacman()}calculando…</div></div>
+          <div class="usage-col-left"><div class="cwc-loading">${pacman()}${t('usage.modal.calc', 'calculando…')}</div></div>
           <div class="usage-col-right">
-            <div class="uh-title">📈 Tendencia</div>
+            <div class="uh-title">${t('usage.trend.title', '📈 Tendencia')}</div>
             <div class="usage-chart-wrap"><canvas class="usage-chart"></canvas></div>
           </div>
         </div>`;
@@ -516,7 +595,7 @@ export default {
         if (range === 'day') return cache.summary?.hourlyToday?.[project] || null;
         return cache.series[`${range}:${project}`] || null;
       }
-      const loaderHtml = `<div class="cwc-loading">${pacman()}cargando…</div>`;
+      const loaderHtml = `<div class="cwc-loading">${pacman()}${t('usage.modal.loading', 'cargando…')}</div>`;
 
       // Pinta TODO desde la caché (0 fetch). chartMode: 'draw' crea la gráfica,
       // 'update' la actualiza en el lugar (sin parpadeo, para el auto-refresh).
@@ -547,7 +626,7 @@ export default {
           await Promise.all(jobs);
           paint('update'); // en el lugar → sin parpadeo
           if (!cache.limits) { // límites nunca llegaron (raro: el server persiste stale)
-            limsEl.innerHTML = '<div class="lim-head">Límites del plan</div><div class="lim-err">sin datos</div>';
+            limsEl.innerHTML = `<div class="lim-head">${t('usage.limits.head', 'Límites del plan')}</div><div class="lim-err">${t('usage.limits.noData', 'sin datos')}</div>`;
           }
         } finally {
           refreshing = false;
@@ -569,8 +648,8 @@ export default {
           else cache.series[`${range}:${project}`] = await fetchHistory(range, project);
           paint('draw');
         } catch {
-          leftEl.innerHTML = '<div class="tok-empty">No se pudo calcular el uso.</div>';
-          chartWrap.innerHTML = '<div class="tok-empty">No se pudo cargar la tendencia.</div>';
+          leftEl.innerHTML = `<div class="tok-empty">${t('usage.left.calcError', 'No se pudo calcular el uso.')}</div>`;
+          chartWrap.innerHTML = `<div class="tok-empty">${t('usage.trend.error', 'No se pudo cargar la tendencia.')}</div>`;
         }
       }
 
@@ -603,7 +682,7 @@ export default {
         const s = seriesFor();
         if (!s || !window.Chart) return;
         const zm = dialog.openModal({
-          title: '📈 Tendencia',
+          title: t('usage.trend.title', '📈 Tendencia'),
           width: 'min(96vw, 1400px)',
           onClose: () => { zoomChart?.destroy(); zoomChart = null; },
         });
