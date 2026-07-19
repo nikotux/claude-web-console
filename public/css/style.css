@@ -1072,6 +1072,14 @@ html, body {
 .hs-tabs { display: flex; gap: .2rem; flex-wrap: wrap; }
 .hs-tab { border: 1px solid var(--cwc-border); background: transparent; color: var(--cwc-text-dim); border-radius: 999px; padding: .2rem .6rem; font-size: var(--cwc-fs-xs); cursor: pointer; }
 .hs-tab--active { background: color-mix(in srgb, var(--cwc-accent) 18%, transparent); border-color: var(--cwc-accent); color: var(--cwc-text); }
+/* Secciones colapsables inline del Escaneo unificado (rediseño 2026-07-19,
+   PLAN-752): cada motor (Revisión/Optim/Coherencia) + Resumen + Pad viven en
+   un <details> propio, todo accionable inline (regla UI colapsable + árbol). */
+.hs-engine { border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm); margin: .3rem 0; overflow: hidden; }
+.hs-engine > summary { padding: .45rem .6rem; cursor: pointer; font-weight: 600; font-size: var(--cwc-fs-sm); list-style: none; display: flex; align-items: center; gap: .4rem; background: color-mix(in srgb, var(--cwc-accent) 6%, transparent); }
+.hs-engine > summary::-webkit-details-marker { display: none; }
+.hs-engine[open] > summary { border-bottom: 1px solid var(--cwc-border); }
+.hs-engine-body { padding: .5rem; }
 .hs-body { flex: 1; min-height: 0; overflow: auto; padding-top: .3rem; }
 .hs-grid { width: 100%; border-collapse: collapse; font-size: var(--cwc-fs-sm); }
 .hs-grid td { padding: .35rem .4rem; border-bottom: 1px solid var(--cwc-border); }

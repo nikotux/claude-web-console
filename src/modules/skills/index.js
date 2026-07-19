@@ -104,47 +104,51 @@ export default {
 
   registerHttp(router) {
     router.get('/skills', async (req, res) => {
-      const skills = WORLDS.flatMap(readSkillDir);
+      try {
+        const skills = WORLDS.flatMap(readSkillDir);
 
-      let padItems = [];
-      let padAvailable = true;
-      const r = await pad.listItems('playbooks', { workspace: 'console' });
-      if (r.ok && Array.isArray(r.data)) {
-        padItems = r.data.map((it) => ({ ...it, parsedFields: parsePadFields(it.fields) }));
-      } else {
-        padAvailable = false;
+        let padItems = [];
+        let padAvailable = true;
+        const r = await pad.listItems('playbooks', { workspace: 'console' });
+        if (r.ok && Array.isArray(r.data)) {
+          padItems = r.data.map((it) => ({ ...it, parsedFields: parsePadFields(it.fields) }));
+        } else {
+          padAvailable = false;
+        }
+
+        const padByRef = new Map(padItems.map((it) => [it.ref, it]));
+        for (const sk of skills) {
+          const p = sk.padRef ? padByRef.get(sk.padRef) : null;
+          sk.pad = p
+            ? {
+                ref: p.ref,
+                status: p.parsedFields.status || null,
+                trigger: p.parsedFields.trigger || null,
+                scope: p.parsedFields.scope || null,
+                invocationSlug: p.parsedFields.invocation_slug || null,
+              }
+            : null;
+        }
+
+        // Candidatos: playbook activo + con invocation_slug que ningún SKILL.md
+        // referencia todavía (MC-683: los draft/sin-slug se gradúan antes, no
+        // se listan acá como "casi listos").
+        const linkedRefs = new Set(skills.map((s) => s.padRef).filter(Boolean));
+        const padOnly = padItems
+          .filter((it) => it.parsedFields.status === 'active' && it.parsedFields.invocation_slug && !linkedRefs.has(it.ref))
+          .map((it) => ({
+            ref: it.ref,
+            title: it.title,
+            invocationSlug: it.parsedFields.invocation_slug,
+            trigger: it.parsedFields.trigger || null,
+            scope: it.parsedFields.scope || null,
+            summary: String(it.content || '').slice(0, 220),
+          }));
+
+        res.json({ skills, padOnly, padAvailable });
+      } catch (e) {
+        res.status(500).json({ error: String(e.message || e) });
       }
-
-      const padByRef = new Map(padItems.map((it) => [it.ref, it]));
-      for (const sk of skills) {
-        const p = sk.padRef ? padByRef.get(sk.padRef) : null;
-        sk.pad = p
-          ? {
-              ref: p.ref,
-              status: p.parsedFields.status || null,
-              trigger: p.parsedFields.trigger || null,
-              scope: p.parsedFields.scope || null,
-              invocationSlug: p.parsedFields.invocation_slug || null,
-            }
-          : null;
-      }
-
-      // Candidatos: playbook activo + con invocation_slug que ningún SKILL.md
-      // referencia todavía (MC-683: los draft/sin-slug se gradúan antes, no
-      // se listan acá como "casi listos").
-      const linkedRefs = new Set(skills.map((s) => s.padRef).filter(Boolean));
-      const padOnly = padItems
-        .filter((it) => it.parsedFields.status === 'active' && it.parsedFields.invocation_slug && !linkedRefs.has(it.ref))
-        .map((it) => ({
-          ref: it.ref,
-          title: it.title,
-          invocationSlug: it.parsedFields.invocation_slug,
-          trigger: it.parsedFields.trigger || null,
-          scope: it.parsedFields.scope || null,
-          summary: String(it.content || '').slice(0, 220),
-        }));
-
-      res.json({ skills, padOnly, padAvailable });
     });
   },
 };

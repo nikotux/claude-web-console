@@ -38,22 +38,42 @@ export const publicRouter = express.Router();
 publicRouter.use(rateLimit);
 
 publicRouter.post('/validate', (req, res) => {
-  const v = validateInvite(req.body?.token);
-  res.json({ valid: v.valid, admin: v.admin || false, reason: v.reason || null });
+  try {
+    const v = validateInvite(req.body?.token);
+    res.json({ valid: v.valid, admin: v.admin || false, reason: v.reason || null });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
 });
 
 publicRouter.post('/register', (req, res) => {
   const { token, username, password } = req.body || {};
-  const v = validateInvite(token, { forUsername: username });
+  let v;
+  try {
+    v = validateInvite(token, { forUsername: username });
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (!isValidUsername(username)) return res.status(400).json({ error: 'Usuario inválido (letras, números, . _ - ; máx 32).' });
+  // Reservar el token ANTES de crear el usuario (evita la carrera: dos
+  // registros concurrentes con el mismo token no deben poder crear dos
+  // usuarios y dejar uno huérfano sin invitación asociada). Reintentar con el
+  // MISMO username tras un fallo de createUser sigue funcionando (lockInvite
+  // es idempotente para el mismo lockedTo).
+  let locked;
+  try {
+    locked = lockInvite(token, username);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo reservar la invitación: ' + (e.message || e) });
+  }
+  if (!locked) return res.status(409).json({ error: 'Invitación ya en uso por otro registro.' });
   try {
     createUser(username, password, !!v.admin); // admin SOLO si el token lo marca
   } catch (e) {
-    return res.status(e.status || 400).json({ error: e.message || 'No se pudo crear el usuario.' });
+    return res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo crear el usuario.' });
   }
   try { ensureUserSpace(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
-  lockInvite(token, username); // ata el token al user (NO consumido aún: falta el paso de creds)
   // Provisionar el Pad PROPIO del inquilino (B2-F3), best-effort y sin bloquear
   // el registro: si el Pad local está caído, el chat funciona igual y el
   // provisioning se reintenta lazy al primer uso (F8). NUNCA await acá.
@@ -78,7 +98,12 @@ function readJob(user) { try { return JSON.parse(fs.readFileSync(jobPath(user), 
 // espacio del inquilino. Requiere que el token esté LOCKED (ya se auto-registró).
 publicRouter.post('/creds-start', (req, res) => {
   const { token } = req.body || {};
-  const v = validateInvite(token);
+  let v;
+  try {
+    v = validateInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
   const user = v.lockedTo;
@@ -88,6 +113,13 @@ publicRouter.post('/creds-start', (req, res) => {
     return res.json({ ok: true, already: true });
   }
   try {
+    // Reserva SINCRÓNICA del job 'starting' en disco ANTES de spawnear (sin
+    // ningún await entre el read de arriba y este write, así el event loop no
+    // puede intercalar otra request en el medio): dos POST casi simultáneos ya
+    // no pueden pasar los dos el dedup y lanzar dos runners para el mismo user
+    // (antes el primer 'starting' lo escribía recién el runner hijo, async).
+    fs.mkdirSync(JOBS_DIR, { recursive: true });
+    fs.writeFileSync(jobPath(user), JSON.stringify({ status: 'starting', user, ts: Date.now() }), { mode: 0o600 });
     spawn(process.execPath, [ONBOARD_RUNNER, '--user', user, '--token', token], { detached: true, stdio: 'ignore' }).unref();
   } catch (e) {
     return res.status(500).json({ error: 'No pude lanzar el paso de credenciales: ' + e.message });
@@ -99,7 +131,12 @@ publicRouter.post('/creds-start', (req, res) => {
 // tras consumir, para mostrar 'done'). NO expone secretos.
 publicRouter.get('/creds-status', (req, res) => {
   const token = req.query?.token;
-  const p = peekInvite(token);
+  let p;
+  try {
+    p = peekInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+  }
   if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
   const job = readJob(p.lockedTo) || { status: 'idle' };
   const stale = job.ts && (Date.now() - job.ts) > 30000 && ['starting', 'exchanging'].includes(job.status);
@@ -111,7 +148,12 @@ publicRouter.get('/creds-status', (req, res) => {
 // Recibe el código pegado por el usuario → lo deja en un archivo que el runner lee.
 publicRouter.post('/creds-code', (req, res) => {
   const { token, code } = req.body || {};
-  const v = validateInvite(token);
+  let v;
+  try {
+    v = validateInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
   const clean = String(code || '').trim();
@@ -131,17 +173,32 @@ export default {
     const r = express.Router();
     r.post('/admin/invite', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo admin.' });
-      const ttlH = Number(req.body?.ttlHours) > 0 ? Number(req.body.ttlHours) : DEFAULT_TTL_H;
-      const invite = generateInvite({ admin: !!req.body?.admin, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
-      res.json({ invite }); // { id, token (crudo, una vez), admin, expiresAt }
+      if (req.body?.admin !== undefined && typeof req.body.admin !== 'boolean') {
+        return res.status(400).json({ error: 'admin debe ser boolean.' });
+      }
+      try {
+        const ttlH = Number(req.body?.ttlHours) > 0 ? Number(req.body.ttlHours) : DEFAULT_TTL_H;
+        const invite = generateInvite({ admin: !!req.body?.admin, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
+        res.json({ invite }); // { id, token (crudo, una vez), admin, expiresAt }
+      } catch (e) {
+        res.status(500).json({ error: e.message || 'No se pudo generar la invitación.' });
+      }
     });
     r.get('/admin/invites', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo admin.' });
-      res.json({ invites: listInvites() });
+      try {
+        res.json({ invites: listInvites() });
+      } catch (e) {
+        res.status(500).json({ error: e.message || 'No se pudieron listar las invitaciones.' });
+      }
     });
     r.post('/admin/invite/:id/revoke', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo admin.' });
-      res.json({ ok: revokeInvite(req.params.id) });
+      try {
+        res.json({ ok: revokeInvite(req.params.id) });
+      } catch (e) {
+        res.status(500).json({ error: e.message || 'No se pudo revocar la invitación.' });
+      }
     });
     router.use('/onboard', r); // → /api/onboard/admin/*
   },

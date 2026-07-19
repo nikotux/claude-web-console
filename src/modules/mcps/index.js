@@ -24,14 +24,10 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config } from '../../core/config.js';
 import { isAdmin } from '../../core/auth.js';
 import {
   spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS,
 } from './login-shared.js';
-
-const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 // Descripciones amigables de servidores conocidos — data no crítica, solo
 // enriquece la tarjeta (si falta, se muestra sin "rol"). No se inventan roles
@@ -123,13 +119,24 @@ function enrich(server, cliCfg, projectMcp, cwd) {
 // --- Caché en memoria (el health-check de claude mcp list es lento) ---
 let cache = null;
 let cacheAt = 0;
+let inFlight = null; // promesa COMPARTIDA: dedup de censos concurrentes
 const CACHE_TTL_MS = 60_000;
 
 async function buildCensus() {
   const cliCfg = readJson(path.join(os.homedir(), '.claude.json')) || {};
   const worlds = [];
   for (const w of WORLDS) {
-    const cwd = worldCwd(w.world) || CONSOLE_ROOT;
+    const cwd = worldCwd(w.world);
+    // Sin cwd resuelto (p.ej. Tolkien sin su directorio configurado) no hay que
+    // caer silenciosamente al cwd de la propia Consola: mostraría los MCP
+    // servers de Mi Consola bajo la etiqueta de otro mundo. Reportar el error
+    // explícito, mismo criterio que spawnLogin (login-shared.js) que ya lanza en
+    // ese caso. (El cruce real al mundo externo lo resuelve worldCwd en
+    // login-shared.js, que sí está en el allowlist de cross-world.)
+    if (!cwd) {
+      worlds.push({ world: w.world, label: w.label, cwd: null, servers: [], hasWarnings: false, error: 'cwd no configurado para este mundo' });
+      continue;
+    }
     const projectMcp = readJson(path.join(cwd, '.mcp.json'))?.mcpServers || null;
     const { servers, hasWarnings, error } = await runMcpList(cwd);
     worlds.push({
@@ -146,9 +153,18 @@ async function buildCensus() {
 
 async function census({ fresh }) {
   if (!fresh && cache && Date.now() - cacheAt < CACHE_TTL_MS) return cache;
-  cache = await buildCensus();
-  cacheAt = Date.now();
-  return cache;
+  // Dedup de llamadas concurrentes: si ya hay un buildCensus() en vuelo,
+  // todos los pedidos que lleguen mientras tanto esperan la MISMA promesa en
+  // vez de disparar `claude mcp list` (lento, health-check HTTP) por duplicado.
+  if (inFlight) return inFlight;
+  inFlight = buildCensus();
+  try {
+    cache = await inFlight;
+    cacheAt = Date.now();
+    return cache;
+  } finally {
+    inFlight = null;
+  }
 }
 
 export default {
@@ -174,15 +190,19 @@ export default {
 
     // Desconectar: limpia las credenciales OAuth guardadas (vía CLI oficial).
     router.post('/mcps/logout', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
-      const { world, name } = req.body || {};
-      const cwd = worldCwd(world);
-      if (!cwd || !/^[A-Za-z0-9_-]+$/.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
-      execFile('claude', ['mcp', 'logout', name], { cwd, timeout: 20000, env: process.env }, (err, stdout, stderr) => {
-        cache = null; // el estado cambió
-        if (err) return res.status(500).json({ error: (stderr || err.message || '').trim().slice(0, 300) });
-        res.json({ ok: true, output: String(stdout || '').trim().slice(0, 300) });
-      });
+      try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+        const { world, name } = req.body || {};
+        const cwd = worldCwd(world);
+        if (!cwd || !/^[A-Za-z0-9_-]+$/.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
+        execFile('claude', ['mcp', 'logout', name], { cwd, timeout: 20000, env: process.env }, (err, stdout, stderr) => {
+          cache = null; // el estado cambió
+          if (err) return res.status(500).json({ error: (stderr || err.message || '').trim().slice(0, 300) });
+          res.json({ ok: true, output: String(stdout || '').trim().slice(0, 300) });
+        });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     // --- Fase 2: reconexión OAuth guiada (runner pty) ---
@@ -207,16 +227,23 @@ export default {
         writeLoginCode(id, value);
         res.json({ ok: true });
       } catch (e) {
-        res.status(400).json({ error: e.message });
+        // El status se deriva de la marca explícita del error (badRequest),
+        // nunca hardcodeado: writeLoginCode también puede fallar por I/O real
+        // (fs.mkdirSync/writeFileSync), que es un 500, no un 400.
+        res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }
     });
 
     // Poll del estado del login guiado (0 tokens, solo lee disco).
     router.get('/mcps/login/:id', (req, res) => {
-      const job = readLoginJob(req.params.id);
-      if (!job) return res.status(404).json({ error: 'no existe' });
-      if (job.status === 'done') cache = null; // reconectó: forzar recenso
-      res.json(job);
+      try {
+        const job = readLoginJob(req.params.id);
+        if (!job) return res.status(404).json({ error: 'no existe' });
+        if (job.status === 'done') cache = null; // reconectó: forzar recenso
+        res.json(job);
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
   },
 };

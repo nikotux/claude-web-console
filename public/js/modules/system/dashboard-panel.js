@@ -1,16 +1,13 @@
-// modules/system/inventory-modal.js — sub-ventana "Dashboard del proyecto"
-// (gemela de optimize-modal.js/coherence-modal.js: la pestaña Salud muestra
-// solo el resumen compacto + botón, el detalle completo vive acá). Pedido del
-// usuario 2026-07-06: antes el "🔍 Censo del proyecto" solo mostraba conteos
-// ("11 módulos") sin decir CUÁLES y sin recursos del servidor (núcleos/CPU/
-// RAM). Acá SÍ: recursos del servidor + módulos backend con sus endpoints y
-// línea de registro + módulos frontend con su montaje + runners + motores IA.
+// modules/system/dashboard-panel.js — pestaña "Dashboard del proyecto" del menú
+// Sistema (grupo Diagnóstico). Antes vivía como sub-modal (inventory-modal.js)
+// abierto desde una tab del Escaneo de Salud; el rediseño 2026-07-19 (PLAN-752,
+// pedido de Niko) lo saca a su PROPIA pestaña porque es INFORMATIVO (censo +
+// recursos), no accionable — así Salud queda solo con lo accionable (escanear/
+// resolver). Mismo contenido, ahora montado en el panel en vez de un modal.
 //
-// TODO gratis (0 tokens, sin LLM): reusa GET /api/health/scan, que a su vez
-// reusa generateInventory() (core/inventory.js) + systemSnapshot()
-// (modules/stats, misma fuente que el gauge del pie — fuente única de
-// recursos del sistema). Sin capa IA: por eso no hay botón "Analizar con
-// IA" como en Optimización/Coherencia, solo "Re-escanear ahora".
+// TODO gratis (0 tokens, sin LLM): reusa GET /api/health/scan, que reusa
+// generateInventory() (core/inventory.js) + systemSnapshot() (modules/stats,
+// misma fuente que el gauge del pie). Sin capa IA: solo "Re-escanear ahora".
 import { icon } from '../../ui/icons.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
@@ -21,21 +18,19 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString('es', { day: '2-digit', month: 'short' }) + ' · ' + new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '—');
 const engineName = (f) => String(f || '').split('/').pop().replace(/^cwc-|\.js$/g, '') || f;
 
-// Abre la sub-ventana. `ctx` trae dialog (no necesita openChat: es puro censo).
-export function openInventory(ctx) {
-  const { dialog } = ctx;
+export function mountDashboardPanel(el, ctx) {
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  const m = dialog.openModal({ title: `📊 ${t('system.inventory.title', 'Dashboard del proyecto')}`, width: 900 });
-  m.card.classList.add('dlg-card--health');
   const wrap = document.createElement('div');
   wrap.className = 'hp-opt';
-  m.body.appendChild(wrap);
+  el.innerHTML = '';
+  el.appendChild(wrap);
 
   let alive = true;
   let scanning = false;
-  const origOnClose = m.close;
-  m.close = () => { alive = false; origOnClose(); };
-  m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
+  // El panel vive dentro del modal de Sistema; se desmonta al cambiar de ítem o
+  // cerrar el modal. Un MutationObserver detecta la desconexión para frenar polls.
+  const obs = new MutationObserver(() => { if (!el.isConnected) { alive = false; obs.disconnect(); } });
+  obs.observe(document.body, { childList: true, subtree: true });
 
   // ===== Recursos del servidor (núcleos/CPU/RAM/disco/load/uptime) =====
   function resourcesHtml(res) {
@@ -96,11 +91,6 @@ export function openInventory(ctx) {
 
   // ===== Frontend: nombre + directorio + si está montado =====
   function frontendHtml(frontend, count) {
-    // "mounted" = tiene [data-module] en index.html. Algunos módulos (chat,
-    // terminal, mobile…) se montan A MANO desde main.js por vista/atajo en vez
-    // de [data-module] — NO es un problema (documentado en CLAUDE.md), por eso
-    // acá es solo informativo (punto neutro), no una advertencia como en
-    // backend (ahí "no registrado" sí impide que el módulo corra).
     const rows = (frontend || []).map((f) => `
       <tr title="${esc(f.dir)}">
         <td><span class="hp-dot ${f.mounted ? 'hp-dot--ok' : 'hp-dot--idle'}"></span> <b>${esc(f.name)}</b></td>
@@ -130,8 +120,7 @@ export function openInventory(ctx) {
     </details>`;
   }
 
-  // ===== Motores IA: solo un vistazo — el detalle de blindaje/turnos/timeouts
-  // vive en "🧠 Optimización IA" (no duplicar acá) =====
+  // ===== Motores IA: solo un vistazo =====
   function enginesHtml(engines, count) {
     const rows = (engines || []).map((e) => `
       <tr title="${esc(e.purpose || '')}">
@@ -139,7 +128,7 @@ export function openInventory(ctx) {
         <td>${e.models?.length ? esc(e.models.join('/')) : (e.modelDynamic ? t('system.inventory.dynamicModel', 'dinámico') : t('system.inventory.defaultModel', 'default'))}</td>
       </tr>`).join('');
     return `<details class="hp-opt-group">
-      <summary>🤖 ${t('system.inventory.aiEngines', 'Motores IA')} · ${count} <span class="hp-opt-snippet">${t('system.inventory.optimizeDetailSnippet', '(detalle en "Optimización IA")')}</span></summary>
+      <summary>🤖 ${t('system.inventory.aiEngines', 'Motores IA')} · ${count}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('system.inventory.engineHeader', 'Motor')}</th><th>${t('system.inventory.modelHeader', 'Modelo')}</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="2">${t('system.inventory.noEngines', 'Sin motores.')}</td></tr>`}</tbody>
@@ -147,8 +136,7 @@ export function openInventory(ctx) {
     </details>`;
   }
 
-  // ===== Pad local · backbone (workspace console): el TRACKER junto al censo
-  // del CÓDIGO. Datos de GET /scan (listCollections, 0 tokens, best-effort). =====
+  // ===== Pad local · backbone (workspace console) =====
   function padHtml(pad) {
     if (!pad) return '';
     if (!pad.ok) {
@@ -191,7 +179,7 @@ export function openInventory(ctx) {
   let lastData = null;
   async function load(force) {
     scanning = !!force;
-    if (force && lastData) render(lastData); // mantiene la tabla visible, solo cambia el botón a "escaneando…"
+    if (force && lastData) render(lastData);
     try {
       const d = await (await fetch(`${API}/scan${force ? '?force=1' : ''}`)).json();
       if (!alive) return;

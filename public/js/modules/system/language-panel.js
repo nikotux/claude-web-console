@@ -24,7 +24,7 @@ export function mountLanguagePanel(el, ctx) {
       ${optHtml('en', '🇬🇧', t('system.lang.en', 'English'))}
     </div>
     <p class="ev-msg" data-ref="msg" hidden></p>
-    <p class="ev-hint lg-note">${t('system.lang.note', 'Esta es la Fase 1 del despliegue de i18n: el mecanismo ya funciona, pero la mayor parte de la interfaz sigue en español (texto de reserva) hasta que la Fase 2 la traduzca módulo por módulo.')}</p>
+    <p class="ev-hint lg-note">${t('system.lang.note', 'Toda la interfaz principal está traducida. Si encontrás algún texto que quedó en español, avisá para sumarlo.')}</p>
   `;
 
   el.querySelectorAll('[data-lang]').forEach((btn) => {

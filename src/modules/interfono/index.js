@@ -27,11 +27,18 @@ export default {
     // Estado completo para el panel (semáforo por claim vía evaluateClaim).
     r.get('/', (req, res) => {
       try {
+        const directory = bus.buildDirectory();
         const claims = bus.allClaims().map((c) => ({ ...c, verdict: bus.evaluateClaim(c) }));
+        // R6 ("nada se pierde en silencio"): lápidas de claims robados aún no
+        // entregadas al handle afectado — solo LECTURA (tombstonesFor no
+        // marca delivered; eso lo hace únicamente el hook-inject real de una
+        // sesión al recibirlas).
+        const tombstones = bus.tombstonesFor(directory.map((e) => e.handle));
         res.json({
-          directory: bus.buildDirectory(),
+          directory,
           messages: bus.allMessages(),
           claims,
+          tombstones,
           ts: Date.now(),
         });
       } catch (e) {

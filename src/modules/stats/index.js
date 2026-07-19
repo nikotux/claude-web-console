@@ -110,10 +110,12 @@ export async function systemSnapshot() {
 const USERS_ROOT = path.join(config.home, '.cwc-users');
 const CHATS_DIR = path.join(config.home, '.cwc-data', 'chats'); // los spawnlock los escribe el server (host) para TODOS los chats
 
-// VmRSS (kB) de un pid, o 0 si no se puede leer.
-function rssKbForPid(pid) {
+// VmRSS (kB) de un pid, o 0 si no se puede leer. Async (fs.promises): esto se
+// llama por cada pid vivo dentro de un handler HTTP — bloquear el event loop
+// acá congelaría en simultáneo los WS de PTY/tmux de TODOS los usuarios.
+async function rssKbForPid(pid) {
   try {
-    const txt = fss.readFileSync(`/proc/${pid}/status`, 'utf8');
+    const txt = await fs.readFile(`/proc/${pid}/status`, 'utf8');
     const m = txt.match(/VmRSS:\s+(\d+) kB/);
     return m ? parseInt(m[1], 10) : 0;
   } catch { return 0; }
@@ -126,19 +128,22 @@ function pidForChat(id) {
   } catch { return null; }
 }
 // Tamaño en bytes de un dir (recursivo, best-effort, con tope de archivos para
-// no dispararse). Un budget compartido corta si el árbol es enorme.
-function dirSizeBytes(dir, budget) {
+// no dispararse). Un budget compartido corta si el árbol es enorme. Async
+// (fs.promises): un walk de hasta 200.000 archivos POR INQUILINO, hecho
+// sincrónico, bloquearía el proceso Node entero (congelando en simultáneo las
+// conexiones WS de PTY/tmux de otros usuarios) mientras dura el recorrido.
+async function dirSizeBytes(dir, budget) {
   budget = budget || { files: 0 };
   let total = 0;
   let entries;
-  try { entries = fss.readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return 0; }
   for (const e of entries) {
     if (budget.files > 200000) break; // guard anti-runaway
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) total += dirSizeBytes(p, budget);
+    if (e.isDirectory()) total += await dirSizeBytes(p, budget);
     else if (e.isFile()) {
       budget.files += 1;
-      try { total += fss.statSync(p).size; } catch { /* skip */ }
+      try { total += (await fs.stat(p)).size; } catch { /* skip */ }
     }
   }
   return total;
@@ -172,10 +177,10 @@ export async function perUserSnapshot() {
   // RSS agregado + disco del espacio (solo inquilinos)
   for (const e of owners.values()) {
     let rssKb = 0;
-    for (const pid of e._pids) rssKb += rssKbForPid(pid);
+    for (const pid of e._pids) rssKb += await rssKbForPid(pid);
     e.rssMB = Math.round(rssKb / 1024);
     if (e.userId !== host) {
-      try { e.diskBytes = dirSizeBytes(userDataDir(e.userId)) + dirSizeBytes(userClaudeDir(e.userId)); } catch { e.diskBytes = 0; }
+      try { e.diskBytes = (await dirSizeBytes(userDataDir(e.userId))) + (await dirSizeBytes(userClaudeDir(e.userId))); } catch { e.diskBytes = 0; }
     } else {
       e.diskBytes = null; // host: home completo, no medido
     }

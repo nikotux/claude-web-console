@@ -36,18 +36,18 @@ export function fillCode(pre, text, lang) {
   const full = String(text ?? '');
   const allLines = full.split('\n');
   const truncated = allLines.length > CODE_MAX_LINES;
-  const t = truncated ? allLines.slice(0, CODE_MAX_LINES).join('\n') : full;
+  const shown = truncated ? allLines.slice(0, CODE_MAX_LINES).join('\n') : full;
   // Aviso de truncado (texto estático, sin metacaracteres HTML → seguro tanto
   // como textContent como concatenado a innerHTML resaltado).
   const note = truncated ? `\n${t('core.trunc.linesHidden', '… ({n} líneas más ocultas por límite de rendimiento)', { n: allLines.length - CODE_MAX_LINES })}` : '';
-  pre.textContent = t + note; // fallback siempre seguro
+  pre.textContent = shown + note; // fallback siempre seguro
   const hljs = window.hljs;
-  if (!hljs || !lang || !t || t.length > HL_MAX_CHARS || !hljs.getLanguage(lang)) return;
+  if (!hljs || !lang || !shown || shown.length > HL_MAX_CHARS || !hljs.getLanguage(lang)) return;
   try {
-    pre.innerHTML = hljs.highlight(t, { language: lang }).value + note;
+    pre.innerHTML = hljs.highlight(shown, { language: lang }).value + note;
     pre.classList.add('hljs');
   } catch {
-    pre.textContent = t + note;
+    pre.textContent = shown + note;
   }
 }
 

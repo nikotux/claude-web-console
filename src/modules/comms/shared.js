@@ -1,6 +1,9 @@
-// modules/comms/shared.js — MOTOR de Comunicaciones: lo COMPARTIDO entre el
-// módulo server (index.js), el runner desacoplado (bin/cwc-comms-runner.js) y
-// el CLI transversal (bin/cwc-comms.js).
+// modules/comms/shared.js — LIBRERÍAS SHARED de Comunicaciones. OJO: el módulo
+// server `comms/index.js` (dashboard-inbox) se ARCHIVÓ el 2026-07-14 —`comms`
+// ya NO está en registry.js ni se monta. Lo que queda acá son las librerías que
+// consumen OTROS módulos/runners: el CLI transversal (bin/cwc-comms.js), los
+// runners desacoplados (bin/cwc-comms-*.js), y tickets/sources.js (vía
+// pr-read-shared.js). No hay `index.js` en esta carpeta a propósito.
 //
 // Es un motor FILE-BASED al estilo del Interfono (src/core/bus.js): TODO el
 // estado vive en archivos en ~/.cwc-data/comms/ — 0 tokens, sobrevive a

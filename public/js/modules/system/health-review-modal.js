@@ -43,16 +43,19 @@ function kindLabel(kind) {
 }
 
 // Abre esta sub-ventana. `ctx` trae dialog + openChat (para trabajar un hallazgo).
-export function openHealthReview(ctx, { isAdmin }) {
+// Monta el contenido de la Revisión en un contenedor `host` (reusable: lo usa
+// el Escaneo de Salud unificado como sección inline, y openHealthReview como
+// modal standalone). `onClose` cierra el modal contenedor al resolver en chat.
+// Devuelve { stop } para frenar el poll.
+export function mountHealthReview(host, ctx, { isAdmin, onClose } = {}) {
   const { dialog, openChat } = ctx;
   // En pantallas chicas todo nace COLAPSADO (vista general; detalle a demanda);
   // en desktop, expandido (hay lugar). Se evalúa una vez al abrir.
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  const m = dialog.openModal({ title: t('system.healthReview.modalTitle', 'Revisión exhaustiva de salud'), width: 900 });
-  m.card.classList.add('dlg-card--health');
   const wrap = document.createElement('div');
   wrap.className = 'hr-wrap';
-  m.body.appendChild(wrap);
+  host.innerHTML = '';
+  host.appendChild(wrap);
 
   let alive = true;
   let pollTimer = null;
@@ -66,9 +69,9 @@ export function openHealthReview(ctx, { isAdmin }) {
   // batch/"Resolver seguros" sigue con su orquestador de siempre (fuera de
   // alcance de este cambio).
   let useTandem = false;
-  const origOnClose = m.close;
-  m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
-  m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
+  function stop() { alive = false; clearTimeout(pollTimer); obs.disconnect(); }
+  const obs = new MutationObserver(() => { if (!host.isConnected) stop(); });
+  obs.observe(document.body, { childList: true, subtree: true });
 
   // ¿El hallazgo está BLOQUEADO para auto-fix? Superficie crítica (pol.risk:
   // toca server/auth/registry/…) O severidad crítica del bug (los más delicados
@@ -335,7 +338,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       t('system.healthReview.resolveCommand', '   node bin/cwc-health-resolve.js {id} "<resumen corto de qué arreglaste>"', { id: f.id }),
       t('system.healthReview.resolveCommandCaution', '   Hacelo SOLO si de verdad lo resolviste. Si resultó un falso positivo o no lo pudiste arreglar, NO ejecutes ese comando y avisame.'),
     ].filter((l) => l !== null && l !== undefined).join('\n');
-    m.close();
+    onClose?.();
     await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `${t('system.healthReview.resolveTitle', 'Resolver')}: ${f.area}`.slice(0, 40) });
   }
 
@@ -362,7 +365,7 @@ export function openHealthReview(ctx, { isAdmin }) {
       t('system.healthReview.resolveAllCommand', '   node bin/cwc-health-resolve.js <id> "<resumen corto de qué arreglaste>"'),
       t('system.healthReview.resolveAllCaution', 'Hacelo por CADA hallazgo que de verdad resolviste. Si alguno es falso positivo o no lo pudiste arreglar, NO lo marques y avisame.'),
     ].join('\n');
-    m.close();
+    onClose?.();
     await openChat({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: t('system.healthReview.resolveHealthFindingsTitle', 'Resolver {count} hallazgos de salud', { count: findings.length }).slice(0, 50) });
   }
 
@@ -529,4 +532,17 @@ export function openHealthReview(ctx, { isAdmin }) {
     render(d || {});
     if (needsPoll(d)) poll();
   })();
+
+  return { stop };
+}
+
+// Wrapper standalone: monta la Revisión en su propio modal (uso directo).
+export function openHealthReview(ctx, { isAdmin }) {
+  const { dialog } = ctx;
+  const m = dialog.openModal({ title: t('system.healthReview.modalTitle', 'Revisión exhaustiva de salud'), width: 900 });
+  m.card.classList.add('dlg-card--health');
+  const inst = mountHealthReview(m.body, ctx, { isAdmin, onClose: () => m.close() });
+  const origClose = m.close;
+  m.close = () => { inst.stop(); origClose(); };
+  m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 }

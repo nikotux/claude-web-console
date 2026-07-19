@@ -42,10 +42,16 @@ export function readLoginJob(id) {
 
 // El usuario pega la URL de redirect completa (localhost:.../callback?code=…)
 // o el code pelado; el runner la vigila y la escribe al stdin del pty.
+function badRequest(message) {
+  const e = new Error(message);
+  e.badRequest = true;
+  return e;
+}
+
 export function writeLoginCode(id, value) {
-  if (!idOk(id)) throw new Error('id inválido');
+  if (!idOk(id)) throw badRequest('id inválido');
   const v = String(value || '').trim();
-  if (!v || v.length > 4000 || /[\r\n]/.test(v)) throw new Error('valor inválido');
+  if (!v || v.length > 4000 || /[\r\n]/.test(v)) throw badRequest('valor inválido');
   fs.mkdirSync(JOBS_DIR, { recursive: true });
   fs.writeFileSync(codeFile(id), v, { mode: 0o600 });
 }
@@ -65,6 +71,11 @@ export function spawnLogin(world, name) {
   fs.writeFileSync(jobFile(id), JSON.stringify({ id, world, name, status: 'starting', ts: Date.now() }), { mode: 0o600 });
   const child = spawn('node', [RUNNER, '--cwd', cwd, '--name', name, '--id', id], {
     detached: true, stdio: 'ignore', env: process.env,
+  });
+  child.on('error', (err) => {
+    try {
+      fs.writeFileSync(jobFile(id), JSON.stringify({ id, world, name, status: 'error', error: String(err.message || err), ts: Date.now() }), { mode: 0o600 });
+    } catch { /* best-effort */ }
   });
   child.unref();
   return id;

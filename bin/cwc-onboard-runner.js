@@ -80,27 +80,34 @@ function watchForCode() {
 }
 
 proc.onData((data) => {
-  buf += data;
-  if (buf.length > 200000) buf = buf.slice(-100000); // cap
-  const clean = stripAnsi(buf);
-  if (!urlSent) {
-    const m = clean.match(URL_RE);
-    if (m) { currentUrl = m[0]; urlSent = true; writeState({ status: 'awaiting-code', url: currentUrl }); watchForCode(); }
-  }
-  if (codeWritten && !done) {
-    const t = clean.match(TOKEN_RE);
-    if (t) {
-      done = true;
-      try {
-        fs.writeFileSync(userOauthTokenPath(USER), t[0], { mode: 0o600 });
-        if (INVITE) consumeInvite(INVITE);
-        writeState({ status: 'done', done: true });
-      } catch (e) {
-        writeState({ status: 'error', error: 'No pude guardar el token: ' + e.message });
-      }
-      if (watchTimer) clearInterval(watchTimer);
-      try { proc.kill(); } catch { /* noop */ }
+  try {
+    buf += data;
+    if (buf.length > 200000) buf = buf.slice(-100000); // cap
+    const clean = stripAnsi(buf);
+    if (!urlSent) {
+      const m = clean.match(URL_RE);
+      if (m) { currentUrl = m[0]; urlSent = true; writeState({ status: 'awaiting-code', url: currentUrl }); watchForCode(); }
     }
+    if (codeWritten && !done) {
+      const t = clean.match(TOKEN_RE);
+      if (t) {
+        done = true;
+        try {
+          fs.writeFileSync(userOauthTokenPath(USER), t[0], { mode: 0o600 });
+          if (INVITE) consumeInvite(INVITE);
+          writeState({ status: 'done', done: true });
+        } catch (e) {
+          writeState({ status: 'error', error: 'No pude guardar el token: ' + e.message });
+        }
+        if (watchTimer) clearInterval(watchTimer);
+        try { proc.kill(); } catch { /* noop */ }
+      }
+    }
+  } catch (e) {
+    writeState({ status: 'error', error: 'Fallo inesperado procesando la salida de setup-token: ' + (e?.message || e) });
+    if (watchTimer) clearInterval(watchTimer);
+    done = true;
+    try { proc.kill(); } catch { /* noop */ }
   }
 });
 

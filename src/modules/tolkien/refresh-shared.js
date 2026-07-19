@@ -189,16 +189,25 @@ export function refreshStatus(job) {
 export function spawnRefreshRunner() {
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
-  child.on('error', (err) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+  try {
+    const child = spawn(process.execPath, [RUNNER], {
+      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    });
+    child.on('error', (err) => {
+      try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+      try {
+        const j = readRefreshJob();
+        if (j && j.running) writeRefreshJob({ ...j, running: false, error: 'No se pudo iniciar el runner de refresh.', finishedAt: Date.now() });
+      } catch { /* noop */ }
+    });
+    child.unref();
+  } catch (err) {
+    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn THROW: ${err?.message || err}\n`); } catch { /* noop */ }
     try {
       const j = readRefreshJob();
       if (j && j.running) writeRefreshJob({ ...j, running: false, error: 'No se pudo iniciar el runner de refresh.', finishedAt: Date.now() });
     } catch { /* noop */ }
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  } finally {
+    fs.closeSync(logFd);
+  }
 }

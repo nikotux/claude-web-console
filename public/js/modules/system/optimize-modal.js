@@ -38,22 +38,26 @@ function tipoLabel(tipo) {
   }[tipo];
 }
 
-// Abre la sub-ventana. `ctx` trae dialog + openChat (para aplicar una propuesta).
-export function openOptimize(ctx, { isAdmin }) {
+// Monta el contenido de Optimización en un contenedor `host` (reusable: lo usa
+// el Escaneo de Salud unificado como sección inline, y openOptimize como modal
+// standalone). `onClose` cierra el modal contenedor al aplicar/explorar una
+// propuesta (o no-op si va inline). Devuelve { stop } para frenar el poll.
+export function mountOptimize(host, ctx, { isAdmin, onClose } = {}) {
   const { dialog, openChat } = ctx;
   // En desktop el censo nace abierto (hay lugar); en móvil, colapsado.
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
-  const m = dialog.openModal({ title: `🧠 ${t('system.optimize.modalTitle', 'Optimización IA de los motores')}`, width: 900 });
-  m.card.classList.add('dlg-card--health');
   const wrap = document.createElement('div');
   wrap.className = 'hp-opt';
-  m.body.appendChild(wrap);
+  host.innerHTML = '';
+  host.appendChild(wrap);
 
   let alive = true;
   let pollTimer = null;
-  const origOnClose = m.close;
-  m.close = () => { alive = false; clearTimeout(pollTimer); origOnClose(); };
-  m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
+  function stop() { alive = false; clearTimeout(pollTimer); obs.disconnect(); }
+  // Frena el poll cuando el contenedor se desconecta del DOM (modal cerrado o
+  // sección colapsada/re-renderizada).
+  const obs = new MutationObserver(() => { if (!host.isConnected) stop(); });
+  obs.observe(document.body, { childList: true, subtree: true });
 
   // ===== Censo en ÁRBOL: grupo padre colapsable → motores anidados =====
   // (convención "UI textual = colapsable + árbol", pedido del usuario
@@ -262,7 +266,7 @@ export function openOptimize(ctx, { isAdmin }) {
       t('system.optimize.applyRule5', '5. Al terminar, resumí qué cambiaste, en qué archivos y cómo verificarlo.'),
       padRef ? t('system.optimize.applyRule6', '6. Como ÚLTIMO paso, tras verificar el cambio, ejecutá:\n   node bin/cwc-health-proposal-done.js {padRef}', { padRef }) : '',
     ].filter(Boolean).join('\n');
-    m.close();
+    onClose?.();
     await openChat?.({ cwd: 'claude-web-console', mode: 'acceptEdits', prompt, title: `${t('system.optimize.chatTitleOptimize', 'Optimizar')}: ${p.motor}`.slice(0, 40) });
   }
 
@@ -275,10 +279,22 @@ export function openOptimize(ctx, { isAdmin }) {
       `${t('system.optimize.descriptionLabel', 'Descripción:')} ${fn.descripcion}`,
       fn.diseno?.length ? `${t('system.optimize.proposedDesignLabel', 'Diseño propuesto:')}\n${fn.diseno.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}` : '',
     ].filter(Boolean).join('\n');
-    m.close();
+    onClose?.();
     await openChat?.({ cwd: 'claude-web-console', mode: 'plan', prompt, title: `${t('system.optimize.flowTitle', 'Flujo')}: ${fn.titulo}`.slice(0, 40) });
   }
 
   wrap.innerHTML = `<p class="hp-running">${pacman()} ${t('system.optimize.loading', 'cargando…')}</p>`;
   load();
+  return { stop };
+}
+
+// Wrapper standalone: monta Optimización en su propio modal (uso directo).
+export function openOptimize(ctx, { isAdmin }) {
+  const { dialog } = ctx;
+  const m = dialog.openModal({ title: `🧠 ${t('system.optimize.modalTitle', 'Optimización IA de los motores')}`, width: 900 });
+  m.card.classList.add('dlg-card--health');
+  const inst = mountOptimize(m.body, ctx, { isAdmin, onClose: () => m.close() });
+  const origClose = m.close;
+  m.close = () => { inst.stop(); origClose(); };
+  m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 }

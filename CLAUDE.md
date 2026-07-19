@@ -3130,8 +3130,9 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
                             master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
                             .sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·
-                            Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Interfono) ·
-                            🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
+                            Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Dashboard ·
+                            Interfono — Dashboard = pestaña propia desde PLAN-752, antes sub-modal del
+                            Escaneo de Salud) · 🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
                             grupos→items aplanados con índice global; en DESKTOP (≥720px) rail de
                             grupos a la izquierda + panel a la derecha (arranca en el 1er ítem); en
                             MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
@@ -3822,6 +3823,18 @@ bin/cwc-health-resolve.js   marca UN hallazgo como RESUELTO (fixStatus:'resolved
                             Determinístico, 0 tokens, NO toca código. Reusa markFindingResolved
                             de health/shared.js (mismo helper que el endpoint POST /finding-resolve
                             del botón manual "Marcar resuelto")
+bin/cwc-health-proposal-mark.js  GEMELO de cwc-health-resolve.js para el OTRO tipo de ítem del
+                            escaneo: las PROPUESTAS de Optimización/Coherencia (no los hallazgos).
+                            Marca UNA propuesta accepted (aplicada) o rejected (falso positivo/no
+                            aplica) en optimization.json/coherence.json, reusando readOpt/writeOpt ·
+                            readCoh/writeCoh de las shared (misma persistencia que el endpoint POST
+                            /optimize-proposal · /coherence-proposal). Lo corre el chat de "Resolver
+                            todo" (Orquestador) tras decidir cada propuesta — sin esto la propuesta
+                            quedaba "pending" en su sección aunque ya se hubiera resuelto (gap que
+                            reportó Niko 2026-07-19). Determinístico, 0 tokens, NO toca código NI
+                            crea tarea en Pad (a diferencia del endpoint, que sí hace el pad-writeback;
+                            acá solo cierra el estado del tablero). Uso:
+                            node bin/cwc-health-proposal-mark.js <optimize|coherence> <id> <accept|reject>
 bin/cwc-bugfix-link.js      vincula un PR YA existente de GitHub a un registro del tablero
                             Bugs & Features (pata de PREVENCIÓN del bug 2026-07-05 "el
                             tablero no se entera del trabajo en los chats"): lo corre el
@@ -4744,15 +4757,43 @@ docs/                       frontend-modules.md · brief-original.txt · context
   con confirmación: `POST /scan-pad-bug` crea el BUG en Pad desde un hallazgo nuevo
   (`createBugFromFinding`). Endpoints: `POST /api/health/scan-all` (admin, spawn,
   reserva pid:0) · `GET /scan-all` (0 tokens, lee disco + progreso) · `POST
-  /scan-pad-bug` (admin). Front: `system/health-panel.js` (Chequeos rápidos + 1
-  botón) + `system/health-scan-modal.js` (Pac-Man persistente `delegating` +
-  progreso por fase + tabs 📊 Resumen · 🔬 Revisión · 🧠 Optimización · 🔗
-  Coherencia · 📊 Dashboard · 🐛 Pad; las 4 primeras abren el modal de detalle
-  existente para accionar). Los 3 runners standalone (`cwc-health-runner`/`optimize`/
-  `coherence`) y sus `POST /review`//optimize`//coherence` SIGUEN existiendo como el
-  mecanismo subyacente (los reusan los modales de detalle); el orquestador sostiene
-  sus 4 locks durante el escaneo, así que no hay doble corrida. La sección de abajo
-  describe cada motor en detalle (siguen siendo la verdad de cómo funciona cada uno).
+  /scan-pad-bug` (admin). Front: `system/health-panel.js` (Chequeos rápidos + 🩺
+  Escaneo de Salud con DOS botones: "Abrir Escaneo" + "🤖 Resolver todo (N)") +
+  `system/health-scan-modal.js`.
+  REDISEÑO 2026-07-19 (PLAN-752, pedido de Niko: "Salud está hecha un desorden,
+  simplificar a 2 botones + menos submenús"). ANTES: el modal del Escaneo tenía 6
+  tabs (Resumen/Revisión/Optim/Coherencia/Dashboard/Pad) y CADA tab de motor abría
+  OTRO modal (health-review/optimize/coherence/inventory) = 3 niveles de ventanas
+  anidadas. AHORA: UNA vista scrolleable con secciones `<details>` colapsables (regla
+  UI "colapsable + árbol"), TODO accionable INLINE — los motores (🔬 Revisión · 🧠
+  Optimización · 🔗 Coherencia) se MONTAN inline dentro de su sección, lazy al abrir
+  el `<details>`, con cleanup (stop del poll) al colapsar/cerrar. Para eso los 3
+  sub-modales exponen ahora `mountX(host, ctx, {isAdmin, onClose})` (montable en un
+  contenedor, reusa el 100% de su lógica) ADEMÁS de `openX` (wrapper standalone que
+  crea el modal y llama mountX). El escaneo importa `mountHealthReview`/`mountOptimize`/
+  `mountCoherence`. CAMBIOS de estructura: (a) el 📊 Dashboard del proyecto SALIÓ a su
+  PROPIA pestaña de Sistema (grupo Diagnóstico → `system/dashboard-panel.js`,
+  `mountDashboardPanel` — es informativo, no accionable); `inventory-modal.js` se
+  ELIMINÓ (su lógica vive ahora en dashboard-panel.js). (b) BOTÓN "🤖 Resolver todo"
+  (F2, `system/health-resolve-all.js` `launchResolveAll`): junta los hallazgos
+  ABIERTOS de la Revisión + las propuestas PENDIENTES de Optim/Coherencia (0 tokens,
+  lee los endpoints existentes) y abre UN chat supervisado (acceptEdits, cwd=console)
+  con un prompt que instruye usar el ORQUESTADOR INTERNO (skills `agrupar`/`orquestar`,
+  PLAN-642) — agrupar por colisión de archivos y resolver bloques en PARALELO
+  supervisado. NO hay runner-orquestador nuevo en el backend: Niko pidió resolver "en
+  el CHAT", así que reusa el flujo de skills probado (cero infra de orquestación en
+  el server). Visible si admin + hay `openCount>0` (el `verdict en vivo` de /scan-all
+  ya expone openCount/resolvedCount). CIERRA EL CICLO de CADA ítem (gap que reportó
+  Niko 2026-07-19: "resolvemos pero las propuestas siguen ahí"): el prompt instruye al
+  chat a cerrar cada HALLAZGO con `cwc-health-resolve.js <id>` y cada PROPUESTA con
+  `cwc-health-proposal-mark.js <optimize|coherence> <id> <accept|reject>` (accept si la
+  aplicó, reject si es FP/no aplica) — sin esos comandos la propuesta quedaba "pending"
+  en su sección aunque estuviera resuelta. Los 3 runners standalone
+  (`cwc-health-runner`/`optimize`/`coherence`) y sus `POST /review`//optimize`/
+  /coherence` SIGUEN existiendo como el mecanismo subyacente (los reusan los mountX);
+  el orquestador sostiene sus 4 locks durante el escaneo, así que no hay doble
+  corrida. La sección de abajo describe cada motor en detalle (siguen siendo la
+  verdad de cómo funciona cada uno).
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
@@ -4777,14 +4818,15 @@ docs/                       frontend-modules.md · brief-original.txt · context
   DETECCIÓN lo nuevo. Migrar un caño viejo al paquete es un proyecto per-caño
   aparte. El `src/modules/chat/index.js` (handoff/worldLabelFor) está en el
   allowlist como EL canal canónico del paquete-sesión.
-- **Dashboard del proyecto** (subsección "📊 Dashboard del proyecto" de la
-  pestaña Salud, 2026-07-06, pedido del usuario: antes "🔍 Censo del
-  proyecto" solo mostraba conteos —"11 módulos"— sin decir CUÁLES, y sin
-  ningún dato de CPU/RAM/núcleos). Mismo patrón resumen-compacto+botón que
-  Optimización IA/Coherencia: la pestaña muestra solo el veredicto (conteos +
-  adelanto de núcleos/CPU/RAM) + botón "Ver dashboard completo →"; el detalle
-  entero vive en la SUB-VENTANA `system/inventory-modal.js`
-  (`.dlg-card--health`). TODO gratis (0 tokens, sin LLM, sin capa IA — por eso
+- **Dashboard del proyecto** (PESTAÑA PROPIA "📊 Dashboard" del grupo
+  Diagnóstico del menú Sistema — `system/dashboard-panel.js`,
+  `mountDashboardPanel`. REDISEÑO 2026-07-19 PLAN-752: antes era una subsección
+  de la pestaña Salud que abría la SUB-VENTANA `inventory-modal.js`; ahora es
+  pestaña propia porque es INFORMATIVO —censo + recursos—, no accionable, y
+  Salud queda solo con lo accionable. `inventory-modal.js` se ELIMINÓ; su lógica
+  vive tal cual en dashboard-panel.js, montada en el panel en vez de un modal).
+  Antes "🔍 Censo del proyecto" solo mostraba conteos —"11 módulos"— sin decir
+  CUÁLES, y sin ningún dato de CPU/RAM/núcleos. TODO gratis (0 tokens, sin LLM, sin capa IA — por eso
   no tiene botón "Analizar con IA" como sus gemelas, solo "Re-escanear
   ahora"): reusa `GET /api/health/scan` (`generateInventory()` de
   `core/inventory.js`, caché por fingerprint) ENRIQUECIDO con lo que antes se

@@ -6,7 +6,7 @@
   "system.lang.confirm": "The page will reload in the language you choose.",
   "system.lang.saving": "Saving…",
   "system.lang.error": "Couldn't save the language.",
-  "system.lang.note": "This is Phase 1 of the i18n rollout: the mechanism is live, but most of the interface still shows Spanish (fallback text) until Phase 2 translates it module by module.",
+  "system.lang.note": "The whole main interface is translated. If you spot any text still in Spanish, let us know so we can add it.",
   "system.activity.subagent": "Subagent",
   "system.activity.process": "Process",
   "system.activity.systemSession": "system",

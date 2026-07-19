@@ -93,7 +93,11 @@ export default {
 
     r.get('/file', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      res.json({ path: instanceFilePath() });
+      try {
+        res.json({ path: instanceFilePath() });
+      } catch (e) {
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+      }
     });
 
     router.use('/env-vars', r);

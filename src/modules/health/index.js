@@ -840,7 +840,24 @@ export default {
     // archivos de resultado (review/optimization/coherence.json) + el overlay
     // health-scan.json. Arrancar+encuestar (patrón /review).
     r.get('/scan-all', (req, res) => {
-      res.json(scanStatus(readScan()));
+      const scan = scanStatus(readScan());
+      // VEREDICTO EN VIVO también para el Escaneo unificado (mismo problema que
+      // /review ya resolvía): `scan.verdict` es una FOTO de la síntesis (sonnet)
+      // al terminar y NUNCA se recalcula, así que a medida que se resuelven/
+      // descartan hallazgos el chip quedaba clavado en CRÍTICO aunque no quedara
+      // nada abierto. El escaneo comparte review.json con la Revisión, así que
+      // reusamos el liveVerdict de enrichReview (0 tokens, determinístico, mismo
+      // criterio critical/high⇒critico · medium⇒atencion · resto⇒ok) para que el
+      // badge refleje el estado REAL. Solo cuando el escaneo NO está corriendo.
+      if (scan && scan.verdict && !scan.running) {
+        const rev = enrichReview(readReview());
+        if (rev.liveVerdict) {
+          scan.verdict = rev.liveVerdict;
+          scan.openCount = rev.openCount;
+          scan.resolvedCount = rev.resolvedCount;
+        }
+      }
+      res.json(scan);
     });
     r.post('/scan-all', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo consume tokens (requiere administrador).' });

@@ -175,13 +175,17 @@ export default {
     // Vuelve al toque; el estado se persiste en disco y se consulta por GET.
     // Admin-only: escribe/trunca la DB LOCAL de Tolkien.
     r.post('/refresh-data', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede refrescar la data local.' });
-      if (isRefreshRunning(readRefreshJob())) return res.json({ started: false, running: true });
-      // Reserva SINCRÓNICA del job 'running' en disco (antes de spawnear) para
-      // dedup + para que el GET lo vea de inmediato; el runner lo completa.
-      writeRefreshJob({ running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null });
-      spawnRefreshRunner();
-      res.json({ started: true, running: true });
+      try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede refrescar la data local.' });
+        if (isRefreshRunning(readRefreshJob())) return res.json({ started: false, running: true });
+        // Reserva SINCRÓNICA del job 'running' en disco (antes de spawnear) para
+        // dedup + para que el GET lo vea de inmediato; el runner lo completa.
+        writeRefreshJob({ running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null });
+        spawnRefreshRunner();
+        res.json({ started: true, running: true });
+      } catch (e) {
+        res.status(500).json({ error: 'No se pudo iniciar el refresh de datos: ' + (e.message || e) });
+      }
     });
 
     // Estado del último/actual refresh (para el polling del frontend) — solo lee disco.

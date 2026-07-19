@@ -187,7 +187,13 @@ export default {
           console.error('[tmux] No se pudo persistir la poda de títulos huérfanos.');
         }
         for (const s of all) s.customTitle = titles[titleKey(s.socketName, s.name)] || null;
-        res.json({ sessions: all });
+        // multi-tenant (BUG-685, mismo guard que title/set-model/kill/raw-feed):
+        // un no-admin solo ve SUS propias sesiones — la poda de títulos de
+        // arriba SÍ usa el `all` completo (evita podar títulos válidos de
+        // sesiones que este request no puede ver), el filtro va solo en la
+        // salida. Admin/host: sin cambios (ve todo, retrocompat).
+        const visible = principalOf(req).admin ? all : all.filter((s) => ownsSession(req, s.socketName, s.name));
+        res.json({ sessions: visible });
       } catch {
         res.status(500).json({ error: 'No se pudo listar sesiones.' });
       }
@@ -208,6 +214,9 @@ export default {
           for (const s of sessions) {
             if (!s.owned) continue;
             if (s.name.startsWith('cwct-')) continue; // TUI oculta de chat → ya llueve por transcript
+            // multi-tenant (BUG-685, mismo guard que title/set-model/kill): un
+            // no-admin solo ve el feed de SUS propias sesiones; admin/host ven todo.
+            if (!ownsSession(req, s.socketName, s.name)) continue;
             if (out.length >= 20) break;
             if (!isValidSessionName(s.name)) continue;
             let text = '';

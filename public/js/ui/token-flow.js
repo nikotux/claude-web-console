@@ -38,12 +38,15 @@ export function pressureFromTps(tps) {
 export async function pollFlow() {
   if (!subscribers || document.hidden || polling) return;
   polling = true;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), POLL_MS * 4);
   try {
-    const res = await fetch('/api/tokens/flow');
+    const res = await fetch('/api/tokens/flow', { signal: ac.signal });
     if (res.ok) latest = await res.json();
   } catch {
-    // Error transitorio: mantenemos el último snapshot bueno.
+    // Error transitorio (o timeout/abort): mantenemos el último snapshot bueno.
   } finally {
+    clearTimeout(timer);
     polling = false;
   }
 }

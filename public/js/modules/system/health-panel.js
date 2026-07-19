@@ -13,6 +13,7 @@ import { icon } from '../../ui/icons.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { openHealthScan } from './health-scan-modal.js';
+import { launchResolveAll } from './health-resolve-all.js';
 
 const API = '/api/health';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -90,11 +91,22 @@ export function mountHealthPanel(el, ctx) {
     } else {
       parts.push(`<p class="hp-empty">${t('system.health.notRun', 'Todavía no se corrió un Escaneo de Salud. Corre Revisión + Optimización + Coherencia + verificación de Pad en una sola pasada.')}</p>`);
     }
+    // DOS botones (rediseño 2026-07-19, PLAN-752): Escanear (abre el escaneo
+    // unificado, con el detalle accionable inline) + Resolver todo (Orquestador
+    // Interno: agrupa los hallazgos abiertos y los resuelve en un chat
+    // supervisado). "Resolver todo" solo para admin y si hay algo abierto.
+    const openCount = d?.openCount;
     parts.push(`<button class="btn btn--block" data-ref="open">${icon('gear', { size: 14 })}<span>${d?.running ? t('system.health.viewRunningScan', 'Ver escaneo en curso') : t('system.health.openScan', 'Abrir Escaneo de Salud →')}</span></button>`);
+    if (isAdmin && !d?.running && openCount) {
+      parts.push(`<button class="btn btn--block" data-ref="resolveall">🤖 <span>${t('system.health.resolveAllN', 'Resolver todo ({n}) con el Orquestador', { n: openCount })}</span></button>`);
+    }
     refs.scan.innerHTML = parts.join('');
     refs.scan.querySelector('[data-ref="open"]')?.addEventListener('click', () => {
       openHealthScan(ctx, { isAdmin });
       setTimeout(loadScan, 600);
+    });
+    refs.scan.querySelector('[data-ref="resolveall"]')?.addEventListener('click', () => {
+      launchResolveAll(ctx, { isAdmin });
     });
   }
 

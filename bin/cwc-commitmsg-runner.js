@@ -33,6 +33,7 @@ async function runGeneration(job) {
       cwd: ROOT,
       settingSources: [], // nada de settings/skills: redacción pura de texto
       model: 'haiku',     // rápido y barato; el diff viene entero en el prompt
+      effort: 'low',      // clasificador/redactor mecánico de 1 turno (F5(a) PEND-405, mismo criterio que chat/index.js)
       maxTurns: 1,
       permissionMode: 'default',
       hooks: { PreToolUse: [{ hooks: [async () => deny] }] },

@@ -75,21 +75,38 @@ function purposeOf(relFile) {
 function parseBackendModules() {
   const registry = readSafe(path.join(ROOT, 'src', 'core', 'registry.js'));
   const regLines = registry.split('\n');
-  // Orden y nombres del array MODULES.
+  // Orden y nombres del array MODULES: son los IDENTIFICADORES de import
+  // (camelCase, p.ej. `envVars`), que NO siempre coinciden con el nombre de
+  // CARPETA (kebab, `env-vars`). Sin mapear carpeta↔identificador, `env-vars`
+  // jamás matchea `envVars` en MODULES → falso "no registrado" en cada corrida.
   const arrMatch = registry.match(/const MODULES = \[([^\]]+)\]/);
   const order = arrMatch ? arrMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : [];
+  // Mapa carpeta → { identificador de import, línea 1-based } leyendo cada
+  // `import <id> from '../modules/<carpeta>/index.js'`.
+  const importOf = {}; // carpeta -> identificador
+  const importLine = {}; // carpeta -> nº de línea (1-based)
+  regLines.forEach((l, i) => {
+    const m = l.match(/import\s+(\w+)\s+from\s+['"][^'"]*\/modules\/([^/'"]+)\/index\.js['"]/);
+    if (m) { importOf[m[2]] = m[1]; importLine[m[2]] = i + 1; }
+  });
   const modsDir = path.join(ROOT, 'src', 'modules');
   let dirs = [];
   try { dirs = fss.readdirSync(modsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch { /* noop */ }
-  // Ordena por el array de registry; los no listados van al final.
+  // Ordena por el array de registry (vía el identificador de cada carpeta); los
+  // no listados van al final.
   dirs.sort((a, b) => {
-    const ia = order.indexOf(a); const ib = order.indexOf(b);
+    const ia = order.indexOf(importOf[a]); const ib = order.indexOf(importOf[b]);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
 
   return dirs.map((name) => {
     const files = listJs(path.join(modsDir, name));
-    const index = files.find((f) => f.endsWith(`${name}/index.js`)) || files[0];
+    const indexRel = files.find((f) => f.endsWith(`${name}/index.js`)) || null;
+    // hasIndex: una carpeta SIN index.js no es un módulo backend registrable
+    // (p.ej. `comms`, que quedó como librerías shared tras archivar su módulo
+    // 2026-07-14) — no debe contar como "sin registrar".
+    const hasIndex = !!indexRel;
+    const index = indexRel || files[0];
     const idxTxt = index ? readSafe(path.join(ROOT, index)) : '';
     // Base HTTP: router.use('/base', r)
     const base = (idxTxt.match(/router\.use\(\s*['"](\/[^'"]+)['"]/) || [])[1] || null;
@@ -101,13 +118,12 @@ function parseBackendModules() {
       const full = base ? `/api${base}${sub === '/' ? '' : sub}` : `/api${sub}`;
       routes.push(`${method} ${full}`);
     }
-    // Línea de registro en registry.js (import).
-    const impLine = regLines.findIndex((l) => new RegExp(`import\\s+${name}\\s+from`).test(l));
-    // ¿Runner detached asociado? (chat/health/triage… — 'bugs' usa 'triage')
+    const importId = importOf[name] || null;
     return {
       name, kind: 'backend',
-      registryLine: impLine >= 0 ? impLine + 1 : null,
-      registered: order.includes(name),
+      hasIndex,
+      registryLine: importLine[name] || null,
+      registered: !!(importId && order.includes(importId)),
       purpose: purposeOf(index || ''),
       files,
       endpoints: [...new Set(routes)],
@@ -368,6 +384,12 @@ const CANONICAL_CONVENTIONS = [
     label: 'Colores/espaciado solo desde tokens.css (o color-mix sobre ellos)',
     scope: (f) => /^public\/css\/.*\.css$/.test(f) && f !== 'public/css/tokens.css',
     violates: (t) => /#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b/.test(t),
+    // Falso positivo VERIFICADO: public/css/raw.css es la paleta propia de la
+    // Vista Raw (easter-egg temático verde-fósforo/negro), DELIBERADAMENTE
+    // fuera de tokens.css — la excepción está documentada en la cabecera del
+    // propio raw.css y en CLAUDE.md (PLAN-544). Sus colores son HSL de mundo/
+    // sesión calculados en JS, no hex sueltos en un CSS compartido.
+    exclude: ['public/css/raw.css'],
   },
   {
     key: 'sin-dialogos-nativos',
@@ -541,7 +563,10 @@ export function coherenceCensus() {
     return false;
   };
   const completeness = {
-    unregistered: backendMods.filter((m) => !m.registered).map((m) => m.name),
+    // Solo una carpeta CON index.js que no esté en MODULES es un módulo backend
+    // sin registrar de verdad; una carpeta de librerías shared sin index.js
+    // (p.ej. `comms`) no cuenta (evita el falso positivo recurrente).
+    unregistered: backendMods.filter((m) => m.hasIndex && !m.registered).map((m) => m.name),
     unmounted: frontendMods.filter((f) => !frontWired(f)).map((f) => f.name),
     orphanRunners: runners.filter((r) => !basenameReferenced(r.file)).map((r) => r.file),
     orphanEngines: engines.filter((e) => !importedFiles.has(e.file) && !basenameReferenced(e.file)).map((e) => e.file),
@@ -630,7 +655,10 @@ export function inventoryMarkdown(inv) {
   L.push('');
   L.push('## Módulos backend (`src/modules/*`, montados en `registry.js`)');
   for (const m of inv.modules) {
-    L.push(`### ${m.name}${m.registered ? '' : ' ⚠️ NO registrado'}  \`${m.fingerprint}\``);
+    // Una carpeta sin index.js es librería shared (no un módulo registrable):
+    // se marca aparte, no como "NO registrado" (que implicaría un olvido).
+    const regTag = m.registered ? '' : (m.hasIndex ? ' ⚠️ NO registrado' : ' · librerías shared (sin index.js)');
+    L.push(`### ${m.name}${regTag}  \`${m.fingerprint}\``);
     if (m.purpose) L.push(`- ${m.purpose}`);
     L.push(`- registro: registry.js${m.registryLine ? `:${m.registryLine}` : ' (no encontrado)'}`);
     if (m.endpoints.length) L.push(`- endpoints: ${m.endpoints.join(' · ')}`);

@@ -87,9 +87,17 @@ function reqFileRoot(req) {
 // propaga el throw (ENOENT) si la ruta no existe — mismo contrato que statSync.
 // Cache del realpath por root (evita un realpathSync por request para el mismo root).
 const rootRealCache = new Map();
+const ROOT_REAL_CACHE_MAX = 200; // defensivo: acotado por cantidad real de usuarios, pero con tope explícito
 function rootReal(root) {
   let r = rootRealCache.get(root);
-  if (!r) { r = fss.realpathSync(root); rootRealCache.set(root, r); }
+  if (!r) {
+    r = fss.realpathSync(root);
+    if (rootRealCache.size >= ROOT_REAL_CACHE_MAX) {
+      const oldest = rootRealCache.keys().next().value;
+      if (oldest !== undefined) rootRealCache.delete(oldest);
+    }
+    rootRealCache.set(root, r);
+  }
   return r;
 }
 // Igual que antes pero contra el ROOT del usuario (no el home global): resuelve
@@ -479,6 +487,13 @@ export default {
             });
           }
         } else {
+          // Re-chequeo INMEDIATO antes del rename, para achicar al máximo la
+          // ventana TOCTOU: a diferencia del caso archivo (linkSync+EEXIST es
+          // atómico), un directorio DESTINO VACÍO no tiene equivalente atómico
+          // en POSIX — rename() lo reemplaza en silencio en vez de fallar con
+          // ENOTEMPTY. No cierra la ventana del todo, pero la reduce al mínimo
+          // posible entre este chequeo síncrono y la syscall siguiente.
+          if (fss.existsSync(target)) return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
           fss.renameSync(abs, target);
         }
         res.json({ ok: true, path: path.relative(root, target) });

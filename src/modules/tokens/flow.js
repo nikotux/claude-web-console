@@ -139,7 +139,15 @@ async function readAppendedEvents(file, extractEvent) {
   } catch {
     return [];
   }
-  if (st.mtimeMs < now - RECENT_MS) return [];
+  if (st.mtimeMs < now - RECENT_MS) {
+    // Archivo frío: no se va a re-visitar mientras siga así (Claude acumula
+    // un .jsonl por sesión histórica, para siempre) — soltar el cursor evita
+    // que el Map crezca sin límite con cada sesión que alguna vez existió.
+    // Si vuelve a tocarse más tarde, se re-baselinea como si fuera nuevo
+    // (mismo criterio de arranque, sin regresión funcional).
+    cursors.delete(file);
+    return [];
+  }
 
   let cur = cursors.get(file);
   if (!cur) {
@@ -306,11 +314,13 @@ function localDayDirs() {
 }
 
 async function scanCodex() {
+  const seen = new Set();
   for (const dir of localDayDirs()) {
     const files = await listDir(dir);
     for (const f of files) {
       if (!f.isFile() || !/^rollout-.*\.jsonl$/.test(f.name)) continue;
       const file = path.join(dir, f.name);
+      seen.add(file);
       const cwd = await readCodexCwd(file);
       const events = await readAppendedEvents(file, extractCodexEvent);
       for (const ev of events) {
@@ -319,6 +329,10 @@ async function scanCodex() {
       }
     }
   }
+  // localDayDirs() solo cubre HOY+AYER: un rollout que sale de esa ventana ya
+  // no se vuelve a visitar — soltar su entrada de fileCwd para no acumularla
+  // para siempre (mismo criterio que el cursor de arriba).
+  for (const file of fileCwd.keys()) if (!seen.has(file)) fileCwd.delete(file);
 }
 
 export async function computeFlow() {

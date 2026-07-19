@@ -28,6 +28,7 @@ async function runAnalysis(text, contactName) {
       cwd: ROOT,
       settingSources: [],
       model: 'haiku',
+      effort: 'low',      // clasificador mecánico de 1 turno (F5(a) PEND-405, mismo criterio que chat/index.js)
       maxTurns: 1,
       permissionMode: 'default',
       hooks: { PreToolUse: [{ hooks: [async () => deny] }] },

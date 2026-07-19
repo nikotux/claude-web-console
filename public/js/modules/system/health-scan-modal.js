@@ -1,19 +1,23 @@
 // modules/system/health-scan-modal.js — sub-ventana del ESCANEO DE SALUD UNIFICADO.
 //
-// UN solo lugar para lanzar y ver TODO: Revisión + Optimización + Coherencia +
-// cross-check con Pad, corriendo en el orquestador desacoplado (un pool
-// compartido). Reemplaza a los 3 modales sueltos como ENTRADA; sus detalles se
-// reusan tal cual — cada tab de motor abre su modal existente para el detalle
-// completo (accionar hallazgos/propuestas). El aporte nuevo es el Pac-Man
-// persistente con progreso por fase + la tab 🐛 Pad (nuevo/rastreado/regresión +
-// crear BUG con confirmación).
+// Rediseño 2026-07-19 (PLAN-752, pedido de Niko): de 6 tabs que abrían 4
+// sub-modales (ventana sobre ventana) → UNA vista scrolleable con secciones
+// <details> colapsables, TODO accionable INLINE (regla UI "colapsable + árbol").
+// Los motores (Revisión / Optimización / Coherencia) se MONTAN inline dentro de
+// su sección (mountHealthReview/mountOptimize/mountCoherence) — lazy al abrir el
+// <details>, con cleanup al colapsar/cerrar. El Dashboard del proyecto salió a su
+// PROPIA pestaña de Sistema (dashboard-panel.js): no va acá.
+//
+// Header: veredicto en vivo + [Escaneo incremental][Completo] + [Resolver todo]
+// (F2, Orquestador Interno). El Pac-Man persistente + la sección 🐛 Pad
+// (nuevo/rastreado/regresión + crear BUG) siguen igual.
 import { icon } from '../../ui/icons.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
-import { openHealthReview } from './health-review-modal.js';
-import { openOptimize } from './optimize-modal.js';
-import { openCoherence } from './coherence-modal.js';
-import { openInventory } from './inventory-modal.js';
+import { mountHealthReview } from './health-review-modal.js';
+import { mountOptimize } from './optimize-modal.js';
+import { mountCoherence } from './coherence-modal.js';
+import { launchResolveAll } from './health-resolve-all.js';
 
 const API = '/api/health';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -38,33 +42,27 @@ function statusLabel(status) {
   }[status];
 }
 
-const TABS = [
-  'resumen', 'revision', 'optim', 'coher', 'dash', 'pad',
-];
-
-function tabLabel(tab) {
-  return {
-    resumen: `📊 ${t('system.healthScan.tabSummary', 'Resumen')}`,
-    revision: `🔬 ${t('system.healthScan.tabReview', 'Revisión')}`,
-    optim: `🧠 ${t('system.healthScan.tabOptimization', 'Optimización')}`,
-    coher: `🔗 ${t('system.healthScan.tabCoherence', 'Coherencia')}`,
-    dash: `📊 ${t('system.healthScan.tabDashboard', 'Dashboard')}`,
-    pad: `🐛 ${t('system.healthScan.tabPad', 'Pad')}`,
-  }[tab];
-}
-
 export function openHealthScan(ctx, { isAdmin }) {
   const { dialog } = ctx;
   const m = dialog.openModal({ title: `🩺 ${t('system.healthScan.modalTitle', 'Escaneo de Salud')}`, width: 920 });
   m.card.classList.add('dlg-card--health');
-  let alive = true; let pollTimer = null; let activeTab = 'resumen'; let last = null;
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  let alive = true; let pollTimer = null; let last = null;
+  const mounted = []; // instancias { stop } de las secciones de motor montadas
   const origClose = m.close;
-  m.close = () => { alive = false; clearTimeout(pollTimer); origClose(); };
+  m.close = () => { alive = false; clearTimeout(pollTimer); mounted.forEach((i) => { try { i?.stop?.(); } catch { /* noop */ } }); origClose(); };
   m.overlay.addEventListener('mousedown', (e) => { if (e.target === m.overlay) m.close(); });
 
   const wrap = document.createElement('div');
   wrap.className = 'hs-wrap';
   m.body.appendChild(wrap);
+  // DOS zonas: `top` se re-renderiza con el poll del escaneo (veredicto +
+  // resumen + Pad, que dependen del estado); `engines` se construye UNA vez con
+  // las secciones de motor montadas inline (persisten entre re-renders del top).
+  const top = document.createElement('div');
+  const engines = document.createElement('div');
+  wrap.appendChild(top);
+  wrap.appendChild(engines);
 
   async function launch(full) {
     if (!isAdmin) { await dialog.alertDialog({ title: t('system.healthScan.shortTitle', 'Escaneo'), message: t('system.healthScan.adminOnly', 'Solo un administrador puede lanzar el escaneo (consume tokens).') }); return; }
@@ -97,6 +95,7 @@ export function openHealthScan(ctx, { isAdmin }) {
     } catch (e) { btn.disabled = false; btn.textContent = t('system.healthScan.createBug', 'Crear BUG'); await dialog.alertDialog({ title: t('system.healthScan.padTitle', 'Pad'), message: String(e.message || e) }); }
   }
 
+  // ===== Header (veredicto + botones) =====
   function headerHtml(d) {
     const running = d?.running;
     const verdict = d?.verdict;
@@ -112,30 +111,27 @@ export function openHealthScan(ctx, { isAdmin }) {
     const badge = running
       ? `<span class="hp-verdict hp-verdict--atencion" style="display:inline-block"><b>${t('system.healthScan.scanning', 'Escaneando…')}</b></span>`
       : (verdict ? `<span class="hp-verdict hp-verdict--${esc(verdict)}" style="display:inline-block"><b>${verdictLabel(verdict) || t('system.healthScan.noVerdict', 'Sin veredicto')}</b><span class="hp-when">${d.finishedAt ? fmtDate(d.finishedAt) : ''}</span></span>` : `<span class="hp-when">${t('system.healthScan.noPreviousScan', 'Sin escaneo previo')}</span>`);
+    const open = d?.openCount;
+    // "Resolver todo" (F2): visible para admin cuando NO corre un escaneo y hay
+    // hallazgos abiertos. Deshabilitado si no hay nada que resolver.
+    const resolveBtn = isAdmin && !running
+      ? `<button class="btn btn--sm" data-act="resolveall" ${open ? '' : 'disabled'} title="${esc(t('system.healthScan.resolveAllTitle', 'Resolver todos los hallazgos abiertos con el Orquestador (en paralelo, supervisado)'))}">🤖 <span>${open ? t('system.healthScan.resolveAllN', 'Resolver todo ({n})', { n: open }) : t('system.healthScan.resolveAllNone', 'Nada que resolver')}</span></button>`
+      : '';
     const launchBtns = running
       ? `<span class="hp-when">${t('system.healthScan.inProgress', 'en curso…')}</span>`
       : `<button class="btn btn--sm" data-act="run">${icon('gear', { size: 13 })}<span>${t('system.healthScan.incrementalScan', 'Escaneo incremental')}</span></button>
          <button class="btn-ghost btn--sm" data-act="runfull">${t('system.healthScan.fullScan', 'Completo')}</button>`;
-    return `<div class="hs-head">${badge}<span class="hs-head-actions">${launchBtns}</span></div>${progress}`;
+    return `<div class="hs-head">${badge}<span class="hs-head-actions">${resolveBtn}${launchBtns}</span></div>${progress}`;
   }
 
-  function tabsHtml() {
-    return `<div class="hs-tabs">${TABS.map((k) => `<button class="hs-tab ${k === activeTab ? 'hs-tab--active' : ''}" data-tab="${k}">${tabLabel(k)}</button>`).join('')}</div>`;
-  }
-
-  function detailTab(summary, openLabel, act) {
-    return `<div class="hs-detail">
-      <p>${summary}</p>
-      <button class="btn btn--block" data-act="${act}">${icon('search', { size: 14 })}<span>${openLabel}</span></button>
-    </div>`;
-  }
-
-  function bodyHtml(d) {
-    if (activeTab === 'resumen') {
-      if (!d || (!d.verdict && !d.running)) return `<p class="hp-empty">${t('system.healthScan.notRun', 'Todavía no se corrió un Escaneo de Salud. Usá el botón de arriba — corre los 4 análisis en una pasada.')}</p>`;
-      const p = d.progress || {};
-      const pad = d.pad;
-      return `<div class="hs-summary">
+  // ===== Resumen (tabla de progreso, depende del estado) =====
+  function summaryHtml(d) {
+    if (!d || (!d.verdict && !d.running)) return `<p class="hp-empty">${t('system.healthScan.notRun', 'Todavía no se corrió un Escaneo de Salud. Usá el botón de arriba — corre los 4 análisis en una pasada.')}</p>`;
+    const p = d.progress || {};
+    const pad = d.pad;
+    return `<details class="hs-engine" ${isMobile ? '' : 'open'}>
+      <summary>📊 ${t('system.healthScan.tabSummary', 'Resumen')}</summary>
+      <div class="hs-summary">
         <table class="hs-grid"><tbody>
           <tr><td>🔬 ${t('system.healthScan.reviewLabel', 'Revisión')}</td><td>${p.review ? `${p.review.done ?? 0}/${p.review.total ?? '?'} ${t('system.healthScan.units', 'unidades')}${p.review.reused ? ` (${t('system.healthScan.cachedCount', '{count} cacheadas', { count: p.review.reused })})` : ''}` : '—'}</td></tr>
           <tr><td>🧠 ${t('system.healthScan.optimizationLabel', 'Optimización')}</td><td>${statusLabel(p.optimize?.status) || '—'}${p.optimize?.count != null ? ` · ${t('system.healthScan.proposalsCount', '{count} propuesta(s)', { count: p.optimize.count })}` : ''}</td></tr>
@@ -143,17 +139,12 @@ export function openHealthScan(ctx, { isAdmin }) {
           <tr><td>🐛 ${t('system.healthScan.padLabel', 'Pad')}</td><td>${pad ? `${t('system.healthScan.padStats', '{newCount} nuevo(s) · {trackedCount} rastreado(s) · {regressionCount} regresión(es) · {openCount} BUG abiertos', { newCount: pad.nuevo?.length || 0, trackedCount: pad.rastreado?.length || 0, regressionCount: pad.regresion?.length || 0, openCount: pad.openCount ?? '?' })}` : '—'}</td></tr>
         </tbody></table>
         ${d.error ? `<p class="hp-empty">⚠️ ${esc(d.error)}</p>` : ''}
-        <p class="hp-when">${esc(t('system.healthScan.modeDetail', 'Modo: {mode} · el detalle accionable de cada motor está en su tab.', { mode: d.mode || 'incremental' }))}</p>
-      </div>`;
-    }
-    if (activeTab === 'revision') return detailTab(t('system.healthScan.reviewDetail', 'Hallazgos por módulo, veredicto y acciones (auto-fix / resolver en chat / marcar resuelto).'), t('system.healthScan.openReviewDetail', 'Abrir detalle de Revisión →'), 'open-rev');
-    if (activeTab === 'optim') return detailTab(t('system.healthScan.optimizationDetail', 'Censo de motores IA + propuestas de optimización aprobables.'), t('system.healthScan.openOptimizationDetail', 'Abrir detalle de Optimización →'), 'open-opt');
-    if (activeTab === 'coher') return detailTab(t('system.healthScan.coherenceDetail', 'Grafo de dependencias, hallazgos determinísticos y propuestas de cableado.'), t('system.healthScan.openCoherenceDetail', 'Abrir detalle de Coherencia →'), 'open-coh');
-    if (activeTab === 'dash') return detailTab(t('system.healthScan.dashboardDetail', 'Censo del proyecto + recursos del servidor (núcleos/CPU/RAM/disco) + backbone de Pad.'), t('system.healthScan.openDashboard', 'Abrir Dashboard →'), 'open-dash');
-    if (activeTab === 'pad') return padTab(d?.pad);
-    return '';
+        <p class="hp-when">${esc(t('system.healthScan.modeDetailInline', 'Modo: {mode} · abrí cada sección para accionar los hallazgos.', { mode: d.mode || 'incremental' }))}</p>
+      </div>
+    </details>`;
   }
 
+  // ===== Pad (cross-check, depende del estado) =====
   function findingRow(f, kind) {
     const sev = f.severity || 'medium';
     const match = f.match ? `<span class="hs-match" title="${esc(t('system.healthScan.matchesTitle', 'matchea {ref} ({score}%)', { ref: f.match.ref, score: f.match.score }))}">${esc(f.match.ref)}</span>` : '';
@@ -166,51 +157,87 @@ export function openHealthScan(ctx, { isAdmin }) {
     </div>`;
   }
 
-  function padTab(pad) {
-    if (!pad) return `<p class="hp-empty">${t('system.healthScan.noPadYet', 'El cross-check con Pad corre al final del escaneo — todavía no hay datos.')}</p>`;
-    if (pad.available === false) return `<p class="hp-empty">${esc(t('system.healthScan.padUnavailable', 'Pad local no respondió ({error}). El escaneo sigue igual; reintentá cuando esté arriba.', { error: pad.error || '' }))}</p>`;
-    const sec = (title, arr, kind, hint) => `
-      <details class="hs-padsec" ${kind === 'nuevo' || kind === 'regresion' ? 'open' : ''}>
-        <summary>${title} <b>${arr.length}</b></summary>
-        <p class="hp-when">${hint}</p>
-        ${arr.length ? arr.map((f) => findingRow(f, kind)).join('') : '<p class="hp-when" style="padding:.2rem">—</p>'}
-      </details>`;
-    return `<div class="hs-pad">
-      <p class="hp-when">${t('system.healthScan.padCrossCheckSummary', 'Cross-check de los hallazgos de la Revisión contra la colección Bugs de Pad (workspace console). {count} BUG abiertos hoy.', { count: pad.openCount ?? '?' })}</p>
-      ${sec(`🆕 ${t('system.healthScan.newBugsTitle', 'Nuevos (no rastreados)')}`, pad.nuevo || [], 'nuevo', t('system.healthScan.newBugsHint', 'No matchean ningún BUG. Podés crearlos en Pad con confirmación.'))}
-      ${sec(`⚠️ ${t('system.healthScan.regressionsTitle', 'Regresiones')}`, pad.regresion || [], 'regresion', t('system.healthScan.regressionsHint', 'Matchean un BUG fixed/wontfix → reaparecieron. Revisar.'))}
-      ${sec(`🔗 ${t('system.healthScan.trackedTitle', 'Ya rastreados')}`, pad.rastreado || [], 'rastreado', t('system.healthScan.trackedHint', 'Ya están en el backlog de Pad — no hace falta re-crearlos.'))}
-    </div>`;
+  function padHtml(pad) {
+    const inner = () => {
+      if (!pad) return `<p class="hp-empty">${t('system.healthScan.noPadYet', 'El cross-check con Pad corre al final del escaneo — todavía no hay datos.')}</p>`;
+      if (pad.available === false) return `<p class="hp-empty">${esc(t('system.healthScan.padUnavailable', 'Pad local no respondió ({error}). El escaneo sigue igual; reintentá cuando esté arriba.', { error: pad.error || '' }))}</p>`;
+      const sec = (title, arr, kind, hint) => `
+        <details class="hs-padsec" ${kind === 'nuevo' || kind === 'regresion' ? 'open' : ''}>
+          <summary>${title} <b>${arr.length}</b></summary>
+          <p class="hp-when">${hint}</p>
+          ${arr.length ? arr.map((f) => findingRow(f, kind)).join('') : '<p class="hp-when" style="padding:.2rem">—</p>'}
+        </details>`;
+      return `<div class="hs-pad">
+        <p class="hp-when">${t('system.healthScan.padCrossCheckSummary', 'Cross-check de los hallazgos de la Revisión contra la colección Bugs de Pad (workspace console). {count} BUG abiertos hoy.', { count: pad.openCount ?? '?' })}</p>
+        ${sec(`🆕 ${t('system.healthScan.newBugsTitle', 'Nuevos (no rastreados)')}`, pad.nuevo || [], 'nuevo', t('system.healthScan.newBugsHint', 'No matchean ningún BUG. Podés crearlos en Pad con confirmación.'))}
+        ${sec(`⚠️ ${t('system.healthScan.regressionsTitle', 'Regresiones')}`, pad.regresion || [], 'regresion', t('system.healthScan.regressionsHint', 'Matchean un BUG fixed/wontfix → reaparecieron. Revisar.'))}
+        ${sec(`🔗 ${t('system.healthScan.trackedTitle', 'Ya rastreados')}`, pad.rastreado || [], 'rastreado', t('system.healthScan.trackedHint', 'Ya están en el backlog de Pad — no hace falta re-crearlos.'))}
+      </div>`;
+    };
+    return `<details class="hs-engine">
+      <summary>🐛 ${t('system.healthScan.tabPad', 'Pad')}</summary>
+      ${inner()}
+    </details>`;
   }
 
-  function render() {
+  // Re-render de la zona `top` (header + resumen + pad). NO toca `engines`.
+  function renderTop() {
     const d = last;
-    wrap.innerHTML = `${headerHtml(d)}${tabsHtml()}<div class="hs-body">${bodyHtml(d)}</div>`;
-    wrap.querySelector('[data-act="run"]')?.addEventListener('click', () => launch(false));
-    wrap.querySelector('[data-act="runfull"]')?.addEventListener('click', () => launch(true));
-    for (const t of wrap.querySelectorAll('[data-tab]')) t.addEventListener('click', () => { activeTab = t.dataset.tab; render(); });
-    wrap.querySelector('[data-act="open-rev"]')?.addEventListener('click', () => openHealthReview(ctx, { isAdmin }));
-    wrap.querySelector('[data-act="open-opt"]')?.addEventListener('click', () => openOptimize(ctx, { isAdmin }));
-    wrap.querySelector('[data-act="open-coh"]')?.addEventListener('click', () => openCoherence(ctx, { isAdmin }));
-    wrap.querySelector('[data-act="open-dash"]')?.addEventListener('click', () => openInventory(ctx));
-    for (const b of wrap.querySelectorAll('[data-newbug]')) {
+    top.innerHTML = `${headerHtml(d)}${summaryHtml(d)}${padHtml(d?.pad)}`;
+    top.querySelector('[data-act="run"]')?.addEventListener('click', () => launch(false));
+    top.querySelector('[data-act="runfull"]')?.addEventListener('click', () => launch(true));
+    top.querySelector('[data-act="resolveall"]')?.addEventListener('click', () => resolveAll());
+    for (const b of top.querySelectorAll('[data-newbug]')) {
       b.addEventListener('click', () => {
         try { const f = JSON.parse(b.closest('[data-fkey]').dataset.fkey.replace(/&quot;/g, '"')); createBug(f, b); } catch { /* noop */ }
       });
     }
   }
 
+  // ===== Secciones de motor: montadas inline, lazy al abrir =====
+  function engineSection(label, mountFn) {
+    const det = document.createElement('details');
+    det.className = 'hs-engine';
+    det.innerHTML = `<summary>${label}</summary><div class="hs-engine-body"></div>`;
+    const body = det.querySelector('.hs-engine-body');
+    let inst = null;
+    det.addEventListener('toggle', () => {
+      if (det.open && !inst) {
+        inst = mountFn(body, ctx, { isAdmin, onClose: () => m.close() });
+        mounted.push(inst);
+      } else if (!det.open && inst) {
+        try { inst.stop?.(); } catch { /* noop */ }
+        const i = mounted.indexOf(inst); if (i >= 0) mounted.splice(i, 1);
+        inst = null; body.innerHTML = '';
+      }
+    });
+    return det;
+  }
+
+  function buildEngines() {
+    engines.innerHTML = '';
+    engines.appendChild(engineSection(`🔬 ${t('system.healthScan.tabReview', 'Revisión')}`, mountHealthReview));
+    engines.appendChild(engineSection(`🧠 ${t('system.healthScan.tabOptimization', 'Optimización')}`, mountOptimize));
+    engines.appendChild(engineSection(`🔗 ${t('system.healthScan.tabCoherence', 'Coherencia')}`, mountCoherence));
+  }
+
+  // "Resolver todo" (F2): delega en el lanzador del Orquestador Interno.
+  async function resolveAll() {
+    await launchResolveAll(ctx, { isAdmin, onClose: () => m.close() });
+  }
+
   async function poll() {
     try {
       const d = await (await fetch(`${API}/scan-all`)).json();
       if (!alive) return;
-      last = d; render();
+      last = d; renderTop();
       if (d.running) pollTimer = setTimeout(poll, 3000);
     } catch {
-      if (alive) { wrap.innerHTML = `<p class="hp-empty">${t('system.healthScan.readError', 'No se pudo leer el estado del escaneo.')}</p>`; }
+      if (alive) { top.innerHTML = `<p class="hp-empty">${t('system.healthScan.readError', 'No se pudo leer el estado del escaneo.')}</p>`; }
     }
   }
 
-  render();
+  buildEngines();
+  renderTop();
   poll();
 }
