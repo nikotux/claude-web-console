@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-19 14:33 — main
+- Añadir pestaña Skills y multi-tenant en terminal
+- Feedback de clientes, i18n Fase 1, panel MCP y mejoras en métricas
+
 ### 2026-07-19 01:59 — main
 - Aislar datos y credenciales por usuario en multi-tenant
 
