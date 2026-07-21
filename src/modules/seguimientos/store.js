@@ -12,7 +12,7 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 const DIR = path.join(os.homedir(), '.cwc-data', 'seguimientos');
 const SNAPSHOT = path.join(DIR, 'snapshot.json');
 
-const EMPTY = { frentes: [], updatedAt: null, refreshing: false, counts: {} };
+const EMPTY = { frentes: [], done: [], updatedAt: null, refreshing: false, counts: {} };
 
 export function ensureDir() {
   fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });

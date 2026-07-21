@@ -10,13 +10,58 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 
 const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const RUNNER = path.join(CONSOLE_ROOT, 'bin', 'cwc-mcp-login-runner.js');
 const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'mcp-login');
+
+// --- Parseo del estado que imprime `claude mcp list` (FUENTE ÚNICA: la usan
+// tanto el censo del módulo `mcps` como el runner de login, que la necesita
+// para VERIFICAR que una reconexión quedó de verdad conectada antes de
+// reportar éxito — ver runMcpList más abajo). ---
+export function classifyStatus(raw) {
+  const s = String(raw || '').toLowerCase();
+  if (raw.includes('✔') || s.includes('connected')) return { code: 'connected', light: 'ok', label: 'Conectado' };
+  if (raw.includes('!') || s.includes('authentication') || s.includes('needs auth')) return { code: 'needs-auth', light: 'warn', label: 'Requiere reconexión' };
+  if (raw.includes('⏸') || s.includes('pending')) return { code: 'pending', light: 'info', label: 'Pendiente de aprobación' };
+  if (raw.includes('✘') || s.includes('failed') || s.includes('disconnect') || s.includes('error')) return { code: 'error', light: 'danger', label: 'Error de conexión' };
+  return { code: 'unknown', light: 'neutral', label: raw.trim() || 'Desconocido' };
+}
+
+// name lazy hasta el primer ":", endpoint lazy, status anclado al final por su
+// símbolo/keyword conocido (así un endpoint con " -- " no confunde el split).
+// El status arranca por un símbolo (✔✘!⏸⚠) o keyword conocido tras " - ". Sin
+// \b: ✔/! seguidos de espacio no forman word-boundary, y el \b anulaba el match.
+const LINE_RE = /^(.+?):\s+(.*?)\s+-\s+((?:[✔✘!⏸⚠]|Connected|Failed|Needs|Pending|Disconnected).*)$/;
+
+export function parseList(stdout) {
+  const servers = [];
+  let hasWarnings = false;
+  for (const rawLine of String(stdout || '').split(/\r?\n/)) {
+    const t = rawLine.trim();
+    if (!t) continue;
+    if (/config diagnostics|conflicting scopes|multiple scopes|^[├└]/i.test(t)) { hasWarnings = true; continue; }
+    const m = t.match(LINE_RE);
+    if (!m) continue;
+    servers.push({ name: m[1].trim(), endpoint: m[2].trim(), statusRaw: m[3].trim(), status: classifyStatus(m[3]) });
+  }
+  return { servers, hasWarnings };
+}
+
+export function runMcpList(cwd) {
+  return new Promise((resolve) => {
+    execFile('claude', ['mcp', 'list'], { cwd, timeout: 30000, env: process.env, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        // `claude mcp list` sale 0 aun con diagnostics; el health-check tarda por
+        // los HTTP. Si falla del todo, devolvemos vacío + el error para la UI.
+        if (err && !stdout) { resolve({ servers: [], hasWarnings: false, error: (stderr || err.message || '').trim().slice(0, 300) }); return; }
+        resolve(parseList((stdout || '') + '\n' + (stderr || '')));
+      });
+  });
+}
 
 // Los mundos donde viven MCP con cwd propio (per-project scope). El global
 // (user scope) aparece dentro de cada uno; no tiene cwd separado.

@@ -706,6 +706,7 @@ class Chat {
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
     this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
     this.owner = null;        // multi-tenant (N6): username del usuario dueño (de principalOf al crear). null = host/admin. Persiste. Gobierna el aislamiento del runner (runner-link.spawnRunner).
+    this._spawnedTandem = false; // flag real del runner adoptado/spawneado; nunca debe quedar undefined tras rehydrate
     this.viewMode = 'chat';   // chat | switching | tui
     this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
@@ -793,6 +794,7 @@ class Chat {
         selfHandle: sid ? `claude:${sid}` : null,
         owner: this.owner, // multi-tenant (N6): host → entorno completo; inquilino → env limpio aislado + su token
       });
+      this._spawnedTandem = this.modelChoice === 'tandem';
     } catch (err) {
       this._push({ type: 'error', message: `No pude lanzar el motor: ${String(err?.message || err).slice(0, 200)}` });
       return false;
@@ -827,7 +829,12 @@ class Chat {
       case 'init': {
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
-        if (!hadSession && this.sessionId) this.onUpdate?.(); // recién ahora es persistible
+        let shouldUpdate = !hadSession && !!this.sessionId; // recién ahora es persistible
+        if (typeof e.tandem === 'boolean') {
+          this._spawnedTandem = e.tandem;
+          shouldUpdate = true;
+        }
+        if (shouldUpdate) this.onUpdate?.();
         this._push({ ...e, chatId: this.id }, { record: false });
         return;
       }
@@ -1632,6 +1639,7 @@ class Chat {
         // effort al tier, así que lo dejamos en high DESPUÉS.
         if (!this._effortPinned && this.effort !== 'high') { this.effort = 'high'; this._push({ type: 'effort', effort: 'high', auto: true }); this.onUpdate?.(); }
       }
+      this._maybeReopenForTandem();
       return;
     }
     if (choice === 'tandem') {
@@ -1645,6 +1653,7 @@ class Chat {
       this.setModel('opus'); // motor real = opus (auto:false)
       this._effortPinned = true;
       if (this.effort !== 'medium') { this.effort = 'medium'; this._push({ type: 'effort', effort: 'medium', auto: false }); this.onUpdate?.(); }
+      this._maybeReopenForTandem();
       return;
     }
     if (!VALID_MODELS.has(choice)) return;
@@ -1652,6 +1661,7 @@ class Chat {
     this._push({ type: 'modelChoice', modelChoice: choice });
     this.onUpdate?.();
     this.setModel(choice); // fuerza el modelo real — auto:false (elección manual)
+    this._maybeReopenForTandem();
   }
 
   // PLAN-519 F1: opt-in del TECHO FABLE de AutoTux. Extiende la escala del router
@@ -1690,6 +1700,7 @@ class Chat {
     };
     this._push({ type: 'tandemCodex', tandemCodex: this.tandemCodex });
     this.onUpdate?.();
+    this._maybeReopenForTandem();
   }
 
   // Fija el ESFUERZO de razonamiento (eje thinking effort, PEND-391 #3). El
@@ -1745,6 +1756,18 @@ class Chat {
     if (!this.link || this.status === 'working') return; // dormido o en turno: se aplica al próximo spawn
     if (this._effortReopenAt && Date.now() - this._effortReopenAt < 30000) return; // throttle 30s
     this._effortReopenAt = Date.now();
+    Promise.resolve().then(() => this.reopen()).catch(() => { /* best-effort: aplica al dormir */ });
+  }
+
+  // PLAN-507: Tándem también es opción de SPAWN (tool Codex + hook PreToolUse),
+  // así que entrar/salir con motor vivo requiere reabrir el runner para aplicar
+  // la bandera real. Igual que effort: solo si está vivo y ocioso; con motor
+  // dormido aplica en el próximo spawn.
+  _maybeReopenForTandem() {
+    if (!this.link || this.status === 'working') return; // dormido o en turno: se aplica al próximo spawn
+    if (this._tandemReopenAt && Date.now() - this._tandemReopenAt < 30000) return; // throttle 30s
+    if (this._spawnedTandem === (this.modelChoice === 'tandem')) return; // ya coincide
+    this._tandemReopenAt = Date.now();
     Promise.resolve().then(() => this.reopen()).catch(() => { /* best-effort: aplica al dormir */ });
   }
 
@@ -1944,6 +1967,7 @@ class Chat {
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
       tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
+      tandemActive: !!this.link && this._spawnedTandem === true,
       sessionId: this.sessionId,
       cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
@@ -1965,6 +1989,7 @@ class Chat {
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
       tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
+      tandemActive: !!this.link && this._spawnedTandem === true,
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
@@ -2161,6 +2186,7 @@ class ChatManager {
         effortPinned: !!c._effortPinned,
         fableCeiling: !!c._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
         tandemCodex: c.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
+        spawnedTandem: c._spawnedTandem === true,
         // AutoTux v2 (core/model-router.js): el NIVEL se deriva de `model`
         // (arriba); esto es el estado MÍNIMO de histéresis — contador de turnos
         // "down" seguidos + turnos restantes de cooldown anti-rebote.
@@ -2191,6 +2217,7 @@ class ChatManager {
     // existiera el registro durable (aunque nunca vuelvan a disparar persist).
     registerChatSessionIds(saved.map((s) => s?.sessionId).filter(Boolean));
     let count = 0;
+    let adoptedRunnerTandem = false;
     for (const s of saved) {
       if (!s?.sessionId || !UUID_RE.test(s.sessionId) || this.chats.has(s.id)) continue;
       const chat = new Chat({
@@ -2217,6 +2244,9 @@ class ChatManager {
       chat._effortPinned = !!s.effortPinned;
       chat._fableCeiling = !!s.fableCeiling; // PLAN-519 F1: techo Fable opt-in de AutoTux
       if (s.tandemCodex && typeof s.tandemCodex === 'object') chat.tandemCodex = { model: s.tandemCodex.model || 'gpt-5.5', effort: s.tandemCodex.effort || 'high' }; // PLAN-519 F2
+      // Seguro aunque el chat quede dormido: `tandemActive` exige `!!link`, y
+      // `_spawnedTandem` además guía si el runner vivo adoptado requiere reopen.
+      chat._spawnedTandem = s.spawnedTandem === true;
       chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
       chat._routerCooldown = Number.isFinite(s.routerCooldown) ? s.routerCooldown : 0;
       // BUG-497: ¿ya arrancó? Persistido; para snapshots viejos sin el campo,
@@ -2241,6 +2271,10 @@ class ChatManager {
         if (link && hello) {
           chat.sessionId = (UUID_RE.test(hello.sessionId || '') && hello.sessionId) || chat.sessionId;
           if (PERMISSION_MODES.has(hello.mode)) chat.permissionMode = hello.mode;
+          if (typeof hello.tandem === 'boolean') {
+            chat._spawnedTandem = hello.tandem;
+            adoptedRunnerTandem = true;
+          }
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null);
           chat.history = [...base, ...(hello.events || [])].slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
@@ -2258,6 +2292,7 @@ class ChatManager {
       this.chats.set(s.id, chat);
       count += 1;
     }
+    if (adoptedRunnerTandem) this.persist();
     this._cleanupOrphans();
     return count;
   }

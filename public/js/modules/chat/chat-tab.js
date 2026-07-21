@@ -249,6 +249,7 @@ export class ChatTab {
     this._delegatingCount = 0;    // subagentes Task/Agent pendientes del turno actual
     this._model = null;           // modelo REAL en curso (haiku/sonnet/opus/fable/opusplan/...)
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
+    this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
     // Adjuntos pendientes de ESTE mensaje (subidos a disco, aún sin enviar).
     // Cada uno: {name|null, type, mime, size, uploading, error?, localUrl?, origName}.
     // Se limpian al enviar. Ver _uploadFiles/_renderTray/_submit.
@@ -738,6 +739,7 @@ export class ChatTab {
         }
         this._setWorking(m.status === 'working');
         this._modelChoice = m.modelChoice || null; // sin notita: solo poblar el estado al abrir/reconectar
+        this._tandemActive = m.tandemActive === undefined ? true : !!m.tandemActive;
         this._effort = m.effort || null;           // eje thinking effort (PEND-391 #3): 2ª línea del banderín
         this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
@@ -1291,6 +1293,7 @@ export class ChatTab {
   // (`modelChoice` cambia mucho menos seguido que `model`).
   _applyModelChoice(modelChoice) {
     this._modelChoice = modelChoice || null;
+    if (this._modelChoice === 'tandem') this._tandemActive = false; // pesimista a propósito: preferimos avisar pendiente hasta que el history post-reopen confirme
     this._renderModelBadge();
   }
 
@@ -1323,8 +1326,13 @@ export class ChatTab {
       // Modelo TÁNDEM (PLAN-507): Opus razona/verifica, Codex ejecuta. Color
       // propio (acento frío, el mismo que Codex en el panel de Uso) para
       // distinguirlo de un modelo forzado común.
-      paint(t('chat.model.tandemBadge', '🤝 Tándem'), 'var(--cwc-accent-cool)',
-        t('chat.model.tandemTitle', 'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código'));
+      if (this._tandemActive === false) {
+        paint(t('chat.model.tandemPendingBadge', '⏳ Tándem (pendiente)'), 'var(--cwc-warn)',
+          t('chat.model.tandemPendingTitle', 'El motor vivo todavía no corre en Tándem — usá «Reabrir para cambios» en el menú ⋯ de Sesiones para activarlo.'));
+      } else {
+        paint(t('chat.model.tandemBadge', '🤝 Tándem'), 'var(--cwc-accent-cool)',
+          t('chat.model.tandemTitle', 'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código'));
+      }
     } else if (choice) {
       const label = CHAT_MODEL_LABEL.get(choice) || choice;
       paint(label, modelColor(ROUTER_MANAGED_MODELS.includes(choice) ? choice : 'unknown'),

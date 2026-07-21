@@ -1,0 +1,98 @@
+// core/connections-zoho.js — proveedor Zoho Desk por grant code pegado.
+//
+// Zoho no ofrece device flow: el usuario genera un grant code en la consola de
+// API de su data center y lo pega en la consola, igual que otros flujos de
+// "pegar código". Este módulo solo hace HTTP; no persiste ni loguea secretos.
+
+export const ZOHO_SCOPES = ['Desk.tickets.ALL', 'Desk.basic.READ', 'Desk.settings.READ'];
+
+const ZOHO_DCS = ['com', 'eu', 'in', 'com.au', 'jp', 'ca'];
+
+function dcOf(dc) {
+  const clean = String(dc || '').trim().toLowerCase();
+  return ZOHO_DCS.includes(clean) ? clean : 'com';
+}
+
+function accountsBase(dc) {
+  return `https://accounts.zoho.${dcOf(dc)}`;
+}
+
+function deskBase(dc) {
+  return `https://desk.zoho.${dcOf(dc)}`;
+}
+
+async function postForm(url, params) {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && value !== '') body.set(key, value);
+  }
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  } catch (err) {
+    throw new Error('No se pudo contactar a Zoho: ' + (err?.message || err));
+  }
+
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+
+  return { ok: res.ok, status: res.status, data, raw: data ? null : text.slice(0, 300) };
+}
+
+function zohoError(r) {
+  return r.data?.error_description || r.data?.error || r.raw || ('HTTP ' + r.status);
+}
+
+export function authUrl({ clientId, dc }) {
+  return `https://api-console.zoho.${dcOf(dc)}`;
+}
+
+export async function exchangeCode({ clientId, clientSecret, code, dc }) {
+  if (!clientId) throw new Error('Falta el Client ID de la app de Zoho.');
+  if (!clientSecret) throw new Error('Falta el Client Secret de la app de Zoho.');
+  if (!code) throw new Error('Falta el grant code de Zoho.');
+
+  const r = await postForm(`${accountsBase(dc)}/oauth/v2/token`, {
+    grant_type: 'authorization_code',
+    client_id: clientId,
+    client_secret: clientSecret,
+    code,
+  });
+  if (!r.data?.access_token || !r.data?.refresh_token) throw new Error(zohoError(r));
+  return r.data;
+}
+
+export async function refreshAccessToken({ clientId, clientSecret, refreshToken, dc }) {
+  const r = await postForm(`${accountsBase(dc)}/oauth/v2/token`, {
+    grant_type: 'refresh_token',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  });
+  if (!r.data?.access_token) throw new Error(zohoError(r));
+  return r.data;
+}
+
+export async function getMe(accessToken, dc) {
+  try {
+    const res = await fetch(`${deskBase(dc)}/api/v1/agents/me`, {
+      headers: { authorization: `Zoho-oauthtoken ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const me = await res.json();
+    return me?.emailId || me?.name || null;
+  } catch {
+    // Si falla el perfil best-effort, no se rompe la conexión.
+    return null;
+  }
+}

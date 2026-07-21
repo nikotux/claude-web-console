@@ -19,6 +19,7 @@ import { mountInterfonoPanel } from './interfono-panel.js';
 import { mountEnvVarsPanel } from './env-vars-panel.js';
 import { mountSkillsPanel } from './skills-panel.js';
 import { mountMcpsPanel } from './mcps-panel.js';
+import { mountUpdatesPanel } from './updates-panel.js';
 import { mountLanguagePanel } from './language-panel.js';
 import { t } from '../../ui/i18n.js';
 
@@ -52,6 +53,7 @@ export default {
           items: [
             { emoji: '❤️', label: t('system.menu.health', 'Salud'), mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
             { emoji: '📊', label: t('system.menu.dashboard', 'Dashboard'), mount: (c) => mountDashboardPanel(c, { ...ctx, isAdmin }) },
+            { emoji: '🔄', label: t('system.menu.updates', 'Actualizaciones'), mount: (c) => mountUpdatesPanel(c, { ...ctx, isAdmin }) },
             { emoji: '📡', label: t('system.menu.interfono', 'Interfono'), mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
           ],
         },

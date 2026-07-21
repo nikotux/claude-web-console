@@ -26,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isAdmin } from '../../core/auth.js';
 import {
-  spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS,
+  spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS, runMcpList,
 } from './login-shared.js';
 
 // Descripciones amigables de servidores conocidos — data no crítica, solo
@@ -41,47 +41,9 @@ const KNOWN_ROLES = {
   context7: 'Documentación de librerías (Upstash)',
 };
 
-// --- Parseo del estado que imprime `claude mcp list` ---
-function classifyStatus(raw) {
-  const s = String(raw || '').toLowerCase();
-  if (raw.includes('✔') || s.includes('connected')) return { code: 'connected', light: 'ok', label: 'Conectado' };
-  if (raw.includes('!') || s.includes('authentication') || s.includes('needs auth')) return { code: 'needs-auth', light: 'warn', label: 'Requiere reconexión' };
-  if (raw.includes('⏸') || s.includes('pending')) return { code: 'pending', light: 'info', label: 'Pendiente de aprobación' };
-  if (raw.includes('✘') || s.includes('failed') || s.includes('disconnect') || s.includes('error')) return { code: 'error', light: 'danger', label: 'Error de conexión' };
-  return { code: 'unknown', light: 'neutral', label: raw.trim() || 'Desconocido' };
-}
-
-// name lazy hasta el primer ":", endpoint lazy, status anclado al final por su
-// símbolo/keyword conocido (así un endpoint con " -- " no confunde el split).
-// El status arranca por un símbolo (✔✘!⏸⚠) o keyword conocido tras " - ". Sin
-// \b: ✔/! seguidos de espacio no forman word-boundary, y el \b anulaba el match.
-const LINE_RE = /^(.+?):\s+(.*?)\s+-\s+((?:[✔✘!⏸⚠]|Connected|Failed|Needs|Pending|Disconnected).*)$/;
-
-function parseList(stdout) {
-  const servers = [];
-  let hasWarnings = false;
-  for (const rawLine of String(stdout || '').split(/\r?\n/)) {
-    const t = rawLine.trim();
-    if (!t) continue;
-    if (/config diagnostics|conflicting scopes|multiple scopes|^[├└]/i.test(t)) { hasWarnings = true; continue; }
-    const m = t.match(LINE_RE);
-    if (!m) continue;
-    servers.push({ name: m[1].trim(), endpoint: m[2].trim(), statusRaw: m[3].trim(), status: classifyStatus(m[3]) });
-  }
-  return { servers, hasWarnings };
-}
-
-function runMcpList(cwd) {
-  return new Promise((resolve) => {
-    execFile('claude', ['mcp', 'list'], { cwd, timeout: 30000, env: process.env, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        // `claude mcp list` sale 0 aun con diagnostics; el health-check tarda por
-        // los HTTP. Si falla del todo, devolvemos vacío + el error para la UI.
-        if (err && !stdout) { resolve({ servers: [], hasWarnings: false, error: (stderr || err.message || '').trim().slice(0, 300) }); return; }
-        resolve(parseList((stdout || '') + '\n' + (stderr || '')));
-      });
-  });
-}
+// classifyStatus/parseList/runMcpList (parseo de `claude mcp list`) viven en
+// login-shared.js — FUENTE ÚNICA compartida con el runner de login, que la
+// necesita para verificar una reconexión antes de reportar éxito.
 
 // --- Config declarada (SOLO LECTURA) para las características ---
 function readJson(file) {

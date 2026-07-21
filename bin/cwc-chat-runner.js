@@ -28,7 +28,7 @@ import {
   PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX,
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
-import { chatQueryOptions, autoApprovesAll } from '../src/core/tool-policy.js';
+import { chatQueryOptions, autoApprovesAll, tandemPreToolUseHook } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
@@ -212,6 +212,7 @@ function startEngine() {
       // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
       tandem: TANDEM,
       ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT }) } } : {}),
+      ...(TANDEM ? { hooks: tandemPreToolUseHook() } : {}),
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),
   });
@@ -225,7 +226,8 @@ function onMessage(m) {
     // vienen SOLO en el init: la lista del init es la fuente de verdad.
     if (Array.isArray(m.slash_commands)) slashCommands = m.slash_commands;
     currentModel = m.model || MODEL;
-    emit({ type: 'init', chatId: ID, sessionId, model: currentModel, cwd: CWD, mode }, { record: false });
+    // El runner es la fuente de verdad de su propio flag de spawn.
+    emit({ type: 'init', chatId: ID, sessionId, model: currentModel, cwd: CWD, mode, tandem: TANDEM }, { record: false });
     emit({ type: 'meta', slashCommands }, { record: false });
     return;
   }
@@ -298,6 +300,8 @@ function askPermission(toolName, toolInput, ctx) {
   // silencioso) para forzarlo a delegar en Codex vía delegate_to_codex. El
   // `message` le explica al modelo por qué y qué usar en su lugar. Esto es lo
   // que GARANTIZA el split (una tool solo "disponible" podría ser ignorada).
+  // Defensa en profundidad: la capa autoritativa ahora es PreToolUse, porque
+  // canUseTool queda shadoweado por bypassPermissions y por allow-rules del usuario.
   if (TANDEM && TANDEM_BLOCKED.has(toolName)) {
     return Promise.resolve({
       behavior: 'deny',
@@ -371,7 +375,8 @@ function shutdown(code) {
 // ---- comandos del server ----
 function handleCommand(c, msg) {
   if (msg.t === 'hello') {
-    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, events: history });
+    // El runner es la fuente de verdad de su propio flag de spawn.
+    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, events: history });
     return;
   }
   if (msg.t === 'user' && typeof msg.text === 'string'

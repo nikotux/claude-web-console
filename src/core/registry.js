@@ -27,8 +27,10 @@ import seguimientos from '../modules/seguimientos/index.js';
 import onboard from '../modules/onboard/index.js';
 import skills from '../modules/skills/index.js';
 import mcps from '../modules/mcps/index.js';
+import updates from '../modules/updates/index.js';
+import connections from '../modules/connections/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

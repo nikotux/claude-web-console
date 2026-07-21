@@ -9,10 +9,20 @@
 // terminal") → node-pty. Mismo patrón y cuidados que bin/cwc-onboard-runner.js
 // (cols alto para no truncar la URL larga; estado en disco reanudable). NO
 // importa core/config.js: el cwd llega por --cwd (el server ya lo resolvió).
+//
+// VERIFICACIÓN ANTES DE "done" (2026-07-20, bug real: el proceso puede
+// terminar con exit 0 —o imprimir un texto que matchea OK_RE— sin que el
+// intercambio de código OAuth haya quedado realmente conectado, p.ej. si el
+// código pegado ya expiró. Antes el runner confiaba en esa señal débil y
+// reportaba "done" con la conexión todavía en `Needs authentication`,
+// confundiendo al usuario). Ahora, antes de escribir 'done', se re-verifica
+// con `claude mcp list` (misma fuente que usa el panel) — solo si el server
+// aparece de verdad como conectado se reporta éxito.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
+import { runMcpList } from '../src/modules/mcps/login-shared.js';
 
 const args = {};
 for (let i = 2; i < process.argv.length - 1; i += 2) {
@@ -75,6 +85,35 @@ function watchForCode() {
   }, 700);
 }
 
+async function verifyConnected() {
+  try {
+    const { servers } = await runMcpList(CWD);
+    const s = servers.find((x) => x.name === NAME);
+    return !!(s && s.status && s.status.code === 'connected');
+  } catch { return false; }
+}
+
+// Punto ÚNICO de cierre exitoso: NUNCA escribe 'done' a ciegas — re-verifica
+// contra `claude mcp list` antes de confirmar. `finalizing` evita doble
+// disparo si onData y onExit calzan casi juntos.
+let finalizing = false;
+async function finalize() {
+  if (finalizing) return;
+  finalizing = true;
+  writeState({ status: 'verifying', url });
+  const connected = await verifyConnected();
+  if (connected) {
+    writeState({ status: 'done', done: true, url });
+  } else {
+    writeState({
+      status: 'error',
+      error: 'El login se cerró pero la conexión no quedó activa (claude mcp list la sigue mostrando sin autenticar). El código pegado puede haber llegado tarde/incompleto — reintentá desde cero con la URL completa.',
+    });
+  }
+  try { proc.kill(); } catch { /* noop */ }
+  process.exit(0);
+}
+
 proc.onData((data) => {
   buf += data;
   if (buf.length > 200000) buf = buf.slice(-100000);
@@ -86,17 +125,16 @@ proc.onData((data) => {
   // Solo consideramos éxito DESPUÉS de haber pegado la URL de redirect.
   if (!done && urlWritten && OK_RE.test(clean)) {
     done = true;
-    writeState({ status: 'done', done: true, url });
     if (watch) clearInterval(watch);
-    try { proc.kill(); } catch { /* noop */ }
+    finalize();
   }
 });
 
 proc.onExit(({ exitCode }) => {
   if (watch) clearInterval(watch);
-  if (done) { process.exit(0); return; }
-  if (urlWritten && exitCode === 0) writeState({ status: 'done', done: true, url });
-  else writeState({ status: 'error', error: `claude mcp login terminó (code ${exitCode})` + (url ? '' : ' sin emitir URL de autorización') });
+  if (done) return; // ya lo maneja finalize() desde onData
+  if (urlWritten && exitCode === 0) { done = true; finalize(); return; }
+  writeState({ status: 'error', error: `claude mcp login terminó (code ${exitCode})` + (url ? '' : ' sin emitir URL de autorización') });
   process.exit(0);
 });
 

@@ -18,6 +18,7 @@ import { manager } from '../chat/index.js';
 import { textOnlyQuery } from '../../core/text-only-query.js';
 import { ensureDir, readSnapshot, writeSnapshot } from './store.js';
 import { refreshNow, isRefreshing } from './refresher.js';
+import { readHistory } from './history-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-seguimientos-runner.js');
@@ -140,7 +141,49 @@ export default {
         'Presentame un PLAN de actualización por ticket (qué comentario/cambio aplicar y de qué fuente salió). Aplicá los updates a Desk SOLO con mi OK. Si aparece un pedido SIN ticket, ofrecé convertirlo en ticket.',
         limboFooter(),
       ].filter(Boolean).join('\n');
-      const chat = manager.create({ cwd: config.projectDir, model: 'auto', permissionMode: 'default', limbo: true, title: `Actualizaciones (${sel.length})` });
+      const chat = manager.create({ cwd: config.projectDir, model: 'opus', permissionMode: 'default', limbo: true, title: `Actualizaciones (${sel.length})` });
+      try { chat.sendUser(prompt); } catch { /* noop */ }
+      res.json({ chatId: chat.info().id });
+    });
+
+    // STANDUP (reunión diaria): abre una SESIÓN con el panorama del día ya
+    // masticado (0 tokens para armarlo: sale del snapshot). El chat repasa qué
+    // hay por hacer / qué llegó / qué terminamos / qué está trabado y puede
+    // actualizar tickets SOLO con aprobación (Limbo). `digest` opcional del front.
+    r.post('/standup', (req, res) => {
+      const snap = readSnapshot();
+      const frentes = snap.frentes || [];
+      const c = snap.counts || {};
+      const digest = req.body?.digest && typeof req.body.digest === 'object' ? req.body.digest : null;
+      // Top trabados: más días sin señal (proxy de "atascado").
+      const stuck = frentes.slice().sort((a, b) => (b.daysIdle || 0) - (a.daysIdle || 0)).slice(0, 6)
+        .map((f) => `- #${f.key} — ${f.title} · ${f.daysIdle || 0}d sin señal${f.ownerBall ? ` · pelota: ${f.ownerBall}` : ''}`);
+      // Reparto por proyecto.
+      const byProj = {};
+      for (const f of frentes) { const p = f.project || '—'; byProj[p] = (byProj[p] || 0) + 1; }
+      const projLines = Object.entries(byProj).sort((a, b) => b[1] - a[1]).map(([p, n]) => `- ${p}: ${n}`);
+      const deltaLines = digest ? [
+        `- Nuevos desde la última visita: ${digest.nuevos ?? 0}`,
+        `- Terminados desde la última visita: ${digest.terminados ?? 0}`,
+        `- Por vencer (vencidos/hoy/semana): ${digest.porVencer ?? 0}`,
+        `- Trabados: ${digest.trabados ?? 0}`,
+      ] : [];
+      const prompt = [
+        'Reunión diaria (standup) de mis Seguimientos. Este es el panorama de HOY, ya armado:',
+        `Total abiertos: ${c.total ?? frentes.length} · míos (asignados/tag Niko): ${c.mine ?? 0} · con deadline: ${c.withDeadline ?? 0} · completados (ventana): ${c.done ?? 0}.`,
+        ...(deltaLines.length ? ['', 'Cambios desde la última vez:', ...deltaLines] : []),
+        '',
+        'Reparto por proyecto:',
+        ...projLines,
+        '',
+        'Frentes más atascados (por días sin señal):',
+        ...stuck,
+        '',
+        'Repasemos como en una reunión diaria: qué debería hacer hoy, qué llegó nuevo, qué terminamos, qué está trabado y de quién es la pelota.',
+        'Si algo amerita actualizar un ticket, redactá el cambio y ESPERÁ mi aprobación antes de escribir a Desk.',
+        limboFooter(),
+      ].join('\n');
+      const chat = manager.create({ cwd: config.projectDir, model: 'opus', permissionMode: 'default', limbo: true, title: 'Standup del día' });
       try { chat.sendUser(prompt); } catch { /* noop */ }
       res.json({ chatId: chat.info().id });
     });
@@ -158,6 +201,11 @@ export default {
         const keys = m ? JSON.parse(m[0]).map(String) : [];
         res.json({ keys });
       } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Historia diaria para los gráficos de tendencia de Métricas (0 tokens).
+    r.get('/history', (req, res) => {
+      res.json({ days: readHistory() });
     });
 
     // Ping del módulo (diagnóstico de que cargó y hay snapshot).

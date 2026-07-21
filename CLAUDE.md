@@ -400,6 +400,16 @@ B-A y C) y recibe todos los textos — es correcto.
   `ticket-investigations/<n>.json` veredicto de la investigación de contexto de un
   ticket sin PR + `<n>.req.json` enunciado + `ticket-investigate.lock` heartbeat,
   `inventory.json`+`inventory.md` generados por core/inventory.js,
+  `updates-census.json` último censo de versiones de terceros (módulo `updates`;
+  npm outdated/audit + claude/apt/pad versions; escritura atómica, caché 6 h, se
+  re-sirve como fallback tras reinicio antes de re-correr los npm lentos),
+  `updates-job.json` estado por fases del BOTÓN ÚNICO de actualización orquestada
+  (módulo `updates`; lo reserva POST /updates/run, lo avanza
+  `bin/cwc-updates-runner.js` con heartbeat — REANUDABLE, sobrevive el reinicio que
+  él mismo dispara) + `updates-orchestrate.log` de ese runner,
+  `updates-risk.json` veredictos IA de riesgo de los saltos mayores (módulo
+  `updates` Fase B; lo escribe `bin/cwc-updates-analyze-runner.js`, heartbeat) +
+  `updates-analyze.log`,
   `plan-limits.json` último snapshot BUENO de límites/créditos del plan (lo
   escribe el módulo tokens en cada respuesta OK de /api/tokens/limits; se sirve
   como fallback `stale` ante 429/corte de red/reinicio),
@@ -1424,6 +1434,68 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             el contexto en el `task`). VERIFICADO E2E (WS real): chat tandem → Opus →
                             "delego a Codex" → tarjeta de permiso → Codex crea el archivo en el cwd →
                             Claude verifica con Read/Bash; Edit/Write NUNCA usadas.
+                            BUG-780 · TÁNDEM ERA INERTE — dos causas raíz (2026-07-21, reporte de
+                            Niko: «las sesiones marcadas Tándem no usaron Codex para nada»). CAUSA A —
+                            el flag `--tandem` es de SPAWN: `setModelChoice('tandem')`/
+                            `configureTandem()` cambiaban estado (badge 🤝 pintado) pero NO
+                            re-spawneaban el runner, así que el motor vivo seguía siendo chat común con
+                            Edit/Write habilitados. Verificado con `ps`: runners de "Calendario
+                            Microsoft" y "Testing y seguridad" corrían `--model sonnet --effort high`
+                            SIN `--tandem`, y sus transcripts muestran 46 y 54 `Edit` + 0
+                            `delegate_to_codex`. FIX: `_maybeReopenForTandem()` (chat/index.js),
+                            calcado de `_maybeReopenForEffort`, reabre el runner (`reopen()`, respawn
+                            `--resume`) solo si está vivo e OCIOSO, throttle 30 s, y solo si
+                            `_spawnedTandem !== (modelChoice === 'tandem')`; se llama en las 3 ramas
+                            de `setModelChoice` (entrar Y salir de Tándem requieren respawn) y en
+                            `configureTandem`. `_spawnedTandem` se fija junto al `spawnRunner` con la
+                            MISMA expresión que el arg `tandem:` (no pueden divergir) y se PERSISTE en
+                            persist()/rehydrate() como `spawnedTandem`: sin eso, tras reinicio del
+                            server (los runners sobreviven por KillMode=process) quedaba `undefined` y
+                            el badge mentía "pendiente". CAUSA B (más grave) — el bloqueo estructural
+                            vivía en `askPermission` del runner, o sea en `canUseTool`, que es
+                            SHADOWEADO por `bypassPermissions` (DEFAULT del launcher, con el que corren
+                            todos los chats) y por las allow-rules del `settings.json` del usuario
+                            (`permissions.allow: ["Bash","Read","WebFetch"]`, llegan porque el chat
+                            usa `settingSources: ['user',...]`). O sea: el "bloqueo estructural" era
+                            INERTE en el modo por defecto de la consola. El SDK lo avisa al arrancar:
+                            warning `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` — "permissionMode
+                            'bypassPermissions' auto-approves every tool call before the callback is
+                            consulted. To gate every tool call, use a PreToolUse hook instead." FIX: la
+                            capa AUTORITATIVA pasó a ser hook `PreToolUse`
+                            (`tandemPreToolUseHook()` de core/tool-policy.js), la MISMA primera capa
+                            que ya usan los runners headless de la regla 6, inmune a bypassPermissions
+                            y a allow-rules. `chatQueryOptions` acepta ahora `hooks` y el runner lo pasa
+                            cuando `--tandem 1`. El deny viejo de `askPermission` SE CONSERVA como
+                            defensa en profundidad (2ª capa). El hook cierra además la FUGA DE BASH
+                            documentada como conocida ("podría escribir con echo>/sed; instrucción lo
+                            prohíbe"): `isWritingBashCommand(cmd)` (core/tool-policy.js) es heurística
+                            CONSERVADORA que parsea la línea completa ignorando lo entre comillas
+                            (`shellOutsideQuotes`) y deniega redirecciones de escritura `>`/`>>`/`&>`
+                            salvo a /dev/null|stderr|stdout y sin confundir `2>&1`, `tee`, `sed -i`,
+                            `perl -i`, `patch`, `git apply`, `dd of=`, `truncate`, `install -`,
+                            `mv`/`cp`/`rm`/`mkdir`/`touch`/`chmod`/`ln -s`, y `python -c`/`node -e`
+                            cuyo código inline contenga `open(`/`writeFile*`/`appendFile`. Medido:
+                            13/13 comandos de inspección pasan sin falso positivo y 10/10 de escritura
+                            se bloquean. NO es hermética por construcción (`python3 - <<EOF` o un
+                            script ya en disco escapan): barrera de altura razonable, no jaula. UI:
+                            `info()`/`_historyPayload` exponen `tandemActive` (= `!!link &&
+                            _spawnedTandem === true`) y el badge del header (chat-tab.js) muestra
+                            "⏳ Tándem (pendiente)" en `--cwc-warn` cuando el motor vivo todavía no
+                            corre en Tándem, con título que invita a "Reabrir para cambios".
+                            `_applyModelChoice` lo pone pesimista en false al elegir Tándem. El runner
+                            ahora REPORTA su propio flag `tandem` en el evento `init` y en su respuesta
+                            al `hello`: este último cubre la re-adopción tras reinicio del server,
+                            porque el `init` va con `record:false` y no se replaya. El server adopta
+                            ese valor y corrige `_spawnedTandem`; el persistido queda solo como
+                            optimista inicial/fallback. El gotcha de migración queda resuelto de raíz,
+                            salvo runners spawneados ANTES de este cambio: no reportan el campo y
+                            conservan el valor persistido actual. VERIFICACIÓN E2E hecha: corrida real
+                            del SDK con
+                            `permissionMode:'bypassPermissions'` + `settingSources:['user']`
+                            (allow-rules activas) + hook → el modelo intentó `Write` y luego `Bash` con
+                            redirección, el hook denegó AMBOS y el archivo víctima quedó intacto.
+                            `node --check` OK en los 4 archivos; `/api/health/checks` 14/14 (único
+                            warn: git dirty, esperado).
                             SELECTOR DE MODELO REDISEÑADO — protocolo DERIVADO de la selección
                             (2026-07-15, PLAN-519, pedido de Niko; VERIFICADO E2E): la arquitectura
                             YA NO se elige como un modelo suelto — se INFIERE de 2 toggles EXCLUYENTES
@@ -3034,6 +3106,143 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             375px): 7 MCP reales de ambos mundos con semáforo correcto; runner pty
                             capturó la URL de authorize en vivo (intercambio final no ejercido para no
                             completar un OAuth real).
+  updates/                  CENSO CENTRALIZADO de versiones de TERCEROS + APLICADO reversible con
+                            verificación (2026-07-21, PLAN-779, pedido de Niko: "no hay mecanismo que
+                            avise cuándo salen updates de lo que la consola depende de afuera").
+                            Pestaña "🔄 Actualizaciones" del grupo 🩺 Diagnóstico del menú Sistema.
+                            Responde la pregunta que hoy nadie miraba: qué de las dependencias EXTERNAS
+                            (no el código propio, que ya cubre Salud/Coherencia) quedó viejo o con CVE.
+                            GET /api/updates (autenticados, 0 tokens IA — todo determinístico, mismo
+                            espíritu que core/inventory.js y `mcps`): corre EN PARALELO `npm outdated
+                            --json` + `npm audit --json --omit=dev` + `npm view @anthropic-ai/claude-code
+                            version` + `claude --version` + `apt list --upgradable` + `pad/node/tmux/
+                            zerotier --version` (todo LECTURA, ningún comando muta). Clasifica cada lib
+                            npm por riesgo: 🧬 core (Agent SDK — motor de TODO chat/runner) · 🔴 watch
+                            (baileys, fijado a propósito, ver comms/) · 📦 lib (normal). Es subprocess
+                            CLI (como tolkien/refresh corre psql/git; NO es corrida del SDK → la regla 6
+                            NO aplica). Caché 6 h en `~/.cwc-data/updates-census.json` (atómica; fallback
+                            a disco tras reinicio antes de re-correr los npm lentos) + ?fresh=1.
+                            APLICADO (admin, decisión de Niko 2026-07-21): botón SOLO en lo REVERSIBLE.
+                            POST /updates/npm {pkg,version} — whitelist ESTRICTA: nombre válido
+                            (PKG_NAME_RE) + versión semver (VERSION_RE) + declarado en package.json +
+                            NO en NEVER_UPDATE (baileys); corre `npm install pkg@ver` + node --check
+                            (syntaxCheck de shared.js) y devuelve {syntax, needsRestart, revertHint}
+                            (revertible con `git checkout -- package.json package-lock.json && npm
+                            install`). POST /updates/claude-cli — `claude update` (updater propio del
+                            CLI, no toca el repo). apt/SO: SOLO informativo (comando `sudo apt-get
+                            install --only-upgrade <pkg>` para copiar; NO se aplica desde la web — se
+                            mezcla con docker/systemd, mayor radio de impacto). REINICIO SEPARADO: POST
+                            /updates/restart (systemctl --user restart, diferido tras responder) es un
+                            botón APARTE "🔁 Reiniciar y verificar" — NUNCA dentro de "Actualizar", para
+                            que Niko elija el momento (el Agent SDK exige reinicio para tomar efecto pero
+                            corta las sesiones activas). GET /updates/verify = node --check a demanda; el
+                            semáforo completo lo trae el front de GET /api/health/checks (existente). VIGILADAS
+                            sin botón (WATCHED): baileys (rompió una vez), endpoints no oficiales (medidor
+                            de Codex, OAuth usage de Anthropic — best-effort a propósito). Lógica en
+                            updates/shared.js (buildUpdatesCensus/syntaxCheck), frontend
+                            system/updates-panel.js (mountUpdatesPanel; look .hr-* de health-review-modal,
+                            secciones colapsables 🧬 Motor · 🔐 Seguridad · 📚 Librerías · 🐧 SO · ⚙️
+                            Servicios · ⚠️ Vigiladas; layout de 2 COLUMNAS por ítem — texto grande /
+                            estado-versión chica). Verificado E2E: censo real (Agent SDK, vulns, apt,
+                            libs) + panel Playwright sin errores JS.
+                            ÍTEMS DESPLEGABLES CON "¿QUÉ ES ESTO?" (2026-07-21, pedido de Niko: "que
+                            cada ítem se pueda desplegar y me muestre una breve descripción para
+                            entender y si es necesario indagar más adelante en una sesión"). Cada ítem
+                            del panel pasó de tarjeta plana a COLAPSABLE (helper `collapsible()` en
+                            updates-panel.js, markup compatible con el `wireToggles()` existente:
+                            .hr-finding/.hr-f-head/.hr-f-body + hr-collapsed): colapsado muestra solo
+                            nombre + versión/estado; al desplegarlo aparece la descripción. Los datos
+                            son DETERMINÍSTICOS (0 tokens): catálogos hand-authored en shared.js —
+                            `PKG_INFO` (los ~21 paquetes npm reales, con `what` = qué es y `role` =
+                            para qué lo usa ESTA consola), `SERVICE_INFO` (Pad local/Node/tmux/
+                            ZeroTier) y `APT_INFO` (paquetes de sistema notables; el resto cae a un
+                            texto genérico). Lo no catalogado usa como fallback el `description`
+                            oficial leído de node_modules/<pkg>/package.json (instantáneo, SIN red).
+                            Además `buildUsageMap()` hace UN solo `grep -rlE` sobre src/bin/public/js
+                            y atribuye por archivo → campo `usedIn` (hasta 6 archivos por paquete) que
+                            se muestra como "Dónde se usa" — el gancho para indagar después en una
+                            sesión. El wiring del `info` va DESPUÉS del bloque que agrega los
+                            CORE_PKGS faltantes y ANTES del `libs.sort()` (así los core también lo
+                            reciben). `wireToggles()` ignora clicks en `button, input, label` para que
+                            tildar el checkbox de un major no colapse la tarjeta. OJO: el panel lista
+                            solo los paquetes DESACTUALIZADOS (+ los core), porque `npm outdated`
+                            omite los que están al día — un paquete sano no aparece ni con su
+                            descripción. Verificado E2E (Playwright): 25 ítems colapsados con chevron,
+                            "Qué es:"/"Para qué lo usa la consola:"/"Dónde se usa:" presentes, y al
+                            desplegar Pad local aparece su descripción; 0 errores JS.
+                            BOTÓN ÚNICO ORQUESTADO (2026-07-21, rediseño pedido de Niko: "una sola
+                            actualización que planee el orden, drene lo que corre por interfono,
+                            actualice todo a lo más reciente-estable, reinicie y mande continuar").
+                            "🚀 Actualizar todo (orquestado)" → POST /updates/run (admin) reserva el job
+                            y spawnea el RUNNER DESACOPLADO bin/cwc-updates-runner.js (lógica en
+                            updates/orchestrate-shared.js). Es el ÚNICO runner que REINICIA el servicio
+                            y SOBREVIVE a ese reinicio (detached + KillMode=process, igual que los
+                            chat-runners que se re-enganchan tras un restart — regla de oro/regla 2).
+                            FASES (estado en ~/.cwc-data/updates-job.json, heartbeat, REANUDABLE):
+                            planning (censo fresco + buildPlan ordenado: reversibles primero, apt al
+                            final) → draining (notifyInterfono broadcast 'all' vía core/bus.js +
+                            detectActiveWork con collectActiveRunners de health/shared; espera ACOTADA
+                            90s a que el fondo repose — no bloquea, los runners igual sobreviven) →
+                            applying (npm SOLO a `wanted`/estable in-range · claude update · apt-get
+                            upgrade con `sudo -n`) → verifying (node --check de server.js + todos los
+                            bin/*.js; si falla ⇒ ABORTA sin reiniciar + hint de revert) → restarting
+                            (systemctl --user restart, el runner espera con waitServiceActive) →
+                            resuming (interfono de continuación + job done). DECISIONES DE NIKO
+                            (AskUserQuestion 2026-07-21): "estable conservador" = npm SOLO a `wanted`;
+                            los SALTOS MAYORES (latest fuera del rango) se LISTAN aparte ("requieren tu
+                            OK") con CHECKBOX de opt-in por paquete (destildado; los tildados viajan en
+                            `includeMajors` del POST /updates/run, validados declarados+no-watch →
+                            buildPlan `majorsToApply` → el runner los instala a `latest` tras los
+                            in-range, mismo node --check+abort; aviso: un major puede romper en RUNTIME,
+                            node --check solo caza sintaxis). Sin tilde NO se aplican solos.
+                            ACTUALIZADOR CON CRITERIO (2026-07-21, pedido de Niko: "que el orquestador
+                            verifique con la documentación oficial si un update es riesgoso"). CUATRO
+                            capas nuevas: (A · VULNERABILIDADES) `applyAuditFix` = `npm audit fix` SIN
+                            --force (solo arreglos in-range, reversibles) — paso PRIMERO del orquestador
+                            + botón standalone "🔐 Arreglar vulnerabilidades" (POST /updates/audit-fix,
+                            0 reinicio) + `plan.vulnFix`. (B · ANÁLISIS DE RIESGO IA) módulo
+                            `updates/analyze-shared.js` + runner DESACOPLADO `bin/cwc-updates-analyze-runner.js`:
+                            por cada salto MAYOR baja el changelog oficial con Node/`gh` (repo
+                            PerpetualSoftware/pad… no, el repo del paquete vía `npm view repository.url` →
+                            `gh api repos/O/R/releases`, determinístico 0 tokens) y una corrida IA
+                            READ-ONLY doble capa (regla 6: Read/Grep/Glob, settingSources [], sonnet,
+                            pool max 3) lee CÓMO el proyecto usa el paquete + cruza los breaking changes →
+                            veredicto {level seguro|riesgoso|rompe, confidence alta|media|baja, why,
+                            breakingChanges, usedApis}. Persistido en ~/.cwc-data/updates-risk.json
+                            (heartbeat). POST /updates/analyze (spawn) · GET /updates/risk (0 tokens).
+                            (C · ORQUESTADOR CON VEREDICTO) buildPlan(census, scope, includeMajors,
+                            verdicts): un major 🟢 seguro+confianza ALTA se AUTO-incluye SIN checkbox
+                            (`auto:true`); el resto necesita tu tilde (override); las BETAS/RC nunca
+                            (`isPrerelease`: OJO — sin \b, "rc13" no tenía boundary). El veredicto NO es
+                            garantía (un changelog puede omitir algo) → el orquestador corre Salud tras
+                            aplicar. El front pinta el veredicto por major (🟢🟡🔴 + por qué) y el
+                            checkbox SOLO en los no-auto. (D · PAD LOCAL) `padLatest()` en shared.js:
+                            `gh api repos/PerpetualSoftware/pad/releases/latest` (ignora RC) vs
+                            `pad --version` → el ítem de servicios muestra "0.9.2 → 0.10.0" si hay update;
+                            NO se aplica desde el botón (el binario self-hosted + su servicio systemd se
+                            cambian a mano por SSH). CACHÉ: el runner llama `invalidateCensusCache()`
+                            (borra updates-census.json) tras aplicar — si no, el server tras el reinicio
+                            (mem=null) servía el snapshot PRE-update y la UI seguía mostrando "por
+                            actualizar" lo ya aplicado (bug reportado por Niko, 2 veces). REGLA DURA:
+                            NUNCA sugerir/ejecutar `sudo reboot` de la MÁQUINA (pedido enfático de Niko
+                            2026-07-21, ver memoria feedback-nunca-reboot-maquina) — el reinicio del
+                            SERVICIO (systemctl --user restart) sí; el reboot-required del SO se muestra
+                            como dato NEUTRO sin nag (interfono/job/panel ya no lo empujan). Verificado E2E: Pad 0.9.2→0.10.0 detectado, npm audit
+                            fix arregla las 2 vulns, análisis IA produce veredictos reales
+                            (@xterm/addon-web-links → riesgoso/baja sin changelog = conservador correcto),
+                            buildPlan auto-incluye seguro+alta y excluye rompe/beta, Playwright 0 errores.
+                            Alcance COMPLETO = apt incluido (si deja
+                            /var/run/reboot-required avisa pero NO reinicia la máquina). baileys
+                            excluido (RC ≠ estable, risk 'watch'). GET /updates/run-status (0 tokens,
+                            status EFECTIVO: job 'running' con heartbeat vencido ⇒ error, no cuelga el
+                            botón). Los updates per-ítem (POST /updates/npm) quedan de RESPALDO en el
+                            censo. Front: vista de PROGRESO en vivo (fases + checklist de pasos + log +
+                            activeWork + aviso reboot), poll cada 2s RESILIENTE al reinicio (el fetch
+                            falla durante el restart → reintenta). Verificado: buildPlan (marked
+                            in-range se aplica, express/baileys van a majors sin aplicar), notifyInterfono
+                            escribe al bus, systemctl --user is-active OK, Playwright (botón único + 51
+                            ítems en grid 2-col + 0 errores JS). El flujo destructivo completo (apt+
+                            reinicio real) se dispara con el botón bajo confirm, no en tests.
 public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
                             montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
                             (patrón completo en docs/frontend-modules.md).
@@ -3131,8 +3340,9 @@ public/js/modules/          launcher · sessions · tasks(sección "Pendientes":
                             master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
                             .sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·
                             Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Dashboard ·
-                            Interfono — Dashboard = pestaña propia desde PLAN-752, antes sub-modal del
-                            Escaneo de Salud) · 🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
+                            Actualizaciones · Interfono — Dashboard = pestaña propia desde PLAN-752, antes
+                            sub-modal del Escaneo de Salud; Actualizaciones = censo de versiones de terceros,
+                            módulo `updates`, PLAN-779) · 🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
                             grupos→items aplanados con índice global; en DESKTOP (≥720px) rail de
                             grupos a la izquierda + panel a la derecha (arranca en el 1er ítem); en
                             MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
@@ -4252,6 +4462,24 @@ bin/cwc-tolkien-refresh-runner.js  refresh de la DB LOCAL de Tolkien (TRUNCATE +
                             archivos: ~/.cwc-data/tolkien-refresh.json (job que reserva el POST
                             /refresh-data; el runner persiste el resultado) + tolkien-refresh.log.
                             Lógica en src/modules/tolkien/refresh-shared.js
+bin/cwc-updates-runner.js   ORQUESTADOR del BOTÓN ÚNICO de actualización (módulo `updates`,
+                            2026-07-21), DESACOPLADO (regla de oro/regla 2). ÚNICO runner que REINICIA
+                            el servicio y SOBREVIVE a ese reinicio (detached + KillMode=process, como
+                            los chat-runners). NO usa el SDK (0 tokens: npm/claude/apt/systemctl
+                            locales — regla 6 no aplica). Fases planning→draining→applying→verifying→
+                            restarting→resuming con estado por heartbeat en ~/.cwc-data/updates-job.json
+                            (reanudable). npm SOLO a `wanted` (estable); majors listados sin aplicar;
+                            apt incluido; si node --check falla tras aplicar ⇒ ABORTA sin reiniciar.
+                            Drena por interfono (core/bus.js) avisando a las sesiones antes de reiniciar
+                            y mandando "continuar" después. Lógica en updates/orchestrate-shared.js
+bin/cwc-updates-analyze-runner.js  ANÁLISIS DE RIESGO IA de los saltos MAYORES
+                            (módulo `updates` Fase B, 2026-07-21), DESACOPLADO (regla de oro). Por cada
+                            major: baja el changelog con Node/`gh` (determinístico) + corrida IA
+                            READ-ONLY doble capa (regla 6: Read/Grep/Glob, settingSources [], sonnet,
+                            pool max 3) que lee cómo el proyecto usa el paquete → veredicto seguro/
+                            riesgoso/rompe + confianza. Solo majors NO-beta. Estado en
+                            ~/.cwc-data/updates-risk.json (heartbeat, reanudable). Lógica en
+                            updates/analyze-shared.js
 bin/cwc-ticket-context-runner.js  CONTEXTO ADICIONAL de un ticket/PR (módulo VIVO
                             `tickets/`, 2026-07-07): interpreta con IA una TRANSCRIPCIÓN de
                             una charla (con el cliente/equipo) y destila el contexto que le
@@ -4360,6 +4588,12 @@ docs/                       frontend-modules.md · brief-original.txt · context
 
 ## Gotchas conocidos (te van a morder si los ignorás)
 
+- En chat interactivo `canUseTool` NO es una capa de seguridad confiable:
+  `permissionMode:'bypassPermissions'` (modo "Todo", default del launcher) y las
+  allow-rules del `settings.json` del usuario la shadowean antes de consultar el
+  callback. Para gatear tools SIEMPRE usar hook `PreToolUse`; el SDK lo avisa con
+  `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`. Por eso el bloqueo de Tándem vivió meses
+  inerte.
 - `renderMarkdown()` (public/js/ui/markdown.js) DEVUELVE UN NODO DOM ya
   sanitizado, NO un string. Interpolarlo en un template de innerHTML
   (`` `<div>${renderMarkdown(x)}</div>` ``) imprime literalmente
@@ -5216,6 +5450,13 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Evitar networkidle de Playwright en apps con polling; usar domcontentloaded + timeout corto
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Al capturar screenshots del login y el splash con Playwright, la espera por `networkidle` colgó porque la app hace polling continuo; hubo que rehacer las capturas con `domcontentloaded` y timeouts cortos, una por una.
+
+**Lección:** Para este proyecto (o cualquier app que haga long-polling/websocket), no usar `waitUntil: networkidle` en capturas Playwright; usar `domcontentloaded` con timeout corto desde el primer intento.
 
 ### Verificar que cada subsistema tenga su propio mecanismo de cierre al unificar una acción 'resolver todo'
 _procedimiento · confianza alta · recurrencia x1_

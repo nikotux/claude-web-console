@@ -93,6 +93,98 @@ export const TANDEM_INSTRUCTION = [
 // Nombre completo (namespaced) de la tool del servidor MCP in-process de Codex.
 export const TANDEM_TOOL = 'mcp__codex__delegate_to_codex';
 
+export const TANDEM_BLOCKED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+function shellOutsideQuotes(cmd) {
+  let out = '';
+  let quote = null;
+  let escaped = false;
+  for (const ch of String(cmd || '')) {
+    if (escaped) { out += quote ? ' ' : ch; escaped = false; continue; }
+    if (ch === '\\') { out += quote ? ' ' : ch; escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      out += ' ';
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; out += ' '; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+// Heurística conservadora para Tándem: Bash se permite para inspección y checks,
+// pero no para escribir archivos. Evaluamos la línea completa (también comandos
+// encadenados con &&, ; o |) y marcamos patrones típicos de escritura.
+export function isWritingBashCommand(cmd) {
+  if (typeof cmd !== 'string' || !cmd.trim()) return false;
+  const raw = cmd;
+  const outside = shellOutsideQuotes(raw).replace(/\s+/g, ' ');
+
+  // Redirecciones de escritura: >, >> y &> hacia destinos reales. Ignoramos
+  // duplicación de fd (2>&1) y sinks explícitos de salida/errores.
+  const redirRe = /(?:^|[\s;&|])(?:\d*)?(>>?|&>)\s*([^\s;&|]+)/g;
+  for (const m of outside.matchAll(redirRe)) {
+    const dest = (m[2] || '').replace(/^['"]|['"]$/g, '');
+    if (!dest || /^&\d+$/.test(dest)) continue;
+    if (['/dev/null', '/dev/stderr', '/dev/stdout'].includes(dest)) continue;
+    return true;
+  }
+
+  const writingPatterns = [
+    /(?:^|[\s;&|])tee(?:\s|$)/,
+    /(?:^|[\s;&|])sed\s+(?:[^\s;&|]*\s+)*--in-place(?:[=\s]|$)/,
+    /(?:^|[\s;&|])sed\s+(?:[^\s;&|]*\s+)*-[A-Za-z]*i[A-Za-z]*(?:\s|$)/,
+    /(?:^|[\s;&|])perl\s+(?:[^\s;&|]*\s+)*-[A-Za-z]*i[A-Za-z]*(?:\s|$)/,
+    /(?:^|[\s;&|])patch(?:\s|$)/,
+    /(?:^|[\s;&|])git\s+apply(?:\s|$)/,
+    /(?:^|[\s;&|])git\s+checkout\s+--(?:\s|$)/,
+    /(?:^|[\s;&|])dd\s+(?:[^\s;&|]+\s+)*of=/,
+    /(?:^|[\s;&|])truncate(?:\s|$)/,
+    /(?:^|[\s;&|])install\s+-/,
+    /(?:^|[\s;&|])mv(?:\s|$)/,
+    /(?:^|[\s;&|])cp(?:\s|$)/,
+    /(?:^|[\s;&|])rm(?:\s|$)/,
+    /(?:^|[\s;&|])mkdir(?:\s|$)/,
+    /(?:^|[\s;&|])touch(?:\s|$)/,
+    /(?:^|[\s;&|])chmod(?:\s|$)/,
+    /(?:^|[\s;&|])ln\s+-s(?:\s|$)/,
+  ];
+  if (writingPatterns.some((re) => re.test(outside))) return true;
+
+  // Inline scripting: solo bloqueamos python -c / node -e si el código contiene
+  // APIs obvias de escritura.
+  if (/(?:^|[\s;&|])(?:python(?:3)?|node)\s+(?:[^\s;&|]+\s+)*-(?:c|e)(?:\s|=)/.test(outside)
+    && /\b(?:open\s*\(|writeFile\s*\(|writeFileSync\s*\(|appendFile\s*\()/.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
+export function tandemPreToolUseHook() {
+  const deny = (permissionDecisionReason) => ({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason,
+    },
+  });
+  return {
+    PreToolUse: [{
+      hooks: [async (input) => {
+        if (TANDEM_BLOCKED_TOOLS.has(input.tool_name)) {
+          return deny('Modo Tándem: Claude no edita archivos. Usá delegate_to_codex con un plan concreto para que Codex haga el cambio.');
+        }
+        if (input.tool_name === 'Bash' && isWritingBashCommand(input.tool_input?.command || '')) {
+          return deny('Modo Tándem: Bash es solo para inspección y verificación (leer, node --check, tests). Para escribir archivos usá delegate_to_codex.');
+        }
+        return {};
+      }],
+    }],
+  };
+}
+
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
 // romper a sus importadores; server y runner validan contra este mismo Set).
 export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
@@ -111,7 +203,7 @@ export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
 // spawnear el motor). El flag va SIEMPRE: debe estar presente en la CREACIÓN de
 // query() para que un cambio a "Todo" (al arranque o en vivo con
 // setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
-export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, canUseTool, chatId, tandem, mcpServers }) {
+export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, canUseTool, chatId, tandem, mcpServers, hooks }) {
   // Append al system prompt (preset claude_code = PRESERVA el prompt nativo,
   // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
   // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
@@ -159,6 +251,7 @@ export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, 
     allowedTools: ['Skill'],
     // Servidores MCP in-process (solo Tándem hoy: { codex: <sdk server> }).
     ...(mcpServers ? { mcpServers } : {}),
+    ...(hooks ? { hooks } : {}),
     canUseTool,
   };
 }
