@@ -118,11 +118,15 @@ export async function addComment(username, ticket, content, { isPublic = false }
   });
 }
 
-export async function uploadAttachment(username, ticket, filePath, { isPublic = false } = {}) {
+export async function uploadAttachment(username, ticket, filePath, { isPublic = false, fileName = null } = {}) {
   const id = await resolveTicketId(username, ticket);
   const fd = new FormData();
   const blob = new Blob([fs.readFileSync(filePath)]);
-  fd.append('file', blob, path.basename(filePath));
+  // Los archivos de WhatsApp llegan con hash; en Desk conviene ver el nombre real.
+  const attachmentName = String(fileName ?? '').trim()
+    ? path.basename(String(fileName).trim())
+    : path.basename(filePath);
+  fd.append('file', blob, attachmentName);
   const qs = new URLSearchParams({ isPublic: String(!!isPublic) });
   return zohoFetch(username, `/tickets/${encodeURIComponent(id)}/attachments?${qs.toString()}`, {
     method: 'POST',

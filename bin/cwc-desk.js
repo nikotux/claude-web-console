@@ -31,9 +31,10 @@ function usage() {
     '  node bin/cwc-desk.js [--user=<id>] get <nroTicket>',
     '  node bin/cwc-desk.js [--user=<id>] assign <nroTicket> [agentId]',
     '  node bin/cwc-desk.js [--user=<id>] comment <nroTicket> "<texto>" [--public]',
-    '  node bin/cwc-desk.js [--user=<id>] attach <nroTicket> <rutaArchivo> [--public]',
+    '  node bin/cwc-desk.js [--user=<id>] attach <nroTicket> <rutaArchivo> [--as="<nombre visible>"] [--public]',
     '  node bin/cwc-desk.js [--user=<id>] update <nroTicket> --status="..." --priority="..." --dueDate="..."',
     '  node bin/cwc-desk.js [--user=<id>] create --subject="..." --department=<id> --contact=<id> [--description="..."]',
+    '  (en create/update: --cf.<campo>=<valor> setea un custom field, ej. --cf.cf_related_to="Facilities - New Office")',
     '',
     'Ejemplos:',
     '  node bin/cwc-desk.js get 606',
@@ -41,7 +42,9 @@ function usage() {
     '  node bin/cwc-desk.js comment 606 "Respuesta al cliente" --public',
     '  node bin/cwc-desk.js assign 606',
     '  node bin/cwc-desk.js attach 606 /tmp/evidencia.pdf',
+    '  node bin/cwc-desk.js attach 693 /tmp/4A576075F4F73BBD8AFD.pdf --as="CUENTA_COBRO_096.pdf"',
     '  node bin/cwc-desk.js update 606 --status="On Hold"',
+    '  node bin/cwc-desk.js update 606 --cf.cf_related_to="Facilities - Mark House"',
   ].join('\n'));
 }
 
@@ -64,11 +67,18 @@ function parseArgs(argv) {
 }
 
 function fieldFlags(flags) {
-  const skip = new Set(['help', 'public', 'user']);
+  const skip = new Set(['help', 'public', 'user', 'as']);
   const fields = {};
   for (const [key, value] of Object.entries(flags)) {
     if (skip.has(key)) continue;
     fields[key] = value === true ? '' : value;
+  }
+  for (const key of Object.keys(fields)) {
+    if (!key.startsWith('cf.') || key === 'cf.') continue;
+    // Zoho Desk exige los custom fields anidados bajo cf.
+    fields.cf = fields.cf && typeof fields.cf === 'object' ? fields.cf : {};
+    fields.cf[key.slice(3)] = fields[key];
+    delete fields[key];
   }
   return fields;
 }
@@ -127,7 +137,7 @@ async function main() {
     const ticket = rest[1];
     const filePath = rest[2];
     if (!ticket || !filePath) throw new Error('Uso: cwc-desk.js attach <nroTicket> <rutaArchivo> [--public]');
-    await uploadAttachment(username, ticket, filePath, { isPublic: !!flags.public });
+    await uploadAttachment(username, ticket, filePath, { isPublic: !!flags.public, fileName: flags.as });
     console.log(`OK: adjunto ${printablePath(filePath)} subido al ticket #${ticket}${flags.public ? ' como público' : ' como interno'}.`);
     return;
   }
