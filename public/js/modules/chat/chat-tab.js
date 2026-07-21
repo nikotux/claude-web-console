@@ -250,6 +250,7 @@ export class ChatTab {
     this._model = null;           // modelo REAL en curso (haiku/sonnet/opus/fable/opusplan/...)
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
     this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
+    this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
     // Adjuntos pendientes de ESTE mensaje (subidos a disco, aún sin enviar).
     // Cada uno: {name|null, type, mime, size, uploading, error?, localUrl?, origName}.
     // Se limpian al enviar. Ver _uploadFiles/_renderTray/_submit.
@@ -739,7 +740,11 @@ export class ChatTab {
         }
         this._setWorking(m.status === 'working');
         this._modelChoice = m.modelChoice || null; // sin notita: solo poblar el estado al abrir/reconectar
-        this._tandemActive = m.tandemActive === undefined ? true : !!m.tandemActive;
+        // OJO: preservar el null (motor dormido). Un `!!` lo aplastaría a false y
+        // el badge volvería a mentir "pendiente" en toda conversación dormida.
+        this._tandemActive = m.tandemActive === undefined ? true
+          : (m.tandemActive === null ? null : !!m.tandemActive);
+        this._engineDormant = false; // llegó history: hay motor/atadura fresca
         this._effort = m.effort || null;           // eje thinking effort (PEND-391 #3): 2ª línea del banderín
         this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
@@ -829,6 +834,9 @@ export class ChatTab {
           // El motor se durmió (inactividad); la conversación sigue viva:
           // el próximo mensaje la retoma. No se bloquea nada.
           this._line('chat-closed-note', t('chat.event.dormant', 'Conversación dormida por inactividad — tu próximo mensaje la retoma.'));
+          this._engineDormant = true;
+          // El motor durmió: el badge de modelo deja de alarmar (el Pac-Man ya comunica el sueño).
+          if (this._tandemActive === false) { this._tandemActive = null; this._renderModelBadge(); }
         } else {
           this._line('chat-closed-note', t('chat.event.closed', 'Conversación cerrada en el servidor.'));
           this.inputEl.disabled = true;
@@ -1293,7 +1301,9 @@ export class ChatTab {
   // (`modelChoice` cambia mucho menos seguido que `model`).
   _applyModelChoice(modelChoice) {
     this._modelChoice = modelChoice || null;
-    if (this._modelChoice === 'tandem') this._tandemActive = false; // pesimista a propósito: preferimos avisar pendiente hasta que el history post-reopen confirme
+    // Pesimista SOLO con motor vivo (ahí la desincronía es real y hay que avisar).
+    // Con el motor dormido no hay nada desincronizado: el próximo spawn ya nace en Tándem.
+    if (this._modelChoice === 'tandem') this._tandemActive = this._engineDormant ? null : false;
     this._renderModelBadge();
   }
 
@@ -1327,8 +1337,8 @@ export class ChatTab {
       // propio (acento frío, el mismo que Codex en el panel de Uso) para
       // distinguirlo de un modelo forzado común.
       if (this._tandemActive === false) {
-        paint(t('chat.model.tandemPendingBadge', '⏳ Tándem (pendiente)'), 'var(--cwc-warn)',
-          t('chat.model.tandemPendingTitle', 'El motor vivo todavía no corre en Tándem — usá «Reabrir para cambios» en el menú ⋯ de Sesiones para activarlo.'));
+        paint(t('chat.model.tandemPendingBadge', '🤝 Tándem · inactivo'), 'var(--cwc-warn)',
+          t('chat.model.tandemPendingTitle', 'Elegiste Tándem pero el motor que está corriendo NO lo aplica (arrancó antes del cambio). Usá «Reabrir para cambios» en el menú ⋯ de Sesiones.'));
       } else {
         paint(t('chat.model.tandemBadge', '🤝 Tándem'), 'var(--cwc-accent-cool)',
           t('chat.model.tandemTitle', 'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código'));

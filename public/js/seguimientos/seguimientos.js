@@ -27,6 +27,7 @@ function projOf(f) { return f.project || (f.detail && f.detail.relatedTo) || 'Ot
 function isBlocked(f) { return (f.blockedBy && f.blockedBy.length) || f.ownerType === 'vendor' || f.ownerType === 'aprobacion' || f.statusType === 'On Hold'; }
 
 const DAY = 86400000;
+function dkey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function daysUntil(dl) { if (!dl) return null; const d = new Date(dl); if (isNaN(d.getTime())) return null; d.setHours(0, 0, 0, 0); return Math.round((d.getTime() - startOfToday()) / DAY); }
 function horizonOf(dl) { const n = daysUntil(dl); if (n == null) return 'nodate'; if (n < 0) return 'overdue'; if (n === 0) return 'today'; if (n <= 7) return 'week'; if (n <= 31) return 'month'; return 'later'; }
@@ -47,7 +48,7 @@ const COLS = [
   { k: 'status', label: 'Estado', type: 'text', get: (f) => f.status || '', cell: (f) => esc(f.status || '') },
 ];
 
-const state = { data: null, sort: { k: 'deadline', dir: 1 }, filters: {}, selected: new Set(), aiKeys: null, groupByProject: false, onlyMine: false, delta: null, lastSeenAt: null, seenMarked: false, collapsed: {}, metricRange: 'month', calMonth: null, history: [], _charts: {}, calEvents: {} };
+const state = { data: null, sort: { k: 'deadline', dir: 1 }, filters: {}, selected: new Set(), aiKeys: null, groupByProject: false, onlyMine: false, delta: null, lastSeenAt: null, seenMarked: false, collapsed: {}, metricRange: 'month', calMonth: null, history: [], _charts: {}, calEvents: {}, calMeta: { connected: false, error: null, loading: false } };
 
 function rows() {
   let r = (state.data?.frentes || []).slice();
@@ -117,7 +118,7 @@ function renderResumen() {
   if (d.nuevos) p.push(`<b class="sg-r-new">${d.nuevos} nuevos</b> desde tu última visita`);
   if (d.terminados) p.push(`${d.terminados} salieron del tablero`);
   let txt = p.join(' · ') + '.';
-  if (noDate === F.length) txt += ' <span class="sg-r-hint">⚠️ Ningún ticket tiene deadline en Zoho todavía — cargalos para llenar el calendario.</span>';
+  if (noDate === F.length) txt += ` <span class="sg-r-hint">⚠️ Ningún ticket tiene deadline en Zoho todavía — ${state.calMeta.connected ? 'el calendario muestra tus reuniones, pero no vencimientos.' : 'cargalos para llenar el calendario.'}</span>`;
   else if (noDate) txt += ` <span class="sg-r-hint">${noDate} sin deadline.</span>`;
   return `<div class="sg-resumen-txt">${txt}</div>`;
 }
@@ -125,15 +126,58 @@ function renderResumen() {
 // ---------- Calendario híbrido (mini-mes en el cuadrante + modal ampliado) ----------
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const WD = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+let lastCalRangeKey = null;
 
 function calMonthDate() { if (!state.calMonth) { const n = new Date(); state.calMonth = new Date(n.getFullYear(), n.getMonth(), 1); } return state.calMonth; }
-function localKey(dl) { const d = new Date(dl); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function localKey(dl) { return dkey(new Date(dl)); }
 function itemsByDay() {
   const m = {};
   for (const f of (state.data?.frentes || [])) { const dl = due(f); if (!dl) continue; const k = localKey(dl); (m[k] = m[k] || []).push(f); }
   return m;
 }
-function todayKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function todayKey() { return dkey(new Date()); }
+function clip(s, n) { const t = String(s || 'Reunión'); return t.length > n ? `${t.slice(0, Math.max(0, n - 1))}…` : t; }
+function hm(s) { return String(s || '').slice(11, 16) || '--:--'; }
+function eventLine(m, withEnd = false) {
+  const time = m.allDay ? 'Todo el día' : (withEnd ? `${hm(m.startISO)}–${hm(m.endISO)}` : hm(m.startISO));
+  return `${time} ${m.subject || 'Reunión'}`;
+}
+function calendarRangeForMonth() {
+  const base = calMonthDate();
+  const from = new Date(base.getFullYear(), base.getMonth(), 1);
+  from.setDate(from.getDate() - 7);
+  const to = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+  to.setDate(to.getDate() + 7);
+  return { from: dkey(from), to: dkey(to) };
+}
+
+function renderCalendarSurfaces() {
+  const agenda = document.querySelector('[data-quad="agenda"] .sg-quad-b');
+  const resumen = document.querySelector('[data-quad="resumen"] .sg-quad-b');
+  if (!agenda && !resumen) { fullRender(); return; }
+  if (agenda) agenda.innerHTML = renderCalendar();
+  if (resumen) resumen.innerHTML = renderResumen();
+}
+
+async function loadCalendar(force) {
+  const range = calendarRangeForMonth();
+  const rangeKey = `${range.from}|${range.to}`;
+  if (!force && lastCalRangeKey === rangeKey) return;
+  lastCalRangeKey = rangeKey;
+  state.calMeta = { ...state.calMeta, loading: true, error: null };
+  try {
+    const qs = new URLSearchParams({ from: range.from, to: range.to });
+    if (force) qs.set('fresh', '1');
+    const r = await fetch(`/api/seguimientos/calendar?${qs}`, { headers: { accept: 'application/json' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    state.calEvents = data.byDay || {};
+    state.calMeta = { connected: !!data.connected, error: data.error || null, loading: false };
+  } catch (e) {
+    state.calMeta = { ...state.calMeta, error: e.message, loading: false };
+  }
+  renderCalendarSurfaces();
+}
 
 // Grilla de un mes. opts.big = celdas con chips de items; opts.selected = día resaltado.
 function miniMonthHtml(base, byDay, opts = {}) {
@@ -144,12 +188,13 @@ function miniMonthHtml(base, byDay, opts = {}) {
   let cells = '';
   for (let i = 0; i < startWd; i++) cells += '<div class="sg-cal-cell sg-cal-empty"></div>';
   for (let d = 1; d <= daysIn; d++) {
-    const k = `${y}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const k = dkey(new Date(y, mo, d));
     const items = byDay[k] || [];
+    const events = (state.calEvents && state.calEvents[k]) || [];
     const chips = opts.big
-      ? items.slice(0, 3).map((f) => `<span class="sg-cal-chip">#${esc(f.key)}</span>`).join('') + (items.length > 3 ? `<span class="sg-cal-more">+${items.length - 3}</span>` : '')
-      : (items.length ? '<span class="sg-cal-dot"></span>' : '');
-    cells += `<div class="sg-cal-cell${k === tk ? ' sg-cal-today' : ''}${opts.selected === k ? ' sg-cal-sel' : ''}${items.length ? ' sg-cal-has' : ''}" data-cal-day="${k}"><span class="sg-cal-num">${d}</span>${chips}</div>`;
+      ? items.map((f) => `<span class="sg-cal-chip">#${esc(f.key)}</span>`).concat(events.map((m) => `<span class="sg-cal-chip sg-cal-chip--ev">📆 ${esc(clip(m.subject, 14))}</span>`)).slice(0, 3).join('') + (items.length + events.length > 3 ? `<span class="sg-cal-more">+${items.length + events.length - 3}</span>` : '')
+      : `<span class="sg-cal-dots">${items.length ? '<span class="sg-cal-dot"></span>' : ''}${events.length ? '<span class="sg-cal-evdot"></span>' : ''}</span>`;
+    cells += `<div class="sg-cal-cell${k === tk ? ' sg-cal-today' : ''}${opts.selected === k ? ' sg-cal-sel' : ''}${items.length || events.length ? ' sg-cal-has' : ''}" data-cal-day="${k}"><span class="sg-cal-num">${d}</span>${chips}</div>`;
   }
   return `<div class="sg-cal-grid${opts.big ? ' sg-cal-grid--big' : ''}">${WD.map((w) => `<div class="sg-cal-wd">${w}</div>`).join('')}${cells}</div>`;
 }
@@ -162,9 +207,10 @@ function weekStripHtml(byDay) {
   let cols = '';
   for (let i = 0; i < 7; i++) {
     const dd = new Date(wStart); dd.setDate(wStart.getDate() + i);
-    const k = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
+    const k = dkey(dd);
     const n = (byDay[k] || []).length;
-    cols += `<div class="sg-wkcol${k === tk ? ' sg-wkcol-today' : ''}" data-cal-day="${k}"><span class="sg-wkcol-wd">${WD[i]}</span><span class="sg-wkcol-d">${dd.getDate()}</span>${n ? `<span class="sg-wkcol-n">${n}</span>` : ''}</div>`;
+    const evn = ((state.calEvents && state.calEvents[k]) || []).length;
+    cols += `<div class="sg-wkcol${k === tk ? ' sg-wkcol-today' : ''}" data-cal-day="${k}"><span class="sg-wkcol-wd">${WD[i]}</span><span class="sg-wkcol-d">${dd.getDate()}</span>${n ? `<span class="sg-wkcol-n">${n}</span>` : ''}${evn ? `<span class="sg-wkcol-ev">${evn}</span>` : ''}</div>`;
   }
   return `<div class="sg-wkstrip">${cols}</div>`;
 }
@@ -181,31 +227,48 @@ function renderCalendar() {
     <button class="sg-cal-exp" data-act="calexpand" title="Ampliar a pantalla completa">⤢</button>
   </div>`;
   const hint = (noDate === F.length && F.length)
-    ? '<div class="sg-r-hint" style="margin-top:.3rem">Sin deadlines en Zoho todavía — cargalos y aparecen acá.</div>'
+    ? `<div class="sg-r-hint" style="margin-top:.3rem">Sin deadlines en Zoho todavía${state.calMeta.connected ? ' — las reuniones aparecen con el punto frío.' : ' — cargalos y aparecen acá.'}</div>`
     : (noDate ? `<div class="sg-dim" style="margin-top:.3rem">${noDate} sin deadline.</div>` : '');
+  const calHint = !state.calMeta.connected
+    ? '<div class="sg-dim" style="margin-top:.3rem">🔌 Conectá tu calendario de Microsoft en ⚙ Sistema → Conexiones para ver tus reuniones acá.</div>'
+    : (state.calMeta.error ? `<div class="sg-r-hint" style="margin-top:.3rem">⚠️ No se pudieron traer las reuniones: ${esc(state.calMeta.error)}</div>` : '');
   return head
     + `<div class="sg-cal-monthrow">${miniMonthHtml(base, byDay)}</div>`
     + '<div class="sg-cal-wklabel">Esta semana · tocá un día para ver el detalle</div>'
     + weekStripHtml(byDay)
-    + hint;
+    + hint
+    + calHint;
 }
 
 // Popup del día estilo Outlook: banda "todo el día" (tickets) + timeline por
-// horas (las REUNIONES del calendario aparecen acá cuando exista la sync — B).
-// Click en un ítem → su detalle (ticket → openDetail; reunión → detalle propio).
+// horas. Las reuniones se leen por strings locales de Graph para no correrlas
+// al huso del server cuando se muestran en el timeline.
 const DV_H0 = 6; const DV_H1 = 21;
 function openDayView(dateK) {
   const items = itemsByDay()[dateK] || [];
-  const meetings = (state.calEvents && state.calEvents[dateK]) || []; // futuro (B)
+  const meetings = (state.calEvents && state.calEvents[dateK]) || [];
+  const allDayMeetings = meetings.filter((m) => m.allDay);
+  const timedMeetings = meetings.filter((m) => !m.allDay && Number.isFinite(Number(m.hour)));
+  const hoursInDay = timedMeetings.map((m) => Number(m.hour));
+  const h0 = Math.min(DV_H0, ...(hoursInDay.length ? hoursInDay : [DV_H0]));
+  const h1 = Math.max(DV_H1, ...(hoursInDay.length ? hoursInDay : [DV_H1]));
   const ov = document.createElement('div');
   ov.className = 'sg-modal';
-  const allday = items.length
-    ? items.map((f) => `<div class="sg-dv-item" data-key="${esc(f.key)}"><span class="sg-ag-dot sg-ag-${horizonOf(due(f))}"></span><span class="sg-dv-t">🎫 #${esc(f.key)} ${esc(f.title)}</span></div>`).join('')
-    : '<div class="sg-dim">Sin tickets con deadline este día.</div>';
+  const allDayRows = items.map((f) => `<div class="sg-dv-item" data-key="${esc(f.key)}"><span class="sg-ag-dot sg-ag-${horizonOf(due(f))}"></span><span class="sg-dv-t">🎫 #${esc(f.key)} ${esc(f.title)}</span></div>`)
+    .concat(allDayMeetings.map((m) => `<div class="sg-dv-item sg-dv-item--ev">📆 <span class="sg-dv-t">${esc(m.subject || 'Reunión')}</span></div>`));
+  const allday = allDayRows.length ? allDayRows.join('') : '<div class="sg-dim">Sin tickets ni reuniones de todo el día.</div>';
+  const note = !state.calMeta.connected
+    ? '<div class="sg-dim sg-dv-note">🔌 Conectá tu calendario de Microsoft en ⚙ Sistema → Conexiones para ver tus reuniones acá.</div>'
+    : (!meetings.length ? '<div class="sg-dim sg-dv-note">Sin reuniones este día.</div>' : '');
   let hours = '';
-  for (let h = DV_H0; h <= DV_H1; h++) {
+  for (let h = h0; h <= h1; h++) {
     const evs = meetings.filter((m) => m.hour === h)
-      .map((m) => `<div class="sg-dv-ev" data-meeting="${esc(m.id)}">📆 ${esc(m.subject || 'Reunión')}</div>`).join('');
+      .map((m) => {
+        const txt = `📆 ${eventLine(m, true)}${m.location ? ` · ${m.location}` : ''}`;
+        return m.webLink
+          ? `<a class="sg-dv-ev" data-meeting-link href="${esc(m.webLink)}" target="_blank" rel="noopener">${esc(txt)}</a>`
+          : `<div class="sg-dv-ev" data-meeting="${esc(m.id)}">${esc(txt)}</div>`;
+      }).join('');
     hours += `<div class="sg-dv-hrow"><span class="sg-dv-h">${String(h).padStart(2, '0')}:00</span><div class="sg-dv-slot">${evs}</div></div>`;
   }
   ov.innerHTML = `<div class="sg-modal-card sg-dv-card">
@@ -213,10 +276,11 @@ function openDayView(dateK) {
     <div class="sg-dv-body">
       <div class="sg-dv-allday"><div class="sg-dv-lbl">Todo el día</div>${allday}</div>
       <div class="sg-dv-hours">${hours}</div>
-      <div class="sg-dim sg-dv-note">🔌 Las reuniones de tu calendario de Outlook aparecerán acá cuando se conecte la sincronización (Parte B, pendiente).</div>
+      ${note}
     </div></div>`;
   ov.addEventListener('click', (e) => {
     if (e.target === ov || e.target.classList.contains('sg-x')) { ov.remove(); return; }
+    if (e.target.closest('[data-meeting-link]')) return;
     const it = e.target.closest('[data-key]');
     if (it) { ov.remove(); openDetail(it.dataset.key); }
   });
@@ -258,9 +322,12 @@ function openCalendarModal() {
     let weekHtml = '';
     for (let i = 0; i < 7; i++) {
       const dd = new Date(wStart); dd.setDate(wStart.getDate() + i);
-      const k = `${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}-${String(dd.getDate()).padStart(2, '0')}`;
+      const k = dkey(dd);
       const items = byDay[k] || [];
-      weekHtml += `<div class="sg-wk-day${k === selected ? ' sg-wk-sel' : ''}"><div class="sg-wk-h">${WD[i]} ${dd.getDate()}</div>${items.length ? items.map((f) => `<div class="sg-wk-item" data-key="${esc(f.key)}">#${esc(f.key)} ${esc(f.title)}</div>`).join('') : '<div class="sg-dim sg-wk-empty">—</div>'}</div>`;
+      const meetings = (state.calEvents && state.calEvents[k]) || [];
+      const ticketHtml = items.map((f) => `<div class="sg-wk-item" data-key="${esc(f.key)}">#${esc(f.key)} ${esc(f.title)}</div>`).join('');
+      const meetingHtml = meetings.map((m) => `<div class="sg-wk-item sg-wk-item--ev">📆 ${esc(eventLine(m))}</div>`).join('');
+      weekHtml += `<div class="sg-wk-day${k === selected ? ' sg-wk-sel' : ''}"><div class="sg-wk-h">${WD[i]} ${dd.getDate()}</div>${ticketHtml}${meetingHtml}${items.length || meetings.length ? '' : '<div class="sg-dim sg-wk-empty">—</div>'}</div>`;
     }
     ov.querySelector('.sg-calm-month').innerHTML = `<div class="sg-cal-head"><button class="sg-cal-nav" data-cm-nav="-1">‹</button><span class="sg-cal-title">${MONTHS[base.getMonth()]} ${base.getFullYear()}</span><button class="sg-cal-nav" data-cm-nav="1">›</button></div>${miniMonthHtml(base, byDay, { big: true, selected })}`;
     ov.querySelector('.sg-calm-week').innerHTML = `<div class="sg-wk-title">Semana de ${esc(selected)}</div>${weekHtml}`;
@@ -577,6 +644,7 @@ async function load() {
     computeDelta();
     fullRender();
     markSeen();
+    loadCalendar(false);
     if (state.data.refreshing || state.data.classifying) setTimeout(load, 2000);
   } catch (e) {
     app.innerHTML = `<p class="sg-empty">Error al cargar: ${esc(e.message)}</p>`;
@@ -605,7 +673,7 @@ app.addEventListener('click', (e) => {
   if (mr) { state.metricRange = mr.dataset.mrange; fullRender(); return; }
   // Navegación de mes del mini-calendario.
   const cn = e.target.closest('[data-cal-nav]');
-  if (cn) { const b = calMonthDate(); b.setMonth(b.getMonth() + Number(cn.dataset.calNav)); state.calMonth = new Date(b); fullRender(); return; }
+  if (cn) { const b = calMonthDate(); b.setMonth(b.getMonth() + Number(cn.dataset.calNav)); state.calMonth = new Date(b); fullRender(); loadCalendar(false); return; }
   // Click en un día del calendario (mes o semana) → popup estilo Outlook.
   const cd = e.target.closest('[data-cal-day]');
   if (cd) { openDayView(cd.dataset.calDay); return; }

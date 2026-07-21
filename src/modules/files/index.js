@@ -316,7 +316,10 @@ export default {
           }
         }
 
-        res.sendFile(abs, (err) => {
+        // dotfiles:'allow' — ver nota en chat/index.js: Express 5 rechaza por
+        // defecto cualquier path que atraviese una carpeta oculta (.cwc-data,
+        // .config, .claude…). El confinamiento real lo hace resolveWithinRoot.
+        res.sendFile(abs, { dotfiles: 'allow' }, (err) => {
           if (err && !res.headersSent) res.status(500).json({ error: 'No se pudo servir el archivo.' });
         });
       } catch {
@@ -334,7 +337,7 @@ export default {
         catch { return res.status(404).json({ error: 'No existe.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo (usá zip para carpetas).' });
-        res.download(abs, path.basename(abs), (err) => {
+        res.download(abs, path.basename(abs), { dotfiles: 'allow' }, (err) => {
           if (err && !res.headersSent) res.status(500).json({ error: 'No se pudo descargar el archivo.' });
         });
       } catch {

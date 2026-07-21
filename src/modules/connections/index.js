@@ -7,6 +7,7 @@
 // endpoint devuelve ni loguea tokens, secrets o códigos internos.
 import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
+import { config } from '../../core/config.js';
 import { hostUser } from '../../core/user-space.js';
 import {
   PROVIDERS,
@@ -14,9 +15,13 @@ import {
   readAppConfig,
   writeAppConfig,
   appConfigured,
+  readConnection,
   writeConnection,
+  getAccessToken,
   deleteConnection,
+  cancelAttempts,
   connectionStatus,
+  lastAttempt,
   newJobId,
   readJob,
   writeJob,
@@ -32,6 +37,7 @@ import {
   ZOHO_SCOPES,
   authUrl,
   exchangeCode,
+  getOrg,
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
 
@@ -147,14 +153,39 @@ function appConfigResponse() {
   };
 }
 
+// Auto-reparación: las conexiones creadas antes del fix de identidad quedaron
+// sin account/agentId. Como el refresh token ya está guardado, se resuelve sin
+// re-hacer OAuth (el grant code de Zoho es de un solo uso). Best-effort: nunca
+// rompe la consulta de estado.
+async function healZohoIdentity(username) {
+  try {
+    const conn = readConnection(username, 'zoho');
+    if (!conn || !conn.refreshToken || conn.agentId) return;
+    const token = await getAccessToken(username, 'zoho');
+    if (!token) return;
+    const { dc } = readAppConfig().zoho;
+    const me = await getZohoMe(token, dc, conn.orgId, config.instance?.identity?.email);
+    if (!me) return;
+    writeConnection(username, 'zoho', {
+      ...conn,
+      account: me.email || conn.account || null,
+      agentId: me.id || null,
+      agentName: me.name || null,
+    });
+  } catch {
+    // Si falla, la tarjeta simplemente sigue sin nombre; no se rompe nada.
+  }
+}
+
 export default {
   name: 'connections',
 
   registerHttp(router) {
     const r = express.Router();
 
-    r.get('/', asyncHandler((req, res) => {
+    r.get('/', asyncHandler(async (req, res) => {
       const username = userOf(req);
+      await healZohoIdentity(username);
       res.json({
         providers: PROVIDERS.map((p) => ({
           id: p.id,
@@ -162,6 +193,7 @@ export default {
           scopes: p.scopes,
           configured: appConfigured(p.id),
           ...connectionStatus(username, p.id),
+          lastAttempt: lastAttempt(username, p.id),
         })),
         isAdmin: isAdmin(req),
       });
@@ -254,7 +286,12 @@ export default {
         createdAt: Date.now(),
         error: null,
       });
-      res.json({ mode: 'paste', jobId, authUrl: authUrl({ clientId, dc }) });
+      res.json({
+        mode: 'paste',
+        jobId,
+        authUrl: authUrl({ clientId, dc }),
+        scopes: ZOHO_SCOPES.join(','),
+      });
     }));
 
     r.post('/:provider/code', asyncHandler(async (req, res) => {
@@ -283,10 +320,16 @@ export default {
         return res.status(502).json({ error: e.message });
       }
 
-      const account = await getZohoMe(tokens.access_token, dc);
+      const org = await getOrg(tokens.access_token, dc);
+      const me = await getZohoMe(tokens.access_token, dc, org?.id, config.instance?.identity?.email);
+      const account = me?.email || null;
       writeConnection(username, 'zoho', {
         provider: 'zoho',
         account,
+        orgId: org?.id || null,
+        orgName: org?.name || null,
+        agentId: me?.id || null,
+        agentName: me?.name || null,
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token || null,
         expiresAt: Date.now() + (Number(tokens.expires_in) || 3600) * 1000,
@@ -319,6 +362,14 @@ export default {
       // gestiona desde el panel del proveedor.
       deleteConnection(userOf(req), provider);
       res.json({ ok: true });
+    }));
+
+    r.post('/:provider/cancel', asyncHandler((req, res) => {
+      const provider = reqProvider(req, res);
+      if (!provider) return;
+
+      const removed = cancelAttempts(userOf(req), provider);
+      res.json({ ok: true, removed });
     }));
 
     router.use('/connections', r);

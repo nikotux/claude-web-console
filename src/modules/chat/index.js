@@ -673,15 +673,15 @@ class Chat {
     // modelo fijo deriva del tier (haiku→low·sonnet→medium·opus→high).
     this.effort = (EFFORT_LEVELS.includes(effort) ? effort : null)
       || (this.modelChoice === 'auto' ? 'high' : effortForModel(this.model));
-    // Tándem fija Opus + effort MEDIUM PINNED (decisión de Niko 2026-07-15: el
-    // lado Claude razona en medio; Codex ejecuta en alto): nada lo re-alinea. Se
-    // re-aplica también en setModelChoice/rehydrate.
-    if (this.modelChoice === 'tandem') { this.effort = 'medium'; this._effortPinned = true; }
+    // Tándem fija Opus + effort HIGH PINNED (Niko 2026-07-21: el protocolo probó
+    // muy buenos resultados y quiere el razonador en alto; Codex ejecuta en alto
+    // también). Nada lo re-alinea. Se re-aplica en setModelChoice/configureTandem.
+    if (this.modelChoice === 'tandem') { this.effort = 'high'; this._effortPinned = true; }
     // PLAN-519 F1: techo FABLE opt-in de AutoTux (lo fija el picker). Con true,
     // la escala del router de ESTE chat se extiende a haiku→sonnet→opus→fable.
     this._fableCeiling = false;
     // PLAN-519 F2: ejecutor Codex de Tándem, configurable (default gama alta). El
-    // RAZONADOR de Tándem = this.model/this.effort (opus/medium por default).
+    // RAZONADOR de Tándem = this.model/this.effort (opus/high por default).
     this.tandemCodex = { model: 'gpt-5.5', effort: 'high' };
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
@@ -1652,7 +1652,7 @@ class Chat {
       this.onUpdate?.();
       this.setModel('opus'); // motor real = opus (auto:false)
       this._effortPinned = true;
-      if (this.effort !== 'medium') { this.effort = 'medium'; this._push({ type: 'effort', effort: 'medium', auto: false }); this.onUpdate?.(); }
+      if (this.effort !== 'high') { this.effort = 'high'; this._push({ type: 'effort', effort: 'high', auto: false }); this.onUpdate?.(); }
       this._maybeReopenForTandem();
       return;
     }
@@ -1678,7 +1678,7 @@ class Chat {
   // PLAN-519 F2: configura el modelo TÁNDEM con razonador (Cloud) + ejecutor
   // (Codex) elegibles. El razonador es this.model/this.effort (Cloud, pinned); el
   // ejecutor viaja en this.tandemCodex y llega al runner (createCodexToolServer).
-  // Sin args = defaults (opus/medium + gpt-5.5/high), retrocompat con el Tándem
+  // Sin args = defaults (opus/high + gpt-5.5/high), retrocompat con el Tándem
   // original. Whitelist inline (el runner revalida, autoritativo — no cargamos el
   // SDK en el server).
   configureTandem({ reasonerModel, reasonerEffort, codexModel, codexEffort } = {}) {
@@ -1690,7 +1690,7 @@ class Chat {
     const rm = CLOUD.has(reasonerModel) ? reasonerModel : 'opus';
     this.setModel(rm); // auto:false (elección de la persona)
     this._effortPinned = true;
-    const re = EFFORT_LEVELS.includes(reasonerEffort) ? reasonerEffort : 'medium';
+    const re = EFFORT_LEVELS.includes(reasonerEffort) ? reasonerEffort : 'high';
     if (this.effort !== re) { this.effort = re; this._push({ type: 'effort', effort: re, auto: false }); }
     // Ejecutor Codex.
     const CX_MODELS = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']);
@@ -1967,7 +1967,10 @@ class Chat {
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
       tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
-      tandemActive: !!this.link && this._spawnedTandem === true,
+      // TRI-ESTADO (el badge habla de MODELO, no de estado de sesión; eso es el Pac-Man):
+      // true = motor vivo en Tándem · false = motor VIVO que NO lo aplica (única alarma real)
+      // null = sin motor vivo ⇒ no aplica, el próximo spawn ya arranca en Tándem.
+      tandemActive: !this.link ? null : this._spawnedTandem === true,
       sessionId: this.sessionId,
       cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
@@ -1989,7 +1992,10 @@ class Chat {
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
       tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
-      tandemActive: !!this.link && this._spawnedTandem === true,
+      // TRI-ESTADO (el badge habla de MODELO, no de estado de sesión; eso es el Pac-Man):
+      // true = motor vivo en Tándem · false = motor VIVO que NO lo aplica (única alarma real)
+      // null = sin motor vivo ⇒ no aplica, el próximo spawn ya arranca en Tándem.
+      tandemActive: !this.link ? null : this._spawnedTandem === true,
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
@@ -2384,9 +2390,13 @@ export default {
       const { cwd, model, permissionMode, resume, title, ticket, learningId } = req.body || {};
       // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
       // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
-      // reconoce Claude Code). Sin `model` en el pedido, el default pasa a
-      // ser 'auto' (antes quedaba null = "lo que decida el CLI"): AutoTux es
-      // ahora el predeterminado de toda conversación nueva.
+      // reconoce Claude Code). 'tandem' es otro sentinel propio (PLAN-507).
+      // DEFAULT DEL SISTEMA = 'tandem' (Niko 2026-07-21): sin `model` en el
+      // pedido y sin preferencia per-user, toda conversación nueva arranca en
+      // el protocolo Tándem (Opus high razona · Codex gpt-5.5 high ejecuta),
+      // que probó mejor distribución de carga que AutoTux. La preferencia
+      // per-user (defaultModelChoice) sigue ganando sobre este fallback, y el
+      // `model` explícito del body gana sobre ambos.
       if (model != null && model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) {
         return res.status(400).json({ error: 'Modelo inválido.' });
       }
@@ -2407,8 +2417,8 @@ export default {
       }
       const prefs = readPrefs(owner);
       // Default per-user cuando el body NO especifica (el body explícito gana).
-      let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'auto');
-      if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'auto'; // defensivo
+      let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'tandem');
+      if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'tandem'; // defensivo
       const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
       const chat = manager.create({
         cwd: safeCwd(cwd, owner),
@@ -2576,7 +2586,7 @@ export default {
       if (model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       // PLAN-519 F2: modelo TÁNDEM CONFIGURABLE — {model:'tandem', tandem:{
       // reasonerModel,reasonerEffort,codexModel,codexEffort}}. Sin `tandem` usa
-      // defaults (retrocompat con el Tándem original opus/medium + gpt-5.5/high).
+      // defaults (retrocompat con el Tándem original opus/high + gpt-5.5/high).
       if (model === 'tandem') {
         chat.configureTandem(req.body?.tandem && typeof req.body.tandem === 'object' ? req.body.tandem : {});
         manager.persist();
@@ -2792,7 +2802,11 @@ export default {
         res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/["\r\n]/g, '_')}"`);
         res.type('application/octet-stream');
       }
-      res.sendFile(abs);
+      // Express 5 (send v1) aplica dotfiles:'ignore' por defecto y ~/.cwc-data
+      // es una carpeta oculta → 404 en TODO adjunto. La ruta ya viene validada
+      // y confinada por attachPath (basename saneado + padre exacto + statSync),
+      // así que 'allow' no relaja ninguna validación propia.
+      res.sendFile(abs, { dotfiles: 'allow' });
     });
 
     // Asegura la carpeta de adjuntos del chat y devuelve su ruta RELATIVA al

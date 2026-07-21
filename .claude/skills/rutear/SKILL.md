@@ -21,12 +21,18 @@ Desglosás un plan en tareas atómicas y le asignás a **cada una** su ruteo de 
    | Naturaleza | Ejecutor | Modelo | Esfuerzo |
    |---|---|---|---|
    | Diseño/prompt/contrato | Claude | opus\|sonnet | high (xhigh/max si es crítico) |
-   | Escribir código | **Tándem** (Claude razona/verifica + Codex ejecuta) | sonnet | medium (Codex corre en high) |
+   | Escribir código | **Tándem** (Claude razona/verifica + Codex ejecuta) | **opus** | **high PINNED** (Codex gpt-5.5 corre en high) |
    | Cableado trivial | Claude | haiku | low |
    | Verificación E2E | Claude | sonnet\|opus | high |
 
-4. **Persistí** cada tarea en la colección Tasks del Pad del mundo correspondiente (campos `model`/`effort`/`executor`), colgada de su PLAN padre.
-5. **Presentá** a Niko la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: Niko puede reasignar cualquier fila.
+4. **Agrupá por EJECUTOR antes de repartir sesiones.** Entrar o salir de Tándem **re-lanza el runner** (BUG-780: el flag `--tandem` es de SPAWN, no se cambia en caliente; `_maybeReopenForTandem` con throttle de 30 s y solo si la sesión está viva y ociosa). Por eso **una sesión = UN ejecutor**: tareas de ejecutor distinto o van a sesiones/bloques distintos, o se aceptan explícitamente los respawns. Dentro de una sesión Tándem, hasta el "cableado trivial" pasa por Codex — el hook `PreToolUse` deniega TODA escritura de Claude (Edit/Write/MultiEdit y también las de Bash: redirecciones, `sed -i`, `mv`/`cp`/`tee`…), salvo destino absoluto bajo `/tmp/`.
+5. **Persistí** cada tarea en la colección Tasks del Pad del mundo correspondiente (campos `model`/`effort`/`executor`), colgada de su PLAN padre.
+6. **Presentá** a Niko la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: Niko puede reasignar cualquier fila.
+
+## Gotchas de spawn (si el plan se va a orquestar)
+- `POST /api/chat/create` acepta `model:'tandem'` pero **NO** la config fina del protocolo. El razonador/ejecutor alternativos se fijan DESPUÉS con `POST /api/chat/model {model:'tandem', tandem:{reasonerModel,reasonerEffort,codexModel,codexEffort}}`.
+- **Tándem es el default del sistema**: un `create` SIN `model` ya nace en Tándem. Si una tarea necesita Claude puro, pedilo explícito en el body.
+- Verificá que agarró: el campo `tandemActive` de `/api/chat/list` (`false`/`null` = el motor vivo todavía no corre en Tándem).
 
 ## Argumentos
 
@@ -42,4 +48,5 @@ Un plan CHICO se ratea acá y listo — una sola sesión lo ejecuta de corrido c
 Cerrá siempre con la línea `🎾 Pelota: …`.
 
 ---
+*Actualizado 2026-07-21: razonador de Tándem = Opus/high pinned (antes sonnet/medium) · Tándem = default del sistema · ruteo por BLOQUE por el coste de respawn.*
 *Fuente de verdad: `PLAYB-559` en Pad `console`. Si el procedimiento cambia, actualizar ahí primero y resincronizar este archivo.*

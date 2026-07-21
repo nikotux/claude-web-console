@@ -15,7 +15,7 @@
 import {
   readJob, writeJob, buildPlan, planActionCount, detectActiveWork, notifyInterfono,
   applyNpm, applyClaudeCli, applyApt, applyAuditFix, verifySyntax, restartService, waitServiceActive, sleep,
-  invalidateCensusCache,
+  invalidateCensusCache, httpAlive, serviceRestartCount, revertNpmChanges,
 } from '../src/modules/updates/orchestrate-shared.js';
 import { buildUpdatesCensus } from '../src/modules/updates/shared.js';
 import { readRisk } from '../src/modules/updates/analyze-shared.js';
@@ -179,11 +179,48 @@ async function main() {
     patch({ phase: 'restarting' });
     notifyInterfono('🔁 Reiniciando el servicio para tomar las actualizaciones. Vuelvo en unos segundos.', 'note');
     pushLog('Reiniciando el servicio… (el runner sobrevive por KillMode=process)');
+    const restartsBefore = await serviceRestartCount();
     await restartService();
     const back = await waitServiceActive({ timeoutMs: 60_000 });
     pushLog(back ? '✅ Servicio activo de nuevo.' : '⚠️ El servicio no confirmó estar activo a tiempo (revisá journalctl).');
-    // Un respiro para que el HTTP termine de bindear antes de reanudar.
-    await sleep(2000);
+    const alive = await httpAlive();
+    const restartsAfter = await serviceRestartCount();
+    const crashLoop = restartsAfter > restartsBefore + 1;
+    const confirmedFailure = alive.alive === false || crashLoop;
+
+    if (confirmedFailure) {
+      patch({ phase: 'reverting' });
+      const why = [
+        alive.alive === false ? `HTTP no respondió OK tras el reinicio (${alive.reason || 'sin detalle'})` : null,
+        crashLoop ? `NRestarts subió de ${restartsBefore} a ${restartsAfter}` : null,
+      ].filter(Boolean).join('; ');
+      pushLog(`❌ Falla confirmada post-reinicio: ${why}. Revirtiendo cambios npm automáticamente…`);
+      const revert = await revertNpmChanges();
+      pushLog(revert.ok ? `✅ Revert npm OK: ${revert.detail}` : `❌ Revert npm falló: ${revert.detail}`);
+      await restartService();
+      const revertedAlive = await httpAlive();
+      const serverBack = revertedAlive.alive === true
+        ? 'server volvió por HTTP'
+        : (revertedAlive.alive === null ? `server no verificable por HTTP (${revertedAlive.reason})` : `server sigue sin responder por HTTP (${revertedAlive.reason})`);
+      notifyInterfono('⚠️ La actualización rompió el server; se revirtieron los cambios npm automáticamente.', 'note');
+      patch({
+        running: false,
+        phase: 'error',
+        finishedAt: Date.now(),
+        error: `La actualización rompió el server; se revirtieron los cambios npm automáticamente. Revert: ${revert.ok ? 'OK' : 'falló'}; ${serverBack}.`,
+        postRestart: { alive, restartsBefore, restartsAfter },
+        revert: { ok: revert.ok, detail: revert.detail, alive: revertedAlive },
+      });
+      pushLog(`🧯 Fin con error tras revert: ${serverBack}.`);
+      return;
+    }
+
+    if (alive.alive === null) {
+      patch({ verifySkipped: true });
+      pushLog('⚠️ No se pudo verificar por HTTP; se continúa sin auto-revert');
+    } else {
+      pushLog('✅ HTTP respondió OK tras el reinicio.');
+    }
 
     // ── 6 · RESUMING ──────────────────────────────────────────────────────
     patch({ phase: 'resuming' });

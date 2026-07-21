@@ -157,6 +157,8 @@
   .sg-cal-today { border-color: var(--cwc-accent); font-weight: 700; }
   .sg-cal-sel { background: var(--cwc-accent-bg); }
   .sg-cal-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--cwc-accent); margin-top: 1px; }
+  .sg-cal-dots { display: flex; gap: 2px; justify-content: center; min-height: 5px; margin-top: 1px; }
+  .sg-cal-evdot { width: 4px; height: 4px; border-radius: 50%; background: var(--cwc-accent-cool); }
   /* Fila 2: tira de la semana del día seleccionado + detalle inline. */
   .sg-cal-wklabel { font-size: .64rem; color: var(--cwc-text-dim); margin: .35rem 0 .15rem; }
   .sg-wkstrip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
@@ -167,6 +169,7 @@
   .sg-wkcol-d { font-size: .78rem; line-height: 1.1; }
   .sg-wkcol-today .sg-wkcol-d { color: var(--cwc-accent); font-weight: 700; }
   .sg-wkcol-n { background: var(--cwc-accent); color: var(--cwc-accent-ink); border-radius: 8px; font-size: .54rem; padding: 0 3px; margin-top: 1px; }
+  .sg-wkcol-ev { background: var(--cwc-accent-cool); color: var(--cwc-accent-ink); border-radius: 8px; font-size: .54rem; padding: 0 3px; margin-top: 1px; }
   .sg-cal-detail { margin-top: .35rem; border-top: 1px solid var(--cwc-border); padding-top: .3rem; }
   .sg-cal-dh { font-size: .72rem; font-weight: 600; margin-bottom: .2rem; }
 
@@ -176,14 +179,16 @@
   .sg-dv-allday { border: 1px solid var(--cwc-border); border-radius: 7px; padding: .4rem .5rem; margin-bottom: .5rem; }
   .sg-dv-lbl { font-size: .68rem; color: var(--cwc-text-dim); margin-bottom: .25rem; }
   .sg-dv-item { display: flex; align-items: center; gap: .45rem; padding: .2rem 0; cursor: pointer; border-radius: 4px; }
+  .sg-dv-item--ev { color: var(--cwc-accent-cool); cursor: default; font-size: .82rem; }
   .sg-dv-item:hover { background: var(--cwc-bg-hover); }
+  .sg-dv-item--ev:hover { background: transparent; }
   .sg-dv-t { font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sg-dv-hours { border: 1px solid var(--cwc-border); border-radius: 7px; overflow: hidden; }
   .sg-dv-hrow { display: flex; min-height: 26px; border-bottom: 1px solid var(--cwc-border); }
   .sg-dv-hrow:last-child { border-bottom: none; }
   .sg-dv-h { flex: none; width: 46px; font-size: .68rem; color: var(--cwc-text-dim); padding: .2rem .4rem; border-right: 1px solid var(--cwc-border); }
   .sg-dv-slot { flex: 1; padding: .12rem .3rem; display: flex; flex-direction: column; gap: 2px; }
-  .sg-dv-ev { background: var(--cwc-accent-cool, var(--cwc-accent)); color: var(--cwc-accent-ink); border-radius: 4px; padding: .1rem .35rem; font-size: .74rem; cursor: pointer; }
+  .sg-dv-ev { display: block; background: var(--cwc-accent-cool); color: var(--cwc-accent-ink); border-radius: 4px; padding: .1rem .35rem; font-size: .74rem; cursor: pointer; text-decoration: none; }
   .sg-dv-note { margin-top: .5rem; }
 
   /* Calendario ampliado (modal mes + semana) */
@@ -192,13 +197,16 @@
   @media (max-width: 760px) { .sg-calm-body { grid-template-columns: 1fr; } }
   .sg-cal-grid--big .sg-cal-cell { aspect-ratio: auto; min-height: 54px; align-items: flex-start; justify-content: flex-start; padding: 2px 3px; gap: 1px; border: 1px solid var(--cwc-border); overflow: hidden; }
   .sg-cal-chip { font-size: .6rem; background: var(--cwc-accent); color: var(--cwc-accent-ink); border-radius: 3px; padding: 0 2px; max-width: 100%; overflow: hidden; }
+  .sg-cal-chip--ev { background: color-mix(in srgb, var(--cwc-accent-cool) 24%, var(--cwc-bg-input)); color: var(--cwc-accent-cool); }
   .sg-cal-more { font-size: .58rem; color: var(--cwc-text-dim); }
   .sg-wk-title { font-weight: 600; font-size: .82rem; margin-bottom: .35rem; }
   .sg-wk-day { border-bottom: 1px solid var(--cwc-border); padding: .25rem 0; }
   .sg-wk-sel { background: var(--cwc-accent-bg); border-radius: 5px; padding-left: .3rem; }
   .sg-wk-h { font-size: .72rem; color: var(--cwc-text-dim); }
   .sg-wk-item { font-size: .76rem; padding: .1rem 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sg-wk-item--ev { color: var(--cwc-accent-cool); cursor: default; font-size: .74rem; }
   .sg-wk-item:hover { color: var(--cwc-accent); }
+  .sg-wk-item--ev:hover { color: var(--cwc-accent-cool); }
   .sg-wk-empty { padding: .1rem 0; }
 </style>
 </head>

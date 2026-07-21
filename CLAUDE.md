@@ -399,6 +399,8 @@ B-A y C) y recibe todos los textos — es correcto.
   la investigación a fondo + `investigate.lock` heartbeat,
   `ticket-investigations/<n>.json` veredicto de la investigación de contexto de un
   ticket sin PR + `<n>.req.json` enunciado + `ticket-investigate.lock` heartbeat,
+  snapshot interno del módulo `seguimientos` + historia diaria de métricas (estado
+  generado desde Zoho Desk; el dashboard lee disco, no el mundo externo en vivo),
   `inventory.json`+`inventory.md` generados por core/inventory.js,
   `updates-census.json` último censo de versiones de terceros (módulo `updates`;
   npm outdated/audit + claude/apt/pad versions; escritura atómica, caché 6 h, se
@@ -1012,6 +1014,20 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             "Trabajar en esto" (pasan modo explícito default/plan por el gate
                             de push) ni el fallback del server /create (sigue 'default' como
                             red anti-footgun para llamadas programáticas).
+                            DEFAULT «TÁNDEM» DE TODO CHAT NUEVO (pedido de Niko 2026-07-21, tras validar el
+                            protocolo en uso real: mejor distribución de carga que AutoTux manteniendo un
+                            mínimo de Opus en el medio y Codex en su versión más potente): el fallback del
+                            sistema en POST /api/chat/create pasó de 'auto' a 'tandem' (incluida la rama
+                            defensiva de modelChoice inválido), y el LANZADOR dejó de recordar el último
+                            modelo usado en localStorage ('cwc:lastModel' eliminado) — arranca SIEMPRE en
+                            Tándem salvo que se elija otro en ese mismo modal. Precedencia (sin cambios en el
+                            mecanismo): `model` explícito del body > preferencia per-user
+                            `defaultModelChoice` (⚙ Sistema → Proyectos, acepta 'tandem') > fallback del
+                            sistema, ahora 'tandem'. AutoTux NO se eliminó: sigue disponible como elección
+                            explícita en el picker y como preferencia per-user. Los chats YA existentes
+                            conservan su modelChoice persistido (no hay migración). Verificado en caliente:
+                            create sin `model` ⇒ {modelChoice:'tandem', model:'opus', effort:'high',
+                            tandemCodex:{gpt-5.5, high}}.
                             CHIPS DE EJECUCIÓN (tool calls): SOLO dos íconos, sin texto —
                             consola (= herramienta ejecutada) + tipo (TOOL_TYPE_ICONS en
                             chat-tab.js: Bash=play · Edit/Write=edit · Read=eye ·
@@ -1375,8 +1391,9 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             MODELO "TÁNDEM" — razona Claude, ejecuta Codex (2026-07-15, PLAN-507/
                             PEND-508, pedido de Niko; VERIFICADO E2E): un modelChoice NUEVO —
                             'tandem' — que SEPARA las dos fases del desarrollo entre proveedores:
-                            RAZONAMIENTO/planeación/verificación → Claude Opus (effort MEDIUM, FIJO —
-                            Niko 2026-07-15: Claude razona en medio, Codex ejecuta en alto) ·
+                            RAZONAMIENTO/planeación/verificación → Claude Opus (effort HIGH, FIJO —
+                            Niko 2026-07-21: subido de medium a high tras validar el protocolo en uso
+                            real; antes era medium por decisión del 2026-07-15) ·
                             EJECUCIÓN de código → Codex gpt-5.5 (reasoning effort alto) vía el CLI
                             `codex exec`. Es HERMANO de 'auto'/AutoTux en la misma infra (centinela
                             de modelChoice + core/tool-policy.js) pero su ANTÍTESIS: dupla FIJA de
@@ -1386,7 +1403,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             como prompt (el plan ES la transferencia). PIEZAS: (a) 'tandem' en
                             CHAT_MODEL_OPTIONS (ui/models.js) → todos los pickers por herencia; (b)
                             setModelChoice('tandem') + constructor (chat/index.js): modelChoice='tandem',
-                            model REAL='opus', effort='medium' PINNED — el CLI nunca ve 'tandem' (centinela
+                            model REAL='opus', effort='high' PINNED — el CLI nunca ve 'tandem' (centinela
                             propio, como 'auto'); (c) spawnRunner pasa `tandem:true` (runner-link.js →
                             arg `--tandem 1`); (d) NUEVO src/modules/chat/codex-tool.js: fábrica
                             createCodexToolServer({cwd}) que arma la tool IN-PROCESS `delegate_to_codex`
@@ -1394,9 +1411,73 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             invocarla, spawnea `codex exec --json --skip-git-repo-check -m gpt-5.5 -c
                             model_reasoning_effort=high -s workspace-write` con cwd = el del chat,
                             parsea el stream JSONL (thread.started/item.completed{agent_message|
-                            file_change}/turn.completed{usage}), y devuelve resumen + `git diff` +
-                            CONTENIDO de archivos nuevos (git diff NO incluye untracked; se leen con
-                            fs, sin tocar el índice) como tool_result para que Claude VERIFIQUE; (e)
+                            file_change}/turn.completed{usage}), y devuelve resumen + diff ACOTADO A LO
+                            QUE TOCÓ ESA DELEGACIÓN + contenido de los archivos nuevos DE ESA
+                            DELEGACIÓN como tool_result para que Claude VERIFIQUE. Cómo se acota:
+                            `snapshotTree()` toma `git diff --numstat` + `git ls-files --others`
+                            ANTES y DESPUÉS de correr Codex; `diffSnapshots()` compara: si cambió el
+                            numstat de un archivo trackeado, lo tocó esta delegación (detecta también
+                            un archivo YA sucio que Codex modificó más, y un revert); untracked nuevo,
+                            o untracked preexistente con mtime >= el arranque de la corrida, cuenta
+                            como archivo nuevo de esta delegación. Es snapshot de GIT, no auto-reporte
+                            de Codex, así que captura el cambio aunque lo haya hecho con apply_patch o
+                            con sed/bash. La atribución usa DOS señales combinadas: (1) el numstat de
+                            git, como arriba; (2) para todo lo que YA venía sucio, la comparación del
+                            CONTENIDO real contra el snapshot previo. La segunda es imprescindible: el
+                            numstat (agregadas:borradas) es CIEGO a un cambio que no altere esos
+                            conteos — BUG REAL detectado en prueba E2E (2026-07-21): una delegación
+                            reemplazó UNA línea que ya formaba parte de las 160 inserciones acumuladas
+                            del archivo, el numstat siguió siendo idéntico, `touched` quedó vacío y la
+                            tool cayó a la rama de FALLBACK devolviendo el árbol completo; el cambio
+                            existía pero no se detectó. Con la señal de contenido, un archivo cuyo
+                            contenido difiere del snapshot previo SIEMPRE se atribuye a la delegación
+                            (a `newFiles` si es untracked, a `touched` si es trackeado). Los bucles de
+                            numstat y de mtime se CONSERVAN: cubren los archivos que no entraron al
+                            snapshot de contenidos (p.ej. los mayores a 1 MB). `diffSnapshots` se
+                            exporta, igual que `delegationDiff`, para poder testear ambas señales sin
+                            runner vivo. DENTRO de cada archivo tocado el diff también es de ESA
+                            delegación, no acumulado: `snapshotTree(cwd, {withContents:true})` captura
+                            además el CONTENIDO de los archivos que YA venían sucios (tracked dirty +
+                            untracked) antes de correr Codex — topes MAX_SNAPSHOT_FILE 1 MB por archivo
+                            y MAX_SNAPSHOT_TOTAL 8 MB — y el helper exportado `delegationDiff(cwd,
+                            touched, before)` los diffea pre/post con `git diff --no-index` contra un
+                            temporal en os.tmpdir(), reescribiendo las rutas del temporal a la ruta del
+                            proyecto y borrando los temporales en un finally. La reescritura contempla
+                            los prefijos `a/` y `b/` que git antepone a las rutas: sin eso los
+                            encabezados salían malformados (`asrc/modules/...` en vez de
+                            `a/src/modules/...`) porque la ruta del temporal es absoluta y su barra
+                            inicial se comía la del prefijo. Los archivos que estaban
+                            LIMPIOS siguen por `git diff -- <rel>`, que ahí YA es exactamente el cambio
+                            de la delegación. Un untracked preexistente que Codex modificó sale como
+                            diff en vez de volcado completo del contenido. Por qué hizo falta: acotar
+                            por archivo dejaba un residuo de segundo orden — si el archivo ya venía
+                            modificado por trabajo anterior de la MISMA sesión, `git diff` contra HEAD
+                            arrastraba todo lo acumulado (medido: una delegación que cambió 1 línea
+                            devolvía 9.227 chars), y con MAX_SCOPED_DIFF de 8000 el cambio real podía
+                            volver a caer del lado truncado — el mismo modo de falla original un nivel
+                            más abajo. Medido tras el fix: 12.645 chars contra HEAD → 973 pre/post en
+                            el mismo archivo (13×). DEGRADACIÓN CONOCIDA: un archivo de más de 1 MB no
+                            entra al snapshot y cae al diff contra HEAD (el comportamiento anterior,
+                            nunca peor). `delegationDiff` se exporta a propósito para poder testearlo
+                            sin runner vivo. Motivo MEDIDO sobre 108 delegaciones reales (2026-07-21): el
+                            diff global escondía el cambio real en el 66% de los casos (solo 15% lo
+                            mostraba completo) y devolvía ~30k chars por vuelta (790k tokens
+                            acumulados), justo lo que Tándem existe para NO gastar en la ventana de
+                            Claude; verificación medida en el propio cambio: 60.004 chars de árbol →
+                            8.604 acotados, con el cambio real adentro. El diff acotado se recorta a
+                            MAX_SCOPED_DIFF (8000) con puntero a leer el resto con Read sobre las rutas
+                            listadas; los archivos sucios AJENOS a la delegación se resumen en UNA
+                            línea ("el árbol tiene además N archivos ajenos — ignoralos"), nunca su
+                            contenido. FALLBACK: si no se pudo atribuir ningún cambio (Codex no cambió
+                            nada, o git no disponible), cae al comportamiento viejo (árbol completo
+                            recortado a MAX_DIFF) etiquetado como "no se pudo acotar". LIMITACIÓN
+                            CONOCIDA: dos delegaciones EN PARALELO sobre el mismo repo (dos chats a la
+                            vez) pueden atribuirse cambios entre sí — el snapshot es del árbol, no por
+                            proceso. Además, `TANDEM_CODEX_PREAMBLE` (constante exportada) antepone al
+                            `task` las reglas fijas del protocolo (tocar solo los archivos del plan,
+                            verificar con `node --check`, no commitear/pushear, resumir qué cambió):
+                            antes Claude las re-escribía a mano en cada encargo (medido: 87% repetía
+                            "node --check", 67% "no toques otros archivos"); (e)
                             runner (bin/cwc-chat-runner.js): si `--tandem 1`, agrega el mcpServer codex
                             a chatQueryOptions Y — BLOQUEO ESTRUCTURAL — askPermission auto-DENIEGA
                             Edit/Write/MultiEdit/NotebookEdit (TANDEM_BLOCKED) sin tarjeta, con un
@@ -1477,12 +1558,36 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             cuyo código inline contenga `open(`/`writeFile*`/`appendFile`. Medido:
                             13/13 comandos de inspección pasan sin falso positivo y 10/10 de escritura
                             se bloquean. NO es hermética por construcción (`python3 - <<EOF` o un
-                            script ya en disco escapan): barrera de altura razonable, no jaula. UI:
-                            `info()`/`_historyPayload` exponen `tandemActive` (= `!!link &&
-                            _spawnedTandem === true`) y el badge del header (chat-tab.js) muestra
-                            "⏳ Tándem (pendiente)" en `--cwc-warn` cuando el motor vivo todavía no
-                            corre en Tándem, con título que invita a "Reabrir para cambios".
-                            `_applyModelChoice` lo pone pesimista en false al elegir Tándem. El runner
+                            script ya en disco escapan): barrera de altura razonable, no jaula.
+                            EXCEPCIÓN /tmp: una redirección de escritura cuyo destino sea ruta absoluta
+                            bajo `/tmp/` (sin `..`) se PERMITE (`isScratchTarget`): un script
+                            descartable en /tmp no es código del proyecto ni esquiva a Codex, que es lo
+                            que el guard protege; el resto (`mv`/`cp`/`rm`/`tee`/`sed -i`/etc.) sigue
+                            bloqueado SIEMPRE, aunque apunte a /tmp. Motivo: el guard frenaba scripts
+                            de análisis descartables. UI:
+                            `info()`/`_historyPayload` exponen `tandemActive` como TRI-ESTADO (corregido
+                            2026-07-21, reporte de Niko: «el badge me sigue diciendo pendiente»): `true` =
+                            motor vivo corriendo en Tándem · `false` = motor VIVO que NO lo aplica (la ÚNICA
+                            alarma legítima, la de BUG-780) · `null` = NO hay motor vivo ⇒ no aplica, el
+                            próximo spawn ya nace en Tándem. ANTES era `!!link && _spawnedTandem === true`,
+                            que colapsaba "sin motor" y "motor desincronizado" en el mismo `false`: los 29
+                            chats Tándem DORMIDOS mostraban "⏳ Tándem (pendiente)" siendo que estaban
+                            perfectos (medido en caliente). PRINCIPIO derivado (pedido de Niko): el BADGE DE
+                            MODELO habla SOLO de qué protocolo/modelo está en efecto; el ESTADO de la sesión
+                            (dormida/turno/delegando) lo comunica el PAC-MAN — el badge nunca lo duplica.
+                            Por eso el texto del caso desincronizado pasó de "⏳ Tándem (pendiente)" (suena a
+                            trámite/estado) a "🤝 Tándem · inactivo" en `--cwc-warn`, con título que explica
+                            que el motor arrancó antes del cambio e invita a "Reabrir para cambios". Del lado
+                            front (chat-tab.js): el handler de `history` PRESERVA el `null` (antes un `!!`
+                            lo aplastaba a `false` — ese era el último eslabón del bug), el flag nuevo
+                            `_engineDormant` (true al recibir `closed` con `resumable`, false al llegar
+                            `history`) hace que `_applyModelChoice` ponga el pesimista `false` SOLO con motor
+                            vivo, y al dormirse el motor un `false` previo se degrada a `null` + repinta.
+                            La rama del badge sigue chequeando `=== false`, así que `null` cae sola en la
+                            rama buena. Verificado E2E: backend 29 dormidos→null / 2 vivos→true / cero
+                            `false` espurios; Playwright confirma "🤝 Tándem" en un chat dormido (0 errores
+                            JS); y el ciclo completo de la alarma legítima (motor vivo haiku → elegir Tándem
+                            ⇒ `false` ⇒ reopen automático) sigue funcionando. El runner
                             ahora REPORTA su propio flag `tandem` en el evento `init` y en su respuesta
                             al `hello`: este último cubre la re-adopción tras reinicio del server,
                             porque el `init` va con `record:false` y no se replaya. El server adopta
@@ -1527,7 +1632,7 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             AutoTux acento · Tándem acento-frío · Manual tenue) + effort por chip (select) +
                             checkbox Fable. Test determinista bin/cwc-test-model-router.js: 77 pass (68+9
                             fable). VERIFICADO E2E: 3 protocolos por endpoint (Manual sonnet/high · AutoTux+
-                            Fable · Tándem sonnet/low+gpt-5.4/medium) + picker por Playwright (leyenda
+                            Fable · histórico Tándem sonnet/low+gpt-5.4/medium) + picker por Playwright (leyenda
                             dinámica, 0 errores). El badge del header (chat-tab.js) se conserva (auto→AutoTux
                             · tandem→🤝 Tándem · forzado→modelo). Métricas/calibración (F6): logDecision/
                             logTurn siguen; con fable en la escala el `from`/`to` puede ser 'fable' (la
@@ -2126,6 +2231,68 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             `CROSS_WORLD_ALLOW`. Las TRES piezas (manual/correo/Teams) caen en la MISMA
                             lista del tablero (ícono 💬, chip de ticket) — se aprueban/adoptan/
                             descartan con el mismo flujo de siempre, nada se auto-aplica.
+  seguimientos/             Dashboard "Seguimientos" (PLAN-553), primer habitante de LIMBO
+                            (Regla dura 13): mapea el trabajo HUMANO-accionable de Niko, es
+                            decir tickets que requieren SU intervención; nunca backend/dev. Se
+                            alimenta del mundo externo (Zoho Desk) por la ADUANA read-only →
+                            snapshot interno en disco; el dashboard lee SIEMPRE del snapshot,
+                            nunca en vivo. Ruta /api/seguimientos. Frontend standalone en
+                            public/seguimientos.html + public/js/seguimientos/seguimientos.js:
+                            página aparte, sin main.js, con CSS INLINE en un <style> del propio
+                            HTML — no en style.css. Archivos: store.js (snapshot) · refresher.js
+                            (aduana Desk) · desk-source.js · classify-shared.js +
+                            bin/cwc-seguimientos-runner.js (clasificador IA desacoplado, Haiku)
+                            · history-store.js (historia diaria para las métricas) ·
+                            calendar-source.js (calendario Outlook). Regla de resolución: el
+                            dashboard NO resuelve nada solo — lanza una SESIÓN-LIMBO
+                            (`limbo: true`) con el contexto ya masticado (0 tokens para armarlo,
+                            sale del snapshot) y esa sesión reporta de vuelta. Endpoints que
+                            abren sesión: /resolve · /resolve-bulk · /scan-updates · /standup.
+                            La sesión lee las 4 fuentes (Desk/correo/Teams por MCP + WhatsApp
+                            por Read del índice) pero SOLO escribe al ticket y con aprobación
+                            explícita (limboFooter()).
+                            CALENDARIO — sync con Microsoft/Outlook (2026-07-21): el cuadrante
+                            📅 tiene DOS capas de datos independientes, no confundirlas. (a)
+                            VENCIMIENTOS de tickets: salen del `dueDate` del snapshot de Zoho;
+                            hoy vacío porque NINGÚN ticket tiene deadline cargado en Zoho (no es
+                            bug del código: el dato no existe en el origen). (b) REUNIONES reales
+                            del calendario de Outlook, vía calendar-source.js. calendar-source.js
+                            es la fuente única: `fetchCalendar(username, {from,to,fresh})` pide
+                            GET /me/calendarView a Microsoft Graph con el token que ya administra
+                            core/connections-store.js (`getAccessToken(username,'microsoft')`,
+                            refresco automático; OAuth en ⚙ Sistema → Conexiones, scope
+                            Calendars.ReadWrite). Devuelve {connected, byDay:{'YYYY-MM-DD':
+                            [eventos]}, count}; caché en memoria 120 s por rango. BEST-EFFORT:
+                            sin conexión devuelve {connected:false} y el dashboard invita a
+                            conectar; si Graph falla devuelve {connected:true, error}; el
+                            calendario nunca puede romper el dashboard.
+                            GOTCHA CENTRAL: el server corre en BERLÍN y el calendario se mira en
+                            MEDELLÍN. La petición manda Prefer:
+                            outlook.timezone="America/Bogota", así que Graph devuelve el
+                            `dateTime` YA convertido a hora de Niko — por eso día y hora se
+                            derivan por SLICE DE STRING (`slice(0,10)` / `slice(11,13)`), NUNCA
+                            con `new Date()`: parsear ese string crearía un Date en la zona del
+                            server y correría al día equivocado los eventos cerca de medianoche.
+                            Mismo cuidado en el front: helper `dkey(date)` de seguimientos.js es
+                            la fuente única del formateo local (reemplazó las copias sueltas del
+                            mismo padStart). Otro gotcha: Graph reporta el `end` de un evento de
+                            día completo como el día SIGUIENTE exclusivo → se le resta un día
+                            antes de expandir el rango, si no un feriado de un día aparece en dos.
+                            Endpoint GET /api/seguimientos/calendar?from=&to=&fresh=1
+                            (autenticados, 0 tokens de IA — es HTTP determinístico, la regla 6 no
+                            aplica): valida el formato de fecha y rechaza rangos >120 días; sin
+                            parámetros usa el mes actual ±7 días (la grilla del mini-mes muestra
+                            colas del mes vecino). Resuelve el usuario con el mismo userOf(req)
+                            de connections/index.js (`principalOf(req)?.username || hostUser()`),
+                            porque los tokens OAuth son PER-USUARIO. Front: el fetch es
+                            fire-and-forget al final de `load()` y al navegar de mes — el
+                            dashboard pinta sin esperar a Graph. Las reuniones se distinguen de
+                            los tickets por COLOR (tickets `--cwc-accent` terracota · reuniones
+                            `--cwc-accent-cool` frío) en el punto del mini-mes, el badge de la
+                            tira semanal, los chips del calendario ampliado y el timeline por
+                            horas del popup del día (extiende su rango 6-21 h si hay una reunión
+                            fuera de esa franja, y manda los eventos de día completo a la banda
+                            "Todo el día").
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
                             claims con verdict de evaluateClaim + ts) · POST /send {to,text}
@@ -3231,6 +3398,49 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             fix arregla las 2 vulns, análisis IA produce veredictos reales
                             (@xterm/addon-web-links → riesgoso/baja sin changelog = conservador correcto),
                             buildPlan auto-incluye seguro+alta y excluye rompe/beta, Playwright 0 errores.
+                            🔴 INCIDENTE REAL + ENDURECIMIENTO (2026-07-21). Qué pasó: el botón aplicó
+                            `cookie` 1→2 (tildado por Niko pese al veredicto IA 🟡 riesgoso/confianza
+                            baja). cookie v2 RENOMBRÓ su export `parse` → `parseCookie`; `src/core/auth.js`
+                            importaba `{ parse }` → `SyntaxError: The requested module 'cookie' does not
+                            provide an export named 'parse'` → el server entró en CRASH-LOOP (systemd
+                            reintentó 5+ veces) y se PERDIÓ EL ACCESO WEB. Se arregló adaptando el import
+                            a la API nueva (commit `10e5b7d`), no revirtiendo. Los tres eslabones que
+                            fallaron: (1) `node --check` es CIEGO a esto — solo parsea sintaxis, un import
+                            inexistente falla en runtime; (2) `waitServiceActive` solo consultaba
+                            `systemctl is-active`, que durante un crash-loop reporta "active/activating"
+                            transitoriamente → el runner mandó "✅ podés continuar" con la consola caída;
+                            (3) el checkbox de opt-in permitía forzar un major que la IA no pudo verificar.
+                            CINCO ENDURECIMIENTOS (pedido de Niko tras el incidente): (1) VERIFICACIÓN
+                            HTTP REAL + AUTO-REVERT — `httpAlive()` (orchestrate-shared.js) pega a
+                            `https://<IP ZeroTier>:<puerto>/api/health/checks` con node:https
+                            (rejectUnauthorized:false, cert self-signed) usando `findZeroTierIp` +
+                            `config.port`; `serviceRestartCount()` lee `NRestarts` de systemd. El runner
+                            guarda NRestarts ANTES de reiniciar y tras el restart declara FALLA
+                            CONFIRMADA si `alive===false` O `restartsAfter > restartsBefore+1` (crash-loop)
+                            → fase `reverting` → `revertNpmChanges()` (git checkout de package.json/lock +
+                            npm install) → reinicia → re-verifica → job en `error` + interfono de aviso.
+                            PRINCIPIO DURO: se auto-revierte SOLO ante evidencia POSITIVA de falla; si
+                            `alive===null` (no se pudo verificar: sin IP/token) NO se revierte, se marca
+                            `verifySkipped:true` y sigue. (2) BLOQUEO POR VEREDICTO — buildPlan clasifica
+                            cada major en AUTO (seguro+alta), TILDABLE (resto no bloqueante) y BLOQUEADO:
+                            sin veredicto IA · `rompe` · `riesgoso`+`baja` · pre-release. Un BLOQUEADO NO
+                            entra aunque esté en `includeMajors` (el checkbox ya no alcanza) y sale en
+                            `plan.majorsBlocked[{name,from,to,reason}]`; el front lo muestra con 🔒 y sin
+                            checkbox. Verificado: cookie riesgoso/baja + tildado ⇒ queda en majorsBlocked.
+                            (3) CONFIRMAR VERSIÓN INSTALADA — `applyNpm` lee la versión REAL de
+                            node_modules tras el install y si no coincide con el target devuelve ok:false
+                            ("npm reportó éxito pero quedó instalada la X"). Mata el ✅ falso (caso real:
+                            archiver dijo OK y siguió en 7.0.1). (4) CLI NO GESTIONABLE — `censusClaudeCli`
+                            resuelve el symlink de `claude`: si cae fuera de $HOME (acá
+                            `/usr/lib/node_modules/...`, instalación root) marca `manageable:false` + nota;
+                            buildPlan OMITE el paso del CLI y el front no ofrece botón — así deja de
+                            figurar como pendiente eterno que `claude update` no puede resolver sin sudo.
+                            (5) DASHBOARD SIEMPRE FRESCO — el panel compara `job.finishedAt` vs
+                            `census.generatedAt` y si el censo es más viejo que el último update lo re-pide
+                            con `fresh=1`, sin que el usuario recargue. GOTCHA descubierto al verificar: la
+                            caché del censo (updates-census.json) SOBREVIVE a cambios de código, así que si
+                            el censo gana campos nuevos el snapshot viejo no los tiene y la UI los muestra
+                            vacíos — se cura con `POST /updates/refresh` (o borrando el archivo).
                             Alcance COMPLETO = apt incluido (si deja
                             /var/run/reboot-required avisa pero NO reinicia la máquina). baileys
                             excluido (RC ≠ estable, risk 'watch'). GET /updates/run-status (0 tokens,
@@ -5450,6 +5660,48 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Piezas de infraestructura críticas requieren gate humano fijo, sin importar el score de riesgo de la IA
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** El auto-apply de actualizaciones dejó pasar 'express' y 'archiver' por veredicto IA 🟢 seguro/alta, mientras 'cookie' (que rompió todo el sistema) quedó marcado 🟡 riesgoso pero se aplicó igual porque el usuario lo había tildado; el umbral de auto-aprobación resultó insuficiente para la pieza más crítica del stack.
+
+**Lección:** En cualquier automatización que aplique cambios reales sobre infraestructura, mantener una lista fija de 'nunca automático' para las piezas más críticas (motor/framework central, autenticación), que exija confirmación humana explícita sin importar la confianza que reporte un veredicto de IA.
+
+### Verificar salud del sistema en la ventana crítica real, no tras un arreglo ajeno concurrente
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** El agente reportó 'sobrevivió, todo sano' tras el incidente de cookie, pero sus chequeos corrieron después de que otra sesión ya había parcheado el import roto — nunca verificó el momento en que el sistema realmente estuvo caído, y tuvo que corregir su propio reporte como engañoso.
+
+**Lección:** Al verificar un incidente o una actualización riesgosa, cruzar los timestamps de los propios chequeos contra el log del servicio para confirmar que caen dentro de la ventana de riesgo real, y chequear si otra sesión/actor ya intervino antes de reportar 'sano' — para no confundir una corrección ajena con la propia verificación.
+
+### Verificar actualizaciones de dependencias con prueba de runtime real, no solo sintaxis
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** El update de `cookie` 1→2 pasó `node --check` sin problema pero rompió en runtime (export renombrado), causando un crash-loop de ~12 minutos que las verificaciones existentes (sintaxis + `systemctl is-active`) no detectaron.
+
+**Lección:** Antes de dar por buena una actualización de dependencia, verificar con una prueba de runtime real (levantar el proceso y pegarle una petición HTTP real, no solo comprobar que el servicio figura 'active') además del chequeo de sintaxis, porque imports rotos y cambios de API solo fallan al ejecutar, no al parsear.
+
+### Al cambiar un componente compartido (p.ej. Tándem), resincronizar en el mismo cambio los playbooks/skills que lo describen
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** El orquestador y sus 3 SKILL.md seguían describiendo el Tándem del 15-jul (sonnet/medium) mientras el código real ya corría opus/high pinned como default desde el 21-jul; se acumularon 6 desfases hasta que el usuario pidió una verificación explícita.
+
+**Lección:** Cuando se modifica el comportamiento de un componente central (modelo por defecto, ruteo, permisos), incluir como parte del mismo cambio la actualización de los playbooks/skills que lo documentan, en vez de dejar que una sesión futura lo descubra por casualidad al comparar contra el código.
+
+### Verificar que un bloqueo de permisos no sea shadowed por un modo de permisos superior
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** El deny de Tándem vivía en canUseTool, pero bypassPermissions (modo default del launcher) y las allow-rules de settings.json evaluaban y aprobaban la tool ANTES de que canUseTool fuera consultado, dejando el bloqueo inerte durante meses sin que nadie lo notara.
+
+**Lección:** Antes de confiar en una capa de bloqueo/permiso como control de seguridad, verificar explícitamente si algún modo de permisos de nivel superior (bypassPermissions, allow-rules, etc.) puede evaluarse primero y volverla inerte; preferir hooks de la capa más autoritativa (p.ej. PreToolUse) documentados como inmunes a ese bypass.
+
+### Derivar estado de UI del proceso vivo (auto-reporte), no de una copia persistida
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** El badge de Tándem mintió durante horas porque dependía de un flag persistido (spawnedTandem) que no se actualizaba al cambiar el modelChoice en caliente; el fix real fue hacer que el runner reporte su propio flag real en vez de confiar en la memoria guardada.
+
+**Lección:** Cuando se muestre en UI el estado de un proceso/config que puede cambiar en caliente, diseñar ese estado para que se derive del auto-reporte del proceso vivo, no de un valor persistido que puede desincronizarse silenciosamente.
 
 ### Evitar networkidle de Playwright en apps con polling; usar domcontentloaded + timeout corto
 _procedimiento · confianza alta · recurrencia x1_

@@ -30,6 +30,7 @@ const PHASES = [
   { id: 'applying', emoji: '⚙️', label: 'Aplicando' },
   { id: 'verifying', emoji: '🩺', label: 'Verificando' },
   { id: 'restarting', emoji: '🔁', label: 'Reiniciando' },
+  { id: 'reverting', emoji: '↩️', label: 'Revirtiendo' },
   { id: 'resuming', emoji: '📨', label: 'Reanudando' },
   { id: 'done', emoji: '✅', label: 'Listo' },
 ];
@@ -94,6 +95,12 @@ export function mountUpdatesPanel(el, ctx = {}) {
     riesgoso: { emoji: '🟡', cls: 'hr-sev--medium', label: 'riesgoso' },
     rompe: { emoji: '🔴', cls: 'hr-sev--high', label: 'rompe' },
   };
+  function blockedMajorReason(verdict) {
+    if (!verdict) return 'sin veredicto IA';
+    if (verdict.level === 'rompe') return 'veredicto IA: rompe';
+    if (verdict.level === 'riesgoso' && verdict.confidence === 'baja') return 'riesgoso con confianza baja';
+    return null;
+  }
 
   async function notify(text) {
     if (dialog?.alertDialog) return dialog.alertDialog({ title: 'Actualizaciones', message: text });
@@ -127,10 +134,13 @@ export function mountUpdatesPanel(el, ctx = {}) {
       ? `<div class="hr-f-file">📨 Esperando/avisado: ${(job.activeWork || []).map((a) => esc(a.label || a.key)).join(', ')}</div>` : '';
     const logTail = (job.log || []).slice(-8).map((l) => esc(l)).join('\n');
     const applyNames = new Set((job.plan?.majorsToApply || []).map((m) => m.name));
-    const forced = (job.plan?.majorsToApply || []);
-    const notApplied = (job.plan?.majors || []).filter((m) => !applyNames.has(m.name));
+    const blocked = job.plan?.majorsBlocked || [];
+    const blockedNames = new Set(blocked.map((m) => m.name));
+    const appliedMajors = (job.plan?.majorsToApply || []);
+    const notApplied = (job.plan?.majors || []).filter((m) => !applyNames.has(m.name) && !blockedNames.has(m.name));
     const majors = [
-      forced.length ? `<div class="hr-f-file">⚠ ${forced.length} salto(s) mayor(es) FORZADOS por vos: ${forced.map((m) => esc(m.name) + ' ' + esc(m.from) + '→' + esc(m.to)).join(', ')}</div>` : '',
+      appliedMajors.length ? `<div class="hr-f-file">⚠ ${appliedMajors.length} salto(s) mayor(es) aplicados: ${appliedMajors.map((m) => esc(m.name) + ' ' + esc(m.from) + '→' + esc(m.to)).join(', ')}</div>` : '',
+      blocked.length ? `<div class="hr-f-file">🔒 ${blocked.length} salto(s) mayor(es) bloqueados: ${blocked.map((m) => esc(m.name) + ' — ' + esc(m.reason || 'bloqueado')).join(', ')}</div>` : '',
       notApplied.length ? `<div class="hr-f-file">🟡 ${notApplied.length} salto(s) mayor(es) NO aplicados (quedan para tu OK): ${notApplied.map((m) => esc(m.name) + ' ' + esc(m.wanted) + '→' + esc(m.latest)).join(', ')}</div>` : '',
     ].join('');
 
@@ -231,9 +241,11 @@ export function mountUpdatesPanel(el, ctx = {}) {
     return collapsible(`🔴 <b>${esc(w.name)}</b>`, 'sin botón', `<div class="hr-f-file">${esc(w.note)}</div>`, { border: 'hr-finding--medium' });
   }
   // Veredicto IA de un major (o null si aún no se analizó). Un 🟢 seguro+alta se
-  // AUTO-aplica sin checkbox; el resto lo tildás vos (bajo tu riesgo).
+  // AUTO-aplica sin checkbox; los bloqueados no son tildables; el resto lo
+  // tildás vos (bajo tu riesgo).
   function majorItem(l, verdict) {
     const autoSafe = verdict && verdict.level === 'seguro' && verdict.confidence === 'alta';
+    const blockedReason = blockedMajorReason(verdict);
     let verdictHtml;
     if (verdict) {
       const vm = LEVEL_META[verdict.level] || LEVEL_META.riesgoso;
@@ -242,13 +254,17 @@ export function mountUpdatesPanel(el, ctx = {}) {
     } else {
       verdictHtml = `<div class="hr-f-file">Sin analizar todavía — apretá "🧠 Analizar riesgo" para que la IA lea el changelog + tu código.</div>`;
     }
-    const chk = isAdmin && !autoSafe
+    const blockedHtml = blockedReason
+      ? `<div class="hr-f-file">🔒 Bloqueado: ${esc(blockedReason)}</div>
+         <div class="hr-f-file">🔒 Bloqueado: la IA no pudo verificar que sea seguro. Para aplicarlo, hacelo en una sesión de trabajo con pruebas.</div>`
+      : '';
+    const chk = isAdmin && !autoSafe && !blockedReason
       ? `<label style="display:inline-flex;align-items:center;gap:.35rem;margin-top:.35rem;cursor:pointer">
            <input type="checkbox" data-major="${esc(l.name)}"> <span class="hr-f-file" style="margin:0">incluir igual en "Actualizar todo" (bajo tu riesgo)</span>
          </label>` : '';
     const autoTag = autoSafe ? `<div class="hr-f-file">✅ La IA lo considera seguro (confianza alta) → se aplica solo en "Actualizar todo".</div>` : '';
-    const title = `<b>${esc(l.name)}</b> <span class="hr-f-file" style="display:inline">salto mayor</span>`;
-    const body = `${infoBlock(l.info)}${verdictHtml}${autoTag}${chk}`;
+    const title = `${blockedReason ? '🔒 ' : ''}<b>${esc(l.name)}</b> <span class="hr-f-file" style="display:inline">salto mayor</span>`;
+    const body = `${infoBlock(l.info)}${verdictHtml}${autoTag}${blockedHtml}${chk}`;
     return collapsible(title, `${esc(l.current || l.wanted || '—')} → ${esc(l.latest || '—')}`, body, { border: autoSafe ? 'hr-finding--low' : 'hr-finding--medium' });
   }
 
@@ -270,8 +286,10 @@ export function mountUpdatesPanel(el, ctx = {}) {
     const majors = libs.filter((l) => l.latest && l.wanted && l.latest !== l.wanted && l.risk !== 'watch');
     const vFor = (l) => verdicts[riskKey(l.name, l.current, l.latest)] || null;
     const autoMajors = majors.filter((l) => { const v = vFor(l); return v && v.level === 'seguro' && v.confidence === 'alta'; });
+    const blockedMajors = majors.filter((l) => blockedMajorReason(vFor(l)));
+    const tildableMajors = Math.max(0, majors.length - autoMajors.length - blockedMajors.length);
     const inRangeN = libs.filter((l) => l.risk !== 'watch' && l.wanted && l.current && l.wanted !== l.current).length;
-    const cliOutdated = d.claudeCli && !d.claudeCli.upToDate;
+    const cliOutdated = d.claudeCli && !d.claudeCli.upToDate && d.claudeCli.manageable !== false;
     const aptN = d.apt?.count || 0;
     const totalActions = inRangeN + autoMajors.length + (cliOutdated ? 1 : 0) + (aptN ? 1 : 0) + (fixableVuln ? 1 : 0);
 
@@ -306,7 +324,7 @@ export function mountUpdatesPanel(el, ctx = {}) {
       ${adminBar}
       ${section('🧬 Motor (crítico)', core.map(coreItem).join('') + coreItem2(d.claudeCli), true)}
       ${section(`🔐 Seguridad — ${totalVuln} vulnerabilidad(es) ${hasHigh ? '⚠️' : ''}`, vulnFixBtn + (vulns.length ? vulns.map(vulnItem).join('') : '<p class="hr-summary">✅ Sin vulnerabilidades conocidas.</p>'), hasHigh)}
-      ${majors.length ? section(`🟡 Saltos mayores (${majors.length}) — ${autoMajors.length} 🟢 auto · ${majors.length - autoMajors.length} para tu OK`, secHint + majors.map((l) => majorItem(l, vFor(l))).join(''), false) : ''}
+      ${majors.length ? section(`🟡 Saltos mayores (${majors.length}) — ${autoMajors.length} 🟢 auto · ${tildableMajors} para tu OK · ${blockedMajors.length} 🔒 bloqueado(s)`, secHint + majors.map((l) => majorItem(l, vFor(l))).join(''), false) : ''}
       ${section(`📚 Librerías npm (${rest.length})`, rest.map(libItem).join(''), false)}
       ${section(`🐧 Sistema operativo (${aptN})`, `<p class="hr-f-file">Incluido en "Actualizar todo". Manual: <code>sudo apt update &amp;&amp; sudo apt upgrade</code></p>` + (d.apt?.pkgs || []).map(aptItem).join(''), false)}
       ${section('⚙️ Servicios y runtime (referencia)', (d.services || []).map(svcItem).join(''), false)}
@@ -320,8 +338,13 @@ export function mountUpdatesPanel(el, ctx = {}) {
   function coreItem2(cli) {
     if (!cli) return '';
     const info = { what: 'La herramienta de línea de comandos de Claude Code.', role: 'Es el programa que corre las sesiones de Claude; la consola lo invoca para las terminales y hereda su login.' };
-    const body = `${infoBlock(info)}<div class="hr-f-file">Updater propio (<code>claude update</code>). No toca el repo. Va incluido en "Actualizar todo".</div>`;
-    const side = cli.upToDate ? '✅ al día' : `${esc(cli.current || '—')} → ${esc(cli.latest || '—')}`;
+    const unmanaged = cli.manageable === false;
+    const body = `${infoBlock(info)}
+      ${cli.resolvedPath ? `<div class="hr-f-file">Ruta: <code>${esc(cli.resolvedPath)}</code></div>` : ''}
+      <div class="hr-f-file">${unmanaged ? esc(cli.note || '') : 'Updater propio (<code>claude update</code>). No toca el repo. Va incluido en "Actualizar todo".'}</div>`;
+    const side = unmanaged
+      ? `<div>🔒 instalación de sistema</div><div style="margin-top:.3rem">${esc(cli.current || '—')} → ${esc(cli.latest || '—')}</div>`
+      : (cli.upToDate ? '✅ al día' : `${esc(cli.current || '—')} → ${esc(cli.latest || '—')}`);
     return collapsible('⌨️ <b>Claude Code CLI</b>', side, body, { border: 'hr-finding--medium', open: true });
   }
 
@@ -405,13 +428,18 @@ export function mountUpdatesPanel(el, ctx = {}) {
     if (riskTimer) { clearTimeout(riskTimer); riskTimer = null; }
     root.innerHTML = `${pacman({ size: 'sm' })} <span class="hr-summary">Escaneando versiones de terceros…</span>`;
     // Si hay un job orquestado en curso, mostrar el progreso en vez del censo.
+    let job = null;
     try {
-      const job = await api.runStatus();
+      job = await api.runStatus();
       if (alive && job && job.running) { startPolling(); return; }
     } catch { /* noop */ }
     let d; let risk;
     try { [d, risk] = await Promise.all([api.census(fresh), api.risk()]); } catch { d = null; }
     if (!alive) return;
+    if (job?.finishedAt && job.finishedAt > (d?.generatedAt || 0)) {
+      try { d = await api.census(true); } catch { /* conservar error original si falla */ }
+      if (!alive) return;
+    }
     if (!d || d.error) { root.innerHTML = `<p class="hr-summary">No se pudo cargar el censo. ${esc(d?.error || '')}</p>`; return; }
     state.census = d; state.risk = risk || null;
     render();

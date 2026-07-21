@@ -36,14 +36,22 @@ Si la ventana está alta (≥75%), decilo en la propuesta: *"ojo, ventana al X% 
 cd /home/nmosquera/claude-web-console
 TOKEN=$(grep '^CWC_TOKEN=' .env | cut -d= -f2); IP=10.213.222.62
 # 1) crear el chat (cwd = el mundo del bloque; para multi-tenant = la consola)
+# MODEL = el ejecutor DEL BLOQUE: "tandem" si el bloque escribe código, o el
+# modelo Claude del ruteo (opus/sonnet/haiku) si es diseño/trivial/E2E.
 curl -sk -X POST -H "x-cwc-token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"cwd":"/home/nmosquera/claude-web-console","model":"tandem"}' \
   "https://$IP:8092/api/chat/create"   # devuelve {id, ...}
 ```
+**Gotchas de Tándem al spawnear (2026-07-21):**
+- **Tándem es el default del sistema**: un `create` sin `model` ya nace en Tándem. Pasá el `model` EXPLÍCITO del ejecutor del bloque siempre, para no depender del default.
+- `/create` **no** acepta la config fina del protocolo. Si el bloque necesita otro razonador o ejecutor Codex, mandá después: `POST /api/chat/model {"model":"tandem","tandem":{"reasonerModel":"opus","reasonerEffort":"high","codexModel":"gpt-5.5","codexEffort":"high"}}` (esos son los defaults; solo hace falta si querés otra cosa).
+- **Verificá que el motor arrancó en Tándem** antes de inyectar el primer mensaje: `tandemActive` en `/api/chat/list` debe ser `true`. Si es `false`/`null`, el runner vivo todavía no corre en Tándem (cambiar de ejecutor exige respawn — throttle de 30 s, solo si está ocioso).
+- **Un bloque = un ejecutor** (CONVE-654): no mezcles tareas Claude-puro y Tándem en la misma sesión-bloque; cada salto cuesta un respawn del runner.
+
 Luego inyectás el **primer mensaje** por WS (`wss://$IP:8092/ws/chat?id=<id>`, header `x-cwc-token`) con el **prompt self-contained del bloque** (ver plantilla abajo). Si el detalle exacto del WS te falla, consultá CONVE-641 (recipe verificado). Registrá en Pad: marcá el PLAN-bloque `active` y anotá en un comentario el `chatId` + `PKG-ref` de la sesión-bloque para rastrearla.
 
 ### Plantilla del prompt de una sesión-BLOQUE (self-contained)
-> *"Sos una sesión-BLOQUE del Orquestador Interno. Tu bloque es **<PLAN-bloque>** «<título>». Cargá Pad `console`, leé el bloque y sus tareas (PEND/TASK hijas, cada una con su ruteo model/effort/executor). Ejecutá SUS tareas de corrido, respetando el ruteo por tarea (CONVE-558) y las reglas duras del CLAUDE.md. Al COMPLETAR cada tarea marcala en Pad con `node /home/nmosquera/claude-web-console/bin/cwc-block-progress.js task <ref> <status-terminal> --note "..."` (esto también es tu heartbeat). Si descubrís una COLISIÓN en runtime (otra sesión reclama un archivo por interfono/claims) o una dependencia nueva → PARÁ y señalá `blocked`. Al terminar TODO (o si parás por capacidad/decisión), SEÑALÁ al orquestador por interfono: `node /home/nmosquera/claude-web-console/bin/cwc-bus.js send --to <PKG-ref-del-orquestador> --kind heads-up --text "[OB] <PLAN-bloque> <resultado> [k=v]"` donde resultado ∈ done|failed|blocked|needs-human|partial. Si el bloque toca código, NO reinicies el server (dejá el working tree; Niko despliega al revisar)."*
+> *"Sos una sesión-BLOQUE del Orquestador Interno. Tu bloque es **<PLAN-bloque>** «<título>». Cargá Pad `console`, leé el bloque y sus tareas (PEND/TASK hijas, cada una con su ruteo model/effort/executor). Ejecutá SUS tareas de corrido, respetando el ruteo por tarea (CONVE-558) y las reglas duras del CLAUDE.md. Si tu sesión corre en Tándem, NO podés escribir archivos vos: delegá TODA edición de código en `delegate_to_codex` (el hook PreToolUse deniega Edit/Write y las escrituras por Bash salvo /tmp). No repitas en el encargo a Codex las reglas fijas del protocolo (tocar solo los archivos del plan, verificar con `node --check`, no commitear/pushear, resumir el cambio): ya van inyectadas automáticamente, y el diff que te vuelve está ACOTADO a esa delegación. Al COMPLETAR cada tarea marcala en Pad con `node /home/nmosquera/claude-web-console/bin/cwc-block-progress.js task <ref> <status-terminal> --note "..."` (esto también es tu heartbeat). Si descubrís una COLISIÓN en runtime (otra sesión reclama un archivo por interfono/claims) o una dependencia nueva → PARÁ y señalá `blocked`. Al terminar TODO (o si parás por capacidad/decisión), SEÑALÁ al orquestador por interfono: `node /home/nmosquera/claude-web-console/bin/cwc-bus.js send --to <PKG-ref-del-orquestador> --kind heads-up --text "[OB] <PLAN-bloque> <resultado> [k=v]"` donde resultado ∈ done|failed|blocked|needs-human|partial. Si el bloque toca código, NO reinicies el server (dejá el working tree; Niko despliega al revisar)."*
 
 ## Paso 4 — Escuchar señales y reconciliar
 Las sesiones-bloque te avisan por **interfono** con `kind:'heads-up'` (level active) → te despierta. El texto es `[OB] <PLAN-bloque> <resultado> [k=v]`. **Los 5 resultados:**
@@ -66,6 +74,7 @@ curl -sk -H "x-cwc-token: $TOKEN" "https://$IP:8092/api/chat/list"  # alive, sta
 - **viva + working/delegating** → sana, esperá.
 - **viva + ociosa + sin señal + heartbeat viejo** (updated_at de sus tareas sin avanzar) → **reportá a Niko** con diagnóstico (típico: permiso trabado — revisá `pendingPerms` del chat).
 - **viva + ociosa + todas las tareas hechas + sin señal** → tratá como `done` (señal perdida).
+- **viva + `tandemActive:false` en un bloque ruteado a Tándem** → el motor no arrancó en Tándem (respawn pendiente o throttle): avisá a Niko para "Reabrir para cambios"; NO le encargues código a esa sesión mientras tanto.
 Sin timeouts mágicos. Barrido: **oportunista** en cada señal (revisás el estado de TODOS los activos, gratis) + **wakeup de respaldo** por si TODOS murieron sin avisar:
 ```
 ScheduleWakeup delaySeconds=900 reason="barrido de bloques activos del orquestador" prompt="<re-invocar esta skill / continuar orquestando PLAN-XXX>"
@@ -78,4 +87,4 @@ Sos stateless por diseño: tras cualquier reinicio, un orquestador fresco recons
 Cuando TODOS los bloques del umbrella estén `done`, avisá a Niko con el resumen (bloques completados, qué queda fuera de alcance) y marcá el umbrella según corresponda. Cerrá SIEMPRE con la línea `🎾 Pelota: …`.
 
 ## ⚠️ Estado de la infra
-La skill `agrupar` (arquitecto) y el CLI `cwc-block-progress` YA existen. Los **campos estructurados** de Pad (`blockState`/`runState`) son build pendiente — por ahora el estado vive en `status` de PLAN/TASK + comentarios; el kill-switch lo leés del comentario/campo del umbrella. Si Niko pide formalizarlos, es un `pad_collection update` de las colecciones `planes`/`pendientes`.
+La skill `agrupar` (arquitecto), la skill `rutear` y el CLI `cwc-block-progress` YA existen. Los **campos estructurados** de Pad (`blockState`/`runState`) son build pendiente — por ahora el estado vive en `status` de PLAN/TASK + comentarios; el kill-switch lo leés del comentario/campo del umbrella. Si Niko pide formalizarlos, es un `pad_collection update` de las colecciones `planes`/`pendientes`.

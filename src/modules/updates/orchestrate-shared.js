@@ -20,12 +20,14 @@
 // máquina, pero NO reinicia la máquina). baileys excluido (su latest es un RC).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import { config } from '../../core/config.js';
+import { findZeroTierIp } from '../../core/zerotier.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { collectActiveRunners } from '../health/shared.js';
 import { sendMessage } from '../../core/bus.js';
-import { buildUpdatesCensus, run, ROOT } from './shared.js';
+import { buildUpdatesCensus, installedVersion, run, ROOT } from './shared.js';
 import { isPrerelease, riskKey } from './analyze-shared.js';
 
 const DATA_DIR = path.join(config.home, '.cwc-data');
@@ -84,19 +86,38 @@ export function buildPlan(census, scope = { apt: true }, includeMajors = [], ver
   const majors = libs
     .filter((l) => l.risk !== 'watch' && l.latest && l.wanted && l.latest !== l.wanted)
     .map((l) => ({ name: l.name, current: l.current, wanted: l.wanted, latest: l.latest }));
-  // Majors a APLICAR: (a) auto — veredicto 🟢 seguro + confianza ALTA; o (b) el
-  // usuario lo tildó (override). NUNCA una beta/RC. `auto` marca el origen.
-  const majorsToApply = libs
+  const majorCandidates = libs
     .filter((l) => l.risk !== 'watch' && l.latest && l.current && l.latest !== l.current && !isPrerelease(l.latest))
     .map((l) => {
       const v = verdicts[riskKey(l.name, l.current, l.latest)];
+      let blockedReason = null;
+      if (!v) blockedReason = 'sin veredicto IA';
+      else if (v.level === 'rompe') blockedReason = 'veredicto IA: rompe';
+      else if (v.level === 'riesgoso' && v.confidence === 'baja') blockedReason = 'riesgoso con confianza baja';
+      return { lib: l, verdict: v, blockedReason };
+    });
+  const prereleaseBlocked = libs
+    .filter((l) => l.risk !== 'watch' && l.latest && l.current && l.latest !== l.current && isPrerelease(l.latest))
+    .map((l) => ({ name: l.name, from: l.current, to: l.latest, reason: 'versión pre-release' }));
+  const majorsBlocked = [
+    ...majorCandidates
+      .filter((c) => c.blockedReason)
+      .map(({ lib, blockedReason }) => ({ name: lib.name, from: lib.current, to: lib.latest, reason: blockedReason })),
+    ...prereleaseBlocked,
+  ];
+  // Majors a APLICAR: (a) AUTO — veredicto 🟢 seguro + confianza ALTA; o (b)
+  // TILDABLE — cualquier otro veredicto no bloqueante, solo si el usuario lo
+  // incluyó. NUNCA entran los bloqueados ni las betas/RC.
+  const majorsToApply = majorCandidates
+    .map(({ lib: l, verdict: v, blockedReason }) => {
+      if (blockedReason) return null;
       const autoSafe = v && v.level === 'seguro' && v.confidence === 'alta';
       const forced = wantMajor.has(l.name);
       if (!autoSafe && !forced) return null;
       return { name: l.name, from: l.current, to: l.latest, auto: autoSafe && !forced, verdict: v ? { level: v.level, confidence: v.confidence } : null };
     })
     .filter(Boolean);
-  const claudeCli = census?.claudeCli && !census.claudeCli.upToDate && census.claudeCli.latest
+  const claudeCli = census?.claudeCli && census.claudeCli.manageable !== false && !census.claudeCli.upToDate && census.claudeCli.latest
     ? { from: census.claudeCli.current, to: census.claudeCli.latest }
     : null;
   const apt = scope.apt && census?.apt?.count
@@ -105,7 +126,7 @@ export function buildPlan(census, scope = { apt: true }, includeMajors = [], ver
   const watch = (census?.watched || []).map((w) => w.name);
   // Hay vulnerabilidades con fix seguro disponible → un paso `npm audit fix`.
   const vulnFix = (census?.npm?.vulns || []).some((v) => v.fixAvailable);
-  return { inRange, majors, majorsToApply, claudeCli, apt, watch, vulnFix };
+  return { inRange, majors, majorsToApply, majorsBlocked, claudeCli, apt, watch, vulnFix };
 }
 
 // Cuántas acciones REALES tiene el plan (para el confirm y para no reiniciar al
@@ -134,7 +155,12 @@ export function notifyInterfono(text, kind = 'note') {
 export async function applyNpm(name, version) {
   const r = await run('npm', ['install', `${name}@${version}`, '--save-exact=false'], { timeout: 180_000 });
   const ok = !r.failed && !(/npm error|ERR!/.test(r.stderr) && !r.ok);
-  return { ok, detail: ok ? `${name}@${version}` : (r.stderr || r.stdout || 'npm install falló').trim().slice(0, 300) };
+  if (!ok) return { ok, detail: (r.stderr || r.stdout || 'npm install falló').trim().slice(0, 300) };
+  const real = installedVersion(name);
+  if (real !== version) {
+    return { ok: false, detail: `npm reportó éxito pero quedó instalada la ${real || 'desconocida'}, se esperaba ${version}` };
+  }
+  return { ok: true, detail: `${name}@${version}` };
 }
 export async function applyClaudeCli() {
   const r = await run('claude', ['update'], { timeout: 180_000 });
@@ -195,6 +221,56 @@ export async function waitServiceActive({ timeoutMs = 60_000 } = {}) {
     await sleep(1000);
   }
   return false;
+}
+
+function requestHealth(url, token) {
+  return new Promise((resolve) => {
+    const req = https.request(url, {
+      method: 'GET',
+      headers: { 'x-cwc-token': token },
+      rejectUnauthorized: false,
+      timeout: 5000,
+    }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ ok: res.statusCode === 200, reason: `HTTP ${res.statusCode || 'sin status'}` }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (err) => resolve({ ok: false, reason: err?.message || 'error HTTP' }));
+    req.end();
+  });
+}
+
+// Chequeo REAL de que el server volvió a responder (no solo que systemd diga
+// "active": en un crash-loop is-active reporta "active"/"activating" de forma
+// transitoria). Usa node:https con rejectUnauthorized:false (cert self-signed).
+export async function httpAlive({ attempts = 10, gapMs = 3000 } = {}) {
+  const found = findZeroTierIp(config.ztIface);
+  const token = process.env.CWC_TOKEN?.trim() || config.token;
+  if (!found?.ip || !token) return { alive: null, reason: 'no verificable' };
+  const url = new URL(`https://${found.ip}:${config.port}/api/health/checks`);
+  let reason = 'sin respuesta';
+  for (let i = 0; i < attempts; i += 1) {
+    const r = await requestHealth(url, token);
+    if (r.ok) return { alive: true };
+    reason = r.reason;
+    if (i < attempts - 1) await sleep(gapMs);
+  }
+  return { alive: false, reason };
+}
+
+// NRestarts de systemd: si subió tras nuestro reinicio, hubo crash-loop.
+export async function serviceRestartCount() {
+  const r = await run('systemctl', ['--user', 'show', '-p', 'NRestarts', '--value', SERVICE], { timeout: 10_000 });
+  const n = Number.parseInt(r.stdout.trim(), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export async function revertNpmChanges() {
+  const co = await run('git', ['checkout', '--', 'package.json', 'package-lock.json'], { timeout: 30_000 });
+  if (!co.ok) return { ok: false, detail: (co.stderr || co.stdout || 'git checkout falló').trim().slice(0, 300) };
+  const inst = await run('npm', ['install'], { timeout: 600_000 });
+  const ok = !inst.failed && inst.ok;
+  return { ok, detail: ok ? 'package.json/package-lock.json revertidos y npm install OK' : (inst.stderr || inst.stdout || 'npm install falló').trim().slice(0, 300) };
 }
 
 export function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

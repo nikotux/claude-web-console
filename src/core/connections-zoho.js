@@ -4,7 +4,7 @@
 // API de su data center y lo pega en la consola, igual que otros flujos de
 // "pegar código". Este módulo solo hace HTTP; no persiste ni loguea secretos.
 
-export const ZOHO_SCOPES = ['Desk.tickets.ALL', 'Desk.basic.READ', 'Desk.settings.READ'];
+export const ZOHO_SCOPES = ['Desk.tickets.ALL', 'Desk.contacts.READ', 'Desk.contacts.CREATE', 'Desk.basic.READ', 'Desk.settings.READ', 'Desk.search.READ'];
 
 const ZOHO_DCS = ['com', 'eu', 'in', 'com.au', 'jp', 'ca'];
 
@@ -67,6 +67,7 @@ export async function exchangeCode({ clientId, clientSecret, code, dc }) {
     client_id: clientId,
     client_secret: clientSecret,
     code,
+    access_type: 'offline',
   });
   if (!r.data?.access_token || !r.data?.refresh_token) throw new Error(zohoError(r));
   return r.data;
@@ -83,16 +84,48 @@ export async function refreshAccessToken({ clientId, clientSecret, refreshToken,
   return r.data;
 }
 
-export async function getMe(accessToken, dc) {
+// La API de Desk exige el header `orgId` en TODA llamada. Se descubre una vez
+// al conectar y se persiste con la conexión para las operaciones futuras.
+export async function getOrg(accessToken, dc) {
   try {
-    const res = await fetch(`${deskBase(dc)}/api/v1/agents/me`, {
+    const res = await fetch(`${deskBase(dc)}/api/v1/organizations`, {
       headers: { authorization: `Zoho-oauthtoken ${accessToken}` },
     });
     if (!res.ok) return null;
-    const me = await res.json();
-    return me?.emailId || me?.name || null;
+    const j = await res.json();
+    const list = Array.isArray(j?.data) ? j.data : (Array.isArray(j) ? j : []);
+    const org = list[0];
+    if (!org?.id) return null;
+    return { id: String(org.id), name: org.companyName || org.name || null };
   } catch {
-    // Si falla el perfil best-effort, no se rompe la conexión.
+    return null;
+  }
+}
+
+// Zoho Desk NO tiene endpoint de "mi agente" (404 verificado). Se resuelve al
+// agente listando agentes y matcheando por email - mismo criterio que
+// seguimientos/desk-source.js. Devuelve también el agentId, que hace falta para
+// operar a nombre del usuario (p.ej. asignarse un ticket).
+// OJO multiusuario: el email lo provee el llamador; hoy sale de la identidad de
+// instancia (un solo usuario). Cuando haya varios, debe ser el email del usuario
+// que conectó ESTA cuenta, no el de la instancia.
+export async function getMe(accessToken, dc, orgId, email) {
+  try {
+    const headers = { authorization: `Zoho-oauthtoken ${accessToken}` };
+    if (orgId) headers.orgId = String(orgId);
+    const res = await fetch(`${deskBase(dc)}/api/v1/agents?limit=100`, { headers });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const list = Array.isArray(j?.data) ? j.data : [];
+    const want = String(email || '').trim().toLowerCase();
+    const me = want
+      ? list.find((a) => String(a.emailId || a.email || '').toLowerCase() === want)
+      : null;
+    if (!me) return null;
+    const name = me.name || `${me.firstName || ''} ${me.lastName || ''}`.trim();
+    return { email: me.emailId || me.email || null, id: me.id ? String(me.id) : null, name: name || null };
+  } catch {
+    // Perfil best-effort: si falla, la conexión NO se rompe (queda sin account).
     return null;
   }
 }

@@ -11,7 +11,6 @@ import { CHAT_MODEL_OPTIONS } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
 
-const LAST_MODEL_KEY = 'cwc:lastModel';
 // "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
 // usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
 const CONSOLE_PLACE = placeFor('claude-web-console');
@@ -38,7 +37,11 @@ export default {
     let modal = null;
     const st = {
       type: 'chat', // chat (SDK, default) | claude (PTY) | terminal
-      model: localStorage.getItem(LAST_MODEL_KEY) || 'auto',
+      // Default del sistema = Tándem (Niko 2026-07-21). Ya NO se recuerda el
+      // último modelo usado: cada sesión nueva arranca en Tándem salvo que se
+      // elija otro en ESTE modal (así el default no queda pegado a una elección
+      // puntual vieja guardada en localStorage).
+      model: 'tandem',
       dest: null,         // nada pre-seleccionado: se elige a mano (pedido del usuario 2026-07-10)
       view: 'list',       // list | browse
       browseRel: '',
@@ -208,7 +211,6 @@ export default {
     async function start() {
       const dest = st.dest;
       if (!dest) return; // botón deshabilitado sin destino; guarda por si acaso
-      if (st.type !== 'terminal') localStorage.setItem(LAST_MODEL_KEY, st.model);
       modal.close();
       if (st.type === 'chat') {
         // Default "Todo" (bypassPermissions) para chat nuevo del lanzador.

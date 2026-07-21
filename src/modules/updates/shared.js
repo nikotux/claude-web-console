@@ -163,7 +163,7 @@ function isMajorBump(current, latest) {
 // Versión REALMENTE instalada de un paquete (lee node_modules/.../package.json,
 // instantáneo). Es la fuente de verdad de "qué corre hoy" — más confiable que el
 // `current` de npm outdated, que además OMITE los paquetes ya al día.
-function installedVersion(name) {
+export function installedVersion(name) {
   try {
     const p = path.join(ROOT, 'node_modules', ...name.split('/'), 'package.json');
     return safeJson(fs.readFileSync(p, 'utf8'))?.version || null;
@@ -258,20 +258,36 @@ async function censusNpm() {
 
 // --- Claude Code CLI (npm global, tiene su propio updater) -----------------
 async function censusClaudeCli() {
-  const [ver, latest] = await Promise.all([
+  const [ver, latest, which] = await Promise.all([
     run('claude', ['--version'], { timeout: 15_000 }),
     run('npm', ['view', '@anthropic-ai/claude-code', 'version'], { timeout: 30_000 }),
+    run('which', ['claude'], { timeout: 10_000 }),
   ]);
   const current = (ver.stdout.match(/(\d+\.\d+\.\d+)/) || [])[1] || null;
   const newest = latest.stdout.trim().match(/^\d+\.\d+\.\d+$/) ? latest.stdout.trim() : null;
+  const whichPath = which.stdout.trim().split('\n')[0] || null;
+  const real = whichPath ? await run('readlink', ['-f', whichPath], { timeout: 10_000 }) : null;
+  const resolvedPath = real?.stdout?.trim().split('\n')[0] || whichPath;
+  const home = path.resolve(process.env.HOME || '');
+  const manageable = resolvedPath
+    ? (() => {
+        const rel = path.relative(home, path.resolve(resolvedPath));
+        return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+      })()
+    : null;
   return {
     name: '@anthropic-ai/claude-code',
     current,
     latest: newest,
     upToDate: current && newest && current === newest,
+    resolvedPath,
+    manageable,
+    note: manageable === false
+      ? 'Instalación de sistema (root) — `claude update` no puede actualizarla. Requiere sudo/npm global del sistema.'
+      : null,
     // el CLI trae `claude update` incorporado → botón directo (reversible: su
     // propio updater, no toca el repo).
-    updatable: true,
+    updatable: manageable !== false,
   };
 }
 

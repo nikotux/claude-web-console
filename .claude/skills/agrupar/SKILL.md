@@ -11,6 +11,8 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 ## Principio
 **Paralelo solo lo que NO colisiona.** Dos tareas que tocan el **mismo archivo** deben ir en el **mismo bloque** (una sola sesión controla esa fase) — es la regla de oro (`health/pool.js`) elevada a dato del plan. La predicción de colisión en tiempo de diseño es **best-effort**; la red de seguridad en runtime son los **claims del interfono** (`evaluateClaim`), que detectan la colisión real.
 
+**Segundo criterio de corte: el EJECUTOR.** Un bloque no solo agrupa por archivo compartido — también agrupa por ejecutor del ruteo (Claude puro vs 🤝 Tándem). Entrar/salir de Tándem re-lanza el runner (BUG-780: `--tandem` es flag de SPAWN), así que mezclar ejecutores dentro de una sesión-bloque paga un respawn por salto. **Un bloque = un ejecutor.**
+
 ## Dos naturalezas, no confundirlas
 - **(A) COLISIÓN = mecánica.** Se calcula: predecís los archivos de cada tarea → grafo (aristas entre tareas que comparten archivo) → **un bloque = un componente conexo**.
 - **(B) DEPENDENCIA lógica = humana.** "B necesita el resultado de A" NO es colisión: lo declara el arquitecto desde el **orden de fases** del plan. Vos proponés las aristas del DAG; **Niko las confirma**.
@@ -18,9 +20,10 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 ## Algoritmo
 1. **Predecí los archivos por tarea** (`files`). Fuente: la descripción de la tarea + el **inventario** del proyecto (`~/.cwc-data/inventory.md`, generado por `core/inventory.js`). Guardá la predicción en la tarea (campo/nota `files`).
 2. **Grafo de colisión** → componentes conexos → **bloques candidatos**.
-3. **HUB-files** (archivos que TODOS tocan: `registry.js`, `server.js`, `tokens.css`, `CLAUDE.md`, `health/invariants.js`): NO colapses todo en un bloque gigante. Agrupá por el archivo **primario** de cada tarea y creá un **BLOQUE DE INTEGRACIÓN** que corre ÚLTIMO y hace solo el cableado del hub → preserva el paralelismo.
-4. **Archivos desconocidos** (no predecibles): la tarea va en su **propio bloque** + **flag** (los claims runtime son la red).
-5. **DAG lógico**: agregá las aristas `blocked-by` entre bloques según las fases (B usa A → B blocked-by A). El bloque de integración/E2E queda `blocked-by` todos los de código.
+3. **Partí cada componente por EJECUTOR.** Si un componente conexo mezcla tareas ruteadas a Claude puro y a Tándem, partilo en un bloque por ejecutor — salvo que compartan archivo, en cuyo caso el bloque entero va a Tándem (dentro de Tándem, Claude no puede escribir: el hook `PreToolUse` deniega Edit/Write y las escrituras por Bash salvo `/tmp`, así que hasta el cableado trivial lo hace Codex).
+4. **HUB-files** (archivos que TODOS tocan: `registry.js`, `server.js`, `tokens.css`, `CLAUDE.md`, `health/invariants.js`): NO colapses todo en un bloque gigante. Agrupá por el archivo **primario** de cada tarea y creá un **BLOQUE DE INTEGRACIÓN** que corre ÚLTIMO y hace solo el cableado del hub → preserva el paralelismo.
+5. **Archivos desconocidos** (no predecibles): la tarea va en su **propio bloque** + **flag** (los claims runtime son la red).
+6. **DAG lógico**: agregá las aristas `blocked-by` entre bloques según las fases (B usa A → B blocked-by A). El bloque de integración/E2E queda `blocked-by` todos los de código.
 
 ## GATE (obligatorio) — proponé, NO crees a ciegas
 Presentá a Niko: la tabla de **bloques** (id · tareas que contiene · superficie de archivos · ruteo · ready/needs-atomize) + el **DAG** (aristas). Esperá su **OK o ajuste** (fusionar/partir bloques, cambiar una dependencia). **Recién con el OK** materializás.
@@ -36,4 +39,4 @@ Presentá a Niko: la tabla de **bloques** (id · tareas que contiene · superfic
 Avisá a Niko que el Pad quedó listo y que el próximo paso es abrir la skill `orquestar` en una sesión nueva apuntada al umbrella. Cerrá con `🎾 Pelota: …`.
 
 ## Ruteo (CONVE-558) por naturaleza de tarea
-diseño/contrato → Claude opus/sonnet high · escribir código → Tándem (sonnet razona + Codex ejecuta) high · cableado trivial → Claude haiku low · verificación E2E → Claude sonnet/opus high. Cada tarea del bloque lleva su `{executor, model, effort}` — así cada paso corre en su modelo óptimo (ahorro de ventana) y una reejecución no cae en un modelo caro por defecto.
+diseño/contrato → Claude opus/sonnet high · escribir código → Tándem (**opus** razona/verifica + Codex gpt-5.5 ejecuta) **high pinned** · cableado trivial → Claude haiku low · verificación E2E → Claude sonnet/opus high. Cada tarea del bloque lleva su `{executor, model, effort}` — así cada paso corre en su modelo óptimo (ahorro de ventana) y una reejecución no cae en un modelo caro por defecto. Cada bloque hereda UN ejecutor (ver Principio); el `{model, effort}` fino por tarea solo varía DENTRO del mismo ejecutor.

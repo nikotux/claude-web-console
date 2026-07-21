@@ -963,7 +963,6 @@ html, body {
 .mcp-oauth-steps { margin: .2rem 0 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: .7rem; font-size: var(--cwc-fs-sm); }
 .mcp-oauth-link { display: inline-flex; align-items: center; gap: .3rem; color: var(--cwc-accent); }
 .mcp-oauth .dlg-input { width: 100%; margin: .3rem 0; }
-.conn-sec { margin-top: 1.1rem; padding-top: .8rem; border-top: 1px solid var(--cwc-divider); }
 .conn-h { font-size: var(--cwc-fs-md); margin: 0 0 .2rem; color: var(--cwc-text); }
 .conn-code {
   font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xl); letter-spacing: .18em;
@@ -2384,6 +2383,9 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-finding--high { border-left-color: var(--cwc-danger); }
 .hr-finding--medium { border-left-color: var(--cwc-warn); }
 .hr-finding--low { border-left-color: var(--cwc-text-dimmer); }
+/* Estado "en curso" de una conexión (trámite esperando a alguien) — calmo, no
+   es severidad: por eso NO reusa .hr-finding--medium, que es la escala de Salud. */
+.hr-finding--running { border-left-color: var(--cwc-accent-cool); }
 /* Estado de sincronía con Pad (pestaña Skills, no es severidad). */
 .hr-finding--linked { border-left-color: var(--cwc-ok); }
 .hr-finding--orphan { border-left-color: var(--cwc-warn); }
@@ -3308,3 +3310,7 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .mc-adopt { display: inline-flex; align-items: stretch; gap: 2px; }
 .mc-adopt .mc-more { padding-left: .4rem; padding-right: .4rem; }
 .mc-dests { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+.conn-inline { margin-top: .6rem; padding-top: .5rem; border-top: 1px dashed var(--cwc-border); }
+/* String de scopes OAuth copiable (flujo de conexión de Zoho): puede ser largo,
+   se parte para que no desborde el modal. */
+.conn-scopes { display: block; word-break: break-all; font-size: var(--cwc-fs-xs); background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border); border-radius: 5px; padding: .3rem .4rem; margin: .25rem 0; }

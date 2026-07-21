@@ -95,6 +95,16 @@ export const TANDEM_TOOL = 'mcp__codex__delegate_to_codex';
 
 export const TANDEM_BLOCKED_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
+// Un destino en /tmp NO es código del proyecto: escribir un script descartable
+// ahí no esquiva a Codex (que es lo que el guard protege). Exigimos ruta
+// ABSOLUTA bajo /tmp/ y sin '..' para que no se pueda salir por traversal.
+function isScratchTarget(dest) {
+  if (typeof dest !== 'string') return false;
+  if (!dest.startsWith('/tmp/')) return false;
+  if (dest.includes('..')) return false;
+  return dest.length > '/tmp/'.length;
+}
+
 function shellOutsideQuotes(cmd) {
   let out = '';
   let quote = null;
@@ -122,12 +132,13 @@ export function isWritingBashCommand(cmd) {
   const outside = shellOutsideQuotes(raw).replace(/\s+/g, ' ');
 
   // Redirecciones de escritura: >, >> y &> hacia destinos reales. Ignoramos
-  // duplicación de fd (2>&1) y sinks explícitos de salida/errores.
+  // duplicación de fd (2>&1), sinks explícitos de salida/errores y scratch /tmp.
   const redirRe = /(?:^|[\s;&|])(?:\d*)?(>>?|&>)\s*([^\s;&|]+)/g;
   for (const m of outside.matchAll(redirRe)) {
     const dest = (m[2] || '').replace(/^['"]|['"]$/g, '');
     if (!dest || /^&\d+$/.test(dest)) continue;
     if (['/dev/null', '/dev/stderr', '/dev/stdout'].includes(dest)) continue;
+    if (isScratchTarget(dest)) continue;
     return true;
   }
 

@@ -14,15 +14,47 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
+import { principalOf } from '../../core/auth.js';
+import { hostUser } from '../../core/user-space.js';
 import { manager } from '../chat/index.js';
 import { textOnlyQuery } from '../../core/text-only-query.js';
 import { ensureDir, readSnapshot, writeSnapshot } from './store.js';
 import { refreshNow, isRefreshing } from './refresher.js';
 import { readHistory } from './history-store.js';
+import { fetchCalendar } from './calendar-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-seguimientos-runner.js');
 const WHATSAPP_FILE = path.join(os.homedir(), '.cwc-data', 'comms', 'whatsapp.json');
+const DAY_MS = 86400000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function userOf(req) {
+  const p = principalOf(req);
+  // El token maestro no identifica a Niko en particular; mantenemos la misma
+  // caída al usuario host que usan las conexiones OAuth.
+  return p?.username || hostUser();
+}
+
+function dateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function defaultCalendarRange() {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), 1);
+  from.setDate(from.getDate() - 7);
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  to.setDate(to.getDate() + 7);
+  return { from: dateKey(from), to: dateKey(to) };
+}
+
+function utcDayMs(dayKey) {
+  const y = Number(dayKey.slice(0, 4));
+  const m = Number(dayKey.slice(5, 7));
+  const d = Number(dayKey.slice(8, 10));
+  return Date.UTC(y, m - 1, d);
+}
 
 // Disciplina de la SESIÓN-LIMBO (Regla 13): herramientas de ambos mundos, con
 // límites duros. Se apendea al prompt de toda sesión lanzada desde el dashboard.
@@ -206,6 +238,28 @@ export default {
     // Historia diaria para los gráficos de tendencia de Métricas (0 tokens).
     r.get('/history', (req, res) => {
       res.json({ days: readHistory() });
+    });
+
+    // Calendario Microsoft: HTTP determinístico y best-effort. Si Graph falla,
+    // el dashboard sigue vivo y muestra el calendario de tickets con un aviso.
+    r.get('/calendar', async (req, res) => {
+      const defaults = defaultCalendarRange();
+      const from = String(req.query.from || defaults.from);
+      const to = String(req.query.to || defaults.to);
+      if (!DATE_RE.test(from) || !DATE_RE.test(to)) return res.status(400).json({ error: 'Rango inválido.' });
+      if (utcDayMs(to) < utcDayMs(from) || (utcDayMs(to) - utcDayMs(from)) / DAY_MS > 120) {
+        return res.status(400).json({ error: 'Rango inválido.' });
+      }
+      try {
+        const out = await fetchCalendar(userOf(req), {
+          from: `${from}T00:00:00-05:00`,
+          to: `${to}T23:59:59-05:00`,
+          fresh: req.query.fresh === '1',
+        });
+        res.json(out);
+      } catch (e) {
+        res.json({ connected: false, byDay: {}, count: 0, error: e.message });
+      }
     });
 
     // Ping del módulo (diagnóstico de que cargó y hay snapshot).

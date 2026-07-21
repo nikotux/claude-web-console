@@ -120,6 +120,23 @@ export function deleteConnection(username, provider) {
   return true;
 }
 
+// Descarta los intentos de conexión de ese usuario para ese proveedor (borra
+// los jobs). Se usa para "Cancelar intento": la tarjeta vuelve a "sin conectar".
+export function cancelAttempts(username, provider) {
+  let removed = 0;
+  try {
+    const dir = path.join(userConnDir(username), 'jobs');
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue;
+      const full = path.join(dir, f);
+      const j = readJson(full);
+      if (!j || j.provider !== provider) continue;
+      try { fs.unlinkSync(full); removed++; } catch { /* best-effort */ }
+    }
+  } catch { /* sin jobs */ }
+  return removed;
+}
+
 export function connectionStatus(username, provider) {
   const c = readConnection(username, provider);
   return {
@@ -128,6 +145,26 @@ export function connectionStatus(username, provider) {
     connectedAt: c?.connectedAt ?? null,
     error: c?.error ?? null,
   };
+}
+
+// Último intento de conexión de ese usuario para ese proveedor (para que la UI
+// distinga "nunca intentó" de "intentó y quedó a medias" — p.ej. esperando la
+// aprobación del admin del tenant). Best-effort: si no hay jobs, null.
+export function lastAttempt(username, provider) {
+  try {
+    const dir = path.join(userConnDir(username), 'jobs');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    let best = null;
+    for (const f of files) {
+      const j = readJson(path.join(dir, f));
+      if (!j || j.provider !== provider) continue;
+      if (!best || (j.createdAt || 0) > (best.createdAt || 0)) best = j;
+    }
+    if (!best) return null;
+    return { status: best.status || 'unknown', error: best.error || null, at: best.createdAt || null };
+  } catch {
+    return null;
+  }
 }
 
 export function newJobId() {

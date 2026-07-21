@@ -18,21 +18,91 @@ import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const LIGHT_DOT = { ok: '🟢', warn: '🟡', info: '🟠', danger: '🔴', neutral: '⚪' };
+const LIGHT_DOT = { ok: '🟢', warn: '🟡', info: '🔵', danger: '🔴', neutral: '⚪' };
+// Vocabulario ÚNICO de estados para TODA conexión (servidores MCP y cuentas).
+// Misma palabra, mismo color y mismo tipo de acción en todo el panel.
+const CONN_STATE = {
+  connected: { light: 'ok', tagKey: 'system.conn.tagOk', tagEs: 'conectado' },
+  inprogress: { light: 'info', tagKey: 'system.conn.tagRunning', tagEs: 'en curso' },
+  action: { light: 'warn', tagKey: 'system.conn.tagAction', tagEs: 'requiere tu acción' },
+  unset: { light: 'neutral', tagKey: 'system.conn.tagUnset', tagEs: 'sin configurar' },
+  error: { light: 'danger', tagKey: 'system.conn.tagError', tagEs: 'error' },
+};
+// Estado unificado de un servidor MCP (a partir del code de classifyStatus).
+function mcpState(s) {
+  const c = s?.status?.code;
+  if (c === 'connected') return 'connected';
+  if (c === 'pending') return 'inprogress';
+  if (c === 'needs-auth') return 'action';
+  if (c === 'error') return 'error';
+  return 'unset';
+}
+// Estado unificado de una cuenta conectada.
+function acctState(p) {
+  if (p.error) return 'error';
+  if (p.connected) return 'connected';
+  if (!p.configured) return 'unset';
+  if (p.lastAttempt && (p.lastAttempt.error || p.lastAttempt.status === 'error')) return 'error';
+  if (p.lastAttempt && p.lastAttempt.status !== 'connected') return 'inprogress';
+  return 'action';
+}
+// "hace X" legible, para reforzar que un trámite está en curso.
+function agoText(ts) {
+  if (!ts) return '';
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 60) return t('system.conn.agoMin', 'hace {n} min', { n: mins });
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return t('system.conn.agoHour', 'hace {n} h', { n: hrs });
+  return t('system.conn.agoDay', 'hace {n} d', { n: Math.round(hrs / 24) });
+}
 const PROVIDER_META = {
   microsoft: { emoji: '📅', purposeKey: 'system.conn.purposeMicrosoft', purposeEs: 'Tu calendario: la consola lee tus eventos con TU cuenta, no con la de otro.' },
   zoho: { emoji: '🎫', purposeKey: 'system.conn.purposeZoho', purposeEs: 'Zoho Desk: que tus comentarios en los tickets salgan a TU nombre.' },
+};
+const SETUP_META = {
+  microsoft: {
+    url: 'https://portal.azure.com',
+    linkKey: 'system.conn.openAzure', linkEs: 'Abrir Azure Portal',
+    steps: [
+      ['system.conn.msStep1', 'Entrá a Azure Portal → Microsoft Entra ID → App registrations → New registration.'],
+      ['system.conn.msStep2', 'Ponele un nombre (ej. "Mi Consola") y registrala.'],
+      ['system.conn.msStep3', '⚠️ En Authentication activá "Allow public client flows" = Yes. Sin esto el código de dispositivo NO funciona.'],
+      ['system.conn.msStep4', 'En API permissions → Microsoft Graph → Delegated agregá: Calendars.ReadWrite, User.Read y offline_access.'],
+      ['system.conn.msStep5', 'Copiá el Application (client) ID y el Directory (tenant) ID y pegalos acá abajo.'],
+    ],
+    fields: [
+      { k: 'clientId', labelKey: 'system.conn.fClientId', labelEs: 'Client ID' },
+      { k: 'tenantId', labelKey: 'system.conn.fTenantId', labelEs: 'Tenant ID', placeholder: 'common' },
+    ],
+  },
+  zoho: {
+    url: 'https://api-console.zoho.com',
+    linkKey: 'system.conn.openZohoConsole', linkEs: 'Abrir Zoho API Console',
+    steps: [
+      ['system.conn.zhStep1', 'Entrá a la Zoho API Console → Add Client → Self Client.'],
+      ['system.conn.zhStep2', 'Copiá el Client ID y el Client Secret y pegalos acá abajo.'],
+      ['system.conn.zhStep3', 'Elegí tu data center (com, eu, in…): el mismo dominio por el que entrás a Zoho.'],
+      ['system.conn.zhStep4', 'Al conectar te vamos a pedir un grant code con los scopes de Desk.'],
+    ],
+    fields: [
+      { k: 'clientId', labelKey: 'system.conn.fClientId', labelEs: 'Client ID' },
+      { k: 'clientSecret', labelKey: 'system.conn.fClientSecret', labelEs: 'Client Secret', type: 'password' },
+      { k: 'dc', labelKey: 'system.conn.fDc', labelEs: 'Data center', placeholder: 'com' },
+    ],
+  },
 };
 
 // Borde de la tarjeta según severidad de conexión (reusa la escala visual de
 // health-review: verde ok / ámbar warn / rojo danger / gris neutro).
 function cardClass(s) {
-  return { ok: 'hr-finding--linked', warn: 'hr-finding--orphan', info: 'hr-finding--medium', danger: 'hr-finding--high', neutral: 'hr-finding--low' }[s.status.light] || 'hr-finding--low';
+  return { ok: 'hr-finding--linked', warn: 'hr-finding--orphan', info: 'hr-finding--running', danger: 'hr-finding--high', neutral: 'hr-finding--low' }[s.status.light] || 'hr-finding--low';
 }
 
 function serverCard(world, s, i) {
   const collapsed = i > 0 ? ' hr-collapsed' : '';
-  const dot = LIGHT_DOT[s.status.light] || '⚪';
+  const uKey = mcpState(s);
+  const uTag = t(CONN_STATE[uKey].tagKey, CONN_STATE[uKey].tagEs);
+  const dot = LIGHT_DOT[CONN_STATE[uKey].light] || '⚪';
   const role = s.role ? `<div class="hr-f-file">🎯 ${esc(s.role)}</div>` : '';
   const target = s.transport === 'stdio'
     ? `<div class="hr-f-file">⌨ <code>${esc(s.command || '')}${s.args ? ' ' + esc(s.args.join(' ')) : ''}</code></div>`
@@ -50,7 +120,7 @@ function serverCard(world, s, i) {
         <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
         <span class="mcp-dot" title="${esc(s.status.label)}">${dot}</span>
         <span class="hr-f-area">${esc(s.name)}</span>
-        <span class="hr-f-mod">${esc(s.transport)} · ${esc(s.scopeLabel)}</span>
+        <span class="hr-f-mod">${esc(uTag)} · ${esc(s.transport)} · ${esc(s.scopeLabel)}</span>
       </div>
       <div class="hr-f-body">
         <p class="hr-f-detail"><b>${dot} ${esc(s.status.label)}</b></p>
@@ -66,6 +136,7 @@ export function mountMcpsPanel(el, ctx = {}) {
   const root = el.querySelector('[data-ref="root"]');
 
   let alive = true;
+  let connAdmin = false;
   const obs = new MutationObserver(() => { if (!el.isConnected) { alive = false; obs.disconnect(); } });
   obs.observe(document.body, { childList: true, subtree: true });
 
@@ -84,16 +155,18 @@ export function mountMcpsPanel(el, ctx = {}) {
   }
 
   function connStatus(p) {
-    if (p.error) return { light: 'danger', label: t('system.conn.stError', 'Error: {e}', { e: p.error }) };
-    if (!p.configured) return { light: 'neutral', label: t('system.conn.stUnconfigured', 'No configurado — falta que un admin cargue las credenciales de la app.') };
-    if (p.connected) return { light: 'ok', label: t('system.conn.stConnected', 'Conectado como {acct}', { acct: p.account || '—' }) };
-    return { light: 'warn', label: t('system.conn.stDisconnected', 'Sin conectar — conectá tu cuenta para usarlo.') };
+    const key = acctState(p);
+    const light = CONN_STATE[key].light;
+    if (key === 'error') return { key, light, label: t('system.conn.stError', 'Error: {e}', { e: p.error || p.lastAttempt?.error || '' }) };
+    if (key === 'connected') return { key, light, label: t('system.conn.stConnected', 'Conectado como {acct}', { acct: p.account || '—' }) };
+    if (key === 'unset') return { key, light, label: t('system.conn.stUnconfigured', 'No configurado — falta que un admin cargue las credenciales de la app.') };
+    if (key === 'inprogress') return { key, light, label: t('system.conn.stRunning', 'Conexión en curso · esperando autorización') };
+    return { key, light, label: t('system.conn.stDisconnected', 'Sin conectar — conectá tu cuenta para usarlo.') };
   }
 
   function connTag(p) {
-    if (!p.configured) return t('system.conn.tagUnconfigured', 'sin configurar');
-    if (p.connected) return t('system.conn.tagConnected', 'conectada');
-    return t('system.conn.tagPending', 'sin conectar');
+    const k = acctState(p);
+    return t(CONN_STATE[k].tagKey, CONN_STATE[k].tagEs);
   }
 
   function connCard(p, i) {
@@ -102,16 +175,22 @@ export function mountMcpsPanel(el, ctx = {}) {
     const meta = PROVIDER_META[p.id] || { emoji: '🔗', purposeKey: 'system.conn.purposeGeneric', purposeEs: 'Cuenta personal conectada a la consola.' };
     const connectedAt = p.connectedAt ? `<div class="hr-f-file">🕑 ${esc(new Date(p.connectedAt).toLocaleString())}</div>` : '';
     const scopes = p.scopes?.length ? `<div class="hr-f-file">🔑 <code>${esc(p.scopes.join(' '))}</code></div>` : '';
+    const stKey = st.key || acctState(p);
     const acts = [];
-    if (p.configured && !p.connected) {
-      acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('externalLink', { size: 12 })}<span>${t('system.conn.connect', 'Conectar mi cuenta')}</span></button>`);
-    }
-    if (p.connected) {
+    if (stKey === 'connected') {
       acts.push(`<button class="btn-ghost btn--sm" data-cact="disconnect" data-prov="${esc(p.id)}">${t('system.conn.disconnect', 'Desconectar')}</button>`);
+    } else if (stKey === 'inprogress') {
+      acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('refresh', { size: 12 })}<span>${t('system.conn.verifyBtn', 'Verificar de nuevo')}</span></button>`);
+      acts.push(`<button class="btn-ghost btn--sm" data-cact="cancel" data-prov="${esc(p.id)}">${t('system.conn.cancelBtn', 'Cancelar intento')}</button>`);
+    } else if (stKey === 'error') {
+      acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('refresh', { size: 12 })}<span>${t('system.conn.retryBtn', 'Reintentar')}</span></button>`);
+    } else {
+      acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('externalLink', { size: 12 })}<span>${t('system.conn.connectBtn', 'Conectar')}</span></button>`);
     }
-    const actions = p.configured
-      ? `<div class="mcp-acts">${acts.join('')}</div>`
-      : `<p class="hr-f-file">${t('system.conn.needsAdmin', 'Un admin tiene que cargar las credenciales de la app abajo antes de que puedas conectar tu cuenta.')}</p>`;
+    const actions = `<div class="mcp-acts">${acts.join('')}</div>`;
+    const attemptNote = stKey === 'inprogress' ? `
+          <div class="hr-f-file">ℹ️ ${t('system.conn.runningHint', 'Ya iniciaste la conexión. Si te pidió aprobación de un administrador, se completa cuando te aprueben — puede tardar. No hay nada roto de tu lado.')}</div>
+          ${p.lastAttempt?.at ? `<div class="hr-f-file">🕓 ${t('system.conn.startedAgo', 'Iniciada {ago}', { ago: agoText(p.lastAttempt.at) })}</div>` : ''}` : '';
 
     return `
       <div class="hr-finding ${cardClass({ status: st })}${i > 0 ? ' hr-collapsed' : ''}" data-conn="${esc(p.id)}">
@@ -126,40 +205,10 @@ export function mountMcpsPanel(el, ctx = {}) {
           <div class="hr-f-file">${t(meta.purposeKey, meta.purposeEs)}</div>
           ${connectedAt}
           ${scopes}
+          ${attemptNote}
           ${actions}
         </div>
       </div>`;
-  }
-
-  function connAdminBlock(d) {
-    if (!d.isAdmin) return '';
-    const labels = new Map((d.providers || []).map((p) => [p.id, p.label]));
-    const providerLabel = (prov) => esc(labels.get(prov) || (prov === 'microsoft' ? t('system.conn.providerMicrosoft', 'Microsoft') : t('system.conn.providerZoho', 'Zoho')));
-    return `
-      <details class="hr-collapsible">
-        <summary>⚙️ ${t('system.conn.appCredsTitle', 'Credenciales de la app (admin)')}</summary>
-        <p class="pj-hint">${t('system.conn.appCredsHint', 'Esto se configura UNA sola vez para toda la consola. Después cada persona conecta su propia cuenta con el botón de arriba.')}</p>
-        <div class="conn-appform" data-appform="microsoft">
-          <h4 class="conn-fh">${providerLabel('microsoft')}</h4>
-          <label class="conn-flabel">${t('system.conn.fClientId', 'Client ID')}</label>
-          <input class="dlg-input" data-f="clientId">
-          <label class="conn-flabel">${t('system.conn.fTenantId', 'Tenant ID')}</label>
-          <input class="dlg-input" data-f="tenantId">
-          <button class="btn btn--sm" data-cact="saveapp" data-prov="microsoft">${t('system.conn.save', 'Guardar')}</button>
-          <p class="hr-f-file" data-appmsg="microsoft"></p>
-        </div>
-        <div class="conn-appform" data-appform="zoho">
-          <h4 class="conn-fh">${providerLabel('zoho')}</h4>
-          <label class="conn-flabel">${t('system.conn.fClientId', 'Client ID')}</label>
-          <input class="dlg-input" data-f="clientId">
-          <label class="conn-flabel">${t('system.conn.fClientSecret', 'Client Secret')}</label>
-          <input class="dlg-input" data-f="clientSecret" type="password">
-          <label class="conn-flabel">${t('system.conn.fDc', 'Data center (ej. com, eu, in)')}</label>
-          <input class="dlg-input" data-f="dc">
-          <button class="btn btn--sm" data-cact="saveapp" data-prov="zoho">${t('system.conn.save', 'Guardar')}</button>
-          <p class="hr-f-file" data-appmsg="zoho"></p>
-        </div>
-      </details>`;
   }
 
   function connTitle() {
@@ -167,6 +216,7 @@ export function mountMcpsPanel(el, ctx = {}) {
   }
 
   function renderConnections(d) {
+    connAdmin = !!d.isAdmin;
     const providers = d.providers || [];
     const cards = providers.length
       ? providers.map((p, i) => connCard(p, i)).join('')
@@ -176,8 +226,7 @@ export function mountMcpsPanel(el, ctx = {}) {
     host.innerHTML = `
       ${connTitle()}
       <p class="pj-hint">${t('system.conn.hint', 'Tus cuentas personales. Cada persona conecta las suyas: la consola actúa con TU identidad, no con la de otro.')}</p>
-      <div class="hr-findings">${cards}</div>
-      ${connAdminBlock(d)}`;
+      <div class="hr-findings">${cards}</div>`;
   }
 
   async function loadConnections() {
@@ -215,7 +264,7 @@ export function mountMcpsPanel(el, ctx = {}) {
       const provider = (d.providers || []).find((p) => p.id === prov);
       const label = provider?.label || prov;
       if (b.dataset.cact === 'connect') {
-        openConnect(prov, label);
+        openConnect(prov, label, provider);
       } else if (b.dataset.cact === 'disconnect') {
         const ok = await (dialog.confirmSheet || dialog.confirmDialog)?.({
           title: t('system.conn.disconnectTitle', 'Desconectar cuenta'),
@@ -230,51 +279,24 @@ export function mountMcpsPanel(el, ctx = {}) {
         } catch (err) {
           dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(err.message || err) });
         }
-      } else if (b.dataset.cact === 'saveapp') {
-        const form = host.querySelector(`[data-appform="${prov}"]`);
-        const msg = host.querySelector(`[data-appmsg="${prov}"]`);
-        if (!form) return;
-        const body = { provider: prov };
-        form.querySelectorAll('[data-f]').forEach((input) => {
-          const value = input.value.trim();
-          if (value) body[input.dataset.f] = value;
+      } else if (b.dataset.cact === 'cancel') {
+        const ok = await (dialog.confirmSheet || dialog.confirmDialog)?.({
+          title: t('system.conn.cancelTitle', 'Cancelar intento'),
+          message: t('system.conn.cancelMsg', '¿Descartar el intento de conexión de "{label}"? No pierde nada configurado: podés volver a conectar cuando quieras.', { label }),
         });
-        b.disabled = true;
-        if (msg) msg.textContent = t('system.conn.saving', 'Guardando…');
+        if (!ok) return;
         try {
-          const r = await fetch('/api/connections/app', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+          const r = await fetch(`/api/connections/${encodeURIComponent(prov)}/cancel`, { method: 'POST' });
           if (!r.ok) throw new Error((await r.json()).error || r.status);
-          if (msg) msg.textContent = t('system.conn.saved', 'Guardado.');
           loadConnections();
         } catch (err) {
-          if (msg) msg.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
-        } finally {
-          b.disabled = false;
+          dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(err.message || err) });
         }
       }
     }));
-    if (d.isAdmin) fillConnectionAppForms(host);
   }
 
-  async function fillConnectionAppForms(host) {
-    try {
-      const r = await fetch('/api/connections/app');
-      if (!r.ok) return;
-      const app = await r.json();
-      const set = (prov, field, value) => {
-        const input = host.querySelector(`[data-appform="${prov}"] [data-f="${field}"]`);
-        if (input && value != null) input.value = value;
-      };
-      set('microsoft', 'clientId', app.microsoft?.clientId || '');
-      set('microsoft', 'tenantId', app.microsoft?.tenantId || '');
-      set('zoho', 'clientId', app.zoho?.clientId || '');
-      set('zoho', 'dc', app.zoho?.dc || '');
-      const secret = host.querySelector('[data-appform="zoho"] [data-f="clientSecret"]');
-      if (secret && app.zoho?.hasSecret) secret.placeholder = t('system.conn.secretSavedPlaceholder', '•••• (guardado)');
-    } catch { /* best effort */ }
-  }
-
-  function openConnect(prov, label) {
+  function openConnect(prov, label, p) {
     const m = dialog.openModal({ title: t('system.conn.connectTitle', 'Conectar · {label}', { label }), width: 560 });
     let timer = null;
     let jobId = null;
@@ -283,7 +305,6 @@ export function mountMcpsPanel(el, ctx = {}) {
     mo.observe(document.body, { childList: true, subtree: true });
 
     const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
-    setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.starting', 'Iniciando conexión…')}`);
 
     const poll = () => {
       timer = setInterval(async () => {
@@ -345,6 +366,9 @@ export function mountMcpsPanel(el, ctx = {}) {
           <li>${t('system.conn.zohoStepOpen', 'Abrí la consola de autorización de Zoho:')}<br>
             <a class="mcp-oauth-link" href="${esc(j.authUrl)}" target="_blank" rel="noopener">${icon('externalLink', { size: 13 })} ${t('system.conn.openZoho', 'Abrir Zoho')}</a></li>
           <li>${t('system.conn.zohoStepGrant', 'Generá el grant code con tu cuenta.')}</li>
+          ${j.scopes ? `<li>${t('system.conn.zohoStepScopes', 'Cuando te pida los scopes, pegá exactamente esto:')}<br>
+            <code class="conn-scopes">${esc(j.scopes)}</code>
+            <button class="btn-ghost btn--sm" data-ref="copyscopes">${t('system.conn.copyScopes', 'Copiar scopes')}</button></li>` : ''}
           <li>${t('system.conn.zohoStepPaste', 'Pegalo acá y envialo:')}<br>
             <input type="text" class="dlg-input" data-ref="code" placeholder="${esc(t('system.conn.grantPlaceholder', '1000.xxxxx…'))}">
             <button class="btn btn--sm" data-ref="send">${icon('check', { size: 12 })}<span>${t('system.conn.send', 'Enviar')}</span></button></li>
@@ -353,6 +377,14 @@ export function mountMcpsPanel(el, ctx = {}) {
       const send = m.body.querySelector('[data-ref="send"]');
       const input = m.body.querySelector('[data-ref="code"]');
       const msg = m.body.querySelector('[data-ref="msg"]');
+      m.body.querySelector('[data-ref="copyscopes"]')?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(j.scopes);
+          if (msg) msg.textContent = t('system.conn.scopesCopied', 'Scopes copiados.');
+        } catch {
+          if (msg) msg.textContent = t('system.conn.copyScopesFallback', 'No se pudo copiar automáticamente. Scopes: {scopes}', { scopes: j.scopes });
+        }
+      });
       send?.addEventListener('click', async () => {
         const value = input.value.trim();
         if (!value) return;
@@ -369,7 +401,8 @@ export function mountMcpsPanel(el, ctx = {}) {
       });
     };
 
-    (async () => {
+    const startConnect = async () => {
+      setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.starting', 'Iniciando conexión…')}`);
       try {
         const r = await fetch(`/api/connections/${encodeURIComponent(prov)}/connect`, { method: 'POST' });
         if (!r.ok) throw new Error((await r.json()).error || r.status);
@@ -382,7 +415,55 @@ export function mountMcpsPanel(el, ctx = {}) {
       } catch (err) {
         setBody(`<p class="hr-f-crit">${t('system.conn.startError', 'No se pudo iniciar: {error}', { error: esc(err.message || err) })}</p>`);
       }
-    })();
+    };
+
+    // PASO 1 (solo admin, solo si la app no está configurada): instructivo +
+    // credenciales de la app. Al guardar, sigue derecho al flujo de conexión.
+    const renderSetup = async () => {
+      const meta = SETUP_META[prov];
+      if (!meta) { setBody(`<p class="hr-f-crit">${t('system.conn.noSetup', 'Este proveedor no tiene instructivo de configuración.')}</p>`); return; }
+      let app = {};
+      try { const r = await fetch('/api/connections/app'); if (r.ok) app = await r.json(); } catch { /* best effort */ }
+      const cur = app[prov] || {};
+      const fields = meta.fields.map((f) => `
+        <label class="conn-flabel">${t(f.labelKey, f.labelEs)}</label>
+        <input class="dlg-input" data-f="${esc(f.k)}"${f.type ? ` type="${esc(f.type)}"` : ''} placeholder="${esc(f.placeholder || '')}">`).join('');
+      setBody(`
+        <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${t('system.conn.setupTitle', 'Paso 1 — registrar la app')}</b></p>
+        <p class="hr-f-file">${t('system.conn.setupHint', 'Esto se hace UNA sola vez para toda la consola. Después cada persona conecta su propia cuenta.')}</p>
+        <ol class="mcp-oauth-steps">${meta.steps.map(([k, es]) => `<li>${t(k, es)}</li>`).join('')}</ol>
+        <a class="mcp-oauth-link" href="${esc(meta.url)}" target="_blank" rel="noopener">${icon('externalLink', { size: 13 })} ${t(meta.linkKey, meta.linkEs)}</a>
+        <div class="conn-appform">${fields}</div>
+        <div class="mcp-acts"><button class="btn btn--sm" data-ref="saveapp">${t('system.conn.saveAndContinue', 'Guardar y continuar')}</button></div>
+        <p class="hr-f-file" data-ref="msg"></p>`);
+      meta.fields.forEach((f) => {
+        const input = m.body.querySelector(`[data-f="${f.k}"]`);
+        if (!input) return;
+        if (f.k === 'clientSecret') { if (cur.hasSecret) input.placeholder = t('system.conn.secretSavedPlaceholder', '•••• (guardado)'); return; }
+        if (cur[f.k]) input.value = cur[f.k];
+      });
+      const btn = m.body.querySelector('[data-ref="saveapp"]');
+      const msg = m.body.querySelector('[data-ref="msg"]');
+      btn?.addEventListener('click', async () => {
+        const body = { provider: prov };
+        m.body.querySelectorAll('[data-f]').forEach((input) => { const v = input.value.trim(); if (v) body[input.dataset.f] = v; });
+        btn.disabled = true;
+        if (msg) msg.textContent = t('system.conn.saving', 'Guardando…');
+        try {
+          const r = await fetch('/api/connections/app', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+          if (!r.ok) throw new Error((await r.json()).error || r.status);
+          loadConnections();
+          startConnect();
+        } catch (err) {
+          if (msg) msg.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
+          btn.disabled = false;
+        }
+      });
+    };
+
+    if (p && p.configured) startConnect();
+    else if (connAdmin) renderSetup();
+    else setBody(`<p class="hr-f-file">⚪ ${t('system.conn.needsAdminModal', 'Falta que un administrador cargue las credenciales de la app de este proveedor. Pedíselo y volvé a intentar.')}</p>`);
   }
 
   async function onAction(act, world, name) {
@@ -510,10 +591,14 @@ export function mountMcpsPanel(el, ctx = {}) {
       const cards = w.servers.length
         ? w.servers.map((s, i) => serverCard(w.world, s, i)).join('')
         : `<p class="hr-summary">${t('system.mcps.noWorldServers', 'Sin servidores MCP en este mundo.')}</p>`;
+      // Las cuentas personales viven DENTRO de 🏠 Mi Consola: son conexiones de
+      // la consola (no de Tolkien), así que se listan junto a sus MCP.
+      const connHost = w.world === 'console' ? '<div class="conn-inline" data-ref="conn"></div>' : '';
       return `<details class="hr-collapsible" open>
         <summary>${esc(w.label)} <span class="hr-f-mod">${esc(w.cwd)}</span> (${w.servers.length})</summary>
         ${warn}
         <div class="hr-findings">${cards}</div>
+        ${connHost}
       </details>`;
     }).join('');
 
@@ -521,7 +606,7 @@ export function mountMcpsPanel(el, ctx = {}) {
       <p class="pj-hint">${t('system.mcps.hintBeforeCommand', 'Servidores MCP de Claude Code por mundo, con estado en vivo. Estado vía')} <code>claude mcp list</code> — ${t('system.mcps.zeroTokens', '0 tokens')}.</p>
       ${globalActs}
       ${groups || `<p class="hr-summary">${t('system.mcps.noServers', 'No se encontraron servidores MCP.')}</p>`}
-      <section class="conn-sec" data-ref="conn"></section>`;
+      ${(d.worlds || []).some((w) => w.world === 'console') ? '' : '<section class="conn-sec" data-ref="conn"></section>'}`;
     wire();
     loadConnections();
   }
