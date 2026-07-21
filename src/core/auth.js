@@ -5,7 +5,7 @@
 //   1) Sesión de usuario  -> cookie cwc_session (login con usuario+contraseña).
 //   2) Token maestro       -> cookie cwc_token / header x-cwc-token / Bearer.
 //      El token da acceso ADMIN (emergencia y bootstrap del primer usuario).
-import { parse as parseCookie } from 'cookie';
+import { parseCookie } from 'cookie';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
