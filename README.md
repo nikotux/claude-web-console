@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-21 17:25 — main
+- Corregir caída del server tras actualización de dependencias mayores
+- Tándem por defecto, opus/high razonador, diff acotado
+
 ### 2026-07-21 06:12 — main
 - Corregir Tándem inerte, agregar módulo Updates y conectores
 
