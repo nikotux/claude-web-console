@@ -401,6 +401,9 @@ B-A y C) y recibe todos los textos — es correcto.
   ticket sin PR + `<n>.req.json` enunciado + `ticket-investigate.lock` heartbeat,
   snapshot interno del módulo `seguimientos` + historia diaria de métricas (estado
   generado desde Zoho Desk; el dashboard lee disco, no el mundo externo en vivo),
+  `connections/_app.json` (credenciales de la APP OAuth de instancia, admin) +
+  `connections/<provider>.json` por usuario (tokens OAuth, perms 600) +
+  `connections/jobs/` (jobs efímeros del flujo de conexión),
   `inventory.json`+`inventory.md` generados por core/inventory.js,
   `updates-census.json` último censo de versiones de terceros (módulo `updates`;
   npm outdated/audit + claude/apt/pad versions; escritura atómica, caché 6 h, se
@@ -645,6 +648,13 @@ src/core/                   config(.env + config.instance) · instance-config(ca
                             sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
                             'chat'=user+project+local / 'headless'=project+local sin user /
                             'none'=[] para texto puro — ver text-only-query) ·
+                            connections-store(app config de instancia + tokens per-usuario +
+                            getAccessToken con refresh) · connections-microsoft(device code
+                            flow) · connections-zoho(grant code Self Client + getOrg +
+                            identidad por listado de agentes) · zoho-desk-client(ESCRITURA a
+                            Desk con la identidad del USUARIO: getTicket/assignTicket/
+                            updateTicket/addComment/uploadAttachment/createTicket; resuelve el
+                            token por username y manda orgId siempre) ·
                             tool-policy(NÚCLEO de gobernanza de permisos del chat interactivo —
                             NO es motor, es plomería in-process como sdk-settings/paths: el
                             estado del modo lo persiste el server (Chat.permissionMode→chats.json)
@@ -2293,6 +2303,11 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             horas del popup del día (extiende su rango 6-21 h si hay una reunión
                             fuera de esa franja, y manda los eventos de día completo a la banda
                             "Todo el día").
+                            ESCRITURAS A DESK A NOMBRE DE NIKO (PLAN-781): el limboFooter() ya NO
+                            manda a la sesión a usar las tools desk_* del MCP (ésas publican con el
+                            token de OTRO agente): ahora le indica el CLI bin/cwc-desk.js, que
+                            escribe con la identidad del usuario. Verificado en vivo: un comentario
+                            creado por esa vía figura autorado por Nicolas Mosquera.
   interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
                             (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
                             claims con verdict de evaluateClaim + ts) · POST /send {to,text}
@@ -3182,6 +3197,15 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             filtro SECUNDARIO dentro de Tickets/Features (ya NO tienen 📦 —
                             es pestaña); se ocultan en Archivados. Cambiar de pestaña es un
                             store.set({tab}) y el re-render es seguro (no toca `expanded`).
+                            AUTO-ASIGNACIÓN AL TOMAR (PLAN-781): POST /claim, además del lock local,
+                            asigna el ticket en Zoho al usuario que lo toma (assignInZohoBestEffort).
+                            Cubre las DOS vías porque "Continuar en el chat" ya hace auto-claim.
+                            Reglas: solo ids numéricos (los claims `pr:<n>` no viven en Zoho); NO roba
+                            un ticket que ya tiene otro dueño; best-effort en segundo plano (si Zoho
+                            falla, el claim y el chat funcionan igual). OJO IDENTIDAD: usa
+                            externalUserOf(req) = principalOf(req)?.username || hostUser(), NO
+                            actor.username — `actorOf` etiqueta al token maestro como 'token-maestro',
+                            que sirve de label para el lock pero NO es una persona con cuenta OAuth.
   env-vars/                 CAPA DE CONFIG DE INSTANCIA (identidad + cliente) — pestaña
                             "Variables de entorno" de ⚙ Sistema (PLAN-476/PEND-377, C1
                             fundacional del Programa Satélite). Separa del CÓDIGO lo que es
@@ -3273,6 +3297,32 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             375px): 7 MCP reales de ambos mundos con semáforo correcto; runner pty
                             capturó la URL de authorize en vivo (intercambio final no ejercido para no
                             completar un OAuth real).
+  connections/              CUENTAS CONECTADAS por usuario (PLAN-781): cada usuario conecta SUS
+                            cuentas de terceros y la consola actúa con SU identidad. Ruta
+                            /api/connections. Se ve en ⚙ Sistema → Conexiones, DENTRO del grupo
+                            🏠 Mi Consola (frontend en system/mcps-panel.js, junto a los MCP).
+                            DOS NIVELES de credencial (así funciona OAuth): (a) APP de instancia
+                            (client_id/secret) que carga UNA vez el admin → ~/.cwc-data/connections/
+                            _app.json; (b) TOKEN por-usuario → userDataDir(<user>)/connections/
+                            <provider>.json (perms 600, escritura atómica). NUNCA se comparte un
+                            token entre usuarios. Proveedores: microsoft (device code flow, scopes
+                            offline_access User.Read Calendars.ReadWrite) y zoho (grant code de
+                            Self Client). core/connections-store.js expone getAccessToken(username,
+                            provider) que refresca y re-persiste solo — es la puerta ÚNICA al token.
+                            Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
+                            GET|POST /app (admin) · POST /:p/connect · /:p/code · /:p/cancel ·
+                            /:p/disconnect · GET /:p/status.
+                            GOTCHAS DUROS (todos verificados en vivo, cuestan caro re-descubrirlos):
+                            (1) ZOHO NO usa el scope `offline_access` — el refresh token se obtiene
+                            pasando `access_type=offline` en el intercambio; sin eso Zoho devuelve
+                            solo access token y se QUEMA el grant code (es de un solo uso y vive
+                            ~3 min). (2) La API de Desk exige el header `orgId` en TODA llamada; se
+                            descubre con getOrg() al conectar y se PERSISTE. (3) `GET /agents/me` NO
+                            EXISTE en Desk (404); la identidad se resuelve listando agentes y
+                            matcheando por email — igual que seguimientos/desk-source.js — y de paso
+                            se guarda el agentId. (4) MICROSOFT: el device code exige "Allow public
+                            client flows" = Yes en la app de Entra, y si el tenant deshabilita el
+                            consentimiento de usuario hace falta aprobación del admin (una vez).
   updates/                  CENSO CENTRALIZADO de versiones de TERCEROS + APLICADO reversible con
                             verificación (2026-07-21, PLAN-779, pedido de Niko: "no hay mecanismo que
                             avise cuándo salen updates de lo que la consola depende de afuera").
@@ -4270,6 +4320,13 @@ bin/cwc-desk-runner.js      consulta EN VIVO del estado de un ticket en Zoho Des
                             doble capa, allowlist desk_* de lectura; interfaz por archivos:
                             desk.lock heartbeat + desk-live/<ticket>.json resultado). Lógica
                             compartida con el módulo en bugfixes/desk-shared.js
+bin/cwc-desk.js             CLI de Zoho Desk con la identidad OAuth del USUARIO (PLAN-781). Es el
+                            PUENTE para las SESIONES: un chat usa tools MCP y no puede llamar al
+                            HTTP interno del server, pero sí correr un comando. Subcomandos: get ·
+                            assign · comment (nota interna por defecto; --public para el cliente) ·
+                            attach · update · create. Carga el .env de la consola por ruta explícita
+                            ANTES de importar core/config.js, así funciona invocado por ruta ABSOLUTA
+                            desde otro cwd (las sesiones-Limbo corren con cwd de Tolkien).
 bin/cwc-projects-analyze-runner.js análisis IA (guardián) de UN cambio de sección de contexto
                             (CLAUDE.md) del módulo projects, DESACOPLADO del server (haiku, 1
                             turno, CERO herramientas — doble capa regla 6 deniega TODO).

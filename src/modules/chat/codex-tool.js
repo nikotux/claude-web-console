@@ -44,6 +44,19 @@ export const TANDEM_CODEX_PREAMBLE = [
   'PLAN CONCRETO:',
   '',
 ].join('\n');
+
+// Advertencia que se antepone al preámbulo cuando la delegación corre SIN
+// sandbox (`danger-full-access`, opt-in por tarea vía `full_access`). Solo se
+// usa para tareas que necesitan escribir en `.git` (rebase, cherry-pick,
+// reset): en `workspace-write` Codex monta `.git` como solo-lectura por diseño
+// y no hay permiso fino para excluirlo (verificado con `codex sandbox`:
+// `writable_roots` NO alcanza para `.git`).
+export const TANDEM_FULL_ACCESS_WARNING = [
+  '⚠️ ATENCIÓN: esta delegación corre SIN SANDBOX (acceso total al filesystem).',
+  'Limitate ESTRICTAMENTE a las rutas que el plan menciona. Cualquier escritura fuera de ellas es un error grave.',
+  '',
+].join('\n');
+
 // Modelos Codex válidos (whitelist estricta para el arg del runner).
 export const CODEX_MODELS = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']);
 export const CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -206,15 +219,16 @@ export function diffSnapshots(before, after, cwd, startedAt) {
 
 // Corre `codex exec --json` con el plan y junta el stream JSONL. Devuelve
 // {code|error, msgs[], threadId, usage, stderr}. Kill por timeout. PLAN-519 F2:
-// modelo+esfuerzo configurables (default gama alta).
-function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT) {
+// modelo+esfuerzo configurables (default gama alta). `fullAccess` desactiva el
+// sandbox, necesario para escribir en `.git`.
+function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false) {
   return new Promise((resolve) => {
     const args = [
       'exec', '--json', '--skip-git-repo-check',
       '-m', model,
       '-c', `model_reasoning_effort=${effort}`,
-      '-s', 'workspace-write',
-      TANDEM_CODEX_PREAMBLE + task,
+      '-s', fullAccess ? 'danger-full-access' : 'workspace-write',
+      (fullAccess ? TANDEM_FULL_ACCESS_WARNING : '') + TANDEM_CODEX_PREAMBLE + task,
     ];
     let child;
     try {
@@ -264,12 +278,16 @@ export function createCodexToolServer({ cwd, model = TANDEM_CODEX_MODEL, effort 
     + 'verificar) y Codex lo implementa en el directorio del proyecto. Devuelve el '
     + 'resumen de lo que hizo Codex y el diff ACOTADO a los archivos que tocó esta '
     + 'delegación (no el árbol entero) para que lo verifiques. '
+    + 'Si la tarea necesita escribir en `.git` (rebase, cherry-pick, reset, fetch), pasá full_access: true — sin eso Codex ve `.git` como solo-lectura y falla. '
     + 'Cuanto más preciso el plan, mejor la ejecución.',
-    { task: z.string().describe('Plan de implementación concreto para Codex: archivos, cambios exactos y criterios de verificación.') },
-    async ({ task }) => {
+    {
+      task: z.string().describe('Plan de implementación concreto para Codex: archivos, cambios exactos y criterios de verificación.'),
+      full_access: z.boolean().optional().describe('Desactiva el sandbox de Codex (corre en danger-full-access). Úsalo ÚNICAMENTE cuando la tarea necesite escribir en `.git` (rebase, cherry-pick, reset, fetch): en el modo normal Codex monta `.git` como solo-lectura y esas operaciones fallan con "read-only file system". No lo actives para cambios de código comunes.'),
+    },
+    async ({ task, full_access }) => {
       const startedAt = Date.now();
       const before = await snapshotTree(cwd, { withContents: true });
-      const res = await runCodex(cwd, task, codexModel, codexEffort);
+      const res = await runCodex(cwd, task, codexModel, codexEffort, full_access === true);
       const after = await snapshotTree(cwd);
       const { touched, newFiles } = diffSnapshots(before, after, cwd, startedAt);
       const parts = [];

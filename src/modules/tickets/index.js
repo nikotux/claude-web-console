@@ -9,6 +9,7 @@
 // sin golpear Zoho en cada apertura.
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { hostUser } from '../../core/user-space.js';
 import { reqPadContext } from '../../core/pad-context.js';
 import { getTicketState, listDepartments } from './desk-mcp-client.js';
 import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolvedInfo } from './sources.js';
@@ -18,6 +19,7 @@ import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
 import { getContext, saveContext, DEFAULT_CONTEXTS, verifySync, syncToTolkien } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
 import { getMeta, saveContexto, clearContexto } from './meta-store.js';
+import { getTicket as zohoGetTicket, assignTicket as zohoAssignTicket } from '../../core/zoho-desk-client.js';
 import {
   contextJobId, readJob, writeJob, spawnRunner, jobResult, isFreshRunning, MAX_TRANSCRIPT,
 } from './context-analyze-shared.js';
@@ -30,6 +32,44 @@ function actorOf(req) {
   if (!p) return null;
   const username = p.username || (p.type === 'token' ? 'token-maestro' : null);
   return { username, admin: !!p.admin, type: p.type, label: username };
+}
+
+// Identidad para operar en el MUNDO EXTERNO (Zoho) — NO es la misma que la del
+// claim local. `actorOf` etiqueta al token maestro como 'token-maestro', que sirve
+// para mostrar quién tiene el lock, pero no es una persona con cuenta OAuth. Acá
+// usamos el mismo criterio que connections/seguimientos: el usuario de la sesión,
+// y si es el token maestro caemos al usuario host.
+function externalUserOf(req) {
+  return principalOf(req)?.username || hostUser();
+}
+
+// Al TOMAR un ticket, además asignarlo en Zoho al usuario que lo toma (PLAN-781):
+// "lo tomo yo" y "soy su dueño en Desk" son la misma cosa, y así el trabajo queda
+// a nombre de quien realmente lo lleva en vez del dueño del token del MCP.
+// BEST-EFFORT y en segundo plano: si Zoho falla, tarda o el usuario no conectó su
+// cuenta, el claim local y la apertura del chat funcionan igual — nunca se rompe
+// el flujo de trabajo por un problema del mundo externo.
+function assignInZohoBestEffort(id, username) {
+  // Solo tickets de Desk: los claims de PR (`pr:123`) y cualquier id no numérico
+  // no viven en Zoho.
+  if (!/^\d+$/.test(String(id || ''))) return;
+  if (!username) return;
+  (async () => {
+    try {
+      const t = await zohoGetTicket(username, id);
+      const actual = t?.assigneeId ? String(t.assigneeId) : null;
+      if (actual) {
+        // Ya tiene dueño: NO se lo robamos a nadie. Si ya es del mismo usuario,
+        // tampoco hace falta escribir.
+        console.error(`[tickets] #${id} ya está asignado en Zoho (${actual}); no se reasigna.`);
+        return;
+      }
+      await zohoAssignTicket(username, id);
+      console.error(`[tickets] #${id} asignado en Zoho a ${username}.`);
+    } catch (err) {
+      console.error(`[tickets] no se pudo asignar #${id} en Zoho:`, err?.message || err);
+    }
+  })();
 }
 
 export default {
@@ -174,6 +214,7 @@ export default {
       const force = req.body?.force === true;
       const out = claimTicket(id, actor, { force });
       if (!out.ok) return res.status(409).json({ error: 'En uso por otro usuario.', heldBy: out.heldBy });
+      assignInZohoBestEffort(id, externalUserOf(req));
       res.json({ ok: true, workingBy: out.claim, you: actor.username });
     });
     r.post('/release', (req, res) => {

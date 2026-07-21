@@ -24,6 +24,7 @@ import { readHistory } from './history-store.js';
 import { fetchCalendar } from './calendar-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONSOLE_ROOT = path.join(__dirname, '..', '..', '..');
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-seguimientos-runner.js');
 const WHATSAPP_FILE = path.join(os.homedir(), '.cwc-data', 'comms', 'whatsapp.json');
 const DAY_MS = 86400000;
@@ -65,8 +66,13 @@ function limboFooter() {
     'Para triangular podés consultar las 4 fuentes:',
     '• Tickets/Desk, Correo y Teams: usá las tools del MCP (desk_*, graph_read_email, graph_read_chat_messages).',
     `• WhatsApp: leé ${WHATSAPP_FILE} con Read (mensajes indexados por la consola; media en la carpeta whatsapp-media/).`,
-    'DISCIPLINA (Regla 13 / Limbo): leé libremente de las 4 fuentes; para ESCRIBIR, SOLO al sistema de tickets',
-    '(desk_create_ticket / desk_update_ticket / desk_add_comment) y SIEMPRE con mi aprobación explícita.',
+    'DISCIPLINA (Regla 13 / Limbo): leé libremente de las 4 fuentes; para ESCRIBIR en Desk NO uses las tools desk_* del MCP, porque publican a nombre de otro agente.',
+    'Usá el CLI de la consola, que escribe con la identidad de Niko:',
+    `• node ${CONSOLE_ROOT}/bin/cwc-desk.js comment <nroTicket> "<texto>"  (nota interna; agregá --public para visible al cliente)`,
+    `• node ${CONSOLE_ROOT}/bin/cwc-desk.js assign <nroTicket>`,
+    `• node ${CONSOLE_ROOT}/bin/cwc-desk.js attach <nroTicket> <rutaArchivo>`,
+    `• node ${CONSOLE_ROOT}/bin/cwc-desk.js update <nroTicket> --status="..."`,
+    'SIEMPRE esperá mi aprobación explícita antes de escribir.',
     'NUNCA sincronices los dos Pad ni escribas fuera del ticket. El ticket es la columna vertebral.',
   ].join('\n');
 }
