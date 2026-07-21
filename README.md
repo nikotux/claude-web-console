@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-21 06:12 — main
+- Corregir Tándem inerte, agregar módulo Updates y conectores
+
 ### 2026-07-19 16:51 — main
 - Integrar marca Mordor Staffing en login y splash
 
