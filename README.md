@@ -51,6 +51,11 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-22 21:41 — main
+- Implementar escrituras a Desk con identidad del usuario (PLAN-781)
+- Soportar custom fields y nombre visible de adjuntos en cwc-desk
+- Monitorear trabajo en segundo plano, mejorar MCP y agregar keyring
+
 ### 2026-07-21 17:25 — main
 - Corregir caída del server tras actualización de dependencias mayores
 - Tándem por defecto, opus/high razonador, diff acotado
