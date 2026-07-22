@@ -795,9 +795,20 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             tipear, restaurar al construir la ChatTab (sobrevive al rebuild total del
                             pane de main.js), limpiar al enviar OK; y el handler `history` re-habilita
                             el input si un `closed` previo lo dejó `disabled`. Los 4 verificados E2E
-                            (WS + Playwright + reinicio real). NOTA: reopen dentro de ~10s del último
-                            spawn falla con "Ya se está lanzando" (spawn-lock, BUG-504) — PRE-EXISTENTE,
-                            no de PLAN-494.
+                            (WS + Playwright + reinicio real). BUG-504 RESUELTO (2026-07-22): reopen
+                            dentro de ~10s del último spawn fallaba con "Ya se está lanzando"
+                            (spawn-lock). El guard `spawnLockAlive` de runner-link.js cubre solo
+                            fork+exec+bind; una vez que reopen()/quiesce() VERIFICARON el descarte
+                            real del link (socket cerrado = autoridad de "vivo"), ese lock es basura.
+                            `releaseSpawnLock(id, pid)` (runner-link.js) lo VENCE poniéndole `ts:0` —
+                            match EXACTO por pid, así solo se libera el lock del spawn PROPIO ya muerto
+                            y un lock ajeno (otro proceso server solapado en un restart) sigue
+                            bloqueando: la ventana TOCTOU cross-proceso NO se ensancha. OJO: el archivo
+                            `.spawnlock` NO se borra a propósito — `src/modules/stats/index.js`
+                            (pidForChat) lee de ahí el pid del runner para el RSS por usuario del
+                            multi-tenant. `Chat._startEngine` guarda `this._spawnPid` (efímero, NO
+                            persiste) y reopen() (ambas ramas) + quiesce() liberan tras verificar
+                            `!this.link`.
                             ADJUNTOS DE ARCHIVOS (2026-07-10, pedido de Niko: "adjuntar imágenes/
                             archivos como en claude.ai, que el modelo los interprete sin
                             describirlos"): UN solo botón 📎 en el composer (chat-tab.js) + pegar
@@ -1611,6 +1622,56 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             redirección, el hook denegó AMBOS y el archivo víctima quedó intacto.
                             `node --check` OK en los 4 archivos; `/api/health/checks` 14/14 (único
                             warn: git dirty, esperado).
+                            TRABAJO EN SEGUNDO PLANO — no matarlo y poder verlo (2026-07-22,
+                            PLAN-892, reporte de Niko: «me confío que está trabajando pero no»).
+                            BUG RAÍZ: una sesión que lanza trabajo en BACKGROUND (tool `Workflow`
+                            o `Agent` asíncrono) cierra el turno y queda `waiting`; a los 45 min
+                            (`SLEEP_MS`) el reaper del server o la auto-siesta del runner duermen
+                            el motor y el trabajo de fondo MUERE con el proceso, SIN dejar marcador
+                            visible — el chat queda diciendo "corriendo" para siempre y el aviso
+                            `<status>stopped</status>` llega recién al revivir el runner. Caso
+                            trazado: chat `c324495-1` (Tolkien), Workflow lanzado 04:19, muerto
+                            05:05 por `sleep`, avisado 11:30 → 7 h 11 min de silencio. Medido:
+                            7 transcripts con trabajo de fondo (6 en Mi Consola, 1 en Tolkien),
+                            14 notificaciones `stopped`. Violaba la regla de oro: nada en curso
+                            puede quedar atado al ciclo de vida del proceso. SOLUCIÓN — UNA fuente,
+                            DOS resultados: el RUNNER lleva un registro `bgWork` de los trabajos de
+                            fondo vivos, y ese MISMO registro (a) impide dormir el motor y (b)
+                            alimenta el radar visual de la tarjeta de Sesiones. ALTA: el runner mira
+                            el `tool_result` de cada `tool_use` — hay DOS formatos reales,
+                            verificados en vivo (`Workflow launched in background. Task ID: <id>` y
+                            `Async agent launched successfully ... agentId: <id>`), unificados en
+                            `bgLaunchId()`. La ETIQUETA sale, en orden: del `Summary:` del Workflow,
+                            del `description` del input del Agent (`recentToolUse.desc` — sin esto el
+                            label era el JSON crudo de `toolSummary`), del summary, o del kind. BAJA:
+                            los DOS formatos cierran con el MISMO bloque
+                            `<task-notification><task-id>…</task-id><status>…</status>`, que llega
+                            como mensaje `user` con `content` de tipo STRING (rama que el runner
+                            ANTES ignoraba por completo: sólo procesaba `Array.isArray(blocks)`).
+                            GOTCHA CLAVE (verificado, costó descubrirlo): el SDK ESCRIBE esa
+                            notificación en el transcript apenas el trabajo termina, pero sólo la
+                            ENTREGA al stream del runner en el PRÓXIMO turno (la encola) — así que
+                            con la sesión ociosa un trabajo ya terminado seguiría "vivo" reteniendo
+                            el motor hasta el tope. Por eso el runner además BARRE SU PROPIO
+                            TRANSCRIPT (`sweepBgFromTranscript()`, cada 20 s y antes de decidir la
+                            siesta): misma señal, leída de disco, sólo la COLA del `.jsonl` (256 KB)
+                            y todo best-effort. RETENCIÓN: la siesta AUTOMÁTICA por inactividad se
+                            pospone mientras haya trabajo vivo (`bgHolds()`), tanto en el runner
+                            como en el reaper (`!(c._bgTasks?.length)`, defensa en profundidad);
+                            una acción EXPLÍCITA del usuario o un traspaso (archive / quiesce /
+                            `_toTui` / reopen) manda `{t:'sleep', force:true}` y SÍ duerme. Tope
+                            `BG_MAX_HOLD_MS` = 4 h desde el último lanzamiento (no runner inmortal).
+                            Al dormir/cerrar con trabajo vivo, `warnBgKilled()` emite un evento
+                            `error` VISIBLE en el chat con las etiquetas de lo que se cortó — el SDK
+                            no deja ninguna marca, esa nota es la única señal. El runner reporta
+                            `bgTasks` en su `hello` (re-adopción tras reinicio del server, mismo
+                            patrón que el flag `tandem`) y emite `{type:'bg', tasks}` que el server
+                            INTERCEPTA en `_onRunnerEvent` ANTES del `_push` (no entra al history).
+                            `info()` expone `bgTasks[]` y `delegatingList[]` (para esto
+                            `_delegatingIds` pasó de Set a Map: ahora cada subagente lleva `label` +
+                            `since`). LIMITACIÓN CONOCIDA: un agente REANUDADO con `SendMessage` no
+                            emite alta nueva, así que no se re-registra (peor caso = comportamiento
+                            anterior).
                             SELECTOR DE MODELO REDISEÑADO — protocolo DERIVADO de la selección
                             (2026-07-15, PLAN-519, pedido de Niko; VERIFICADO E2E): la arquitectura
                             YA NO se elige como un modelo suelto — se INFIERE de 2 toggles EXCLUYENTES
@@ -2896,7 +2957,27 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             (las 3 capas anti-secretos del push, helper ahora COMPARTIDO por
                             push y commit) + sanitizeCommitMessage (sin chars de control,
                             tope 2000); add -u + untracked seleccionados; NO changelog, NO
-                            restart, reversible con git reset --soft. Mensaje IA: POST
+                            restart, reversible con git reset --soft.
+                            BOTÓN "🔁 Reiniciar el servidor" (2026-07-22, PEND-917, pedido de Niko:
+                            "no veo el botón de reiniciar"): el panel de Backup suma, en el bloque
+                            "Mantenimiento" junto a su hermano "🔄 Reiniciar sesiones", un botón que
+                            reinicia el PROCESO del server (systemctl --user restart). NO son lo
+                            mismo: "Reiniciar sesiones" (POST /api/admin/restart-runners) recicla los
+                            MOTORES de chat; éste mata el Node de la consola — las tmux y los runners
+                            SOBREVIVEN (KillMode=process), solo se corta la web unos segundos. Hace
+                            falta para que el server tome CÓDIGO nuevo tras un deploy. OJO: el
+                            endpoint NO vive acá sino en el módulo `updates` (POST
+                            /api/updates/restart, admin, difiere el restart 300 ms para alcanzar a
+                            responder) — existía desde antes pero estaba HUÉRFANO (ningún frontend lo
+                            llamaba); esto es solo el cableado del botón, en `system/backup-panel.js`.
+                            Como el server muere DESPUÉS de responder, el botón encuesta
+                            /api/chat/list cada 1,5 s (hasta 40 intentos) hasta que vuelva a atender
+                            — el fetch fallando mientras está caído es lo ESPERADO, no un error.
+                            GOTCHA de testeo: `data-ref` NO es único entre paneles (el "Reciclar
+                            runners" de Conexiones también usa data-ref="recycle") — al verificar con
+                            Playwright, calificá por contenedor (`.bk-git [data-ref=...]`), si no da
+                            falso positivo/negativo.
+                            Mensaje IA: POST
                             /commit-message captura diff+archivos EN NODE, escribe el job en
                             ~/.cwc-data/commitmsg/<id>.json (id determinístico por estado del
                             árbol ⇒ doble click = mismo job) y spawnea
@@ -3258,45 +3339,102 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             SKILL.md espejado (coherente con la lección MC-683: los draft/sin-slug
                             no cuentan como candidatos). Ver detalle completo del diseño en el
                             bloque de `system.js` más abajo.
-  mcps/                     CENSO + ESTADO EN VIVO de los servidores MCP de Claude Code (2026-07-19,
-                            pestaña "Conexiones" del grupo ⚙️ Configuración del menú Sistema,
-                            PLAN-695). Hermano de `skills` pero ACCIONABLE: además de las
-                            características muestra un semáforo de conexión y permite (re)conectar
-                            DESDE LA VENTANA. GET /api/mcps (autenticados, 0 tokens IA): corre
-                            `claude mcp list` con el cwd de cada mundo (🏠 Consola = CONSOLE_ROOT ·
-                            🌳 Tolkien = config.projectDir — los MCP son per-project, scope local en
-                            ~/.claude.json), parsea `<name>: <endpoint> - <estado>` (✔ Connected /
-                            ! Needs authentication / ⏸ Pending / ⚠ scope conflict → semáforo
-                            ok/warn/info/danger) y cruza con ~/.claude.json + el .mcp.json del repo
-                            (SOLO LECTURA) para transporte/scope/args. Es un subprocess CLI
-                            determinístico (como tolkien/refresh corre psql/git; NO es corrida del
-                            SDK → la regla 6 no aplica). Caché en memoria 60 s + ?fresh=1. OJO regex
-                            del parseo: el status arranca por símbolo (✔✘!⏸) SIN \b (un word-boundary
-                            tras ✔+espacio nunca matchea — bug corregido en construcción). ACCIONES
-                            (admin; Regla 4: NUNCA editan ~/.claude.json a mano — van por la vía CLI
-                            oficial `claude mcp`, que gestiona su propio archivo, igual que el
-                            onboarding usa `claude setup-token`): POST /mcps/refresh (re-verificar) ·
-                            POST /mcps/logout {world,name} (`claude mcp logout`, limpia OAuth) ·
-                            reciclar runners lo hace el FRONT vía /api/admin/restart-runners (existente).
-                            El enable/disable de servers .mcp.json se DESCARTÓ (editaría ~/.claude.json
-                            a mano). FASE 2 · RECONEXIÓN OAuth GUIADA (login-shared.js +
-                            bin/cwc-mcp-login-runner.js): `claude mcp login <name>` EXIGE TTY (stdin
-                            no-terminal aborta) → runner PTY (node-pty, mismo patrón que
-                            cwc-onboard-runner.js). Captura la URL de authorize que imprime, espera
-                            que el usuario pegue la URL de redirect (localhost:.../callback?code=…) →
-                            la escribe al stdin del pty → detecta éxito. Estado en archivos
-                            ~/.cwc-data/mcp-login/<world>-<name>.json (sobrevive reinicio, Regla 2).
-                            Endpoints POST /mcps/login (spawn, dedup por job fresco no-terminal) ·
-                            POST /mcps/login-code {id,value} · GET /mcps/login/:id (poll). El cwd del
-                            mundo lo resuelve login-shared en el server y lo pasa por --cwd al runner
-                            (que NO importa config.js). Frontend public/js/modules/system/mcps-panel.js
-                            (calco de skills-panel: reusa .hr-* + semáforo emoji 🟢🟡🟠🔴; modal OAuth
-                            guiado con URL clickeable + input de redirect + poll). login-shared.js
-                            usa config.projectDir → sumado a CROSS_WORLD_ALLOW del check `cross-world`
-                            (cruce READ-ONLY, no enlaza los Pad). Verificado E2E (Playwright desktop +
-                            375px): 7 MCP reales de ambos mundos con semáforo correcto; runner pty
-                            capturó la URL de authorize en vivo (intercambio final no ejercido para no
-                            completar un OAuth real).
+  mcps/                     CENSO + ESTADO EN VIVO de los servidores MCP de Claude Code (pestaña
+                            "Conexiones" del grupo ⚙️ Configuración del menú Sistema). Hermano de
+                            `skills` pero ACCIONABLE: muestra semáforo de conexión y permite
+                            (re)conectar DESDE LA VENTANA. RESILIENCIA POR ITEM (2026-07-22,
+                            BUG-910 reportado por Niko): con el MCP de Tolkien caído (Infisical sin
+                            login), el menú se bloqueaba ENTERO y no se podía ni aplicar el arreglo.
+                            Causa raíz: `buildCensus()` recorría mundos con `for … await` (SERIAL),
+                            `claude mcp list` health-chequeaba TODOS los servers de un mundo en un
+                            solo comando con timeout de 30 s, la caché era solo memoria (restart =
+                            panel vacío) y el front reemplazaba todo por spinner esperando el fetch
+                            entero. Rediseño: el censo se DESCUBRE desde config (`~/.claude.json`
+                            local+user + `.mcp.json` del repo): instantáneo, 0 subprocess; la salud
+                            se chequea POR ITEM con `claude mcp get <name>` (un solo server, ~3 s),
+                            en pool acotado (`core/pool.js`, max 4) y timeout propio de 15 s.
+                            Estado persistido POR ITEM en `~/.cwc-data/mcps-census.json` (atómico)
+                            con `checkedAt`/`stale`; el GET responde YA con el último dato conocido
+                            y dispara chequeos en segundo plano (fire-and-forget: idempotentes y
+                            re-disparados en el próximo poll, por eso NO necesitan runner
+                            desacoplado). `POST /mcps/check {world,name}` re-verifica UNO. Estado
+                            propio `timeout` (⏱️ "no respondió en 15s") distinto de `error`.
+                            El front pinta primero y actualiza EN EL LUGAR por `data-key`
+                            (`applyStates`), con poll de 2 s SOLO mientras haya items en `checking`;
+                            un re-render completo destruiría el colapsado que abrió el usuario.
+                            Medido: censo 26 ms (antes hasta 60 s) y, con un server colgado a
+                            propósito, su tarjeta quedó aislada mientras las otras 7 seguían
+                            operables. `claude mcp list` SALIÓ del camino crítico del panel (sigue
+                            usándose SOLO dentro de `bin/cwc-mcp-login-runner.js` para verificar una
+                            reconexión). El conflicto de scopes ya no se lee de su salida: se detecta
+                            comparando config (mismo nombre en >1 scope con endpoints distintos) y se
+                            muestra con detalle real + comandos `claude mcp remove … -s <scope>`
+                            copiables; la consola NUNCA decide cuál borrar.
+                            EL LLAVERO (`keyring-shared.js` + `infisical-shared.js`, 2026-07-22):
+                            el panel mostraba las PUERTAS (MCP) pero nunca el LLAVERO. Infisical no
+                            es MCP ni cuenta: es la llave de la que cuelga `tolkien-mordor` (scope
+                            local, arranca con `infisical run …`). Y no era la excepción: hay una
+                            llave detrás de casi todo. `GET /mcps/keyring` (autenticados, 0 tokens IA,
+                            caché 60 s + `?fresh=1` + snapshot `~/.cwc-data/keyring.json` con
+                            degradación `stale`) devuelve 11 tarjetas en 3 familias: 🧠 Motores
+                            (Claude OAuth vía `expiresAt` · Codex CLI vía `last_refresh`, vencimiento
+                            ESTIMADO a 10 días) · 🔑 Llaves (Infisical · `gh auth status` · Pad local
+                            token+HTTP · Pad cloud `mcpOAuth.expiresAt`) · 🔌 Servicios (WhatsApp por
+                            heartbeat · systemd · ZeroTier por interfaz `zt*`, no `zerotier-cli` que
+                            pide root). Cada item lleva `dependents` (qué se rompe si cae; los de
+                            Infisical se DERIVAN de los MCP cuyo `command === 'infisical'`, no
+                            hardcodeados) y `action` (`infisical-login` o comando copiable).
+                            SEGURIDAD: allowlist explícita de campos, jamás un spread:
+                            `~/.infisical/infisical-config.json` contiene `vaultBackendPassphrase` y
+                            NUNCA sale; de `infisical run --projectId … --silent -- true` se mira
+                            SOLO exit code y stderr (nunca stdout: hoy corre `true`, pero si cambia
+                            el comando ese canal traería secretos); de `gh auth status` se filtra la
+                            línea `Token:`.
+                            GOTCHA DE DISEÑO DE ALARMAS — `autoRefresh`: Claude OAuth dura ~1 h y Pad
+                            cloud lo refresca Claude Code; con umbral preventivo genérico de 2 días
+                            salían SIEMPRE en 🟡 "Vence pronto", y una alarma permanentemente
+                            encendida entrena a ignorar el panel entero. Por eso
+                            `expiryLight(expiresAt, {autoRefresh})`: una credencial auto-renovable va
+                            🟢 mientras no venza, 🟡 "Renovando…" dentro de una gracia de 30 min
+                            (`AUTO_GRACE_MS`) y 🔴 solo si pasada esa gracia sigue vencida (= dejó de
+                            refrescarse, la señal REAL). Codex e Infisical NO son auto-renovables:
+                            ahí el aviso preventivo de 2 días (`EXPIRY_WARN_MS`) es el valor. Regla
+                            general: antes de poner un umbral de vencimiento, preguntar si esa
+                            credencial se renueva sola.
+                            LOGIN GUIADO DE INFISICAL (`bin/cwc-infisical-login-runner.js`):
+                            `infisical login` sin `--domain` arranca con menú de FLECHAS (imposible
+                            de guiar desde la web); con `--domain <base>` (sacado de la config del
+                            usuario, sin sufijo `/api`) lo saltea e imprime `open this address in
+                            your browser: …/login?callback_port=N` y luego espera `Paste your browser
+                            token here:`. Como el navegador corre en la máquina de Niko y el callback
+                            apunta al localhost del server, el camino real es pegar el token. Runner
+                            PTY (node-pty: `claude mcp login` y este exigen TTY) con estado en
+                            `~/.cwc-data/infisical-login/<id>.json`, id fijo `infisical` (una sola
+                            sesión por máquina) y timeout de inactividad de 10 min. El token pegado
+                            es SECRETO: llega por archivo 0600 que el runner BORRA apenas lo escribe
+                            al pty, nunca entra al JSON del job ni a logs, y el buffer del pty (que
+                            lo ecoa) jamás se vuelca a estado; solo se expone la URL. Igual que el
+                            runner de MCP, NUNCA declara éxito por exit code: re-verifica con
+                            `infisical login status` antes de escribir `done`. Endpoints admin
+                            `POST /mcps/infisical/login` · `/login-token` ·
+                            `GET /mcps/infisical/login/:id`. En la UI, una tarjeta MCP stdio con
+                            `command === 'infisical'` que NO esté conectada ofrece directo
+                            `🔑 Reconectar Infisical`: el botón que arregla la causa real, en la
+                            tarjeta que falló.
+                            ACCIONES MCP (admin; Regla 4: NUNCA editan `~/.claude.json` a mano — van
+                            por la vía CLI oficial `claude mcp`, que gestiona su archivo, igual que
+                            onboarding usa `claude setup-token`): `POST /mcps/logout {world,name}`
+                            (`claude mcp logout`, limpia OAuth) · reciclar runners lo hace el FRONT
+                            vía `/api/admin/restart-runners` (existente). Enable/disable de servers
+                            `.mcp.json` se DESCARTÓ (editaría `~/.claude.json` a mano). Reconexión
+                            OAuth guiada (`login-shared.js` + `bin/cwc-mcp-login-runner.js`):
+                            `claude mcp login <name>` EXIGE TTY → runner PTY, captura URL de
+                            authorize, espera la URL de redirect pegada y re-verifica antes de dar
+                            éxito. Estado en `~/.cwc-data/mcp-login/<world>-<name>.json`; endpoints
+                            `POST /mcps/login` · `POST /mcps/login-code {id,value}` ·
+                            `GET /mcps/login/:id`. `login-shared.js` e `infisical-shared.js` usan
+                            `config.projectDir` para cwd/lecturas READ-ONLY de Tolkien → entradas
+                            explícitas en `CROSS_WORLD_ALLOW`, no enlazan los Pad ni cruzan datos.
   connections/              CUENTAS CONECTADAS por usuario (PLAN-781): cada usuario conecta SUS
                             cuentas de terceros y la consola actúa con SU identidad. Ruta
                             /api/connections. Se ve en ⚙ Sistema → Conexiones, DENTRO del grupo
@@ -3519,10 +3657,13 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             fresh · último commit + botones fetch/update) y la leyenda
                             CPU/RAM/disco (data-module="stats") DEBAJO, separada por un
                             divisor. El widget "Actividad en Segundo Plano" (#activity-widget /
-                            ui/activity-widget.js, ROAD-76) fue ELIMINADO/desconectado de la UI
-                            a pedido de Niko (2026-07-15): activity-widget.js y
-                            modules/system/activity-modal.js quedan como código huérfano inerte,
-                            y el front ya no consume GET /api/health/active-runners. Los gauges se
+                            ui/activity-widget.js, ROAD-76) fue primero desconectado a pedido de
+                            Niko (2026-07-15) y luego BORRADO el 2026-07-22 (PLAN-892) junto con
+                            `modules/system/activity-modal.js`: su función la cumple ahora el radar
+                            de la tarjeta de Sesiones + el modal "Trabajos en segundo plano", que sí
+                            consume `GET /api/health/active-runners`. Se conserva la lección de
+                            diseño: un indicador que se esconde cuando está vacío es indescubrible,
+                            por eso el botón nuevo queda atenuado en 0 pero visible. Los gauges se
                             movieron del pie IZQUIERDO al DERECHO
                             (pedido 2026-07-07): en el rail colapsado derecho Tolkien se oculta
                             (only-expanded) y los gauges quedan como anillos-ícono compactos
@@ -3579,7 +3720,42 @@ public/index.html + js/main.js  app principal: módulos frontend { name, mount(e
                             no los descoloca (verificado). NO quitar el body:fixed sin reponer otra
                             forma de impedir el scroll de foco de iOS (overflow:hidden solo NO
                             alcanza en iOS).
-public/js/modules/          launcher · sessions · tasks(sección "Pendientes": tarjeta sidebar
+public/js/modules/          launcher · sessions (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
+                            2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la
+                            fila 2 suma una LÍNEA VIVA (`.sess-live`, `liveText()`) con prioridad
+                            trabajo de fondo > delegando > turno en curso, siempre con "hace cuánto".
+                            En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
+                            SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
+                            (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se
+                            esconde — misma lección del widget de actividad ya aplicada al botón
+                            global: un control que aparece sólo en el instante en que hay algo
+                            corriendo es indescubrible. Con hijos vivos (`kidsOf()` = `bgTasks` +
+                            `delegatingList`) muestra un hijo por trabajo, cada uno con su PROPIO
+                            Pac-Man en estado `delegating` (el que orbita, o sea MOVIMIENTO visible),
+                            etiqueta y tiempo corriendo. Al desplegar con 0 hijos muestra una fila
+                            tranquila `.sess-kid--empty` con "Nada corriendo en segundo plano", no un
+                            panel vacío.
+                            El header de "Sesiones" ganó un SEGUNDO botón (`data-ref="bg"`) con el
+                            contador GLOBAL: hijos de todos los chats + `processCount` de
+                            `GET /api/health/active-runners`, endpoint que hasta ahora no consumía
+                            nadie. Ese botón abre el modal "Trabajos en segundo plano" con una
+                            sección `<details>` por sesión + una sección de procesos del server. En
+                            0 se ATENÚA (`.sess-bgbtn--idle`) pero NUNCA se esconde: un botón que
+                            desaparece es indescubrible (lección del widget de actividad). GOTCHAS:
+                            el estado abierto de hijos vive FUERA del DOM (`openKidCards`, key
+                            `chat:<id>`) porque `updateInPlace` refresca cada 8 s, y NO se borra
+                            cuando termina el último trabajo: si Niko lo dejó abierto, el panel sigue
+                            abierto mostrando el mensaje vacío en vez de cerrarse solo en la cara;
+                            hay un timer
+                            propio de 1 s que sólo reescribe los "hace cuánto" (tictac, sin fetch);
+                            y `.sess-main` pasó de `<button>` a `<div role="button">` con `tabIndex`
+                            + handler de teclado porque un `<button>` no puede contener otro
+                            `<button>` (el chevron). El fetch de `active-runners` es BEST-EFFORT:
+                            si falla, la lista de sesiones se pinta igual. CSS: la indentación del
+                            árbol `.sess-kids` va por PADDING con `box-sizing:border-box`, no por
+                            margen — en un contenedor flex el margen se suma al flex-basis y el bloque
+                            quedaba más ancho que la tarjeta, cortando la columna de tiempo (defecto
+                            real, visto en captura)) · tasks(sección "Pendientes": tarjeta sidebar
                             colapsable + tablero modal con CUATRO PESTAÑAS 📊 Panel (dashboard estilo
                             Pad con datos LOCALES: En curso / Necesita atención / Seguí por acá /
                             Planes activos con progreso % / Clasificación / Actividad reciente del
@@ -3956,42 +4132,18 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             con cls 'chat-alive' y estado vivo/dormido) ·
                             activity-widget.js (ACTIVIDAD EN SEGUNDO PLANO, ROAD-76 del Pad
                             `console`, 2026-07-11, pedido de Niko: "poder ver cuántos agentes/
-                            runners consumen tokens en paralelo"). ELIMINADO/desconectado de la UI
-                            a pedido de Niko (2026-07-15): ya no existe #activity-widget en
-                            index.html, main.js ya no importa initActivityWidget ni consume
-                            GET /api/health/active-runners, y activity-widget.js +
-                            modules/system/activity-modal.js quedan como código huérfano inerte.
-                            Diseño histórico desconectado: widget COMPACTO en el pie de la
-                            barra DERECHA (#activity-widget en index.html, ENTRE .tk-persist de
-                            Tolkien y el data-module="stats" de los gauges). SIEMPRE VISIBLE
-                            (pedido de Niko 2026-07-11 "actualicé y no lo veo": un widget que se
-                            esconde cuando está vacío es indescubrible): en reposo se atenúa
-                            (.cwc-activity--idle: opacity+borde punteado, 0/0, semáforo gris) y al
-                            arrancar algo se enciende. OJO: NO existe la clase .hidden en el CSS
-                            (solo el guard [hidden] de atributo) — no togglearla. Como el espacio es chico:
-                            ÍCONOS+NÚMEROS — dos columnas ✦ N subagentes (chats con delegating) · ⚙️
-                            N procesos/runners — + un SEMÁFORO (punto coloreado con modelColor del
-                            MODELO DOMINANTE corriendo ahora, ui/models.js). Clickeable → abre
-                            modules/system/activity-modal.js (openModal): TABLA DINÁMICA agrupada
-                            tipo árbol (<details> "Subagentes" / "Procesos en segundo plano") con
-                            tipo·qué·sesión-que-lo-llamó·tiempo-corriendo·modelo; el subagente
-                            linkea a su chat de origen (openChat, patrón perm-center). DINÁMICO en
-                            dos planos: el widget refresca la lista en cada poll de 8 s (si el modal
-                            está abierto, refreshActivityModal) + un timer propio de 1 s hace tictac
-                            el "tiempo corriendo". NO encuesta solo: main.js lo alimenta en
-                            pollTabStatus con initActivityWidget({openChat}).update(processes, chats)
-                            — processes del endpoint nuevo GET /api/health/active-runners (0 tokens,
-                            solo lee locks/jobs), agents derivados de /api/chat/list (delegating +
-                            delegatingCount + delegatingSince, YA en info()). El endpoint devuelve
-                            {processes, processCount, dominantModel}; su detección vive en
-                            collectActiveRunners() de health/shared.js: un REGISTRO declarativo de
-                            los ~17 runners (familias lock {pid,ts,phase} / job {status:'running',
-                            startedAt} — sub-tipos job/jobglob/jobdir) que ESCANEA los archivos de
-                            ~/.cwc-data directamente (misma lógica de frescura que cada isXRunning,
-                            centralizada — NO importa los 17 módulos: evita acoplamiento/circular).
-                            Modelo por runner = mapa estático (documentado, para el semáforo);
-                            startedAt = birthtime del lock/job ≈ spawn. Agregar un runner nuevo = una
-                            fila más en RUNNER_REGISTRY; si su lock nunca existe, no se lista) ·
+                            runners consumen tokens en paralelo") y
+                            `modules/system/activity-modal.js`: BORRADOS el 2026-07-22 (PLAN-892).
+                            Historia útil: habían nacido como widget compacto en el pie de la barra
+                            derecha, con contador de subagentes + procesos y modal árbol alimentado
+                            por `/api/chat/list` + `GET /api/health/active-runners`; el primer
+                            intento de ocultarlo/desconectarlo demostró la lección de UX que Niko
+                            pidió conservar — un indicador que desaparece cuando está vacío es
+                            indescubrible. La función vigente ya NO vive en `ui/`: la cumple
+                            `public/js/modules/sessions.js` con el radar de la tarjeta de Sesiones y
+                            el modal "Trabajos en segundo plano"; el botón nuevo se atenúa en 0, pero
+                            nunca se esconde. `collectActiveRunners()` de health/shared.js sigue como
+                            fuente de procesos server-side y ahora lo consume Sesiones) ·
                             token-flow.js (visualización "Manguera de tokens" del caudal de tokens:
                             DIRECTOR DOM con un solo rAF que anima todas las celdas .cwc-flow-cell
                             del documento leyendo el store compartido; suavizado por data-flow-key,
@@ -4008,10 +4160,29 @@ public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO 
                             Se eliminaron el widget de la barra derecha, el botón 💧, el modal
                             dedicado y la sección de caudal del modal Uso. Las tarjetas de Sesiones
                             quedan revertidas a título + modelo; las 2 barras de caudal POR SESIÓN
-                            viven en el header del chat activo (.chat-flow): Claude por sessionId →
-                            bySession y Codex por cwd → byCwd, con tps + acumulado. El sessionId
+                            viven en el header del chat activo (.chat-flow), A LA IZQUIERDA,
+                            inmediatamente después del título y la insignia de mundo: Claude por
+                            sessionId → bySession y Codex por cwd → byCwd, con tps + acumulado. Su
+                            margin-right:auto (style.css, regla `.chat-flow`) es lo que ancla
+                            Pac-Man/badge de modelo/select de modo/ayuda a la derecha; el título dejó
+                            de ser flex:1 y pasó a flex:0 1 auto + min-width:0 para seguir truncando
+                            con ellipsis. Reubicación pedida por Niko el 2026-07-22. El sessionId
                             viaja ahora en _historyPayload junto a cwd/world para poblar esa barra
-                            al abrir/reconectar.
+                            al abrir/reconectar. GOTCHA BUG-920 (Pad `console`): la clave de `byCwd`
+                            sale del `cwd` del `session_meta` (primera línea del rollout de Codex) y
+                            ESA LÍNEA NO TIENE TAMAÑO ACOTADO. Codex 0.142.4 le metió
+                            `base_instructions.text` completo (~22 KB medidos el 2026-07-22) y el
+                            lector fijo de 4 KB la truncaba: JSON.parse fallaba, cwd quedaba null,
+                            addTotal() descartaba el evento y byCwd quedaba VACÍO → la barra de
+                            Codex por sesión marcaba 0 para siempre, aunque el caudal GLOBAL de Codex
+                            sí contaba (no usa esa clave). Por eso `readCodexCwd`
+                            (src/modules/tokens/flow.js) lee la primera línea COMPLETA en chunks de
+                            64 KB hasta el `\n` con tope duro de 1 MB (incluye EOF sin newline), y la
+                            caché `fileCwd` guarda SOLO resultados definitivos: un fallo de I/O,
+                            truncamiento por tope o parseo roto NO se cachea, para que el próximo
+                            scan reintente. Lección general: leer un campo del encabezado de un
+                            archivo de un tercero con buffer de tamaño FIJO es frágil — leer hasta el
+                            delimitador, con tope.
                             PESO DEL CACHE READ EN EL CAUDAL (2026-07-19, pedido de Niko: "la barra
                             de Claude siempre está en 0 o full, nunca intermedia"). CAUSA RAÍZ (mismo
                             villano que la barra de Sesión 5h): flow.js (extractClaudeEvent) sumaba el
@@ -4255,6 +4426,11 @@ bin/cwc-adduser.js          crea un usuario de la consola desde la CLI (reusa cr
                             de stdin (automación). El PRIMER usuario se fuerza admin. OJO: el server
                             vivo NO relee users.json en caliente (reiniciar para que lo tome); en
                             instalación nueva se crea antes de arrancar el servicio.
+bin/cwc-infisical-login-runner.js  LOGIN GUIADO de Infisical para la pestaña Conexiones:
+                            runner PTY (node-pty, `infisical login --domain <base>` exige TTY),
+                            estado en `~/.cwc-data/infisical-login/infisical.json`, token por
+                            archivo 0600 efímero que se borra apenas se escribe al pty, y éxito
+                            declarado solo tras re-verificar `infisical login status`.
 bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
 bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
                             DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
@@ -5717,6 +5893,111 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Verificar si una notificación de fin de tarea de fondo llega al proceso en vivo o solo queda en el transcript
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Se asumió que el evento de cierre de un trabajo de fondo llegaría al stream del runner; en la prueba real se vio que el SDK lo escribe en el transcript pero lo encola hasta el próximo turno, dejando el trabajo 'vivo' y reteniendo el motor despierto sin necesidad.
+
+**Lección:** Al diseñar un cierre automático basado en un evento asíncrono del SDK, no asumir que ese evento llega al proceso mientras está ocioso: verificar explícitamente si hace falta sondear el transcript/disco en su lugar antes de confiar en que 'la notificación despierta la lógica'.
+
+### Mantener siempre visible un control atado a estado transitorio, aunque esté en cero
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** El chevron de trabajos de fondo se implementó para aparecer solo cuando había algo corriendo; con 0 sesiones activas en ese momento, el usuario no veía ningún cambio y creyó que el deploy había fallado — el mismo error de diseño ('control indescubrible') que ya se había corregido antes en el widget de actividad.
+
+**Lección:** Todo indicador/control cuya existencia depende de un estado transitorio (tareas en curso, notificaciones, etc.) debe estar siempre visible, atenuado/deshabilitado en el estado vacío — nunca condicionado a que haya datos. Aplicar esta regla de entrada a cada componente nuevo del mismo patrón, no solo al primero.
+
+### Distinguir constantes module-load de strings render-time al usar t()
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** La sesión detectó que arrays/constantes de nivel-módulo (opciones de modelos, nombres canónicos en places.js) se evalúan al importar, antes de que cargue el diccionario i18n, por lo que envolverlas en t() no las traduciría — solo las envolvió si se evaluaban en tiempo de render.
+
+**Lección:** Antes de envolver un string en t(), verificar si se evalúa en tiempo de import (defaults/arrays a nivel de módulo) o en tiempo de render (dentro de una función/handler); solo estas últimas se benefician de t(). Sumar esta distinción a la convención '🌐 i18n' de CLAUDE.md para que los demás bloques del mismo umbrella (PLAN-707) no malgasten esfuerzo ni generen falsas expectativas de traducción.
+
+### No reiniciar el servicio si hay ediciones de backend concurrentes a medias
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Tras integrar Pacman en 13 archivos (cambios 100% frontend), el agente evitó reiniciar el servicio porque otras sesiones tenían backend (retro/index.js, health/index.js) editado a medias, y en su lugar verificó el resultado en caliente con un navegador headless.
+
+**Lección:** Antes de reiniciar el servicio para validar un cambio, verificar si hay sesiones paralelas con backend a medio editar; si el cambio propio es solo frontend, preferir verificación en caliente (recarga de navegador) para no arrastrar código ajeno incompleto.
+
+### No traer datos de relación (fan-out N+1) en listados si solo se usan en el detalle
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** /api/tasks disparaba 121 requests para traer blocks[] de cada tarea en la lista completa, pero blocks[] solo se consumía en el modal de detalle de una tarjeta — nunca en el render del tablero. Deferir esa carga al abrir el detalle bajó el endpoint de 15,2 s a 18 ms.
+
+**Lección:** Al diseñar o revisar un endpoint de listado, verificar qué campos consume realmente la vista de lista vs. la vista de detalle, y cargar de forma lazy (bajo demanda, endpoint separado) cualquier relación costosa que solo se necesite en el detalle.
+
+### Verificar UI de la consola con Playwright vía domcontentloaded+selector y DOM, no networkidle ni solo screenshot
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** Al verificar el grupo Limbo en el sidebar, Playwright con 'networkidle' colgó porque la SPA tiene polling/WS activo que nunca queda inactivo; hubo que reintentar con domcontentloaded, y el screenshot salió con fondo negro por lo que la verificación real se hizo leyendo el DOM.
+
+**Lección:** Para verificar cambios de UI en esta consola con Playwright, esperar domcontentloaded + un selector concreto (nunca networkidle, que nunca dispara por el polling/WS), y confirmar el resultado leyendo el DOM/atributos en vez de confiar solo en la captura visual.
+
+### Verificar código en disco antes de confiar en el status de una tarea en Pad
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** La sesión encontró tareas de SP7 marcadas 'todo' en Pad que ya estaban completamente implementadas en disco (y otras 'doing' también listas) — el tracking de Pad iba con lag respecto al código real, para bien y para mal.
+
+**Lección:** Antes de dar una tarea por pendiente o por hecha basándose solo en su status de Pad, leer los archivos reales involucrados y correr una verificación mínima (node --check, grep de la lógica clave) para confirmar el estado real, y recién ahí ajustar el status en Pad con una nota de auditoría.
+
+### Antes de certificar algo como 'en vivo', comparar fecha del código vs hora de arranque del servicio
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** El código de threading de B2 y onboarding tenía fecha Jul-17, pero el server systemd corría desde Jul-16 23:20 sin reiniciarse, por lo que lo verificado en disco podía no ser lo que realmente estaba sirviendo en producción.
+
+**Lección:** Al validar que una funcionalidad ya está operativa, chequear explícitamente el uptime/hora de arranque del servicio contra la fecha de modificación del código; si el servicio es anterior al código, marcar la verificación como 'en disco, pendiente de deploy' en vez de 'en vivo'.
+
+### node --check no detecta imports nombrados rotos; sumar smoke test de imports
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Tras verificar cada módulo nuevo con `node --check` (según manda el CLAUDE.md del repo), la sesión notó que ese chequeo solo valida sintaxis y no ejecuta el módulo, por lo que un named import roto pasaría desapercibido; corrió un smoke test de imports aparte antes de cerrar.
+
+**Lección:** Cuando el CLAUDE.md exige `node --check` por archivo tocado, completarlo SIEMPRE con un smoke test que importe/ejecute los módulos nuevos o modificados (require/import real), porque `node --check` solo detecta errores de sintaxis, no de resolución de imports.
+
+### Documentar como 'contrato forward' un invariante que el código aún no cumple, en vez de omitirlo
+_metodologia · confianza media · recurrencia x1_
+
+**Observación:** El invariante de ownership matchea terminal/sessions.js aunque ese archivo todavía no filtra por owner; en vez de excluirlo o fingir cumplimiento, se documentó explícitamente en el código y en CLAUDE.md como contrato pendiente ('forward').
+
+**Lección:** Al escribir un invariante/contrato de seguridad sobre un módulo que todavía no lo cumple, no omitirlo ni asumir que ya cumple: declararlo explícitamente como pendiente ('contrato forward') en el propio artefacto y en la documentación, para que quede trazable el gap real.
+
+### Usar costo equivalente (no tokens crudos) en toda métrica derivada de uso
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** Al calcular el ratio de ritmo histórico de la barra de Sesión se usó primero tokens crudos y dio 2.7×, pero no cuadraba con el 25% real que reporta Anthropic; la causa era que el 95% de los tokens crudos eran cache reads (10× más baratos). Se corrigió a costo equivalente, el mismo criterio que ya usa el resto de la app, y el ratio bajó a 2.1×, coherente con el dato oficial.
+
+**Lección:** En el módulo tokens, toda métrica nueva derivada de consumo debe construirse con costo equivalente (que ya pesa cache reads a ~10%), nunca con tokens crudos — y validarse contra el % oficial del proveedor antes de darla por cerrada.
+
+### Un job de ingesta no debe marcarse 'done' si el guardado no persistió nada
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Un intento previo de ingesta de feedback falló en silencio y quedó cacheado como 'done · 0 nuevas' porque Pad había rechazado todos los ítems; solo se detectó al reintentar con otro texto y comparar contra el conteo real en Pad.
+
+**Lección:** En runners que persisten a un store externo, verificar que el guardado realmente aplicó (contar ítems antes/después) antes de marcar el job como terminado; si el store rechaza los ítems, el job debe fallar de forma visible en vez de reportarse como éxito vacío.
+
+### Al sumar categoría nueva a un store en Pad, actualizar también el schema de la colección
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** La ingesta de feedback-cliente falló con 500 porque el schema de la colección Pad 'mejora-continua' no tenía habilitada la categoría nueva, aunque el código del módulo ya la aceptaba y guardaba sin avisar del desfase.
+
+**Lección:** Cuando se agrega un valor de enum/categoría nuevo a un módulo respaldado por una colección de Pad, incluir en el mismo cambio la actualización del schema de esa colección en Pad, no solo el enum en el código local — verificar ambos lados antes de dar la ingesta por lista.
+
+### Avisar que pestañas ya abiertas no toman cambios de JS de browser hasta recargar
+_convencion · confianza alta · recurrencia x1_
+
+**Observación:** Al cerrar el fix de lazy-connect, se aclaró explícitamente que las conversaciones ya abiertas en una pestaña del navegador seguían con el código viejo hasta recargar la página.
+
+**Lección:** Todo cierre de un cambio en JS servido al browser (main.js, chat-tab.js, etc.) debe incluir la aclaración de que las pestañas/sesiones de navegador ya abiertas no toman el cambio hasta un reload, para que el usuario no crea que el fix falló al no verlo reflejado en su sesión actual.
+
+### Scripts de verificación E2E que usan node_modules van en el repo, no en /tmp
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** El script de Playwright para contar WebSockets se escribió primero en /tmp y falló porque no resolvía node_modules; hubo que moverlo al repo para que corriera.
+
+**Lección:** Al escribir un script temporal de verificación (Playwright, Node) que depende de las dependencias del proyecto, crearlo directamente dentro del repo (o una subcarpeta tipo /tmp-scripts del propio proyecto) desde el arranque, no en /tmp, para evitar el paso extra de reubicarlo tras el fallo de resolución de módulos.
 
 ### Piezas de infraestructura críticas requieren gate humano fijo, sin importar el score de riesgo de la IA
 _convencion · confianza alta · recurrencia x1_

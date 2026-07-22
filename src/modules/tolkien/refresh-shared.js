@@ -48,7 +48,7 @@ function readTolkienDbName() {
   return process.env.CWC_TOLKIEN_DB_NAME?.trim() || 'tolkien';
 }
 
-function readInfisicalWorkspaceId() {
+export function readInfisicalWorkspaceId() {
   if (process.env.CWC_TOLKIEN_INFISICAL_ID?.trim()) return process.env.CWC_TOLKIEN_INFISICAL_ID.trim();
   try {
     const j = JSON.parse(fs.readFileSync(path.join(CWD, '.infisical.json'), 'utf8'));

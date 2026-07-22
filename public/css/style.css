@@ -263,7 +263,7 @@ html, body {
 #sidebar-right.collapsed .cwc-activity { flex-direction: column; gap: .25rem; padding: .3rem .2rem; }
 #sidebar-right.collapsed .cwc-act-cols { flex-direction: column; gap: .25rem; }
 
-/* ===== Modal de detalle (system/activity-modal.js) ===== */
+/* ===== Modal de detalle de actividad (legado visual) ===== */
 .act-empty { color: var(--cwc-text-dim); text-align: center; padding: 1rem .5rem; margin: 0; }
 .act-group { margin: 0 0 .5rem; }
 .act-group > summary {
@@ -389,7 +389,7 @@ html, body {
 /* ===== Sesiones: tarjetas ===== */
 .sess-list { padding: 0 .4rem; display: flex; flex-direction: column; gap: .2rem; }
 .sess-card {
-  display: flex; align-items: stretch; gap: .2rem;
+  display: flex; align-items: stretch; gap: .2rem; flex-wrap: wrap;
   background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
   border-radius: var(--cwc-radius-md); padding: .15rem;
 }
@@ -401,6 +401,7 @@ html, body {
   min-height: 34px;
 }
 .sess-main:hover { background: var(--cwc-bg-hover); }
+.sess-main:focus-visible { outline: 2px solid var(--cwc-accent); outline-offset: 1px; }
 /* Cuerpo de 2 filas (2026-07-06, pedido del usuario: el título se cortaba
    peleando por espacio con modo/modelo en una sola línea). El Pac-Man queda
    HERMANO de este bloque (no adentro) — con .sess-main en align-items:center
@@ -413,6 +414,76 @@ html, body {
   font-size: var(--cwc-fs-sm); font-weight: 600;
 }
 .sess-model { flex: none; font-size: .65rem; font-weight: 600; }
+.sess-live {
+  margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
+}
+.sess-kids-toggle {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: .12rem;
+  min-width: 24px; min-height: 18px; padding: 0 .2rem; cursor: pointer;
+  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
+  background: var(--cwc-bg-chip); color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs); line-height: 1;
+}
+.sess-kids-toggle:hover { color: var(--cwc-text); border-color: var(--cwc-border-strong); background: var(--cwc-bg-hover); }
+.sess-kids-toggle--idle { opacity: .55; color: var(--cwc-text-dim); }
+.sess-kids-n { font-size: .58rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sess-kids {
+  order: 3; flex: 1 1 100%; width: 100%; min-width: 0; box-sizing: border-box;
+  /* La indentacion del arbol va por padding: en un contenedor flex el margen
+     se suma al flex-basis y el bloque terminaba mas ancho que la tarjeta. */
+  margin: .02rem 0 .12rem; padding: 0 .2rem 0 1.5rem;
+  border-left: none; position: relative;
+  display: flex; flex-direction: column; gap: .12rem;
+}
+.sess-kids::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: .95rem;
+  border-left: 1px solid var(--cwc-border); pointer-events: none;
+}
+.sess-kid {
+  min-width: 0; min-height: 22px; display: flex; align-items: center; gap: .25rem;
+  color: var(--cwc-text); font-size: var(--cwc-fs-xs);
+}
+.sess-kid--empty { color: var(--cwc-text-dimmer); font-style: italic; }
+.sess-kid-pac { flex: none; }
+.sess-kid-ic { flex: none; display: inline-flex; color: var(--cwc-accent-cool); }
+.sess-kid-label {
+  min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sess-kid-phase { color: var(--cwc-text-dim); }
+.sess-kid-model {
+  flex: none; color: var(--cwc-text-dim); font-weight: 700;
+  background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border);
+  border-radius: 999px; padding: 0 .28rem;
+}
+.sess-kid-ago {
+  flex: 0 0 auto; margin-left: auto; color: var(--cwc-text-dimmer);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.sess-bg-n {
+  min-width: 13px; height: 13px; padding: 0 2px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .55rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--cwc-accent-ink); background: var(--cwc-accent-cool);
+  border-radius: 999px;
+}
+.sess-bgbtn--idle { opacity: .55; color: var(--cwc-text-dim); }
+.sess-bgbtn--idle .sess-bg-n { color: var(--cwc-text-dim); background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border); }
+.sess-bg-modal { display: flex; flex-direction: column; gap: .45rem; }
+.sess-bg-group { border-bottom: 1px solid var(--cwc-border); padding-bottom: .35rem; }
+.sess-bg-group > summary {
+  cursor: pointer; display: flex; align-items: center; gap: .35rem;
+  font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text);
+  list-style: none; padding: .15rem 0; user-select: none;
+}
+.sess-bg-group > summary::-webkit-details-marker { display: none; }
+.sess-bg-group > summary .sess-bg-n { margin-left: auto; }
+.sess-bg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-kids--modal { margin: .25rem 0 0 .45rem; flex: none; width: auto; }
+.sess-bg-empty {
+  margin: 0; padding: .8rem .4rem; color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-sm); text-align: center;
+}
 /* Mini-ícono de LUGAR de la tarjeta (ui/places.js): dónde corre la sesión —
    Mi Consola en acento, otros lugares conocidos en tono tenue. */
 .sess-place { display: inline-flex; color: var(--cwc-text-dimmer); flex: none; }
@@ -1308,7 +1379,7 @@ html, body {
   padding: .45rem .7rem; border-bottom: 1px solid var(--cwc-border);
   background: var(--cwc-bg-panel);
 }
-.chat-title { flex: 1; font-size: var(--cwc-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title { flex: 0 1 auto; min-width: 0; font-size: var(--cwc-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Insignia de MUNDO del header (anti-confusión, PLAN-373): SIEMPRE visible en qué
    mundo está la conversación, con color de identidad. 🏠 Mi Consola = acento
    terracota · 🌳 Tolkien = verde · otro = neutro. */
@@ -1374,9 +1445,11 @@ html, body {
 .chat-model-pill--two .chat-pill-l2 {
   font-size: 9px; font-weight: 500; opacity: .78; letter-spacing: .01em;
 }
+/* Caudal a la izquierda del header, junto al título; margin-right:auto ancla
+   Pac-Man/modelo/modo/ayuda a la derecha. */
 .chat-flow {
   display: flex; flex-direction: column; gap: 1px; justify-content: center;
-  min-width: 90px; max-width: 160px;
+  min-width: 90px; max-width: 160px; margin-right: auto;
 }
 .chat-flow .cwc-flow-cell { display: flex; width: 100%; gap: .25rem; align-items: center; }
 .chat-flow .cwc-flow-bar { flex: 1 1 auto; width: auto; }
@@ -2390,6 +2463,14 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .hr-finding--linked { border-left-color: var(--cwc-ok); }
 .hr-finding--orphan { border-left-color: var(--cwc-warn); }
 .hr-f-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; cursor: pointer; }
+.mcp-exp {
+  flex: 0 1 auto; min-width: 0; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--cwc-fs-xs); line-height: 1.2; padding: .05rem .3rem; border-radius: var(--cwc-radius-sm);
+  border: 1px solid currentColor;
+}
+.mcp-exp--ok { color: var(--cwc-ok); }
+.mcp-exp--warn { color: var(--cwc-warn); }
+.mcp-exp--danger { color: var(--cwc-danger); }
 /* Chevron de la tarjeta colapsable + plegado del cuerpo. */
 .hr-chev { display: inline-flex; color: var(--cwc-text-dim); transition: transform .15s ease; flex: none; }
 .hr-finding.hr-collapsed .hr-chev { transform: rotate(-90deg); }

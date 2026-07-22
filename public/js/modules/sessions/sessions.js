@@ -65,6 +65,12 @@ const TUI_MODEL_OPTIONS = [
   ['default', 'Default de la cuenta'],
 ];
 
+// Estado visual de los hijos de cada chat: vive fuera del DOM porque el poll de
+// 8 s actualiza tarjetas en su lugar y puede reconstruir solo el contenido
+// derivado. La key coincide con dataset.key (`chat:<id>`).
+const openKidCards = new Set();
+let liveTickTimer = null;
+
 export default {
   name: 'sessions',
 
@@ -76,6 +82,7 @@ export default {
         <span class="sec-dot" data-ref="dot" title="${t('sessions.dot.moduleTitle', 'Estado del módulo')}"></span>
         <span class="sec-title">${t('sessions.title', 'Sesiones')}</span>
         <span class="side-count" data-ref="count"></span>
+        <button class="btn-ghost btn--sm btn--icon sess-bgbtn--idle" data-ref="bg" title="${t('sessions.bg.title', 'Trabajos en segundo plano')}">${icon('relay', { size: 14 })}<span class="sess-bg-n">0</span></button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('sessions.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
       </header>
       <div class="sess-list" data-ref="list"></div>`;
@@ -83,7 +90,12 @@ export default {
     const listEl = el.querySelector('[data-ref="list"]');
     const countEl = el.querySelector('[data-ref="count"]');
     const dotEl = el.querySelector('[data-ref="dot"]');
+    const bgBtn = el.querySelector('[data-ref="bg"]');
+    const bgCountEl = bgBtn.querySelector('.sess-bg-n');
+    let lastData = { sessions: [], chats: [], runners: { processes: [], processCount: 0, dominantModel: null } };
+    let bgModal = null;
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
+    bgBtn.addEventListener('click', openBgModal);
     bus.addEventListener('sessions-changed', refresh);
 
     const baseName = (p) => {
@@ -109,6 +121,212 @@ export default {
       if (s < 3600) return t('sessions.ago.min', 'hace {n} min', { n: Math.floor(s / 60) });
       if (s < 86400) return t('sessions.ago.hour', 'hace {n} h', { n: Math.floor(s / 3600) });
       return t('sessions.ago.day', 'hace {n} d', { n: Math.floor(s / 86400) });
+    }
+
+    function tsMs(v) {
+      if (!v) return 0;
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) return n;
+      const d = Date.parse(v);
+      return Number.isFinite(d) ? d : 0;
+    }
+
+    function oldestTs(items, field) {
+      const xs = (items || []).map((x) => tsMs(x?.[field])).filter(Boolean);
+      return xs.length ? Math.min(...xs) : 0;
+    }
+
+    function liveWithAge(prefix, since) {
+      return {
+        prefix,
+        since,
+        text: prefix + (since ? t('sessions.live.ageSuffix', ' · {ago}', { ago: fmtAgo(since) }) : ''),
+      };
+    }
+
+    function liveMeta(c) {
+      const bg = Array.isArray(c.bgTasks) ? c.bgTasks : [];
+      if (bg.length) return liveWithAge(t('sessions.live.background', '⚡ {n} en segundo plano', { n: bg.length }), oldestTs(bg, 'startedAt'));
+      const n = Number(c.delegatingCount || 0);
+      if (n > 0) return liveWithAge(t('sessions.live.delegating', '✦ delegando {n}', { n }), tsMs(c.delegatingSince));
+      if (c.status === 'working') return { prefix: '', since: 0, text: t('sessions.live.working', 'trabajando') };
+      return { prefix: '', since: 0, text: '' };
+    }
+
+    // Texto vivo de la fila 2: QUÉ está haciendo la sesión ahora y hace cuánto.
+    // Prioridad: trabajo de fondo > delegando > turno en curso > nada.
+    function liveText(c) {
+      return liveMeta(c).text;
+    }
+
+    function syncLiveText(root, c) {
+      const liveEl = root.querySelector('.sess-live');
+      if (!liveEl) return;
+      const meta = liveMeta(c);
+      liveEl.textContent = liveText(c);
+      if (meta.prefix) {
+        liveEl.dataset.livePrefix = meta.prefix;
+        liveEl.dataset.liveSince = meta.since ? String(meta.since) : '';
+      } else {
+        delete liveEl.dataset.livePrefix;
+        delete liveEl.dataset.liveSince;
+      }
+    }
+
+    // Hijos de una sesión = lo que cuelga de ella y sigue vivo: subagentes Task
+    // (delegatingList) + trabajos en segundo plano (bgTasks). Es la MISMA lista
+    // que impide dormir el motor (PLAN-892): un solo dato, dos usos.
+    function kidsOf(c) {
+      return [
+        ...(c.bgTasks || []).map((b) => ({ id: `bg:${b.id}`, kind: 'bg', label: b.label || b.kind || t('sessions.live.bgFallback', 'trabajo de fondo'), since: b.startedAt })),
+        ...(c.delegatingList || []).map((d) => ({ id: `sub:${d.id}`, kind: 'sub', label: d.label || t('sessions.live.subFallback', 'subagente'), since: d.since })),
+      ];
+    }
+
+    function kidRowHtml(k) {
+      const since = tsMs(k.since);
+      const ico = k.kind === 'sub' ? 'sparkle' : 'relay';
+      return `
+        <div class="sess-kid" data-kid="${escapeHtml(k.id)}">
+          ${pacman({ state: 'delegating', size: 'sm', cls: 'sess-kid-pac' })}
+          <span class="sess-kid-ic">${icon(ico, { size: 12 })}</span>
+          <span class="sess-kid-label">${escapeHtml(k.label)}</span>
+          <span class="sess-kid-ago" data-start="${since || ''}">${since ? fmtAgo(since) : ''}</span>
+        </div>`;
+    }
+
+    function syncKids(cardEl, c) {
+      const key = `chat:${c.id}`;
+      cardEl._cwcKidsChat = c;
+      const kids = kidsOf(c);
+      const row2 = cardEl.querySelector('.sess-row2');
+      let toggle = cardEl.querySelector('.sess-kids-toggle');
+      let box = cardEl.querySelector('.sess-kids');
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'sess-kids';
+        box.hidden = true;
+        cardEl.appendChild(box);
+      }
+      if (!toggle && row2) {
+        toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'sess-kids-toggle';
+        toggle.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const open = !openKidCards.has(key);
+          if (open) openKidCards.add(key);
+          else openKidCards.delete(key);
+          syncKids(cardEl, cardEl._cwcKidsChat || c);
+        });
+        toggle.addEventListener('keydown', (e) => e.stopPropagation());
+        row2.appendChild(toggle);
+      }
+      const open = openKidCards.has(key);
+      if (toggle) {
+        toggle.hidden = false;
+        // El chevron NO se esconde con 0 hijos, sólo se atenúa: un control que
+        // aparece únicamente cuando hay algo corriendo es indescubrible (la misma
+        // lección del widget de actividad que se eliminó). Consistente con el botón
+        // global del header, que también se atenúa en 0 pero sigue visible.
+        toggle.classList.toggle('sess-kids-toggle--idle', kids.length === 0);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.title = kids.length === 0
+          ? t('sessions.live.showKidsEmpty', 'Ver trabajos de esta sesión (ninguno ahora)')
+          : (open ? t('sessions.live.hideKids', 'Ocultar trabajos de esta sesión') : t('sessions.live.showKids', 'Ver trabajos de esta sesión'));
+        toggle.innerHTML = `${icon(open ? 'chevronDown' : 'chevronRight', { size: 12 })}<span class="sess-kids-n">${kids.length}</span>`;
+      }
+      box.hidden = !open;
+      box.innerHTML = kids.length
+        ? kids.map(kidRowHtml).join('')
+        : `<div class="sess-kid sess-kid--empty">${escapeHtml(t('sessions.live.emptyKids', 'Nada corriendo en segundo plano'))}</div>`;
+    }
+
+    function runnerInfo(data = lastData) {
+      const r = data?.runners || {};
+      const processes = Array.isArray(r.processes) ? r.processes : [];
+      const processCount = Number.isFinite(Number(r.processCount)) ? Number(r.processCount) : processes.length;
+      return { processes, processCount, dominantModel: r.dominantModel || null };
+    }
+
+    function globalBgCount(data = lastData) {
+      const chats = data?.chats || [];
+      const childCount = chats.reduce((sum, c) => sum + kidsOf(c).length, 0);
+      return childCount + runnerInfo(data).processCount;
+    }
+
+    function syncBgButton(data = lastData) {
+      const n = globalBgCount(data);
+      bgCountEl.textContent = String(n);
+      bgBtn.classList.toggle('sess-bgbtn--idle', n === 0);
+      bgBtn.title = n
+        ? t('sessions.bg.titleCount', 'Trabajos en segundo plano: {n}', { n })
+        : t('sessions.bg.titleIdle', 'Trabajos en segundo plano: nada corriendo');
+    }
+
+    function processRowHtml(p) {
+      const since = tsMs(p.startedAt);
+      const label = p.label || p.key || t('sessions.bg.processFallback', 'proceso');
+      const phase = p.phase ? `<span class="sess-kid-phase"> · ${escapeHtml(p.phase)}</span>` : '';
+      const model = p.model ? `<span class="sess-kid-model">${escapeHtml(p.model)}</span>` : '';
+      return `
+        <div class="sess-kid" data-process="${escapeHtml(p.key || label)}">
+          ${pacman({ state: 'delegating', size: 'sm', cls: 'sess-kid-pac' })}
+          <span class="sess-kid-ic">${icon(p.icon || 'gear', { size: 12 })}</span>
+          <span class="sess-kid-label">${escapeHtml(label)}${phase}</span>
+          ${model}
+          <span class="sess-kid-ago" data-start="${since || ''}">${since ? fmtAgo(since) : ''}</span>
+        </div>`;
+    }
+
+    function bgSessionSection(c) {
+      const kids = kidsOf(c);
+      if (!kids.length) return '';
+      return `
+        <details class="sess-bg-group">
+          <summary>${placeBadge(c.cwd)}<span class="sess-bg-name">${escapeHtml(c.title || c.id)}</span><span class="sess-bg-n">${kids.length}</span></summary>
+          <div class="sess-kids sess-kids--modal">${kids.map(kidRowHtml).join('')}</div>
+        </details>`;
+    }
+
+    function renderBgModal(data = lastData) {
+      if (!bgModal) return;
+      const chats = data?.chats || [];
+      const { processes } = runnerInfo(data);
+      const chatSections = chats.map(bgSessionSection).filter(Boolean).join('');
+      const procSection = processes.length ? `
+        <details class="sess-bg-group">
+          <summary>${icon('gear', { size: 13 })}<span class="sess-bg-name">${t('sessions.bg.serverProcesses', '⚙️ Procesos del server')}</span><span class="sess-bg-n">${processes.length}</span></summary>
+          <div class="sess-kids sess-kids--modal">${processes.map(processRowHtml).join('')}</div>
+        </details>` : '';
+      bgModal.body.innerHTML = (chatSections || procSection)
+        ? `<div class="sess-bg-modal">${chatSections}${procSection}</div>`
+        : `<p class="sess-bg-empty">${t('sessions.bg.empty', 'Nada corriendo en segundo plano.')}</p>`;
+    }
+
+    function openBgModal() {
+      if (bgModal) { renderBgModal(lastData); return; }
+      bgModal = dialog.openModal({
+        title: t('sessions.bg.modalTitle', 'Trabajos en segundo plano'),
+        width: 620,
+        onClose: () => { bgModal = null; },
+      });
+      renderBgModal(lastData);
+    }
+
+    function tickLiveTimes() {
+      for (const liveEl of listEl.querySelectorAll('.sess-live[data-live-prefix]')) {
+        const since = tsMs(liveEl.dataset.liveSince);
+        liveEl.textContent = liveEl.dataset.livePrefix + (since ? t('sessions.live.ageSuffix', ' · {ago}', { ago: fmtAgo(since) }) : '');
+      }
+      const roots = [listEl, bgModal?.body].filter(Boolean);
+      for (const root of roots) {
+        for (const elAgo of root.querySelectorAll('.sess-kid-ago[data-start]')) {
+          const since = tsMs(elAgo.dataset.start);
+          if (since) elAgo.textContent = fmtAgo(since);
+        }
+      }
     }
 
     // Estado → estado del motor Pac-Man + texto del punto. Sin datos de
@@ -155,14 +373,21 @@ export default {
     }
 
     async function fetchAll() {
-      const [tmuxRes, chatRes] = await Promise.all([
+      const runnersReq = fetch('/api/health/active-runners')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const [tmuxRes, chatRes, runnersRaw] = await Promise.all([
         fetch('/api/tmux/sessions'),
         fetch('/api/chat/list'),
+        runnersReq,
       ]);
       if (!tmuxRes.ok) throw new Error();
       const sessions = (await tmuxRes.json()).sessions;
       const chats = chatRes.ok ? (await chatRes.json()).chats || [] : [];
-      return { sessions, chats };
+      const processes = Array.isArray(runnersRaw?.processes) ? runnersRaw.processes : [];
+      const processCount = Number.isFinite(Number(runnersRaw?.processCount)) ? Number(runnersRaw.processCount) : processes.length;
+      const runners = { processes, processCount, dominantModel: runnersRaw?.dominantModel || null };
+      return { sessions, chats, runners };
     }
 
     async function refresh() {
@@ -180,7 +405,11 @@ export default {
       }
     }
 
-    function render({ sessions, chats }) {
+    function render(data) {
+      const { sessions, chats } = data;
+      lastData = { sessions, chats, runners: runnerInfo(data) };
+      syncBgButton(lastData);
+      if (bgModal) renderBgModal(lastData);
       // Mapa completo (INCLUYE cwct-*) para resolver el estado de un chat en
       // modo TUI; la lista VISIBLE excluye esas tmux ocultas — son plomería
       // interna del modo TUI de un chat, no una sesión propia del usuario.
@@ -259,8 +488,10 @@ export default {
 
       const dot = chatDotInfo(c, tmuxByName);
       const isTui = c.viewMode === 'tui';
-      const main = document.createElement('button');
+      const main = document.createElement('div');
       main.className = 'sess-main';
+      main.setAttribute('role', 'button');
+      main.tabIndex = 0;
       main.innerHTML = `
         ${pacEl(dot.state, dot.label)}
         <span class="sess-body">
@@ -272,10 +503,16 @@ export default {
           </span>
           <span class="sess-row2">
             <span class="sess-model">${chatModelLabel(c)}</span>
+            <span class="sess-live"></span>
           </span>
         </span>`;
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
       main.addEventListener('click', () => (c.archived ? reviveChat(c, { open: true }) : openChatView(c)));
+      main.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        c.archived ? reviveChat(c, { open: true }) : openChatView(c);
+      });
 
       const menuBtn = document.createElement('button');
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
@@ -283,7 +520,13 @@ export default {
       menuBtn.title = t('sessions.options', 'Opciones');
       menuBtn.addEventListener('click', (e) => { e.stopPropagation(); openChatMenu(c, menuBtn); });
 
-      elCard.append(main, menuBtn);
+      const kidsBox = document.createElement('div');
+      kidsBox.className = 'sess-kids';
+      kidsBox.hidden = true;
+
+      elCard.append(main, menuBtn, kidsBox);
+      syncLiveText(elCard, c);
+      syncKids(elCard, c);
       syncInterfonoBadge(elCard, c); // señal pasiva del interfono (Fase 2)
       return elCard;
     }
@@ -879,7 +1122,11 @@ export default {
     async function updateInPlace() {
       if (document.hidden) return;
       try {
-        const { sessions, chats } = await fetchAll();
+        const data = await fetchAll();
+        const { sessions, chats } = data;
+        lastData = { sessions, chats, runners: runnerInfo(data) };
+        syncBgButton(lastData);
+        if (bgModal) renderBgModal(lastData);
         const tmuxByName = new Map(sessions.map((s) => [s.name, s]));
         const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s]));
         const chatMap = new Map(chats.map((c) => [`chat:${c.id}`, c]));
@@ -901,6 +1148,8 @@ export default {
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.
             const chatModelEl = cardEl.querySelector('.sess-model');
             if (chatModelEl) chatModelEl.textContent = chatModelLabel(c);
+            syncLiveText(cardEl, c);
+            syncKids(cardEl, c);
             syncInterfonoBadge(cardEl, c); // señal pasiva del interfono (Fase 2)
             continue;
           }
@@ -918,6 +1167,8 @@ export default {
       } catch { /* noop */ }
     }
     setInterval(updateInPlace, 8000);
+    if (liveTickTimer) clearInterval(liveTickTimer);
+    liveTickTimer = setInterval(tickLiveTimes, 1000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) updateInPlace(); });
 
     refresh();

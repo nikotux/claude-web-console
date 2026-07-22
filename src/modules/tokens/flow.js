@@ -15,6 +15,8 @@ const LEDGER_MS = 120000;
 const RECENT_MS = 5 * 60 * 1000;
 const INSTANT_MS = 10000;
 const MAX_APPEND = 4 * 1024 * 1024;
+const META_CHUNK = 64 * 1024;
+const MAX_META_LINE = 1024 * 1024;
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
 const cursors = new Map();
@@ -214,23 +216,54 @@ async function readAppendedEvents(file, extractEvent) {
 async function readCodexCwd(file) {
   if (fileCwd.has(file)) return fileCwd.get(file);
 
-  let cwd = null;
-  const buf = Buffer.allocUnsafe(4096);
+  // El session_meta de Codex ya no cabe en un buffer fijo: desde Codex 0.142.4
+  // incluye base_instructions.text completo (~22 KB medidos el 2026-07-22).
+  // Por eso leemos la primera línea completa en chunks, con tope duro de 1 MB.
+  let first = null;
   try {
     const fh = await fs.open(file, 'r');
     try {
-      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-      const first = buf.subarray(0, bytesRead).toString('utf8').split('\n')[0];
-      if (first) {
-        const obj = JSON.parse(first);
-        if (obj?.type === 'session_meta') cwd = obj.payload?.cwd || obj.cwd || null;
+      const chunks = [];
+      let offset = 0;
+      let hitEof = false;
+      while (offset < MAX_META_LINE) {
+        const buf = Buffer.allocUnsafe(Math.min(META_CHUNK, MAX_META_LINE - offset));
+        const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+        if (bytesRead <= 0) {
+          hitEof = true;
+          break;
+        }
+        const chunk = buf.subarray(0, bytesRead);
+        const nl = chunk.indexOf(0x0A);
+        if (nl >= 0) {
+          chunks.push(chunk.subarray(0, nl));
+          first = Buffer.concat(chunks).toString('utf8');
+          break;
+        }
+        chunks.push(chunk);
+        offset += bytesRead;
+      }
+      // EOF sin newline final: usar lo acumulado como primera línea completa.
+      if (first == null && hitEof && chunks.length > 0) {
+        first = Buffer.concat(chunks).toString('utf8');
       }
     } finally {
       await fh.close().catch(() => {});
     }
   } catch {
-    cwd = null;
+    return null;
   }
+
+  if (first == null) return null;
+
+  let cwd = null;
+  try {
+    const obj = JSON.parse(first);
+    cwd = obj?.type === 'session_meta' ? (obj.payload?.cwd || obj.cwd || null) : null;
+  } catch {
+    return null;
+  }
+
   fileCwd.set(file, cwd);
   return cwd;
 }

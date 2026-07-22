@@ -216,6 +216,7 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/tolkien/refresh-shared.js',
   'src/modules/skills/index.js',           // censo READ-ONLY de .claude/skills/ de Tolkien (pestaña Skills), no cruza datos
   'src/modules/mcps/login-shared.js',      // censo/estado READ-ONLY de MCP de Tolkien (pestaña Conexiones) + login OAuth guiado (claude mcp, vía CLI); no enlaza los Pad ni cruza datos
+  'src/modules/mcps/infisical-shared.js',  // sonda de Infisical: corre el CLI con el cwd del proyecto externo y lee su .infisical.json (solo lectura, no cruza datos)
   'src/core/workspace-provision.js',       // clon read-only del repo de Tolkien por-inquilino (decisión 🆕1 de PLAN-500) — provisiona un checkout, no enlaza los Pad
   'src/modules/seguimientos/index.js',     // dashboard LIMBO (Regla dura #13 / PLAN-553): config.projectDir = cwd de la sesión-Limbo; aduana read-only + escritura solo a tickets con OK — no enlaza los Pad
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync

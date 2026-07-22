@@ -267,9 +267,9 @@ export class ChatTab {
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="${t('chat.header.menuTitle', 'Abrir panel lateral')}">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
           <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
+          <span class="chat-flow" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: t('chat.pac.waitingTitle', 'Esperando tu mensaje') })}
           <span class="chat-model-pill" title="${t('chat.header.modelPillTitle', 'Router de modelo automático')}" hidden></span>
-          <span class="chat-flow" hidden></span>
           <select class="chat-mode" data-risk="ok" title="${t('chat.header.modeTitle', 'Modo de permisos')}">
             ${MODES.map(([v, l, , k]) => `<option value="${v}">${t(k, l)}</option>`).join('')}
           </select>

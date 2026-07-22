@@ -14,6 +14,9 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export { PERMISSION_MODES } from '../../core/tool-policy.js';
 export const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
 export const SLEEP_MS = 45 * 60 * 1000; // inactiva => el runner se auto-duerme
+// Tope de retención del motor con trabajo de fondo vivo (PLAN-892): pasado
+// esto duerme igual, avisando en el chat qué se cortó (no runner inmortal).
+export const BG_MAX_HOLD_MS = 4 * 60 * 60 * 1000;
 export const HISTORY_MAX = 600;
 
 // Cada conversación tiene su runner con socket Unix + log propios acá.

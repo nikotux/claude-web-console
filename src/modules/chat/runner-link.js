@@ -43,6 +43,25 @@ function writeSpawnLock(id, pid) {
   catch { /* best-effort: un fallo de disco acá no debe tumbar el spawn */ }
 }
 
+// Liberación puntual del guard de arranque: cuando ya verificamos que el
+// socket murió, esa es la autoridad de "vivo"; el lock solo cubría
+// fork+exec+bind. Se vence ÚNICAMENTE el lock propio (match exacto por pid)
+// para no ensanchar la ventana TOCTOU cross-proceso que el guard cierra. No se
+// borra a propósito: src/modules/stats/index.js (pidForChat) lee este pid para
+// calcular el RSS por usuario en multi-tenant, así que dejamos el archivo con
+// ts:0.
+export function releaseSpawnLock(id, pid) {
+  try {
+    if (!pid || pid <= 0) return;
+    let lock;
+    try { lock = JSON.parse(fs.readFileSync(spawnLockPath(id), 'utf8')); }
+    catch { return; }
+    if (lock?.pid !== pid) return;
+    try { fs.writeFileSync(spawnLockPath(id), JSON.stringify({ pid, ts: 0, released: true }), { mode: 0o600 }); }
+    catch { /* best-effort: no debe propagar nada */ }
+  } catch { /* best-effort total */ }
+}
+
 // Lanza el runner de una conversación como proceso INDEPENDIENTE: detached
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,

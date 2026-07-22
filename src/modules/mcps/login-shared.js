@@ -63,6 +63,34 @@ export function runMcpList(cwd) {
   });
 }
 
+// Health-check de UN SOLO server (`claude mcp get <name>`), con timeout propio.
+// A diferencia de `claude mcp list` (que chequea TODOS los servers del mundo en
+// un comando y por eso un server colgado bloquea el mundo entero), esto acota
+// el daño a la tarjeta de ese server — es la base de la resiliencia por item.
+export function runMcpGet(cwd, name, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    if (!/^[A-Za-z0-9_-]+$/.test(String(name || ''))) {
+      resolve({ status: { code: 'error', light: 'danger', label: 'nombre inválido' }, statusRaw: '', error: 'nombre inválido' });
+      return;
+    }
+    execFile('claude', ['mcp', 'get', name], { cwd, timeout: timeoutMs, env: process.env, maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const out = `${stdout || ''}\n${stderr || ''}`;
+        const statusRaw = (out.match(/^\s*Status:\s*(.+)$/m)?.[1] || '').trim();
+        if (statusRaw) { resolve({ status: classifyStatus(statusRaw), statusRaw }); return; }
+        if (err && (err.killed || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT')) {
+          resolve({ status: { code: 'timeout', light: 'warn', label: 'No respondió' }, statusRaw: '', timedOut: true, timeoutMs });
+          return;
+        }
+        if (err) {
+          resolve({ status: { code: 'error', light: 'danger', label: 'Error de conexión' }, statusRaw: '', error: (stderr || err.message || '').trim().slice(0, 300) });
+          return;
+        }
+        resolve({ status: { code: 'unknown', light: 'neutral', label: 'Desconocido' }, statusRaw: '' });
+      });
+  });
+}
+
 // Los mundos donde viven MCP con cwd propio (per-project scope). El global
 // (user scope) aparece dentro de cada uno; no tiene cwd separado.
 export const WORLDS = [

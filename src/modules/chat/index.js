@@ -78,7 +78,7 @@ import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
   trim, toolSummary, toolDetail, resultText,
 } from './shared.js';
-import { spawnRunner, connectRunner, tryConnectRunner } from './runner-link.js';
+import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from './runner-link.js';
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
 import {
   attachUpload, existingAttachments, attachPath,
@@ -715,6 +715,7 @@ class Chat {
     this.slashCommands = []; // comandos slash del init del SDK (depende del cwd)
     this.clients = new Set();
     this.link = null;        // RunnerLink al runner (motor desacoplado)
+    this._spawnPid = null;    // pid efímero para liberar después el spawn-lock propio (BUG-504)
     this._engineP = null;     // promesa del arranque en curso (dedup)
     this._engineStopping = false; // cierre esperado (traspaso/sueño pedido): no anunciar 'closed'
     this._engineWaiters = [];     // callbacks al morir el motor (traspaso a TUI)
@@ -725,10 +726,11 @@ class Chat {
     // subagente, visible en /api/chat/list como `delegating` sin necesitar
     // la pestaña del chat abierta (antes esto solo vivía en el frontend,
     // como ícono de tool call, invisible para la tarjeta de Sesiones).
-    this._delegatingIds = new Set();
+    this._delegatingIds = new Map();
+    this._bgTasks = [];
     // Momento (ts) en que arrancó la delegación ACTUAL (0→>0 subagentes). Lo
-    // consume el panel de Actividad en Segundo Plano (ui/activity-widget.js) para
-    // la columna "tiempo corriendo" del subagente. Efímero como _turnToolCount:
+    // consume la tarjeta de Sesiones / modal de trabajos en segundo plano para
+    // mostrar "hace cuánto" corre el subagente. Efímero como _turnToolCount:
     // no se persiste (un chat dormido no tiene subagente vivo).
     this._delegatingSince = null;
     // Router de modelo automático — AutoTux v2 (núcleo: core/model-router.js).
@@ -777,7 +779,8 @@ class Chat {
     // uno (el SDK prohíbe combinarlos sin forkSession).
     const canResume = transcriptExists(this.cwd, sid);
     try {
-      spawnRunner({
+      // Guardamos el pid para liberar DESPUÉS el spawn-lock propio (BUG-504).
+      this._spawnPid = spawnRunner({
         id: this.id, cwd: this.cwd, model: this.model,
         mode: this.permissionMode,
         resume: canResume ? sid : null,
@@ -825,6 +828,10 @@ class Chat {
 
   _onRunnerEvent(e) {
     this.lastActivity = Date.now();
+    if (e.type === 'bg') {
+      this._bgTasks = Array.isArray(e.tasks) ? e.tasks : [];
+      return;
+    }
     switch (e.type) {
       case 'init': {
         const hadSession = !!this.sessionId;
@@ -906,7 +913,10 @@ class Chat {
           // frontend, acá server-side para que /api/chat/list lo vea sin la
           // pestaña abierta).
           if (/^(Task|Agent)/i.test(e.name || '')) {
-            this._delegatingIds.add(e.id);
+            this._delegatingIds.set(e.id, {
+              label: (e.summary || e.name || 'subagente').slice(0, 120),
+              since: Date.now(),
+            });
             // Sella el inicio de la delegación al pasar de 0→>0 (para "tiempo corriendo").
             if (this._delegatingIds.size === 1) this._delegatingSince = Date.now();
           }
@@ -1038,6 +1048,7 @@ class Chat {
     if (this._downAnnounced) return;
     this._downAnnounced = true;
     this.alive = false;
+    this._bgTasks = [];
     // Permisos que quedaron abiertos: el runner ya los resolvió como deny al
     // salir, pero sin emitir permission_closed por cada uno. Cerrarlos acá
     // (sintético) para que el history quede apareado — sin esto, una vida
@@ -1090,12 +1101,17 @@ class Chat {
   async quiesce() {
     if (!this.alive || !this.link) return true;
     this._engineStopping = true;
-    this.link.send({ t: 'sleep' });
+    this.link.send({ t: 'sleep', force: true });
     await this._waitEngineDown(SWITCH_CLOSE_MS);
     const deadline = Date.now() + SWITCH_CLOSE_MS;
     while (this.link && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
     this._engineStopping = false;
-    return !this.link;
+    if (!this.link) {
+      // BUG-504: el lock del spawn anterior es basura verificada; el socket ya cerró.
+      releaseSpawnLock(this.id, this._spawnPid);
+      return true;
+    }
+    return false;
   }
 
   // ===== Traspaso Chat <-> TUI (regla dura: nunca ambos a la vez) =====
@@ -1116,7 +1132,7 @@ class Chat {
     // 1. Dormir el motor (runner sale con resume disponible) y ESPERAR su
     //    muerte verificada. 'sleep' y no 'close': la conversación sigue viva.
     this._engineStopping = true;
-    this.link?.send({ t: 'sleep' });
+    this.link?.send({ t: 'sleep', force: true });
     const died = await this._waitEngineDown(SWITCH_CLOSE_MS);
     if (!died) {
       // No pudimos cerrar el chat: NO abrimos la TUI (nunca ambos activos).
@@ -1183,6 +1199,8 @@ class Chat {
     // Motor dormido/caído: no hay proceso viejo que matar. Un arranque fresco
     // ya toma el código nuevo.
     if (!this.alive || !this.link) {
+      // BUG-504: el lock del spawn anterior es basura verificada; el socket ya cerró.
+      releaseSpawnLock(this.id, this._spawnPid);
       const ok = await this._ensureEngine();
       if (ok === false) return { ok: false, error: 'El motor no arrancó (mirá ~/.cwc-data/chats/*.log).' };
       // Motor fresco sin turno en curso: el runner arranca en 'waiting' pero no
@@ -1196,7 +1214,7 @@ class Chat {
     // antes de re-spawnear. 'sleep' y no 'close': la conversación sigue viva.
     // _engineStopping suprime la nota "dormida por inactividad" en el relevo.
     this._engineStopping = true;
-    this.link.send({ t: 'sleep' });
+    this.link.send({ t: 'sleep', force: true });
     // OJO: el runner emite el evento 'closed' y RECIÉN ~2s después cierra el
     // socket (bin/cwc-chat-runner.js: margen para que 'closed' llegue). Ese
     // evento resuelve _waitEngineDown con this.link TODAVÍA seteado, así que no
@@ -1217,6 +1235,8 @@ class Chat {
     // Recargar el history desde el transcript (por si el turno cortado dejó
     // algo) y levantar un runner FRESCO sobre la misma sesión.
     if (this.sessionId) this.history = loadTranscriptEvents(this.cwd, this.sessionId);
+    // BUG-504: el lock del spawn anterior es basura verificada; el socket ya cerró.
+    releaseSpawnLock(this.id, this._spawnPid);
     const ok = await this._ensureEngine();
     if (ok === false) return { ok: false, error: 'El motor no volvió a arrancar (mirá ~/.cwc-data/chats/*.log).' };
     // Motor fresco sin turno en curso (matamos el que hubiera): fijar 'waiting'
@@ -1882,7 +1902,9 @@ class Chat {
       this.viewMode = 'chat';
     }
     this._engineStopping = true;
-    this.link?.send({ t: 'sleep' });
+    // Archivar es una acción explícita del usuario: fuerza el sueño aunque haya
+    // trabajo de fondo, y el runner avisa en el chat qué se cortó (PLAN-892).
+    this.link?.send({ t: 'sleep', force: true });
     this.alive = false;
     this.lastActivity = Date.now();
     this._syncPackage('archived', 'archived');
@@ -2007,9 +2029,14 @@ class Chat {
       // la pestaña del chat esté cerrada.
       delegating: this._delegatingIds.size > 0,
       // Cuántos subagentes Task/Agent en vuelo + desde cuándo (panel de Actividad
-      // en Segundo Plano: ui/activity-widget.js / system/activity-modal.js).
+      // en Segundo Plano: tarjeta de Sesiones / modal de trabajos en segundo plano).
       delegatingCount: this._delegatingIds.size,
       delegatingSince: this._delegatingSince,
+      // Subagentes en vuelo CON nombre (radar de la tarjeta de Sesiones, PLAN-892).
+      delegatingList: [...this._delegatingIds.entries()].map(([id, v]) => ({ id, label: v.label, since: v.since })),
+      // Trabajo en SEGUNDO PLANO vivo (Workflow/Task en background) reportado por
+      // el runner. Mientras haya, el motor NO se duerme (PLAN-892).
+      bgTasks: this._bgTasks || [],
       // Ticket/feature que trabaja este chat (si nació de un bug de Desk o de un
       // FEAT-n). Lo consume el panel "Bugs & Features" para pintar el Pac-Man de
       // actividad en la columna correcta sin abrir la pestaña del chat.
@@ -2033,8 +2060,10 @@ class ChatManager {
       let dirty = false;
       for (const [id, c] of this.chats) {
         // Inactiva => DORMIR el motor (el runner también se auto-duerme solo;
-        // esto lo apura si el server sí está). Una TUI viva se respeta.
-        if (c.viewMode === 'chat' && c.alive && now - c.lastActivity > SLEEP_MS) c.sleep();
+        // esto lo apura si el server sí está). Este sleep NO es forzado: es el
+        // reaper por inactividad, no una acción explícita ni traspaso a TUI, y
+        // el runner lo rechaza si hay trabajo de fondo vivo (PLAN-892).
+        if (c.viewMode === 'chat' && c.alive && !(c._bgTasks?.length) && now - c.lastActivity > SLEEP_MS) c.sleep();
         // Cerradas explícitamente: se descartan a los 90 min.
         if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
         // Dormidas sin uso 24 h: recién ahí se descarta la tarjeta (la
@@ -2281,6 +2310,7 @@ class ChatManager {
             chat._spawnedTandem = hello.tandem;
             adoptedRunnerTandem = true;
           }
+          chat._bgTasks = Array.isArray(hello.bgTasks) ? hello.bgTasks : [];
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null);
           chat.history = [...base, ...(hello.events || [])].slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';

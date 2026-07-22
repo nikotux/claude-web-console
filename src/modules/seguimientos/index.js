@@ -72,6 +72,11 @@ function limboFooter() {
     `• node ${CONSOLE_ROOT}/bin/cwc-desk.js assign <nroTicket>`,
     `• node ${CONSOLE_ROOT}/bin/cwc-desk.js attach <nroTicket> <rutaArchivo>`,
     `• node ${CONSOLE_ROOT}/bin/cwc-desk.js update <nroTicket> --status="..."`,
+    'Para el CALENDARIO de Niko (conexión Microsoft propia, identidad de Niko — NO uses tools del MCP para esto):',
+    `• node ${CONSOLE_ROOT}/bin/cwc-calendar.js list [--from=YYYY-MM-DD --to=YYYY-MM-DD]`,
+    `• node ${CONSOLE_ROOT}/bin/cwc-calendar.js create --subject="..." --start="2026-07-23T09:00:00" --end="2026-07-23T09:30:00" [--reminder=<min>] [--body="..."]`,
+    `• node ${CONSOLE_ROOT}/bin/cwc-calendar.js delete <eventId>`,
+    'Zona horaria por defecto America/Bogota. Los ETA/dueDate de tickets deberían reflejarse acá.',
     'SIEMPRE esperá mi aprobación explícita antes de escribir.',
     'NUNCA sincronices los dos Pad ni escribas fuera del ticket. El ticket es la columna vertebral.',
   ].join('\n');

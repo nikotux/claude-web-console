@@ -8,7 +8,7 @@
 //
 //   server->runner: {t:'hello'} · {t:'user',text} · {t:'perm',id,allow[,answers]}
 //                   {t:'interrupt'} · {t:'set_mode',mode} · {t:'set_model',model}
-//                   {t:'sleep'} · {t:'close'}
+//                   {t:'sleep'[,force]} · {t:'close'}
 //   runner->server: {t:'hello', id, sessionId, model, mode, status, startedAt,
 //                    slashCommands, events:[...historial de ESTA vida]} (respuesta)
 //                   {t:'event', event:{...}}                          (en vivo)
@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX,
+  PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, BG_MAX_HOLD_MS, HISTORY_MAX,
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
 import { chatQueryOptions, autoApprovesAll, tandemPreToolUseHook } from '../src/core/tool-policy.js';
@@ -33,6 +33,7 @@ import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
+import { encodeCwd } from '../src/core/claude-model.js';
 
 // ---- argv ----
 const args = {};
@@ -124,6 +125,10 @@ let sessionId = RESUME || SESSION_ID; // BUG-496: nace conocido (forzado o retom
 let slashCommands = []; // lista del system/init (depende del cwd; Fase 8)
 let status = 'waiting';
 let lastActivity = Date.now();
+const bgWork = new Map(); // taskId -> { id, kind, label, startedAt }
+const recentToolUse = new Map(); // toolUseId -> { name, summary, desc }
+let lastBgLaunch = 0;
+let lastBgHoldLog = 0;
 let closedByUser = false;
 let exiting = false;
 const history = []; // eventos de UI de ESTA vida del motor (para replay al reconectar)
@@ -182,6 +187,106 @@ function emit(event, { record = true, broadcast = true } = {}) {
     if (history.length > HISTORY_MAX) history.splice(0, history.length - HISTORY_MAX);
   }
   if (broadcast) for (const c of clients) writeTo(c, { t: 'event', event });
+}
+
+function bgList() { return [...bgWork.values()]; }
+function emitBg() { emit({ type: 'bg', tasks: bgList() }, { record: false }); }
+
+// Retiene el motor mientras haya trabajo de fondo vivo (PLAN-892), con tope
+// para no volverlo inmortal si una tarea queda colgada.
+function bgHolds() { return bgWork.size > 0 && (Date.now() - lastBgLaunch) < BG_MAX_HOLD_MS; }
+
+// Nota VISIBLE si el motor se duerme/cierra con trabajo de fondo vivo: sin
+// esto el chat queda diciendo "corriendo" para siempre (el SDK no deja marcador).
+function warnBgKilled() {
+  if (!bgWork.size) return;
+  const labels = bgList().map((b) => b.label).join(' · ');
+  emit({ type: 'error', message: `⚠️ El motor se durmió con ${bgWork.size} trabajo(s) en segundo plano en curso — se cortaron: ${labels}. Volvé a lanzarlos si hacen falta.` });
+  bgWork.clear();
+  emitBg();
+}
+
+function logBgHold(message) {
+  const now = Date.now();
+  if (now - lastBgHoldLog < 10 * 60 * 1000) return;
+  lastBgHoldLog = now;
+  log(message);
+}
+
+// Dos formatos REALES de lanzamiento en segundo plano (verificados en vivo):
+// el tool Workflow anuncia "launched in background. Task ID: <id>"; el tool
+// Agent (subagente asincrono, el caso mas comun) anuncia "Async agent
+// launched successfully" + "agentId: <id>". Los DOS cierran despues con el
+// mismo bloque <task-notification>, asi que solo cambia la deteccion de alta.
+const BG_LAUNCH_RE = /launched in background\.\s*Task ID:\s*([A-Za-z0-9_-]+)/i;
+const BG_AGENT_RE = /Async agent launched successfully[\s\S]*?\bagentId:\s*([A-Za-z0-9_-]+)/i;
+const TASK_NOTIFICATION_RE = /<task-notification\b[^>]*>[\s\S]*?<\/task-notification>/gi;
+const TRANSCRIPT_SWEEP_TAIL_BYTES = 256 * 1024;
+
+function bgLaunchId(out) {
+  return (BG_LAUNCH_RE.exec(out)?.[1]) || (BG_AGENT_RE.exec(out)?.[1]) || null;
+}
+
+function firstTagText(xml, tag) {
+  const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const match = re.exec(xml);
+  return match ? match[1].trim() : null;
+}
+
+// El SDK escribe el <task-notification> de fin en el transcript apenas el
+// trabajo termina, pero sólo lo ENTREGA al stream en el próximo turno (lo
+// encola). Sin esto un trabajo ya terminado seguiría "vivo" en el radar y
+// retendría el motor despierto hasta el tope. Leemos la MISMA señal de disco.
+function sweepBgFromTranscript() {
+  if (bgWork.size <= 0 || !sessionId) return;
+  let fd;
+  try {
+    const transcript = path.join(os.homedir(), '.claude', 'projects', encodeCwd(CWD), `${sessionId}.jsonl`);
+    fd = fs.openSync(transcript, 'r');
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - TRANSCRIPT_SWEEP_TAIL_BYTES);
+    const len = size - start;
+    if (len <= 0) return;
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, start);
+    const text = buf.toString('utf8').replace(/\\n/g, '\n');
+    let removed = 0;
+    TASK_NOTIFICATION_RE.lastIndex = 0;
+    let note;
+    while ((note = TASK_NOTIFICATION_RE.exec(text))) {
+      const id = firstTagText(note[0], 'task-id');
+      const statusText = firstTagText(note[0], 'status');
+      if (!id || !statusText || !bgWork.has(id)) continue;
+      bgWork.delete(id);
+      removed += 1;
+    }
+    if (removed > 0) {
+      emitBg();
+      log(`barrido de transcript: ${removed} trabajo(s) de fondo cerrado(s)`);
+    }
+  } catch {
+    // Best-effort: el transcript puede no existir todavía o estar rotando.
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* noop */ } }
+  }
+}
+
+function bgLabelFromOutput(out) {
+  const lines = String(out || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    // El formato real del SDK trae `Summary:` y el texto en la MISMA línea; si
+    // alguna versión vuelve a dejarlo vacío, conservamos el fallback a la línea
+    // siguiente no vacía para no perder el label del trabajo.
+    const m = /^\s*Summary:\s*(.*)$/i.exec(lines[i]);
+    if (!m) continue;
+    const inline = m[1].trim();
+    if (inline) return inline.slice(0, 120);
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const label = lines[j].trim();
+      if (label) return label.slice(0, 120);
+    }
+  }
+  return null;
 }
 
 function setStatus(state) {
@@ -243,9 +348,20 @@ function onMessage(m) {
     for (const b of blocks) {
       if (b.type === 'text' && b.text) emit({ type: 'assistant', text: b.text });
       if (b.type === 'tool_use') {
+        const summary = toolSummary(b.name, b.input);
+        recentToolUse.set(b.id, {
+          name: b.name,
+          summary,
+          // El tool Agent trae una descripcion corta y humana en el input; es
+          // mejor etiqueta que el resumen JSON del tool para el radar de fondo.
+          desc: (typeof b.input?.description === 'string' && b.input.description.trim())
+            || (typeof b.input?.name === 'string' && b.input.name.trim())
+            || null,
+        });
+        if (recentToolUse.size > 50) recentToolUse.delete(recentToolUse.keys().next().value);
         emit({
           type: 'tool_use', id: b.id, name: b.name,
-          summary: toolSummary(b.name, b.input),
+          summary,
           detail: toolDetail(b.name, b.input),
         });
       }
@@ -258,13 +374,37 @@ function onMessage(m) {
       for (const b of blocks) {
         if (b.type === 'tool_result') {
           const images = saveToolImages(b.content, b.tool_use_id);
+          const out = trim(resultText(b.content), 2000);
           emit({
             type: 'tool_result', id: b.tool_use_id, ok: !b.is_error,
-            output: trim(resultText(b.content), 2000),
+            output: out,
             ...(images ? { images } : {}),
           });
+          const bgId = bgLaunchId(out);
+          if (bgId && !b.is_error) {
+            const recent = recentToolUse.get(b.tool_use_id);
+            const id = bgId;
+            const kind = recent?.name || 'Task';
+            const label = (bgLabelFromOutput(out) || recent?.desc || recent?.summary || kind).slice(0, 120);
+            // Limitacion conocida: SendMessage a un agente reanudado no emite
+            // una nueva alta, asi que no se re-registra; la notificacion previa
+            // ya lo dio por cerrado y el peor caso queda igual que antes.
+            bgWork.set(id, { id, kind, label, startedAt: Date.now() });
+            lastBgLaunch = Date.now();
+            emitBg();
+          }
         }
       }
+    } else if (typeof blocks === 'string') {
+      let removed = false;
+      for (const note of blocks.matchAll(TASK_NOTIFICATION_RE)) {
+        const id = firstTagText(note[0], 'task-id');
+        const statusText = firstTagText(note[0], 'status');
+        if (!id || !statusText || !bgWork.has(id)) continue;
+        bgWork.delete(id);
+        removed = true;
+      }
+      if (removed) emitBg();
     }
     return;
   }
@@ -376,7 +516,7 @@ function shutdown(code) {
 function handleCommand(c, msg) {
   if (msg.t === 'hello') {
     // El runner es la fuente de verdad de su propio flag de spawn.
-    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, events: history });
+    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, bgTasks: bgList(), events: history });
     return;
   }
   if (msg.t === 'user' && typeof msg.text === 'string'
@@ -451,8 +591,13 @@ function handleCommand(c, msg) {
     return;
   }
   if (msg.t === 'sleep' || msg.t === 'close') {
+    if (msg.t === 'sleep' && !msg.force && bgHolds()) {
+      logBgHold(`sueño rechazado: ${bgWork.size} trabajo(s) de fondo vivo(s)`);
+      return;
+    }
     if (msg.t === 'close') closedByUser = true;
     log(msg.t === 'close' ? 'cierre pedido por el server' : 'sueño pedido por el server');
+    if (bgWork.size > 0) warnBgKilled();
     input.end();
     Promise.resolve(q?.close?.()).catch(() => {});
   }
@@ -495,11 +640,21 @@ function claimSocket() {
 // el server no exista para pedírselo). El pump termina y el proceso sale.
 setInterval(() => {
   if (Date.now() - lastActivity > SLEEP_MS) {
+    sweepBgFromTranscript();
+    if (bgHolds()) {
+      logBgHold(`siesta pospuesta: ${bgWork.size} trabajo(s) de fondo vivo(s)`);
+      return;
+    }
+    if (bgWork.size > 0) warnBgKilled();
     log('auto-sueño por inactividad');
     input.end();
     Promise.resolve(q?.close?.()).catch(() => {});
   }
 }, 60 * 1000).unref();
+
+setInterval(() => {
+  sweepBgFromTranscript();
+}, 20 * 1000).unref();
 
 process.on('SIGTERM', () => { input.end(); Promise.resolve(q?.close?.()).catch(() => {}); });
 

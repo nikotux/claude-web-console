@@ -51,6 +51,8 @@ export function mountBackupPanel(el, ctx) {
       <div class="bk-git-title">${icon('refresh', { size: 14 })}<span>${t('system.backup.maintenanceTitle', 'Mantenimiento')}</span></div>
       <button class="btn-ghost btn--block" data-ref="recycle" title="${t('system.backup.restartSessionsTooltip', 'Recicla los motores de chat vivos (SIGTERM). Se reabren solos con el historial intacto y vuelven a leer las credenciales del disco (arregla el MCP pad que no carga tras una credencial vieja).')}">🔄<span>${t('system.backup.restartSessions', 'Reiniciar sesiones')}</span></button>
       <p class="bk-msg" data-ref="rmsg" hidden></p>
+      <button class="btn-ghost btn--block" data-ref="restart" title="${t('system.backup.restartServerTooltip', 'Reinicia el proceso del servidor (systemctl --user restart). Las terminales tmux y los motores de chat SOBREVIVEN (KillMode=process): solo se corta la web unos segundos. Hace falta para que el server tome cambios de código nuevos.')}">🔁<span>${t('system.backup.restartServer', 'Reiniciar el servidor')}</span></button>
+      <p class="bk-msg" data-ref="srvmsg" hidden></p>
     </div>`;
 
   const refs = {};
@@ -456,6 +458,12 @@ export function mountBackupPanel(el, ctx) {
     refs.rmsg.className = `bk-msg ${kind}`;
     refs.rmsg.hidden = !text;
   }
+  function srvmsg(text, kind = 'info', { running = false } = {}) {
+    if (running) refs.srvmsg.innerHTML = `${pacman()} ${text}`;
+    else refs.srvmsg.textContent = text;
+    refs.srvmsg.className = `bk-msg ${kind}`;
+    refs.srvmsg.hidden = !text;
+  }
 
   async function recycle() {
     if (busy) return;
@@ -483,8 +491,64 @@ export function mountBackupPanel(el, ctx) {
     }
   }
 
+  // Reinicia el PROCESO del server (systemctl --user restart). Distinto de
+  // "Reiniciar sesiones": acá muere el Node de la consola, no los motores de
+  // chat. Las tmux y los runners SOBREVIVEN (la unidad usa KillMode=process),
+  // así que el trabajo en curso no se pierde: solo se corta la web unos
+  // segundos. Hace falta cuando el server tiene que tomar código nuevo.
+  // El endpoint responde ANTES de morir, así que tras el POST hay que
+  // ESPERAR a que vuelva a atender: encuestamos un endpoint barato hasta que
+  // conteste (el fetch falla mientras el proceso está caído — es lo esperado).
+  async function restartServer() {
+    if (busy) return;
+    const ok = await dialog.confirmDialog({
+      title: t('system.backup.restartServerTitle', 'Reiniciar el servidor'),
+      message: t('system.backup.restartServerMessage', '¿Reiniciar el proceso del servidor? La web se corta unos segundos y vuelve sola. Las terminales y los motores de chat NO se tocan: el trabajo en curso sobrevive.'),
+      confirmLabel: t('system.backup.restartConfirm', 'Reiniciar'),
+    });
+    if (!ok) return;
+    setBusy(true);
+    refs.restart.disabled = true;
+    srvmsg(t('system.backup.restartingServer', 'Reiniciando el servidor…'), 'info', { running: true });
+    try {
+      const res = await fetch('/api/updates/restart', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error === 'admin'
+          ? t('system.backup.restartServerAdmin', 'Solo un admin puede reiniciar el servidor.')
+          : (data.error || t('system.backup.restartServerFailed', 'No se pudo reiniciar el servidor.')));
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      let volvio = false;
+      for (let i = 0; i < 40; i++) {
+        srvmsg(t('system.backup.waitingServer', 'Esperando que el servidor vuelva…'), 'info', { running: true });
+        try {
+          const p = await fetch('/api/chat/list', { cache: 'no-store' });
+          if (p.ok) {
+            volvio = true;
+            break;
+          }
+        } catch { /* el server está caído: es lo esperado */ }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+
+      if (volvio) {
+        srvmsg(t('system.backup.serverBack', 'Servidor reiniciado ✓ — la web ya está al día.'), 'ok');
+      } else {
+        srvmsg(t('system.backup.serverNotBack', 'El servidor no respondió a tiempo. Revisá journalctl --user -u claude-web-console.'), 'err');
+      }
+    } catch (e) {
+      srvmsg(e.message, 'err');
+    } finally {
+      setBusy(false);
+      refs.restart.disabled = false;
+    }
+  }
+
   refs.create.addEventListener('click', create);
   refs.recycle.addEventListener('click', recycle);
+  refs.restart.addEventListener('click', restartServer);
   loadList();
   loadGit();
 }

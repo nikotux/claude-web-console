@@ -30,10 +30,11 @@ const CONN_STATE = {
 };
 // Estado unificado de un servidor MCP (a partir del code de classifyStatus).
 function mcpState(s) {
+  if (s?.checking) return 'inprogress';
   const c = s?.status?.code;
   if (c === 'connected') return 'connected';
   if (c === 'pending') return 'inprogress';
-  if (c === 'needs-auth') return 'action';
+  if (c === 'needs-auth' || c === 'timeout') return 'action';
   if (c === 'error') return 'error';
   return 'unset';
 }
@@ -54,6 +55,39 @@ function agoText(ts) {
   const hrs = Math.round(mins / 60);
   if (hrs < 48) return t('system.conn.agoHour', 'hace {n} h', { n: hrs });
   return t('system.conn.agoDay', 'hace {n} d', { n: Math.round(hrs / 24) });
+}
+
+function compactDuration(ms) {
+  if (!Number.isFinite(ms)) return '';
+  const abs = Math.abs(ms);
+  const day = 24 * 60 * 60 * 1000;
+  const hour = 60 * 60 * 1000;
+  const min = 60 * 1000;
+  const days = Math.floor(abs / day);
+  const hours = Math.floor((abs % day) / hour);
+  const mins = Math.floor((abs % hour) / min);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function expiryChipHtml(item) {
+  // Number(null) === 0: el guard tiene que ir antes de convertir.
+  if (item?.expiresAt == null || item.expiresAt === '') return '';
+  const expiresAt = Number(item.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '';
+  const left = expiresAt - Date.now();
+  const sev = left <= 0 ? 'danger' : (left < 2 * 24 * 60 * 60 * 1000 ? 'warn' : 'ok');
+  const text = left <= 0
+    ? `⚠ ${t('system.mcps.expiredAgo', 'vencido hace {time}', { time: compactDuration(left) })}`
+    : `⏳ ${compactDuration(left)}`;
+  return `<span class="mcp-exp mcp-exp--${sev}" title="${esc(t('system.mcps.expiresAtTitle', 'Vence {when}', { when: new Date(expiresAt).toLocaleString() }))}">${esc(text)}</span>`;
+}
+
+function verifiedHtml(ts) {
+  return ts
+    ? `<div class="hr-f-file">🕑 ${t('system.mcps.verifiedAgo', 'verificado {ago}', { ago: agoText(ts) })}</div>`
+    : `<div class="hr-f-file">🕑 ${t('system.mcps.notVerifiedYet', 'sin verificar todavía')}</div>`;
 }
 const PROVIDER_META = {
   microsoft: { emoji: '📅', purposeKey: 'system.conn.purposeMicrosoft', purposeEs: 'Tu calendario: la consola lee tus eventos con TU cuenta, no con la de otro.' },
@@ -95,39 +129,197 @@ const SETUP_META = {
 // Borde de la tarjeta según severidad de conexión (reusa la escala visual de
 // health-review: verde ok / ámbar warn / rojo danger / gris neutro).
 function cardClass(s) {
-  return { ok: 'hr-finding--linked', warn: 'hr-finding--orphan', info: 'hr-finding--running', danger: 'hr-finding--high', neutral: 'hr-finding--low' }[s.status.light] || 'hr-finding--low';
+  return { ok: 'hr-finding--linked', warn: 'hr-finding--orphan', info: 'hr-finding--running', danger: 'hr-finding--high', neutral: 'hr-finding--low' }[s.checking ? 'info' : s.status?.light] || 'hr-finding--low';
 }
 
-function serverCard(world, s, i) {
-  const collapsed = i > 0 ? ' hr-collapsed' : '';
+function checkSeconds(d, s) {
+  return Math.round((s.timeoutMs || d?.checkTimeoutMs || 15000) / 1000);
+}
+
+function mcpDot(s) {
+  if (s.checking) return '🔵';
+  if (s.status?.code === 'timeout') return '⏱️';
+  return LIGHT_DOT[CONN_STATE[mcpState(s)].light] || '⚪';
+}
+
+function mcpStatusLabel(d, s) {
+  if (s.checking) return t('system.mcps.checkingWithTimeout', 'verificando… (⏱ {n}s)', { n: checkSeconds(d, s) });
+  if (s.status?.code === 'timeout') return t('system.mcps.timeoutIn', 'no respondió en {n}s', { n: checkSeconds(d, s) });
+  return s.status?.label || t('system.mcps.unknown', 'Desconocido');
+}
+
+function mcpTag(s) {
   const uKey = mcpState(s);
-  const uTag = t(CONN_STATE[uKey].tagKey, CONN_STATE[uKey].tagEs);
-  const dot = LIGHT_DOT[CONN_STATE[uKey].light] || '⚪';
+  return t(CONN_STATE[uKey].tagKey, CONN_STATE[uKey].tagEs);
+}
+
+function mcpStatusHtml(d, s) {
+  const dot = mcpDot(s);
+  const label = mcpStatusLabel(d, s);
+  const busy = s.checking ? `${pacman({ size: 'sm' })} ` : '';
+  return `<p class="hr-f-detail"><b>${dot} ${busy}${esc(label)}</b></p>`;
+}
+
+function mcpExtraHtml(s) {
+  const stale = s.stale && !s.checking ? `<div class="hr-f-file">⚠ ${t('system.mcps.staleData', 'dato de {ago}', { ago: agoText(s.checkedAt) })}</div>` : '';
+  const err = s.error ? `<div class="hr-f-crit">🔴 ${esc(s.error)}</div>` : '';
+  return verifiedHtml(s.checkedAt) + stale + err;
+}
+
+function mcpActsHtml(world, s) {
+  const acts = [];
+  acts.push(`<button class="btn-ghost btn--sm" data-act="check" data-world="${esc(world)}" data-name="${esc(s.name)}">🔄<span>${t('system.mcps.checkOne', 'Verificar este')}</span></button>`);
+  if (s.reconnectable) acts.push(`<button class="btn btn--sm" data-act="reconnect" data-world="${esc(world)}" data-name="${esc(s.name)}">${icon('refresh', { size: 12 })}<span>${t('system.mcps.reconnect', 'Reconectar')}</span></button>`);
+  if (s.transport === 'stdio' && s.command === 'infisical' && s.status?.code !== 'connected') {
+    acts.push(`<button class="btn btn--sm" data-act="infisical-login" data-world="${esc(world)}" data-name="${esc(s.name)}">🔑<span>${t('system.mcps.infisicalReconnect', 'Reconectar Infisical')}</span></button>`);
+  }
+  if (s.status?.code === 'connected') acts.push(`<button class="btn-ghost btn--sm" data-act="logout" data-world="${esc(world)}" data-name="${esc(s.name)}">${t('system.mcps.disconnect', 'Desconectar')}</button>`);
+  acts.push(`<button class="btn-ghost btn--sm" data-act="copy" data-world="${esc(world)}" data-name="${esc(s.name)}">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copyCommand', 'Copiar comando')}</span></button>`);
+  return acts.join('');
+}
+
+function serverCard(d, world, s, i) {
+  const collapsed = i > 0 ? ' hr-collapsed' : '';
+  const uTag = mcpTag(s);
+  const dot = mcpDot(s);
   const role = s.role ? `<div class="hr-f-file">🎯 ${esc(s.role)}</div>` : '';
   const target = s.transport === 'stdio'
     ? `<div class="hr-f-file">⌨ <code>${esc(s.command || '')}${s.args ? ' ' + esc(s.args.join(' ')) : ''}</code></div>`
     : `<div class="hr-f-file">🌐 <code>${esc(s.url || s.endpoint)}</code>${s.hasHeaders ? ` · ${t('system.mcps.withAuthHeader', 'con auth header')}` : ''}</div>`;
 
-  // Botones de acción según estado. reconnectable = HTTP/SSE con OAuth pendiente.
-  const acts = [];
-  if (s.reconnectable) acts.push(`<button class="btn btn--sm" data-act="reconnect" data-world="${esc(world)}" data-name="${esc(s.name)}">${icon('refresh', { size: 12 })}<span>${t('system.mcps.reconnect', 'Reconectar')}</span></button>`);
-  if (s.status.code === 'connected') acts.push(`<button class="btn-ghost btn--sm" data-act="logout" data-world="${esc(world)}" data-name="${esc(s.name)}">${t('system.mcps.disconnect', 'Desconectar')}</button>`);
-  acts.push(`<button class="btn-ghost btn--sm" data-act="copy" data-world="${esc(world)}" data-name="${esc(s.name)}">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copyCommand', 'Copiar comando')}</span></button>`);
-
   return `
-    <div class="hr-finding ${cardClass(s)}${collapsed}" data-key="${esc(world)}:${esc(s.name)}">
+    <div class="hr-finding ${cardClass(s)}${collapsed}" data-key="${esc(s.key || `${world}:${s.name}`)}">
       <div class="hr-f-head" data-toggle="1">
         <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
-        <span class="mcp-dot" title="${esc(s.status.label)}">${dot}</span>
+        <span class="mcp-dot" title="${esc(mcpStatusLabel(d, s))}">${dot}</span>
         <span class="hr-f-area">${esc(s.name)}</span>
+        ${expiryChipHtml(s)}
         <span class="hr-f-mod">${esc(uTag)} · ${esc(s.transport)} · ${esc(s.scopeLabel)}</span>
       </div>
       <div class="hr-f-body">
-        <p class="hr-f-detail"><b>${dot} ${esc(s.status.label)}</b></p>
+        <div data-ref="mcp-state">${mcpStatusHtml(d, s)}</div>
         ${role}${target}
-        <div class="mcp-acts">${acts.join('')}</div>
+        <div data-ref="mcp-extra">${mcpExtraHtml(s)}</div>
+        <div class="mcp-acts" data-ref="mcp-acts">${mcpActsHtml(world, s)}</div>
       </div>
     </div>`;
+}
+
+const KEYRING_FAMILIES = [
+  { id: 'engines', labelKey: 'system.mcps.keyringEngines', labelEs: '🧠 Motores de IA' },
+  { id: 'keys', labelKey: 'system.mcps.keyringKeys', labelEs: '🔑 Llaves y accesos' },
+  { id: 'services', labelKey: 'system.mcps.keyringServices', labelEs: '🔌 Servicios y puentes' },
+];
+
+function keyringCardClass(light) {
+  return cardClass({ status: { light } });
+}
+
+function keyringActionsHtml(item) {
+  const acts = [];
+  const action = item.action || null;
+  if (action) {
+    // El botón siempre queda disponible; el color lo dicta el estado actual.
+    const reconnectClass = ['warn', 'danger'].includes(item.light) ? 'btn btn--sm' : 'btn-ghost btn--sm';
+    acts.push(`<button class="${reconnectClass}" data-kact="reconnect-keyring" data-kid="${esc(item.id)}">🔗<span>${t('system.mcps.guidedReconnect', 'Reconectar')}</span></button>`);
+    if (action.kind === 'command' && action.command) {
+      acts.push(`<button class="btn-ghost btn--sm" data-kact="copy-command" data-command="${esc(action.command)}">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copyCommandButton', 'Copiar comando')}</span></button>`);
+    }
+  }
+  acts.push(`<button class="btn-ghost btn--sm" data-kact="verify-keyring">🔄<span>${t('system.mcps.verify', 'Verificar')}</span></button>`);
+  return `<div class="mcp-acts">${acts.join('')}</div>`;
+}
+
+function keyringCard(item, i, generatedAt) {
+  const dot = LIGHT_DOT[item.light] || '⚪';
+  const label = item.label || item.id || t('system.mcps.keyringUnknown', 'Conexión');
+  const statusLabel = item.statusLabel || t('system.mcps.unknown', 'Desconocido');
+  const role = item.role ? `<div class="hr-f-file">🎯 ${esc(item.role)}</div>` : '';
+  const detail = item.detail ? `<div class="hr-f-file">${esc(item.detail)}</div>` : '';
+  const verified = verifiedHtml(item.checkedAt || generatedAt);
+  const dependents = Array.isArray(item.dependents) && item.dependents.length
+    ? `<div class="hr-f-file">⛓️ ${t('system.mcps.keyringDependents', 'Si esto se cae:')} ${item.dependents.map((x) => esc(x)).join(' · ')}</div>`
+    : '';
+  const err = item.error ? `<div class="hr-f-crit">🔴 ${esc(item.error)}</div>` : '';
+  return `
+    <div class="hr-finding ${keyringCardClass(item.light)}${i > 0 ? ' hr-collapsed' : ''}" data-keyring="${esc(item.id || label)}">
+      <div class="hr-f-head" data-toggle="1">
+        <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
+        <span class="mcp-dot" title="${esc(statusLabel)}">${dot}</span>
+        <span class="hr-f-area">${esc(label)}</span>
+        ${expiryChipHtml(item)}
+        <span class="hr-f-mod">${esc(statusLabel)}</span>
+      </div>
+      <div class="hr-f-body">
+        <p class="hr-f-detail"><b>${dot} ${esc(statusLabel)}</b></p>
+        ${role}${verified}${detail}${dependents}${err}
+        ${keyringActionsHtml(item)}
+      </div>
+    </div>`;
+}
+
+function keyringSection(meta, d) {
+  const allItems = d.items || [];
+  const items = (allItems || []).filter((item) => item.family === meta.id);
+  const hasTrouble = items.some((item) => item.light === 'danger' || item.light === 'warn');
+  const troubleDot = items.some((item) => item.light === 'danger') ? ' 🔴' : hasTrouble ? ' 🟡' : '';
+  const body = items.length
+    ? items.map((item, i) => keyringCard(item, i, d.generatedAt)).join('')
+    : `<p class="hr-summary">${t('system.mcps.keyringEmptyFamily', 'Sin conexiones en esta sección.')}</p>`;
+  return `<details class="hr-collapsible" ${hasTrouble ? 'open' : ''}>
+    <summary>${t(meta.labelKey, meta.labelEs)}${troubleDot} <span class="hr-f-mod">(${items.length})</span></summary>
+    <div class="hr-findings">${body}</div>
+  </details>`;
+}
+
+function keyringHtml(d) {
+  if (!d) return '';
+  if (d.error) return `<p class="hr-summary">⚪ ${t('system.mcps.keyringLoadError', 'No se pudo cargar el llavero.')} ${esc(d.error)}</p>`;
+  const stale = d.stale
+    ? `<p class="hr-f-file" title="${esc(d.staleReason || '')}">⚠ ${t('system.mcps.keyringStale', 'datos guardados')} · ${esc(agoText(d.generatedAt))}</p>`
+    : '';
+  return `${stale}${KEYRING_FAMILIES.map((meta) => keyringSection(meta, d)).join('')}`;
+}
+
+function conflictsHtml(w) {
+  const conflicts = Array.isArray(w.conflicts) ? w.conflicts : [];
+  if (!conflicts.length) return '';
+  const cards = conflicts.map((c) => {
+    const scopes = (c.scopes || []).map((s) => `<div class="hr-f-file"><code>${esc(s.scope)}: ${esc(s.endpoint)}</code></div>`).join('');
+    const fixes = (c.fixCommands || []).map((cmd) => `
+      <div class="hr-f-file"><code>${esc(cmd)}</code></div>
+      <button class="btn-ghost btn--sm" data-act="copy-config-fix" data-command="${esc(cmd)}">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copy', 'Copiar')}</span></button>`).join('');
+    return `<div class="hr-finding hr-finding--orphan">
+      <div class="hr-f-head">
+        <span class="mcp-dot">⚠️</span>
+        <span class="hr-f-area">${t('system.mcps.conflictTitle', '⚠️ "{name}" está definido en {n} scopes con endpoints distintos', { name: esc(c.name), n: (c.scopes || []).length })}</span>
+      </div>
+      <div class="hr-f-body">
+        ${scopes}
+        <div class="hr-f-file">${t('system.mcps.conflictOAuthHint', 'Los tokens OAuth se guardan por endpoint: autenticar en un contexto no sirve para el otro.')}</div>
+        <div class="mcp-acts">${fixes}</div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<details class="hr-collapsible" open>
+    <summary>${t('system.mcps.conflictsSummary', 'Conflictos de config')} <span class="hr-f-mod">(${conflicts.length})</span></summary>
+    <div class="hr-findings">${cards}</div>
+  </details>`;
+}
+
+function missingReasonText(reason) {
+  if (reason === 'timeout') return t('system.mcps.missingTimeout', 'no respondió');
+  if (reason === 'error') return t('system.mcps.missingError', 'falló la verificación');
+  return t('system.mcps.missingUnchecked', 'sin verificar todavía');
+}
+
+function missingItemsHtml(w) {
+  const missing = Array.isArray(w.missing) ? w.missing : [];
+  return missing.map((item) => `<p class="hr-f-file">⚪ ${esc(item.name)} — ${t('system.mcps.missingDeclared', 'declarado en la config pero no se pudo verificar')} (${esc(missingReasonText(item.reason))})</p>`).join('');
+}
+
+function missingHostHtml(w) {
+  return `<div data-missing-world="${esc(w.world)}">${missingItemsHtml(w)}</div>`;
 }
 
 export function mountMcpsPanel(el, ctx = {}) {
@@ -137,17 +329,68 @@ export function mountMcpsPanel(el, ctx = {}) {
 
   let alive = true;
   let connAdmin = false;
-  const obs = new MutationObserver(() => { if (!el.isConnected) { alive = false; obs.disconnect(); } });
+  let lastData = null;
+  let lastKeyring = null;
+  let hasRendered = false;
+  let pollTimer = null;
+
+  function clearPoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+
+  const obs = new MutationObserver(() => {
+    if (!el.isConnected) {
+      alive = false;
+      clearPoll();
+      obs.disconnect();
+    }
+  });
   obs.observe(document.body, { childList: true, subtree: true });
 
-  function wire() {
-    root.querySelectorAll('[data-toggle]').forEach((head) => {
+  function wireToggles(scope = root) {
+    scope.querySelectorAll('[data-toggle]').forEach((head) => {
       head.addEventListener('click', () => head.closest('.hr-finding')?.classList.toggle('hr-collapsed'));
     });
-    root.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', (e) => {
+  }
+
+  function wireActions(scope = root) {
+    scope.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', (e) => {
       e.stopPropagation();
-      onAction(b.dataset.act, b.dataset.world, b.dataset.name);
+      onAction(b.dataset.act, b.dataset.world, b.dataset.name, b);
     }));
+  }
+
+  function wireKeyring() {
+    const host = root.querySelector('[data-ref="keyring"]');
+    if (!host) return;
+    host.querySelectorAll('[data-toggle]').forEach((head) => {
+      head.addEventListener('click', () => head.closest('.hr-finding')?.classList.toggle('hr-collapsed'));
+    });
+    host.querySelectorAll('[data-kact]').forEach((b) => b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (b.dataset.kact === 'reconnect-keyring') {
+        const item = (lastKeyring?.items || []).find((x) => x.id === b.dataset.kid);
+        if (item?.action?.kind === 'infisical-login') openInfisicalLogin();
+        else if (item) openGuidedReconnect(item);
+      } else if (b.dataset.kact === 'copy-command') {
+        copyCommandText(b.dataset.command || '');
+      } else if (b.dataset.kact === 'verify-keyring') {
+        loadKeyring(true);
+      }
+    }));
+  }
+
+  function renderKeyring() {
+    const host = root.querySelector('[data-ref="keyring"]');
+    if (!host) return;
+    host.innerHTML = keyringHtml(lastKeyring);
+    wireKeyring();
+  }
+
+  function wire() {
+    wireToggles();
+    wireActions();
     const rev = root.querySelector('[data-ref="reverify"]');
     if (rev) rev.addEventListener('click', () => load(true));
     const rec = root.querySelector('[data-ref="recycle"]');
@@ -466,11 +709,118 @@ export function mountMcpsPanel(el, ctx = {}) {
     else setBody(`<p class="hr-f-file">⚪ ${t('system.conn.needsAdminModal', 'Falta que un administrador cargue las credenciales de la app de este proveedor. Pedíselo y volvé a intentar.')}</p>`);
   }
 
-  async function onAction(act, world, name) {
+  function allMcpServers(d) {
+    return (d?.worlds || []).flatMap((w) => (w.servers || []).map((s) => ({ world: w.world, server: s })));
+  }
+
+  function keyList(d) {
+    return allMcpServers(d).map(({ server }) => server.key).sort();
+  }
+
+  function sameKeys(a, b) {
+    const ak = keyList(a);
+    const bk = keyList(b);
+    return ak.length === bk.length && ak.every((k, i) => k === bk[i]);
+  }
+
+  function anyChecking(d) {
+    return allMcpServers(d).some(({ server }) => server.checking);
+  }
+
+  function cardFor(key) {
+    return [...root.querySelectorAll('[data-key]')].find((c) => c.dataset.key === key);
+  }
+
+  function updateCardClass(card, s) {
+    card.classList.remove('hr-finding--linked', 'hr-finding--orphan', 'hr-finding--running', 'hr-finding--high', 'hr-finding--low');
+    card.classList.add(cardClass(s));
+  }
+
+  function applyStates(d) {
+    if (!lastData || !sameKeys(lastData, d)) {
+      render(d);
+      return;
+    }
+    lastData = d;
+    allMcpServers(d).forEach(({ world, server: s }) => {
+      const card = cardFor(s.key);
+      if (!card) return;
+      updateCardClass(card, s);
+      const dot = card.querySelector('.mcp-dot');
+      if (dot) {
+        dot.textContent = mcpDot(s);
+        dot.title = mcpStatusLabel(d, s);
+      }
+      const tag = card.querySelector('.hr-f-mod');
+      if (tag) tag.textContent = `${mcpTag(s)} · ${s.transport} · ${s.scopeLabel}`;
+      const state = card.querySelector('[data-ref="mcp-state"]');
+      if (state) state.innerHTML = mcpStatusHtml(d, s);
+      const extra = card.querySelector('[data-ref="mcp-extra"]');
+      if (extra) extra.innerHTML = mcpExtraHtml(s);
+      const acts = card.querySelector('[data-ref="mcp-acts"]');
+      if (acts) {
+        acts.innerHTML = mcpActsHtml(world, s);
+        wireActions(acts);
+      }
+    });
+    for (const w of d.worlds || []) {
+      const host = [...root.querySelectorAll('[data-missing-world]')].find((node) => node.dataset.missingWorld === w.world);
+      if (host) host.innerHTML = missingItemsHtml(w);
+    }
+    if (anyChecking(d)) startPoll();
+    else clearPoll();
+  }
+
+  function startPoll() {
+    if (pollTimer || !alive) return;
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (!alive) return;
+      try {
+        const res = await fetch('/api/mcps');
+        if (!res.ok) throw new Error(res.status);
+        const d = await res.json();
+        if (!alive) return;
+        applyStates(d);
+      } catch {
+        if (alive && lastData && anyChecking(lastData)) startPoll();
+      }
+    }, 2000);
+  }
+
+  async function copyCommandText(cmd) {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      dialog.alertDialog?.({ title: t('system.mcps.copiedTitle', 'Copiado'), message: t('system.mcps.copyTerminalMessage', 'Pegá en una terminal interactiva:\n\n{cmd}', { cmd }) });
+    } catch {
+      dialog.alertDialog?.({ title: t('system.mcps.commandTitle', 'Comando'), message: cmd });
+    }
+  }
+
+  async function onAction(act, world, name, button = null) {
+    if (act === 'check') {
+      try {
+        const key = `${world}:${name}`;
+        if (lastData) {
+          allMcpServers(lastData).forEach(({ server }) => { if (server.key === key) server.checking = true; });
+          applyStates(lastData);
+        }
+        startPoll();
+        const r = await fetch('/api/mcps/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ world, name }) });
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+      } catch (e) {
+        dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(e.message || e) });
+        load(false);
+      }
+      return;
+    }
     if (act === 'copy') {
       const cmd = `cd ${world === 'tolkien' ? '~/tolkien' : '~/claude-web-console'} && claude mcp login ${name}`;
-      try { await navigator.clipboard.writeText(cmd); dialog.alertDialog?.({ title: t('system.mcps.copiedTitle', 'Copiado'), message: t('system.mcps.copyTerminalMessage', 'Pegá en una terminal interactiva:\n\n{cmd}', { cmd }) }); }
-      catch { dialog.alertDialog?.({ title: t('system.mcps.commandTitle', 'Comando'), message: cmd }); }
+      copyCommandText(cmd);
+      return;
+    }
+    if (act === 'copy-config-fix') {
+      copyCommandText(button?.dataset.command || '');
       return;
     }
     if (act === 'logout') {
@@ -484,6 +834,7 @@ export function mountMcpsPanel(el, ctx = {}) {
       return;
     }
     if (act === 'reconnect') openReconnect(world, name);
+    if (act === 'infisical-login') openInfisicalLogin();
   }
 
   async function recycleRunners() {
@@ -494,6 +845,175 @@ export function mountMcpsPanel(el, ctx = {}) {
       const d = await r.json();
       dialog.alertDialog?.({ title: t('system.mcps.runnersRecycledTitle', 'Runners reciclados'), message: t('system.mcps.runnersRecycledMessage', 'Se reiniciaron {count} runner(s). Se re-conectan en la próxima interacción.', { count: d.killed ?? 0 }) });
     } catch (e) { dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(e.message || e) }); }
+  }
+
+  async function loadKeyring(fresh = false) {
+    const host = root.querySelector('[data-ref="keyring"]');
+    if (host && fresh) host.innerHTML = `${pacman({ state: 'delegating', size: 'sm' })} <span class="hr-summary">${t('system.mcps.keyringVerifying', 'Verificando llavero…')}</span>`;
+    try {
+      const res = await fetch('/api/mcps/keyring' + (fresh ? '?fresh=1' : ''));
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      if (!alive) return;
+      lastKeyring = d;
+    } catch (e) {
+      if (!alive) return;
+      lastKeyring = { error: String(e.message || e) };
+    }
+    renderKeyring();
+  }
+
+  function openInfisicalLogin() {
+    const m = dialog.openModal({ title: t('system.mcps.infisicalLoginTitle', 'Reconectar Infisical'), width: 560 });
+    let timer = null;
+    let id = null;
+    let phase = '';
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { if (timer) clearInterval(timer); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+
+    function render(job) {
+      if (job.status === 'awaiting-url' && phase !== 'awaiting-url') {
+        phase = 'awaiting-url';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${t('system.mcps.yourTurn', 'Tu turno:')}</b></p>
+          <ol class="mcp-oauth-steps">
+            <li>${t('system.mcps.infisicalStepOpen', 'Abrí este enlace y completá el login en tu navegador.')}<br>
+              <a href="${esc(job.url)}" target="_blank" rel="noopener" class="mcp-oauth-link">${icon('externalLink', { size: 13 })} ${t('system.mcps.infisicalOpenLogin', 'Abrir login de Infisical')}</a></li>
+            <li>${t('system.mcps.infisicalStepToken', 'Si el navegador no logra hablar con la consola (es lo habitual cuando entrás desde otra máquina), la página te va a mostrar un token. Copialo.')}</li>
+            <li>${t('system.mcps.infisicalStepPaste', 'Pegalo acá.')}<br>
+              <input type="password" class="dlg-input" data-ref="token" autocomplete="off" placeholder="${esc(t('system.mcps.infisicalTokenPlaceholder', 'Token'))}" />
+              <button class="btn btn--sm" data-ref="send">${icon('check', { size: 12 })}<span>${t('system.mcps.send', 'Enviar')}</span></button></li>
+          </ol>
+          <p class="hr-f-file" data-ref="msg"></p>`);
+        const send = m.body.querySelector('[data-ref="send"]');
+        const input = m.body.querySelector('[data-ref="token"]');
+        const msg = m.body.querySelector('[data-ref="msg"]');
+        send?.addEventListener('click', async () => {
+          const value = input?.value.trim() || '';
+          if (input) input.value = '';
+          if (!value) return;
+          send.disabled = true;
+          if (msg) msg.textContent = t('system.mcps.completing', 'Completando…');
+          try {
+            const r = await fetch('/api/mcps/infisical/login-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, value }) });
+            if (!r.ok) throw new Error((await r.json()).error || r.status);
+            if (msg) msg.textContent = t('system.mcps.infisicalTokenSent', 'Token enviado. Esperando confirmación…');
+          } catch (e) {
+            if (msg) msg.textContent = t('system.mcps.inlineError', 'Error: {error}', { error: e.message || e });
+            send.disabled = false;
+          }
+        });
+      } else if ((job.status === 'exchanging' || job.status === 'verifying') && phase !== job.status) {
+        phase = job.status;
+        setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.infisicalVerifyingSession', 'Verificando la sesión…')}`);
+      } else if (job.status === 'done') {
+        stop();
+        const email = job.email ? `<div class="hr-f-file">📧 ${esc(job.email)}</div>` : '';
+        const expires = job.expiresInText ? `<div class="hr-f-file">⏳ ${esc(job.expiresInText)}</div>` : '';
+        setBody(`
+          <p class="hr-f-detail">🟢 <b>${t('system.mcps.infisicalRestored', 'Sesión de Infisical restablecida')}</b></p>
+          ${email}${expires}
+          <p class="hr-f-file">${t('system.mcps.infisicalRecycleHint', 'Los motores vivos tienen la config vieja: reciclá runners para que relean la sesión.')}</p>
+          <div class="mcp-acts">
+            <button class="btn btn--sm" data-ref="recycle2">♻️ ${t('system.mcps.recycleRunnersTitle', 'Reciclar runners')}</button>
+            <button class="btn-ghost btn--sm" data-ref="close2">${t('system.mcps.close', 'Cerrar')}</button>
+          </div>`);
+        m.body.querySelector('[data-ref="recycle2"]')?.addEventListener('click', () => { recycleRunners(); });
+        m.body.querySelector('[data-ref="close2"]')?.addEventListener('click', () => { m.close?.(); loadKeyring(true); load(true); });
+      } else if (job.status === 'error') {
+        stop();
+        setBody(`<p class="hr-f-crit">🔴 ${t('system.mcps.infisicalError', 'No se pudo restablecer Infisical: {error}', { error: esc(job.error || t('system.mcps.unknownError', 'error desconocido')) })}</p>
+          <p class="hr-f-file">${t('system.mcps.infisicalManualAlternative', 'Alternativa manual: corré')} <code>infisical login</code> ${t('system.mcps.manualAlternativeAfterCommand', 'en una terminal interactiva.')}</p>`);
+      }
+    }
+
+    async function pollOnce() {
+      try {
+        const jr = await fetch('/api/mcps/infisical/login/' + encodeURIComponent(id));
+        if (jr.ok) render(await jr.json());
+      } catch { /* red intermitente, sigue */ }
+    }
+
+    (async () => {
+      setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.startingAuth', 'Iniciando autenticación…')}`);
+      try {
+        const r = await fetch('/api/mcps/infisical/login', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        id = d.id;
+        await pollOnce();
+        timer = setInterval(pollOnce, 1500);
+      } catch (e) {
+        setBody(`<p class="hr-f-crit">${t('system.mcps.startError', 'No se pudo iniciar: {error}', { error: esc(e.message || e) })}</p>`);
+      }
+    })();
+  }
+
+  function keyringConnected(item) {
+    return item?.light === 'ok';
+  }
+
+  function openGuidedReconnect(item) {
+    const action = item.action || {};
+    const title = action.title || t('system.mcps.guidedReconnectTitle', 'Reconectar · {name}', { name: item.label || item.id || '' });
+    const m = dialog.openModal({ title: esc(title), width: 560 });
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+
+    const renderResult = (checked) => {
+      const dot = LIGHT_DOT[checked?.light] || '⚪';
+      if (keyringConnected(checked)) {
+        return `<p class="hr-f-detail">🟢 <b>${t('system.mcps.guidedConnected', 'Quedó conectado')}</b></p>`;
+      }
+      const detail = checked?.detail || checked?.error || checked?.statusLabel || t('system.mcps.unknownError', 'error desconocido');
+      return `<p class="hr-f-crit">🔴 ${t('system.mcps.guidedStillDisconnected', 'Sigue sin conexión: {detail}', { detail: esc(detail) })} ${dot}</p>`;
+    };
+
+    const render = (resultHtml = '') => {
+      const what = action.what ? `<p class="hr-f-file">${esc(action.what)}</p>` : '';
+      const steps = Array.isArray(action.steps) && action.steps.length
+        ? `<ol class="mcp-oauth-steps">${action.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`
+        : '';
+      const command = action.command
+        ? `<p class="hr-f-file">${t('system.mcps.guidedCommand', 'Comando:')} <code>${esc(action.command)}</code></p>
+           <div class="mcp-acts"><button class="btn-ghost btn--sm" data-ref="copycmd">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copy', 'Copiar')}</span></button></div>`
+        : '';
+      setBody(`
+        <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${t('system.mcps.yourTurn', 'Tu turno:')}</b></p>
+        ${what}
+        ${steps}
+        ${command}
+        <div data-ref="guided-result">${resultHtml}</div>
+        <div class="mcp-acts">
+          <button class="btn btn--sm" data-ref="verifydone">✓<span>${t('system.mcps.guidedVerifyNow', 'Ya lo hice · Verificar ahora')}</span></button>
+          <button class="btn-ghost btn--sm" data-ref="close">${t('system.mcps.close', 'Cerrar')}</button>
+        </div>`);
+      m.body.querySelector('[data-ref="copycmd"]')?.addEventListener('click', () => copyCommandText(action.command || ''));
+      m.body.querySelector('[data-ref="close"]')?.addEventListener('click', () => m.close?.());
+      m.body.querySelector('[data-ref="verifydone"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const result = m.body.querySelector('[data-ref="guided-result"]');
+        btn.disabled = true;
+        if (result) result.innerHTML = `${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.keyringVerifying', 'Verificando llavero…')}`;
+        try {
+          const res = await fetch('/api/mcps/keyring?fresh=1');
+          const d = await res.json();
+          if (!res.ok) throw new Error(d?.error || res.status);
+          lastKeyring = d;
+          renderKeyring();
+          const checked = (d.items || []).find((x) => x.id === item.id);
+          if (result) result.innerHTML = renderResult(checked);
+        } catch (err) {
+          if (result) result.innerHTML = `<p class="hr-f-crit">🔴 ${t('system.mcps.inlineError', 'Error: {error}', { error: esc(err.message || err) })}</p>`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    };
+
+    render();
   }
 
   // --- Fase 2: reconexión OAuth guiada ---
@@ -587,9 +1107,9 @@ export function mountMcpsPanel(el, ctx = {}) {
     const groups = (d.worlds || []).map((w) => {
       const warn = w.error
         ? `<p class="hr-f-crit">⚠️ ${t('system.mcps.worldReadError', 'No se pudo leer: {error}', { error: esc(w.error) })}</p>`
-        : w.hasWarnings ? `<p class="hr-f-file">⚠️ ${t('system.mcps.configWarnings', 'Claude reportó avisos de config en este mundo (p.ej. un server en dos scopes). Revisalos con')} <code>claude mcp list</code>.</p>` : '';
+        : conflictsHtml(w);
       const cards = w.servers.length
-        ? w.servers.map((s, i) => serverCard(w.world, s, i)).join('')
+        ? w.servers.map((s, i) => serverCard(d, w.world, s, i)).join('')
         : `<p class="hr-summary">${t('system.mcps.noWorldServers', 'Sin servidores MCP en este mundo.')}</p>`;
       // Las cuentas personales viven DENTRO de 🏠 Mi Consola: son conexiones de
       // la consola (no de Tolkien), así que se listan junto a sus MCP.
@@ -598,30 +1118,53 @@ export function mountMcpsPanel(el, ctx = {}) {
         <summary>${esc(w.label)} <span class="hr-f-mod">${esc(w.cwd)}</span> (${w.servers.length})</summary>
         ${warn}
         <div class="hr-findings">${cards}</div>
+        ${missingHostHtml(w)}
         ${connHost}
       </details>`;
     }).join('');
 
     root.innerHTML = `
-      <p class="pj-hint">${t('system.mcps.hintBeforeCommand', 'Servidores MCP de Claude Code por mundo, con estado en vivo. Estado vía')} <code>claude mcp list</code> — ${t('system.mcps.zeroTokens', '0 tokens')}.</p>
+      <p class="pj-hint">${t('system.mcps.hintBeforeCommand', 'Servidores MCP de Claude Code por mundo, con estado persistido por servidor. Censo desde config y health-check por item')} — ${t('system.mcps.zeroTokens', '0 tokens')}.</p>
       ${globalActs}
+      <div data-ref="keyring"></div>
       ${groups || `<p class="hr-summary">${t('system.mcps.noServers', 'No se encontraron servidores MCP.')}</p>`}
       ${(d.worlds || []).some((w) => w.world === 'console') ? '' : '<section class="conn-sec" data-ref="conn"></section>'}`;
+    lastData = d;
+    hasRendered = true;
     wire();
+    renderKeyring();
     loadConnections();
+    if (anyChecking(d)) startPoll();
+    else clearPoll();
   }
 
   async function load(fresh) {
-    root.innerHTML = `${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.mcps.verifyingConnections', 'Verificando conexiones…')}</span>`;
+    if (!hasRendered) {
+      let host = root.querySelector('[data-ref="mcp-main"]');
+      if (!host) {
+        root.innerHTML = `<div data-ref="keyring"></div><div data-ref="mcp-main"></div><section class="conn-sec" data-ref="conn"></section>`;
+        renderKeyring();
+        host = root.querySelector('[data-ref="mcp-main"]');
+      }
+      host.innerHTML = `${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.mcps.verifyingConnections', 'Verificando conexiones…')}</span>`;
+    }
     let d;
     try {
       const res = await fetch('/api/mcps' + (fresh ? '?fresh=1' : ''));
       d = await res.json();
     } catch { d = null; }
     if (!alive) return;
-    if (!d || d.error) { root.innerHTML = `<p class="hr-summary">${t('system.mcps.loadStateError', 'No se pudo cargar el estado de los MCP.')}${d?.error ? ' ' + esc(d.error) : ''}</p>`; return; }
-    render(d);
+    if (!d || d.error) {
+      const host = root.querySelector('[data-ref="mcp-main"]') || root;
+      host.innerHTML = `<p class="hr-summary">${t('system.mcps.loadStateError', 'No se pudo cargar el estado de los MCP.')}${d?.error ? ' ' + esc(d.error) : ''}</p>`;
+      return;
+    }
+    if (hasRendered && sameKeys(lastData, d)) applyStates(d);
+    else render(d);
   }
 
+  root.innerHTML = `<div data-ref="keyring"></div><div data-ref="mcp-main">${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.mcps.verifyingConnections', 'Verificando conexiones…')}</span></div><section class="conn-sec" data-ref="conn"></section>`;
+  loadKeyring(false);
+  loadConnections();
   load(false);
 }
