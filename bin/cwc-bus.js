@@ -80,18 +80,13 @@ function done(code = 0) { try { bus.gc(); } catch { /* noop */ } process.exit(co
 
 // ================= SEND =================
 function doSend() {
-  // Todo lo que sigue al subcomando; /btw pasa "$ARGUMENTS" tal cual. Aceptamos
-  // "--" como separador opcional. Primer token = destino, resto = mensaje.
-  let args = process.argv.slice(3);
-  if (args[0] === '--') args = args.slice(1);
-  const raw = args.join(' ').trim();
-  const m = raw.match(/^(\S+)\s+([\s\S]+)$/);
-  if (!m) {
+  const parsed = bus.parseSendArgs(process.argv.slice(3));
+  if (parsed.error) {
     console.log('Uso: /btw <sesión|all> <mensaje>. Sesiones disponibles: ' +
       (bus.buildDirectory().map((e) => e.name).join(', ') || '(ninguna)'));
     return done(0);
   }
-  const [, targetArg, text] = m;
+  const { targetArg, text } = parsed;
   const target = bus.resolveTarget(targetArg);
   if (target.error) { console.log('⚠ ' + target.error); return done(0); }
 

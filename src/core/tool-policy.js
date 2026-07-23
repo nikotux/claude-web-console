@@ -36,7 +36,7 @@ import { chatAttachDir } from '../modules/chat/attachments.js';
 // ende debe recibir el recordatorio de bootstrap de Pad local (workspace
 // `console`). Los chats de Tolkien (mundo externo) NO lo reciben — regla dura 12.
 const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-function isConsoleCwd(cwd) {
+export function isConsoleCwd(cwd) {
   if (!cwd) return false;
   const c = path.resolve(cwd);
   return c === CONSOLE_ROOT || c.startsWith(CONSOLE_ROOT + path.sep);
@@ -54,6 +54,7 @@ export const CONSOLE_PAD_BOOTSTRAP = [
   'Registrá lo que hagas en Pad: bug real → item BUG; trabajo de entidad (feature/migración/fase) → TASK/PLAN; decisión de arquitectura → `pad_item action=decide` con rationale. Los playbooks `module-scan`/`codex-verify` son procedimientos invocables cuando calcen.',
   'El server MCP `pad` es el LOCAL (workspace `console`); `pad-cloud-backup` es solo respaldo, nunca operativo. La fuente de verdad de las reglas duras es el CLAUDE.md del repo.',
   'Regla dura #12 (anti-colisión entre mundos): los dos mundos NUNCA se enlazan EN VIVO — 🏠 interno = Mi Consola + Pad `console` · 🌳 externo = Tolkien + Pad `tolkien`. Todo se resuelve PRIMERO y por completo acá; el ÚLTIMO paso es crear un PLAN NUEVO (plan-puente) para inyectar en Tolkien. Nunca al revés, nunca un sync/MCP vivo cruzando los dos Pad.',
+  'Al crear ítems en Pad, enlazalos a su "sol" (root real: un PLAN es sol de sus tareas, una RED de sus miembros) con parent/link y cross-linkeá entre sistemas; nunca dejes ítems flotando ni crees hubs sintéticos en colecciones de módulos vivos (pendientes/planes, temas/rutas, mejora-continua, contexto-de-tickets).',
 ].join('\n');
 
 // REGLA DE CARPETA DE TRABAJO DEL PAQUETE-SESIÓN (PLAN-447 · pedido de Niko

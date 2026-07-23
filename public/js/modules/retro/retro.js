@@ -207,16 +207,14 @@ export default {
       let refFilter = '';   // filtro "por ticket" (chip clickeado o tipeado)
       let emailScanning = false;
       let teamsScanning = false;
+      let pendingOpenHistory = false;   // abre el historial UNA vez tras un escaneo, para que lo nuevo se vea
 
       const feedbackComposer = () => `
-        <details class="mc-group" data-role="fb-composer">
-          <summary>${t('retro.fb.title', '💬 Feedback de Chris')} <span class="bb-chip bb-chip--muted">${t('retro.fb.chip', 'registrar / traer')}</span></summary>
+        <details class="mc-group" data-role="fb-composer" open>
+          <summary>${t('retro.fb.title', '💬 Feedback de Chris')}</summary>
           <div class="mc-group-body">
-            <div class="bf-sub" style="margin-bottom:.4rem">${t('retro.fb.instr', 'Pegá acá un correo, mensaje de Teams o notas de una llamada de Chris — la IA lo interpreta y lo deja listo para adoptar (se inyecta solo en todo chat de bug futuro).')}</div>
-            <textarea class="mc-fb-text" placeholder="${t('retro.fb.placeholder', 'Pegá el texto acá…')}" rows="4" style="width:100%; resize:vertical"></textarea>
-            <div style="display:flex; gap:.4rem; margin-top:.4rem; align-items:center; flex-wrap:wrap">
-              <input class="mc-fb-ref" type="text" placeholder="${t('retro.fb.refPlaceholder', 'TKT-519 / PR-245 (opcional)')}" style="max-width:160px">
-              <button class="btn btn--sm" data-act="fb-submit">${t('retro.fb.submit', 'Interpretar y registrar')}</button>
+            <div class="bf-sub" style="margin-bottom:.4rem">${t('retro.fb.instr', 'Traé el feedback de desarrollo que Chris dejó en el correo o el DM de Teams. La IA lo interpreta, lo suma al historial de acá abajo y lo inyecta solo en todo chat de bug futuro.')}</div>
+            <div style="display:flex; gap:.4rem; align-items:center; flex-wrap:wrap">
               ${isAdmin ? `<button class="btn-ghost btn--sm" data-act="email-scan" title="${t('retro.fb.emailTitle', 'Buscar feedback nuevo en el correo de Chris. Consume tokens.')}">${emailScanning ? t('retro.fb.emailScanning', '📧 Buscando…') : t('retro.fb.emailScan', '📧 Traer feedback de correo')}</button>` : ''}
               ${isAdmin ? `<button class="btn-ghost btn--sm" data-act="teams-scan" title="${t('retro.fb.teamsTitle', 'Buscar feedback nuevo en el DM de Teams con Chris. Consume tokens.')}">${teamsScanning ? t('retro.fb.teamsScanning', '📨 Buscando…') : t('retro.fb.teamsScan', '📨 Traer feedback de Teams')}</button>` : ''}
             </div>
@@ -230,7 +228,7 @@ export default {
       // descartando piezas sueltas. Ignora refFilter a propósito (es la vista
       // "todo", no la filtrada).
       const FB_STATUS_ICON = { propuesta: '🟡', aprobada: '🔖', promovida: '✅', descartada: '🗑️' };
-      const feedbackHistoryHtml = (all) => {
+      const feedbackHistoryHtml = (all, openHistory) => {
         const fb = all.filter((l) => l.category === 'feedback-cliente');
         if (!fb.length) return '';
         const byRef = new Map();
@@ -246,20 +244,21 @@ export default {
             <span class="mc-fbh-title">${esc(l.title)}</span>
             <span class="bf-sub">${esc(l.confidence)} · ${esc(l.id)}</span>
           </div>`;
+        const recencyOf = (items) => Math.max(...items.map((l) => l.updatedAt || l.createdAt || 0));
         const ticketGroups = [...byRef.entries()]
-          .sort((a, b) => b[1].length - a[1].length)
+          .sort((a, b) => recencyOf(b[1]) - recencyOf(a[1]))
           .map(([ref, items]) => `
-            <details class="mc-group">
+            <details class="mc-group mc-group--sub">
               <summary>🎫 ${esc(ref)} <span class="bb-chip bb-chip--muted">${items.length}</span></summary>
               <div class="mc-group-body">${items.map(miniCard).join('')}</div>
             </details>`).join('');
         const noRefHtml = noRef.length ? `
-          <details class="mc-group">
+          <details class="mc-group mc-group--sub">
             <summary>${t('retro.fbh.noRef', '📦 Sin ticket vinculado')} <span class="bb-chip bb-chip--muted">${noRef.length}</span></summary>
             <div class="mc-group-body">${noRef.map(miniCard).join('')}</div>
           </details>` : '';
         return `
-          <details class="mc-group" open data-role="fb-history">
+          <details class="mc-group" ${openHistory ? 'open' : ''} data-role="fb-history">
             <summary>${t('retro.fbh.title', '📜 Historial de feedback (por ticket)')} <span class="bb-chip bb-chip--muted">${fb.length}</span></summary>
             <div class="mc-group-body">${ticketGroups}${noRefHtml}</div>
           </details>`;
@@ -268,6 +267,8 @@ export default {
       const render = (data) => {
         lastData = data;
         const all = data.lessons || [];
+        const openHist = pendingOpenHistory; pendingOpenHistory = false;
+        const pendingAdopt = isAdmin ? all.filter((l) => (l.status === 'propuesta' || l.status === 'aprobada') && applicableTargets(l).length) : [];
         const visible = refFilter ? all.filter((l) => (l.sourceRefs || []).includes(refFilter)) : all;
         const groups = STATUS_GROUPS.map((g) => {
           const items = visible.filter((l) => l.status === g.key);
@@ -282,10 +283,13 @@ export default {
         body.innerHTML = `
           <div class="bf-sub" style="margin-bottom:.6rem; display:flex; justify-content:space-between; gap:.5rem; align-items:center">
             <span>${t('retro.render.intro', 'Lecciones de proceso que la consola destila sola al cerrar chats, más el feedback de Chris que registrás. <b>Adoptá</b> las que sirvan (van a donde la IA sugiere) o <b>descartalas</b>. Nada se auto-aplica.')}</span>
-            ${isAdmin && total >= 2 ? `<button class="btn-ghost btn--sm" data-act="curate" title="${t('retro.render.curateTitle', 'De vez en cuando: revisá duplicados, contradicciones y huecos del registro. Consume tokens.')}">${t('retro.render.curate', '🧹 Ordenar el registro')}</button>` : ''}
+            <span style="display:flex; gap:.4rem; align-items:center; flex-shrink:0">
+              ${pendingAdopt.length ? `<button class="btn btn--sm" data-act="accept-all" title="${t('retro.render.acceptAllTitle', 'Adoptar todas las lecciones pendientes a su destino sugerido. Escribe en archivos reales.')}">${t('retro.render.acceptAll', '👍 Aceptar todo')} (${pendingAdopt.length})</button>` : ''}
+              ${isAdmin && total >= 2 ? `<button class="btn-ghost btn--sm" data-act="curate" title="${t('retro.render.curateTitle', 'De vez en cuando: revisá duplicados, contradicciones y huecos del registro. Consume tokens.')}">${t('retro.render.curate', '🧹 Ordenar el registro')}</button>` : ''}
+            </span>
           </div>
           ${feedbackComposer()}
-          ${feedbackHistoryHtml(all)}
+          ${feedbackHistoryHtml(all, openHist)}
           ${refFilter ? `<div class="bf-sub" style="margin:.4rem 0"><span class="bb-chip bb-chip--info">${t('retro.render.filterBy', 'Filtrando por')} ${esc(refFilter)}</span> <button class="btn-ghost btn--sm" data-act="clear-ref-filter">${t('retro.render.clearFilter', '✕ quitar filtro')}</button></div>` : ''}
           ${curationHtml()}
           ${total ? (visible.length ? groups : `<div class="bf-sub" style="padding:1rem">${t('retro.render.noRef', 'Nada con esa referencia todavía.')}</div>`) : `<div class="bf-sub" style="padding:1rem">${t('retro.render.empty', 'Todavía no hay lecciones. Se destilan solas al cerrar chats con sustancia (que tocaron código o de varios turnos), o registrá feedback de Chris arriba.')}</div>`}`;
@@ -311,17 +315,6 @@ export default {
         curating = true; curation = null; render(lastData);
         try { await postJSON('/api/retro/curate'); pollTimer = setTimeout(pollCuration, 2500); }
         catch (e) { curating = false; render(lastData); await dialog.alertDialog({ title: t('retro.dlg.failed', 'No se pudo'), message: e.message }); }
-      };
-
-      // Poll de un job de feedback manual (0 tokens por poll, mismo patrón de pollCuration).
-      const pollFeedback = (jobId, resolve) => {
-        setTimeout(async () => {
-          try {
-            const j = await getJSON(`/api/retro/feedback/${jobId}`);
-            if (j.status === 'done' || j.status === 'error') { resolve(j); return; }
-          } catch { /* reintenta */ }
-          pollFeedback(jobId, resolve);
-        }, 2500);
       };
 
       // Poll del escaneo de correo (0 tokens por poll).
@@ -359,23 +352,6 @@ export default {
         ev.preventDefault();
         try {
           if (act === 'clear-ref-filter') { refFilter = ''; render(lastData); return; }
-          if (act === 'fb-submit') {
-            const wrap = btn.closest('[data-role="fb-composer"]');
-            const text = wrap?.querySelector('.mc-fb-text')?.value.trim() || '';
-            const ticketRef = wrap?.querySelector('.mc-fb-ref')?.value.trim() || '';
-            if (!text) { await dialog.alertDialog({ title: t('retro.dlg.missingTextTitle', 'Falta el texto'), message: t('retro.dlg.missingTextMsg', 'Pegá el correo/Teams/llamada antes de interpretar.') }); return; }
-            btn.disabled = true; btn.textContent = t('retro.fb.interpreting', 'Interpretando…');
-            try {
-              const r = await postJSON('/api/retro/feedback', { text, ticketRef });
-              const done = await new Promise((resolve) => pollFeedback(r.id, resolve));
-              if (done.status === 'error') throw new Error(done.error || t('retro.dlg.cantInterpret', 'No se pudo interpretar.'));
-              await reload(); await loadSummary();
-            } catch (e) {
-              await dialog.alertDialog({ title: t('retro.dlg.cantRecord', 'No se pudo registrar'), message: e.message });
-              btn.disabled = false; btn.textContent = t('retro.fb.submit', 'Interpretar y registrar');
-            }
-            return;
-          }
           if (act === 'email-scan') {
             const ok = await dialog.confirmDialog({ title: t('retro.dlg.emailScanTitle', 'Traer feedback de correo'), message: t('retro.dlg.emailScanMsg', 'Se escanea el correo de Chris buscando feedback de desarrollo (solo lectura, nunca envía nada). Consume tokens. ¿Seguir?') });
             if (!ok) return;
@@ -392,6 +368,7 @@ export default {
                   message: t('retro.dlg.emailDoneMsg', '{n} correo(s) con feedback revisados · {created} lección(es) nueva(s) · {merged} recurrente(s).', { n: done.items?.length ?? 0, created: s.created ?? 0, merged: s.merged ?? 0 }),
                 });
               }
+              pendingOpenHistory = true;
               await reload(); await loadSummary();
             } catch (e) {
               emailScanning = false; render(lastData);
@@ -415,6 +392,7 @@ export default {
                   message: `${t('retro.dlg.teamsDoneMsg', '{n} mensaje(s) con feedback revisados · {created} lección(es) nueva(s) · {merged} recurrente(s).', { n: done.items?.length ?? 0, created: s.created ?? 0, merged: s.merged ?? 0 })}${done.note ? ` (${done.note})` : ''}`,
                 });
               }
+              pendingOpenHistory = true;
               await reload(); await loadSummary();
             } catch (e) {
               teamsScanning = false; render(lastData);
@@ -424,6 +402,25 @@ export default {
           }
           // --- acciones de curaduría (no cuelgan de una lección) ---
           if (act === 'curate') { await startCurate(); return; }
+          if (act === 'accept-all') {
+            const pend = (lastData?.lessons || []).filter((l) => (l.status === 'propuesta' || l.status === 'aprobada') && applicableTargets(l).length);
+            if (!pend.length) return;
+            const ok = await dialog.confirmDialog({ title: t('retro.dlg.acceptAllTitle', 'Aceptar todo'), message: t('retro.dlg.acceptAllMsg', 'Se van a adoptar {n} lección(es) pendiente(s), cada una a su destino sugerido (memoria/CLAUDE.md/contexto/playbook). Esto escribe en archivos reales. ¿Seguir?', { n: pend.length }) });
+            if (!ok) return;
+            btn.disabled = true; btn.textContent = t('retro.render.acceptingAll', 'Adoptando…');
+            let okCount = 0; const failed = [];
+            for (const l of pend) {
+              const app = applicableTargets(l);
+              const target = app.includes(l.destination) ? l.destination : app[0];
+              try { await postJSON(`/api/retro/${l.id}/promote`, { target }); okCount += 1; }
+              catch (e) { failed.push(`${l.id}: ${e.message}`); }
+            }
+            await reload(); await loadSummary();
+            if (failed.length) {
+              await dialog.alertDialog({ title: t('retro.dlg.acceptAllDoneTitle', 'Adopción masiva'), message: t('retro.dlg.acceptAllPartial', '{ok} adoptada(s), {fail} con error: {list}', { ok: okCount, fail: failed.length, list: failed.join('; ') }) });
+            }
+            return;
+          }
           if (act === 'cur-close') { curation = null; render(lastData); return; }
           if (act === 'cur-merge') {
             const d = curation?.duplicados?.[+btn.dataset.i]; if (!d) return;

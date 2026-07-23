@@ -910,9 +910,11 @@ html, body {
 .ul-models { margin-top: .4rem; }
 .ul-model { display: flex; align-items: center; gap: .4rem; font-size: var(--cwc-fs-sm); padding: .12rem 0; }
 .ul-model .cwc-pacman { flex: none; }
-.ul-model-name { flex: 0 1 auto; min-width: 0; color: var(--cwc-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* El nombre es la única identificación textual de la serie (el color es secundario): 4.2em deja entrar Sonnet/Codex y comprime badge/espacio libre. */
+.ul-model-name { flex: 0 1 auto; min-width: 4.2em; color: var(--cwc-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Badge de precio $/M (identifica el más caro/barato): tenue, junto al nombre. */
 .ul-model-price { flex: none; font-size: var(--cwc-fs-xs); color: var(--cwc-text-dimmer); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ul-model-price--none { color: var(--cwc-text-dimmer); font-style: italic; }
 /* El costo se empuja a la derecha (margin-left:auto) — deja el precio junto al nombre. */
 .ul-model-cost { margin-left: auto; color: var(--cwc-ok); font-variant-numeric: tabular-nums; flex: none; }
 /* Leyenda del orden por precio bajo la lista de modelos. */
@@ -1446,14 +1448,18 @@ html, body {
   font-size: 9px; font-weight: 500; opacity: .78; letter-spacing: .01em;
 }
 /* Caudal a la izquierda del header, junto al título; margin-right:auto ancla
-   Pac-Man/modelo/modo/ayuda a la derecha. */
+   Pac-Man/modelo/modo/ayuda a la derecha. El contenedor y las dos columnas
+   de texto tienen ancho fijo para que la barra no cambie de tamaño ni los
+   números se muevan cuando el caudal varía (se refrescan cada 200 ms). ch
+   funciona porque la fuente es mono con tabular-nums. */
 .chat-flow {
   display: flex; flex-direction: column; gap: 1px; justify-content: center;
-  min-width: 90px; max-width: 160px; margin-right: auto;
+  flex: 0 0 152px; width: 152px; margin-right: auto;
 }
 .chat-flow .cwc-flow-cell { display: flex; width: 100%; gap: .25rem; align-items: center; }
 .chat-flow .cwc-flow-bar { flex: 1 1 auto; width: auto; }
-.chat-flow .cwc-flow-num, .chat-flow .cwc-flow-total { flex: 0 0 auto; }
+.chat-flow .cwc-flow-num { flex: 0 0 5ch; text-align: right; }
+.chat-flow .cwc-flow-total { flex: 0 0 6ch; text-align: right; }
 /* Banner de consentimiento del juez AutoMix (PEND-391 #1 / D1): pasivo, discreto,
    con acento fresco para distinguirlo de un mensaje normal. Reusa .btn/.btn--sm. */
 .chat-redo {
@@ -3387,6 +3393,11 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .mc-fbh-item { font-size: var(--cwc-fs-sm); padding: .3rem 0; border-bottom: 1px solid var(--cwc-border); display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
 .mc-fbh-item:last-child { border-bottom: 0; }
 .mc-fbh-title { flex: 1 1 auto; min-width: 0; }
+/* Historial de feedback — grupos por ticket compactos (menos espacio entre items) */
+.mc-group--sub { margin-bottom: .3rem; }
+.mc-group--sub > summary { padding: .3rem .5rem; }
+.mc-group--sub .mc-group-body { padding: .3rem .5rem; gap: .25rem; }
+.mc-group--sub .mc-fbh-item { padding: .2rem 0; }
 /* Mejora Continua · acción "Adoptar → destino ▾" (rediseño 2026-07-12) */
 .mc-adopt { display: inline-flex; align-items: stretch; gap: 2px; }
 .mc-adopt .mc-more { padding-left: .4rem; padding-right: .4rem; }

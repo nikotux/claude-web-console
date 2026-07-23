@@ -63,6 +63,19 @@ function labelOf(provider) {
   return PROVIDERS.find((p) => p.id === provider)?.label || provider;
 }
 
+function scopesForResponse(username, provider, requestedScopes) {
+  const conn = readConnection(username, provider);
+  const requested = Array.isArray(requestedScopes) ? requestedScopes : [];
+  const grantedScopes = Array.isArray(conn?.scopes) ? conn.scopes : [];
+  const hasStoredScopes = grantedScopes.length > 0;
+  const connected = !!conn && !conn.error;
+  const grantedSet = new Set(grantedScopes.map((s) => String(s).toLowerCase()));
+  const missingScopes = connected && hasStoredScopes
+    ? requested.filter((s) => !grantedSet.has(String(s).toLowerCase()))
+    : [];
+  return { grantedScopes, missingScopes };
+}
+
 function patchJob(username, jobId, fields) {
   try {
     const job = readJob(username, jobId);
@@ -187,14 +200,19 @@ export default {
       const username = userOf(req);
       await healZohoIdentity(username);
       res.json({
-        providers: PROVIDERS.map((p) => ({
-          id: p.id,
-          label: p.label,
-          scopes: p.scopes,
-          configured: appConfigured(p.id),
-          ...connectionStatus(username, p.id),
-          lastAttempt: lastAttempt(username, p.id),
-        })),
+        providers: PROVIDERS.map((p) => {
+          const { grantedScopes, missingScopes } = scopesForResponse(username, p.id, p.scopes);
+          return {
+            id: p.id,
+            label: p.label,
+            scopes: p.scopes,
+            grantedScopes,
+            missingScopes,
+            configured: appConfigured(p.id),
+            ...connectionStatus(username, p.id),
+            lastAttempt: lastAttempt(username, p.id),
+          };
+        }),
         isAdmin: isAdmin(req),
       });
     }));

@@ -1,12 +1,21 @@
-// Manguera de tokens: estima el caudal reciente (tokens/segundo) leyendo solo
-// bytes nuevos apendeados a los logs locales de Claude y Codex. Fuentes:
+// Manguera de tokens: estima el caudal reciente (tokens/segundo) leyendo los
+// logs locales de Claude y Codex. Fuentes:
 //   - Claude: ~/.claude/projects/<proj>/*.jsonl
 //   - Codex:  ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 //
-// BASELINE crítico: cuando un archivo aparece por primera vez, se fija el cursor
-// al tamaño actual y NO se parsea su histórico. Así el consumo viejo ya presente
-// en disco no se transforma en una ráfaga falsa; solo cuenta lo que se apende
-// después de empezar a observar.
+// TOTAL: se deriva de la suma real del archivo en disco. Al descubrir un log se
+// siembra parseándolo desde el inicio y luego se agregan solo los deltas nuevos;
+// así el acumulado se puede reconstruir tras reiniciar el server sin persistir
+// estado auxiliar.
+//
+// TPS: conserva la semántica de caudal observado. El seed histórico NO entra al
+// ledger para evitar una ráfaga falsa; solo los eventos apendeados mientras
+// observamos alimentan tokens60/tps.
+//
+// Claude repite el mismo message.id en varias líneas del transcript. El seed
+// dedupea con un Set local por archivo, descartable al terminar, porque
+// seenClaudeIds es un dedupe temporal del ledger (TTL 120 s), no una fuente
+// histórica confiable para reconstruir totales.
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,15 +24,15 @@ const LEDGER_MS = 120000;
 const RECENT_MS = 5 * 60 * 1000;
 const INSTANT_MS = 10000;
 const MAX_APPEND = 4 * 1024 * 1024;
+const SEED_CHUNK = 1024 * 1024;
+const SEED_MAX = 256 * 1024 * 1024;
 const META_CHUNK = 64 * 1024;
 const MAX_META_LINE = 1024 * 1024;
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
-const cursors = new Map();
+const files = new Map(); // file -> { side, key, total, lastTs, offset, size, mtimeMs, seeded }
 const seenClaudeIds = new Map();
 const fileCwd = new Map();
-const claudeTotals = new Map();
-const codexTotals = new Map();
 let ledger = [];
 let inFlight = false;
 let lastSummary = {
@@ -46,22 +55,15 @@ function prune(now) {
   }
 }
 
-function pruneTotals(now) {
+function pruneFiles(now) {
   const minTs = now - SESSION_TTL_MS;
-  for (const [sid, e] of claudeTotals) {
-    if (e.lastTs < minTs) claudeTotals.delete(sid);
+  // Esta purga limita el crecimiento del Map por archivo. Ya no borramos el
+  // cursor al enfriarse un log, porque hacerlo perdería deltas escritos entre
+  // polls y forzaría un nuevo baseline.
+  for (const [file, e] of files) {
+    const seenTs = e.lastTs || e.mtimeMs || 0;
+    if (seenTs < minTs) files.delete(file);
   }
-  for (const [cwd, e] of codexTotals) {
-    if (e.lastTs < minTs) codexTotals.delete(cwd);
-  }
-}
-
-function addTotal(map, key, ev) {
-  if (key == null) return;
-  const e = map.get(key) || { total: 0, lastTs: 0 };
-  e.total += ev.tokens;
-  e.lastTs = Math.max(e.lastTs, ev.ts);
-  map.set(key, e);
 }
 
 function bumpGroupedTps(grouped, side, key, tokens) {
@@ -74,10 +76,18 @@ function bumpGroupedTps(grouped, side, key, tokens) {
   byKey.set(key, (byKey.get(key) || 0) + tokens);
 }
 
-function buildBreakdown(totals, instantGrouped) {
+function buildBreakdown(side, instantGrouped) {
+  const totals = new Map();
+  for (const e of files.values()) {
+    if (e.side !== side || e.key == null || e.total <= 0) continue;
+    const cur = totals.get(e.key) || { total: 0, lastTs: 0 };
+    cur.total += e.total;
+    cur.lastTs = Math.max(cur.lastTs, e.lastTs);
+    totals.set(e.key, cur);
+  }
+
   const out = {};
   for (const [key, e] of totals) {
-    if (e.total <= 0) continue;
     out[key] = {
       tps: (instantGrouped.get(key) || 0) / (INSTANT_MS / 1000),
       total: e.total,
@@ -90,7 +100,7 @@ function buildBreakdown(totals, instantGrouped) {
 function summarize() {
   const now = Date.now();
   prune(now);
-  pruneTotals(now);
+  pruneFiles(now);
 
   const global = {
     claude: { instantTokens: 0, tokens60: 0, lastTs: 0 },
@@ -119,8 +129,8 @@ function summarize() {
       tokens60: global.codex.tokens60,
       lastTs: global.codex.lastTs,
     },
-    bySession: buildBreakdown(claudeTotals, grouped.get('claude') || new Map()),
-    byCwd: buildBreakdown(codexTotals, grouped.get('codex') || new Map()),
+    bySession: buildBreakdown('claude', grouped.get('claude') || new Map()),
+    byCwd: buildBreakdown('codex', grouped.get('codex') || new Map()),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -133,7 +143,106 @@ async function listDir(dir) {
   }
 }
 
-async function readAppendedEvents(file, extractEvent) {
+function makeFileEntry(side, key, st) {
+  return {
+    side,
+    key,
+    total: 0,
+    lastTs: 0,
+    offset: 0,
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+    seeded: false,
+  };
+}
+
+function addFileTotal(entry, ev) {
+  entry.total += ev.tokens;
+  entry.lastTs = Math.max(entry.lastTs, ev.ts);
+}
+
+function parseTokenLine(line, tokensFromLine, now) {
+  if (!line.length) return null;
+  let obj;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const ev = tokensFromLine(obj, now);
+  return ev && ev.tokens > 0 ? ev : null;
+}
+
+async function seedFile(file, entry, tokensFromLine, st, now) {
+  entry.total = 0;
+  entry.lastTs = 0;
+  entry.offset = 0;
+  entry.size = st.size;
+  entry.mtimeMs = st.mtimeMs;
+  entry.seeded = false;
+
+  const maxOffset = Math.min(st.size, SEED_MAX);
+  const seenIds = entry.side === 'claude' ? new Set() : null;
+  let rest = Buffer.alloc(0);
+  let offset = 0;
+
+  try {
+    const fh = await fs.open(file, 'r');
+    try {
+      while (offset < maxOffset) {
+        const toRead = Math.min(SEED_CHUNK, maxOffset - offset);
+        const buf = Buffer.allocUnsafe(toRead);
+        const { bytesRead } = await fh.read(buf, 0, toRead, offset);
+        if (bytesRead <= 0) break;
+        offset += bytesRead;
+
+        const chunk = buf.subarray(0, bytesRead);
+        const data = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+        let start = 0;
+        for (;;) {
+          const nl = data.indexOf(0x0A, start);
+          if (nl < 0) break;
+          const line = data.subarray(start, nl).toString('utf8');
+          const ev = parseTokenLine(line, tokensFromLine, now);
+          if (ev) {
+            if (seenIds && ev.id) {
+              if (seenIds.has(ev.id)) {
+                start = nl + 1;
+                continue;
+              }
+              seenIds.add(ev.id);
+            }
+            addFileTotal(entry, ev);
+          }
+          start = nl + 1;
+        }
+        rest = data.subarray(start);
+      }
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    return false;
+  }
+
+  if (offset >= st.size && rest.length) {
+    const ev = parseTokenLine(rest.toString('utf8'), tokensFromLine, now);
+    if (ev) {
+      if (!seenIds || !ev.id || !seenIds.has(ev.id)) {
+        if (seenIds && ev.id) seenIds.add(ev.id);
+        addFileTotal(entry, ev);
+      }
+    }
+  }
+
+  entry.offset = offset;
+  entry.size = st.size;
+  entry.mtimeMs = st.mtimeMs;
+  entry.seeded = true;
+  return true;
+}
+
+async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine) {
   const now = Date.now();
   let st;
   try {
@@ -141,34 +250,54 @@ async function readAppendedEvents(file, extractEvent) {
   } catch {
     return [];
   }
+
+  let entry = files.get(file);
   if (st.mtimeMs < now - RECENT_MS) {
-    // Archivo frío: no se va a re-visitar mientras siga así (Claude acumula
-    // un .jsonl por sesión histórica, para siempre) — soltar el cursor evita
-    // que el Map crezca sin límite con cada sesión que alguna vez existió.
-    // Si vuelve a tocarse más tarde, se re-baselinea como si fuera nuevo
-    // (mismo criterio de arranque, sin regresión funcional).
-    cursors.delete(file);
+    // El chequeo de archivo frio va primero porque sembrar implica parsear el
+    // archivo completo y solo se justifica para sesiones vivas. Con miles de
+    // transcripts historicos en disco, sembrarlos todos congelaria el endpoint.
+    // Una sesion ociosa por mas de RECENT_MS no tiene total hasta que vuelva a
+    // escribir; en ese momento se siembra completa y el total queda exacto, que
+    // es el comportamiento deseado y barato.
+    if (entry) {
+      entry.side = side;
+      entry.key = key;
+      entry.size = st.size;
+      entry.mtimeMs = st.mtimeMs;
+    }
     return [];
   }
 
-  let cur = cursors.get(file);
-  if (!cur) {
-    cursors.set(file, { offset: st.size, size: st.size });
-    return [];
-  }
-  if (st.size < cur.offset) cur.offset = 0;
-  if (st.size <= cur.offset) {
-    cur.size = st.size;
+  if (!entry) {
+    entry = makeFileEntry(side, key, st);
+    files.set(file, entry);
+    const seeded = await seedFile(file, entry, tokensFromLine, st, now);
+    if (!seeded) files.delete(file);
     return [];
   }
 
-  const toRead = Math.min(st.size - cur.offset, MAX_APPEND);
+  entry.side = side;
+  entry.key = key;
+  entry.size = st.size;
+  entry.mtimeMs = st.mtimeMs;
+
+  if (st.size < entry.offset) {
+    const seeded = await seedFile(file, entry, tokensFromLine, st, now);
+    if (!seeded) files.delete(file);
+    return [];
+  }
+  if (st.size <= entry.offset) {
+    entry.size = st.size;
+    return [];
+  }
+
+  const toRead = Math.min(st.size - entry.offset, MAX_APPEND);
   const buf = Buffer.allocUnsafe(toRead);
   let bytesRead = 0;
   try {
     const fh = await fs.open(file, 'r');
     try {
-      ({ bytesRead } = await fh.read(buf, 0, toRead, cur.offset));
+      ({ bytesRead } = await fh.read(buf, 0, toRead, entry.offset));
     } finally {
       await fh.close().catch(() => {});
     }
@@ -177,7 +306,7 @@ async function readAppendedEvents(file, extractEvent) {
   }
 
   if (bytesRead <= 0) {
-    cur.size = st.size;
+    entry.size = st.size;
     return [];
   }
 
@@ -187,28 +316,23 @@ async function readAppendedEvents(file, extractEvent) {
   if (lastNL >= 0) {
     consumed = chunk.subarray(0, lastNL + 1);
   } else if (bytesRead >= MAX_APPEND) {
-    cur.offset += bytesRead;
-    cur.size = st.size;
+    entry.offset += bytesRead;
+    entry.size = st.size;
     return [];
   } else {
-    cur.size = st.size;
+    entry.size = st.size;
     return [];
   }
 
-  cur.offset += consumed.length;
-  cur.size = st.size;
+  entry.offset += consumed.length;
+  entry.size = st.size;
 
   const out = [];
   for (const line of consumed.toString('utf8').split('\n')) {
-    if (!line) continue;
-    let obj;
-    try {
-      obj = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const ev = extractEvent(obj, now);
-    if (ev && ev.tokens > 0) out.push(ev);
+    const ev = parseTokenLine(line, extractEvent, now);
+    if (!ev) continue;
+    addFileTotal(entry, ev);
+    out.push(ev);
   }
   return out;
 }
@@ -277,24 +401,34 @@ async function readCodexCwd(file) {
 // procesado por primera vez, peso 1). Mismo villano que la barra de Sesión.
 const CACHE_READ_WEIGHT = 0.1;
 
-function extractClaudeEvent(obj, now) {
+function claudeTokensFromLine(obj, now) {
   if (obj?.type !== 'assistant') return null;
   const msg = obj.message;
   const id = msg?.id;
   const u = msg?.usage;
-  if (!id || !u || seenClaudeIds.has(id)) return null;
+  if (!id || !u) return null;
   const tokens = numeric(u.input_tokens)
     + numeric(u.output_tokens)
     + numeric(u.cache_creation_input_tokens)
     + numeric(u.cache_read_input_tokens) * CACHE_READ_WEIGHT;
-  seenClaudeIds.set(id, Date.parse(obj.timestamp || '') || now);
   return {
+    id,
     ts: Date.parse(obj.timestamp || '') || now,
     tokens,
   };
 }
 
-function extractCodexEvent(obj, now) {
+function extractClaudeEvent(obj, now) {
+  const ev = claudeTokensFromLine(obj, now);
+  if (!ev || seenClaudeIds.has(ev.id)) return null;
+  seenClaudeIds.set(ev.id, ev.ts);
+  return {
+    ts: ev.ts,
+    tokens: ev.tokens,
+  };
+}
+
+function codexTokensFromLine(obj, now) {
   if (obj?.type !== 'event_msg' || obj.payload?.type !== 'token_count') return null;
   const usage = obj.payload?.info?.last_token_usage;
   if (!usage) return null;
@@ -309,8 +443,18 @@ function extractCodexEvent(obj, now) {
     + numeric(usage.output_tokens)
     + cached * CACHE_READ_WEIGHT;
   return {
+    id: null,
     ts: Date.parse(obj.timestamp || '') || now,
     tokens,
+  };
+}
+
+function extractCodexEvent(obj, now) {
+  const ev = codexTokensFromLine(obj, now);
+  if (!ev) return null;
+  return {
+    ts: ev.ts,
+    tokens: ev.tokens,
   };
 }
 
@@ -320,14 +464,19 @@ async function scanClaude() {
   for (const dirent of projects) {
     if (!dirent.isDirectory()) continue;
     const dir = path.join(base, dirent.name);
-    const files = await listDir(dir);
-    for (const f of files) {
+    const entries = await listDir(dir);
+    for (const f of entries) {
       if (!f.isFile() || !f.name.endsWith('.jsonl')) continue;
       const sid = path.basename(f.name, '.jsonl');
-      const events = await readAppendedEvents(path.join(dir, f.name), extractClaudeEvent);
+      const events = await readAppendedEvents(
+        path.join(dir, f.name),
+        'claude',
+        sid,
+        extractClaudeEvent,
+        claudeTokensFromLine,
+      );
       for (const ev of events) {
         ledger.push({ ...ev, side: 'claude', key: sid });
-        addTotal(claudeTotals, sid, ev);
       }
     }
   }
@@ -349,16 +498,21 @@ function localDayDirs() {
 async function scanCodex() {
   const seen = new Set();
   for (const dir of localDayDirs()) {
-    const files = await listDir(dir);
-    for (const f of files) {
+    const entries = await listDir(dir);
+    for (const f of entries) {
       if (!f.isFile() || !/^rollout-.*\.jsonl$/.test(f.name)) continue;
       const file = path.join(dir, f.name);
       seen.add(file);
       const cwd = await readCodexCwd(file);
-      const events = await readAppendedEvents(file, extractCodexEvent);
+      const events = await readAppendedEvents(
+        file,
+        'codex',
+        cwd,
+        extractCodexEvent,
+        codexTokensFromLine,
+      );
       for (const ev of events) {
         ledger.push({ ...ev, side: 'codex', key: cwd });
-        addTotal(codexTotals, cwd, ev);
       }
     }
   }

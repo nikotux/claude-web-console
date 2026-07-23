@@ -15,7 +15,7 @@ import * as ms from './connections-microsoft.js';
 import * as zoho from './connections-zoho.js';
 
 export const PROVIDERS = [
-  { id: 'microsoft', label: 'Microsoft (Calendario)', scopes: ms.MS_SCOPES },
+  { id: 'microsoft', label: 'Microsoft (Calendario y SharePoint)', scopes: ms.MS_SCOPES },
   { id: 'zoho', label: 'Zoho (Desk)', scopes: zoho.ZOHO_SCOPES },
 ];
 

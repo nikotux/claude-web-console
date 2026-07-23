@@ -28,11 +28,14 @@ import {
   PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, BG_MAX_HOLD_MS, HISTORY_MAX,
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
-import { chatQueryOptions, autoApprovesAll, tandemPreToolUseHook } from '../src/core/tool-policy.js';
+import {
+  chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, isConsoleCwd,
+} from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
+import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd } from '../src/core/claude-model.js';
 
 // ---- argv ----
@@ -304,6 +307,13 @@ function startEngine() {
   // Opciones armadas por el NÚCLEO de gobernanza (core/tool-policy.js): fuente
   // única que garantiza `allowDangerouslySkipPermissions` para que el modo
   // "Todo" (bypassPermissions) realmente saltee permisos. Ver ese archivo.
+  const mcpServers = {};
+  if (TANDEM) mcpServers.codex = createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT });
+  try {
+    if (isConsoleCwd(CWD)) mcpServers.unifi = createUnifiToolServer();
+  } catch (e) {
+    console.error('[runner] no se pudo cargar la tool unifi:', e?.message);
+  }
   q = query({
     prompt: input.gen(),
     options: chatQueryOptions({
@@ -316,7 +326,7 @@ function startEngine() {
       chatId: ID, // regla de carpeta de trabajo del paquete-sesión (PLAN-447)
       // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
       tandem: TANDEM,
-      ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT }) } } : {}),
+      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
       ...(TANDEM ? { hooks: tandemPreToolUseHook() } : {}),
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),

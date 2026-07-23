@@ -220,6 +220,7 @@ código.
       funcionan) — documentado como pendiente futuro en
       `docs/evaluacion-rol-pad.md`, NO iniciado, requiere su propio OK
       explícito cuando se decida abordarlo.
+    - **Todo ítem de Pad nace ENLAZADO, nunca flotando:** al crear un ítem, colgalo de su "sol" (root real — un PLAN es sol de sus tareas, una RUTA de sus temas, una RED/el UDM Pro de la infra) con parent/link (`addLink`, típicamente `implements`, idempotente vía `listLinks`) y cross-linkeá entre sistemas. PROHIBIDO crear ítems-hub SINTÉTICOS en colecciones que son data viva de módulos (`pendientes`/`planes`, `temas-de-aprendizaje`/`rutas-de-aprendizaje`, `mejora-continua`, `contexto-de-tickets`): aparecerían como tarjetas fantasma. El grafo de Pad es item-only; el "sol de una colección" es un root real, no un hub inventado. Ver CONVE de linkeo y PLAN-1255.
 12. **Anti-colisión entre mundos — resolución interna PRIMERO, puente por
     plan** (pedido explícito de Niko 2026-07-12). Los dos mundos NUNCA
     colisionan ni se enlazan EN VIVO: 🏠 **INTERNO** = Mi Consola + Pad
@@ -655,6 +656,22 @@ src/core/                   config(.env + config.instance) · instance-config(ca
                             Desk con la identidad del USUARIO: getTicket/assignTicket/
                             updateTicket/addComment/uploadAttachment/createTicket; resuelve el
                             token por username y manda orgId siempre) ·
+                            connections-store GOTCHA: MS_SCOPES incluye Sites.ReadWrite.All; un
+                            cambio de scopes obliga a reconectar porque el refresh token viejo no
+                            cubre el consentimiento nuevo → AADSTS65001 ·
+                            microsoft-sharepoint-client(cliente Graph de SharePoint con identidad
+                            del USUARIO, hermano de microsoft-calendar-client: resuelve el token por
+                            username con getAccessToken. parseSharePointUrl acepta la URL LARGA
+                            pegada del navegador y saca sitio + carpeta del query param `id`;
+                            resolveSite (caché 5 min) · listFolder (pagina @odata.nextLink) ·
+                            downloadFile · uploadFile (simple ≤4 MB, upload session en chunks de
+                            5 MB arriba de eso) · createFolder. GOTCHAS: en Graph la raíz del drive
+                            del sitio YA ES la biblioteca "Shared Documents" ⇒ el path del item es
+                            `/General/NUEVA OFICINA` SIN la biblioteca; carpeta raíz =
+                            `/drive/root/children` pero con path = `/drive/root:{path}:/children`
+                            — nunca `root::/children`; el path se codifica POR SEGMENTO (espacios
+                            → %20, barras intactas). Un 401/403 se traduce a un mensaje accionable
+                            que pide reconectar Microsoft porque el token viejo no tiene el scope) ·
                             tool-policy(NÚCLEO de gobernanza de permisos del chat interactivo —
                             NO es motor, es plomería in-process como sdk-settings/paths: el
                             estado del modo lo persiste el server (Chat.permissionMode→chats.json)
@@ -2757,6 +2774,55 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             cuenta entera). MODEL_ORDER pasó
                             a orden por PRECIO (haiku,sonnet,opus,fable) → fija el apilado de la
                             gráfica (base=más económico).
+                            CONSUMO DE CODEX EN LAS ESTADÍSTICAS (2026-07-22, PLAN-927, hallazgo de
+                            Niko): hasta acá el modal Uso tenía tres mitades con fuentes distintas y
+                            Codex solo aparecía en dos — barras de LÍMITE (/limits, endpoint
+                            wham/usage) y MANGUERA en vivo (flow.js) — pero NO en General+Tendencia:
+                            buildSummary() solo parseaba ~/.claude/projects, así que se veía el cupo y
+                            el caudal de Codex pero no su consumo histórico; agravante: Tándem es el
+                            default de todo chat nuevo desde 2026-07-21, justo el motor que más
+                            ejecuta. Solución: src/modules/tokens/codex-usage.js escanea
+                            ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl con caché por archivo
+                            (mtime+size) y LRU 1000 igual que parseCached, más filtro barato por
+                            substring antes de JSON.parse porque los rollouts traen mucho ruido
+                            (reasoning, function_call_output). De cada rollout saca
+                            session_meta.payload.cwd → proyecto (espejo deliberado de projectOf, pero
+                            sobre la ruta ABSOLUTA real y no el dir codificado de Claude),
+                            turn_context.payload.model → modelo vigente, y event_msg token_count →
+                            info.last_token_usage (delta por turno). GOTCHA heredado de flow.js:
+                            input_tokens YA INCLUYE cached_input_tokens y total_tokens = input+output,
+                            entonces el cache se descuenta del input y viaja aparte como cache read
+                            (`cr`); si no, se cuenta dos veces. DECISIONES DE NIKO: Codex se cuenta
+                            SOLO EN TOKENS, cost: 0 — no se inventa tarifa de la API de gpt-5.x, y la
+                            fila muestra badge "sin tarifa" y `—` en modo $ (nunca $0.00, que se
+                            leería como gratis); entra como UN MODELO MÁS en la misma barra apilada,
+                            key `codex`. En index.js, mkeyOf(model) colapsa cualquier `gpt-*`/`codex`
+                            en la ÚNICA serie `codex` sin pasar por keyOf (solo conoce modelos de
+                            Claude y devolvería `unknown`), para que un cambio de versión gpt-5.5 →
+                            5.6 no parta la barra; reemplaza a keyOf en los 3 puntos de buildSummary
+                            que calculan clave de serie, NUNCA en el keyOf de límites del plan (ese es
+                            de Anthropic). ENGINE_LABELS gana motor propio `codex: 'Codex · ejecución'`
+                            y NO se agrega a projects[] (esos son dirs de Claude). Queda
+                            DELIBERADAMENTE AFUERA de h5tok/h5cost porque son token-count y ritmo de la
+                            ventana de límite de ANTHROPIC: contaminarlos corrompería la barra
+                            "Sesión (5h)" y el ratio "N× tu ritmo habitual"; también se EXCLUYE de
+                            d7ByKey/d7tok con `if (k === 'codex') continue;`, aunque `daily` sí lo
+                            tenga para histórico y gráficas. Codex tiene ventanas propias en
+                            getCodexBlock; la cifra en dólares del dashboard sigue siendo SOLO Claude
+                            y es correcta. Todo el bloque Codex de buildSummary va en try/catch: fuente
+                            auxiliar, un rollout corrupto o en escritura nunca puede romper el resumen
+                            de Claude. history-store.js suma `codex` a MODEL_ORDER justo antes de
+                            `unknown` (fuera del orden por precio, porque no tiene tarifa), así
+                            Semana/Mes lo persisten solas. Color: --cwc-model-codex: #3ec9c0 (teal),
+                            deliberadamente LEJOS de --cwc-accent-cool (#5b8fc7) — usado por Codex en
+                            manguera y límites — porque es casi idéntico a --cwc-model-sonnet
+                            (#4e8fd1) y en la barra apilada serían indistinguibles; prima la
+                            legibilidad de la serie. VERIFICADO E2E (2026-07-22): 344 rollouts / 356
+                            entries en 367 ms; self-check del formato (suma de last_token_usage ==
+                            total_token_usage final) con delta 0 en 3 sesiones; engine `codex` con
+                            157.6M tokens y cost 0; d7ByKey sin key `codex`; Playwright confirma fila
+                            "Codex" con badge "sin tarifa", `—` en modo $ y su volumen en modo tok, 0
+                            errores JS.
                             buildSeries (history-store, compartido) arma esa forma para las 3
                             vistas. TODO en hora local, date-math sin DST (86400000 ms/día). Los
                             límites (fetchPlanLimits) suman `modelKey` (keyOf del display_name de la
@@ -2817,17 +2883,43 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             Niko): GET /api/tokens/flow (autenticado, 0 tokens) devuelve el CAUDAL
                             reciente {claude:{tps,tokens60,lastTs}, codex:{tps,tokens60,lastTs},
                             updatedAt} para alimentar una visualización animada de agua (ver
-                            ui/token-flow.js). Lógica en src/modules/tokens/flow.js: lee SOLO los
-                            bytes recién APENDEADOS a los logs locales (cursor por byte-offset,
-                            in-memory, sin costo de tokens ni escritura a disco) — Claude de
-                            ~/.claude/projects/**/*.jsonl (message.usage input+output+cache, dedup
-                            por message.id) y Codex de ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
-                            (event_msg type=token_count → last_token_usage.total_tokens, ya es delta
-                            por turno). BASELINE crítico: al ver un archivo por primera vez fija el
-                            cursor al tamaño actual SIN parsear el histórico (solo cuenta lo que se
-                            apende después de arrancar; el primer poll da ceros). Ledger rodante de
-                            120 s; tps = tokens de los últimos 10 s / 10; solo escanea archivos con
-                            mtime < 5 min. Es efímero (nada persiste; un reinicio arranca de baseline).
+                            ui/token-flow.js). Lógica en src/modules/tokens/flow.js: DOS métricas con
+                            contabilidad DISTINTA. tps/tokens60 siguen siendo CAUDAL OBSERVADO: lee
+                            SOLO los bytes recién APENDEADOS a los logs locales (cursor por byte-
+                            offset, in-memory, sin costo de tokens ni escritura a disco) y no mete
+                            histórico en el ledger, que es rodante de 120 s (LEDGER_MS); tps son los
+                            tokens de los últimos 10 s dividido 10 (INSTANT_MS) y solo escanea
+                            archivos con mtime < 5 min (RECENT_MS), así el primer poll da ceros y no
+                            hay ráfaga falsa al arrancar; `total`, en cambio, se deriva de la suma
+                            REAL del archivo en
+                            disco. Claude viene de ~/.claude/projects/**/*.jsonl (message.usage
+                            input+output+cache) y Codex de
+                            ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (event_msg type=token_count
+                            → last_token_usage.total_tokens, ya es delta por turno). Refactor BUG-928:
+                            un solo Map por ARCHIVO (`files`: side/key/total/lastTs/offset/size/
+                            seeded) reemplazó a los tres Maps viejos (`cursors`, `claudeTotals`,
+                            `codexTotals`); `bySession`/`byCwd` se derivan sumando las entradas por
+                            key. SEED: al descubrir un archivo CALIENTE se parsea completo (chunks de
+                            1 MB, tope 256 MB) y el total nace con el consumo REAL de la sesión; el
+                            seed NO entra al ledger. Como el total se reconstruye desde disco,
+                            sobrevive a un reinicio del server SIN persistir nada (medido: siembra en
+                            177 ms, endpoint responde en 224 ms tras reiniciar). GOTCHA DE ORDEN: el
+                            chequeo de archivo FRÍO (mtime > RECENT_MS) va PRIMERO, antes de crear la
+                            entrada y de sembrar. Sembrar es caro y solo se justifica para sesiones
+                            VIVAS: en esta máquina hay ~4.000 transcripts / 811 MB en
+                            ~/.claude/projects contra apenas 4 calientes; sembrarlos todos congelaría
+                            el endpoint. Una sesión ociosa por más de RECENT_MS no tiene total hasta
+                            que vuelva a escribir; ahí se siembra completa y queda exacta. El dedup
+                            del seed usa un Set LOCAL por archivo (el `message.id` de Claude se
+                            repite en varias líneas del transcript), NO el `seenClaudeIds` global, que
+                            tiene TTL de 120 s y sirve solo al ledger. El enfriamiento ya NO borra la
+                            entrada (antes borraba el cursor y se perdía todo lo escrito entre polls);
+                            la purga pasó a ser por TTL de 6 h. Un archivo truncado/rotado
+                            (`size < offset`) dispara re-seed completo; antes reseteaba el offset a 0
+                            y volvía a sumar todo sobre el total, contando doble. Lección BUG-928 (Pad
+                            `console`): un acumulado derivado de "lo que vi pasar" es frágil ante
+                            reinicios y gaps de observación; si el dato ya está en disco, derivarlo de
+                            ahí lo hace reconstruible y exacto.
                             TEXTO EN VIVO — GET /api/tokens/stream (2026-07-15, PLAN-544, para la
                             Vista Raw): HERMANO de flow.js (src/modules/tokens/stream.js) — MISMO
                             mecanismo cursor+baseline por bytes apendeados, pero en vez de CONTAR
@@ -3447,6 +3539,9 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             offline_access User.Read Calendars.ReadWrite) y zoho (grant code de
                             Self Client). core/connections-store.js expone getAccessToken(username,
                             provider) que refresca y re-persiste solo — es la puerta ÚNICA al token.
+                            El scope Microsoft ahora cubre también SharePoint (Sites.ReadWrite.All,
+                            delegado ⇒ la consola solo ve lo que el usuario ve); agregar un scope
+                            nuevo SIEMPRE obliga a reconectar la cuenta.
                             Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
                             GET|POST /app (admin) · POST /:p/connect · /:p/code · /:p/cancel ·
                             /:p/disconnect · GET /:p/status.
@@ -4503,6 +4598,17 @@ bin/cwc-desk.js             CLI de Zoho Desk con la identidad OAuth del USUARIO 
                             attach · update · create. Carga el .env de la consola por ruta explícita
                             ANTES de importar core/config.js, así funciona invocado por ruta ABSOLUTA
                             desde otro cwd (las sesiones-Limbo corren con cwd de Tolkien).
+bin/cwc-sharepoint.js       CLI de SharePoint con la identidad OAuth del USUARIO (PLAN-923). Es el
+                            PUENTE para las SESIONES, igual que cwc-desk.js: un chat no puede
+                            pegarle al HTTP interno del server pero sí correr un comando, y carga
+                            el .env por ruta explícita ANTES de importar core/config.js para
+                            funcionar con cwd de cualquier mundo. Subcomandos: ls · get (con
+                            --chat=<id> materializa el archivo en la carpeta del chat vía
+                            materializeIntoChat) · put · mkdir. La ESCRITURA (put/mkdir) EXIGE
+                            --yes: sin el flag imprime qué iba a hacer y sale con exit 2 sin tocar
+                            nada — deliberado, porque el scope Sites.ReadWrite.All es TENANT-WIDE
+                            (no existe un scope "solo esta carpeta" para flujos delegados;
+                            Sites.Selected es app-only) y el gate del CLI es el único acotamiento real.
 bin/cwc-projects-analyze-runner.js análisis IA (guardián) de UN cambio de sección de contexto
                             (CLAUDE.md) del módulo projects, DESACOPLADO del server (haiku, 1
                             turno, CERO herramientas — doble capa regla 6 deniega TODO).
@@ -5893,6 +5999,34 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
 
 **Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+
+### Al tocar un módulo, verificar que tenga entrada en el mapa de CLAUDE.md y agregarla si falta
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** El módulo seguimientos no figuraba en el mapa de módulos de CLAUDE.md; la sesión lo detectó como hueco previo y lo agregó junto con el cambio del calendario.
+
+**Lección:** Antes de cerrar trabajo sobre un módulo, chequear que tenga entrada en el mapa de módulos de CLAUDE.md; si no existe, agregarla como parte del mismo cambio en vez de dejarla pendiente.
+
+### Tras delegar un cambio de código a Codex, verificar sintaxis y alcance del diff por cuenta propia
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** Después de delegar los 4 cambios de CSS/JS a Codex, el agente corrió `node --check` sobre el JS, contó el balance de llaves del CSS y confirmó que el diff tocara solo los 2 archivos planeados, ignorando 20 archivos ajenos que Codex reportó en el árbol.
+
+**Lección:** Cuando se delega implementación de código a una herramienta externa (Codex u otro agente), no cerrar la tarea solo con el reporte de éxito de esa herramienta: correr una verificación propia mínima (chequeo de sintaxis, balance de estructuras, diff acotado a los archivos del plan) antes de reportarle al usuario que quedó listo.
+
+### Antes de reiniciar el server, verificar flujos de autenticación en curso en memoria
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** Una sesión paralela reinició el servicio justo mientras el usuario completaba el device code de Microsoft; el estado del intento vive solo en memoria, así que la aprobación del usuario se perdió sin ningún aviso y quedó registrado como BUG-929.
+
+**Lección:** Antes de reiniciar el servicio (propio o coordinado con sesiones paralelas), chequear si hay flujos OAuth/device-code u otro estado efímero en memoria pendiente de cualquier sesión; si el usuario está a mitad de un flujo así, avisarle o esperar en vez de reiniciar a ciegas.
+
+### Leer metadata de un formato de terceros hasta el delimitador, no con buffer de tamaño fijo
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** readCodexCwd() leía solo los primeros 4096 bytes de la primera línea del rollout de Codex para sacar el cwd; una versión nueva de Codex (0.142.4) alargó esa línea a 22KB con base_instructions completo, el JSON truncado falló al parsear, y todo el caudal por sesión de Codex quedó vacío (con el null cacheado para siempre).
+
+**Lección:** Al parsear metadata de un formato externo o de terceros que puede cambiar de tamaño sin aviso, leer en chunks hasta el delimitador real (con un tope de seguridad) en vez de asumir que cabe en un buffer fijo; y no cachear un resultado null cuando la causa fue una falla transitoria de lectura/parseo.
 
 ### Verificar si una notificación de fin de tarea de fondo llega al proceso en vivo o solo queda en el transcript
 _procedimiento · confianza alta · recurrencia x1_

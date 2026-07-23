@@ -32,7 +32,7 @@ const LOG_TICK_MS = 90;         // cadencia de la máquina de escribir
 const IDLE_VEL = 1.2;           // filas/s de una banda en reposo
 const FAST_VEL = 30;            // filas/s a energía plena
 const AMBIENT_VEL = 1.0;        // columnas sin dueño
-const FADE_ALPHA = 0.085;
+const FADE_ALPHA = 0.12;
 const FONT_SIZE = 16;
 const TERM_POLL_MS = 3000;
 const PROC_POLL_MS = 1500;
@@ -183,13 +183,19 @@ function syncLogPanels() {
   const slotPx = bands.length ? canvas.width / bands.length : canvas.width;
   const panelW = Math.max(60, slotPx - 16);
   const top = 22; // pegado bajo el rótulo (márgenes 0)
-  const height = Math.max(80, window.innerHeight - top - 118); // deja aire para feed/contador
+  const height = Math.max(120, window.innerHeight - top - 30); // llena casi todo el alto
   const present = new Set();
   for (const b of bands) {
     present.add(b.sid);
     let el = logPanels.get(b.sid);
     let born = false;
-    if (!el) { el = document.createElement('div'); el.className = 'raw-log'; logsEl.appendChild(el); logPanels.set(b.sid, el); born = true; }
+    if (!el) {
+      el = document.createElement('div'); el.className = 'raw-log';
+      const gut = document.createElement('div'); gut.className = 'raw-log-gut';
+      const code = document.createElement('div'); code.className = 'raw-log-code';
+      el.append(gut, code); el._gut = gut; el._code = code;
+      logsEl.appendChild(el); logPanels.set(b.sid, el); born = true;
+    }
     const s = state.sessions.get(b.sid);
     const left = Math.min(b.start * FONT_SIZE, Math.max(0, canvas.width - panelW)); // clamp al borde
     el.style.left = `${left}px`;
@@ -235,7 +241,20 @@ function typewriterTick() {
     for (let k = 0; k < rate; k++) { add += s.log[s.cursor % s.log.length]; s.cursor++; }
     s.cursor %= s.log.length;
     s.display = (s.display + add).slice(-1600);
-    if (el._txt !== s.display) { el.textContent = s.display; el._txt = s.display; el.scrollTop = el.scrollHeight; }
+    if (el._txt === s.display) continue;
+    el._txt = s.display;
+    const code = el._code, gut = el._gut;
+    if (!code || !gut) continue;
+    code.textContent = s.display;
+    const nLines = s.display.split('\n').length;
+    if (el._nLines !== nLines) {
+      el._nLines = nLines;
+      let g = '';
+      for (let ln = 1; ln <= nLines; ln++) g += ln + '\n';
+      gut.textContent = g;
+    }
+    code.scrollTop = code.scrollHeight;
+    gut.scrollTop = code.scrollTop; // el gutter sigue al código (misma altura de línea)
   }
 }
 

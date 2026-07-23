@@ -5,7 +5,7 @@
 // ZeroTier o redes privadas. Los tokens son secretos del caller; este módulo no
 // los persiste ni los loguea.
 
-export const MS_SCOPES = ['offline_access', 'User.Read', 'Calendars.ReadWrite'];
+export const MS_SCOPES = ['offline_access', 'User.Read', 'Calendars.ReadWrite', 'Sites.ReadWrite.All'];
 
 function authority(tenantId) {
   return `https://login.microsoftonline.com/${encodeURIComponent(tenantId || 'common')}/oauth2/v2.0`;

@@ -43,6 +43,7 @@ import {
   spawnScanRunner, createBugFromFinding,
 } from './scan-shared.js';
 import { createTaskFromProposal } from './pad-writeback-shared.js';
+import { getSites } from '../unifi/client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -176,6 +177,20 @@ function checkServer() {
   const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
   const h = Math.floor(up / 3600); const m = Math.floor((up % 3600) / 60);
   return { id: 'server', label: 'Proceso del server', status: 'ok', detail: `node ${process.version} · pid ${process.pid} · up ${h}h ${m}m · ${mem} MB RSS` };
+}
+
+async function checkUnifiBridge() {
+  const id = 'unifi-bridge';
+  const label = 'Puente UniFi';
+  try {
+    if (!config.unifi?.host || !config.unifi?.apiKey) {
+      return { id, label, status: 'skip', detail: 'puente UniFi no configurado' };
+    }
+    const sites = await getSites();
+    return { id, label, status: 'ok', detail: `API responde · ${Array.isArray(sites) ? sites.length : 0} site(s)` };
+  } catch (err) {
+    return { id, label, status: 'warn', detail: `UniFi no responde (${String(err?.message || err).slice(0, 200)})` };
+  }
 }
 
 // El subset work+pr de "Tickets & Features" se espeja a ~/tolkien/
@@ -318,6 +333,7 @@ async function runChecks() {
     checkDisk(),
     Promise.resolve(checkData()),
     Promise.resolve(checkDeps()),
+    checkUnifiBridge(),
     Promise.resolve(checkTolkienContextSync()),
     Promise.resolve(checkCrossWorld()),
     checkPadBackbone(),

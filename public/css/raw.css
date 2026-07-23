@@ -25,6 +25,7 @@ html, body {
   inset: 0;
   display: block;
   background: var(--raw-bg);
+  opacity: 0.4;
 }
 
 /* Logs de terminal por sesión: texto real escribiéndose de corrido,
@@ -38,18 +39,40 @@ html, body {
 
 .raw-log {
   position: absolute;
+  display: flex;
   overflow: hidden;
   font-family: inherit;
   font-size: 11px;
   line-height: 1.35;
-  white-space: pre-wrap;
-  word-break: break-word;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 0 4px 4px 4px;
+  background: rgba(1, 6, 3, 0.62);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.45);
   opacity: 0;                 /* aparece con .raw-log--in */
-  text-shadow: 0 0 3px currentColor;
   transition: left 0.5s ease, top 0.5s ease, width 0.5s ease, height 0.5s ease, opacity 0.5s ease;
 }
-.raw-log--in { opacity: 0.4; }   /* transparente: la lluvia de fondo se sigue viendo */
+.raw-log--in { opacity: 0.72; }   /* protagonista ahora: texto legible sobre la lluvia tenue */
 .raw-log--out { opacity: 0; }
+
+.raw-log-gut {
+  flex: 0 0 auto;
+  padding: 4px 6px 4px 4px;
+  text-align: right;
+  white-space: pre;
+  overflow: hidden;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  border-right: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+.raw-log-code {
+  flex: 1 1 auto;
+  padding: 4px 8px;
+  white-space: pre;
+  overflow: hidden;
+  color: currentColor;
+  text-shadow: 0 0 3px currentColor;
+}
 
 /* Rótulos de banda de sesión: fila superior tenue, pegada al borde. */
 .raw-labels {

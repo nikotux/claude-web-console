@@ -28,6 +28,11 @@ export const config = {
   // Proyecto principal con panel/actualización propia (git). Default: ~/tolkien.
   projectDir: path.resolve(process.env.CWC_PROJECT_DIR?.trim() || path.join(home, 'tolkien')),
   projectName: process.env.CWC_PROJECT_NAME?.trim() || 'tolkien',
+  unifi: {
+    host: process.env.UNIFI_HOST?.trim() || null,
+    apiKey: process.env.UNIFI_API_KEY?.trim() || null,
+    site: process.env.UNIFI_SITE?.trim() || 'default',
+  },
   // Capa de config de instancia (identidad + cliente) — ver core/instance-config.js.
   // Separa del código la identidad de quien corre esta consola (email, GitHub,
   // departamento Zoho, nombre del MCP) para que otra persona pueda instalar su

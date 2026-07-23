@@ -48,6 +48,7 @@ import {
 import { computeFlow } from './flow.js';
 import { getStream, getSeed } from './stream.js';
 import { localHourKey, localHourStartMs, localTodayStr, localDateStartMs, localDayStr, localHourNow } from './time.js';
+import { scanCodexUsage } from './codex-usage.js';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
@@ -98,6 +99,14 @@ function costOf(m, { input, output, cw1h, cw5m, cr }) {
     (cw5m / 1e6) * (i * 1.25) +
     (cr / 1e6) * (i * 0.1)
   );
+}
+
+// Clave semántica de modelo para las series. Codex NO pasa por keyOf (que solo
+// conoce los modelos de Claude y devolvería 'unknown'): cualquier gpt-*/codex
+// colapsa en la ÚNICA serie 'codex' — así un cambio de versión (gpt-5.5 → 5.6)
+// no parte la barra en dos.
+function mkeyOf(model) {
+  return /^gpt-|codex/i.test(model || '') ? 'codex' : keyOf(model);
 }
 
 // Caché por archivo: path -> { mtimeMs, size, rows: {`day\tmodel`: {tok...}} }
@@ -203,6 +212,7 @@ const ENGINE_LABELS = {
   tolkien: 'Tolkien · bugfix',
   cli: 'CLI interactivo',
   headless: 'Motores headless',
+  codex: 'Codex · ejecución',
 };
 function classifyEngine(dir, sessionId, entrypoint, chatIds, learningIds) {
   let key;
@@ -344,7 +354,7 @@ export async function buildSummary() {
         const day = hourKey === 'unknown' ? 'unknown' : hourKey.slice(0, 10);
         const c = costOf(model, b);
         const tok = b.input + b.output + b.cw1h + b.cw5m + b.cr;
-        const mkey = keyOf(model);
+        const mkey = mkeyOf(model);
         // Timestamp del ÚLTIMO mensaje de ESTE modelo (no el mtime del archivo):
         // así "consumiendo ahora" corresponde al modelo real. Fallback al mtime.
         const ts = modelTs[model] || fileMtime;
@@ -394,7 +404,7 @@ export async function buildSummary() {
     // Se descartan entradas sin tokens (p.ej. "<synthetic>", mensajes internos
     // de Claude Code sin uso real).
     const models = Object.entries(modelStats)
-      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
+      .map(([model, v]) => ({ model, key: mkeyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
       .filter((m) => m.tokens > 0)
       .sort((a, b) => b.cost - a.cost);
     projects.push({
@@ -405,13 +415,51 @@ export async function buildSummary() {
     });
   }
 
+  // Codex suma al consumo GENERAL en tokens, pero queda FUERA de h5tok/h5cost:
+  // esas ventanas son el token-count y el ritmo de los límites de ANTHROPIC.
+  // Meter OpenAI ahí corrompería la barra "Sesión (5h)" y el ratio "N× tu ritmo
+  // habitual". Todo este bloque es best-effort: el resumen de Claude nunca puede
+  // romperse porque un rollout de Codex esté corrupto o en escritura.
+  try {
+    const { entries } = await scanCodexUsage();
+    for (const e of entries) {
+      const b = { input: e.input, output: e.output, cw1h: 0, cw5m: 0, cr: e.cachedInput };
+      const tok = e.input + e.output + e.cachedInput;
+      const cost = 0;
+      addInto(totals, b);
+
+      const engine = engineFor({ key: 'codex', label: ENGINE_LABELS.codex });
+      addInto(engine.B, b);
+      engine.cost += cost;
+      const es = (engine.modelStats[e.model] ||= { tokens: 0, cost: 0, lastMtime: 0 });
+      es.tokens += tok; es.cost += cost;
+      es.lastMtime = Math.max(es.lastMtime, e.ts || 0);
+
+      const day = e.hourKey === 'unknown' ? 'unknown' : e.hourKey.slice(0, 10);
+      if (day === today) {
+        addInto(todayB, b);
+        const hr = Number(e.hourKey.slice(11, 13));
+        const hb = ((hourlyByProj[e.proj] ||= {})[hr] ||= {});
+        const hm = (hb.codex ||= { tokens: 0, cost: 0 });
+        hm.tokens += tok; hm.cost += cost;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        const dp = ((daily[day] ||= {})[e.proj] ||= {});
+        const dm = (dp.codex ||= { tokens: 0, cost: 0 });
+        dm.tokens += tok; dm.cost += cost;
+      }
+    }
+  } catch {
+    // noop: Codex es una fuente auxiliar; Claude sigue siendo la respuesta base.
+  }
+
   projects.sort((a, b) => b.cost - a.cost);
   const tok = (b) => b.input + b.output + b.cw1h + b.cw5m + b.cr;
 
   // Motores consolidados (mismo shape que projects[]: label + models[]).
   const engines = [...engineMap.values()].map((e) => {
     const models = Object.entries(e.modelStats)
-      .map(([model, v]) => ({ model, key: keyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
+      .map(([model, v]) => ({ model, key: mkeyOf(model), tokens: v.tokens, cost: v.cost, lastMtime: v.lastMtime }))
       .filter((m) => m.tokens > 0)
       .sort((a, b) => b.cost - a.cost);
     const lastMtime = models.reduce((mx, m) => Math.max(mx, m.lastMtime), 0);
@@ -451,6 +499,8 @@ export async function buildSummary() {
     if (!dayProjects) continue;
     for (const p of Object.keys(dayProjects)) {
       for (const [k, v] of Object.entries(dayProjects[p])) {
+        // Codex no cuenta en las ventanas de límite de Anthropic (tiene las suyas, ver getCodexBlock).
+        if (k === 'codex') continue;
         (d7ByKey[k] ||= { tokens: 0 }).tokens += v.tokens;
         d7tok += v.tokens;
       }

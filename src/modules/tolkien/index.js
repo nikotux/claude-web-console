@@ -515,8 +515,37 @@ export default {
         ));
         return;
       }
-      const port = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
-      const email = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || config.instance.identity.email);
+      // Allowlist explícita para los accesos locales: "Tolkien local" (:3010)
+      // y "Tolkien pruebas" (:3011). Ambos comparten la cookie host-only
+      // `tolkien.session`, así que entrar a uno reemplaza la sesión del otro
+      // hasta volver a clickear; tradeoff conocido y aceptado.
+      const ALLOWED_LOCAL_PORTS = ['3010', '3011'];
+      const defaultPort = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
+      const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');
+      if (requestedPort && !ALLOWED_LOCAL_PORTS.includes(requestedPort)) {
+        res.status(400).type('html').send(localEnterErrPage(
+          'Puerto no permitido',
+          `Puerto no permitido: ${requestedPort}. Permitidos: 3010, 3011.`,
+        ));
+        return;
+      }
+      const port = requestedPort || defaultPort;
+
+      const defaultEmail = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || config.instance.identity.email);
+      const requestedEmail = (typeof req.query.email === 'string' ? req.query.email.trim() : '');
+      if (
+        requestedEmail
+        && requestedEmail !== defaultEmail
+        && !/^[^@\s]+@phase3val\.test$/.test(requestedEmail)
+      ) {
+        res.status(400).type('html').send(localEnterErrPage(
+          'Email no permitido',
+          `Email no permitido para local-enter: ${requestedEmail}. `
+            + 'Solo el email real o un usuario de validación @phase3val.test.',
+        ));
+        return;
+      }
+      const email = requestedEmail || defaultEmail;
       const base = `http://localhost:${port}`;
       // Acumula Set-Cookie en un "jar" dedupeando POR NOMBRE (última ocurrencia
       // gana, como un browser/curl). Imprescindible: /api/auth/csrf devuelve DOS

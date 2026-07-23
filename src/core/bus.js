@@ -175,6 +175,25 @@ export function buildDirectory() {
   return entries;
 }
 
+// Separa el argv de `send` en {targetArg, text}. DOS modos de invocación:
+//   - Directo desde una sesión: `send "<destino>" "<texto>"` → el shell YA
+//     separó los argumentos; usarlos tal cual (un nombre con espacios NO se
+//     debe re-partir). Este es el modo que rompía BUG-936.
+//   - /btw: pasa "$ARGUMENTS" como UN solo argumento → ahí sí partimos por el
+//     primer bloque de espacios (destino = primer token, resto = mensaje).
+// Devuelve {targetArg, text} o {error} si no hay suficiente.
+export function parseSendArgs(rawArgs) {
+  let args = Array.isArray(rawArgs) ? rawArgs.slice() : [];
+  if (args[0] === '--') args = args.slice(1);
+  if (args.length >= 2) {
+    return { targetArg: args[0], text: args.slice(1).join(' ') };
+  }
+  const raw = (args[0] || '').trim();
+  const m = raw.match(/^(\S+)\s+([\s\S]+)$/);
+  if (!m) return { error: 'faltan argumentos' };
+  return { targetArg: m[1], text: m[2] };
+}
+
 // Resuelve el argumento de `/btw <destino>` a un handle (o 'all').
 // Acepta: "all"/"todos" (broadcast); un handle explícito (tmux:… / claude:…);
 // o un nombre amigable (case-insensitive, match exacto y luego por inclusión).
@@ -195,12 +214,19 @@ export function resolveTarget(arg) {
   }
   const dir = buildDirectory();
   const lc = q.toLowerCase();
-  let hit = dir.find((e) => e.name.toLowerCase() === lc);
+  const exact = dir.filter((e) => e.name.toLowerCase() === lc);
+  let hit = exact.find((e) => !e.archived) || exact[0];
   if (!hit) {
     const partial = dir.filter((e) => e.name.toLowerCase().includes(lc));
-    if (partial.length === 1) [hit] = partial;
-    else if (partial.length > 1) {
-      return { error: `"${q}" es ambiguo: ${partial.map((e) => e.name).join(', ')}` };
+    const live = partial.filter((e) => !e.archived);
+    const pool = live.length ? live : partial;
+    if (pool.length === 1) {
+      [hit] = pool;
+      if (hit.archived) {
+        return { error: `La única sesión que coincide con "${q}" está ARCHIVADA (${hit.name}). Usá el handle claude:<sessionId> o PKG-N si querés mandarle igual.` };
+      }
+    } else if (pool.length > 1) {
+      return { error: `"${q}" es ambiguo: ${pool.map((e) => e.name).join(', ')}` };
     }
   }
   if (!hit) return { error: `No encontré una sesión llamada "${q}". Sesiones: ${dir.map((e) => e.name).join(', ') || '(ninguna)'}` };

@@ -399,8 +399,10 @@ export function mountMcpsPanel(el, ctx = {}) {
 
   function connStatus(p) {
     const key = acctState(p);
-    const light = CONN_STATE[key].light;
+    const missing = Array.isArray(p.missingScopes) ? p.missingScopes : [];
+    const light = key === 'connected' && missing.length ? 'warn' : CONN_STATE[key].light;
     if (key === 'error') return { key, light, label: t('system.conn.stError', 'Error: {e}', { e: p.error || p.lastAttempt?.error || '' }) };
+    if (key === 'connected' && missing.length) return { key, light, label: t('system.conn.stConnectedMissingScopes', 'Conectado como {acct} · faltan permisos nuevos', { acct: p.account || '—' }) };
     if (key === 'connected') return { key, light, label: t('system.conn.stConnected', 'Conectado como {acct}', { acct: p.account || '—' }) };
     if (key === 'unset') return { key, light, label: t('system.conn.stUnconfigured', 'No configurado — falta que un admin cargue las credenciales de la app.') };
     if (key === 'inprogress') return { key, light, label: t('system.conn.stRunning', 'Conexión en curso · esperando autorización') };
@@ -417,10 +419,22 @@ export function mountMcpsPanel(el, ctx = {}) {
     const dot = LIGHT_DOT[st.light] || '⚪';
     const meta = PROVIDER_META[p.id] || { emoji: '🔗', purposeKey: 'system.conn.purposeGeneric', purposeEs: 'Cuenta personal conectada a la consola.' };
     const connectedAt = p.connectedAt ? `<div class="hr-f-file">🕑 ${esc(new Date(p.connectedAt).toLocaleString())}</div>` : '';
-    const scopes = p.scopes?.length ? `<div class="hr-f-file">🔑 <code>${esc(p.scopes.join(' '))}</code></div>` : '';
+    const missingScopes = Array.isArray(p.missingScopes) ? p.missingScopes : [];
+    const missingSet = new Set(missingScopes.map((s) => String(s).toLowerCase()));
+    const scopeList = (p.scopes || []).map((s) => {
+      const safe = esc(s);
+      return missingSet.has(String(s).toLowerCase()) ? `<b>${safe}</b>` : safe;
+    }).join(' ');
+    const scopes = p.scopes?.length ? `<div class="hr-f-file">🔑 <code>${scopeList}</code></div>` : '';
+    const missingScopesNote = st.key === 'connected' && missingScopes.length
+      ? `<div class="hr-f-file">⚠️ <b>${t('system.conn.missingScopesTitle', 'Permisos nuevos sin autorizar:')}</b> <code>${esc(missingScopes.join(' '))}</code> — ${t('system.conn.missingScopesHint', 'tocá "Renovar permisos" para que tu cuenta los tome.')}</div>`
+      : '';
     const stKey = st.key || acctState(p);
     const acts = [];
     if (stKey === 'connected') {
+      const renewClass = missingScopes.length ? 'btn btn--sm' : 'btn-ghost btn--sm';
+      const renewTitle = t('system.conn.renewTooltip', 'Vuelve a autorizar tu cuenta sin desconectarla. Hace falta cuando la consola suma permisos nuevos (el token viejo no los cubre). Si el nuevo consentimiento falla, tu conexión actual sigue intacta.');
+      acts.push(`<button class="${renewClass}" data-cact="connect" data-prov="${esc(p.id)}" title="${esc(renewTitle)}">${icon('refresh', { size: 12 })}<span>${t('system.conn.renewBtn', 'Renovar permisos')}</span></button>`);
       acts.push(`<button class="btn-ghost btn--sm" data-cact="disconnect" data-prov="${esc(p.id)}">${t('system.conn.disconnect', 'Desconectar')}</button>`);
     } else if (stKey === 'inprogress') {
       acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('refresh', { size: 12 })}<span>${t('system.conn.verifyBtn', 'Verificar de nuevo')}</span></button>`);
@@ -448,6 +462,7 @@ export function mountMcpsPanel(el, ctx = {}) {
           <div class="hr-f-file">${t(meta.purposeKey, meta.purposeEs)}</div>
           ${connectedAt}
           ${scopes}
+          ${missingScopesNote}
           ${attemptNote}
           ${actions}
         </div>

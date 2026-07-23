@@ -79,6 +79,12 @@
   --cwc-model-sonnet: #4e8fd1;
   --cwc-model-haiku: #6cb06c;
   --cwc-model-fable: #d9925a;
+  /* Codex (OpenAI) — se cuenta en TOKENS, sin tarifa. Teal deliberadamente
+     lejos de --cwc-accent-cool (#5b8fc7), que es casi idéntico a
+     --cwc-model-sonnet (#4e8fd1): en la barra apilada serían indistinguibles.
+     Prima la legibilidad de la serie sobre reusar el acento frío con que Codex
+     se identifica en la manguera y en los límites. */
+  --cwc-model-codex: #3ec9c0;
   --cwc-model-unknown: #8a8a8a;
 
   /* ===== Escala tipográfica ÚNICA (5 tamaños; nada fuera de esta escala

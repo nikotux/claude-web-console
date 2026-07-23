@@ -35,7 +35,9 @@ const WRITE_THROTTLE_MS = 300000;
 // gráfica (base = más barato) y la leyenda. Es el orden de las `keys` de las
 // series; la columna "General" lo INVIERTE (más caro arriba). Pedido del usuario
 // 2026-07-10. Precios: haiku $1 < sonnet $3 < opus $5 < fable $10 (input $/M).
-const MODEL_ORDER = ['haiku', 'sonnet', 'opus', 'fable', 'unknown'];
+// Codex no tiene tarifa: se cuenta en tokens con cost 0, así que queda fuera del
+// orden de precio y antes de 'unknown' para que aparezca arriba del apilado.
+const MODEL_ORDER = ['haiku', 'sonnet', 'opus', 'fable', 'codex', 'unknown'];
 // Buckets de proyecto (documental: las funciones de abajo son genéricas sobre las
 // claves presentes en cada día, no dependen de esta lista). 'aprendizaje' se
 // separa de 'consola' para auditar tokens de estudio vs desarrollo.

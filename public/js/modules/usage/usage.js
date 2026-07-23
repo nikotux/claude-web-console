@@ -36,6 +36,9 @@ function fmtTokens(n) {
 const fmtCost = (c) => `$${(c || 0).toFixed(2)}`;
 // Formatea un valor según la métrica activa ('cost' | 'tokens').
 const fmtMetric = (v, metric) => (metric === 'cost' ? fmtCost(v) : `${fmtTokens(v)} tok`);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[ch]));
 
 function fmtRelative(ms) {
   if (!ms) return t('usage.rel.none', 'sin actividad');
@@ -375,17 +378,25 @@ function renderLeft(container, series, metric, liveKeys, range) {
   const perModel = rows.map((m) => {
     const live = liveKeys?.has(m.key);
     // Badge de precio ($X/M input): identifica el modelo más caro/barato.
-    const price = PRICE_INPUT[m.key] != null ? `<span class="ul-model-price">$${PRICE_INPUT[m.key]}/M</span>` : '';
+    const price = PRICE_INPUT[m.key] != null
+      ? `<span class="ul-model-price">$${PRICE_INPUT[m.key]}/M</span>`
+      : `<span class="ul-model-price ul-model-price--none" title="${esc(t('usage.left.noRateTitle', 'Se cuenta en tokens: no hay tarifa pública verificada para este modelo, así que no suma al total en dólares.'))}">${t('usage.left.noRate', 'sin tarifa')}</span>`;
+    const value = metric === 'cost' && PRICE_INPUT[m.key] == null
+      ? '—'
+      : fmtMetric(metric === 'cost' ? m.cost : m.tokens, metric);
     return `
       <div class="ul-model">
         <span class="tok-dot" style="background:${modelColor(m.key)}"></span>
         <span class="ul-model-name">${modelName(m.key, m.key)}</span>
         ${price}
         ${live ? pacman({ state: 'working', size: 'sm', cls: 'tok-live', title: t('usage.left.liveTitle', 'consumiendo tokens ahora') }) : ''}
-        <span class="ul-model-cost">${fmtMetric(metric === 'cost' ? m.cost : m.tokens, metric)}</span>
+        <span class="ul-model-cost">${value}</span>
       </div>`;
   }).join('') || `<div class="tok-empty">${t('usage.left.empty', 'sin consumo en el período')}</div>`;
 
+  const codexNote = rows.some((m) => PRICE_INPUT[m.key] == null && m.tokens > 0)
+    ? `<br>${t('usage.left.codexNote', 'Codex se cuenta en tokens; su consumo no suma al total en dólares.')}`
+    : '';
   const bigVal = metric === 'cost' ? fmtCost(gCost) : `${fmtTokens(gTok)} <span class="ul-big-unit">${t('usage.unit.tok', 'tok')}</span>`;
   const subVal = metric === 'cost' ? `${fmtTokens(gTok)} ${t('usage.unit.tok', 'tok')}` : fmtCost(gCost);
   container.innerHTML = `
@@ -396,7 +407,7 @@ function renderLeft(container, series, metric, liveKeys, range) {
       <div class="ul-models">${perModel}</div>
       ${rows.length ? `<div class="ul-order">${t('usage.left.order', '▲ más costoso · ▼ más económico ($/M)')}</div>` : ''}
     </div>
-    <div class="ul-note">${t('usage.left.note', 'El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token.')}</div>`;
+    <div class="ul-note">${t('usage.left.note', 'El costo es el <b>equivalente a precios de API</b>: la suscripción de Claude no factura por token.')}${codexNote}</div>`;
 }
 
 // ===== Columna derecha: gráfica de tendencia (Chart.js) =====
