@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-23 19:18 — main
+- Integrar SharePoint y Unifi; refactor tokens/Codex; herramientas Pad
+
 ### 2026-07-22 21:41 — main
 - Implementar escrituras a Desk con identidad del usuario (PLAN-781)
 - Soportar custom fields y nombre visible de adjuntos en cwc-desk
