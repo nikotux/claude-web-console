@@ -12,6 +12,7 @@
 // para poder referenciarla. best-effort: si Pad no responde, la aprobación NO
 // se bloquea (igual queda 'accepted'), solo sin padRef.
 import * as padLocal from '../../core/pad-service-client.js';
+import { loadArquiIndex, linkItemToArqui } from './arqui-link-shared.js';
 
 const KIND_LABEL = { optimize: 'Optimización IA', coherence: 'Coherencia' };
 
@@ -36,5 +37,10 @@ export async function createTaskFromProposal(p, kind) {
     fields: { status: 'pendiente', priority: 'media', tags: [kind] },
   }, { workspace: 'console' });
   if (!r || !r.ok) throw new Error(`Pad no aceptó la tarea: ${r?.error || 'error'}`);
-  return r.data?.ref || null;
+  const ref = r.data?.ref || null;
+  if (ref) {
+    try { const idx = await loadArquiIndex(); await linkItemToArqui(ref, p, idx); }
+    catch (err) { console.error('[pad-writeback] link ARQUI de la tarea falló (best-effort):', err?.message); }
+  }
+  return ref;
 }

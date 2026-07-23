@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import * as padLocal from '../../core/pad-service-client.js';
+import { loadArquiIndex, linkItemToArqui } from './arqui-link-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -170,5 +171,10 @@ export async function createBugFromFinding(finding = {}) {
     },
   }, { workspace: 'console' });
   if (!r || !r.ok) throw new Error(`Pad no aceptó el BUG: ${r?.error || 'error'}`);
-  return r.data?.ref || null;
+  const ref = r.data?.ref || null;
+  if (ref) {
+    try { const idx = await loadArquiIndex(); await linkItemToArqui(ref, finding, idx); }
+    catch (err) { console.error('[health-scan] link ARQUI del BUG falló (best-effort):', err?.message); }
+  }
+  return ref;
 }

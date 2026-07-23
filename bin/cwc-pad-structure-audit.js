@@ -33,6 +33,10 @@ function countFor(map, key) {
   return map.get(key) || 0;
 }
 
+function isHierarchyLink(link) {
+  return link?.link_type === 'parent' || link?.link_type === 'implements';
+}
+
 function titleFor(title, ref) {
   return title.get(ref) || '-';
 }
@@ -55,6 +59,7 @@ try {
   const degree = new Map();
   const parents = new Map();
   const childCount = new Map();
+  const parentTypeCount = new Map();
   let errores = 0;
 
   for (const slug of slugs) {
@@ -75,6 +80,7 @@ try {
       degree.set(ref, 0);
       parents.set(ref, []);
       childCount.set(ref, 0);
+      parentTypeCount.set(ref, 0);
     }
   }
 
@@ -93,17 +99,20 @@ try {
         const target = link?.target_ref;
         if (!source || !target) continue;
 
-        const pairKey = `${source}|${target}`;
+        const pairKey = link?.id || `${source}|${target}|${link?.link_type || ''}`;
         if (seenPairs.has(pairKey)) continue;
         seenPairs.add(pairKey);
 
         degree.set(ref, countFor(degree, ref) + 1);
 
-        if (source === ref && target) {
+        if (source === ref && target && isHierarchyLink(link)) {
           getMapArray(parents, ref).push(target);
+          if (link?.link_type === 'parent') {
+            parentTypeCount.set(ref, countFor(parentTypeCount, ref) + 1);
+          }
         }
 
-        if (target === ref && source) {
+        if (target === ref && source && isHierarchyLink(link)) {
           childCount.set(ref, countFor(childCount, ref) + 1);
         }
       }
@@ -125,11 +134,11 @@ try {
 
   console.log('=== MULTI-PADRE (jerarquía ambigua) ===');
   const multiParent = allRefs
-    .map((ref) => ({ ref, refs: getMapArray(parents, ref) }))
-    .filter((item) => item.refs.length > 1)
+    .map((ref) => ({ ref, parentCount: countFor(parentTypeCount, ref), refs: getMapArray(parents, ref) }))
+    .filter((item) => item.parentCount !== 1 && item.refs.length > 1)
     .sort((a, b) => b.refs.length - a.refs.length || a.ref.localeCompare(b.ref));
   for (const item of multiParent) {
-    console.log(`${item.ref}  [${collFor(coll, item.ref)}]  ${titleFor(title, item.ref)}  padres: ${item.refs.join(', ')}`);
+    console.log(`${item.ref} [${collFor(coll, item.ref)}] ${titleFor(title, item.ref)} parent:${item.parentCount} hier:${item.refs.length} -> ${item.refs.join(', ')}`);
   }
 
   console.log('=== NODOS-MARAÑA (grado > 12) ===');
@@ -159,6 +168,7 @@ try {
   const promedioGrado = totalItems > 0 ? (totalDegree / totalItems).toFixed(1) : '0.0';
 
   console.log(`TOTAL items=${totalItems} conLinks=${conLinks} promedioGrado=${promedioGrado}`);
+  console.log(`MULTI-PADRE(sin hogar único)=${multiParent.length}`);
   if (errores > 0) console.error(`Errores recuperables: ${errores}`);
   process.exit(0);
 } catch (err) {
