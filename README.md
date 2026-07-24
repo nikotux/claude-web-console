@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-24 19:40 — main
+- Implementar entornos Tolkien efímeros por sesión (PLAN-1815)
+
 ### 2026-07-24 04:57 — main
 - Integrar arquitectura en auditoría y workflows de creación de items
 - Integrar módulo UniFi y refactorizar runners
