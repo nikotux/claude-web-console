@@ -30,6 +30,7 @@ export default {
     // Mis PRs abiertos sin mergear (de gh). null = todavía no consultado.
     let branchesData = null;
     let branchesBusy = false;
+    let envsData = null;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -44,10 +45,13 @@ export default {
         <div class="tk-info" data-ref="info">${t('tolkien.info.loading', 'cargando…')}</div>
         <div class="tk-actions">
           <a class="btn-ghost btn--sm tk-link tk-link--local" href="/api/tolkien/local-enter" target="_blank" rel="noopener" title="${t('tolkien.links.localTitle', 'Entrar al Tolkien local ya logueado (la consola inyecta la sesión dev-login · ZeroTier)')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.local', 'Tolkien local')}</span></a>
-          <a class="btn-ghost btn--sm tk-link tk-link--pruebas" href="/api/tolkien/local-enter?port=3011&email=admin@phase3val.test" target="_blank" rel="noopener" title="${t('tolkien.links.pruebasTitle', 'Entrar al Tolkien de PRUEBAS (:3011, rama en validación pre-push) logueado como admin de prueba · inyecta la sesión dev-login')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.pruebas', 'Tolkien pruebas')}</span></a>
           <a class="btn-ghost btn--sm tk-link tk-link--oficial" href="https://app.tolkien.mordorstaffing.com" target="_blank" rel="noopener" title="${t('tolkien.links.oficialTitle', 'Abrir la app oficial de Tolkien (producción)')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.oficial', 'Tolkien oficial')}</span></a>
           <a class="btn-ghost btn--sm tk-link tk-link--pad" href="http://${location.hostname}:7777" target="_blank" rel="noopener" title="${t('tolkien.links.padTitle', 'Abrir el Pad local self-hosted (workspace console) en una pestaña nueva')}">${icon('externalLink', { size: 13 })}<span>${t('tolkien.links.pad', 'GetPad local')}</span></a>
         </div>
+        <details class="tk-envs">
+          <summary>${icon('gitBranch', { size: 12 })} <span>${t('tolkien.envs.title', 'Entornos de sesión')}</span> <span data-ref="envsCount"></span></summary>
+          <div data-ref="envsList"></div>
+        </details>
       </div>`;
 
     const refs = {};
@@ -229,6 +233,76 @@ export default {
       }
     }
 
+    async function loadEnvs() {
+      try {
+        envsData = await (await fetch('/api/tolkien/envs')).json();
+        renderEnvs();
+      } catch { /* noop */ }
+    }
+
+    function envStatusLabel(status) {
+      switch (status) {
+        case 'provisioning': return t('tolkien.envs.status.provisioning', 'creando');
+        case 'worktree-ready': return t('tolkien.envs.status.worktreeReady', 'worktree');
+        case 'db-ready': return t('tolkien.envs.status.dbReady', 'DB lista');
+        case 'serving': return t('tolkien.envs.status.serving', 'sirviendo');
+        case 'error': return t('tolkien.envs.status.error', 'error');
+        case 'down': return t('tolkien.envs.status.down', 'apagado');
+        default: return String(status || '');
+      }
+    }
+
+    function envStateIcon(status) {
+      if (status === 'serving') return pacman({ state: 'waiting', size: 'sm' });
+      if (status === 'provisioning' || status === 'worktree-ready' || status === 'db-ready') return pacman({ state: 'delegating', size: 'sm' });
+      return `<span class="tk-env-state" aria-hidden="true">${status === 'error' ? '⚠️' : '💤'}</span>`;
+    }
+
+    function hasTransitionEnvs() {
+      return ((envsData && envsData.envs) || []).some((env) => !['serving', 'error', 'down'].includes(env.status));
+    }
+
+    function renderEnvs() {
+      if (!refs.envsCount || !refs.envsList) return;
+      if (!envsData) {
+        refs.envsCount.textContent = '';
+        refs.envsList.innerHTML = '';
+        return;
+      }
+      const envs = envsData.envs || [];
+      refs.envsCount.textContent = `${envs.length}/${envsData.max ?? ''}`;
+      if (envs.length === 0) {
+        refs.envsList.innerHTML = `<div class="tk-line tk-line--dim">${t('tolkien.envs.empty', 'Sin entornos activos')}</div>`;
+        return;
+      }
+      refs.envsList.innerHTML = envs.map((env) => {
+        const port = env.port == null ? '' : `<span class="tk-env-port">:${esc(env.port)}</span>`;
+        const enter = env.status === 'serving'
+          ? `<a class="btn-ghost btn--sm" href="/api/tolkien/local-enter?port=${esc(encodeURIComponent(String(env.port ?? '')))}" target="_blank" rel="noopener">${t('tolkien.envs.enter', 'entrar')}</a>`
+          : '';
+        const error = env.error
+          ? `<div class="tk-line tk-line--dim" title="${esc(env.error)}">${esc(String(env.error).slice(0, 160))}</div>`
+          : '';
+        return `<div class="tk-env-row">
+          <div class="tk-line tk-line--split">
+            <span>${envStateIcon(env.status)} <span class="tk-branch">${esc(env.branch || '-')}</span>${port} <span class="tk-env-status">${esc(envStatusLabel(env.status))}</span></span>
+            <span>${enter}<button class="btn-ghost btn--sm" data-env-teardown="${esc(env.id)}">${t('tolkien.envs.teardown', 'cerrar')}</button></span>
+          </div>
+          ${error}
+        </div>`;
+      }).join('');
+    }
+
+    async function postEnvTeardown(id, force) {
+      const res = await fetch(`/api/tolkien/envs/${encodeURIComponent(id)}/teardown`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(force ? { force: true } : {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    }
+
     async function doRebase(branch) {
       const ok = await dialog.confirmDialog({
         title: t('tolkien.rebase.confirmTitle', 'Poner esta rama al día sobre main'),
@@ -320,6 +394,25 @@ export default {
       ? log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || t('tolkien.common.ok', '(ok)')}`).join('\n')
       : '';
 
+    function fmtUpdateEnvResult(result) {
+      switch (result) {
+        case 'rebased': return t('tolkien.updateAction.envResult.rebased', 'rebaseado');
+        case 'skipped-dirty': return t('tolkien.updateAction.envResult.skippedDirty', 'omitido: sucio');
+        case 'conflict': return t('tolkien.updateAction.envResult.conflict', 'conflicto');
+        case 'status-failed': return t('tolkien.updateAction.envResult.statusFailed', 'status falló');
+        case 'error': return t('tolkien.updateAction.envResult.error', 'error');
+        default: return String(result || '');
+      }
+    }
+
+    function fmtUpdateSummary(data) {
+      const log = fmtLog(data.log);
+      const envs = Array.isArray(data.envs) && data.envs.length
+        ? data.envs.map((env) => t('tolkien.updateAction.envLine', '• entorno {branch}: {result}', { branch: env.branch || env.id || '?', result: fmtUpdateEnvResult(env.result) })).join('\n')
+        : '';
+      return [log, envs].filter(Boolean).join('\n\n');
+    }
+
     async function doUpdate() {
       if (busy) return;
       const ok = await dialog.confirmDialog({
@@ -334,25 +427,34 @@ export default {
         const data = await res.json();
         if (data.status) current = data.status;
         if (!res.ok || data.error) {
+          const summary = fmtUpdateSummary(data);
           await dialog.alertDialog({
             title: t('tolkien.updateAction.failTitle', 'No se pudo actualizar'),
-            message: `${data.error || t('tolkien.updateAction.failMsg', 'No se pudo actualizar (respuesta inválida del servidor).')}\n\n${fmtLog(data.log)}`,
+            message: `${data.error || t('tolkien.updateAction.failMsg', 'No se pudo actualizar (respuesta inválida del servidor).')}${summary ? `\n\n${summary}` : ''}`,
           });
         } else if (data.popConflict) {
+          const summary = fmtUpdateSummary(data);
           await dialog.alertDialog({
             title: t('tolkien.updateAction.conflictTitle', 'Actualizado, con conflicto'),
-            message: `${t('tolkien.updateAction.conflictMsg', 'Hubo conflicto al reaplicar tus cambios: quedaron en el stash (git stash list).')}\n\n${fmtLog(data.log)}`,
+            message: `${t('tolkien.updateAction.conflictMsg', 'Hubo conflicto al reaplicar tus cambios: quedaron en el stash (git stash list).')}${summary ? `\n\n${summary}` : ''}`,
           });
         } else if (data.warn) {
           // Caso raro: estás en una rama feature y tu main local no pudo
           // adelantar solo (divergió o tiene commits propios). Tu rama quedó
           // intacta; solo avisamos.
-          await dialog.alertDialog({ title: t('tolkien.updateAction.warnTitle', 'Actualizado (con aviso)'), message: `${data.warn}\n\n${fmtLog(data.log)}` });
+          const summary = fmtUpdateSummary(data);
+          await dialog.alertDialog({ title: t('tolkien.updateAction.warnTitle', 'Actualizado (con aviso)'), message: `${data.warn}${summary ? `\n\n${summary}` : ''}` });
+        } else if (Array.isArray(data.envs) && data.envs.length) {
+          await dialog.alertDialog({
+            title: t('tolkien.updateAction.okTitle', 'Tolkien actualizado'),
+            message: fmtUpdateSummary(data),
+          });
         }
       } catch {
         await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.updateAction.netError', 'No se pudo actualizar (error de red o del servidor).') });
       } finally {
         busy = false; render();
+        await loadEnvs();
         // Chris pudo haber mergeado un PR mientras tanto: refrescamos la lista.
         loadBranches();
       }
@@ -370,9 +472,9 @@ export default {
       try {
         // Arranca el job en background (vuelve al instante, sin request larga).
         const startRes = await fetch('/api/tolkien/refresh-data', { method: 'POST' });
+        const startData = await startRes.json().catch(() => ({}));
         if (!startRes.ok) {
-          const d = await startRes.json().catch(() => ({}));
-          throw new Error(d.error || `HTTP ${startRes.status}`);
+          throw new Error(startData.error || `HTTP ${startRes.status}`);
         }
         // Polling del estado hasta que termina (o timeout de guarda a 5 min).
         const deadline = Date.now() + 5 * 60 * 1000;
@@ -400,17 +502,56 @@ export default {
               return t('tolkien.refreshData.stepSummary', '✓ {importer}: +{creates} nuevos · {updates} act. · {softDeletes} baja', { importer: s.importer, creates: s.creates, updates: s.updates, softDeletes: s.softDeletes });
             })
             .join('\n');
+          const templateNote = startData.templateBuild
+            ? `${t('tolkien.refreshData.templateBuild', 'Plantilla y entornos: refresco en curso.')}\n\n`
+            : '';
           await dialog.alertDialog({
             title: data.ok ? t('tolkien.refreshData.okTitle', '✅ Data local actualizada') : t('tolkien.refreshData.errTitle', '⚠️ Actualización con errores'),
-            message: `${summary || t('tolkien.refreshData.noDetail', 'Sin detalle.')}\n\n(${Math.round((data.durationMs || 0) / 1000)}s)`,
+            message: `${templateNote}${summary || t('tolkien.refreshData.noDetail', 'Sin detalle.')}\n\n(${Math.round((data.durationMs || 0) / 1000)}s)`,
           });
         }
       } catch (err) {
         await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: err?.message || t('tolkien.refreshData.netError', 'No se pudo actualizar la data (error de red o del servidor).') });
       } finally {
         dataBusy = false; render();
+        await loadEnvs();
       }
     }
+
+    refs.envsList.addEventListener('click', async (e) => {
+      const btn = e.target.closest && e.target.closest('[data-env-teardown]');
+      if (!btn || !refs.envsList.contains(btn)) return;
+      const id = btn.dataset.envTeardown;
+      const ok = await dialog.confirmDialog({
+        title: t('tolkien.envs.teardownConfirmTitle', 'Cerrar entorno'),
+        message: t('tolkien.envs.teardownConfirmMsg', 'Se detiene el dev-server, se borra la DB del entorno y se elimina el worktree. Los cambios sin commitear se pierden si forzás.'),
+        confirmLabel: t('tolkien.envs.teardownConfirmLabel', 'Cerrar'),
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        let { res, data } = await postEnvTeardown(id, false);
+        if (res.status === 409 && data.dirty) {
+          const force = await dialog.confirmDialog({
+            title: t('tolkien.envs.teardownDirtyTitle', 'Cambios sin commitear'),
+            message: t('tolkien.envs.teardownDirtyMsg', 'Este entorno tiene cambios sin commitear. Si forzás el cierre, esos cambios se descartan.'),
+            confirmLabel: t('tolkien.envs.teardownDirtyLabel', 'Forzar cierre'),
+          });
+          if (!force) {
+            btn.disabled = false;
+            return;
+          }
+          ({ res, data } = await postEnvTeardown(id, true));
+        }
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        await loadEnvs();
+      } catch (err) {
+        await dialog.alertDialog({ title: t('tolkien.envs.teardownFailTitle', 'No se pudo cerrar el entorno'), message: err?.message || t('tolkien.envs.teardownFailMsg', 'Error de red o del servidor.') });
+        btn.disabled = false;
+      }
+    });
 
     refs.update.addEventListener('click', doUpdate);
     refs.fetch.addEventListener('click', checkRemote); // Buscar cambios (fetch)
@@ -418,12 +559,15 @@ export default {
 
     (async () => {
       await loadStatus();
+      loadEnvs();
       checkRemote();
       loadBranches(); // consulta mis PRs abiertos (gh, red) — sin bloquear
     })();
 
     const CHECK_MS = 5 * 60 * 1000;
     setInterval(() => { if (!document.hidden) checkRemote(); }, CHECK_MS);
+    const ENVS_CHECK_MS = 6000;
+    setInterval(() => { if (!document.hidden && hasTransitionEnvs()) loadEnvs(); }, ENVS_CHECK_MS);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRemote(); });
   },
 };

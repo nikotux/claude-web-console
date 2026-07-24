@@ -2974,6 +2974,62 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             aplica). `runCmd` (exec local) se movió a refresh-shared y RECHAZA ante
                             terminación anormal (timeout/kill/spawn-fail sin código numérico), igual
                             que `git()` — el `gh` de /branches lo importa de ahí.
+                            ENTORNOS TOLKIEN EFÍMEROS POR SESIÓN (PLAN-1815, 2026-07-24): resuelve
+                            el choque de sesiones PARALELAS que editan Tolkien sobre la ÚNICA carpeta
+                            ~/tolkien. Modelo: `~/tolkien` = repo BASE (.git compartido, main fresco,
+                            fuente de worktrees); :3010/tolkien_console = entorno base por defecto
+                            (read-only/miradas rápidas). Cada sesión que va a MODIFICAR Tolkien
+                            obtiene un ENTORNO propio = git worktree
+                            (~/.cwc-data/tolkien-envs/<id>/tree, rama cwc-env/<id>) + DB clonada
+                            tolkien_env_<id> (createdb TEMPLATE tolkien_template, segundos) +
+                            dev-server next dev en un puerto del pool (CWC_TOLKIEN_ENV_PORTS, default
+                            3012-3020) como unit systemd TRANSITORIA tolkien-env-<id>.service
+                            (sobrevive reinicio de la consola, regla 2). Archivos:
+                            src/modules/tolkien/template-shared.js (DB plantilla DORMIDA
+                            tolkien_template: buildTemplate = migrate deploy + 3 importers Zoho,
+                            luego IS_TEMPLATE true/ALLOW_CONNECTIONS false → clonable sin chocar con
+                            la restricción de 0 conexiones de CREATE DATABASE ... TEMPLATE;
+                            cloneTemplateInto/dropEnvDb/recloneLiveEnvs) +
+                            bin/cwc-tolkien-template-build.js · src/modules/tolkien/env-store.js
+                            (registro ~/.cwc-data/tolkien-envs/<id>.json atómico, pool de puertos,
+                            cap CWC_TOLKIEN_MAX_ENVS default 4, naming determinista por chatId +
+                            validación anti-traversal) · src/modules/tolkien/env-shared.js
+                            (createWorktree SÍNCRONO [lo llama el hook, ~2s], provisionEnv
+                            desacoplado, teardownEnv con GUARDA de dirty [no descarta cambios sin
+                            commitear salvo force], reattachEnvs [reconcilia registro vs systemctl
+                            --user is-active tras reinicio], reapEnvs [idle, force:false — NUNCA
+                            descarta dirty]) + bin/cwc-tolkien-env-runner.js. AUTO-PROVISIÓN (hook,
+                            PLAN-1819): un chat cuyo cwd es EXACTAMENTE el Tolkien base (no un
+                            worktree) en modo escribible instala un hook PreToolUse
+                            (tolkienEnvPreToolUseHook de core/tool-policy.js, arg --tolkien-env-auto)
+                            que al PRIMER Edit/Write/MultiEdit/NotebookEdit —o delegate_to_codex en
+                            Tándem— DENIEGA una vez ('creando tu entorno') y emite
+                            'tolkien-env-needed' al server → ChatManager.provisionTolkienEnvForChat:
+                            worktree síncrono + DB/dev-server async (spawnEnvProvision) + REUSA
+                            handoff({internal:true}) para MOVER el transcript al projectKey del
+                            worktree, flipear cwd y respawnear → el write reintentado cae en el
+                            worktree. El hook se instala SOLO por-spawn en cwd=base (NO es global:
+                            chats de Consola o ya-en-worktree no lo ven). worldLabelFor reconoce los
+                            worktrees bajo ENVS_DIR como 'Tolkien'. Feature flag CWC_TOLKIEN_ENV_AUTO
+                            (default on). BOTONES fan-out: ⬇️ Actualizar rebasea cada worktree vivo
+                            sobre origin/main (dirty→skip, conflicto→abort+report); 💽 Vista fresca
+                            refresca tolkien_console (:3010) + dispara build de tolkien_template que
+                            al terminar RE-CLONA las DBs de los entornos vivos (recloneLiveEnvs); 🔄
+                            fetch NO cambia (.git compartido ya beneficia a todos los worktrees).
+                            local-enter con allowlist DINÁMICA = 3010 + puertos de entornos vivos.
+                            UI: panel colapsable de entornos en la tarjeta Tolkien
+                            (public/js/modules/tolkien/tolkien.js). Health check `tolkien-envs`
+                            (registro vs worktrees huérfanos). :3011 'Tolkien pruebas' ELIMINADO
+                            (redundante, colisionaba la cookie host-only tolkien.session con :3010).
+                            GOTCHA cookie host-only: `tolkien.session` es por-HOST no por-puerto → N
+                            dev-servers pelean por un login en el browser; local-enter?port=
+                            re-inyecta al entrar → se trabaja UN entorno a la vez en el navegador
+                            (aceptable, documentado). ESTADO (2026-07-24): código COMPLETO y
+                            verificado (node --check en todos los archivos), pero DORMIDO — falta (a)
+                            construir tolkien_template por 1ª vez
+                            (node bin/cwc-tolkien-template-build.js, hace el import Zoho real) y (b)
+                            reiniciar la consola para activar el hook; ambos pendientes de E2E
+                            supervisado.
                             ACTUALIZAR = MAIN LOCAL SIEMPRE FRESCO (2026-07-10, pedido de Niko:
                             "el botón no hacía nada"). CAUSA RAÍZ: el viejo /update hacía `pull
                             --ff-only` sobre la RAMA ACTUAL — parado en una rama feature decía
@@ -5068,6 +5124,13 @@ bin/cwc-tolkien-refresh-runner.js  refresh de la DB LOCAL de Tolkien (TRUNCATE +
                             archivos: ~/.cwc-data/tolkien-refresh.json (job que reserva el POST
                             /refresh-data; el runner persiste el resultado) + tolkien-refresh.log.
                             Lógica en src/modules/tolkien/refresh-shared.js
+bin/cwc-tolkien-template-build.js  build DESACOPLADO de la DB plantilla dormida tolkien_template
+                            (migrate deploy + importers Zoho, luego la sella IS_TEMPLATE/no-conexiones;
+                            al terminar re-clona los entornos vivos). Lógica en
+                            src/modules/tolkien/template-shared.js. Regla de oro.
+bin/cwc-tolkien-env-runner.js  provisión DESACOPLADA de UN entorno Tolkien de sesión (worktree +
+                            createdb TEMPLATE + systemd-run next dev). Recibe el id del entorno.
+                            Lógica en src/modules/tolkien/env-shared.js. Regla de oro/regla 2.
 bin/cwc-updates-runner.js   ORQUESTADOR del BOTÓN ÚNICO de actualización (módulo `updates`,
                             2026-07-21), DESACOPLADO (regla de oro/regla 2). ÚNICO runner que REINICIA
                             el servicio y SOBREVIVE a ese reinicio (detached + KillMode=process, como
@@ -5557,6 +5620,16 @@ docs/                       frontend-modules.md · brief-original.txt · context
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
+- Entornos Tolkien por sesión (PLAN-1815): el worktree de un entorno NO es
+  config.projectDir → worldLabelFor lo reconoce por PREFIJO (ENVS_DIR), no por
+  igualdad exacta. Flipear el cwd de un chat requiere MOVER su transcript (el
+  --resume del SDK está indexado por projectKey=cwd) → la auto-provisión REUSA
+  handoff({internal}) en vez de reinventar el move. El hook de auto-provisión se
+  instala SOLO cuando cwd===config.projectDir base y en modo escribible (no
+  'plan'); un runner YA VIVO no lo toma hasta reabrir/chat nuevo (mismo gotcha
+  del bootstrap de Pad). La DB plantilla tolkien_template debe quedar DORMIDA
+  (ALLOW_CONNECTIONS false) para poder clonarla: Postgres exige 0 conexiones a
+  la fuente de un CREATE DATABASE ... TEMPLATE.
 
 ## Proceso de cambio (seguirlo SIEMPRE)
 
@@ -6049,6 +6122,20 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** El módulo seguimientos no figuraba en el mapa de módulos de CLAUDE.md; la sesión lo detectó como hueco previo y lo agregó junto con el cambio del calendario.
 
 **Lección:** Antes de cerrar trabajo sobre un módulo, chequear que tenga entrada en el mapa de módulos de CLAUDE.md; si no existe, agregarla como parte del mismo cambio en vez de dejarla pendiente.
+
+### Verificar el alcance real de una propuesta de auditoría automatizada antes de ejecutar su plan literal
+_metodologia · confianza media · recurrencia x1_
+
+**Observación:** Opt#2 citaba '8 runners' migrables y Coh#2 citaba '6 ghCallers, todos falsos positivos', pero al investigar antes de delegar se descubrió que solo 6 runners eran migrables de verdad (uno capturaba session_id y se hubiera roto) y que de los 6 ghCallers solo 1 era un falso positivo real vigente (los otros 5 ya estaban exentos).
+
+**Lección:** Antes de ejecutar el plan literal de un hallazgo o propuesta generado por un auditor/censo automatizado, re-derivar el alcance real (qué ítems aplican y cuáles no) leyendo el código actual, en vez de asumir que los números y la lista citados siguen vigentes.
+
+### Registrar falsos positivos confirmados en el mecanismo de exclusión del auditor, no solo descartarlos en el chat
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Al confirmar que keyring-shared.js y luego updates/shared.js eran falsos positivos del censo de coherencia, se los agregó al `exclude`/lista de exención de inventory.js con motivo documentado, en vez de dejar la conclusión solo anotada en la respuesta.
+
+**Lección:** Cuando se verifica que un hallazgo de un motor de diagnóstico automatizado (censo, auditor de salud) es falso positivo, codificar la exclusión con motivo en el propio motor, para que corridas futuras no vuelvan a gastar turnos re-verificando lo mismo.
 
 ### Correr smoke test de imports antes de reiniciar el server, no solo node --check
 _procedimiento · confianza alta · recurrencia x1_

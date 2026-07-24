@@ -51,7 +51,7 @@ export const CHAT_MODEL_OPTIONS = [
   ['tandem', 'Tándem (Opus + Codex)'],
   ['opusplan', 'Opus plan'],
   ['fable', 'Fable'],
-  ['opus', 'Opus'],
+  ['opus', 'Opus 5'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],
   ['default', 'Default de la cuenta'],

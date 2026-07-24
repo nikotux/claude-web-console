@@ -197,6 +197,42 @@ export function tandemPreToolUseHook() {
   };
 }
 
+export const TOLKIEN_ENV_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', TANDEM_TOOL]);
+
+// Hook SOLO por-spawn para chats cuyo cwd es el Tolkien base: no es global.
+export function tolkienEnvPreToolUseHook({ onNeed }) {
+  let requested = false;
+  const deny = (reason) => ({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  });
+  return {
+    PreToolUse: [{
+      hooks: [async (input) => {
+        if (TOLKIEN_ENV_WRITE_TOOLS.has(input.tool_name)) {
+          if (!requested) {
+            requested = true;
+            try { onNeed?.(); } catch { /* noop */ }
+          }
+          return deny('Estoy creando tu entorno aislado de Tolkien (worktree + DB propia). Reintentá la edición/delegación en unos segundos: cuando el entorno esté listo tu cwd apunta a él y el cambio cae en tu copia, sin pisar otras sesiones.');
+        }
+        return {};
+      }],
+    }],
+  };
+}
+
+export function mergePreToolUseHooks(...sets) {
+  const pre = [];
+  for (const s of sets) {
+    if (s && Array.isArray(s.PreToolUse)) pre.push(...s.PreToolUse);
+  }
+  return pre.length ? { PreToolUse: pre } : null;
+}
+
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
 // romper a sus importadores; server y runner validan contra este mismo Set).
 export const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions', 'plan']);

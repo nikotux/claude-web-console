@@ -27,10 +27,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
 const CWD = config.projectDir;
 
-const IMPORTERS = ['clients', 'employees', 'employee-client-links'];
-const DEV_DB_PASSWORD = 'tolkien_dev_only'; // password fijo de la DB de dev (ver CLAUDE.md de tolkien)
+export const IMPORTERS = ['clients', 'employees', 'employee-client-links'];
+export const DEV_DB_PASSWORD = 'tolkien_dev_only'; // password fijo de la DB de dev (ver CLAUDE.md de tolkien)
 
-function readTolkienDbPort() {
+export function readTolkienDbPort() {
   if (process.env.CWC_TOLKIEN_DB_PORT?.trim()) return process.env.CWC_TOLKIEN_DB_PORT.trim();
   try {
     const env = fs.readFileSync(path.join(CWD, '.env'), 'utf8');
@@ -44,7 +44,7 @@ function readTolkienDbPort() {
 // :3010 usa una DB DEDICADA (`tolkien_console`) para aislarse de los otros
 // worktrees — se setea con CWC_TOLKIEN_DB_NAME en el .env de la consola. Así el
 // botón de refresh apunta SIEMPRE a la misma DB que el server que la lee.
-function readTolkienDbName() {
+export function readTolkienDbName() {
   return process.env.CWC_TOLKIEN_DB_NAME?.trim() || 'tolkien';
 }
 
@@ -83,7 +83,7 @@ export function runCmd(cmd, args, { timeout = 120000, env = process.env } = {}) 
 }
 
 // Extrae {creates,updates,softDeletes,failed} del log pino de un importer.
-function parseImporterOutput(name, out) {
+export function parseImporterOutput(name, out) {
   const lines = (out || '').split('\n');
   let done = null;
   let failed = false;

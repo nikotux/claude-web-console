@@ -13,6 +13,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
+import { resolveModelArg } from '../../core/claude-model.js';
 // Títulos humanos custom (titles.json), compartidos con el módulo tmux: se
 // consultan acá para que una sesión rehidratada tras un reinicio de Node
 // recupere el título que tenía antes de reiniciar (ver rehydrate() abajo —
@@ -170,7 +171,7 @@ class Session {
       // Default "Todo": arranca en modo bypass (--dangerously-skip-permissions)
       // — pedido del usuario 2026-07-06: sesión TUI nueva no pide permisos.
       const claudeCmd = model
-        ? `claude --dangerously-skip-permissions --model ${model}`
+        ? `claude --dangerously-skip-permissions --model ${resolveModelArg(model)}`
         : 'claude --dangerously-skip-permissions';
       this.proc.write(`${claudeCmd}\r`);
     }

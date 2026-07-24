@@ -74,6 +74,8 @@ import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
+import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, ENVS_DIR } from '../tolkien/env-store.js';
+import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs } from '../tolkien/env-shared.js';
 import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
   trim, toolSummary, toolDetail, resultText,
@@ -541,8 +543,9 @@ function moveTranscript(sid, fromCwd, toCwd) {
 // basename. Fuente backend equivalente a placeFor().
 function worldLabelFor(cwd) {
   const abs = path.resolve(cwd || '');
+  const envsDir = path.resolve(ENVS_DIR);
   if (abs === path.resolve(CONSOLE_ROOT)) return 'Mi Consola';
-  if (config.projectDir && abs === path.resolve(config.projectDir)) return 'Tolkien';
+  if (config.projectDir && (abs === path.resolve(config.projectDir) || abs.startsWith(envsDir + path.sep))) return 'Tolkien';
   return path.basename(abs) || String(cwd || '');
 }
 // F2 (anti-confusión, pedido de Niko): el repo GitHub REAL de un mundo (leído del
@@ -703,6 +706,8 @@ class Chat {
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
     this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
+    this.tolkienEnv = null;
+    this._provisioningEnv = false;
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
     this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
     this.owner = null;        // multi-tenant (N6): username del usuario dueño (de principalOf al crear). null = host/admin. Persiste. Gobierna el aislamiento del runner (runner-link.spawnRunner).
@@ -760,6 +765,15 @@ class Chat {
     return this;
   }
 
+  _wantsTolkienEnv() {
+    if (process.env.CWC_TOLKIEN_ENV_AUTO === '0') return false;
+    if (this.viewMode !== 'chat') return false;
+    if (this.permissionMode === 'plan') return false;
+    if (this.tolkienEnv) return false;
+    if (!config.projectDir) return false;
+    return path.resolve(this.cwd) === path.resolve(config.projectDir);
+  }
+
   // Garantiza UN runner corriendo y conectado (dedup de arranques en paralelo).
   _ensureEngine() {
     if (this.link) return Promise.resolve(true);
@@ -790,6 +804,7 @@ class Chat {
         // PLAN-519 F2: ejecutor Codex configurable (modelo+esfuerzo).
         codexModel: this.tandemCodex?.model || null,
         codexEffort: this.tandemCodex?.effort || null,
+        tolkienEnvAuto: this._wantsTolkienEnv(),
 
         // Identidad del chat en el Interfono (Fase 0.4): handle canónico
         // claude:<sessionId> — mismo que _busHandle(). Ahora SIEMPRE lo conocemos
@@ -890,6 +905,9 @@ class Chat {
       }
       case 'closed':
         this._engineDown(e.resumable);
+        return;
+      case 'tolkien-env-needed':
+        this._onTolkienEnvNeeded?.();
         return;
       default:
         // assistant / tool_use / tool_result / permission_* / error / user
@@ -1996,6 +2014,7 @@ class Chat {
       sessionId: this.sessionId,
       cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
+      tolkienEnv: this.tolkienEnv || null,
       ...extra,
     };
   }
@@ -2024,6 +2043,7 @@ class Chat {
       limbo: this.limbo, // 🌗 sesión-Limbo → grupo "Limbo" (alto riesgo) en Sesiones
       owner: this.owner || null, // multi-tenant (N6)
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
+      tolkienEnv: this.tolkienEnv || null,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver
       // ui/pacman.js, estado 'delegating') — visible en /api/chat/list aunque
       // la pestaña del chat esté cerrada.
@@ -2125,6 +2145,7 @@ class ChatManager {
     const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
     const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
     chat.onUpdate = () => this.persist();
+    chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(id);
     chat.packageRef = nextPackageRef(); // F2(b): ref estable del paquete (sobrevive moves)
     chat.limbo = !!limbo; // 🌗 sesión-Limbo (alto riesgo, ambos mundos) — dashboard Seguimientos
     chat.owner = owner || null; // multi-tenant (N6): dueño de la conversación → aislamiento del runner
@@ -2145,7 +2166,8 @@ class ChatManager {
   // — nada queda atrás. F3 (Archivar) es una acción MANUAL aparte, no un efecto de
   // mudar. "Un mundo a la vez" (Regla 12): tras el move el transcript existe SOLO
   // en el destino. Devuelve result.code para el endpoint.
-  async handoff(id, destCwd, task = null) {
+  async handoff(id, destCwd, task = null, opts = {}) {
+    const { internal = false } = opts;
     const chat = this.chats.get(id);
     if (!chat) return { ok: false, code: 404, error: 'Conversación inexistente.' };
     if (chat.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
@@ -2167,10 +2189,14 @@ class ChatManager {
     try { moveTranscript(chat.sessionId, fromCwd, dest); }
     catch (err) { return { ok: false, code: 500, error: `No se pudo mover el transcript: ${String(err?.message || err).slice(0, 200)}` }; }
     // 3. Manifiesto (misma carpeta de adjuntos: mismo chat id) + inyección al 1er turno.
-    try {
-      const md = writeHandoffManifest(chat.id, { fromCwd, toCwd: dest, title: chat.title, task, ref: chat.packageRef });
-      if (md) chat._pendingHandoffNote = md;
-    } catch { /* best-effort */ }
+    if (internal) {
+      chat._pendingHandoffNote = task || null;
+    } else {
+      try {
+        const md = writeHandoffManifest(chat.id, { fromCwd, toCwd: dest, title: chat.title, task, ref: chat.packageRef });
+        if (md) chat._pendingHandoffNote = md;
+      } catch { /* best-effort */ }
+    }
     // 4. Flipear el mundo EN EL LUGAR: mismo chat, nuevo cwd, resume de la MISMA sid.
     chat.cwd = dest;
     chat.resume = chat.sessionId;
@@ -2194,6 +2220,36 @@ class ChatManager {
     return { ok: true, code: 200, chat: chat.info() };
   }
 
+  async provisionTolkienEnvForChat(id) {
+    const chat = this.chats.get(id);
+    if (!chat || chat.closed || chat.archived || chat.viewMode !== 'chat') return;
+    if (chat.tolkienEnv || chat._provisioningEnv) return;
+    if (!config.projectDir) return;
+    if (path.resolve(chat.cwd) !== path.resolve(config.projectDir)) return;
+    chat._provisioningEnv = true;
+    try {
+      const envId = envIdForChat(id);
+      if (atCap()) { chat._push({ type: 'error', message: 'No se pudo crear tu entorno de Tolkien: se alcanzó el tope de entornos concurrentes. Cerrá alguno desde la tarjeta Tolkien y reintentá.' }); return; }
+      const port = allocatePort();
+      if (port === null) { chat._push({ type: 'error', message: 'No se pudo crear tu entorno de Tolkien: no hay puertos libres en el pool.' }); return; }
+      const db = dbNameFor(envId);
+      saveEnv({ id: envId, chatId: id, packageRef: chat.packageRef || null, base: 'main', port, db, branch: `cwc-env/${envId}`, unit: `tolkien-env-${envId}`, worktree: null, status: 'provisioning', error: '', createdAt: Date.now(), updatedAt: Date.now(), heartbeatAt: Date.now() });
+      let wt;
+      try { wt = createWorktree(envId, 'main'); }
+      catch (e) { patchEnv(envId, { status: 'error', error: String(e?.message || e).slice(0, 300) }); chat._push({ type: 'error', message: `No se pudo crear el worktree de tu entorno de Tolkien: ${String(e?.message || e).slice(0, 200)}` }); return; }
+      patchEnv(envId, { worktree: wt.worktree, branch: wt.branch, status: 'worktree-ready' });
+      spawnEnvProvision(envId);
+      chat.tolkienEnv = { id: envId, port, branch: wt.branch, db, worktree: wt.worktree };
+      const note = `Estás ahora en tu ENTORNO AISLADO de Tolkien: worktree propio (rama ${wt.branch}) + DB propia. El dev-server levanta en el puerto ${port} (entrá por la tarjeta Tolkien). Editá o delegá a Codex normalmente: tus cambios viven en esta copia y no pisan otras sesiones.`;
+      const r = await this.handoff(id, wt.worktree, note, { internal: true });
+      if (!r || r.ok === false) { chat._push({ type: 'error', message: `Tu entorno de Tolkien se creó pero no se pudo re-apuntar la sesión: ${r?.error || 'error'}. Reintentá la edición.` }); }
+    } catch (e) {
+      try { chat._push({ type: 'error', message: `Fallo al crear tu entorno de Tolkien: ${String(e?.message || e).slice(0, 200)}` }); } catch { /* noop */ }
+    } finally {
+      chat._provisioningEnv = false;
+    }
+  }
+
   // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
   persist() {
     // Registro durable append-only: TODOS los chats del map (incluidos los
@@ -2211,6 +2267,7 @@ class ChatManager {
         owner: c.owner || null, // multi-tenant (N6)
         ticket: c.ticket || null,
         learningId: c.learningId || null,
+        tolkienEnv: c.tolkienEnv || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
         // persiste explícito porque `model` solo no alcanza para distinguir
         // "elegí Sonnet a mano" de "AutoTux bajó a Sonnet" — ver constructor.
@@ -2261,12 +2318,14 @@ class ChatManager {
         resume: s.sessionId,
       });
       chat.onUpdate = () => this.persist();
+      chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(chat.id);
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.lastActivity = s.lastActivity || Date.now();
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
+      if (s.tolkienEnv) chat.tolkienEnv = s.tolkienEnv;
       chat.owner = s.owner || null; // multi-tenant (N6)
       if (s.limbo) chat.limbo = true; // 🌗 sesión-Limbo (alto riesgo)
       // AutoTux: restaurar la ELECCIÓN persistida tal cual (el constructor ya
@@ -2327,6 +2386,12 @@ class ChatManager {
       }
       this.chats.set(s.id, chat);
       count += 1;
+    }
+    try { reattachEnvs(); } catch { /* best-effort */ }
+    if (!this._tolkienReaperStarted) {
+      this._tolkienReaperStarted = true;
+      const IDLE = 6 * 60 * 60 * 1000; // 6h sin heartbeat
+      setInterval(() => { reapEnvs({ idleMs: IDLE }).catch(() => {}); }, 30 * 60 * 1000).unref?.();
     }
     if (adoptedRunnerTandem) this.persist();
     this._cleanupOrphans();

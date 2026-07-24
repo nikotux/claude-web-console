@@ -29,14 +29,15 @@ import {
   trim, toolSummary, toolDetail, resultText, makeInput,
 } from '../src/modules/chat/shared.js';
 import {
-  chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, isConsoleCwd,
+  chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, tolkienEnvPreToolUseHook,
+  mergePreToolUseHooks, isConsoleCwd,
 } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
-import { encodeCwd } from '../src/core/claude-model.js';
+import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
 
 // ---- argv ----
 const args = {};
@@ -64,6 +65,8 @@ const EFFORT = EFFORT_LEVELS.has(args.effort) ? args.effort : null;
 // Modelo TÁNDEM (PLAN-507): Claude razona/planea, Codex ejecuta. En este modo se
 // AGREGA la tool delegate_to_codex y se DENIEGAN las tools de escritura (abajo).
 const TANDEM = args.tandem === '1';
+// Entorno Tolkien efímero: hook instalado solo en spawns cuyo cwd es el Tolkien base.
+const TOLKIEN_ENV_AUTO = args['tolkien-env-auto'] === '1';
 // PLAN-519 F2: ejecutor Codex de Tándem configurable (modelo+esfuerzo). Sin arg
 // = defaults de gama alta (createCodexToolServer valida contra su whitelist).
 const CODEX_MODEL = args['codex-model'] || null;
@@ -314,11 +317,19 @@ function startEngine() {
   } catch (e) {
     console.error('[runner] no se pudo cargar la tool unifi:', e?.message);
   }
+  const hookSets = [];
+  if (TANDEM) hookSets.push(tandemPreToolUseHook());
+  if (TOLKIEN_ENV_AUTO) {
+    hookSets.push(tolkienEnvPreToolUseHook({
+      onNeed: () => emit({ type: 'tolkien-env-needed', chatId: ID }, { record: false }),
+    }));
+  }
+  const mergedHooks = mergePreToolUseHooks(...hookSets);
   q = query({
     prompt: input.gen(),
     options: chatQueryOptions({
       cwd: CWD,
-      model: MODEL,
+      model: resolveModelArg(MODEL),
       resume: RESUME,
       sessionId: SESSION_ID, // BUG-496: primer arranque de un chat nuevo (excluye resume)
       mode,
@@ -327,7 +338,7 @@ function startEngine() {
       // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
       tandem: TANDEM,
       ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
-      ...(TANDEM ? { hooks: tandemPreToolUseHook() } : {}),
+      ...(mergedHooks ? { hooks: mergedHooks } : {}),
       canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
     }),
   });
@@ -592,7 +603,7 @@ function handleCommand(c, msg) {
     return;
   }
   if (msg.t === 'set_model' && typeof msg.model === 'string' && msg.model) {
-    Promise.resolve(q?.setModel?.(msg.model)).then(() => {
+    Promise.resolve(q?.setModel?.(resolveModelArg(msg.model))).then(() => {
       currentModel = msg.model;
       emit({ type: 'model', model: currentModel });
     }).catch((err) => {

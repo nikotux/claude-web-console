@@ -31,6 +31,7 @@ import { classifyFinding } from './policy.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
+import { listEnvs, ENVS_DIR } from '../tolkien/env-store.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
@@ -235,6 +236,7 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/core/workspace-provision.js',       // clon read-only del repo de Tolkien por-inquilino (decisión 🆕1 de PLAN-500) — provisiona un checkout, no enlaza los Pad
   'src/modules/seguimientos/index.js',     // dashboard LIMBO (Regla dura #13 / PLAN-553): config.projectDir = cwd de la sesión-Limbo; aduana read-only + escritura solo a tickets con OK — no enlaza los Pad
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync
+  'src/modules/tolkien/env-shared.js',      // entornos Tolkien efímeros: gestiona git worktrees off config.projectDir (repo propio de Tolkien), no enlaza los Pad
   'bin/cwc-comms-runner.js',
   'bin/cwc-comms-chatbot-runner.js',
   'bin/cwc-comms-send-runner.js',
@@ -266,6 +268,27 @@ function checkCrossWorld() {
     return { id, label, status: 'warn', detail: `cruce cross-mundo NUEVO fuera del paquete en: ${found.join(', ')} — pasalo por el paquete-sesión (canal canónico) o, si es legítimo, sumalo al allowlist con motivo` };
   }
   return { id, label, status: 'ok', detail: `${CROSS_WORLD_ALLOW.size} cruces conocidos (grandfathered) · sin cruces nuevos fuera del paquete` };
+}
+
+function checkTolkienEnvs() {
+  const id = 'tolkien-envs';
+  const label = 'Entornos Tolkien de sesión';
+  let recs = [];
+  try { recs = listEnvs(); } catch { recs = []; }
+  let dirs = [];
+  try {
+    dirs = fss.readdirSync(ENVS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch { dirs = []; }
+  const ids = new Set(recs.map((r) => r?.id).filter(Boolean));
+  const orphanDirs = dirs.filter((d) => !ids.has(d));
+  const errored = recs.filter((r) => r?.status === 'error');
+  if (orphanDirs.length || errored.length) {
+    const parts = [`${recs.length} entorno(s)`];
+    if (errored.length) parts.push(`${errored.length} en error`);
+    if (orphanDirs.length) parts.push(`${orphanDirs.length} worktree(s) huérfano(s) sin registro (${orphanDirs.slice(0, 3).join(', ')})`);
+    return { id, label, status: 'warn', detail: parts.join(' · ') };
+  }
+  return { id, label, status: 'ok', detail: recs.length ? `${recs.length} entorno(s) registrado(s), todos sanos` : 'sin entornos activos' };
 }
 
 // Verifica el BACKBONE de Pad local (workspace `console`): hoy tasks/learning/
@@ -336,6 +359,7 @@ async function runChecks() {
     checkUnifiBridge(),
     Promise.resolve(checkTolkienContextSync()),
     Promise.resolve(checkCrossWorld()),
+    Promise.resolve(checkTolkienEnvs()),
     checkPadBackbone(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
@@ -527,7 +551,11 @@ export default {
     r.get('/scan', async (req, res) => {
       try {
         const { inventory, regenerated } = generateInventory({ force: req.query.force === '1' });
-        const unregistered = inventory.modules.filter((m) => !m.registered).map((m) => m.name);
+        // Fuente única: inventory.js ya calcula unregistered con la regla correcta
+        // (una carpeta SIN index.js — p.ej. `comms`, librerías shared — no cuenta).
+        // Fallback con la MISMA regla (hasIndex) para caches viejos sin `completeness`.
+        const unregistered = inventory.completeness?.unregistered
+          ?? inventory.modules.filter((m) => m.hasIndex && !m.registered).map((m) => m.name);
         let resources = null;
         try { resources = await systemSnapshot(); } catch { /* el dashboard igual muestra el resto */ }
         const pad = await padBackboneStats(); // backbone de Pad local (0 tokens, best-effort)

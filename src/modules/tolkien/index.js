@@ -24,6 +24,13 @@ import { findZeroTierIp } from '../../core/zerotier.js';
 import {
   runCmd, spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
 } from './refresh-shared.js';
+import {
+  listEnvs, getEnv, getEnvByChat, saveEnv, envIdForChat, dbNameFor, allocatePort, atCap, isEnvAlive, MAX_ENVS, PORT_RANGE,
+} from './env-store.js';
+import { teardownEnv, reattachEnvs, spawnEnvProvision, unitActive } from './env-shared.js';
+import {
+  spawnTemplateBuild, readTemplateJob, writeTemplateJob, templateStatus, isTemplateBuilding,
+} from './template-shared.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
@@ -52,6 +59,50 @@ function git(args, { timeout = 90000 } = {}) {
         resolve({ code: err ? err.code : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
       });
   });
+}
+
+function gitAt(cwd, args, { timeout = 90000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['-C', cwd, ...args], { timeout, env: process.env, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && (err.killed || err.signal || typeof err.code !== 'number')) {
+          return reject(err);
+        }
+        resolve({ code: err ? err.code : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
+      });
+  });
+}
+
+function isSafeEnvId(id) {
+  return typeof id === 'string' && id !== '.' && id !== '..' && /^[A-Za-z0-9._-]+$/.test(id);
+}
+
+async function fanoutUpdateEnvs() {
+  const results = [];
+  for (const rec of listEnvs()) {
+    if (!isEnvAlive(rec) || !rec?.worktree) continue;
+    try {
+      const dirty = await gitAt(rec.worktree, ['status', '--porcelain']);
+      if (dirty.code !== 0) {
+        results.push({ id: rec.id, branch: rec.branch, result: 'status-failed' });
+        continue;
+      }
+      if (dirty.stdout) {
+        results.push({ id: rec.id, branch: rec.branch, result: 'skipped-dirty' });
+        continue;
+      }
+      const reb = await gitAt(rec.worktree, ['rebase', 'origin/main']);
+      if (reb.code === 0) {
+        results.push({ id: rec.id, branch: rec.branch, result: 'rebased' });
+      } else {
+        await gitAt(rec.worktree, ['rebase', '--abort']).catch(() => ({ code: 1, stdout: '', stderr: '' }));
+        results.push({ id: rec.id, branch: rec.branch, result: 'conflict' });
+      }
+    } catch (err) {
+      results.push({ id: rec?.id || null, branch: rec?.branch || null, result: 'error', detail: String(err?.message || err).slice(0, 300) });
+    }
+  }
+  return results;
 }
 
 // Timestamp del último fetch/pull exitoso (freshness del "N detrás"). Se
@@ -177,12 +228,22 @@ export default {
     r.post('/refresh-data', (req, res) => {
       try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede refrescar la data local.' });
-        if (isRefreshRunning(readRefreshJob())) return res.json({ started: false, running: true });
+        let templateBuild = false;
+        try {
+          if (!isTemplateBuilding(readTemplateJob())) {
+            writeTemplateJob({ running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null });
+            spawnTemplateBuild();
+            templateBuild = true;
+          }
+        } catch (err) {
+          console.error('[tolkien] No se pudo iniciar el build de plantilla:', err.message || err);
+        }
+        if (isRefreshRunning(readRefreshJob())) return res.json({ started: false, running: true, templateBuild });
         // Reserva SINCRÓNICA del job 'running' en disco (antes de spawnear) para
         // dedup + para que el GET lo vea de inmediato; el runner lo completa.
         writeRefreshJob({ running: true, result: null, error: null, startedAt: Date.now(), finishedAt: null });
         spawnRefreshRunner();
-        res.json({ started: true, running: true });
+        res.json({ started: true, running: true, templateBuild });
       } catch (e) {
         res.status(500).json({ error: 'No se pudo iniciar el refresh de datos: ' + (e.message || e) });
       }
@@ -191,6 +252,82 @@ export default {
     // Estado del último/actual refresh (para el polling del frontend) — solo lee disco.
     r.get('/refresh-data/status', (req, res) => {
       res.json(refreshStatus(readRefreshJob()));
+    });
+
+    r.get('/envs', (req, res) => {
+      const envs = listEnvs()
+        .slice()
+        .sort((a, b) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0))
+        .map((e) => ({
+          id: e.id,
+          chatId: e.chatId,
+          packageRef: e.packageRef,
+          branch: e.branch,
+          port: e.port,
+          db: e.db,
+          status: e.status,
+          error: e.error,
+          worktree: e.worktree,
+          createdAt: e.createdAt,
+          updatedAt: e.updatedAt,
+          heartbeatAt: e.heartbeatAt,
+        }));
+      res.json({ envs, max: MAX_ENVS, portRange: PORT_RANGE });
+    });
+
+    r.get('/envs/:id', (req, res) => {
+      const id = String(req.params.id || '');
+      if (!isSafeEnvId(id)) return res.status(400).json({ error: 'Id de entorno inválido.' });
+      const rec = getEnv(id);
+      if (!rec) return res.status(404).json({ error: 'Entorno no encontrado.' });
+      res.json(rec);
+    });
+
+    r.post('/envs/provision', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede crear entornos.' });
+      const chatId = req.body?.chatId;
+      const base = req.body?.base;
+      if (!chatId) return res.status(400).json({ error: 'Falta chatId.' });
+      const id = envIdForChat(chatId);
+      const rec = getEnv(id);
+      if (rec && isEnvAlive(rec)) return res.json({ id, already: true, status: rec.status });
+      if (atCap()) return res.status(409).json({ error: `Se alcanzó el tope de entornos concurrentes (${MAX_ENVS}). Cerrá alguno.` });
+      const port = allocatePort();
+      if (port === null) return res.status(503).json({ error: 'No hay puertos libres en el pool.' });
+      saveEnv({
+        id,
+        chatId,
+        packageRef: req.body?.packageRef || null,
+        base: base || 'main',
+        port,
+        db: dbNameFor(id),
+        branch: `cwc-env/${id}`,
+        worktree: null,
+        unit: `tolkien-env-${id}`,
+        status: 'provisioning',
+        error: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        heartbeatAt: Date.now(),
+      });
+      spawnEnvProvision(id);
+      res.json({ id, status: 'provisioning', port });
+    });
+
+    r.post('/envs/:id/teardown', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede cerrar entornos.' });
+      const id = String(req.params.id || '');
+      if (!isSafeEnvId(id)) return res.status(400).json({ error: 'Id de entorno inválido.' });
+      const force = req.body?.force === true;
+      const r2 = await teardownEnv(id, { force });
+      if (r2.dirty && !force) {
+        return res.status(409).json({
+          ok: false,
+          dirty: true,
+          error: 'El entorno tiene cambios sin commitear. Confirmá para descartarlos (force).',
+        });
+      }
+      res.json(r2);
     });
 
     r.get('/status', async (req, res) => {
@@ -244,12 +381,14 @@ export default {
           log.push({ step: 'ff-main', code: ff.code, out: ff.stdout || ff.stderr || '(ya al día)' });
           const st = await status();
           const mainUpdated = ff.code === 0;
+          const envs = await fanoutUpdateEnvs();
           return res.json({
             ok: true,
             onMain: false,
             mainUpdated,
             log,
             status: st,
+            envs,
             warn: mainUpdated ? undefined
               : 'Tu main local no se pudo adelantar solo (puede tener commits propios o haber divergido de origin/main). Tu rama actual quedó intacta; revisá main a mano si hace falta.',
           });
@@ -338,7 +477,8 @@ export default {
 
         const st = await status();
         const ok = pull.code === 0 && !popConflict;
-        res.json({ ok, onMain: true, popConflict, stashed, log, status: st });
+        const envs = await fanoutUpdateEnvs();
+        res.json({ ok, onMain: true, popConflict, stashed, log, status: st, envs });
       } catch {
         res.status(500).json({ error: 'Falló la actualización.', log });
       } finally {
@@ -515,17 +655,13 @@ export default {
         ));
         return;
       }
-      // Allowlist explícita para los accesos locales: "Tolkien local" (:3010)
-      // y "Tolkien pruebas" (:3011). Ambos comparten la cookie host-only
-      // `tolkien.session`, así que entrar a uno reemplaza la sesión del otro
-      // hasta volver a clickear; tradeoff conocido y aceptado.
-      const ALLOWED_LOCAL_PORTS = ['3010', '3011'];
+      const ALLOWED_LOCAL_PORTS = ['3010', ...listEnvs().filter(isEnvAlive).map((e) => String(e.port)).filter(Boolean)];
       const defaultPort = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
       const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');
       if (requestedPort && !ALLOWED_LOCAL_PORTS.includes(requestedPort)) {
         res.status(400).type('html').send(localEnterErrPage(
           'Puerto no permitido',
-          `Puerto no permitido: ${requestedPort}. Permitidos: 3010, 3011.`,
+          `Puerto no permitido: ${requestedPort}. Permitidos: ${ALLOWED_LOCAL_PORTS.join(', ')}.`,
         ));
         return;
       }

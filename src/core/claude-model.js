@@ -46,6 +46,17 @@ const MODEL_KEYS = ['opus', 'sonnet', 'haiku', 'fable'];
 // Valores aceptados por `claude --model` / `/model` que expone la UI
 // (dropdown de sesiones y lanzador). Fuente única para validación.
 export const VALID_MODELS = new Set(['opusplan', 'fable', 'opus', 'sonnet', 'haiku', 'default']);
+// Repunte de tier → ID de modelo concreto para el CLI/SDK (2026-07-24, repoint
+// aprobado por Niko): el alias 'opus' de la consola pasa a resolver a Claude
+// Opus 5. Mantiene el alias INTERNO intacto (key/costeo/color/router siguen
+// derivando de keyOf, que bucketea 'claude-opus-5' en 'opus'); esto SOLO cambia
+// el STRING que se le entrega a `claude --model` / q.setModel(). La "Opus" de la
+// consola ES Opus 5 (AutoTux tope, Tándem razonador y elección manual). Opus 4.8
+// costea igual ($5/$25) si algún día vuelve a aparecer.
+const MODEL_ARG_OVERRIDES = { opus: 'claude-opus-5' };
+export function resolveModelArg(model) {
+  return (model && MODEL_ARG_OVERRIDES[model]) || model;
+}
 export function keyOf(id) {
   const low = (id || '').toLowerCase();
   // 'mythos' se COSTEA como fable (pin/pout de tokens usan /fable|mythos/); sin
