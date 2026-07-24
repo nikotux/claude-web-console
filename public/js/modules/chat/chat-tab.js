@@ -11,7 +11,7 @@ import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
-import { modelColor, modelName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
+import { modelColor, modelName, tierName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
 import { placeFor } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
@@ -1289,7 +1289,7 @@ export class ChatTab {
     this._model = model || null;
     this._renderModelBadge();
     if (auto && prev && this._modelChoice === 'auto' && prev !== model) {
-      this._line('chat-switch-note', t('chat.model.autoSwitch', '🤖 AutoTux cambió el modelo a {model} sin que hagas nada.', { model: modelName(model) }));
+      this._line('chat-switch-note', t('chat.model.autoSwitch', '🤖 AutoTux cambió el modelo a {model} sin que hagas nada.', { model: tierName(model) }));
     }
   }
 
@@ -1328,7 +1328,7 @@ export class ChatTab {
       this.modelPillEl.classList.toggle('chat-model-pill--two', !!effTxt);
     };
     if (choice === 'auto') {
-      const level = ROUTER_MANAGED_MODELS.includes(model) ? modelName(model) : '…';
+      const level = ROUTER_MANAGED_MODELS.includes(model) ? tierName(model) : '…';
       paint(t('chat.model.autoBadge', '🤖 AutoTux: {level}', { level }), modelColor(ROUTER_MANAGED_MODELS.includes(model) ? model : 'unknown'),
         t('chat.model.autoTitle', 'AutoTux (router de modelo automático) — nivel actual: {level}', { level }));
     } else if (choice === 'tandem') {

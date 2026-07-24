@@ -1,0 +1,698 @@
+{
+  "generatedAt": "2026-07-24T19:26:13.010Z",
+  "sourceBytes": 572637,
+  "block": {
+    "startLine": 627,
+    "endLine": 5163
+  },
+  "entries": [
+    {
+      "key": "src/server.js",
+      "level": 1,
+      "dest": "__ROOT__",
+      "lines": 1,
+      "bytes": 90,
+      "indent": ""
+    },
+    {
+      "key": "src/core/",
+      "level": 1,
+      "dest": "src/core/CLAUDE.md",
+      "lines": 139,
+      "bytes": 13449,
+      "indent": "                            "
+    },
+    {
+      "key": "src/modules/<nombre>/index.js",
+      "level": 1,
+      "dest": "__ROOT__",
+      "lines": 2,
+      "bytes": 207,
+      "indent": "                            "
+    },
+    {
+      "key": "terminal/",
+      "level": 2,
+      "dest": "src/modules/terminal/CLAUDE.md",
+      "lines": 1,
+      "bytes": 104,
+      "indent": ""
+    },
+    {
+      "key": "chat/",
+      "level": 2,
+      "dest": "src/modules/chat/CLAUDE.md",
+      "lines": 1057,
+      "bytes": 102740,
+      "indent": "                            "
+    },
+    {
+      "key": "files/ stats/ tmux/ admin/ health/",
+      "level": 2,
+      "dest": "__ROOT__",
+      "lines": 1,
+      "bytes": 37,
+      "indent": ""
+    },
+    {
+      "key": "learning/",
+      "level": 2,
+      "dest": "src/modules/learning/CLAUDE.md",
+      "lines": 163,
+      "bytes": 16298,
+      "indent": "                            "
+    },
+    {
+      "key": "tasks/",
+      "level": 2,
+      "dest": "src/modules/tasks/CLAUDE.md",
+      "lines": 144,
+      "bytes": 13992,
+      "indent": "                            "
+    },
+    {
+      "key": "audio/",
+      "level": 2,
+      "dest": "src/modules/audio/CLAUDE.md",
+      "lines": 49,
+      "bytes": 4800,
+      "indent": "                            "
+    },
+    {
+      "key": "retro/",
+      "level": 2,
+      "dest": "src/modules/retro/CLAUDE.md",
+      "lines": 159,
+      "bytes": 15489,
+      "indent": "                            "
+    },
+    {
+      "key": "seguimientos/",
+      "level": 2,
+      "dest": "src/modules/seguimientos/CLAUDE.md",
+      "lines": 67,
+      "bytes": 6243,
+      "indent": "                            "
+    },
+    {
+      "key": "interfono/",
+      "level": 2,
+      "dest": "src/modules/interfono/CLAUDE.md",
+      "lines": 99,
+      "bytes": 9617,
+      "indent": "                            "
+    },
+    {
+      "key": "comms/",
+      "level": 2,
+      "dest": "src/modules/comms/CLAUDE.md",
+      "lines": 93,
+      "bytes": 8969,
+      "indent": "                            "
+    },
+    {
+      "key": "bugs/",
+      "level": 2,
+      "dest": "src/modules/bugs/CLAUDE.md",
+      "lines": 68,
+      "bytes": 6090,
+      "indent": "                            "
+    },
+    {
+      "key": "tokens/",
+      "level": 2,
+      "dest": "src/modules/tokens/CLAUDE.md",
+      "lines": 291,
+      "bytes": 28282,
+      "indent": "                            "
+    },
+    {
+      "key": "tolkien/",
+      "level": 2,
+      "dest": "src/modules/tolkien/CLAUDE.md",
+      "lines": 103,
+      "bytes": 9963,
+      "indent": "                            "
+    },
+    {
+      "key": "projects/",
+      "level": 2,
+      "dest": "src/modules/projects/CLAUDE.md",
+      "lines": 53,
+      "bytes": 4837,
+      "indent": "                            "
+    },
+    {
+      "key": "backup/",
+      "level": 2,
+      "dest": "src/modules/backup/CLAUDE.md",
+      "lines": 66,
+      "bytes": 6067,
+      "indent": "                            "
+    },
+    {
+      "key": "bugfixes/",
+      "level": 2,
+      "dest": "src/modules/bugfixes/CLAUDE.md",
+      "lines": 276,
+      "bytes": 25497,
+      "indent": "                            "
+    },
+    {
+      "key": "env-vars/",
+      "level": 2,
+      "dest": "src/modules/env-vars/CLAUDE.md",
+      "lines": 40,
+      "bytes": 3721,
+      "indent": "                            "
+    },
+    {
+      "key": "skills/",
+      "level": 2,
+      "dest": "src/modules/skills/CLAUDE.md",
+      "lines": 12,
+      "bytes": 1124,
+      "indent": "                            "
+    },
+    {
+      "key": "mcps/",
+      "level": 2,
+      "dest": "src/modules/mcps/CLAUDE.md",
+      "lines": 96,
+      "bytes": 9313,
+      "indent": "                            "
+    },
+    {
+      "key": "connections/",
+      "level": 2,
+      "dest": "src/modules/connections/CLAUDE.md",
+      "lines": 29,
+      "bytes": 2812,
+      "indent": "                            "
+    },
+    {
+      "key": "unifi/",
+      "level": 2,
+      "dest": "src/modules/unifi/CLAUDE.md",
+      "lines": 36,
+      "bytes": 3352,
+      "indent": "                            "
+    },
+    {
+      "key": "updates/",
+      "level": 2,
+      "dest": "src/modules/updates/CLAUDE.md",
+      "lines": 180,
+      "bytes": 18611,
+      "indent": "                            "
+    },
+    {
+      "key": "public/index.html + js/main.js",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 79,
+      "bytes": 7277,
+      "indent": "                            "
+    },
+    {
+      "key": "public/js/modules/",
+      "level": 1,
+      "dest": "public/js/modules/CLAUDE.md",
+      "lines": 342,
+      "bytes": 31689,
+      "indent": "                            "
+    },
+    {
+      "key": "public/js/ui/",
+      "level": 1,
+      "dest": "public/js/ui/CLAUDE.md",
+      "lines": 141,
+      "bytes": 13535,
+      "indent": "                            "
+    },
+    {
+      "key": "public/js/modules/chat/chat-tab.js",
+      "level": 1,
+      "dest": "public/js/modules/CLAUDE.md",
+      "lines": 1,
+      "bytes": 105,
+      "indent": ""
+    },
+    {
+      "key": "public/css/tokens.css",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 1,
+      "bytes": 82,
+      "indent": ""
+    },
+    {
+      "key": "public/css/ui.css",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 20,
+      "bytes": 1985,
+      "indent": "                            "
+    },
+    {
+      "key": "public/css/fm.css",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 1,
+      "bytes": 98,
+      "indent": ""
+    },
+    {
+      "key": "public/archivos.html + js/filemanager/fm.js",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 1,
+      "bytes": 107,
+      "indent": ""
+    },
+    {
+      "key": "public/raw.html + js/rawview/raw.js + css/raw.css",
+      "level": 1,
+      "dest": "public/CLAUDE.md",
+      "lines": 136,
+      "bytes": 11138,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-whatsapp-daemon.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 916,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-whatsapp-work.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 941,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-attach.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 21,
+      "bytes": 1971,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-setup.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 15,
+      "bytes": 1456,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-adduser.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 679,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-infisical-login-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 5,
+      "bytes": 465,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-chat-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 1,
+      "bytes": 85,
+      "indent": ""
+    },
+    {
+      "key": "bin/cwc-triage-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 929,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-health-scan-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 8,
+      "bytes": 707,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-health-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 1,
+      "bytes": 109,
+      "indent": ""
+    },
+    {
+      "key": "bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 12,
+      "bytes": 1148,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-health-resolve.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 6,
+      "bytes": 547,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-health-proposal-mark.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 12,
+      "bytes": 1187,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-bugfix-link.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 11,
+      "bytes": 991,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-desk-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 4,
+      "bytes": 360,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-desk.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 696,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-sharepoint.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 11,
+      "bytes": 1064,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-projects-analyze-runner.js análisis IA (guardián) de UN cambio de sección de contexto",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 615,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-commitmsg-runner.js generación IA del mensaje de commit del botón \"Commit (sin push)\"",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 648,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-audio-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 8,
+      "bytes": 708,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-retro-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 11,
+      "bytes": 1058,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-retro-curate-runner.js CURADURÍA IA del registro de MEJORA CONTINUA (ROAD-256,",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 6,
+      "bytes": 563,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-retro-feedback-runner.js \"💬 Feedback de Chris\" — ingesta MANUAL (pegar correo/",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 644,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-retro-email-runner.js \"💬 Feedback de Chris\" — ESCANEO AUTOMÁTICO de correo",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 955,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-retro-teams-runner.js \"💬 Feedback de Chris\" — ESCANEO AUTOMÁTICO de Microsoft",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 9,
+      "bytes": 841,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón \"🧠",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 9,
+      "bytes": 867,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-learning-explain-runner.js \"🎓 Explicame esto\" del MÓDULO DE APRENDIZAJE",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 16,
+      "bytes": 1584,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-learning-context-runner.js \"🎙️ Contexto adicional\" de un TEMA de aprendizaje",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 13,
+      "bytes": 1239,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-learning-analyze-runner.js \"🧠 Analizar aprendizaje\" del MÓDULO DE APRENDIZAJE,",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 12,
+      "bytes": 1171,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-investigate-runner.js investigación a fondo de UN PR (¿la pelota es tuya o de Chris,",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 5,
+      "bytes": 434,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-ticket-investigate-runner.js investigación de CONTEXTO de UN ticket SIN PR (¿por qué",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 6,
+      "bytes": 587,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-optimize-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 23,
+      "bytes": 2080,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-coherence-runner.js MÓDULO DE COHERENCIA (subsección \"🔗 Coherencia\" de la pestaña",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 26,
+      "bytes": 2394,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-bus.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 12,
+      "bytes": 1081,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/install-interfono.js + bin/uninstall-interfono.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 637,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/install-pelota.js + bin/uninstall-pelota.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 9,
+      "bytes": 809,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 4,
+      "bytes": 367,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms-chatbot-runner.js motor del CHATBOT del módulo comms (botón \"🤖 Chatbot\"",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 11,
+      "bytes": 1086,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo comms:",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 157,
+      "bytes": 14700,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms-send-runner.js EJECUTOR desacoplado de envíos Desk/Teams del GATEWAY de",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 589,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms-analyze-runner.js análisis IA de UN hilo de comunicaciones (resumen +",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 583,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-comms.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 4,
+      "bytes": 369,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-observe.js + (un)install-observer.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 1,
+      "bytes": 82,
+      "indent": ""
+    },
+    {
+      "key": "bin/cwc-inventory.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 1,
+      "bytes": 101,
+      "indent": ""
+    },
+    {
+      "key": "bin/cwc-tolkien-refresh-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 7,
+      "bytes": 663,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-tolkien-template-build.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 4,
+      "bytes": 364,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-tolkien-env-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 3,
+      "bytes": 292,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-updates-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 1030,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-updates-analyze-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 8,
+      "bytes": 723,
+      "indent": "                            "
+    },
+    {
+      "key": "bin/cwc-ticket-context-runner.js",
+      "level": 1,
+      "dest": "bin/CLAUDE.md",
+      "lines": 10,
+      "bytes": 916,
+      "indent": "                            "
+    },
+    {
+      "key": "systemd/claude-web-console.service",
+      "level": 1,
+      "dest": "__ROOT__",
+      "lines": 1,
+      "bytes": 86,
+      "indent": ""
+    },
+    {
+      "key": "docs/",
+      "level": 1,
+      "dest": "__ROOT__",
+      "lines": 1,
+      "bytes": 101,
+      "indent": ""
+    }
+  ]
+}

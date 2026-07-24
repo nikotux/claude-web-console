@@ -70,9 +70,9 @@ const now = () => Date.now();
 // A partir del censo arma el plan ordenado. `scope.apt` decide si el SO entra.
 // `includeMajors` = nombres de paquetes cuyo SALTO MAYOR el usuario tildó para
 // forzar (override explícito). `verdicts` = veredictos IA (analyze) por riskKey:
-// un major 🟢 seguro + confianza ALTA se auto-incluye SIN que el usuario tilde
-// nada. En AMBOS casos se aplican a `latest` DESPUÉS de los in-range con la misma
-// verificación node --check + abort. Las betas/RC NUNCA entran (isPrerelease).
+// el veredicto IA informa, NO decide. El 2026-07-24 archiver@8 entró como 🟢
+// seguro/alta sin tilde y tumbó el server en runtime; desde entonces ningún major
+// se auto-incluye. Las betas/RC NUNCA entran (isPrerelease).
 export function buildPlan(census, scope = { apt: true }, includeMajors = [], verdicts = {}) {
   const libs = census?.npm?.libs || [];
   const wantMajor = new Set((includeMajors || []).map(String));
@@ -105,16 +105,15 @@ export function buildPlan(census, scope = { apt: true }, includeMajors = [], ver
       .map(({ lib, blockedReason }) => ({ name: lib.name, from: lib.current, to: lib.latest, reason: blockedReason })),
     ...prereleaseBlocked,
   ];
-  // Majors a APLICAR: (a) AUTO — veredicto 🟢 seguro + confianza ALTA; o (b)
-  // TILDABLE — cualquier otro veredicto no bloqueante, solo si el usuario lo
-  // incluyó. NUNCA entran los bloqueados ni las betas/RC.
+  // Majors a APLICAR: solo los que el usuario tildó. El veredicto IA se conserva
+  // para mostrar contexto, pero no autoriza auto-updates: archiver@8 (2026-07-24)
+  // pasó como 🟢 seguro/alta y rompió recién al importar el árbol backend.
   const majorsToApply = majorCandidates
     .map(({ lib: l, verdict: v, blockedReason }) => {
       if (blockedReason) return null;
-      const autoSafe = v && v.level === 'seguro' && v.confidence === 'alta';
       const forced = wantMajor.has(l.name);
-      if (!autoSafe && !forced) return null;
-      return { name: l.name, from: l.current, to: l.latest, auto: autoSafe && !forced, verdict: v ? { level: v.level, confidence: v.confidence } : null };
+      if (!forced) return null;
+      return { name: l.name, from: l.current, to: l.latest, auto: false, verdict: v ? { level: v.level, confidence: v.confidence } : null };
     })
     .filter(Boolean);
   const claudeCli = census?.claudeCli && census.claudeCli.manageable !== false && !census.claudeCli.upToDate && census.claudeCli.latest
@@ -208,6 +207,18 @@ export async function verifySyntax() {
   return { ok: results.every((r) => r.ok), results: results.filter((r) => !r.ok) };
 }
 
+// node --check es CIEGO a los imports: un paquete que pasa de CJS a ESM y deja
+// de exportar `default` PARSEA perfecto y revienta recién al cargarse (archiver
+// v8 2026-07-24, cookie v2 2026-07-21 — las dos veces el server quedó en
+// crash-loop). Esto IMPORTA de verdad el árbol entero de módulos backend en un
+// proceso aparte: registry.js encadena todos los src/modules/*/index.js, así que
+// un import roto en cualquiera falla acá, ANTES de tocar el servicio.
+export async function verifyRuntime({ timeoutMs = 60_000 } = {}) {
+  const code = "import('./src/core/registry.js').then(() => process.exit(0)).catch((e) => { console.error(e?.message || String(e)); process.exit(1); })";
+  const r = await run('node', ['-e', code], { timeout: timeoutMs });
+  return { ok: !!r.ok, error: r.ok ? null : (r.stderr || r.stdout || 'el import del árbol de módulos falló').trim().slice(0, 300) };
+}
+
 // ───────── Reinicio del servicio ─────────
 // El runner SOBREVIVE esto (KillMode=process). Espera a que el server vuelva sano.
 export async function restartService() {
@@ -271,6 +282,21 @@ export async function revertNpmChanges() {
   const inst = await run('npm', ['install'], { timeout: 600_000 });
   const ok = !inst.failed && inst.ok;
   return { ok, detail: ok ? 'package.json/package-lock.json revertidos y npm install OK' : (inst.stderr || inst.stdout || 'npm install falló').trim().slice(0, 300) };
+}
+
+// Revert QUIRÚRGICO: reinstala SOLO los paquetes indicados a su versión previa,
+// dejando intactos los updates que SÍ funcionaron. Nace del incidente de
+// archiver@8 (2026-07-24): el revert total (git checkout del package.json)
+// arrastraba el update bueno del Agent SDK junto con el major que rompía, y
+// Niko quedaba en un bucle donde actualizar nunca "pegaba".
+export async function revertPackages(pkgs = []) {
+  const results = [];
+  for (const p of pkgs) {
+    const r = await run('npm', ['install', `${p.name}@${p.from}`], { timeout: 600_000 });
+    results.push({ name: p.name, to: p.from, ok: !!r.ok && !r.failed });
+  }
+  const ok = results.length > 0 && results.every((r) => r.ok);
+  return { ok, results, detail: results.map((r) => `${r.name}@${r.to}${r.ok ? '' : ' (falló)'}`).join(', ') };
 }
 
 export function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

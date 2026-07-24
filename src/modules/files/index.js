@@ -14,7 +14,8 @@
 //   POST /api/files/trash/purge   { id? }
 import express from 'express';
 import multer from 'multer';
-import archiver from 'archiver';
+// Archiver v8 es ESM y expone clases nombradas, sin default export.
+import { ZipArchive } from 'archiver';
 import fs from 'node:fs/promises';
 import fss from 'node:fs';
 import path from 'node:path';
@@ -357,7 +358,7 @@ export default {
         const name = path.basename(abs) || 'home';
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="${name}.zip"`);
-        const archive = archiver('zip', { zlib: { level: 6 } });
+        const archive = new ZipArchive({ zlib: { level: 6 } });
         archive.on('error', () => {
           try {
             if (!res.headersSent) return res.status(500).json({ error: 'No se pudo generar el zip.' });
@@ -398,7 +399,7 @@ export default {
         }
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', 'attachment; filename="archivos.zip"');
-        const archive = archiver('zip', { zlib: { level: 6 } });
+        const archive = new ZipArchive({ zlib: { level: 6 } });
         archive.on('error', () => {
           try {
             if (!res.headersSent) return res.status(500).json({ error: 'No se pudo generar el zip.' });

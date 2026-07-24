@@ -903,7 +903,7 @@
   "system.projectContext.chatModelTandem": "Tandem (Opus + Codex)",
   "system.projectContext.chatModelOpusPlan": "Opus plan",
   "system.projectContext.chatModelFable": "Fable",
-  "system.projectContext.chatModelOpus": "Opus",
+  "system.projectContext.chatModelOpus": "Opus 5",
   "system.projectContext.chatModelSonnet": "Sonnet",
   "system.projectContext.chatModelHaiku": "Haiku",
   "system.projectContext.chatModelAccountDefault": "Account default",

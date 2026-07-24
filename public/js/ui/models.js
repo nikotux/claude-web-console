@@ -14,6 +14,17 @@ export function modelName(key, fallbackId = '') {
   return key[0].toUpperCase() + key.slice(1);
 }
 
+// Etiqueta de TIER para estado EN VIVO (badge del chat, notita de AutoTux):
+// el alias interno sigue siendo 'opus', pero la consola corre Claude Opus 5
+// (ver resolveModelArg en core/claude-model.js), así que lo VISIBLE dice
+// "Opus 5". DELIBERADAMENTE separada de modelName(): esa la usa el modal Uso
+// para el consumo HISTÓRICO por modelo, donde renombrar el tier relabelaría
+// como "Opus 5" gasto viejo de Opus 4.8 (que costea igual pero no fue Opus 5).
+const MODEL_TIER_LABEL = { opus: 'Opus 5' };
+export function tierName(key, fallbackId = '') {
+  return MODEL_TIER_LABEL[key] || modelName(key, fallbackId);
+}
+
 // Ícono diferenciador por modelo (2026-07-06, pedido del usuario: AutoTux ya
 // tenía el suyo — 🤖 — y el resto de los modelos quedaban como texto pelado
 // en el chip .sess-model de Sesiones; ahora TODOS tienen uno, mismo criterio

@@ -207,6 +207,39 @@ function checkTolkienContextSync() {
   return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
 }
 
+const MODULES_WITHOUT_FICHA = new Set(['files', 'stats', 'tmux', 'admin']);
+
+// Regla 14 / PLAN-1862: sin este check, un módulo nuevo puede nacer sin ficha
+// CLAUDE.md y su contexto se pierde en silencio.
+function checkFichasModulo() {
+  const id = 'fichas-modulo';
+  const label = 'Fichas de módulo (CLAUDE.md por carpeta)';
+  const moduleDirs = fss.readdirSync(path.join(ROOT, 'src', 'modules'), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .filter((name) => !MODULES_WITHOUT_FICHA.has(name))
+    .sort();
+  const required = [
+    ...moduleDirs.map((name) => path.join('src', 'modules', name, 'CLAUDE.md')),
+    path.join('src', 'core', 'CLAUDE.md'),
+    path.join('bin', 'CLAUDE.md'),
+    path.join('public', 'CLAUDE.md'),
+    path.join('public', 'js', 'ui', 'CLAUDE.md'),
+    path.join('public', 'js', 'modules', 'CLAUDE.md'),
+  ];
+  const missing = required.filter((rel) => !fss.existsSync(path.join(ROOT, rel)))
+    .map((rel) => rel.split(path.sep).join('/'));
+  if (missing.length) {
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `faltan fichas: ${missing.join(', ')} · Regla 14: crear un módulo nuevo incluye crear su ficha`,
+    };
+  }
+  return { id, label, status: 'ok', detail: `${required.length} fichas presentes` };
+}
+
 // F7 (PLAN-373/PEND-466) — AUDIT de CRUCES ENTRE MUNDOS. GRANDFATHER de los
 // cruces LEGÍTIMOS conocidos (los que hoy tocan el mundo externo Tolkien —
 // mapeados en DOC-468) + DETECCIÓN de cualquier cruce NUEVO: un archivo que
@@ -358,6 +391,7 @@ async function runChecks() {
     Promise.resolve(checkDeps()),
     checkUnifiBridge(),
     Promise.resolve(checkTolkienContextSync()),
+    Promise.resolve(checkFichasModulo()),
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     checkPadBackbone(),

@@ -59,7 +59,7 @@ const bareNameOf = (terminalId) => `cwct-${terminalId}`;
 const TUI_MODEL_OPTIONS = [
   ['opusplan', 'Opus plan'],
   ['fable', 'Fable'],
-  ['opus', 'Opus'],
+  ['opus', 'Opus 5'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],
   ['default', 'Default de la cuenta'],
@@ -790,7 +790,7 @@ export default {
     // y en móvil — convención colapsable del proyecto; funcionalmente idéntico.)
     function pickModelForChat(c) {
       const m = dialog.openModal({ title: t('sessions.model.title', 'Modelo y protocolo'), width: 460 });
-      const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable']];
+      const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus 5'], ['fable', 'Fable']];
       const CODEX = [['', t('sessions.model.codexNone', 'Ninguno (Manual)')], ['gpt-5.5', 'GPT-5.5'], ['gpt-5.4', 'GPT-5.4'], ['gpt-5.4-mini', 'GPT-5.4 mini'], ['gpt-5.3-codex-spark', 'GPT-5.3 Spark']];
       const EFFS = [['low', t('sessions.eff.low', 'Bajo')], ['medium', t('sessions.eff.medium', 'Medio')], ['high', t('sessions.eff.high', 'Alto')], ['xhigh', t('sessions.eff.xhigh', 'Muy alto')], ['max', t('sessions.eff.max', 'Máximo')]];
       const CLOUDSET = new Set(['haiku', 'sonnet', 'opus', 'fable']);

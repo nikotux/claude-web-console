@@ -14,8 +14,9 @@
 // de revert). npm solo a `wanted` (estable). Majors nunca auto-aplicados.
 import {
   readJob, writeJob, buildPlan, planActionCount, detectActiveWork, notifyInterfono,
-  applyNpm, applyClaudeCli, applyApt, applyAuditFix, verifySyntax, restartService, waitServiceActive, sleep,
-  invalidateCensusCache, httpAlive, serviceRestartCount, revertNpmChanges,
+  applyNpm, applyClaudeCli, applyApt, applyAuditFix, verifySyntax, verifyRuntime,
+  restartService, waitServiceActive, sleep, invalidateCensusCache, httpAlive,
+  serviceRestartCount, revertNpmChanges, revertPackages,
 } from '../src/modules/updates/orchestrate-shared.js';
 import { buildUpdatesCensus } from '../src/modules/updates/shared.js';
 import { readRisk } from '../src/modules/updates/analyze-shared.js';
@@ -41,6 +42,75 @@ function setStep(id, status, detail) {
   const j = readJob() || {};
   const steps = (j.steps || []).map((s) => (s.id === id ? { ...s, status, detail: detail ?? s.detail } : s));
   writeJob({ ...j, steps, heartbeat: Date.now() });
+}
+function appliedMajors(plan) {
+  const steps = readJob()?.steps || [];
+  const okNames = new Set(steps
+    .filter((s) => s.id?.startsWith('major:') && s.status === 'ok')
+    .map((s) => s.id.slice('major:'.length)));
+  return (plan?.majorsToApply || []).filter((p) => okNames.has(p.name));
+}
+function revertSummary(pkgs) {
+  return pkgs.map((p) => `${p.name}@${p.from}`).join(', ');
+}
+function surgicalPayload(pkgs, reason, revert, runtime) {
+  return {
+    pkgs: pkgs.map((p) => ({ name: p.name, from: p.from, to: p.to })),
+    reason,
+    revert,
+    runtime,
+  };
+}
+async function handleRuntimeFailure({ plan, runtime, continueAfterSurgical }) {
+  const reason = runtime?.error || 'el import del árbol de módulos falló';
+  const majors = appliedMajors(plan);
+  if (majors.length) {
+    pushLog(`❌ Runtime roto tras npm (${reason}). Revirtiendo SOLO major(s): ${revertSummary(majors)}…`);
+    const surgical = await revertPackages(majors);
+    const afterSurgical = await verifyRuntime();
+    const surgicalRevert = surgicalPayload(majors, reason, surgical, afterSurgical);
+    if (surgical.ok && afterSurgical.ok) {
+      for (const p of majors) setStep(`major:${p.name}`, 'fail', `revertido: rompía el runtime (${reason})`);
+      pushLog('✅ Revertidos los majors; los updates in-range se conservan.');
+      patch({ runtime: afterSurgical, surgicalRevert });
+      if (continueAfterSurgical) return { recovered: true };
+      patch({
+        running: false,
+        phase: 'error',
+        finishedAt: Date.now(),
+        runtime: afterSurgical,
+        surgicalRevert,
+        error: `verifyRuntime falló (${reason}); se revirtieron SOLO los majors y los updates in-range se conservan. NO se reinició el servicio.`,
+      });
+      return { recovered: false, aborted: true };
+    }
+    pushLog(`⚠️ El revert quirúrgico no alcanzó (${afterSurgical.error || surgical.detail || 'sin detalle'}). Revert total npm…`);
+    const revert = await revertNpmChanges();
+    const afterTotal = await verifyRuntime();
+    patch({
+      running: false,
+      phase: 'error',
+      finishedAt: Date.now(),
+      runtime: afterTotal,
+      surgicalRevert,
+      revert: { ok: revert.ok, detail: revert.detail, runtime: afterTotal },
+      error: `verifyRuntime falló (${reason}); se intentó revert quirúrgico y luego revert total npm. NO se reinició el servicio.`,
+    });
+    return { recovered: false, aborted: true };
+  }
+
+  pushLog(`❌ Runtime roto tras npm (${reason}). Sin majors aplicados: revert total npm y ABORTO sin reiniciar…`);
+  const revert = await revertNpmChanges();
+  const afterTotal = await verifyRuntime();
+  patch({
+    running: false,
+    phase: 'error',
+    finishedAt: Date.now(),
+    runtime: afterTotal,
+    revert: { ok: revert.ok, detail: revert.detail, runtime: afterTotal },
+    error: `verifyRuntime falló (${reason}); se revirtió npm completo. NO se reinició el servicio.`,
+  });
+  return { recovered: false, aborted: true };
 }
 
 async function main() {
@@ -138,6 +208,12 @@ async function main() {
         pushLog('❌ Sintaxis rota tras npm. Abortado sin reiniciar.');
         return;
       }
+      const runtime = await verifyRuntime();
+      patch({ runtime });
+      if (!runtime.ok) {
+        const handled = await handleRuntimeFailure({ plan, runtime, continueAfterSurgical: true });
+        if (!handled.recovered) return;
+      }
     }
 
     if (plan.claudeCli) {
@@ -174,6 +250,15 @@ async function main() {
       return;
     }
     pushLog('✅ Sintaxis OK.');
+    pushLog('Verificando runtime (import real del árbol backend)…');
+    const runtime = await verifyRuntime();
+    patch({ runtime });
+    if (!runtime.ok) {
+      await handleRuntimeFailure({ plan, runtime, continueAfterSurgical: false });
+      pushLog('❌ Runtime falló en la verificación final. No reinicio.');
+      return;
+    }
+    pushLog('✅ Runtime OK.');
 
     // ── 5 · RESTARTING ────────────────────────────────────────────────────
     patch({ phase: 'restarting' });
@@ -194,7 +279,33 @@ async function main() {
         alive.alive === false ? `HTTP no respondió OK tras el reinicio (${alive.reason || 'sin detalle'})` : null,
         crashLoop ? `NRestarts subió de ${restartsBefore} a ${restartsAfter}` : null,
       ].filter(Boolean).join('; ');
-      pushLog(`❌ Falla confirmada post-reinicio: ${why}. Revirtiendo cambios npm automáticamente…`);
+      pushLog(`❌ Falla confirmada post-reinicio: ${why}.`);
+      const majors = appliedMajors(plan);
+      if (majors.length) {
+        pushLog(`Probando revert quirúrgico de major(s): ${revertSummary(majors)}…`);
+        const surgical = await revertPackages(majors);
+        pushLog(surgical.ok ? `✅ Revert quirúrgico OK: ${surgical.detail}` : `❌ Revert quirúrgico falló: ${surgical.detail}`);
+        if (surgical.ok) {
+          await restartService();
+          const surgicalAlive = await httpAlive();
+          if (surgicalAlive.alive === true) {
+            for (const p of majors) setStep(`major:${p.name}`, 'fail', `revertido: rompía el server post-reinicio (${why})`);
+            notifyInterfono('⚠️ La actualización rompió el server; se revirtieron SOLO los saltos mayores automáticamente.', 'note');
+            patch({
+              running: false,
+              phase: 'error',
+              finishedAt: Date.now(),
+              error: `La actualización rompió el server; se revirtieron SOLO los saltos mayores y los updates in-range se conservan. Server volvió por HTTP.`,
+              postRestart: { alive, restartsBefore, restartsAfter },
+              revert: { surgical: true, ok: true, detail: surgical.detail, pkgs: majors.map((p) => ({ name: p.name, from: p.from, to: p.to })), alive: surgicalAlive },
+            });
+            pushLog('🧯 Fin con error: majors revertidos; server volvió por HTTP; in-range conservados.');
+            return;
+          }
+          pushLog(`⚠️ El revert quirúrgico no alcanzó: ${surgicalAlive.reason || 'HTTP no volvió OK'}. Caigo a revert total npm…`);
+        }
+      }
+      pushLog('Revirtiendo cambios npm automáticamente…');
       const revert = await revertNpmChanges();
       pushLog(revert.ok ? `✅ Revert npm OK: ${revert.detail}` : `❌ Revert npm falló: ${revert.detail}`);
       await restartService();
