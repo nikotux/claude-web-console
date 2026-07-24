@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-24 22:23 — main
+- Dividir CLAUDE.md monolítico en mapa + fichas descentralizadas
+
 ### 2026-07-24 19:40 — main
 - Implementar entornos Tolkien efímeros por sesión (PLAN-1815)
 
