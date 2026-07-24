@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-24 04:57 — main
+- Integrar arquitectura en auditoría y workflows de creación de items
+- Integrar módulo UniFi y refactorizar runners
+
 ### 2026-07-23 19:18 — main
 - Integrar SharePoint y Unifi; refactor tokens/Codex; herramientas Pad
 
