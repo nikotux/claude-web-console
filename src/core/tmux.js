@@ -36,12 +36,17 @@ export function runTmux(socketPath, args, { throwOnError = false } = {}) {
 }
 
 // Lista los sockets tmux del usuario: [{ name, path }].
-export function listSockets() {
+// throwOnError: por defecto false (retrocompat) devuelve [] ante cualquier
+// fallo. Con true, un error de enumeración que NO sea ENOENT (dir inexistente =
+// realmente no hay sockets) se PROPAGA, para que el caller distinga "no pude
+// leer /tmp/tmux-<uid>" de "vacío real" y no pode estado de sesiones vivas.
+export function listSockets({ throwOnError = false } = {}) {
   const dir = tmuxDir();
   let names = [];
   try {
     names = fs.readdirSync(dir);
-  } catch {
+  } catch (err) {
+    if (throwOnError && err.code !== 'ENOENT') throw err;
     return [];
   }
   const out = [];

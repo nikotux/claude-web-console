@@ -104,11 +104,13 @@ export function mountUpdatesPanel(el, ctx = {}) {
 
   async function notify(text) {
     if (dialog?.alertDialog) return dialog.alertDialog({ title: 'Actualizaciones', message: text });
-    alert(text); // eslint-disable-line no-alert
+    console.error('[updates] diálogo no disponible; aviso no mostrado:', text); // sin fallback a alert() nativo (convención del proyecto)
   }
   async function confirm(text) {
     if (dialog?.confirmDialog) return dialog.confirmDialog({ title: 'Confirmar actualización', message: text, danger: true, confirmLabel: 'Actualizar todo' });
-    return window.confirm(text); // eslint-disable-line no-alert
+    // Sin diálogo no se puede confirmar una acción destructiva: fail-safe = NO proceder.
+    console.error('[updates] diálogo no disponible; se cancela la acción por seguridad.');
+    return false;
   }
 
   function wireToggles() {

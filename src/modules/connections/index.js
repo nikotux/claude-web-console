@@ -338,8 +338,18 @@ export default {
         return res.status(502).json({ error: e.message });
       }
 
-      const org = await getOrg(tokens.access_token, dc);
-      const me = await getZohoMe(tokens.access_token, dc, org?.id, config.instance?.identity?.email);
+      // getOrg/getZohoMe pueden fallar (timeout, rate limit) DESPUÉS de consumir
+      // el grant code (un solo uso): NO perder los tokens ya obtenidos. La
+      // identidad se completa luego con healZohoIdentity. Simétrico con el flujo
+      // de Microsoft (pollMicrosoft), que persiste aunque getMicrosoftMe falle.
+      let org = null;
+      let me = null;
+      try {
+        org = await getOrg(tokens.access_token, dc);
+        me = await getZohoMe(tokens.access_token, dc, org?.id, config.instance?.identity?.email);
+      } catch (e) {
+        console.error('[connections] identidad Zoho falló tras el exchange; se persiste sin nombre:', e?.message);
+      }
       const account = me?.email || null;
       writeConnection(username, 'zoho', {
         provider: 'zoho',
@@ -363,8 +373,19 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      const job = readJob(userOf(req), req.query.jobId);
+      const username = userOf(req);
+      const jobId = req.query.jobId;
+      const job = readJob(username, jobId);
       if (!job) return res.status(404).json({ error: 'Job inexistente.' });
+      // Auto-sanado tras reinicio: pollMicrosoft vive en memoria del proceso; si
+      // el server se reinició mientras el usuario esperaba la aprobación del
+      // device code, el loop murió y el job quedaría 'pending' para siempre. Si
+      // ya venció, lo marcamos 'error' en la lectura para no dejar colgado al front.
+      if (job.status === 'pending' && job.expiresAt && Date.now() > job.expiresAt) {
+        patchJob(username, jobId, { status: 'error', error: 'El código expiró antes de completar la autorización.' });
+        job.status = 'error';
+        job.error = 'El código expiró antes de completar la autorización.';
+      }
       res.json({
         status: job.status,
         ...(job.account ? { account: job.account } : {}),

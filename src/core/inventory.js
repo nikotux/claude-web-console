@@ -345,6 +345,25 @@ const CANONICAL_PATTERNS = [
       //    (regla de oro "serial lo que ESCRIBE").
       'src/modules/tolkien/refresh-shared.js',
       'bin/cwc-retro-runner.js',
+      // Falsos positivos VERIFICADOS (2026-07-24, resolución del hallazgo de
+      // Coherencia Coh#2): seriales POR DISEÑO — su bucle NO es paralelizable.
+      //  · pad-provision.js: provisioning por pasos con `await sleep(SLEEP_MS)`
+      //    entre cada uno (pacing deliberado del registro/workspace/colecciones).
+      //  · pad-service-client.js: el bucle flageado es un retry/backoff
+      //    (for(;;) attempt), no una iteración de items paralelizable.
+      //  · zoho-desk-client.js: paginación secuencial [1,101,201] contra la API
+      //    de Zoho, que es rate-limited (paralelizar dispararía 429).
+      //  · cwc-retro-teams-runner.js: persist() hace upsertLesson en ORDEN
+      //    (regla de oro "serial lo que ESCRIBE"; el dedup por fingerprint lo exige).
+      'src/core/pad-provision.js',
+      'src/core/pad-service-client.js',
+      'src/core/zoho-desk-client.js',
+      'bin/cwc-retro-teams-runner.js',
+      //  · updates/shared.js: los 2 bucles con await sobre subprocesos iteran
+      //    colecciones de UN elemento (CORE_PKGS=[agent-sdk], targets=[server.js]);
+      //    el resto de sus for-of son síncronos (readFileSync/lookups). Su
+      //    concurrencia real ya va por Promise.all (npm outdated+audit, versiones).
+      'src/modules/updates/shared.js',
     ],
   },
   {
@@ -456,8 +475,13 @@ function resolveImport(fromRel, spec) {
 export function coherenceCensus() {
   const files = [...new Set([...listJs(path.join(ROOT, 'src')), ...listJs(path.join(ROOT, 'bin'))])];
   const texts = new Map(files.map((f) => [f, readSafe(path.join(ROOT, f))]));
-  // Llamadas a la CLI `gh` (scraping de GitHub): execFile/spawn('gh') o `gh pr…`.
-  const ghRe = /(?:execFile|execFileSync|spawn|spawnSync|exec)\(\s*['"]gh['"]|[`'"]gh\s+(?:pr|repo|api|issue|auth|search|view|list)\b/;
+  // Llamadas a la CLI `gh` (scraping de GitHub). Dos formas:
+  //  · execFile/spawn('gh', ...) — llamada REAL (cualquier verbo).
+  //  · string/template `gh pr …` — SOLO el verbo `pr` (lectura de PRs, el único
+  //    concern de dedup contra comms/pr-read-shared.js). Antes matcheaba TODOS
+  //    los verbos y flageaba strings de comando documentados (p.ej. 'gh auth
+  //    login' en keyring-shared.js) como si fueran llamadas — falso positivo.
+  const ghRe = /(?:execFile|execFileSync|spawn|spawnSync|exec)\(\s*['"]gh['"]|[`'"]gh\s+pr\b/;
 
   const nodes = files.map((f) => {
     const t = texts.get(f) || '';

@@ -16,7 +16,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { settingSourcesFor } from './sdk-settings.js';
 
 export async function textOnlyQuery(prompt, {
-  model = 'sonnet', maxTurns = 1, timeoutMs, cwd,
+  model = 'sonnet', effort, maxTurns = 1, timeoutMs, cwd,
   denyReason = 'Esta corrida no usa herramientas.',
   timeoutMessage = 'La corrida tardó demasiado.',
 } = {}) {
@@ -33,6 +33,7 @@ export async function textOnlyQuery(prompt, {
       cwd,
       settingSources: settingSourcesFor('none'), // [] — cero settings/skills/MCP
       model,
+      ...(effort ? { effort } : {}),
       maxTurns,
       permissionMode: 'default',
       hooks: { PreToolUse: [{ hooks: [async () => deny] }] },        // CAPA 1

@@ -11,7 +11,7 @@
 // resultado se persiste en el MISMO archivo. El front encuesta GET
 // /api/tasks/analysis?scope=... hasta que status deja de ser 'running'. Mismo
 // patrón que bin/cwc-audio-runner.js.
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, ANALYZE_TIMEOUT_MS, normScope, buildContext, analyzePrompt, parseAnalysis,
   readAnalysisJob, writeAnalysisJob,
@@ -21,42 +21,14 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const scope = normScope(process.argv[2]);
 
 async function runAnalysis(context) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'El análisis general no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: analyzePrompt(scope, context),
-    options: {
-      cwd: ROOT,
-      settingSources: [],   // nada de settings/skills/MCP: interpretación pura de texto
-      model: 'sonnet',
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const text = await textOnlyQuery(analyzePrompt(scope, context), {
+    cwd: ROOT,
+    model: 'sonnet',
+    maxTurns: 1,
+    timeoutMs: ANALYZE_TIMEOUT_MS,
+    denyReason: 'El análisis general no usa herramientas.',
+    timeoutMessage: 'El análisis tardó demasiado.',
   });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El análisis tardó demasiado.')), ANALYZE_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  pump.catch(() => {}); // el rechazo tardío no debe colarse como unhandledRejection
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
   const result = parseAnalysis(text);
   if (!result) throw new Error('No se pudo interpretar la respuesta del análisis.');
   return result;

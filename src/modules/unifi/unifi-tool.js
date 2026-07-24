@@ -6,6 +6,7 @@ import {
   getHealth,
   findClient,
 } from './client.js';
+import { getRadios, getWan, buildVoiceAudit } from './audit-shared.js';
 import { scanToPad } from './inventory-shared.js';
 
 function textResult(value) {
@@ -157,9 +158,51 @@ export function createUnifiToolServer() {
     { alwaysLoad: true },
   );
 
+  const radios = tool(
+    'unifi_radios',
+    'Config y utilización de las radios de cada AP UniFi (canal, ancho, potencia, utilización de canal, reintentos).',
+    {},
+    async () => {
+      try {
+        return textResult(await getRadios());
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+    { alwaysLoad: true },
+  );
+
+  const wan = tool(
+    'unifi_wan',
+    'Estado de los WAN de UniFi: Smart Queue, modo multi-WAN (balanceo/failover), disponibilidad y latencia por enlace.',
+    {},
+    async () => {
+      try {
+        return textResult(await getWan());
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+    { alwaysLoad: true },
+  );
+
+  const auditoria = tool(
+    'unifi_auditoria',
+    'Auditoría determinística de optimización para llamadas/voz: semáforo + hallazgos con recomendaciones.',
+    {},
+    async () => {
+      try {
+        return textResult(await buildVoiceAudit());
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+    { alwaysLoad: true },
+  );
+
   return createSdkMcpServer({
     name: 'unifi',
     version: '1.0.0',
-    tools: [dispositivos, cliente, diagnosticar, salud, inventario],
+    tools: [dispositivos, cliente, diagnosticar, salud, inventario, radios, wan, auditoria],
   });
 }

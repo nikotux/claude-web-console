@@ -261,7 +261,7 @@ class Session {
     this.cols = cols;
     this.rows = rows;
     if (this.alive && this.proc) {
-      try { this.proc.resize(cols, rows); } catch { /* noop */ }
+      try { this.proc.resize(cols, rows); } catch (e) { console.error('[terminal] resize falló:', e?.message); }
     }
   }
 

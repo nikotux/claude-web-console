@@ -69,16 +69,24 @@ export default {
     const r = express.Router();
 
     r.get('/sessions', (req, res) => {
-      res.json({ sessions: sessionManager.list(principalOf(req)) });
+      try {
+        res.json({ sessions: sessionManager.list(principalOf(req)) });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     // Modelo de Claude en uso por esta sesión (para el banderín del rail).
     // Preferimos el observador (tiempo real); transcript como fallback.
     r.get('/model', (req, res) => {
-      const session = ownedSession(req, req.query.id);
-      if (!session) return res.status(404).json({ error: 'Sesión inexistente.' });
-      const st = stateForCwd(session.cwd);
-      res.json({ model: st?.model || modelForCwd(session.cwd) });
+      try {
+        const session = ownedSession(req, req.query.id);
+        if (!session) return res.status(404).json({ error: 'Sesión inexistente.' });
+        const st = stateForCwd(session.cwd);
+        res.json({ model: st?.model || modelForCwd(session.cwd) });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     r.post('/sessions', (req, res) => {
@@ -158,7 +166,11 @@ export default {
 
     // Carpetas recientes donde se crearon sesiones (para el lanzador).
     r.get('/recents', (req, res) => {
-      res.json({ recents: listRecents() });
+      try {
+        res.json({ recents: listRecents() });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     router.use('/terminal', r);

@@ -127,6 +127,7 @@
   "system.menu.projects": "Projects",
   "system.menu.groupDiagnostics": "Diagnostics",
   "system.menu.health": "Health",
+  "system.menu.unifi": "UniFi",
   "system.menu.interfono": "Interfono",
   "system.menu.groupAdmin": "Administration",
   "system.menu.backup": "Backup",

@@ -9,7 +9,7 @@
 // herramientas — dos capas de denegación, el análisis solo necesita el
 // prompt) y se persiste el resultado en el MISMO archivo. El front encuesta
 // GET .../analyze/:id hasta que status deja de ser 'running'.
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, ANALYZE_TIMEOUT_MS, analyzePrompt, parseAnalysis, readAnalyzeJob, writeAnalyzeJob,
 } from '../src/modules/projects/analyze-shared.js';
@@ -18,48 +18,14 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
 async function runAnalysis(before, after) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'El análisis de cambios no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: analyzePrompt(before, after),
-    options: {
-      cwd: ROOT,
-      settingSources: [], // nada de settings/skills: análisis puro de texto
-      model: 'sonnet',    // guardián: haiku alucinaba FP y era inconsistente entre
-                          // corridas (mismo motivo que auditModelFor() de Salud). Acá un
-                          // FALSO NEGATIVO deja pasar una edición que debilita una regla
-                          // dura como risk:"ok" — sonnet es estable. Uso de baja frecuencia
-                          // (1 turno, prompt corto), el costo extra es insignificante.
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const text = await textOnlyQuery(analyzePrompt(before, after), {
+    cwd: ROOT,
+    model: 'sonnet',
+    maxTurns: 1,
+    timeoutMs: ANALYZE_TIMEOUT_MS,
+    denyReason: 'El análisis de cambios no usa herramientas.',
+    timeoutMessage: 'El análisis tardó demasiado.',
   });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El análisis tardó demasiado.')), ANALYZE_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  // Si `timeout` gana la carrera, `pump` sigue viva y nadie más la espera; sin
-  // este catch, un rechazo tardío se cuela como unhandledRejection.
-  pump.catch(() => {});
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
   const analysis = parseAnalysis(text);
   if (!analysis) throw new Error('No se pudo interpretar el análisis.');
   return analysis;

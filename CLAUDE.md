@@ -1451,7 +1451,28 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             parsea el stream JSONL (thread.started/item.completed{agent_message|
                             file_change}/turn.completed{usage}), y devuelve resumen + diff ACOTADO A LO
                             QUE TOCÓ ESA DELEGACIÓN + contenido de los archivos nuevos DE ESA
-                            DELEGACIÓN como tool_result para que Claude VERIFIQUE. Cómo se acota:
+                            DELEGACIÓN como tool_result para que Claude VERIFIQUE.
+                            WRITABLE_ROOTS a la carpeta del chat (2026-07-23, BUG-1796 /
+                            PLAN-1799): `runCodex` agrega `-c
+                            'sandbox_workspace_write.writable_roots=["<chatDir>"]'` cuando NO es
+                            full_access, para que Codex pueda escribir en la carpeta del chat
+                            (`~/.cwc-data/chat-attachments/<id>/`), que está FUERA del cwd/repo y por
+                            eso el sandbox `workspace-write` la montaba read-only. Hallazgo de un
+                            análisis de 442 sesiones Codex: 17 escrituras a `chat-attachments/`
+                            rebotaban con EROFS (caso Expediente Princeton: 18 bloqueos, todos a la
+                            carpeta del chat). `createCodexToolServer` recibe `chatDir`;
+                            `bin/cwc-chat-runner.js` pasa `chatAttachDir(ID)`; healthfix NO pasa
+                            chatDir (no aplica). OJO (verificado E2E): `writable_roots` hace escribible
+                            la carpeta LISTADA y su contenido (subcarpetas incluidas), NO su padre; por
+                            eso `createCodexToolServer` hace `fs.mkdirSync(chatDir, {recursive:true})`
+                            defensivo: la carpeta del chat se crea LAZY (al primer adjunto) y podría no
+                            existir; sin ese mkdir, crear la carpeta requeriría escribir en
+                            `chat-attachments` (no writable) y seguía fallando. `full_access`
+                            (`danger-full-access`) ignora writable_roots. El `TANDEM_CODEX_PREAMBLE`
+                            además recuerda: usar `python3` (no `python`), evitar heredocs frágiles,
+                            pasar `full_access` para tocar `.git`, y preferir Claude para generación
+                            PURA de documentos (ruteo CONVE-558).
+                            Cómo se acota:
                             `snapshotTree()` toma `git diff --numstat` + `git ls-files --others`
                             ANTES y DESPUÉS de correr Codex; `diffSnapshots()` compara: si cambió el
                             numstat de un archivo trackeado, lo tocó esta delegación (detecta también
@@ -3556,6 +3577,42 @@ src/modules/<nombre>/index.js  módulo backend: { name, init(ctx), registerHttp(
                             se guarda el agentId. (4) MICROSOFT: el device code exige "Allow public
                             client flows" = Yes en la app de Entra, y si el tenant deshabilita el
                             consentimiento de usuario hace falta aprobación del admin (una vez).
+  unifi/                    — Puente SOLO-LECTURA al UDM Pro (PLAN-774 inventario + PLAN-1795
+                            deep-read para voz/llamadas). NUNCA escribe al router. client.js habla
+                            con DOS APIs usando UNIFI_API_KEY (.env): la Integration
+                            (/proxy/network/integration/v1) y la INTERNA de Network
+                            (/proxy/network/api/s/<site>); esta última expone la config PROFUNDA —
+                            getDeviceStats() lee stat/device (radio_table:
+                            canal/ht(ancho)/tx_power/min_rssi + radio_table_stats:
+                            cu_total=utilización de canal/tx_retries_pct/satisfaction; vap_table por
+                            SSID), rest/networkconf de los WAN (wan_load_balance_type
+                            weighted|failover-only, smartq_enabled) y stat/health (wan.uptime_stats
+                            por WAN + www speedtest/latency). inventory-shared.js escanea la
+                            ESTRUCTURA a Pad (colección infraestructura-de-red, upsert por uid,
+                            retire-sweep de lo ausente; NO tocar en cambios de deep-read).
+                            audit-shared.js (PLAN-1795) es DETERMINÍSTICO (0 tokens, sin LLM):
+                            getRadios()/getWan() derivan la telemetría y buildVoiceAudit() aplica
+                            REGLAS de voz (2.4GHz cu_total>60→rojo / 40-60→amarillo,
+                            tx_retries>10%, ancho 2.4≠20MHz, 5GHz cu>70, sin Smart Queue, multi-WAN
+                            en balanceo 'weighted', min-rate 2.4 legacy ≤1 Mbps, >4 SSIDs activas,
+                            WAN con disponibilidad<99%) → {semaforo verde|amarillo|rojo,
+                            hallazgos[], resumen, datos}. snapshotToPad() hace upsert de UN item
+                            (uid 'voz-audit') en la colección Pad NUEVA `auditoria-red` (prefix AR)
+                            — DELIBERADAMENTE aislada de infraestructura-de-red para no ser barrida
+                            por el retire-sweep del inventario — con tabla de hallazgos + historial
+                            de las últimas 10 corridas. unifi-tool.js expone tools MCP de
+                            solo-lectura al chat:
+                            unifi_dispositivos/unifi_cliente/unifi_diagnosticar/unifi_salud/unifi_inventario
+                            + (PLAN-1795) unifi_radios/unifi_wan/unifi_auditoria. Rutas /api/unifi
+                            (index.js): GET /devices · /clients · /health · /client · /radios ·
+                            /wan · /audit + POST /scan (admin) · /audit-snapshot (admin).
+                            FRONTEND: panel en ⚙ Sistema → grupo Diagnóstico → '🛰️ UniFi'
+                            (public/js/modules/system/unifi-panel.js, mountUnifiPanel; molde de
+                            dashboard-panel.js) — semáforo de optimización para llamadas + tablas
+                            colapsables Hallazgos/Radios/WAN, botón Re-escanear (0 tokens, GET
+                            /audit en vivo) y Guardar snapshot en Pad (admin, POST
+                            /audit-snapshot); i18n en public/i18n/en/unifi.json.
+                            bin/cwc-unifi-scan.js corre el inventario a Pad.
   updates/                  CENSO CENTRALIZADO de versiones de TERCEROS + APLICADO reversible con
                             verificación (2026-07-21, PLAN-779, pedido de Niko: "no hay mecanismo que
                             avise cuándo salen updates de lo que la consola depende de afuera").
@@ -5979,40 +6036,47 @@ docs/                       frontend-modules.md · brief-original.txt · context
 ## Mejora Continua (auto)
 <!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->
 
-### Antes de cerrar hallazgos de un análisis, cruzarlos y registrarlos contra el backlog de Pad
-_procedimiento · confianza alta · recurrencia x2_
+### Tras delegar un cambio de código a Codex, verificar sintaxis y alcance del diff por cuenta propia
+_procedimiento · confianza media · recurrencia x3_
 
-**Observación:** Tras resolver 14 hallazgos + propuestas de los 3 escaneos de Salud, el agente dio el trabajo por cerrado sin cruzarlo contra los 23 BUGs abiertos en Pad ni registrar los fixes como items BUG (Regla 11); el usuario tuvo que preguntar '¿Y los bugs registrados en pad?' para que se corrigiera.
+**Observación:** Después de delegar los 4 cambios de CSS/JS a Codex, el agente corrió `node --check` sobre el JS, contó el balance de llaves del CSS y confirmó que el diff tocara solo los 2 archivos planeados, ignorando 20 archivos ajenos que Codex reportó en el árbol.
 
-**Lección:** Al cerrar cualquier tanda de fixes originados en un motor de análisis (Salud, Coherencia, Revisión), antes del resumen final: (1) cruzar los hallazgos contra el backlog abierto de Pad para no duplicar ni dejar huérfanos, y (2) crear/actualizar los items BUG correspondientes en Pad — sin esperar a que el usuario lo pida.
-
-### Diseñar acciones por ítem con un botón principal por defecto, no un botón por opción
-_convencion · confianza alta · recurrencia x2_
-
-**Observación:** El tablero de Mejora Continua mostraba 7 botones por lección (aprobar + 4 destinos + descartar + cerrar) y el usuario reportó explícitamente no entender qué botón usar, pidiendo simplificación.
-
-**Lección:** Cuando un ítem tiene múltiples acciones o destinos posibles, exponer un único botón de acción primaria con la opción sugerida por defecto (más un menú ▾ para las alternativas), en vez de un botón por cada opción posible — validar esto en el diseño ANTES de construir la UI completa, no después de que el usuario se confunda.
-
-### Reconocer eco del propio broadcast en el interfono antes de responder
-_procedimiento · confianza media · recurrencia x2_
-
-**Observación:** La sesión recibió por interfono un mensaje que resultó ser el eco de su propio broadcast anterior (mandado a "all" porque el remitente original tenía from: null y no se podía resolver 1:1); tuvo que investigar con varios Bash antes de darse cuenta de que no requería acción.
-
-**Lección:** Al usar cwc-bus para el interfono: si el remitente no es resoluble por nombre (from: null), responder por broadcast a "all" es correcto; pero antes de reaccionar a un mensaje entrante, comparar su contenido/timestamp contra el último broadcast propio para detectar que es el eco de tu propio mensaje y así evitar investigación redundante o una respuesta innecesaria.
+**Lección:** Cuando se delega implementación de código a una herramienta externa (Codex u otro agente), no cerrar la tarea solo con el reporte de éxito de esa herramienta: correr una verificación propia mínima (chequeo de sintaxis, balance de estructuras, diff acotado a los archivos del plan) antes de reportarle al usuario que quedó listo.
 
 ### Al tocar un módulo, verificar que tenga entrada en el mapa de CLAUDE.md y agregarla si falta
-_procedimiento · confianza media · recurrencia x1_
+_procedimiento · confianza media · recurrencia x2_
 
 **Observación:** El módulo seguimientos no figuraba en el mapa de módulos de CLAUDE.md; la sesión lo detectó como hueco previo y lo agregó junto con el cambio del calendario.
 
 **Lección:** Antes de cerrar trabajo sobre un módulo, chequear que tenga entrada en el mapa de módulos de CLAUDE.md; si no existe, agregarla como parte del mismo cambio en vez de dejarla pendiente.
 
-### Tras delegar un cambio de código a Codex, verificar sintaxis y alcance del diff por cuenta propia
+### Correr smoke test de imports antes de reiniciar el server, no solo node --check
+_procedimiento · confianza alta · recurrencia x1_
+
+**Observación:** Antes de reiniciar el server con sesiones paralelas (UniFi/Arquitectura) con código a medias, se validó sintaxis con node --check en todo src/ y bin/, pero como esa herramienta no detecta imports o variables rotas, se agregó un smoke test cargando el registry backend completo en un proceso aparte antes de confiar en el reinicio.
+
+**Lección:** Al validar código ajeno de sesiones paralelas antes de reiniciar el server, complementar siempre node --check con un smoke test real de imports (cargar el módulo/registry principal en un proceso aparte) para descartar un crash-loop que la sintaxis sola no revela.
+
+### Verificar que el entregable de una delegación a Codex sea código de repo, no un documento
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** El caso Princeton mostró 89 delegaciones a Codex para producir un expediente y sus traducciones, que vivían en la carpeta del chat (fuera del repo escribible por el sandbox); resultó en 18 bloqueos 'read-only file system' que Claude tuvo que resolver a mano, gastando su propia ventana en vez de ahorrarla.
+
+**Lección:** Antes de delegar una tarea a Codex, chequear si el entregable final es código dentro del repo (sí delegar) o un documento/traducción/informe que vive fuera del repo (resolverlo directo con Claude según el ruteo Tándem, o decirle explícitamente a Codex que escriba en el repo para moverlo después).
+
+### La herramienta de adjuntar no sobrescribe: verificar nombre de copia antes de dar el entregable por final
 _procedimiento · confianza media · recurrencia x1_
 
-**Observación:** Después de delegar los 4 cambios de CSS/JS a Codex, el agente corrió `node --check` sobre el JS, contó el balance de llaves del CSS y confirmó que el diff tocara solo los 2 archivos planeados, ignorando 20 archivos ajenos que Codex reportó en el árbol.
+**Observación:** Al regenerar el PDF con emojis reales y adjuntarlo con el mismo nombre, la herramienta no reemplazó el archivo viejo sino que creó una copia con sufijo '(1)', dejando dos PDFs en la carpeta y el bueno con nombre confuso; además el archivo viejo no se pudo borrar porque el guardián de Modo Tándem bloquea 'rm'.
 
-**Lección:** Cuando se delega implementación de código a una herramienta externa (Codex u otro agente), no cerrar la tarea solo con el reporte de éxito de esa herramienta: correr una verificación propia mínima (chequeo de sintaxis, balance de estructuras, diff acotado a los archivos del plan) antes de reportarle al usuario que quedó listo.
+**Lección:** Tras re-adjuntar un archivo regenerado con el mismo nombre, verificar si la herramienta creó una copia en vez de sobrescribir, y si es así, aclarar explícitamente al usuario cuál de los archivos es el vigente (y que el viejo debe borrarlo él mismo si el guardián de Tándem impide hacerlo por Bash).
+
+### Registrar que el guardián de Modo Tándem bloquea comandos de sistema (apt, rm) también fuera del repo
+_nota · confianza media · recurrencia x1_
+
+**Observación:** El hook de Modo Tándem impidió tanto 'apt-get install' (incluso con override de sandbox) como 'rm' de un archivo en la carpeta del chat, pese a no tocar el repo de código — quedó claro que el guardián cubre cualquier escritura al sistema, no solo al árbol de git.
+
+**Lección:** Dar por hecho desde el inicio que instalaciones de paquetes o borrados de archivo requieren que el usuario los ejecute manualmente (proveer el comando exacto), en vez de intentar rutas de override que el guardián va a rechazar de todas formas.
 
 ### Antes de reiniciar el server, verificar flujos de autenticación en curso en memoria
 _procedimiento · confianza media · recurrencia x1_
@@ -6042,47 +6106,12 @@ _convencion · confianza alta · recurrencia x1_
 
 **Lección:** Todo indicador/control cuya existencia depende de un estado transitorio (tareas en curso, notificaciones, etc.) debe estar siempre visible, atenuado/deshabilitado en el estado vacío — nunca condicionado a que haya datos. Aplicar esta regla de entrada a cada componente nuevo del mismo patrón, no solo al primero.
 
-### Distinguir constantes module-load de strings render-time al usar t()
-_metodologia · confianza alta · recurrencia x1_
-
-**Observación:** La sesión detectó que arrays/constantes de nivel-módulo (opciones de modelos, nombres canónicos en places.js) se evalúan al importar, antes de que cargue el diccionario i18n, por lo que envolverlas en t() no las traduciría — solo las envolvió si se evaluaban en tiempo de render.
-
-**Lección:** Antes de envolver un string en t(), verificar si se evalúa en tiempo de import (defaults/arrays a nivel de módulo) o en tiempo de render (dentro de una función/handler); solo estas últimas se benefician de t(). Sumar esta distinción a la convención '🌐 i18n' de CLAUDE.md para que los demás bloques del mismo umbrella (PLAN-707) no malgasten esfuerzo ni generen falsas expectativas de traducción.
-
-### No reiniciar el servicio si hay ediciones de backend concurrentes a medias
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** Tras integrar Pacman en 13 archivos (cambios 100% frontend), el agente evitó reiniciar el servicio porque otras sesiones tenían backend (retro/index.js, health/index.js) editado a medias, y en su lugar verificó el resultado en caliente con un navegador headless.
-
-**Lección:** Antes de reiniciar el servicio para validar un cambio, verificar si hay sesiones paralelas con backend a medio editar; si el cambio propio es solo frontend, preferir verificación en caliente (recarga de navegador) para no arrastrar código ajeno incompleto.
-
-### No traer datos de relación (fan-out N+1) en listados si solo se usan en el detalle
-_convencion · confianza alta · recurrencia x1_
-
-**Observación:** /api/tasks disparaba 121 requests para traer blocks[] de cada tarea en la lista completa, pero blocks[] solo se consumía en el modal de detalle de una tarjeta — nunca en el render del tablero. Deferir esa carga al abrir el detalle bajó el endpoint de 15,2 s a 18 ms.
-
-**Lección:** Al diseñar o revisar un endpoint de listado, verificar qué campos consume realmente la vista de lista vs. la vista de detalle, y cargar de forma lazy (bajo demanda, endpoint separado) cualquier relación costosa que solo se necesite en el detalle.
-
-### Verificar UI de la consola con Playwright vía domcontentloaded+selector y DOM, no networkidle ni solo screenshot
-_procedimiento · confianza media · recurrencia x1_
-
-**Observación:** Al verificar el grupo Limbo en el sidebar, Playwright con 'networkidle' colgó porque la SPA tiene polling/WS activo que nunca queda inactivo; hubo que reintentar con domcontentloaded, y el screenshot salió con fondo negro por lo que la verificación real se hizo leyendo el DOM.
-
-**Lección:** Para verificar cambios de UI en esta consola con Playwright, esperar domcontentloaded + un selector concreto (nunca networkidle, que nunca dispara por el polling/WS), y confirmar el resultado leyendo el DOM/atributos en vez de confiar solo en la captura visual.
-
 ### Verificar código en disco antes de confiar en el status de una tarea en Pad
 _procedimiento · confianza alta · recurrencia x1_
 
 **Observación:** La sesión encontró tareas de SP7 marcadas 'todo' en Pad que ya estaban completamente implementadas en disco (y otras 'doing' también listas) — el tracking de Pad iba con lag respecto al código real, para bien y para mal.
 
 **Lección:** Antes de dar una tarea por pendiente o por hecha basándose solo en su status de Pad, leer los archivos reales involucrados y correr una verificación mínima (node --check, grep de la lógica clave) para confirmar el estado real, y recién ahí ajustar el status en Pad con una nota de auditoría.
-
-### Antes de certificar algo como 'en vivo', comparar fecha del código vs hora de arranque del servicio
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** El código de threading de B2 y onboarding tenía fecha Jul-17, pero el server systemd corría desde Jul-16 23:20 sin reiniciarse, por lo que lo verificado en disco podía no ser lo que realmente estaba sirviendo en producción.
-
-**Lección:** Al validar que una funcionalidad ya está operativa, chequear explícitamente el uptime/hora de arranque del servicio contra la fecha de modificación del código; si el servicio es anterior al código, marcar la verificación como 'en disco, pendiente de deploy' en vez de 'en vivo'.
 
 ### node --check no detecta imports nombrados rotos; sumar smoke test de imports
 _procedimiento · confianza alta · recurrencia x1_
@@ -6104,13 +6133,6 @@ _convencion · confianza alta · recurrencia x1_
 **Observación:** Al calcular el ratio de ritmo histórico de la barra de Sesión se usó primero tokens crudos y dio 2.7×, pero no cuadraba con el 25% real que reporta Anthropic; la causa era que el 95% de los tokens crudos eran cache reads (10× más baratos). Se corrigió a costo equivalente, el mismo criterio que ya usa el resto de la app, y el ratio bajó a 2.1×, coherente con el dato oficial.
 
 **Lección:** En el módulo tokens, toda métrica nueva derivada de consumo debe construirse con costo equivalente (que ya pesa cache reads a ~10%), nunca con tokens crudos — y validarse contra el % oficial del proveedor antes de darla por cerrada.
-
-### Un job de ingesta no debe marcarse 'done' si el guardado no persistió nada
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** Un intento previo de ingesta de feedback falló en silencio y quedó cacheado como 'done · 0 nuevas' porque Pad había rechazado todos los ítems; solo se detectó al reintentar con otro texto y comparar contra el conteo real en Pad.
-
-**Lección:** En runners que persisten a un store externo, verificar que el guardado realmente aplicó (contar ítems antes/después) antes de marcar el job como terminado; si el store rechaza los ítems, el job debe fallar de forma visible en vez de reportarse como éxito vacío.
 
 ### Al sumar categoría nueva a un store en Pad, actualizar también el schema de la colección
 _procedimiento · confianza alta · recurrencia x1_
@@ -6161,13 +6183,6 @@ _procedimiento · confianza media · recurrencia x1_
 
 **Lección:** Cuando se modifica el comportamiento de un componente central (modelo por defecto, ruteo, permisos), incluir como parte del mismo cambio la actualización de los playbooks/skills que lo documentan, en vez de dejar que una sesión futura lo descubra por casualidad al comparar contra el código.
 
-### Verificar que un bloqueo de permisos no sea shadowed por un modo de permisos superior
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** El deny de Tándem vivía en canUseTool, pero bypassPermissions (modo default del launcher) y las allow-rules de settings.json evaluaban y aprobaban la tool ANTES de que canUseTool fuera consultado, dejando el bloqueo inerte durante meses sin que nadie lo notara.
-
-**Lección:** Antes de confiar en una capa de bloqueo/permiso como control de seguridad, verificar explícitamente si algún modo de permisos de nivel superior (bypassPermissions, allow-rules, etc.) puede evaluarse primero y volverla inerte; preferir hooks de la capa más autoritativa (p.ej. PreToolUse) documentados como inmunes a ese bypass.
-
 ### Derivar estado de UI del proceso vivo (auto-reporte), no de una copia persistida
 _metodologia · confianza alta · recurrencia x1_
 
@@ -6195,32 +6210,4 @@ _metodologia · confianza alta · recurrencia x1_
 **Observación:** El badge de Salud quedó clavado en CRÍTICO pese a que los 26 hallazgos estaban resueltos: existía una lógica 'liveVerdict' que recalculaba el veredicto real ya usada en /review, pero /scan-all nunca la adoptó y seguía sirviendo el verdict congelado de la corrida IA original.
 
 **Lección:** Cuando dos rutas/endpoints exponen el mismo dato derivado de un estado mutable (ej. un veredicto agregado), extraer el cómputo a una única función compartida que ambas llamen, en vez de mantener copias que puedan desincronizarse en silencio. Al agregar una lógica de recálculo 'en vivo' a un endpoint, revisar si hay un endpoint hermano exponiendo el mismo tipo de dato y aplicarle la misma corrección.
-
-### Actualizar el mapa de módulos en CLAUDE.md al agregar un módulo backend nuevo
-_procedimiento · confianza media · recurrencia x1_
-
-**Observación:** Tras montar src/modules/skills/index.js en el registry, la sesión actualizó el mapa del proyecto en CLAUDE.md y el comentario de cabecera de system.js como paso final antes de cerrar.
-
-**Lección:** Todo módulo backend nuevo registrado en registry.js debe reflejarse también en el mapa de módulos de CLAUDE.md (y en el comentario de cabecera del archivo que lo monta en UI) antes de dar la tarea por cerrada.
-
-### Registrar cruces legítimos entre mundos en CROSS_WORLD_ALLOW con motivo
-_procedimiento · confianza media · recurrencia x1_
-
-**Observación:** El check de Salud 'cruces entre mundos' marcó el nuevo módulo de skills por leer .claude/skills de Tolkien desde Consola; se resolvió sumándolo a CROSS_WORLD_ALLOW con motivo, igual que projects/index.js, en vez de dejarlo como warning.
-
-**Lección:** Cuando un módulo nuevo necesita acceso legítimo a carpetas de otro mundo, documentarlo explícitamente en CROSS_WORLD_ALLOW con su motivo antes de cerrar la tarea, siguiendo el precedente de módulos similares.
-
-### Probar una regla inyectada en tool-policy/system prompt en un chat NUEVO, no en el actual
-_procedimiento · confianza alta · recurrencia x1_
-
-**Observación:** Tras modificar tool-policy.js para inyectar la regla de 'carpeta del chat' en todo system prompt, el propio chat en curso no la recibió (su runner ya había arrancado antes del deploy) y hubo que crear una sesión nueva para hacer la 'prueba de fuego' real.
-
-**Lección:** Cuando se cambia el system prompt o tool-policy del runner, dar por hecho que las sesiones ya abiertas NO reciben el cambio hasta 'Reabrir para cambios'; verificar el efecto siempre en un chat recién creado, y aclararlo como caveat explícito al cerrar la tarea.
-
-### Commitear directo a main en repos personales, sin branches acumulables
-_convencion · confianza alta · recurrencia x1_
-
-**Observación:** El trabajo de varias semanas (facilities, migración a Pad local, learning module) quedó apilado 62 commits en una feature branch nunca mergeada a main, dejando main desactualizado y confundiendo al usuario sobre dónde vivía realmente su trabajo.
-
-**Lección:** En el repo personal de consola (single-dev, sin flujo de PR), evitar crear feature branches de larga vida: commitear directo a main o mergear con frecuencia, para que main siempre refleje el estado real del trabajo.
 <!-- cwc:mejora-continua:end -->

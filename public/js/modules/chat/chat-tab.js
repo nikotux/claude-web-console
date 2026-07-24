@@ -300,7 +300,7 @@ export class ChatTab {
     this._draftKey = `cwc:chat-draft:${this.id}`;
     try {
       const d = localStorage.getItem(this._draftKey);
-      if (d) { this.inputEl.value = d; requestAnimationFrame(() => { this.inputEl.style.height = 'auto'; this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`; }); }
+      if (d) { this.inputEl.value = d; requestAnimationFrame(() => this._autosize()); }
     } catch { /* localStorage no disponible: sin respaldo, no rompe */ }
     this.sendBtn = container.querySelector('.chat-send');
     this.stopBtn = container.querySelector('.chat-stop');
@@ -353,8 +353,7 @@ export class ChatTab {
     });
     // Autogrow del textarea (hasta ~6 líneas) + autocompletado de comandos.
     this.inputEl.addEventListener('input', () => {
-      this.inputEl.style.height = 'auto';
-      this.inputEl.style.height = `${Math.min(this.inputEl.scrollHeight, 140)}px`;
+      this._autosize();
       this._slashUpdate();
       // BUG-498: respaldar el borrador en cada tecla (barato; cubre reconexión,
       // disable y reconstrucción total del pane).
@@ -1503,6 +1502,19 @@ export class ChatTab {
     });
   }
 
+  // Recalcula el alto del textarea según su contenido. NO fija 0px cuando el
+  // pane está oculto (display:none) o sin layout: ahí scrollHeight es 0 y
+  // fijarlo colapsaría el input a un sliver ilegible (bug: composer chico e
+  // inmóvil al restaurar un borrador con la pestaña inactiva, lazy-connect
+  // PEND-747). En ese caso se deja en 'auto' hasta que haya layout real; se
+  // recomputa en focus() al mostrar la pestaña y en el handler de 'input'.
+  _autosize() {
+    const el = this.inputEl;
+    if (!el) return;
+    el.style.height = 'auto';
+    if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }
+
   focus() {
     // Re-anclar SIEMPRE al final al activar la pestaña: mientras el panel está
     // oculto (display:none) scrollTop se pierde (scrollHeight=0), así que el
@@ -1510,6 +1522,7 @@ export class ChatTab {
     // vista arriba de todo al volver a este chat. setActive() nos llama justo
     // DESPUÉS de mostrar el panel, con el layout ya medible.
     this._scroll();
+    this._autosize();
     // En táctil no auto-enfocamos: abriría el teclado sin que lo pidas.
     if (!window.matchMedia('(pointer: coarse)').matches) this.inputEl.focus();
   }

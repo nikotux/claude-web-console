@@ -18,7 +18,7 @@
 
 const MODULES = [
   'core', 'launcher', 'sessions', 'chat', 'terminal', 'tickets', 'tasks',
-  'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile',
+  'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile', 'unifi',
 ];
 
 let LANG = 'es';

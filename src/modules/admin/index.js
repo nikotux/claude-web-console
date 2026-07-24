@@ -91,6 +91,9 @@ export default {
         let changed = false;
         if (typeof password === 'string' && password.length) {
           setPassword(username, password);
+          // Cambio de contraseña ⇒ revocar sesiones vivas (típico ante cuenta
+          // comprometida): la cookie vieja no debe seguir válida hasta vencer.
+          invalidateSessionsForUser(username);
           changed = true;
         }
         if (typeof admin === 'boolean') {
@@ -136,15 +139,19 @@ export default {
     r.post('/restart-runners', (req, res) => {
       try {
         const killed = [];
+        const failed = [];
         for (const pid of liveRunnerPids()) {
           try {
             process.kill(pid, 'SIGTERM');
             killed.push(pid);
           } catch (err) {
-            if (err.code !== 'ESRCH') throw err; // ESRCH = ya murió, se ignora
+            if (err.code === 'ESRCH') continue; // ya murió, no es un fallo
+            // Otro error (p.ej. EPERM): no abortar todo el reciclado por un pid;
+            // acumular y seguir con el resto para no dejar runners sin señal.
+            failed.push({ pid, error: err.code || err.message });
           }
         }
-        res.json({ killed: killed.length, pids: killed });
+        res.json({ killed: killed.length, pids: killed, failed });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }

@@ -4,7 +4,7 @@
 // doble capa (regla 6: sonnet, maxTurns 1, settingSources [], PreToolUse deny +
 // canUseTool deny — CERO herramientas). El server ya juntó lessons+rules en el
 // job; acá solo prompt-eamos y parseamos. Un solo job (retro-curation.json).
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, CURATE_TIMEOUT_MS, curatePrompt, parseCuration,
   readCurationJob, writeCurationJob,
@@ -12,40 +12,15 @@ import {
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
-const deny = {
-  hookSpecificOutput: {
-    hookEventName: 'PreToolUse',
-    permissionDecision: 'deny',
-    permissionDecisionReason: 'La curaduría de mejora continua no usa herramientas.',
-  },
-};
-
 async function run(job) {
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('La curaduría tardó demasiado.')), CURATE_TIMEOUT_MS); });
-  const q = query({
-    prompt: curatePrompt(job.context),
-    options: {
-      cwd: ROOT,
-      settingSources: [],
-      model: 'sonnet',
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const text = await textOnlyQuery(curatePrompt(job.context), {
+    cwd: ROOT,
+    model: 'sonnet',
+    maxTurns: 1,
+    timeoutMs: CURATE_TIMEOUT_MS,
+    denyReason: 'La curaduría de mejora continua no usa herramientas.',
+    timeoutMessage: 'La curaduría tardó demasiado.',
   });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  pump.catch(() => {});
-  try { await Promise.race([pump, timeout]); }
-  finally { clearTimeout(timer); try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   const parsed = parseCuration(text);
   if (!parsed) throw new Error('No se pudo interpretar la respuesta de la curaduría.');
   return parsed;

@@ -10,7 +10,7 @@
 // diff viaja entero en el prompt) y se persiste el resultado en el MISMO
 // archivo. El front encuesta GET /commit-message/:id hasta que status deja de
 // ser 'running'. Mismo patrón que bin/cwc-projects-analyze-runner.js.
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, COMMITMSG_TIMEOUT_MS, commitMsgPrompt, parseCommitMsg,
   readCommitMsgJob, writeCommitMsgJob,
@@ -20,45 +20,15 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
 async function runGeneration(job) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'La generación del mensaje de commit no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: commitMsgPrompt(job),
-    options: {
-      cwd: ROOT,
-      settingSources: [], // nada de settings/skills: redacción pura de texto
-      model: 'haiku',     // rápido y barato; el diff viene entero en el prompt
-      effort: 'low',      // clasificador/redactor mecánico de 1 turno (F5(a) PEND-405, mismo criterio que chat/index.js)
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const text = await textOnlyQuery(commitMsgPrompt(job), {
+    cwd: ROOT,
+    model: 'haiku',
+    effort: 'low',
+    maxTurns: 1,
+    timeoutMs: COMMITMSG_TIMEOUT_MS,
+    denyReason: 'La generación del mensaje de commit no usa herramientas.',
+    timeoutMessage: 'La generación tardó demasiado.',
   });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('La generación tardó demasiado.')), COMMITMSG_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  // Si `timeout` gana la carrera, `pump` sigue viva y nadie más la espera; sin
-  // este catch, un rechazo tardío se cuela como unhandledRejection.
-  pump.catch(() => {});
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
   const message = parseCommitMsg(text);
   if (!message) throw new Error('No se pudo interpretar el mensaje generado.');
   return message;

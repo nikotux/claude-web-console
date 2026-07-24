@@ -2197,7 +2197,7 @@ html, body {
   border-radius: var(--cwc-radius-sm); padding: 0 .35rem; margin-right: .35rem;
 }
 .chat-input {
-  flex: 1; min-width: 0; resize: none; max-height: 140px;
+  flex: 1; min-width: 0; resize: none; min-height: 34px; max-height: 140px;
   background: var(--cwc-bg-input); color: var(--cwc-text);
   border: 1px solid var(--cwc-border-strong); border-radius: var(--cwc-radius-md);
   font-size: var(--cwc-fs-md); font-family: var(--cwc-font-ui);

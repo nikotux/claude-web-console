@@ -67,8 +67,23 @@ fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
 fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + '\n');
 console.log(`hooks instalados en ${SETTINGS}`);
 
-// Comando /btw
+// Comando /btw. Si ya existe un btw.md AJENO (sin nuestra marca cwc-bus.js), lo
+// respaldamos antes de pisarlo — misma protección que damos a settings.json.
 fs.mkdirSync(CMD_DIR, { recursive: true });
+if (fs.existsSync(CMD_FILE)) {
+  let prev = '';
+  try { prev = fs.readFileSync(CMD_FILE, 'utf8'); } catch { /* ilegible: lo tratamos como ajeno */ }
+  if (!prev.includes('cwc-bus.js')) {
+    const bak = `${CMD_FILE}.bak`;
+    try {
+      fs.writeFileSync(bak, prev);
+      console.log(`había un /btw ajeno; respaldado en ${bak}`);
+    } catch (e) {
+      console.error(`no se pudo respaldar el /btw ajeno (${e?.message}); se aborta para no destruirlo.`);
+      process.exit(1);
+    }
+  }
+}
 fs.writeFileSync(CMD_FILE, btwCommandText());
 console.log(`comando instalado: ${CMD_FILE}`);
 console.log('Las sesiones NUEVAS de Claude Code toman el Interfono; las ya abiertas, al reiniciar claude adentro.');

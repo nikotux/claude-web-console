@@ -6,7 +6,7 @@
 // denegación, regla 6: solo resume el texto del hilo) y se persiste el
 // resultado en el MISMO archivo. El front encuesta GET hasta que status deja de
 // ser 'running'. Clon de bin/cwc-projects-analyze-runner.js.
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, ANALYZE_TIMEOUT_MS, analyzePrompt, parseAnalysis, readAnalyzeJob, writeAnalyzeJob,
 } from '../src/modules/comms/analyze-shared.js';
@@ -15,42 +15,15 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
 async function runAnalysis(text, contactName) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'El análisis de hilo no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: analyzePrompt(text, contactName),
-    options: {
-      cwd: ROOT,
-      settingSources: [],
-      model: 'haiku',
-      effort: 'low',      // clasificador mecánico de 1 turno (F5(a) PEND-405, mismo criterio que chat/index.js)
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const out = await textOnlyQuery(analyzePrompt(text, contactName), {
+    cwd: ROOT,
+    model: 'sonnet',
+    effort: 'low',
+    maxTurns: 1,
+    timeoutMs: ANALYZE_TIMEOUT_MS,
+    denyReason: 'El análisis de hilo no usa herramientas.',
+    timeoutMessage: 'El análisis tardó demasiado.',
   });
-  let out = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El análisis tardó demasiado.')), ANALYZE_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  pump.catch(() => {});
-  try { await Promise.race([pump, timeout]); }
-  finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
   const analysis = parseAnalysis(out);
   if (!analysis) throw new Error('No se pudo interpretar el análisis.');
   return analysis;

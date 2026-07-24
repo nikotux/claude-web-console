@@ -14,6 +14,7 @@ import { mountBackupPanel } from './backup-panel.js';
 import { mountUsersPanel } from './users.js';
 import { mountHealthPanel } from './health-panel.js';
 import { mountDashboardPanel } from './dashboard-panel.js';
+import { mountUnifiPanel } from './unifi-panel.js';
 import { mountProjectContextPanel } from './project-context-panel.js';
 import { mountInterfonoPanel } from './interfono-panel.js';
 import { mountEnvVarsPanel } from './env-vars-panel.js';
@@ -54,6 +55,7 @@ export default {
             { emoji: '❤️', label: t('system.menu.health', 'Salud'), mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
             { emoji: '📊', label: t('system.menu.dashboard', 'Dashboard'), mount: (c) => mountDashboardPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🔄', label: t('system.menu.updates', 'Actualizaciones'), mount: (c) => mountUpdatesPanel(c, { ...ctx, isAdmin }) },
+            { emoji: '🛰️', label: t('system.menu.unifi', 'UniFi'), mount: (c) => mountUnifiPanel(c, { ...ctx, isAdmin }) },
             { emoji: '📡', label: t('system.menu.interfono', 'Interfono'), mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
           ],
         },

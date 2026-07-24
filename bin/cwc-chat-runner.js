@@ -308,7 +308,7 @@ function startEngine() {
   // única que garantiza `allowDangerouslySkipPermissions` para que el modo
   // "Todo" (bypassPermissions) realmente saltee permisos. Ver ese archivo.
   const mcpServers = {};
-  if (TANDEM) mcpServers.codex = createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT });
+  if (TANDEM) mcpServers.codex = createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT, chatDir: chatAttachDir(ID) });
   try {
     if (isConsoleCwd(CWD)) mcpServers.unifi = createUnifiToolServer();
   } catch (e) {

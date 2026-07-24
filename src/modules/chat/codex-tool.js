@@ -39,6 +39,10 @@ export const TANDEM_CODEX_PREAMBLE = [
   '- Tocá ÚNICAMENTE los archivos que el plan menciona. Si creés que hace falta tocar otro, decilo en tu mensaje final en vez de hacerlo.',
   '- Al terminar, verificá la sintaxis de cada archivo .js que hayas modificado con `node --check <archivo>`.',
   '- No corras git commit, git push, systemctl ni npm install salvo pedido explícito.',
+  '- Usá `python3`, nunca `python` (en esta máquina `python` no existe).',
+  '- Evitá heredocs frágiles y comillas/backticks anidados sin cerrar; preferí comandos de una línea simples.',
+  '- Si la tarea necesita escribir en `.git` (git add/commit/rebase/etc.), avisá que hace falta `full_access: true`; sin eso `.git` es read-only.',
+  '- La generación PURA de documentos (redactar/traducir texto que no es código) es razonamiento y conviene que la resuelva Claude directo, no esta delegación.',
   '- En tu mensaje final resumí en pocas líneas QUÉ cambiaste y en qué archivo.',
   '',
   'PLAN CONCRETO:',
@@ -221,13 +225,16 @@ export function diffSnapshots(before, after, cwd, startedAt) {
 // {code|error, msgs[], threadId, usage, stderr}. Kill por timeout. PLAN-519 F2:
 // modelo+esfuerzo configurables (default gama alta). `fullAccess` desactiva el
 // sandbox, necesario para escribir en `.git`.
-function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false) {
+function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = []) {
   return new Promise((resolve) => {
     const args = [
       'exec', '--json', '--skip-git-repo-check',
       '-m', model,
       '-c', `model_reasoning_effort=${effort}`,
       '-s', fullAccess ? 'danger-full-access' : 'workspace-write',
+      ...(!fullAccess && Array.isArray(writableRoots) && writableRoots.length
+        ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(writableRoots)}`]
+        : []),
       (fullAccess ? TANDEM_FULL_ACCESS_WARNING : '') + TANDEM_CODEX_PREAMBLE + task,
     ];
     let child;
@@ -267,7 +274,8 @@ function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_E
 // Fábrica del servidor MCP in-process con la única tool `delegate_to_codex`.
 // `cwd` = directorio del chat (Codex ejecuta ahí, con sandbox workspace-write).
 // PLAN-519 F2: `model`/`effort` del Codex configurables (default gama alta).
-export function createCodexToolServer({ cwd, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT }) {
+export function createCodexToolServer({ cwd, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, chatDir }) {
+  if (chatDir) { try { fs.mkdirSync(chatDir, { recursive: true }); } catch { /* best-effort */ } }
   const codexModel = CODEX_MODELS.has(model) ? model : TANDEM_CODEX_MODEL;
   const codexEffort = CODEX_EFFORTS.has(effort) ? effort : TANDEM_CODEX_EFFORT;
   const delegateTool = tool(
@@ -287,7 +295,7 @@ export function createCodexToolServer({ cwd, model = TANDEM_CODEX_MODEL, effort 
     async ({ task, full_access }) => {
       const startedAt = Date.now();
       const before = await snapshotTree(cwd, { withContents: true });
-      const res = await runCodex(cwd, task, codexModel, codexEffort, full_access === true);
+      const res = await runCodex(cwd, task, codexModel, codexEffort, full_access === true, full_access === true ? [] : (chatDir ? [chatDir] : []));
       const after = await snapshotTree(cwd);
       const { touched, newFiles } = diffSnapshots(before, after, cwd, startedAt);
       const parts = [];

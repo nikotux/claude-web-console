@@ -107,7 +107,7 @@ function listSessionsForSocket(sock, opts) {
       // cwc- de terminales O cwct- de vistas TUI ocultas de conversaciones —
       // ambas nacen de esta consola en el mismo socket; 'cwct-' NO matchea
       // startsWith('cwc-') porque el 4º carácter es 't', no '-').
-      owned: sock.name === config.tmuxSocket && (name.startsWith('cwc-') || name.startsWith('cwct-')),
+      owned: sock.name === config.tmuxSocket && (name.startsWith(PREFIX) || name.startsWith(BARE_PREFIX)),
       // Modelo: en tiempo real vía observador; si no, inferido del transcript.
       model: st?.model || (cwd ? modelForCwd(cwd) : null),
       state: st ? { status: st.status, ts: st.ts } : null,
@@ -156,7 +156,18 @@ export default {
         // vivas. Si list-sessions falla, tratamos ese socket como "no
         // verificado esta pasada" y no tocamos sus títulos custom.
         const unverifiedSockets = new Set();
-        for (const sock of listSockets()) {
+        let sockets;
+        let enumFailed = false;
+        try {
+          sockets = listSockets({ throwOnError: true });
+        } catch (e) {
+          // No pudimos ENUMERAR los sockets (distinto de "no hay ninguno"): si
+          // podáramos ahora, borraríamos títulos de sesiones vivas no verificadas.
+          console.error('[tmux] no se pudo enumerar los sockets; se omite la poda de títulos esta pasada:', e?.message);
+          enumFailed = true;
+          sockets = [];
+        }
+        for (const sock of sockets) {
           try {
             all.push(...listSessionsForSocket(sock, { throwOnError: true }));
           } catch {
@@ -171,14 +182,18 @@ export default {
         const titles = loadTitles();
         const valid = new Set(all.map((s) => titleKey(s.socketName, s.name)));
         let dirty = false;
-        for (const k of Object.keys(titles)) {
-          if (valid.has(k)) continue;
-          // No podar títulos de un socket cuya consulta falló esta pasada:
-          // no sabemos si sus sesiones siguen vivas o no.
-          const sockName = k.slice(0, k.indexOf('/'));
-          if (unverifiedSockets.has(sockName)) continue;
-          delete titles[k];
-          dirty = true;
+        // Solo podar si la ENUMERACIÓN de sockets fue confiable: si falló, no
+        // sabemos qué sesiones siguen vivas y no tocamos ningún título.
+        if (!enumFailed) {
+          for (const k of Object.keys(titles)) {
+            if (valid.has(k)) continue;
+            // No podar títulos de un socket cuya consulta falló esta pasada:
+            // no sabemos si sus sesiones siguen vivas o no.
+            const sockName = k.slice(0, k.indexOf('/'));
+            if (unverifiedSockets.has(sockName)) continue;
+            delete titles[k];
+            dirty = true;
+          }
         }
         if (dirty && !saveTitles(titles)) {
           // No abortamos la respuesta (los títulos podados ya están correctos

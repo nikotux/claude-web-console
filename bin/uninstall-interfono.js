@@ -49,5 +49,14 @@ if (existed) {
   console.log(`${SETTINGS} no existe; nada que quitar en hooks.`);
 }
 
-try { fs.unlinkSync(CMD_FILE); console.log(`comando removido: ${CMD_FILE}`); }
-catch { /* no existía */ }
+// Solo borramos el btw.md si es NUESTRO (contiene la marca cwc-bus.js); un
+// /btw ajeno del usuario no se toca — misma cautela que con settings.json.
+try {
+  const cur = fs.readFileSync(CMD_FILE, 'utf8');
+  if (cur.includes('cwc-bus.js')) {
+    fs.unlinkSync(CMD_FILE);
+    console.log(`comando removido: ${CMD_FILE}`);
+  } else {
+    console.log(`${CMD_FILE} no es del Interfono (sin marca cwc-bus.js); se deja intacto.`);
+  }
+} catch { /* no existía o ilegible: nada que quitar */ }

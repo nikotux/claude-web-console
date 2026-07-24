@@ -10,7 +10,7 @@
 // prompt) y se persiste el resultado en el MISMO archivo. El front encuesta
 // GET /api/audio/:id hasta que status deja de ser 'running'. Mismo patrón que
 // bin/cwc-commitmsg-runner.js / bin/cwc-projects-analyze-runner.js.
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
 import {
   ROOT, AUDIO_TIMEOUT_MS, audioPrompt, parseAudio,
   readAudioJob, writeAudioJob,
@@ -20,44 +20,14 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const id = process.argv[2];
 
 async function runAnalysis(job) {
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: 'El análisis de audio no usa herramientas.',
-    },
-  };
-  const q = query({
-    prompt: audioPrompt(job.transcript),
-    options: {
-      cwd: ROOT,
-      settingSources: [],   // nada de settings/skills/MCP: interpretación pura de texto
-      model: 'sonnet',      // la lectura quién/por qué + plan necesita calidad
-      maxTurns: 1,
-      permissionMode: 'default',
-      hooks: { PreToolUse: [{ hooks: [async () => deny] }] },
-      canUseTool: async () => ({ behavior: 'deny', message: 'Sin herramientas.' }),
-    },
+  const text = await textOnlyQuery(audioPrompt(job.transcript), {
+    cwd: ROOT,
+    model: 'sonnet',
+    maxTurns: 1,
+    timeoutMs: AUDIO_TIMEOUT_MS,
+    denyReason: 'El análisis de audio no usa herramientas.',
+    timeoutMessage: 'El análisis tardó demasiado.',
   });
-  let text = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('El análisis tardó demasiado.')), AUDIO_TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text' && b.text) text += `${b.text}\n`;
-      } else if (m.type === 'result') break;
-    }
-  })();
-  // Si `timeout` gana la carrera, `pump` sigue viva y nadie la espera; sin este
-  // catch un rechazo tardío se colaría como unhandledRejection.
-  pump.catch(() => {});
-  try {
-    await Promise.race([pump, timeout]);
-  } finally {
-    clearTimeout(timer);
-    try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ }
-  }
   const result = parseAudio(text);
   if (!result) throw new Error('No se pudo interpretar la respuesta del análisis.');
   return result;

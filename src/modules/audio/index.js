@@ -72,13 +72,24 @@ export default {
           return res.json({ id, title: existing.title || title, ...jobResult(existing) });
         }
         // titleAuto = el runner rellenará el título con el que genere la IA. Si el
-        // usuario mandó uno explícito (uso programático), se respeta.
+        // usuario mandó uno explícito (uso programático) o ya había editado el
+        // título del job anterior (titleAuto:false), se preserva.
+        const keepTitle = title || existing?.title || '';
+        const keepAuto = title ? false : (existing ? existing.titleAuto : true);
         writeAudioJob(id, {
-          id, title: title || '', titleAuto: !title, transcript, status: 'running',
+          id, title: keepTitle, titleAuto: keepAuto, transcript, status: 'running',
           result: null, error: null, startedAt: Date.now(), updatedAt: Date.now(),
         });
-        spawnAudioRunner(id);
-        res.json({ id, title: title || '', status: 'running', result: null, error: null });
+        try {
+          spawnAudioRunner(id);
+        } catch (spawnErr) {
+          // Fallo SÍNCRONO antes del spawn (mkdir/open del log): el job quedaría
+          // 'running' colgado hasta volverse stale. Lo marcamos 'error' ya.
+          const msg = String(spawnErr?.message || spawnErr).slice(0, 300);
+          writeAudioJob(id, { id, title: keepTitle, titleAuto: keepAuto, transcript, status: 'error', result: null, error: msg, startedAt: Date.now(), updatedAt: Date.now() });
+          return res.status(500).json({ error: msg });
+        }
+        res.json({ id, title: keepTitle, status: 'running', result: null, error: null });
       } catch (e) {
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }

@@ -176,3 +176,9 @@ export async function findClient(query) {
     return fields.some((value) => String(value ?? '').toLowerCase().includes(needle));
   });
 }
+
+export async function getDeviceStats() {
+  const site = config.unifi?.site || 'default';
+  const payload = await apiGet(`/proxy/network/api/s/${segment(site)}/stat/device`);
+  return asArray(payload?.data);
+}
