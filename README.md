@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-25 14:08 — main
+- Actualizar Codex a gpt-5.6-sol + runners desacoplados + auditoría Pad
+
 ### 2026-07-24 22:23 — main
 - Dividir CLAUDE.md monolítico en mapa + fichas descentralizadas
 
