@@ -8,7 +8,12 @@
     token: '',
     username: '',
     admin: false,
+    lang: 'es',
+    codex: '',
     url: '',
+    codexUrl: '',
+    codexCode: '',
+    finishSent: false,
     error: '',
   };
 
@@ -25,12 +30,16 @@
   }
 
   function setStep(step) {
-    if (state.step === 'creds' && step !== 'creds') clearPoll();
+    if (['creds', 'codex'].includes(state.step) && step !== state.step) clearPoll();
     state.step = step;
     state.error = '';
     loading = '';
     exchanging = false;
     currentJobKey = '';
+    if (step === 'done' && !state.finishSent) {
+      state.finishSent = true;
+      apiJson('/finish', { method: 'POST', body: { token: state.token } }).catch(() => {});
+    }
     render();
   }
 
@@ -88,8 +97,9 @@
 
     const steps = document.createElement('div');
     steps.className = 'ob-steps';
+    steps.style.gridTemplateColumns = 'repeat(5, 1fr)';
     steps.setAttribute('aria-label', 'Progreso del onboarding');
-    for (let i = 1; i <= 4; i += 1) {
+    for (let i = 1; i <= 5; i += 1) {
       const step = document.createElement('span');
       step.className = i <= activeStep ? 'ob-step is-active' : 'ob-step';
       steps.appendChild(step);
@@ -156,9 +166,11 @@
     const usernameEl = document.getElementById('ob-username');
     const passwordEl = document.getElementById('ob-password');
     const repeatEl = document.getElementById('ob-password-repeat');
+    const langEl = document.getElementById('ob-lang');
     const username = usernameEl ? usernameEl.value.trim() : '';
     const password = passwordEl ? passwordEl.value : '';
     const repeat = repeatEl ? repeatEl.value : '';
+    const lang = langEl && langEl.value === 'en' ? 'en' : 'es';
 
     if (!username) {
       setError('Ingresá un nombre de usuario.');
@@ -174,13 +186,14 @@
     }
 
     loading = 'register';
+    state.lang = lang;
     state.error = '';
     render();
 
     try {
       const data = await apiJson('/register', {
         method: 'POST',
-        body: { token: state.token, username, password },
+        body: { token: state.token, username, password, lang },
       });
       if (!data.ok) throw new Error(data.error || 'No se pudo crear la cuenta.');
       state.username = username;
@@ -297,9 +310,22 @@
     const username = input('ob-username', 'text', 'Usuario', 'username');
     const password = input('ob-password', 'password', 'Contraseña', 'new-password');
     const repeat = input('ob-password-repeat', 'password', 'Repetir contraseña', 'new-password');
+    const lang = document.createElement('select');
+    lang.id = 'ob-lang';
+    lang.className = 'dlg-input';
+    const spanish = document.createElement('option');
+    spanish.value = 'es';
+    spanish.textContent = 'Español';
+    const english = document.createElement('option');
+    english.value = 'en';
+    english.textContent = 'English';
+    lang.appendChild(spanish);
+    lang.appendChild(english);
+    lang.value = state.lang;
     form.appendChild(field('Usuario', username));
     form.appendChild(field('Contraseña', password));
     form.appendChild(field('Repetir contraseña', repeat));
+    form.appendChild(field('Idioma de la consola', lang));
 
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
@@ -393,7 +419,8 @@
 
     if (status === 'done' || job.done) {
       clearPoll();
-      setStep('done');
+      setStep('codex');
+      startCodex();
       return;
     }
 
@@ -439,10 +466,174 @@
     renderSpinner('Preparando…');
   }
 
+  function renderCodexBase() {
+    root.replaceChildren();
+    root.appendChild(header('Conectar Codex (opcional)', 'Autorizá Codex para usar el modo Tándem.', 4));
+    root.appendChild(textEl('p', 'ob-note', 'Codex es el ejecutor del modo Tándem (Claude razona, Codex escribe el código). Sin Codex tus chats usan AutoTux; podés conectarlo más tarde desde ⚙ Sistema → Conexiones.'));
+  }
+
+  function appendCodexSkip() {
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+      state.codex = 'skipped';
+      setStep('done');
+    }));
+    root.appendChild(actions);
+  }
+
+  function renderCodexSpinner(text) {
+    renderCodexBase();
+    const line = document.createElement('div');
+    line.className = 'ob-spinner-line';
+    line.appendChild(document.createElement('span')).className = 'ob-spinner';
+    line.appendChild(textEl('span', '', text));
+    root.appendChild(line);
+    appendCodexSkip();
+  }
+
+  async function startCodex() {
+    clearPoll();
+    state.codexUrl = '';
+    state.codexCode = '';
+    state.error = '';
+    currentJobKey = '';
+    renderCodexSpinner('Preparando…');
+
+    try {
+      const data = await apiJson('/codex-start', { method: 'POST', body: { token: state.token } });
+      if (state.step !== 'codex') return;
+      if (data.connected === true) {
+        state.codex = 'connected';
+        setStep('done');
+        return;
+      }
+      pollId = setInterval(pollCodex, 3000);
+      pollCodex();
+    } catch (err) {
+      clearPoll();
+      renderCodexStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function pollCodex() {
+    try {
+      const data = await apiJson('/codex-status?token=' + encodeURIComponent(state.token), { method: 'GET' });
+      renderCodexStatus(data || {});
+    } catch (err) {
+      clearPoll();
+      renderCodexStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  function renderCodexAwaitingAuth() {
+    renderCodexBase();
+
+    const list = document.createElement('ol');
+    list.className = 'ob-list';
+
+    const first = document.createElement('li');
+    first.appendChild(textEl('span', '', 'Abrí este enlace:'));
+    first.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.className = 'ob-url';
+    link.href = state.codexUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = state.codexUrl;
+    first.appendChild(link);
+    const copyLink = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+      try {
+        await navigator.clipboard.writeText(state.codexUrl);
+        copyLink.textContent = 'Copiado';
+      } catch (err) {
+        copyLink.textContent = 'No se pudo copiar';
+      }
+      window.setTimeout(function () {
+        copyLink.textContent = 'Copiar enlace';
+      }, 1800);
+    });
+    first.appendChild(copyLink);
+    list.appendChild(first);
+
+    const second = document.createElement('li');
+    second.appendChild(textEl('span', '', 'Código de autorización:'));
+    second.appendChild(textEl('p', 'ob-title', state.codexCode));
+    const copyCode = button('Copiar código', 'btn-ghost ob-copy', async function () {
+      try {
+        await navigator.clipboard.writeText(state.codexCode);
+        copyCode.textContent = 'Copiado';
+      } catch (err) {
+        copyCode.textContent = 'No se pudo copiar';
+      }
+      window.setTimeout(function () {
+        copyCode.textContent = 'Copiar código';
+      }, 1800);
+    });
+    second.appendChild(copyCode);
+    list.appendChild(second);
+    root.appendChild(list);
+    root.appendChild(textEl('p', 'ob-note', 'Abrí el enlace, pegá este código y autorizá con tu cuenta de ChatGPT. El código vence en 15 minutos.'));
+    root.appendChild(textEl('p', 'ob-note', 'Esta pantalla avanza sola cuando termines.'));
+    appendCodexSkip();
+  }
+
+  function renderCodexStatus(job) {
+    if (state.step !== 'codex') return;
+
+    const status = job.status || (job.done ? 'done' : 'starting');
+    const url = job.url || state.codexUrl || '';
+    const code = job.code || state.codexCode || '';
+    const stale = job.stale === true;
+    const error = job.error || '';
+    const jobKey = [status, url, code, stale ? 'stale' : '', error].join('|');
+
+    if (job.connected === true || job.done === true || status === 'done') {
+      clearPoll();
+      state.codex = 'connected';
+      setStep('done');
+      return;
+    }
+
+    if (status === 'error' || stale) {
+      clearPoll();
+      currentJobKey = jobKey;
+      renderCodexBase();
+      root.appendChild(textEl('p', 'ob-error', error || 'Parece que se interrumpió.'));
+      const actions = document.createElement('div');
+      actions.className = 'ob-actions';
+      actions.appendChild(button('Reintentar', 'btn', startCodex));
+      root.appendChild(actions);
+      appendCodexSkip();
+      return;
+    }
+
+    if (jobKey === currentJobKey && status === 'awaiting-auth') return;
+    currentJobKey = jobKey;
+
+    if (status === 'awaiting-auth' && url && code) {
+      state.codexUrl = url;
+      state.codexCode = code;
+      renderCodexAwaitingAuth();
+      return;
+    }
+
+    renderCodexSpinner('Preparando…');
+  }
+
   function renderDone() {
     root.replaceChildren();
-    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 4));
-    root.appendChild(textEl('p', 'ob-ok', 'Tu cuenta quedó configurada.'));
+    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 5));
+    const list = document.createElement('ul');
+    list.className = 'ob-list';
+    list.appendChild(textEl('li', '', '✅ Cuenta creada (' + state.username + ')'));
+    list.appendChild(textEl('li', '', '✅ Cuenta de Claude conectada'));
+    list.appendChild(textEl('li', '', state.codex === 'connected'
+      ? '✅ Codex conectado'
+      : '⏭ Codex omitido — lo podés conectar después'));
+    list.appendChild(textEl('li', '', '✅ Idioma: ' + (state.lang === 'en' ? 'English' : 'Español')));
+    root.appendChild(list);
+    root.appendChild(textEl('p', 'ob-note', 'Cuando entres, en ⚙ Sistema → Conexiones podés conectar Microsoft y Zoho.'));
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
     actions.appendChild(button('Ir a iniciar sesión', 'btn', function () {
@@ -456,6 +647,7 @@
     if (state.step === 'token') renderToken();
     else if (state.step === 'register') renderRegister();
     else if (state.step === 'creds') renderSpinner('Preparando…');
+    else if (state.step === 'codex') renderCodexSpinner('Preparando…');
     else renderDone();
   }
 

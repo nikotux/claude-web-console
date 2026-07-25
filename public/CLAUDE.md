@@ -193,8 +193,9 @@ hacia arriba si la acumulación real por deltas de
 contador de CAUDAL (estimación viva "ver subir los
 tokens"), no facturación exacta — para eso está el
 panel Uso. Ruta `/raw` en server.js (mismo
-patrón que `/archivos`, detrás del middleware de
-auth). Cierre con `Esc`/✕ → `window.close()` (solo
+gate que `/admin`: exige administrador porque muestra
+texto en vivo de las sesiones del host, BUG-1874). Cierre con
+`Esc`/✕ → `window.close()` (solo
 funciona si la pestaña se abrió por click real
 —`target="_blank"`—, no programáticamente:
 comportamiento de navegador, no bug). Paleta propia

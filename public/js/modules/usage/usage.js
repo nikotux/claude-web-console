@@ -510,7 +510,12 @@ function updateChart(canvas, series, metric) {
 export default {
   name: 'usage',
 
-  mount(el, ctx) {
+  async mount(el, ctx) {
+    el.hidden = true;
+    const me = await ctx.whoami;
+    if (!me?.admin) return;
+    el.hidden = false;
+
     const { dialog, icon } = ctx;
     el.innerHTML = `
       <button class="btn-ghost btn--sm usage-btn" title="${t('usage.btn.title', 'Uso de tokens (hoy)')}">

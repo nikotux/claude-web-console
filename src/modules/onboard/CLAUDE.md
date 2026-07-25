@@ -8,7 +8,8 @@
 módulo es la puerta de alta de inquilinos: un admin ya autenticado emite una
 invitación, el usuario nuevo entra por `/onboard`, se auto-registra con ese
 token y después configura su propia credencial Claude con `claude setup-token`
-corriendo en SU HOME aislado. La implementación vive en
+corriendo en SU HOME aislado, puede conectar Codex opcionalmente y cierra el
+wizard consumiendo la invitación. La implementación vive en
 `src/modules/onboard/index.js`; la persistencia/estado de invitaciones está en
 `src/core/onboard-tokens.js`; el paso PTY de credenciales está delegado a
 `bin/cwc-onboard-runner.js`.
@@ -35,7 +36,8 @@ devuelve `{valid, admin, reason}`. No exige usuario; rechaza tokens ausentes,
 inexistentes, consumidos, revocados o expirados según
 `core/onboard-tokens.js:validateInvite`. En error interno responde 500.
 
-`POST /api/onboard/public/register` recibe `{token, username, password}`.
+`POST /api/onboard/public/register` recibe `{token, username, password, lang?}`;
+`lang` acepta `es` o `en` y se persiste best-effort con `setUserLang`.
 Primero valida el token con `validateInvite(token, { forUsername: username })`;
 si el token está locked a otro usuario, queda inválido para este intento. Luego
 valida el username con `isValidUsername` (letras, números, `.`, `_`, `-`, máx.
@@ -67,6 +69,19 @@ done/error/stale y booleano `hasToken`.
 exige token locked a un usuario, trimmea el código y acepta solo valores no
 vacíos de hasta 4000 chars. Escribe `~/.cwc-data/onboard-jobs/<user>.code` mode
 600 para que el runner PTY lo lea e inyecte por stdin.
+
+`POST /api/onboard/public/codex-start` recibe `{token}`, lo valida y exige
+`lockedTo`. El paso es OPCIONAL y usa `bin/cwc-codex-login-runner.js` con
+device-auth (el callback localhost del login normal no sirve en el server);
+deduplica y persiste el job en
+`~/.cwc-data/codex-login-jobs/<user>.json`. `GET
+/api/onboard/public/codex-status?token=...` usa `peekInvite`, lee ese job y
+devuelve URL, código y estado sin exponer credenciales.
+
+`POST /api/onboard/public/finish` recibe `{token}`, valida que siga locked a un
+usuario y llama `consumeInvite(token)`. Es el cierre explícito del wizard; si el
+consumo devuelve false responde `{ok:true, already:true}` para tolerar
+reintentos, y en el caso normal responde `{ok:true}`.
 
 ### Superficie ADMIN
 La superficie admin vive en el `apiRouter` post-auth por
@@ -114,10 +129,16 @@ inquilino, borra `CLAUDE_CODE_OAUTH_TOKEN` para forzar login fresco y corre
 actualiza el job a `awaiting-code`; cuando `creds-code` deja el archivo `.code`,
 lo escribe al PTY y pasa a `exchanging`. Si `setup-token` emite un token
 `sk-ant-*`, lo guarda en `userOauthTokenPath(USER)` mode 600
-(`~/.cwc-users/<user>/.claude/oauth-token` para inquilinos), consume la
-invitación con `consumeInvite(INVITE)` y deja el job `done`. El server solo usa
-`readUserOauthToken` en `creds-status` para publicar `hasToken`; el secreto no
-viaja al cliente.
+(`~/.cwc-users/<user>/.claude/oauth-token` para inquilinos) y deja el job
+`done`, sin consumir la invitación. El server solo usa `readUserOauthToken` en
+`creds-status` para publicar `hasToken`; el secreto no viaja al cliente.
+
+Después, el wizard ofrece Codex como paso opcional. `codex-start` lanza
+`bin/cwc-codex-login-runner.js`, que usa device-auth y persiste el job en
+`~/.cwc-data/codex-login-jobs/<user>.json`; omitirlo no impide terminar. Al
+entrar al checklist final, el front llama best-effort a `POST /public/finish`,
+que recién entonces consume la invitación. Así queda `locked` durante registro,
+Claude y Codex, alineado con la decisión de `PLAN-500`.
 
 ### Gotchas reales
 TTL default duplicado deliberadamente: `index.js` usa `DEFAULT_TTL_H = 24` para
@@ -142,9 +163,12 @@ de Pad/workspace son best-effort.
 `creds-start` deduplica por archivo de job fresco, no por proceso real. Si el
 server reinicia, el job persiste; si el hijo murió sin poder actualizar estado,
 `creds-status` puede marcar `stale`. El runner tiene timeout de 10 min y solo
-consume la invitación al guardar el OAuth token correctamente. Una invitación
-consumida ya no sirve para `creds-start`/`creds-code`, pero `creds-status` sigue
-consultable por `peekInvite` para mostrar finalización.
+guarda el OAuth token y marca `done`: no consume la invitación. El ciclo de vida
+es `locked` durante TODO el wizard (registro → Claude → Codex → cierre) y pasa a
+`consumed` recién en `POST /public/finish`; si el usuario abandona antes, queda
+locked a SU username hasta morir por TTL. Esa ventana ya existía entre registro
+y credenciales. Tras el consumo, los status siguen consultables por
+`peekInvite` para mostrar finalización.
 
 `readUserOauthToken` devuelve null ante ausencia o error y nunca lanza. Eso es
 parte del blindaje: el UI puede mostrar `hasToken:false`, pero los runners de

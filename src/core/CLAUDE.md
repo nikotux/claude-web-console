@@ -80,6 +80,15 @@ que alcanzaría a otro workspace). Un runner vivo no lo toma hasta
 "Reabrir para cambios"/chat nuevo. Llevarlo a sesiones TUI = Frente B
 diferido. La regla 6 (blindaje read-only headless) NO pasa
 por acá: esos runners arman sus propias allowlists.
+AUTONOMÍA EJECUTABLE (2026-07-25): `AUTONOMY_INSTRUCTION` se agrega al
+system prompt de TODO chat, no sólo Tándem, porque la convención de la
+pelota es global. `declaresBallMine(text)` mira únicamente las últimas 3
+líneas no vacías y exige el emoji 🎾 + «pelota…mía»; `autonomyStopHook`
+traduce esa declaración a un `Stop` bloqueado para que el SDK continúe el
+turno. `mergeHookSets` compone hooks por nombre de evento y conserva juntos
+`PreToolUse`/`Stop`; `mergePreToolUseHooks` queda como alias
+retrocompatible. La continuación no tiene tope por decisión explícita de
+Niko del 2026-07-25: la única salida es declarar `TUYA`, `nadie` u `OTRO`.
 REGLA DE CARPETA DE TRABAJO DEL PAQUETE-SESIÓN (PLAN-447, pedido de Niko
 2026-07-14): chatQueryOptions ADEMÁS inyecta sessionFolderRule(chatId)
 —también preset+append, COMPUESTO con el bootstrap de Pad en un solo
@@ -156,7 +165,7 @@ reparación remota — login/puerto/MCPs rotos, la sesión abría "como la compu
 Nico" heredando `~/.claude` y rutas del host). Cada usuario tiene una RAÍZ
 propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
 `workspace/` — helpers en `src/core/user-space.js` (`userSpace`/`userDataDir`/
-`userClaudeDir`/`userFileRoot`/`userPadDir`/`readUserOauthToken`/
+`userClaudeDir`/`userFileRoot`/`userCodexDir`/`userCodexAuthPath`/`hasCodexCreds`/`userPadDir`/`readUserOauthToken`/
 `readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
 HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
 `config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.

@@ -19,7 +19,12 @@ delegado ⇒ la consola solo ve lo que el usuario ve); agregar un scope
 nuevo SIEMPRE obliga a reconectar la cuenta.
 Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
 GET|POST /app (admin) · POST /:p/connect · /:p/code · /:p/cancel ·
-/:p/disconnect · GET /:p/status.
+/:p/disconnect · GET /:p/status. Codex suma endpoints AUTENTICADOS,
+por-usuario y NO admin-only: POST /codex/start · GET /codex/status ·
+POST /codex/cancel; lanzan `bin/cwc-codex-login-runner.js`, que corre
+`codex login --device-auth`. Device-auth es obligatorio en el server
+remoto porque el login normal abre un callback en localhost:1455, que el
+navegador remoto no puede devolverle al server.
 GOTCHAS DUROS (todos verificados en vivo, cuestan caro re-descubrirlos):
 (1) ZOHO NO usa el scope `offline_access` — el refresh token se obtiene
 pasando `access_type=offline` en el intercambio; sin eso Zoho devuelve
@@ -31,3 +36,10 @@ matcheando por email — igual que seguimientos/desk-source.js — y de paso
 se guarda el agentId. (4) MICROSOFT: el device code exige "Allow public
 client flows" = Yes en la app de Entra, y si el tenant deshabilita el
 consentimiento de usuario hace falta aprobación del admin (una vez).
+(5) BUG-929 / regla dura 2: el device flow persiste `deviceCode`+`interval`
+en el job y `GET /:provider/status` lo REANUDA perezosamente tras reinicios
+cuando el registro en memoria `activePolls` no tiene un poller vivo.
+(6) ORDEN DE RUTAS CODEX: `/codex/start|status|cancel` DEBEN registrarse
+ANTES de `'/:provider/...'`; si no, `/codex/status` matchea
+`'/:provider/status'` con `provider='codex'` y devuelve 400
+`"Proveedor desconocido"`.

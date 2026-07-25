@@ -70,7 +70,23 @@ runner PTY (node-pty, `infisical login --domain <base>` exige TTY),
 estado en `~/.cwc-data/infisical-login/infisical.json`, token por
 archivo 0600 efímero que se borra apenas se escribe al pty, y éxito
 declarado solo tras re-verificar `infisical login status`.
+### bin/cwc-codex-login-runner.js  LOGIN GUIADO de Codex por usuario para onboarding y ⚙ Sistema
+→ Conexiones: runner PTY de `codex login --device-auth` (el login normal
+abre callback en localhost:1455, inservible desde un navegador contra un
+server remoto), con HOME aislado del dueño mediante `userRunnerEnv`.
+Publica URL/código/estado en
+`~/.cwc-data/codex-login-jobs/<user>.json`; ese job vive en el HOME del
+HOST — no en el HOME aislado — porque lo spawnea y consulta el server.
+Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
+NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
+`cancelled` del job y corta el PTY. Timeout duro: 15 min.
 ### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
+### bin/cwc-codex-runner.js     ejecutor DESACOPLADO de UNA delegación Tándem a Codex
+(`--job <id>`). Es config-free: no importa `core/config.js` y resuelve el
+directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Actualiza el heartbeat
+cada 15 s; es idempotente (un job `done`/`error` no vuelve a correr) y
+cualquier excepción persiste `error`, de modo que nunca deja el job colgado
+en `running`.
 ### bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
 DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
 barata que solo LISTA los [Tolkien Bug] abiertos; (2) triage de

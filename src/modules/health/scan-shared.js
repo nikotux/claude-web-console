@@ -118,7 +118,8 @@ function parseBugFields(item) {
 export async function crossCheckPad(findings = []) {
   let bugs = [];
   try {
-    const r = await padLocal.listItems('bugs', { workspace: 'console', all: true });
+    // BUG-1792: sin `all` solo se omiten soft-deleted, no terminales (fixed/wontfix), preservando regresiones; `all=true` dio 0 vs 60 en el Pad local (verificado en vivo 2026-07-24; ver nota en pad-service-client.js).
+    const r = await padLocal.listItems('bugs', { workspace: 'console' });
     bugs = (r && (r.data || r.items || r)) || [];
     if (!Array.isArray(bugs)) bugs = [];
   } catch (err) {

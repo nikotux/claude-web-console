@@ -230,9 +230,12 @@ async function main() {
   // Gestor de archivos (subpágina): cualquier usuario autenticado.
   app.get('/archivos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'archivos.html')));
 
-  // Vista Raw (subpágina, PLAN-544): visualización solo-lectura estilo Matrix
-  // de la actividad en vivo de la consola. Cualquier usuario autenticado.
-  app.get('/raw', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'raw.html')));
+  // Vista Raw (subpágina, PLAN-544): muestra el texto en vivo de las sesiones
+  // del host, así que desde BUG-1874 es exclusiva de administradores.
+  app.get('/raw', (req, res) => {
+    if (!isAdmin(req)) return res.status(403).send('Solo administradores.');
+    res.sendFile(path.join(PUBLIC_DIR, 'raw.html'));
+  });
 
   // Dashboard "Seguimientos" (subpágina, PLAN-553 · primer habitante de Limbo):
   // trabajo humano-accionable de Niko. Cualquier usuario autenticado.

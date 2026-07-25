@@ -58,7 +58,7 @@
   "chat.model.autoBadge": "🤖 AutoTux: {level}",
   "chat.model.autoTitle": "AutoTux (automatic model router) — current level: {level}",
   "chat.model.tandemBadge": "🤝 Tandem",
-  "chat.model.tandemTitle": "Tandem — Opus (medium) reasons and verifies · Codex gpt-5.5 (high) runs the code",
+  "chat.model.tandemTitle": "Tandem — Opus (high) reasons and verifies · Codex GPT-5.6 Sol (high) runs the code",
   "chat.model.forcedTitle": "Forced model — this conversation only uses {label}",
   "chat.help.title": "Chat help",
   "chat.help.modesSection": "Permission modes",

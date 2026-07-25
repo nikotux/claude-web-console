@@ -44,7 +44,7 @@ curl -sk -X POST -H "x-cwc-token: $TOKEN" -H 'Content-Type: application/json' \
 ```
 **Gotchas de Tándem al spawnear (2026-07-21):**
 - **Tándem es el default del sistema**: un `create` sin `model` ya nace en Tándem. Pasá el `model` EXPLÍCITO del ejecutor del bloque siempre, para no depender del default.
-- `/create` **no** acepta la config fina del protocolo. Si el bloque necesita otro razonador o ejecutor Codex, mandá después: `POST /api/chat/model {"model":"tandem","tandem":{"reasonerModel":"opus","reasonerEffort":"high","codexModel":"gpt-5.5","codexEffort":"high"}}` (esos son los defaults; solo hace falta si querés otra cosa).
+- `/create` **no** acepta la config fina del protocolo. Si el bloque necesita otro razonador o ejecutor Codex, mandá después: `POST /api/chat/model {"model":"tandem","tandem":{"reasonerModel":"opus","reasonerEffort":"high","codexModel":"gpt-5.6-sol","codexEffort":"high"}}` (esos son los defaults; solo hace falta si querés otra cosa).
 - **Verificá que el motor arrancó en Tándem** antes de inyectar el primer mensaje: `tandemActive` en `/api/chat/list` debe ser `true`. Si es `false`/`null`, el runner vivo todavía no corre en Tándem (cambiar de ejecutor exige respawn — throttle de 30 s, solo si está ocioso).
 - **Un bloque = un ejecutor** (CONVE-654): no mezcles tareas Claude-puro y Tándem en la misma sesión-bloque; cada salto cuesta un respawn del runner.
 

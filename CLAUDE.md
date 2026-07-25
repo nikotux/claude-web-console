@@ -13,7 +13,8 @@ código.
 2. **Resiliencia:** ninguna operación en curso puede quedar atada al ciclo de
    vida del proceso Node. Terminales → tmux (socket `cwc`); vistas TUI de
    conversaciones → tmux oculta (`cwct-`); motores de chat → runner desacoplado
-   (`bin/cwc-chat-runner.js`); triage de bugs → runner desacoplado
+   (`bin/cwc-chat-runner.js`); delegaciones Tándem a Codex → runner desacoplado
+   (`bin/cwc-codex-runner.js`); triage de bugs → runner desacoplado
    (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
    runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
@@ -221,7 +222,47 @@ código.
       funcionan) — documentado como pendiente futuro en
       `docs/evaluacion-rol-pad.md`, NO iniciado, requiere su propio OK
       explícito cuando se decida abordarlo.
-    - **Todo ítem de Pad nace ENLAZADO, nunca flotando:** al crear un ítem, colgalo de su "sol" (root real — un PLAN es sol de sus tareas, una RUTA de sus temas, una RED/el UDM Pro de la infra) con parent/link (`addLink`, típicamente `implements`, idempotente vía `listLinks`) y cross-linkeá entre sistemas. PROHIBIDO crear ítems-hub SINTÉTICOS en colecciones que son data viva de módulos (`pendientes`/`planes`, `temas-de-aprendizaje`/`rutas-de-aprendizaje`, `mejora-continua`, `contexto-de-tickets`): aparecerían como tarjetas fantasma. El grafo de Pad es item-only; el "sol de una colección" es un root real, no un hub inventado. Ver CONVE de linkeo y PLAN-1255.
+    - **Todo ítem de Pad nace ENLAZADO y en su NIVEL correcto** (endurecido
+      2026-07-25 tras auditoría estructural del grafo). Seis leyes; fuente de
+      verdad en Pad `CONVE-1257`, detalle largo con ejemplos y queries en
+      `docs/pad-grafo.md`:
+      1. **Nada flota:** todo ítem nace con al menos UNA arista hacia su "sol"
+         (root real — un PLAN es sol de sus tareas, una RUTA de sus temas, una
+         RED/el UDM Pro de la infra, `ARQUI-1258 «🖥️ Mi Consola»` de toda la
+         arquitectura del código).
+      2. **`parent` es JERARQUÍA (única) · `implements` es REFERENCIA (muchas).**
+         `parent` expresa "es parte de" y forma el ÁRBOL que dibuja el visor de
+         grafo; `implements` expresa "se relaciona con / realiza" y cruza
+         constelaciones. Usar `implements` para lo que es jerarquía deja al ítem
+         CON arista pero dibujado flotando al costado, porque no anida — fue
+         exactamente el bug de 36 nodos del 2026-07-25 (incluidos los 7 buckets
+         `MC · *`, sol de 240 lecciones).
+      3. **Subniveles: tantos como tenga el objeto real.** `Mi Consola → sección
+         → módulo → archivo → endpoint` son 4 niveles legítimos; NO se aplana
+         para "simplificar". Un nodo conceptual grueso puede convivir con el
+         nodo fino que lo realiza: el fino cuelga del módulo y marca el lineaje
+         con `supersedes` hacia el grueso.
+      4. **Grupos con nodo-grupo REAL, nunca hub sintético.** Hermanos de la
+         misma naturaleza se agrupan bajo un nodo que existe de verdad en el
+         árbol (las 16 secciones de `arquitectura`, los 7 buckets `MC · *`).
+         PROHIBIDO crear ítems-hub SINTÉTICOS en colecciones que son data viva
+         de módulos (`pendientes`/`planes`, `temas-de-aprendizaje`/
+         `rutas-de-aprendizaje`, `mejora-continua`, `contexto-de-tickets`):
+         aparecen como tarjetas fantasma y los módulos las parsean como dato
+         real. Ahí se usa SOLO el root real que ya existe (el PLAN/RUTA) o
+         cross-links.
+      5. **Una sola raíz por constelación.** `arquitectura` tiene exactamente
+         una (`ARQUI-1258`); si aparecen más raíces es síntoma de la ley 2 o de
+         un ítem creado sin sol.
+      6. **Idempotencia:** verificar con `listLinks` que el link no exista antes
+         de crearlo — los escaneos y reprocesos re-corren.
+      **Islas legítimas:** un PLAN de trabajo humano no-código (rediseño de
+      oficina, un expediente, el onboarding de una persona) puede ser un sol
+      autónomo desconectado del árbol de arquitectura; eso NO es defecto —
+      forzarle un `implements` a un módulo sería un link falso. **Verificación
+      (0 tokens):** query read-only sobre `~/.pad/pad.db` — ítems con grado 0
+      debe dar 0, y `arquitectura` debe tener 1 raíz. Ver `PLAN-1255`,
+      `CONVE-1257` y `BUG-1878` (causa de código que regeneraba huérfanos).
 12. **Anti-colisión entre mundos — resolución interna PRIMERO, puente por
     plan** (pedido explícito de Niko 2026-07-12). Los dos mundos NUNCA
     colisionan ni se enlazan EN VIVO: 🏠 **INTERNO** = Mi Consola + Pad
@@ -361,7 +402,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 | Módulo | Qué es | Lo que más duele |
 |---|---|---|
-| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | El modo **Tándem** (Claude razona, Codex ejecuta) bloquea Edit/Write por hook **PreToolUse** — `canUseTool` NO alcanza, lo shadowea `bypassPermissions`. **AutoTux** = router de modelo. Un runner VIVO no toma cambios de código hasta "Reabrir para cambios". Paquete-sesión (`PKG-n`) + handoff entre mundos. |
+| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". |
 | `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). Aún NO es owner-scoped (contrato forward del multi-tenant). |
 | `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
 | `tasks/` | Pendientes: tablero privado (PEND / PLAN) | Backend en **Pad LOCAL** (colecciones `pendientes`/`planes`), no file-based. Ojo con el rate limit al pedir links por ítem. |
@@ -557,7 +598,7 @@ Detalle completo: `src/modules/health/CLAUDE.md` (se carga solo al tocar el mód
 <!-- Gestionado por el módulo Mejora Continua de Mi Consola (ROAD-256). NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->
 
 ### Tras delegar un cambio de código a Codex, verificar sintaxis y alcance del diff por cuenta propia
-_procedimiento · confianza media · recurrencia x5_
+_procedimiento · confianza media · recurrencia x7_
 
 **Observación:** Después de delegar los 4 cambios de CSS/JS a Codex, el agente corrió `node --check` sobre el JS, contó el balance de llaves del CSS y confirmó que el diff tocara solo los 2 archivos planeados, ignorando 20 archivos ajenos que Codex reportó en el árbol.
 
@@ -569,6 +610,13 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** El módulo seguimientos no figuraba en el mapa de módulos de CLAUDE.md; la sesión lo detectó como hueco previo y lo agregó junto con el cambio del calendario.
 
 **Lección:** Antes de cerrar trabajo sobre un módulo, chequear que tenga entrada en el mapa de módulos de CLAUDE.md; si no existe, agregarla como parte del mismo cambio en vez de dejarla pendiente.
+
+### Verificar los scopes de una conexión OAuth existente antes de reusarla para un nuevo dominio de API
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** El plan para que la consola escriba en Zoho People vía un MCP propio asumía poder reusar la conexión OAuth de ⚙ Sistema → Conexiones, pero al inspeccionar el código (src/core/connections-zoho.js) se encontró que esa conexión solo tenía scopes de Desk.*, sin nada de People — el hallazgo llegó recién al revisar el código de la conexión, no antes de proponer el plan.
+
+**Lección:** Antes de diseñar una integración que reutiliza una conexión OAuth ya existente, verificar explícitamente qué scopes tiene otorgados hoy (no asumir que cubre el nuevo dominio); si faltan, incluir la re-autorización como paso explícito y temprano del plan, no como detalle de implementación.
 
 ### Ante Write bloqueado por Modo Tándem, no reintentar: mostrar el plan inline
 _procedimiento · confianza baja · recurrencia x1_

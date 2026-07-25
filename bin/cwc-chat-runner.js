@@ -30,12 +30,13 @@ import {
 } from '../src/modules/chat/shared.js';
 import {
   chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, tolkienEnvPreToolUseHook,
-  mergePreToolUseHooks, isConsoleCwd,
+  autonomyStopHook, mergeHookSets, isConsoleCwd,
 } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
+import { listCodexJobs } from '../src/modules/chat/codex-shared.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
 
@@ -71,9 +72,10 @@ const TOLKIEN_ENV_AUTO = args['tolkien-env-auto'] === '1';
 // = defaults de gama alta (createCodexToolServer valida contra su whitelist).
 const CODEX_MODEL = args['codex-model'] || null;
 const CODEX_EFFORT = args['codex-effort'] || null;
-// Una corrida de Codex (tool MCP in-process) puede durar minutos; el SDK corta
-// las tools MCP a 60 s por defecto (sdk.d.ts:441). Subimos el tope antes de query().
-if (TANDEM) process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT || '600000';
+// Una delegación de Codex corre en su propio proceso y puede llegar al tope real
+// CODEX_MAX_MS (60 min, en codex-shared.js). El SDK corta antes el stream si no
+// lo subimos: invariante obligatorio, stream close > CODEX_MAX_MS.
+if (TANDEM) process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT || '3900000';
 // Herramientas de escritura que Tándem le niega a Claude: sin ellas, su único
 // camino para tocar un archivo es delegate_to_codex → el split es estructural.
 const TANDEM_BLOCKED = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -141,6 +143,7 @@ const history = []; // eventos de UI de ESTA vida del motor (para replay al reco
 const clients = new Set();
 const pendingPerms = new Map(); // permId -> { resolve, timer, input }
 let permSeq = 0;
+let autonomyTurns = 0; // continuaciones desde el último mensaje humano
 
 function writeTo(c, obj) {
   try { c.write(`${JSON.stringify(obj)}\n`); } catch { /* cliente roto */ }
@@ -198,6 +201,20 @@ function emit(event, { record = true, broadcast = true } = {}) {
 function bgList() { return [...bgWork.values()]; }
 function emitBg() { emit({ type: 'bg', tasks: bgList() }, { record: false }); }
 
+// El radar reúne DOS fuentes: subagentes/workflows del SDK detectados por su
+// salida, y delegaciones a Codex avisadas por callbacks desde la tool.
+function bgAdd({ id, kind, label, startedAt = Date.now() }) {
+  bgWork.set(id, { id, kind, label, startedAt });
+  lastBgLaunch = Date.now();
+  emitBg();
+}
+
+function bgDone(id) {
+  if (!bgWork.delete(id)) return false;
+  emitBg();
+  return true;
+}
+
 // Retiene el motor mientras haya trabajo de fondo vivo (PLAN-892), con tope
 // para no volverlo inmortal si una tarea queda colgada.
 function bgHolds() { return bgWork.size > 0 && (Date.now() - lastBgLaunch) < BG_MAX_HOLD_MS; }
@@ -206,8 +223,17 @@ function bgHolds() { return bgWork.size > 0 && (Date.now() - lastBgLaunch) < BG_
 // esto el chat queda diciendo "corriendo" para siempre (el SDK no deja marcador).
 function warnBgKilled() {
   if (!bgWork.size) return;
-  const labels = bgList().map((b) => b.label).join(' · ');
-  emit({ type: 'error', message: `⚠️ El motor se durmió con ${bgWork.size} trabajo(s) en segundo plano en curso — se cortaron: ${labels}. Volvé a lanzarlos si hacen falta.` });
+  const work = bgList();
+  const codex = work.filter((b) => b.kind === 'Codex');
+  const sdk = work.filter((b) => b.kind !== 'Codex');
+  if (codex.length) {
+    const labels = codex.map((b) => b.label).join(' · ');
+    emit({ type: 'error', message: `⚠️ El motor se durmió con ${codex.length} delegación(es) a Codex en curso — siguen corriendo en su propio proceso: ${labels}. Recuperá el resultado con collect_codex.` });
+  }
+  if (sdk.length) {
+    const labels = sdk.map((b) => b.label).join(' · ');
+    emit({ type: 'error', message: `⚠️ El motor se durmió con ${sdk.length} trabajo(s) en segundo plano en curso — se cortaron: ${labels}. Volvé a lanzarlos si hacen falta.` });
+  }
   bgWork.clear();
   emitBg();
 }
@@ -228,6 +254,7 @@ const BG_LAUNCH_RE = /launched in background\.\s*Task ID:\s*([A-Za-z0-9_-]+)/i;
 const BG_AGENT_RE = /Async agent launched successfully[\s\S]*?\bagentId:\s*([A-Za-z0-9_-]+)/i;
 const TASK_NOTIFICATION_RE = /<task-notification\b[^>]*>[\s\S]*?<\/task-notification>/gi;
 const TRANSCRIPT_SWEEP_TAIL_BYTES = 256 * 1024;
+const CODEX_HEARTBEAT_EXPIRED_MS = 90 * 1000;
 
 function bgLaunchId(out) {
   return (BG_LAUNCH_RE.exec(out)?.[1]) || (BG_AGENT_RE.exec(out)?.[1]) || null;
@@ -263,13 +290,9 @@ function sweepBgFromTranscript() {
       const id = firstTagText(note[0], 'task-id');
       const statusText = firstTagText(note[0], 'status');
       if (!id || !statusText || !bgWork.has(id)) continue;
-      bgWork.delete(id);
-      removed += 1;
+      if (bgDone(id)) removed += 1;
     }
-    if (removed > 0) {
-      emitBg();
-      log(`barrido de transcript: ${removed} trabajo(s) de fondo cerrado(s)`);
-    }
+    if (removed > 0) log(`barrido de transcript: ${removed} trabajo(s) de fondo cerrado(s)`);
   } catch {
     // Best-effort: el transcript puede no existir todavía o estar rotando.
   } finally {
@@ -311,7 +334,17 @@ function startEngine() {
   // única que garantiza `allowDangerouslySkipPermissions` para que el modo
   // "Todo" (bypassPermissions) realmente saltee permisos. Ver ese archivo.
   const mcpServers = {};
-  if (TANDEM) mcpServers.codex = createCodexToolServer({ cwd: CWD, model: CODEX_MODEL, effort: CODEX_EFFORT, chatDir: chatAttachDir(ID) });
+  if (TANDEM) {
+    mcpServers.codex = createCodexToolServer({
+      cwd: CWD,
+      model: CODEX_MODEL,
+      effort: CODEX_EFFORT,
+      chatDir: chatAttachDir(ID),
+      chatId: ID,
+      onBgStart: ({ id, kind, label }) => bgAdd({ id, kind, label }),
+      onBgEnd: (id) => bgDone(id),
+    });
+  }
   try {
     if (isConsoleCwd(CWD)) mcpServers.unifi = createUnifiToolServer();
   } catch (e) {
@@ -324,7 +357,14 @@ function startEngine() {
       onNeed: () => emit({ type: 'tolkien-env-needed', chatId: ID }, { record: false }),
     }));
   }
-  const mergedHooks = mergePreToolUseHooks(...hookSets);
+  hookSets.push(autonomyStopHook({
+    onContinue: () => {
+      autonomyTurns += 1;
+      emit({ type: 'autonomy', turn: autonomyTurns }, { record: false });
+      log(`continuación autónoma #${autonomyTurns}`);
+    },
+  }));
+  const mergedHooks = mergeHookSets(...hookSets);
   q = query({
     prompt: input.gen(),
     options: chatQueryOptions({
@@ -410,22 +450,17 @@ function onMessage(m) {
             // Limitacion conocida: SendMessage a un agente reanudado no emite
             // una nueva alta, asi que no se re-registra; la notificacion previa
             // ya lo dio por cerrado y el peor caso queda igual que antes.
-            bgWork.set(id, { id, kind, label, startedAt: Date.now() });
-            lastBgLaunch = Date.now();
-            emitBg();
+            bgAdd({ id, kind, label });
           }
         }
       }
     } else if (typeof blocks === 'string') {
-      let removed = false;
       for (const note of blocks.matchAll(TASK_NOTIFICATION_RE)) {
         const id = firstTagText(note[0], 'task-id');
         const statusText = firstTagText(note[0], 'status');
         if (!id || !statusText || !bgWork.has(id)) continue;
-        bgWork.delete(id);
-        removed = true;
+        bgDone(id);
       }
-      if (removed) emitBg();
     }
     return;
   }
@@ -543,6 +578,7 @@ function handleCommand(c, msg) {
   if (msg.t === 'user' && typeof msg.text === 'string'
       && (msg.text.trim() || (Array.isArray(msg.attachments) && msg.attachments.length))) {
     lastActivity = Date.now();
+    autonomyTurns = 0;
     setStatus('working');
     // Va al historial (para el replay de una reconexión) pero NO en vivo: el
     // server que lo mandó ya lo pintó localmente. Los adjuntos viajan como
@@ -657,6 +693,30 @@ function claimSocket() {
   });
 }
 
+function rehydrateCodexBg() {
+  if (!TANDEM) return;
+  try {
+    const now = Date.now();
+    let recovered = 0;
+    for (const job of listCodexJobs(ID)) {
+      if (!['pending', 'running'].includes(job.status)) continue;
+      const heartbeatExpired = job.status === 'running'
+        && now - Number(job.heartbeatAt || 0) > CODEX_HEARTBEAT_EXPIRED_MS;
+      if (heartbeatExpired) continue;
+      bgAdd({
+        id: job.id,
+        kind: 'Codex',
+        label: job.label,
+        startedAt: job.startedAt,
+      });
+      recovered += 1;
+    }
+    log(`radar Tándem rehidratado: ${recovered} delegación(es) a Codex recuperada(s)`);
+  } catch (err) {
+    log('no se pudo rehidratar el radar de Codex (continúo igual):', err?.message || err);
+  }
+}
+
 // La auto-siesta: sin actividad por SLEEP_MS, el motor se cierra solo (aunque
 // el server no exista para pedírselo). El pump termina y el proceso sale.
 setInterval(() => {
@@ -681,6 +741,7 @@ process.on('SIGTERM', () => { input.end(); Promise.resolve(q?.close?.()).catch((
 
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
 await claimSocket();
+rehydrateCodexBg();
 server.listen(SOCK, () => {
   try { fs.chmodSync(SOCK, 0o600); } catch { /* noop */ }
   log(`runner ${ID} escuchando en ${SOCK} (cwd=${CWD}, resume=${RESUME || 'nueva'})`);

@@ -626,6 +626,10 @@ whoami.then((me) => {
   const acct = document.getElementById('acct-user');
   if (me?.type === 'user') acct.textContent = me.username;
   else if (me?.type === 'token') acct.textContent = '(token)';
+  if (!me?.admin) {
+    document.querySelector('[data-module="usage"]')?.setAttribute('hidden', '');
+    document.querySelector('a[href="/raw"]')?.setAttribute('hidden', '');
+  }
 });
 
 // Mantiene el layout sobre el teclado virtual (móvil). Al enfocar el input del

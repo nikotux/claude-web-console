@@ -296,6 +296,10 @@ histórico). Lo consume public/js/rawview/raw.js (ver raw.html en el mapa).
 
 ## Gotchas de esta carpeta
 
+- Desde 2026-07-24 (BUG-1874) todo el módulo es ADMIN-ONLY: todos sus paths
+  salen de `os.homedir()` y por lo tanto leen la cuenta del host; la
+  contabilidad aislada por usuario queda pendiente.
+
 - Módulo tokens: los TOKENS son exactos (campos `usage` que la API de
   Anthropic reporta en cada mensaje del transcript, dedup por message.id);
   el COSTO es un EQUIVALENTE a precios de API, no un gasto real — la

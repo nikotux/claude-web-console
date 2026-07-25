@@ -161,3 +161,9 @@ Comunicaciones, que solo lee). Estado en `~/.cwc-data/retro-teams-scan.json`
 `CROSS_WORLD_ALLOW`. Las TRES piezas (manual/correo/Teams) caen en la MISMA
 lista del tablero (ícono 💬, chip de ticket) — se aprueban/adoptan/
 descartan con el mismo flujo de siempre, nada se auto-aplica.
+
+## Linkeo automático al grafo de Pad (BUG-1878)
+
+Toda lección que se crea en `mejora-continua` recibe un link `implements` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. El playbook que crea `promoteToPlaybook` recibe `implements` hacia la lección de origen.
+
+Los tres links son BEST-EFFORT (nunca rompen la destilación ni la promoción) y se SALTAN cuando el `ctx` es de un inquilino (workspace `tenant-*`), porque los ítems `ARQUI-*` solo existen en el workspace `console` del host. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz; detalle en `docs/pad-grafo.md`.

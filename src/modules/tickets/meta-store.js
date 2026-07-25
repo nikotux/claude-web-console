@@ -40,9 +40,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { encodeCwd } from '../../core/claude-model.js';
-import { findItemByTitle, createItem, updateItem } from '../../core/pad-service-client.js';
+import { findItemByTitle, createItem, updateItem, addLink } from '../../core/pad-service-client.js';
 
 const COLLECTION = 'contexto-de-tickets';
+// Sol de todo ítem de `contexto-de-tickets`: el nodo «Ciclo de tickets» de la
+// colección `arquitectura` (CONVE-1257 / regla dura 11). Sin este link el CDT
+// queda huérfano en el grafo de Pad (BUG-1878).
+const CDT_SUN = 'ARQUI-1274';
 const HISTORY_MAX = 40;     // tope de entradas de histórico por ítem
 const CONTEXT_MAX = 20000;  // tope de chars del contexto adicional
 const SUMMARY_MAX = 4000;
@@ -50,6 +54,25 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 function keyOf(id) { return String(id); }
 function blankEntry() { return { contextoAdicional: '', contextoAt: null, historico: [] }; }
+
+// CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
+// Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
+function padSunApplies(ctx) {
+  const ws = ctx && ctx.workspace;
+  return !ws || ws === 'console';
+}
+
+// BUG-1878: aplica CONVE-1257 / regla dura 11 sin poner en riesgo el guardado
+// del contexto ni el cierre del chat que crea su entrada de histórico.
+async function linkCdtToSun(ref, ctx) {
+  try {
+    if (!padSunApplies(ctx)) return;
+    const linkR = await addLink(ref, CDT_SUN, 'implements', { ctx });
+    if (!linkR?.ok) console.error('[tickets] no pude enlazar el contexto a su sol en Pad:', linkR?.error || linkR);
+  } catch (err) {
+    console.error('[tickets] no pude enlazar el contexto a su sol en Pad:', err?.message || err);
+  }
+}
 
 // Lectura null-safe de los custom fields de un item (mismo helper que
 // tasks/store.js y learning/store.js: `fields` puede venir objeto u
@@ -100,6 +123,7 @@ export async function saveContexto(id, text, ctx = null) {
       fields: { ticketKey: key, contexto: { text: clean, at }, historico: [] },
     }, { ctx });
     if (!r.ok) throw padError('saveContexto', r);
+    await linkCdtToSun(r.data.ref, ctx);
     return getMeta(id, ctx);
   }
   const nextFields = { ...parseFields(item), ticketKey: key, contexto: { text: clean, at } };
@@ -140,6 +164,7 @@ export async function appendHistorico(id, { sessionId, resumen, files }, ctx = n
         fields: { ticketKey: key, contexto: null, historico: [entry] },
       }, { ctx });
       if (!r.ok) console.error('[tickets] no pude crear item de histórico en Pad:', r.error);
+      else await linkCdtToSun(r.data.ref, ctx);
       return;
     }
     const f = parseFields(item);

@@ -25,6 +25,8 @@ let pollTimer = null;
 let polling = false;
 let visibilityBound = false;
 let directorStarted = false;
+let adminAccess = null;
+let adminCheck = null;
 let lastNumAt = 0;
 let lastPruneAt = 0;
 
@@ -95,6 +97,26 @@ export function getLatestFlow() {
   return latest;
 }
 
+// Este helper global no recibe el ctx de main.js: resuelve el principal una
+// sola vez por /api/whoami antes de iniciar el poll (BUG-1874).
+function resolveAdminAccess() {
+  if (!adminCheck) {
+    adminCheck = fetch('/api/whoami')
+      .then((res) => res.ok ? res.json() : null)
+      .then((me) => !!me?.admin)
+      .catch(() => false);
+  }
+  return adminCheck;
+}
+
+function hideFlowUi() {
+  for (const cell of document.querySelectorAll('.cwc-flow-cell')) {
+    cell.hidden = true;
+    const container = cell.closest('.chat-flow');
+    if (container) container.hidden = true;
+  }
+}
+
 function fmtTps(tps) {
   const n = Math.max(0, Number(tps) || 0);
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -137,69 +159,82 @@ export function flowBarHtml(opts = {}) {
 }
 
 export function ensureFlowDirector() {
+  if (adminAccess === false) {
+    hideFlowUi();
+    return;
+  }
   if (directorStarted) return;
-  directorStarted = true;
-  subscribeFlow();
 
-  function frame(now) {
-    const cells = document.querySelectorAll('.cwc-flow-cell');
-    // Sin celdas visibles (todos los chats cerrados): NO animar a 60fps.
-    // Chequear esporádicamente (2/s) si aparece una nueva y recién ahí volver
-    // al rAF pleno (PEND-622). Evita mantener vivo el hilo de animación +
-    // querySelectorAll por frame para siempre.
-    if (!cells.length) { setTimeout(() => requestAnimationFrame(frame), 500); return; }
-    const flow = getLatestFlow();
-    const updateNums = now - lastNumAt >= 200;
-
-    if (updateNums) lastNumAt = now;
-
-    for (const el of cells) {
-      const eng = el.dataset.flowEngine;
-      const session = el.dataset.flowSession;
-      const cwd = el.dataset.flowCwd;
-      const key = el.dataset.flowKey || `${eng || 'unknown'}:${session || cwd || 'global'}`;
-      let tps = 0;
-      let total = null;
-
-      if (session && eng === 'claude') {
-        const b = flow?.bySession?.[session];
-        tps = b?.tps || 0;
-        total = b?.total ?? 0;
-      } else if (cwd && eng === 'codex') {
-        const b = flow?.byCwd?.[cwd];
-        tps = b?.tps || 0;
-        total = b?.total ?? 0;
-      } else {
-        tps = flow?.[eng]?.tps || 0;
-      }
-
-      const prev = smooth.get(key) || 0;
-      const target = pressureFromTps(tps) * 100;
-      const disp = prev + (target - prev) * 0.15;
-      smooth.set(key, disp);
-
-      const mask = el.querySelector('.cwc-flow-mask');
-      if (mask) mask.style.left = `${disp.toFixed(2)}%`;
-
-      if (updateNums) {
-        const numEl = el.querySelector('[data-flow-num]');
-        if (numEl) numEl.textContent = el.classList.contains('cwc-flow-cell--compact') ? fmtTps(tps) : `${fmtTps(tps)} t/s`;
-
-        const totEl = el.querySelector('[data-flow-total]');
-        if (totEl && total != null) totEl.textContent = fmtTokens(total);
-      }
+  resolveAdminAccess().then((allowed) => {
+    adminAccess = allowed;
+    if (!allowed) {
+      hideFlowUi();
+      return;
     }
+    if (directorStarted) return;
+    directorStarted = true;
+    subscribeFlow();
 
-    if (now - lastPruneAt >= 2000) {
-      lastPruneAt = now;
-      const present = new Set([...document.querySelectorAll('.cwc-flow-cell')].map((el) => el.dataset.flowKey).filter(Boolean));
-      for (const key of smooth.keys()) {
-        if (!present.has(key)) smooth.delete(key);
+    function frame(now) {
+      const cells = document.querySelectorAll('.cwc-flow-cell');
+      // Sin celdas visibles (todos los chats cerrados): NO animar a 60fps.
+      // Chequear esporádicamente (2/s) si aparece una nueva y recién ahí volver
+      // al rAF pleno (PEND-622). Evita mantener vivo el hilo de animación +
+      // querySelectorAll por frame para siempre.
+      if (!cells.length) { setTimeout(() => requestAnimationFrame(frame), 500); return; }
+      const flow = getLatestFlow();
+      const updateNums = now - lastNumAt >= 200;
+
+      if (updateNums) lastNumAt = now;
+
+      for (const el of cells) {
+        const eng = el.dataset.flowEngine;
+        const session = el.dataset.flowSession;
+        const cwd = el.dataset.flowCwd;
+        const key = el.dataset.flowKey || `${eng || 'unknown'}:${session || cwd || 'global'}`;
+        let tps = 0;
+        let total = null;
+
+        if (session && eng === 'claude') {
+          const b = flow?.bySession?.[session];
+          tps = b?.tps || 0;
+          total = b?.total ?? 0;
+        } else if (cwd && eng === 'codex') {
+          const b = flow?.byCwd?.[cwd];
+          tps = b?.tps || 0;
+          total = b?.total ?? 0;
+        } else {
+          tps = flow?.[eng]?.tps || 0;
+        }
+
+        const prev = smooth.get(key) || 0;
+        const target = pressureFromTps(tps) * 100;
+        const disp = prev + (target - prev) * 0.15;
+        smooth.set(key, disp);
+
+        const mask = el.querySelector('.cwc-flow-mask');
+        if (mask) mask.style.left = `${disp.toFixed(2)}%`;
+
+        if (updateNums) {
+          const numEl = el.querySelector('[data-flow-num]');
+          if (numEl) numEl.textContent = el.classList.contains('cwc-flow-cell--compact') ? fmtTps(tps) : `${fmtTps(tps)} t/s`;
+
+          const totEl = el.querySelector('[data-flow-total]');
+          if (totEl && total != null) totEl.textContent = fmtTokens(total);
+        }
       }
+
+      if (now - lastPruneAt >= 2000) {
+        lastPruneAt = now;
+        const present = new Set([...document.querySelectorAll('.cwc-flow-cell')].map((el) => el.dataset.flowKey).filter(Boolean));
+        for (const key of smooth.keys()) {
+          if (!present.has(key)) smooth.delete(key);
+        }
+      }
+
+      requestAnimationFrame(frame);
     }
 
     requestAnimationFrame(frame);
-  }
-
-  requestAnimationFrame(frame);
+  });
 }

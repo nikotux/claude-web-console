@@ -301,6 +301,12 @@ explícita en el picker y como preferencia per-user. Los chats YA existentes
 conservan su modelChoice persistido (no hay migración). Verificado en caliente:
 create sin `model` ⇒ {modelChoice:'tandem', model:'opus', effort:'high',
 tandemCodex:{gpt-5.5, high}}.
+Tándem exige una credencial Codex DEL DUEÑO en `$HOME/.codex/auth.json`, donde
+el HOME lo resuelve el runner por-usuario. Si falta, el default de creación
+degrada a AutoTux (BUG-1875), y una delegación explícita falla con un mensaje
+accionable. AHORA cada usuario puede conectar su propio Codex tanto en el
+wizard de onboarding como en ⚙ Sistema → Conexiones: la degradación a AutoTux
+es el fallback seguro, no un callejón sin salida.
 CHIPS DE EJECUCIÓN (tool calls): SOLO dos íconos, sin texto —
 consola (= herramienta ejecutada) + tipo (TOOL_TYPE_ICONS en
 chat-tab.js: Bash=play · Edit/Write=edit · Read=eye ·
@@ -667,7 +673,8 @@ PEND-508, pedido de Niko; VERIFICADO E2E): un modelChoice NUEVO —
 RAZONAMIENTO/planeación/verificación → Claude Opus (effort HIGH, FIJO —
 Niko 2026-07-21: subido de medium a high tras validar el protocolo en uso
 real; antes era medium por decisión del 2026-07-15) ·
-EJECUCIÓN de código → Codex gpt-5.5 (reasoning effort alto) vía el CLI
+EJECUCIÓN de código → Codex gpt-5.6-sol (era gpt-5.5 hasta 2026-07-24, ver
+MIGRACIÓN A GPT-5.6 abajo) (reasoning effort alto) vía el CLI
 `codex exec`. Es HERMANO de 'auto'/AutoTux en la misma infra (centinela
 de modelChoice + core/tool-policy.js) pero su ANTÍTESIS: dupla FIJA de
 gama alta elegida a mano, NO ruteo dinámico. Motores fijos = decisión de
@@ -681,7 +688,7 @@ propio, como 'auto'); (c) spawnRunner pasa `tandem:true` (runner-link.js →
 arg `--tandem 1`); (d) NUEVO src/modules/chat/codex-tool.js: fábrica
 createCodexToolServer({cwd}) que arma la tool IN-PROCESS `delegate_to_codex`
 con createSdkMcpServer()+tool() del Agent SDK (zod schema {task}). Al
-invocarla, spawnea `codex exec --json --skip-git-repo-check -m gpt-5.5 -c
+invocarla, spawnea `codex exec --json --skip-git-repo-check -m gpt-5.6-sol -c
 model_reasoning_effort=high -s workspace-write` con cwd = el del chat,
 parsea el stream JSONL (thread.started/item.completed{agent_message|
 file_change}/turn.completed{usage}), y devuelve resumen + diff ACOTADO A LO
@@ -809,6 +816,33 @@ Continuidad Codex entre delegaciones (codex exec resume
 el contexto en el `task`). VERIFICADO E2E (WS real): chat tandem → Opus →
 "delego a Codex" → tarjeta de permiso → Codex crea el archivo en el cwd →
 Claude verifica con Read/Bash; Edit/Write NUNCA usadas.
+MIGRACIÓN A GPT-5.6 (2026-07-24): el ejecutor Codex de Tándem deja de usar
+gpt-5.5 como default y pasa a la familia GPT-5.6 sufijada: `gpt-5.6-sol`
+es frontier y reemplaza a gpt-5.5; `gpt-5.6-terra` es balanceado y
+reemplazo oficial de gpt-5.4; `gpt-5.6-luna` es rápido/barato y reemplazo
+oficial de gpt-5.4-mini. `gpt-5.4` y `gpt-5.4-mini` quedan FUERA del
+picker porque OpenAI los marcó deprecados en el catálogo del CLI (campo
+`upgrade` apuntando a terra/luna); `gpt-5.5` se conserva SOLO como legacy y
+`gpt-5.3-codex-spark` sigue. El default nuevo del protocolo Tándem es
+`gpt-5.6-sol` con effort `high`. Aparece además el effort Codex `ultra`
+("máximo razonamiento con delegación automática"), PERO SOLO para sol/terra:
+luna llega a `max`, y gpt-5.5/spark cortan en `xhigh`; la escala de
+esfuerzo de Claude (razonador Cloud) NO tiene `ultra`. Requisito operativo:
+CLI Codex >= 0.145.0; con 0.142.4 el modelo devuelve HTTP 400 `requires a
+newer version of Codex`, y el id pelado `gpt-5.6` NO existe para Codex con
+cuenta ChatGPT (HTTP 400 `not supported when using Codex with a ChatGPT
+account`): los ids válidos son los tres sufijados. La whitelist que estaba
+DUPLICADA (codex-tool.js + inline en chat/index.js + picker front) se
+unificó en `src/modules/chat/codex-models.js`, módulo PURO sin imports para
+no arrastrar el Agent SDK ni zod al proceso del server — ese era el motivo
+de la duplicación anterior — y `codex-tool.js` la re-exporta por
+retrocompatibilidad. El front duplica el mapa a propósito en
+`public/js/ui/models.js` (nunca importa del server, mismo criterio que
+ROUTER_MANAGED_MODELS). La validación del effort Codex dejó de usar
+`EFFORT_LEVELS` (escala de Claude, sin `ultra`) y pasó a
+`normalizeCodexEffort(model, effort)`, que clampa por modelo en vez de
+mandar un valor que el CLI rechaza con 400; el picker de Sesiones filtra los
+efforts por modelo y también clampa al cambiar de modelo.
 BUG-780 · TÁNDEM ERA INERTE — dos causas raíz (2026-07-21, reporte de
 Niko: «las sesiones marcadas Tándem no usaron Codex para nada»). CAUSA A —
 el flag `--tandem` es de SPAWN: `setModelChoice('tandem')`/
@@ -895,6 +929,75 @@ del SDK con
 redirección, el hook denegó AMBOS y el archivo víctima quedó intacto.
 `node --check` OK en los 4 archivos; `/api/health/checks` 14/14 (único
 warn: git dirty, esperado).
+TÁNDEM RESILIENTE, PARALELO Y AUTÓNOMO (2026-07-25, cuatro fases,
+verificado en caliente).
+A · RADAR REAL DE DELEGACIÓN. `chat/index.js` ya no reconoce como
+«delegando» sólo las tools `Task|Agent`: importa `TANDEM_TOOL`
+(`mcp__codex__delegate_to_codex`) desde `core/tool-policy.js` y lo mete por
+el mismo camino. Era un hueco especialmente visible porque Tándem es el
+default de todo chat nuevo: durante los 8+ minutos de Codex la tarjeta
+parecía un «trabajando» mudo, indistinguible de un cuelgue. `toolSummary`
+(`chat/shared.js`) resume ahora el `task` por su PRIMERA LÍNEA, no con un
+`JSON.stringify` ilegible; así `kidsOf()` (`terminal/sessions.js`) muestra
+la delegación con Pac-Man, etiqueta útil y cronómetro.
+B · RUNNER DESACOPLADO (regla de oro/regla 2). Antes `codex exec` vivía
+DENTRO de `cwc-chat-runner.js`; el timeout operativo de 8 min podía matar
+la espera aunque Codex ya hubiera aplicado bien el cambio, perdiendo su
+resumen. La ejecución larga vive ahora en `bin/cwc-codex-runner.js` y su
+estado durable en disco. `src/modules/chat/codex-shared.js` concentra la
+lógica compartida: snapshot git antes/después, atribución del diff,
+`runCodex`, `buildDelegationReport` y gestión de jobs. Es un módulo PURO:
+NO puede importar el Agent SDK ni zod, porque también lo consume el runner
+desacoplado/config-free; arrastrarlos volvería a acoplar la ejecución al
+stack del chat y le impediría arrancar como proceso mínimo independiente.
+El job persistido tiene esta forma:
+`{id, chatId, cwd, task, model, effort, fullAccess, writableRoots, status,
+label, startedAt, heartbeatAt, finishedAt, report, isError, error,
+threadId}`, con `status` `pending|running|done|error`. `codexJobsDir()`
+usa `resolveDataDir()` (multi-tenant); el id se valida contra traversal,
+la escritura es atómica `.tmp`+rename y los terminados se podan a las
+24 h. El runner procesa UN `--job <id>`, late cada 15 s, no reejecuta uno
+terminado y ante cualquier excepción persiste `error`: nunca deja
+`running` huérfano.
+`CODEX_TIMEOUT_MS` (8 min) murió. `CODEX_MAX_MS` = 60 min es sólo un tope
+de SEGURIDAD: desde el salto a `gpt-5.6-sol`, la mediana medida pasó de
+~110 s a ~250 s y el 20 % supera 8 min (contra 3–6 % con gpt-5.5).
+INVARIANTE OPERATIVO — NO ROMPER: `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` del
+chat-runner (3.900.000 ms = 65 min) DEBE ser mayor que `CODEX_MAX_MS`, o
+el SDK corta la tool MCP antes de que el job termine. Tocar uno exige
+revisar el otro.
+C · PARALELO Y RECOLECCIÓN. `delegate_to_codex({background:true})`
+devuelve inmediatamente un `jobId`; permite lanzar varias delegaciones en
+paralelo sólo cuando sus archivos no se pisan. Sin `background`, el default
+sigue esperando como antes. La tool nueva `collect_codex({job_ids?,wait?})`
+sin argumentos lista los jobs de esa conversación; con ids espera y
+devuelve sus reportes. El aislamiento por `chatId` es una frontera de
+seguridad: todo job inexistente o cuyo `chatId` difiera del chat que
+consulta se descarta, aunque el llamador conozca su id.
+El wiring de `cwc-chat-runner.js` entrega `chatId` y callbacks
+`onBgStart`/`onBgEnd` a `createCodexToolServer`; ambos alimentan el radar
+por el único camino `bgAdd`/`bgDone`. Al arrancar, `rehydrateCodexBg()`
+recupera los jobs `pending|running` de ESE chat, conserva su `startedAt`
+real y descarta un `running` con heartbeat vencido más de 90 s.
+`warnBgKilled()` ya no afirma que Codex murió al dormir el motor: su
+proceso sigue y el resultado se recupera con `collect_codex`; el aviso de
+corte queda sólo para subagentes/workflows que sí viven dentro del SDK.
+D · AUTONOMÍA EJECUTABLE. La línea `🎾 Pelota: MÍA` dejó de ser decoración:
+`declaresBallMine()` mira sólo las últimas 3 líneas no vacías y exige el
+emoji más «pelota…mía», evitando falsos positivos en el cuerpo.
+`autonomyStopHook()` bloquea el evento `Stop` con
+`AUTONOMY_CONTINUE_REASON`, así el SDK devuelve el control y el chat sigue
+con el próximo paso. `AUTONOMY_INSTRUCTION` entra al system prompt de TODO
+chat, no sólo Tándem. `mergeHookSets` reemplaza al merge limitado a
+`PreToolUse` y compone por evento, para no tirar `Stop` en silencio; el
+nombre viejo `mergePreToolUseHooks` queda como alias.
+CONTRATO: `MÍA` = seguir solo; `TUYA`, `nadie` u `OTRO` = terminar el turno
+de verdad. NO HAY TOPE de continuaciones por decisión explícita de Niko
+del 2026-07-25: no cortar por `stop_hook_active` ni agregar un contador en
+una sesión futura; la pelota es la única válvula de escape. Cada
+continuación emite un evento efímero `{type:'autonomy', turn:N}` y un log;
+cada mensaje humano nuevo reinicia el contador, para distinguir autonomía
+de un turno pedido por el usuario.
 TRABAJO EN SEGUNDO PLANO — no matarlo y poder verlo (2026-07-22,
 PLAN-892, reporte de Niko: «me confío que está trabajando pero no»).
 BUG RAÍZ: una sesión que lanza trabajo en BACKGROUND (tool `Workflow`

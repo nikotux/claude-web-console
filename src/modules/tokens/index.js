@@ -38,6 +38,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { isAdmin } from '../../core/auth.js';
 import { keyOf } from '../../core/claude-model.js';
 import { runAdaptivePool } from '../health/pool.js';
 import {
@@ -932,15 +933,26 @@ const LIMITS_TTL_MS = 120000;
 // primera actualice limitsAt).
 let limitsFetchPromise = null;
 
+function adminOnly(req, res) {
+  if (isAdmin(req)) return true;
+  res.status(403).json({ error: 'El panel de Uso es de administración: sus datos salen de la cuenta del host.' });
+  return false;
+}
+
 export default {
   name: 'tokens',
 
   registerHttp(router) {
+    // BUG-1874: todo este módulo lee consumo y sesiones desde el HOME del host,
+    // así que para un no-admin serían datos ajenos; /stream y /stream/seed
+    // además exponen el texto real que muestra Vista Raw. Gate provisorio hasta
+    // que exista contabilidad aislada por usuario.
     const r = express.Router();
 
     // ?fresh=1 saltea el TTL del summary (botón Actualizar del modal Uso);
     // el caché por archivo (mtime+size) queda: solo re-parsea lo que cambió.
     r.get('/summary', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       try {
         res.json(publicSummary(await cachedSummary(!!req.query.fresh)));
       } catch (err) {
@@ -949,6 +961,7 @@ export default {
     });
 
     r.get('/flow', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       try {
         res.json(await computeFlow());
       } catch (err) {
@@ -961,6 +974,7 @@ export default {
     // lluvia estilo Matrix sea lo que se procesa de verdad. ?since=<seq> devuelve
     // solo lo nuevo (multi-ventana safe). 0 tokens, solo lee bytes apendeados.
     r.get('/stream', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       try {
         const since = Number.parseInt(req.query.since, 10);
         res.json(await getStream(Number.isFinite(since) ? since : 0));
@@ -971,6 +985,7 @@ export default {
 
     // Seed de texto reciente de UNA sesión (para poblar su banda al descubrirla).
     r.get('/stream/seed', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       try {
         res.json(await getSeed(String(req.query.sid || '')));
       } catch (err) {
@@ -985,6 +1000,7 @@ export default {
     // Devuelve {range, keys, points, totals}: `totals` (suma por modelo) alimenta
     // la columna "General" del período. 0 tokens.
     r.get('/history', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       const range = ['day', 'week', 'month'].includes(req.query.range) ? req.query.range : 'week';
       const project = ['all', 'consola', 'tolkien', 'otros', 'aprendizaje'].includes(req.query.project) ? req.query.project : 'all';
       try {
@@ -1002,6 +1018,7 @@ export default {
     // Límites del plan (ventanas de claude.ai): % usado y hora de reset.
     // ?fresh=1 saltea el TTL (botón Actualizar del modal Uso).
     r.get('/limits', async (req, res) => {
+      if (!adminOnly(req, res)) return;
       // Reloj MONOTÓNICO (como /summary): Date.now() retrocede con ajustes
       // NTP y dejaba el caché de límites "fresco" para siempre.
       const now = Number(process.hrtime.bigint()) / 1e6;

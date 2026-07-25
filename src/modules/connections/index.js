@@ -3,12 +3,17 @@
 // Este módulo existe para exponer una capa HTTP chica sobre el store y los
 // proveedores ya implementados: la configuración OAuth de la app es global y
 // admin-only, mientras que los tokens quedan siempre por usuario. Por eso el
-// deviceCode de Microsoft vive solo en memoria durante el polling y ningún
-// endpoint devuelve ni loguea tokens, secrets o códigos internos.
+// deviceCode de Microsoft se persiste en el job (mode 600, directorio privado
+// del usuario) para que el canje sobreviva a reinicios; ningún endpoint lo
+// devuelve ni loguea tokens, secrets o códigos internos.
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
 import { config } from '../../core/config.js';
-import { hostUser } from '../../core/user-space.js';
+import { hasCodexCreds, hostUser } from '../../core/user-space.js';
 import {
   PROVIDERS,
   isProvider,
@@ -41,7 +46,28 @@ import {
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
+const CODEX_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
+function codexLoginJobPath(user) { return path.join(CODEX_LOGIN_JOBS_DIR, `${user}.json`); }
+function readCodexLoginJob(user) {
+  try { return JSON.parse(fs.readFileSync(codexLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+function writeCodexLoginJob(user, job) {
+  fs.mkdirSync(CODEX_LOGIN_JOBS_DIR, { recursive: true });
+  fs.writeFileSync(
+    codexLoginJobPath(user),
+    JSON.stringify({ ...job, user, ts: Date.now() }),
+    { mode: 0o600 },
+  );
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const activePolls = new Set();
+
+function pollKey(username, jobId) {
+  return `${username}:${jobId}`;
+}
 
 function userOf(req) {
   const p = principalOf(req);
@@ -87,58 +113,63 @@ function patchJob(username, jobId, fields) {
 }
 
 async function pollMicrosoft(username, jobId, { clientId, tenantId, deviceCode, interval, expiresIn }) {
-  let waitMs = Math.max(interval, 5) * 1000;
-  const deadline = Date.now() + expiresIn * 1000;
+  activePolls.add(pollKey(username, jobId));
+  try {
+    let waitMs = Math.max(interval, 5) * 1000;
+    const deadline = Date.now() + expiresIn * 1000;
 
-  while (Date.now() < deadline) {
-    await sleep(waitMs);
+    while (Date.now() < deadline) {
+      await sleep(waitMs);
 
-    let job;
-    try {
-      job = readJob(username, jobId);
-    } catch {
-      return;
-    }
-    if (!job || job.status !== 'pending') return;
-
-    let result;
-    try {
-      result = await pollDeviceToken({ clientId, tenantId, deviceCode });
-    } catch (e) {
-      patchJob(username, jobId, { status: 'error', error: e.message });
-      return;
-    }
-
-    if (result.status === 'slow_down') {
-      waitMs += 5000;
-      continue;
-    }
-    if (result.status === 'pending') continue;
-    if (result.status === 'ok') {
+      let job;
       try {
-        const account = await getMicrosoftMe(result.tokens.access_token);
-        writeConnection(username, 'microsoft', {
-          provider: 'microsoft',
-          account,
-          accessToken: result.tokens.access_token,
-          refreshToken: result.tokens.refresh_token || null,
-          expiresAt: Date.now() + (Number(result.tokens.expires_in) || 3600) * 1000,
-          scopes: MS_SCOPES,
-          connectedAt: new Date().toISOString(),
-          error: null,
-        });
-        patchJob(username, jobId, { status: 'connected', account, error: null });
+        job = readJob(username, jobId);
+      } catch {
+        return;
+      }
+      if (!job || job.status !== 'pending') return;
+
+      let result;
+      try {
+        result = await pollDeviceToken({ clientId, tenantId, deviceCode });
       } catch (e) {
         patchJob(username, jobId, { status: 'error', error: e.message });
+        return;
       }
-      return;
-    }
-  }
 
-  patchJob(username, jobId, {
-    status: 'error',
-    error: 'El código expiró antes de que se completara la autorización.',
-  });
+      if (result.status === 'slow_down') {
+        waitMs += 5000;
+        continue;
+      }
+      if (result.status === 'pending') continue;
+      if (result.status === 'ok') {
+        try {
+          const account = await getMicrosoftMe(result.tokens.access_token);
+          writeConnection(username, 'microsoft', {
+            provider: 'microsoft',
+            account,
+            accessToken: result.tokens.access_token,
+            refreshToken: result.tokens.refresh_token || null,
+            expiresAt: Date.now() + (Number(result.tokens.expires_in) || 3600) * 1000,
+            scopes: MS_SCOPES,
+            connectedAt: new Date().toISOString(),
+            error: null,
+          });
+          patchJob(username, jobId, { status: 'connected', account, error: null });
+        } catch (e) {
+          patchJob(username, jobId, { status: 'error', error: e.message });
+        }
+        return;
+      }
+    }
+
+    patchJob(username, jobId, {
+      status: 'error',
+      error: 'El código expiró antes de que se completara la autorización.',
+    });
+  } finally {
+    activePolls.delete(pollKey(username, jobId));
+  }
 }
 
 function asyncHandler(fn) {
@@ -247,6 +278,69 @@ export default {
       res.json({ ok: true });
     }));
 
+    // Estas rutas deben registrarse ANTES de '/:provider/...': si no,
+    // '/codex/status' matchea '/:provider/status' con provider='codex' y
+    // reqProvider responde 400 "Proveedor desconocido".
+    r.post('/codex/start', (req, res) => {
+      const user = userOf(req);
+      const job = readCodexLoginJob(user);
+      if (
+        job
+        && ['starting', 'awaiting-auth'].includes(job.status)
+        && (Date.now() - (job.ts || 0)) < 15 * 60 * 1000
+      ) {
+        return res.json({ ok: true, already: true });
+      }
+      if (hasCodexCreds(user)) {
+        return res.json({ ok: true, already: true, connected: true });
+      }
+
+      try {
+        // Reserva SINCRÓNICA del job 'starting' en disco ANTES de spawnear
+        // (sin ningún await entre el read de arriba y este write): así dos POST
+        // simultáneos no pueden pasar ambos el dedup y lanzar dos runners.
+        writeCodexLoginJob(user, { status: 'starting' });
+        spawn(process.execPath, [CODEX_LOGIN_RUNNER, '--user', user], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude lanzar el login de Codex: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
+    r.get('/codex/status', (req, res) => {
+      const user = userOf(req);
+      const connected = hasCodexCreds(user);
+      const job = readCodexLoginJob(user);
+      if (!job) return res.json({ status: 'idle', connected });
+
+      const stale = job.status === 'starting'
+        && !!job.ts
+        && (Date.now() - job.ts) > 30000;
+      res.json({
+        status: job.status,
+        url: job.url || null,
+        code: job.code || null,
+        done: !!job.done,
+        error: job.error || null,
+        stale: !!stale,
+        connected,
+      });
+    });
+
+    r.post('/codex/cancel', (req, res) => {
+      const user = userOf(req);
+      const job = readCodexLoginJob(user);
+      try {
+        if (job) writeCodexLoginJob(user, { ...job, status: 'cancelled' });
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude cancelar el login de Codex: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
     r.post('/:provider/connect', asyncHandler(async (req, res) => {
       const provider = reqProvider(req, res);
       if (!provider) return;
@@ -277,6 +371,8 @@ export default {
           mode: 'device',
           createdAt: Date.now(),
           expiresAt: Date.now() + flow.expiresIn * 1000,
+          deviceCode: flow.deviceCode,
+          interval: flow.interval,
           error: null,
         });
         pollMicrosoft(username, jobId, {
@@ -376,7 +472,11 @@ export default {
       const username = userOf(req);
       const jobId = req.query.jobId;
       const job = readJob(username, jobId);
-      if (!job) return res.status(404).json({ error: 'Job inexistente.' });
+      if (!job) {
+        return res.status(404).json({
+          error: 'La autorización ya no está disponible (puede haber expirado o haberse limpiado). Volvé a tocar Renovar permisos.',
+        });
+      }
       // Auto-sanado tras reinicio: pollMicrosoft vive en memoria del proceso; si
       // el server se reinició mientras el usuario esperaba la aprobación del
       // device code, el loop murió y el job quedaría 'pending' para siempre. Si
@@ -385,6 +485,31 @@ export default {
         patchJob(username, jobId, { status: 'error', error: 'El código expiró antes de completar la autorización.' });
         job.status = 'error';
         job.error = 'El código expiró antes de completar la autorización.';
+      }
+      // Reanuda tras reinicios del server (BUG-929, regla dura 2) sin escanear usuarios.
+      if (
+        job.status === 'pending'
+        && job.mode === 'device'
+        && job.deviceCode
+        && !activePolls.has(pollKey(username, jobId))
+        && job.expiresAt
+        && Date.now() < job.expiresAt
+      ) {
+        const { clientId, tenantId } = readAppConfig().microsoft;
+        if (!clientId) {
+          const error = 'La app OAuth de Microsoft ya no está configurada; pedile a un administrador que la cargue y volvé a tocar Renovar permisos.';
+          patchJob(username, jobId, { status: 'error', error });
+          job.status = 'error';
+          job.error = error;
+        } else {
+          pollMicrosoft(username, jobId, {
+            clientId,
+            tenantId,
+            deviceCode: job.deviceCode,
+            interval: Number(job.interval) || 5,
+            expiresIn: Math.max(1, Math.floor((job.expiresAt - Date.now()) / 1000)),
+          }).catch(() => {});
+        }
       }
       res.json({
         status: job.status,

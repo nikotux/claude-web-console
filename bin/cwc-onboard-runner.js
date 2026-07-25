@@ -4,16 +4,17 @@
 // OAuth (flujo code=true, ver PLAN-561), espera el código pegado (archivo
 // <hash?>.code → lo escribimos por username), lo inyecta al stdin del PTY,
 // captura el token de salida y lo guarda en userOauthTokenPath (mode 600). Al
-// terminar OK consume la invitación. Estado en ~/.cwc-data/onboard-jobs/<user>.json.
+// FINALIZAR el wizard, el server consume la invitación vía POST /public/finish:
+// así los pasos posteriores (Codex) todavía pueden validarla. Hasta ese cierre
+// o su TTL queda locked. Estado en ~/.cwc-data/onboard-jobs/<user>.json.
 // Reanudable en el sentido de que el estado persiste: si el PTY muere en un
-// reinicio, el job queda 'error'/stale y el usuario reintenta (la invitación NO
-// se consumió hasta el éxito). setup-token REQUIERE TTY → node-pty.
+// reinicio, el job queda 'error'/stale y el usuario reintenta. setup-token
+// REQUIERE TTY → node-pty.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import pty from 'node-pty';
 import { userWorkspace, userRunnerEnv, userOauthTokenPath, ensureUserSpace } from '../src/core/user-space.js';
-import { consumeInvite } from '../src/core/onboard-tokens.js';
 
 const args = {};
 for (let i = 2; i < process.argv.length - 1; i += 2) {
@@ -21,7 +22,6 @@ for (let i = 2; i < process.argv.length - 1; i += 2) {
   if (k.startsWith('--')) args[k.slice(2)] = process.argv[i + 1];
 }
 const USER = args.user;
-const INVITE = args.token || null; // token de invitación (para consumir al final)
 if (!USER) { console.error('[onboard-runner] falta --user'); process.exit(2); }
 
 const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'onboard-jobs');
@@ -94,7 +94,6 @@ proc.onData((data) => {
         done = true;
         try {
           fs.writeFileSync(userOauthTokenPath(USER), t[0], { mode: 0o600 });
-          if (INVITE) consumeInvite(INVITE);
           writeState({ status: 'done', done: true });
         } catch (e) {
           writeState({ status: 'error', error: 'No pude guardar el token: ' + e.message });

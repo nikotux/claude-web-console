@@ -226,7 +226,7 @@ export function mountHealthReview(host, ctx, { isAdmin, onClose } = {}) {
       ${d.summary ? `<details class="hr-collapsible"${isMobile ? '' : ' open'}><summary>${t('system.healthReview.analysisSummary', 'Resumen del análisis')}</summary><p class="hr-summary">${esc(d.summary)}</p></details>` : ''}
       ${d.error ? `<p class="hr-summary" style="color:var(--cwc-danger-strong)">⚠️ ${esc(d.error)}</p>` : ''}
       ${batchBannerHtml()}
-      ${!running && !batchState?.running && isAdmin && nAuto ? `<label class="hr-tandem-toggle" title="${t('system.healthReview.tandemTitle', 'Con Tándem activo, el botón «Automático» de cada hallazgo ya no edita el código él mismo: delega la escritura del fix a Codex (gpt-5.5, esfuerzo alto) y Claude solo diagnostica/verifica. No afecta a «Resolver seguros» (batch).')}">
+      ${!running && !batchState?.running && isAdmin && nAuto ? `<label class="hr-tandem-toggle" title="${t('system.healthReview.tandemTitle', 'Con Tándem activo, el botón «Automático» de cada hallazgo ya no edita el código él mismo: delega la escritura del fix a Codex (GPT-5.6 Sol, esfuerzo alto) y Claude solo diagnostica/verifica. No afecta a «Resolver seguros» (batch).')}">
         <input type="checkbox" id="hr-tandem-chk"${useTandem ? ' checked' : ''}> 🤝 ${t('system.healthReview.tandemLabel', '«Automático» usa Tándem (Codex ejecuta el fix)')}
       </label>` : ''}
       ${!running && !batchState?.running && isAdmin ? `<div class="hr-actions-row">

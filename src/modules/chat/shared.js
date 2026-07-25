@@ -38,6 +38,11 @@ export function toolSummary(name, input) {
       const q = input?.questions?.[0]?.question;
       return q ? String(q).slice(0, 120) : 'Pregunta del asistente';
     }
+    // La delegación hoy cae al JSON fallback y deja un chip/radar ilegible.
+    if (name?.endsWith('__delegate_to_codex')) {
+      const firstLine = typeof input?.task === 'string' ? input.task.split(/\r?\n/).find((line) => line.trim()) : '';
+      return firstLine ? firstLine.trim().slice(0, 120) : 'delegación a Codex';
+    }
     const s = JSON.stringify(input);
     return s.length > 120 ? `${s.slice(0, 120)}…` : s;
   } catch { return ''; }

@@ -12,9 +12,9 @@ import { isAdmin, principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
 import { provisionUserPad } from '../../core/pad-provision.js';
 import { provisionUserWorkspace } from '../../core/workspace-provision.js';
-import { createUser, isValidUsername } from '../../core/users.js';
-import { ensureUserSpace, readUserOauthToken } from '../../core/user-space.js';
-import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite } from '../../core/onboard-tokens.js';
+import { createUser, isValidUsername, setUserLang } from '../../core/users.js';
+import { ensureUserSpace, hasCodexCreds, readUserOauthToken } from '../../core/user-space.js';
+import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite, consumeInvite } from '../../core/onboard-tokens.js';
 
 const DEFAULT_TTL_H = 24;
 
@@ -47,7 +47,7 @@ publicRouter.post('/validate', (req, res) => {
 });
 
 publicRouter.post('/register', (req, res) => {
-  const { token, username, password } = req.body || {};
+  const { token, username, password, lang } = req.body || {};
   let v;
   try {
     v = validateInvite(token, { forUsername: username });
@@ -73,6 +73,9 @@ publicRouter.post('/register', (req, res) => {
   } catch (e) {
     return res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo crear el usuario.' });
   }
+  if (lang === 'es' || lang === 'en') {
+    try { setUserLang(username, lang); } catch { /* best-effort: el default sigue siendo 'es' */ }
+  }
   try { ensureUserSpace(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
   // Provisionar el Pad PROPIO del inquilino (B2-F3), best-effort y sin bloquear
   // el registro: si el Pad local está caído, el chat funciona igual y el
@@ -91,8 +94,12 @@ publicRouter.post('/register', (req, res) => {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ONBOARD_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-onboard-runner.js');
 const JOBS_DIR = path.join(config.home, '.cwc-data', 'onboard-jobs');
+const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
+const CODEX_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
 function jobPath(user) { return path.join(JOBS_DIR, `${user}.json`); }
 function readJob(user) { try { return JSON.parse(fs.readFileSync(jobPath(user), 'utf8')); } catch { return null; } }
+function codexJobPath(user) { return path.join(CODEX_JOBS_DIR, `${user}.json`); }
+function readCodexJob(user) { try { return JSON.parse(fs.readFileSync(codexJobPath(user), 'utf8')); } catch { return null; } }
 
 // Inicia el paso de credenciales: spawnea el runner PTY de setup-token en el
 // espacio del inquilino. Requiere que el token esté LOCKED (ya se auto-registró).
@@ -163,6 +170,82 @@ publicRouter.post('/creds-code', (req, res) => {
     fs.writeFileSync(path.join(JOBS_DIR, `${v.lockedTo}.code`), clean, { mode: 0o600 });
   } catch (e) {
     return res.status(500).json({ error: 'No pude guardar el código: ' + e.message });
+  }
+  res.json({ ok: true });
+});
+
+// Codex usa device-auth porque el login normal abre un callback en
+// localhost:1455, inservible desde un server remoto. Este paso es OPCIONAL:
+// sin Codex, el chat degrada a AutoTux (BUG-1875).
+publicRouter.post('/codex-start', (req, res) => {
+  const { token } = req.body || {};
+  let v;
+  try {
+    v = validateInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
+  if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
+  if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
+  const user = v.lockedTo;
+  const job = readCodexJob(user);
+  if (job && ['starting', 'awaiting-auth'].includes(job.status) && (Date.now() - (job.ts || 0)) < 15 * 60 * 1000) {
+    return res.json({ ok: true, already: true });
+  }
+  if (hasCodexCreds(user)) {
+    return res.json({ ok: true, already: true, connected: true });
+  }
+  try {
+    fs.mkdirSync(CODEX_JOBS_DIR, { recursive: true });
+    fs.writeFileSync(codexJobPath(user), JSON.stringify({ status: 'starting', user, ts: Date.now() }), { mode: 0o600 });
+    spawn(process.execPath, [CODEX_LOGIN_RUNNER, '--user', user], { detached: true, stdio: 'ignore' }).unref();
+  } catch (e) {
+    return res.status(500).json({ error: 'No pude lanzar el login de Codex: ' + e.message });
+  }
+  res.json({ ok: true });
+});
+
+publicRouter.get('/codex-status', (req, res) => {
+  const token = req.query?.token;
+  let p;
+  try {
+    p = peekInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+  }
+  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
+  const job = readCodexJob(p.lockedTo) || { status: 'idle' };
+  const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30000;
+  const connected = !!(p.lockedTo && hasCodexCreds(p.lockedTo));
+  res.json({
+    status: job.status,
+    url: job.url || null,
+    code: job.code || null,
+    done: !!job.done,
+    error: job.error || null,
+    stale: !!stale,
+    connected,
+  });
+});
+
+// PLAN-500: el consumo vive en el cierre explícito, no en el runner de Claude,
+// para que Claude y los pasos posteriores (Codex) validen el token durante TODO
+// el wizard. Si el usuario abandona antes, queda locked a SU username hasta el
+// TTL: es la misma ventana que ya existía entre registro y credenciales.
+publicRouter.post('/finish', (req, res) => {
+  const { token } = req.body || {};
+  let v;
+  try {
+    v = validateInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
+  }
+  if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
+  if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
+  try {
+    if (!consumeInvite(token)) return res.json({ ok: true, already: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo cerrar la invitación: ' + (e.message || e) });
   }
   res.json({ ok: true });
 });

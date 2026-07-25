@@ -62,10 +62,11 @@ import { config } from '../../core/config.js';
 import { principalOf } from '../../core/auth.js';
 import { padContextForUser } from '../../core/pad-context.js';
 import { clampToHome, clampToRoot } from '../../core/paths.js';
-import { userFileRoot, userClaudeDir, hostUser } from '../../core/user-space.js';
+import { userFileRoot, userClaudeDir, hostUser, hasCodexCreds } from '../../core/user-space.js';
 import { readPrefs } from '../../core/user-prefs.js';
 import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { TANDEM_TOOL } from '../../core/tool-policy.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
@@ -86,6 +87,7 @@ import {
   attachUpload, existingAttachments, attachPath,
   attachRelForExplorer, chatAttachDir, classifyAttachment,
 } from './attachments.js';
+import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
 // chats. Ver _archived/ARCHIVED.md.
@@ -685,7 +687,7 @@ class Chat {
     this._fableCeiling = false;
     // PLAN-519 F2: ejecutor Codex de Tándem, configurable (default gama alta). El
     // RAZONADOR de Tándem = this.model/this.effort (opus/high por default).
-    this.tandemCodex = { model: 'gpt-5.5', effort: 'high' };
+    this.tandemCodex = { model: TANDEM_CODEX_MODEL, effort: TANDEM_CODEX_EFFORT };
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
@@ -925,12 +927,10 @@ class Chat {
           // insufficiencyEscalation): CUALQUIER herramienta cuenta, no solo
           // Task/Agent.
           this._turnToolCount = (this._turnToolCount || 0) + 1;
-          // Estado "delegando" (ver PAC_STATES en ui/pacman.js): un tool_use
-          // Task/Agent abre la espera de un subagente; su tool_result la
-          // cierra (mismo patrón de matching que TOOL_TYPE_ICONS del
-          // frontend, acá server-side para que /api/chat/list lo vea sin la
-          // pestaña abierta).
-          if (/^(Task|Agent)/i.test(e.name || '')) {
+          // Estado "delegando" (ver PAC_STATES en ui/pacman.js): Task/Agent o
+          // la delegación a Codex de Tándem abren un hijo vivo de la sesión,
+          // para que el sidebar lo vea; su tool_result lo cierra.
+          if (/^(Task|Agent)/i.test(e.name || '') || e.name === TANDEM_TOOL) {
             this._delegatingIds.set(e.id, {
               label: (e.summary || e.name || 'subagente').slice(0, 120),
               since: Date.now(),
@@ -1716,9 +1716,9 @@ class Chat {
   // PLAN-519 F2: configura el modelo TÁNDEM con razonador (Cloud) + ejecutor
   // (Codex) elegibles. El razonador es this.model/this.effort (Cloud, pinned); el
   // ejecutor viaja en this.tandemCodex y llega al runner (createCodexToolServer).
-  // Sin args = defaults (opus/high + gpt-5.5/high), retrocompat con el Tándem
-  // original. Whitelist inline (el runner revalida, autoritativo — no cargamos el
-  // SDK en el server).
+  // Sin args = defaults (opus/high + gpt-5.6-sol/high), retrocompat con el Tándem
+  // original. La whitelist viene de codex-models.js (módulo puro, sin SDK); el
+  // runner revalida igual como autoridad final.
   configureTandem({ reasonerModel, reasonerEffort, codexModel, codexEffort } = {}) {
     this.modelChoice = 'tandem';
     this._push({ type: 'modelChoice', modelChoice: 'tandem' });
@@ -1731,11 +1731,8 @@ class Chat {
     const re = EFFORT_LEVELS.includes(reasonerEffort) ? reasonerEffort : 'high';
     if (this.effort !== re) { this.effort = re; this._push({ type: 'effort', effort: re, auto: false }); }
     // Ejecutor Codex.
-    const CX_MODELS = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']);
-    this.tandemCodex = {
-      model: CX_MODELS.has(codexModel) ? codexModel : 'gpt-5.5',
-      effort: EFFORT_LEVELS.includes(codexEffort) ? codexEffort : 'high',
-    };
+    const cxModel = normalizeCodexModel(codexModel);
+    this.tandemCodex = { model: cxModel, effort: normalizeCodexEffort(cxModel, codexEffort) };
     this._push({ type: 'tandemCodex', tandemCodex: this.tandemCodex });
     this.onUpdate?.();
     this._maybeReopenForTandem();
@@ -2337,7 +2334,7 @@ class ChatManager {
       if (EFFORT_LEVELS.includes(s.effort)) chat.effort = s.effort;
       chat._effortPinned = !!s.effortPinned;
       chat._fableCeiling = !!s.fableCeiling; // PLAN-519 F1: techo Fable opt-in de AutoTux
-      if (s.tandemCodex && typeof s.tandemCodex === 'object') chat.tandemCodex = { model: s.tandemCodex.model || 'gpt-5.5', effort: s.tandemCodex.effort || 'high' }; // PLAN-519 F2
+      if (s.tandemCodex && typeof s.tandemCodex === 'object') chat.tandemCodex = { model: s.tandemCodex.model || TANDEM_CODEX_MODEL, effort: s.tandemCodex.effort || TANDEM_CODEX_EFFORT }; // PLAN-519 F2
       // Seguro aunque el chat quede dormido: `tandemActive` exige `!!link`, y
       // `_spawnedTandem` además guía si el runner vivo adoptado requiere reopen.
       chat._spawnedTandem = s.spawnedTandem === true;
@@ -2488,7 +2485,7 @@ export default {
       // reconoce Claude Code). 'tandem' es otro sentinel propio (PLAN-507).
       // DEFAULT DEL SISTEMA = 'tandem' (Niko 2026-07-21): sin `model` en el
       // pedido y sin preferencia per-user, toda conversación nueva arranca en
-      // el protocolo Tándem (Opus high razona · Codex gpt-5.5 high ejecuta),
+      // el protocolo Tándem (Opus high razona · Codex gpt-5.6-sol high ejecuta),
       // que probó mejor distribución de carga que AutoTux. La preferencia
       // per-user (defaultModelChoice) sigue ganando sobre este fallback, y el
       // `model` explícito del body gana sobre ambos.
@@ -2514,6 +2511,12 @@ export default {
       // Default per-user cuando el body NO especifica (el body explícito gana).
       let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'tandem');
       if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'tandem'; // defensivo
+      // BUG-1875 — Tándem sin ejecutor Codex es un default roto para un inquilino;
+      // degradar a AutoTux evita fallar en la primera delegación. Tándem se puede elegir a mano igual.
+      if (modelChoice === 'tandem' && !hasCodexCreds(owner || hostUser())) {
+        console.warn(`[BUG-1875] Usuario ${owner || hostUser()} sin credencial Codex; el chat nuevo degrada de Tándem a AutoTux.`);
+        modelChoice = 'auto';
+      }
       const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
       const chat = manager.create({
         cwd: safeCwd(cwd, owner),
@@ -2681,7 +2684,7 @@ export default {
       if (model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) return res.status(400).json({ error: 'Modelo inválido.' });
       // PLAN-519 F2: modelo TÁNDEM CONFIGURABLE — {model:'tandem', tandem:{
       // reasonerModel,reasonerEffort,codexModel,codexEffort}}. Sin `tandem` usa
-      // defaults (retrocompat con el Tándem original opus/high + gpt-5.5/high).
+      // defaults (retrocompat con el Tándem original opus/high + gpt-5.6-sol/high).
       if (model === 'tandem') {
         chat.configureTandem(req.body?.tandem && typeof req.body.tandem === 'object' ? req.body.tandem : {});
         manager.persist();

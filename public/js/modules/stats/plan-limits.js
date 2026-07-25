@@ -19,7 +19,12 @@ const POLL_MS = 5000;
 export default {
   name: 'plan-limits',
 
-  mount(el) {
+  async mount(el, ctx) {
+    el.hidden = true;
+    const me = await ctx.whoami;
+    if (!me?.admin) return;
+    el.hidden = false;
+
     // classList.add (no className=): el wrapper puede traer clases de layout
     // (p.ej. only-expanded) que NO hay que pisar.
     el.classList.add('plan-lims');

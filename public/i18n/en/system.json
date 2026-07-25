@@ -417,7 +417,7 @@
   "system.healthReview.completedProgress": "{done}/{total} completed",
   "system.healthReview.analyzedModules": "Analyzed modules ({count})",
   "system.healthReview.analysisSummary": "Analysis summary",
-  "system.healthReview.tandemTitle": "With Tandem enabled, each finding's \"Automatic\" button no longer edits the code itself: it delegates fix writing to Codex (gpt-5.5, high effort), and Claude only diagnoses/verifies. It does not affect \"Resolve safe\" (batch).",
+  "system.healthReview.tandemTitle": "With Tandem enabled, each finding's \"Automatic\" button no longer edits the code itself: it delegates fix writing to Codex (GPT-5.6 Sol, high effort), and Claude only diagnoses/verifies. It does not affect \"Resolve safe\" (batch).",
   "system.healthReview.tandemLabel": "\"Automatic\" uses Tandem (Codex applies the fix)",
   "system.healthReview.analyzeChangesTitle": "Analyzes ONLY modules changed since the last review (unchanged ones are reused). Fast and cheap.",
   "system.healthReview.analyzeChanges": "Analyze changes",

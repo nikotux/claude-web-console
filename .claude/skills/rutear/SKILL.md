@@ -21,7 +21,7 @@ Desglosás un plan en tareas atómicas y le asignás a **cada una** su ruteo de 
    | Naturaleza | Ejecutor | Modelo | Esfuerzo |
    |---|---|---|---|
    | Diseño/prompt/contrato | Claude | opus\|sonnet | high (xhigh/max si es crítico) |
-   | Escribir código | **Tándem** (Claude razona/verifica + Codex ejecuta) | **opus** | **high PINNED** (Codex gpt-5.5 corre en high) |
+   | Escribir código | **Tándem** (Claude razona/verifica + Codex ejecuta) | **opus** | **high PINNED** (Codex gpt-5.6-sol corre en high) |
    | Cableado trivial | Claude | haiku | low |
    | Verificación E2E | Claude | sonnet\|opus | high |
 

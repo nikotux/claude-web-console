@@ -1340,7 +1340,7 @@ export class ChatTab {
           t('chat.model.tandemPendingTitle', 'Elegiste Tándem pero el motor que está corriendo NO lo aplica (arrancó antes del cambio). Usá «Reabrir para cambios» en el menú ⋯ de Sesiones.'));
       } else {
         paint(t('chat.model.tandemBadge', '🤝 Tándem'), 'var(--cwc-accent-cool)',
-          t('chat.model.tandemTitle', 'Tándem — Opus (medio) razona y verifica · Codex gpt-5.5 (alto) ejecuta el código'));
+          t('chat.model.tandemTitle', 'Tándem — Opus (alto) razona y verifica · Codex GPT-5.6 Sol (alto) ejecuta el código'));
       }
     } else if (choice) {
       const label = CHAT_MODEL_LABEL.get(choice) || choice;

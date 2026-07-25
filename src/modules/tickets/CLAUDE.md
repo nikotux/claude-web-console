@@ -174,3 +174,7 @@ Gotcha crítico: el splitter corta solo encabezados top-level `## ` fuera de fen
 Los contextos tienen snippets de bash y plantillas markdown con líneas como
 `## Summary` / `## Verification` dentro de bloques ```; mientras el splitter está
 dentro de un fence, ninguna línea cuenta como encabezado.
+
+## Linkeo automático al grafo de Pad (BUG-1878)
+
+Todo ítem que `meta-store.js` crea en `contexto-de-tickets` recibe un link `implements` hacia `ARQUI-1274` («Ciclo de tickets»), el sol de esa colección. Es BEST-EFFORT (nunca rompe el guardado del contexto ni el cierre de un chat) y se salta para inquilinos (workspace `tenant-*`), porque los `ARQUI-*` solo existen en el workspace `console`. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz.

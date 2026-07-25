@@ -89,7 +89,22 @@ export const TANDEM_INSTRUCTION = [
   'En este modo NO tenés herramientas de edición: Edit/Write/MultiEdit/NotebookEdit están DESHABILITADAS a propósito. Para CUALQUIER cambio de código llamá la herramienta `delegate_to_codex` con un plan CONCRETO (archivos, cambios exactos, criterios de aceptación).',
   'Codex implementa y te devuelve el diff. Vos lo VERIFICÁS (leé el diff; usá Bash para node --check / tests si hace falta) y, si algo está mal, volvés a llamar a `delegate_to_codex` con las correcciones.',
   'Bash es SOLO para inspección y verificación (leer, correr checks/tests), NUNCA para escribir archivos — todo cambio pasa por Codex.',
+  'Una delegación puede tardar y ya no se corta a los 8 minutos: corre en un proceso propio y sobrevive a un reinicio de la interfaz web.',
+  'Con `background: true` la delegación devuelve el control al instante: podés lanzar VARIAS en paralelo sobre archivos que no se pisan y seguir trabajando mientras corren; recogé el resultado con `collect_codex`. NO lances en paralelo dos delegaciones que toquen los MISMOS archivos, porque se pisan entre sí.',
 ].join('\n');
+
+export const AUTONOMY_INSTRUCTION = [
+  'CONTRATO DE AUTONOMÍA — la línea final `🎾 Pelota: …` NO es decorativa: el sistema la lee y actúa según lo que declares.',
+  'Si cerrás con `🎾 Pelota: MÍA`, el sistema te devuelve el control automáticamente para que sigas trabajando sin esperar una respuesta del usuario. Declará MÍA solamente cuando de verdad vayas a continuar vos.',
+  'Si necesitás una decisión, un permiso o una respuesta del usuario, cerrá con `🎾 Pelota: TUYA` y el turno termina de verdad. Si no queda nada pendiente, cerrá con `🎾 Pelota: nadie`.',
+  'Cuando el sistema te devuelva el control, retomá por el próximo paso concreto: no vuelvas a saludar ni repitas el resumen anterior.',
+].join('\n');
+
+export const AUTONOMY_CONTINUE_REASON = [
+  'Declaraste que la pelota es tuya.',
+  'Seguí YA con el próximo paso concreto, sin esperar al usuario.',
+  'Cuando necesites algo de él o no quede trabajo, cerrá con otra declaración `🎾 Pelota: …` para que el turno termine.',
+].join(' ');
 
 // Nombre completo (namespaced) de la tool del servidor MCP in-process de Codex.
 export const TANDEM_TOOL = 'mcp__codex__delegate_to_codex';
@@ -225,12 +240,43 @@ export function tolkienEnvPreToolUseHook({ onNeed }) {
   };
 }
 
-export function mergePreToolUseHooks(...sets) {
-  const pre = [];
+export function declaresBallMine(text) {
+  if (typeof text !== 'string') return false;
+  const tail = text.split(/\r?\n/).filter((line) => line.trim()).slice(-3);
+  const declaration = /pelota(?:\s|[*_~`])*:?(?:\s|[*_~`])*m[ií]a\b/iu;
+  return tail.some((line) => line.includes('🎾') && declaration.test(line));
+}
+
+export function autonomyStopHook({ onContinue } = {}) {
+  return {
+    Stop: [{
+      hooks: [async (input) => {
+        if (!declaresBallMine(input?.last_assistant_message)) return {};
+        try { onContinue?.(); } catch { /* un aviso de UI no puede cortar el turno */ }
+        // Decisión explícita de Niko (2026-07-25): SIN tope de continuaciones.
+        // La válvula de escape es la propia pelota; no cortar por stop_hook_active
+        // ni agregar contadores máximos en una sesión futura.
+        return { decision: 'block', reason: AUTONOMY_CONTINUE_REASON };
+      }],
+    }],
+  };
+}
+
+export function mergeHookSets(...sets) {
+  const merged = {};
   for (const s of sets) {
-    if (s && Array.isArray(s.PreToolUse)) pre.push(...s.PreToolUse);
+    if (!s) continue;
+    for (const [event, hooks] of Object.entries(s)) {
+      if (!Array.isArray(hooks) || !hooks.length) continue;
+      if (!merged[event]) merged[event] = [];
+      merged[event].push(...hooks);
+    }
   }
-  return pre.length ? { PreToolUse: pre } : null;
+  return Object.keys(merged).length ? merged : null;
+}
+
+export function mergePreToolUseHooks(...sets) {
+  return mergeHookSets(...sets);
 }
 
 // FUENTE ÚNICA de los modos válidos del chat (shared.js la re-exporta para no
@@ -256,12 +302,14 @@ export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, 
   // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
   // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
   // (repo de la consola) — Tolkien no lo recibe (regla 12), (3) la instrucción
-  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex).
+  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex)
+  // y (4) el contrato global de autonomía de la línea final `🎾 Pelota: …`.
   const appends = [];
   const folderRule = sessionFolderRule(chatId);
   if (folderRule) appends.push(folderRule);
   if (isConsoleCwd(cwd)) appends.push(CONSOLE_PAD_BOOTSTRAP);
   if (tandem) appends.push(TANDEM_INSTRUCTION);
+  appends.push(AUTONOMY_INSTRUCTION);
   const appendText = appends.join('\n\n');
   return {
     cwd,

@@ -329,20 +329,36 @@ export function mountMcpsPanel(el, ctx = {}) {
 
   let alive = true;
   let connAdmin = false;
+  let lastCodex = { status: 'loading', connected: false };
   let lastData = null;
   let lastKeyring = null;
   let hasRendered = false;
   let pollTimer = null;
+  let codexPollTimer = null;
+  let codexRetryTimer = null;
+  let codexPolling = false;
 
   function clearPoll() {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
   }
 
+  function clearCodexPoll() {
+    if (codexPollTimer) clearInterval(codexPollTimer);
+    codexPollTimer = null;
+  }
+
+  function clearCodexRetry() {
+    if (codexRetryTimer) clearTimeout(codexRetryTimer);
+    codexRetryTimer = null;
+  }
+
   const obs = new MutationObserver(() => {
-    if (!el.isConnected) {
+    if (!el.isConnected || !root.isConnected) {
       alive = false;
       clearPoll();
+      clearCodexPoll();
+      clearCodexRetry();
       obs.disconnect();
     }
   });
@@ -473,12 +489,102 @@ export function mountMcpsPanel(el, ctx = {}) {
     return `<h3 class="conn-h">🔗 ${t('system.conn.title', 'Cuentas conectadas')}</h3>`;
   }
 
+  function codexUiState(d) {
+    if (d?.connected || d?.done || d?.status === 'connected' || d?.status === 'done') {
+      return { key: 'connected', light: 'ok', label: t('system.conn.codexConnected', 'Conectado') };
+    }
+    if (d?.stale || d?.status === 'error') {
+      return { key: 'error', light: 'danger', label: t('system.conn.codexError', 'No se pudo conectar') };
+    }
+    if (d?.status === 'awaiting-auth') {
+      return { key: 'action', light: 'warn', label: t('system.conn.codexAwaiting', 'Requiere autorización') };
+    }
+    if (d?.status === 'starting' || d?.status === 'loading') {
+      return { key: 'inprogress', light: 'info', label: t('system.conn.codexStarting', 'Iniciando conexión…') };
+    }
+    return { key: 'unset', light: 'neutral', label: t('system.conn.codexDisconnected', 'Sin conectar') };
+  }
+
+  function codexNeedsAttention(d) {
+    const key = codexUiState(d).key;
+    return key === 'action' || key === 'inprogress' || key === 'error';
+  }
+
+  function codexActive(d) {
+    return !d?.connected && !d?.stale && ['starting', 'awaiting-auth'].includes(d?.status);
+  }
+
+  function codexCard(d, collapsed = false) {
+    const st = codexUiState(d);
+    const dot = LIGHT_DOT[st.light] || '⚪';
+    const tag = t(CONN_STATE[st.key].tagKey, CONN_STATE[st.key].tagEs);
+    let flow = '';
+    let actions = '';
+
+    if (st.key === 'connected') {
+      flow = `<p class="hr-f-detail"><b>🟢 ${t('system.conn.codexConnected', 'Conectado')}</b></p>`;
+    } else if (d?.status === 'awaiting-auth' && !d?.stale) {
+      const link = d.url
+        ? `<a class="mcp-oauth-link" href="${esc(d.url)}" target="_blank" rel="noopener">${icon('externalLink', { size: 13 })} ${t('system.conn.codexOpenLink', 'Abrir enlace de ChatGPT')}</a>`
+        : '';
+      const code = d.code ? `<div class="conn-code" data-ref="codex-code">${esc(d.code)}</div>` : '';
+      flow = `
+        <p class="hr-f-detail"><b>${dot} ${t('system.conn.codexAwaiting', 'Requiere autorización')}</b></p>
+        <p class="hr-f-file">${t('system.conn.codexAuthorizeHint', 'Abrí el enlace, pegá el código y autorizá con tu cuenta de ChatGPT. Vence en 15 minutos.')}</p>
+        ${code}
+        <div class="mcp-acts">
+          ${link}
+          ${d.code ? `<button class="btn-ghost btn--sm" data-codex-act="copy">${icon('clipboard', { size: 12 })}<span>${t('system.conn.copyCode', 'Copiar código')}</span></button>` : ''}
+          <button class="btn-ghost btn--sm" data-codex-act="cancel">${t('system.conn.codexCancel', 'Cancelar')}</button>
+        </div>
+        <p class="hr-f-file" data-ref="codex-msg"></p>`;
+    } else if (st.key === 'inprogress') {
+      flow = `
+        <p class="hr-f-detail"><b>${dot} ${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.codexStarting', 'Iniciando conexión…')}</b></p>
+        <div class="mcp-acts"><button class="btn-ghost btn--sm" data-codex-act="cancel">${t('system.conn.codexCancel', 'Cancelar')}</button></div>`;
+    } else if (st.key === 'error') {
+      const error = d?.error || (d?.stale
+        ? t('system.conn.codexStaleError', 'El intento no respondió. Volvé a intentarlo.')
+        : t('system.mcps.unknownError', 'error desconocido'));
+      flow = `<p class="hr-f-crit">🔴 ${esc(error)}</p>`;
+      actions = `<div class="mcp-acts"><button class="btn btn--sm" data-codex-act="start">${icon('refresh', { size: 12 })}<span>${t('system.conn.retryBtn', 'Reintentar')}</span></button></div>`;
+    } else {
+      flow = `<p class="hr-f-detail"><b>⚪ ${t('system.conn.codexDisconnected', 'Sin conectar')}</b></p>`;
+      actions = `<div class="mcp-acts"><button class="btn btn--sm" data-codex-act="start">${icon('externalLink', { size: 12 })}<span>${t('system.conn.connectBtn', 'Conectar')}</span></button></div>`;
+    }
+
+    return `
+      <div class="hr-finding ${cardClass({ status: st })}${collapsed ? ' hr-collapsed' : ''}" data-conn="codex">
+        <div class="hr-f-head" data-toggle="1">
+          <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
+          <span class="mcp-dot" title="${esc(st.label)}">${dot}</span>
+          <span class="hr-f-area">${t('system.conn.codexTitle', 'Codex (ChatGPT)')}</span>
+          <span class="hr-f-mod">${esc(tag)}</span>
+        </div>
+        <div class="hr-f-body">
+          ${flow}
+          <div class="hr-f-file">${t('system.conn.codexPurpose', 'Codex es el ejecutor del modo Tándem (Claude razona, Codex escribe el código). Sin Codex, tus chats usan AutoTux.')}</div>
+          ${actions}
+        </div>
+      </div>`;
+  }
+
+  function renderCodexCard() {
+    const old = root.querySelector('[data-conn="codex"]');
+    if (!old) return;
+    const collapsed = old.classList.contains('hr-collapsed');
+    const box = document.createElement('div');
+    box.innerHTML = codexCard(lastCodex, collapsed);
+    old.replaceWith(box.firstElementChild);
+    wireCodex();
+  }
+
   function renderConnections(d) {
     connAdmin = !!d.isAdmin;
     const providers = d.providers || [];
-    const cards = providers.length
-      ? providers.map((p, i) => connCard(p, i)).join('')
-      : `<p class="hr-summary">${t('system.conn.empty', 'No hay proveedores de cuentas configurados.')}</p>`;
+    const providerCards = providers.map((p, i) => connCard(p, i)).join('');
+    const codexCollapsed = providers.length > 0 && !codexNeedsAttention(lastCodex);
+    const cards = providerCards + codexCard(lastCodex, codexCollapsed);
     const host = root.querySelector('[data-ref="conn"]');
     if (!host) return;
     host.innerHTML = `
@@ -505,8 +611,19 @@ export function mountMcpsPanel(el, ctx = {}) {
         host.innerHTML = `${connTitle()}<p class="hr-summary">⚪ ${t('system.conn.unavailable', 'No disponible todavía. La conexión de cuentas personales se está terminando de instalar; probá de nuevo más tarde.')}</p>`;
         return;
       }
+      try {
+        const res = await fetch('/api/connections/codex/status');
+        const status = await res.json();
+        if (!res.ok) throw new Error(status?.error || res.status);
+        lastCodex = status;
+      } catch (err) {
+        lastCodex = { status: 'error', connected: false, error: t('system.conn.codexStatusError', 'No se pudo consultar Codex: {error}', { error: err.message || err }) };
+      }
+      if (!alive) return;
       renderConnections(d);
       wireConnections(d);
+      wireCodex();
+      syncCodexPoll();
     } catch { /* la sección de cuentas nunca debe romper el panel MCP */ }
   }
 
@@ -514,6 +631,7 @@ export function mountMcpsPanel(el, ctx = {}) {
     const host = root.querySelector('[data-ref="conn"]');
     if (!host) return;
     host.querySelectorAll('[data-toggle]').forEach((head) => {
+      if (head.closest('[data-conn="codex"]')) return;
       head.addEventListener('click', () => head.closest('.hr-finding')?.classList.toggle('hr-collapsed'));
     });
     host.querySelectorAll('[data-cact]').forEach((b) => b.addEventListener('click', async (e) => {
@@ -552,6 +670,122 @@ export function mountMcpsPanel(el, ctx = {}) {
         }
       }
     }));
+  }
+
+  function wireCodex() {
+    const card = root.querySelector('[data-conn="codex"]');
+    if (!card) return;
+    card.querySelector('[data-toggle]')?.addEventListener('click', () => card.classList.toggle('hr-collapsed'));
+    card.querySelectorAll('[data-codex-act]').forEach((button) => button.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (button.dataset.codexAct === 'start') {
+        startCodexLogin();
+      } else if (button.dataset.codexAct === 'cancel') {
+        cancelCodexLogin();
+      } else if (button.dataset.codexAct === 'copy') {
+        const msg = card.querySelector('[data-ref="codex-msg"]');
+        try {
+          await navigator.clipboard.writeText(lastCodex.code || '');
+          if (msg) msg.textContent = t('system.conn.codeCopied', 'Código copiado.');
+        } catch {
+          if (msg) msg.textContent = t('system.conn.copyCodeFallback', 'No se pudo copiar automáticamente. Código: {code}', { code: lastCodex.code || '' });
+        }
+      }
+    }));
+  }
+
+  function syncCodexPoll() {
+    if (codexActive(lastCodex)) startCodexPoll();
+    else clearCodexPoll();
+  }
+
+  function startCodexPoll() {
+    if (codexPollTimer || !alive) return;
+    codexPollTimer = setInterval(() => {
+      if (!codexPolling) loadCodexStatus();
+    }, 3000);
+  }
+
+  async function loadCodexStatus() {
+    if (!alive || codexPolling) return;
+    codexPolling = true;
+    try {
+      const res = await fetch('/api/connections/codex/status');
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      if (!alive) return;
+      lastCodex = d;
+    } catch (err) {
+      if (!alive) return;
+      lastCodex = { status: 'error', connected: false, error: t('system.conn.codexStatusError', 'No se pudo consultar Codex: {error}', { error: err.message || err }) };
+    } finally {
+      codexPolling = false;
+    }
+    if (!alive) return;
+    renderCodexCard();
+    syncCodexPoll();
+  }
+
+  async function launchCodexLogin() {
+    if (!alive) return;
+    clearCodexRetry();
+    try {
+      const res = await fetch('/api/connections/codex/start', { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      await loadCodexStatus();
+      syncCodexPoll();
+    } catch (err) {
+      if (!alive) return;
+      lastCodex = { status: 'error', connected: false, error: err.message || String(err) };
+      renderCodexCard();
+      clearCodexPoll();
+    }
+  }
+
+  async function startCodexLogin() {
+    const wasStale = !!lastCodex?.stale;
+    clearCodexPoll();
+    clearCodexRetry();
+    lastCodex = { status: 'starting', connected: false };
+    renderCodexCard();
+    if (!wasStale) {
+      launchCodexLogin();
+      return;
+    }
+    try {
+      // Un job stale sigue figurando como `starting` y el backend lo deduplica.
+      // Primero se cancela y se deja un tick al runner para apagar su PTY.
+      const res = await fetch('/api/connections/codex/cancel', { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      codexRetryTimer = setTimeout(() => {
+        codexRetryTimer = null;
+        launchCodexLogin();
+      }, 2500);
+    } catch (err) {
+      if (!alive) return;
+      lastCodex = { status: 'error', connected: false, error: err.message || String(err) };
+      renderCodexCard();
+      clearCodexPoll();
+    }
+  }
+
+  async function cancelCodexLogin() {
+    clearCodexPoll();
+    clearCodexRetry();
+    try {
+      const res = await fetch('/api/connections/codex/cancel', { method: 'POST' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      if (!alive) return;
+      lastCodex = { status: 'cancelled', connected: false };
+      renderCodexCard();
+    } catch (err) {
+      if (!alive) return;
+      lastCodex = { status: 'error', connected: false, error: err.message || String(err) };
+      renderCodexCard();
+    }
   }
 
   function openConnect(prov, label, p) {

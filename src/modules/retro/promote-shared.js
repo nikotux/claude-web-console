@@ -19,13 +19,20 @@ import { config } from '../../core/config.js';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { readNote, writeNote, readIndex, writeIndex, hashOf } from '../projects/memory.js';
 import { getContext, saveContext } from '../tickets/context-store.js';
-import { createItem } from '../../core/pad-service-client.js';
+import { createItem, addLink } from '../../core/pad-service-client.js';
 import { listLessons } from './store.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MEMORY_NOTE = 'mejora-continua.md';
 const MARK_START = '<!-- cwc:mejora-continua:start -->';
 const MARK_END = '<!-- cwc:mejora-continua:end -->';
+
+// CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
+// Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
+function padSunApplies(ctx) {
+  const ws = ctx && ctx.workspace;
+  return !ws || ws === 'console';
+}
 
 // Destinos cableados. memoria+claude-md (Fase 2) · contexto (Fase 3) · playbook (Fase 4).
 export const PROMOTE_TARGETS = ['memoria', 'claude-md', 'contexto', 'playbook'];
@@ -129,6 +136,13 @@ async function promoteToPlaybook(lesson, ctx = null) {
     fields: { status: 'draft', trigger: 'manual', scope: 'all' },
   }, { ctx });
   if (!r.ok) throw Object.assign(new Error(`Pad local (crear playbook): ${r.error || 'error'}`), { padError: true });
+  try {
+    if (!padSunApplies(ctx)) return;
+    const linkR = await addLink(r.data.ref, lesson.id, 'implements', { ctx });
+    if (!linkR?.ok) console.error('[retro] no pude enlazar el playbook a su lección:', linkR?.error || linkR);
+  } catch (err) {
+    console.error('[retro] no pude enlazar el playbook a su lección:', err?.message || err);
+  }
 }
 
 // Dispatcher. `lesson` ya debe estar marcada promovida (markPromoted corre

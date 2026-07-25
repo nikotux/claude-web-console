@@ -7,7 +7,7 @@
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
-import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel } from '../../ui/models.js';
+import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel, CODEX_MODEL_OPTIONS, codexEffortsFor, DEFAULT_CODEX_MODEL } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor, PLACES, LIMBO_PLACE } from '../../ui/places.js';
@@ -791,14 +791,15 @@ export default {
     function pickModelForChat(c) {
       const m = dialog.openModal({ title: t('sessions.model.title', 'Modelo y protocolo'), width: 460 });
       const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus 5'], ['fable', 'Fable']];
-      const CODEX = [['', t('sessions.model.codexNone', 'Ninguno (Manual)')], ['gpt-5.5', 'GPT-5.5'], ['gpt-5.4', 'GPT-5.4'], ['gpt-5.4-mini', 'GPT-5.4 mini'], ['gpt-5.3-codex-spark', 'GPT-5.3 Spark']];
-      const EFFS = [['low', t('sessions.eff.low', 'Bajo')], ['medium', t('sessions.eff.medium', 'Medio')], ['high', t('sessions.eff.high', 'Alto')], ['xhigh', t('sessions.eff.xhigh', 'Muy alto')], ['max', t('sessions.eff.max', 'Máximo')]];
+      const CODEX = [['', t('sessions.model.codexNone', 'Ninguno (Manual)')], ...CODEX_MODEL_OPTIONS];
+      const EFFS = [['low', t('sessions.eff.low', 'Bajo')], ['medium', t('sessions.eff.medium', 'Medio')], ['high', t('sessions.eff.high', 'Alto')], ['xhigh', t('sessions.eff.xhigh', 'Muy alto')], ['max', t('sessions.eff.max', 'Máximo')], ['ultra', t('sessions.eff.ultra', 'Ultra')]];
+      const CLOUD_EFFS = ['low', 'medium', 'high', 'xhigh', 'max'];
       const CLOUDSET = new Set(['haiku', 'sonnet', 'opus', 'fable']);
       // Estado inicial derivado de la conversación.
       let mode = 'autotux'; let fable = false;
       let rModel = 'opus'; let rEffort = 'medium'; let cModel = ''; let cEffort = 'high';
       if (c.modelChoice === 'auto') { mode = 'autotux'; fable = !!c.fableCeiling; }
-      else if (c.modelChoice === 'tandem') { mode = 'tandem'; rModel = CLOUDSET.has(c.model) ? c.model : 'opus'; rEffort = c.effort || 'medium'; cModel = c.tandemCodex?.model || 'gpt-5.5'; cEffort = c.tandemCodex?.effort || 'high'; }
+      else if (c.modelChoice === 'tandem') { mode = 'tandem'; rModel = CLOUDSET.has(c.model) ? c.model : 'opus'; rEffort = c.effort || 'medium'; cModel = c.tandemCodex?.model || DEFAULT_CODEX_MODEL; cEffort = c.tandemCodex?.effort || 'high'; }
       else { mode = 'tandem'; rModel = CLOUDSET.has(c.modelChoice) ? c.modelChoice : (CLOUDSET.has(c.model) ? c.model : 'opus'); rEffort = c.effort || 'medium'; cModel = ''; }
 
       const legend = () => {
@@ -808,7 +809,7 @@ export default {
       };
       const opts = (list, sel, attr) => list.map(([v, l]) =>
         `<button class="mp-opt${v === sel ? ' mp-opt--on' : ''}" data-${attr}="${v}">${l}${v === sel ? icon('check', { size: 12 }) : ''}</button>`).join('');
-      const effSel = (id, sel) => `<select class="mp-eff" data-eff="${id}">${EFFS.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+      const effSel = (id, sel, allowed) => `<select class="mp-eff" data-eff="${id}">${EFFS.filter(([v]) => allowed.includes(v)).map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
 
       const paint = () => {
         const lg = legend();
@@ -828,12 +829,12 @@ export default {
             <div class="sess-pick-sec">
               <div class="sess-pick-h">${icon('sparkle', { size: 14 })} ${t('sessions.model.cloudReasoner', 'Cloud · razonador')}</div>
               <div class="mp-opts">${opts(CLOUD, rModel, 'rmodel')}</div>
-              <div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('r', rEffort)}</div>
+              <div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('r', rEffort, CLOUD_EFFS)}</div>
             </div>
             <div class="sess-pick-sec">
               <div class="sess-pick-h">${icon('gear', { size: 14 })} ${t('sessions.model.codexExec', 'Codex · ejecutor')}</div>
               <div class="mp-opts">${opts(CODEX, cModel, 'cmodel')}</div>
-              ${cModel ? `<div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('c', cEffort)}</div>` : `<p class="mp-info">${t('sessions.model.manualInfo', 'Sin Codex = <b>Manual</b> (Claude solo, sin delegación).')}</p>`}
+              ${cModel ? `<div class="mp-effrow">${t('sessions.model.effort', 'Esfuerzo:')} ${effSel('c', cEffort, codexEffortsFor(cModel))}</div>` : `<p class="mp-info">${t('sessions.model.manualInfo', 'Sin Codex = <b>Manual</b> (Claude solo, sin delegación).')}</p>`}
             </div>`;
         }
         m.body.innerHTML = `
@@ -850,7 +851,14 @@ export default {
           </div>`;
         m.body.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { mode = b.dataset.mode; paint(); }));
         m.body.querySelectorAll('[data-rmodel]').forEach((b) => b.addEventListener('click', () => { rModel = b.dataset.rmodel; paint(); }));
-        m.body.querySelectorAll('[data-cmodel]').forEach((b) => b.addEventListener('click', () => { cModel = b.dataset.cmodel; paint(); }));
+        m.body.querySelectorAll('[data-cmodel]').forEach((b) => b.addEventListener('click', () => {
+          cModel = b.dataset.cmodel;
+          // `ultra` solo existe en sol/terra: al pasar a un modelo que no lo
+          // soporta, el esfuerzo cae al default en vez de mandar un valor inválido.
+          const allowed = codexEffortsFor(cModel);
+          if (cModel && !allowed.includes(cEffort)) cEffort = allowed.includes('high') ? 'high' : allowed[allowed.length - 1];
+          paint();
+        }));
         const fb = m.body.querySelector('[data-fable]'); if (fb) fb.addEventListener('change', () => { fable = fb.checked; paint(); });
         const re = m.body.querySelector('[data-eff="r"]'); if (re) re.addEventListener('change', () => { rEffort = re.value; });
         const ce = m.body.querySelector('[data-eff="c"]'); if (ce) ce.addEventListener('change', () => { cEffort = ce.value; });

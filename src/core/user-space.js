@@ -40,6 +40,25 @@ export function userSpace(userId) {
   return path.join(USERS_ROOT, id);
 }
 
+// Credencial Codex por-usuario: para el HOST userSpace(host) === config.home y
+// conserva ~/.codex/auth.json; para un inquilino apunta dentro de su root aislado.
+export function userCodexDir(userId) {
+  return path.join(userSpace(userId), '.codex');
+}
+
+export function userCodexAuthPath(userId) {
+  return path.join(userCodexDir(userId), 'auth.json');
+}
+
+// Chequeo best-effort: un userId inválido o cualquier error de FS equivale a no tener credencial.
+export function hasCodexCreds(userId) {
+  try {
+    return fs.existsSync(userCodexAuthPath(userId));
+  } catch {
+    return false;
+  }
+}
+
 // Directorio de datos persistentes de la consola para ese usuario.
 export function userDataDir(userId) {
   return path.join(userSpace(userId), '.cwc-data');

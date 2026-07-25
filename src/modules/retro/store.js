@@ -12,10 +12,22 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import {
-  listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
+  listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem, listLinks, addLink,
 } from '../../core/pad-service-client.js';
 
 const COLLECTION = 'mejora-continua';
+// Sol de cada lección según su categoría: los 7 buckets `MC · *` de la
+// colección `arquitectura` (ver CONVE-1257 / regla dura 11 del CLAUDE.md).
+// Sin este link la lección queda huérfana en el grafo de Pad (BUG-1878).
+const MC_SUN_BY_CATEGORY = {
+  procedimiento: 'ARQUI-1310',
+  metodologia: 'ARQUI-1311',
+  convencion: 'ARQUI-1312',
+  'feedback-cliente': 'ARQUI-1313',
+  nota: 'ARQUI-1314',
+  regla: 'ARQUI-1315',
+  herramienta: 'ARQUI-1316',
+};
 export const MC_ID_RE = /^MC-\d+$/;
 const ACTIVITY_FILE = path.join(os.homedir(), '.cwc-data', 'retro-activity.json');
 const ACTIVITY_MAX = 300;
@@ -34,6 +46,35 @@ const STATUSES = ['propuesta', 'aprobada', 'promovida', 'descartada'];
 
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
 const oneOf = (v, list, def) => (list.includes(v) ? v : def);
+
+// CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
+// Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
+function padSunApplies(ctx) {
+  const ws = ctx && ctx.workspace;
+  return !ws || ws === 'console';
+}
+
+// BUG-1878: aplica CONVE-1257 / regla dura 11 sin arriesgar la destilación;
+// la consulta previa mantiene idempotentes los reintentos y la auto-sanación.
+async function linkLessonToSun(ref, category, ctx) {
+  try {
+    const sun = MC_SUN_BY_CATEGORY[category];
+    if (!sun || !padSunApplies(ctx)) return;
+    const linksR = await listLinks(ref, { ctx });
+    const links = linksR?.ok && Array.isArray(linksR.data) ? linksR.data : [];
+    const alreadyLinked = links.some((link) => {
+      if (link?.link_type !== 'implements') return false;
+      if (link.source_ref && link.source_ref !== ref) return false;
+      const targetRef = link.target_ref || link.target?.ref || link.target_item?.ref;
+      return targetRef === sun;
+    });
+    if (alreadyLinked) return;
+    const linkR = await addLink(ref, sun, 'implements', { ctx });
+    if (!linkR?.ok) console.error('[retro] no pude enlazar la lección a su sol en Pad:', linkR?.error || linkR);
+  } catch (err) {
+    console.error('[retro] no pude enlazar la lección a su sol en Pad:', err?.message || err);
+  }
+}
 
 // Lock de archivo para serializar el read-find-create/update de upsertLesson
 // entre runners de retro CONCURRENTES (dos sesiones cerrando casi a la vez
@@ -208,6 +249,8 @@ export async function upsertLesson(input = {}, ctx = null) {
       const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50), sourceRefs: mergedRefs } }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
       appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` });
+      // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
+      await linkLessonToSun(existing.ref, f.category || category, ctx);
       const fresh = await getItem(existing.ref, { ctx });
       return { created: false, lesson: lessonFromPadItem(fresh.ok ? fresh.data : existing) };
     }
@@ -229,6 +272,7 @@ export async function upsertLesson(input = {}, ctx = null) {
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
     appendActivity({ kind: 'nueva', refId: r.data.ref, title });
+    await linkLessonToSun(r.data.ref, category, ctx);
     const fresh = await getItem(r.data.ref, { ctx });
     return { created: true, lesson: lessonFromPadItem(fresh.ok ? fresh.data : r.data) };
   });
