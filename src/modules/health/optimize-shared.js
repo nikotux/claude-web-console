@@ -24,6 +24,7 @@
 // nombres históricos (bin/cwc-optimize-runner.js y el módulo server no cambian).
 import path from 'node:path';
 import { hardRulesText } from './shared.js';
+import { defineCatalog, catalogEnum } from '../../core/closed-envelope.js';
 import {
   DATA_DIR, readOnlyToolAllowed, makeLock, makeResultStore, makeProposalParser,
 } from './proposal-runner-shared.js';
@@ -45,11 +46,23 @@ export const OPT_LOCK_FRESH_MS = 20000;       // lock más viejo = runner muerto
 // el optimizador LEE código y datos, jamás escribe.
 export const optToolAllowed = readOnlyToolAllowed;
 
-export const OPT_RISKS = new Set(['bajo', 'medio', 'alto']);
-export const OPT_TIPOS = new Set(['modelo', 'turnos', 'timeout', 'flujo', 'fusion', 'paralelismo', 'prompt', 'otro']);
+// FUENTE ÚNICA: Sets, validación y enum visible por el modelo nacen de estos
+// mismos arrays cerrados.
+const OPT_RISK_VALUES = ['bajo', 'medio', 'alto'];
+const OPT_TIPO_VALUES = ['modelo', 'turnos', 'timeout', 'flujo', 'fusion', 'paralelismo', 'prompt', 'otro'];
+export const OPT_RISKS = new Set(OPT_RISK_VALUES);
+export const OPT_TIPOS = new Set(OPT_TIPO_VALUES);
+export const OPT_RISK_CATALOG = defineCatalog({ id: 'health.optimize.risk', field: 'riesgo', values: OPT_RISK_VALUES, source: 'health/optimize-shared.js' });
+export const OPT_TIPO_CATALOG = defineCatalog({ id: 'health.optimize.tipo', field: 'tipo', values: OPT_TIPO_VALUES, source: 'health/optimize-shared.js' });
 
 // Parseo defensivo + id estable (sha1 motor|tipo|propuesta) — fábrica compartida.
-const parser = makeProposalParser({ keyField: 'motor', tipos: OPT_TIPOS, risks: OPT_RISKS });
+const parser = makeProposalParser({
+  keyField: 'motor',
+  tipos: OPT_TIPOS,
+  risks: OPT_RISKS,
+  engine: 'health-optimize',
+  catalogs: { tipo: OPT_TIPO_CATALOG, riesgo: OPT_RISK_CATALOG },
+});
 export const proposalId = parser.proposalId;
 export const parseOptimization = parser.parse;
 
@@ -135,12 +148,12 @@ export function optimizePrompt(census, usage, padCtx = '') {
     '  "propuestas": [{',
     '    "motor": "nombre corto del motor (p.ej. triage, auto-título)",',
     '    "archivo": "ruta relativa del archivo principal",',
-    '    "tipo": "modelo" | "turnos" | "timeout" | "flujo" | "fusion" | "paralelismo" | "prompt" | "otro",',
+    `    "tipo": ${catalogEnum(OPT_TIPO_CATALOG)},`,
     '    "actual": "configuración/comportamiento actual, concreto",',
     '    "propuesta": "qué cambiar, concreto y accionable",',
     '    "razon": "por qué mejora (con evidencia del código/consumo)",',
     '    "impacto": "qué se gana (menos tokens, más calidad, menos latencia…)",',
-    '    "riesgo": "bajo" | "medio" | "alto",',
+    `    "riesgo": ${catalogEnum(OPT_RISK_CATALOG)},`,
     '    "archivos": ["rutas a tocar"],',
     '    "pasos": ["pasos concretos para aplicarla"]',
     '  }],',

@@ -23,6 +23,18 @@ Lo usan retro-runner y ticket-context-runner; NO usarlo si el runner
 necesita herramientas — ese arma su query con su allowlist explícita) ·
 paths(resolveWithinHome/clampToHome — TODA validación de
 rutas del cliente pasa por acá; nunca startsWith crudo) ·
+pad-world-refs(frontera compartida entre los mundos: detector de refs
+foráneos para Tolkien + reemplazo controlado; listas cerradas de
+prefijos, con `TASK-*` interno distinto de `TTASK-*` externo) ·
+closed-envelope(sobre cerrado + ledger de intentos de IA: el enum del
+prompt se genera con `catalogEnum()` desde el MISMO array que valida la
+respuesta; outcomes/errorClass son cerrados y guardan CLASE, nunca el
+mensaje crudo. `ai-attempts.jsonl` se ubica por `resolveDataDir()` para
+aislamiento multi-tenant correcto y `recordAttempt` persiste sólo una
+whitelist explícita de campos. La tabla de precios DUPLICA a propósito
+las privadas `pin()`/`pout()` de tokens/index.js porque core no importa
+módulos; unificar haciendo que tokens consuma esta fuente es contrato
+FORWARD) ·
 sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
 'chat'=user+project+local / 'headless'=project+local sin user /
 'none'=[] para texto puro — ver text-only-query) ·
@@ -370,6 +382,61 @@ estilo o de criterio NO entra acá — forzarla degradaría el mecanismo.
   workspace `console` con TODO su historial (ROAD-10 incluido) vive ahora físicamente
   en el Pad LOCAL, migrado 1-vía desde el cloud.**
 
+- **Pad: `parent` es un LINK, no un campo** (medido en vivo 2026-07-26,
+  `console:BUG-2053`; refs calificadas por workspace según
+  `console:CONVE-2056`). Mandar `parent=X` en `pad_item update` sobre un ítem que
+  YA tiene padre responde 200 pero deja dos verdades incompatibles: crea el link
+  `parent` al target nuevo, degrada el link viejo a `implements` en vez de
+  borrarlo, y `GET /items/<ref>` conserva el `parent_ref` viejo mientras
+  `GET /items/<ref>/links` muestra el `parent` nuevo. En la medición de
+  `PLAN-507`, al actualizar a `ARQUI-1425`, `parent_ref` siguió en `ARQUI-1271`,
+  apareció `parent → ARQUI-1425` y el anterior quedó como
+  `implements → ARQUI-1271`; sin padre previo el update sí funciona limpio. Por
+  eso reparentar SIEMPRE es read-modify-write de aristas: tomar del ítem el
+  `parent_link_id`, quitar el viejo con `deleteLink` y recién fijar el nuevo con
+  `setParent`; NUNCA usar `updateItem`/`pad_item update` con `parent=`.
+  Corolario peligroso: `parent_ref` es DERIVADO del link disponible sin importar
+  su tipo — si la única arista es `implements`, Pad igualmente reporta su target
+  como `parent_ref`. La regla falsa de que un `implements` coincidente era un
+  duplicado redundante de otro `parent` (`console:BUG-2046`, punto retirado)
+  llevó a borrar 531 links y dejó 506 ítems sin aristas; el backup permitió
+  restaurarlos al 100%, pero la ejecución correcta no salvaba una premisa falsa.
+  Regla de `console:MC-2055`: antes de CUALQUIER borrado masivo basado en que dos
+  campos coinciden, demostrar primero que representan dos cosas distintas:
+  listar las aristas reales, separarlas por tipo y contarlas antes de borrar.
+  Además, el listado de colección y el detalle individual derivan `parent_ref`
+  de links DISTINTOS. Evidencia: `console:TASK-478` tenía simultáneamente
+  `implements → console:PEND-382`, `implements → console:PEND-387` y
+  `parent → console:PLAN-476`; en el mismo instante,
+  `GET /items/TASK-478` devolvía `parent_ref=PLAN-476` (el link `parent`
+  correcto), mientras `GET /collections/tasks/items` devolvía
+  `parent_ref=PEND-387` (uno de los `implements`). En una muestra de 25 ítems de
+  `tasks`, 3 discrepaban (12%): `console:TASK-618` (listado
+  `console:TASK-569`, individual `console:PLAN-655`), `console:TASK-1877` y
+  `console:TASK-1876` (listado `console:ARQUI-*`, individual
+  `console:PLAN-500`). Esto cierra el mecanismo de `console:BUG-2053`: la regla
+  leía el `parent_ref` del listado y borraba el `implements` cuyo target
+  coincidía; cuando el listado había derivado el campo de ese mismo
+  `implements`, no detectaba duplicación sino mera existencia.
+  Regla operativa: para topología —contar hijos, construir jerarquías, detectar
+  huérfanos o tomar cualquier decisión sobre el grafo— NUNCA usar el
+  `parent_ref` del listado de colección. Leer las aristas reales con
+  `GET /items/<ref>/links` o usar el detalle individual. El listado sirve para
+  inventario (refs, títulos y `fields`), no para estructura.
+  El guard de `bulk-update` rechaza cerrar un ítem con `open_children` usando la
+  topología verdadera: frenó el cierre de `console:PLAN-476` al señalar como
+  hijo `todo` a `console:TASK-478`, aunque el conteo basado en el listado lo
+  daba por terminado. Es una baranda que ve más que esos conteos: NUNCA pasar
+  `force` sin revisar primero qué está señalando.
+
+- **Medición del bootstrap de Pad** (`pad-service-client.js`, BUG-2047):
+  `getBootstrap()` hace un GET read-only directo a
+  `/api/v1/workspaces/<workspace>/agent/bootstrap`, sin caché, y conserva en
+  `bytes` el tamaño de la respuesta HTTP real. El bypass de caché es deliberado:
+  el check `pad-bootstrap` de Salud vigila crecimiento del blob generado por el
+  server y un hit sin bytes o una reserialización podrían esconderlo. Pad caído
+  sigue devolviendo `{ok:false, error}`; nunca propaga una excepción al caller.
+
 ## Verificador de contratos (pad-contracts.js) — perfiles
 
 El verificador determinístico admite dos perfiles de checks.
@@ -378,6 +445,38 @@ y su flujo de lectura de Pad sin cambios de comportamiento.
 `tolkien` agrega tres reglas mecánicas sobre un diff del repo externo:
 `migrationOrder` y `schemaSinMigracion` (módulo `prisma`), y
 `handlerSinProductor` (módulo `worker`).
+
+**Cobertura real de los contratos (BUG-2048, medida 2026-07-26).** “Obligación
+verificable” no significa que `pad-contracts.js` la ejecute: de las 41
+obligaciones declaradas por los seis contratos, 13 están mecanizadas (32%).
+Lo demás es prosa para la sesión y NO debe leerse como un gate automático.
+
+| Contrato | Obligaciones declaradas | Mecanizadas | Consumidor real |
+|---|---:|---:|---|
+| `CONVE-1943` módulo FRONTEND | 10 | 5 | `CONSOLE_CHECKS.frontend` |
+| `CONVE-1944` módulo BACKEND | 9 | 4 | `CONSOLE_CHECKS.backend` |
+| `CONVE-1945` cerrar cambio | 11 | 0 | ninguno |
+| `CONVE-1958` anclar/contrastar | 8 | 2 | check `ancla` de Salud |
+| `CONVE-1964` verificador Tolkien | 3 | 3 | `TOLKIEN_CHECKS` |
+| `CONVE-1969` lecciones adoptadas | 1 | 1 | capa `leccion` |
+
+En particular, `CONVE-1945` y `CONVE-1958` dicen “Consumido por: el emisor de
+tareas de `pad-index.js`”, pero ese consumidor no existe. Hasta que los ítems de
+Pad se corrijan, esta tabla es la fuente honesta: `pad-index.js` enruta/trae los
+contratos y `pad-contracts.js` emite solo las obligaciones enumeradas arriba.
+
+Además de esas dos capas estáticas existe una tercera capa `leccion`, data-driven:
+el destino `contrato` de Mejora Continua alimenta
+`<dataDir>/lesson-contracts.json`, resuelto siempre con `resolveDataDir` y nunca
+con `~/.cwc-data` hardcodeado. Cada entrada puede declarar una regla
+`fileExists`, `grepPresent` o `grepAbsent`; si no declara regla queda
+`skipped` con un motivo concreto y jamás se informa como incumplida. El
+`module` del check es su ref `MC-n`, sin barras porque el marcador
+`cwc-contract` no las admite en ese segmento. Los contratos citados por estas
+lecciones se agregan al fetch de `collect()`, pero NO al perfil: el índice
+enrutador del CLAUDE.md raíz no crece. El dialecto de glob se reimplementa
+localmente a propósito, porque `core/` no importa desde `src/modules/`.
+
 Las reglas viven aisladas en `tolkien-checks.js` y no mutan el repo analizado.
 Ese módulo sólo lee `~/tolkien` y ejecuta `git` mediante `execFileSync`.
 La allowlist admite exclusivamente subcomandos read-only:

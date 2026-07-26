@@ -178,7 +178,7 @@ async function doFetch(method, urlPath, { body, url, token } = {}) {
         const msg = (data && data.error && data.error.message) || `HTTP ${res.status}`;
         return { ok: false, error: msg, status: res.status };
       }
-      return { ok: true, data };
+      return { ok: true, data, bytes: Buffer.byteLength(text, 'utf8') };
     } catch (err) {
       return { ok: false, error: String(err?.message || err).slice(0, 200) };
     } finally {
@@ -214,6 +214,15 @@ export async function listCollections(opts = {}) {
   if (typeof opts === 'string') opts = { workspace: opts };
   const { url, token, workspace } = resolveCtx(opts);
   return request('GET', `/api/v1/workspaces/${workspace}/collections`, { url, token });
+}
+
+// Bootstrap consolidado que consume `pad_set_workspace`. Va directo a doFetch
+// (sin caché) porque Salud audita el tamaño REAL de la respuesta HTTP de esta
+// corrida; reserializar el objeto o servir un hit sin sus bytes escondería
+// cambios en el blob generado por el server.
+export async function getBootstrap(opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return doFetch('GET', `/api/v1/workspaces/${workspace}/agent/bootstrap`, { url, token });
 }
 
 // OJO verificado 2026-07-12 (migración tasks/store.js): `all=true` NO es "incluir
@@ -338,9 +347,10 @@ export async function addLink(ref, targetRef, linkType = 'blocks', opts = {}) {
   });
 }
 
-// Conveniencia: fijar el padre de un item (plan de una tarea, etc.) — es un link
-// con link_type='parent', mismo mecanismo que blocks. Verificado 2026-07-12: fijar
-// un parent NUEVO reemplaza el anterior automáticamente (no hace falta unlink previo).
+// OJO #3 (`console:BUG-2053`): `parent` es un LINK. Un update con `parent=` sobre
+// un ítem que ya tenía padre responde 200 pero deja `parent_ref` viejo, crea el link
+// nuevo y degrada el anterior a `implements`. Para reparentar: tomar `parent_link_id`,
+// hacer `deleteLink` y después `setParent`; nunca alcanza con mandar `parent` al update.
 export async function setParent(ref, parentRef, opts = {}) {
   const targetId = await resolveId(parentRef, opts);
   if (!targetId) return { ok: false, error: `Pad: no se encontró el item destino ${parentRef}` };

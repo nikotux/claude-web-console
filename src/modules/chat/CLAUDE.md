@@ -951,14 +951,22 @@ NO puede importar el Agent SDK ni zod, porque también lo consume el runner
 desacoplado/config-free; arrastrarlos volvería a acoplar la ejecución al
 stack del chat y le impediría arrancar como proceso mínimo independiente.
 El job persistido tiene esta forma:
-`{id, chatId, cwd, task, model, effort, fullAccess, writableRoots, status,
-label, startedAt, heartbeatAt, finishedAt, report, isError, error,
-threadId}`, con `status` `pending|running|done|error`. `codexJobsDir()`
+`{id, chatId, cwd, task, model, effort, fullAccess, writableRoots, pid,
+status, label, startedAt, heartbeatAt, finishedAt, report, isError, error,
+threadId}`, con `status`
+`pending|running|done|error|killed|orphaned`. `codexJobsDir()`
 usa `resolveDataDir()` (multi-tenant); el id se valida contra traversal,
 la escritura es atómica `.tmp`+rename y los terminados se podan a las
-24 h. El runner procesa UN `--job <id>`, late cada 15 s, no reejecuta uno
-terminado y ante cualquier excepción persiste `error`: nunca deja
-`running` huérfano.
+24 h, incluidos `killed` y `orphaned`. El runner procesa UN `--job <id>`,
+persiste su `pid`, late cada 15 s, no reejecuta ningún estado terminal y
+ante cualquier excepción persiste `error`. `SIGTERM`/`SIGINT` escriben
+`killed` antes de salir. `readCodexJob()` es además el reaper central:
+un `running` cuyo pid ya no existe o cuyo heartbeat venció por 3 latidos
+(45 s) se persiste atómicamente como `orphaned`, con motivo y
+`finishedAt`; nunca se disfraza de `done`. Esto también cubre jobs viejos
+que todavía no tenían pid y hace que `orphaned` participe de la poda de
+24 h. LÍMITE: `SIGKILL` y un crash del host no se pueden interceptar; por
+eso el reaper, no los handlers de señal, es el cierre real del agujero.
 `CODEX_TIMEOUT_MS` (8 min) murió. `CODEX_MAX_MS` = 60 min es sólo un tope
 de SEGURIDAD: desde el salto a `gpt-5.6-sol`, la mediana medida pasó de
 ~110 s a ~250 s y el 20 % supera 8 min (contra 3–6 % con gpt-5.5).
@@ -974,6 +982,13 @@ sin argumentos lista los jobs de esa conversación; con ids espera y
 devuelve sus reportes. El aislamiento por `chatId` es una frontera de
 seguridad: todo job inexistente o cuyo `chatId` difiera del chat que
 consulta se descarta, aunque el llamador conozca su id.
+La espera y el radar consumen SIEMPRE
+`CODEX_JOB_TERMINAL_STATUSES` de `codex-shared.js`; no mantienen listas
+locales. `killed` y `orphaned` cierran la espera pero NUNCA cuentan como
+éxito: la tool devuelve `isError: true` y un texto explícito con el motivo
+persistido (señal recibida, pid inexistente o heartbeat vencido), para que
+Claude vea que la delegación no completó en vez de interpretar un resultado
+vacío como éxito.
 El wiring de `cwc-chat-runner.js` entrega `chatId` y callbacks
 `onBgStart`/`onBgEnd` a `createCodexToolServer`; ambos alimentan el radar
 por el único camino `bgAdd`/`bgDone`. Al arrancar, `rehydrateCodexBg()`

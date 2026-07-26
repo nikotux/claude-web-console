@@ -8,6 +8,8 @@
 // desde CWC_DATA_DIR/HOME y no importa core/config.js.
 import {
   buildDelegationReport,
+  CODEX_HEARTBEAT_MS,
+  CODEX_JOB_TERMINAL_STATUSES,
   codexJobPath,
   diffSnapshots,
   pruneCodexJobs,
@@ -17,9 +19,35 @@ import {
   writeCodexJob,
 } from '../src/modules/chat/codex-shared.js';
 
-const HEARTBEAT_MS = 15 * 1000;
 const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 const usage = () => console.error(`[${new Date().toISOString()}] Uso: node bin/cwc-codex-runner.js --job <id>`);
+let activeJobId = null;
+let heartbeat = null;
+let handlingSignal = false;
+
+function handleSignal(signal, exitCode) {
+  if (handlingSignal) return;
+  handlingSignal = true;
+  if (heartbeat) clearInterval(heartbeat);
+  if (activeJobId) {
+    try {
+      writeCodexJob(activeJobId, {
+        status: 'killed',
+        isError: true,
+        error: `El runner de Codex recibió ${signal} y terminó antes de completar el job.`,
+        finishedAt: Date.now(),
+        pid: process.pid,
+      });
+    } catch (err) {
+      log(`No se pudo persistir la señal ${signal} del job ${activeJobId}:`, err?.message || err);
+    }
+  }
+  log(`Runner terminado por ${signal}.`);
+  process.exit(exitCode);
+}
+
+process.once('SIGTERM', () => handleSignal('SIGTERM', 143));
+process.once('SIGINT', () => handleSignal('SIGINT', 130));
 
 pruneCodexJobs();
 
@@ -36,17 +64,23 @@ try {
 async function runJob(id) {
   const job = readCodexJob(id);
   if (!job) throw new Error(`Job Codex ${id} inexistente o inválido.`);
-  if (job.status === 'done' || job.status === 'error') {
+  if (CODEX_JOB_TERMINAL_STATUSES.includes(job.status)) {
     log(`Job ${id} ya terminó con estado ${job.status}; no se vuelve a ejecutar.`);
     return;
   }
 
   const startedAt = Date.now();
-  writeCodexJob(id, { status: 'running', startedAt, heartbeatAt: startedAt });
-  const heartbeat = setInterval(() => {
+  activeJobId = id;
+  writeCodexJob(id, {
+    status: 'running',
+    startedAt,
+    heartbeatAt: startedAt,
+    pid: process.pid,
+  });
+  heartbeat = setInterval(() => {
     try { writeCodexJob(id, { heartbeatAt: Date.now() }); }
     catch (err) { log(`No se pudo actualizar el heartbeat del job ${id}:`, err?.message || err); }
-  }, HEARTBEAT_MS);
+  }, CODEX_HEARTBEAT_MS);
   heartbeat.unref();
 
   try {
@@ -76,9 +110,11 @@ async function runJob(id) {
       threadId: res.threadId,
       finishedAt: Date.now(),
     });
+    activeJobId = null;
     log(`Job ${id} terminado${isError ? ' con problema informado por Codex' : ''}.`);
   } finally {
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
   }
 }
 
@@ -96,6 +132,7 @@ if (!validJobId) {
         error: message,
         finishedAt: Date.now(),
       });
+      activeJobId = null;
     } catch (writeErr) {
       log(`No se pudo persistir el error del job ${jobId}:`, writeErr?.message || writeErr);
     }

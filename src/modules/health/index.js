@@ -28,6 +28,8 @@ import {
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
 import { classifyFinding } from './policy.js';
+import { rulesStatus } from './finding-rules.js';
+import { attemptStats } from '../../core/closed-envelope.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
@@ -291,9 +293,21 @@ const CROSS_WORLD_RE = /config\.projectDir|CLAUDE\.local\.md/;
 
 // Instante de adopción de la Regla dura 15 (ancla del pedido original) = la
 // creación de CONVE-1957 en Pad. Es un timestamp exacto y no la medianoche a
-// propósito: los planes abiertos ESA misma mañana nacieron cuando la convención
+// propósito: los ítems abiertos ESA misma mañana nacieron cuando la convención
 // todavía no existía, y marcarlos sería reprochar historia.
 const ANCLA_SINCE = '2026-07-26T15:09:20Z';
+const ANCLA_COLLECTIONS = ['planes', 'tasks', 'bugs'];
+const ANCLA_MAX_PARENT_DEPTH = 12;
+// Medido el 2026-07-26 sobre la respuesta real de `pad_set_workspace console`:
+// 72.751 B. Redondeo inmediato hacia arriba = 73.000 B (249 B de margen);
+// detecta crecimiento, no pretende declarar un tamaño ideal.
+const PAD_BOOTSTRAP_LIMIT_BYTES = 73_000;
+const ANCLA_TERMINAL = new Set([
+  'done', 'hecha', 'hecho', 'closed', 'cerrada', 'fixed', 'wontfix',
+  'archived', 'cancelled', 'canceled', 'descartada',
+]);
+const hasPedidoOriginal = (content) => /^##\s+.*Pedido original/mi.test(String(content || ''));
+const hasCriteriosAceptacion = (content) => /^##\s+.*Criterios de aceptación/mi.test(String(content || ''));
 
 function checkCrossWorld() {
   const id = 'cross-world';
@@ -424,47 +438,216 @@ async function checkPadIndex() {
   }
 }
 
-// Audita la Regla dura 15 (ancla del pedido original, CONVE-1957/CONVE-1958):
-// todo trabajo no trivial guarda en Pad el pedido VERBATIM + sus criterios de
-// aceptación, y sin eso el contraste final no tiene contra qué medir. Read-only
-// por HTTP plano (NO MCP, no toca el blindaje de la regla 6), 0 tokens.
-// GRANDFATHERING: solo audita los ítems creados a partir de ANCLA_SINCE (la
-// fecha de adopción de la convención). Los planes anteriores nacieron sin ancla
-// y marcarlos sería ruido permanente — el check tiene que señalar deriva NUEVA.
-async function checkAncla() {
-  const id = 'ancla';
-  const label = 'Ancla del pedido original';
+function bootstrapComponentBytes(value) {
+  if (value === undefined) return 0;
+  // Incluye el separador del campo en el blob. Este criterio reproduce el
+  // desglose medido sobre la respuesta real sin contar el nombre del campo.
+  return Buffer.byteLength(JSON.stringify(value), 'utf8') + 1;
+}
+
+// Check hermano de pad-index: el índice es texto controlado por este repo; este
+// blob lo genera Pad server. Mantenerlos separados deja visible cuál de los dos
+// canales creció. Read-only por HTTP plano, 0 tokens, nunca MCP.
+export async function checkPadBootstrap(fetchBootstrap = padLocal.getBootstrap) {
+  const id = 'pad-bootstrap';
+  const label = 'Bootstrap de Pad (console)';
   try {
-    const r = await padLocal.listItems('planes', { workspace: 'console' });
-    if (!r.ok) {
-      return { id, label, status: 'warn', detail: 'Pad local no responde, no se pudo auditar el ancla de los planes activos' };
+    const result = await fetchBootstrap({ workspace: 'console' });
+    if (!result?.ok) {
+      return {
+        id,
+        label,
+        status: 'warn',
+        detail: `Pad local no responde (${result?.error || 'sin detalle'}); no se pudo medir el bootstrap`,
+      };
     }
-    const items = Array.isArray(r.data)
-      ? r.data
-      : (Array.isArray(r.data?.items) ? r.data.items : []);
-    const terminal = new Set(['done', 'hecha', 'hecho', 'archived', 'cancelled', 'descartada']);
-    const audited = items.filter((it) => {
-      const status = String(padField(it, 'status') || '').toLowerCase();
-      return it.created_at && it.created_at >= ANCLA_SINCE && !terminal.has(status);
+    const bootstrap = result.data?.bootstrap || result.data;
+    if (!bootstrap || typeof bootstrap !== 'object') {
+      return { id, label, status: 'warn', detail: 'Pad local respondió sin un bootstrap medible' };
+    }
+    const total = Number(result.bytes)
+      || Buffer.byteLength(JSON.stringify(result.data), 'utf8');
+    const components = {
+      playbooks: bootstrapComponentBytes(bootstrap.playbooks),
+      conventions: bootstrapComponentBytes(bootstrap.conventions),
+      collections: bootstrapComponentBytes(bootstrap.collections),
+      dashboard: bootstrapComponentBytes(bootstrap.dashboard),
+    };
+    const parts = Object.entries(components).map(([name, bytes]) => {
+      const pct = total ? Math.round((bytes / total) * 100) : 0;
+      return `${name} ${bytes.toLocaleString('es-AR')} B (${pct}%)`;
     });
-    if (!audited.length) {
-      return { id, label, status: 'ok', detail: 'sin planes activos posteriores a la adopción de la Regla 15' };
-    }
-    const sinAncla = audited.filter((it) => {
-      const content = String(it.content || '');
-      return !/^##\s+.*Pedido original/mi.test(content)
-        || !/^##\s+.*Criterios de aceptación/mi.test(content);
-    });
-    if (!sinAncla.length) {
-      return { id, label, status: 'ok', detail: `${audited.length} plan(es) activo(s) auditado(s) · todos anclados` };
-    }
-    const firstRefs = sinAncla.slice(0, 5).map((it) => it.ref).join(', ');
-    const refs = sinAncla.length > 5 ? `${firstRefs} y ${sinAncla.length - 5} más` : firstRefs;
+    return {
+      id,
+      label,
+      status: total > PAD_BOOTSTRAP_LIMIT_BYTES ? 'warn' : 'ok',
+      detail: `${total.toLocaleString('es-AR')}/${PAD_BOOTSTRAP_LIMIT_BYTES.toLocaleString('es-AR')} B · ${parts.join(' · ')}`,
+    };
+  } catch (err) {
     return {
       id,
       label,
       status: 'warn',
-      detail: `${sinAncla.length}/${audited.length} plan(es) activo(s) SIN ancla del pedido original (Regla 15): ${refs} — corré la skill \`anclar\` sobre ${sinAncla.length === 1 ? 'ese ítem' : 'esos ítems'}`,
+      detail: `Pad local no responde (${String(err?.message || err).slice(0, 160)}); no se pudo medir el bootstrap`,
+    };
+  }
+}
+
+// Audita la Regla dura 15 (ancla del pedido original, CONVE-1957/CONVE-1958):
+// todo trabajo no trivial guarda en Pad el pedido VERBATIM + sus criterios de
+// aceptación, y sin eso el contraste final no tiene contra qué medir. El pedido
+// original se declara una sola vez en la raíz: planes/tasks/bugs hijos lo heredan
+// de cualquier ancestro unido por links `parent` reales. Read-only por HTTP plano
+// (NO MCP, no toca el blindaje de la regla 6), 0 tokens.
+// GRANDFATHERING: solo audita los ítems creados a partir de ANCLA_SINCE (la
+// fecha de adopción de la convención). Los ítems anteriores nacieron sin ancla y
+// marcarlos sería ruido permanente — el check tiene que señalar deriva NUEVA.
+async function anclaEnAncestros(ref, itemCache, linksCache) {
+  const visited = new Set([ref]);
+  let frontier = [ref];
+  let incomplete = false;
+
+  for (let depth = 0; depth < ANCLA_MAX_PARENT_DEPTH && frontier.length; depth += 1) {
+    const next = [];
+    for (const currentRef of frontier) {
+      if (!linksCache.has(currentRef)) {
+        linksCache.set(currentRef, padLocal.listLinks(currentRef, { workspace: 'console' }));
+      }
+      const linksResult = await linksCache.get(currentRef);
+      if (!linksResult.ok) {
+        incomplete = true;
+        continue;
+      }
+      const links = Array.isArray(linksResult.data)
+        ? linksResult.data
+        : (Array.isArray(linksResult.data?.links) ? linksResult.data.links : []);
+      const parentRefs = links
+        .filter((link) => (
+          link?.link_type === 'parent'
+          && link?.source_ref === currentRef
+          && link?.target_ref
+        ))
+        .map((link) => link.target_ref);
+
+      for (const parentRef of parentRefs) {
+        if (visited.has(parentRef)) continue;
+        visited.add(parentRef);
+        if (!itemCache.has(parentRef)) {
+          itemCache.set(parentRef, padLocal.getItem(parentRef, { workspace: 'console' }));
+        }
+        const parentResult = await itemCache.get(parentRef);
+        if (!parentResult.ok || !parentResult.data) {
+          incomplete = true;
+          continue;
+        }
+        if (
+          hasPedidoOriginal(parentResult.data.content)
+          && hasCriteriosAceptacion(parentResult.data.content)
+        ) {
+          return { found: true, incomplete: false };
+        }
+        next.push(parentRef);
+      }
+    }
+    frontier = next;
+  }
+
+  // Una frontera todavía abierta al alcanzar el tope equivale a topología
+  // incompleta: jamás convertirla en un incumplimiento falso.
+  if (frontier.length) incomplete = true;
+  return { found: false, incomplete };
+}
+
+async function checkAncla() {
+  const id = 'ancla';
+  const label = 'Ancla del pedido original';
+  try {
+    const listed = await Promise.all(ANCLA_COLLECTIONS.map(async (collection) => ({
+      collection,
+      result: await padLocal.listItems(collection, { workspace: 'console' }),
+    })));
+    const unavailable = listed.filter(({ result }) => !result.ok).map(({ collection }) => collection);
+    if (unavailable.length) {
+      return {
+        id,
+        label,
+        status: 'warn',
+        detail: `Pad local no responde para ${unavailable.join(', ')}; no se pudo auditar el ancla del trabajo activo`,
+      };
+    }
+    const items = listed.flatMap(({ collection, result }) => {
+      const rows = Array.isArray(result.data)
+        ? result.data
+        : (Array.isArray(result.data?.items) ? result.data.items : []);
+      return rows.map((item) => ({ ...item, _anclaCollection: collection }));
+    });
+    const audited = items.filter((item) => {
+      const status = String(padField(item, 'status') || '').toLowerCase();
+      return item.created_at && item.created_at >= ANCLA_SINCE && !ANCLA_TERMINAL.has(status);
+    });
+    const auditCounts = Object.fromEntries(
+      ANCLA_COLLECTIONS.map((collection) => [
+        collection,
+        audited.filter((item) => item._anclaCollection === collection).length,
+      ]),
+    );
+    const countsText = ANCLA_COLLECTIONS.map((collection) => `${collection} ${auditCounts[collection]}`).join(' · ');
+    if (!audited.length) {
+      return { id, label, status: 'ok', detail: 'sin trabajo activo posterior a la adopción de la Regla 15' };
+    }
+    const itemCache = new Map(items.map((item) => [
+      item.ref,
+      Promise.resolve({ ok: true, data: item }),
+    ]));
+    const linksCache = new Map();
+    const evaluated = await Promise.all(audited.map(async (item) => {
+      const ownAncla = hasPedidoOriginal(item.content) && hasCriteriosAceptacion(item.content);
+      const inherited = ownAncla
+        ? { found: true, incomplete: false }
+        : await anclaEnAncestros(item.ref, itemCache, linksCache);
+      return {
+        item,
+        missing: !inherited.found && !inherited.incomplete,
+        incomplete: !inherited.found && inherited.incomplete,
+      };
+    }));
+    const sinAncla = evaluated.filter((entry) => entry.missing).map((entry) => entry.item);
+    const incompletos = evaluated.filter((entry) => entry.incomplete).map((entry) => entry.item);
+    if (!sinAncla.length) {
+      if (incompletos.length) {
+        return {
+          id,
+          label,
+          status: 'warn',
+          detail: `${audited.length} ítem(es) activo(s) auditado(s) (${countsText}) · ${incompletos.length} cadena(s) parent no se pudieron completar`,
+        };
+      }
+      return {
+        id,
+        label,
+        status: 'ok',
+        detail: `${audited.length} ítem(es) activo(s) auditado(s) (${countsText}) · todos anclados, por bloque propio o ancestro`,
+      };
+    }
+    const firstRefs = sinAncla.slice(0, 5).map((it) => it.ref).join(', ');
+    const refs = sinAncla.length > 5 ? `${firstRefs} y ${sinAncla.length - 5} más` : firstRefs;
+    const missingCounts = Object.fromEntries(
+      ANCLA_COLLECTIONS.map((collection) => [
+        collection,
+        sinAncla.filter((item) => item._anclaCollection === collection).length,
+      ]),
+    );
+    const missingText = ANCLA_COLLECTIONS
+      .map((collection) => `${collection} ${missingCounts[collection]}/${auditCounts[collection]}`)
+      .join(' · ');
+    const incompleteText = incompletos.length
+      ? ` · ${incompletos.length} cadena(s) parent adicionales no se pudieron completar`
+      : '';
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `${sinAncla.length}/${audited.length} ítem(es) activo(s) SIN ancla completa (Regla 15; ${missingText}): ${refs}${incompleteText} — corré la skill \`anclar\` sobre ${sinAncla.length === 1 ? 'ese ítem' : 'esos ítems'}`,
     };
   } catch {
     return { id, label, status: 'warn', detail: 'no pude auditar el ancla (Pad local no responde)' };
@@ -510,6 +693,7 @@ async function runChecks() {
     Promise.resolve(checkTolkienEnvs()),
     checkPadBackbone(),
     checkPadIndex(),
+    checkPadBootstrap(),
     checkAncla(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
@@ -668,11 +852,13 @@ function enrichReview(state) {
   // desde los hallazgos ABIERTOS (ni resueltos ni descartados; los 'fixing'
   // cuentan como abiertos) usando el MISMO criterio que la síntesis y el
   // fallback del runner: critical/high ⇒ critico · medium ⇒ atencion · solo low
-  // o vacío ⇒ ok. Solo se calcula si hubo una revisión (state.verdict presente).
+  // o vacío ⇒ ok. También se calcula cuando la síntesis fue RECHAZADA por
+  // catálogo: el veredicto determinístico por severidad cubre justamente ese
+  // hueco; sin esto el front fabricaría 'atencion' al recibir liveVerdict:null.
   const open = findings.filter((f) => f.fixStatus !== 'resolved' && f.fixStatus !== 'dismissed');
   const resolvedCount = findings.length - open.length;
   let liveVerdict = null;
-  if (state.verdict) {
+  if (state.verdict || state.verdictOmitted) {
     const sev = new Set(open.map((f) => String(f.severity)));
     liveVerdict = sev.has('critical') || sev.has('high') ? 'critico' : sev.has('medium') ? 'atencion' : 'ok';
   }
@@ -1058,6 +1244,11 @@ export default {
           scan.resolvedCount = rev.resolvedCount;
         }
       }
+      // Superficie observable del sobre cerrado (0 tokens): hoy se consulta por
+      // curl; renderizar rules/ledger en public/ queda como contrato FORWARD.
+      // Ambos son best-effort para que su telemetría jamás tumbe el endpoint.
+      try { scan.rules = rulesStatus(); } catch { scan.rules = null; }
+      try { scan.ledger = attemptStats({ limit: 2000 }); } catch { scan.ledger = null; }
       res.json(scan);
     });
     r.post('/scan-all', (req, res) => {

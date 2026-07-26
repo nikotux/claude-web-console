@@ -413,5 +413,10 @@
     "match": "src/modules/**/memory.js",
     "text": "Toda función write*() en src/modules/*/memory.js (o equivalente) que persista un archivo editable tanto por un admin desde la UI como por una escritura automática/externa concurrente debe aceptar un expectedHash opcional y rechazar con error .conflict si el hash actual no coincide, en vez de pisar en silencio",
     "addedAt": 1783262012728
+  },
+  {
+    "match": "bin/**/*.js",
+    "text": "[MC-850] Scripts de verificación E2E que usan node_modules van en el repo, no en /tmp — Al escribir un script temporal de verificación (Playwright, Node) que depende de las dependencias del proyecto, crearlo directamente dentro del repo (o una subcarpeta tipo /tmp-scripts del propio proyecto) desde el arranque, no en /tmp, para evitar el paso extra de reubicarlo tras el fallo de resolución de mód…",
+    "addedAt": 1785086729494
   }
 ]

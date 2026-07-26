@@ -89,16 +89,33 @@
   aparte. El `src/modules/chat/index.js` (handoff/worldLabelFor) está en el
   allowlist como EL canal canónico del paquete-sesión.
   Y **`ancla`** (2026-07-26, Regla dura 15 / CONVE-1957 / CONVE-1958):
-  `checkAncla` audita por HTTP plano (0 tokens, NO MCP) que los PLANes ACTIVOS del
-  Pad local tengan su `## 📌 Pedido original (verbatim)` y sus `## 🎯 Criterios de
-  aceptación` — el ancla contra la cual se contrasta al cerrar. GRANDFATHERING por
+  `checkAncla` audita por HTTP plano (0 tokens, NO MCP) los PLANes, TASKs y BUGs
+  ACTIVOS del Pad local: el ancla completa (`## 📌 Pedido original (verbatim)` +
+  `## 🎯 Criterios de aceptación`) puede vivir en el propio ítem o heredarse de
+  un ancestro; solo la raíz de la constelación la declara. La herencia recorre
+  exclusivamente links reales
+  `link_type === 'parent'` de `GET /items/<ref>/links` — NUNCA el `parent_ref`
+  del listado, que no representa topología confiable (BUG-2053)—, cachea lecturas
+  y corta a 12 niveles para que un ciclo no cuelgue Salud. Una cadena ilegible o
+  que alcanza el tope queda como auditoría incompleta, no como falso
+  incumplimiento. GRANDFATHERING por
   fecha: `ANCLA_SINCE` (constante de módulo, `2026-07-26T15:09:20Z` = el instante
   exacto de creación de CONVE-1957, no la medianoche) acota la
-  auditoría a los ítems creados DESPUÉS de la adopción de la convención; los planes
+  auditoría a los ítems creados DESPUÉS de la adopción de la convención; los ítems
   anteriores nacieron sin ancla y marcarlos sería ruido permanente — el check existe
   para señalar deriva NUEVA, no para reprochar historia. Falta de ancla ⇒ `warn` con
-  los refs (máx 5) y el remedio ("corré la skill `anclar`"); Pad caído ⇒ `warn`,
-  nunca `fail` (mismo criterio que `pad-backbone`).
+  conteos por colección, refs (máx 5) y el remedio ("corré la skill `anclar`");
+  Pad caído ⇒ `warn`, nunca `fail` (mismo criterio que `pad-backbone`).
+  Y **`pad-bootstrap`** (2026-07-26, BUG-2047): check hermano de `pad-index`
+  porque auditan canales de naturaleza distinta — el índice y sus destinos los
+  controla este repo; el bootstrap lo genera Pad server. Lee por HTTP plano el
+  mismo blob consolidado de `pad_set_workspace console` (colecciones +
+  conventions always-on + playbooks + dashboard + índices + roles), 0 tokens y
+  NUNCA MCP. Techo `73.000 B`, derivado de la medición real al implementar:
+  `72.751 B` el 2026-07-26, redondeado al millar inmediato superior (249 B de
+  margen): detecta crecimiento, no declara un ideal. Si lo supera ⇒ `warn` con
+  desglose obligatorio de playbooks/conventions/collections/dashboard y su
+  porcentaje; Pad caído o respuesta ilegible ⇒ `warn`, nunca `fail`.
 - **Dashboard del proyecto** (PESTAÑA PROPIA "📊 Dashboard" del grupo
   Diagnóstico del menú Sistema — `system/dashboard-panel.js`,
   `mountDashboardPanel`. REDISEÑO 2026-07-19 PLAN-752: antes era una subsección
@@ -393,8 +410,12 @@
   con Aprobar/Descartar (GET /invariant-proposals · POST /invariant-proposals/:id
   {approve|reject}, admin). Aprobar → appendLearnedInvariant valida el regex y lo
   suma a src/modules/health/invariants-learned.json (JSON de DATOS en el repo,
-  NO código; se commitea y revisa); invariants.js mergea SEED_INVARIANTS +
-  loadLearned(). Así el bug resuelto no puede regresar sin que salte. Al final
+  NO código; se commitea y revisa). BUG-1977: antes comparaba el texto completo
+  contra los 400 caracteres persistidos y una entrada larga se duplicaba; ahora
+  normaliza `match`/`text` a 200/400 ANTES de comparar y guardar, conservando el
+  formato y deduplicando también contra entradas históricas. invariants.js mergea
+  SEED_INVARIANTS + loadLearned(). Así el bug resuelto no puede regresar sin que
+  salte. Al final
   SONNET sintetiza el veredicto (solo procesa los hallazgos, no re-lee código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +
   health-review.lock (heartbeat => running). POST responde INMEDIATO
@@ -472,3 +493,26 @@
   los descartados para que no reaparezcan. Si en el futuro sonnet se queda corto
   en las unidades más grandes (frontend-modules ~5k líneas), el siguiente paso
   es opus SOLO en esas (editar auditModelFor) o partir la unidad.
+- **🎯 Anillo determinista + sobre cerrado + ledger** (2026-07-26, PLAN-1963 · patrón de `DOC-1925`):
+  el flujo queda ordenado en CUATRO anillos: 🟢 reglas determinísticas MEDIDAS
+  (`finding-rules.js`: `loadCorpus`/`activeRules`/`classifyFinding`, cableadas
+  por `scan-shared.js:crossCheckPad`) · 🔵 normalización/catálogo cerrado
+  (`closed-envelope.js:defineCatalog`/`catalogEnum`/`validateField`, una sola
+  fuente para prompt+validador) · 🟡 dedup heurístico contra Pad
+  (`crossCheckPad`, NUNCA auto-mergea ni descarta: etiqueta `rastreado`/
+  `regresion` y deja el link) · 🔴 IA sólo sobre el residuo ambiguo (review,
+  síntesis, optimización y coherencia). `finding-rules.js` tiene hoy CERO reglas
+  aprobadas: los 13 falsos positivos del corpus salen de UNA única ventana de
+  14 minutos del 2026-07-04, así que el support aparente colapsa a UN incidente
+  independiente y ninguna candidata alcanza evidencia suficiente; mejor sin
+  regla que con una regla débil. Las CUATRO coerciones silenciosas históricas
+  (`severity`→medium, `kind`→bug, `tipo`→otro, `riesgo`→medio) pasaron a
+  RECHAZO de la unidad afectada, y un `verdict` inválido también se omite:
+  cada rechazo queda en `ai-attempts.jsonl` mediante `recordAttempt`, con
+  outcome/errorClass cerrados y costo estimado; `index.js:enrichReview` cubre
+  una síntesis rechazada con `liveVerdict` determinístico. GOTCHA CRÍTICO:
+  los literales enum de los CUATRO prompts se generan con `catalogEnum()` y
+  DEBEN quedar BYTE-IDÉNTICOS porque `unitFingerprint` hashea el prompt; cambiar
+  un solo espacio invalida la caché incremental y re-audita ~16 unidades con
+  sonnet. `latencyMs`/`inputUnits` del ledger quedan en null hasta que los
+  runners de `bin/` pasen `ctx`: contrato FORWARD fuera de este bloque.

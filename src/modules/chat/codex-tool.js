@@ -27,6 +27,7 @@ import {
 } from './codex-models.js';
 import {
   CODEX_MAX_MS,
+  CODEX_JOB_TERMINAL_STATUSES,
   codexJobLabel,
   listCodexJobs,
   newCodexJobId,
@@ -65,7 +66,8 @@ function jobResultText(job) {
 }
 
 function resultIsError(job) {
-  return job?.status === 'error' || job?.isError === true;
+  return job?.isError === true
+    || (CODEX_JOB_TERMINAL_STATUSES.includes(job?.status) && job.status !== 'done');
 }
 
 function safeNotify(callback, ...args) {
@@ -159,7 +161,7 @@ export function createCodexToolServer({
             error: 'El job de Codex desapareció antes de dejar resultado.',
           };
         }
-        if (job.status === 'done' || job.status === 'error') return job;
+        if (CODEX_JOB_TERMINAL_STATUSES.includes(job.status)) return job;
         if (heartbeatExpired(job)) {
           return {
             ...job,

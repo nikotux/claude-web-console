@@ -19,6 +19,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // puede escribir con seguridad — nunca se genera código. Se mergean con los
 // seeds hand-authored de abajo.
 const LEARNED_FILE = path.join(__dirname, 'invariants-learned.json');
+const LEARNED_MATCH_MAX = 200;
+const LEARNED_TEXT_MAX = 400;
 
 // Seeds hand-authored (RegExp ricas). Los aprendidos se suman aparte.
 export const SEED_INVARIANTS = [
@@ -135,7 +137,13 @@ export function appendLearnedInvariant({ match, text }) {
   try { new RegExp(globToRegExp(m)); } catch { throw new Error('El patrón de archivos no es válido.'); }
   let arr = [];
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
-  if (arr.some((e) => e.match === m && e.text === t)) return; // dedup
-  arr.push({ match: m.slice(0, 200), text: t.slice(0, 400), addedAt: Date.now() });
+  // BUG-1977: la dedup debe comparar exactamente la representación que queda
+  // en disco. Así también reconoce las entradas históricas, sin migrar formato.
+  const persisted = {
+    match: m.slice(0, LEARNED_MATCH_MAX),
+    text: t.slice(0, LEARNED_TEXT_MAX),
+  };
+  if (arr.some((e) => e?.match === persisted.match && e?.text === persisted.text)) return;
+  arr.push({ ...persisted, addedAt: Date.now() });
   fss.writeFileSync(LEARNED_FILE, JSON.stringify(arr, null, 2));
 }

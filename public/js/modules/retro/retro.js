@@ -57,9 +57,21 @@ export default {
         short: t('retro.target.contexto.short', '🎫 Guía tickets/PRs'),
         full: t('retro.target.contexto.full', 'la guía de trabajo de tickets/PRs (se inyecta en esos chats y se espeja a Tolkien)'),
       },
+      convencion: {
+        short: t('retro.target.convencion.short', '📏 Convención'),
+        full: t('retro.target.convencion.full', 'una convención activa del equipo (regla aplicable según su disparador)'),
+      },
       playbook: {
-        short: t('retro.target.playbook.short', '📘 Procedimiento'),
-        full: t('retro.target.playbook.full', 'un procedimiento invocable (Playbook de Pad)'),
+        short: t('retro.target.playbook.short', '📘 Procedimiento (histórico)'),
+        full: t('retro.target.playbook.full', 'un procedimiento histórico de Pad (destino deprecado, solo lectura)'),
+      },
+      contrato: {
+        short: t('retro.target.contrato.short', '📚 Obligación'),
+        full: t('retro.target.contrato.full', 'una obligación de un contrato (queda como fila verificable y el sistema la vigila solo, sin gastar tokens)'),
+      },
+      invariante: {
+        short: t('retro.target.invariante.short', '🛡️ Invariante'),
+        full: t('retro.target.invariante.full', 'un invariante del auditor de Salud (se inyecta y se verifica sí o sí en cada escaneo de esos archivos; solo Mi Consola)'),
       },
     };
     let isAdmin = false;
@@ -106,6 +118,7 @@ export default {
     const openBoard = async () => {
       let curation = null;   // resultado de la curaduría IA (Fase 5)
       let curating = false;  // corrida en vuelo
+      let hygiene = null;    // barrido determinístico de Pad (0 tokens)
       let pollTimer = null;
       let lastData = { lessons: [] };
       const m = dialog.openModal({ title: t('retro.board.title', '🔄 Mejora Continua'), width: 'min(880px, 96vw)', onClose: () => { if (pollTimer) clearTimeout(pollTimer); } });
@@ -125,14 +138,18 @@ export default {
         return `<span class="bb-chip bb-chip--muted" title="${t('retro.eff.watching.title', 'Recién promovida, observando')}">${t('retro.eff.watching.label', '⚪ observando')}</span>`;
       };
 
-      // Destinos aplicables a una lección (memoria/claude-md exigen proyecto con
-      // filesystem; contexto/playbook aplican siempre). El destino SUGERIDO por
-      // la IA se resalta como acción primaria; el resto va en el menú "▾".
-      const NEED_DIR = ['memoria', 'claude-md'];
+      // Destinos aplicables a una lección. Los calcula el BACKEND
+      // (promote-shared.targetBlockReason) y viajan en `l.targets`: duplicar la
+      // regla acá dejaba al tablero ciego a cualquier destino nuevo — ofrecía
+      // `invariante` en lecciones que no lo admiten y el click fallaba con 400.
       const applicableTargets = (l) => {
-        const hasDir = l.project === 'console' || l.project === 'tolkien';
-        return targets.filter((t) => (NEED_DIR.includes(t) ? hasDir : true));
+        if (Array.isArray(l.targets)) return l.targets.filter((x) => targets.includes(x));
+        return targets.filter((x) => (x === 'memoria' || x === 'claude-md') ? (l.project === 'console' || l.project === 'tolkien') : true);
       };
+      // Motivo por el que un destino NO se ofrece (tooltip del menú "▾").
+      const blockedTargets = (l) => targets
+        .filter((x) => !applicableTargets(l).includes(x))
+        .map((x) => `${TARGET_LABEL[x]?.short || x}: ${l.targetReasons?.[x] || t('retro.adopt.blockedGeneric', 'no aplica a esta lección')}`);
 
       // Bloque "Adoptar → <destino sugerido>" + menú ▾ con los otros destinos.
       const adoptBlock = (l, escalate) => {
@@ -146,7 +163,8 @@ export default {
           ${app.length > 1 ? `<button class="btn btn--sm mc-more" data-act="more" title="${t('retro.adopt.more', 'Elegir otro destino')}">▾</button>` : ''}
         </span>`;
         if (app.length > 1) {
-          h += `<span class="mc-dests" hidden>${app.map((t) => `<button class="btn-ghost btn--sm" data-act="promote" data-target="${t}" title="${esc(TARGET_LABEL[t]?.full || t)}">${TARGET_LABEL[t]?.short || t}</button>`).join('')}</span>`;
+          const off = blockedTargets(l);
+          h += `<span class="mc-dests" hidden>${app.map((t2) => `<button class="btn-ghost btn--sm" data-act="promote" data-target="${t2}" title="${esc(TARGET_LABEL[t2]?.full || t2)}">${TARGET_LABEL[t2]?.short || t2}</button>`).join('')}${off.length ? `<span class="bb-chip bb-chip--muted" title="${esc(off.join(' · '))}">${t('retro.adopt.blocked', '{n} no aplican', { n: off.length })}</span>` : ''}</span>`;
         }
         return h;
       };
@@ -204,7 +222,38 @@ export default {
           ${sec(t('retro.cur.redundant', '♻️ Redundantes (ya cubiertas por una regla)'), c.redundantes, (x, i) => `<div class="mc-cur-item"><b>${esc(x.id)}</b> — ${esc(x.rule)} <button class="btn-ghost btn--sm" data-act="cur-dismiss" data-i="${i}">${t('retro.cur.dismiss', 'Descartar')}</button></div>`)}
           ${sec(t('retro.cur.consolidatable', '🧩 Consolidables'), c.consolidables, (x, i) => `<div class="mc-cur-item">${esc(x.ids.join(' + '))} → <b>${esc(x.title)}</b> <button class="btn btn--sm" data-act="cur-consolidate" data-i="${i}">${t('retro.cur.createConsolidated', 'Crear consolidada')}</button></div>`)}
           ${sec(t('retro.cur.gaps', '🕳️ Huecos'), c.huecos, (x) => `<div class="mc-cur-item"><b>${esc(x.tema)}</b> — ${esc(x.why)}</div>`)}
+          ${sec(t('retro.cur.destinations', '🧭 Destinos equivocados'), c.destinos, (x, i) => `<div class="mc-cur-item"><b>${esc(x.id)}</b>: ${TARGET_LABEL[x.actual]?.short || esc(x.actual)} → <b>${TARGET_LABEL[x.sugerido]?.short || esc(x.sugerido)}</b>. <span class="bf-sub">${esc(x.why)}</span> <button class="btn btn--sm" data-act="cur-redestinar" data-i="${i}">${t('retro.cur.redestinar', 'Redestinar')}</button></div>`)}
         </div>`;
+      };
+
+      const hygieneCandidateRefs = () => [...new Set([
+        ...(hygiene?.copiasRedundantes || []).filter((item) => item.mcExists).map((item) => item.ref),
+        ...(hygiene?.huerfanosDescartados || []).map((item) => item.ref),
+      ])];
+
+      const hygieneHtml = () => {
+        const copies = hygiene?.copiasRedundantes || [];
+        const broken = hygiene?.refsRotas || [];
+        const orphans = hygiene?.huerfanosDescartados || [];
+        const deprecated = hygiene?.destinoDeprecado || [];
+        const findings = copies.length + broken.length + orphans.length + deprecated.length;
+        const candidates = hygieneCandidateRefs();
+        const sec = (title, items, fn) => `<details class="mc-group mc-group--sub">
+          <summary>${title} <span class="bb-chip bb-chip--muted">${items.length}</span></summary>
+          <div class="mc-group-body">${items.length ? items.map(fn).join('') : `<div class="bf-sub">${t('retro.hygiene.noneGroup', 'Sin hallazgos.')}</div>`}</div>
+        </details>`;
+        return `<details class="mc-group" data-role="hygiene">
+          <summary>${t('retro.hygiene.title', '🧽 Higiene del registro')} · ${t('retro.hygiene.findings', '{n} hallazgo(s)', { n: findings })}</summary>
+          <div class="mc-group-body">
+            <div class="bf-sub" style="margin-bottom:.4rem">${t('retro.hygiene.zeroTokens', 'Barrido determinístico de Pad: no consume tokens.')}</div>
+            ${hygiene?.error ? `<div class="bf-err">${esc(hygiene.error)}</div>` : ''}
+            ${sec(t('retro.hygiene.copies', '📄 Copias redundantes'), copies, (item) => `<div class="mc-cur-item"><b>${esc(item.ref)}</b> — ${esc(item.title)} · ${esc(item.mcRef || t('retro.hygiene.noParent', 'sin referencia MC'))} · ${item.mcExists ? t('retro.hygiene.deletable', 'padre presente, borrable') : t('retro.hygiene.keep', 'padre ausente, conservar')}</div>`)}
+            ${sec(t('retro.hygiene.deprecated', '🧭 Destino deprecado'), deprecated, (item) => `<div class="mc-cur-item"><b>${esc(item.id)}</b> — ${esc(item.title)} · ${TARGET_LABEL[item.promotedTo]?.short || esc(item.promotedTo)} · ${t('retro.hygiene.redestine', 'Se resuelve con “🧹 Ordenar el registro” → Redestinar; no se borra nada.')}</div>`)}
+            ${sec(t('retro.hygiene.broken', '🔗 Referencias rotas'), broken, (item) => `<div class="mc-cur-item"><b>${esc(item.id)}</b> — ${esc(item.title)} · ${t('retro.hygiene.missingTarget', 'falta el destino')} ${TARGET_LABEL[item.promotedTo]?.short || esc(item.promotedTo)}</div>`)}
+            ${sec(t('retro.hygiene.orphans', '🗑️ Huérfanos descartados'), orphans, (item) => `<div class="mc-cur-item"><b>${esc(item.ref)}</b> — ${esc(item.title)} · ${esc(item.mcRef)}</div>`)}
+            ${isAdmin && candidates.length ? `<button class="btn btn--sm" data-act="hygiene-apply">${t('retro.hygiene.delete', '🧹 Borrar copias redundantes ({n})', { n: candidates.length })}</button>` : ''}
+          </div>
+        </details>`;
       };
 
       let refFilter = '';   // filtro "por ticket" (chip clickeado o tipeado)
@@ -288,9 +337,10 @@ export default {
             <span>${t('retro.render.intro', 'Lecciones de proceso que la consola destila sola al cerrar chats, más el feedback de Chris que registrás. <b>Adoptá</b> las que sirvan (van a donde la IA sugiere) o <b>descartalas</b>. Nada se auto-aplica.')}</span>
             <span style="display:flex; gap:.4rem; align-items:center; flex-shrink:0">
               ${pendingAdopt.length ? `<button class="btn btn--sm" data-act="accept-all" title="${t('retro.render.acceptAllTitle', 'Adoptar todas las lecciones pendientes a su destino sugerido. Escribe en archivos reales.')}">${t('retro.render.acceptAll', '👍 Aceptar todo')} (${pendingAdopt.length})</button>` : ''}
-              ${isAdmin && total >= 2 ? `<button class="btn-ghost btn--sm" data-act="curate" title="${t('retro.render.curateTitle', 'De vez en cuando: revisá duplicados, contradicciones y huecos del registro. Consume tokens.')}">${t('retro.render.curate', '🧹 Ordenar el registro')}</button>` : ''}
+              ${isAdmin && total >= 2 ? `<button class="btn-ghost btn--sm" data-act="curate" title="${t('retro.render.curateTitle', 'De vez en cuando: revisá duplicados, contradicciones, huecos y destinos del registro. Consume tokens.')}">${t('retro.render.curate', '🧹 Ordenar el registro')}</button>` : ''}
             </span>
           </div>
+          ${hygieneHtml()}
           ${feedbackComposer()}
           ${feedbackHistoryHtml(all, openHist)}
           ${refFilter ? `<div class="bf-sub" style="margin:.4rem 0"><span class="bb-chip bb-chip--info">${t('retro.render.filterBy', 'Filtrando por')} ${esc(refFilter)}</span> <button class="btn-ghost btn--sm" data-act="clear-ref-filter">${t('retro.render.clearFilter', '✕ quitar filtro')}</button></div>` : ''}
@@ -299,7 +349,14 @@ export default {
       };
 
       const reload = async () => {
-        try { render(await getJSON('/api/retro')); }
+        try {
+          const [data, hygieneResult] = await Promise.all([
+            getJSON('/api/retro'),
+            getJSON('/api/retro/hygiene').catch((e) => ({ error: e.message })),
+          ]);
+          hygiene = hygieneResult;
+          render(data);
+        }
         catch (e) { body.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(e.message)}</div>`; }
       };
 
@@ -313,7 +370,7 @@ export default {
       };
 
       const startCurate = async () => {
-        const ok = await dialog.confirmDialog({ title: t('retro.dlg.curateTitle', 'Curar con IA'), message: t('retro.dlg.curateMsg', 'Se analiza todo el registro con IA (duplicados, contradicciones, redundantes, huecos). Consume tokens. ¿Seguir?') });
+        const ok = await dialog.confirmDialog({ title: t('retro.dlg.curateTitle', 'Curar con IA'), message: t('retro.dlg.curateMsg', 'Se analiza todo el registro con IA (duplicados, contradicciones, redundantes, huecos y destinos). Consume tokens. ¿Seguir?') });
         if (!ok) return;
         curating = true; curation = null; render(lastData);
         try { await postJSON('/api/retro/curate'); pollTimer = setTimeout(pollCuration, 2500); }
@@ -405,10 +462,33 @@ export default {
           }
           // --- acciones de curaduría (no cuelgan de una lección) ---
           if (act === 'curate') { await startCurate(); return; }
+          if (act === 'hygiene-apply') {
+            const refs = hygieneCandidateRefs();
+            if (!refs.length) return;
+            const ok = await dialog.confirmDialog({
+              title: t('retro.dlg.hygieneTitle', 'Borrar copias redundantes'),
+              message: t('retro.dlg.hygieneMsg', 'Se borrarán {n} borrador(es) de playbooks que el barrido volvió a verificar como copias u huérfanos descartados. No consume tokens. ¿Seguir?', { n: refs.length }),
+            });
+            if (!ok) return;
+            btn.disabled = true;
+            const result = await postJSON('/api/retro/hygiene/apply', { action: 'delete-copies', refs });
+            await reload();
+            if (result.skipped?.length) {
+              await dialog.alertDialog({
+                title: t('retro.dlg.hygieneSkippedTitle', 'Higiene aplicada parcialmente'),
+                message: t('retro.dlg.hygieneSkippedMsg', '{deleted} borrada(s); {skipped} omitida(s): {reasons}', {
+                  deleted: result.deleted?.length || 0,
+                  skipped: result.skipped.length,
+                  reasons: result.skipped.map((item) => `${item.ref}: ${item.reason}`).join('; '),
+                }),
+              });
+            }
+            return;
+          }
           if (act === 'accept-all') {
             const pend = (lastData?.lessons || []).filter((l) => (l.status === 'propuesta' || l.status === 'aprobada') && applicableTargets(l).length);
             if (!pend.length) return;
-            const ok = await dialog.confirmDialog({ title: t('retro.dlg.acceptAllTitle', 'Aceptar todo'), message: t('retro.dlg.acceptAllMsg', 'Se van a adoptar {n} lección(es) pendiente(s), cada una a su destino sugerido (memoria/CLAUDE.md/contexto/playbook). Esto escribe en archivos reales. ¿Seguir?', { n: pend.length }) });
+            const ok = await dialog.confirmDialog({ title: t('retro.dlg.acceptAllTitle', 'Aceptar todo'), message: t('retro.dlg.acceptAllMsg', 'Se van a adoptar {n} lección(es) pendiente(s), cada una a su destino sugerido (memoria/CLAUDE.md/contexto/convención/contrato/invariante). Esto escribe en destinos reales. ¿Seguir?', { n: pend.length }) });
             if (!ok) return;
             btn.disabled = true; btn.textContent = t('retro.render.acceptingAll', 'Adoptando…');
             let okCount = 0; const failed = [];
@@ -448,6 +528,18 @@ export default {
             btn.disabled = true;
             await postJSON('/api/retro/curate/apply', { action: 'consolidate', ids: d.ids, title: d.title, lesson: d.lesson, category: d.category });
             const ix = curation.consolidables.indexOf(d); if (ix >= 0) curation.consolidables.splice(ix, 1);
+            await reload(); await loadSummary(); return;
+          }
+          if (act === 'cur-redestinar') {
+            const d = curation?.destinos?.[+btn.dataset.i]; if (!d) return;
+            const ok = await dialog.confirmDialog({
+              title: t('retro.dlg.redestinarTitle', 'Corregir destino sugerido'),
+              message: t('retro.dlg.redestinarMsg', 'Cambiar el destino sugerido de {id} a {destination}. Esto no promueve la lección. ¿Confirmás?', { id: d.id, destination: TARGET_LABEL[d.sugerido]?.short || d.sugerido }),
+            });
+            if (!ok) return;
+            btn.disabled = true;
+            await postJSON('/api/retro/curate/apply', { action: 'redestinar', id: d.id, destination: d.sugerido });
+            const ix = curation.destinos.indexOf(d); if (ix >= 0) curation.destinos.splice(ix, 1);
             await reload(); await loadSummary(); return;
           }
           // --- acciones sobre una lección ---

@@ -167,6 +167,38 @@ el primer turno, más un puntero explícito a `.cwc-ticket-playbook.md`. BUG-192
 y `.cwc-ticket-playbook.md` de 17/52.009 a 0/36.102. El neto de ambos casi
 no cambia: las 17 migraron de lectura a demanda a auto-carga, no se duplicaron.
 
+PODA PLAN-1938 (2026-07-26, mismo día, DESPUÉS de BUG-1927). Ese re-ruteo era
+correcto pero dejó `~/tolkien/CLAUDE.local.md` en 48.864 bytes, auto-cargados en
+CADA sesión de Tolkien. La causa no eran las `MIRROR_RULES` —su clasificación por
+sección ya era correcta— sino el CONTENIDO de `## 6. Feedback adoptado`: 15.931 B
+de los cuales 12 de las 17 lecciones eran del MUNDO INTERNO (Mi Consola, Zoho
+Desk, correo/Teams/WhatsApp) y no tenían nada que ver con trabajar un ticket de
+Tolkien. Se retiraron del maestro `~/.cwc-data/bugfix-context.md` las 12
+(MC-293, MC-322, MC-368, MC-413, MC-493, MC-639, MC-773, MC-792, MC-822, MC-827,
+MC-829, MC-897) y quedaron las 5 de alcance Tolkien (MC-806, MC-1337, MC-1844,
+MC-1841, MC-1909). Resultado medido: espejo 37.421 → 27.974 B · `CLAUDE.local.md`
+48.864 → 39.417 B · maestro `work` 47.256 → 37.811 B. Se corrigieron además los
+punteros muertos que apuntaban a la propia fuente de verdad del corpus
+(`pr-workflow-context.md` → `bugfix-pr-context.md` en el maestro work;
+`bugfixer-context.md` → `bugfix-context.md` ×2 en el maestro pr): `grep` da 0 en
+los dos maestros y en `CLAUDE.local.md`.
+
+DOS COSAS QUE NO SE PUEDEN DESHACER SIN ROMPER ALGO. (1) Las 12 lecciones
+retiradas NO se borraron: siguen canónicas en el Pad local (colección
+`mejora-continua`) y se traen por tarea desde el índice enrutador. Sus ids
+quedaron LITERALES en un bloque de registro dentro de `## 6.` — es a propósito:
+`retro/promote-shared.js` hace `cur.includes(lesson.id)` para no re-apendear una
+lección ya adoptada, así que borrar los ids las haría volver solas. Ese bloque de
+registro es markdown de cita (`> `) sin ningún `## ` ni fence, justamente para no
+romper el splitter. (2) `MIRROR_BUDGET = 30000` (context-store.js) NO cambia
+comportamiento: `syncToTolkien()` loguea un warning si el bloque supera el
+presupuesto, y `verifySync()` expone `mirrorBytes`/`mirrorBudget`/
+`mirrorOverBudget` para que el engorde silencioso sea imposible. El check de
+Salud `tolkien-context` solo lee `.status`, así que esos campos son aditivos y no
+lo afectan. Quien más empuja el peso hacia arriba es `## 6.`, que
+`retro/promote-shared.js` apendea SIN TOPE: cuando ese warning aparezca, la
+acción es podar el maestro, no subir el presupuesto.
+
 El procedimiento largo (fases, checklists y lecciones registradas) se genera en
 `~/tolkien/.cwc-ticket-playbook.md`, archivo local no versionado y excluido por
 `.git/info/exclude`. La fuente de verdad siguen siendo los masters editables desde
@@ -176,6 +208,30 @@ El procedimiento largo (fases, checklists y lecciones registradas) se genera en
 Fail-safe obligatorio: si los títulos cambian y ninguna sección matchea las reglas
 esperadas, ese contexto se espeja completo como antes y se loguea un aviso. Nunca se
 pierde cobertura por un rename de encabezados.
+
+GUARD DE REFS BUG-1984 (2026-07-26). Los dos generadores que cruzan hacia
+`CLAUDE.local.md` (`tickets/context-store.js` para `cwc:tickets-context` y
+`retro/promote-shared.js` para `cwc:mejora-continua`) sanitizan con el mismo
+criterio al renderizar: un `MC-*` conocido se reemplaza por el título humano de
+la lección y cualquier otra ref interna por su tipo semántico sin identificador,
+también dentro de fences. El maestro `~/.cwc-data/bugfix-context.md` NO se
+modifica: sus refs son correctas en el mundo interno y la frontera es el render
+del espejo. La sanitización de tickets cubre también el fail-safe que espeja el
+contexto completo cuando cambian los encabezados, y `syncToTolkien()` devuelve
+`sanitizedRefs` para auditar cuántas ocurrencias neutralizó.
+
+Después de sanitizar y antes de cualquier escritura, `syncToTolkien()` conserva
+el detector como barrera fail-closed: si todavía queda una ref del Pad `console`,
+loguea con `console.error` cada ocurrencia con su línea y devuelve
+`{ ok:false, reason:'foreign-refs', foreignRefs, sanitizedRefs }`. El detector
+compartido `core/pad-world-refs.js` (`findForeignRefsForTolkien()`, re-exportado
+por compatibilidad desde context-store) usa listas cerradas de prefijos reales:
+`CONVE PLAN TASK BUG ARQUI DOC PLAYB ROAD PEND MC FEAT FB TDA RDA CDT IDR AR`
+para `console`, y `TCONVE TPLAN TTASK TBUG TARQUI TDOC TPLAYB` para `tolkien`.
+Esto evita falsos positivos como `UTF-8`/`SHA-256` y resuelve el caso límite:
+`TASK-123` es foráneo aunque empiece con T; `TTASK-123` sí pertenece a Tolkien.
+El guard corre antes de `ensureGitExclude()` y `writePlaybook()`, por lo que un
+bloque contaminado no produce ninguna escritura en el mundo externo.
 
 Gotcha crítico: `splitTopSections` corta solo encabezados top-level `## ` y
 mantiene `inFence`; los contextos tienen snippets de bash y plantillas markdown

@@ -59,7 +59,10 @@ pedido del usuario 2026-07-07) importa openAudioPanel de audio/audio.js
 propuestas + raw), y la pestaña Informes usa mountReports de audio.js) ·
 retro (sección "Mejora Continua": badge de propuestas + tablero modal
 colapsable de LECCIONES DE PROCESO destiladas al cerrar chats — ver el
-módulo backend `retro/` arriba; adoptar → destino sugerido/guardar/descartar) ·
+módulo backend `retro/` arriba; adoptar → destino sugerido/guardar/descartar;
+el tablero ya no calcula la aplicabilidad de destinos: la recibe del backend
+en `l.targets`/`l.targetReasons`, y el menú "▾" muestra un chip con cuántos
+destinos NO aplican y por qué) ·
 stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
 master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
 .sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·

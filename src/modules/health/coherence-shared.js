@@ -31,6 +31,9 @@ import { ROOT } from '../../core/inventory.js';
 import { hardRulesText } from './shared.js';
 import { crossCheckPad } from './scan-shared.js';
 import {
+  defineCatalog, catalogEnum, validateField, recordAttempt,
+} from '../../core/closed-envelope.js';
+import {
   DATA_DIR, sha, readOnlyToolAllowed, makeLock, makeResultStore, makeProposalParser,
 } from './proposal-runner-shared.js';
 
@@ -47,9 +50,20 @@ export const COH_LOCK_FRESH_MS = 20000;       // lock más viejo = runner muerto
 // Idéntica al auditor de salud y al optimizador: LEE código, jamás escribe.
 export const cohToolAllowed = readOnlyToolAllowed;
 
-export const COH_RISKS = new Set(['bajo', 'medio', 'alto']);
-export const COH_TIPOS = new Set(['cableado', 'dedup', 'fuente-unica', 'regla-oro', 'blindaje', 'espejo', 'adopcion', 'convencion', 'otro']);
-export const COH_SEVERIDADES = new Set(['info', 'aviso', 'alto']);
+// FUENTE ÚNICA: cada Set histórico y cada literal de prompt nacen del mismo
+// array cerrado, para que el modelo y los validadores no puedan divergir.
+const COH_RISK_VALUES = ['bajo', 'medio', 'alto'];
+const COH_TIPO_VALUES = ['cableado', 'dedup', 'fuente-unica', 'regla-oro', 'blindaje', 'espejo', 'adopcion', 'convencion', 'otro'];
+const COH_SEVERIDAD_VALUES = ['info', 'aviso', 'alto'];
+const COH_CATEGORIA_VALUES = ['reuso', 'fuente-unica', 'regla-oro', 'blindaje', 'huerfano', 'registro', 'convencion', 'adopcion'];
+export const COH_RISKS = new Set(COH_RISK_VALUES);
+export const COH_TIPOS = new Set(COH_TIPO_VALUES);
+export const COH_SEVERIDADES = new Set(COH_SEVERIDAD_VALUES);
+export const COH_CATEGORIAS = new Set(COH_CATEGORIA_VALUES);
+export const COH_RISK_CATALOG = defineCatalog({ id: 'health.coherence.risk', field: 'riesgo', values: COH_RISK_VALUES, source: 'health/coherence-shared.js' });
+export const COH_TIPO_CATALOG = defineCatalog({ id: 'health.coherence.tipo', field: 'tipo', values: COH_TIPO_VALUES, source: 'health/coherence-shared.js' });
+export const COH_SEVERIDAD_CATALOG = defineCatalog({ id: 'health.coherence.severidad', field: 'severidad', values: COH_SEVERIDAD_VALUES, source: 'health/coherence-shared.js' });
+export const COH_CATEGORIA_CATALOG = defineCatalog({ id: 'health.coherence.categoria', field: 'categoria', values: COH_CATEGORIA_VALUES, source: 'health/coherence-shared.js' });
 
 // ===== Convenciones de CLAUDE.md, pre-masticadas (4ª dimensión, 2026-07-06) ===
 // Mismo patrón que hardRulesText() de health/shared.js: recorta la sección
@@ -76,7 +90,13 @@ export function conventionsText() {
 }
 
 // Parseo defensivo + id estable (sha1 foco|tipo|propuesta) — fábrica compartida.
-const parser = makeProposalParser({ keyField: 'foco', tipos: COH_TIPOS, risks: COH_RISKS });
+const parser = makeProposalParser({
+  keyField: 'foco',
+  tipos: COH_TIPOS,
+  risks: COH_RISKS,
+  engine: 'health-coherence',
+  catalogs: { tipo: COH_TIPO_CATALOG, riesgo: COH_RISK_CATALOG },
+});
 export const proposalId = parser.proposalId;
 const findingId = (f) => sha(`${f.categoria || ''}|${f.foco || ''}|${f.detalle || ''}`);
 
@@ -87,7 +107,28 @@ const findingId = (f) => sha(`${f.categoria || ''}|${f.foco || ''}|${f.detalle |
 // (validación de rutas, espejos back↔front) se dejan a la capa IA.
 export function evaluateCoherence(census) {
   const findings = [];
-  const add = (f) => findings.push({ ...f, id: findingId(f) });
+  const add = (f) => {
+    // Acá el «modelo» somos nosotros: este anillo es determinístico. Una
+    // violación es un typo en la regla, no una salida de IA, y falla cerrada:
+    // mejor perder un aviso que emitir algo que el frontend no sabe pintar.
+    // Como es el anillo 0-tokens, el ledger no lleva costo.
+    for (const validation of [
+      validateField(COH_CATEGORIA_CATALOG, f?.categoria),
+      validateField(COH_SEVERIDAD_CATALOG, f?.severidad),
+    ]) {
+      if (validation.ok) continue;
+      recordAttempt({
+        engine: 'health-coherence-deterministic',
+        outcome: 'error',
+        errorClass: 'value_out_of_catalog',
+        field: validation.field,
+        offending: validation.offending,
+        deterministicReason: 'hallazgo determinístico con valor fuera de su catálogo: bug de código, no del modelo',
+      });
+      return;
+    }
+    findings.push({ ...f, id: findingId(f) });
+  };
   const svc = Object.fromEntries((census.services || []).map((s) => [s.key, s]));
 
   // Regla 1: los módulos del ciclo de tickets/features deberían consumir `comms`
@@ -458,12 +499,12 @@ export function coherencePrompt(census, findings, padCtx = '') {
     '  "propuestas": [{',
     '    "foco": "módulo o archivo protagonista (p.ej. tickets, comms/shared.js)",',
     '    "archivo": "ruta relativa del archivo principal",',
-    '    "tipo": "cableado" | "dedup" | "fuente-unica" | "regla-oro" | "blindaje" | "espejo" | "adopcion" | "convencion" | "otro",',
+    `    "tipo": ${catalogEnum(COH_TIPO_CATALOG)},`,
     '    "actual": "cómo se relacionan HOY (concreto)",',
     '    "propuesta": "qué cableado/unificación hacer (concreto y accionable)",',
     '    "razon": "por qué mejora la coherencia/eficiencia (con evidencia del código)",',
     '    "impacto": "qué se gana (menos duplicación, un solo lugar de verdad, menos tokens…)",',
-    '    "riesgo": "bajo" | "medio" | "alto",',
+    `    "riesgo": ${catalogEnum(COH_RISK_CATALOG)},`,
     '    "archivos": ["rutas a tocar"],',
     '    "pasos": ["pasos concretos para aplicarla"]',
     '  }],',

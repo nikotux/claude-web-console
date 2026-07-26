@@ -2,6 +2,30 @@
 # bin — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+### bin/cwc-pad-graph-fix.js    reparación one-shot e idempotente del grafo de Pad en el
+workspace `console`: reparenta PLAN-507/PLAN-272 desde nodos ARQUI retirados
+a sus sucesores y borra exclusivamente links `implements` cuyo target coincide
+con el `parent_ref` del mismo ítem. Sin flags hace DRY-RUN completo (cero
+escrituras); `--apply` revalida cada link antes de borrarlo/crearlo, opera
+secuencialmente y respeta el rate-limit. Nunca toca el workspace `tolkien` ni
+borra ítems. `--apply --only-reparents` ejecuta únicamente el Trabajo A para
+PLAN-507/PLAN-272 y omite por completo el relevamiento de links y las
+escrituras del Trabajo B; sirve para verificar el recálculo de `parent_ref`
+antes del lote.
+ADVERTENCIA: no volver a ejecutar el Trabajo B. La premisa resultó falsa:
+`parent_ref` es un campo derivado del link disponible y no demuestra que haya
+una arista `parent` separada; borrar el `implements` coincidente puede dejar al
+ítem sin ninguna arista.
+### bin/cwc-pad-links-restore.js    restauración one-shot, reanudable e idempotente de los
+531 links `implements` borrados por el Trabajo B de
+`cwc-pad-graph-fix.js`. Compara por ID el backup fijo
+`~/.cwc-backups/pad-backup-2026-07-26_21-28-47.db` con la DB viva, abre ambas
+solo lectura y escribe únicamente por la API REST de Pad. Sin flags hace
+dry-run; `--apply` exige exactamente 531 faltantes, todos `implements`,
+revalida cada arista con `listLinks` antes de recrearla y aborta al primer
+error. El workspace está fijado a `console`: nunca opera sobre `tolkien`.
+Existe porque `parent_ref` es derivado de la arista disponible, sin importar
+su tipo, y por lo tanto no implica la existencia de un link `parent` propio.
 ### bin/cwc-whatsapp-daemon.js  puente WhatsApp ↔ Comunicaciones (Baileys, servicio systemd
 whatsapp-bridge.service, sesión emparejada, estado persistido
 ~/.cwc-data/comms/whatsapp*, PLAN-447 — ver el detalle completo en
@@ -96,10 +120,14 @@ El sweep Codex corre junto a `sweepBgFromTranscript()` en AMBOS puntos:
 intervalo de 20 s y chequeo de auto-siesta.
 ### bin/cwc-codex-runner.js     ejecutor DESACOPLADO de UNA delegación Tándem a Codex
 (`--job <id>`). Es config-free: no importa `core/config.js` y resuelve el
-directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Actualiza el heartbeat
-cada 15 s; es idempotente (un job `done`/`error` no vuelve a correr) y
-cualquier excepción persiste `error`, de modo que nunca deja el job colgado
-en `running`.
+directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Al pasar a `running`
+persiste `pid` y actualiza el heartbeat cada 15 s. Los estados terminales son
+`done|error|killed|orphaned` y todos entran en la poda de 24 h. Los handlers
+de `SIGTERM`/`SIGINT` escriben `killed` antes de salir; `SIGKILL` y un crash
+del host no son interceptables. El cierre real está en el reaper puro de
+`codex-shared.js`: cada lectura convierte atómicamente un `running` cuyo pid
+murió o cuyo heartbeat superó 3 intervalos (45 s) en `orphaned`, con motivo
+y `finishedAt`, nunca en un falso `done`.
 ### bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
 DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
 barata que solo LISTA los [Tolkien Bug] abiertos; (2) triage de
@@ -262,6 +290,26 @@ BUG-1928/BUG-1930 del runner de correo: `project:'tolkien'` (NUNCA
 `cwc-retro-feedback-runner.js`; sin títulos previos el fingerprint no se
 reusa, `recurrence` no sube ni el semáforo puede detectar reincidencia, y
 sin el filtro/tope entrarían las 275 lecciones (~168 KB) al prompt.
+### bin/cwc-retro-verify-runner.js MEDIDOR REAL de efectividad de Mejora Continua
+(M1 de DOC-1926 / PLAN-1937), DESACOPLADO (regla de oro/regla 2). Es el ÚNICO
+runner de la familia `retro` que NO usa el SDK: **0 TOKENS**, solo lee PRs con
+`fetchPrRich` de `comms/pr-read-shared.js` (lector ÚNICO ya cacheado 60 s —
+nunca un `gh` propio), así que la regla 6 no aplica. Cuenta, por cada lección
+`feedback-cliente` `promovida` con `sourceRefs`, las RONDAS de review de Chris
+sobre esos PRs POSTERIORES a `promotedAt`; ese conteo alimenta
+`computeEffectiveness` (retro/store.js) como `external.rounds` y es la ÚNICA
+señal capaz de poner en rojo una lección de Chris, porque su contador interno
+`recurrence` no puede subir nunca (BUG-1930). NO persiste NADA en Pad (el
+resultado es derivado) y hace 0 escrituras a GitHub. El revisor NO se hardcodea:
+sale de `readContacts()` (contacto `chris` → `cswenor`) y sin él falla CERRADO.
+Estado en `~/.cwc-data/retro-verify.json` + `retro-verify.lock` (heartbeat
+pid-aware, reserva del lock con el pid REAL del hijo en el mismo tick del spawn,
+patrón email/Teams) + `retro-verify.log`. REANUDABLE: escribe el estado tras CADA
+PR y al relanzarse reusa los PRs chequeados hace menos de 30 min (`--full` los
+ignora) — verificado con `kill -9` a mitad de corrida (quedó `running` con 3/8
+PRs persistidos y el relanzamiento completó los 5 que faltaban). Lógica en
+`src/modules/retro/verify-shared.js`. Lo disparan `POST /api/retro/verify`
+(admin) y el auto-cebado por vencimiento de `GET /api/retro`.
 ### bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
 Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
 server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
@@ -374,7 +422,12 @@ health/coherence-shared.js (plomería lock/store/parseo =
 fábricas de health/proposal-runner-shared.js, ver optimize)
 ### bin/cwc-bus.js              CLI del INTERFONO entre sesiones (lógica en src/core/bus.js). PUERTA
 ÚNICA de los hooks de Claude Code + el comando /btw. Subcomandos:
-send (lo usa /btw) · hook-inject (SessionStart/UserPromptSubmit:
+send (lo usa /btw; valida ANTES de escribir que el destino resuelto por
+`resolveTarget` exista en `buildDirectory`, salvo broadcast `all`; un handle
+fantasma falla con exit 1 y lista cada nombre+handle disponible; `--force`
+permite escribir a un handle de una sesión todavía no arrancada, con aviso;
+el éxito muestra SIEMPRE el nombre y handle realmente resueltos, no el texto
+crudo ingresado) · hook-inject (SessionStart/UserPromptSubmit:
 imprime mensajes/lápidas pendientes → Claude los inyecta) ·
 hook-guard (PreToolUse Edit|Write|MultiEdit: frena si otra sesión
 VIVA reclama el archivo, exit 2) · hook-claim (PostToolUse: reserva

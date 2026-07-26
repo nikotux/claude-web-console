@@ -130,6 +130,11 @@ código.
     el Pad CLOUD de Tolkien) y `src/core/pad-service-client.js` (habla con el
     Pad LOCAL de Consola) son y SIGUEN siendo dos conexiones separadas por
     diseño: ningún código puede unirlas en una operación que escriba a ambos.
+    Consecuencia operativa: todo ref de Pad citado en un artefacto que cruza
+    mundos va **calificado con su workspace** (`console:BUG-2045`,
+    `tolkien:CONVE-3`) — los dos workspaces comparten los siete prefijos y cada
+    uno lleva su propio contador, así que un ref pelado puede resolver en
+    silencio al ítem del mundo equivocado. Detalle: `CONVE-2056`.
 13. **🌗 Limbo — tercer espacio neutral entre mundos** (acuñado por Niko
     2026-07-15; detalle completo en `CONVE-554` del Pad `console`). Para
     proyectos que MAPEAN datos de AMBOS mundos + fuentes futuras (p.ej. el
@@ -220,6 +225,7 @@ Detalle completo: `src/modules/tickets/CLAUDE.md`.
 - 🔒 | se crea `src/modules/<n>/` | Contrato · Módulo BACKEND nuevo — 9 obligaciones verificables | pad_item get CONVE-1944 (~3 KB) | manual
 - 🔒 | se va a cerrar/reportar un cambio en Mi Consola | Contrato · Cerrar CUALQUIER cambio — 10 obligaciones verificables | pad_item get CONVE-1945 (~4 KB) | manual
 - 🔒 | se arranca o se cierra CUALQUIER trabajo no trivial (proyecto, ticket, PR, bug, refactor) | Contrato · Anclar y contrastar cualquier trabajo — 8 obligaciones verificables | pad_item get CONVE-1958 (~3 KB) | manual
+- 🔒 | se va a citar un ref de Pad en un artefacto que cruza mundos (plan-puente, CLAUDE.local.md de Tolkien, comunicación a Chris) | Convención · Citado de refs con MUNDO explícito (`console:BUG-1`, nunca `BUG-1`) | pad_item get CONVE-2056 (~3 KB) | manual
 
 ### Si hace falta el mapa entre subsistemas
 - 📎 | vas a cruzar módulos o subsistemas y no sabés dónde vive algo | Mapa completo: 1 raíz, 18 secciones, 66 módulos | pad_item get ARQUI-1258 + sus hijos (~23 KB el árbol completo) | mapa

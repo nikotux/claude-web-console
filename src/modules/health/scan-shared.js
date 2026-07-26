@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import { loadArquiIndex, linkItemToArqui } from './arqui-link-shared.js';
+import { loadCorpus, classifyFinding, rulesStatus } from './finding-rules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -116,6 +117,17 @@ function parseBugFields(item) {
 }
 
 export async function crossCheckPad(findings = []) {
+  // Orden DOC-1925: anillo determinista (reglas medidas) → dedup heurístico
+  // contra Pad (nunca auto-mergea: etiqueta y deja link) → IA sólo sobre el
+  // residuo. Hoy activeRules=0 porque ninguna regla fue aprobada, por lo que
+  // deterministic queda null y el comportamiento observable no cambia; el
+  // cableado se enciende solo cuando una regla supera la vara medida.
+  const corpus = loadCorpus();
+  const rules = rulesStatus();
+  const classified = findings.map((finding) => ({
+    finding,
+    deterministic: classifyFinding(finding, corpus) ?? null,
+  }));
   let bugs = [];
   try {
     // BUG-1792: sin `all` solo se omiten soft-deleted, no terminales (fixed/wontfix), preservando regresiones; `all=true` dio 0 vs 60 en el Pad local (verificado en vivo 2026-07-24; ver nota en pad-service-client.js).
@@ -123,15 +135,15 @@ export async function crossCheckPad(findings = []) {
     bugs = (r && (r.data || r.items || r)) || [];
     if (!Array.isArray(bugs)) bugs = [];
   } catch (err) {
-    return { available: false, error: String(err?.message || err).slice(0, 160), nuevo: [], rastreado: [], regresion: [], openCount: 0 };
+    return { available: false, error: String(err?.message || err).slice(0, 160), nuevo: [], rastreado: [], regresion: [], openCount: 0, rules };
   }
   const bugIndex = bugs.map((b) => {
     const bf = parseBugFields(b);
     return { ref: b.ref, title: b.title || '', status: bf.status || 'open', module: String(bf.module || '').toLowerCase(), terms: terms(`${b.title} ${b.content || ''}`) };
   });
   const OPEN = new Set(['open', 'verifying']);
-  const out = { available: true, error: null, nuevo: [], rastreado: [], regresion: [], openCount: bugIndex.filter((b) => OPEN.has(b.status)).length };
-  for (const f of findings) {
+  const out = { available: true, error: null, nuevo: [], rastreado: [], regresion: [], openCount: bugIndex.filter((b) => OPEN.has(b.status)).length, rules };
+  for (const { finding: f, deterministic } of classified) {
     const fk = moduleKeyOfFinding(f);
     const ft = terms(`${f.area || ''} ${f.detail || ''}`);
     let best = null; let bestScore = 0;
@@ -140,7 +152,7 @@ export async function crossCheckPad(findings = []) {
       const s = jaccard(ft, b.terms);
       if (s > bestScore) { bestScore = s; best = b; }
     }
-    const compact = { area: f.area, detail: String(f.detail || '').slice(0, 200), file: f.file || null, module: fk || null, severity: f.severity || 'medium', kind: f.kind || null, match: best ? { ref: best.ref, title: best.title, score: Math.round(bestScore * 100) } : null };
+    const compact = { area: f.area, detail: String(f.detail || '').slice(0, 200), file: f.file || null, module: fk || null, severity: f.severity || 'medium', kind: f.kind || null, match: best ? { ref: best.ref, title: best.title, score: Math.round(bestScore * 100) } : null, deterministic };
     if (best && bestScore >= 0.18) {
       if (OPEN.has(best.status)) out.rastreado.push(compact);
       else out.regresion.push(compact); // matchea un BUG fixed/wontfix → reapareció

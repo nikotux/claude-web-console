@@ -18,6 +18,9 @@ import { invariantsFor } from './invariants.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import { TANDEM_TOOL } from '../../core/tool-policy.js';
+import {
+  defineCatalog, catalogEnum, validateField, recordAttempt, charsToUnits, estimateCostUsd,
+} from '../../core/closed-envelope.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo
@@ -131,9 +134,19 @@ export async function padContext() {
   } catch { return ''; }
 }
 
-export const VERDICTS = new Set(['ok', 'atencion', 'critico']);
-export const SEVERITY = new Set(['critical', 'high', 'medium', 'low']);
-export const KINDS = new Set(['bug', 'regla', 'mejora']); // tipo del hallazgo
+// FUENTE ÚNICA: cada catálogo nace de un solo array y el literal del prompt se
+// GENERA de ese mismo array con catalogEnum(); así el enum que ve el modelo y
+// el que valida la respuesta no pueden divergir (antes eran dos copias: estas
+// constantes y los literales del prompt de unitPrompt).
+const VERDICT_VALUES = ['ok', 'atencion', 'critico'];
+const SEVERITY_VALUES = ['critical', 'high', 'medium', 'low'];
+const KIND_VALUES = ['bug', 'regla', 'mejora'];
+export const VERDICTS = new Set(VERDICT_VALUES);
+export const SEVERITY = new Set(SEVERITY_VALUES);
+export const KINDS = new Set(KIND_VALUES); // tipo del hallazgo
+export const VERDICT_CATALOG = defineCatalog({ id: 'health.verdict', field: 'verdict', values: VERDICT_VALUES, source: 'health/shared.js' });
+export const SEVERITY_CATALOG = defineCatalog({ id: 'health.severity', field: 'severity', values: SEVERITY_VALUES, source: 'health/shared.js' });
+export const KIND_CATALOG = defineCatalog({ id: 'health.kind', field: 'kind', values: KIND_VALUES, source: 'health/shared.js' });
 
 // Allowlist de herramientas: SOLO lecturas locales (dos capas — regla 6).
 // TodoWrite es la lista de tareas INTERNA del modelo (Agent SDK): solo toca
@@ -272,8 +285,8 @@ export function unitPrompt(unit) {
     'uno EXACTAMENTE con estas claves:',
     '{',
     '  "area": "tema corto (qué falla)",',
-    '  "severity": "critical" | "high" | "medium" | "low",',
-    '  "kind": "bug" | "regla" | "mejora",',
+    `  "severity": ${catalogEnum(SEVERITY_CATALOG)},`,
+    `  "kind": ${catalogEnum(KIND_CATALOG)},`,
     '  "detail": "qué encontraste, por qué importa y cómo se ve el síntoma",',
     '  "file": "ruta relativa:linea si la sabés, o \'\'",',
     '  "suggestedFix": "en una línea, qué habría que cambiar (o \'\')"',
@@ -304,7 +317,7 @@ export function synthesisPrompt(findings, padCtx = '') {
     ] : []),
     'Devolvé ÚNICAMENTE un bloque ```json con:',
     '{',
-    '  "verdict": "ok" | "atencion" | "critico",',
+    `  "verdict": ${catalogEnum(VERDICT_CATALOG)},`,
     '  "summary": "3-5 líneas en criollo: estado general, lo más urgente primero"',
     '}',
     'Criterio: "critico" si hay algún bug critical/high o violación de regla',
@@ -313,21 +326,64 @@ export function synthesisPrompt(findings, padCtx = '') {
   ].join('\n');
 }
 
-export function parseFindings(text) {
+export function parseFindings(text, ctx = {}) {
+  const outputUnits = charsToUnits(String(text || '').length);
+  const rejectUnparseable = () => {
+    recordAttempt({
+      engine: 'health-review',
+      model: ctx.model ?? null,
+      outcome: 'rejected_invalid_output',
+      errorClass: 'unparseable_output',
+      outputUnits,
+      estimatedCostUsd: estimateCostUsd({ model: ctx.model, outputUnits }),
+      ref: ctx.unit ?? null,
+    });
+    return null;
+  };
   const fences = [...String(text || '').matchAll(/```json\s*([\s\S]*?)```/gi)];
   const raw = fences.length ? fences[fences.length - 1][1] : (String(text || '').match(/\[[\s\S]*\]/) || [])[0];
-  if (!raw) return null;
+  if (!raw) return rejectUnparseable();
   let arr;
-  try { arr = JSON.parse(raw); } catch { return null; }
-  if (!Array.isArray(arr)) return null;
-  return arr.slice(0, 30).map((f) => ({
-    area: String(f.area ?? '').slice(0, 100),
-    severity: SEVERITY.has(f.severity) ? f.severity : 'medium',
-    kind: KINDS.has(f.kind) ? f.kind : 'bug',
-    detail: String(f.detail ?? '').slice(0, 1000),
-    file: String(f.file ?? '').slice(0, 200),
-    suggestedFix: String(f.suggestedFix ?? '').slice(0, 400),
-  }));
+  try { arr = JSON.parse(raw); } catch { return rejectUnparseable(); }
+  if (!Array.isArray(arr)) return rejectUnparseable();
+  const findings = [];
+  for (const f of arr.slice(0, 30)) {
+    const severity = validateField(SEVERITY_CATALOG, f?.severity);
+    const kind = validateField(KIND_CATALOG, f?.kind);
+    const invalid = !severity.ok ? severity : !kind.ok ? kind : null;
+    if (invalid) {
+      // Trade-off C4 (PLAN-1963): rechazar puede perder un hallazgo verdadero
+      // cuyo severity vino mal escrito, pero coaccionarlo a medium/bug inventa
+      // una clasificación que nadie dio y que después ordena la UI y alimenta
+      // el criterio humano. Elegimos «no clasifico» sobre «clasifico mal». El
+      // rechazo no es silencioso: el ledger conserva clase y costo, el rastro
+      // que antes no existía.
+      recordAttempt({
+        engine: 'health-review',
+        model: ctx.model ?? null,
+        outcome: 'rejected_invalid_output',
+        errorClass: invalid.errorClass,
+        field: invalid.field,
+        offending: invalid.offending,
+        outputUnits,
+        estimatedCostUsd: estimateCostUsd({ model: ctx.model, outputUnits }),
+        ref: ctx.unit ?? null,
+        deterministicReason: 'valor fuera del catálogo cerrado: el hallazgo se rechaza en vez de coaccionarse a un default',
+      });
+      continue;
+    }
+    findings.push({
+      area: String(f.area ?? '').slice(0, 100),
+      severity: severity.value,
+      kind: kind.value,
+      detail: String(f.detail ?? '').slice(0, 1000),
+      file: String(f.file ?? '').slice(0, 200),
+      suggestedFix: String(f.suggestedFix ?? '').slice(0, 400),
+    });
+  }
+  // Contrato FORWARD: latencyMs/inputUnits quedan null hasta que los runners
+  // de bin/ pasen ctx; hoy los consumidores históricos llaman con un argumento.
+  return findings;
 }
 
 export function parseSynthesis(text) {
@@ -336,8 +392,32 @@ export function parseSynthesis(text) {
   if (!raw) return null;
   let o;
   try { o = JSON.parse(raw); } catch { return null; }
+  const verdict = validateField(VERDICT_CATALOG, o.verdict);
+  if (!verdict.ok) {
+    const outputUnits = charsToUnits(String(text || '').length);
+    // El verdict es lo primero que lee el humano: no se coacciona a «atencion».
+    // El liveVerdict determinístico de health/index.js cubre el hueco sin
+    // inventar nada: anillo determinista primero, síntesis rechazada después.
+    recordAttempt({
+      engine: 'health-review-synthesis',
+      outcome: 'rejected_invalid_output',
+      errorClass: verdict.errorClass,
+      field: 'verdict',
+      offending: verdict.offending,
+      outputUnits,
+      estimatedCostUsd: estimateCostUsd({ outputUnits }),
+      deterministicReason: 'veredicto fuera del catálogo cerrado: lo cubre liveVerdict determinístico',
+    });
+    return {
+      verdict: null,
+      verdictOmitted: true,
+      verdictErrorClass: verdict.errorClass,
+      summary: String(o.summary ?? '').slice(0, 1200),
+    };
+  }
   return {
-    verdict: VERDICTS.has(o.verdict) ? o.verdict : 'atencion',
+    verdict: verdict.value,
+    verdictOmitted: false,
     summary: String(o.summary ?? '').slice(0, 1200),
   };
 }

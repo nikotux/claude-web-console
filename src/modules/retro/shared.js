@@ -227,7 +227,7 @@ Para cada lección devolvé:
 - category: uno de regla | convencion | metodologia | procedimiento | herramienta | nota.
 - observation: qué pasó en ESTA sesión que la disparó (1-2 frases).
 - lesson: qué hacer distinto de ahora en más (accionable, concreto).
-- destination: dónde debería vivir para cambiar el comportamiento futuro — uno de memoria | claude-md | contexto | playbook | registro.
+- destination: dónde debería vivir para cambiar el comportamiento futuro — uno de memoria | claude-md | contexto | convencion | registro.
 - project: uno de console | tolkien | otros (a qué proyecto aplica; si es universal, usá el de la sesión).
 - confidence: alta | media | baja.
 
@@ -241,7 +241,7 @@ ${job?.context || ''}`;
 }
 
 const CATS = ['regla', 'convencion', 'metodologia', 'procedimiento', 'herramienta', 'nota'];
-const DESTS = ['memoria', 'claude-md', 'contexto', 'playbook', 'registro'];
+const DESTS = ['memoria', 'claude-md', 'contexto', 'convencion', 'registro'];
 const PROJS = ['console', 'tolkien', 'otros'];
 const CONFS = ['alta', 'media', 'baja'];
 const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);

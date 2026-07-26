@@ -1,8 +1,8 @@
 // modules/system/backup-panel.js — panel de backups (pestaña del menú Sistema).
 //
-// Misma lógica de siempre (crear / listar solo fecha-hora / restaurar con
-// reinicio automático / eliminar), embebida en el modal Sistema y con
-// diálogos propios. El backend no cambió.
+// Crear / listar / restaurar con reinicio automático / eliminar, embebido en
+// el modal Sistema. La lista separa los tar.gz de la consola de las bases del
+// Pad y deja visible el cupo de retención independiente.
 import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
@@ -79,19 +79,31 @@ export function mountBackupPanel(el, ctx) {
 
   async function loadList() {
     try {
-      const { backups } = await (await fetch(`${API}/list`)).json();
-      if (!backups.length) {
-        refs.list.innerHTML = `<div class="bk-empty">${t('system.backup.noBackupsYet', 'Todavía no hay backups.')}</div>`;
-        return;
-      }
-      refs.list.innerHTML = backups.map((b) => `
+      const res = await fetch(`${API}/list`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || t('system.backup.listError', 'No se pudo listar los backups.'));
+      const backups = data.backups || [];
+      const padBackups = data.padBackups || [];
+      const keepPerSet = data.keepPerSet;
+      const projectRows = backups.length ? backups.map((b) => `
         <div class="bk-row" title="${b.id} · ${fmtSize(b.size)}">
-          <span class="bk-date">${fmtDate(b.date)}</span>
+          <span class="bk-date">${fmtDate(b.date)} · ${fmtSize(b.size)}</span>
           <span class="bk-actions">
             <button class="btn-ghost btn--sm" data-restore="${b.id}">${t('system.backup.restore', 'Restaurar')}</button>
             <button class="btn-ghost btn--sm btn--icon btn--danger" data-del="${b.id}" title="${t('system.backup.deleteBackupTooltip', 'Eliminar backup')}">${icon('trash', { size: 13 })}</button>
           </span>
-        </div>`).join('');
+        </div>`).join('') : `<div class="bk-empty">${t('system.backup.noProjectBackups', 'Todavía no hay backups de la consola.')}</div>`;
+      const padRows = padBackups.length ? padBackups.map((b) => `
+        <div class="bk-row" title="${b.id}">
+          <span class="bk-date">${fmtDate(b.date)} · ${fmtSize(b.size)}</span>
+        </div>`).join('') : `<div class="bk-empty">${t('system.backup.noPadBackups', 'Todavía no hay backups del Pad.')}</div>`;
+
+      refs.list.innerHTML = `
+        <p class="bk-git-hint">${t('system.backup.retentionPolicy', 'Se conservan los últimos {count} de cada tipo.', { count: keepPerSet })}</p>
+        <div class="bk-git-title"><span>${t('system.backup.projectBackupsTitle', 'Consola (tar.gz)')}</span></div>
+        ${projectRows}
+        <div class="bk-git-title"><span>${t('system.backup.padBackupsTitle', 'Pad (base de datos)')}</span></div>
+        ${padRows}`;
       for (const b of refs.list.querySelectorAll('[data-restore]')) b.addEventListener('click', () => restore(b.dataset.restore));
       for (const b of refs.list.querySelectorAll('[data-del]')) b.addEventListener('click', () => del(b.dataset.del));
     } catch {

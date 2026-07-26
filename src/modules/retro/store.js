@@ -6,6 +6,8 @@
 // Registro PROPIO de lecciones de proceso con aprobación humana. Recurrencia =
 // prioridad: una lección que ya existe (por fingerprint) NO se duplica, se le
 // incrementa el contador. Nada se auto-aplica (status arranca 'propuesta').
+// La efectividad combina señal interna con evidencia externa del medidor
+// (verify-shared.js / cwc-retro-verify-runner.js).
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -14,6 +16,8 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem, listLinks, addLink,
 } from '../../core/pad-service-client.js';
+import { readVerifyState, verifyForLesson } from './verify-shared.js';
+import { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-shared.js';
 
 const COLLECTION = 'mejora-continua';
 // Sol de cada lección según su categoría: los 7 buckets `MC · *` de la
@@ -39,7 +43,7 @@ const ACTIVITY_MAX = 300;
 // inyecta solo en todo chat de bug futuro al adoptarla) y el dedup por
 // recurrencia (misma queja repetida = prioridad).
 const CATS = ['regla', 'convencion', 'metodologia', 'procedimiento', 'herramienta', 'nota', 'feedback-cliente'];
-const DESTS = ['memoria', 'claude-md', 'contexto', 'playbook', 'registro'];
+const DESTS = [...PROMOTE_TARGETS, ...LEGACY_PROMOTE_TARGETS];
 const PROJS = ['console', 'tolkien', 'otros'];
 const CONFS = ['alta', 'media', 'baja'];
 const STATUSES = ['propuesta', 'aprobada', 'promovida', 'descartada'];
@@ -158,19 +162,48 @@ function bodyOf(observation, lesson) {
 }
 
 // Fase 6 (loop que aprende): estado de efectividad DERIVADO de una lección
-// promovida. hits = recurrencias NUEVAS desde que se promovió (si sigue
-// pasando, la promoción no alcanzó → reincide → escalar). NO se persiste.
-function computeEffectiveness(status, promAt, rec, recAt) {
+// promovida. NO se persiste.
+//   · hits INTERNOS = recurrencias nuevas desde promotedAt (re-destilación con
+//     el mismo fingerprint). Para 'feedback-cliente' este contador NO puede
+//     subir nunca (BUG-1930) ⇒ el semáforo era estructuralmente ciego.
+//   · hits EXTERNOS (M1, PLAN-1937) = rondas de review de Chris sobre los PRs
+//     de sourceRefs POSTERIORES a la adopción, medidas por
+//     bin/cwc-retro-verify-runner.js. Es la única señal que puede poner en rojo
+//     una lección de Chris. `hits` los SUMA a propósito: el tablero muestra
+//     "🔴 reincide ×hits" y una reincidencia observada afuera es tan real como
+//     una re-destilación. El desglose queda en hitsInternal/external.
+// OJO: al conectar esto las métricas EMPEORAN (lecciones hoy 🟢 pasan a 🔴).
+// Es la prueba de que funciona, NO una regresión: no lo "arregles" volviéndolo
+// a verde. Una lección SIN evidencia externa (ext=null) se comporta EXACTAMENTE
+// como antes.
+function computeEffectiveness(status, promAt, rec, recAt, ext) {
   if (status !== 'promovida' || !promAt) return null;
-  const hits = Math.max(0, (rec || 1) - (recAt || 0));
+  const internal = Math.max(0, (rec || 1) - (recAt || 0));
+  const external = ext ? Math.max(0, Number(ext.rounds) || 0) : 0;
+  const hits = internal + external;
   const ageDays = Math.floor((Date.now() - promAt) / 86400000);
   let state = 'observando';
   if (hits > 0) state = 'reincide';
   else if (ageDays >= 7) state = 'efectiva';
-  return { state, hits, ageDays };
+  return {
+    state,
+    hits,
+    ageDays,
+    hitsInternal: internal,
+    external: ext
+      ? {
+        rounds: external,
+        lastAt: Number(ext.lastAt) || 0,
+        prs: Array.isArray(ext.prs) ? ext.prs : [],
+        unresolved: Array.isArray(ext.unresolved) ? ext.unresolved : [],
+        checkedAt: Number(ext.checkedAt) || 0,
+        sample: Array.isArray(ext.sample) ? ext.sample.slice(0, 3) : [],
+      }
+      : null,
+  };
 }
 
-function lessonFromPadItem(item) {
+function lessonFromPadItem(item, verify = null) {
   const f = parseFields(item);
   const rec = parseInt(f.recurrence, 10);
   const recAtProm = parseInt(f.recurrenceAtPromotion, 10);
@@ -193,10 +226,12 @@ function lessonFromPadItem(item) {
     sourceRefs: parseJsonField(f.sourceRefs, []),
     body: item.content || '',
     // Fase 2/6: destino REAL al que se promovió + snapshot para medir efectividad.
-    promotedTo: (f.promotedTo && f.promotedTo !== 'ninguno') ? f.promotedTo : '',
+    promotedTo: (f.promotedTo && f.promotedTo !== 'ninguno')
+      ? oneOf(f.promotedTo, DESTS, '')
+      : '',
     promotedAt: promAtN,
     recurrenceAtPromotion: recAtN,
-    effectiveness: computeEffectiveness(status, promAtN, recN, recAtN),
+    effectiveness: computeEffectiveness(status, promAtN, recN, recAtN, verifyForLesson(verify, item.ref)),
     createdAt: tsMs(item.created_at),
     updatedAt: tsMs(item.updated_at),
   };
@@ -205,7 +240,8 @@ function lessonFromPadItem(item) {
 export async function listLessons(ctx = null) {
   const r = await listItems(COLLECTION, { ctx });   // sin all:true (ver gotcha del cliente)
   if (!r.ok) throw padError('listLessons', r);
-  const lessons = r.data.map(lessonFromPadItem);
+  const verify = readVerifyState();
+  const lessons = r.data.map((it) => lessonFromPadItem(it, verify));
   const order = { propuesta: 0, aprobada: 1, promovida: 2, descartada: 3 };
   lessons.sort((a, b) => (order[a.status] - order[b.status]) || (b.recurrence - a.recurrence) || (b.updatedAt - a.updatedAt));
   const counts = { propuesta: 0, aprobada: 0, promovida: 0, descartada: 0, total: lessons.length };
@@ -217,7 +253,7 @@ export async function getLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   const r = await getItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('getLesson', 'Lección', r);
-  return lessonFromPadItem(r.data);
+  return lessonFromPadItem(r.data, readVerifyState());
 }
 
 // Crea la lección o, si ya existe una con el mismo fingerprint, le suma
@@ -252,7 +288,7 @@ export async function upsertLesson(input = {}, ctx = null) {
       // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
       await linkLessonToSun(existing.ref, f.category || category, ctx);
       const fresh = await getItem(existing.ref, { ctx });
-      return { created: false, lesson: lessonFromPadItem(fresh.ok ? fresh.data : existing) };
+      return { created: false, lesson: lessonFromPadItem(fresh.ok ? fresh.data : existing, readVerifyState()) };
     }
 
     const r = await createItem(COLLECTION, {
@@ -274,7 +310,7 @@ export async function upsertLesson(input = {}, ctx = null) {
     appendActivity({ kind: 'nueva', refId: r.data.ref, title });
     await linkLessonToSun(r.data.ref, category, ctx);
     const fresh = await getItem(r.data.ref, { ctx });
-    return { created: true, lesson: lessonFromPadItem(fresh.ok ? fresh.data : r.data) };
+    return { created: true, lesson: lessonFromPadItem(fresh.ok ? fresh.data : r.data, readVerifyState()) };
   });
 }
 
@@ -289,17 +325,34 @@ export async function setStatus(id, status, ctx = null) {
   if (!r.ok) throw padError('setStatus', r);
   appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st });
   const fresh = await getItem(id, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data);
+  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState());
 }
 
-// Marca una lección como PROMOVIDA a un destino real (memoria|claude-md|
-// contexto|playbook) + snapshotea la recurrencia y el momento de la promoción
+// Cambia SOLO el destino sugerido. La promoción real es otra decisión humana.
+export async function setDestination(id, destination, ctx = null) {
+  if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
+  if (!PROMOTE_TARGETS.includes(destination)) throw Object.assign(new Error('Destino inválido.'), { badRequest: true });
+  const cur = await getItem(id, { ctx });
+  if (!cur.ok) throw notFoundOr500('setDestination', 'Lección', cur);
+  const f = parseFields(cur.data);
+  const r = await updateItem(id, { fields: { ...f, destination } }, { ctx });
+  if (!r.ok) throw padError('setDestination', r);
+  appendActivity({ kind: 'redestinada', refId: id, title: cur.data.title, detail: destination });
+  const fresh = await getItem(id, { ctx });
+  return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields: { ...f, destination } }, readVerifyState());
+}
+
+// Marca una lección como PROMOVIDA a un destino real + snapshotea la
+// recurrencia y el momento de la promoción
 // (Fase 6: para medir después si la lección "funcionó" — dejó de recurrir). NO
 // escribe el destino en sí (eso lo hace promote-shared.js); solo el estado.
-const PROMOTE_TO = ['memoria', 'claude-md', 'contexto', 'playbook'];
+// PLAN-1936: `contrato` e `invariante` son los destinos VERIFICABLES — la lección
+// deja de ser texto y pasa a chequearse sola. El schema de la colección en Pad ya
+// admite ambos en `destination` y en `promotedTo` (un valor no listado ahí lo
+// rechaza el server de Pad con 500, aunque el oneOf() de acá lo validara).
 export async function markPromoted(id, target, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
-  if (!PROMOTE_TO.includes(target)) throw Object.assign(new Error('Destino de promoción inválido.'), { badRequest: true });
+  if (!PROMOTE_TARGETS.includes(target)) throw Object.assign(new Error('Destino de promoción inválido.'), { badRequest: true });
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('markPromoted', 'Lección', cur);
   const f = parseFields(cur.data);
@@ -313,7 +366,7 @@ export async function markPromoted(id, target, ctx = null) {
   if (!r.ok) throw padError('markPromoted', r);
   appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target });
   const fresh = await getItem(id, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data);
+  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState());
 }
 
 // Fusiona lecciones (Fase 5, curaduría): conserva keepId sumándole la
@@ -350,7 +403,7 @@ export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
   if (!r.ok) throw padError('mergeLessons', r);
   appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` });
   const fresh = await getItem(keepId, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data);
+  return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data, readVerifyState());
 }
 
 export async function deleteLesson(id, ctx = null) {

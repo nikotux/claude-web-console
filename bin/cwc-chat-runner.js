@@ -36,7 +36,11 @@ import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
-import { listCodexJobs, readCodexJob } from '../src/modules/chat/codex-shared.js';
+import {
+  CODEX_JOB_TERMINAL_STATUSES,
+  listCodexJobs,
+  readCodexJob,
+} from '../src/modules/chat/codex-shared.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
 
@@ -313,7 +317,7 @@ function sweepCodexBg() {
     for (const [id, work] of bgWork) {
       if (work.kind !== 'Codex') continue;
       const job = readCodexJob(id);
-      if (!job || !['done', 'error'].includes(job.status)) continue;
+      if (!job || !CODEX_JOB_TERMINAL_STATUSES.includes(job.status)) continue;
       if (work.ready && work.outcome === job.status) continue;
       work.ready = true;
       work.readyAt ||= Date.now();

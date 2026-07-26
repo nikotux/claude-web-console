@@ -21,6 +21,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
+import { findForeignRefsForTolkien, replaceForeignRefsForTolkien } from '../../core/pad-world-refs.js';
+
+export { findForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 const CONTEXT_FILES = {
@@ -37,16 +40,48 @@ const TOLKIEN_PLAYBOOK_MD = path.join(config.projectDir, '.cwc-ticket-playbook.m
 const MARK_START = '<!-- cwc:tickets-context:start -->';
 const MARK_END = '<!-- cwc:tickets-context:end -->';
 
+// PLAN-1938: presupuesto de peso del espejo (techo de CONVE-1942). Lo que baja a
+// CLAUDE.local.md AUTO-CARGA en CADA sesión de Tolkien: engordar acá es gratis para
+// quien escribe y caro para todos los que leen. No cambia comportamiento — avisa
+// (log al sincronizar + campos en verifySync) para que el engorde silencioso sea
+// imposible. `retro/promote-shared.js` reutiliza esta constante y mide el espejo
+// candidato ANTES de escribir `## 6.`; si no entra, rota texto viejo a referencias
+// o falla ruidosamente. 30 kB deja margen sobre los ~28 kB medidos tras la poda.
+export const MIRROR_BUDGET = 30000;
+
 // Secciones que viajan SIEMPRE al espejo de Tolkien (REGLA: lo que una sesión
 // necesita desde el primer turno). El resto — procedimiento por fases,
 // checklists y lecciones — va al playbook que se lee a demanda.
 // PEND-1864: antes viajaba todo (~60k en CADA sesión de Tolkien).
+// PLAN-1938: las reglas se verificaron y quedan IGUAL — la clasificación por sección
+// ya era correcta; el peso salió del maestro (poda de `## 6.`), no de las reglas.
 const MIRROR_RULES = {
   // BUG-1927: el feedback adoptado debe llegar al archivo de auto-carga.
   work: [/gate pre-push/i, /^##\s*0\./, /^##\s*1\./, /^##\s*6\./],
   // PR ya usa "## 5." para quick reference; "## 6." queda para feedback.
   pr: [/^##\s*1\./, /^##\s*2\./, /^##\s*5\./, /^##\s*6\./],
 };
+
+const INTERNAL_REF_LABELS = {
+  CONVE: 'convención interna',
+  PLAN: 'plan interno',
+  TASK: 'tarea interna',
+  BUG: 'bug interno',
+  ARQUI: 'decisión de arquitectura interna',
+  DOC: 'documento interno',
+  PLAYB: 'playbook interno',
+  ROAD: 'hoja de ruta interna',
+  PEND: 'pendiente interno',
+  MC: 'lección interna de Mejora Continua',
+  FEAT: 'feature interna',
+  FB: 'feedback interno',
+  TDA: 'decisión técnica interna',
+  RDA: 'decisión interna',
+  CDT: 'contexto interno',
+  IDR: 'registro interno',
+  AR: 'registro interno',
+};
+const CONTEXT_LESSON_RE = /^### 🔄 Lección de Mejora Continua \((MC-\d+)\) — (.+)$/gm;
 
 export const DEFAULT_CONTEXTS = {
   work: [
@@ -110,8 +145,38 @@ function sectionMatches(kind, section) {
   return (MIRROR_RULES[kind] || []).some((re) => re.test(section.title));
 }
 
-function splitContextForMirror(kind) {
-  const text = getContext(kind);
+function internalRefPlaceholder(prefix) {
+  return `[${INTERNAL_REF_LABELS[prefix] || 'referencia interna'}; identificador omitido]`;
+}
+
+function lessonTitlesFromContexts(contexts) {
+  const titles = new Map();
+  for (const context of contexts) {
+    for (const match of String(context || '').matchAll(CONTEXT_LESSON_RE)) {
+      const title = replaceForeignRefsForTolkien(
+        match[2].replace(/[\r\n]+/g, ' ').trim(),
+        (_ref, prefix) => internalRefPlaceholder(prefix),
+      );
+      titles.set(match[1], title);
+    }
+  }
+  return titles;
+}
+
+// El master es interno y conserva sus refs literales. La frontera está en este
+// render: un MC conocido baja como título humano y cualquier otra ref del Pad
+// console conserva solo su tipo semántico. El conteo permite auditar cada sync.
+function sanitizeForTolkien(text, lessonTitles) {
+  let sanitizedRefs = 0;
+  const rendered = replaceForeignRefsForTolkien(text, (ref, prefix) => {
+    sanitizedRefs += 1;
+    const title = lessonTitles.get(ref);
+    return title ? `“${title}”` : internalRefPlaceholder(prefix);
+  });
+  return { rendered, sanitizedRefs };
+}
+
+function splitContextForMirror(kind, text = getContext(kind)) {
   const split = splitTopSections(text);
   const ruleSections = split.sections.filter((section) => sectionMatches(kind, section));
   if (!ruleSections.length && split.sections.length) {
@@ -147,10 +212,14 @@ function playbookPointer(contextName) {
 // documento para que un future-Niko que abra CLAUDE.local.md sepa qué es y no
 // lo confunda con un objeto raro. Se genera desde el master (work + pr), pero
 // baja solo REGLA; el procedimiento largo queda en .cwc-ticket-playbook.md.
-export function renderManagedSection() {
-  const work = splitContextForMirror('work');
-  const pr = splitContextForMirror('pr');
-  return [
+function renderManagedSectionResult(overrides = {}) {
+  const sources = {
+    work: overrides.work ?? getContext('work'),
+    pr: overrides.pr ?? getContext('pr'),
+  };
+  const work = splitContextForMirror('work', sources.work);
+  const pr = splitContextForMirror('pr', sources.pr);
+  const raw = [
     '## ⚙️ Contexto de trabajo · Tickets / Features / PR — gestionado por Mi Consola',
     '',
     '> Sección GENERADA y actualizada automáticamente desde **Mi Consola →',
@@ -173,6 +242,15 @@ export function renderManagedSection() {
     '',
     playbookPointer('un PR'),
   ].join('\n');
+  const { rendered, sanitizedRefs } = sanitizeForTolkien(
+    raw,
+    lessonTitlesFromContexts(Object.values(sources)),
+  );
+  return { rendered, sanitizedRefs };
+}
+
+export function renderManagedSection(overrides = {}) {
+  return renderManagedSectionResult(overrides).rendered;
 }
 
 export function renderPlaybook() {
@@ -196,8 +274,23 @@ export function renderPlaybook() {
 }
 
 // Bloque completo con marcadores (lo que buscamos/reemplazamos en el archivo).
-function managedBlock() {
-  return `${MARK_START}\n${renderManagedSection()}\n${MARK_END}`;
+function managedBlockResult(overrides = {}) {
+  const { rendered, sanitizedRefs } = renderManagedSectionResult(overrides);
+  return {
+    block: `${MARK_START}\n${rendered}\n${MARK_END}`,
+    sanitizedRefs,
+  };
+}
+
+function managedBlock(overrides = {}) {
+  return managedBlockResult(overrides).block;
+}
+
+// El escritor de `## 6. Feedback adoptado` usa esta misma medición ANTES de
+// guardar. Así el presupuesto no depende de un warning posterior al sync ni
+// duplica el número en otro módulo.
+export function measureMirrorBytes(overrides = {}) {
+  return Buffer.byteLength(managedBlock(overrides), 'utf8');
 }
 
 function ensureGitExclude() {
@@ -232,13 +325,24 @@ function writePlaybook() {
 // guardado del master — el verificador lo reportará como 'unavailable'.
 export function syncToTolkien() {
   try {
+    const { block, sanitizedRefs } = managedBlockResult();
+    const foreignRefs = findForeignRefsForTolkien(block);
+    if (foreignRefs.length) {
+      const detail = foreignRefs.map(({ ref, line }) => `  - ${ref} (línea ${line})`).join('\n');
+      console.error(`[tickets/context-store] BUG-1984: espejo a Tolkien bloqueado; contiene refs foráneos:\n${detail}`);
+      return { ok: false, reason: 'foreign-refs', foreignRefs, sanitizedRefs };
+    }
+
     ensureGitExclude();
     const playbook = writePlaybook();
     let existing = '';
     let fileExisted = false;
     try { existing = fss.readFileSync(TOLKIEN_LOCAL_MD, 'utf8'); fileExisted = true; } catch { /* no existe aún */ }
 
-    const block = managedBlock();
+    const mirrorBytes = Buffer.byteLength(block, 'utf8');
+    if (mirrorBytes > MIRROR_BUDGET) {
+      console.warn(`[tickets/context-store] PLAN-1938: el espejo a Tolkien pesa ${mirrorBytes} B y supera el presupuesto de ${MIRROR_BUDGET} B; podá el maestro (probablemente "## 6. Feedback adoptado").`);
+    }
     let next;
     const i = existing.indexOf(MARK_START);
     const j = existing.indexOf(MARK_END);
@@ -256,10 +360,22 @@ export function syncToTolkien() {
       next = `# Reglas personales de Nico para sesiones en este repo (NO versionado)\n\n${block}\n`;
     }
 
-    if (next === existing) return { ok: true, reason: 'sin-cambios', playbookChanged: playbook.changed };
+    if (next === existing) {
+      return {
+        ok: true,
+        reason: 'sin-cambios',
+        playbookChanged: playbook.changed,
+        sanitizedRefs,
+      };
+    }
     // 0o644: archivo de texto legible (el master en ~/.cwc-data queda 0o600).
     writeFileAtomic(TOLKIEN_LOCAL_MD, next, { mode: 0o644 });
-    return { ok: true, created: !fileExisted, playbookChanged: playbook.changed };
+    return {
+      ok: true,
+      created: !fileExisted,
+      playbookChanged: playbook.changed,
+      sanitizedRefs,
+    };
   } catch (err) {
     return { ok: false, reason: err?.message || String(err) };
   }
@@ -286,7 +402,16 @@ export function verifySync() {
     const present = extractManaged(text);
     if (present == null) return { status: 'missing', file: TOLKIEN_LOCAL_MD };
     const expected = renderManagedSection().trim();
-    if (present !== expected) return { status: 'stale', file: TOLKIEN_LOCAL_MD };
+    const mirrorBytes = Buffer.byteLength(expected, 'utf8');
+    if (present !== expected) {
+      return {
+        status: 'stale',
+        file: TOLKIEN_LOCAL_MD,
+        mirrorBytes,
+        mirrorBudget: MIRROR_BUDGET,
+        mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
+      };
+    }
 
     const expectedPlaybook = `${renderPlaybook()}\n`;
     let playbook = '';
@@ -298,6 +423,9 @@ export function verifySync() {
         detail: 'playbook-missing',
         playbookStatus: 'playbook-missing',
         playbookFile: TOLKIEN_PLAYBOOK_MD,
+        mirrorBytes,
+        mirrorBudget: MIRROR_BUDGET,
+        mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
       };
     }
     if (playbook !== expectedPlaybook) {
@@ -307,6 +435,9 @@ export function verifySync() {
         detail: 'playbook-stale',
         playbookStatus: 'playbook-stale',
         playbookFile: TOLKIEN_PLAYBOOK_MD,
+        mirrorBytes,
+        mirrorBudget: MIRROR_BUDGET,
+        mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
       };
     }
     return {
@@ -314,6 +445,9 @@ export function verifySync() {
       file: TOLKIEN_LOCAL_MD,
       playbookStatus: 'ok',
       playbookFile: TOLKIEN_PLAYBOOK_MD,
+      mirrorBytes,
+      mirrorBudget: MIRROR_BUDGET,
+      mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
     };
   } catch (err) {
     return { status: 'unavailable', file: TOLKIEN_LOCAL_MD, reason: err?.message || String(err) };

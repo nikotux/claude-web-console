@@ -34,7 +34,9 @@ export async function createTaskFromProposal(p, kind) {
   const r = await padLocal.createItem('pendientes', {
     title,
     content: body,
-    fields: { status: 'pendiente', priority: 'media', tags: [kind] },
+    // `tags` es nativo y Pad solo lo aplica plano; ver pad-service-client.js:261.
+    tags: [kind],
+    fields: { status: 'pendiente', priority: 'media' },
   }, { workspace: 'console' });
   if (!r || !r.ok) throw new Error(`Pad no aceptó la tarea: ${r?.error || 'error'}`);
   const ref = r.data?.ref || null;

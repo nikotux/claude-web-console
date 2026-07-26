@@ -6,7 +6,8 @@
 // archivos (~/.cwc-data/session-bus/), así que sobrevive reinicios del server.
 //
 // Subcomandos:
-//   send <destino> <mensaje...>   una sesión manda un mensaje (lo usa /btw)
+//   send [--force] <destino> <mensaje...>
+//                                 una sesión manda un mensaje (lo usa /btw)
 //   hook-inject                   hooks SessionStart/UserPromptSubmit: imprime
 //                                 los mensajes/lápidas pendientes -> Claude los
 //                                 inyecta como contexto en su próximo turno
@@ -79,21 +80,69 @@ function selfIdentity(input) {
 function done(code = 0) { try { bus.gc(); } catch { /* noop */ } process.exit(code); }
 
 // ================= SEND =================
-function doSend() {
-  const parsed = bus.parseSendArgs(process.argv.slice(3));
-  if (parsed.error) {
-    console.log('Uso: /btw <sesión|all> <mensaje>. Sesiones disponibles: ' +
-      (bus.buildDirectory().map((e) => e.name).join(', ') || '(ninguna)'));
-    return done(0);
+function parseSendInvocation(rawArgs) {
+  let args = Array.isArray(rawArgs) ? rawArgs.slice() : [];
+  let force = false;
+  if (args[0] === '--force') {
+    force = true;
+    args = args.slice(1);
+  } else if (args.length === 1) {
+    // /btw entrega "$ARGUMENTS" como un único argv; reconocer el flag también
+    // en ese formato sin cambiar parseSendArgs(), que sigue siendo compartido.
+    const packed = String(args[0] || '').trim().match(/^--force\s+([\s\S]+)$/);
+    if (packed) {
+      force = true;
+      args = [packed[1]];
+    }
   }
-  const { targetArg, text } = parsed;
+  return { force, ...bus.parseSendArgs(args) };
+}
+
+function availableTargets(directory) {
+  if (!directory.length) return '  (ninguno)';
+  return directory.map((entry) => `  - "${entry.name}" (${entry.handle})`).join('\n');
+}
+
+function failSend(message, directory) {
+  process.stderr.write(
+    `❌ INTERFONO: ${message}\n` +
+    `Destinos disponibles:\n${availableTargets(directory)}\n`);
+  return done(1);
+}
+
+function doSend() {
+  const parsed = parseSendInvocation(process.argv.slice(3));
+  if (parsed.error) {
+    return failSend(
+      'Uso: /btw [--force] <sesión|all> <mensaje>.',
+      bus.buildDirectory());
+  }
+  const { force, targetArg, text } = parsed;
   const target = bus.resolveTarget(targetArg);
-  if (target.error) { console.log('⚠ ' + target.error); return done(0); }
+  const directory = bus.buildDirectory();
+  if (target.error) return failSend(`${target.error} No se escribió ningún mensaje.`, directory);
+
+  const directoryEntry = target.handle === 'all'
+    ? null
+    : directory.find((entry) => entry.handle === target.handle);
+  if (target.handle !== 'all' && !directoryEntry && !force) {
+    return failSend(
+      `El destino "${targetArg}" resolvió a ${target.handle}, pero ese handle no está en el directorio. ` +
+      'No se escribió ningún mensaje. Si la sesión todavía no arrancó, reintentá con --force.',
+      directory);
+  }
+  if (target.handle !== 'all' && !directoryEntry) {
+    process.stderr.write(
+      `⚠ INTERFONO: --force activo; ${target.handle} no está en el directorio. Se escribirá igualmente.\n`);
+  }
+  const resolved = directoryEntry
+    ? { handle: directoryEntry.handle, name: directoryEntry.name, entry: directoryEntry }
+    : target;
 
   const self = selfIdentity(parseHookInputSafe());
   const msg = bus.sendMessage({
     from: self.primary, fromName: self.name,
-    to: target.handle, toName: target.name, text,
+    to: resolved.handle, toName: resolved.name, text,
   });
 
   // Nudge SEGURO: si el destino es UNA TUI con Claude idle (el observador dice
@@ -101,12 +150,12 @@ function doSend() {
   // aviso corto por send-keys para que lo vea YA. Si está trabajando o es un
   // shell, NO tocamos su input: el mensaje espera en la bandeja (hook-inject).
   let nudged = false;
-  if (target.entry && target.entry.kind === 'tui') {
-    nudged = tryNudge(target.entry, self, text);
-    if (nudged) logDelivery({ route: 'tui-nudge', msgId: msg.id, from: self.primary || null, to: target.handle, kind: 'note' });
+  if (resolved.entry && resolved.entry.kind === 'tui') {
+    nudged = tryNudge(resolved.entry, self, text);
+    if (nudged) logDelivery({ route: 'tui-nudge', msgId: msg.id, from: self.primary || null, to: resolved.handle, kind: 'note' });
   }
-  const via = nudged ? 'entregado en vivo' : 'quedó en la bandeja (lo verá en su próximo turno)';
-  console.log(`✅ Mensaje para ${target.name}: ${via}. [id ${msg.id}]`);
+  const via = nudged ? 'entregado en vivo' : 'quedó en la bandeja';
+  console.log(`✅ Mensaje para "${resolved.name}" (${resolved.handle}): ${via}. [id ${msg.id}]`);
   return done(0);
 }
 

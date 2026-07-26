@@ -14,6 +14,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { PROMOTE_TARGETS } from './promote-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -65,7 +66,7 @@ export function spawnRetroCurateRunner() {
 export function curatePrompt(context) {
   const lessons = context?.lessons || [];
   const rules = String(context?.rules || '');
-  const list = lessons.map((l) => `${l.id} [${l.category}·${l.project}·x${l.recurrence}·${l.status}] ${l.title}\n   ${String(l.body || '').replace(/\s+/g, ' ').slice(0, 240)}`).join('\n');
+  const list = lessons.map((l) => `${l.id} [${l.category}·${l.project}·x${l.recurrence}·${l.status}·dest:${l.promotedTo || l.destination || '-'}] ${l.title}\n   ${String(l.body || '').replace(/\s+/g, ' ').slice(0, 240)}`).join('\n');
   return `Sos un CURADOR del registro de LECCIONES DE PROCESO de un equipo de desarrollo. Te paso TODAS las lecciones vigentes y un extracto de las REGLAS DURAS del proyecto. Analizá el conjunto y encontrá:
 
 - duplicados: lecciones que dicen esencialmente LO MISMO aunque estén redactadas distinto (dedup semántico). Elegí una para CONSERVAR (keep) y listá las demás (merge).
@@ -73,12 +74,13 @@ export function curatePrompt(context) {
 - redundantes: lecciones YA cubiertas por una Regla Dura existente (citá cuál regla).
 - consolidables: 2+ lecciones PARCIALES que convendría unir en una sola mejor.
 - huecos: temas de proceso que se repiten o son importantes pero NO tienen lección todavía.
+- destinos: lecciones cuyo DESTINO es equivocado. Una lección que es una REGLA ("verificar X antes de Y") pertenece a una convención o contrato, NO a un procedimiento invocable. Destinos válidos: memoria (recordatorio del proyecto) · claude-md (regla permanente del proyecto) · contexto (guía de tickets/PRs) · convencion (regla del equipo) · contrato (obligación VERIFICABLE mecánicamente) · invariante (regla que un chequeo audita sobre archivos). El destino "playbook" está DEPRECADO: toda lección que hoy lo tenga necesita destino nuevo.
 
 Sé CONSERVADOR: solo hallazgos REALES y claros. Si una categoría no aplica, devolvé lista vacía. En español. Usá los ids EXACTOS (MC-N) que te paso.
 
 Respondé ÚNICAMENTE con un bloque \`\`\`json con esta forma EXACTA, sin texto fuera:
 \`\`\`json
-{ "resumen": "...", "duplicados": [ { "keep": "MC-1", "merge": ["MC-2"], "why": "..." } ], "contradicciones": [ { "ids": ["MC-1","MC-2"], "why": "..." } ], "redundantes": [ { "id": "MC-1", "rule": "..." } ], "consolidables": [ { "ids": ["MC-1","MC-2"], "title": "...", "lesson": "...", "category": "metodologia" } ], "huecos": [ { "tema": "...", "why": "..." } ] }
+{ "resumen": "...", "duplicados": [ { "keep": "MC-1", "merge": ["MC-2"], "why": "..." } ], "contradicciones": [ { "ids": ["MC-1","MC-2"], "why": "..." } ], "redundantes": [ { "id": "MC-1", "rule": "..." } ], "consolidables": [ { "ids": ["MC-1","MC-2"], "title": "...", "lesson": "...", "category": "metodologia" } ], "huecos": [ { "tema": "...", "why": "..." } ], "destinos": [ { "id": "MC-1", "actual": "playbook", "sugerido": "convencion", "why": "..." } ] }
 \`\`\`
 
 === REGLAS DURAS (extracto) ===
@@ -90,6 +92,7 @@ ${list}`;
 
 // ===== Parseo defensivo =====
 const CATS = ['regla', 'convencion', 'metodologia', 'procedimiento', 'herramienta', 'nota'];
+const VALID_DESTS = PROMOTE_TARGETS;
 const clamp = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
 const ids = (a) => (Array.isArray(a) ? a.filter((x) => /^MC-\d+$/.test(x)) : []);
 
@@ -119,5 +122,10 @@ export function parseCuration(text) {
         : null;
     }),
     huecos: arr(o?.huecos, 40, (h) => (clamp(h?.tema, 200).trim() ? { tema: clamp(h.tema, 200).trim(), why: clamp(h?.why, 400) } : null)),
+    destinos: arr(o?.destinos, 40, (d) => {
+      const id = /^MC-\d+$/.test(d?.id) ? d.id : null;
+      const sugerido = VALID_DESTS.includes(d?.sugerido) ? d.sugerido : null;
+      return id && sugerido ? { id, actual: clamp(d?.actual, 40), sugerido, why: clamp(d?.why, 400) } : null;
+    }),
   };
 }

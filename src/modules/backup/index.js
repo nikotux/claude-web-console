@@ -11,7 +11,7 @@
 // así que puede pedir re-login.
 //
 // HTTP (solo administradores):
-//   GET  /api/backup/list             -> { backups: [{id, date, size}] }
+//   GET  /api/backup/list             -> { backups, padBackups, keepPerSet }
 //   POST /api/backup/create           -> { ok, backup, pad }
 //   POST /api/backup/restore {id}     -> { ok, restarting: true }
 //   POST /api/backup/delete  {id}     -> { ok }
@@ -68,6 +68,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(__dirname, '..', '..', '..');
 const BACKUP_DIR = path.join(os.homedir(), '.cwc-backups');
 const NAME_RE = /^cwc-backup-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.tar\.gz$/;
+const PAD_NAME_RE = /^pad-backup-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/;
+
+// Son cupos separados porque el código y la base del Pad tienen tamaños y
+// ritmos distintos: una racha de un tipo nunca debe desalojar al otro.
+export const KEEP_PER_SET = 10;
 
 // ===== Push del CÓDIGO a GitHub personal (backup off-site, SIN secretos) =====
 // Guardas duras: solo el remote llamado exactamente `personal`, cuya URL NO
@@ -294,15 +299,72 @@ function ensureDir() {
   try { fs.chmodSync(BACKUP_DIR, 0o700); } catch { /* best-effort */ }
 }
 
-function listBackups() {
+function listBackupSet(nameRe) {
   ensureDir();
   return fs.readdirSync(BACKUP_DIR)
-    .filter((f) => NAME_RE.test(f))
+    .filter((f) => nameRe.test(f))
     .map((f) => {
       const st = fs.statSync(path.join(BACKUP_DIR, f));
       return { id: f, date: st.mtimeMs, size: st.size };
     })
     .sort((a, b) => b.date - a.date);
+}
+
+function listBackups() {
+  return listBackupSet(NAME_RE);
+}
+
+function listPadBackups() {
+  return listBackupSet(PAD_NAME_RE);
+}
+
+// Retención por mtime real, no por el timestamp del nombre: un archivo
+// renombrado o repuesto a mano conserva el lugar que le corresponde. La
+// función nunca propaga un error de poda sobre un backup que ya fue creado;
+// registra tanto los borrados efectivos como cualquier fallo.
+function pruneBackupSet(label, nameRe, { sidecars = [] } = {}) {
+  const removedBackups = [];
+  const removedFiles = [];
+  const errors = [];
+  let freedBytes = 0;
+  let expired = [];
+
+  try {
+    expired = listBackupSet(nameRe).slice(KEEP_PER_SET);
+  } catch (e) {
+    errors.push(`no se pudo enumerar el conjunto: ${e?.message || e}`);
+  }
+
+  for (const backup of expired) {
+    const backupPath = path.join(BACKUP_DIR, backup.id);
+    try {
+      fs.unlinkSync(backupPath);
+      removedBackups.push(backup.id);
+      removedFiles.push(backup.id);
+      freedBytes += backup.size;
+    } catch (e) {
+      errors.push(`${backup.id}: ${e?.message || e}`);
+      continue;
+    }
+
+    for (const suffix of sidecars) {
+      const sidecarName = `${backup.id}${suffix}`;
+      const sidecarPath = path.join(BACKUP_DIR, sidecarName);
+      try {
+        const st = fs.statSync(sidecarPath);
+        fs.unlinkSync(sidecarPath);
+        removedFiles.push(sidecarName);
+        freedBytes += st.size;
+      } catch (e) {
+        if (e?.code !== 'ENOENT') errors.push(`${sidecarName}: ${e?.message || e}`);
+      }
+    }
+  }
+
+  const names = removedFiles.length ? removedFiles.join(', ') : '(ninguno)';
+  console.info(`[backup] poda ${label}: ${removedBackups.length} backup(s), ${removedFiles.length} archivo(s), ${freedBytes} bytes liberados; archivos: ${names}`);
+  if (errors.length) console.error(`[backup] poda ${label}: errores: ${errors.join(' | ')}`);
+  return { removed: removedBackups.length, files: removedFiles, freedBytes, errors };
 }
 
 function stamp() {
@@ -337,7 +399,14 @@ function padDbBackup() {
   const timeout = 30000;
   return new Promise((resolve) => {
     execFile(PAD_BIN, ['--url', PAD_URL, 'db', 'backup', '--cron', '-o', out], { timeout }, (err, _stdout, stderr) => {
-      if (err) return resolve({ ok: false, error: (stderr || err.message || 'pad db backup falló').trim().slice(0, 300) });
+      if (err) {
+        // Igual que con un tar fallido: el artefacto incompleto no cuenta como
+        // respaldo, pero no se toca ninguna copia anterior.
+        for (const suffix of ['', '-shm', '-wal']) {
+          try { fs.rmSync(`${out}${suffix}`, { force: true }); } catch { /* noop */ }
+        }
+        return resolve({ ok: false, error: (stderr || err.message || 'pad db backup falló').trim().slice(0, 300) });
+      }
       resolve({ ok: true, file: path.basename(out) });
     });
   });
@@ -371,7 +440,13 @@ export default {
     r.use(requireAdmin);
 
     r.get('/list', (req, res) => {
-      try { res.json({ backups: listBackups() }); }
+      try {
+        res.json({
+          backups: listBackups(),
+          padBackups: listPadBackups(),
+          keepPerSet: KEEP_PER_SET,
+        });
+      }
       catch { res.status(500).json({ error: 'No se pudo listar los backups.' }); }
     });
 
@@ -389,7 +464,13 @@ export default {
         }
         const st = fs.statSync(out);
         const pad = await padDbBackup(); // best-effort, ver ROAD-257 Fase B
-        res.json({ ok: true, backup: { id, date: st.mtimeMs, size: st.size }, pad });
+        const pruning = {
+          project: pruneBackupSet('proyecto', NAME_RE),
+          pad: pad.ok
+            ? pruneBackupSet('Pad', PAD_NAME_RE, { sidecars: ['-shm', '-wal'] })
+            : null,
+        };
+        res.json({ ok: true, backup: { id, date: st.mtimeMs, size: st.size }, pad, pruning });
       } catch (e) {
         res.status(500).json({ error: `Falló el backup: ${e?.message || e}` });
       } finally {

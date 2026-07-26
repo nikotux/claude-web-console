@@ -68,3 +68,15 @@ adelante reiniciaría al pedo). Si package(-lock).json cambió corre
 npm install ANTES del restart; reinicia SOLO con árbol sano (pop
 conflictuado o npm roto → avisa y NO reinicia: un server sobre
 archivos con marcas de conflicto entra en crash-loop).
+
+REGLA 8 — RETENCIÓN DE BACKUPS (2026-07-26, BUG-2044): se conservan
+10 archivos por conjunto, con cupos INDEPENDIENTES para
+`cwc-backup-*.tar.gz` y `pad-backup-*.db` porque tienen tamaños y ritmos
+distintos. La antigüedad se decide por `mtime` real, nunca por el nombre.
+Cada conjunto se poda únicamente después de crear con éxito un backup de
+ese mismo tipo; un fallo no habilita el borrado de respaldos anteriores.
+Al podar un `.db` también se borran sus sidecars `.db-shm`/`.db-wal`.
+Toda corrida de poda loguea cantidad, nombres y bytes liberados, incluso
+si no había excedente. `KEEP_PER_SET` es la constante exportada y la UI
+lista ambos conjuntos con tamaño y muestra la política vigente. La poda
+no se ejecuta al listar ni al arrancar: solo después de `POST /create`.

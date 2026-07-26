@@ -26,7 +26,8 @@ herramienta|nota · project console|tolkien|otros (BUG-1928: feedback de
 Chris SIEMPRE usa `tolkien`; NUNCA volverlo a `otros`, porque
 `projectDirFor()` da `null` y `TARGETS_NEED_DIR` veda memoria/claude-md,
 los dos destinos que Claude Code auto-carga) · destination
-(sugerido) memoria|claude-md|contexto|playbook|registro · recurrence
+(sugerido) memoria|claude-md|contexto|convencion|contrato|invariante ·
+recurrence
 · confidence · fingerprint · sourceChats[] · content=Observación/
 Lección}. RECURRENCIA = PRIORIDAD: una lección repetida NO se
 duplica, sube su contador (dedup por fingerprint = sha1 de
@@ -51,7 +52,12 @@ el título exacto no coincide el fingerprint, no sube `recurrence` y el
 semáforo queda verde por falta de evidencia. NO confundir esta ventana
 de proceso con `FEEDBACK_DEDUP_LIMIT=30` de correo/Teams. PROMOVER (admin)
 enruta a un DESTINO real vía retro/promote-shared.js (ROUTER,
-Fase 2/ROAD-256). Destinos cableados (PROMOTE_TARGETS): (a) memoria =
+Fase 2/ROAD-256). `PROMOTE_TARGETS` tiene SEIS destinos vigentes:
+`memoria`, `claude-md`, `contexto`, `convencion`, `contrato` e
+`invariante`. `LEGACY_PROMOTE_TARGETS=['playbook','registro']` conserva
+la lectura/render de los valores históricos, pero el gate de escritura
+no permite elegirlos. `playbook` se deprecó porque su molde copiaba
+literalmente la lección y produjo 85 drafts inejecutables en Pad. (a) memoria =
 append de la lección a la nota mejora-continua.md en memory/ del
 proyecto (console=ROOT · tolkien=config.projectDir) + línea en el
 índice MEMORY.md, reusando projects/memory.js (whitelist + escritura
@@ -66,14 +72,40 @@ syncToTolkien de tickets/context-store.js) → NUNCA toca lo de AFUERA de
 los marcadores (Reglas duras/Convenciones a mano — verificado E2E). markPromoted
 (store.js) sella status promovida + promotedTo + snapshot
 recurrenceAtPromotion/promotedAt (campos del schema, ya listos para el
-LOOP de Fase 6). La próxima sesión auto-carga el destino. DESTINOS
-COMPLETOS del router (PROMOTE_TARGETS): contexto (Fase 3, BUG-1927) =
+LOOP de Fase 6). La próxima sesión auto-carga el destino.
+El bloque final pasa por el guard compartido `core/pad-world-refs.js` ANTES de
+cualquier lectura/escritura del archivo externo: si queda un ref foráneo, se
+loguean todas sus ocurrencias con línea y la promoción tira error
+`reason=foreign-refs`. Las citas legítimas de una lección no inutilizan el
+destino: al renderizar se reemplaza un `MC-*` conocido por el título de esa
+lección y los demás refs internos por su tipo semántico con el identificador
+omitido, también dentro de fences. El comentario generado tampoco incluye refs
+internos. Así el detector queda como fail-closed contra cualquier fuga que el
+saneado no haya cubierto, sin importar desde qué generador se escribe
+`CLAUDE.local.md`.
+DESTINOS COMPLETOS del router: contexto (Fase 3, BUG-1927) =
 `promoteToContext` usa `splitTopSections` y la inserta idempotente por
 `lesson.id` dentro de `## 6. Feedback adoptado` de bugfix-work/pr,
 creando esa sección si falta → se inyecta en chats de ticket/PR y
 `saveContext` la ESPEJA a la CLAUDE.local.md de Tolkien. Es `## 6.` y NO
 `## 5.` porque el contexto `pr` persistido ya reserva `## 5. Quick
-reference — end-to-end flow`. `promote-shared.js` exporta
+reference — end-to-end flow`. BUG-1973 cerró el cruce de mundos:
+`contextRouteForProject` usa SIEMPRE `lesson.project`; solo `tolkien`
+escribe en ese master/espejo, mientras `console` y `otros` permanecen
+únicamente en su lección canónica de Pad interno. Un project vacío o
+desconocido falla cerrado con `reason=context-project-unknown`; no existe
+default hacia Tolkien. Por eso una promoción `contexto` interna aporta
+exactamente 0 lecciones al espejo. BUG-1972 cerró el crecimiento monótono:
+`MIRROR_BUDGET` se exporta desde `tickets/context-store.js` y
+`measureMirrorBytes({work|pr})` mide el espejo candidato completo ANTES
+de guardar. Si excede 30 kB, rota desde la entrada completa más vieja:
+quita su texto duplicado y deja una referencia por título al contenido
+canónico en Pad con un marcador hash opaco que conserva la idempotencia
+sin filtrar refs `MC-*`. Rota tantas entradas como hagan falta; si ni
+rotándolas todas entra la nueva, falla ruidosamente con
+`reason=context-mirror-budget` y no escribe. El render del contexto sanea
+refs internas antes del guard compartido; el guard sigue siendo la última
+barrera fail-closed. `promote-shared.js` exporta
 `sanitizeContextEntry(title, body)` y `promoteToContext` lo aplica ANTES
 de armar la entrada: colapsa saltos de línea del título que vive en
 `### …`, degrada cada línea `## ` del cuerpo libre a `### ` y cierra el
@@ -93,30 +125,144 @@ pasó de 0 lecciones/32.932 bytes a 17/48.864, y
 contenido nuevo: migró de lectura A DEMANDA a AUTO-CARGA y el total de
 ambos archivos casi no cambió. NO borrar los backups
 `~/.cwc-data/bugfix-context.md.bak-BUG1927-2026-07-26` y
-`~/tolkien/CLAUDE.local.md.bak-BUG1927-2026-07-26` · playbook (Fase 4) = crea un item DRAFT
-en la colección `playbooks` de Pad (pad-service-client.createItem). Solo
-memoria/claude-md exigen dir de proyecto (TARGETS_NEED_DIR); contexto/
-playbook no. CURADURÍA IA (Fase 5): runner desacoplado
+`~/tolkien/CLAUDE.local.md.bak-BUG1927-2026-07-26` · convencion =
+`promoteToConvention` crea una regla `active` en la colección
+`conventions`, con `scope:all`, `priority:should` y trigger derivado de
+la categoría. Es idempotente por título exacto: si ya existe actualiza
+su contenido; el cuerpo termina con la procedencia MC y el link
+`implements` hacia la lección es best-effort. Solo memoria/claude-md
+exigen dir de proyecto (`TARGETS_NEED_DIR`); contexto/convencion no. Los
+dos destinos verificables de PLAN-1936 cierran el lazo
+sin tokens. `contrato` agrega una fila de obligación en `CONVE-1969`,
+el contrato-hogar con parent PLAN-1936, y registra su check para que
+`emitTasks()` abra un PEND automático cuando se incumple y lo cierre
+automáticamente cuando vuelve a cumplirse. `invariante` llama
+`appendLearnedInvariant({match,text})`. BUG-1977 resuelto en el almacén:
+`appendLearnedInvariant` normaliza `match` y `text` a los mismos límites
+que persiste (200/400) ANTES de comparar, por lo que también deduplica
+contra entradas históricas sin migrar el formato. `invariantTextFor`
+mantiene el límite de 400 como defensa en profundidad porque el texto
+entra en el prompt del auditor; además se queda con la **Lección** y
+descarta la **Observación**: un invariante es una regla, no el caso que
+la originó. La corrección ya no depende del recorte del llamador. El glob del
+invariante y el ref del contrato salen de CAMPOS DECLARADOS en el cuerpo
+(`**Archivos:** <glob>` / `**Contrato:** CONVE-n`) y NUNCA se infieren
+de la prosa: si falta el dato, falla cerrado con un mensaje accionable
+(trampa del trigger circular, PLAN-1955). La interfaz pública es
+`applicableTargetsFor(lesson)` /
+`targetBlockReason(target,lesson,explicitMatch?)` — el tercer parámetro
+es el glob explícito de quien promueve; sin él la aplicabilidad se
+calcula SOLO con lo declarado en el cuerpo (correcto para OFRECER el
+destino en el tablero), pero el gate de la ruta sí lo cuenta — si no, el
+`match` que forwardea `/promote` sería código muerto (bug detectado en
+la verificación en vivo de PLAN-1936) /
+`invariantMatchFor(lesson,explicit)` /
+`contractCheckIdFor(lesson)` → `leccionNNN` (sin barras:
+`markerFor` no las admite) / `contractRefFor` /
+`LESSONS_CONTRACT_REF` + `LESSONS_CONTRACT_TITLE` /
+`TARGETS_NEED_CONSOLE=['invariante']`. La ruta
+`/api/retro/:id/promote` usa `targetBlockReason` como gate único y
+forwardea `{kind,match,contract}`; la ruta forwardea además `rule`
+(predicado declarativo `fileExists`/`grepPresent`/`grepAbsent` que evalúa
+la capa `leccion` de `core/pad-contracts.js`); una obligación SIN regla
+entra igual pero queda como verificación manual — `skipped` con motivo,
+nunca «incumplida». `GET /api/retro` manda `targets` +
+`targetReasons` POR LECCIÓN y el tablero los consume: ya no duplica
+`NEED_DIR`. CURADURÍA IA (Fase 5): runner desacoplado
 bin/cwc-retro-curate-runner.js (lógica curate-shared.js, TEXTO PURO
 regla 6; el server junta lessons + hardRulesText() en el job) que
-detecta duplicados (dedup SEMÁNTICO, más allá del fingerprint),
-contradicciones, redundantes (ya en una Regla Dura), consolidables y
-huecos. Propuestas NUNCA auto-aplicadas: apply reusa el CRUD
+detecta seis dimensiones: duplicados (dedup SEMÁNTICO, más allá del
+fingerprint), contradicciones, redundantes (ya en una Regla Dura),
+consolidables, huecos y `destinos` equivocados. El prompt incluye
+`promotedTo || destination` por lección y marca `playbook` como
+deprecado. Propuestas NUNCA auto-aplicadas: apply reusa el CRUD
 (merge=mergeLessons suma recurrencia+chats y borra · dismiss=setStatus
-descartada · consolidate=upsertLesson+delete). LOOP QUE APRENDE (Fase
-6): computeEffectiveness (store.js, DERIVADO 0 tokens) sobre una
-lección promovida = {state, hits, ageDays} donde hits = recurrencias
-NUEVAS desde promotedAt → observando | efectiva (≥7d sin reincidir) |
-reincide (volvió a pasar pese a promovida → la UI re-ofrece promover =
-"⬆️ Escalar" a un destino más fuerte).
+descartada · consolidate=upsertLesson+delete · redestinar cambia SOLO
+`destination`, sin promover). HIGIENE DETERMINÍSTICA
+(`hygiene-shared.js`, 0 TOKENS): lee Pad y compara strings para listar
+cuatro grupos: copias redundantes del viejo molde de playbooks, destinos
+deprecados (la lección se redestina), referencias rotas (el ítem del destino
+vigente desapareció) y drafts huérfanos de lecciones descartadas.
+`GET /hygiene` es lectura autenticada; `POST /hygiene/apply` es admin, acepta
+`delete-copies`, re-escanea en backend y solo borra refs elegibles de la
+colección `playbooks`. El tablero lo muestra en un bloque colapsado y
+explicita que no consume tokens. LOOP QUE APRENDE (Fase 6):
+computeEffectiveness (store.js, DERIVADO 0 tokens) sobre una lección promovida
+= {state, hits, ageDays, hitsInternal, external} → observando | efectiva (≥7d
+sin reincidir) | reincide (volvió a pasar pese a promovida → la UI re-ofrece
+promover = "⬆️ Escalar" a un destino más fuerte). `hits` SUMA dos señales de
+distinta naturaleza. (a) INTERNA (`hitsInternal`) = recurrencias nuevas desde
+`promotedAt`, o sea re-destilaciones con el mismo fingerprint. (b) EXTERNA
+(`external.rounds`, M1 de DOC-1926 / PLAN-1937) = rondas de review de Chris
+sobre los PRs de `sourceRefs` POSTERIORES a `promotedAt`. La externa existe
+porque la interna es ESTRUCTURALMENTE CIEGA al feedback de Chris (BUG-1930): el
+destilador de chats no puede emitir la categoría `feedback-cliente`, el
+fingerprint la incluye, y por lo tanto `recurrence` de una lección de Chris NO
+PUEDE SUBIR NUNCA — el semáforo no podía ponerse en rojo aunque el
+incumplimiento fuera evidente. Se suman a propósito y no se muestran por
+separado en el badge: el tablero renderiza "🔴 reincide ×hits" y una
+reincidencia observada AFUERA es evidencia tan real como una re-destilación; el
+desglose queda disponible en `hitsInternal`/`external` para quien lo necesite.
+Una lección SIN evidencia externa (`external:null`) se comporta EXACTAMENTE
+como antes — el cambio no toca a las 233 lecciones de proceso. MEDIDOR EXTERNO
+(`verify-shared.js` + `bin/cwc-retro-verify-runner.js`, 0 TOKENS): el runner
+lee los PRs con `fetchPrRich` de `comms/pr-read-shared.js` (lector ÚNICO ya
+cacheado 60 s — NUNCA `gh` propio) y cuenta las rondas del revisor. La identidad
+del revisor NO se hardcodea: sale de
+`readContacts().find(c=>c.id==='chris').github` (hoy `cswenor`); sin ese
+contacto el runner falla CERRADO con un mensaje accionable. Una review
+`APPROVED` NO cuenta como ronda — es lo contrario, evidencia de que la entrega
+pasó; cuentan las reviews CHANGES_REQUESTED/COMMENTED/DISMISSED y TODOS los
+comentarios de issue del revisor, porque medido sobre el histórico real de
+Tolkien el feedback sustantivo de Chris llega casi siempre como comment, no
+como review formal. RESOLUCIÓN DE `sourceRefs` (`prRefsFrom`): `PR-n` es
+DIRECTO; `TKT-n` es CANDIDATO — la ingesta de julio-2026 guardó números de PR
+bajo el prefijo TKT (MC-740/741/742/743/745/746) pero `TKT-n` también puede ser
+un ticket de Desk (MC-744 → `TKT-617`, que no existe como PR) — y solo cuenta
+si ese PR EXISTE y es NUESTRO (autor = `readSelf().github`; si el autor es el
+propio revisor, como en los #353/#354 que Chris escribió para reemplazar el
+#275, sus rondas ahí no miden nuestra ejecución); `DESK-n`/`FEAT-n` nunca son
+PRs. Todo lo que no resuelve queda LISTADO en `external.unresolved` con el
+motivo — el medidor no adivina en silencio. Estado en
+`~/.cwc-data/retro-verify.json` + `retro-verify.lock` (heartbeat pid-aware: un
+lock fresco cuyo proceso ya murió NO bloquea el reintento) +
+`retro-verify.log`; `readVerifyState()` memoiza por mtime+size para no releer el
+archivo una vez por lección en cada request. REANUDABLE de verdad (regla dura
+2, verificado con `kill -9` a mitad de corrida): escribe el estado tras CADA
+PR, y al relanzarse reusa las entradas cuyo `checkedAt` esté dentro de
+`PR_ENTRY_TTL_MS` (30 min) — `--full` las ignora. Rutas:
+`POST /api/retro/verify` (admin, dispara el runner) y
+`GET /api/retro/verify` (poll: status/progress/summary/lessons/stale), ambas
+LITERALES y por lo tanto ANTES de la paramétrica `/:id`. Además `GET /api/retro`
+AUTO-CEBA el medidor: si el resultado está vencido (`VERIFY_TTL_MS` = 6 h) y no
+hay corrida viva, spawnea el runner sin bloquear la respuesta — acotado a admin
+del host sobre el workspace `console`, así un inquilino nunca dispara lecturas
+del repo externo. OJO CON EL EFECTO ESPERADO: al conectar el medidor las
+métricas EMPEORAN. Corrida real del 2026-07-26: de las 12 piezas de Chris, 8
+cambiaron de estado y 3 de ellas (MC-740, MC-741, MC-746) pasaron de 🟢 efectiva
+a 🔴 reincide — eran verdes por AUSENCIA de evidencia. Eso es la prueba de que
+funciona, NO una regresión: no lo "arregles" volviéndolo a verde.
+CONVENCIÓN CANÓNICA DE `sourceRefs`: `PR-n` significa un pull request de
+GitHub del repo Tolkien y es el ÚNICO prefijo que deben emitir los datos nuevos
+o migrados para un PR; `TKT-n` significa un ticket de Zoho Desk; `DESK-n` es
+un alias explícito histórico para un ticket de Desk; `FEAT-n` identifica una
+feature. `TKT`/`DESK`/`FEAT` nunca deben emitirse para un PR. Un `#n` sin tipo
+es ambiguo: la ingesta debe resolver su fuente antes de persistirlo. El trato de
+`TKT-n` como candidato en `prRefsFrom` se conserva SOLO como compatibilidad
+defensiva con datos históricos: verifica existencia y autor, nunca confía en el
+prefijo, y mantiene los fallos en `external.unresolved`.
 Ruta /api/retro (auth; PROMOVER/CURAR requieren admin, tocan memorias/
 CLAUDE.md/tokens): GET / {lessons,counts} · GET /activity · GET /targets
 {destinos} · POST /curate (admin, spawn curaduría) · GET /curation
-(poll) · POST /curate/apply {action:merge|dismiss|consolidate} (admin) ·
+(poll) · POST /curate/apply
+{action:merge|dismiss|consolidate|redestinar} (admin) · GET /hygiene ·
+POST /hygiene/apply {action:delete-copies,refs[]} (admin) ·
 GET /:id · POST /:id/approve · POST /:id/dismiss · POST /:id/promote
-{target?,kind?} (admin; target ∈ memoria|claude-md|contexto|playbook) ·
-POST /:id/delete. OJO ORDEN: /activity, /targets, /curate, /curation,
-/curate/apply literales ANTES de la paramétrica /:id. Estado
+{target?,kind?} (admin; target ∈
+memoria|claude-md|contexto|convencion|contrato|invariante) · POST
+/:id/delete. OJO ORDEN: /activity, /targets, /curate, /curation,
+/curate/apply, /hygiene y /hygiene/apply literales ANTES de la
+paramétrica /:id. Estado
 file-based del job en ~/.cwc-data/retro/<id>.json (id sha1 del
 sessionId; dedup: no re-gasta si ya done/fresco) + retro.log +
 retro-activity.json (log local append-only). Frontend
@@ -130,7 +276,8 @@ Descartadas". Una lección nueva muestra solo: (a) botón PRIMARIO
 "👍 Adoptar → <destino sugerido>" que aplica el `destination` que la IA
 ya sugirió (adoptBlock; el destino se resalta con NOMBRE HUMANO —
 TARGET_LABEL: 📓 Recordatorio · 📕 Regla permanente · 🎫 Guía tickets/PRs
-· 📘 Procedimiento) + un "▾" que revela los otros destinos aplicables
+· 📏 Convención · 📚 Obligación · 🛡️ Invariante; 📘 Procedimiento
+(histórico) queda solo para render de datos viejos) + un "▾" que revela los otros destinos aplicables
 (data-act=more togglea .mc-dests[hidden]; applicableTargets filtra:
 memoria/claude-md solo si el proyecto tiene dir); (b) "🔖 Guardar" (=
 estado 'aprobada' reetiquetado "guardar para después", POST /:id/approve);
@@ -150,9 +297,10 @@ en TODO chat de ticket/PR futuro, sin depender de que "se parezca" a otro
 por archivos/tags como hace la Biblioteca de Soluciones de bugfixes). A
 diferencia de una lección de proceso, ésta es retroalimentación PUNTUAL de
 un cliente/revisor sobre un bug/PR — llegada por correo, Teams o una
-llamada — y suma el campo `sourceRefs[]` (TKT-n/PR-n/FEAT-n normalizados,
-`normRefs`/`store.js`) para poder agrupar/filtrar "todo lo que dijo Chris
-sobre el TKT-519" (chip clickeable en el tablero, `data-ref-filter`; el
+llamada — y suma el campo `sourceRefs[]`
+(`PR-n`/`TKT-n`/`DESK-n`/`FEAT-n`; `normRefs`/`store.js`) para poder
+agrupar/filtrar "todo lo que dijo Chris sobre el TKT-519" (chip
+clickeable en el tablero, `data-ref-filter`; el
 schema de la colección en Pad se actualizó a mano vía `pad_collection
 update` para sumar la opción `feedback-cliente` al campo `category` y el
 campo `sourceRefs` — un `category` no listado ahí lo RECHAZA el server de
@@ -217,6 +365,6 @@ que otra capa infiera el proyecto.
 
 ## Linkeo automático al grafo de Pad (BUG-1878)
 
-Toda lección que se crea en `mejora-continua` recibe un link `implements` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. El playbook que crea `promoteToPlaybook` recibe `implements` hacia la lección de origen.
+Toda lección que se crea en `mejora-continua` recibe un link `implements` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. La convención que crea o actualiza `promoteToConvention` recibe `implements` hacia la lección de origen.
 
 Los tres links son BEST-EFFORT (nunca rompen la destilación ni la promoción) y se SALTAN cuando el `ctx` es de un inquilino (workspace `tenant-*`), porque los ítems `ARQUI-*` solo existen en el workspace `console` del host. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz; detalle en `docs/pad-grafo.md`.

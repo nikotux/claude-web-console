@@ -4,9 +4,9 @@
 // core/config.js.
 //
 // Cada delegación persistida usa un job con esta forma:
-// { id, chatId, cwd, task, model, effort, fullAccess, writableRoots,
-//   status: 'pending'|'running'|'done'|'error', label, startedAt, heartbeatAt,
-//   finishedAt, report, isError, error, threadId }
+// { id, chatId, cwd, task, model, effort, fullAccess, writableRoots, pid,
+//   status: 'pending'|'running'|'done'|'error'|'killed'|'orphaned', label,
+//   startedAt, heartbeatAt, finishedAt, report, isError, error, threadId }
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -60,6 +60,14 @@ export const MAX_SNAPSHOT_TOTAL = 8 * 1024 * 1024; // 8 MB: tope global del snap
 
 const JOB_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const FINISHED_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const CODEX_HEARTBEAT_MS = 15 * 1000;
+export const CODEX_HEARTBEAT_STALE_MS = 3 * CODEX_HEARTBEAT_MS;
+export const CODEX_JOB_TERMINAL_STATUSES = Object.freeze([
+  'done',
+  'error',
+  'killed',
+  'orphaned',
+]);
 
 // Etiqueta corta y estable para mostrar una delegación en el radar del chat.
 export function codexJobLabel(task) {
@@ -355,19 +363,67 @@ export function codexJobPath(id) {
   return path.join(codexJobsDir(), `${safeId}.json`);
 }
 
-export function readCodexJob(id) {
-  try { return JSON.parse(fs.readFileSync(codexJobPath(id), 'utf8')); }
+function readCodexJobFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch { return null; }
+}
+
+function writeCodexJobFile(file, next) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  return next;
+}
+
+function processIsDead(pid) {
+  const n = Number(pid);
+  if (!Number.isSafeInteger(n) || n <= 0) return false;
+  try {
+    process.kill(n, 0);
+    return false;
+  } catch (err) {
+    return err?.code === 'ESRCH';
+  }
+}
+
+// Reaper central: TODO lector obtiene estado efectivo, no un `running` fósil.
+// El pid permite detectar enseguida un runner muerto; el heartbeat cubre jobs
+// viejos sin pid, PID reciclado, SIGKILL y caídas completas del host.
+export function readCodexJob(id) {
+  let file;
+  try { file = codexJobPath(id); }
+  catch { return null; }
+  const job = readCodexJobFile(file);
+  if (!job || job.status !== 'running') return job;
+
+  const now = Date.now();
+  const heartbeatAt = Number(job.heartbeatAt || job.startedAt || 0);
+  const heartbeatExpired = heartbeatAt > 0 && now - heartbeatAt > CODEX_HEARTBEAT_STALE_MS;
+  const pidDead = processIsDead(job.pid);
+  if (!heartbeatExpired && !pidDead) return job;
+
+  const reason = pidDead
+    ? `El runner de Codex quedó huérfano: el pid ${job.pid} ya no existe.`
+    : `El runner de Codex quedó huérfano: heartbeat vencido por más de ${CODEX_HEARTBEAT_STALE_MS / 1000} s.`;
+  const orphaned = {
+    ...job,
+    status: 'orphaned',
+    isError: true,
+    error: reason,
+    orphanedAt: now,
+    finishedAt: now,
+    id,
+  };
+  // Leer conserva su contrato best-effort aunque el volumen se haya vuelto
+  // read-only: el lector igual ve el estado efectivo y deja de contarlo vivo.
+  try { return writeCodexJobFile(file, orphaned); }
+  catch { return orphaned; }
 }
 
 export function writeCodexJob(id, patch) {
   const file = codexJobPath(id);
   const current = readCodexJob(id) || {};
-  const next = { ...current, ...(patch || {}), id };
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
-  fs.renameSync(tmp, file);
-  return next;
+  return writeCodexJobFile(file, { ...current, ...(patch || {}), id });
 }
 
 export function listCodexJobs(chatId) {
@@ -394,7 +450,7 @@ export function pruneCodexJobs() {
       if (!JOB_ID_RE.test(id)) continue;
       try {
         const job = readCodexJob(id);
-        if (!job || !['done', 'error'].includes(job.status)) continue;
+        if (!job || !CODEX_JOB_TERMINAL_STATUSES.includes(job.status)) continue;
         const finishedAt = Number(job.finishedAt || 0);
         if (finishedAt > 0 && now - finishedAt > FINISHED_JOB_MAX_AGE_MS) {
           fs.unlinkSync(path.join(dir, file));

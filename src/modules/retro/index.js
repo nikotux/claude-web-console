@@ -9,10 +9,14 @@
 //   GET  /api/retro                 -> { lessons, counts }
 //   GET  /api/retro/activity        -> { events }
 //   GET  /api/retro/targets         -> { targets }   (destinos de promoción cableados)
+//   GET  /api/retro/hygiene         -> hallazgos determinísticos (0 tokens)
+//   POST /api/retro/hygiene/apply   -> { deleted, skipped } (ADMIN)
+//   POST /api/retro/verify          -> { status }    (ADMIN; dispara medidor 0 tokens)
+//   GET  /api/retro/verify          -> { status, progress, summary, lessons, ... }
 //   GET  /api/retro/:id             -> { lesson }
 //   POST /api/retro/:id/approve     -> { lesson }   (status 'aprobada')
 //   POST /api/retro/:id/dismiss     -> { lesson }   (status 'descartada')
-//   POST /api/retro/:id/promote {target?} -> { lesson }   (ADMIN; target ∈ memoria|claude-md)
+//   POST /api/retro/:id/promote {target?,kind?,match?,contract?,rule?} -> { lesson }   (ADMIN; target ∈ memoria|claude-md|contexto|convencion|contrato|invariante)
 //   POST /api/retro/:id/delete      -> { ok }
 //
 // "Feedback de Chris" (2026-07-19, categoría 'feedback-cliente' de la MISMA
@@ -25,16 +29,18 @@
 //   GET  /api/retro/email-scan                       -> { items, scannedAt, running, ... }
 //   POST /api/retro/teams-refresh                     -> { status }     (escaneo del DM de Teams con 'chris')
 //   GET  /api/retro/teams-scan                        -> { items, scannedAt, running, ... }
-// OJO ORDEN: las literales /activity, /targets, /feedback, /email-*, /teams-* van ANTES de la paramétrica /:id.
+// OJO ORDEN: las literales /activity, /targets, /hygiene, /verify, /feedback,
+// /email-*, /teams-* van ANTES de la paramétrica /:id.
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { reqPadContext } from '../../core/pad-context.js';
+import { deleteItem as padDeleteItem } from '../../core/pad-service-client.js';
 import { hardRulesText } from '../health/shared.js';
 import {
   listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted,
-  mergeLessons, upsertLesson,
+  mergeLessons, upsertLesson, setDestination,
 } from './store.js';
-import { PROMOTE_TARGETS, TARGETS_NEED_DIR, promote, projectDirFor } from './promote-shared.js';
+import { PROMOTE_TARGETS, promote, applicableTargetsFor, targetBlockReason } from './promote-shared.js';
 import {
   readCurationJob, writeCurationJob, isFreshRunning as isCurateRunning,
   jobResult as curationResult, spawnRetroCurateRunner,
@@ -45,6 +51,8 @@ import {
 } from './feedback-shared.js';
 import { readEmailScan, isEmailScanRunning, spawnRetroEmailRunner } from './email-shared.js';
 import { readTeamsFeedbackScan, isTeamsFeedbackScanRunning, spawnRetroTeamsRunner } from './teams-feedback-shared.js';
+import { readVerifyState, isVerifyRunning, isVerifyStale, spawnRetroVerifyRunner } from './verify-shared.js';
+import { scanHygiene } from './hygiene-shared.js';
 
 function sendErr(res, e) {
   if (e?.badRequest) return res.status(400).json({ error: e.message });
@@ -62,7 +70,33 @@ export default {
     r.get('/', async (req, res) => {
       try {
         const ctx = reqPadContext(req);
-        res.json(await listLessons(ctx));
+        // La aplicabilidad la calcula el BACKEND: el tablero la duplicaba con un
+        // NEED_DIR propio y quedaba ciego a cualquier destino con reglas nuevas.
+        const { lessons, counts } = await listLessons(ctx);
+        res.json({
+          counts,
+          lessons: lessons.map((l) => ({
+            ...l,
+            targets: applicableTargetsFor(l),
+            targetReasons: Object.fromEntries(
+              PROMOTE_TARGETS.map((target) => [target, targetBlockReason(target, l)]).filter(([, reason]) => reason),
+            ),
+          })),
+        });
+        // Auto-cebado del medidor: sin esto el semáforo externo solo se
+        // actualizaría a mano. Si el resultado está vencido y no hay corrida
+        // viva, relanzamos el runner SIN bloquear la respuesta — el tablero
+        // recoge el resultado en el próximo poll (el front se re-engancha al
+        // estado persistido, regla 2). Acotado al admin del host sobre el
+        // workspace 'console': un inquilino NO dispara lecturas del repo externo.
+        try {
+          const own = !ctx || !ctx.workspace || ctx.workspace === 'console';
+          if (isAdmin(req) && own
+            && lessons.some((l) => l.category === 'feedback-cliente' && l.status === 'promovida')
+            && !isVerifyRunning() && isVerifyStale(readVerifyState())) {
+            spawnRetroVerifyRunner();
+          }
+        } catch { /* best-effort: nunca rompe el listado */ }
       }
       catch (e) { sendErr(res, e); }
     });
@@ -151,7 +185,17 @@ export default {
         try {
           const { lessons } = await listLessons(ctx);
           const active = lessons.filter((l) => l.status !== 'descartada')
-            .map((l) => ({ id: l.id, title: l.title, category: l.category, project: l.project, status: l.status, recurrence: l.recurrence, body: l.body }));
+            .map((l) => ({
+              id: l.id,
+              title: l.title,
+              category: l.category,
+              project: l.project,
+              status: l.status,
+              recurrence: l.recurrence,
+              destination: l.destination,
+              promotedTo: l.promotedTo,
+              body: l.body,
+            }));
           if (active.length < 2) {
             writeCurationJob({ status: 'idle', startedAt: 0, context: null, result: null, error: null }); // liberar el lock reservado
             return res.status(400).json({ error: 'Hacen falta al menos 2 lecciones vigentes para curar.' });
@@ -184,6 +228,11 @@ export default {
         if (action === 'dismiss') {
           return res.json({ lesson: await setStatus(String(b.id || ''), 'descartada', ctx) });
         }
+        if (action === 'redestinar') {
+          const destination = String(b.destination || '');
+          if (!PROMOTE_TARGETS.includes(destination)) return res.status(400).json({ error: 'Destino inválido.' });
+          return res.json({ lesson: await setDestination(String(b.id || ''), destination, ctx) });
+        }
         if (action === 'consolidate') {
           const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' }, ctx);
           for (const mid of (Array.isArray(b.ids) ? b.ids : [])) {
@@ -193,6 +242,71 @@ export default {
           return res.json({ lesson: created.lesson });
         }
         return res.status(400).json({ error: 'Acción de curaduría inválida.' });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    // ===== Medidor REAL de efectividad (M1 de DOC-1926 / PLAN-1937) =====
+    // Cuenta las rondas de review de Chris sobre los PRs de `sourceRefs`
+    // POSTERIORES a la adopción. 0 TOKENS (lee los PRs con el lector único ya
+    // cacheado), runner DESACOPLADO por regla 2. Admin porque dispara un
+    // proceso y lecturas de red contra el repo trackeado.
+    r.post('/verify', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Verificar la efectividad requiere administrador.' });
+      try {
+        if (isVerifyRunning()) return res.json({ status: 'running' });
+        spawnRetroVerifyRunner({ full: !!req.body?.full });
+        res.json({ status: 'running' });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    r.get('/verify', (req, res) => {
+      try {
+        const st = readVerifyState();
+        res.json({
+          running: isVerifyRunning(),
+          status: st.status || 'idle',
+          scannedAt: st.scannedAt || 0,
+          progress: st.progress || { done: 0, total: 0 },
+          summary: st.summary || null,
+          lessons: st.lessons || {},
+          stale: isVerifyStale(st),
+          error: st.error || null,
+        });
+      } catch (e) { sendErr(res, e); }
+    });
+
+    // ===== Higiene determinística del registro (0 tokens) =====
+    r.get('/hygiene', async (req, res) => {
+      try { res.json(await scanHygiene(reqPadContext(req))); }
+      catch (e) { sendErr(res, e); }
+    });
+
+    r.post('/hygiene/apply', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Aplicar la higiene requiere administrador.' });
+      try {
+        const b = req.body || {};
+        if (b.action !== 'delete-copies') return res.status(400).json({ error: 'Acción de higiene inválida.' });
+        const ctx = reqPadContext(req);
+        // Re-verificación obligatoria: la lista del cliente nunca decide qué se
+        // borra. Solo refs encontradas AHORA dentro de `playbooks` son elegibles.
+        const scan = await scanHygiene(ctx);
+        const eligible = new Set([
+          ...scan.copiasRedundantes.filter((item) => item.mcExists).map((item) => item.ref),
+          ...scan.huerfanosDescartados.map((item) => item.ref),
+        ]);
+        const refs = [...new Set(Array.isArray(b.refs) ? b.refs.map((ref) => String(ref || '').trim()).filter(Boolean) : [])];
+        const deleted = [];
+        const skipped = [];
+        for (const ref of refs) {
+          if (!eligible.has(ref)) {
+            skipped.push({ ref, reason: 'El escaneo actual no lo marca como copia borrable de playbooks.' });
+            continue;
+          }
+          const result = await padDeleteItem(ref, { ctx });
+          if (result.ok) deleted.push(ref);
+          else skipped.push({ ref, reason: result.error || 'Pad rechazó el borrado.' });
+        }
+        res.json({ deleted, skipped });
       } catch (e) { sendErr(res, e); }
     });
 
@@ -235,21 +349,35 @@ export default {
         const ctx = reqPadContext(req);
         const l = await getLesson(req.params.id, ctx);
         const asked = String(req.body?.target || '').trim();
+        if (asked && !PROMOTE_TARGETS.includes(asked)) {
+          return res.status(400).json({ error: `El destino "${asked}" no está disponible.` });
+        }
         // target explícito si es válido; si no, el destino sugerido si está
         // cableado; si no, memoria (el más inocuo).
-        const target = PROMOTE_TARGETS.includes(asked)
+        const target = asked
           ? asked
           : (PROMOTE_TARGETS.includes(l.destination) ? l.destination : 'memoria');
-        // Solo memoria/claude-md escriben al filesystem del proyecto → exigen dir.
-        if (TARGETS_NEED_DIR.includes(target) && !projectDirFor(l.project)) {
-          return res.status(400).json({ error: `El proyecto "${l.project}" no admite promoción a ${target} (solo console/tolkien). Reasigná el proyecto o probá otro destino.` });
-        }
+        // Gate ÚNICO de aplicabilidad (promote-shared): el backend rechaza lo que
+        // el tablero no debería haber ofrecido, con el motivo exacto.
+        // El glob explícito del body cuenta para el gate: sin esto una promoción
+        // legítima con `match` a mano se rechazaba antes de llegar al destino.
+        const blocked = targetBlockReason(target, l, req.body?.match);
+        if (blocked) return res.status(400).json({ error: `No se puede adoptar como ${target}: ${blocked}` });
         // Marcar primero (snapshot Fase 6) → así claude-md la incluye al render.
         // Si escribir el destino falla DESPUÉS de marcar, revertimos el status
         // para no dejarla 'promovida' sin haberla escrito (y que se pueda reintentar).
         const marked = await markPromoted(l.id, target, ctx);
         try {
-          await promote(marked.project, target, marked, { kind: String(req.body?.kind || 'work') }, ctx);
+          await promote(marked.project, target, marked, {
+            kind: String(req.body?.kind || 'work'),
+            match: req.body?.match,
+            contract: req.body?.contract,
+            // `rule` es el predicado declarativo (fileExists|grepPresent|grepAbsent)
+            // que hace que la obligación se verifique SOLA en cada corrida del
+            // emisor. Sin regla la fila entra igual, pero como verificación
+            // manual (skipped con motivo, nunca "incumplida").
+            rule: req.body?.rule,
+          }, ctx);
         } catch (err) {
           try { await setStatus(l.id, l.status, ctx); } catch { /* best-effort */ }
           throw err;
