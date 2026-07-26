@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-26 04:30 — main
+- Implementar sistema de ayuda contextual unificado en toda la consola
+
 ### 2026-07-25 14:08 — main
 - Actualizar Codex a gpt-5.6-sol + runners desacoplados + auditoría Pad
 
