@@ -20,6 +20,7 @@ Sos la sesión **ORQUESTADOR** de la metodología *Orquestador Interno* (diseño
 3. Leé **PLAN-642** (método completo) si necesitás el detalle fino de alguna decisión.
 4. Reconstruí el **DAG**: los bloques son PLANes hijos del umbrella; las dependencias son links `blocked-by` entre ellos (`pad_item action=deps ref=<PLAN-bloque>`).
 5. Chequeá el **kill-switch**: si el umbrella tiene `runState=paused|aborted` (campo o comentario), NO propongas spawns — avisá a Niko y esperá.
+6. Leé el **ANCLA** del umbrella (`## 📌 Pedido original (verbatim)` + criterios, CONVE-1957). Es el Norte contra el que vas a contrastar en cada señal. Si el umbrella no tiene ancla, pedila antes de spawnear nada — no podés reconciliar contra un objetivo que no existe.
 
 ## Paso 1 — Identificar bloques LISTOS
 Un bloque está **listo** si: (a) su status no es `done`, (b) TODOS sus `blocked-by` están `done`, (c) no está ya corriendo (sesión viva asociada). Marcá aparte los que están 🔵 **ya corriendo** (no re-spawnear) y los ⚠️ **needs-atomize** (su 1ª tarea es una sub-sesión ARQUITECTO que corre la skill `agrupar` sobre ese sub-plan antes de la ejecución real).
@@ -62,6 +63,14 @@ Las sesiones-bloque te avisan por **interfono** con `kind:'heads-up'` (level act
 | `blocked` | colisión/dep en runtime (típico claim conflict) | **serializá** ese bloque tras el que lo bloquea; avisá a Niko |
 | `needs-human` | decisión de Niko | surfaceá con contexto |
 | `partial` | paró temprano (capacidad/decisión) | retomá el bloque resumiendo desde su 1ª tarea no-hecha (CONVE-641 dentro del bloque) |
+
+**🧭 CP-N — contraste por bloque cerrado.** Cada vez que un bloque señale `done`, además de
+recalcular el DAG, corré el contraste de ese bloque contra el ancla (skill `contrastar`,
+modo `CP-N:<PLAN-bloque>`): ¿a qué criterio sirvió lo que hizo, y apareció trabajo que no
+sirve a ninguno? Si el veredicto es 🟡, abrí la corrección como tarea del bloque ANTES de
+proponer los bloques que desbloquea — la deriva se propaga hacia adelante y sale más cara
+en cada bloque que pasa. Si es 🔴, pará y surfaceá a Niko como `needs-human`.
+
 Ante CUALQUIER señal: **releé el Pad** (status de tareas/bloques) — es la verdad. La señal es solo el timbre. Idempotente: no dupliques si la señal llega dos veces.
 
 ## Paso 5 — Salud / heartbeat (reportar, no actuar salvo muerte real)
@@ -84,7 +93,13 @@ ScheduleWakeup delaySeconds=900 reason="barrido de bloques activos del orquestad
 Sos stateless por diseño: tras cualquier reinicio, un orquestador fresco reconstruye todo leyendo Pad (status por tarea) + cruzando `/api/chat/list`. En el peor caso se reejecuta SOLO la última tarea (las anteriores están marcadas hechas). Los mensajes de interfono PERSISTEN en disco (`~/.cwc-data/session-bus/messages`) → una señal emitida mientras estabas caído sigue pendiente (`pendingFor`) al revivir.
 
 ## Cierre
-Cuando TODOS los bloques del umbrella estén `done`, avisá a Niko con el resumen (bloques completados, qué queda fuera de alcance) y marcá el umbrella según corresponda. Cerrá SIEMPRE con la línea `🎾 Pelota: …`.
+Cuando TODOS los bloques del umbrella estén `done`, corré el **CP-Ω** (skill `contrastar`,
+modo `CP-Ω`) sobre el umbrella ANTES de dar nada por entregado: criterio por criterio, con
+evidencia. Un umbrella con todos los bloques en `done` y el contraste en 🟡 **no está
+terminado** — abrí las correcciones y volvé a contrastar (iterar hasta 🟢 es lo esperado;
+3 pasadas 🟡 seguidas ⇒ escalá a Niko). Con el 🟢 en mano, avisá a Niko con el resumen
+(bloques completados, la tabla del contraste final, qué queda fuera de alcance) y marcá el
+umbrella según corresponda. Cerrá SIEMPRE con la línea `🎾 Pelota: …`.
 
 ## ⚠️ Estado de la infra
 La skill `agrupar` (arquitecto), la skill `rutear` y el CLI `cwc-block-progress` YA existen. Los **campos estructurados** de Pad (`blockState`/`runState`) son build pendiente — por ahora el estado vive en `status` de PLAN/TASK + comentarios; el kill-switch lo leés del comentario/campo del umbrella. Si Niko pide formalizarlos, es un `pad_collection update` de las colecciones `planes`/`pendientes`.

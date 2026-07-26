@@ -80,7 +80,20 @@ HOST — no en el HOME aislado — porque lo spawnea y consulta el server.
 Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
 NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
 `cancelled` del job y corta el PTY. Timeout duro: 15 min.
-### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix)
+### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix).
+RADAR TÁNDEM (BUG-1959): `bgWork` distingue trabajo VIVO de resultado Codex
+LISTO para recoger. `sweepCodexBg()` cruza cada entrada `kind==='Codex'` con
+`readCodexJob(id)` del store `~/.cwc-data/codex-jobs/`; si el job está
+`done|error`, NO borra la entrada: la reclasifica con `ready:true`,
+`readyAt` y `outcome`. GOTCHA crítico: `bgWork` es memoria DEL RUNNER y
+`bgDone(id)` solo ocurre al recoger ESE id con `collect_codex`; si el agente
+nunca recogía el id concreto, la entrada quedaba viva aunque el proceso ya
+hubiera terminado y sobrevivía incluso a `systemctl restart` del server porque
+`KillMode=process` preserva el runner (regla dura 2). Por eso `bgHolds()` usa
+`bgLiveCount()` y un resultado listo ya no retiene despierto el motor;
+`warnBgKilled()` excluye los `ready` para no decir que siguen corriendo.
+El sweep Codex corre junto a `sweepBgFromTranscript()` en AMBOS puntos:
+intervalo de 20 s y chequeo de auto-siesta.
 ### bin/cwc-codex-runner.js     ejecutor DESACOPLADO de UNA delegación Tándem a Codex
 (`--job <id>`). Es config-free: no importa `core/config.js` y resuelve el
 directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Actualiza el heartbeat
@@ -224,7 +237,16 @@ comms/shared.js) vía el MISMO MCP de Graph de Tolkien que ya usa Teams
 (scope Mail.Read ya concedido, sin consentimiento nuevo); cwd=Tolkien
 (CROSS_WORLD_ALLOW). Estado en ~/.cwc-data/retro-email-scan.json +
 retro-email.lock (heartbeat pid-aware, dedup patrón triage/Teams). Lógica
-en src/modules/retro/email-shared.js
+en src/modules/retro/email-shared.js. BUG-1928: persiste SIEMPRE
+`project:'tolkien'`; NO “corregir” a `'otros'`: `projectDirFor('otros')`
+devuelve `null` y `TARGETS_NEED_DIR=['memoria','claude-md']` deja vedados
+justo los dos destinos que Claude Code auto-carga. BUG-1930: antes de la
+query trae `listLessons`, filtra `category==='feedback-cliente'`, ordena por
+`updatedAt` descendente y pasa solo `FEEDBACK_DEDUP_LIMIT=30` títulos ya
+registrados para que un re-reporte reuse el fingerprint, suba `recurrence` y
+pueda encender en rojo el semáforo de efectividad. Patrón copiado de
+`cwc-retro-feedback-runner.js`; el tope evita volcar al prompt las 275
+lecciones generales (~168 KB).
 ### bin/cwc-retro-teams-runner.js "💬 Feedback de Chris" — ESCANEO AUTOMÁTICO de Microsoft
 Teams (DM con 'chris') para Mejora Continua, DESACOPLADO (regla de oro;
 sonnet, READ-ONLY doble capa regla 6 con `graphReadAllowed` REUSADO tal
@@ -233,7 +255,13 @@ de Teams de Comunicaciones, no uno nuevo). Una sola query lee el DM 1:1 con
 el contacto Y destila el feedback en el mismo paso. Estado en
 ~/.cwc-data/retro-teams-scan.json + retro-teams.lock (heartbeat pid-aware,
 mismo dedup que el runner de correo). Lógica en
-src/modules/retro/teams-feedback-shared.js
+src/modules/retro/teams-feedback-shared.js. Comparte los blindajes
+BUG-1928/BUG-1930 del runner de correo: `project:'tolkien'` (NUNCA
+`'otros'`, que deja `projectDirFor()` en `null` y veda memoria/claude-md) +
+`listLessons` acotado a las 30 `feedback-cliente` más recientes, patrón de
+`cwc-retro-feedback-runner.js`; sin títulos previos el fingerprint no se
+reusa, `recurrence` no sube ni el semáforo puede detectar reincidencia, y
+sin el filtro/tope entrarían las 275 lecciones (~168 KB) al prompt.
 ### bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
 Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
 server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
@@ -606,3 +634,12 @@ el texto viaja entero en el prompt). Interfaz por archivos:
 key+transcripción). Al terminar AUTO-GUARDA el resultado en el
 meta-store del ítem (decisión de Niko: auto-guardar al interpretar).
 Lógica en src/modules/tickets/context-analyze-shared.js
+### bin/cwc-forbidden-override.js  CAMINO DE OVERRIDE CONSCIENTE del gate de acciones
+prohibidas por lección (M5, PLAN-1934). Determinístico, 0 tokens, config-free (no
+importa core/config.js: corre desde cualquier cwd y sin .env). `--list` muestra las
+reglas activas (seed de src/core/forbidden-actions.js + las del registro en disco) y
+los últimos overrides; `<reglaId> "<motivo>"` registra un override de UN SOLO USO con
+TTL en minutos (default 10, máx 60) en <dataDir>/forbidden-overrides.json, que el hook
+`lessonsPreToolUseHook` CONSUME al dejar pasar la tool call. Exige un motivo de ≥20
+caracteres: el registro de POR QUÉ se salteó la lección es el punto del mecanismo.
+Exit 0 ok · 1 error de uso · 2 regla desconocida.

@@ -88,6 +88,17 @@
   DETECCIÓN lo nuevo. Migrar un caño viejo al paquete es un proyecto per-caño
   aparte. El `src/modules/chat/index.js` (handoff/worldLabelFor) está en el
   allowlist como EL canal canónico del paquete-sesión.
+  Y **`ancla`** (2026-07-26, Regla dura 15 / CONVE-1957 / CONVE-1958):
+  `checkAncla` audita por HTTP plano (0 tokens, NO MCP) que los PLANes ACTIVOS del
+  Pad local tengan su `## 📌 Pedido original (verbatim)` y sus `## 🎯 Criterios de
+  aceptación` — el ancla contra la cual se contrasta al cerrar. GRANDFATHERING por
+  fecha: `ANCLA_SINCE` (constante de módulo, `2026-07-26T15:09:20Z` = el instante
+  exacto de creación de CONVE-1957, no la medianoche) acota la
+  auditoría a los ítems creados DESPUÉS de la adopción de la convención; los planes
+  anteriores nacieron sin ancla y marcarlos sería ruido permanente — el check existe
+  para señalar deriva NUEVA, no para reprochar historia. Falta de ancla ⇒ `warn` con
+  los refs (máx 5) y el remedio ("corré la skill `anclar`"); Pad caído ⇒ `warn`,
+  nunca `fail` (mismo criterio que `pad-backbone`).
 - **Dashboard del proyecto** (PESTAÑA PROPIA "📊 Dashboard" del grupo
   Diagnóstico del menú Sistema — `system/dashboard-panel.js`,
   `mountDashboardPanel`. REDISEÑO 2026-07-19 PLAN-752: antes era una subsección

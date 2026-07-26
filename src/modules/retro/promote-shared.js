@@ -4,9 +4,9 @@
 //
 //   memoria   → nota mejora-continua.md en la carpeta memory/ del proyecto
 //               (append; la próxima sesión la auto-carga). [Fase 1, movido acá]
-//   claude-md → SECCIÓN GESTIONADA dedicada con marcadores en el CLAUDE.md del
-//               proyecto (console) o en CLAUDE.local.md (tolkien, NO versionado
-//               → nunca se filtra al repo del equipo). Se RENDERIZA desde el
+//   claude-md → para console queda en Pad y se consulta desde el índice
+//               enrutador; para tolkien se mantiene CLAUDE.local.md (NO
+//               versionado → nunca se filtra al repo del equipo). Se RENDERIZA desde el
 //               conjunto de lecciones promovidas (idempotente); NUNCA toca lo
 //               que está fuera de los marcadores (Reglas duras/Convenciones a
 //               mano). Patrón syncToTolkien de tickets/context-store.js.
@@ -18,14 +18,14 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { readNote, writeNote, readIndex, writeIndex, hashOf } from '../projects/memory.js';
-import { getContext, saveContext } from '../tickets/context-store.js';
+import { getContext, saveContext, splitTopSections } from '../tickets/context-store.js';
 import { createItem, addLink } from '../../core/pad-service-client.js';
 import { listLessons } from './store.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MEMORY_NOTE = 'mejora-continua.md';
-const MARK_START = '<!-- cwc:mejora-continua:start -->';
-const MARK_END = '<!-- cwc:mejora-continua:end -->';
+export const MARK_START = '<!-- cwc:mejora-continua:start -->';
+export const MARK_END = '<!-- cwc:mejora-continua:end -->';
 
 // CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
 // Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
@@ -89,6 +89,10 @@ function renderManagedBlock(lessons) {
 }
 
 async function promoteToClaudeMd(project, ctx = null) {
+  // En console ya no espejamos las lecciones al CLAUDE.md: la entrada
+  // "Si vas a cerrar trabajo" del índice enrutador las trae desde Pad por tarea.
+  // Tolkien conserva su espejo externo en CLAUDE.local.md.
+  if (project === 'console') return;
   const file = claudeFileFor(project);
   if (!file) throw Object.assign(new Error(`El proyecto "${project}" no tiene CLAUDE.md promovible (solo console/tolkien).`), { badRequest: true });
   const { lessons } = await listLessons(ctx);
@@ -116,12 +120,36 @@ async function promoteToClaudeMd(project, ctx = null) {
 // Apéndala al contexto 'work' o 'pr' (bugfix-work/pr), que se inyecta en los
 // chats de ticket/PR y se ESPEJA a la CLAUDE.local.md de Tolkien vía saveContext
 // (syncToTolkien adentro). Idempotente por id (no re-apendea la misma lección).
+const FEEDBACK_CONTEXT_HEADING = '## 6. Feedback adoptado';
+
+// BUG-1927: crear la sección no alcanza. El splitter corta cada "## " fuera de
+// fences, y un fence impar puede ocultar todos los encabezados posteriores.
+export function sanitizeContextEntry(title, body) {
+  const safeTitle = String(title || '').replace(/[\r\n]+/g, ' ');
+  let safeBody = String(body || '').replace(/^## /gm, '### ');
+  const fenceCount = safeBody.split('\n').filter((line) => line.startsWith('```')).length;
+  if (fenceCount % 2 !== 0) safeBody = `${safeBody}${safeBody.endsWith('\n') ? '' : '\n'}\`\`\``;
+  return { title: safeTitle, body: safeBody };
+}
+
 function promoteToContext(lesson, kind) {
   const k = kind === 'pr' ? 'pr' : 'work';
   const cur = getContext(k) || '';
   if (cur.includes(lesson.id)) return; // ya está
-  const entry = `\n\n### 🔄 Lección de Mejora Continua (${lesson.id}) — ${lesson.title}\n_${lesson.category} · confianza ${lesson.confidence}_\n\n${lesson.body}\n`;
-  saveContext(k, `${cur}${entry}`);
+  const safe = sanitizeContextEntry(lesson.title, lesson.body);
+  const entry = `### 🔄 Lección de Mejora Continua (${lesson.id}) — ${safe.title}\n_${lesson.category} · confianza ${lesson.confidence}_\n\n${safe.body}`;
+  const split = splitTopSections(cur);
+  const section = split.sections.find((s) => s.title === FEEDBACK_CONTEXT_HEADING);
+  if (section) {
+    const sep = section.text.endsWith('\n\n') ? '' : (section.text.endsWith('\n') ? '\n' : '\n\n');
+    section.text = `${section.text}${sep}${entry}\n`;
+    saveContext(k, split.preamble + split.sections.map((s) => s.text).join(''));
+    return;
+  }
+  // BUG-1927: sección propia y espejable. Usamos 6 porque el contexto PR ya
+  // reserva "## 5." para su quick reference.
+  const sep = cur ? (cur.endsWith('\n\n') ? '' : (cur.endsWith('\n') ? '\n' : '\n\n')) : '';
+  saveContext(k, `${cur}${sep}${FEEDBACK_CONTEXT_HEADING}\n\n${entry}\n`);
 }
 
 // ===== Destino: PLAYBOOK de Pad (Fase 4) =====

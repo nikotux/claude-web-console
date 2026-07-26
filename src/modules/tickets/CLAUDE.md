@@ -158,7 +158,14 @@ El espejo de `tickets/context-store.js` ya NO baja los contextos `work` y `pr`
 completos a `~/tolkien/CLAUDE.local.md`: ese archivo auto-carga en toda sesión de
 Tolkien y el bloque completo pesaba ~60k. Ahora el bloque gestionado conserva los
 mismos marcadores, pero solo incluye secciones de REGLA que la sesión necesita desde
-el primer turno, más un puntero explícito a `.cwc-ticket-playbook.md`.
+el primer turno, más un puntero explícito a `.cwc-ticket-playbook.md`. BUG-1927:
+`MIRROR_RULES` incluye ahora `/^##\s*6\./` tanto en `work` como en `pr`, para que
+`## 6. Feedback adoptado` viaje a la auto-carga incluso cuando la promoción fue
+`kind:'pr'`; la regla `/^##\s*5\./` de `pr` queda INTACTA porque corresponde a
+`## 5. Quick reference — end-to-end flow`. El re-ruteo BUG-1927 ya corrió el
+2026-07-26: `CLAUDE.local.md` pasó de 0 lecciones/32.932 bytes a 17/48.864,
+y `.cwc-ticket-playbook.md` de 17/52.009 a 0/36.102. El neto de ambos casi
+no cambia: las 17 migraron de lectura a demanda a auto-carga, no se duplicaron.
 
 El procedimiento largo (fases, checklists y lecciones registradas) se genera en
 `~/tolkien/.cwc-ticket-playbook.md`, archivo local no versionado y excluido por
@@ -170,10 +177,10 @@ Fail-safe obligatorio: si los títulos cambian y ninguna sección matchea las re
 esperadas, ese contexto se espeja completo como antes y se loguea un aviso. Nunca se
 pierde cobertura por un rename de encabezados.
 
-Gotcha crítico: el splitter corta solo encabezados top-level `## ` fuera de fences.
-Los contextos tienen snippets de bash y plantillas markdown con líneas como
-`## Summary` / `## Verification` dentro de bloques ```; mientras el splitter está
-dentro de un fence, ninguna línea cuenta como encabezado.
+Gotcha crítico: `splitTopSections` corta solo encabezados top-level `## ` y
+mantiene `inFence`; los contextos tienen snippets de bash y plantillas markdown
+con líneas como `## Summary` / `## Verification` dentro de bloques ```, que NO
+fragmentan secciones mientras el splitter está dentro del fence.
 
 ## Linkeo automático al grafo de Pad (BUG-1878)
 

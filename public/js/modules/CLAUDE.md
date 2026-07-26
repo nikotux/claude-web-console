@@ -5,16 +5,22 @@
 ### public/js/modules/          launcher · sessions (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
 2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la
 fila 2 suma una LÍNEA VIVA (`.sess-live`, `liveText()`) con prioridad
-trabajo de fondo > delegando > turno en curso, siempre con "hace cuánto".
+trabajo de fondo VIVO > resultado listo para recoger > delegando > turno
+en curso, siempre con "hace cuánto". BUG-1959: `liveMeta()` parte
+`bgTasks` en `bgLive` (`!ready`) y `bgReady` (`ready`): si queda algún vivo
+gana `⚡ N en segundo plano`; SOLO cuando no hay vivos y sí listos muestra
+`sessions.live.bgReady` con `✅ N listo(s) para recoger`.
 En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
 SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
 (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se
 esconde — misma lección del widget de actividad ya aplicada al botón
 global: un control que aparece sólo en el instante en que hay algo
-corriendo es indescubrible. Con hijos vivos (`kidsOf()` = `bgTasks` +
-`delegatingList`) muestra un hijo por trabajo, cada uno con su PROPIO
-Pac-Man en estado `delegating` (el que orbita, o sea MOVIMIENTO visible),
-etiqueta y tiempo corriendo. Al desplegar con 0 hijos muestra una fila
+corriendo es indescubrible. Con hijos (`kidsOf()` = `bgTasks` +
+`delegatingList`) muestra uno por trabajo; `kidsOf`/`kidRowHtml` propagan
+`ready`: los vivos llevan su PROPIO Pac-Man en estado `delegating` (el que
+orbita, o sea MOVIMIENTO visible), pero un resultado listo lleva ícono
+`check` y CERO Pac-Man — terminado no puede animarse como si corriera.
+Todos conservan etiqueta y tiempo. Al desplegar con 0 hijos muestra una fila
 tranquila `.sess-kid--empty` con "Nada corriendo en segundo plano", no un
 panel vacío.
 El header de "Sesiones" ganó un SEGUNDO botón (`data-ref="bg"`) con el

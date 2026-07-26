@@ -19,11 +19,12 @@ import {
   readEmailScan, writeEmailScan, writeEmailLock, clearEmailLock, readEmailLock,
   EMAIL_TIMEOUT_MS, EMAIL_HEARTBEAT_MS,
 } from '../src/modules/retro/email-shared.js';
-import { upsertLesson, computeFingerprint } from '../src/modules/retro/store.js';
+import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
 import { padContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-email]', ...a);
 const FEEDBACK_CONTACT_ID = 'chris';
+const FEEDBACK_DEDUP_LIMIT = 30;
 
 // Dedup pid-aware (patrón bugs/index.js:spawnTriage / comms-teams-runner): el
 // server ya reservó el lock con MI pid al spawnearme (mismo tick que
@@ -39,10 +40,28 @@ function finish(code) { clearInterval(heartbeat); clearEmailLock(); process.exit
 const denyMsg = 'Escaneo de correo: SOLO graph_read_email/graph_read_email_body.';
 const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg } };
 
-async function fetchEmail(contact, self, sinceIso) {
+async function feedbackForDedup(ctx) {
+  try {
+    const r = await listLessons(ctx);
+    // BUG-1930: acotamos el prompt y priorizamos lo reciente; la categoría ya
+    // está filtrada, así no mandamos las cientos de lecciones generales.
+    return (r.lessons || [])
+      .filter((l) => l.category === 'feedback-cliente')
+      .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+      .slice(0, FEEDBACK_DEDUP_LIMIT);
+  } catch (err) {
+    log('no pude traer feedback existente para dedup:', err?.message || err);
+    return [];
+  }
+}
+
+async function fetchEmail(contact, self, sinceIso, existing = []) {
   let out = '';
+  const existingBlock = existing.length
+    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
+    : '';
   const q = query({
-    prompt: emailScanPrompt(contact, self, sinceIso),
+    prompt: emailScanPrompt(contact, self, sinceIso) + existingBlock,
     options: {
       cwd: config.projectDir,
       model: 'sonnet',
@@ -84,7 +103,9 @@ async function persist(items, ctx) {
         observation: obsWithSource,
         lesson: it.lesson,
         destination: 'contexto',
-        project: 'otros',
+        // BUG-1928: es feedback sobre PRs de Tolkien; "otros" bloquea los
+        // destinos que necesitan el directorio del proyecto.
+        project: 'tolkien',
         confidence: it.confidence,
         fingerprint,
         sourceRefs: it.refs,
@@ -107,7 +128,8 @@ async function run() {
   const self = readSelf();
   const prev = readEmailScan();
   const ctx = padContextForUser(null); // corrida bajo botón admin del host ⇒ Pad de 'console' (retrocompat)
-  const out = await fetchEmail(contact, self, prev.lastReceivedAt || null);
+  const existing = await feedbackForDedup(ctx);
+  const out = await fetchEmail(contact, self, prev.lastReceivedAt || null, existing);
   const parsed = parseEmailScan(out);
   if (!parsed) throw new Error('No se pudo interpretar el escaneo de correo (respuesta inválida).');
   const summary = await persist(parsed.items, ctx);

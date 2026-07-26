@@ -30,6 +30,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settingSourcesFor } from './sdk-settings.js';
 import { chatAttachDir } from '../modules/chat/attachments.js';
+import {
+  evaluateForbiddenAction, consumeForbiddenOverride, forbiddenDenyMessage,
+} from './forbidden-actions.js';
 
 // Raíz del repo de la CONSOLA (este archivo vive en src/core/ → ../.. = raíz).
 // Se usa para decidir si un chat trabaja en el MUNDO INTERNO (Mi Consola) y por
@@ -207,6 +210,46 @@ export function tandemPreToolUseHook() {
           return deny('Modo Tándem: Bash es solo para inspección y verificación (leer, node --check, tests). Para escribir archivos usá delegate_to_codex.');
         }
         return {};
+      }],
+    }],
+  };
+}
+
+// M5 (PLAN-1934) — HOOK DE LECCIONES PROHIBITIVAS: el ÚNICO gate DURO de la casa.
+// A diferencia del hook de Tándem (que sólo corre en ese modelo), éste va en TODO
+// chat y en los DOS mundos: una lección del tipo "nunca ejecutes X" no depende de
+// qué modelo corra la sesión. Por ser `PreToolUse` es inmune a bypassPermissions y
+// a las allow-rules del settings.json — por eso es el único mecanismo que IMPIDE
+// en vez de sugerir. Las reglas viven en core/forbidden-actions.js (seed en código
+// + registro en disco); el override consciente se pide con
+// bin/cwc-forbidden-override.js y se CONSUME acá (un solo uso).
+export function lessonsPreToolUseHook({ chatId = null, onDeny = null, onOverride = null } = {}) {
+  return {
+    PreToolUse: [{
+      hooks: [async (input) => {
+        let rule = null;
+        try {
+          const cmd = input?.tool_name === 'Bash' ? String(input?.tool_input?.command || '') : '';
+          const command = cmd ? shellOutsideQuotes(cmd).replace(/\s+/g, ' ') : '';
+          rule = evaluateForbiddenAction({ toolName: input?.tool_name, toolInput: input?.tool_input, command });
+        } catch {
+          return {}; // FALLA ABIERTO: un registro roto no puede tapar todos los chats
+        }
+        if (!rule) return {};
+        let grant = null;
+        try { grant = consumeForbiddenOverride(rule.id, { chatId }); } catch { grant = null; }
+        if (grant) {
+          try { onOverride?.(rule, grant); } catch { /* un aviso de UI no puede cortar el turno */ }
+          return {};
+        }
+        try { onDeny?.(rule); } catch { /* idem */ }
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: forbiddenDenyMessage(rule),
+          },
+        };
       }],
     }],
   };

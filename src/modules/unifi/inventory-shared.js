@@ -231,6 +231,22 @@ export async function scanToPad({ dryRun = false } = {}) {
   let retired = 0;
   let linked = 0;
   let errors = 0;
+  const errorDetails = [];
+
+  function failureReason(result) {
+    const status = result?.status ? `HTTP ${result.status}: ` : '';
+    return `${status}${result?.error || result?.code || 'error desconocido'}`.slice(0, 180);
+  }
+
+  function recordError(ref, result) {
+    if (errorDetails.length >= 20) return;
+    errorDetails.push(`${ref}: ${failureReason(result)}`);
+  }
+
+  function isOpenChildren(result) {
+    const code = result?.code || result?.data?.code || result?.data?.error?.code;
+    return code === 'open_children' || result?.status === 409;
+  }
 
   for (const entry of inv) {
     const item = existingByUid.get(entry.uid);
@@ -289,6 +305,8 @@ export async function scanToPad({ dryRun = false } = {}) {
     else errors += 1;
   }
 
+  const membersToRetire = [];
+  const networksToRetire = [];
   for (const item of existingItems) {
     const fields = parseFields(item);
     const uid = fields.uid;
@@ -296,21 +314,41 @@ export async function scanToPad({ dryRun = false } = {}) {
       continue;
     }
 
+    const candidate = { item, fields };
+    if (fields.kind === 'red') networksToRetire.push(candidate);
+    else membersToRetire.push(candidate);
+  }
+
+  // BUG-1254: Pad ve los links implements como PARENT/CHILD; retirar primero
+  // los miembros evita que el guard open_children bloquee a la red padre.
+  const itemsToRetire = [...membersToRetire, ...networksToRetire];
+  for (const { item, fields } of itemsToRetire) {
     if (dryRun) {
       retired += 1;
       continue;
     }
 
-    const write = await updateItem(item.ref, {
-      fields: {
-        ...fields,
-        status: 'retirado',
-        lastSeen: now,
-      },
-    });
+    const retirementFields = {
+      ...fields,
+      status: 'retirado',
+      lastSeen: now,
+    };
+    let write = await updateItem(item.ref, { fields: retirementFields });
+
+    // Una red aún puede conservar hijos presentes; en ese conflicto explícito,
+    // Pad permite confirmar el retiro mediante force en el mismo PATCH.
+    if (!write.ok && isOpenChildren(write)) {
+      write = await updateItem(item.ref, {
+        fields: retirementFields,
+        force: true,
+      });
+    }
 
     if (write.ok) retired += 1;
-    else errors += 1;
+    else {
+      errors += 1;
+      recordError(`retiro ${item.ref}`, write);
+    }
   }
 
   if (!dryRun) {
@@ -345,9 +383,13 @@ export async function scanToPad({ dryRun = false } = {}) {
 
           const w = await addLink(sourceRef, targetRef, 'implements');
           if (w.ok) linked += 1;
-          else errors += 1;
-        } catch {
+          else {
+            errors += 1;
+            recordError(`link ${sourceRef} -> ${targetRef}`, w);
+          }
+        } catch (err) {
           errors += 1;
+          recordError(`link ${sourceRef} -> ${targetRef}`, { error: err?.message || err });
         }
       }
 
@@ -373,5 +415,5 @@ export async function scanToPad({ dryRun = false } = {}) {
     }
   }
 
-  return { ok: true, created, updated, retired, linked, total: inv.length, dryRun, errors };
+  return { ok: true, created, updated, retired, linked, total: inv.length, dryRun, errors, errorDetails };
 }

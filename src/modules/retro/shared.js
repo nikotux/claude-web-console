@@ -25,7 +25,12 @@ const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-runner.js');
 
 export const RETRO_TIMEOUT_MS = 4 * 60 * 1000;
 export const RETRO_STALE_MS = RETRO_TIMEOUT_MS + 30 * 1000;
+// BUG-1930: limita el prompt (275 lecciones rondan 25 KB solo en títulos).
+// El caller debe priorizar bien: si deja promovidas fuera de esta ventana, el
+// medidor de efectividad pierde recurrencias y queda ciego.
+export const RETRO_DEDUP_LIMIT = 120;
 const MAX_CONTEXT = 60 * 1000;   // tope del texto condensado que viaja al modelo
+const MAX_TRANSCRIPT_FILES = 40;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const MIN_USER_TURNS = 3;        // filtro híbrido: menos que esto y sin código tocado ⇒ trivial, no se destila
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -182,7 +187,7 @@ export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, l
       ticketNumber: ticketNumber || null,
       learningId: learningId || null,
       userTurns: sig.userTurns,
-      files: [...sig.files].slice(0, 40),
+      files: [...sig.files].slice(0, MAX_TRANSCRIPT_FILES),
     },
     result: null,
     error: null,
@@ -199,7 +204,7 @@ export function retroPrompt(job, existing = []) {
   const meta = job?.meta || {};
   const filesLine = (meta.files || []).length ? `\nArchivos tocados en la sesión: ${(meta.files || []).join(', ')}` : '';
   const existingBlock = existing.length
-    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.slice(0, 40).map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
+    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.slice(0, RETRO_DEDUP_LIMIT).map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
     : '';
   return `Sos un analista de PROCESO de un equipo de desarrollo. Te paso la TRANSCRIPCIÓN CONDENSADA de una sesión de trabajo de Claude Code sobre el proyecto "${meta.project || 'otros'}" (título: "${meta.title || 's/título'}").${filesLine}${existingBlock}
 

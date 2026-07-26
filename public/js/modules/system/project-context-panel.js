@@ -459,7 +459,25 @@ export function mountProjectContextPanel(el, ctx) {
     });
   }
 
-  async function editSection(i) {
+  function showManagedSection(sec) {
+    const m = dialog.openModal({
+      title: t('system.projectContext.sectionEditorTitle', 'Sección — {title}', { title: sec.title }),
+      width: 760,
+    });
+    const box = document.createElement('div');
+    box.innerHTML = `
+      <p class="pj-sync pj-sync--warn">⚙️ ${t('projects.section.managed', 'Generada automáticamente — editá el origen, no este texto.')}</p>
+      <textarea class="dlg-editor-text" spellcheck="false" readonly aria-readonly="true"></textarea>
+      <div class="dlg-actions">
+        <button class="btn-ghost btn--sm" data-ref="close">${t('system.projectContext.close', 'Cerrar')}</button>
+      </div>`;
+    box.querySelector('.dlg-editor-text').value = sec.text;
+    box.querySelector('[data-ref="close"]').addEventListener('click', m.close);
+    m.body.appendChild(box);
+  }
+
+  async function editSection(section) {
+    const i = section.i;
     let sec;
     try {
       const res = await fetch(sectionsUrl(`/section/${i}`));
@@ -467,6 +485,10 @@ export function mountProjectContextPanel(el, ctx) {
       if (!res.ok) throw new Error(sec.error || t('system.projectContext.sectionReadError', 'No se pudo leer la sección.'));
     } catch (e) {
       dialog.alertDialog({ title: t('system.projectContext.contextTitle', 'Contexto'), message: e.message });
+      return;
+    }
+    if (section.managed) {
+      showManagedSection(sec);
       return;
     }
     await dialog.textEditorDialog({
@@ -511,10 +533,11 @@ export function mountProjectContextPanel(el, ctx) {
             <b>${esc(s.title)}</b><br>
             <span class="hp-sev">${t('system.projectContext.linesCount', '{count} líneas', { count: s.lines })} · ${fmtSize(s.size)}</span>
           </span>
-          ${isAdmin || current?.kind === 'perso' ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-act="edit" title="${t('system.projectContext.editOnlyThisSectionTooltip', 'Editar SOLO esta sección')}">${icon('edit', { size: 13 })}</button></span>` : ''}
+          ${isAdmin || current?.kind === 'perso' ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-act="edit" title="${s.managed ? t('projects.section.managed', 'Generada automáticamente — editá el origen, no este texto.') : t('system.projectContext.editOnlyThisSectionTooltip', 'Editar SOLO esta sección')}">${icon(s.managed ? 'eye' : 'edit', { size: 13 })}</button></span>` : ''}
         </div>`).join('');
       for (const row of ctxSectionsEl().querySelectorAll('[data-i]')) {
-        row.querySelector('[data-act="edit"]')?.addEventListener('click', () => editSection(row.dataset.i));
+        const section = data.sections.find((s) => String(s.i) === row.dataset.i);
+        row.querySelector('[data-act="edit"]')?.addEventListener('click', () => editSection(section));
       }
     } catch {
       if (alive && ctxSectionsEl()) ctxSectionsEl().innerHTML = `<div class="bk-empty">${t('system.projectContext.contextReadError', 'No se pudo leer el contexto.')}</div>`;

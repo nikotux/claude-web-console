@@ -73,7 +73,14 @@ export function hardRulesText() {
     for (let i = start + 1; i < lines.length; i++) {
       if (/^##\s/.test(lines[i])) { end = i; break; }
     }
-    _hardRules = lines.slice(start, end).join('\n').trim();
+    const hardRules = lines.slice(start, end).join('\n').trim();
+    let catalog = '';
+    try {
+      catalog = fss.readFileSync(path.join(ROOT, 'docs', 'reglas-catalogo.md'), 'utf8').trim();
+    } catch {}
+    _hardRules = catalog
+      ? `${hardRules}\n\n===== CATÁLOGO DE LAS REGLAS (docs/reglas-catalogo.md) =====\n\n${catalog}`
+      : hardRules;
   } catch { _hardRules = ''; }
   return _hardRules;
 }

@@ -14,7 +14,16 @@ SSID), rest/networkconf de los WAN (wan_load_balance_type
 weighted|failover-only, smartq_enabled) y stat/health (wan.uptime_stats
 por WAN + www speedtest/latency). inventory-shared.js escanea la
 ESTRUCTURA a Pad (colección infraestructura-de-red, upsert por uid,
-retire-sweep de lo ausente; NO tocar en cambios de deep-read).
+retire-sweep de lo ausente; NO tocar en cambios de deep-read). BUG-1254:
+el retiro ordena estable miembros primero y `kind==='red'` al final,
+porque Pad materializa los links `implements` wifi/reserva → red como
+PARENT/CHILD: retirar la red antes chocaba con `open_children` y quedaba
+sin retirar EN SILENCIO. Red de seguridad: ante `open_children`/HTTP 409
+reintenta UNA vez con `force:true`. GOTCHA de cliente: aunque Pad mande
+`code` en el cuerpo, `core/pad-service-client.js` solo devuelve
+`{ok,error,status}` y lo descarta; la detección efectiva es
+`status===409`. El retorno conserva todas sus claves y suma
+`errorDetails[]` (máximo 20), para que `errors` no sea un contador mudo.
 audit-shared.js (PLAN-1795) es DETERMINÍSTICO (0 tokens, sin LLM):
 getRadios()/getWan() derivan la telemetría y buildVoiceAudit() aplica
 REGLAS de voz (2.4GHz cu_total>60→rojo / 40-60→amarillo,

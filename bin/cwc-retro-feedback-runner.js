@@ -52,7 +52,9 @@ async function persist(items, job, ctx) {
         observation: it.observation,
         lesson: it.lesson,
         destination: 'contexto',
-        project: job.project || 'otros',
+        // BUG-1928: el feedback manual también trata PRs de Tolkien; dejarlo en
+        // "otros" bloquearía memoria y claude-md cuando el frontend no manda project.
+        project: job.project || 'tolkien',
         confidence: it.confidence,
         fingerprint,
         sourceRefs: refs,

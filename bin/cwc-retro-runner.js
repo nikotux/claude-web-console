@@ -7,7 +7,7 @@
 // determinístico en Pad local (dedup por fingerprint = recurrencia) — eso NO es
 // una tool del modelo, es HTTP desde Node (como audio escribe el job a disco).
 import {
-  ROOT, RETRO_TIMEOUT_MS, retroPrompt, parseRetro,
+  ROOT, RETRO_TIMEOUT_MS, RETRO_DEDUP_LIMIT, retroPrompt, parseRetro,
   readRetroJob, writeRetroJob,
 } from '../src/modules/retro/shared.js';
 import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
@@ -22,7 +22,22 @@ async function distill(job, ctx) {
   // reuse el título exacto de un concepto repetido (best-effort — si Pad falla
   // igual destila, solo pierde la guía de recurrencia).
   let existing = [];
-  try { const r = await listLessons(ctx); existing = (r.lessons || []).map((l) => ({ category: l.category, title: l.title })); }
+  try {
+    const r = await listLessons(ctx);
+    const lessons = r.lessons || [];
+    // BUG-1930: el medidor observa primero aprobadas/promovidas; descartadas
+    // quedan últimas, aunque su recurrencia todavía aporta una señal secundaria.
+    const priority = (l) => (l.status === 'promovida' || l.status === 'aprobada' ? 0 : (l.status === 'descartada' ? 2 : 1));
+    const ordered = [...lessons].sort((a, b) => (
+      priority(a) - priority(b)
+      || Number(b.recurrence || 0) - Number(a.recurrence || 0)
+      || Number(b.updatedAt || 0) - Number(a.updatedAt || 0)
+    ));
+    existing = ordered.slice(0, RETRO_DEDUP_LIMIT).map((l) => ({ category: l.category, title: l.title }));
+    if (lessons.length > RETRO_DEDUP_LIMIT) {
+      log(`dedup: ${lessons.length - RETRO_DEDUP_LIMIT} lección(es) quedaron fuera del tope de ${RETRO_DEDUP_LIMIT}.`);
+    }
+  }
   catch (err) { log('no pude traer lecciones existentes para dedup:', err?.message || err); }
   // Texto puro, read-only doble capa (regla 6) vía el helper único core/text-only-query.
   const text = await textOnlyQuery(retroPrompt(job, existing), {

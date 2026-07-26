@@ -45,6 +45,12 @@ import {
 } from './scan-shared.js';
 import { createTaskFromProposal } from './pad-writeback-shared.js';
 import { getSites } from '../unifi/client.js';
+import {
+  collect as collectPadIndex,
+  computeCeiling,
+  DEFAULT_PROFILE as PAD_INDEX_PROFILE,
+  renderIndex,
+} from '../../core/pad-index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
@@ -207,7 +213,11 @@ function checkTolkienContextSync() {
   return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
 }
 
-const MODULES_WITHOUT_FICHA = new Set(['files', 'stats', 'tmux', 'admin']);
+// Módulos que legítimamente NO llevan ficha propia. Vacío desde 2026-07-26:
+// `files`, `stats`, `tmux` y `admin` estaban acá por no tenerla y ya la tienen
+// (F6 de PLAN-1940). Si algún día se agrega un nombre, documentar el motivo:
+// una exclusión sin motivo es un punto ciego del chequeo.
+const MODULES_WITHOUT_FICHA = new Set([]);
 
 // Regla 14 / PLAN-1862: sin este check, un módulo nuevo puede nacer sin ficha
 // CLAUDE.md y su contexto se pierde en silencio.
@@ -278,6 +288,13 @@ const CROSS_WORLD_ALLOW = new Set([
   'bin/cwc-retro-teams-runner.js',          // "Feedback de Chris" (retro): lee el DM de Teams con Chris, mismo MCP/allowlist que el escaneo de Teams de Comunicaciones, no enlaza los Pad
 ]);
 const CROSS_WORLD_RE = /config\.projectDir|CLAUDE\.local\.md/;
+
+// Instante de adopción de la Regla dura 15 (ancla del pedido original) = la
+// creación de CONVE-1957 en Pad. Es un timestamp exacto y no la medianoche a
+// propósito: los planes abiertos ESA misma mañana nacieron cuando la convención
+// todavía no existía, y marcarlos sería reprochar historia.
+const ANCLA_SINCE = '2026-07-26T15:09:20Z';
+
 function checkCrossWorld() {
   const id = 'cross-world';
   const label = 'Cruces entre mundos (F7)';
@@ -324,6 +341,16 @@ function checkTolkienEnvs() {
   return { id, label, status: 'ok', detail: recs.length ? `${recs.length} entorno(s) registrado(s), todos sanos` : 'sin entornos activos' };
 }
 
+// OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto,
+// a diferencia del MCP) — hay que parsearlo antes de leer sus atributos.
+function padField(item, key) {
+  let fields = item?.fields;
+  if (typeof fields === 'string') {
+    try { fields = JSON.parse(fields); } catch { fields = {}; }
+  }
+  return fields?.[key] ?? item?.[key];
+}
+
 // Verifica el BACKBONE de Pad local (workspace `console`): hoy tasks/learning/
 // retro/tickets-meta hablan contra él y si se cae DEGRADAN EN SILENCIO — este
 // check lo hace visible en el semáforo. Además vigila que el ESPEJO de la Regla
@@ -334,19 +361,12 @@ function checkTolkienEnvs() {
 async function checkPadBackbone() {
   const id = 'pad-backbone';
   const label = 'Pad local (backbone console)';
-  // OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto,
-  // a diferencia del MCP) — hay que parsearlo antes de leer priority/status.
-  const field = (it, k) => {
-    let f = it?.fields;
-    if (typeof f === 'string') { try { f = JSON.parse(f); } catch { f = {}; } }
-    return f?.[k] ?? it?.[k];
-  };
   const r = await padLocal.listItems('conventions', { workspace: 'console' });
   if (!r.ok) {
     return { id, label, status: 'warn', detail: `Pad local no responde (${r.error || 'sin detalle'}) — tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?` };
   }
   const items = Array.isArray(r.data) ? r.data : [];
-  const musts = items.filter((c) => field(c, 'priority') === 'must' && field(c, 'status') !== 'disabled');
+  const musts = items.filter((c) => padField(c, 'priority') === 'must' && padField(c, 'status') !== 'disabled');
   const hasAnticollision = items.some((c) => {
     const t = `${c?.title || ''} ${c?.content || ''}`.toLowerCase();
     return /anti-?colisi[oó]n|plan-puente|regla dura #12|regla #12/.test(t);
@@ -355,6 +375,100 @@ async function checkPadBackbone() {
     return { id, label, status: 'warn', detail: 'Pad local OK pero FALTA en las Conventions el espejo de la Regla dura #12 (anti-colisión entre mundos) — CLAUDE.md y Pad divergieron; recrear la convención' };
   }
   return { id, label, status: 'ok', detail: `Pad local OK · ${musts.length} convención(es) must · espejo Regla #12 presente` };
+}
+
+// Verifica que el índice enrutador respete su techo y que todos sus destinos
+// bloqueantes existan y tengan cuerpo. Read-only, HTTP plano y 0 tokens.
+async function checkPadIndex() {
+  const id = 'pad-index';
+  const label = 'Índice enrutador de Pad';
+  try {
+    const conventions = await padLocal.listItems('conventions', {
+      workspace: PAD_INDEX_PROFILE.workspace,
+    });
+    if (!conventions.ok) {
+      return { id, label, status: 'warn', detail: 'Pad no responde, no se pudo verificar el índice' };
+    }
+
+    const data = await collectPadIndex(PAD_INDEX_PROFILE);
+    const indexText = renderIndex(data, PAD_INDEX_PROFILE);
+    const ceiling = computeCeiling(indexText, data);
+    const lockedRefs = [...new Set(
+      indexText.split('\n')
+        .filter((line) => line.startsWith('- 🔒 |'))
+        .map((line) => line.match(/\bpad_item get\s+([^\s(]+)/)?.[1])
+        .filter(Boolean),
+    )];
+    const items = Array.isArray(conventions.data)
+      ? conventions.data
+      : (Array.isArray(conventions.data?.items) ? conventions.data.items : []);
+    const byRef = new Map(items.map((item) => [item?.ref, item]));
+    const badRefs = lockedRefs.filter((ref) => {
+      const item = byRef.get(ref);
+      return !item || !String(item.content || '').trim();
+    });
+    const errors = [];
+    if (!ceiling.ok) {
+      errors.push(`techo excedido por ${ceiling.total - ceiling.limit} caracteres (${ceiling.total}/${ceiling.limit})`);
+    }
+    if (badRefs.length) errors.push(`refs bloqueantes inexistentes o vacías: ${badRefs.join(', ')}`);
+    if (errors.length) return { id, label, status: 'fail', detail: errors.join(' · ') };
+    return {
+      id,
+      label,
+      status: 'ok',
+      detail: `techo ${ceiling.total}/${ceiling.limit} · ${lockedRefs.length} ref(s) bloqueante(s) resueltas`,
+    };
+  } catch {
+    return { id, label, status: 'warn', detail: 'Pad no responde, no se pudo verificar el índice' };
+  }
+}
+
+// Audita la Regla dura 15 (ancla del pedido original, CONVE-1957/CONVE-1958):
+// todo trabajo no trivial guarda en Pad el pedido VERBATIM + sus criterios de
+// aceptación, y sin eso el contraste final no tiene contra qué medir. Read-only
+// por HTTP plano (NO MCP, no toca el blindaje de la regla 6), 0 tokens.
+// GRANDFATHERING: solo audita los ítems creados a partir de ANCLA_SINCE (la
+// fecha de adopción de la convención). Los planes anteriores nacieron sin ancla
+// y marcarlos sería ruido permanente — el check tiene que señalar deriva NUEVA.
+async function checkAncla() {
+  const id = 'ancla';
+  const label = 'Ancla del pedido original';
+  try {
+    const r = await padLocal.listItems('planes', { workspace: 'console' });
+    if (!r.ok) {
+      return { id, label, status: 'warn', detail: 'Pad local no responde, no se pudo auditar el ancla de los planes activos' };
+    }
+    const items = Array.isArray(r.data)
+      ? r.data
+      : (Array.isArray(r.data?.items) ? r.data.items : []);
+    const terminal = new Set(['done', 'hecha', 'hecho', 'archived', 'cancelled', 'descartada']);
+    const audited = items.filter((it) => {
+      const status = String(padField(it, 'status') || '').toLowerCase();
+      return it.created_at && it.created_at >= ANCLA_SINCE && !terminal.has(status);
+    });
+    if (!audited.length) {
+      return { id, label, status: 'ok', detail: 'sin planes activos posteriores a la adopción de la Regla 15' };
+    }
+    const sinAncla = audited.filter((it) => {
+      const content = String(it.content || '');
+      return !/^##\s+.*Pedido original/mi.test(content)
+        || !/^##\s+.*Criterios de aceptación/mi.test(content);
+    });
+    if (!sinAncla.length) {
+      return { id, label, status: 'ok', detail: `${audited.length} plan(es) activo(s) auditado(s) · todos anclados` };
+    }
+    const firstRefs = sinAncla.slice(0, 5).map((it) => it.ref).join(', ');
+    const refs = sinAncla.length > 5 ? `${firstRefs} y ${sinAncla.length - 5} más` : firstRefs;
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `${sinAncla.length}/${audited.length} plan(es) activo(s) SIN ancla del pedido original (Regla 15): ${refs} — corré la skill \`anclar\` sobre ${sinAncla.length === 1 ? 'ese ítem' : 'esos ítems'}`,
+    };
+  } catch {
+    return { id, label, status: 'warn', detail: 'no pude auditar el ancla (Pad local no responde)' };
+  }
 }
 
 // Estado del BACKBONE de Pad local para el Dashboard del proyecto (Gap #5,
@@ -395,9 +509,17 @@ async function runChecks() {
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     checkPadBackbone(),
+    checkPadIndex(),
+    checkAncla(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
-  return { checkedAt: Date.now(), ok: count('ok'), warn: count('warn'), fail: count('fail'), checks };
+  return {
+    checkedAt: Date.now(),
+    ok: count('ok'),
+    warn: count('warn'),
+    fail: count('fail'),
+    checks,
+  };
 }
 
 // ===== revisión EXHAUSTIVA con Claude (runner desacoplado, READ-ONLY) =====

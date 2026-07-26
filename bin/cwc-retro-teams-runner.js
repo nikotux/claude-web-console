@@ -20,11 +20,12 @@ import {
   writeTeamsFbLock, clearTeamsFbLock, readTeamsFbLock,
   TEAMS_FB_TIMEOUT_MS, TEAMS_FB_HEARTBEAT_MS,
 } from '../src/modules/retro/teams-feedback-shared.js';
-import { upsertLesson, computeFingerprint } from '../src/modules/retro/store.js';
+import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
 import { padContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-teams]', ...a);
 const FEEDBACK_CONTACT_ID = 'chris';
+const FEEDBACK_DEDUP_LIMIT = 30;
 
 // Dedup pid-aware (el server ya reservó el lock con MI pid al spawnearme).
 const _resv = readTeamsFbLock();
@@ -38,10 +39,28 @@ function finish(code) { clearInterval(heartbeat); clearTeamsFbLock(); process.ex
 const denyMsg = 'Escaneo de Teams: SOLO tools graph_*/teams_* de lectura.';
 const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg } };
 
-async function fetchTeams(contact, self, sinceIso) {
+async function feedbackForDedup(ctx) {
+  try {
+    const r = await listLessons(ctx);
+    // BUG-1930: acotamos el prompt y priorizamos lo reciente; la categoría ya
+    // está filtrada, así no mandamos las cientos de lecciones generales.
+    return (r.lessons || [])
+      .filter((l) => l.category === 'feedback-cliente')
+      .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+      .slice(0, FEEDBACK_DEDUP_LIMIT);
+  } catch (err) {
+    log('no pude traer feedback existente para dedup:', err?.message || err);
+    return [];
+  }
+}
+
+async function fetchTeams(contact, self, sinceIso, existing = []) {
   let out = '';
+  const existingBlock = existing.length
+    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
+    : '';
   const q = query({
-    prompt: teamsFeedbackPrompt(contact, self, sinceIso),
+    prompt: teamsFeedbackPrompt(contact, self, sinceIso) + existingBlock,
     options: {
       cwd: config.projectDir,
       model: 'sonnet',
@@ -83,7 +102,9 @@ async function persist(items, ctx) {
         observation: obsWithSource,
         lesson: it.lesson,
         destination: 'contexto',
-        project: 'otros',
+        // BUG-1928: es feedback sobre PRs de Tolkien; "otros" bloquea los
+        // destinos que necesitan el directorio del proyecto.
+        project: 'tolkien',
         confidence: it.confidence,
         fingerprint,
         sourceRefs: it.refs,
@@ -104,7 +125,8 @@ async function run() {
   const self = readSelf();
   const prev = readTeamsFeedbackScan();
   const ctx = padContextForUser(null); // corrida bajo botón admin del host ⇒ Pad de 'console'
-  const out = await fetchTeams(contact, self, prev.lastProcessedAt || null);
+  const existing = await feedbackForDedup(ctx);
+  const out = await fetchTeams(contact, self, prev.lastProcessedAt || null, existing);
   const parsed = parseTeamsFeedback(out);
   if (!parsed) throw new Error('No se pudo interpretar el escaneo de Teams (respuesta inválida).');
   const summary = await persist(parsed.items, ctx);

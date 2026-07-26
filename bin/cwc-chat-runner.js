@@ -30,13 +30,13 @@ import {
 } from '../src/modules/chat/shared.js';
 import {
   chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, tolkienEnvPreToolUseHook,
-  autonomyStopHook, mergeHookSets, isConsoleCwd,
+  lessonsPreToolUseHook, autonomyStopHook, mergeHookSets, isConsoleCwd,
 } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
-import { listCodexJobs } from '../src/modules/chat/codex-shared.js';
+import { listCodexJobs, readCodexJob } from '../src/modules/chat/codex-shared.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
 
@@ -199,6 +199,7 @@ function emit(event, { record = true, broadcast = true } = {}) {
 }
 
 function bgList() { return [...bgWork.values()]; }
+function bgLiveCount() { return bgList().filter((b) => !b.ready).length; }
 function emitBg() { emit({ type: 'bg', tasks: bgList() }, { record: false }); }
 
 // El radar reúne DOS fuentes: subagentes/workflows del SDK detectados por su
@@ -217,13 +218,15 @@ function bgDone(id) {
 
 // Retiene el motor mientras haya trabajo de fondo vivo (PLAN-892), con tope
 // para no volverlo inmortal si una tarea queda colgada.
-function bgHolds() { return bgWork.size > 0 && (Date.now() - lastBgLaunch) < BG_MAX_HOLD_MS; }
+function bgHolds() { return bgLiveCount() > 0 && (Date.now() - lastBgLaunch) < BG_MAX_HOLD_MS; }
 
 // Nota VISIBLE si el motor se duerme/cierra con trabajo de fondo vivo: sin
 // esto el chat queda diciendo "corriendo" para siempre (el SDK no deja marcador).
 function warnBgKilled() {
   if (!bgWork.size) return;
-  const work = bgList();
+  // Un resultado listo sigue en el radar para que lo recojan, pero ya no es
+  // trabajo en curso y no debe producir una advertencia que diga lo contrario.
+  const work = bgList().filter((b) => !b.ready);
   const codex = work.filter((b) => b.kind === 'Codex');
   const sdk = work.filter((b) => b.kind !== 'Codex');
   if (codex.length) {
@@ -300,6 +303,29 @@ function sweepBgFromTranscript() {
   }
 }
 
+// Codex persiste el estado real aunque el agente no recoja el job por id. El
+// resultado queda visible para recordar que falta recogerlo, pero deja de
+// contar como trabajo vivo apenas el store confirma que terminó.
+function sweepCodexBg() {
+  if (!TANDEM || bgWork.size === 0) return;
+  try {
+    let changed = 0;
+    for (const [id, work] of bgWork) {
+      if (work.kind !== 'Codex') continue;
+      const job = readCodexJob(id);
+      if (!job || !['done', 'error'].includes(job.status)) continue;
+      if (work.ready && work.outcome === job.status) continue;
+      work.ready = true;
+      work.readyAt ||= Date.now();
+      work.outcome = job.status;
+      changed += 1;
+    }
+    if (changed > 0) emitBg();
+  } catch {
+    // Best-effort: el job puede desaparecer o estar reemplazándose al leerlo.
+  }
+}
+
 function bgLabelFromOutput(out) {
   const lines = String(out || '').split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
@@ -357,6 +383,14 @@ function startEngine() {
       onNeed: () => emit({ type: 'tolkien-env-needed', chatId: ID }, { record: false }),
     }));
   }
+  // M5 (PLAN-1934): gate DURO de lecciones prohibitivas. Va en TODO chat —
+  // cualquier modelo, cualquier mundo — porque "nunca ejecutes X" no depende del
+  // modo. Ver src/core/forbidden-actions.js y bin/cwc-forbidden-override.js.
+  hookSets.push(lessonsPreToolUseHook({
+    chatId: ID,
+    onDeny: (rule) => log(`acción prohibida por lección DENEGADA (${rule.id})`),
+    onOverride: (rule, grant) => log(`override consciente aplicado a ${rule.id} (${grant.id}: ${grant.motivo})`),
+  }));
   hookSets.push(autonomyStopHook({
     onContinue: () => {
       autonomyTurns += 1;
@@ -649,7 +683,7 @@ function handleCommand(c, msg) {
   }
   if (msg.t === 'sleep' || msg.t === 'close') {
     if (msg.t === 'sleep' && !msg.force && bgHolds()) {
-      logBgHold(`sueño rechazado: ${bgWork.size} trabajo(s) de fondo vivo(s)`);
+      logBgHold(`sueño rechazado: ${bgLiveCount()} trabajo(s) de fondo vivo(s)`);
       return;
     }
     if (msg.t === 'close') closedByUser = true;
@@ -722,8 +756,9 @@ function rehydrateCodexBg() {
 setInterval(() => {
   if (Date.now() - lastActivity > SLEEP_MS) {
     sweepBgFromTranscript();
+    sweepCodexBg();
     if (bgHolds()) {
-      logBgHold(`siesta pospuesta: ${bgWork.size} trabajo(s) de fondo vivo(s)`);
+      logBgHold(`siesta pospuesta: ${bgLiveCount()} trabajo(s) de fondo vivo(s)`);
       return;
     }
     if (bgWork.size > 0) warnBgKilled();
@@ -735,6 +770,7 @@ setInterval(() => {
 
 setInterval(() => {
   sweepBgFromTranscript();
+  sweepCodexBg();
 }, 20 * 1000).unref();
 
 process.on('SIGTERM', () => { input.end(); Promise.resolve(q?.close?.()).catch(() => {}); });

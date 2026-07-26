@@ -23,8 +23,37 @@ import crypto from 'node:crypto';
 import { encodeCwd } from '../../core/claude-model.js';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { userClaudeDir, hostUser } from '../../core/user-space.js';
+import {
+  MARK_START as RETRO_MARK_START,
+  MARK_END as RETRO_MARK_END,
+} from '../retro/promote-shared.js';
 
 const INDEX_FILE_NAME = 'MEMORY.md';
+
+// Bloques que otros módulos regeneran automáticamente. Los getters del par de
+// Mejora Continua evitan leer los imports durante la inicialización circular
+// (promote-shared.js también consume helpers de este módulo).
+export const MANAGED_MARKERS = [
+  {
+    managedBy: 'mejora-continua',
+    get start() { return RETRO_MARK_START; },
+    get end() { return RETRO_MARK_END; },
+  },
+  {
+    managedBy: 'pad-index',
+    start: '<!-- cwc:pad-index:start -->',
+    end: '<!-- cwc:pad-index:end -->',
+  },
+];
+
+function managedMarkerOf(text) {
+  const src = String(text ?? '');
+  return MANAGED_MARKERS.find((marker) => src.includes(marker.start)) || null;
+}
+
+export function isManagedSection(text) {
+  return managedMarkerOf(text) !== null;
+}
 
 // Whitelist estricto para el nombre de nota que llega del cliente: sin '/' ni
 // '..', nada de path traversal posible (nunca se concatena "crudo").
@@ -103,16 +132,34 @@ export function splitContextSections(text) {
   return sections;
 }
 
+// Un bloque gestionado puede contener encabezados propios y, por lo tanto,
+// abarcar varias secciones Markdown. Propagamos el gestor desde el fragmento
+// que contiene el marcador de apertura hasta el que contiene el de cierre.
+function managementOfSections(sections) {
+  let active = null;
+  return sections.map((section) => {
+    const opened = managedMarkerOf(section.text);
+    if (opened) active = opened;
+    const managedBy = active?.managedBy || null;
+    if (active && section.text.includes(active.end)) active = null;
+    return { managed: managedBy !== null, managedBy };
+  });
+}
+
 // Índice de secciones para la lista (sin el texto completo de cada una).
 export function listSectionsOfFile(filePath) {
   const src = readTextFile(filePath);
-  const sections = splitContextSections(src).map((s, i) => ({
+  const split = splitContextSections(src);
+  const management = managementOfSections(split);
+  const sections = split.map((s, i) => ({
     i,
     title: s.title,
     level: s.level,
     lines: s.text.split('\n').length,
     size: Buffer.byteLength(s.text),
     hash: hashOf(s.text),
+    managed: management[i].managed,
+    managedBy: management[i].managedBy,
   }));
   return { totalLines: src ? src.split('\n').length : 0, totalSize: Buffer.byteLength(src), sections };
 }
@@ -131,10 +178,18 @@ export function readSectionOfFile(filePath, i) {
 export function writeSectionOfFile(filePath, i, expectedHash, content) {
   const src = readTextFile(filePath);
   const sections = splitContextSections(src);
+  const management = managementOfSections(sections);
   const idx = Number(i);
   const s = sections[idx];
   if (!Number.isInteger(idx) || !s) {
     throw Object.assign(new Error('La sección ya no existe (el contenido cambió). Recargá la lista.'), { conflict: true });
+  }
+  const managedBy = management[idx].managedBy;
+  if (managedBy === 'pad-index') {
+    throw Object.assign(new Error('La sección está gestionada por el generador pad-index y se regenera sola: editá el origen en Pad, no el CLAUDE.md.'), { conflict: true });
+  }
+  if (managedBy === 'mejora-continua') {
+    throw Object.assign(new Error('La sección está gestionada por Mejora Continua y se regenera sola: editá las lecciones desde Mejora Continua, no el CLAUDE.md.'), { conflict: true });
   }
   if (hashOf(s.text) !== String(expectedHash || '')) {
     throw Object.assign(new Error('El contenido cambió desde que abriste esta sección (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });

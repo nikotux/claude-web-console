@@ -148,7 +148,10 @@ export default {
 
     function liveMeta(c) {
       const bg = Array.isArray(c.bgTasks) ? c.bgTasks : [];
-      if (bg.length) return liveWithAge(t('sessions.live.background', '⚡ {n} en segundo plano', { n: bg.length }), oldestTs(bg, 'startedAt'));
+      const bgLive = bg.filter((b) => !b.ready);
+      const bgReady = bg.filter((b) => b.ready);
+      if (bgLive.length) return liveWithAge(t('sessions.live.background', '⚡ {n} en segundo plano', { n: bgLive.length }), oldestTs(bgLive, 'startedAt'));
+      if (bgReady.length) return liveWithAge(t('sessions.live.bgReady', '✅ {n} listo(s) para recoger', { n: bgReady.length }), oldestTs(bgReady, 'startedAt'));
       const n = Number(c.delegatingCount || 0);
       if (n > 0) return liveWithAge(t('sessions.live.delegating', '✦ delegando {n}', { n }), tsMs(c.delegatingSince));
       if (c.status === 'working') return { prefix: '', since: 0, text: t('sessions.live.working', 'trabajando') };
@@ -180,17 +183,17 @@ export default {
     // que impide dormir el motor (PLAN-892): un solo dato, dos usos.
     function kidsOf(c) {
       return [
-        ...(c.bgTasks || []).map((b) => ({ id: `bg:${b.id}`, kind: 'bg', label: b.label || b.kind || t('sessions.live.bgFallback', 'trabajo de fondo'), since: b.startedAt })),
+        ...(c.bgTasks || []).map((b) => ({ id: `bg:${b.id}`, kind: 'bg', label: b.label || b.kind || t('sessions.live.bgFallback', 'trabajo de fondo'), since: b.startedAt, ready: b.ready })),
         ...(c.delegatingList || []).map((d) => ({ id: `sub:${d.id}`, kind: 'sub', label: d.label || t('sessions.live.subFallback', 'subagente'), since: d.since })),
       ];
     }
 
     function kidRowHtml(k) {
       const since = tsMs(k.since);
-      const ico = k.kind === 'sub' ? 'sparkle' : 'relay';
+      const ico = k.ready ? 'check' : (k.kind === 'sub' ? 'sparkle' : 'relay');
       return `
         <div class="sess-kid" data-kid="${escapeHtml(k.id)}">
-          ${pacman({ state: 'delegating', size: 'sm', cls: 'sess-kid-pac' })}
+          ${k.ready ? '' : pacman({ state: 'delegating', size: 'sm', cls: 'sess-kid-pac' })}
           <span class="sess-kid-ic">${icon(ico, { size: 12 })}</span>
           <span class="sess-kid-label">${escapeHtml(k.label)}</span>
           <span class="sess-kid-ago" data-start="${since || ''}">${since ? fmtAgo(since) : ''}</span>

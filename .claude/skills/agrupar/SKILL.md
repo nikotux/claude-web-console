@@ -28,12 +28,19 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 ## GATE (obligatorio) — proponé, NO crees a ciegas
 Presentá a Niko: la tabla de **bloques** (id · tareas que contiene · superficie de archivos · ruteo · ready/needs-atomize) + el **DAG** (aristas). Esperá su **OK o ajuste** (fusionar/partir bloques, cambiar una dependencia). **Recién con el OK** materializás.
 
+**🧭 Cobertura contra el ancla (CONVE-1957).** En la misma tabla, sumá una columna
+`criterios` con los criterios del ancla (`C1`, `C2`, …) a los que sirve cada bloque. Dos
+señales que se leen de un vistazo: un **criterio sin ningún bloque** = el plan no cubre lo
+pedido; un **bloque sin ningún criterio** = trabajo que nadie pidió. Las dos se arreglan
+acá gratis.
+
 ## Materializar en Pad (modelo de datos)
 - **Bloque = PLAN hijo** del umbrella. Reusá sub-planes existentes como bloques cuando mapeen limpio (menos duplicación); creá PLANes nuevos solo para bloques que cruzan varios sub-planes (típico: el de integración/E2E).
 - **Tareas = PEND/TASK** hijas del PLAN-bloque (re-parentá las existentes; para un bloque sin tareas aún, agregá una 1ª tarea `atomizar` ruteada a Claude opus/high = sub-sesión arquitecto).
 - **DAG = links** `pad_item action=link ref=<bloque> target=<bloqueador> link_type=blocked-by`.
 - **Ancla de control**: dejá un **comentario en el PLAN umbrella** con el mapa completo (bloques→PLAN-ref, DAG, ready-state, caveats de deploy) — es lo que lee la skill `orquestar` al arrancar.
 - Marcá los bloques ya en curso (si hay una sesión viva) para que el orquestador no los re-spawnee.
+- **Ancla heredada**: cada PLAN-bloque referencia el ítem-raíz anclado del umbrella (por `parent` o `implements`), para que la sesión-bloque pueda leer el pedido original sin reconstruirlo.
 
 ## Cierre
 Avisá a Niko que el Pad quedó listo y que el próximo paso es abrir la skill `orquestar` en una sesión nueva apuntada al umbrella. Cerrá con `🎾 Pelota: …`.

@@ -42,8 +42,10 @@ const MARK_END = '<!-- cwc:tickets-context:end -->';
 // checklists y lecciones — va al playbook que se lee a demanda.
 // PEND-1864: antes viajaba todo (~60k en CADA sesión de Tolkien).
 const MIRROR_RULES = {
-  work: [/gate pre-push/i, /^##\s*0\./, /^##\s*1\./],
-  pr: [/^##\s*1\./, /^##\s*2\./, /^##\s*5\./],
+  // BUG-1927: el feedback adoptado debe llegar al archivo de auto-carga.
+  work: [/gate pre-push/i, /^##\s*0\./, /^##\s*1\./, /^##\s*6\./],
+  // PR ya usa "## 5." para quick reference; "## 6." queda para feedback.
+  pr: [/^##\s*1\./, /^##\s*2\./, /^##\s*5\./, /^##\s*6\./],
 };
 
 export const DEFAULT_CONTEXTS = {

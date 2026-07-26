@@ -22,7 +22,10 @@ STORE = Pad LOCAL (store.js, workspace 'console', colección
 'mejora-continua'/MC, molde de learning/store.js: async, read-modify-
 write). 1 lección = 1 item {status propuesta|aprobada|promovida|
 descartada · category regla|convencion|metodologia|procedimiento|
-herramienta|nota · project console|tolkien|otros · destination
+herramienta|nota · project console|tolkien|otros (BUG-1928: feedback de
+Chris SIEMPRE usa `tolkien`; NUNCA volverlo a `otros`, porque
+`projectDirFor()` da `null` y `TARGETS_NEED_DIR` veda memoria/claude-md,
+los dos destinos que Claude Code auto-carga) · destination
 (sugerido) memoria|claude-md|contexto|playbook|registro · recurrence
 · confidence · fingerprint · sourceChats[] · content=Observación/
 Lección}. RECURRENCIA = PRIORIDAD: una lección repetida NO se
@@ -33,26 +36,64 @@ mismo concepto distinto y crea near-duplicados; por eso el runner le
 pasa al modelo las lecciones YA REGISTRADAS y le pide reusar el título
 EXACTO de un concepto repetido (patrón "dedup vs seen" del loop de
 Salud) → recién ahí el fingerprint coincide y mergea. NADA se
-auto-aplica: el humano APRUEBA/DESCARTA y PROMUEVE. PROMOVER (admin)
+auto-aplica: el humano APRUEBA/DESCARTA y PROMUEVE. BUG-1930, defecto
+hermano en el destilador de PROCESO: `retroPrompt` limita esa lista con
+`RETRO_DEDUP_LIMIT=120`, pero el orden útil lo decide el CALLER
+(`bin/cwc-retro-runner.js`), no `shared.js`, cuyo tope solo protege el
+tamaño del prompt. El caller pone `promovida`/`aprobada` primero, el
+resto después y `descartada` última; dentro de cada grupo ordena por
+`recurrence` y luego `updatedAt`, ambos descendentes, recorta y loguea
+cuántas quedaron afuera. Es imprescindible porque `listLessons` entrega
+`propuesta` → `aprobada` → `promovida` → `descartada`: la ventana mágica
+anterior de 40 se llenaba con lo menos útil. Medición real 2026-07-26:
+275 lecciones, 235 `promovida` ⇒ 195 promovidas quedaban invisibles; sin
+el título exacto no coincide el fingerprint, no sube `recurrence` y el
+semáforo queda verde por falta de evidencia. NO confundir esta ventana
+de proceso con `FEEDBACK_DEDUP_LIMIT=30` de correo/Teams. PROMOVER (admin)
 enruta a un DESTINO real vía retro/promote-shared.js (ROUTER,
 Fase 2/ROAD-256). Destinos cableados (PROMOTE_TARGETS): (a) memoria =
 append de la lección a la nota mejora-continua.md en memory/ del
 proyecto (console=ROOT · tolkien=config.projectDir) + línea en el
 índice MEMORY.md, reusando projects/memory.js (whitelist + escritura
 atómica + guard de hash); (b) claude-md = SECCIÓN GESTIONADA dedicada
-con marcadores `<!-- cwc:mejora-continua:start/end -->` en el CLAUDE.md
-del proyecto (console) o en CLAUDE.local.md (tolkien, NO versionado →
-no se filtra al repo del equipo). Se RENDERIZA desde el CONJUNTO de
-lecciones promovidas a claude-md (idempotente, patrón syncToTolkien de
-tickets/context-store.js) → NUNCA toca lo de AFUERA de los marcadores
-(Reglas duras/Convenciones a mano — verificado E2E). markPromoted
+con marcadores `<!-- cwc:mejora-continua:start/end -->` SOLO en
+CLAUDE.local.md de Tolkien (NO versionado → no se filtra al repo del
+equipo). Para `console`, `promoteToClaudeMd` retorna sin escribir: la
+lección queda en Pad y el índice enrutador la trae al cerrar trabajo; NO
+volver a inflar el CLAUDE.md raíz. En Tolkien se RENDERIZA desde el
+CONJUNTO de lecciones promovidas a claude-md (idempotente, patrón
+syncToTolkien de tickets/context-store.js) → NUNCA toca lo de AFUERA de
+los marcadores (Reglas duras/Convenciones a mano — verificado E2E). markPromoted
 (store.js) sella status promovida + promotedTo + snapshot
 recurrenceAtPromotion/promotedAt (campos del schema, ya listos para el
 LOOP de Fase 6). La próxima sesión auto-carga el destino. DESTINOS
-COMPLETOS del router (PROMOTE_TARGETS): contexto (Fase 3) = apéndala al
-bugfix-work/pr (getContext/saveContext de tickets/context-store.js) →
-se inyecta en chats de ticket/PR y se ESPEJA a la CLAUDE.local.md de
-Tolkien (idempotente por id) · playbook (Fase 4) = crea un item DRAFT
+COMPLETOS del router (PROMOTE_TARGETS): contexto (Fase 3, BUG-1927) =
+`promoteToContext` usa `splitTopSections` y la inserta idempotente por
+`lesson.id` dentro de `## 6. Feedback adoptado` de bugfix-work/pr,
+creando esa sección si falta → se inyecta en chats de ticket/PR y
+`saveContext` la ESPEJA a la CLAUDE.local.md de Tolkien. Es `## 6.` y NO
+`## 5.` porque el contexto `pr` persistido ya reserva `## 5. Quick
+reference — end-to-end flow`. `promote-shared.js` exporta
+`sanitizeContextEntry(title, body)` y `promoteToContext` lo aplica ANTES
+de armar la entrada: colapsa saltos de línea del título que vive en
+`### …`, degrada cada línea `## ` del cuerpo libre a `### ` y cierra el
+fence si la cantidad de líneas que empiezan con ``` es impar. El cuerpo
+lo genera un modelo desde feedback de Chris sobre PRs, cuyas plantillas
+traen `## Summary`/`## Verification`: un `## ` suelto abre otra sección
+top-level, deja media lección fuera de `## 6.`, no matchea
+`MIRROR_RULES` y la desvía al playbook SIN error visible; un fence impar
+es peor, deja `inFence` abierto y se come todos los encabezados
+posteriores. Antes el append crudo caía dentro de `## 4. Lecciones
+registradas`, que no matcheaba ninguna `MIRROR_RULES`. La migración
+BUG-1927 ya CORRIÓ el 2026-07-26: re-ruteó las 17 lecciones adoptadas
+atrapadas ahí desde el master `~/.cwc-data/bugfix-context.md` hacia
+`## 6. Feedback adoptado`. Estado real: `~/tolkien/CLAUDE.local.md`
+pasó de 0 lecciones/32.932 bytes a 17/48.864, y
+`~/tolkien/.cwc-ticket-playbook.md` de 17/52.009 a 0/36.102. No es
+contenido nuevo: migró de lectura A DEMANDA a AUTO-CARGA y el total de
+ambos archivos casi no cambió. NO borrar los backups
+`~/.cwc-data/bugfix-context.md.bak-BUG1927-2026-07-26` y
+`~/tolkien/CLAUDE.local.md.bak-BUG1927-2026-07-26` · playbook (Fase 4) = crea un item DRAFT
 en la colección `playbooks` de Pad (pad-service-client.createItem). Solo
 memoria/claude-md exigen dir de proyecto (TARGETS_NEED_DIR); contexto/
 playbook no. CURADURÍA IA (Fase 5): runner desacoplado
@@ -122,7 +163,10 @@ igual que la destilación de proceso): (a) MANUAL — composer "💬 Feedback de
 Chris" del tablero: pegás el texto (+ ticket opcional) →
 `POST /api/retro/feedback` → `bin/cwc-retro-feedback-runner.js`
 (`retro/feedback-shared.js`) interpreta y puede extraer VARIAS piezas de
-feedback de un mismo pegado; (b) AUTOMÁTICA — botón "📧 Traer feedback de
+feedback de un mismo pegado. El composer NO manda `project`: BUG-1928 fija
+el default manual en `job.project || 'tolkien'` (un `project` explícito se
+respeta), en vez del viejo `otros` que bloqueaba memoria/claude-md; (b)
+AUTOMÁTICA — botón "📧 Traer feedback de
 correo" (admin, confirm, consume tokens): `POST /api/retro/email-refresh` →
 `bin/cwc-retro-email-runner.js` (`retro/email-shared.js`) escanea el correo
 del contacto `chris` (reusa `comms/shared.js` readContacts/readSelf — el
@@ -146,7 +190,13 @@ construcción: si Pad rechaza TODOS los ítems al persistir (p.ej. un campo
 no en el schema), el job NO puede quedar 'done' con "0 nuevas" en
 silencio — TODOS los runners de esta familia revisan
 `created+merged===0` con `items.length>0` y lanzan error para que se vea
-el fallo real.
+el fallo real. BUG-1930: correo y Teams copian el patrón de dedup del
+runner manual y pasan a la query las lecciones ya registradas, pero SOLO
+`category==='feedback-cliente'`, ordenadas por `updatedAt` descendente y
+acotadas por `FEEDBACK_DEDUP_LIMIT=30`; sin eso un re-reporte no reusaba
+el título/fingerprint, `recurrence` nunca subía y el semáforo de
+efectividad no podía ponerse rojo. El tope es obligatorio: el registro
+completo tiene 275 lecciones (~168 KB) y reventaría el prompt.
 (c) AUTOMÁTICA por TEAMS (mismo pedido, 2026-07-19): botón "📨 Traer
 feedback de Teams" → `POST /api/retro/teams-refresh` →
 `bin/cwc-retro-teams-runner.js` (`retro/teams-feedback-shared.js`) — MISMA
@@ -160,7 +210,10 @@ Comunicaciones, que solo lee). Estado en `~/.cwc-data/retro-teams-scan.json`
 + `retro-teams.lock`; `bin/cwc-retro-teams-runner.js` sumado a
 `CROSS_WORLD_ALLOW`. Las TRES piezas (manual/correo/Teams) caen en la MISMA
 lista del tablero (ícono 💬, chip de ticket) — se aprueban/adoptan/
-descartan con el mismo flujo de siempre, nada se auto-aplica.
+descartan con el mismo flujo de siempre, nada se auto-aplica. BUG-1928:
+las TRES vías garantizan `tolkien` por separado — default en manual,
+asignación propia en correo y asignación propia en Teams. No depender de
+que otra capa infiera el proyecto.
 
 ## Linkeo automático al grafo de Pad (BUG-1878)
 

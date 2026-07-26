@@ -103,7 +103,31 @@ carpeta de runtime propia de la consola, indexada por chatId — no de
 recursos de otro mundo, por eso es seguro inyectarla también en chats
 de Tolkien. El runner pasa `chatId: ID` a chatQueryOptions; sin chatId
 la regla se omite (compone sin romper). Mismo gotcha del bootstrap: un
-runner vivo no la toma hasta reabrir/chat nuevo) ·
+runner vivo no la toma hasta reabrir/chat nuevo.
+LECCIONES PROHIBITIVAS (M5, PLAN-1934): `lessonsPreToolUseHook({chatId,
+onDeny, onOverride})` es el gate DURO. A diferencia de
+tandemPreToolUseHook (sólo ese modelo), va en TODO chat y en los dos
+mundos: "nunca ejecutes X" no depende del modo. El runner lo empuja a
+hookSets SIEMPRE (bin/cwc-chat-runner.js). Normaliza el comando con el
+shellOutsideQuotes que ya existía y delega el veredicto a
+core/forbidden-actions.js; si hay un override consciente vigente lo
+CONSUME (un solo uso) y deja pasar. Mismo gotcha de siempre: un runner ya
+vivo no toma reglas nuevas de código hasta "Reabrir para cambios" — el
+registro en disco, en cambio, se relee por mtime en caliente) ·
+forbidden-actions(REGISTRO de ACCIONES PROHIBIDAS por lección — M5 de
+PLAN-1934/DOC-1926, el ÚNICO gate DURO de la casa. Reglas del tipo "nunca
+ejecutes X" con SEED en código (siempre compila) + registro opcional en
+<dataDir>/forbidden-actions.json (caché por mtime, FALLA ABIERTO: un JSON
+corrupto no puede tapar los chats). evaluateForbiddenAction({toolName,
+toolInput, command}) recibe el comando YA normalizado por tool-policy —
+no duplica el parser de shell. forbiddenDenyMessage arma el deny citando
+la lección + qué hacer en su lugar + cómo pedir el override.
+OVERRIDE CONSCIENTE: grantForbiddenOverride/consumeForbiddenOverride sobre
+el ledger <dataDir>/forbidden-overrides.json — motivo de ≥20 chars, TTL en
+minutos, UN SOLO USO, queda registrado; lo emite la CLI
+bin/cwc-forbidden-override.js. Paths por resolveDataDir() = multi-tenant
+correcto. LÍMITE HONESTO: sólo entran lecciones traducibles a "no ejecutes
+X"; "escribí PRs más chicos" NO es de este registro y no se fuerza) ·
 claude-model(VALID_MODELS/encodeCwd/resolveModelArg — REPOINT DE TIER 2026-07-24: el alias interno 'opus' resuelve a `claude-opus-5` SOLO al entregarse a `claude --model`/`q.setModel()`; el alias NO cambia, así keyOf/pin-pout/color/router siguen intactos. Call-sites: bin/cwc-chat-runner.js (spawn + set_model; `currentModel` guarda el ALIAS sin resolver porque alimenta el eco `model` que adopta el server) y terminal/sessions.js (TUI). Un modelo nuevo del mismo tier = una entrada más en MODEL_ARG_OVERRIDES) · claude-state(observador —
 estado por PANE de tmux primero: cwc-observe.js captura
 $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
@@ -252,6 +276,32 @@ es un contrato FORWARD (cuando gane multi-tenant, el mismo filtro por dueño deb
 aplicar). Un archivo puede matchear varias familias (p.ej. `user-space.js` cae en
 B-A y C) y recibe todos los textos — es correcto.
 
+## 🔒 Acciones prohibidas por lección (M5 · gate DURO)
+
+`core/forbidden-actions.js` + `lessonsPreToolUseHook()` de `tool-policy.js` son el
+único mecanismo de la consola que **impide** en vez de sugerir. Todo el resto de
+Mejora Continua termina en texto que el modelo puede ignorar; un hook `PreToolUse`
+no se puede ignorar (inmune a `bypassPermissions` y a las allow-rules del
+`settings.json`).
+
+| Regla (seed) | Qué deniega | Origen |
+|---|---|---|
+| `git-descarta-cambios-ajenos` | `git checkout -- …` · `git restore …` (salvo `--staged`) | gotcha del `CLAUDE.md` raíz: descartó ediciones sin commitear de una sesión paralela |
+| `pkill-server-mata-el-shell` | `pkill`/`killall` con patrón `src/server.js` | gotcha del `CLAUDE.md` raíz: el patrón mata al propio shell |
+| `reboot-de-la-maquina` | `reboot`/`shutdown`/`poweroff`/`halt`/`init 0\|6`/`systemctl reboot` | memoria de Niko: jamás reiniciar la máquina física (el servicio sí) |
+
+**Sumar una regla sin tocar código:** `<dataDir>/forbidden-actions.json` con
+`{"rules":[{"id":"…","lesson":"MC-123","title":"…","pattern":"<regex>","why":"…","hint":"…"}]}`.
+Se relee por mtime; un JSON inválido se ignora (falla abierto) pero el seed sigue vivo.
+
+**Override consciente:** `node bin/cwc-forbidden-override.js <reglaId> "<motivo ≥20 chars>"`
+— vale una sola tool call, vence en minutos y queda en `<dataDir>/forbidden-overrides.json`.
+`--list` muestra reglas activas y overrides recientes. El deny le explica al modelo que
+lo pida al usuario antes de usarlo: el gate no es ciego, pero tampoco se saltea solo.
+
+**Límite honesto:** sólo lecciones traducibles a *"nunca ejecutes X"*. Una lección de
+estilo o de criterio NO entra acá — forzarla degradaría el mecanismo.
+
 ## Gotchas de esta carpeta
 
 - **MCP de Pad (getpad.dev) disponible en Consola** (2026-07-10, pedido del
@@ -319,3 +369,34 @@ B-A y C) y recibe todos los textos — es correcto.
   ROAD-74 se re-aprobó y se ejecutó (Fases 1-2 completas, ver bullet de arriba); este
   workspace `console` con TODO su historial (ROAD-10 incluido) vive ahora físicamente
   en el Pad LOCAL, migrado 1-vía desde el cloud.**
+
+## Verificador de contratos (pad-contracts.js) — perfiles
+
+El verificador determinístico admite dos perfiles de checks.
+`console` es el perfil histórico: conserva sus checks frontend/backend, su orden
+y su flujo de lectura de Pad sin cambios de comportamiento.
+`tolkien` agrega tres reglas mecánicas sobre un diff del repo externo:
+`migrationOrder` y `schemaSinMigracion` (módulo `prisma`), y
+`handlerSinProductor` (módulo `worker`).
+Las reglas viven aisladas en `tolkien-checks.js` y no mutan el repo analizado.
+Ese módulo sólo lee `~/tolkien` y ejecuta `git` mediante `execFileSync`.
+La allowlist admite exclusivamente subcomandos read-only:
+`diff`, `grep`, `log`, `show`, `ls-tree`, `rev-parse`, `merge-base` y `cat-file`.
+Cualquier otro subcomando falla explícitamente por la Regla dura 12.
+El repo Tolkien y su workspace de Pad siguen siendo mundos externos read-only.
+`emitTasks` reutiliza el motor idempotente, pero para Tolkien escribe SIEMPRE
+las tareas en el workspace interno `console`.
+Un perfil Tolkien con otro workspace es un error de configuración y tira.
+`TOLKIEN_PROFILE.dest` es `null`, para que `pad-index.apply()` tampoco pueda
+escribir un índice Markdown en el mundo externo.
+El `module` de cada check Tolkien es un slug estable por dominio, no por archivo:
+el marcador `cwc-contract` idempotente no admite barras en ese segmento.
+Todo check que no aplica devuelve `ok: null`; nunca se informa como incumplido.
+Además, su `detail` debe empezar con `skipped:` y explicar el motivo concreto.
+Se descartaron por medición: `catchVacio` (0 recall), `stringDeDisplay`
+(único disparo falso), `autorizacionDuplicada` (la duplicación es semántica,
+no textual) y `datoSensibleGenerico` (0 disparos con términos estrictos y
+10/21 falsos positivos potenciales al incluir términos de identidad).
+Gotcha: `migrationOrder` compara con las migraciones existentes en `base`.
+Para el gate vivo debe ser `origin/main`; al analizar un PR histórico hay que
+pasar su `baseRefOid`, o el tip actual puede producir fallas espurias.

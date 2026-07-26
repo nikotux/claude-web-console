@@ -10,13 +10,17 @@ Desglosás un plan en tareas atómicas y le asignás a **cada una** su ruteo de 
 
 ## Pasos
 
-1. **Desglosá** el plan en tareas/subtareas atómicas — una unidad de trabajo verificable cada una (mismo criterio que un ítem de Pad accionable, no una fase difusa).
-2. **Clasificá la naturaleza** de cada tarea. Cuatro categorías, no más:
+1. **🧭 Verificá el ANCLA (Paso 0, CONVE-1957).** Antes de desglosar nada, el ítem-raíz del
+   trabajo tiene que tener su `## 📌 Pedido original (verbatim)` y sus criterios de
+   aceptación en Pad. Si no lo tiene, corré primero la skill `anclar` — rutear tareas que no
+   se sabe a qué pedido sirven es exactamente cómo empieza la deriva.
+2. **Desglosá** el plan en tareas/subtareas atómicas — una unidad de trabajo verificable cada una (mismo criterio que un ítem de Pad accionable, no una fase difusa).
+3. **Clasificá la naturaleza** de cada tarea. Cuatro categorías, no más:
    - Diseño / arquitectura / prompt / contrato
    - Escribir código
    - Cableado trivial
    - Verificación E2E
-3. **Asigná el ruteo** según el rúbrico:
+4. **Asigná el ruteo** según el rúbrico:
 
    | Naturaleza | Ejecutor | Modelo | Esfuerzo |
    |---|---|---|---|
@@ -25,9 +29,13 @@ Desglosás un plan en tareas atómicas y le asignás a **cada una** su ruteo de 
    | Cableado trivial | Claude | haiku | low |
    | Verificación E2E | Claude | sonnet\|opus | high |
 
-4. **Agrupá por EJECUTOR antes de repartir sesiones.** Entrar o salir de Tándem **re-lanza el runner** (BUG-780: el flag `--tandem` es de SPAWN, no se cambia en caliente; `_maybeReopenForTandem` con throttle de 30 s y solo si la sesión está viva y ociosa). Por eso **una sesión = UN ejecutor**: tareas de ejecutor distinto o van a sesiones/bloques distintos, o se aceptan explícitamente los respawns. Dentro de una sesión Tándem, hasta el "cableado trivial" pasa por Codex — el hook `PreToolUse` deniega TODA escritura de Claude (Edit/Write/MultiEdit y también las de Bash: redirecciones, `sed -i`, `mv`/`cp`/`tee`…), salvo destino absoluto bajo `/tmp/`.
-5. **Persistí** cada tarea en la colección Tasks del Pad del mundo correspondiente (campos `model`/`effort`/`executor`), colgada de su PLAN padre.
-6. **Presentá** a Niko la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: Niko puede reasignar cualquier fila.
+5. **Agrupá por EJECUTOR antes de repartir sesiones.** Entrar o salir de Tándem **re-lanza el runner** (BUG-780: el flag `--tandem` es de SPAWN, no se cambia en caliente; `_maybeReopenForTandem` con throttle de 30 s y solo si la sesión está viva y ociosa). Por eso **una sesión = UN ejecutor**: tareas de ejecutor distinto o van a sesiones/bloques distintos, o se aceptan explícitamente los respawns. Dentro de una sesión Tándem, hasta el "cableado trivial" pasa por Codex — el hook `PreToolUse` deniega TODA escritura de Claude (Edit/Write/MultiEdit y también las de Bash: redirecciones, `sed -i`, `mv`/`cp`/`tee`…), salvo destino absoluto bajo `/tmp/`.
+6. **Persistí** cada tarea en la colección Tasks del Pad del mundo correspondiente (campos `model`/`effort`/`executor`), colgada de su PLAN padre.
+7. **Presentá** a Niko la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: Niko puede reasignar cualquier fila.
+8. **🧭 Cerrá con CP-0.** Con la tabla de ruteo lista y antes del GO, corré la skill
+   `contrastar` en modo `CP-0`: ¿el plan cubre TODOS los criterios del ancla, y hay alguna
+   tarea que no sirva a ninguno? Una tarea huérfana en esta etapa cuesta borrar una fila;
+   descubierta al final cuesta rehacer el trabajo.
 
 ## Gotchas de spawn (si el plan se va a orquestar)
 - `POST /api/chat/create` acepta `model:'tandem'` pero **NO** la config fina del protocolo. El razonador/ejecutor alternativos se fijan DESPUÉS con `POST /api/chat/model {model:'tandem', tandem:{reasonerModel,reasonerEffort,codexModel,codexEffort}}`.
