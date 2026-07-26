@@ -15,6 +15,7 @@ import { modelColor, modelName, tierName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MOD
 import { placeFor } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -65,7 +66,7 @@ export function isDestructiveCommand(cmd) {
 // Ícono del TIPO de herramienta: es el SEGUNDO ícono del chip de ejecución
 // (el primero es siempre la consola = "Claude usó una herramienta"). El chip
 // ya no lleva texto (era innecesariamente largo); la leyenda de estos íconos
-// vive en el modal del "?" del header (_modeHelp) y el nombre completo queda
+// vive en el tema unificado de ayuda del chat y el nombre completo queda
 // en el tooltip del chip.
 const TOOL_TYPE_ICONS = [
   [/^Bash/i, 'play'],
@@ -273,7 +274,7 @@ export class ChatTab {
           <select class="chat-mode" data-risk="ok" title="${t('chat.header.modeTitle', 'Modo de permisos')}">
             ${MODES.map(([v, l, , k]) => `<option value="${v}">${t(k, l)}</option>`).join('')}
           </select>
-          <button class="btn-ghost btn--icon chat-mode-help" title="${t('chat.header.helpTitle', 'Ayuda: modos de permisos e íconos de acciones')}">${icon('help', { size: 15 })}</button>
+          ${helpBtn('chat')}
         </header>
         <div class="chat-msgs"></div>
         <div class="chat-atttray" hidden></div>
@@ -332,7 +333,6 @@ export class ChatTab {
       if (ok) this._send({ type: 'interrupt' });
     });
     this.modeEl.addEventListener('change', () => this._modeChanged());
-    container.querySelector('.chat-mode-help').addEventListener('click', () => this._modeHelp());
     this.inputEl.addEventListener('keydown', (e) => {
       if (this._slashKeydown(e)) return; // el autocompletado consumió la tecla
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -1349,72 +1349,6 @@ export class ChatTab {
     } else {
       this.modelPillEl.hidden = true;
     }
-  }
-
-  // ¿Qué significan los modos de permisos? Modal explicativo del "?" del header.
-  // Ayuda del chat: modos de permisos + nomenclatura de los chips de
-  // herramientas (los chips son SOLO íconos; esta es su leyenda).
-  _modeHelp() {
-    const leg = (ic, name, desc) => `
-      <div class="mh-leg">
-        <span class="mh-leg-icons">${icon('terminal', { size: 13 })}${icon(ic, { size: 12 })}</span>
-        <b>${name}</b><span>${desc}</span>
-      </div>`;
-    // Leyenda del motor Pac-Man (ver ui/pacman.js): un swatch real de cada
-    // estado (mismo componente que el header/las tarjetas de Sesiones) para
-    // reconocer de un vistazo qué está haciendo la conversación.
-    const pacLeg = (state, name, desc) => `
-      <div class="mh-leg">
-        <span class="mh-leg-icons">${pacman({ state, size: 'sm', title: name })}</span>
-        <b>${name}</b><span>${desc}</span>
-      </div>`;
-    const m = openModal({ title: t('chat.help.title', 'Ayuda del chat'), width: 480 });
-    m.body.innerHTML = `
-      <div class="mode-help">
-        <div class="mh-sec">${t('chat.help.modesSection', 'Modos de permisos')}</div>
-        <div class="mh-item">
-          <b>${t('chat.mode.ask', 'Preguntar')}</b>
-          <p>${t('chat.help.askDesc', 'El modo estándar. Claude pide permiso antes de CADA acción que toque tu sistema (editar archivos, correr comandos): aparece una tarjeta y vos aprobás o denegás una por una.')}</p>
-        </div>
-        <div class="mh-item">
-          <b>${t('chat.mode.edits', 'Ediciones')}</b>
-          <p>${t('chat.help.editsDesc', 'Claude puede editar y crear archivos sin preguntar; todo lo demás (comandos de terminal, red, etc.) sigue pidiendo permiso. Cómodo cuando ya confiás en el rumbo del trabajo.')}</p>
-        </div>
-        <div class="mh-item">
-          <b class="mh-danger">${t('chat.mode.all', 'Todo')}</b>
-          <p>${t('chat.help.allDesc', 'Aceptación avanzada: Claude ejecuta ABSOLUTAMENTE todo sin pedir permiso — comandos, ediciones, red. Es el modo más riesgoso (por eso pide confirmación al activarlo); usalo solo cuando confiás plenamente en la tarea y quieras cero fricción.')}</p>
-        </div>
-        <div class="mh-item">
-          <b>${t('chat.mode.plan', 'Plan')}</b>
-          <p>${t('chat.help.planDesc', 'Claude no toca nada: solo lee el proyecto y arma un plan de trabajo. Ideal para explorar una idea o ver qué haría antes de soltarle la mano.')}</p>
-        </div>
-        <p class="mh-foot">${t('chat.help.modesFoot', 'Podés cambiar de modo en cualquier momento; aplica desde la próxima acción. El color del selector marca el riesgo: verde = controlado · amarillo = medio · rojo = acepta todo.')}</p>
-
-        <div class="mh-sec">${t('chat.help.iconsSection', 'Íconos de acciones')}</div>
-        <p class="mh-intro">${t('chat.help.iconsIntro', 'Cada acción de Claude aparece en el hilo como un chip de dos íconos: la consola (ejecutó una herramienta) + el tipo. Tocá el chip para ver el detalle completo; el borde marca el resultado (verde ok · rojo error).')}</p>
-        <div class="mh-legend">
-          ${leg('play', 'Bash', t('chat.help.legBashDesc', 'corre un comando'))}
-          ${leg('edit', 'Edit / Write', t('chat.help.legEditDesc', 'edita o crea archivos'))}
-          ${leg('eye', 'Read', t('chat.help.legReadDesc', 'lee archivos'))}
-          ${leg('search', 'Grep / Glob', t('chat.help.legGrepDesc', 'busca en el proyecto'))}
-          ${leg('download', 'Web', t('chat.help.legWebDesc', 'consulta la web'))}
-          ${leg('list', 'Todo', t('chat.help.legTodoDesc', 'lista de tareas del agente'))}
-          ${leg('sparkle', 'Task', t('chat.help.legTaskDesc', 'lanza un subagente'))}
-          ${leg('gear', t('chat.help.legOtherName', 'Otras'), t('chat.help.legOtherDesc', 'cualquier otra herramienta'))}
-        </div>
-
-        <div class="mh-sec">${t('chat.help.pacSection', 'Estados del Pac-Man')}</div>
-        <p class="mh-intro">${t('chat.help.pacIntro', 'El mismo Pac-Man aparece acá arriba y en las tarjetas de Sesiones — el color Y el movimiento te dicen qué está haciendo la conversación en cada momento:')}</p>
-        <div class="mh-legend">
-          ${pacLeg('working', t('chat.help.pacWorkingName', 'Trabajando'), t('chat.help.pacWorkingDesc', 'dorado, mordisco rápido: un turno corriendo ahora'))}
-          ${pacLeg('delegating', t('chat.help.pacDelegatingName', 'Delegando'), t('chat.help.pacDelegatingDesc', 'violeta con el ícono del interfono: esperando que vuelva un subagente (Task) u otro proceso'))}
-          ${pacLeg('queued', t('chat.help.pacQueuedName', 'En cola'), t('chat.help.pacQueuedDesc', 'ámbar que respira: esperando su turno detrás de otro paso'))}
-          ${pacLeg('waiting', t('chat.help.pacWaitingName', 'Tu turno'), t('chat.help.pacWaitingDesc', 'verde, parpadeo lento: esperando tu mensaje o tu decisión'))}
-          ${pacLeg('stale', t('chat.help.pacStaleName', 'Sin señales'), t('chat.help.pacStaleDesc', 'ámbar apagado y quieto: se perdió el rastro, no se sabe si sigue activo'))}
-          ${pacLeg('error', t('chat.help.pacErrorName', 'Falló'), t('chat.help.pacErrorDesc', 'rojo y quieto: se detuvo por un error'))}
-          ${pacLeg('dormant', t('chat.help.pacDormantName', 'Dormido'), t('chat.help.pacDormantDesc', 'gris y quieto: nada activo ni delegado — el único estado sin animación'))}
-        </div>
-      </div>`;
   }
 
   _result(m) {

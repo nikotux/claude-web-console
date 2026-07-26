@@ -8,6 +8,7 @@
 //   4) Reservas de archivo (claims) con semáforo 🔴🟡🟢 + liberar (admin).
 // Solo LEE (0 tokens); el tráfico real lo generan los hooks de las sesiones.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -44,6 +45,7 @@ export function mountInterfonoPanel(el, ctx) {
     <div class="if-head">
       <span class="hp-title">📻 ${t('system.interfono.title', 'Interfono entre sesiones')}</span>
       <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="${t('system.interfono.refresh', 'Refrescar')}">${icon('refresh', { size: 13 })}</button>
+      ${helpBtn('sys-interfono')}
     </div>
     <p class="if-hint">${t('system.interfono.hint', 'Las sesiones de Claude se avisan y evitan pisarse solas. Acá lo ves y podés escribirles vos.')}</p>
 

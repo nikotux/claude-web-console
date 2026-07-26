@@ -3,6 +3,7 @@
 // Misma lógica CRUD contra /api/admin/*, con diálogos propios. Lo usa tanto
 // la pestaña "Usuarios" del modal Sistema como la página /admin (admin.js).
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { confirmDialog, promptDialog } from '../../ui/dialog.js';
 import { t } from '../../ui/i18n.js';
 
@@ -19,6 +20,10 @@ async function api(path, opts) {
 
 export function mountUsersPanel(el) {
   el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.users.title', 'Usuarios')}</span>
+      ${helpBtn('sys-users')}
+    </div>
     <form class="users-new" data-ref="form">
       <input data-ref="user" placeholder="${t('system.users.usernamePlaceholder', 'Usuario')}" autocapitalize="off" autocorrect="off" spellcheck="false" />
       <input data-ref="pass" type="password" placeholder="${t('system.users.passwordPlaceholder', 'Contraseña')}" />

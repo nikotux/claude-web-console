@@ -176,11 +176,20 @@ export async function perUserSnapshot() {
   }
   // RSS agregado + disco del espacio (solo inquilinos)
   for (const e of owners.values()) {
-    let rssKb = 0;
-    for (const pid of e._pids) rssKb += await rssKbForPid(pid);
+    // RSS de todos los pids EN PARALELO: rssKbForPid es best-effort (nunca
+    // lanza, devuelve 0 en catch), así que el handler no crece linealmente con
+    // la cantidad de runners vivos.
+    const rssKb = (await Promise.all(e._pids.map(rssKbForPid))).reduce((a, b) => a + b, 0);
     e.rssMB = Math.round(rssKb / 1024);
     if (e.userId !== host) {
-      try { e.diskBytes = (await dirSizeBytes(userDataDir(e.userId))) + (await dirSizeBytes(userClaudeDir(e.userId))); } catch { e.diskBytes = 0; }
+      try {
+        // Budget COMPARTIDO entre los dos subárboles: el tope de 200.000
+        // archivos aplica al espacio COMPLETO del usuario, no a cada subárbol
+        // por separado (si no, el walk podía llegar a 400.000 en un request).
+        const budget = { files: 0 };
+        e.diskBytes = (await dirSizeBytes(userDataDir(e.userId), budget))
+                    + (await dirSizeBytes(userClaudeDir(e.userId), budget));
+      } catch { e.diskBytes = 0; }
     } else {
       e.diskBytes = null; // host: home completo, no medido
     }

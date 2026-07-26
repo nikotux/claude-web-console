@@ -5,15 +5,28 @@
 //   R2   🟡 Métricas                · 💬 Standup (reunión diaria)
 // Todo 0 tokens salvo los botones que abren sesión (Actualizaciones/Standup/
 // Trabajar/Vista IA). Móvil: los cuadrantes se apilan y son colapsables.
+import { bindHelp, helpBtn } from '../ui/help.js';
+
 const app = document.getElementById('app');
 
-const TYPE = {
+const DEFAULT_TYPE = {
   vendor: { label: '🔴 Proveedor', color: 'var(--cwc-danger)' },
   aprobacion: { label: '🟠 Aprobación', color: 'var(--cwc-warn)' },
   'decision-mark-chris': { label: '🟡 Decisión M/C', color: 'var(--cwc-warn)' },
   mio: { label: '✅ Mío', color: 'var(--cwc-ok)' },
   '': { label: '⚪ —', color: 'var(--cwc-text-dim)' },
 };
+let TYPE = { ...DEFAULT_TYPE };
+
+// La taxonomía la manda el backend (classify-shared.js:OWNER_TYPE_LIST) en el
+// snapshot; si un snapshot viejo no la trae, se cae al hardcode de arriba.
+function applyOwnerTypes(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  const next = {};
+  for (const t of list) { if (t && t.key) next[t.key] = { label: t.label || t.key, color: t.color || 'var(--cwc-text-dim)' }; }
+  next[''] = DEFAULT_TYPE[''];
+  TYPE = next;
+}
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -39,7 +52,7 @@ const COLS = [
   { k: 'domain', label: 'Área', type: 'enum', opts: ['casa', 'oficina', 'otros'], get: (f) => f.domain || '', cell: (f) => `${dom(f.domain)} ${esc(f.domain || '')}` },
   { k: 'project', label: 'Proyecto', type: 'text', get: (f) => projOf(f), cell: (f) => esc(projOf(f)) },
   { k: 'ownerBall', label: 'Dueño de la pelota', type: 'text', get: (f) => f.ownerBall || '', cell: (f) => esc(f.ownerBall || '—') },
-  { k: 'ownerType', label: 'Tipo', type: 'enum', opts: Object.keys(TYPE).filter(Boolean), get: (f) => f.ownerType || '', cell: (f) => `<span style="color:${typeMeta(f.ownerType).color}">${typeMeta(f.ownerType).label}</span>` },
+  { k: 'ownerType', label: 'Tipo', type: 'enum', opts: () => Object.keys(TYPE).filter(Boolean), get: (f) => f.ownerType || '', cell: (f) => `<span style="color:${typeMeta(f.ownerType).color}">${typeMeta(f.ownerType).label}</span>` },
   { k: 'involucrados', label: 'Involucrados', type: 'text', get: (f) => (f.involucrados || []).join(', '), cell: (f) => esc((f.involucrados || []).join(', ') || '—') },
   { k: 'title', label: 'Título', type: 'text', get: (f) => f.title || '', cell: (f) => esc(f.title || '') },
   { k: 'nextAction', label: 'Próxima acción', type: 'text', get: (f) => f.nextAction || '', cell: (f) => esc(f.nextAction || '') },
@@ -444,7 +457,8 @@ function headHtml() {
   }).join('');
   const filters = COLS.map((c) => {
     if (c.type === 'enum') {
-      const opts = ['<option value="">·</option>'].concat(c.opts.map((o) => `<option value="${esc(o)}" ${state.filters[c.k] === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
+      const values = typeof c.opts === 'function' ? c.opts() : c.opts;
+      const opts = ['<option value="">·</option>'].concat(values.map((o) => `<option value="${esc(o)}" ${state.filters[c.k] === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
       return `<th><select data-filter="${c.k}">${opts}</select></th>`;
     }
     return `<th><input data-filter="${c.k}" value="${esc(state.filters[c.k] || '')}" placeholder="filtrar"></th>`;
@@ -500,6 +514,7 @@ function fullRender() {
           ${state.aiKeys ? `<button class="sg-mini" data-act="clearai" title="Limpiar Vista IA">✖ IA (${state.aiKeys.size})</button>` : ''}
           <button class="sg-mini" data-act="refresh" title="Refrescar datos de Desk" ${busy ? 'disabled' : ''}>${d.refreshing ? '…' : '↻'}</button>
           <button class="sg-mini" data-act="classify" title="Re-clasificar con IA" ${busy ? 'disabled' : ''}>${d.classifying ? '…' : '🧠'}</button>
+          ${helpBtn('seguimientos', { size: 14, cls: 'sg-mini' })}
         </div>
       </div>
     </header>
@@ -639,6 +654,7 @@ async function load() {
       fetch('/api/seguimientos', { headers: { accept: 'application/json' } }).then((r) => r.json()),
       fetch('/api/seguimientos/history', { headers: { accept: 'application/json' } }).then((r) => r.json()).catch(() => ({ days: [] })),
     ]);
+    applyOwnerTypes(snap.ownerTypes);
     state.data = snap;
     state.history = Array.isArray(hist.days) ? hist.days : [];
     computeDelta();
@@ -708,4 +724,5 @@ app.addEventListener('input', (e) => {
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.sg-modal').forEach((m) => m.remove()); });
 
+bindHelp();
 load();

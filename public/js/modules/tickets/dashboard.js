@@ -12,10 +12,11 @@ import { pacman } from '../../ui/pacman.js';
 import { openTicketDetail } from './ticket-detail.js';
 import { openPrDetail } from './pr-detail.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 // Carriles: emoji + label SEPARADOS. En la card se muestra SOLO el emoji (chip
 // sin texto); el label vive en las pestañas de filtro (que hacen de leyenda) y
-// en el modal de leyenda (botón "?"). `other` ya no es "·": tiene su ícono.
+// en el tema unificado de ayuda (botón "?"). `other` ya no es "·": tiene su ícono.
 const LANE_META = {
   bug: { emoji: '🐞', label: 'bug' }, feature: { emoji: '💡', label: 'feature' },
   hardware: { emoji: '🖥', label: 'hardware' }, access: { emoji: '🔑', label: 'access' },
@@ -245,9 +246,9 @@ export function openBugsV2Dashboard(deps = {}) {
   const headActions = document.createElement('div');
   headActions.className = 'bv2-head-actions';
   headActions.innerHTML = `
-    <button class="btn-ghost btn--sm btn--icon" data-ref="legend" title="${t('tickets.dash.legendTitle', 'Leyenda de íconos')}">${icon('help', { size: 15 })}</button>
     <button class="btn-ghost btn--sm btn--icon" data-ref="search-toggle" title="${t('tickets.dash.searchTitle', 'Buscar ticket por número')}">${icon('search', { size: 15 })}</button>
-    <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('tickets.dash.refreshTitle', 'Actualizar (fuerza refresh)')}">${icon('refresh', { size: 15 })}</button>`;
+    <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('tickets.dash.refreshTitle', 'Actualizar (fuerza refresh)')}">${icon('refresh', { size: 15 })}</button>
+    ${helpBtn('tickets')}`;
   head.insertBefore(headActions, head.querySelector('.dlg-x'));
   const refreshBtn = headActions.querySelector('[data-ref="refresh"]');
   const refreshIcon = refreshBtn.innerHTML;
@@ -275,28 +276,6 @@ export function openBugsV2Dashboard(deps = {}) {
     const bar = content.querySelector('[data-ref="searchbar"]');
     if (bar) { bar.hidden = !bar.hidden; if (!bar.hidden) bar.querySelector('input')?.focus(); }
   });
-  headActions.querySelector('[data-ref="legend"]').addEventListener('click', openLegend);
-
-  // Leyenda de íconos: carriles + estados + propiedades, agrupada tipo árbol.
-  function openLegend() {
-    const row = (chipHtml, desc) => `<div class="bv2-leg-row">${chipHtml}<span class="bv2-leg-desc">${esc(desc)}</span></div>`;
-    const laneRows = Object.values(LANE_META)
-      .map((v) => row(`<span class="bb-chip bv2-ic">${v.emoji}</span>`, v.label)).join('');
-    const statusRows = Object.values(STATUS_META)
-      .map((v) => row(`<span class="bb-chip ${v.chip} bv2-ic">${v.emoji}</span>`, v.label)).join('');
-    const propRows = [
-      ...Object.values(PRIO_META).map((v) => row(`<span class="bb-chip ${v.chip} bv2-prop">${v.emoji} ${v.label}</span>`, v.desc)),
-      row('<span class="bb-chip bb-chip--info bv2-prop">👤 GR</span>', t('tickets.dash.ownerAssigned', 'Dueño asignado (iniciales del agente)')),
-    ].join('');
-    const m = openModal({ title: t('tickets.dash.legendTitle', 'Leyenda de íconos'), width: 420 });
-    m.body.innerHTML = `
-      <div class="bv2-legend">
-        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legLane', '🏷️ Carril')}</div>${laneRows}</div>
-        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legStatus', '🚦 Estado')}</div>${statusRows}</div>
-        <div class="bv2-leg-group"><div class="bv2-leg-h">${t('tickets.dash.legProps', '🔖 Propiedades')}</div>${propRows}</div>
-      </div>`;
-  }
-
   // Badge de "en uso": 🔒 verde si es tuyo, ámbar si lo trabaja otro.
   function lockBadge(item) {
     const w = item.workingBy;
@@ -316,8 +295,8 @@ export function openBugsV2Dashboard(deps = {}) {
 
   // Card de DOS filas: (1) título completo del ticket; (2) #nº + chips de
   // clasificación SOLO-ícono (carril · estado) + chips de PROPIEDAD con su valor
-  // (prioridad · dueño · antigüedad). La leyenda de todos los íconos vive en el
-  // botón "?" del header. Prioridad/dueño se omiten si el ticket no los tiene.
+  // (prioridad · dueño · antigüedad). La leyenda de todos los íconos vive en la
+  // ayuda unificada del header. Prioridad/dueño se omiten si el ticket no los tiene.
   function ticketRow(ticket) {
     ticketMap.set(String(ticket.ticketNumber), ticket);
     const sm = statusMeta(ticket);

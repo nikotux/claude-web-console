@@ -8,6 +8,7 @@
 // Solo lectura a propósito (decisión explícita 2026-07-19): sin crear/editar
 // SKILL.md ni playbooks desde acá todavía.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -71,7 +72,12 @@ function candidateRow(c) {
 }
 
 export function mountSkillsPanel(el) {
-  el.innerHTML = `<div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.skills.loading', 'Cargando skills…')}</span></div>`;
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.skills.title', 'Skills')}</span>
+      ${helpBtn('sys-skills')}
+    </div>
+    <div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.skills.loading', 'Cargando skills…')}</span></div>`;
   const root = el.querySelector('[data-ref="root"]');
 
   let alive = true;

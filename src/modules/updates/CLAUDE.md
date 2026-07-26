@@ -234,3 +234,67 @@ de veredicto favorable aclarando que igual necesita tu tilde, y conteos de la
 sección ajustados. LECCIÓN DURA: un veredicto IA favorable informa pero no
 decide, y `node --check` nunca alcanza — el gate previo al reinicio es
 `verifyRuntime()`.
+🧑‍✈️ SESIÓN DE ACTUALIZACIÓN (2026-07-25, PLAN-1895). Pedido de Niko: el
+botón orquestado le resultaba confuso, poco práctico y a veces riesgoso, y
+además «se escapan cosas»; ejemplo real: se actualizaron Codex y Claude para
+que aparecieran modelos nuevos que la consola no ofrecía. Huecos verificados
+ese día: el Codex CLI (`codex-cli 0.145.0`, `~/.npm-global`) NO estaba en el
+censo; `~/.codex/models_cache.json` listaba 8 modelos mientras
+`src/modules/chat/codex-models.js` conocía 5 — faltaban `gpt-5.4`,
+`gpt-5.4-mini` y `codex-auto-review`—; MCPs y Pad también estaban fuera del
+censo. Decisiones explícitas de Niko vía AskUserQuestion: sesión EJECUTORA
+TOTAL (Bash directo, no copiloto), se abre SIEMPRE al apretar el botón y tiene
+cobertura completa (Codex + modelos + MCPs/Pad).
+Implementación: `POST /api/updates/session-briefing` (admin) corre un censo
+fresco y `buildPlan(census,{apt:true},[],verdicts)`, con `includeMajors` VACÍO
+a propósito: la sesión decide con Niko EN EL CHAT, no mediante el checkbox.
+Después `buildUpdateBriefing()` de `updates/session-shared.js`, función PURA,
+determinística y de 0 tokens, produce `{ok, prompt, title, cwd, actions}`. El
+front (`system/updates-panel.js`) llama
+`openChat({cwd:'claude-web-console', model:'opus',
+mode:'bypassPermissions', prompt, title})`. DOS GOTCHAS DE DISEÑO no obvios:
+(1) la sesión NO puede ser TÁNDEM porque su hook bloquea `Bash` de escritura;
+una sesión de update en Tándem ni siquiera podría correr `npm install`, por lo
+que va en modo normal. (2) `mode:'bypassPermissions'` es DELIBERADO: frenar en
+cada permiso de npm/apt/systemctl volvería inusable el flujo; Bash total hace
+que se PIERDAN las whitelists del runner, de modo que el blindaje pasa a ser
+el BRIEFING y no el código, riesgo aceptado explícitamente por Niko.
+El briefing entrega censo completo en tablas, plan ordenado, veredictos IA por
+major, los DOS incidentes reales (`cookie` v2 y `archiver` v8) con su modo de
+falla y reglas innegociables: JAMÁS ejecutar `sudo reboot` de la máquina;
+antes de reiniciar correr la verificación de runtime real
+`import('./src/core/registry.js')`, porque `node --check` es ciego a imports
+rotos; drenar por interfono; entender que el corte de unos 10 s de la web es
+esperado porque la sesión sobrevive gracias a `KillMode=process`; intentar
+primero un revert QUIRÚRGICO, preferir ARREGLAR antes que revertir y borrar
+`~/.cwc-data/updates-census.json` tras aplicar. El runner determinístico
+`bin/cwc-updates-runner.js` se CONSERVA INTACTO como botón secundario
+«🤖 Modo automático», sin IA y con 0 tokens.
+CENSO AMPLIADO en `shared.js`: `censusCodexCli()` compara la versión contra
+`npm view @openai/codex version`, resuelve el symlink y, si cae dentro de
+`$HOME`, devuelve `manageable:true` más `updateCmd`; `censusModels()` compara
+Codex desde `models_cache.json` contra `CODEX_MODEL_EFFORTS` y Claude contra
+`VALID_MODELS`. El CLI de Claude NO expone un catálogo en disco, por lo que
+devuelve honestamente `source:'hardcoded'` más una nota en vez de fabricar una
+detección falsa. `censusMcps()` reutiliza `runMcpList`/`parseList` de
+`mcps/login-shared.js` y es informativo. Los modelos faltantes NO se arreglan
+actualizando: se arreglan EDITANDO `src/modules/chat/codex-models.js` o
+`src/core/claude-model.js`, y el panel lo explica con `hint`.
+`CENSUS_VERSION = 2`: como la caché `updates-census.json` sobrevive a cambios
+de código, un censo anterior dejaba vacíos los campos nuevos hasta forzar
+`?fresh=1`; ahora un snapshot cuya `version` difiere se trata como
+inexistente. DOS DEFECTOS CAZADOS EN LA VERIFICACIÓN: el panel renderizaba
+`[object Object]` para los MCP porque `status` es
+`{code,light,label}` y no un string; además, el ítem de modelos de Claude
+mostraba un FALSO VERDE («conoce todos los modelos disponibles») aunque no se
+había comparado contra ninguna fuente. Ahora existe un tercer estado NEUTRO
+«sin verificación automática» y el ✅ verde queda reservado para una
+comparación real. E2E verificado: `POST /api/updates/session-briefing` respondió
+HTTP 200 con 4 acciones y un briefing de 5559 caracteres que contenía las 17
+secciones y todas las reglas; Playwright confirmó los botones
+«🧑‍✈️ Actualizar con sesión · 4» y «🤖 Modo automático · 4», la sección
+«🤖 Codex y modelos» con los 3 modelos faltantes, cero `[object Object]`,
+Claude en estado neutro y el click entregando a `openChat` exactamente
+`{cwd:'claude-web-console', model:'opus', mode:'bypassPermissions'}`.
+`GET /api/health/checks` quedó 16/17 ok; el único warn eran cambios sin
+commitear.

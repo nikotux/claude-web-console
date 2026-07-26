@@ -4,6 +4,7 @@
 // reinicio automático / eliminar), embebida en el modal Sistema y con
 // diálogos propios. El backend no cambió.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -38,6 +39,10 @@ export function mountBackupPanel(el, ctx) {
   let busy = false;
 
   el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.backup.title', 'Backup')}</span>
+      ${helpBtn('sys-backup')}
+    </div>
     <button class="btn btn--block" data-ref="create">${icon('archive', { size: 15 })}<span>${t('system.backup.createNow', 'Crear backup ahora')}</span></button>
     <p class="bk-msg" data-ref="msg" hidden></p>
     <div class="bk-list" data-ref="list"></div>

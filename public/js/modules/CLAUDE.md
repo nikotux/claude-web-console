@@ -344,6 +344,15 @@ trae datos solo si faltan en caché (Día del summary, Semana/Mes de
 fetchLimits/fmtReset/renderLimits (renderLimits(el,data,{windows}) — el
 pie plan-limits.js lo reusa sin windows: créditos colapsables ahí también,
 sin token-counts); destroyChart en onClose (sin leaks de Chart.js))
+
+CONVENCIÓN DE AYUDA: cada módulo frontend lleva su propio `help.js` (o
+`help/<panel>.js` en `system`) y exporta default una función que devuelve el
+tema; su `helpBtn('<id>')` va como último control del header. El censo actual
+tiene 28 temas: 26 ids usan `helpBtn`, `auxbar` usa un botón estático
+`data-help="auxbar"` porque su chrome vive en index.html, y `stats` no tiene
+botón propio porque su widget son tres gauges sin header; se llega desde el
+hub "Guía de la consola".
+
 ### public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 
 ## Gotchas de esta carpeta

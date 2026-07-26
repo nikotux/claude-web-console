@@ -351,7 +351,7 @@ Las 4 familias están blindadas como invariantes en `src/modules/health/invarian
 
 ## NO MODIFICAR (generado o estado de runtime)
 
-**En el repo:** `node_modules/`, `package-lock.json` (solo vía npm) · `certs/` (self-signed autogenerado) · `users.json`, `sessions.json` (auth, perms 600), `recents.json`, `titles.json` · `.env` (config del usuario — solo el usuario).
+**En el repo:** `node_modules/`, `package-lock.json` (solo vía npm) · `certs/` (self-signed autogenerado) · `users.json`, `sessions.json` (auth, perms 600), `recents.json`, `titles.json`, `session-owners.json` (dueño de cada sesión tmux, para la rehidratación multi-tenant) · `.env` (config del usuario — solo el usuario).
 
 **Fuera del repo:** `~/.cwc-data/` (estado de runtime de TODOS los módulos: chats, cachés, jobs de runners, snapshots, locks y logs) · `~/.cwc-backups/` · `~/.cwc-trash/` · `~/.cwc-state/` (observador — OJO: `claude-state.js` PODA todo `.json` de ahí sin `ts` fresco; nunca guardes ahí nada ajeno al observador).
 
@@ -417,7 +417,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `projects/` | edita el CLAUDE.md y las memorias REALES de cada proyecto | Excepción deliberada a la regla 4: lo que guardás acá cambia el comportamiento de la próxima sesión. Edición por SECCIONES con guard de hash. |
 | `backup/` | tar.gz + commit + push del código | Solo al remote `personal`; URLs con `Mordor-Staffing` bloqueadas. Nunca versionar `.env`, `users.json`, `certs/`. |
 | `comms/` | **librerías compartidas** (NO es un módulo registrado) | El dashboard se eliminó en 2026-07-14. Quedan `pr-read-shared` (lector único de PRs), `gateway-shared` (envíos) y el puente de WhatsApp. |
-| `updates/` | censo de versiones de terceros + actualización orquestada | Un major NUNCA entra sin veredicto IA favorable. `node --check` NO detecta imports rotos: exige prueba de runtime. |
+| `updates/` | censo de versiones de terceros + dos caminos de actualización | El botón principal abre una **sesión** con Bash total (no puede ser Tándem: su hook bloquea Bash de escritura); el runner determinístico queda como "Modo automático". Un major NO entra por veredicto IA favorable: solo si Niko lo tilda. `node --check` NO detecta imports rotos: exige prueba de runtime. |
 | `mcps/` | censo + estado en vivo de los MCP + el Llavero | Resiliencia POR ÍTEM: un MCP caído no puede bloquear el panel entero. |
 | `connections/` | cuentas OAuth por usuario (Microsoft, Zoho) | Zoho NO usa `offline_access`: el refresh token sale de `access_type=offline`, y el grant code se quema en un solo uso. |
 | `onboard/` | alta self-service de usuarios por token de invitación (SP7 multi-tenant) | Su `publicRouter` se monta ANTES del gate de auth: lo único que lo protege es la validación del token + un rate-limit por IP en memoria. Todo endpoint que agregues ahí queda expuesto sin login. |
@@ -451,6 +451,13 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   `alert()/confirm()/prompt()` nativos.
 - **Íconos:** `icon(name)` de `ui/icons.js` (SVG de trazo, currentColor);
   agregar íconos nuevos AHÍ, no SVG inline.
+- **Ayuda contextual obligatoria en superficie nueva:** todo panel/tablero/
+  página nueva nace con su tema en `public/js/modules/<n>/help.js` (contrato
+  en `ui/help.js`), su entrada en `ui/help-index.js` y su botón
+  `helpBtn('<id>')` como último control del header. Anatomía mínima: qué es ·
+  primeros pasos · leyenda de íconos reales · botones y acciones (marcando
+  los que consumen tokens) · ojo con esto. Los strings van por `t()` con el
+  español inline, como el resto del frontend.
 - **"Mi Consola" = nombre CANÓNICO de este proyecto (pedido del usuario
   2026-07-05):** en toda la UI el proyecto se llama "Mi Consola" (nunca
   "claude-web-console" ni "Consola (este proyecto)") con el ícono `console`
@@ -610,6 +617,27 @@ _procedimiento · confianza media · recurrencia x2_
 **Observación:** El módulo seguimientos no figuraba en el mapa de módulos de CLAUDE.md; la sesión lo detectó como hueco previo y lo agregó junto con el cambio del calendario.
 
 **Lección:** Antes de cerrar trabajo sobre un módulo, chequear que tenga entrada en el mapa de módulos de CLAUDE.md; si no existe, agregarla como parte del mismo cambio en vez de dejarla pendiente.
+
+### Verificar qué persiste realmente un dispositivo/API externo antes de diseñar el almacenamiento
+_metodologia · confianza media · recurrencia x1_
+
+**Observación:** Se asumió que la API de MikroTik guardaba histórico y que la base de datos de la consola sería solo un caché temporal; al revisar el comportamiento real de netwatch se descubrió que no guarda nada del pasado (solo el último test), lo que convertía a la base de la consola en la única copia irrecuperable del dato, subiendo la criticidad del runner registrador.
+
+**Lección:** Antes de diseñar la capa de almacenamiento sobre un dispositivo o API externa, confirmar explícitamente qué persiste ese sistema y qué no (histórico real vs. solo estado actual), en vez de asumir que existe un respaldo del lado del proveedor.
+
+### Revisar el backlog de bugs abiertos por colisiones antes de arrancar un plan nuevo
+_metodologia · confianza alta · recurrencia x1_
+
+**Observación:** Antes de ejecutar el plan de multi-tenant, se hizo una pasada por el backlog de Pad y aparecieron dos bugs (BUG-1792, BUG-929) que chocaban directamente con lo planeado: uno rompía el propio mecanismo de verificación (crossCheckPad) y otro afectaba el mismo paso que se iba a agregar al wizard (device flow de conexiones).
+
+**Lección:** Antes de arrancar la ejecución de un plan multi-paso, revisar el backlog de bugs/tareas abiertas buscando específicamente los que tocan los mismos archivos, módulos o mecanismos de verificación que el plan va a usar, y resolverlos primero.
+
+### Verificar que no haya jobs/procesos en vivo antes de reiniciar el servidor
+_procedimiento · confianza media · recurrencia x1_
+
+**Observación:** Antes de reiniciar el server para aplicar el fix de BUG-929 (device flow que no sobrevive un reinicio), se chequeó explícitamente que no hubiera device flows de Microsoft en curso, evitando dejar un job huérfano justo del tipo que el propio bug describía.
+
+**Lección:** Antes de reiniciar un servicio compartido, verificar si hay jobs o procesos en curso dependientes del estado en memoria (polling, flujos OAuth, tareas en progreso) que el reinicio pueda dejar huérfanos o corromper.
 
 ### Verificar los scopes de una conexión OAuth existente antes de reusarla para un nuevo dominio de API
 _procedimiento · confianza media · recurrencia x1_

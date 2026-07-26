@@ -3,7 +3,18 @@
 // mundo externo. Best-effort: cualquier respuesta rara devuelve Map vacío.
 import { textOnlyQuery } from '../../core/text-only-query.js';
 
-const OWNER_TYPES = new Set(['vendor', 'aprobacion', 'decision-mark-chris', 'mio']);
+// Fuente ÚNICA de la taxonomía de ownerType: la consume el prompt IA, la
+// validación de normalizeClassification Y el frontend (vía el snapshot de
+// GET /api/seguimientos). Antes estaba duplicada a mano en
+// public/js/seguimientos/seguimientos.js: agregar un tipo en el backend sin
+// tocar el front hacía caer esos frentes al fallback '⚪ —' en silencio.
+export const OWNER_TYPE_LIST = [
+  { key: 'vendor', label: '🔴 Proveedor', color: 'var(--cwc-danger)' },
+  { key: 'aprobacion', label: '🟠 Aprobación', color: 'var(--cwc-warn)' },
+  { key: 'decision-mark-chris', label: '🟡 Decisión M/C', color: 'var(--cwc-warn)' },
+  { key: 'mio', label: '✅ Mío', color: 'var(--cwc-ok)' },
+];
+const OWNER_TYPES = new Set(OWNER_TYPE_LIST.map((t) => t.key));
 
 function briefFrente(f) {
   return {

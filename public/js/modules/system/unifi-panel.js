@@ -1,4 +1,5 @@
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -15,7 +16,11 @@ const dash = (v) => (v == null || v === '' ? '—' : v);
 export function mountUnifiPanel(el, ctx) {
   const wrap = document.createElement('div');
   wrap.className = 'hp-opt';
-  el.innerHTML = '';
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.unifi.title', 'Red (UniFi)')}</span>
+      ${helpBtn('sys-unifi')}
+    </div>`;
   el.appendChild(wrap);
 
   let alive = true;

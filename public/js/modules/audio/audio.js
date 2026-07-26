@@ -11,6 +11,7 @@
 // runner detached y el modal ENCUESTA GET /api/audio/:id (resiliente a cambios
 // de pestaña / reinicios del server — patrón triage/health/desk-live).
 import { pacman } from '../../ui/pacman.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 
 const SEG = {
@@ -228,6 +229,7 @@ export function openAudioPanel(ctx) {
 
   const m = dialog.openModal({ title: t('audio.panel.title', 'Extracción de audio'), width: '780px' });
   m.card.classList.add('au-card');
+  m.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('audio'));
   m.body.innerHTML = `
     <div class="au-panel">
       <div class="au-intro">${t('audio.panel.intro', 'Pegá la transcripción del audio (ya pasada a texto). La IA interpreta <strong>quién dijo qué y por qué</strong>, le pone un <strong>título</strong>, arma un plan y propone tareas para Pendientes. El título se puede editar después.')}</div>

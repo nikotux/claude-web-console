@@ -22,6 +22,7 @@ import { ensureDir, readSnapshot, writeSnapshot } from './store.js';
 import { refreshNow, isRefreshing } from './refresher.js';
 import { readHistory } from './history-store.js';
 import { fetchCalendar } from './calendar-source.js';
+import { OWNER_TYPE_LIST } from './classify-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_ROOT = path.join(__dirname, '..', '..', '..');
@@ -92,7 +93,9 @@ export default {
 
     // Snapshot completo del dashboard (frentes + conteos). 0 tokens: solo disco.
     r.get('/', (req, res) => {
-      res.json({ ...readSnapshot(), refreshing: isRefreshing() });
+      // ownerTypes: taxonomía servida desde el backend (fuente única en
+      // classify-shared.js) para que el front no la duplique a mano.
+      res.json({ ...readSnapshot(), ownerTypes: OWNER_TYPE_LIST, refreshing: isRefreshing() });
     });
 
     // Dispara la ADUANA (Zoho Desk read-only → snapshot). Responde YA; el front

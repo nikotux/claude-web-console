@@ -496,7 +496,10 @@ export default {
 
         // Commit: los trackeados modificados/borrados (add -u) + los untracked
         // recién seleccionados (ya stageados arriba).
-        await git(['add', '-u']);
+        // Un fallo real (index.lock, permisos o disco lleno) antes se ocultaba
+        // como "no hay nada que commitear", dejando un git roto en silencio.
+        const addU = await git(['add', '-u']);
+        if (addU.code !== 0) return res.status(500).json({ error: `No se pudieron agregar los cambios trackeados (git add -u): ${addU.stderr || addU.out}` });
         let staged = lines((await git(['diff', '--cached', '--name-only'])).out);
 
         // Changelog EN INGLÉS en README.md: commits locales hechos pero aún
@@ -516,7 +519,8 @@ export default {
         const entry = buildChangelogEntry({ branch, priorSubjects, fileStatuses, initial: !beforeRef });
         const changelogUpdated = entry ? updateReadmeChangelog(entry) : false;
         if (changelogUpdated) {
-          await git(['add', 'README.md']);
+          const addReadme = await git(['add', 'README.md']);
+          if (addReadme.code !== 0) return res.status(500).json({ error: `No se pudo agregar README.md (changelog): ${addReadme.stderr || addReadme.out}` });
           staged = lines((await git(['diff', '--cached', '--name-only'])).out);
         }
 
@@ -626,7 +630,8 @@ export default {
         }
 
         // Trackeados modificados/borrados + untracked recién stageados.
-        await git(['add', '-u']);
+        const addUCommit = await git(['add', '-u']);
+        if (addUCommit.code !== 0) return res.status(500).json({ error: `No se pudieron agregar los cambios trackeados (git add -u): ${addUCommit.stderr || addUCommit.out}` });
         const staged = lines((await git(['diff', '--cached', '--name-only'])).out);
         if (!staged.length) return res.status(409).json({ error: 'No hay cambios para commitear.' });
 
@@ -722,8 +727,13 @@ export default {
         // Deps nuevas: npm install ANTES del restart (el server nuevo puede requerirlas).
         let npm = null;
         if (changed.includes('package.json') || changed.includes('package-lock.json')) {
+          const NPM_TIMEOUT_MS = 300000;
           npm = await new Promise((resolve) => {
-            execFile('npm', ['install'], { cwd: PROJECT_DIR, timeout: 300000 }, (err, _o, stderr) => {
+            execFile('npm', ['install'], { cwd: PROJECT_DIR, timeout: NPM_TIMEOUT_MS }, (err, _o, stderr) => {
+              // Mismo criterio que git()/ghCmd()/tar() (invariante 10): una
+              // terminación anormal (timeout/señal/binario ausente) se reporta como tal.
+              const bad = abnormalExec(err, 'npm install', NPM_TIMEOUT_MS);
+              if (bad) return resolve({ ok: false, error: bad.message.slice(0, 300) });
               resolve({ ok: !err, error: err ? String(stderr || err.message).slice(0, 300) : null });
             });
           });

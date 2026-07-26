@@ -15,6 +15,7 @@ import { mountLearning } from '../learning/learning.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderMarkdown } from '../../ui/markdown.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 const STATUS = [
   { key: 'pendiente', get label() { return t('tasks.status.pendiente', 'Pendiente'); }, emoji: '⚪' },
@@ -78,6 +79,7 @@ export default {
         <span class="sec-title">${t('tasks.sidebar.title', 'Banco de conocimiento')}</span>
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="add" title="${t('tasks.sidebar.addTitle', 'Nueva tarea')}">${icon('plus', { size: 14 })}</button>
+        ${helpBtn('tasks')}
       </header>
       <div class="tk-card">
         <div class="task-mini" data-ref="mini">${t('tasks.common.loading', 'cargando…')}</div>
@@ -252,6 +254,7 @@ export default {
       // real vive en .task-board-card (style.css); pasamos 92vw como el explorador.
       const m = dialog.openModal({ title: t('tasks.board.title', 'Banco de conocimiento'), width: '92vw', onClose: () => { boardApi = null; } });
       m.card.classList.add('task-board-card');
+      m.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('tasks'));
       m.body.innerHTML = `
         <div class="task-board">
           <div class="tk-tabs" data-ref="tabs"></div>

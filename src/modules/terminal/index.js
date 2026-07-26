@@ -200,17 +200,28 @@ export default {
 
       session.attach(ws);
 
+      // try/catch en TODO el cuerpo (no solo el JSON.parse) — invariante 5: este
+      // listener corre en un emisor externo (ws), FUERA de la ventana try/catch
+      // de core/wss.js, que solo envuelve la invocación síncrona del handler.
+      // Sin esto, un frame literal `null` (JSON.parse('null') === null) o un
+      // session.write() que lance tiraba abajo el proceso entero — no hay
+      // uncaughtException global en src/server.js.
       ws.on('message', (raw) => {
-        let msg;
         try {
-          msg = JSON.parse(raw.toString());
-        } catch {
-          return; // ignoramos frames no-JSON del cliente
-        }
-        if (msg.type === 'input') {
-          session.write(msg.data);
-        } else if (msg.type === 'resize') {
-          session.resize(msg.cols, msg.rows);
+          let msg;
+          try {
+            msg = JSON.parse(raw.toString());
+          } catch {
+            return; // ignoramos frames no-JSON del cliente
+          }
+          if (!msg || typeof msg !== 'object') return; // null, número, string suelto…
+          if (msg.type === 'input') {
+            session.write(msg.data);
+          } else if (msg.type === 'resize') {
+            session.resize(msg.cols, msg.rows);
+          }
+        } catch (e) {
+          console.error('[terminal] mensaje WS inválido o fallo al despacharlo:', e?.message);
         }
       });
 

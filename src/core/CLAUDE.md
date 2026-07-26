@@ -120,7 +120,11 @@ uniqueName("tolkien"→"tolkien 1") consultado al CREAR chat
 (manager.create; rehydrate NO uniquifica) y terminal (si el
 basename choca, persiste el único como customTitle en
 titles.json, cuyos helpers loadTitles/saveTitles/titleKey ahora
-viven acá, compartidos por los módulos tmux y terminal) ·
+viven acá, compartidos por los módulos tmux y terminal; también
+loadOwners/saveOwners/setSessionOwner/ownerForSession sobre
+session-owners.json, registro durable id→owner de las sesiones
+tmux que terminal/sessions.js consume al rehidratar para no perder
+el dueño tras un reinicio, fail-closed si falta la entrada) ·
 inventory(INVENTARIO determinístico del proyecto — FASE 1 del
 "sistema nervioso": el CLAUDE.md son las REGLAS/receta; el
 inventario es el CENSO VIVO "qué existe AHORA". Sin LLM: parsea el

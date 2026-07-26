@@ -9,6 +9,7 @@
 // Patrón: GET abierto a cualquier autenticado (solo lectura si no es admin),
 // POST admin (mismo criterio que project-context-panel.js).
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -18,7 +19,13 @@ export function mountEnvVarsPanel(el, ctx) {
   const { isAdmin } = ctx;
   let data = null;
 
-  el.innerHTML = `<p class="ev-msg" data-ref="loading">${pacman({ size: 'sm' })} ${t('system.envVars.loading', 'Cargando…')}</p>`;
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.env.title', 'Variables de entorno')}</span>
+      ${helpBtn('sys-env')}
+    </div>
+    <div data-ref="root"><p class="ev-msg" data-ref="loading">${pacman({ size: 'sm' })} ${t('system.envVars.loading', 'Cargando…')}</p></div>`;
+  const root = el.querySelector('[data-ref="root"]');
 
   async function load() {
     try {
@@ -27,7 +34,7 @@ export function mountEnvVarsPanel(el, ctx) {
       if (!r.ok) throw new Error(data?.error || t('system.envVars.loadError', 'Error al cargar.'));
       render();
     } catch (e) {
-      el.innerHTML = `<p class="ev-msg ev-msg--err">${String(e.message || e)}</p>`;
+      root.innerHTML = `<p class="ev-msg ev-msg--err">${String(e.message || e)}</p>`;
     }
   }
 
@@ -42,7 +49,7 @@ export function mountEnvVarsPanel(el, ctx) {
 
   function render() {
     const { identity, client } = data;
-    el.innerHTML = `
+    root.innerHTML = `
       <p class="ev-hint">
         ${t('system.envVars.hintBeforePath', 'Config propia de ESTA instalación — identidad (email/GitHub/firma) y datos del cliente/proyecto (MCP, departamentos Zoho). Vive en')} <code>~/.cwc-data/instance.json</code>,
         ${t('system.envVars.hintAfterPath', 'fuera del repo. Los')} <b>${t('system.envVars.secretsWord', 'secretos')}</b> ${t('system.envVars.hintSecrets', '(token, credenciales) NO están acá: siguen en')} <code>.env</code>.

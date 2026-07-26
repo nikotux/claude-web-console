@@ -1483,39 +1483,6 @@ html, body {
 .chat-mode option[value="default"] { color: var(--cwc-ok); }
 .chat-mode option[value="acceptEdits"] { color: var(--cwc-warn); }
 .chat-mode option[value="bypassPermissions"] { color: var(--cwc-danger-strong); }
-/* "?" junto al selector: abre el modal explicativo (._modeHelp). MISMA altura
-   que el select (era un btn--icon de 30px y sobresalía). */
-.chat-mode-help {
-  flex: none; color: var(--cwc-text-dim);
-  /* min-height 0: pisa el min-height base de .btn-ghost (42px, 44px táctil),
-     si no la altura fija no aplica y el "?" sobresale del select. */
-  height: var(--chat-mode-h); min-height: 0; min-width: var(--chat-mode-h);
-  padding: 0 .25rem; box-sizing: border-box;
-}
-
-/* Modal "Ayuda del chat": modos de permisos + leyenda de íconos de acciones */
-.mode-help .mh-sec {
-  font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); text-transform: uppercase;
-  letter-spacing: .05em; margin: .2rem 0 .5rem;
-}
-.mode-help .mh-sec + .mh-sec, .mode-help .mh-foot + .mh-sec { margin-top: 1rem; }
-.mode-help .mh-item { margin-bottom: .7rem; }
-.mode-help .mh-item b { color: var(--cwc-text); font-size: var(--cwc-fs-md); }
-.mode-help .mh-item b.mh-danger { color: var(--cwc-danger-strong); }
-.mode-help .mh-item p { margin: .2rem 0 0; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-md); line-height: 1.45; }
-.mode-help .mh-foot { margin: .6rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--cwc-divider); color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
-.mode-help .mh-intro { margin: 0 0 .5rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); line-height: 1.45; }
-.mode-help .mh-leg {
-  display: flex; align-items: center; gap: .5rem; padding: .2rem 0;
-  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
-}
-.mode-help .mh-leg-icons {
-  display: inline-flex; align-items: center; gap: .25rem; flex: none;
-  padding: .15rem .35rem; border: 1px solid var(--cwc-border-soft);
-  border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-chip);
-  color: var(--cwc-text-secondary);
-}
-.mode-help .mh-leg b { color: var(--cwc-text); font-weight: 600; flex: none; }
 
 /* Ritmo de diálogo: aire chico entre elementos del mismo turno (gap) y aire
    grande al abrir turno nuevo (margen extra sobre cada mensaje del usuario). */
@@ -3308,8 +3275,6 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .bb-chip.bv2-ic { padding: .06rem .3rem; }
 /* Chip de propiedad: lleva su valor (P1 / iniciales / Xd), no envuelve. */
 .bb-chip.bv2-prop { white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* Leyenda de íconos (botón "?" del header). */
-.bv2-legend { display: flex; flex-direction: column; gap: .8rem; }
 .bv2-leg-group { display: flex; flex-direction: column; gap: .3rem; }
 .bv2-leg-h { font-size: var(--cwc-fs-sm); font-weight: 600; color: var(--cwc-text); margin-bottom: .1rem; }
 .bv2-leg-row { display: flex; align-items: center; gap: .5rem; }

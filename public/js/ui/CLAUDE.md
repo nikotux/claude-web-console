@@ -22,6 +22,14 @@ y el tinte +/− lo sigue poniendo diff.js. VISTA EDITOR: .ct-cmd/
 scroll horizontal — NUNCA wrap, la indentación se conserva como
 en VS Code; .cwc-diff-line lleva min-width:max-content para que
 el tinte +/− cubra todo el ancho scrolleable) ·
+help.js + help-index.js (sistema unificado: botón "?" estándar,
+modal multi-columna por tema y hub "Guía de la consola"). Un tema
+exporta default una función que devuelve `{title, icon?, intro?,
+sections:[{title, icon?, wide?, blocks:[]}]}` según el contrato
+detallado en help.js. El índice conserva metadatos y carga cada tema
+bajo demanda con `import()` dinámico. GOTCHA: toda superficie nueva
+debe sumar su entrada a help-index.js; un `helpBtn()` con un id ausente
+abre "Todavía no hay ayuda para esta sección") ·
 perm-center.js (CENTRO GLOBAL DE PERMISOS: pila de popups
 flotantes — .cwc-permcenter/.pc-card en ui.css, z-index 190
 bajo modales (200) — con los permisos PENDIENTES de todas las

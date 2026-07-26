@@ -21,6 +21,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TITLES_FILE = path.join(__dirname, '..', '..', 'titles.json');
+const OWNERS_FILE = path.join(__dirname, '..', '..', 'session-owners.json');
 
 // ===== Títulos humanos custom de sesiones tmux (titles.json) =====
 export function loadTitles() {
@@ -44,6 +45,35 @@ export function saveTitles(titles) {
   }
 }
 export const titleKey = (socketName, name) => `${socketName}/${name}`;
+
+// ===== Dueño de cada sesión tmux (session-owners.json) =====
+// Multi-tenant: `list(principal)` filtra las terminales por `owner`, pero la
+// rehidratación tras un reinicio de Node reconstruye las Session desde tmux,
+// que no sabe de dueños. Sin este registro durable, la terminal de un inquilino
+// sobrevive como proceso pero deja de verse desde su cuenta. Mismo mecanismo
+// que titles.json: archivo en la raíz, escritura atómica, nunca lanza.
+export function loadOwners() {
+  try { return JSON.parse(fs.readFileSync(OWNERS_FILE, 'utf8')).owners || {}; }
+  catch { return {}; }
+}
+export function saveOwners(owners) {
+  try {
+    writeJsonAtomic(OWNERS_FILE, { owners }, { space: 2 });
+    return true;
+  } catch (err) {
+    console.error('[session-names] no se pudo persistir session-owners.json:', err?.message || err);
+    return false;
+  }
+}
+// Registra/borra el dueño de UNA sesión sin pisar el resto del mapa.
+export function setSessionOwner(id, owner) {
+  const owners = loadOwners();
+  if (owner) owners[id] = owner; else delete owners[id];
+  return saveOwners(owners);
+}
+export function ownerForSession(id) {
+  return loadOwners()[id] || null;
+}
 
 // ===== Registro de nombres en uso + uniquificador =====
 const providers = new Set(); // funciones () => iterable de display names

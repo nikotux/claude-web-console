@@ -14,6 +14,7 @@
 // modal+poll de openReconnect. Es tolerante a fallos: si /api/connections aún
 // no existe (404), muestra un estado neutro y no rompe el resto del panel.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 
@@ -324,7 +325,12 @@ function missingHostHtml(w) {
 
 export function mountMcpsPanel(el, ctx = {}) {
   const { dialog, isAdmin } = ctx;
-  el.innerHTML = `<div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.mcps.loadingConnections', 'Cargando conexiones…')}</span></div>`;
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.mcps.title', 'Conexiones (MCP)')}</span>
+      ${helpBtn('sys-mcps')}
+    </div>
+    <div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">${t('system.mcps.loadingConnections', 'Cargando conexiones…')}</span></div>`;
   const root = el.querySelector('[data-ref="root"]');
 
   let alive = true;

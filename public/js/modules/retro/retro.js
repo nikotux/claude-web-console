@@ -6,6 +6,7 @@
 // NO confundir con "🎓 Aprendizaje" (temas de estudio de Niko): esto es el
 // SISTEMA aprendiendo a mejorar su propio proceso.
 import { pacman } from '../../ui/pacman.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 
 const CAT_ICON = {
@@ -69,6 +70,7 @@ export default {
         <span class="sec-dot sec-dot--idle" title="${t('retro.sidebar.title', 'Mejora Continua')}"></span>
         <span class="sec-title">${t('retro.sidebar.title', 'Mejora Continua')}</span>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('retro.sidebar.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
+        ${helpBtn('retro')}
       </header>
       <div class="tk-card">
         <div class="bv2-sum" data-ref="sum"><span class="bf-sub">${t('retro.sidebar.notLoaded', 'sin cargar')}</span></div>
@@ -107,6 +109,7 @@ export default {
       let pollTimer = null;
       let lastData = { lessons: [] };
       const m = dialog.openModal({ title: t('retro.board.title', '🔄 Mejora Continua'), width: 'min(880px, 96vw)', onClose: () => { if (pollTimer) clearTimeout(pollTimer); } });
+      m.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('retro'));
       const body = m.body;
       body.innerHTML = `<div class="bf-sub" style="padding:1rem">${pacman({ size: 'sm' })} ${t('retro.board.loading', 'Cargando lecciones…')}</div>`;
 

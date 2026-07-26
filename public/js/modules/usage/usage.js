@@ -17,6 +17,7 @@ import { pacman } from '../../ui/pacman.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 const POLL_MS = 15000;
 const AUTO_MS = 15000; // auto-refresh del modal (silencioso)
@@ -562,6 +563,7 @@ export default {
       reload.title = t('usage.modal.reload', 'Actualizar (re-lee transcripts y límites ahora)');
       reload.innerHTML = icon('refresh', { size: 15 });
       m.card.querySelector('.dlg-head').insertBefore(reload, m.card.querySelector('.dlg-x'));
+      reload.insertAdjacentHTML('afterend', helpBtn('usage'));
 
       m.body.innerHTML = `
         <div class="usage-lims"><div class="cwc-loading">${pacman()}${t('usage.modal.limsLoading', 'límites del plan…')}</div></div>

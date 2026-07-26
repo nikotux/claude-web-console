@@ -19,7 +19,7 @@ import { resolveModelArg } from '../../core/claude-model.js';
 // recupere el título que tenía antes de reiniciar (ver rehydrate() abajo —
 // antes SIEMPRE usaba basename(cwd) para el título en memoria, ignorando
 // cualquier customTitle ya persistido para esa misma sesión tmux).
-import { loadTitles, titleKey } from '../../core/session-names.js';
+import { loadOwners, loadTitles, setSessionOwner, titleKey } from '../../core/session-names.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMUX_CONF = path.join(__dirname, 'tmux.cwc.conf');
@@ -310,6 +310,7 @@ class SessionManager {
     // (p.ej. "tolkien 1" por colisión de basename al crearla) recupera SOLO el
     // basename crudo al rehidratar tras un reinicio de Node.
     const titles = loadTitles();
+    const owners = loadOwners();
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
       const [name, cwdRaw] = line.split('\t');
@@ -318,7 +319,11 @@ class SessionManager {
       if (this.sessions.has(id)) continue;
       const cwd = (cwdRaw && cwdRaw.trim()) || config.home;
       const title = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd) || 'terminal';
-      const session = new Session({ id, cwd, title });
+      // Dueño persistido (session-owners.json): sin esto la sesión rehidratada
+      // nace con owner=null y su dueño no-admin deja de verla tras un reinicio
+      // del server (la tmux sigue viva). FAIL-CLOSED: si no hay entrada, sigue
+      // siendo null (solo el admin la ve) — nunca se adivina un dueño.
+      const session = new Session({ id, cwd, title, owner: owners[id] || null });
       try {
         session.spawn({ runClaude: false });
       } catch (e) {
@@ -343,6 +348,7 @@ class SessionManager {
       throw e;
     }
     this.sessions.set(id, session);
+    if (owner) { try { setSessionOwner(id, owner); } catch { /* best-effort: el owner vive en RAM */ } }
     return session;
   }
 
@@ -374,9 +380,9 @@ class SessionManager {
   // Las sesiones "bare" (vistas TUI de conversaciones) NO se listan: se
   // reconstruyen desde /api/chat/list, no como pestañas PTY sueltas.
   // multi-tenant (BUG-680): filtra por dueño salvo admin, espejo de
-  // Chat.list(principal). Las sesiones rehidratadas tras un reinicio de Node
-  // quedan con owner=null (tmux no lo persiste) → solo el admin las ve
-  // (fail-closed: un inquilino nunca ve una sesión ajena ni la rehidratada).
+  // Chat.list(principal). Las sesiones rehidratadas recuperan el owner desde
+  // session-owners.json; sin entrada quedan con owner=null y solo el admin las
+  // ve (fail-closed: nunca se adivina el dueño de una sesión).
   list(principal) {
     const visible = [...this.sessions.values()].filter((s) => {
       if (s.bare) return false;

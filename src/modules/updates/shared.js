@@ -8,6 +8,9 @@
 //   · npm audit --json         → vulnerabilidades conocidas (severidad)
 //   · npm view <pkg> version   → última del Claude Code CLI (npm global)
 //   · claude --version         → versión instalada del CLI
+//   · codex/npm view           → versión instalada/última del Codex CLI
+//   · ~/.codex/models_cache    → modelos que el Codex CLI ya ofrece
+//   · claude mcp list          → estado informativo de los MCP de la consola
 //   · apt list --upgradable    → paquetes del SO con update (INFORMATIVO)
 //   · apt-cache policy gh       → gh (informativo, resaltado)
 //   · pad --version            → Pad local self-hosted (sin auto-check upstream)
@@ -19,8 +22,18 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { VALID_MODELS } from '../../core/claude-model.js';
+import { CODEX_MODEL_EFFORTS } from '../chat/codex-models.js';
+import { runMcpList } from '../mcps/login-shared.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+export const CENSUS_VERSION = 2;
+
+// La lectura persistida vive en index.js. Se exporta este guard para que ese
+// consumidor invalide snapshots de una forma anterior cuando lo pueda cablear.
+export function isCensusStale(cached) {
+  return !cached || cached.version !== CENSUS_VERSION;
+}
 
 // exec que NUNCA lanza: devuelve {ok, stdout, stderr, code}. Muchos de estos
 // comandos (npm outdated, npm audit) salen con código ≠0 CUANDO ENCUENTRAN algo
@@ -291,6 +304,119 @@ async function censusClaudeCli() {
   };
 }
 
+// --- Codex CLI (npm global del usuario, ejecutor del Modo Tándem) ----------
+async function censusCodexCli() {
+  const [ver, latest, which] = await Promise.all([
+    run('codex', ['--version'], { timeout: 15_000 }),
+    run('npm', ['view', '@openai/codex', 'version'], { timeout: 30_000 }),
+    run('which', ['codex'], { timeout: 10_000 }),
+  ]);
+  const current = (ver.stdout.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/) || [])[1] || null;
+  const newest = (latest.stdout.trim().match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/) || [])[1] || null;
+  const whichPath = which.stdout.trim().split('\n')[0] || null;
+  if (!whichPath && !current) return { installed: false };
+
+  const real = whichPath ? await run('readlink', ['-f', whichPath], { timeout: 10_000 }) : null;
+  const resolvedPath = real?.stdout?.trim().split('\n')[0] || whichPath;
+  const home = path.resolve(process.env.HOME || '');
+  const manageable = resolvedPath
+    ? (() => {
+        const rel = path.relative(home, path.resolve(resolvedPath));
+        return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+      })()
+    : null;
+  return {
+    current,
+    latest: newest,
+    upToDate: current && newest && current === newest,
+    manageable,
+    path: resolvedPath,
+    updateCmd: manageable === false ? null : 'npm install -g @openai/codex@latest',
+    note: manageable === false
+      ? 'Instalación de sistema (root) — npm global del usuario no puede actualizarla. Requiere sudo/npm global del sistema.'
+      : null,
+    info: {
+      what: 'CLI de OpenAI que corre los modelos GPT/Codex.',
+      role: 'Es el ejecutor del Modo Tándem: Claude planea y Codex implementa el código; también alimenta el medidor de consumo de Codex.',
+    },
+  };
+}
+
+// --- Catálogos de modelos ofrecidos por los CLIs --------------------------
+// Señala el hueco entre lo que el CLI ya conoce y lo que la consola permite.
+// No ofrece update: cerrar un `missing` exige editar la whitelist indicada.
+async function censusModels() {
+  const codexHint = 'src/modules/chat/codex-models.js';
+  const claudeHint = 'src/core/claude-model.js';
+  const codexFile = path.join(process.env.HOME || '', '.codex', 'models_cache.json');
+  let codex;
+  try {
+    const cache = JSON.parse(fs.readFileSync(codexFile, 'utf8'));
+    if (!Array.isArray(cache.models)) throw new Error('la clave models no es un array');
+    const known = Object.keys(CODEX_MODEL_EFFORTS);
+    const available = [...new Set(cache.models
+      .map((model) => {
+        if (typeof model === 'string') return model;
+        if (!model || typeof model !== 'object') return null;
+        return model.id || model.slug || model.name || null;
+      })
+      .filter(Boolean)
+      .map(String))];
+    const knownSet = new Set(known);
+    codex = {
+      known,
+      available,
+      missing: available.filter((model) => !knownSet.has(model)),
+      fetchedAt: cache.fetched_at || null,
+      clientVersion: cache.client_version || null,
+      file: codexFile,
+      hint: codexHint,
+    };
+  } catch (err) {
+    codex = {
+      error: `No se pudo leer el catálogo de modelos de Codex: ${String(err?.message || err).slice(0, 240)}`,
+      hint: codexHint,
+    };
+  }
+
+  const claude = {
+    known: [...VALID_MODELS],
+    source: 'hardcoded',
+    note: 'El CLI de Claude no expone un catálogo de modelos en disco; esta lista se mantiene a mano en src/core/claude-model.js. Revisala tras actualizar el CLI.',
+    hint: claudeHint,
+  };
+  return { codex, claude };
+}
+
+// --- MCP configurados para el cwd de esta consola (solo informativo) -------
+async function censusMcps() {
+  let timer;
+  try {
+    const listed = await Promise.race([
+      runMcpList(ROOT),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({
+          servers: [],
+          error: 'claude mcp list excedió el timeout de 15 s',
+        }), 15_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    return {
+      items: (listed.servers || []).map(({ name, status }) => ({ name, status })),
+      error: listed.error || null,
+      note: 'Censo informativo: los MCP se administran y reconectan por separado; esta sección no ofrece actualizarlos.',
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      items: [],
+      error: String(err?.message || err).slice(0, 300),
+      note: 'Censo informativo: los MCP se administran y reconectan por separado; esta sección no ofrece actualizarlos.',
+    };
+  }
+}
+
 // --- Sistema operativo (apt) — INFORMATIVO, sin botón ----------------------
 async function censusApt() {
   const up = await run('apt', ['list', '--upgradable'], { timeout: 30_000 });
@@ -369,15 +495,22 @@ const WATCHED = [
 
 // Censo completo — corre todo en paralelo (todo es lectura, sin colisión).
 export async function buildUpdatesCensus() {
-  const [npm, claudeCli, apt, services] = await Promise.all([
+  const [npm, claudeCli, codexCli, models, mcps, apt, services] = await Promise.all([
     censusNpm(),
     censusClaudeCli(),
+    censusCodexCli(),
+    censusModels(),
+    censusMcps(),
     censusApt(),
     censusServices(),
   ]);
   return {
+    version: CENSUS_VERSION,
     npm,
     claudeCli,
+    codexCli,
+    models,
+    mcps,
     apt,
     services,
     watched: WATCHED,

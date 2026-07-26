@@ -10,6 +10,7 @@ import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog }
 import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
 import { initI18n, applyI18n } from './ui/i18n.js';
+import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -153,6 +154,8 @@ function buildConversationInner(entry, info, initialPrompt = null) {
     menuBtn.innerHTML = icon('menu', { size: 16 });
     menuBtn.addEventListener('click', () => window.dispatchEvent(new Event('cwc:open-sidebar')));
     bar.append(menuBtn, ttl, back);
+    // La barra se arma con createElement; helpBtn devuelve el HTML del botón estándar.
+    bar.insertAdjacentHTML('beforeend', helpBtn('terminal'));
     const host = document.createElement('div');
     host.className = 'conv-tui-term';
     entry.pane.append(bar, host);
@@ -539,6 +542,7 @@ bootMsg('cargando idioma…', 28);
 const meForLang = await whoami;
 await initI18n(meForLang?.lang || 'es');
 applyI18n(document);
+bindHelp(document);
 
 // ===== Montaje de módulos (espejo del registry backend) =====
 bootMsg('montando módulos…', 35);
@@ -607,6 +611,9 @@ window.addEventListener('resize', applySidebarState);
 
 // El ＋ del rail abre el mismo lanzador (una sola puerta de entrada).
 document.getElementById('rail-new').addEventListener('click', () => bus.dispatchEvent(new Event('open-launcher')));
+
+// El ? del pie abre el índice unificado de ayudas de toda la consola.
+document.getElementById('help-index-btn')?.addEventListener('click', openHelpIndex);
 
 // El asa flotante IZQUIERDA (solo móvil) abre el drawer de módulos — gemela de
 // la derecha, ubicada sobre el composer para estorbar menos (pedido del usuario

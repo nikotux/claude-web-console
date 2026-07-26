@@ -20,6 +20,7 @@
 // real. Edición gateada por isAdmin (frontend Y backend); textEditorDialog
 // para editar.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderDiff } from '../../ui/diff.js';
@@ -106,7 +107,12 @@ const entryHint = (e) => e.hintKey ? t(e.hintKey, e.hint) : e.hint;
 export function mountProjectContextPanel(el, ctx) {
   const { dialog, isAdmin } = ctx;
 
-  el.innerHTML = '<div data-ref="root"><span class="cwc-spinner"></span></div>';
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.projects.title', 'Proyectos')}</span>
+      ${helpBtn('sys-projects')}
+    </div>
+    <div data-ref="root"><span class="cwc-spinner"></span></div>`;
   const root = el.querySelector('[data-ref="root"]');
 
   let alive = true;

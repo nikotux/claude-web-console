@@ -32,7 +32,14 @@ const RUNNER = path.join(ROOT, 'bin', 'cwc-learning-context-runner.js');
 export const CONTEXT_MAX_TURNS = 1;
 export const CONTEXT_TIMEOUT_MS = 4 * 60 * 1000;
 export const CONTEXT_STALE_MS = CONTEXT_TIMEOUT_MS + 30 * 1000;
-export const CONTEXT_MODEL = 'sonnet';
+// Modelo: HAIKU a esfuerzo bajo (Optimización IA 2026-07-25, mismo patrón F5(a)
+// que chat/index.js aplica a extractTitle/classifyRelative/judgeAnswer). Es una
+// corrida de 1 turno, CERO herramientas, con el criterio COMPLETO dado en el
+// prompt (schema JSON exacto) y sin código de por medio — el caso justo donde
+// Haiku alcanza. ROLLBACK: si el resumen se degrada en transcripciones largas
+// (hasta MAX_TRANSCRIPT = 120k chars), volver a 'sonnet' acá y listo.
+export const CONTEXT_MODEL = 'haiku';
+export const CONTEXT_EFFORT = 'low';
 export const MAX_TRANSCRIPT = 120000;
 
 // Cero herramientas: ninguna tool está permitida (regla 6, doble capa).

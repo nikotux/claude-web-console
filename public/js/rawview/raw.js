@@ -18,6 +18,8 @@
 // SOLO-LECTURA. Datos: /api/tokens/stream (texto real) + /api/tokens/flow (tps
 // global, HUD) + /api/chat/list (estado de sesión). Cierre con Esc/✕.
 
+import { bindHelp, helpBtn } from '../ui/help.js';
+
 const POLL_MS = 800;
 const FEED_MAX = 30;
 const FEED_LIFE_MS = 7000;
@@ -709,6 +711,8 @@ function saveNow() {
 }
 function stop() { state.stopped = true; saveNow(); window.close(); }
 
+document.body.insertAdjacentHTML('beforeend', helpBtn('rawview', { size: 13, cls: 'raw-help' }));
+bindHelp();
 closeBtn.addEventListener('click', stop);
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') stop(); });
 window.addEventListener('beforeunload', saveNow);

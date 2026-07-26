@@ -228,7 +228,7 @@ export default {
           try { sessions = listSessionsForSocket(sock, { throwOnError: true }); } catch { continue; }
           for (const s of sessions) {
             if (!s.owned) continue;
-            if (s.name.startsWith('cwct-')) continue; // TUI oculta de chat → ya llueve por transcript
+            if (s.name.startsWith(BARE_PREFIX)) continue; // TUI oculta de chat → ya llueve por transcript
             // multi-tenant (BUG-685, mismo guard que title/set-model/kill): un
             // no-admin solo ve el feed de SUS propias sesiones; admin/host ven todo.
             if (!ownsSession(req, s.socketName, s.name)) continue;

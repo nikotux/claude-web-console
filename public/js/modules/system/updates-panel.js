@@ -7,7 +7,9 @@
 // estado/versión (pedido de Niko). El botón único reemplaza los updates manuales;
 // los per-ítem quedan de respaldo en "modo avanzado".
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { pacman } from '../../ui/pacman.js';
+import { t } from '../../ui/i18n.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -67,8 +69,13 @@ function infoBlock(info) {
 
 export function mountUpdatesPanel(el, ctx = {}) {
   const isAdmin = !!ctx.isAdmin;
-  const dialog = ctx.dialog;
-  el.innerHTML = `<div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">Escaneando versiones de terceros…</span></div>`;
+  const { dialog, openChat } = ctx;
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.updates.title', 'Actualizaciones')}</span>
+      ${helpBtn('sys-updates')}
+    </div>
+    <div data-ref="root">${pacman({ size: 'sm' })} <span class="hr-summary">Escaneando versiones de terceros…</span></div>`;
   const root = el.querySelector('[data-ref="root"]');
 
   let alive = true;
@@ -88,6 +95,7 @@ export function mountUpdatesPanel(el, ctx = {}) {
     async analyze() { return (await fetch('/api/updates/analyze', { method: 'POST' })).json(); },
     async risk() { try { return (await fetch('/api/updates/risk')).json(); } catch { return null; } },
     async auditFix() { return (await fetch('/api/updates/audit-fix', { method: 'POST' })).json(); },
+    async sessionBriefing() { return (await fetch('/api/updates/session-briefing', { method: 'POST' })).json(); },
   };
   const riskKey = (name, from, to) => `${name}@${from || '?'}->${to || '?'}`;
   const LEVEL_META = {
@@ -269,6 +277,87 @@ export function mountUpdatesPanel(el, ctx = {}) {
     return collapsible(title, `${esc(l.current || l.wanted || '—')} → ${esc(l.latest || '—')}`, body, { border: verdictSafe ? 'hr-finding--low' : 'hr-finding--medium' });
   }
 
+  function codexCliItem(cli) {
+    if (!cli || cli.installed === false) return '';
+    const what = cli.info?.what
+      ? `<div class="hr-f-file"><b>${t('system.updates.what', 'Qué es')}:</b> ${esc(cli.info.what)}</div>` : '';
+    const role = cli.info?.role
+      ? `<div class="hr-f-file"><b>${t('system.updates.consoleRole', 'Para qué lo usa la consola')}:</b> ${esc(cli.info.role)}</div>` : '';
+    const path = cli.path
+      ? `<div class="hr-f-file">${t('system.updates.path', 'Ruta')}: <code>${esc(cli.path)}</code></div>` : '';
+    const updateCmd = cli.manageable && cli.updateCmd
+      ? `<div class="hr-f-file">${t('system.updates.updateCommand', 'Comando de actualización')}: <code>${esc(cli.updateCmd)}</code></div>` : '';
+    const note = cli.note ? `<div class="hr-f-file">${esc(cli.note)}</div>` : '';
+    const versions = `${esc(cli.current || '—')} → ${esc(cli.latest || '—')}`;
+    const side = `${versions}${cli.upToDate ? `<div style="margin-top:.3rem"><span class="hr-sev hr-sev--low">✅ ${t('system.updates.upToDate', 'al día')}</span></div>` : ''}`;
+    return collapsible(`🤖 <b>${t('system.updates.codexCli', 'Codex CLI')}</b>`, side, what + role + path + updateCmd + note);
+  }
+
+  function modelItem(cliLabel, modelData) {
+    if (!modelData) return '';
+    const verified = modelData.source !== 'hardcoded' && Array.isArray(modelData.missing);
+    if (!verified) {
+      const known = Array.isArray(modelData.known) ? modelData.known : [];
+      const title = `<b>${esc(cliLabel)}</b> — ${t('system.updates.noAutomaticVerification', 'sin verificación automática')}`;
+      const side = `<span class="hr-sev">ℹ️ ${t('system.updates.manualReview', 'manual')}</span>`;
+      const list = `<div class="hr-f-file"><b>${t('system.updates.knownModels', 'Modelos que la consola ofrece hoy')}:</b></div>${known.length
+        ? known.map((model) => `<div class="hr-f-file"><code>${esc(model)}</code></div>`).join('')
+        : `<div class="hr-f-file">${t('system.updates.noKnownModels', 'No hay modelos configurados.')}</div>`}`;
+      const note = modelData.note ? `<div class="hr-f-file">${esc(modelData.note)}</div>` : '';
+      const hint = `<div class="hr-f-file">${t('system.updates.modelsMaintainedManually', 'Esta lista se mantiene a mano en')} <code>${esc(modelData.hint || '—')}</code> ${t('system.updates.reviewAfterCliUpdate', 'y hay que revisarla después de actualizar el CLI.')}</div>`;
+      const error = modelData.error
+        ? `<div class="hr-f-file" style="opacity:.65">${t('system.updates.modelsError', 'Aviso del censo')}: ${esc(modelData.error)}</div>` : '';
+      return collapsible(title, side, list + note + hint + error, { border: '' });
+    }
+    const missing = Array.isArray(modelData.missing) ? modelData.missing : [];
+    const count = missing.length;
+    const title = count
+      ? `<b>${esc(cliLabel)}</b> — ${t('system.updates.newModelsCount', '{count} modelo(s) nuevo(s)', { count })}`
+      : `<b>${esc(cliLabel)}</b> — ${t('system.updates.allModelsKnown', 'la consola conoce todos los modelos disponibles')}`;
+    const side = count
+      ? `<span class="hr-sev hr-sev--medium">⚠ ${t('system.updates.reviewModels', 'revisar')}</span>`
+      : `<span class="hr-sev hr-sev--low">✅ ${t('system.updates.upToDate', 'al día')}</span>`;
+    const list = count
+      ? `<div class="hr-f-file"><b>${t('system.updates.missingModels', 'Modelos que faltan')}:</b></div>${missing.map((model) => `<div class="hr-f-file"><code>${esc(model)}</code></div>`).join('')}`
+      : `<div class="hr-f-file">✅ ${t('system.updates.noMissingModels', 'No faltan modelos en la configuración de la consola.')}</div>`;
+    const editHint = count
+      ? `<div class="hr-f-file">${t('system.updates.modelsNeedEdit', 'Esto NO se arregla con un update: hay que editar el archivo indicado.')} <code>${esc(modelData.hint || '—')}</code></div>` : '';
+    const fetchedAt = modelData.fetchedAt
+      ? `<div class="hr-f-file">${t('system.updates.modelsFetchedAt', 'Disponibilidad consultada')}: ${esc(new Date(modelData.fetchedAt).toLocaleString())}</div>` : '';
+    const note = modelData.note ? `<div class="hr-f-file">${esc(modelData.note)}</div>` : '';
+    const error = modelData.error
+      ? `<div class="hr-f-file" style="opacity:.65">${t('system.updates.modelsError', 'Aviso del censo')}: ${esc(modelData.error)}</div>` : '';
+    return collapsible(title, side, list + editHint + fetchedAt + note + error, { border: count ? 'hr-finding--medium' : 'hr-finding--low' });
+  }
+
+  function mcpsItem(mcps) {
+    const items = Array.isArray(mcps?.items) ? mcps.items : [];
+    if (!items.length) return '';
+    const rows = items.map((item) => {
+      const status = item.status;
+      const statusText = typeof status === 'string'
+        ? status
+        : (status?.label || status?.code || '—');
+      const lightClass = {
+        ok: 'hr-sev--low',
+        warn: 'hr-sev--medium',
+        err: 'hr-sev--high',
+        error: 'hr-sev--high',
+      }[status?.light];
+      const statusHtml = status && typeof status === 'object' && status.light
+        ? `<span class="hr-sev${lightClass ? ` ${lightClass}` : ''}">${esc(statusText)}</span>`
+        : esc(statusText);
+      return `<div class="hr-f-file" style="display:grid;grid-template-columns:1fr auto;gap:.6rem">
+        <span><b>${esc(item.name || '—')}</b></span><span>${statusHtml}</span>
+      </div>`;
+    }).join('');
+    const note = mcps.note ? `<div class="hr-f-file">${esc(mcps.note)}</div>` : '';
+    const error = mcps.error
+      ? `<div class="hr-f-file" style="opacity:.65">${t('system.updates.mcpsError', 'Aviso del censo')}: ${esc(mcps.error)}</div>` : '';
+    const body = `${rows}${note}<div class="hr-f-file">${t('system.updates.mcpsInformational', 'Estos datos son informativos; los MCPs no se actualizan desde este panel.')}</div>${error}`;
+    return collapsible(`🔌 <b>${t('system.updates.mcps', 'MCPs')}</b>`, t('system.updates.mcpsCount', '{count} detectado(s)', { count: items.length }), body);
+  }
+
   function render() {
     const d = state.census; if (!d) return;
     const risk = state.risk || {};
@@ -297,14 +386,18 @@ export function mountUpdatesPanel(el, ctx = {}) {
       ? `🟠 ${totalVuln} vulnerabilidad(es) — ${(counts.critical || 0) + (counts.high || 0)} alta/crítica · ${totalActions} acción(es) de update`
       : (totalActions ? `🟡 ${totalActions} acción(es) de update disponibles` : '🟢 Todo al día');
 
+    const sessionBtn = isAdmin && openChat
+      ? `<button class="btn btn--sm" data-act="session-update" title="${t('system.updates.sessionUpdateTitle', 'Abre un chat que te explica y ejecuta la actualización paso a paso')}">${t('system.updates.sessionUpdate', '🧑‍✈️ Actualizar con sesión')}${totalActions ? ` · ${totalActions}` : ''}</button>`
+      : '';
     const runBtn = isAdmin
-      ? `<button class="btn btn--sm" data-act="run" ${totalActions ? '' : 'disabled'} title="Planea, drena sesiones, aplica, verifica, reinicia y reanuda">🚀 Actualizar todo (orquestado)${totalActions ? ` · ${totalActions}` : ''}</button>`
+      ? `<button class="btn btn--sm btn-ghost" data-act="run" ${totalActions ? '' : 'disabled'} title="${t('system.updates.automaticTitle', 'Flujo determinístico sin IA, sin sesión, 0 tokens')}">${t('system.updates.automatic', '🤖 Modo automático')}${totalActions ? ` · ${totalActions}` : ''}</button>`
       : '';
     const analyzeBtn = isAdmin && majors.length
       ? `<button class="btn btn--sm btn-ghost" data-act="analyze" ${riskRunning ? 'disabled' : ''}>${riskRunning ? pacman({ size: 'sm' }) + ' analizando…' : '🧠 Analizar riesgo (majors)'}</button>`
       : '';
     const adminBar = isAdmin
       ? `<div class="hr-f-actions" style="margin:.5rem 0;flex-wrap:wrap">
+          ${sessionBtn}
           ${runBtn}
           ${analyzeBtn}
           <button class="btn btn--sm btn-ghost" data-act="refresh">🔄 Re-escanear</button>
@@ -316,13 +409,22 @@ export function mountUpdatesPanel(el, ctx = {}) {
 
     const secHint = riskRunning ? '<p class="hr-f-file">🧠 Analizando el riesgo de cada salto mayor…</p>' : '';
     const vulnFixBtn = isAdmin && fixableVuln ? `<div class="hr-f-actions" style="margin-bottom:.4rem"><button class="btn btn--sm" data-act="audit-fix">🔐 Arreglar vulnerabilidades ahora</button></div>` : '';
+    const codexModelsItems = [
+      codexCliItem(d.codexCli),
+      modelItem(t('system.updates.codex', 'Codex'), d.models?.codex),
+      modelItem(t('system.updates.claude', 'Claude'), d.models?.claude),
+      mcpsItem(d.mcps),
+    ].join('');
+    const codexModelsSection = codexModelsItems
+      ? section(t('system.updates.codexAndModels', '🤖 Codex y modelos'), codexModelsItems, false) : '';
 
     const when = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '';
     root.innerHTML = `
       <p class="pj-hint"><b>${headline}</b></p>
-      <p class="hr-f-file" style="margin-top:-.3rem">Escaneado: ${esc(when)} · el botón único arregla vulnerabilidades + actualiza lo estable (in-range) + los majors que tildes + Claude CLI + SO, drena por interfono y reinicia. Betas nunca.</p>
+      <p class="hr-f-file" style="margin-top:-.3rem">Escaneado: ${esc(when)} · ${t('system.updates.updatePaths', '<b>🧑‍✈️ Actualizar con sesión</b> abre un chat que te explica el plan, lo ejecuta y arregla lo que se rompa · <b>🤖 Modo automático</b> es el flujo determinístico sin IA (0 tokens): aplica lo estable in-range + los majors que tildes, verifica, reinicia y reanuda. Betas nunca.')}</p>
       ${adminBar}
       ${section('🧬 Motor (crítico)', core.map(coreItem).join('') + coreItem2(d.claudeCli), true)}
+      ${codexModelsSection}
       ${section(`🔐 Seguridad — ${totalVuln} vulnerabilidad(es) ${hasHigh ? '⚠️' : ''}`, vulnFixBtn + (vulns.length ? vulns.map(vulnItem).join('') : '<p class="hr-summary">✅ Sin vulnerabilidades conocidas.</p>'), hasHigh)}
       ${majors.length ? section(`🟡 Saltos mayores (${majors.length}) — ${tildableMajors} para tu OK · ${blockedMajors.length} 🔒 bloqueado(s)`, secHint + majors.map((l) => majorItem(l, vFor(l))).join(''), false) : ''}
       ${section(`📚 Librerías npm (${rest.length})`, rest.map(libItem).join(''), false)}
@@ -353,6 +455,29 @@ export function mountUpdatesPanel(el, ctx = {}) {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const act = btn.dataset.act;
+        if (act === 'session-update') {
+          const originalHtml = btn.innerHTML;
+          btn.disabled = true;
+          btn.innerHTML = `${pacman({ size: 'sm' })} ${t('system.updates.preparingSession', 'preparando sesión…')}`;
+          try {
+            const data = await api.sessionBriefing();
+            if (!data?.ok) throw new Error(data?.error || t('system.updates.sessionBriefingError', 'No se pudo preparar la sesión de actualización.'));
+            // bypassPermissions es deliberado: la sesión debe poder ejecutar npm/apt/systemctl sin pedir permiso en cada paso.
+            // Esta sesión NO debe ser Tándem: su hook bloquea Bash de escritura e impediría correr npm install.
+            await openChat({
+              cwd: data.cwd || 'claude-web-console',
+              model: 'opus',
+              mode: 'bypassPermissions',
+              prompt: data.prompt,
+              title: data.title,
+            });
+          } catch (error) {
+            await notify(`❌ ${t('system.updates.sessionLaunchError', 'No se pudo abrir la sesión de actualización')}: ${esc(error?.message || error)}`);
+          } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+          }
+        }
         if (act === 'run') {
           const majors = [...root.querySelectorAll('[data-major]:checked')].map((c) => c.dataset.major);
           const majorLine = majors.length

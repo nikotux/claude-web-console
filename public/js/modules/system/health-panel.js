@@ -10,6 +10,7 @@
 //      con las tabs (Revisión/Optimización/Coherencia/Dashboard/Pad), el Pac-Man
 //      persistente y el lanzador.
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { openHealthScan } from './health-scan-modal.js';
@@ -36,6 +37,7 @@ export function mountHealthPanel(el, ctx) {
     <div class="hp-head">
       <span class="hp-title">${t('system.health.quickChecksTitle', 'Chequeos rápidos')}</span>
       <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="${t('system.health.refreshChecksTitle', 'Refrescar chequeos')}">${icon('refresh', { size: 13 })}</button>
+      ${helpBtn('sys-health')}
     </div>
     <div class="hp-checks" data-ref="checks"><span class="cwc-spinner"></span></div>
 

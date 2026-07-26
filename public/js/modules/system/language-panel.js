@@ -5,6 +5,7 @@
 // del núcleo i18n — demo end-to-end del mecanismo que Fase 2 va a replicar
 // módulo por módulo (PLAN i18n, 2026-07-19).
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t, getLang, setLang } from '../../ui/i18n.js';
 
 export function mountLanguagePanel(el, ctx) {
@@ -18,6 +19,10 @@ export function mountLanguagePanel(el, ctx) {
     </button>`;
 
   el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.language.title', 'Idioma')}</span>
+      ${helpBtn('sys-lang')}
+    </div>
     <p class="ev-hint">${t('system.lang.hint', 'Elegí el idioma de la interfaz para TU cuenta. Aplica solo a vos — es una preferencia personal, no una configuración del sistema.')}</p>
     <div class="lg-opts">
       ${optHtml('es', '🇪🇸', t('system.lang.es', 'Español'))}

@@ -1,15 +1,15 @@
 // modules/launcher/launcher.js — "Nueva sesión": LA acción prominente de la app.
 //
-// Modal lanzador completo: tipo (Claude/Terminal), modelo (recuerda el último
-// usado), y destino con atajos fijos (Home/Tolkien/Mi Consola — los lugares
-// con identidad salen de ui/places.js: nombre + ícono + diferenciador),
-// carpetas RECIENTES (GET /api/terminal/recents) y navegador de carpetas con
-// breadcrumb (GET /api/files/list, solo directorios). [Iniciar] crea y enfoca.
-// Flujos: Home = 2 taps · reciente = 3 taps · carpeta nueva = navegar + Iniciar.
+// Modal lanzador completo: tipo (Chat/Claude TUI/Terminal), modelo cuando
+// corresponde y destino con atajos fijos (Tolkien/Mi Consola — los lugares
+// con identidad salen de ui/places.js: nombre + ícono + diferenciador) más un
+// navegador de carpetas con breadcrumb (GET /api/files/list, solo directorios).
+// [Iniciar] crea y enfoca la sesión.
 import { placeFor } from '../../ui/places.js';
 import { CHAT_MODEL_OPTIONS } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 // "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
 // usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
@@ -54,6 +54,7 @@ export default {
       // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido
       // del usuario 2026-07-10).
       modal = dialog.openModal({ title: t('launcher.newSession', 'Nueva sesión'), width: 360, onClose: () => { modal = null; } });
+      modal.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('launcher'));
       st.view = 'list';
       st.dest = null;
       render();

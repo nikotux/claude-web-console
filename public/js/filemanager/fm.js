@@ -2,6 +2,7 @@
 import { icon, hydrateIcons } from '../ui/icons.js';
 import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
 import { dismissablePopup } from '../ui/popup.js';
+import { bindHelp, helpBtn } from '../ui/help.js';
 
 const API = '/api/files';
 
@@ -584,6 +585,8 @@ main.addEventListener('drop', (e) => { if (state.mode === 'files' && e.dataTrans
   } catch { /* noop */ }
 })();
 
+document.querySelector('.fm-tb-right')?.insertAdjacentHTML('beforeend', helpBtn('files'));
+bindHelp();
 hydrateIcons(); // rellena los [data-icon] estáticos del HTML
 
 // Deep-link: /archivos?path=<rel> arranca en esa carpeta (si no, en el home).

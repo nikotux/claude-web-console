@@ -9,6 +9,7 @@
 // generateInventory() (core/inventory.js) + systemSnapshot() (modules/stats,
 // misma fuente que el gauge del pie). Sin capa IA: solo "Re-escanear ahora".
 import { icon } from '../../ui/icons.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { heat, fmtBytes, fmtUptime } from '../stats/stats.js';
@@ -22,7 +23,11 @@ export function mountDashboardPanel(el, ctx) {
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   const wrap = document.createElement('div');
   wrap.className = 'hp-opt';
-  el.innerHTML = '';
+  el.innerHTML = `
+    <div class="hp-head">
+      <span class="hp-title">${t('system.help.dashboard.title', 'Dashboard')}</span>
+      ${helpBtn('sys-dashboard')}
+    </div>`;
   el.appendChild(wrap);
 
   let alive = true;

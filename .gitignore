@@ -4,5 +4,6 @@ users.json
 sessions.json
 recents.json
 titles.json
+session-owners.json
 certs/
 *.log

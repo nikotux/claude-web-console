@@ -30,10 +30,12 @@ import {
 } from './shared.js';
 import {
   readJob, writeJob, isRunning, effectiveStatus, spawnUpdatesRunner, applyAuditFix, spawnAnalyzeRunner,
+  buildPlan, planActionCount,
 } from './orchestrate-shared.js';
 import {
   readRisk, writeRisk, isRiskRunning, effectiveRisk,
 } from './analyze-shared.js';
+import { buildUpdateBriefing } from './session-shared.js';
 
 const CACHE_FILE = path.join(resolveDataDir(), 'updates-census.json');
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 h — esto cambia lento; no hace falta más
@@ -155,6 +157,22 @@ export default {
     router.get('/updates/verify', async (req, res) => {
       try { res.json(await syntaxCheck()); }
       catch (e) { res.status(500).json({ error: String(e.message || e).slice(0, 300) }); }
+    });
+
+    // Briefing determinístico para abrir una sesión de chat que conduce el
+    // update con Bash. No aplica nada: censa fresco y arma prompt + plan.
+    router.post('/updates/session-briefing', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      try {
+        const currentCensus = await census({ fresh: true });
+        const risk = readRisk();
+        const verdicts = (risk || {}).verdicts || {};
+        const plan = buildPlan(currentCensus, { apt: true }, [], verdicts);
+        const { prompt, title } = buildUpdateBriefing({ census: currentCensus, plan, risk });
+        res.json({ ok: true, prompt, title, cwd: 'claude-web-console', actions: planActionCount(plan) });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e?.message || 'error' });
+      }
     });
 
     // --- BOTÓN ÚNICO: actualización orquestada (admin) ---

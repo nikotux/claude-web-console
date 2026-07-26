@@ -15,6 +15,7 @@
 // ctx = { icon, dialog, bus, whoami }.
 import { renderMarkdown } from '../../ui/markdown.js';
 import { pacman } from '../../ui/pacman.js';
+import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 
 // renderMarkdown() devuelve un NODO DOM (ya sanitizado en su interior); para
@@ -117,6 +118,7 @@ export function mountLearning(container, ctx) {
         </div>
         <button class="btn-ghost btn--sm" data-ref="analyze" title="${t('learning.analyze.tip', 'Analizar el aprendizaje con IA: organiza, agrupa en rutas y sugiere qué aprender (consume tokens)')}" style="display:none">${icon('sparkle', { size: 13 })}<span>${t('learning.analyze.btn', 'Analizar')}</span></button>
         <button class="btn btn--sm" data-ref="new" title="${t('learning.new.tip', 'Agregar un tema para aprender')}">${icon('plus', { size: 13 })}<span>${t('learning.new.btn', 'Nuevo tema')}</span></button>
+        ${helpBtn('learning')}
       </div>
       <div class="lt-intro">${t('learning.intro', '🎓 Temas que vas aprendiendo/reforzando. Agrupalos en <b>rutas</b>, tocá "🎓 Explicame esto" para un repaso que <b>lee el código real</b>, y usá "Analizar" para que la IA organice todo y sugiera qué estudiar.')}</div>
       <details class="lt-routes-sec" data-ref="routessec">

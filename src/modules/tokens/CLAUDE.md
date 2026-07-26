@@ -296,6 +296,24 @@ histórico). Lo consume public/js/rawview/raw.js (ver raw.html en el mapa).
 
 ## Gotchas de esta carpeta
 
+- SEPARADOR DE RUTA — las dos fuentes NO usan el mismo (BUG-1910, 2026-07-26).
+  `projectOf(dir)` de index.js recibe el dir CODIFICADO de Claude
+  (`-home-nmosquera-tolkien`, separador GUION); `projectOfPath(absPath)` de
+  codex-usage.js recibe la ruta ABSOLUTA real de Codex
+  (`/home/nmosquera/tolkien`, separador BARRA). El regex de Tolkien se había
+  copiado tal cual del espejo (`(^|-)tolkien(-|$)`), así que en Codex NUNCA
+  matcheaba y TODO el consumo hecho en Tolkien caía en `otros` — 335 entradas
+  mal atribuidas, ~50% del histórico de Codex, sin que el total ni los límites
+  del plan se vieran afectados (solo el desglose POR PROYECTO). Corregido a
+  `(^|[-/])tolkien([-/]|$)`, que acepta ambos separadores y así resuelve
+  también worktrees (`tolkien-wt-*`), subdirectorios (`tolkien/apps/mcp`) y
+  entornos efímeros (`.cwc-data/tolkien-envs/env-*/tree`), sin tragarse
+  falsos positivos (`mitolkien`). Si agregás un proyecto nuevo al
+  clasificador, escribí el patrón en LOS DOS archivos por separado y probalo
+  contra rutas reales de CADA fuente: son espejos en intención, no en formato
+  de entrada. El histórico ya congelado en usage-history.json NO se
+  re-atribuye (mismo criterio que el bucket `aprendizaje`).
+
 - Desde 2026-07-24 (BUG-1874) todo el módulo es ADMIN-ONLY: todos sus paths
   salen de `os.homedir()` y por lo tanto leen la cuenta del host; la
   contabilidad aislada por usuario queda pendiente.

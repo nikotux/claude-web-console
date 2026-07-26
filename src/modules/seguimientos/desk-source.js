@@ -10,6 +10,7 @@
 import { listTicketsByDepartment, listAgents, listContacts, getTicketState } from '../tickets/desk-mcp-client.js';
 import { DEPT_MORDOR } from '../tickets/derive.js';
 import { config } from '../../core/config.js';
+import { runAdaptivePool } from '../../core/pool.js';
 
 const OPEN_TYPES = new Set(['Open', 'On Hold']);
 // Ventana de cerrados para las métricas ("en qué invierto el tiempo"). El
@@ -154,11 +155,22 @@ function stripHtml(s = '') {
   return String(s).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 }
 
-// Pool de concurrencia acotada (rate-limit de Zoho): N workers en paralelo.
+// Pool de concurrencia acotada (rate-limit de Zoho), adoptando el pool
+// ADAPTATIVO canónico de core/pool.js — mismo patrón que tickets/sources.js
+// contra la MISMA API de Zoho. El techo se fija en `concurrency`
+// (min=start=max) para NO cambiar la carga; lo que se GANA es el back-off
+// cuando Zoho responde 429/overload.
+const RATE_LIMIT_RE = /429|rate.?limit|too many|overload/i;
 async function mapPool(items, worker, concurrency = 4) {
-  let i = 0;
-  async function run() { while (i < items.length) { const idx = i++; try { await worker(items[idx]); } catch { /* best-effort */ } } }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
+  if (!items.length) return items;
+  await runAdaptivePool(items, async (item, ctl) => {
+    try { await worker(item); }
+    catch (err) {
+      const msg = String(err?.message || err);
+      if (RATE_LIMIT_RE.test(msg)) ctl.backoff(); // señal de sobrecarga → baja la concurrencia
+      /* best-effort: un item que falla no tumba el lote */
+    }
+  }, { min: concurrency, start: concurrency, max: concurrency });
   return items;
 }
 

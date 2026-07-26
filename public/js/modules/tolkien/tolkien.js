@@ -18,6 +18,7 @@
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 export default {
   name: 'tolkien',
@@ -40,6 +41,7 @@ export default {
         <button class="btn-ghost btn--sm btn--icon" data-ref="fetch" title="${t('tolkien.header.fetchTitle', 'Buscar cambios en GitHub (fetch)')}">${icon('refresh', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="update" title="${t('tolkien.header.updateTitle', 'Descargar cambios (pull: stash → pull → pop)')}">${icon('download', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refreshData" title="${t('tolkien.header.refreshDataTitle', 'Vista fresca: borrar data local + recargar de Zoho')}">${icon('disk', { size: 14 })}</button>
+        ${helpBtn('tolkien')}
       </header>
       <div class="tk-card">
         <div class="tk-info" data-ref="info">${t('tolkien.info.loading', 'cargando…')}</div>

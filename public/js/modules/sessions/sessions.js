@@ -13,6 +13,7 @@ import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor, PLACES, LIMBO_PLACE } from '../../ui/places.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { t } from '../../ui/i18n.js';
+import { helpBtn } from '../../ui/help.js';
 
 // Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
 // animación por estado vienen del catálogo central (ver ui.css); acá solo
@@ -84,6 +85,7 @@ export default {
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon sess-bgbtn--idle" data-ref="bg" title="${t('sessions.bg.title', 'Trabajos en segundo plano')}">${icon('relay', { size: 14 })}<span class="sess-bg-n">0</span></button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('sessions.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
+        ${helpBtn('sessions')}
       </header>
       <div class="sess-list" data-ref="list"></div>`;
 

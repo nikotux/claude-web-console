@@ -201,6 +201,21 @@ html, body {
 }
 .raw-close:hover { background: rgba(60, 255, 110, 0.12); }
 
+.raw-help {
+  position: fixed;
+  top: 4px;
+  right: 40px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--raw-green-dim);
+  background: rgba(2, 12, 6, 0.55);
+  color: var(--raw-green);
+}
+.raw-help:hover { background: rgba(60, 255, 110, 0.12); }
+
 /* Tira de procesos-servicio (latidos): arriba-derecha, bajo el botón cerrar.
    Un servicio permanente no "llueve" — late. */
 .raw-procs {

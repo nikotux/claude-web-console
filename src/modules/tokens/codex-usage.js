@@ -24,9 +24,18 @@ function emptyBucket() {
 
 // Espejo deliberado de projectOf() en index.js, pero acá recibimos el cwd real
 // absoluto de Codex (no el nombre de directorio codificado que usa Claude).
+// OJO — el separador NO es el mismo en las dos fuentes (bug 2026-07-26): Claude
+// codifica el cwd con GUIONES ('-home-nmosquera-tolkien') y su projectOf usa
+// `(^|-)tolkien(-|$)`; Codex graba la ruta absoluta REAL, donde el separador es
+// la BARRA ('/home/nmosquera/tolkien'). El regex se había copiado tal cual del
+// espejo, así que TODO el consumo de Codex hecho en Tolkien caía en 'otros'
+// (335 entradas mal atribuidas al detectarlo). Acá se aceptan AMBOS separadores
+// para que el worktree ('/home/nmosquera/tolkien-wt-phase3') y un subdirectorio
+// ('/home/nmosquera/tolkien/src') también resuelvan, sin tragarse un falso
+// positivo tipo '/home/nmosquera/mitolkien'.
 function projectOfPath(absPath) {
   if (/claude-web-console|healthfix-wt-/.test(absPath || '')) return 'consola';
-  if (/(^|-)tolkien(-|$)/.test(absPath || '')) return 'tolkien';
+  if (/(^|[-/])tolkien([-/]|$)/.test(absPath || '')) return 'tolkien';
   return 'otros';
 }
 

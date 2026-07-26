@@ -15,7 +15,7 @@
 // canUseTool deniegan TODO). settingSources: []. NUNCA lee/escribe código.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  CONTEXT_MODEL, CONTEXT_MAX_TURNS, CONTEXT_TIMEOUT_MS,
+  CONTEXT_MODEL, CONTEXT_EFFORT, CONTEXT_MAX_TURNS, CONTEXT_TIMEOUT_MS,
   contextPrompt, parseContext, renderContextText,
   readContextJob, writeContextJob,
 } from '../src/modules/learning/context-shared.js';
@@ -39,6 +39,7 @@ async function interpret(job) {
     prompt: contextPrompt({ transcript: job.transcript, itemTitle: job.itemTitle, itemDesc: job.itemDesc }),
     options: {
       model: CONTEXT_MODEL,
+      effort: CONTEXT_EFFORT,
       maxTurns: CONTEXT_MAX_TURNS,
       permissionMode: 'default',
       settingSources: [], // sin user/project: cero MCP ni permisos pre-aprobados
