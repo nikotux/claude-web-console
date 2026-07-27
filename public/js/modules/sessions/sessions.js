@@ -10,7 +10,7 @@
 import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel, CODEX_MODEL_OPTIONS, codexEffortsFor, DEFAULT_CODEX_MODEL } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
-import { placeFor, PLACES, LIMBO_PLACE } from '../../ui/places.js';
+import { placeFor, resolvePlace, PLACES, LIMBO_PLACE } from '../../ui/places.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
@@ -106,14 +106,23 @@ export default {
     };
     // Nombre humano: custom > lugar conocido (ui/places.js: "Mi Consola",
     // "Tolkien") > basename del cwd. El renombre manual sigue mandando.
-    const displayName = (s) => s.customTitle || placeFor(s.cwd)?.label || (s.cwd ? baseName(s.cwd) : s.name);
+    const displayName = (s) => {
+      const p = resolvePlace(s.cwd);
+      const placeLabel = p?.isolated ? t('sessions.place.envLabel', 'Tolkien (aislado)') : p?.label;
+      return s.customTitle || placeLabel || (s.cwd ? baseName(s.cwd) : s.name);
+    };
     const plumbing = (s) => `tmux: ${s.name} · socket ${s.socketName}${s.cwd ? ` · ${s.cwd}` : ''}`;
     // Mini-ícono de LUGAR (dónde corre la sesión): solo lugares conocidos —
     // Mi Consola en acento (is-console), Tolkien tenue. El badge es estático
     // por tarjeta (el cwd no cambia), updateInPlace no necesita tocarlo.
     const placeBadge = (cwd) => {
-      const p = placeFor(cwd);
-      return p ? `<span class="sess-place ${p.cls}" title="${p.label}">${icon(p.ico, { size: 11 })}</span>` : '';
+      const p = resolvePlace(cwd);
+      if (!p) return '';
+      if (p.isolated) {
+        const title = t('sessions.place.envTitle', 'Tolkien · entorno aislado ({env})', { env: p.envId });
+        return `<span class="sess-place is-env" title="${escapeHtml(title)}">${icon(p.ico, { size: 11 })}</span>`;
+      }
+      return `<span class="sess-place ${p.cls}" title="${p.label}">${icon(p.ico, { size: 11 })}</span>`;
     };
 
     function fmtAgo(ms) {
@@ -444,10 +453,18 @@ export default {
       for (const c of activeChats) {
         // 🌗 sesión-Limbo (alto riesgo, herramientas de ambos mundos): grupo
         // PROPIO, sin importar el cwd — así se identifica de un vistazo.
-        const p = c.limbo ? LIMBO_PLACE : placeFor(c.cwd);
+        const p = c.limbo ? LIMBO_PLACE : resolvePlace(c.cwd);
         const key = c.limbo ? '__limbo' : (p?.rel || '__otros');
-        if (!byWorld.has(key)) byWorld.set(key, { place: p, chats: [] });
-        byWorld.get(key).chats.push(c);
+        const worldPlace = key === 'tolkien' ? PLACES.find((x) => x.rel === key) : p;
+        if (!byWorld.has(key)) byWorld.set(key, { place: worldPlace, chats: [] });
+        const envId = c.tolkienEnv?.id || p?.envId || null;
+        const branch = c.tolkienEnv?.branch || envId;
+        byWorld.get(key).chats.push({
+          chat: c,
+          envId,
+          branch,
+          worktree: c.tolkienEnv?.worktree || c.cwd,
+        });
       }
       const order = ['__limbo', ...PLACES.map((p) => p.rel), '__otros'];
       const worldKeys = [...byWorld.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
@@ -460,7 +477,43 @@ export default {
           h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || t('sessions.world.other', 'Otros')}</span><span class="side-count">${grp.chats.length}</span>`;
           listEl.appendChild(h);
         }
-        for (const c of grp.chats) listEl.appendChild(chatCard(c, tmuxByName));
+        if (key !== 'tolkien') {
+          for (const item of grp.chats) listEl.appendChild(chatCard(item.chat, tmuxByName));
+          continue;
+        }
+
+        // Tolkien principal conserva sus tarjetas al mismo nivel. Cada worktree
+        // efímero vive debajo en su propio bloque de árbol, incluso cuando no hay
+        // headers de mundo porque Tolkien es el único grupo presente.
+        for (const item of grp.chats.filter((x) => !x.envId)) {
+          listEl.appendChild(chatCard(item.chat, tmuxByName));
+        }
+        const envGroups = new Map();
+        for (const item of grp.chats.filter((x) => x.envId)) {
+          if (!envGroups.has(item.envId)) {
+            const shortBranch = String(item.branch || '').replace(/^cwc-env\//, '');
+            const label = t('sessions.env.header', 'Aislado · {branch}', { branch: shortBranch });
+            envGroups.set(item.envId, { ...item, label, chats: [] });
+          }
+          envGroups.get(item.envId).chats.push(item.chat);
+        }
+        const sortedEnvs = [...envGroups.values()].sort((a, b) => a.label.localeCompare(b.label));
+        for (const env of sortedEnvs) {
+          const det = document.createElement('details');
+          det.className = 'sess-env-grp';
+          det.open = true;
+          const summary = document.createElement('summary');
+          summary.className = 'sess-env-h';
+          summary.title = t('sessions.env.summaryTitle', 'Entorno {env} · rama {branch} · worktree {worktree}', {
+            env: env.envId,
+            branch: env.branch,
+            worktree: env.worktree,
+          });
+          summary.innerHTML = `${icon('isolated', { size: 12 })}<span class="sess-env-name">${escapeHtml(env.label)}</span><span class="side-count">${env.chats.length}</span>`;
+          det.appendChild(summary);
+          for (const c of env.chats) det.appendChild(chatCard(c, tmuxByName));
+          listEl.appendChild(det);
+        }
       }
       for (const s of owned) listEl.appendChild(card(s));
 
@@ -487,7 +540,8 @@ export default {
     // ===== Tarjeta de conversación (chat SDK) =====
     function chatCard(c, tmuxByName) {
       const elCard = document.createElement('div');
-      elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '');
+      const isEnv = resolvePlace(c.cwd)?.isolated;
+      elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '') + (isEnv ? ' sess-chat--env' : '');
       elCard.dataset.key = `chat:${c.id}`;
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
 

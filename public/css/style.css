@@ -551,6 +551,25 @@ html, body {
   padding: .35rem .35rem .15rem; user-select: none;
 }
 .sess-world-h .side-count { margin-left: auto; }
+/* Entorno aislado de Tolkien: sub-bloque anidado con identidad fría y guía
+   vertical para distinguirlo del árbol principal. */
+.sess-env-grp {
+  margin: .1rem 0 .25rem .55rem; padding-left: .45rem;
+  border-left: 2px solid var(--cwc-accent-cool); border-radius: 3px;
+  background: color-mix(in srgb, var(--cwc-accent-cool) 6%, transparent);
+}
+.sess-env-h {
+  color: var(--cwc-accent-cool); cursor: pointer;
+  display: flex; align-items: center; gap: .4rem;
+  min-width: 0;
+  font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .04em;
+  padding: .25rem .35rem; list-style: none; user-select: none;
+}
+.sess-env-h::-webkit-details-marker { display: none; }
+.sess-env-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-env-h .side-count { margin-left: auto; }
+.sess-env-grp .sess-card { margin-bottom: .25rem; }
+.sess-place.is-env { color: var(--cwc-accent-cool); }
 /* 🌗 grupo SESIÓN-LIMBO (alto riesgo, herramientas de ambos mundos): resaltado. */
 .sess-world-h.sess-limbo-h {
   color: var(--cwc-danger);
@@ -564,6 +583,7 @@ html, body {
 
 /* Tarjeta de conversación (chat SDK): distinguible por ícono y borde */
 .sess-chat { border-left: 2px solid var(--cwc-accent); }
+.sess-chat--env { border-left-color: var(--cwc-accent-cool); }
 .sess-type-ic { display: inline-flex; color: var(--cwc-accent); flex: none; }
 
 /* Menú ⋯ de tarjeta */

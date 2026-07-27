@@ -33,7 +33,7 @@ import { attemptStats } from '../../core/closed-envelope.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
-import { listEnvs, ENVS_DIR, isEnvAlive } from '../tolkien/env-store.js';
+import { listEnvs, ENVS_DIR } from '../tolkien/env-store.js';
 import { verifyEnvContext } from '../tolkien/env-shared.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
@@ -265,6 +265,7 @@ function checkFichasModulo() {
 // es un proyecto per-caño aparte, no un hachazo.
 const CROSS_WORLD_ALLOW = new Set([
   'src/core/bus.js',                       // interfono: etiqueta el MUNDO de una sesión por su cwd (PLAN-469), no cruza datos
+  'src/core/worlds.js',                    // fuente ÚNICA de worldLabelFor(cwd): etiqueta el MUNDO de un cwd comparando paths, no cruza datos (extraído de bus.js + chat/index.js, que tenían copias divergentes)
   'src/modules/chat/index.js',             // EL canal del paquete-sesión (handoff/worldLabelFor) — canónico
   'src/modules/tickets/context-store.js',  // syncToTolkien → CLAUDE.local.md
   'src/modules/tickets/index.js',
@@ -350,7 +351,8 @@ function checkTolkienEnvs() {
   const incomplete = [];
   let verifiedAlive = 0;
   for (const r of recs) {
-    if (!isEnvAlive(r) || !r.worktree) continue;
+    // NO filtramos por isEnvAlive: 'down'/'error' describen el dev-server, no si hay una sesión trabajando en el worktree. El caso que originó este check tenía status 'down' y una sesión adentro.
+    if (!r.worktree || !fss.existsSync(r.worktree)) continue;
     try {
       const context = verifyEnvContext(r.worktree);
       verifiedAlive += 1;

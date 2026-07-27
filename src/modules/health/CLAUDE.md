@@ -116,6 +116,19 @@
   margen): detecta crecimiento, no declara un ideal. Si lo supera ⇒ `warn` con
   desglose obligatorio de playbooks/conventions/collections/dashboard y su
   porcentaje; Pad caído o respuesta ilegible ⇒ `warn`, nunca `fail`.
+  Y **`tolkien-envs`** (2026-07-27, `console:PLAN-2072`): además de
+  reconciliar el registro con worktrees huérfanos, llama a
+  `verifyEnvContext(worktree)` para
+  auditar el marco operativo de CADA entorno cuyo worktree exista en disco
+  (`CLAUDE.local.md`, `.cwc-ticket-playbook.md`, `.env`,
+  `.claude/settings.local.json` y `memory/`). `.pad.toml` se siembra, pero NO
+  se audita: si se borra a mano, este check no lo detecta. Si falta contexto
+  devuelve `warn`, con artefactos faltantes por entorno (máx. 3 entornos y 3
+  faltantes por entorno), y pone ese hallazgo ANTES de errores y huérfanos.
+  GOTCHA: NO filtrar con `isEnvAlive`; `'down'`/`'error'` describen el
+  dev-server, no si una sesión sigue trabajando dentro del worktree. El caso
+  que originó el check estaba `'down'` con una sesión adentro, por eso se
+  verifica todo worktree existente.
 - **Dashboard del proyecto** (PESTAÑA PROPIA "📊 Dashboard" del grupo
   Diagnóstico del menú Sistema — `system/dashboard-panel.js`,
   `mountDashboardPanel`. REDISEÑO 2026-07-19 PLAN-752: antes era una subsección

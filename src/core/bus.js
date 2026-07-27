@@ -27,22 +27,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { runTmux, tmuxDir } from './tmux.js';
 import { loadTitles, titleKey } from './session-names.js';
-
-// Raíz del repo de la Consola (para etiquetar el MUNDO de una sesión por su cwd,
-// PLAN-469): bus.js vive en src/core/ → '../..' = raíz.
-const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-// Etiqueta humana del MUNDO de un cwd (misma lógica que chat/index worldLabelFor):
-// Tolkien = config.projectDir · Mi Consola = dentro del repo · resto = basename.
-function worldLabelForCwd(cwd) {
-  const abs = path.resolve(cwd || '');
-  if (config.projectDir && abs === path.resolve(config.projectDir)) return 'Tolkien';
-  if (abs === CONSOLE_ROOT || abs.startsWith(CONSOLE_ROOT + path.sep)) return 'Mi Consola';
-  return cwd ? (path.basename(abs) || null) : null;
-}
+import { worldLabelFor } from './worlds.js';
 // Registro de paquetes-sesión (F2b, session-packages.json) — para direccionar por
 // ref estable PKG-N en el interfono (PLAN-469 · 1a). Lee el JSON directo, como
 // buildDirectory lee chats.json (sin importar el módulo chat, evita acoplar core).
@@ -147,7 +135,7 @@ export function buildDirectory() {
       kind: isBare ? 'tui-chat' : 'tui',
       tmux: name,
       cwd: cwd || null,
-      world: worldLabelForCwd(cwd), // PLAN-469 · 2a
+      world: worldLabelFor(cwd), // PLAN-469 · 2a
       pid: pid ? parseInt(pid, 10) : null,
       alive: true,
     });
@@ -164,7 +152,7 @@ export function buildDirectory() {
         name: c.title || c.id || 'chat',
         kind: 'chat',
         cwd: c.cwd || null,
-        world: worldLabelForCwd(c.cwd), // PLAN-469 · 2a
+        world: worldLabelFor(c.cwd), // PLAN-469 · 2a
         packageRef: c.packageRef || null, // PLAN-469 · 1b (ref estable en el panel)
         archived: !!c.archived, // PLAN-469 · 3a (status de la sesión destino)
         claudeSid: c.sessionId,
@@ -291,11 +279,16 @@ export function markDelivered(messages, handles) {
 function stripMeta(o) { const { _file, ...rest } = o; return rest; }
 
 // Todos los mensajes vivos (para el panel).
-export function allMessages() {
+// `directory` opcional: si el llamador ya construyó el directorio (el endpoint del
+// panel lo hace), se reutiliza en vez de recalcularlo — buildDirectory() lanza
+// subprocess de tmux y este endpoint se consulta seguido.
+export function allMessages(directory = null) {
   const now = Date.now();
+  const entries = directory || buildDirectory();
+  const liveHandles = new Set(entries.map((entry) => entry.handle));
   return listJson(MSG_DIR)
     .filter((m) => now - (m.ts || 0) <= MSG_TTL_MS)
-    .map(stripMeta)
+    .map((m) => ({ ...stripMeta(m), undeliverable: !liveHandles.has(m.to) }))
     .sort((a, b) => b.ts - a.ts);
 }
 

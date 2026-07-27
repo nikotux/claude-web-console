@@ -68,6 +68,7 @@ import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { TANDEM_TOOL } from '../../core/tool-policy.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
+import { worldLabelFor } from '../../core/worlds.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { queueRetroDistill } from '../retro/shared.js';
@@ -75,7 +76,7 @@ import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
-import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, ENVS_DIR } from '../tolkien/env-store.js';
+import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv } from '../tolkien/env-store.js';
 import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs } from '../tolkien/env-shared.js';
 import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
@@ -539,16 +540,6 @@ function moveTranscript(sid, fromCwd, toCwd) {
   if (!fss.existsSync(dst)) throw new Error('la copia al mundo destino no quedó');
   try { fss.rmSync(src); } catch { /* best-effort: el origen queda, pero el destino ya tiene todo */ }
   try { if (fss.existsSync(subSrc)) fss.rmSync(subSrc, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
-// Etiqueta humana del MUNDO de un cwd (sin acoplar el front ui/places.js): la
-// consola (CONSOLE_ROOT) = "Mi Consola", config.projectDir = "Tolkien", resto =
-// basename. Fuente backend equivalente a placeFor().
-function worldLabelFor(cwd) {
-  const abs = path.resolve(cwd || '');
-  const envsDir = path.resolve(ENVS_DIR);
-  if (abs === path.resolve(CONSOLE_ROOT)) return 'Mi Consola';
-  if (config.projectDir && (abs === path.resolve(config.projectDir) || abs.startsWith(envsDir + path.sep))) return 'Tolkien';
-  return path.basename(abs) || String(cwd || '');
 }
 // F2 (anti-confusión, pedido de Niko): el repo GitHub REAL de un mundo (leído del
 // .git/config, sin subprocess) — para nombrar la identidad concreta ("el GitHub de

@@ -2,6 +2,12 @@
 # public/js/ui — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+### places.js
+`placeFor()` conserva la resolución exacta de `PLACES`; `resolvePlace()` suma
+los worktrees efímeros `~/.cwc-data/tolkien-envs/<envId>/tree` como una capa
+aislada de Tolkien, con `envId` e ícono propio, sin cambiar launcher ni "Abrir en".
+Contraparte BACKEND del mismo concepto: `src/core/worlds.js` (`worldLabelFor(cwd)`), que también reconoce esos worktrees como Tolkien. Son DOS capas deliberadas — frontend y backend no comparten módulos y `ui/places.js` es la fuente frontend por diseño —, no una copia olvidada de la otra: si cambia la ruta de los entornos hay que tocar las dos (`console:BUG-2074` nació justamente de dos copias desincronizadas del mismo helper).
+
 ### public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
 openModal/confirmDialog/promptDialog/alertDialog/textEditorDialog +
 confirmSheet — confirmación ADAPTATIVA 2026-07-07: en desktop delega en

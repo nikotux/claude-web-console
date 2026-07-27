@@ -14,6 +14,7 @@ import {
 } from './refresh-shared.js';
 import {
   ENVS_DIR,
+  allocatePort,
   assertSafeId,
   getEnv,
   heartbeat,
@@ -154,6 +155,29 @@ function appendProvisionLog(id, msg) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(path.join(dir, 'provision.log'), `[${new Date().toISOString()}] ${msg}\n`);
   } catch { /* noop */ }
+}
+
+// El puerto guardado en el record puede haber quedado tomado por otro entorno
+// (ver BUG-2076: allocatePort lo regalaba cuando el dueño estaba 'down'). Antes
+// de levantar el dev-server se revalida: si OTRO entorno con worktree vivo lo
+// tiene, se pide uno nuevo y se persiste en el record. Nunca se levanta un
+// server sobre un puerto ajeno.
+function ensureFreePort(rec) {
+  const claimedByOther = listEnvs().some((other) => (
+    other?.id !== rec.id
+    && Number(other?.port) === Number(rec.port)
+    && other?.worktree
+    && fs.existsSync(other.worktree)
+  ));
+  if (!claimedByOther) return rec.port;
+
+  const previousPort = rec.port;
+  const newPort = allocatePort();
+  if (newPort === null) return null;
+
+  patchEnv(rec.id, { port: newPort });
+  appendProvisionLog(rec.id, `puerto reasignado: ${previousPort} -> ${newPort}`);
+  return newPort;
 }
 
 function execFileResult(cmd, args, options = {}) {
@@ -302,7 +326,14 @@ export async function provisionEnv(id) {
     patchEnv(id, { status: 'db-ready' });
     appendProvisionLog(id, `db ready: ${rec.db}`);
 
-    const launchScript = writeLaunchScript(id, wt.worktree, rec.port, rec.db);
+    const port = ensureFreePort(rec);
+    if (port === null) {
+      const msg = `sin puertos libres: el puerto ${rec.port} está reclamado por otro entorno`;
+      patchEnv(id, { status: 'error', error: msg });
+      appendProvisionLog(id, `provision error: ${msg}`);
+      return;
+    }
+    const launchScript = writeLaunchScript(id, wt.worktree, port, rec.db);
     const started = await startDevServer(id, launchScript);
     if (!started.ok) throw new Error(started.detail || 'no se pudo iniciar el server dev');
     patchEnv(id, { status: 'serving', error: '' });
@@ -390,7 +421,15 @@ export async function recloneLiveEnvs() {
         results.push({ id: rec.id, ok: false, detail });
         continue;
       }
-      const script = writeLaunchScript(rec.id, rec.worktree, rec.port, rec.db);
+      const port = ensureFreePort(rec);
+      if (port === null) {
+        const detail = `sin puertos libres: el puerto ${rec.port} está reclamado por otro entorno`;
+        patchEnv(rec.id, { status: 'error', error: detail });
+        appendProvisionLog(rec.id, `reclone error: ${detail}`);
+        results.push({ id: rec.id, ok: false, detail });
+        continue;
+      }
+      const script = writeLaunchScript(rec.id, rec.worktree, port, rec.db);
       const started = await startDevServer(rec.id, script);
       const detail = started.detail || (started.ok ? 'reclonado y reiniciado' : 'no se pudo reiniciar el server dev');
       if (!started.ok) appendProvisionLog(rec.id, `reclone start error: ${detail}`);

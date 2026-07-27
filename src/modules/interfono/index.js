@@ -36,7 +36,7 @@ export default {
         const tombstones = bus.tombstonesFor(directory.map((e) => e.handle));
         res.json({
           directory,
-          messages: bus.allMessages(),
+          messages: bus.allMessages(directory),
           claims,
           tombstones,
           ts: Date.now(),

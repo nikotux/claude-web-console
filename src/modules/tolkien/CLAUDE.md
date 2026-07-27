@@ -55,12 +55,42 @@ worktree, flipear cwd y respawnear → el write reintentado cae en el
 worktree. El hook se instala SOLO por-spawn en cwd=base (NO es global:
 chats de Consola o ya-en-worktree no lo ven). worldLabelFor reconoce los
 worktrees bajo ENVS_DIR como 'Tolkien'. Feature flag CWC_TOLKIEN_ENV_AUTO
-(default on). BOTONES fan-out: ⬇️ Actualizar rebasea cada worktree vivo
+(default on). CONTRATO DE CONTEXTO (Pad local `console:PLAN-2072`, hijo de
+PLAN-1815,
+2026-07-27): un `git worktree add` materializa SOLO lo trackeado, pero el
+marco operativo de Tolkien es untracked por diseño (`CLAUDE.local.md`,
+`.cwc-ticket-playbook.md`, `.env`, `.claude/settings.local.json`) y Claude
+Code deriva del cwd un projectKey nuevo con `memory/` vacía. Como el handoff
+muda transcript+cwd pero no ese marco, la sesión conservaba el historial y
+fallaba EN SILENCIO sin reglas/playbook/memorias/credenciales. `env-shared.js`
+exporta `ENV_CONTEXT_LINKS`, `claudeProjectDirFor(cwd)` (reemplaza `/` y `.`
+por `-`), `seedEnvContext(worktree)` y `verifyEnvContext(worktree)`. El seed
+crea SYMLINKS hacia los cuatro artefactos del base + hacia `memory/` del
+projectKey base, y escribe `.pad.toml` con `workspace = "tolkien"` para fijar
+el Pad LOCAL frente al workspace cloud homónimo; es idempotente, nunca pisa
+un archivo real, aísla fallos puntuales y devuelve
+`{linked,already,skipped,conflicts,padToml}`. `createWorktree()` lo ejecuta
+en sus DOS returns (también reconcilia un worktree viejo ya existente);
+`verifyEnvContext` es read-only y devuelve `{ok,missing}`. `teardownEnv()`
+borra el symlink `memory/`, NUNCA el projectKey ni sus transcripts. El
+disparador NO cambió: sigue en el primer Edit/Write/delegación para que chats
+de solo lectura no consuman el cap 4/pool 9; el contexto ya está completo
+antes de la mudanza. BOTONES fan-out: ⬇️ Actualizar rebasea cada worktree vivo
 sobre origin/main (dirty→skip, conflicto→abort+report); 💽 Vista fresca
 refresca tolkien_console (:3010) + dispara build de tolkien_template que
 al terminar RE-CLONA las DBs de los entornos vivos (recloneLiveEnvs); 🔄
 fetch NO cambia (.git compartido ya beneficia a todos los worktrees).
 local-enter con allowlist DINÁMICA = 3010 + puertos de entornos vivos.
+PUERTOS RESERVADOS (`console:BUG-2076`): hubo tres records con 3012 porque
+allocatePort() filtraba por isEnvAlive, pero `down`/`error` describe al
+DEV-SERVER, no al entorno. Ahora considera ocupado el puerto de TODO record
+cuyo worktree exista en disco, sin importar status. atCap() DELIBERADAMENTE
+sigue usando isEnvAlive: limita dev-servers concurrentes, no worktrees
+persistidos. Además ensureFreePort(rec), en env-shared.js, revalida antes de
+writeLaunchScript tanto en provisionEnv como en recloneLiveEnvs: si otro
+record con worktree vivo reclama el puerto guardado, asigna otro, lo persiste
+con patchEnv y lo loguea; si el pool se agotó devuelve null, marca ese entorno
+en error y el barrido continúa. Nunca se levanta sobre un puerto ajeno.
 UI: panel colapsable de entornos en la tarjeta Tolkien
 (public/js/modules/tolkien/tolkien.js). Health check `tolkien-envs`
 (registro vs worktrees huérfanos). :3011 'Tolkien pruebas' ELIMINADO
@@ -108,6 +138,11 @@ tras Actualizar y al abrir la ventana.
 
 ## Gotchas de esta carpeta
 
+- `isEnvAlive` describe el DEV-SERVER, no el entorno. No filtrar por esa señal
+  decisiones sobre recursos persistentes (puerto, DB, marco o limpieza): el
+  criterio correcto casi siempre es si el worktree existe en disco. atCap() es
+  la excepción deliberada porque su recurso sí son los dev-servers concurrentes;
+  no "unificar" ambos criterios.
 - Entornos Tolkien por sesión (PLAN-1815): el worktree de un entorno NO es
   config.projectDir → worldLabelFor lo reconoce por PREFIJO (ENVS_DIR), no por
   igualdad exacta. Flipear el cwd de un chat requiere MOVER su transcript (el
@@ -118,3 +153,13 @@ tras Actualizar y al abrir la ventana.
   del bootstrap de Pad). La DB plantilla tolkien_template debe quedar DORMIDA
   (ALLOW_CONNECTIONS false) para poder clonarla: Postgres exige 0 conexiones a
   la fuente de un CREATE DATABASE ... TEMPLATE.
+- Contexto de entornos (`console:PLAN-2072`): los symlinks son
+  BIDIRECCIONALES — editar
+  `CLAUDE.local.md` desde un worktree edita el archivo REAL de `~/tolkien`; es
+  deliberado para que una lección promovida se propague al instante y nunca
+  quede stale. `.pad.toml` DEBE estar ignorado en Tolkien: vive en el
+  `.git/info/exclude` LOCAL compartido por todos los worktrees, junto a los
+  otros artefactos operativos. Si se suma un link a `ENV_CONTEXT_LINKS` o un
+  archivo generado, verificar ANTES que esté ignorado; un untracked deja
+  `git status --porcelain` dirty, bloquea `teardownEnv()` y puede colarse en un
+  PR.

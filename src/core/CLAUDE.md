@@ -175,6 +175,17 @@ fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
 unidades cuyo fingerprint cambió), F3 contexto de chats nuevos,
 F4 invariantes, F5 loop que aprende. NADIE lo importa aún —
 standalone en F1, cero riesgo al server) ·
+worlds(FUENTE ÚNICA de worldLabelFor(cwd): etiqueta humana "Mi Consola" /
+"Tolkien" / basename, o null si cwd está vacío. `console:BUG-2074`: reemplaza
+las copias de bus.js y chat/index.js, que divergieron cuando solo chat aprendió
+los worktrees de PLAN-1815 aunque bus todavía afirmaba que era la "misma lógica";
+el interfono terminó reportando `world:"tree"` para una sesión Tolkien y la
+ocultó de quien la buscaba por ese mundo. Conserva la variante AMPLIA de bus:
+config.projectDir y TODAS sus subcarpetas son "Mi Consola". ENVS_DIR se deriva
+de config.home
+(~/.cwc-data/tolkien-envs), NO se importa de modules/tolkien/env-store.js:
+core no depende de modules; si el store cambia esa ruta hay que sincronizarla
+acá, precio explícito de no invertir la dependencia) ·
 bus(INTERFONO entre sesiones: BUS DE ARCHIVOS determinístico, 0
 tokens, en ~/.cwc-data/session-bus/. Dos capacidades: (1)
 MENSAJERÍA — sendMessage/pendingFor/markDelivered: una sesión deja
@@ -316,6 +327,10 @@ estilo o de criterio NO entra acá — forzarla degradaría el mecanismo.
 
 ## Gotchas de esta carpeta
 
+- `core/worlds.js` referencia config.projectDir y por eso matchea
+  `CROSS_WORLD_RE` del check de salud `cross-world`; está deliberadamente en
+  `CROSS_WORLD_ALLOW` de `modules/health/index.js`. Cualquier helper nuevo de
+  mundos que haga lo mismo necesitará la misma excepción.
 - **MCP de Pad (getpad.dev) disponible en Consola** (2026-07-10, pedido del
   usuario "integremos la mcp de pad en consola"): igual que Tolkien
   (`~/.claude.json → projects["/home/nmosquera/tolkien"].mcpServers.pad`), el

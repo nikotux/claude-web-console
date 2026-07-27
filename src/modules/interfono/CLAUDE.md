@@ -10,6 +10,17 @@ claims con verdict de evaluateClaim + ts) · POST /send {to,text}
 mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
 de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
 menú ⚙ Sistema (system/interfono-panel.js).
+MENSAJES HUÉRFANOS (`console:BUG-2074`): allMessages() de core/bus.js
+agrega el campo DERIVADO `undeliverable:true` cuando el destino no figura
+en el directorio vivo; NO se persiste. La medición fue 25/36 mensajes para
+sesiones ya inexistentes (handles de entornos efímeros destruidos), incluido
+"REENVIO — MIS 8 MENSAJES ANTERIORES NUNCA TE LLEGARON". No se implementó
+caducidad ni borrado A PROPÓSITO: lo que alguien quiso comunicar no se destruye
+sin decisión humana; el campo lo visibiliza y qué hacer sigue abierto.
+allMessages(directory=null) acepta un directorio ya construido: el endpoint
+le pasa el resultado de buildDirectory(), que ejecuta un subprocess de tmux,
+para no repetirlo dos veces por request. bin/cwc-bus.js sigue llamándolo sin
+argumentos; la firma es retrocompatible.
 CONSCIENTE DE PAQUETES-SESIÓN (2026-07-14, PLAN-469): el interfono
 aprovecha la estructura de sesiones de PLAN-373. (1a) Direccionar por
 REF ESTABLE: `/btw PKG-5 <msg>` — `resolveTarget` de bus.js resuelve

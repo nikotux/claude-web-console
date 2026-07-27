@@ -66,6 +66,11 @@ export default function sessionsHelp() {
                 name: t('sessions.help.states.dormant.name', 'Dormido'),
                 desc: t('sessions.help.states.dormant.desc', 'gris y quieto: nada activo ni delegado — el único estado sin animación'),
               },
+              {
+                emoji: t('sessions.help.legend.env.emoji', '⧉'),
+                name: t('sessions.help.legend.env.name', 'Entorno aislado'),
+                desc: t('sessions.help.legend.env.desc', 'azul frío: la conversación corre en un worktree efímero de Tolkien, no en el Tolkien principal — sus cambios y su base de datos están separados'),
+              },
             ],
           },
         ],

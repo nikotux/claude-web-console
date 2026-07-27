@@ -10,6 +10,9 @@ en curso, siempre con "hace cuánto". BUG-1959: `liveMeta()` parte
 `bgTasks` en `bgLive` (`!ready`) y `bgReady` (`ready`): si queda algún vivo
 gana `⚡ N en segundo plano`; SOLO cuando no hay vivos y sí listos muestra
 `sessions.live.bgReady` con `✅ N listo(s) para recoger`.
+Los chats cuyo cwd es `~/.cwc-data/tolkien-envs/<envId>/tree` se agrupan bajo
+Tolkien, pero en sub-bloques colapsables por entorno: rama, contador, guía de
+árbol e identidad azul fría distinguen el worktree efímero del Tolkien principal.
 En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
 SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
 (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se

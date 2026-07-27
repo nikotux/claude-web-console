@@ -34,6 +34,8 @@ const PATHS = {
   bug: `<path d="M9 8a3 3 0 0 1 6 0"/><rect x="7.5" y="8" width="9" height="10" rx="4.5"/><line x1="12" y1="12" x2="12" y2="18"/><path d="M7.5 11H4M7.5 15H4.5M7.5 18l-2.5 2M16.5 11H20M16.5 15H19.5M16.5 18l2.5 2M9.5 8 8 6M14.5 8 16 6"/>`,
   home: `<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h4v-6h2v6h4a1 1 0 0 0 1-1v-9"/>`,
   gitBranch: `<circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="9" r="2.4"/><path d="M6 8.4V15.6"/><path d="M6 15.6c0-3.6 3-4.8 6-4.8h4.7"/><path d="M18 6.4V6.8"/>`,
+  // Worktree efímero: límite exterior punteado + caja sólida aislada.
+  isolated: `<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2.5 2.5"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" stroke="none"/>`,
   check: `<polyline points="4,13 9,18 20,6"/>`,
   // Estados de ticket/PR del tablero Bugs & PRs (Fase 2 del rediseño: los
   // emoji funcionales 🎫✅/🎫✔/🎫✕/🎫○/◐ de las celdas pasan a SVG de trazo

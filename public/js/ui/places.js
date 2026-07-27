@@ -22,3 +22,22 @@ export function placeFor(p) {
   const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
   return PLACES.find((x) => x.rel === rel) || null;
 }
+
+// Los entornos aislados viven bajo ENVS_DIR de
+// src/modules/tolkien/env-store.js (`~/.cwc-data/tolkien-envs`), y
+// worktreePathFor(id) resuelve cada árbol como `<ENVS_DIR>/<id>/tree`.
+const TOLKIEN_ENV_RE = /^\.cwc-data\/tolkien-envs\/([A-Za-z0-9._-]+)\/tree$/;
+
+export function envPlaceFor(p) {
+  const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
+  const m = rel.match(TOLKIEN_ENV_RE);
+  return m
+    ? { rel: 'tolkien', envId: m[1], label: 'Tolkien', ico: 'isolated', cls: 'is-env', isolated: true }
+    : null;
+}
+
+// Resolución ampliada para superficies que deben reconocer también la capa
+// aislada; placeFor() conserva a propósito su contrato de lugares exactos.
+export function resolvePlace(p) {
+  return placeFor(p) || envPlaceFor(p);
+}

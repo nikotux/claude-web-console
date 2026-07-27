@@ -12,7 +12,7 @@ import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, tierName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
-import { placeFor } from '../../ui/places.js';
+import { resolvePlace } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
@@ -1202,14 +1202,15 @@ export class ChatTab {
   _applyWorld(cwd, world) {
     const el = this.worldEl;
     if (!el) return;
-    const p = cwd ? placeFor(cwd) : null;
-    const label = p?.label || world || '';
+    const p = cwd ? resolvePlace(cwd) : null;
+    const label = p?.isolated ? t('chat.world.envLabel', 'Tolkien (aislado)') : (p?.label || world || '');
     if (!label) { el.hidden = true; return; }
     el.hidden = false;
     el.dataset.world = p?.rel || 'other';
     el.innerHTML = `${icon(p?.ico || 'folder', { size: 12 })}<span>${label}</span>`;
     const _path = cwd ? ` · ${cwd}` : '';
-    el.title = t('chat.world.title', 'Mundo: {label}{path} — acá "GitHub/Pad/cuenta" son los de {label}', { label, path: _path });
+    const _env = p?.isolated ? t('chat.world.envSuffix', ' · entorno {env}', { env: p.envId }) : '';
+    el.title = t('chat.world.title', 'Mundo: {label}{env}{path} — acá "GitHub/Pad/cuenta" son los de {label}', { label, env: _env, path: _path });
   }
 
   _applyFlow(sessionId, cwd) {

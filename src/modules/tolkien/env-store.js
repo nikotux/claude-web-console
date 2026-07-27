@@ -126,7 +126,11 @@ export function isEnvAlive(rec) {
 export function allocatePort() {
   const [min, max] = PORT_RANGE;
   const used = new Set(listEnvs()
-    .filter(isEnvAlive)
+    // El puerto se considera ocupado mientras EXISTA el worktree, no mientras el
+    // dev-server esté vivo: 'down'/'error' describen el server, y un entorno caído
+    // conserva worktree, rama, DB y su puerto reservado — puede revivir. Filtrar por
+    // isEnvAlive acá le regalaba el mismo puerto a dos entornos (BUG-2076).
+    .filter((rec) => rec.worktree && fs.existsSync(rec.worktree))
     .map((rec) => Number(rec.port))
     .filter((port) => Number.isInteger(port)));
   for (let port = min; port <= max; port += 1) {
@@ -135,6 +139,8 @@ export function allocatePort() {
   return null;
 }
 
+// OJO: a diferencia de allocatePort(), acá SÍ se filtra por isEnvAlive y es
+// deliberado: este tope limita dev-servers concurrentes, no worktrees en disco.
 export function atCap() {
   return listEnvs().filter(isEnvAlive).length >= MAX_ENVS;
 }
