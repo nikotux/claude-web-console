@@ -46,15 +46,19 @@ function worldFromCwd(cwd) {
 // sockets). Para un no-admin exige: socket cwc + sesión de la consola (cwc-/cwct-)
 // cuya Session.owner coincida. Otro socket, sesión ajena, o sin dueño conocido
 // (p.ej. rehidratada tras un reinicio → owner=null) → false (fail-closed).
-function ownsSession(req, socketName, session) {
-  const p = principalOf(req);
-  if (p.admin) return true;
-  if (socketName !== config.tmuxSocket) return false;
+function consoleSession(socketName, session) {
+  if (socketName !== config.tmuxSocket) return null;
   let id = null;
   if (session.startsWith(BARE_PREFIX)) id = session.slice(BARE_PREFIX.length);
   else if (session.startsWith(PREFIX)) id = session.slice(PREFIX.length);
-  else return false;
-  const s = sessionManager.get(id);
+  else return null;
+  return sessionManager.get(id) || null;
+}
+
+function ownsSession(req, socketName, session) {
+  const p = principalOf(req);
+  if (p.admin) return true;
+  const s = consoleSession(socketName, session);
   return !!s && s.owner === p.username;
 }
 
@@ -108,6 +112,7 @@ function listSessionsForSocket(sock, opts) {
       // ambas nacen de esta consola en el mismo socket; 'cwct-' NO matchea
       // startsWith('cwc-') porque el 4º carácter es 't', no '-').
       owned: sock.name === config.tmuxSocket && (name.startsWith(PREFIX) || name.startsWith(BARE_PREFIX)),
+      owner: consoleSession(sock.name, name)?.owner ?? null,
       // Modelo: en tiempo real vía observador; si no, inferido del transcript.
       model: st?.model || (cwd ? modelForCwd(cwd) : null),
       state: st ? { status: st.status, ts: st.ts } : null,

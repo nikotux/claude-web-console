@@ -196,6 +196,22 @@ mundo" (solo Chat, no TUI) → chooser de mundos conocidos (ui/places.js
 PLACES, menos el de origen) + confirm; el front solo hace
 syncConversation+refresh (misma tarjeta, se re-agrupa sola). El "mundo"
 se infiere del cwd (no hay campo `world` explícito).
+CICLO DE VIDA DE ENTORNOS TOLKIEN EFÍMEROS (`console:BUG-2086`): el
+heartbeat que nace en `provisionEnv()` NO representa por sí solo la actividad
+posterior de la sesión. `Chat._touchEnv()` refresca `heartbeatAt` del entorno
+referenciado por `tolkienEnv`, con throttle de 5 min; se llama desde
+`_onRunnerEvent()` (cualquier señal de vida del motor) y desde `_startEngine()`.
+Existe porque, sin ese refresco, el reaper podía considerar idle un entorno con
+la sesión trabajando adentro, borrar su worktree y dejar al chat apuntando a un
+`cwd` inexistente. Como defensa inmediata, `_startEngine()` verifica que `cwd`
+exista ANTES de spawnear y empuja un error visible al chat en vez de dejar al
+motor morir y reintentar en silencio. Como reconciliación,
+`ChatManager._sweepDeadEnvRefs()` suelta `chat.tolkienEnv` cuando el worktree ya
+no existe en disco; corre al rehidratar y después de cada ciclo del reaper.
+Además el reaper pasa a `reapEnvs()` los `activeChatIds` de chats no cerrados,
+no archivados y con `alive` true: un entorno cuyo chat tiene el motor VIVO es
+intocable por el corte de idle (el teardown explícito por `closedChatIds` se
+mantiene).
 F3 · ARCHIVAR-NO-BORRAR (2026-07-14, PEND-462; INDEPENDIENTE del move —
 ya NO es efecto del handoff): acción MANUAL para aparcar un chat terminado
 y revivirlo ante feedback días después. `Chat.archive()` (aparca revivible: duerme
@@ -1180,6 +1196,14 @@ comparaciones y reservar Mermaid para flujos con ciclos.
 
 ## Gotchas de esta carpeta
 
+- Arranque multi-tenant: el runner de un INQUILINO nace con el env limpio de
+  `userRunnerEnv` y con `cwd` en su workspace. Si `bin/_env-boot.js` no es el
+  PRIMER import de `bin/cwc-chat-runner.js`, `dotenv/config` busca `.env` en ese
+  workspace y la cadena que arrastra `core/config.js` aborta con
+  `[config] Falta la variable obligatoria CWC_TOKEN en el .env`; el host no
+  revela el bug porque hereda el env completo del server. Ante “El motor de chat
+  no arrancó”, mirar el `.log` del chat en el data dir del usuario:
+  `~/.cwc-users/<usuario>/.cwc-data/chats/<id>.log` para un inquilino.
 - Traspaso Chat↔TUI: regla dura "nunca ambos a la vez"; el cierre del lado
   saliente se ESPERA verificado antes de abrir el otro. El header del chat
   YA NO tiene botón TUI ni contador de costo (se quitaron a pedido): pasar

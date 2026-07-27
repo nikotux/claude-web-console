@@ -22,6 +22,11 @@ export default function sessionsHelp() {
               t('sessions.help.first.step4', 'Usá el contador desplegable para revisar trabajos que siguen corriendo en segundo plano.'),
             ],
           },
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('sessions.help.first.otherUsers', 'Si sos administrador, las sesiones de otros usuarios aparecen agrupadas por dueño en una sección aparte que nace colapsada.'),
+          },
         ],
       },
       {

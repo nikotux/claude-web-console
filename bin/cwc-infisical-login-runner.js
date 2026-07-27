@@ -17,6 +17,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
+import {
+  ensureUserSpace,
+  hasInfisicalCreds,
+  hostUser,
+  userRunnerEnv,
+  userSpace,
+} from '../src/core/user-space.js';
 import { probeInfisicalStatus } from '../src/modules/mcps/infisical-shared.js';
 
 const args = {};
@@ -26,10 +33,13 @@ for (let i = 2; i < process.argv.length - 1; i += 2) {
 }
 
 const ID = args.id;
+const USER = args.user;
 const DOMAIN = args.domain || 'https://app.infisical.com';
-const CWD = args.cwd || os.homedir();
 if (!ID) { console.error('[infisical-login] falta --id'); process.exit(2); }
 
+// El job pertenece siempre al server host, incluso cuando el PTY corre con el
+// HOME aislado de un inquilino. Sin --user se conserva exactamente el flujo
+// histórico de ⚙ Sistema → Conexiones.
 const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'infisical-login');
 const jobFile = path.join(JOBS_DIR, `${ID}.json`);
 const tokenFile = path.join(JOBS_DIR, `${ID}.token`);
@@ -46,6 +56,20 @@ const stripAnsi = (s) => String(s || '')
   .replace(/\x1b[()][AB012]/g, '');
 const URL_RE = /https?:\/\/[^\s'"\x1b]+\/login\?[^\s'"\x1b]*callback_port=\d+/;
 
+const isolatedUser = USER && USER !== hostUser();
+let cwd = args.cwd || os.homedir();
+let env = process.env;
+if (isolatedUser) {
+  try {
+    ensureUserSpace(USER);
+    cwd = userSpace(USER);
+    env = userRunnerEnv(USER);
+  } catch (e) {
+    writeState({ status: 'error', error: 'No pude preparar el espacio del usuario: ' + (e?.message || e) });
+    process.exit(1);
+  }
+}
+
 writeState({ status: 'starting' });
 
 let proc;
@@ -54,8 +78,8 @@ try {
     name: 'xterm-color',
     cols: 1000,
     rows: 50,
-    cwd: CWD,
-    env: process.env,
+    cwd,
+    env,
   });
 } catch (e) {
   writeState({ status: 'error', error: 'No pude lanzar infisical login: ' + e.message });
@@ -89,7 +113,12 @@ async function finalize() {
   finalizing = true;
   if (watch) clearInterval(watch);
   writeState({ status: 'verifying' });
-  const st = await probeInfisicalStatus();
+  // La sonda compartida corre con el HOME del proceso (host). Para un
+  // inquilino, la señal equivalente y suficiente es que el CLI haya escrito
+  // su config dentro del HOME aislado.
+  const st = isolatedUser
+    ? { ok: hasInfisicalCreds(USER), email: null, expiresInText: null }
+    : await probeInfisicalStatus();
   terminal = true;
   if (st.ok) {
     writeState({ status: 'done', done: true, email: st.email, expiresInText: st.expiresInText });

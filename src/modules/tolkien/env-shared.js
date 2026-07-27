@@ -384,7 +384,23 @@ export async function teardownEnv(id, { force = false } = {}) {
     } catch { /* noop */ }
   }
   try { fs.rmSync(path.join(ENVS_DIR, id), { recursive: true, force: true }); } catch { /* noop */ }
-  try { gitBase(['branch', '-D', `cwc-env/${id}`]); } catch { /* noop */ }
+  // BUG-2086: `git branch -D` borraba la rama del entorno aunque tuviera commits
+  // propios — el guard de `force:false` solo mira cambios SIN COMMITEAR, así que
+  // una sesión prolija (que commitea) perdía su trabajo. Si la rama tiene commits
+  // que no están en la base, se CONSERVA: el worktree se va, el trabajo no.
+  const branch = `cwc-env/${id}`;
+  let branchHasWork = false;
+  try {
+    const ahead = gitBase(['rev-list', '--count', `${rec.base || 'main'}..${branch}`]);
+    branchHasWork = Number.parseInt(String(ahead).trim(), 10) > 0;
+  } catch {
+    branchHasWork = true; // ante la duda, NO borrar
+  }
+  if (branchHasWork) {
+    try { appendProvisionLog(id, `branch ${branch} conservada: tiene commits propios`); } catch { /* noop */ }
+  } else {
+    try { gitBase(['branch', '-D', branch]); } catch { /* noop */ }
+  }
   removeEnvRecord(id);
   return { ok: true };
 }
@@ -444,14 +460,20 @@ export async function recloneLiveEnvs() {
   return results;
 }
 
-export async function reapEnvs({ idleMs, closedChatIds = [] }) {
+export async function reapEnvs({ idleMs, closedChatIds = [], activeChatIds = [] }) {
   const now = Date.now();
   const closed = new Set(closedChatIds.map((id) => String(id)));
+  // BUG-2086: un entorno cuyo chat tiene el MOTOR VIVO no se desaloja jamás por
+  // inactividad — su worktree es el cwd de un proceso corriendo. El corte por
+  // idle sigue valiendo para chats dormidos/huérfanos, que es su propósito.
+  const active = new Set(activeChatIds.map((id) => String(id)));
   const hasIdleCutoff = Number.isFinite(idleMs) && idleMs >= 0;
   for (const rec of listEnvs()) {
     if (!rec?.id) continue;
-    const idle = hasIdleCutoff && now - Number(rec.heartbeatAt || 0) > idleMs;
     const closedChat = closed.has(String(rec.chatId));
+    const idle = hasIdleCutoff
+      && !active.has(String(rec.chatId))
+      && now - Number(rec.heartbeatAt || 0) > idleMs;
     if (idle || closedChat) await teardownEnv(rec.id, { force: false });
   }
 }

@@ -20,6 +20,7 @@ import {
   createSession, destroySession, sessionIdOf, SESSION_COOKIE,
 } from './core/auth.js';
 import { verifyUser, getUserLang, setUserLang } from './core/users.js';
+import { hostUser } from './core/user-space.js';
 import { createWsRouter } from './core/wss.js';
 import { registerModules } from './core/registry.js';
 import { warmCache, startCacheSweep } from './core/pad-service-client.js';
@@ -201,7 +202,7 @@ async function main() {
   app.get('/api/whoami', (req, res) => {
     const p = principalOf(req);
     if (p) p.lang = p.type === 'user' ? getUserLang(p.username) : 'es';
-    res.json(p);
+    res.json({ ...p, host: hostUser() });
   });
 
   // Self-service: CADA usuario elige SU idioma de interfaz (no admin-gated,

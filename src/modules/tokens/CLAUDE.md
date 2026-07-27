@@ -2,6 +2,37 @@
 # src/modules/tokens — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+
+## Scope multi-tenant (BUG-1874)
+
+TODO el módulo es user-scoped. Cada handler deriva el dueño exclusivamente de
+`principalOf(req)` (sesión de usuario; el token maestro mapea al host), lo valida
+con `sanitizeUserId()` y nunca acepta un owner por query ni header. Las rutas se
+arman con `userClaudeDir(owner)`, `userDataDir(owner)`, `userSpace(owner)` y
+`userCodexAuthPath(owner)`; para el host estos helpers conservan exactamente sus
+rutas históricas. Las funciones públicas agregan `owner` como ÚLTIMO parámetro
+con `hostUser()` por default (`buildSummary`, `computeFlow`, `getStream`,
+`getSeed`, `mergeDaily`, `readSeries`, `scanCodexUsage`) para mantener
+retrocompatibilidad con callers como `bin/cwc-optimize-runner.js`.
+
+Las cachés TTL, promesas concurrentes, throttles, cursores y buffers efímeros son
+por owner y están acotados a 32 usuarios; solo los caches de parseo por archivo
+siguen globales porque su clave es el path absoluto y ya queda aislada. Para los
+límites de Claude, `fetchPlanLimits(owner)` intenta primero
+`.claude/.credentials.json` si el access token sigue vigente y, si falta, está
+roto o venció, usa `.claude/oauth-token` vía `readUserOauthToken(owner)` (token
+que deja el onboarding). Ninguna credencial viaja al cliente ni se loguea.
+
+GOTCHA (verificado 2026-07-27 comparando host e inquilino en el mismo instante):
+el setup-token `sk-ant-oat01` de `.claude/oauth-token` que deja el onboarding NO
+habilita `api.anthropic.com/api/oauth/usage`; Anthropic responde 429, no 401. Por
+eso un usuario sin `.credentials.json` propia recibe `{unavailable:true}`:
+`reason:'setup-token'` si Anthropic rechaza el fallback, o
+`reason:'sin-credencial'` si no hay ninguno. El front omite en silencio la sección
+Claude (Codex puede aparecer igual) y el consumo local se sigue calculando desde
+los transcripts. Si luego aparece una `.credentials.json` propia, el camino 1 la
+toma automáticamente y los límites vuelven a mostrarse sin cambios.
+
 ### tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
 por mtime+size; buildSummary parsea los .jsonl de cada dir en
 PARALELO con runAdaptivePool — adopción Coherencia 2026-07-06:
@@ -19,12 +50,12 @@ vienen en la UNIDAD MÍNIMA (centavos) con `decimal_places` diciendo
 cuántos decimales → el backend divide por 10^decimal_places para
 pasarlos a dólares ($100 llegaba como 10000; se usa el campo, no un
 /100 hardcodeado). `utilization` YA viene en % (0-100)),
-vía el endpoint OAuth de uso de Anthropic con
-el accessToken de ~/.claude/.credentials.json, la misma credencial
-que hereda el SDK; el archivo SOLO se lee, el token nunca viaja al
-cliente, caché 120 s (subido de 60 s: el medidor OAuth tira 429 si
-se lo consulta seguido) y ?fresh=1 la saltea; si el token venció el
-error dice cómo arreglarlo — jamás refrescarlo desde acá.
+vía el endpoint OAuth de uso de Anthropic con el accessToken vigente
+de `.claude/.credentials.json`; el fallback `.claude/oauth-token` se prueba
+pero, si Anthropic lo rechaza, devuelve el marcador `unavailable` descripto arriba;
+los archivos SOLO se leen, el token nunca viaja al cliente, caché
+120 s (subido de 60 s: el medidor OAuth tira 429 si se lo consulta
+seguido) y ?fresh=1 la saltea — jamás refrescar credenciales desde acá.
 PERSISTENCIA + FALLBACK (2026-07-07, pedido del usuario: el dato
 venía SOLO de memoria y un 429/corte de red/reinicio lo perdía):
 cada respuesta BUENA se guarda en ~/.cwc-data/plan-limits.json
@@ -314,9 +345,10 @@ histórico). Lo consume public/js/rawview/raw.js (ver raw.html en el mapa).
   de entrada. El histórico ya congelado en usage-history.json NO se
   re-atribuye (mismo criterio que el bucket `aprendizaje`).
 
-- Desde 2026-07-24 (BUG-1874) todo el módulo es ADMIN-ONLY: todos sus paths
-  salen de `os.homedir()` y por lo tanto leen la cuenta del host; la
-  contabilidad aislada por usuario queda pendiente.
+- Desde BUG-1874 el panel Uso está habilitado para todo usuario autenticado y
+  cada request queda aislada por su `principalOf(req)`. No reintroducir un gate
+  admin-only ni rutas globales: transcripts, históricos, límites, credenciales,
+  caudal y Vista Raw siempre resuelven dentro del espacio de ese owner.
 
 - Módulo tokens: los TOKENS son exactos (campos `usage` que la API de
   Anthropic reporta en cada mensaje del transcript, dedup por message.id);

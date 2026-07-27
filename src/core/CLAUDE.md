@@ -216,12 +216,21 @@ reparación remota — login/puerto/MCPs rotos, la sesión abría "como la compu
 Nico" heredando `~/.claude` y rutas del host). Cada usuario tiene una RAÍZ
 propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
 `workspace/` — helpers en `src/core/user-space.js` (`userSpace`/`userDataDir`/
-`userClaudeDir`/`userFileRoot`/`userCodexDir`/`userCodexAuthPath`/`hasCodexCreds`/`userPadDir`/`readUserOauthToken`/
+`userClaudeDir`/`userFileRoot`/`userCodexDir`/`userCodexAuthPath`/`hasCodexCreds`/
+`userInfisicalDir`/`userInfisicalConfigPath`/`hasInfisicalCreds`/`userPadDir`/`readUserOauthToken`/
+`userTolkienMcpTokenPath`/`readUserTolkienMcpToken`/`hasTolkienMcpToken`/
 `readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
 HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
 `config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.
 No hay usuarios de SO ni sudo/setuid: el aislamiento se logra apuntando cada
 runner a un directorio de config por-usuario (decisión 🅰, `decision-1784076518`).
+`GET /api/whoami` devuelve `{type, username, admin, lang, host}`: `host` siempre
+es `hostUser()`, incluso para el token maestro, cuyo `username` sigue siendo
+`null`.
+Los helpers de Infisical apuntan a
+`<userSpace>/.infisical/infisical-config.json`, que es donde el CLI persiste su
+sesión; para el host conservan `~/.infisical/` y para un inquilino quedan dentro
+de su raíz aislada.
 
 **Blindaje anticonsumo (regla dura, FAIL-CLOSED, `decision-1784080554`).** Es el
 riesgo #1 de seguridad/costo y HOY el default estaba roto (el runner heredaba

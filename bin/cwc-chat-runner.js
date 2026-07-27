@@ -19,6 +19,8 @@
 // 45 min sin actividad (sale limpio; el próximo mensaje lo relanza con resume)
 // y muere al cerrar la conversación. Los permisos pendientes viven acá con su
 // timeout de 5 min: sobreviven a un server caído y se responden al reconectar.
+// Orden significativo: _env-boot debe ser el PRIMER import; no mover.
+import { scrubEnvSecrets } from './_env-boot.js';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -43,6 +45,7 @@ import {
 } from '../src/modules/chat/codex-shared.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
+import { hostUser } from '../src/core/user-space.js';
 
 // ---- argv ----
 const args = {};
@@ -92,10 +95,14 @@ if (!ID || !CWD || !SOCK) {
 // server ya nos spawnea con env LIMPIO + HOME per-user (runner-link.userRunnerEnv);
 // esto es la CAPA fail-closed de defensa en profundidad: si por un bug el
 // aislamiento no llegó, ABORTAMOS antes de tocar query() en vez de caer a la cuenta
-// del server. Config-free (el runner de inquilino corre sin CWC_TOKEN, no importa core/*).
+// del server.
 const OWNER = args.owner || null;
-const HOST_USER = process.env.CWC_HOST_USER || os.userInfo().username;
-if (OWNER && OWNER !== HOST_USER) {
+const IS_TENANT = !!OWNER && OWNER !== hostUser();
+if (IS_TENANT) {
+  // El helper de env ya permitió que config.js capture la configuración del
+  // host; desde acá el inquilino no debe conservar esos secretos en
+  // process.env (su Bash puede leer /proc/self/environ y los hijos heredan).
+  scrubEnvSecrets();
   const home = process.env.HOME || '';
   // El HOME del inquilino debe ser su root aislado: ~/.cwc-users/<owner>.
   const expected = path.sep + path.join('.cwc-users', OWNER);

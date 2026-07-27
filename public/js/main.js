@@ -336,7 +336,14 @@ async function apiCreateSession(body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('No se pudo crear la sesión');
+  if (!res.ok) {
+    // El backend responde motivos accionables ("Destino de adjuntado
+    // inválido.", "Modelo inválido."); sin esto el modal repetía un texto
+    // genérico y no había forma de diagnosticar desde la UI.
+    let detail = '';
+    try { detail = (await res.json())?.error || ''; } catch { /* respuesta sin JSON */ }
+    throw new Error(detail || `No se pudo crear la sesión (HTTP ${res.status})`);
+  }
   const { session } = await res.json();
   return session;
 }
@@ -633,10 +640,7 @@ whoami.then((me) => {
   const acct = document.getElementById('acct-user');
   if (me?.type === 'user') acct.textContent = me.username;
   else if (me?.type === 'token') acct.textContent = '(token)';
-  if (!me?.admin) {
-    document.querySelector('[data-module="usage"]')?.setAttribute('hidden', '');
-    document.querySelector('a[href="/raw"]')?.setAttribute('hidden', '');
-  }
+  // Ni Uso ni Raw requieren gate: el backend aplica scope por usuario (BUG-1874).
 });
 
 // Mantiene el layout sobre el teclado virtual (móvil). Al enfocar el input del

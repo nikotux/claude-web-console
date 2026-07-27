@@ -12,24 +12,50 @@ import { isAdmin, principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
 import { provisionUserPad } from '../../core/pad-provision.js';
 import { provisionUserWorkspace } from '../../core/workspace-provision.js';
-import { createUser, isValidUsername, setUserLang } from '../../core/users.js';
-import { ensureUserSpace, hasCodexCreds, readUserOauthToken } from '../../core/user-space.js';
+import { createUser, isValidUsername, listUsers, setUserLang } from '../../core/users.js';
+import {
+  ensureUserSpace,
+  hasCodexCreds,
+  hasInfisicalCreds,
+  readUserOauthToken,
+} from '../../core/user-space.js';
 import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite, consumeInvite } from '../../core/onboard-tokens.js';
+import { provisionTolkienMcp, tolkienMcpStatus } from './tolkien-mcp-shared.js';
 
 const DEFAULT_TTL_H = 24;
 
-// Rate-limit simple por IP para la superficie PÚBLICA (anti fuerza-bruta de tokens).
+function redact(s) {
+  return String(s || '')
+    .replace(/mcp_[A-Za-z0-9_-]+/g, 'mcp_****')
+    .replace(/sk-[A-Za-z0-9_-]+/g, 'sk-****');
+}
+
+async function provisionTolkienBestEffort(user) {
+  try {
+    const result = await provisionTolkienMcp(user);
+    if (!result.ok) console.error('[onboard] provisioning de Tolkien MCP best-effort falló:', redact(result.error || result.reason));
+  } catch (e) {
+    console.error('[onboard] provisioning de Tolkien MCP best-effort excepción:', redact(e?.message || e));
+  }
+}
+
+// Rate-limit por IP para la superficie PÚBLICA: las acciones conservan el tope
+// anti fuerza-bruta, mientras los *-status tienen un bucket separado y más
+// amplio porque el wizard los pollea durante sus pasos largos.
 const RL_WINDOW_MS = 60 * 1000;
 const RL_MAX = 30;
-const rlMap = new Map(); // ip -> { count, resetAt }
+const RL_STATUS_MAX = 240;
+const rlMap = new Map(); // ip -> { act, status, resetAt }
 function rateLimit(req, res, next) {
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
   const now = Date.now();
   let e = rlMap.get(ip);
-  if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + RL_WINDOW_MS }; rlMap.set(ip, e); }
-  e.count += 1;
+  if (!e || now > e.resetAt) { e = { act: 0, status: 0, resetAt: now + RL_WINDOW_MS }; rlMap.set(ip, e); }
+  const bucket = req.path.endsWith('-status') ? 'status' : 'act';
+  const max = bucket === 'status' ? RL_STATUS_MAX : RL_MAX;
+  e[bucket] += 1;
   if (rlMap.size > 5000) { for (const [k, v] of rlMap) if (now > v.resetAt) rlMap.delete(k); } // GC oportunista
-  if (e.count > RL_MAX) return res.status(429).json({ error: 'Demasiados intentos, esperá un minuto.' });
+  if (e[bucket] > max) return res.status(429).json({ error: 'Demasiados intentos, esperá un minuto.' });
   next();
 }
 
@@ -37,10 +63,89 @@ function rateLimit(req, res, next) {
 export const publicRouter = express.Router();
 publicRouter.use(rateLimit);
 
+function userExists(username) {
+  return !!username && listUsers().some((user) => user.username === username);
+}
+
+// Resuelve el usuario habilitado a ejecutar un paso del wizard. Acepta la
+// invitación LOCKED (alta en curso) y también la ya CONSUMIDA cuyo usuario
+// existe: es la reentrada para completar pasos pendientes (Codex/Infisical),
+// que nunca puede registrar a nadie porque /register sigue exigiendo
+// validateInvite. Una invitación REVOCADA no habilita nada.
+function stepUser(token) {
+  let v;
+  try {
+    v = validateInvite(token);
+  } catch (e) {
+    return {
+      statusCode: 500,
+      error: 'No se pudo validar la invitación: ' + (e.message || e),
+    };
+  }
+  if (v.valid) {
+    if (v.status === 'locked' && v.lockedTo) return { user: v.lockedTo };
+    return { statusCode: 409, error: 'Registrate primero.' };
+  }
+  if (v.reason === 'ya usado') {
+    let p;
+    try {
+      p = peekInvite(token);
+    } catch (e) {
+      return {
+        statusCode: 500,
+        error: 'No se pudo validar la invitación: ' + (e.message || e),
+      };
+    }
+    if (p.found && p.status === 'consumed' && p.lockedTo) {
+      if (userExists(p.lockedTo)) return { user: p.lockedTo };
+      return { statusCode: 409, error: 'Registrate primero.' };
+    }
+  }
+  return {
+    statusCode: 403,
+    error: `Invitación ${v.reason || 'inválida'}.`,
+  };
+}
+
 publicRouter.post('/validate', (req, res) => {
   try {
-    const v = validateInvite(req.body?.token);
-    res.json({ valid: v.valid, admin: v.admin || false, reason: v.reason || null });
+    const token = req.body?.token;
+    const v = validateInvite(token);
+    // validateInvite mantiene su semántica estricta: una invitación consumida
+    // sigue siendo inválida. Solo para armar el checklist de reentrada leemos
+    // su metadata leniente y recuperamos el usuario al que había quedado atada.
+    let meta = v;
+    if (!v.valid && v.reason === 'ya usado') {
+      const p = peekInvite(token);
+      if (p.found) meta = { ...v, ...p };
+    }
+    const lockedTo = meta.lockedTo || null;
+    const status = meta.status || null;
+    const hasToken = !!(lockedTo && readUserOauthToken(lockedTo));
+    const hasCodex = !!(lockedTo && hasCodexCreds(lockedTo));
+    const hasInfisical = !!(lockedTo && hasInfisicalCreds(lockedTo));
+    const hasTolkienMcp = !!(lockedTo && tolkienMcpStatus(lockedTo).registered);
+    const pending = lockedTo
+      ? [
+        !hasToken && 'claude',
+        !hasCodex && 'codex',
+        !hasInfisical && 'infisical',
+      ].filter(Boolean)
+      : [];
+    const resume = !!(lockedTo && status !== 'revoked' && userExists(lockedTo));
+    res.json({
+      valid: v.valid,
+      admin: meta.admin || false,
+      reason: v.reason || null,
+      status,
+      lockedTo,
+      hasToken,
+      hasCodex,
+      hasInfisical,
+      hasTolkienMcp,
+      pending,
+      resume,
+    });
   } catch (e) {
     res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
   }
@@ -86,7 +191,10 @@ publicRouter.post('/register', (req, res) => {
   // Clon del repo de trabajo (Tolkien) en el workspace del inquilino (SP9-7/TASK-673),
   // best-effort y sin bloquear el registro (idempotente; se reintenta si algun dia se cablea lazy).
   provisionUserWorkspace(username)
-    .then((r) => { if (!r.ok && !r.skipped) console.error('[onboard] clon de workspace best-effort falló:', r.error); })
+    .then(async (r) => {
+      if (!r.ok && !r.skipped) console.error('[onboard] clon de workspace best-effort falló:', r.error);
+      if (r.ok) await provisionTolkienBestEffort(username);
+    })
     .catch((e) => console.error('[onboard] clon de workspace excepción:', e?.message || e));
   res.json({ ok: true, username });
 });
@@ -96,28 +204,44 @@ const ONBOARD_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-onboar
 const JOBS_DIR = path.join(config.home, '.cwc-data', 'onboard-jobs');
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
 const CODEX_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
+const INFISICAL_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-infisical-login-runner.js');
+const INFISICAL_JOBS_DIR = path.join(config.home, '.cwc-data', 'infisical-login');
 function jobPath(user) { return path.join(JOBS_DIR, `${user}.json`); }
 function readJob(user) { try { return JSON.parse(fs.readFileSync(jobPath(user), 'utf8')); } catch { return null; } }
+// ¿El runner de ESE job sigue vivo? Miramos el pid persistido y confirmamos
+// por /proc que sea realmente nuestro runner (un pid se recicla).
+function runnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-onboard-runner.js'); }
+  catch { return false; }
+}
 function codexJobPath(user) { return path.join(CODEX_JOBS_DIR, `${user}.json`); }
 function readCodexJob(user) { try { return JSON.parse(fs.readFileSync(codexJobPath(user), 'utf8')); } catch { return null; } }
+function infisicalJobPath(user) { return path.join(INFISICAL_JOBS_DIR, `${user}.json`); }
+function infisicalTokenPath(user) { return path.join(INFISICAL_JOBS_DIR, `${user}.token`); }
+function readInfisicalJob(user) {
+  try { return JSON.parse(fs.readFileSync(infisicalJobPath(user), 'utf8')); } catch { return null; }
+}
 
 // Inicia el paso de credenciales: spawnea el runner PTY de setup-token en el
-// espacio del inquilino. Requiere que el token esté LOCKED (ya se auto-registró).
+// espacio del inquilino. stepUser también admite la reentrada consumida segura.
 publicRouter.post('/creds-start', (req, res) => {
   const { token } = req.body || {};
-  let v;
-  try {
-    v = validateInvite(token);
-  } catch (e) {
-    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
-  }
-  if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
-  if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
-  const user = v.lockedTo;
-  // Dedup: si ya hay un job fresco en curso, no relanzar.
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const user = step.user;
+  // Dedup: preservar un awaiting-code vivo y proteger starting/exchanging
+  // durante su primer minuto. Un job huérfano nunca bloquea el reintento.
   const job = readJob(user);
-  if (job && ['starting', 'awaiting-code', 'exchanging'].includes(job.status) && (Date.now() - (job.ts || 0)) < 10 * 60 * 1000) {
+  const alive = runnerAlive(job);
+  if (job && ['starting', 'awaiting-code', 'exchanging'].includes(job.status) && alive
+      && (job.status === 'awaiting-code' || (Date.now() - (job.ts || 0)) < 60_000)) {
     return res.json({ ok: true, already: true });
+  }
+  if (alive) {
+    try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
   }
   try {
     // Reserva SINCRÓNICA del job 'starting' en disco ANTES de spawnear (sin
@@ -149,7 +273,15 @@ publicRouter.get('/creds-status', (req, res) => {
   const stale = job.ts && (Date.now() - job.ts) > 30000 && ['starting', 'exchanging'].includes(job.status);
   // SP9-1 (TASK-664): check liviano — ¿el inquilino ya canjeó su suscripción Claude?
   const hasToken = !!(p.lockedTo && readUserOauthToken(p.lockedTo));
-  res.json({ status: job.status, url: job.url || null, done: !!job.done, error: job.error || null, stale: !!stale, hasToken });
+  res.json({
+    status: job.status,
+    url: job.url || null,
+    note: job.note || null,
+    done: !!job.done,
+    error: job.error || null,
+    stale: !!stale,
+    hasToken,
+  });
 });
 
 // Recibe el código pegado por el usuario → lo deja en un archivo que el runner lee.
@@ -179,15 +311,9 @@ publicRouter.post('/creds-code', (req, res) => {
 // sin Codex, el chat degrada a AutoTux (BUG-1875).
 publicRouter.post('/codex-start', (req, res) => {
   const { token } = req.body || {};
-  let v;
-  try {
-    v = validateInvite(token);
-  } catch (e) {
-    return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
-  }
-  if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
-  if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
-  const user = v.lockedTo;
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const user = step.user;
   const job = readCodexJob(user);
   if (job && ['starting', 'awaiting-auth'].includes(job.status) && (Date.now() - (job.ts || 0)) < 15 * 60 * 1000) {
     return res.json({ ok: true, already: true });
@@ -228,10 +354,82 @@ publicRouter.get('/codex-status', (req, res) => {
   });
 });
 
+publicRouter.post('/infisical-start', (req, res) => {
+  const { token } = req.body || {};
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const user = step.user;
+  const job = readInfisicalJob(user);
+  if (job && ['starting', 'awaiting-url', 'exchanging', 'verifying'].includes(job.status)
+      && (Date.now() - (job.ts || 0)) < 10 * 60 * 1000) {
+    return res.json({ ok: true, already: true });
+  }
+  if (hasInfisicalCreds(user)) {
+    return res.json({ ok: true, already: true, connected: true });
+  }
+  try {
+    fs.mkdirSync(INFISICAL_JOBS_DIR, { recursive: true });
+    // Un buzón viejo nunca puede inyectarse en una corrida nueva.
+    try { fs.unlinkSync(infisicalTokenPath(user)); } catch { /* inexistente */ }
+    fs.writeFileSync(
+      infisicalJobPath(user),
+      JSON.stringify({ status: 'starting', id: user, ts: Date.now() }),
+      { mode: 0o600 },
+    );
+    spawn(process.execPath, [
+      INFISICAL_LOGIN_RUNNER,
+      '--id', user,
+      '--user', user,
+      '--domain', 'https://app.infisical.com',
+    ], { detached: true, stdio: 'ignore' }).unref();
+  } catch (e) {
+    return res.status(500).json({ error: 'No pude lanzar el login de Infisical: ' + e.message });
+  }
+  res.json({ ok: true });
+});
+
+publicRouter.get('/infisical-status', (req, res) => {
+  const token = req.query?.token;
+  let p;
+  try {
+    p = peekInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+  }
+  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
+  const job = p.lockedTo ? readInfisicalJob(p.lockedTo) : null;
+  const state = job || { status: 'idle' };
+  const stale = state.status === 'starting' && !!state.ts && (Date.now() - state.ts) > 30000;
+  const hasInfisical = !!(p.lockedTo && hasInfisicalCreds(p.lockedTo));
+  res.json({
+    status: state.status,
+    url: state.url || null,
+    error: state.error || null,
+    stale: !!stale,
+    hasInfisical,
+  });
+});
+
+publicRouter.post('/infisical-token', (req, res) => {
+  const { token, value } = req.body || {};
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const clean = String(value || '').trim();
+  if (!clean || clean.length > 4000) return res.status(400).json({ error: 'Token inválido.' });
+  try {
+    fs.mkdirSync(INFISICAL_JOBS_DIR, { recursive: true });
+    fs.writeFileSync(infisicalTokenPath(step.user), clean, { mode: 0o600 });
+  } catch (e) {
+    return res.status(500).json({ error: 'No pude guardar el token: ' + e.message });
+  }
+  res.json({ ok: true });
+});
+
 // PLAN-500: el consumo vive en el cierre explícito, no en el runner de Claude,
-// para que Claude y los pasos posteriores (Codex) validen el token durante TODO
-// el wizard. Si el usuario abandona antes, queda locked a SU username hasta el
-// TTL: es la misma ventana que ya existía entre registro y credenciales.
+// para que Claude y los pasos posteriores (Codex/Infisical) validen el token
+// durante TODO el wizard. Si el usuario abandona antes, queda locked a SU
+// username hasta el TTL: es la misma ventana que ya existía entre registro y
+// credenciales.
 publicRouter.post('/finish', (req, res) => {
   const { token } = req.body || {};
   let v;
@@ -242,6 +440,7 @@ publicRouter.post('/finish', (req, res) => {
   }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
+  void provisionTolkienBestEffort(v.lockedTo);
   try {
     if (!consumeInvite(token)) return res.json({ ok: true, already: true });
   } catch (e) {

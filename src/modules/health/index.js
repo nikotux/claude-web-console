@@ -284,6 +284,7 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/seguimientos/index.js',     // dashboard LIMBO (Regla dura #13 / PLAN-553): config.projectDir = cwd de la sesión-Limbo; aduana read-only + escritura solo a tickets con OK — no enlaza los Pad
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync
   'src/modules/tolkien/env-shared.js',      // entornos Tolkien efímeros: gestiona git worktrees off config.projectDir (repo propio de Tolkien), no enlaza los Pad
+  'src/modules/onboard/tolkien-mcp-shared.js',  // provisioning del MCP HTTP per-dev del inquilino: usa config.projectDir solo como cwd de `infisical run` para acuñar su bearer, no enlaza los Pad
   'bin/cwc-comms-runner.js',
   'bin/cwc-comms-chatbot-runner.js',
   'bin/cwc-comms-send-runner.js',

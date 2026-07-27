@@ -35,8 +35,8 @@ export const SEED_INVARIANTS = [
   },
   {
     // Familia B · dato user-scoped NUNCA global (PLAN-500/PLAN-592/PLAN-593 SP1).
-    match: /src\/core\/data-dir\.js$|src\/modules\/(chat|tasks|learning|retro|tickets)\//,
-    text: 'DATO USER-SCOPED NUNCA GLOBAL (multi-tenant, PLAN-500/PLAN-592): toda lectura/escritura de estado propio de un usuario resuelve su directorio con `resolveDataDir()` (core/data-dir.js), que honra `CWC_DATA_DIR` — el server inyecta `CWC_DATA_DIR = userDataDir(owner)` en el env del runner del inquilino (userRunnerEnv). PROHIBIDO hardcodear `path.join(os.homedir(), ".cwc-data")` (o `config.home + "/.cwc-data"`) para estado user-scoped: eso lo colaría al root del host y cruzaría datos entre inquilinos. Un módulo nuevo que persista datos de usuario (chat/tasks/learning/retro/tickets) debe derivar su base de resolveDataDir(), no del home del proceso.',
+    match: /src\/core\/data-dir\.js$|src\/modules\/(chat|tasks|learning|retro|tickets|tokens)\//,
+    text: 'DATO USER-SCOPED NUNCA GLOBAL (multi-tenant, PLAN-500/PLAN-592): toda lectura/escritura de estado propio de un usuario resuelve su directorio con `resolveDataDir()` (core/data-dir.js), que honra `CWC_DATA_DIR` — el server inyecta `CWC_DATA_DIR = userDataDir(owner)` en el env del runner del inquilino (userRunnerEnv). PROHIBIDO hardcodear `path.join(os.homedir(), ".cwc-data")` (o `config.home + "/.cwc-data"`) para estado user-scoped: eso lo colaría al root del host y cruzaría datos entre inquilinos. Un módulo nuevo que persista datos de usuario (chat/tasks/learning/retro/tickets/tokens) debe derivar su base de resolveDataDir(), no del home del proceso. El módulo `tokens` resuelve las rutas de consumo (transcripts de Claude, sesiones de Codex, histórico de uso, credenciales de límites) con los helpers de `src/core/user-space.js` (`userClaudeDir`/`userDataDir`/`userCodexAuthPath`) contra el `principalOf(req)` de la request; PROHIBIDO volver a `os.homedir()` ahí (BUG-1874).',
   },
   {
     // Familia C · Pad per-usuario, sin credencial compartida (PLAN-500/PLAN-593 SP1).

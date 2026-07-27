@@ -10,11 +10,11 @@
 // otro camino (ver getCodexBlock en index.js). Todo es best-effort: un rollout
 // corrupto, ausente o todavía escribiéndose no debe romper el resumen de Claude.
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { hostUser, userSpace } from '../../core/user-space.js';
 import { localHourKey } from './time.js';
 
-const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
+const codexSessionsDir = (owner) => path.join(userSpace(owner), '.codex', 'sessions');
 const FILE_CACHE_MAX = 1000;
 const fileCache = new Map();
 
@@ -132,13 +132,14 @@ async function parseCached(file) {
   return { entries: data, mtimeMs: st.mtimeMs };
 }
 
-export async function scanCodexUsage() {
+export async function scanCodexUsage(owner = hostUser()) {
+  const sessionsDir = codexSessionsDir(owner);
   try {
-    const st = await fs.stat(CODEX_SESSIONS_DIR);
+    const st = await fs.stat(sessionsDir);
     if (!st.isDirectory()) return { entries: [], lastMtime: 0 };
 
     const files = [];
-    await collectRollouts(CODEX_SESSIONS_DIR, files);
+    await collectRollouts(sessionsDir, files);
 
     const entries = [];
     let lastMtime = 0;

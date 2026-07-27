@@ -543,6 +543,12 @@ html, body {
 }
 .sess-others[open] summary { margin-bottom: .3rem; }
 .sess-others .sess-card { margin-bottom: .3rem; }
+.sess-owner-head {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .3rem .35rem .15rem; color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-xs); font-weight: 600;
+}
+.sess-owner-head .side-count { margin-left: auto; }
 /* F4 (PLAN-373): header de grupo por MUNDO en Sesiones. */
 .sess-world-h {
   display: flex; align-items: center; gap: .4rem;

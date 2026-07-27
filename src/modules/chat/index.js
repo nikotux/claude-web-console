@@ -76,7 +76,7 @@ import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
-import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv } from '../tolkien/env-store.js';
+import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, heartbeat } from '../tolkien/env-store.js';
 import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs } from '../tolkien/env-shared.js';
 import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
@@ -700,6 +700,7 @@ class Chat {
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
     this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
     this.tolkienEnv = null;
+    this._lastEnvTouch = 0;
     this._provisioningEnv = false;
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
     this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
@@ -767,6 +768,20 @@ class Chat {
     return path.resolve(this.cwd) === path.resolve(config.projectDir);
   }
 
+  // BUG-2086: el heartbeat del entorno efímero solo se escribía en provisionEnv(),
+  // así que reapEnvs() veía "6h de inactividad" y borraba el worktree con la
+  // sesión trabajando adentro. Ahora CUALQUIER señal de vida del motor lo
+  // refresca. Throttle de 5 min: no hace falta escribir el registro en cada
+  // evento del runner (llegan a decenas por turno).
+  _touchEnv() {
+    const envId = this.tolkienEnv?.id;
+    if (!envId) return;
+    const now = Date.now();
+    if (now - (this._lastEnvTouch || 0) < 5 * 60 * 1000) return;
+    this._lastEnvTouch = now;
+    try { heartbeat(envId); } catch { /* best-effort: nunca romper el turno */ }
+  }
+
   // Garantiza UN runner corriendo y conectado (dedup de arranques en paralelo).
   _ensureEngine() {
     if (this.link) return Promise.resolve(true);
@@ -781,10 +796,21 @@ class Chat {
   // acá simplemente nos conectamos al que quedó.
   async _startEngine() {
     const sid = this.sessionId || this.resume;
+    // BUG-2086: si el cwd desapareció (p.ej. el reaper borró el worktree del
+    // entorno efímero), el SDK muere con "Path ... does not exist" y el chat
+    // queda reintentando en silencio para siempre. Fallar acá, VISIBLE.
+    if (!fss.existsSync(this.cwd)) {
+      this._push({
+        type: 'error',
+        message: `La carpeta de esta conversación ya no existe: ${this.cwd}. Mudala a una carpeta válida (Sesiones → mudar de mundo) para retomarla; el historial está intacto.`,
+      });
+      return false;
+    }
     // BUG-496: si ya hay transcript en disco → RETOMAR (--resume); si no (primer
     // arranque de un chat nuevo) → CREAR con NUESTRO UUID (--session-id). Exactamente
     // uno (el SDK prohíbe combinarlos sin forkSession).
     const canResume = transcriptExists(this.cwd, sid);
+    this._touchEnv();
     try {
       // Guardamos el pid para liberar DESPUÉS el spawn-lock propio (BUG-504).
       this._spawnPid = spawnRunner({
@@ -835,6 +861,7 @@ class Chat {
   }
 
   _onRunnerEvent(e) {
+    this._touchEnv();
     this.lastActivity = Date.now();
     if (e.type === 'bg') {
       this._bgTasks = Array.isArray(e.tasks) ? e.tasks : [];
@@ -2187,6 +2214,13 @@ class ChatManager {
     }
     // 4. Flipear el mundo EN EL LUGAR: mismo chat, nuevo cwd, resume de la MISMA sid.
     chat.cwd = dest;
+    // BUG-2086: si la sesión se va del worktree de su entorno efímero, la
+    // referencia al entorno deja de aplicar (provisionTolkienEnvForChat muda
+    // AL worktree, así que ahí el path coincide y la referencia se conserva).
+    if (chat.tolkienEnv?.worktree
+        && path.resolve(chat.tolkienEnv.worktree) !== path.resolve(dest)) {
+      chat.tolkienEnv = null;
+    }
     chat.resume = chat.sessionId;
     chat.history = loadTranscriptEvents(dest, chat.sessionId);
     chat._syncPackage('active', 'moved'); // F2(b): mismo ref, nuevo mundo + evento en el timeline
@@ -2236,6 +2270,22 @@ class ChatManager {
     } finally {
       chat._provisioningEnv = false;
     }
+  }
+
+  // BUG-2086: ni teardownEnv() ni handoff() limpiaban chat.tolkienEnv, así que
+  // la tarjeta seguía anunciando un entorno fantasma (puerto, rama y DB que ya
+  // no existen). Barrido: si el worktree no está en disco, la referencia se cae.
+  _sweepDeadEnvRefs() {
+    let changed = false;
+    for (const chat of this.chats.values()) {
+      const wt = chat.tolkienEnv?.worktree;
+      if (!wt) continue;
+      if (fss.existsSync(wt)) continue;
+      chat.tolkienEnv = null;
+      changed = true;
+    }
+    if (changed) this.persist();
+    return changed;
   }
 
   // ===== Persistencia: las conversaciones sobreviven reinicios del server =====
@@ -2376,10 +2426,19 @@ class ChatManager {
       count += 1;
     }
     try { reattachEnvs(); } catch { /* best-effort */ }
+    try { this._sweepDeadEnvRefs(); } catch { /* noop */ }
     if (!this._tolkienReaperStarted) {
       this._tolkienReaperStarted = true;
       const IDLE = 6 * 60 * 60 * 1000; // 6h sin heartbeat
-      setInterval(() => { reapEnvs({ idleMs: IDLE }).catch(() => {}); }, 30 * 60 * 1000).unref?.();
+      setInterval(() => {
+        // BUG-2086: los chats con motor vivo son intocables para el reaper.
+        const activeChatIds = [...this.chats.values()]
+          .filter((c) => !c.closed && !c.archived && c.alive)
+          .map((c) => c.id);
+        reapEnvs({ idleMs: IDLE, activeChatIds })
+          .then(() => { try { this._sweepDeadEnvRefs(); } catch { /* noop */ } })
+          .catch(() => {});
+      }, 30 * 60 * 1000).unref?.();
     }
     if (adoptedRunnerTandem) this.persist();
     this._cleanupOrphans();

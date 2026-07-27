@@ -13,7 +13,7 @@ No es admin-gated con `isAdmin`. Aplica autorización por principal: un admin ve
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
-| GET | `/api/tmux/sessions` | Enumera sesiones, estado/modelo y título custom; filtra la salida por dueño y poda títulos huérfanos solo con enumeración confiable. |
+| GET | `/api/tmux/sessions` | Enumera sesiones, estado/modelo, título custom y `owner` (username o `null`); filtra la salida por dueño y poda títulos huérfanos solo con enumeración confiable. |
 | GET | `/api/tmux/raw-feed` | Devuelve hasta 20 terminales propias `cwc-`, excluye TUI ocultas `cwct-` y captura las últimas 30 líneas con texto limitado a 4000 caracteres. |
 | POST | `/api/tmux/title` | Guarda o borra el título de `{ socket, session, title }`; recorta a 60 caracteres. |
 | POST | `/api/tmux/set-model` | Valida `{ socket, session, model }` e inyecta `/model <modelo>` + Enter en tmux. |
@@ -34,6 +34,7 @@ Escribe indirectamente `titles.json` en la raíz del repo mediante `core/session
 ## Lo que más duele
 
 - El guard de un no-admin es fail-closed: exige el socket `config.tmuxSocket`, prefijo conocido y una sesión viva en `sessionManager` con owner coincidente. Sesiones ajenas o sin dueño conocido responden como inexistentes (`404`) para no revelar su existencia.
+- El `owner` del censo sale del mismo lookup de `sessionManager` que usa el guard `ownsSession`; vale `null` cuando la sesión no se reconoce. La barra de Sesiones lo usa para agrupar las sesiones ajenas en una sección aparte.
 - `GET /sessions` primero construye el universo completo para podar correctamente y recién después filtra la respuesta. Filtrar antes haría que una consulta de un inquilino borre títulos válidos de otros usuarios.
 - No se poda nada si falla la enumeración de sockets; si falla solo `list-sessions` de un socket, se preservan las claves de ese socket. Un fallo transitorio de tmux no equivale a “sesión muerta”.
 - El estado se busca primero por pane (`stateForPane`) y solo cae a cwd (`stateForCwd`) si no hay observación exacta. Invertirlo vuelve a mezclar dos sesiones de Claude que trabajan en la misma carpeta.

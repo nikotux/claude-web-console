@@ -1,9 +1,11 @@
 // modules/tokens/index.js — uso y costo de tokens de Claude Code.
 //
-// Lee las transcripciones ~/.claude/projects/<proj>/*.jsonl, deduplica por
-// message.id (cada mensaje aparece repetido en el jsonl) y suma
-// input/output/cache. El costo usa precios OFICIALES por modelo. La misma
-// contabilidad que token-usage.sh del proyecto `estadisticas`.
+// Lee las transcripciones del espacio privado de cada usuario
+// (<userSpace>/.claude/projects/<proj>/*.jsonl), deduplica por message.id
+// (cada mensaje aparece repetido en el jsonl) y suma input/output/cache. Para
+// el host, userSpace(host) conserva exactamente el HOME real. El costo usa
+// precios OFICIALES por modelo. La misma contabilidad que token-usage.sh del
+// proyecto `estadisticas`.
 //
 // Se cachea por archivo según mtime+size: solo se re-parsean los que cambiaron.
 //
@@ -36,10 +38,17 @@
 //   con historial persistente no hace falta "poner en cero".
 import express from 'express';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { isAdmin } from '../../core/auth.js';
+import { principalOf } from '../../core/auth.js';
 import { keyOf } from '../../core/claude-model.js';
+import {
+  hostUser,
+  readUserOauthToken,
+  sanitizeUserId,
+  userClaudeDir,
+  userCodexAuthPath,
+  userDataDir,
+} from '../../core/user-space.js';
 import { runAdaptivePool } from '../health/pool.js';
 import {
   mergeDaily, readSeries, buildSeries,
@@ -51,27 +60,27 @@ import { getStream, getSeed } from './stream.js';
 import { localHourKey, localHourStartMs, localTodayStr, localDateStartMs, localDayStr, localHourNow } from './time.js';
 import { scanCodexUsage } from './codex-usage.js';
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const projectsDir = (owner) => path.join(userClaudeDir(owner), 'projects');
 // Estado de la consola: mapea sessionId -> chat. Se usa para atribuir cada
 // transcript a su MOTOR de origen (un .jsonl cuyo sessionId figura acá salió
 // del motor de conversaciones; el resto se clasifica por directorio/entrypoint).
-const CHATS_FILE = path.join(os.homedir(), '.cwc-data', 'chats.json');
+const chatsFile = (owner) => path.join(userDataDir(owner), 'chats.json');
 // Registro DURABLE append-only de sessionIds que ALGUNA VEZ fueron chat (lo
 // escribe el módulo chat, nunca se poda): chats.json solo tiene los VIVOS —
 // un chat cerrado/olvidado (FORGET_MS) salía de ahí y su transcript caía en
 // "Motores headless" aunque fuera una conversación normal en fable/opus.
-const CHAT_IDS_FILE = path.join(os.homedir(), '.cwc-data', 'chat-session-ids.json');
+const chatIdsFile = (owner) => path.join(userDataDir(owner), 'chat-session-ids.json');
 // Backfill retroactivo: cada registro de bugfixes.json ES un chat que trabajó
 // un ticket (clave sessionId) — recupera la atribución de chats cerrados antes
 // de que existiera el registro durable. Solo lectura.
-const BUGFIXES_FILE = path.join(os.homedir(), '.cwc-data', 'bugfixes.json');
+const bugfixesFile = (owner) => path.join(userDataDir(owner), 'bugfixes.json');
 // Registro DURABLE de sessionIds de las corridas del MÓDULO DE APRENDIZAJE
 // (explain/context/analyze), lo escriben esos runners vía learning/session-log.js.
 // Esos transcripts corren con cwd = la consola, así que projectOf() los vería como
 // 'consola'; este registro permite atribuirlos al bucket 'aprendizaje' aparte
 // (pedido del usuario 2026-07-10: auditar tokens de ESTUDIO vs DESARROLLO de la
 // consola). Solo lectura. Mismo archivo que learning/session-log.js declara.
-const LEARNING_IDS_FILE = path.join(os.homedir(), '.cwc-data', 'learning-session-ids.json');
+const learningIdsFile = (owner) => path.join(userDataDir(owner), 'learning-session-ids.json');
 
 // Precio de input por millón, por modelo; el resto se deriva del input.
 // OJO: el costo es un EQUIVALENTE a precios de API — la suscripción del CLI
@@ -245,7 +254,8 @@ function projectOf(dir) {
 // Exportada a propósito: el runner de Optimización IA (bin/cwc-optimize-runner.js)
 // la usa para cruzar el censo de motores con el CONSUMO REAL (solo lectura de
 // transcripts, mismo caché por mtime+size — no toca nada).
-export async function buildSummary() {
+export async function buildSummary(owner = hostUser()) {
+  sanitizeUserId(owner);
   const today = localTodayStr();
   const now = Date.now();
   const fiveHAgo = now - 5 * 3600000;
@@ -258,7 +268,7 @@ export async function buildSummary() {
   let h5cost = 0;
   let dirs = [];
   try {
-    dirs = (await fs.readdir(PROJECTS_DIR, { withFileTypes: true }))
+    dirs = (await fs.readdir(projectsDir(owner), { withFileTypes: true }))
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
@@ -271,15 +281,15 @@ export async function buildSummary() {
   // chats vivos + registro durable de todo-lo-que-fue-chat + bugfixes.
   const chatIds = new Set();
   try {
-    const arr = JSON.parse(await fs.readFile(CHATS_FILE, 'utf8'));
+    const arr = JSON.parse(await fs.readFile(chatsFile(owner), 'utf8'));
     if (Array.isArray(arr)) for (const c of arr) if (c?.sessionId) chatIds.add(c.sessionId);
   } catch { /* noop */ }
   try {
-    const arr = JSON.parse(await fs.readFile(CHAT_IDS_FILE, 'utf8'));
+    const arr = JSON.parse(await fs.readFile(chatIdsFile(owner), 'utf8'));
     if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string' && id) chatIds.add(id);
   } catch { /* noop */ }
   try {
-    const arr = JSON.parse(await fs.readFile(BUGFIXES_FILE, 'utf8'));
+    const arr = JSON.parse(await fs.readFile(bugfixesFile(owner), 'utf8'));
     if (Array.isArray(arr)) for (const r of arr) if (r?.sessionId) chatIds.add(r.sessionId);
   } catch { /* noop */ }
 
@@ -288,7 +298,7 @@ export async function buildSummary() {
   // APARTE, no en 'consola'/'tolkien' (auditar estudio vs desarrollo). Best-effort.
   const learningIds = new Set();
   try {
-    const arr = JSON.parse(await fs.readFile(LEARNING_IDS_FILE, 'utf8'));
+    const arr = JSON.parse(await fs.readFile(learningIdsFile(owner), 'utf8'));
     if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string' && id) learningIds.add(id);
   } catch { /* noop */ }
 
@@ -312,7 +322,7 @@ export async function buildSummary() {
 
   for (const dir of dirs) {
     const proj = projectOf(dir); // consola | tolkien | otros (filtro de las gráficas)
-    const projPath = path.join(PROJECTS_DIR, dir);
+    const projPath = path.join(projectsDir(owner), dir);
     let files = [];
     let lastMtime = 0;
     try {
@@ -422,7 +432,7 @@ export async function buildSummary() {
   // habitual". Todo este bloque es best-effort: el resumen de Claude nunca puede
   // romperse porque un rollout de Codex esté corrupto o en escritura.
   try {
-    const { entries } = await scanCodexUsage();
+    const { entries } = await scanCodexUsage(owner);
     for (const e of entries) {
       const b = { input: e.input, output: e.output, cw1h: 0, cw5m: 0, cr: e.cachedInput };
       const tok = e.input + e.output + e.cachedInput;
@@ -516,7 +526,7 @@ export async function buildSummary() {
   // escalado a un bloque de 5h. En COSTO ($ equivalente), no tokens crudos (ver
   // el comentario de h5cost arriba). Con <3 días de historial no hay base
   // confiable → h5CostBaseline queda null y el front no muestra el comparativo.
-  const h5BaselineWeek = await readSeries('week', 'all');
+  const h5BaselineWeek = await readSeries('week', 'all', owner);
   const h5BaselineFullDays = h5BaselineWeek.points.slice(0, -1); // últimos 6, sin hoy
   const h5BaselineDays = h5BaselineFullDays.length;
   const h5CostBaseline = h5BaselineDays >= 3
@@ -551,31 +561,45 @@ function publicSummary(result) {
 // parseo de TODOS los transcripts tarda ~2 s: con TTL corto cada apertura del
 // modal lo re-disparaba. 15 s se alinea con el poll del pie (15 s) y del modal
 // → la mayoría de las lecturas caen en caché; ?fresh lo saltea (botón Actualizar).
-let summaryCache = null;
-let summaryAt = 0;
 const SUMMARY_TTL_MS = 15000;
 // Promesa compartida: evita buildSummary() concurrentes (dos requests casi
 // simultáneas que pasan el check de TTL antes de que la primera actualice
 // summaryAt re-parsearían todos los transcripts en paralelo).
-let summaryBuildPromise = null;
+const OWNER_CACHE_MAX = 32;
+
+function cacheFor(map, owner) {
+  let slot = map.get(owner);
+  if (slot) {
+    map.delete(owner);
+    map.set(owner, slot);
+    return slot;
+  }
+  slot = { data: null, at: 0, promise: null };
+  map.set(owner, slot);
+  if (map.size > OWNER_CACHE_MAX) map.delete(map.keys().next().value);
+  return slot;
+}
+
+const summaryCaches = new Map();
 
 // buildSummary con caché de TTL + dedup de concurrentes + snapshot al histórico.
 // Fuente ÚNICA para /summary y /history?range=day (ambos necesitan el resultado
 // fresco/cacheado). ?fresh la saltea.
-async function cachedSummary(fresh) {
+async function cachedSummary(fresh, owner = hostUser()) {
+  const slot = cacheFor(summaryCaches, owner);
   const ms = Number(process.hrtime.bigint()) / 1e6;
-  if (!fresh && summaryCache && ms - summaryAt < SUMMARY_TTL_MS) return summaryCache;
-  if (!summaryBuildPromise) {
-    summaryBuildPromise = buildSummary()
+  if (!fresh && slot.data && ms - slot.at < SUMMARY_TTL_MS) return slot.data;
+  if (!slot.promise) {
+    slot.promise = buildSummary(owner)
       .then((result) => {
-        summaryCache = result;
-        summaryAt = Number(process.hrtime.bigint()) / 1e6;
-        mergeDaily(result.daily); // snapshot al histórico (throttle interno 5 min)
+        slot.data = result;
+        slot.at = Number(process.hrtime.bigint()) / 1e6;
+        mergeDaily(result.daily, owner); // snapshot al histórico (throttle interno 5 min)
         return result;
       })
-      .finally(() => { summaryBuildPromise = null; });
+      .finally(() => { slot.promise = null; });
   }
-  return summaryBuildPromise;
+  return slot.promise;
 }
 
 // ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
@@ -584,14 +608,14 @@ async function cachedSummary(fresh) {
 // credencial que ya hereda el Agent SDK; acá SOLO se lee, jamás se escribe
 // ni se refresca: si venció, el error lo dice y se arregla abriendo claude).
 // El token nunca sale hacia el cliente: el server hace de proxy.
-const CREDS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+const credsFile = (owner) => path.join(userClaudeDir(owner), '.credentials.json');
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 // Persistencia a disco del ÚLTIMO resultado bueno de límites/créditos: el dato
 // viene de Anthropic pero un 429 / corte de red / reinicio del server lo perdía
 // (quedaba solo en memoria). Guardamos la última respuesta OK acá para poder
 // SERVIRLA (marcada `stale`) cuando la consulta falla, y de paso reducir las
 // llamadas reales al medidor OAuth. Escritura atómica (tmp+rename).
-const PLAN_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'plan-limits.json');
+const planLimitsFile = (owner) => path.join(userDataDir(owner), 'plan-limits.json');
 
 const LIMIT_LABELS = {
   session: 'Sesión (5 h)',
@@ -599,9 +623,9 @@ const LIMIT_LABELS = {
 };
 
 // Lee el último snapshot bueno persistido (o null si no hay/está corrupto).
-async function readPersistedLimits() {
+async function readPersistedLimits(owner = hostUser()) {
   try {
-    const obj = JSON.parse(await fs.readFile(PLAN_LIMITS_FILE, 'utf8'));
+    const obj = JSON.parse(await fs.readFile(planLimitsFile(owner), 'utf8'));
     return obj && Array.isArray(obj.limits) ? obj : null;
   } catch {
     return null;
@@ -610,36 +634,34 @@ async function readPersistedLimits() {
 
 // Persiste un snapshot bueno (best-effort: si falla el disco, no rompe la
 // respuesta al cliente — el dato en memoria ya se devolvió).
-async function writePersistedLimits(data) {
+async function writePersistedLimits(data, owner = hostUser()) {
+  if (data?.unavailable) return;
+  const file = planLimitsFile(owner);
   try {
-    await fs.mkdir(path.dirname(PLAN_LIMITS_FILE), { recursive: true, mode: 0o700 });
-    const tmp = `${PLAN_LIMITS_FILE}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11)
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11)
     await fs.writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
-    await fs.rename(tmp, PLAN_LIMITS_FILE);
+    await fs.rename(tmp, file);
   } catch { /* best-effort */ }
 }
 
-async function fetchPlanLimits() {
-  let oauth;
+async function fetchPlanLimits(owner = hostUser()) {
+  let oauth = null;
+  let accessToken = null;
+  let tokenSource = null;
   try {
-    oauth = JSON.parse(await fs.readFile(CREDS_FILE, 'utf8')).claudeAiOauth;
-  } catch {
-    // Falla local (credenciales del CLI ilegibles/ausentes): no es culpa de
-    // Anthropic, no amerita 502. `.badRequest` deja que el catch del router
-    // derive el status explícitamente en vez de hardcodear uno.
-    const e = new Error('No se pudieron leer las credenciales del CLI (~/.claude/.credentials.json).');
-    e.badRequest = true;
-    throw e;
+    oauth = JSON.parse(await fs.readFile(credsFile(owner), 'utf8')).claudeAiOauth || null;
+    if (oauth?.accessToken && (!oauth.expiresAt || oauth.expiresAt >= Date.now())) {
+      accessToken = oauth.accessToken;
+      tokenSource = 'credentials';
+    }
+  } catch { /* fallback al token que deja el onboarding */ }
+  if (!accessToken) {
+    accessToken = readUserOauthToken(owner);
+    if (accessToken) tokenSource = 'setup-token';
   }
-  if (!oauth?.accessToken) {
-    const e = new Error('Sin token OAuth del CLI.');
-    e.badRequest = true;
-    throw e;
-  }
-  if (oauth.expiresAt && oauth.expiresAt < Date.now()) {
-    const e = new Error('El token del CLI está vencido: abrí una sesión de claude para refrescarlo.');
-    e.badRequest = true;
-    throw e;
+  if (!accessToken) {
+    return { unavailable: true, reason: 'sin-credencial' };
   }
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 10000);
@@ -647,7 +669,7 @@ async function fetchPlanLimits() {
   try {
     res = await fetch(USAGE_URL, {
       headers: {
-        Authorization: `Bearer ${oauth.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
         'Content-Type': 'application/json',
       },
@@ -663,6 +685,9 @@ async function fetchPlanLimits() {
     clearTimeout(t);
   }
   if (!res.ok) {
+    if (tokenSource === 'setup-token') {
+      return { unavailable: true, reason: 'setup-token' };
+    }
     const e = new Error(`Anthropic respondió ${res.status}.`);
     e.upstream = true;
     throw e;
@@ -729,7 +754,7 @@ async function fetchPlanLimits() {
   return {
     limits,
     credits,
-    subscription: oauth.subscriptionType || null,
+    subscription: oauth?.subscriptionType || null,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -748,9 +773,8 @@ async function fetchPlanLimits() {
 // NUNCA tira abajo el resto de /limits (que sirve los límites de Claude). El
 // CHAT de ChatGPT Max queda deliberadamente AFUERA: no tiene ninguna vía
 // (ni oficial ni semi-oficial) equivalente (decisión de Niko 2026-07-15).
-const CODEX_CREDS_FILE = path.join(os.homedir(), '.codex', 'auth.json');
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
-const CODEX_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'codex-limits.json');
+const codexLimitsFile = (owner) => path.join(userDataDir(owner), 'codex-limits.json');
 
 // Nombre legible del plan de OpenAI que reporta el endpoint.
 const CODEX_PLAN_LABELS = {
@@ -786,32 +810,31 @@ function codexWindowRow(win, label) {
   };
 }
 
-async function readPersistedCodex() {
+async function readPersistedCodex(owner = hostUser()) {
   try {
-    const obj = JSON.parse(await fs.readFile(CODEX_LIMITS_FILE, 'utf8'));
+    const obj = JSON.parse(await fs.readFile(codexLimitsFile(owner), 'utf8'));
     return obj && Array.isArray(obj.limits) ? obj : null;
   } catch {
     return null;
   }
 }
 
-async function writePersistedCodex(data) {
+async function writePersistedCodex(data, owner = hostUser()) {
+  const file = codexLimitsFile(owner);
   try {
-    await fs.mkdir(path.dirname(CODEX_LIMITS_FILE), { recursive: true, mode: 0o700 });
-    const tmp = `${CODEX_LIMITS_FILE}.tmp.${process.pid}`;
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.tmp.${process.pid}`;
     await fs.writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
-    await fs.rename(tmp, CODEX_LIMITS_FILE);
+    await fs.rename(tmp, file);
   } catch { /* best-effort */ }
 }
 
-async function fetchCodexLimits() {
+async function fetchCodexLimits(owner = hostUser()) {
   let auth;
   try {
-    auth = JSON.parse(await fs.readFile(CODEX_CREDS_FILE, 'utf8'));
+    auth = JSON.parse(await fs.readFile(userCodexAuthPath(owner), 'utf8'));
   } catch {
-    const e = new Error('No se pudo leer ~/.codex/auth.json (¿Codex CLI instalado y autenticado?).');
-    e.badRequest = true;
-    throw e;
+    return null;
   }
   const accessToken = auth?.tokens?.access_token;
   const accountId = auth?.tokens?.account_id;
@@ -890,80 +913,82 @@ async function fetchCodexLimits() {
   };
 }
 
-// Caché + promesa compartida de Codex (mismo patrón que Claude).
-let codexCache = null;
-let codexAt = 0;
-let codexFetchPromise = null;
+// Caché + promesa compartida de Codex (mismo patrón que Claude), por usuario.
+const codexCaches = new Map();
 const CODEX_TTL_MS = 120000;
 
 // Devuelve el bloque `codex` para /limits: best-effort — ante cualquier fallo
 // sirve el último snapshot bueno (`stale`) o, si nunca hubo, null (la sección
 // no se muestra). NUNCA lanza: no puede romper la respuesta de límites.
-async function getCodexBlock(fresh = false) {
+async function getCodexBlock(fresh = false, owner = hostUser()) {
+  const slot = cacheFor(codexCaches, owner);
   const now = Number(process.hrtime.bigint()) / 1e6;
-  if (!fresh && codexCache && now - codexAt < CODEX_TTL_MS) return codexCache;
+  if (!fresh && slot.data && now - slot.at < CODEX_TTL_MS) return slot.data;
   try {
-    if (!codexFetchPromise) {
-      codexFetchPromise = fetchCodexLimits()
+    if (!slot.promise) {
+      slot.promise = fetchCodexLimits(owner)
         .then((result) => {
-          codexCache = result;
-          codexAt = Number(process.hrtime.bigint()) / 1e6;
-          writePersistedCodex(result);
+          slot.data = result;
+          slot.at = Number(process.hrtime.bigint()) / 1e6;
+          if (result) writePersistedCodex(result, owner);
           return result;
         })
-        .finally(() => { codexFetchPromise = null; });
+        .finally(() => { slot.promise = null; });
     }
-    return await codexFetchPromise;
+    return await slot.promise;
   } catch (err) {
-    const fallback = codexCache || await readPersistedCodex();
+    const fallback = slot.data || await readPersistedCodex(owner);
     if (fallback) return { ...fallback, stale: true, staleReason: err.message || null };
     return null; // sin ningún dato: la sección de Codex no aparece
   }
 }
 
-// Cache de límites: consulta remota, TTL más largo que el summary local.
-let limitsCache = null;
-let limitsAt = 0;
+// Cache de límites por usuario: consulta remota, TTL más largo que el summary local.
+const limitsCaches = new Map();
 // TTL más largo (2 min): el medidor OAuth de Anthropic devuelve 429 si se lo
 // consulta seguido (compartido con el propio CLI). Con el poll del pie cada 5 s,
 // esto hace que solo ~1 de cada 24 lecturas golpee de verdad a Anthropic.
 const LIMITS_TTL_MS = 120000;
-// Promesa compartida: evita fetchPlanLimits() concurrentes (p.ej. dos
+// Promesa compartida por usuario: evita fetchPlanLimits() concurrentes (p.ej. dos
 // requests casi simultáneas que pasan el check de TTL antes de que la
 // primera actualice limitsAt).
-let limitsFetchPromise = null;
-
-function adminOnly(req, res) {
-  if (isAdmin(req)) return true;
-  res.status(403).json({ error: 'El panel de Uso es de administración: sus datos salen de la cuenta del host.' });
-  return false;
+function ownerOf(req, res) {
+  try {
+    const principal = principalOf(req);
+    const owner = principal?.username || (principal?.type === 'token' ? hostUser() : null);
+    if (!owner) throw new Error('principal sin usuario');
+    return sanitizeUserId(owner);
+  } catch {
+    res.status(400).json({ error: 'Usuario inválido.' });
+    return null;
+  }
 }
 
 export default {
   name: 'tokens',
 
   registerHttp(router) {
-    // BUG-1874: todo este módulo lee consumo y sesiones desde el HOME del host,
-    // así que para un no-admin serían datos ajenos; /stream y /stream/seed
-    // además exponen el texto real que muestra Vista Raw. Gate provisorio hasta
-    // que exista contabilidad aislada por usuario.
+    // BUG-1874: todo el módulo queda aislado por el principal autenticado.
+    // El owner nunca se acepta desde query ni headers.
     const r = express.Router();
 
     // ?fresh=1 saltea el TTL del summary (botón Actualizar del modal Uso);
     // el caché por archivo (mtime+size) queda: solo re-parsea lo que cambió.
     r.get('/summary', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
       try {
-        res.json(publicSummary(await cachedSummary(!!req.query.fresh)));
+        res.json(publicSummary(await cachedSummary(!!req.query.fresh, owner)));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el uso de tokens.' });
       }
     });
 
     r.get('/flow', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
       try {
-        res.json(await computeFlow());
+        res.json(await computeFlow(owner));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo calcular el caudal de tokens.' });
       }
@@ -974,10 +999,11 @@ export default {
     // lluvia estilo Matrix sea lo que se procesa de verdad. ?since=<seq> devuelve
     // solo lo nuevo (multi-ventana safe). 0 tokens, solo lee bytes apendeados.
     r.get('/stream', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
       try {
         const since = Number.parseInt(req.query.since, 10);
-        res.json(await getStream(Number.isFinite(since) ? since : 0));
+        res.json(await getStream(Number.isFinite(since) ? since : 0, owner));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo leer el flujo de texto.' });
       }
@@ -985,9 +1011,10 @@ export default {
 
     // Seed de texto reciente de UNA sesión (para poblar su banda al descubrirla).
     r.get('/stream/seed', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
       try {
-        res.json(await getSeed(String(req.query.sid || '')));
+        res.json(await getSeed(String(req.query.sid || ''), owner));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo leer el seed.' });
       }
@@ -1000,16 +1027,17 @@ export default {
     // Devuelve {range, keys, points, totals}: `totals` (suma por modelo) alimenta
     // la columna "General" del período. 0 tokens.
     r.get('/history', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
       const range = ['day', 'week', 'month'].includes(req.query.range) ? req.query.range : 'week';
       const project = ['all', 'consola', 'tolkien', 'otros', 'aprendizaje'].includes(req.query.project) ? req.query.project : 'all';
       try {
         if (range === 'day') {
-          const sum = await cachedSummary(!!req.query.fresh);
+          const sum = await cachedSummary(!!req.query.fresh, owner);
           const s = sum.hourlyToday[project] || sum.hourlyToday.all;
           return res.json({ ...s, project, updatedAt: sum.updatedAt });
         }
-        res.json(await readSeries(range, project));
+        res.json(await readSeries(range, project, owner));
       } catch (err) {
         res.status(500).json({ error: 'No se pudo leer el histórico de uso.' });
       }
@@ -1018,7 +1046,9 @@ export default {
     // Límites del plan (ventanas de claude.ai): % usado y hora de reset.
     // ?fresh=1 saltea el TTL (botón Actualizar del modal Uso).
     r.get('/limits', async (req, res) => {
-      if (!adminOnly(req, res)) return;
+      const owner = ownerOf(req, res);
+      if (!owner) return;
+      const slot = cacheFor(limitsCaches, owner);
       // Reloj MONOTÓNICO (como /summary): Date.now() retrocede con ajustes
       // NTP y dejaba el caché de límites "fresco" para siempre.
       const now = Number(process.hrtime.bigint()) / 1e6;
@@ -1026,37 +1056,38 @@ export default {
       // Bloque de Codex: best-effort, EN PARALELO con la lógica de Claude — su
       // propia caché/TTL/fallback; null si nunca hubo dato (la sección no sale).
       // Nunca lanza, así que jamás afecta el status de esta respuesta.
-      const codexP = getCodexBlock(fresh);
-      if (!fresh && limitsCache && now - limitsAt < LIMITS_TTL_MS) {
-        return res.json({ ...limitsCache, codex: await codexP });
+      const codexP = getCodexBlock(fresh, owner);
+      if (!fresh && slot.data && now - slot.at < LIMITS_TTL_MS) {
+        return res.json({ ...slot.data, codex: await codexP });
       }
       try {
-        if (!limitsFetchPromise) {
-          limitsFetchPromise = fetchPlanLimits()
+        if (!slot.promise) {
+          slot.promise = fetchPlanLimits(owner)
             .then((result) => {
+              if (result.unavailable) return result;
               // Igual que en /summary: solo la promesa que construyó el
               // resultado actualiza limitsAt, para que el TTL se cuente
               // desde el momento real de la construcción.
-              limitsCache = result;
-              limitsAt = Number(process.hrtime.bigint()) / 1e6;
+              slot.data = result;
+              slot.at = Number(process.hrtime.bigint()) / 1e6;
               // Persiste el último snapshot BUENO a disco (async, no bloquea
               // la respuesta): sobrevive a reinicios del server y sirve de
               // fallback ante un 429/corte de red posterior.
-              writePersistedLimits(result);
+              writePersistedLimits(result, owner);
               return result;
             })
             .finally(() => {
-              limitsFetchPromise = null;
+              slot.promise = null;
             });
         }
-        const result = await limitsFetchPromise;
+        const result = await slot.promise;
         res.json({ ...result, codex: await codexP });
       } catch (err) {
         // FALLBACK: antes un 429/corte de red devolvía el error y el dato
         // "desaparecía" en la UI. Ahora servimos el ÚLTIMO snapshot bueno —
         // de la caché en memoria o, si el server se reinició, del disco —
         // marcado `stale:true` para que el front avise "datos de hace X".
-        const fallback = limitsCache || await readPersistedLimits();
+        const fallback = slot.data || await readPersistedLimits(owner);
         if (fallback) {
           return res.json({ ...fallback, stale: true, staleReason: err.message || null, codex: await codexP });
         }

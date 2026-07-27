@@ -10,9 +10,14 @@
     admin: false,
     lang: 'es',
     codex: '',
+    infisical: '',
     url: '',
+    credsNote: '',
     codexUrl: '',
     codexCode: '',
+    infisicalUrl: '',
+    pending: [],
+    checklist: null,
     finishSent: false,
     error: '',
   };
@@ -20,6 +25,7 @@
   let loading = '';
   let exchanging = false;
   let pollId = null;
+  let pollFails = 0;
   let currentJobKey = '';
 
   function clearPoll() {
@@ -27,10 +33,11 @@
       clearInterval(pollId);
       pollId = null;
     }
+    pollFails = 0;
   }
 
   function setStep(step) {
-    if (['creds', 'codex'].includes(state.step) && step !== state.step) clearPoll();
+    if (['creds', 'codex', 'infisical'].includes(state.step) && step !== state.step) clearPoll();
     state.step = step;
     state.error = '';
     loading = '';
@@ -41,6 +48,53 @@
       apiJson('/finish', { method: 'POST', body: { token: state.token } }).catch(() => {});
     }
     render();
+  }
+
+  function startNamedStep(step) {
+    if (step === 'claude') {
+      setStep('creds');
+      startCreds();
+    } else if (step === 'codex') {
+      setStep('codex');
+      startCodex();
+    } else if (step === 'infisical') {
+      setStep('infisical');
+      startInfisical();
+    } else {
+      setStep('done');
+    }
+  }
+
+  function startNextPending() {
+    startNamedStep(state.pending[0]);
+  }
+
+  function advanceCompleted(step) {
+    if (state.checklist) {
+      state.checklist[step] = true;
+      state.pending = state.pending.filter(function (item) {
+        return item !== step;
+      });
+      startNextPending();
+      return;
+    }
+
+    if (step === 'claude') startNamedStep('codex');
+    else if (step === 'codex') startNamedStep('infisical');
+    else startNamedStep('done');
+  }
+
+  function advanceSkipped(step) {
+    if (state.checklist) {
+      state.pending = state.pending.filter(function (item) {
+        return item !== step;
+      });
+      startNextPending();
+      return;
+    }
+
+    if (step === 'codex') startNamedStep('infisical');
+    else startNamedStep('done');
   }
 
   function setError(message) {
@@ -97,9 +151,9 @@
 
     const steps = document.createElement('div');
     steps.className = 'ob-steps';
-    steps.style.gridTemplateColumns = 'repeat(5, 1fr)';
+    steps.style.gridTemplateColumns = 'repeat(6, 1fr)';
     steps.setAttribute('aria-label', 'Progreso del onboarding');
-    for (let i = 1; i <= 5; i += 1) {
+    for (let i = 1; i <= 6; i += 1) {
       const step = document.createElement('span');
       step.className = i <= activeStep ? 'ob-step is-active' : 'ob-step';
       steps.appendChild(step);
@@ -150,9 +204,25 @@
 
     try {
       const data = await apiJson('/validate', { method: 'POST', body: { token } });
+      state.token = token;
+      state.admin = Boolean(data.admin);
+
+      if (data.resume === true) {
+        state.username = data.lockedTo || '';
+        state.pending = Array.isArray(data.pending) ? data.pending.slice() : [];
+        state.checklist = {
+          claude: Boolean(data.hasToken),
+          codex: Boolean(data.hasCodex),
+          infisical: Boolean(data.hasInfisical),
+        };
+        state.codex = data.hasCodex ? 'connected' : '';
+        state.infisical = data.hasInfisical ? 'connected' : '';
+        if (state.pending.length) setStep('pending');
+        else setStep('done');
+        return;
+      }
+
       if (data.valid === true) {
-        state.token = token;
-        state.admin = Boolean(data.admin);
         setStep('register');
       } else {
         setError('Invitación ' + (data.reason || 'inválida'));
@@ -207,6 +277,7 @@
   async function startCreds() {
     clearPoll();
     state.url = '';
+    state.credsNote = '';
     state.error = '';
     currentJobKey = '';
     renderCredsStatus({ status: 'starting' });
@@ -224,8 +295,11 @@
   async function pollCreds() {
     try {
       const data = await apiJson('/creds-status?token=' + encodeURIComponent(state.token), { method: 'GET' });
+      pollFails = 0;
       renderCredsStatus(data || {});
     } catch (err) {
+      pollFails += 1;
+      if (pollFails < 5) return;
       clearPoll();
       renderCredsStatus({ status: 'error', error: err.message });
     }
@@ -290,6 +364,39 @@
     if (err) form.appendChild(err);
     root.appendChild(form);
     token.focus();
+  }
+
+  function renderPending() {
+    const stepNumbers = { claude: 3, codex: 4, infisical: 5 };
+    const activeStep = stepNumbers[state.pending[0]] || 2;
+    const items = [
+      ['claude', 'Cuenta de Claude'],
+      ['codex', 'Codex (opcional)'],
+      ['infisical', 'Infisical (acceso a Tolkien)'],
+    ];
+
+    root.replaceChildren();
+    root.appendChild(header(
+      'Te falta completar tu configuración',
+      'Entraste como ' + state.username + '. Estos son los pasos que quedaron pendientes.',
+      activeStep
+    ));
+
+    const form = document.createElement('div');
+    form.className = 'ob-form';
+    const list = document.createElement('ul');
+    list.className = 'ob-list';
+    items.forEach(function (item) {
+      const complete = state.checklist && state.checklist[item[0]];
+      list.appendChild(textEl('li', '', (complete ? '✅ ' : '⬜ ') + item[1]));
+    });
+    form.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    actions.appendChild(button('Continuar', 'btn', startNextPending));
+    form.appendChild(actions);
+    root.appendChild(form);
   }
 
   function renderRegister() {
@@ -392,6 +499,9 @@
 
     const second = document.createElement('li');
     second.appendChild(textEl('span', '', 'Copiá el código que te da y pegalo acá:'));
+    if (state.credsNote) {
+      second.appendChild(textEl('p', 'ob-error', state.credsNote));
+    }
     const row = document.createElement('div');
     row.className = 'ob-code-row';
     const code = input('ob-code', 'text', 'Código de autorización', 'one-time-code');
@@ -415,12 +525,16 @@
     const url = job.url || state.url || '';
     const stale = job.stale === true;
     const error = job.error || '';
-    const jobKey = [status, url, stale ? 'stale' : '', error, state.error].join('|');
+    const jobKey = [status, url, stale ? 'stale' : '', error, job.note || '', state.error].join('|');
+
+    if (status === 'awaiting-code') {
+      exchanging = false;
+      state.credsNote = job.note || '';
+    }
 
     if (status === 'done' || job.done) {
       clearPoll();
-      setStep('codex');
-      startCodex();
+      advanceCompleted('claude');
       return;
     }
 
@@ -477,7 +591,7 @@
     actions.className = 'ob-actions';
     actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
       state.codex = 'skipped';
-      setStep('done');
+      advanceSkipped('codex');
     }));
     root.appendChild(actions);
   }
@@ -505,7 +619,7 @@
       if (state.step !== 'codex') return;
       if (data.connected === true) {
         state.codex = 'connected';
-        setStep('done');
+        advanceCompleted('codex');
         return;
       }
       pollId = setInterval(pollCodex, 3000);
@@ -519,8 +633,11 @@
   async function pollCodex() {
     try {
       const data = await apiJson('/codex-status?token=' + encodeURIComponent(state.token), { method: 'GET' });
+      pollFails = 0;
       renderCodexStatus(data || {});
     } catch (err) {
+      pollFails += 1;
+      if (pollFails < 5) return;
       clearPoll();
       renderCodexStatus({ status: 'error', error: err.message });
     }
@@ -591,7 +708,7 @@
     if (job.connected === true || job.done === true || status === 'done') {
       clearPoll();
       state.codex = 'connected';
-      setStep('done');
+      advanceCompleted('codex');
       return;
     }
 
@@ -621,16 +738,212 @@
     renderCodexSpinner('Preparando…');
   }
 
+  function renderInfisicalBase() {
+    root.replaceChildren();
+    root.appendChild(header('Conectá Infisical', 'Es lo que le da acceso a las herramientas de Tolkien.', 5));
+    root.appendChild(textEl('p', 'ob-note', 'Infisical guarda los secretos del proyecto. Sin esta conexión, el MCP de Tolkien queda sin credenciales y las herramientas de Desk/Teams no funcionan. Podés conectarlo más tarde desde ⚙ Sistema → MCPs.'));
+  }
+
+  function appendInfisicalSkip() {
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+      state.infisical = 'skipped';
+      advanceSkipped('infisical');
+    }));
+    root.appendChild(actions);
+  }
+
+  function renderInfisicalSpinner(text) {
+    renderInfisicalBase();
+    const line = document.createElement('div');
+    line.className = 'ob-spinner-line';
+    line.appendChild(document.createElement('span')).className = 'ob-spinner';
+    line.appendChild(textEl('span', '', text));
+    root.appendChild(line);
+    appendInfisicalSkip();
+  }
+
+  async function startInfisical() {
+    clearPoll();
+    state.infisicalUrl = '';
+    state.error = '';
+    currentJobKey = '';
+    renderInfisicalSpinner('Preparando…');
+
+    try {
+      const data = await apiJson('/infisical-start', { method: 'POST', body: { token: state.token } });
+      if (state.step !== 'infisical') return;
+      if (data.connected === true || data.hasInfisical === true || data.status === 'done') {
+        state.infisical = 'connected';
+        advanceCompleted('infisical');
+        return;
+      }
+      pollId = setInterval(pollInfisical, 3000);
+      pollInfisical();
+    } catch (err) {
+      clearPoll();
+      renderInfisicalStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function pollInfisical() {
+    try {
+      const data = await apiJson('/infisical-status?token=' + encodeURIComponent(state.token), { method: 'GET' });
+      pollFails = 0;
+      renderInfisicalStatus(data || {});
+    } catch (err) {
+      pollFails += 1;
+      if (pollFails < 5) return;
+      clearPoll();
+      renderInfisicalStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function sendInfisicalToken() {
+    const tokenEl = document.getElementById('ob-infisical-token');
+    const value = tokenEl ? tokenEl.value.trim() : '';
+    if (!value) {
+      state.error = 'Pegá el token de Infisical.';
+      renderInfisicalStatus({ status: 'awaiting-token', url: state.infisicalUrl });
+      return;
+    }
+
+    exchanging = true;
+    state.error = '';
+    updateInfisicalTokenButton();
+
+    try {
+      await apiJson('/infisical-token', {
+        method: 'POST',
+        body: { token: state.token, value },
+      });
+      renderInfisicalStatus({ status: 'exchanging', url: state.infisicalUrl });
+    } catch (err) {
+      exchanging = false;
+      state.error = err.message;
+      renderInfisicalStatus({ status: 'awaiting-token', url: state.infisicalUrl });
+    }
+  }
+
+  function updateInfisicalTokenButton() {
+    const btn = document.getElementById('ob-infisical-token-btn');
+    if (!btn) return;
+    btn.disabled = exchanging;
+    btn.textContent = exchanging ? 'Confirmando…' : 'Confirmar token';
+  }
+
+  function renderInfisicalAwaitingToken() {
+    renderInfisicalBase();
+
+    const list = document.createElement('ol');
+    list.className = 'ob-list';
+
+    const first = document.createElement('li');
+    first.appendChild(textEl('span', '', 'Abrí este enlace e iniciá sesión en Infisical:'));
+    first.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.className = 'ob-url';
+    link.href = state.infisicalUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = state.infisicalUrl;
+    first.appendChild(link);
+    const copy = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+      try {
+        await navigator.clipboard.writeText(state.infisicalUrl);
+        copy.textContent = 'Copiado';
+      } catch (err) {
+        copy.textContent = 'No se pudo copiar';
+      }
+      window.setTimeout(function () {
+        copy.textContent = 'Copiar enlace';
+      }, 1800);
+    });
+    first.appendChild(copy);
+    list.appendChild(first);
+
+    const second = document.createElement('li');
+    second.appendChild(textEl('span', '', 'Copiá el token que te muestra Infisical y pegalo acá:'));
+    const row = document.createElement('div');
+    row.className = 'ob-code-row';
+    const token = input('ob-infisical-token', 'text', 'Token de Infisical', 'one-time-code');
+    const confirm = button('Confirmar token', 'btn', sendInfisicalToken);
+    confirm.id = 'ob-infisical-token-btn';
+    row.appendChild(token);
+    row.appendChild(confirm);
+    second.appendChild(row);
+    list.appendChild(second);
+
+    root.appendChild(list);
+    const err = message();
+    if (err) root.appendChild(err);
+    updateInfisicalTokenButton();
+    appendInfisicalSkip();
+  }
+
+  function renderInfisicalStatus(job) {
+    if (state.step !== 'infisical') return;
+
+    const status = job.status || (job.done ? 'done' : 'starting');
+    const url = job.url || state.infisicalUrl || '';
+    const stale = job.stale === true;
+    const error = job.error || '';
+    const jobKey = [status, url, stale ? 'stale' : '', error, state.error].join('|');
+
+    if (job.hasInfisical === true || job.done === true || status === 'done') {
+      clearPoll();
+      state.infisical = 'connected';
+      advanceCompleted('infisical');
+      return;
+    }
+
+    if (status === 'error' || stale) {
+      clearPoll();
+      currentJobKey = jobKey;
+      renderInfisicalBase();
+      root.appendChild(textEl('p', 'ob-error', error || 'Parece que se interrumpió.'));
+      const actions = document.createElement('div');
+      actions.className = 'ob-actions';
+      actions.appendChild(button('Reintentar', 'btn', startInfisical));
+      root.appendChild(actions);
+      appendInfisicalSkip();
+      return;
+    }
+
+    if (jobKey === currentJobKey && url) return;
+    currentJobKey = jobKey;
+
+    if (status === 'exchanging') {
+      renderInfisicalSpinner('Verificando el token…');
+      return;
+    }
+
+    if (url) {
+      exchanging = false;
+      state.infisicalUrl = url;
+      renderInfisicalAwaitingToken();
+      return;
+    }
+
+    renderInfisicalSpinner('Preparando…');
+  }
+
   function renderDone() {
     root.replaceChildren();
-    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 5));
+    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 6));
     const list = document.createElement('ul');
     list.className = 'ob-list';
+    const codexConnected = state.codex === 'connected' || (state.checklist && state.checklist.codex);
+    const infisicalConnected = state.infisical === 'connected' || (state.checklist && state.checklist.infisical);
     list.appendChild(textEl('li', '', '✅ Cuenta creada (' + state.username + ')'));
     list.appendChild(textEl('li', '', '✅ Cuenta de Claude conectada'));
-    list.appendChild(textEl('li', '', state.codex === 'connected'
+    list.appendChild(textEl('li', '', codexConnected
       ? '✅ Codex conectado'
       : '⏭ Codex omitido — lo podés conectar después'));
+    list.appendChild(textEl('li', '', infisicalConnected
+      ? '✅ Infisical conectado'
+      : '⏭ Infisical omitido — lo podés conectar después'));
     list.appendChild(textEl('li', '', '✅ Idioma: ' + (state.lang === 'en' ? 'English' : 'Español')));
     root.appendChild(list);
     root.appendChild(textEl('p', 'ob-note', 'Cuando entres, en ⚙ Sistema → Conexiones podés conectar Microsoft y Zoho.'));
@@ -645,9 +958,11 @@
   function render() {
     if (!root) return;
     if (state.step === 'token') renderToken();
+    else if (state.step === 'pending') renderPending();
     else if (state.step === 'register') renderRegister();
     else if (state.step === 'creds') renderSpinner('Preparando…');
     else if (state.step === 'codex') renderCodexSpinner('Preparando…');
+    else if (state.step === 'infisical') renderInfisicalSpinner('Preparando…');
     else renderDone();
   }
 

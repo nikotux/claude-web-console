@@ -71,6 +71,21 @@ const TUI_MODEL_OPTIONS = [
 // derivado. La key coincide con dataset.key (`chat:<id>`).
 const openKidCards = new Set();
 let liveTickTimer = null;
+let me = null;
+let hostName = null;
+let iAmAdmin = false;
+
+// Una sesión autenticada por TOKEN no trae username (whoami.username === null)
+// pero representa al HOST: sin esto, "mío" daba true para todo y la sección de
+// otros usuarios no se dibujaba nunca. Verificado con Playwright contra la
+// instancia real.
+const whoAmI = () => me || hostName;
+const isMine = (owner) => {
+  const yo = whoAmI();
+  if (!yo) return true;      // todavía no sé quién soy: comportamiento histórico
+  if (!owner) return true;   // sin dueño registrado = del host, por retrocompat
+  return owner === yo;
+};
 
 export default {
   name: 'sessions',
@@ -95,7 +110,17 @@ export default {
     const bgBtn = el.querySelector('[data-ref="bg"]');
     const bgCountEl = bgBtn.querySelector('.sess-bg-n');
     let lastData = { sessions: [], chats: [], runners: { processes: [], processCount: 0, dominantModel: null } };
+    let hasRendered = false;
     let bgModal = null;
+    me = null;
+    hostName = null;
+    iAmAdmin = false;
+    Promise.resolve(ctx.whoami).then((user) => {
+      me = user?.username || null;
+      hostName = user?.host || null;
+      iAmAdmin = !!user?.admin;
+      if (hasRendered) render(lastData);
+    }).catch(() => { /* El primer render conserva el comportamiento histórico. */ });
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
     bgBtn.addEventListener('click', openBgModal);
     bus.addEventListener('sessions-changed', refresh);
@@ -422,6 +447,7 @@ export default {
     function render(data) {
       const { sessions, chats } = data;
       lastData = { sessions, chats, runners: runnerInfo(data) };
+      hasRendered = true;
       syncBgButton(lastData);
       if (bgModal) renderBgModal(lastData);
       // Mapa completo (INCLUYE cwct-*) para resolver el estado de un chat en
@@ -438,6 +464,15 @@ export default {
       const others = visible.filter((s) => !s.owned);
       const activeChats = chats.filter((c) => !c.archived);
       const archivedChats = chats.filter((c) => c.archived);
+      const mySessions = owned.filter((s) => isMine(s.owner));
+      const otherSessions = owned.filter((s) => !isMine(s.owner));
+      const myChats = activeChats.filter((c) => isMine(c.owner));
+      const otherChats = activeChats.filter((c) => !isMine(c.owner));
+      const myArchivedChats = archivedChats.filter((c) => isMine(c.owner));
+      const otherUserChats = [
+        ...otherChats,
+        ...archivedChats.filter((c) => !isMine(c.owner)),
+      ];
 
       listEl.innerHTML = '';
       if (!total && !archivedChats.length) {
@@ -450,7 +485,7 @@ export default {
       // header de mundo aparece solo si hay chats en >1 mundo (con uno solo sería
       // ruido). Cada grupo lleva ícono + label + conteo.
       const byWorld = new Map();
-      for (const c of activeChats) {
+      for (const c of myChats) {
         // 🌗 sesión-Limbo (alto riesgo, herramientas de ambos mundos): grupo
         // PROPIO, sin importar el cwd — así se identifica de un vistazo.
         const p = c.limbo ? LIMBO_PLACE : resolvePlace(c.cwd);
@@ -515,15 +550,15 @@ export default {
           listEl.appendChild(det);
         }
       }
-      for (const s of owned) listEl.appendChild(card(s));
+      for (const s of mySessions) listEl.appendChild(card(s));
 
       // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
       // sección colapsada. Tocar una la revive y la abre (ver chatCard).
-      if (archivedChats.length) {
+      if (myArchivedChats.length) {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
-        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${archivedChats.length}</span></summary>`;
-        for (const c of archivedChats) det.appendChild(chatCard(c, tmuxByName));
+        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${myArchivedChats.length}</span></summary>`;
+        for (const c of myArchivedChats) det.appendChild(chatCard(c, tmuxByName));
         listEl.appendChild(det);
       }
 
@@ -532,6 +567,38 @@ export default {
         det.className = 'sess-others';
         det.innerHTML = `<summary>${t('sessions.otherTmux', 'Otras sesiones tmux')} <span class="side-count">${others.length}</span></summary>`;
         for (const s of others) det.appendChild(card(s));
+        listEl.appendChild(det);
+      }
+
+      const otherUserCount = otherUserChats.length + otherSessions.length;
+      if (otherUserCount) {
+        const byOwner = new Map();
+        const ownerGroup = (owner) => {
+          if (!byOwner.has(owner)) byOwner.set(owner, { chats: [], sessions: [] });
+          return byOwner.get(owner);
+        };
+        for (const c of otherUserChats) ownerGroup(c.owner).chats.push(c);
+        for (const s of otherSessions) ownerGroup(s.owner).sessions.push(s);
+
+        const det = document.createElement('details');
+        det.className = 'sess-others sess-owners';
+        try {
+          det.open = localStorage.getItem('cwc.sessions.others.open') === '1';
+        } catch { /* localStorage puede estar bloqueado. */ }
+        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.otherUsers', 'Otros usuarios')} <span class="side-count">${otherUserCount}</span></summary>`;
+        for (const [owner, items] of [...byOwner.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)))) {
+          const head = document.createElement('div');
+          head.className = 'sess-owner-head';
+          head.innerHTML = `<span>${escapeHtml(owner)}</span><span class="side-count">${items.chats.length + items.sessions.length}</span>`;
+          det.appendChild(head);
+          for (const c of items.chats) det.appendChild(chatCard(c, tmuxByName));
+          for (const s of items.sessions) det.appendChild(card(s));
+        }
+        det.addEventListener('toggle', () => {
+          try {
+            localStorage.setItem('cwc.sessions.others.open', det.open ? '1' : '0');
+          } catch { /* localStorage puede estar bloqueado. */ }
+        });
         listEl.appendChild(det);
       }
 

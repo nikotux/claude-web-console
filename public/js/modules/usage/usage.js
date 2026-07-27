@@ -290,6 +290,7 @@ function codexBlockHtml(codex, compact = false) {
 export function renderLimits(el, data, opts = {}) {
   const windows = opts.windows || null;
   const compact = !!opts.compact;
+  const claudeAvailable = !data.unavailable;
   // Etiquetas que se rellenan por textContent (traen nombres del server, evita
   // inyección). Se acumulan en ORDEN DE RENDER (Claude primero, luego Codex).
   const labelTexts = [];
@@ -313,9 +314,9 @@ export function renderLimits(el, data, opts = {}) {
     return limRowHtml(l.percent, [t('usage.remaining', 'queda {n}%', { n: 100 - pct }), fmtReset(l.resetsAt, compact), wt != null ? t('usage.approxTok', '≈ {tok} tok', { tok: fmtTokens(wt) }) : ''], pace);
   }).join('');
 
-  const creditsHtml = opts.credits === false ? '' : claudeCreditsHtml(data.credits);
+  const creditsHtml = !claudeAvailable || opts.credits === false ? '' : claudeCreditsHtml(data.credits);
 
-  const staleHtml = data.stale
+  const staleHtml = claudeAvailable && data.stale
     ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
     : '';
 
@@ -325,11 +326,14 @@ export function renderLimits(el, data, opts = {}) {
     for (const l of data.codex.limits) labelTexts.push(l.label);
   }
 
-  el.innerHTML = `
+  const claudeHtml = claudeAvailable ? `
     <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.claude.head', 'Claude')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${staleHtml}
     ${rows || `<div class="lim-err">${t('usage.claude.noWindows', 'Anthropic no reportó ventanas de límite.')}</div>`}
-    ${creditsHtml}
+    ${creditsHtml}` : '';
+
+  el.innerHTML = `
+    ${claudeHtml}
     ${codexHtml}`;
   // Etiquetas (Claude + Codex) por textContent, en el mismo orden de render.
   const labels = el.querySelectorAll('.lim-row .lim-label');
@@ -513,8 +517,7 @@ export default {
 
   async mount(el, ctx) {
     el.hidden = true;
-    const me = await ctx.whoami;
-    if (!me?.admin) return;
+    // El backend aplica scope por usuario; ya no hace falta el gate (BUG-1874).
     el.hidden = false;
 
     const { dialog, icon } = ctx;
@@ -618,7 +621,16 @@ export default {
       // Pinta TODO desde la caché (0 fetch). chartMode: 'draw' crea la gráfica,
       // 'update' la actualiza en el lugar (sin parpadeo, para el auto-refresh).
       function paint(chartMode) {
-        if (cache.limits) renderLimits(limsEl, cache.limits, { windows: cache.summary?.windows });
+        if (cache.limits) {
+          const hasCodex = cache.limits.codex && Array.isArray(cache.limits.codex.limits);
+          if (cache.limits.unavailable && !hasCodex) {
+            limsEl.hidden = true;
+            limsEl.innerHTML = '';
+          } else {
+            limsEl.hidden = false;
+            renderLimits(limsEl, cache.limits, { windows: cache.summary?.windows });
+          }
+        }
         const liveKeys = liveKeysFrom(cache.summary);
         const s = seriesFor();
         if (!s) { leftEl.innerHTML = loaderHtml; if (!chartInst) chartWrap.innerHTML = loaderHtml; return; }

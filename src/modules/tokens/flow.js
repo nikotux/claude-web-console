@@ -17,8 +17,8 @@
 // seenClaudeIds es un dedupe temporal del ledger (TTL 120 s), no una fuente
 // histórica confiable para reconstruir totales.
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { hostUser, userClaudeDir, userSpace } from '../../core/user-space.js';
 
 const LEDGER_MS = 120000;
 const RECENT_MS = 5 * 60 * 1000;
@@ -30,39 +30,55 @@ const META_CHUNK = 64 * 1024;
 const MAX_META_LINE = 1024 * 1024;
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
-const files = new Map(); // file -> { side, key, total, lastTs, offset, size, mtimeMs, seeded }
-const seenClaudeIds = new Map();
-const fileCwd = new Map();
-let ledger = [];
-let inFlight = false;
-let lastSummary = {
-  claude: { tps: 0, tokens60: 0, lastTs: 0 },
-  codex: { tps: 0, tokens60: 0, lastTs: 0 },
-  bySession: {},
-  byCwd: {},
-  updatedAt: new Date().toISOString(),
-};
+const OWNER_STATE_MAX = 32;
+const ownerStates = new Map();
+
+function stateFor(owner) {
+  let state = ownerStates.get(owner);
+  if (state) {
+    ownerStates.delete(owner);
+    ownerStates.set(owner, state);
+    return state;
+  }
+  state = {
+    files: new Map(), // file -> { side, key, total, lastTs, offset, size, mtimeMs, seeded }
+    seenClaudeIds: new Map(),
+    fileCwd: new Map(),
+    ledger: [],
+    inFlight: false,
+    lastSummary: {
+      claude: { tps: 0, tokens60: 0, lastTs: 0 },
+      codex: { tps: 0, tokens60: 0, lastTs: 0 },
+      bySession: {},
+      byCwd: {},
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  ownerStates.set(owner, state);
+  if (ownerStates.size > OWNER_STATE_MAX) ownerStates.delete(ownerStates.keys().next().value);
+  return state;
+}
 
 function numeric(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
-function prune(now) {
+function prune(now, state) {
   const minTs = now - LEDGER_MS;
-  ledger = ledger.filter((e) => e.ts >= minTs);
-  for (const [id, ts] of seenClaudeIds) {
-    if (ts < minTs) seenClaudeIds.delete(id);
+  state.ledger = state.ledger.filter((e) => e.ts >= minTs);
+  for (const [id, ts] of state.seenClaudeIds) {
+    if (ts < minTs) state.seenClaudeIds.delete(id);
   }
 }
 
-function pruneFiles(now) {
+function pruneFiles(now, state) {
   const minTs = now - SESSION_TTL_MS;
   // Esta purga limita el crecimiento del Map por archivo. Ya no borramos el
   // cursor al enfriarse un log, porque hacerlo perdería deltas escritos entre
   // polls y forzaría un nuevo baseline.
-  for (const [file, e] of files) {
+  for (const [file, e] of state.files) {
     const seenTs = e.lastTs || e.mtimeMs || 0;
-    if (seenTs < minTs) files.delete(file);
+    if (seenTs < minTs) state.files.delete(file);
   }
 }
 
@@ -76,9 +92,9 @@ function bumpGroupedTps(grouped, side, key, tokens) {
   byKey.set(key, (byKey.get(key) || 0) + tokens);
 }
 
-function buildBreakdown(side, instantGrouped) {
+function buildBreakdown(side, instantGrouped, state) {
   const totals = new Map();
-  for (const e of files.values()) {
+  for (const e of state.files.values()) {
     if (e.side !== side || e.key == null || e.total <= 0) continue;
     const cur = totals.get(e.key) || { total: 0, lastTs: 0 };
     cur.total += e.total;
@@ -97,17 +113,17 @@ function buildBreakdown(side, instantGrouped) {
   return out;
 }
 
-function summarize() {
+function summarize(state) {
   const now = Date.now();
-  prune(now);
-  pruneFiles(now);
+  prune(now, state);
+  pruneFiles(now, state);
 
   const global = {
     claude: { instantTokens: 0, tokens60: 0, lastTs: 0 },
     codex: { instantTokens: 0, tokens60: 0, lastTs: 0 },
   };
   const grouped = new Map();
-  for (const e of ledger) {
+  for (const e of state.ledger) {
     const g = global[e.side];
     if (!g) continue;
     if (e.ts >= now - INSTANT_MS) {
@@ -129,8 +145,8 @@ function summarize() {
       tokens60: global.codex.tokens60,
       lastTs: global.codex.lastTs,
     },
-    bySession: buildBreakdown('claude', grouped.get('claude') || new Map()),
-    byCwd: buildBreakdown('codex', grouped.get('codex') || new Map()),
+    bySession: buildBreakdown('claude', grouped.get('claude') || new Map(), state),
+    byCwd: buildBreakdown('codex', grouped.get('codex') || new Map(), state),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -242,7 +258,7 @@ async function seedFile(file, entry, tokensFromLine, st, now) {
   return true;
 }
 
-async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine) {
+async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine, state) {
   const now = Date.now();
   let st;
   try {
@@ -251,7 +267,7 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine)
     return [];
   }
 
-  let entry = files.get(file);
+  let entry = state.files.get(file);
   if (st.mtimeMs < now - RECENT_MS) {
     // El chequeo de archivo frio va primero porque sembrar implica parsear el
     // archivo completo y solo se justifica para sesiones vivas. Con miles de
@@ -270,9 +286,9 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine)
 
   if (!entry) {
     entry = makeFileEntry(side, key, st);
-    files.set(file, entry);
+    state.files.set(file, entry);
     const seeded = await seedFile(file, entry, tokensFromLine, st, now);
-    if (!seeded) files.delete(file);
+    if (!seeded) state.files.delete(file);
     return [];
   }
 
@@ -283,7 +299,7 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine)
 
   if (st.size < entry.offset) {
     const seeded = await seedFile(file, entry, tokensFromLine, st, now);
-    if (!seeded) files.delete(file);
+    if (!seeded) state.files.delete(file);
     return [];
   }
   if (st.size <= entry.offset) {
@@ -337,8 +353,8 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine)
   return out;
 }
 
-async function readCodexCwd(file) {
-  if (fileCwd.has(file)) return fileCwd.get(file);
+async function readCodexCwd(file, state) {
+  if (state.fileCwd.has(file)) return state.fileCwd.get(file);
 
   // El session_meta de Codex ya no cabe en un buffer fijo: desde Codex 0.142.4
   // incluye base_instructions.text completo (~22 KB medidos el 2026-07-22).
@@ -388,7 +404,7 @@ async function readCodexCwd(file) {
     return null;
   }
 
-  fileCwd.set(file, cwd);
+  state.fileCwd.set(file, cwd);
   return cwd;
 }
 
@@ -418,10 +434,10 @@ function claudeTokensFromLine(obj, now) {
   };
 }
 
-function extractClaudeEvent(obj, now) {
+function extractClaudeEvent(obj, now, state) {
   const ev = claudeTokensFromLine(obj, now);
-  if (!ev || seenClaudeIds.has(ev.id)) return null;
-  seenClaudeIds.set(ev.id, ev.ts);
+  if (!ev || state.seenClaudeIds.has(ev.id)) return null;
+  state.seenClaudeIds.set(ev.id, ev.ts);
   return {
     ts: ev.ts,
     tokens: ev.tokens,
@@ -458,8 +474,8 @@ function extractCodexEvent(obj, now) {
   };
 }
 
-async function scanClaude() {
-  const base = path.join(os.homedir(), '.claude', 'projects');
+async function scanClaude(owner, state) {
+  const base = path.join(userClaudeDir(owner), 'projects');
   const projects = await listDir(base);
   for (const dirent of projects) {
     if (!dirent.isDirectory()) continue;
@@ -472,17 +488,18 @@ async function scanClaude() {
         path.join(dir, f.name),
         'claude',
         sid,
-        extractClaudeEvent,
+        (obj, now) => extractClaudeEvent(obj, now, state),
         claudeTokensFromLine,
+        state,
       );
       for (const ev of events) {
-        ledger.push({ ...ev, side: 'claude', key: sid });
+        state.ledger.push({ ...ev, side: 'claude', key: sid });
       }
     }
   }
 }
 
-function localDayDirs() {
+function localDayDirs(owner) {
   const days = [];
   for (let i = 0; i < 2; i += 1) {
     const d = new Date();
@@ -490,47 +507,49 @@ function localDayDirs() {
     const yyyy = String(d.getFullYear());
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
-    days.push(path.join(os.homedir(), '.codex', 'sessions', yyyy, mm, dd));
+    days.push(path.join(userSpace(owner), '.codex', 'sessions', yyyy, mm, dd));
   }
   return days;
 }
 
-async function scanCodex() {
+async function scanCodex(owner, state) {
   const seen = new Set();
-  for (const dir of localDayDirs()) {
+  for (const dir of localDayDirs(owner)) {
     const entries = await listDir(dir);
     for (const f of entries) {
       if (!f.isFile() || !/^rollout-.*\.jsonl$/.test(f.name)) continue;
       const file = path.join(dir, f.name);
       seen.add(file);
-      const cwd = await readCodexCwd(file);
+      const cwd = await readCodexCwd(file, state);
       const events = await readAppendedEvents(
         file,
         'codex',
         cwd,
         extractCodexEvent,
         codexTokensFromLine,
+        state,
       );
       for (const ev of events) {
-        ledger.push({ ...ev, side: 'codex', key: cwd });
+        state.ledger.push({ ...ev, side: 'codex', key: cwd });
       }
     }
   }
   // localDayDirs() solo cubre HOY+AYER: un rollout que sale de esa ventana ya
   // no se vuelve a visitar — soltar su entrada de fileCwd para no acumularla
   // para siempre (mismo criterio que el cursor de arriba).
-  for (const file of fileCwd.keys()) if (!seen.has(file)) fileCwd.delete(file);
+  for (const file of state.fileCwd.keys()) if (!seen.has(file)) state.fileCwd.delete(file);
 }
 
-export async function computeFlow() {
-  if (inFlight) return lastSummary;
-  inFlight = true;
+export async function computeFlow(owner = hostUser()) {
+  const state = stateFor(owner);
+  if (state.inFlight) return state.lastSummary;
+  state.inFlight = true;
   try {
-    await scanClaude();
-    await scanCodex();
+    await scanClaude(owner, state);
+    await scanCodex(owner, state);
   } finally {
-    inFlight = false;
+    state.inFlight = false;
   }
-  lastSummary = summarize();
-  return lastSummary;
+  state.lastSummary = summarize(state);
+  return state.lastSummary;
 }

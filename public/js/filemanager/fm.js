@@ -20,7 +20,12 @@ async function sessionHere(rel, runClaude) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cwd: rel, runClaude }),
     });
-    if (!res.ok) throw new Error('No se pudo crear la sesión.');
+    if (!res.ok) {
+      // Propaga el motivo accionable del backend en vez de ocultarlo.
+      let detail = '';
+      try { detail = (await res.json())?.error || ''; } catch { /* respuesta sin JSON */ }
+      throw new Error(detail || `No se pudo crear la sesión (HTTP ${res.status})`);
+    }
     const { session } = await res.json();
     if (EMBEDDED) window.parent.postMessage({ type: 'cwc-session', id: session.id }, location.origin);
     else location.href = `/?focus=${encodeURIComponent(session.id)}`;

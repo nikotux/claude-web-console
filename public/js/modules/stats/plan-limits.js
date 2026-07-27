@@ -16,14 +16,15 @@ import { t } from '../../ui/i18n.js';
 
 const POLL_MS = 5000;
 
+function canRender(data) {
+  return !data?.unavailable || !!(data.codex && Array.isArray(data.codex.limits));
+}
+
 export default {
   name: 'plan-limits',
 
   async mount(el, ctx) {
     el.hidden = true;
-    const me = await ctx.whoami;
-    if (!me?.admin) return;
-    el.hidden = false;
 
     // classList.add (no className=): el wrapper puede traer clases de layout
     // (p.ej. only-expanded) que NO hay que pisar.
@@ -31,18 +32,38 @@ export default {
     let firstOk = false;
     // Cache-then-network: pinta las últimas barras conocidas al instante.
     const cachedLim = readCache('plan-limits');
-    if (cachedLim) { try { renderLimits(el, cachedLim.data, { credits: false, compact: true }); firstOk = true; } catch { /* noop */ } }
+    if (cachedLim) {
+      try {
+        if (canRender(cachedLim.data)) {
+          el.hidden = false;
+          renderLimits(el, cachedLim.data, { credits: false, compact: true });
+        } else {
+          el.innerHTML = '';
+        }
+        firstOk = true;
+      } catch { /* noop */ }
+    }
     async function tick() {
       if (document.hidden) return;
       try {
         const data = await fetchLimits(); // sin fresh: reusa el caché de 60 s
         writeCache('plan-limits', data);
+        if (!canRender(data)) {
+          el.hidden = true;
+          el.innerHTML = '';
+          firstOk = true;
+          return;
+        }
+        el.hidden = false;
         renderLimits(el, data, { credits: false, compact: true });
         firstOk = true;
       } catch {
         // Sin datos aún (token vencido / sin red): mostramos una nota discreta
         // solo si nunca llegó a pintar; si ya había datos, dejamos los viejos.
-        if (!firstOk) el.innerHTML = `<div class="lim-head">${t('stats.limits.title', 'Límites del plan')}</div><div class="lim-err">${t('stats.limits.noData', 'sin datos')}</div>`;
+        if (!firstOk) {
+          el.hidden = false;
+          el.innerHTML = `<div class="lim-head">${t('stats.limits.title', 'Límites del plan')}</div><div class="lim-err">${t('stats.limits.noData', 'sin datos')}</div>`;
+        }
       }
     }
     tick();

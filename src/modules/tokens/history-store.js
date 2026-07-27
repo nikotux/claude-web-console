@@ -23,13 +23,14 @@
 //     buildSummary.hourlyToday, que necesita resolución horaria).
 //   • buildSeries(range, entries): helper compartido (lo reusa index.js).
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { hostUser, userDataDir } from '../../core/user-space.js';
 import { localTodayStr, localDateStartMs, localDayStr } from './time.js';
 
-const HISTORY_FILE = path.join(os.homedir(), '.cwc-data', 'usage-history.json');
+const historyFile = (owner) => path.join(userDataDir(owner), 'usage-history.json');
 const RETAIN_DAYS = 400;
 const WRITE_THROTTLE_MS = 300000;
+const OWNER_STATE_MAX = 32;
 
 // Orden CANÓNICO por PRECIO (más económico → más costoso): fija el apilado de la
 // gráfica (base = más barato) y la leyenda. Es el orden de las `keys` de las
@@ -46,13 +47,28 @@ const MODEL_ORDER = ['haiku', 'sonnet', 'opus', 'fable', 'codex', 'unknown'];
 export const PROJECTS = ['consola', 'tolkien', 'otros', 'aprendizaje'];
 export const DAY_MS = 86400000;
 
-let lastWriteMs = 0;
+const ownerWriteTimes = new Map();
+
+function lastWriteFor(owner) {
+  const at = ownerWriteTimes.get(owner) || 0;
+  if (ownerWriteTimes.has(owner)) {
+    ownerWriteTimes.delete(owner);
+    ownerWriteTimes.set(owner, at);
+  }
+  return at;
+}
+
+function setLastWrite(owner, at) {
+  ownerWriteTimes.delete(owner);
+  ownerWriteTimes.set(owner, at);
+  if (ownerWriteTimes.size > OWNER_STATE_MAX) ownerWriteTimes.delete(ownerWriteTimes.keys().next().value);
+}
 
 function emptyStore() { return { days: {}, months: {}, updatedAt: null }; }
 
-async function loadHistory() {
+async function loadHistory(owner) {
   try {
-    const obj = JSON.parse(await fs.readFile(HISTORY_FILE, 'utf8'));
+    const obj = JSON.parse(await fs.readFile(historyFile(owner), 'utf8'));
     if (obj && typeof obj === 'object') {
       return { days: obj.days || {}, months: obj.months || {}, updatedAt: obj.updatedAt || null };
     }
@@ -60,12 +76,13 @@ async function loadHistory() {
   return emptyStore();
 }
 
-async function writeHistory(store) {
+async function writeHistory(store, owner) {
+  const file = historyFile(owner);
   try {
-    await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true, mode: 0o700 });
-    const tmp = `${HISTORY_FILE}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11): dos escritores no comparten tmp → sin corrupción del histórico de 400 días
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.tmp.${process.pid}`; // tmp por-PID (fix B4 2026-07-11): dos escritores no comparten tmp → sin corrupción del histórico de 400 días
     await fs.writeFile(tmp, JSON.stringify(store), { mode: 0o600 });
-    await fs.rename(tmp, HISTORY_FILE);
+    await fs.rename(tmp, file);
   } catch { /* best-effort */ }
 }
 
@@ -99,16 +116,16 @@ function modelsFor(dayVal, project) {
 }
 
 // UPSERT de los días de transcripts (nested {proyecto:{modelo:bucket}}) + poda.
-export async function mergeDaily(daily) {
+export async function mergeDaily(daily, owner = hostUser()) {
   if (!daily || typeof daily !== 'object') return;
   // Throttle con reloj MONOTÓNICO (hrtime), NO de pared: un salto del reloj del
   // sistema (NTP/DST) no debe congelar ni disparar el snapshot de 5 min. Mismo
   // patrón que summaryAt/limitsAt en tokens/index.js. (El `updatedAt` sí usa la
   // hora de pared, más abajo, porque es un timestamp para mostrar.)
   const mono = Number(process.hrtime.bigint()) / 1e6;
-  if (mono - lastWriteMs < WRITE_THROTTLE_MS) return;
+  if (mono - lastWriteFor(owner) < WRITE_THROTTLE_MS) return;
 
-  const store = await loadHistory();
+  const store = await loadHistory(owner);
   for (const [day, projects] of Object.entries(daily)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
     store.days[day] = projects;
@@ -127,8 +144,8 @@ export async function mergeDaily(daily) {
   }
 
   store.updatedAt = new Date().toISOString();
-  lastWriteMs = mono;
-  await writeHistory(store);
+  setLastWrite(owner, mono);
+  await writeHistory(store, owner);
 }
 
 // Une las claves de modelo presentes en el orden canónico por PRECIO.
@@ -157,8 +174,8 @@ export function buildSeries(range, entries) {
 
 // Serie por día filtrada por proyecto. range: 'week'=7 días · 'month'=30 días.
 // project: 'all'|'consola'|'tolkien'|'otros'|'aprendizaje'.
-export async function readSeries(range = 'week', project = 'all') {
-  const store = await loadHistory();
+export async function readSeries(range = 'week', project = 'all', owner = hostUser()) {
+  const store = await loadHistory(owner);
   const n = range === 'month' ? 30 : 7;
   const anchor = localDateStartMs(localTodayStr());
   const entries = [];

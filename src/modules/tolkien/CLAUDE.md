@@ -42,7 +42,9 @@ validación anti-traversal) · src/modules/tolkien/env-shared.js
 desacoplado, teardownEnv con GUARDA de dirty [no descarta cambios sin
 commitear salvo force], reattachEnvs [reconcilia registro vs systemctl
 --user is-active tras reinicio], reapEnvs [idle, force:false — NUNCA
-descarta dirty]) + bin/cwc-tolkien-env-runner.js. AUTO-PROVISIÓN (hook,
+descarta dirty; acepta activeChatIds: un entorno cuyo chat tiene el motor
+VIVO es intocable por el corte de idle, console:BUG-2086]) +
+bin/cwc-tolkien-env-runner.js. AUTO-PROVISIÓN (hook,
 PLAN-1819): un chat cuyo cwd es EXACTAMENTE el Tolkien base (no un
 worktree) en modo escribible instala un hook PreToolUse
 (tolkienEnvPreToolUseHook de core/tool-policy.js, arg --tolkien-env-auto)
@@ -163,3 +165,14 @@ tras Actualizar y al abrir la ventana.
   archivo generado, verificar ANTES que esté ignorado; un untracked deja
   `git status --porcelain` dirty, bloquea `teardownEnv()` y puede colarse en un
   PR.
+- El corte por idle del reaper NO mide actividad de la sesión por sí solo
+  (`console:BUG-2086`): `heartbeat(id)` se escribe en `provisionEnv()` y lo refresca
+  `Chat._touchEnv()` desde `chat/index.js` (throttle de 5 min, disparado por
+  `_onRunnerEvent`). Si algún día se spawnea un entorno por un camino que NO pase por
+  un chat con `tolkienEnv` seteado, ese entorno nace con el latido congelado y el
+  reaper lo desaloja a las 6h aunque esté en uso. La segunda red es `activeChatIds`,
+  no el latido. Y `teardownEnv()` conserva la rama `cwc-env/<id>` cuando tiene
+  commits propios: el guard de `force:false` solo mira cambios SIN COMMITEAR, así que
+  antes una sesión que commiteaba perdía su trabajo. Consecuencia deliberada: pueden
+  quedar ramas `cwc-env/*` acumuladas — se limpian a mano, es el precio de no perder
+  commits.

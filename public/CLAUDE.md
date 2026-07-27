@@ -244,6 +244,11 @@ queda como pulido futuro, no implementado.
 
 ## Gotchas de esta carpeta
 
+- `apiCreateSession` (`js/main.js`) propaga el campo `error` que devuelve el
+  backend para que el modal muestre el motivo accionable. Todo helper `fetch`
+  nuevo del frontend debe hacer lo mismo: un modal que repite un texto genérico
+  deja al usuario y al operador sin diagnóstico.
+
 - `#sidebar` en móvil (`@media (max-width:768px)` de style.css): overlay con
   ancho `min(78vw, 300px)` (tope en px para que NO crezca proporcional en
   teléfonos grandes) + `#sidebar-scrim` (velo, `--cwc-scrim`, ~index.html

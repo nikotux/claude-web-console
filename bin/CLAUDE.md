@@ -92,8 +92,32 @@ instalación nueva se crea antes de arrancar el servicio.
 ### bin/cwc-infisical-login-runner.js  LOGIN GUIADO de Infisical para la pestaña Conexiones:
 runner PTY (node-pty, `infisical login --domain <base>` exige TTY),
 estado en `~/.cwc-data/infisical-login/infisical.json`, token por
-archivo 0600 efímero que se borra apenas se escribe al pty, y éxito
-declarado solo tras re-verificar `infisical login status`.
+archivo 0600 efímero que se borra apenas se escribe al pty. En el flujo host
+declara éxito tras re-verificar `infisical login status`. Acepta
+`--user <userId>` para onboarding: si es un inquilino, prepara su espacio y
+corre el PTY con HOME aislado por `userRunnerEnv` y cwd=`userSpace(user)`, de
+modo que la sesión queda en SU `.infisical/` y el éxito se detecta por su
+`infisical-config.json`; el job y el buzón `.token`
+permanecen siempre en `~/.cwc-data/infisical-login/` del HOST porque el server
+los escribe y consulta. Sin `--user` conserva exactamente el comportamiento
+histórico del host (mismo cwd/env/jobs).
+### bin/cwc-onboard-runner.js  CANJE GUIADO de credenciales Claude por usuario durante onboarding:
+runner PTY de `claude setup-token` con HOME/workspace aislados mediante
+`userRunnerEnv`; publica estado + `pid` en
+`~/.cwc-data/onboard-jobs/<user>.json` y vuelca salida sin ANSI en
+`<user>.log` mode 600. TODA escritura al log y todo `note` pasan por redacción
+obligatoria de `sk-ant-*`: el secreto solo se guarda en
+`userOauthTokenPath(user)`. Vigila `<user>.code` durante toda la corrida:
+acepta múltiples intentos y, si un canje no produce token en 20 s, vuelve a
+`awaiting-code` con un `note` diagnóstico para reintentar desde el wizard:
+filtra URLs y ruido de UI y busca la última línea que parezca un error real;
+si no la hay, devuelve un mensaje accionable fijo. El volcado completo queda
+solo en `<user>.log`.
+GOTCHA: escribe el código al PTY y manda Enter en una llamada SEPARADA 300 ms
+después, porque Ink trata un `\r` pegado a texto largo como parte del pegado y
+nunca envía; verificado en el log del PTY (35 chars se enviaban, 92 no). Era la
+causa raíz de los canjes que morían en `exchanging`.
+SIGTERM/SIGINT dejan `error:cancelado` y matan el PTY; timeout duro: 10 min.
 ### bin/cwc-codex-login-runner.js  LOGIN GUIADO de Codex por usuario para onboarding y ⚙ Sistema
 → Conexiones: runner PTY de `codex login --device-auth` (el login normal
 abre callback en localhost:1455, inservible desde un navegador contra un
@@ -104,7 +128,19 @@ HOST — no en el HOME aislado — porque lo spawnea y consulta el server.
 Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
 NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
 `cancelled` del job y corta el PTY. Timeout duro: 15 min.
+### bin/_env-boot.js           bootstrap explícito del `.env` del REPO para runners cuyo
+`cwd` está fuera del repo. Resuelve el fallo de `core/config.js` en procesos de
+INQUILINO spawneados con `userRunnerEnv`: `dotenv/config` buscaría el `.env`
+contra el workspace y abortaría por falta de `CWC_TOKEN`. También expone
+`scrubEnvSecrets()`, que no corre al importar y permite retirar del entorno los
+secretos del host después de que config los capturó. REGLA: debe ser el PRIMER
+import de cualquier runner que use `userRunnerEnv` y cuya cadena de imports
+arrastre `core/config.js`.
 ### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix).
+GOTCHA multi-tenant: `_env-boot.js` debe ser su PRIMER import. Sin él, el chat
+de un inquilino muere al arrancar con
+`[config] Falta la variable obligatoria CWC_TOKEN en el .env`; el host no lo
+detecta porque su runner hereda el env completo del server.
 RADAR TÁNDEM (BUG-1959): `bgWork` distingue trabajo VIVO de resultado Codex
 LISTO para recoger. `sweepCodexBg()` cruza cada entrada `kind==='Codex'` con
 `readCodexJob(id)` del store `~/.cwc-data/codex-jobs/`; si el job está

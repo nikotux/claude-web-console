@@ -13,6 +13,13 @@ gana `⚡ N en segundo plano`; SOLO cuando no hay vivos y sí listos muestra
 Los chats cuyo cwd es `~/.cwc-data/tolkien-envs/<envId>/tree` se agrupan bajo
 Tolkien, pero en sub-bloques colapsables por entorno: rama, contador, guía de
 árbol e identidad azul fría distinguen el worktree efímero del Tolkien principal.
+Para administradores, chats y sesiones tmux gestionadas de otros usuarios se
+agrupan por `owner` en `.sess-owners`, separado de "Otras sesiones tmux". El
+helper `isMine(owner)` resuelve la identidad contra `whoami.username` o, cuando
+la sesión se autentica por token y ese username es nulo, contra `whoami.host`;
+`owner:null` sigue siendo propio por retrocompatibilidad con sesiones históricas
+del host. El estado abierto del grupo ajeno se persiste en `localStorage` bajo
+`cwc.sessions.others.open`.
 En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
 SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
 (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se

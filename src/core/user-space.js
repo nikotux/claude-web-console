@@ -2,9 +2,8 @@
 //
 // Cada usuario tiene un root privado en ~/.cwc-users/<userId>/ con sus
 // subdirectorios .claude, .cwc-data, workspace, etc. Estas funciones son
-// plomería server-side: el SERVER las usa para direccionar ese root y armar
-// el env limpio del runner por-usuario. El RUNNER nunca las llama; él recibe
-// HOME y CWC_DATA_DIR ya inyectados en su entorno.
+// plomería server-side: el SERVER y los runners guiados las usan para
+// direccionar ese root y armar el env limpio por-usuario.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +58,25 @@ export function hasCodexCreds(userId) {
   }
 }
 
+// El CLI de Infisical guarda su sesión en
+// ~/.infisical/infisical-config.json; alcanza con detectar ese archivo dentro
+// del espacio del usuario.
+export function userInfisicalDir(userId) {
+  return path.join(userSpace(userId), '.infisical');
+}
+
+export function userInfisicalConfigPath(userId) {
+  return path.join(userInfisicalDir(userId), 'infisical-config.json');
+}
+
+export function hasInfisicalCreds(userId) {
+  try {
+    return fs.existsSync(userInfisicalConfigPath(userId));
+  } catch {
+    return false;
+  }
+}
+
 // Directorio de datos persistentes de la consola para ese usuario.
 export function userDataDir(userId) {
   return path.join(userSpace(userId), '.cwc-data');
@@ -102,6 +120,26 @@ export function readUserOauthToken(userId) {
     const t = fs.readFileSync(userOauthTokenPath(userId), 'utf8').trim();
     return t || null;
   } catch { return null; }
+}
+
+// Token per-dev del MCP hosteado de Tolkien; gemelo del oauth-token del usuario.
+export function userTolkienMcpTokenPath(userId) {
+  return path.join(userClaudeDir(userId), 'tolkien-mcp-token');
+}
+
+export function readUserTolkienMcpToken(userId) {
+  try {
+    const t = fs.readFileSync(userTolkienMcpTokenPath(userId), 'utf8').trim();
+    return t || null;
+  } catch { return null; }
+}
+
+export function hasTolkienMcpToken(userId) {
+  try {
+    return fs.existsSync(userTolkienMcpTokenPath(userId));
+  } catch {
+    return false;
+  }
 }
 
 // Crea idempotentemente la estructura privada mínima del usuario.

@@ -104,6 +104,7 @@ export default {
         if (attach) {
           const socketPath = validateSocketPath(attach.socket);
           if (!socketPath || !isValidSessionName(attach.session)) {
+            console.warn('[terminal] Adjuntado rechazado — owner:', String(owner).slice(0, 200), '· socket:', String(attach.socket).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
             return res.status(400).json({ error: 'Destino de adjuntado inválido.' });
           }
           const session = sessionManager.create({
@@ -117,10 +118,12 @@ export default {
 
         // Modelo inicial opcional (lanzador): se arranca `claude --model <x>`.
         if (model != null && !VALID_MODELS.has(model)) {
+          console.warn('[terminal] Modelo rechazado — owner:', String(owner).slice(0, 200), '· modelo:', String(model).slice(0, 200));
           return res.status(400).json({ error: 'Modelo inválido.' });
         }
 
         if (runClaude != null && typeof runClaude !== 'boolean') {
+          console.warn('[terminal] runClaude rechazado — owner:', String(owner).slice(0, 200), '· tipo:', typeof runClaude);
           return res.status(400).json({ error: 'runClaude debe ser booleano.' });
         }
 

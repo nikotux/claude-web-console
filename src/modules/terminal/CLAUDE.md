@@ -6,6 +6,10 @@
 
 ## Gotchas de esta carpeta
 
+- Los rechazos 400 de `POST /sessions` se registran con el `owner` y solo los
+  valores mínimos necesarios para diagnosticar. El frontend muestra el campo
+  `error` tal cual al usuario: ese texto es UI y debe escribirse pensando en
+  quien lo lee.
 - En `Session` (terminal/sessions.js) la propiedad de adjuntado es
   `attachSpec`, NO `attach` (colisiona con el método `attach(ws)`).
 - El `owner` de una sesión `cwc-*` se PERSISTE en `session-owners.json` (raíz del
