@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-27 04:25 — main
+- Agregar entornos aislados de Tolkien con sub-bloques UI colapsables
+
 ### 2026-07-27 02:29 — main
 - Verificar y sembrar contexto de Tolkien en entornos (PLAN-2072)
 
