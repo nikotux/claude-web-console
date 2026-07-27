@@ -26,7 +26,114 @@ import {
 } from './env-store.js';
 
 const CWD_BASE = config.projectDir;
+
+// Contrato de entorno (PLAN-2072): artefactos UNTRACKED que hacen que un
+// worktree sea un Tolkien completo. `git worktree add` solo trae lo trackeado,
+// así que estos se enlazan al base — SYMLINK, no copia: el contexto de Tolkien
+// es UNO SOLO y así un entorno vivo ve al instante lo que se promueva al base.
+export const ENV_CONTEXT_LINKS = [
+  'CLAUDE.local.md',
+  '.cwc-ticket-playbook.md',
+  '.env',
+  path.join('.claude', 'settings.local.json'),
+];
+
 const EXEC_MAX_BUFFER = 64 * 1024 * 1024;
+
+// Dir de proyecto de Claude Code para un cwd: se deriva del PATH, reemplazando
+// `/` y `.` por `-`. Por eso un worktree estrena projectKey (y memorias vacías).
+export function claudeProjectDirFor(cwd) {
+  const key = String(cwd).replace(/[/.]/g, '-');
+  return path.join(config.home, '.claude', 'projects', key);
+}
+
+export function seedEnvContext(worktree) {
+  const result = {
+    linked: [],
+    already: [],
+    skipped: [],
+    conflicts: [],
+    padToml: 'skipped',
+  };
+
+  const linkOne = (label, source, destination, { replaceEmptyDir = false } = {}) => {
+    try {
+      if (!fs.existsSync(source)) {
+        result.skipped.push(label);
+        return;
+      }
+
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      let destinationStat = null;
+      try {
+        destinationStat = fs.lstatSync(destination);
+      } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
+      }
+
+      if (destinationStat?.isSymbolicLink()) {
+        const currentTarget = path.resolve(path.dirname(destination), fs.readlinkSync(destination));
+        if (currentTarget === path.resolve(source)) {
+          result.already.push(label);
+          return;
+        }
+        fs.rmSync(destination, { force: true });
+      } else if (destinationStat) {
+        if (replaceEmptyDir && destinationStat.isDirectory() && fs.readdirSync(destination).length === 0) {
+          fs.rmdirSync(destination);
+        } else {
+          result.conflicts.push(`${label}: el destino existe y no es un symlink`);
+          return;
+        }
+      }
+
+      fs.symlinkSync(source, destination);
+      result.linked.push(label);
+    } catch (err) {
+      result.conflicts.push(`${label}: ${String(err?.message || err)}`);
+    }
+  };
+
+  for (const rel of ENV_CONTEXT_LINKS) {
+    linkOne(rel, path.join(CWD_BASE, rel), path.join(worktree, rel));
+  }
+
+  const memorySource = path.join(claudeProjectDirFor(CWD_BASE), 'memory');
+  const memoryDestination = path.join(claudeProjectDirFor(worktree), 'memory');
+  linkOne('memory/', memorySource, memoryDestination, { replaceEmptyDir: true });
+
+  const padToml = path.join(worktree, '.pad.toml');
+  try {
+    fs.writeFileSync(padToml, 'workspace = "tolkien"\n', { flag: 'wx' });
+    result.padToml = 'written';
+  } catch (err) {
+    if (err?.code === 'EEXIST') {
+      result.padToml = 'exists';
+    } else {
+      result.padToml = 'skipped';
+      result.conflicts.push(`.pad.toml: ${String(err?.message || err)}`);
+    }
+  }
+
+  return result;
+}
+
+export function verifyEnvContext(worktree) {
+  const missing = [];
+  for (const rel of ENV_CONTEXT_LINKS) {
+    if (fs.existsSync(path.join(CWD_BASE, rel)) && !fs.existsSync(path.join(worktree, rel))) {
+      missing.push(rel);
+    }
+  }
+
+  const memorySource = path.join(claudeProjectDirFor(CWD_BASE), 'memory');
+  const memoryDestination = path.join(claudeProjectDirFor(worktree), 'memory');
+  if (fs.existsSync(memorySource) && !fs.existsSync(memoryDestination)) {
+    missing.push('memory/');
+  }
+
+  return { ok: missing.length === 0, missing };
+}
 
 function gitBase(args) {
   return execFileSync('git', ['-C', CWD_BASE, ...args], { encoding: 'utf8', maxBuffer: EXEC_MAX_BUFFER });
@@ -73,6 +180,15 @@ export function createWorktree(id, baseRef = 'main') {
 
   const worktree = worktreePathFor(id);
   if (fs.existsSync(worktree) && fs.existsSync(path.join(worktree, '.git'))) {
+    try {
+      const seeded = seedEnvContext(worktree);
+      appendProvisionLog(
+        id,
+        `contexto sembrado: ${seeded.linked.length} enlazados, ${seeded.already.length} ya estaban, ${seeded.conflicts.length} conflictos; .pad.toml ${seeded.padToml}`,
+      );
+    } catch (err) {
+      appendProvisionLog(id, `error al sembrar contexto: ${String(err?.message || err).slice(0, 300)}`);
+    }
     return { worktree, branch: `cwc-env/${id}` };
   }
 
@@ -91,6 +207,15 @@ export function createWorktree(id, baseRef = 'main') {
     gitBase(['worktree', 'add', '-b', branch, worktree, baseRef]);
   }
 
+  try {
+    const seeded = seedEnvContext(worktree);
+    appendProvisionLog(
+      id,
+      `contexto sembrado: ${seeded.linked.length} enlazados, ${seeded.already.length} ya estaban, ${seeded.conflicts.length} conflictos; .pad.toml ${seeded.padToml}`,
+    );
+  } catch (err) {
+    appendProvisionLog(id, `error al sembrar contexto: ${String(err?.message || err).slice(0, 300)}`);
+  }
   return { worktree, branch };
 }
 
@@ -209,8 +334,23 @@ export async function teardownEnv(id, { force = false } = {}) {
   if (rec.db) {
     try { await dropEnvDb(rec.db); } catch { /* noop */ }
   }
+  let worktreeRemoved = false;
   if (rec.worktree) {
-    try { gitBase(['worktree', 'remove', '--force', rec.worktree]); } catch { /* noop */ }
+    try {
+      gitBase(['worktree', 'remove', '--force', rec.worktree]);
+      worktreeRemoved = true;
+    } catch { /* noop */ }
+  }
+  if (worktreeRemoved) {
+    try {
+      const projectDir = claudeProjectDirFor(rec.worktree);
+      const memoryLink = path.join(projectDir, 'memory');
+      if (fs.existsSync(projectDir) && fs.lstatSync(memoryLink).isSymbolicLink()) {
+        fs.rmSync(memoryLink, { force: true });
+      }
+      // No se borra el projectKey ni sus transcripts: son conversaciones y
+      // requieren una decisión humana, aunque el worktree ya no exista.
+    } catch { /* noop */ }
   }
   try { fs.rmSync(path.join(ENVS_DIR, id), { recursive: true, force: true }); } catch { /* noop */ }
   try { gitBase(['branch', '-D', `cwc-env/${id}`]); } catch { /* noop */ }

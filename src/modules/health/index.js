@@ -33,7 +33,8 @@ import { attemptStats } from '../../core/closed-envelope.js';
 import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/inventory.js';
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
-import { listEnvs, ENVS_DIR } from '../tolkien/env-store.js';
+import { listEnvs, ENVS_DIR, isEnvAlive } from '../tolkien/env-store.js';
+import { verifyEnvContext } from '../tolkien/env-shared.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
@@ -346,13 +347,32 @@ function checkTolkienEnvs() {
   const ids = new Set(recs.map((r) => r?.id).filter(Boolean));
   const orphanDirs = dirs.filter((d) => !ids.has(d));
   const errored = recs.filter((r) => r?.status === 'error');
-  if (orphanDirs.length || errored.length) {
-    const parts = [`${recs.length} entorno(s)`];
+  const incomplete = [];
+  let verifiedAlive = 0;
+  for (const r of recs) {
+    if (!isEnvAlive(r) || !r.worktree) continue;
+    try {
+      const context = verifyEnvContext(r.worktree);
+      verifiedAlive += 1;
+      if (context.ok === false) incomplete.push({ id: r.id, missing: context.missing });
+    } catch { /* un check de salud nunca debe romper el endpoint */ }
+  }
+  if (incomplete.length || orphanDirs.length || errored.length) {
+    const parts = [];
+    if (incomplete.length) {
+      const sample = incomplete.slice(0, 3).map(({ id: envId, missing }) => {
+        const artifacts = Array.isArray(missing) ? missing.slice(0, 3).join(', ') : 'sin detalle';
+        return `${envId}: ${artifacts || 'sin detalle'}`;
+      }).join('; ');
+      parts.push(`${incomplete.length} entorno(s) SIN el marco de Tolkien (${sample}) — la sesión trabaja sin reglas; recreá el entorno o corré el sembrado`);
+    }
+    parts.push(`${recs.length} entorno(s)`);
     if (errored.length) parts.push(`${errored.length} en error`);
     if (orphanDirs.length) parts.push(`${orphanDirs.length} worktree(s) huérfano(s) sin registro (${orphanDirs.slice(0, 3).join(', ')})`);
     return { id, label, status: 'warn', detail: parts.join(' · ') };
   }
-  return { id, label, status: 'ok', detail: recs.length ? `${recs.length} entorno(s) registrado(s), todos sanos` : 'sin entornos activos' };
+  const detail = recs.length ? `${recs.length} entorno(s) registrado(s), todos sanos` : 'sin entornos activos';
+  return { id, label, status: 'ok', detail: verifiedAlive ? `${detail} · marco de Tolkien completo` : detail };
 }
 
 // OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto,
