@@ -1,7 +1,9 @@
 ---
 name: agrupar
-description: "🧭 Paso ARQUITECTO del Orquestador Interno (PLAN-642 / CONVE-654): agrupa las tareas de un plan en BLOQUES por COLISIÓN de archivos + arma el DAG de dependencias, y lo materializa en Pad como PLANes-bloque + links. Úsalo tras atomizar un plan (ítems + ruteo CONVE-558) y ANTES de orquestar: es lo que deja el Pad listo para la skill `orquestar`. Corre en el mundo interno (Pad console)."
+description: "🧭 Paso ARQUITECTO del Orquestador Interno (PLAN-642 / CONVE-654): agrupa las tareas de un plan en BLOQUES por COLISIÓN de archivos + arma el DAG de dependencias, y lo materializa en Pad como PLANes-bloque + links. Úsalo tras atomizar un plan (ítems + ruteo CONVE-558) y ANTES de orquestar: es lo que deja el Pad listo para la skill `orquestar`. Corre en el mundo interno del usuario."
 argument-hint: "[PLAN-umbrella a agrupar en bloques]"
+cwc-share: catalog
+cwc-default: false
 ---
 
 # 🧭 Agrupar en bloques (paso Arquitecto)
@@ -15,7 +17,7 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 
 ## Dos naturalezas, no confundirlas
 - **(A) COLISIÓN = mecánica.** Se calcula: predecís los archivos de cada tarea → grafo (aristas entre tareas que comparten archivo) → **un bloque = un componente conexo**.
-- **(B) DEPENDENCIA lógica = humana.** "B necesita el resultado de A" NO es colisión: lo declara el arquitecto desde el **orden de fases** del plan. Vos proponés las aristas del DAG; **Niko las confirma**.
+- **(B) DEPENDENCIA lógica = humana.** "B necesita el resultado de A" NO es colisión: lo declara el arquitecto desde el **orden de fases** del plan. Vos proponés las aristas del DAG; **el usuario las confirma**.
 
 ## Algoritmo
 1. **Predecí los archivos por tarea** (`files`). Fuente: la descripción de la tarea + el **inventario** del proyecto (`~/.cwc-data/inventory.md`, generado por `core/inventory.js`). Guardá la predicción en la tarea (campo/nota `files`).
@@ -26,7 +28,7 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 6. **DAG lógico**: agregá las aristas `blocked-by` entre bloques según las fases (B usa A → B blocked-by A). El bloque de integración/E2E queda `blocked-by` todos los de código.
 
 ## GATE (obligatorio) — proponé, NO crees a ciegas
-Presentá a Niko: la tabla de **bloques** (id · tareas que contiene · superficie de archivos · ruteo · ready/needs-atomize) + el **DAG** (aristas). Esperá su **OK o ajuste** (fusionar/partir bloques, cambiar una dependencia). **Recién con el OK** materializás.
+Presentá al usuario: la tabla de **bloques** (id · tareas que contiene · superficie de archivos · ruteo · ready/needs-atomize) + el **DAG** (aristas). Esperá su **OK o ajuste** (fusionar/partir bloques, cambiar una dependencia). **Recién con el OK** materializás.
 
 **🧭 Cobertura contra el ancla (CONVE-1957).** En la misma tabla, sumá una columna
 `criterios` con los criterios del ancla (`C1`, `C2`, …) a los que sirve cada bloque. Dos
@@ -43,7 +45,7 @@ acá gratis.
 - **Ancla heredada**: cada PLAN-bloque referencia el ítem-raíz anclado del umbrella (por `parent` o `implements`), para que la sesión-bloque pueda leer el pedido original sin reconstruirlo.
 
 ## Cierre
-Avisá a Niko que el Pad quedó listo y que el próximo paso es abrir la skill `orquestar` en una sesión nueva apuntada al umbrella. Cerrá con `🎾 Pelota: …`.
+Avisá al usuario que su workspace de Pad quedó listo y que el próximo paso es abrir la skill `orquestar` en una sesión nueva apuntada al umbrella. Cerrá con `🎾 Pelota: …`.
 
 ## Ruteo (CONVE-558) por naturaleza de tarea
 diseño/contrato → Claude opus/sonnet high · escribir código → Tándem (**opus** razona/verifica + Codex gpt-5.6-sol ejecuta) **high pinned** · cableado trivial → Claude haiku low · verificación E2E → Claude sonnet/opus high. Cada tarea del bloque lleva su `{executor, model, effort}` — así cada paso corre en su modelo óptimo (ahorro de ventana) y una reejecución no cae en un modelo caro por defecto. Cada bloque hereda UN ejecutor (ver Principio); el `{model, effort}` fino por tarea solo varía DENTRO del mismo ejecutor.

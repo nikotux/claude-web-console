@@ -203,6 +203,7 @@ export function createWorktree(id, baseRef = 'main') {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const worktree = worktreePathFor(id);
+  // console:BUG-2142: `reused` informa si la sesión recuperó un entorno preexistente.
   if (fs.existsSync(worktree) && fs.existsSync(path.join(worktree, '.git'))) {
     try {
       const seeded = seedEnvContext(worktree);
@@ -213,7 +214,7 @@ export function createWorktree(id, baseRef = 'main') {
     } catch (err) {
       appendProvisionLog(id, `error al sembrar contexto: ${String(err?.message || err).slice(0, 300)}`);
     }
-    return { worktree, branch: `cwc-env/${id}` };
+    return { worktree, branch: `cwc-env/${id}`, reused: true };
   }
 
   const branch = `cwc-env/${id}`;
@@ -240,7 +241,7 @@ export function createWorktree(id, baseRef = 'main') {
   } catch (err) {
     appendProvisionLog(id, `error al sembrar contexto: ${String(err?.message || err).slice(0, 300)}`);
   }
-  return { worktree, branch };
+  return { worktree, branch, reused: branchExists };
 }
 
 export function writeLaunchScript(id, wt, port, db) {
@@ -384,23 +385,13 @@ export async function teardownEnv(id, { force = false } = {}) {
     } catch { /* noop */ }
   }
   try { fs.rmSync(path.join(ENVS_DIR, id), { recursive: true, force: true }); } catch { /* noop */ }
-  // BUG-2086: `git branch -D` borraba la rama del entorno aunque tuviera commits
-  // propios — el guard de `force:false` solo mira cambios SIN COMMITEAR, así que
-  // una sesión prolija (que commitea) perdía su trabajo. Si la rama tiene commits
-  // que no están en la base, se CONSERVA: el worktree se va, el trabajo no.
+  // console:BUG-2142 endurece el C5 de console:BUG-2086: la rama cwc-env/<id>
+  // es la identidad persistente de la sesión, no un residuo. envIdForChat(chatId)
+  // es determinístico y createWorktree() reengancha una rama existente; borrarla
+  // por no tener commits haría que la reprovisión volviera a main y dejara un
+  // aislamiento hueco. Se prefiere una rama barata y recuperable a perder identidad.
   const branch = `cwc-env/${id}`;
-  let branchHasWork = false;
-  try {
-    const ahead = gitBase(['rev-list', '--count', `${rec.base || 'main'}..${branch}`]);
-    branchHasWork = Number.parseInt(String(ahead).trim(), 10) > 0;
-  } catch {
-    branchHasWork = true; // ante la duda, NO borrar
-  }
-  if (branchHasWork) {
-    try { appendProvisionLog(id, `branch ${branch} conservada: tiene commits propios`); } catch { /* noop */ }
-  } else {
-    try { gitBase(['branch', '-D', branch]); } catch { /* noop */ }
-  }
+  try { appendProvisionLog(id, `branch ${branch} conservada (identidad de la sesión, console:BUG-2142)`); } catch { /* noop */ }
   removeEnvRecord(id);
   return { ok: true };
 }

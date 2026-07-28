@@ -40,6 +40,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { principalOf } from '../../core/auth.js';
+import { getValidClaudeAccessToken, refreshClaudeOauth } from '../../core/claude-oauth.js';
 import { keyOf } from '../../core/claude-model.js';
 import {
   hostUser,
@@ -629,10 +630,9 @@ export async function withLocalUsage(result, owner) {
 // ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
 // Fuente: el endpoint OAuth de uso de Anthropic — el MISMO que consulta el
 // /usage del CLI — con el accessToken de ~/.claude/.credentials.json (la
-// credencial que ya hereda el Agent SDK; acá SOLO se lee, jamás se escribe
-// ni se refresca: si venció, el error lo dice y se arregla abriendo claude).
-// El token nunca sale hacia el cliente: el server hace de proxy.
-const credsFile = (owner) => path.join(userClaudeDir(owner), '.credentials.json');
+// credencial que ya hereda el Agent SDK). Si venció, se refresca mediante
+// core/claude-oauth.js; el token nunca sale hacia el cliente: el server hace
+// de proxy.
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 // Persistencia a disco del ÚLTIMO resultado bueno de límites/créditos: el dato
 // viene de Anthropic pero un 429 / corte de red / reinicio del server lo perdía
@@ -669,29 +669,13 @@ async function writePersistedLimits(data, owner = hostUser()) {
   } catch { /* best-effort */ }
 }
 
-async function fetchPlanLimits(owner = hostUser()) {
-  let oauth = null;
-  let accessToken = null;
-  let tokenSource = null;
-  try {
-    oauth = JSON.parse(await fs.readFile(credsFile(owner), 'utf8')).claudeAiOauth || null;
-    if (oauth?.accessToken && (!oauth.expiresAt || oauth.expiresAt >= Date.now())) {
-      accessToken = oauth.accessToken;
-      tokenSource = 'credentials';
-    }
-  } catch { /* fallback al token que deja el onboarding */ }
-  if (!accessToken) {
-    accessToken = readUserOauthToken(owner);
-    if (accessToken) tokenSource = 'setup-token';
-  }
-  if (!accessToken) {
-    return { unavailable: true, reason: 'sin-credencial' };
-  }
+// Una llamada al medidor OAuth con el token dado. Devuelve la Response o
+// lanza un error marcado `upstream` si ni siquiera se pudo hablar con Anthropic.
+async function callUsage(accessToken) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 10000);
-  let res;
   try {
-    res = await fetch(USAGE_URL, {
+    return await fetch(USAGE_URL, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
@@ -707,6 +691,41 @@ async function fetchPlanLimits(owner = hostUser()) {
     throw e;
   } finally {
     clearTimeout(t);
+  }
+}
+
+async function fetchPlanLimits(owner = hostUser()) {
+  let oauth = null;
+  let accessToken = null;
+  let tokenSource = null;
+  // Si el access token venció, se renueva SOLO con el refreshToken. Antes, el
+  // CLI del inquilino no actualizaba este archivo y el medidor real caía a
+  // localUsage después de unas 24 horas.
+  const valid = await getValidClaudeAccessToken(owner);
+  if (valid) {
+    oauth = valid.oauth;
+    accessToken = valid.token;
+    tokenSource = 'credentials';
+  }
+  if (!accessToken) {
+    accessToken = readUserOauthToken(owner);
+    if (accessToken) tokenSource = 'setup-token';
+  }
+  if (!accessToken) {
+    return { unavailable: true, reason: 'sin-credencial' };
+  }
+
+  let res = await callUsage(accessToken);
+  // 401 con credenciales: el access token puede haberse invalidado del lado de
+  // Anthropic aunque su expiresAt local dijera que seguía vivo. Forzamos UN
+  // refresh y reintentamos una sola vez antes de caer al setup-token.
+  if (res.status === 401 && tokenSource === 'credentials') {
+    const next = await refreshClaudeOauth(owner);
+    if (next?.accessToken && next.accessToken !== accessToken) {
+      oauth = next;
+      accessToken = next.accessToken;
+      res = await callUsage(accessToken);
+    }
   }
   if (!res.ok) {
     if (tokenSource === 'setup-token') {

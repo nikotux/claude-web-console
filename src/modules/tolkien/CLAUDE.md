@@ -154,7 +154,13 @@ tras Actualizar y al abrir la ventana.
   'plan'); un runner YA VIVO no lo toma hasta reabrir/chat nuevo (mismo gotcha
   del bootstrap de Pad). La DB plantilla tolkien_template debe quedar DORMIDA
   (ALLOW_CONNECTIONS false) para poder clonarla: Postgres exige 0 conexiones a
-  la fuente de un CREATE DATABASE ... TEMPLATE.
+  la fuente de un CREATE DATABASE ... TEMPLATE. `console:BUG-2092`: ese
+  `handoff()` reusado corre a MITAD de turno, cuando el SDK todavía no escribió
+  el transcript — por eso `moveTranscript()` tolera el origen inexistente y la
+  provisión espera el cierre del turno antes de mudar. Y "tener entorno" no es
+  "estar dentro del entorno": mientras el `cwd` siga siendo el base, el hook debe
+  quedar instalado y la mudanza se REINTENTA, o la sesión termina escribiendo en
+  el repo base sin aislamiento.
 - Contexto de entornos (`console:PLAN-2072`): los symlinks son
   BIDIRECCIONALES — editar
   `CLAUDE.local.md` desde un worktree edita el archivo REAL de `~/tolkien`; es
@@ -171,8 +177,20 @@ tras Actualizar y al abrir la ventana.
   `_onRunnerEvent`). Si algún día se spawnea un entorno por un camino que NO pase por
   un chat con `tolkienEnv` seteado, ese entorno nace con el latido congelado y el
   reaper lo desaloja a las 6h aunque esté en uso. La segunda red es `activeChatIds`,
-  no el latido. Y `teardownEnv()` conserva la rama `cwc-env/<id>` cuando tiene
-  commits propios: el guard de `force:false` solo mira cambios SIN COMMITEAR, así que
-  antes una sesión que commiteaba perdía su trabajo. Consecuencia deliberada: pueden
-  quedar ramas `cwc-env/*` acumuladas — se limpian a mano, es el precio de no perder
-  commits.
+  no el latido. `teardownEnv()` ya NO borra NUNCA la rama `cwc-env/<id>`
+  (`console:BUG-2142`): antes sólo la conservaba cuando
+  `git rev-list --count <base>..<branch>` daba > 0, pero la rama no es un residuo
+  condicionado a tener commits propios sino la IDENTIDAD persistente de la sesión.
+  `envIdForChat(chatId)` es determinístico, por lo que un chat vuelve siempre a la
+  misma rama, y `createWorktree()` se reengancha sobre ella cuando existe. Borrarla
+  por «no tener commits» hacía que la reconstrucción naciera desde `main` y
+  devolviera un aislamiento hueco: entorno correcto, historia de trabajo vacía.
+  Se prefiere una rama de más —barata, sin worktree y recuperable— a una identidad
+  perdida. Esto ENDURECE el C5 de `console:BUG-2086`; no lo contradice.
+- Reprovisión perezosa (`console:PLAN-2172`): `createWorktree(id,
+  baseRef='main')` devuelve `{ worktree, branch, reused }`. `reused: true`
+  informa que reconstruyó sobre una rama o un worktree preexistente;
+  `reused: false`, que el entorno nació de cero. El dato no gobierna la
+  reconstrucción: `chat/index.js` sólo lo consume para contarle al usuario si
+  RECUPERÓ su entorno o recibió uno nuevo. Es un campo aditivo, por lo que ningún
+  call-site anterior se rompe.

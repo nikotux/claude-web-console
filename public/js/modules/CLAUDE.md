@@ -143,10 +143,23 @@ descripción + chevron. Tocar una tarjeta → detalle con "‹
 Proyectos" (volver), dir del proyecto, Contexto y (solo proyectos
 completos) Memorias — el detalle de un bugfix NI renderiza la
 sección Memorias. Visible a todos (autenticados), edición gateada por
-isAdmin en el frontend Y en el backend. La pestaña Skills (2026-07-19,
-módulo backend `skills` — GET /api/skills, frontend
-`system/skills-panel.js`, mountSkillsPanel) es un CENSO READ-ONLY (0
-tokens IA, todo determinístico) de las skills de Claude Code
+isAdmin en el frontend Y en el backend. La pestaña Skills (2026-07-19;
+catálogo Fase 4 de PLAN-2181, 2026-07-28; módulo backend `skills` —
+GET `/api/skills` + POST `/api/skills/install|uninstall`, frontend
+`system/skills-panel.js`, mountSkillsPanel) combina arriba un CATÁLOGO
+ACCIONABLE por usuario y debajo el CENSO READ-ONLY original (0 tokens IA,
+todo determinístico). El catálogo nace colapsado con resumen
+disponibles/instaladas/desactualizadas; cada tarjeta también nace plegada y
+usa los tres semáforos existentes: ✅ instalada al día (verde) ·
+⬆️ actualización disponible (ámbar) · ⬜ no instalada (neutro), más
+⭐ para las `cwc-default`. Instalar/Actualizar copia la versión compartible
+del repo al espacio global del principal; Quitar exige `confirmDialog` y
+borra solo copias marcadas como propias del catálogo. Durante el POST los
+controles quedan deshabilitados con Pac-Man, y éxito o error siempre dispara
+un GET fresco. `user_owned` tiene mensaje propio: una skill personal con el
+mismo nombre nunca se pisa ni se borra. Tras instalar/actualizar, el panel
+avisa que los runners ya abiertos deben reiniciarse para cargarla.
+El censo informativo inventaría las skills de Claude Code
 (`.claude/skills/*/SKILL.md`) cruzadas con la colección `playbooks` del
 Pad LOCAL (vía `pad-service-client.listItems('playbooks')`, workspace
 `console`) — agrupadas por MUNDO: 🏠 Mi Consola (`.claude/skills` de
@@ -170,12 +183,11 @@ colapsable de `health-review-modal.js` (`.hr-collapsible`/
 `.hr-finding`/`.hr-f-*`) — 2 modificadores nuevos
 (`.hr-finding--linked`/`.hr-sev--linked` verde ·
 `.hr-finding--orphan`/`.hr-sev--orphan` ámbar) para el estado de
-sincronía con Pad, mismo patrón visual que un hallazgo de Salud. Solo
-lectura a propósito (decisión explícita del usuario): sin crear/editar
-SKILL.md ni playbooks desde acá — un paso 2 futuro podría sumar "crear
-el SKILL.md faltante de un candidato" sobre esta misma base. Best-effort
-ante Pad local caído (`padAvailable:false`): muestra igual los SKILL.md,
-solo sin badges de vínculo. Registrado en Pad como `PEND-684`.
+sincronía con Pad, mismo patrón visual que un hallazgo de Salud. El CENSO
+sigue siendo solo lectura a propósito: ni crea/edita SKILL.md ni modifica
+playbooks. Best-effort ante Pad local caído (`padAvailable:false`): muestra
+igual los SKILL.md, solo sin badges de vínculo. Registrado en Pad como
+`PEND-684`.
 La pestaña Salud es SOLO
 salud: chequeos rápidos + revisión profunda + subsección "🧠
 Optimización IA" (resumen compacto + botón → sub-ventana

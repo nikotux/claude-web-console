@@ -22,7 +22,9 @@ import {
   userClaudeDir,
 } from '../../core/user-space.js';
 import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite, consumeInvite } from '../../core/onboard-tokens.js';
+import { installDefaults } from '../skills/catalog.js';
 import { provisionTolkienMcp, tolkienMcpStatus } from './tolkien-mcp-shared.js';
+import { startProvision, markProvisionStep, readProvisionState } from './provision-state.js';
 
 const DEFAULT_TTL_H = 24;
 
@@ -165,7 +167,8 @@ publicRouter.post('/register', (req, res) => {
     return res.status(500).json({ error: 'No se pudo validar la invitación: ' + (e.message || e) });
   }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
-  if (!isValidUsername(username)) return res.status(400).json({ error: 'Usuario inválido (letras, números, . _ - ; máx 32).' });
+  if (typeof username !== 'string' || !username.trim()) return res.status(400).json({ error: 'Falta el campo "username" en el body (letras, números, . _ - ; máx 32).' });
+  if (!isValidUsername(username)) return res.status(400).json({ error: 'Usuario inválido: el campo "username" admite letras, números, . _ - ; máx 32.' });
   // Reservar el token ANTES de crear el usuario (evita la carrera: dos
   // registros concurrentes con el mismo token no deben poder crear dos
   // usuarios y dejar uno huérfano sin invitación asociada). Reintentar con el
@@ -187,20 +190,52 @@ publicRouter.post('/register', (req, res) => {
     try { setUserLang(username, lang); } catch { /* best-effort: el default sigue siendo 'es' */ }
   }
   try { ensureUserSpace(username); ensureCliOnboarded(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
-  // Provisionar el Pad PROPIO del inquilino (B2-F3), best-effort y sin bloquear
-  // el registro: si el Pad local está caído, el chat funciona igual y el
-  // provisioning se reintenta lazy al primer uso (F8). NUNCA await acá.
+  // El provisioning sigue corriendo DESPUÉS de responder — deliberado, para no
+  // bloquear el alta — pero su resultado YA NO se pierde en el journal: queda
+  // persistido para el checklist final del wizard y para el check
+  // `onboard-provisioning` de Salud (console:BUG-2118).
+  startProvision(username);
+  // Pad PROPIO del inquilino (B2-F3): si el Pad local está caído, el chat
+  // funciona igual y el provisioning se reintenta lazy al primer uso (F8).
+  // NUNCA await acá.
   provisionUserPad(username, { name: username })
-    .then((r) => { if (!r.ok) console.error('[onboard] provisioning de Pad best-effort falló:', r.error); })
-    .catch((e) => console.error('[onboard] provisioning de Pad best-effort excepción:', e?.message || e));
-  // Clon del repo de trabajo (Tolkien) en el workspace del inquilino (SP9-7/TASK-673),
-  // best-effort y sin bloquear el registro (idempotente; se reintenta si algun dia se cablea lazy).
+    .then((r) => {
+      if (!r.ok) console.error('[onboard] provisioning de Pad best-effort falló:', r.error);
+      markProvisionStep(username, 'pad', r.ok ? 'ok' : 'failed', r.ok ? null : r.error);
+    })
+    .catch((e) => {
+      console.error('[onboard] provisioning de Pad best-effort excepción:', e?.message || e);
+      markProvisionStep(username, 'pad', 'failed', e?.message || e);
+    });
+  // Clon del repo de trabajo (Tolkien) en el workspace del inquilino
+  // (SP9-7/TASK-673), best-effort e idempotente. `skipped` es el host: cuenta
+  // como paso resuelto, no como fallo.
   provisionUserWorkspace(username)
     .then(async (r) => {
-      if (!r.ok && !r.skipped) console.error('[onboard] clon de workspace best-effort falló:', r.error);
+      const done = !!(r.ok || r.skipped);
+      if (!done) console.error('[onboard] clon de workspace best-effort falló:', r.error);
+      markProvisionStep(username, 'workspace', done ? 'ok' : 'failed', done ? null : r.error);
       if (r.ok) await provisionTolkienBestEffort(username);
     })
-    .catch((e) => console.error('[onboard] clon de workspace excepción:', e?.message || e));
+    .catch((e) => {
+      console.error('[onboard] clon de workspace excepción:', e?.message || e);
+      markProvisionStep(username, 'workspace', 'failed', e?.message || e);
+    });
+  // Skills base del catálogo, best-effort. Se difiere con una Promise para que
+  // la copia síncrona de archivos no bloquee el handler ni demore la respuesta.
+  // NUNCA await acá.
+  Promise.resolve()
+    .then(() => installDefaults(userClaudeDir(username)))
+    .then((r) => {
+      const failed = r.failed.map((item) => item.dirName);
+      const error = failed.length ? `Skills del catálogo fallidas: ${failed.join(', ')}` : null;
+      if (error) console.error('[onboard] provisioning de skills best-effort falló:', error);
+      markProvisionStep(username, 'skills', error ? 'failed' : 'ok', error);
+    })
+    .catch((e) => {
+      console.error('[onboard] provisioning de skills best-effort excepción:', e?.message || e);
+      markProvisionStep(username, 'skills', 'failed', e?.message || e);
+    });
   res.json({ ok: true, username });
 });
 
@@ -323,6 +358,31 @@ publicRouter.get('/creds-status', (req, res) => {
     stale: !!stale,
     hasToken,
   });
+});
+
+// Estado del provisioning posterior al alta (lo pollea el checklist final del
+// wizard — console:BUG-2118). Mismo gate que los demás *-status del router
+// PÚBLICO: la invitación es la única llave, `peekInvite` resuelve el usuario aun
+// con el token ya consumido, y el sufijo `-status` lo mete en el bucket amplio
+// del rate-limit. NO expone rutas ni secretos: el motivo ya se guardó saneado en
+// disco y acá se recorta.
+publicRouter.get('/provision-status', (req, res) => {
+  const token = req.query?.token;
+  let p;
+  try {
+    p = peekInvite(token);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+  }
+  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
+  const state = p.lockedTo ? readProvisionState(p.lockedTo) : null;
+  if (!state) return res.json({ status: 'idle', steps: {} });
+  const steps = {};
+  for (const [name, s] of Object.entries(state.steps || {})) {
+    steps[name] = { status: s.status, ...(s.error ? { error: String(s.error).slice(0, 160) } : {}) };
+  }
+  const stale = state.status === 'pending' && !!state.ts && (Date.now() - state.ts) > 10 * 60 * 1000;
+  res.json({ status: state.status || 'pending', steps, stale });
 });
 
 // Recibe el código pegado por el usuario → lo deja en un archivo que el runner lee.

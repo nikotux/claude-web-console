@@ -1,7 +1,7 @@
-// modules/skills/index.js — pestaña "Skills" de ⚙ Sistema: censo READ-ONLY de
-// las skills de Claude Code (SKILL.md) cruzadas con los Playbooks de Pad
-// del principal de la request. 0 tokens IA — todo determinístico (fs + HTTP
-// plano ya cacheado por el cliente de Pad), mismo espíritu que core/inventory.js.
+// modules/skills/index.js — pestaña "Skills" de ⚙ Sistema: censo de las skills
+// de Claude Code (SKILL.md) cruzadas con los Playbooks de Pad del principal de
+// la request. 0 tokens IA — todo determinístico (fs + HTTP plano ya cacheado
+// por el cliente de Pad), mismo espíritu que core/inventory.js.
 //
 // Fuentes escaneadas: el host conserva Consola (este repo) + Tolkien
 // (config.projectDir) + global; cada inquilino ve solo su global y su clon de
@@ -13,22 +13,28 @@
 // ("solo promover a skill un playbook activo con invocation_slug; los draft
 // o sin slug se gradúan antes").
 //
-// Solo lectura a propósito (decisión explícita 2026-07-19): sin crear/editar
-// SKILL.md ni playbooks desde acá todavía.
+// El módulo NO edita el contenido de ninguna skill ni de los playbooks. Sí
+// instala/desinstala copias del catálogo de Mi Consola en el espacio global del
+// propio principal: escribe solo bajo scope.claudeDir, con whitelist estricta
+// del nombre y marcador de origen, sin cruzar datos ni pisar skills del usuario.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { reqPadContext } from '../../core/pad-context.js';
 import * as pad from '../../core/pad-service-client.js';
 import { systemScopeFor } from '../../core/system-scope.js';
-
-const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+import {
+  CATALOG_DIR,
+  catalogStateFor,
+  installSkill,
+  parseFrontmatter,
+  uninstallSkill,
+} from './catalog.js';
 
 export function skillSourcesFor(scope) {
   const sources = scope.isHost
     ? [
-        { world: 'console', label: '🏠 Mi Consola', dir: path.join(CONSOLE_ROOT, '.claude', 'skills'), scope: 'project' },
+        { world: 'console', label: '🏠 Mi Consola', dir: CATALOG_DIR, scope: 'project' },
         { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(config.projectDir || '', '.claude', 'skills'), scope: 'project' },
         { world: 'global', label: '🌐 Global (usuario)', dir: path.join(scope.claudeDir, 'skills'), scope: 'user' },
       ]
@@ -37,32 +43,6 @@ export function skillSourcesFor(scope) {
         { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(scope.workspace, 'tolkien', '.claude', 'skills'), scope: 'project' },
       ];
   return sources.filter((source) => fs.existsSync(source.dir));
-}
-
-// Frontmatter YAML MINIMAL (mismo criterio que chat/index.js `skillDescription`:
-// no vale la pena parsear YAML de verdad para esto) — soporta líneas planas
-// `clave: valor` y listas simples `- item` bajo la última clave vista (cubre
-// `allowed-tools:` en formato lista, usado por skills/pad/SKILL.md).
-function parseFrontmatter(raw) {
-  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) return {};
-  const out = {};
-  let curKey = null;
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = line.match(/^([a-zA-Z_-]+):[ \t]*(.*)$/);
-    if (kv) {
-      curKey = kv[1].trim();
-      const val = kv[2].trim();
-      out[curKey] = val ? val.replace(/^["']|["']$/g, '') : '';
-      continue;
-    }
-    const item = line.match(/^\s*-\s*(.+)$/);
-    if (item && curKey) {
-      if (!Array.isArray(out[curKey])) out[curKey] = [];
-      out[curKey].push(item[1].trim());
-    }
-  }
-  return out;
 }
 
 const PAD_REF_RE = /Fuente de verdad:\s*`(PLAYB-\d+)`/;
@@ -153,9 +133,46 @@ export default {
             summary: String(it.content || '').slice(0, 220),
           }));
 
-        res.json({ skills, padOnly, padAvailable });
+        res.json({
+          skills,
+          padOnly,
+          padAvailable,
+          catalog: catalogStateFor(scope.claudeDir),
+        });
       } catch (e) {
         res.status(500).json({ error: String(e.message || e) });
+      }
+    });
+
+    router.post('/skills/install', (req, res) => {
+      try {
+        const scope = systemScopeFor(req);
+        const result = installSkill(scope.claudeDir, req.body?.dirName);
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error, code: result.code });
+        }
+        return res.json(result);
+      } catch (e) {
+        return res.status(400).json({
+          error: 'No se pudo instalar la skill.',
+          code: e?.code || 'install_failed',
+        });
+      }
+    });
+
+    router.post('/skills/uninstall', (req, res) => {
+      try {
+        const scope = systemScopeFor(req);
+        const result = uninstallSkill(scope.claudeDir, req.body?.dirName);
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error, code: result.code });
+        }
+        return res.json(result);
+      } catch (e) {
+        return res.status(400).json({
+          error: 'No se pudo desinstalar la skill.',
+          code: e?.code || 'uninstall_failed',
+        });
       }
     });
   },

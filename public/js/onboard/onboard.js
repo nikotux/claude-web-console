@@ -20,6 +20,8 @@
     infisicalUrl: '',
     pending: [],
     checklist: null,
+    provision: null,
+    provisionPolling: false,
     finishSent: false,
     error: '',
   };
@@ -49,7 +51,29 @@
       state.finishSent = true;
       apiJson('/finish', { method: 'POST', body: { token: state.token } }).catch(() => {});
     }
+    if (step === 'done' && !state.provisionPolling) {
+      state.provisionPolling = true;
+      pollProvision(0);
+    }
     render();
+  }
+
+  // console:BUG-2118: el alta responde ok:true antes de que terminen el Pad y el
+  // clon del workspace del inquilino. El checklist final consulta el estado real
+  // y lo muestra, en vez de dar por hecho que salió bien. Nunca bloquea el
+  // cierre del wizard: si el poll falla, el checklist simplemente no muestra
+  // esas líneas.
+  function pollProvision(tries) {
+    if (!state.token) return;
+    apiJson('/provision-status?token=' + encodeURIComponent(state.token), {})
+      .then(function (data) {
+        state.provision = data;
+        if (state.step === 'done') render();
+        if (data.status === 'pending' && tries < 20) {
+          setTimeout(function () { pollProvision(tries + 1); }, 3000);
+        }
+      })
+      .catch(function () { /* el checklist no bloquea el cierre del wizard */ });
   }
 
   function startNamedStep(step) {
@@ -1140,13 +1164,33 @@
 
   function renderDone() {
     root.replaceChildren();
-    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 7));
+    const provFailed = !!(state.provision && state.provision.status === 'failed');
+    root.appendChild(provFailed
+      ? header('⚠️ Casi listo', 'Tu cuenta quedó creada, pero algo de tu espacio no se pudo preparar.', 7)
+      : header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 7));
     const list = document.createElement('ul');
     list.className = 'ob-list';
     const accountConnected = state.account === 'connected' || (state.checklist && state.checklist.account);
     const codexConnected = state.codex === 'connected' || (state.checklist && state.checklist.codex);
     const infisicalConnected = state.infisical === 'connected' || (state.checklist && state.checklist.infisical);
     list.appendChild(textEl('li', '', '✅ Cuenta creada (' + state.username + ')'));
+    const provStepLine = function (key, okText, pendingText, failText) {
+      const prov = state.provision;
+      if (!prov || prov.status === 'idle') return null;
+      const s = (prov.steps && prov.steps[key]) || null;
+      if (!s) return null;
+      if (s.status === 'ok') return '✅ ' + okText;
+      if (s.status === 'failed') return '⚠️ ' + failText + (s.error ? ' (' + s.error + ')' : '');
+      return '⏳ ' + pendingText;
+    };
+    [
+      provStepLine('pad', 'Tu espacio de Pad quedó creado', 'Creando tu espacio de Pad…',
+        'Tu espacio de Pad NO se pudo crear — avisale al administrador'),
+      provStepLine('workspace', 'Tu copia del repo de trabajo quedó lista', 'Clonando tu repo de trabajo…',
+        'Tu copia del repo de trabajo NO se pudo clonar — avisale al administrador'),
+    ].forEach(function (text) {
+      if (text) list.appendChild(textEl('li', '', text));
+    });
     list.appendChild(textEl('li', '', '✅ Claude listo para trabajar (setup-token)'));
     list.appendChild(textEl('li', '', accountConnected
       ? '✅ Claude · tu consumo conectado'

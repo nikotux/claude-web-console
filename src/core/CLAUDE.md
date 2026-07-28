@@ -21,6 +21,14 @@ vía settingSourcesFor('none') + las DOS capas de deny de la regla 6
 [PreToolUse+canUseTool, INCONDICIONALES] + carrera de timeout + pump.
 Lo usan retro-runner y ticket-context-runner; NO usarlo si el runner
 necesita herramientas — ese arma su query con su allowlist explícita) ·
+claude-oauth(ÚNICO escritor de `.claude/.credentials.json`: refresca el
+access token OAuth con el refreshToken contra
+`console.anthropic.com/v1/oauth/token` y el client_id público del CLI. El
+refresh token ROTA, por eso escribe atómicamente con modo 0600 y re-lee justo
+antes para no pisar un refresh del propio CLI. Guard de concurrencia por owner;
+nunca loguea credenciales y ante cualquier fallo devuelve `null` en vez de
+lanzar. Exports: `refreshClaudeOauth(owner)`,
+`getValidClaudeAccessToken(owner)`) ·
 paths(resolveWithinHome/clampToHome — TODA validación de
 rutas del cliente pasa por acá; nunca startsWith crudo) ·
 pad-world-refs(frontera compartida entre los mundos: detector de refs
@@ -126,6 +134,15 @@ core/forbidden-actions.js; si hay un override consciente vigente lo
 CONSUME (un solo uso) y deja pasar. Mismo gotcha de siempre: un runner ya
 vivo no toma reglas nuevas de código hasta "Reabrir para cambios" — el
 registro en disco, en cambio, se relee por mtime en caliente) ·
+`tolkienEnvPreToolUseHook({onNeed})` es el hook POR-SPAWN (no global) de los
+chats cuyo cwd es el Tolkien BASE: deniega el primer Edit/Write/MultiEdit/
+NotebookEdit —o `delegate_to_codex`— y le avisa al server que hace falta un
+entorno aislado. `console:BUG-2092`: emitía `onNeed` UNA sola vez por spawn
+(latch). Si la mudanza al worktree fallaba, ese runner no volvía a pedirla nunca
+y TODA escritura quedaba denegada para siempre — deadlock silencioso. Ahora es un
+THROTTLE de 15 s: vuelve a pedir el entorno mientras la sesión siga afuera, y el
+server descarta el pedido redundante (`_provisioningEnv` en curso, o la sesión ya
+adentro). El deny y el set de tools no cambiaron.
 forbidden-actions(REGISTRO de ACCIONES PROHIBIDAS por lección — M5 de
 PLAN-1934/DOC-1926, el ÚNICO gate DURO de la casa. Reglas del tipo "nunca
 ejecutes X" con SEED en código (siempre compila) + registro opcional en

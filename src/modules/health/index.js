@@ -34,6 +34,7 @@ import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
 import { listEnvs, ENVS_DIR } from '../tolkien/env-store.js';
+import { listProvisionStates } from '../onboard/provision-state.js';
 import { verifyEnvContext } from '../tolkien/env-shared.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
@@ -388,6 +389,36 @@ function checkCrossWorld() {
     return { id, label, status: 'warn', detail: `cruce cross-mundo NUEVO fuera del paquete en: ${found.join(', ')} — pasalo por el paquete-sesión (canal canónico) o, si es legítimo, sumalo al allowlist con motivo` };
   }
   return { id, label, status: 'ok', detail: `${CROSS_WORLD_ALLOW.size} cruces conocidos (grandfathered) · sin cruces nuevos fuera del paquete` };
+}
+
+// console:BUG-2118: el provisioning de un inquilino (su Pad + el clon de su
+// workspace) corre DESPUÉS de que /register respondió ok:true. Si falla, el
+// wizard ya dijo "listo" y el único rastro era el journal. Acá el admin lo ve
+// sin leer logs. Un `pending` viejo también cuenta: si el server murió a mitad
+// del provisioning, ese inquilino quedó a medias y nadie lo va a reintentar.
+const PROVISION_STALE_MS = 10 * 60 * 1000;
+
+function checkOnboardProvisioning() {
+  const id = 'onboard-provisioning';
+  const label = 'Provisioning de inquilinos';
+  let states = [];
+  try { states = listProvisionStates(); } catch { return { id, label, status: 'warn', detail: 'no pude leer el estado de provisioning' }; }
+  if (!states.length) return { id, label, status: 'ok', detail: 'sin altas registradas' };
+  const failed = states.filter((s) => s.status === 'failed');
+  const stuck = states.filter((s) => s.status === 'pending' && Date.now() - (s.ts || 0) > PROVISION_STALE_MS);
+  const describe = (s) => {
+    const bad = Object.entries(s.steps || {})
+      .filter(([, v]) => v.status !== 'ok')
+      .map(([k, v]) => `${k}: ${v.error || v.status}`);
+    return `${s.user}${bad.length ? ` (${bad.join(' · ')})` : ''}`;
+  };
+  if (failed.length || stuck.length) {
+    const parts = [];
+    if (failed.length) parts.push(`${failed.length} alta(s) con provisioning FALLIDO: ${failed.slice(0, 3).map(describe).join(' | ')}`);
+    if (stuck.length) parts.push(`${stuck.length} colgada(s) en pending hace más de 10 min: ${stuck.slice(0, 3).map((s) => s.user).join(', ')}`);
+    return { id, label, status: 'warn', detail: `${parts.join(' · ')} — ese inquilino quedó sin su Pad o sin el clon de su workspace` };
+  }
+  return { id, label, status: 'ok', detail: `${states.length} alta(s) con provisioning completo` };
 }
 
 function checkTolkienEnvs() {
@@ -767,6 +798,7 @@ async function runChecks() {
     Promise.resolve(checkFichasModulo()),
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
+    Promise.resolve(checkOnboardProvisioning()),
     checkPadBackbone(),
     checkPadIndex(),
     checkPadBootstrap(),

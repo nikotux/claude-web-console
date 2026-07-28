@@ -52,6 +52,9 @@ import {
 import { readEmailScan, isEmailScanRunning, spawnRetroEmailRunner } from './email-shared.js';
 import { readTeamsFeedbackScan, isTeamsFeedbackScanRunning, spawnRetroTeamsRunner } from './teams-feedback-shared.js';
 import { readVerifyState, isVerifyRunning, isVerifyStale, spawnRetroVerifyRunner } from './verify-shared.js';
+import {
+  SWEEP_EVERY_MS, SWEEP_BOOT_DELAY_MS, isSweepRunning, spawnRetroSweepRunner,
+} from './sweep-shared.js';
 import { scanHygiene } from './hygiene-shared.js';
 
 function sendErr(res, e) {
@@ -63,6 +66,19 @@ function sendErr(res, e) {
 
 export default {
   name: 'retro',
+
+  // BUG-2068: las sesiones TUI no pasan por Chat.close, así que nunca destilaban.
+  // El tick solo SPAWNEA el runner desacoplado (regla 2): todo el trabajo y el
+  // estado viven fuera del proceso del server, y el barrido es idempotente
+  // (registro durable), así que un reinicio no pierde ni duplica nada.
+  init() {
+    const kick = () => {
+      try { if (!isSweepRunning()) spawnRetroSweepRunner(); }
+      catch (err) { console.error('[retro] no pude lanzar el barrido de TUI:', err?.message); }
+    };
+    setTimeout(kick, SWEEP_BOOT_DELAY_MS).unref();
+    setInterval(kick, SWEEP_EVERY_MS).unref();
+  },
 
   registerHttp(router) {
     const r = express.Router();

@@ -261,6 +261,11 @@ gráfico, no puede abrir el navegador del usuario y el runner pasa de `url` a
 los índices son token 1, register 2, creds 3, account 4, Codex 5, Infisical 6 y
 done 7.
 
+Al entrar en `done`, el wizard pollea `provision-status` hasta 20 intentos cada
+3 s mientras siga `pending`. El checklist muestra el estado real del Pad y del
+clon del workspace; si alguno falla, el título se degrada a
+“⚠️ Casi listo”.
+
 ## Gotchas de esta carpeta
 
 - `apiCreateSession` (`js/main.js`) propaga el campo `error` que devuelve el

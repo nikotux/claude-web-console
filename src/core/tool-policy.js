@@ -259,7 +259,13 @@ export const TOLKIEN_ENV_WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'N
 
 // Hook SOLO por-spawn para chats cuyo cwd es el Tolkien base: no es global.
 export function tolkienEnvPreToolUseHook({ onNeed }) {
-  let requested = false;
+  // BUG-2092: antes esto era un latch de UNA sola emisión por spawn. Si la
+  // mudanza al worktree fallaba, el runner nunca volvía a pedirla y toda
+  // escritura quedaba denegada para siempre. Ahora es un THROTTLE: se vuelve a
+  // pedir cada RETRY_MS, y el server descarta el pedido redundante (ya está
+  // dentro del entorno, o hay una provisión en curso).
+  const RETRY_MS = 15000;
+  let lastRequestAt = 0;
   const deny = (reason) => ({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -271,8 +277,9 @@ export function tolkienEnvPreToolUseHook({ onNeed }) {
     PreToolUse: [{
       hooks: [async (input) => {
         if (TOLKIEN_ENV_WRITE_TOOLS.has(input.tool_name)) {
-          if (!requested) {
-            requested = true;
+          const now = Date.now();
+          if (now - lastRequestAt >= RETRY_MS) {
+            lastRequestAt = now;
             try { onNeed?.(); } catch { /* noop */ }
           }
           return deny('Estoy creando tu entorno aislado de Tolkien (worktree + DB propia). Reintentá la edición/delegación en unos segundos: cuando el entorno esté listo tu cwd apunta a él y el cambio cae en tu copia, sin pisar otras sesiones.');

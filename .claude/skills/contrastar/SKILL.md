@@ -2,6 +2,8 @@
 name: contrastar
 description: "🧭 Contrasta el trabajo hecho contra el pedido original anclado en Pad (CONVE-1957 / CONVE-1958) y emite veredicto 🟢 alineado / 🟡 deriva recuperable / 🔴 cambio de alcance. Úsalo al cerrar CADA fase o bloque (CP-N) y SIEMPRE antes de entregar cualquier resultado (CP-Ω): la verificación de un cambio es técnica Y de intención. Si detecta deriva, corregí y volvé a correrlo — iterar hasta 🟢 es el objetivo."
 argument-hint: "[ref del ítem anclado] [CP-0 | CP-N:<fase> | CP-Ω]"
+cwc-share: catalog
+cwc-default: true
 ---
 
 # 🧭 Contrastar contra el pedido original
@@ -41,7 +43,7 @@ Convención madre: **CONVE-1957**; obligaciones: **CONVE-1958**.
 | C1 · … | 🟢/🟡/🔴 | <archivo:línea, ref de Pad, salida de comando> |
 VEREDICTO: 🟢 alineado | 🟡 deriva recuperable | 🔴 cambio de alcance
 DERIVA DETECTADA: <de más / de menos / distinto — o "ninguna">
-ACCIÓN: <corrección + re-contraste | escalar a Niko | entregar>
+ACCIÓN: <corrección + re-contraste | escalar al usuario | entregar>
 PASADA: <n>/3
 ```
 
@@ -53,14 +55,14 @@ PASADA: <n>/3
 | 🟡 deriva recuperable | **corregir dentro del alcance y VOLVER A CORRER esta skill.** Iterar es lo esperado: "cinco o seis pasadas" es un resultado correcto, no un fracaso. |
 | 🔴 cambio de alcance | **PARÁ.** No lo decidas solo: pedile a quien pidió una enmienda, y registrala en la tabla `## 📝 Enmiendas` del ancla si la aprueba. |
 
-7. **Tope de convergencia:** 3 veredictos 🟡 seguidos sin llegar a 🟢 ⇒ escalá a Niko con el
+7. **Tope de convergencia:** 3 veredictos 🟡 seguidos sin llegar a 🟢 ⇒ escalá al usuario con el
    diagnóstico en vez de seguir ciclando. Iterar hasta converger es el objetivo; ciclar sin
    converger significa que el ancla o el plan están mal, y eso lo decide un humano.
 
 ## En CP-Ω, además
 
 El contraste final es la **obligación 11 del cierre** (CONVE-1945): un cambio no está listo
-para entregar con los chequeos técnicos en verde si el contraste no da 🟢. Presentá a Niko la
+para entregar con los chequeos técnicos en verde si el contraste no da 🟢. Presentá al usuario la
 tabla criterio·evidencia·veredicto junto al resumen del trabajo — es lo que le permite ver
 en diez segundos que lo entregado es lo que pidió.
 
@@ -76,4 +78,4 @@ es la señal de deriva, no la refutación de la deriva.
 Cerrá siempre con la línea `🎾 Pelota: …`.
 
 ---
-*Fuente de verdad: `CONVE-1957` + `CONVE-1958` en Pad `console`.*
+*Fuente de verdad: `CONVE-1957` + `CONVE-1958` en el workspace Pad del usuario.*

@@ -63,10 +63,14 @@ valida el username con `isValidUsername` (letras, números, `.`, `_`, `-`, máx.
 32). Después reserva el token con `lockInvite(token, username)` ANTES de llamar
 `createUser(username, password, !!v.admin)`: ese lock evita que dos requests
 concurrentes del mismo token puedan crear dos usuarios distintos. El bit admin
-del usuario sale SOLO del token. Tras crear el usuario, hace
-`ensureUserSpace(username)` best-effort y dispara sin await
-`provisionUserPad(username, { name: username })` y
-`provisionUserWorkspace(username)`. La respuesta OK es `{ok:true, username}`.
+del usuario sale SOLO del token. Si falta el valor o llega con otro nombre, el
+400 nombra explícitamente el campo esperado `username`; el formato inválido
+también identifica ese campo. Tras crear el usuario, hace
+`ensureUserSpace(username)` best-effort, llama `startProvision(username)` y
+dispara sin await `provisionUserPad(username, { name: username })`,
+`provisionUserWorkspace(username)` e `installDefaults(userClaudeDir(username))`,
+cerrando cada resultado persistido con `markProvisionStep`. La respuesta OK es
+`{ok:true, username}` y no espera esos pasos.
 
 `POST /api/onboard/public/creds-start` recibe `{token}`. Resuelve el usuario con
 `stepUser`: acepta la invitación locked del alta en curso o una consumida cuyo
@@ -88,6 +92,13 @@ si `starting`/`exchanging` tiene más de 30 s, y calcula `hasToken` con
 `readUserOauthToken(lockedTo)`. NO expone secretos: devuelve estado, URL OAuth,
 `note` diagnóstico, done/error/stale y booleano `hasToken`; el `pid` queda
 exclusivamente del lado servidor.
+
+`GET /api/onboard/public/provision-status?token=...` usa
+`peekInvite(token)` como gate y resuelve el usuario incluso con la invitación
+ya consumida. Devuelve `{status, steps:{pad,workspace,skills}, stale}` con los
+estados reales del provisioning posterior al alta; no expone secretos ni rutas
+y los errores ya saneados se recortan antes de responder. Por su sufijo
+`-status` entra en el bucket amplio de polling del rate-limit público.
 
 `POST /api/onboard/public/creds-code` recibe `{token, code}`. Valida token,
 exige token locked a un usuario, trimmea el código y acepta solo valores no
@@ -197,8 +208,19 @@ problemas y el módulo solo loguea. `provisionUserWorkspace` clona el repo local
 de trabajo en el workspace del inquilino, default shallow
 `--depth 1 --single-branch --branch main`, saltea al host y no re-clona si el
 destino ya tiene `.git`; también resuelve siempre y el módulo solo loguea.
+El tercer paso instala en `<userClaudeDir>/skills/` todas las skills del
+catálogo de `<repo>/.claude/skills/` marcadas `cwc-default: true`. Si el
+catálogo no tiene ninguna default, el paso `skills` termina `ok`: un catálogo
+vacío no debe impedir ni degradar el alta.
 Después de un clon exitoso, `tolkien-mcp-shared.js` registra idempotentemente el
 MCP HTTP `tolkien-mordor`; `/public/finish` lo reintenta best-effort.
+
+`provision-state.js` persiste el resultado de ese trabajo en el HOME del HOST,
+igual que `onboard-jobs/`, porque es estado de administración del alta y no
+dato user-scoped del inquilino. Cada registro vive en
+`~/.cwc-data/onboard-provisioning/<user>.json`, mode 600 y con escritura
+atómica, con forma
+`{user, startedAt, ts, status, steps:{pad,workspace,skills}}`.
 
 Para credenciales Claude, `creds-start` spawnea el runner PTY. El runner llama
 `ensureUserSpace(USER)`, arma `userRunnerEnv(USER)` con HOME/CWC_DATA_DIR del
@@ -251,6 +273,11 @@ llama `generateInvite` sin TTL. Si cambiás el default, revisá ambos puntos.
 Todo endpoint de polling nuevo que se agregue al `publicRouter` tiene que entrar
 en el bucket de estado (`*-status`); de lo contrario volverá a consumir el
 presupuesto de acciones y repetirá el auto-bloqueo del wizard.
+
+El estado de provisioning NO se reintenta solo. Si el server muere a mitad del
+proceso, el registro queda `pending` para siempre y lo delata el check
+`onboard-provisioning` de Salud. Un reintento automático exigiría un runner
+desacoplado por la regla dura 2 y quedó fuera de alcance de console:BUG-2118.
 
 El wizard es REANUDABLE por token: con una invitación `locked`, el front salta
 el registro y retoma según `pending`; con una `consumed`, `/validate` sigue

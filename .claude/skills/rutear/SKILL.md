@@ -2,6 +2,8 @@
 name: rutear
 description: "🤝 Rutea las tareas de un plan de ejecución entre Claude/Tándem/Codex por NATURALEZA de la tarea (convención \"Ruteo de ejecución Tándem\", CONVE-558 / PLAYB-559): asigna {executor, modelo, esfuerzo} a cada tarea ANTES del GO para sacar la escritura de código de la ventana de Claude. Úsalo SIEMPRE que armes o cierres un plan de ejecución (trigger on-plan), en cualquier mundo — es el paso que precede a `agrupar`/`orquestar` cuando el plan es grande, o corre solo en un plan chico."
 argument-hint: "[plan o lista de tareas a rutear] [world: interno|externo, opcional]"
+cwc-share: catalog
+cwc-default: true
 ---
 
 # 🤝 Rutear un plan de ejecución (Tándem)
@@ -31,7 +33,7 @@ Desglosás un plan en tareas atómicas y le asignás a **cada una** su ruteo de 
 
 5. **Agrupá por EJECUTOR antes de repartir sesiones.** Entrar o salir de Tándem **re-lanza el runner** (BUG-780: el flag `--tandem` es de SPAWN, no se cambia en caliente; `_maybeReopenForTandem` con throttle de 30 s y solo si la sesión está viva y ociosa). Por eso **una sesión = UN ejecutor**: tareas de ejecutor distinto o van a sesiones/bloques distintos, o se aceptan explícitamente los respawns. Dentro de una sesión Tándem, hasta el "cableado trivial" pasa por Codex — el hook `PreToolUse` deniega TODA escritura de Claude (Edit/Write/MultiEdit y también las de Bash: redirecciones, `sed -i`, `mv`/`cp`/`tee`…), salvo destino absoluto bajo `/tmp/`.
 6. **Persistí** cada tarea en la colección Tasks del Pad del mundo correspondiente (campos `model`/`effort`/`executor`), colgada de su PLAN padre.
-7. **Presentá** a Niko la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: Niko puede reasignar cualquier fila.
+7. **Presentá** al usuario la tabla de ruteo completa + el ahorro estimado (cuántas tareas van a Codex vs a Claude puro) **antes del GO**. Es un gate, no un trámite: el usuario puede reasignar cualquier fila.
 8. **🧭 Cerrá con CP-0.** Con la tabla de ruteo lista y antes del GO, corré la skill
    `contrastar` en modo `CP-0`: ¿el plan cubre TODOS los criterios del ancla, y hay alguna
    tarea que no sirva a ninguno? Una tarea huérfana en esta etapa cuesta borrar una fila;
@@ -57,4 +59,4 @@ Cerrá siempre con la línea `🎾 Pelota: …`.
 
 ---
 *Actualizado 2026-07-21: razonador de Tándem = Opus/high pinned (antes sonnet/medium) · Tándem = default del sistema · ruteo por BLOQUE por el coste de respawn.*
-*Fuente de verdad: `PLAYB-559` en Pad `console`. Si el procedimiento cambia, actualizar ahí primero y resincronizar este archivo.*
+*Fuente de verdad: `PLAYB-559` en el workspace Pad del usuario. Si el procedimiento cambia, actualizar ahí primero y resincronizar este archivo.*

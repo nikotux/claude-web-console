@@ -19,9 +19,18 @@ Las cachés TTL, promesas concurrentes, throttles, cursores y buffers efímeros 
 por owner y están acotados a 32 usuarios; solo los caches de parseo por archivo
 siguen globales porque su clave es el path absoluto y ya queda aislada. Para los
 límites de Claude, `fetchPlanLimits(owner)` intenta primero
-`.claude/.credentials.json` si el access token sigue vigente y, si falta, está
-roto o venció, usa `.claude/oauth-token` vía `readUserOauthToken(owner)` (token
-que deja el onboarding). Ninguna credencial viaja al cliente ni se loguea.
+`getValidClaudeAccessToken(owner)` de `core/claude-oauth.js`: si el access token
+de `.claude/.credentials.json` venció, renueva SOLO ese token mediante el
+refreshToken. Un 401 con credenciales dispara UN refresh y un único reintento.
+Recién como ÚLTIMO recurso usa `.claude/oauth-token` vía
+`readUserOauthToken(owner)` (token que deja el onboarding). Ninguna credencial
+viaja al cliente ni se loguea.
+
+CAUSA RAÍZ: un INQUILINO corre sus sesiones con `CLAUDE_CODE_OAUTH_TOKEN` (el
+setup-token), así que su CLI nunca renovaba `.credentials.json`; a las ~24 h el
+medidor real se apagaba solo y caía a `localUsage`. El refresh mantiene vivo ese
+camino mientras el refreshToken siga vigente (~1 mes). Cuando venza, sí hay que
+volver a loguear al usuario con `bin/cwc-claude-login-runner.js`.
 
 GOTCHA (verificado 2026-07-27 comparando host e inquilino en el mismo instante):
 el setup-token `sk-ant-oat01` de `.claude/oauth-token` que deja el onboarding NO
@@ -60,12 +69,13 @@ cuántos decimales → el backend divide por 10^decimal_places para
 pasarlos a dólares ($100 llegaba como 10000; se usa el campo, no un
 /100 hardcodeado). `utilization` YA viene en % (0-100)),
 vía el endpoint OAuth de uso de Anthropic con el accessToken vigente
-de `.claude/.credentials.json`; el fallback `.claude/oauth-token` se prueba
-pero, si Anthropic lo rechaza, devuelve el marcador `unavailable` + la alternativa
-local `localUsage` descripta arriba;
-los archivos SOLO se leen, el token nunca viaja al cliente, caché
+de `.claude/.credentials.json`; `core/claude-oauth.js` renueva el access token
+vencido con el refreshToken y persiste atómicamente el par rotado; el fallback
+`.claude/oauth-token` se prueba como último recurso pero, si Anthropic lo
+rechaza, devuelve el marcador `unavailable` + la alternativa local `localUsage`
+descripta arriba; el token nunca viaja al cliente, caché
 120 s (subido de 60 s: el medidor OAuth tira 429 si se lo consulta
-seguido) y ?fresh=1 la saltea — jamás refrescar credenciales desde acá.
+seguido) y ?fresh=1 la saltea.
 PERSISTENCIA + FALLBACK (2026-07-07, pedido del usuario: el dato
 venía SOLO de memoria y un 429/corte de red/reinicio lo perdía):
 cada respuesta BUENA se guarda en ~/.cwc-data/plan-limits.json

@@ -76,7 +76,7 @@ import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
 import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux } from '../terminal/sessions.js';
-import { envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, heartbeat } from '../tolkien/env-store.js';
+import { ENVS_DIR, envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, heartbeat } from '../tolkien/env-store.js';
 import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs } from '../tolkien/env-shared.js';
 import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
@@ -363,6 +363,7 @@ function registerChatSessionIds(ids) {
 
 // Traspaso Chat <-> TUI (una misma conversación, un solo modo a la vez).
 const SWITCH_CLOSE_MS = 8000; // T1: esperar a que muera el motor de chat
+const TURN_IDLE_WAIT_MS = 60000; // BUG-2092: esperar el cierre del turno antes de mudar (el SDK escribe el transcript al cerrar)
 const SWITCH_CTRLC_MS = 8000; // T2: esperar a que `claude` salga tras Ctrl-C x2
 const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 
@@ -528,18 +529,32 @@ function chatProjectDir(cwd) {
 // a otro: copia → verifica → borra el origen (sin ventana de pérdida). La MISMA
 // sessionId pasa a vivir SOLO en el destino → move TRANSPARENTE entre mundos (la
 // conversación no se fotocopia ni deja rastro; rediseño 2026-07-14 por feedback).
+// Si todavía no existe ningún transcript, no hay nada que mover y no es un error.
 function moveTranscript(sid, fromCwd, toCwd) {
   const fromDir = chatProjectDir(fromCwd);
   const toDir = chatProjectDir(toCwd);
-  fss.mkdirSync(toDir, { recursive: true });
   const src = path.join(fromDir, `${sid}.jsonl`);
-  const dst = path.join(toDir, `${sid}.jsonl`);
-  fss.copyFileSync(src, dst);
   const subSrc = path.join(fromDir, sid); // subagentes (si hubiera)
-  if (fss.existsSync(subSrc)) fss.cpSync(subSrc, path.join(toDir, sid), { recursive: true });
-  if (!fss.existsSync(dst)) throw new Error('la copia al mundo destino no quedó');
-  try { fss.rmSync(src); } catch { /* best-effort: el origen queda, pero el destino ya tiene todo */ }
-  try { if (fss.existsSync(subSrc)) fss.rmSync(subSrc, { recursive: true, force: true }); } catch { /* best-effort */ }
+  const hasSrc = fss.existsSync(src);
+  const hasSubs = fss.existsSync(subSrc);
+  // BUG-2092: el SDK no escribe el .jsonl hasta que el turno CIERRA. Un handoff
+  // disparado a mitad de turno (auto-provisión del entorno Tolkien) no tiene NADA
+  // que mover: eso no es un error — el destino crea el transcript al reanudar con
+  // `--session-id`. Antes el ENOENT del copyfile abortaba el handoff entero y
+  // dejaba la sesión huérfana (entorno creado, cwd viejo).
+  if (!hasSrc && !hasSubs) return { moved: false, reason: 'sin-transcript-en-origen' };
+  fss.mkdirSync(toDir, { recursive: true });
+  if (hasSrc) {
+    const dst = path.join(toDir, `${sid}.jsonl`);
+    fss.copyFileSync(src, dst);
+    if (!fss.existsSync(dst)) throw new Error('la copia al mundo destino no quedó');
+    try { fss.rmSync(src); } catch { /* best-effort: el origen queda, pero el destino ya tiene todo */ }
+  }
+  if (hasSubs) {
+    fss.cpSync(subSrc, path.join(toDir, sid), { recursive: true });
+    try { fss.rmSync(subSrc, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+  return { moved: hasSrc };
 }
 // F2 (anti-confusión, pedido de Niko): el repo GitHub REAL de un mundo (leído del
 // .git/config, sin subprocess) — para nombrar la identidad concreta ("el GitHub de
@@ -759,11 +774,21 @@ class Chat {
     return this;
   }
 
+  // BUG-2092: "tener entorno" NO es "estar dentro del entorno". Si el handoff
+  // falló, el chat queda con `tolkienEnv` seteado y el cwd viejo (Tolkien base).
+  _insideTolkienEnv() {
+    const wt = this.tolkienEnv?.worktree;
+    return !!wt && path.resolve(this.cwd) === path.resolve(wt);
+  }
+
   _wantsTolkienEnv() {
     if (process.env.CWC_TOLKIEN_ENV_AUTO === '0') return false;
     if (this.viewMode !== 'chat') return false;
     if (this.permissionMode === 'plan') return false;
-    if (this.tolkienEnv) return false;
+    // BUG-2092: con entorno creado pero la sesión TODAVÍA en el Tolkien base, el
+    // hook debe seguir instalado: sin él, el próximo runner escribiría directo en
+    // el repo base, sin aislamiento y en silencio.
+    if (this._insideTolkienEnv()) return false;
     if (!config.projectDir) return false;
     return path.resolve(this.cwd) === path.resolve(config.projectDir);
   }
@@ -1148,6 +1173,20 @@ class Chat {
       return true;
     }
     return false;
+  }
+
+  // BUG-2092: el SDK recién escribe el transcript cuando el turno CIERRA. La
+  // auto-provisión del entorno Tolkien dispara a mitad de turno (el hook denegó
+  // la primera escritura), así que mudar en ese instante encuentra el .jsonl
+  // inexistente y pierde el contexto del turno en curso. Esperamos el cierre
+  // (o la muerte del motor) con deadline. Es un await ACOTADO dentro de la
+  // operación — no deja nada colgado del proceso del server (regla 2).
+  async _waitTurnIdle(timeoutMs = TURN_IDLE_WAIT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    while (this.alive && this.status === 'working' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return !(this.alive && this.status === 'working');
   }
 
   // ===== Traspaso Chat <-> TUI (regla dura: nunca ambos a la vez) =====
@@ -2223,7 +2262,11 @@ class ChatManager {
       chat.tolkienEnv = null;
     }
     chat.resume = chat.sessionId;
-    chat.history = loadTranscriptEvents(dest, chat.sessionId);
+    // BUG-2092: si no había transcript que mover (turno aún sin cerrar), el
+    // destino todavía no tiene .jsonl: recargar lo dejaría en blanco y perderíamos
+    // los eventos que la conversación ya tiene en memoria. Solo recargamos cuando
+    // el transcript existe de verdad en el destino.
+    if (transcriptExists(dest, chat.sessionId)) chat.history = loadTranscriptEvents(dest, chat.sessionId);
     chat._syncPackage('active', 'moved'); // F2(b): mismo ref, nuevo mundo + evento en el timeline
     // 5. Runner FRESCO bajo el cwd destino (toma los MCP/settings de ESE mundo).
     //    quiesce ya dejó this.link en null ⇒ _ensureEngine spawnea limpio con el
@@ -2246,8 +2289,46 @@ class ChatManager {
   async provisionTolkienEnvForChat(id) {
     const chat = this.chats.get(id);
     if (!chat || chat.closed || chat.archived || chat.viewMode !== 'chat') return;
-    if (chat.tolkienEnv || chat._provisioningEnv) return;
+    if (chat._provisioningEnv) return;
     if (!config.projectDir) return;
+    // console:BUG-2142 · REPROVISIÓN PEREZOSA: un cwd huérfano bloquea la
+    // guarda `chat.cwd !== config.projectDir` y, con ella, toda reconstrucción.
+    // Hay que repararlo antes del despacho: el estado más común ya tiene
+    // `tolkienEnv` limpiado por el sweep pero conserva el cwd del worktree
+    // desmontado, así que no entra en ninguna rama. Es seguro hacerlo siempre:
+    // el helper retorna temprano si el cwd existe; R1 y R2, que por definición
+    // tienen un cwd válido, no se ven afectados.
+    if (this._repairOrphanCwd(chat)) this.persist();
+    // BUG-2092 (F3) · DESPACHO POR TRES RAMAS sobre el estado de `chat.tolkienEnv`.
+    // Decisión de arquitectura (Pad `console:BUG-2092`, decision-1785248470781407184):
+    // esto NO es un `if` suelto — es el ÚNICO punto donde se decide qué hacer
+    // cuando el chat dice tener entorno pero el estado real no es el esperado.
+    // Las tres ramas se mantienen explícitas aunque dos deleguen, para que una
+    // mejora futura reemplace el cuerpo de UNA sin re-abrir el diseño de las otras
+    // (era esto o dos mecanismos paralelos decidiendo lo mismo — `console:CONVE-2085`).
+    //   R1 · worktree existe y el cwd ya está DENTRO  ⇒ nada que hacer.
+    //   R2 · worktree existe y el cwd sigue AFUERA    ⇒ REINTENTAR la mudanza (BUG-2092).
+    //   R3 · el worktree ya no existe                 ⇒ soltar la referencia muerta y
+    //        caer al camino de provisión, que reconstruye sobre la rama sobreviviente.
+    if (chat.tolkienEnv) {
+      const wt = chat.tolkienEnv.worktree;
+      // R1 — caso normal: la sesión ya vive en su entorno.
+      if (chat._insideTolkienEnv()) return;
+      // R2 — el entorno está pero la sesión nunca llegó (el handoff falló antes).
+      // Sin esta rama el early-return se rendía en silencio y el hook dejaba la
+      // sesión encerrada para siempre: es el corazón de BUG-2092.
+      if (wt && fss.existsSync(wt)) {
+        chat._provisioningEnv = true;
+        try { await this._moveChatIntoEnv(chat, wt); }
+        finally { chat._provisioningEnv = false; }
+        return;
+      }
+      // R3 — el worktree se desmontó (reaper). R1 y R2 siguen sin tocarse.
+      chat.tolkienEnv = null;
+      // La reparación del cwd huérfano ya corrió arriba para el método entero;
+      // acá solo soltamos la referencia muerta.
+      this.persist();
+    }
     if (path.resolve(chat.cwd) !== path.resolve(config.projectDir)) return;
     chat._provisioningEnv = true;
     try {
@@ -2263,9 +2344,7 @@ class ChatManager {
       patchEnv(envId, { worktree: wt.worktree, branch: wt.branch, status: 'worktree-ready' });
       spawnEnvProvision(envId);
       chat.tolkienEnv = { id: envId, port, branch: wt.branch, db, worktree: wt.worktree };
-      const note = `Estás ahora en tu ENTORNO AISLADO de Tolkien: worktree propio (rama ${wt.branch}) + DB propia. El dev-server levanta en el puerto ${port} (entrá por la tarjeta Tolkien). Editá o delegá a Codex normalmente: tus cambios viven en esta copia y no pisan otras sesiones.`;
-      const r = await this.handoff(id, wt.worktree, note, { internal: true });
-      if (!r || r.ok === false) { chat._push({ type: 'error', message: `Tu entorno de Tolkien se creó pero no se pudo re-apuntar la sesión: ${r?.error || 'error'}. Reintentá la edición.` }); }
+      await this._moveChatIntoEnv(chat, wt.worktree, { reused: !!wt.reused });
     } catch (e) {
       try { chat._push({ type: 'error', message: `Fallo al crear tu entorno de Tolkien: ${String(e?.message || e).slice(0, 200)}` }); } catch { /* noop */ }
     } finally {
@@ -2273,17 +2352,71 @@ class ChatManager {
     }
   }
 
-  // BUG-2086: ni teardownEnv() ni handoff() limpiaban chat.tolkienEnv, así que
-  // la tarjeta seguía anunciando un entorno fantasma (puerto, rama y DB que ya
-  // no existen). Barrido: si el worktree no está en disco, la referencia se cae.
+  // BUG-2092: la mudanza de la conversación a su worktree, compartida por la
+  // provisión nueva y por el REINTENTO de F3. Espera el cierre del turno para
+  // que el transcript exista antes de moverlo (F2); si aun así no existe, F1
+  // deja que el handoff siga adelante en vez de abortar.
+  async _moveChatIntoEnv(chat, worktree, { reused = false } = {}) {
+    const env = chat.tolkienEnv || {};
+    const note = reused
+      ? `Se RECUPERÓ tu ENTORNO AISLADO de Tolkien sobre tu rama de siempre (${env.branch || ''}): los commits que hubieras hecho antes siguen ahí. El worktree y la DB se reconstruyeron; tu trabajo commiteado no se perdió. El dev-server levanta en el puerto ${env.port || '?'} (entrá por la tarjeta Tolkien).`
+      : `Estás ahora en tu ENTORNO AISLADO de Tolkien: worktree propio (rama ${env.branch || ''}) + DB propia. El dev-server levanta en el puerto ${env.port || '?'} (entrá por la tarjeta Tolkien). Editá o delegá a Codex normalmente: tus cambios viven en esta copia y no pisan otras sesiones.`;
+    await chat._waitTurnIdle();
+    const r = await this.handoff(chat.id, worktree, note, { internal: true });
+    if (!r || r.ok === false) {
+      chat._push({ type: 'error', message: `Tu entorno de Tolkien se creó pero no se pudo re-apuntar la sesión: ${r?.error || 'error'}. Reintentá la edición.` });
+      return false;
+    }
+    return true;
+  }
+
+  // console:BUG-2142: el sweep limpiaba chat.tolkienEnv pero dejaba el cwd
+  // huérfano; además, un chat dormido no está protegido por activeChatIds del
+  // reaper. Si su entorno desapareció, repuntarlo al mundo Tolkien base.
+  _repairOrphanCwd(chat) {
+    if (chat.closed || !chat.cwd || fss.existsSync(chat.cwd)) return false;
+    const rel = path.relative(path.resolve(ENVS_DIR), path.resolve(chat.cwd));
+    const cwdInDeadEnv = rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+    if (!cwdInDeadEnv || !config.projectDir || !fss.existsSync(config.projectDir)) return false;
+
+    const fromCwd = chat.cwd;
+    const toCwd = config.projectDir;
+    let transcriptMoved = true;
+    if (chat.sessionId) {
+      try {
+        const moveResult = moveTranscript(chat.sessionId, fromCwd, toCwd);
+        if (moveResult?.moved === false) transcriptMoved = false;
+      } catch (err) {
+        transcriptMoved = false;
+        console.error(`[chat] no se pudo mover el transcript de ${chat.id} al reparar su cwd: ${String(err?.message || err)}`);
+      }
+    }
+    chat.cwd = toCwd;
+    if (chat.sessionId) {
+      // console:BUG-2153: sin transcript de origen, el destino queda sin .jsonl
+      // y recargarlo blanquearía los eventos que todavía viven en memoria.
+      if (transcriptExists(toCwd, chat.sessionId)) chat.history = loadTranscriptEvents(toCwd, chat.sessionId);
+    }
+    chat.resume = chat.sessionId;
+    chat._push({
+      type: 'error',
+      message: transcriptMoved
+        ? `Tu entorno aislado de Tolkien fue desmontado por inactividad (6 h sin uso). Esta conversación se repuntó sola al mundo Tolkien (${toCwd}) y el historial está intacto; si necesitás aislamiento, pedí un entorno nuevo.`
+        : `Tu entorno aislado de Tolkien fue desmontado por inactividad (6 h sin uso). Esta conversación se repuntó sola al mundo Tolkien (${toCwd}), pero su transcript no se pudo mover: el historial en pantalla puede estar incompleto aunque la sesión sigue siendo la misma.`,
+    });
+    return true;
+  }
+
   _sweepDeadEnvRefs() {
     let changed = false;
     for (const chat of this.chats.values()) {
       const wt = chat.tolkienEnv?.worktree;
-      if (!wt) continue;
-      if (fss.existsSync(wt)) continue;
-      chat.tolkienEnv = null;
-      changed = true;
+      if (wt && !fss.existsSync(wt)) {
+        chat.tolkienEnv = null;
+        changed = true;
+      }
+
+      if (this._repairOrphanCwd(chat)) changed = true;
     }
     if (changed) this.persist();
     return changed;

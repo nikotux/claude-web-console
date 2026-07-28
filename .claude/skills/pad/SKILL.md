@@ -5,6 +5,8 @@ argument-hint: <anything you want to say to your project>
 allowed-tools:
   - Bash
   - Read
+cwc-share: catalog
+cwc-default: true
 ---
 
 # Pad — Talk to Your Project
@@ -121,7 +123,10 @@ If the first token isn't a known slug, fall through to the natural-language rout
 
 **Recognizing trigger-based intent.** Even when a user doesn't type the slug, you can match by intent. The bootstrap's `playbooks` array carries each playbook's `trigger` (e.g. `on-release`, `on-implement`, `manual`). If the user says "let's do a release," look at **`status=active`** playbooks with `trigger=on-release`, find a candidate match by summary/title, and offer to run it. Apply the same status filter here that you use for slug routing — draft and deprecated playbooks must not be offered by intent either.
 
-> *"Sounds like the release playbook (PLAYB-1160). Want me to run it? It expects a `version` argument (semver, e.g. `0.5.0`). What version are you cutting?"*
+> *"Sounds like the release playbook (the one with slug `release`). Want me to run it? It expects a `version` argument (semver, e.g. `0.5.0`). What version are you cutting?"*
+
+<!-- Este renglón es un EJEMPLO ilustrativo de diálogo, no una instrucción. Nunca pongas acá un ref concreto (`PLAYB-n`): hasta 2026-07-28 decía `PLAYB-1160`, un ítem que no existe en este workspace, y una auditoría lo reportó como referencia rota (`console:BUG-2033` p1). Si hace falta nombrar un playbook en un ejemplo, usá su slug. -->
+
 
 **Argument-binding rules.**
 

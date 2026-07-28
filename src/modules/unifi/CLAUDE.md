@@ -24,6 +24,17 @@ reintenta UNA vez con `force:true`. GOTCHA de cliente: aunque Pad mande
 `{ok,error,status}` y lo descarta; la detección efectiva es
 `status===409`. El retorno conserva todas sus claves y suma
 `errorDetails[]` (máximo 20), para que `errors` no sea un contador mudo.
+VERIFICADO 2026-07-28 (console:PLAN-2138 / console:BUG-2051 p1): el
+retire-sweep NUNCA archiva. Marca `status='retirado'` + `lastSeen` del
+último escaneo y deja `deleted_at` en NULL; el ítem sigue visible para
+`listItems`, así que si la entidad reaparece el upsert por `uid` la
+devuelve a `presente` sin duplicarla. No hay ninguna llamada a
+`deleteItem` en el módulo. Aclaración para futuros auditores: los 202
+ítems con `deleted_at` de la colección `infraestructura-de-red` NO son
+retiros — son duplicados creados y borrados el 2026-07-23 entre las
+13:55 y las 13:57 (2 filas por cada uno de los 101 `uid`) durante el
+desarrollo del módulo. Contar `deleted_at` en esa colección NO mide el
+retire-sweep.
 audit-shared.js (PLAN-1795) es DETERMINÍSTICO (0 tokens, sin LLM):
 getRadios()/getWan() derivan la telemetría y buildVoiceAudit() aplica
 REGLAS de voz (2.4GHz cu_total>60→rojo / 40-60→amarillo,

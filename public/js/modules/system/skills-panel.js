@@ -1,12 +1,8 @@
-// modules/system/skills-panel.js — pestaña "Skills" de ⚙ Sistema: censo
-// READ-ONLY de las skills de Claude Code (SKILL.md) cruzadas con los
-// Playbooks de Pad del usuario, agrupadas según los mundos que devuelve el
-// backend. Reusa el look de tarjeta colapsable de health-review-modal
-// (.hr-collapsible/.hr-finding/.hr-f-*) — casi sin CSS nuevo, solo 2
-// modificadores de color para el estado de sincronía con Pad.
-//
-// Solo lectura a propósito (decisión explícita 2026-07-19): sin crear/editar
-// SKILL.md ni playbooks desde acá todavía.
+// modules/system/skills-panel.js — pestaña "Skills" de ⚙ Sistema: catálogo
+// instalable por usuario + censo informativo de las skills de Claude Code
+// (SKILL.md) cruzadas con los Playbooks de Pad. Reusa el look de tarjeta
+// colapsable de health-review-modal (.hr-collapsible/.hr-finding/.hr-f-*).
+import { alertDialog, confirmDialog } from '../../ui/dialog.js';
 import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
@@ -49,6 +45,63 @@ function skillCard(sk, i) {
     </div>`;
 }
 
+function catalogClass(sk) {
+  if (sk.outdated) return 'hr-finding--orphan';
+  if (sk.installed) return 'hr-finding--linked';
+  return 'hr-finding--low';
+}
+
+function catalogBadge(sk) {
+  if (sk.outdated) {
+    return `<span class="hr-sev hr-sev--orphan">${t('system.skills.catalog.status.outdated', '⬆️ actualización disponible')}</span>`;
+  }
+  if (sk.installed) {
+    return `<span class="hr-sev hr-sev--linked">${t('system.skills.catalog.status.installed', '✅ instalada')}</span>`;
+  }
+  return `<span class="hr-sev hr-sev--low">${t('system.skills.catalog.status.notInstalled', '⬜ no instalada')}</span>`;
+}
+
+function catalogActions(sk) {
+  const remove = `
+    <button class="btn-ghost btn--sm btn--danger" data-catalog-action="uninstall" title="${t('system.skills.catalog.removeTitle', 'Quita esta copia de tu espacio personal')}">
+      ${icon('trash', { size: 13 })}<span>${t('system.skills.catalog.remove', 'Quitar')}</span>
+    </button>`;
+  if (!sk.installed) {
+    return `
+      <button class="btn btn--sm" data-catalog-action="install" title="${t('system.skills.catalog.installTitle', 'Copia esta skill a tu espacio personal')}">
+        ${icon('download', { size: 13 })}<span>${t('system.skills.catalog.install', 'Instalar')}</span>
+      </button>`;
+  }
+  if (sk.outdated) {
+    return `
+      <button class="btn btn--sm" data-catalog-action="install" title="${t('system.skills.catalog.updateTitle', 'Reemplaza la copia del catálogo por la versión actual')}">
+        ${icon('refresh', { size: 13 })}<span>${t('system.skills.catalog.update', 'Actualizar')}</span>
+      </button>
+      ${remove}`;
+  }
+  return remove;
+}
+
+function catalogCard(sk) {
+  const defaultMark = sk.isDefault
+    ? `<span class="hr-kind" title="${t('system.skills.catalog.defaultTitle', 'Se instala automáticamente a los usuarios nuevos')}">${t('system.skills.catalog.defaultBadge', '⭐ predeterminada')}</span>`
+    : '';
+  return `
+    <div class="hr-finding ${catalogClass(sk)} hr-collapsed" data-catalog-dir="${esc(sk.dirName)}">
+      <div class="hr-f-head" data-toggle="1">
+        <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
+        ${catalogBadge(sk)}
+        <span class="hr-f-area">${esc(sk.name)}</span>
+        ${defaultMark}
+        <span class="hr-f-mod">${esc(sk.dirName)}</span>
+      </div>
+      <div class="hr-f-body">
+        <p class="hr-f-detail">${esc(sk.description) || `<i>${t('system.skills.noDescription', 'sin descripción')}</i>`}</p>
+        <div class="hr-f-actions">${catalogActions(sk)}</div>
+      </div>
+    </div>`;
+}
+
 function candidateRow(c) {
   return `
     <div class="hr-finding hr-finding--medium">
@@ -83,6 +136,89 @@ export function mountSkillsPanel(el) {
     });
   }
 
+  async function requestCatalog(action, dirName) {
+    const res = await fetch(`/api/skills/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dirName }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const fallback = action === 'install'
+        ? t('system.skills.catalog.installError', 'No se pudo instalar la skill.')
+        : t('system.skills.catalog.uninstallError', 'No se pudo quitar la skill.');
+      const error = new Error(data.error || fallback);
+      error.code = data.code || 'catalog_action_failed';
+      throw error;
+    }
+    return data;
+  }
+
+  async function runCatalogAction(card, sk, action) {
+    if (action === 'uninstall') {
+      const confirmed = await confirmDialog({
+        title: t('system.skills.catalog.removeConfirmTitle', 'Quitar skill'),
+        message: t('system.skills.catalog.removeConfirmMessage', '¿Quitar “{name}” de tu espacio? La copia del catálogo se borra solo para tu usuario.', { name: sk.name }),
+        confirmLabel: t('system.skills.catalog.remove', 'Quitar'),
+        danger: true,
+      });
+      if (!confirmed || !alive) return;
+    }
+
+    const buttons = [...card.querySelectorAll('[data-catalog-action]')];
+    buttons.forEach((button) => { button.disabled = true; });
+    const actions = card.querySelector('.hr-f-actions');
+    const busyText = action === 'uninstall'
+      ? t('system.skills.catalog.removing', 'Quitando…')
+      : (sk.outdated
+          ? t('system.skills.catalog.updating', 'Actualizando…')
+          : t('system.skills.catalog.installing', 'Instalando…'));
+    actions?.insertAdjacentHTML('afterbegin', `<span class="hr-f-fixing">${pacman({ size: 'sm' })}<span>${busyText}</span></span>`);
+
+    let error = null;
+    try {
+      await requestCatalog(action, sk.dirName);
+    } catch (err) {
+      error = err;
+    }
+
+    await load();
+    if (!alive) return;
+
+    if (error) {
+      const userOwned = error.code === 'user_owned';
+      await alertDialog({
+        title: userOwned
+          ? t('system.skills.catalog.ownSkillTitle', 'Skill propia protegida')
+          : t('system.skills.catalog.actionErrorTitle', 'No se pudo cambiar la skill'),
+        message: userOwned
+          ? t('system.skills.catalog.ownSkillMessage', 'Ya existe una skill propia con ese nombre en tu espacio. Mi Consola no pisa ni borra skills que no instaló desde el catálogo.')
+          : error.message,
+      });
+      return;
+    }
+
+    if (action === 'install') {
+      await alertDialog({
+        title: sk.outdated
+          ? t('system.skills.catalog.updatedTitle', 'Skill actualizada')
+          : t('system.skills.catalog.installedTitle', 'Skill instalada'),
+        message: t('system.skills.catalog.restartNotice', 'La skill ya está en tu espacio. Una sesión de chat que ya estaba abierta no la carga hasta reiniciarse, porque cada runner toma sus skills al nacer.'),
+      });
+    }
+  }
+
+  function wireCatalogActions(catalog) {
+    const byDir = new Map(catalog.map((sk) => [sk.dirName, sk]));
+    root.querySelectorAll('[data-catalog-dir]').forEach((card) => {
+      const sk = byDir.get(card.dataset.catalogDir);
+      if (!sk) return;
+      card.querySelectorAll('[data-catalog-action]').forEach((button) => {
+        button.addEventListener('click', () => runCatalogAction(card, sk, button.dataset.catalogAction));
+      });
+    });
+  }
+
   function render(d) {
     const byWorld = new Map();
     for (const sk of d.skills || []) {
@@ -109,13 +245,33 @@ export function mountSkillsPanel(el) {
       ? `<p class="hr-f-crit">⚠️ ${t('system.skills.padUnavailable', 'Pad local no respondió — se muestran solo los SKILL.md, sin estado de sincronía.')}</p>`
       : '';
 
+    const catalog = d.catalog || [];
+    const installed = catalog.filter((sk) => sk.installed).length;
+    const outdated = catalog.filter((sk) => sk.outdated).length;
+    const catalogSummary = t(
+      'system.skills.catalog.summary',
+      '📦 Catálogo · {available} disponibles · {installed} instaladas · {outdated} con actualización',
+      { available: catalog.length, installed, outdated },
+    );
+    const catalogSection = `
+      <details class="hr-collapsible">
+        <summary>${catalogSummary}</summary>
+        <div class="hr-findings">
+          ${catalog.length
+            ? catalog.map(catalogCard).join('')
+            : `<p class="hr-summary">${t('system.skills.catalog.empty', 'No hay skills compartibles en el catálogo.')}</p>`}
+        </div>
+      </details>`;
+
     root.innerHTML = `
-      <p class="pj-hint">${t('system.skills.hint', 'Skills de Claude Code (SKILL.md) cruzadas con los Playbooks de Pad local — solo lectura.')}</p>
+      ${catalogSection}
+      <p class="pj-hint">${t('system.skills.hint', 'Censo informativo de skills de Claude Code (SKILL.md) cruzadas con los Playbooks de Pad local.')}</p>
       ${warn}
       ${groups || `<p class="hr-summary">${t('system.skills.noneFound', 'No se encontraron skills.')}</p>`}
       ${candSec}
     `;
     wireToggles();
+    wireCatalogActions(catalog);
   }
 
   async function load() {
@@ -124,6 +280,7 @@ export function mountSkillsPanel(el) {
     try {
       const res = await fetch('/api/skills');
       d = await res.json();
+      if (!res.ok) d = null;
     } catch {
       d = null;
     }

@@ -368,3 +368,20 @@ que otra capa infiera el proyecto.
 Toda lección que se crea en `mejora-continua` recibe un link `implements` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. La convención que crea o actualiza `promoteToConvention` recibe `implements` hacia la lección de origen.
 
 Los tres links son BEST-EFFORT (nunca rompen la destilación ni la promoción) y se SALTAN cuando el `ctx` es de un inquilino (workspace `tenant-*`), porque los ítems `ARQUI-*` solo existen en el workspace `console` del host. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz; detalle en `docs/pad-grafo.md`.
+
+### Barrido de sesiones TUI (BUG-2068)
+
+Las sesiones TUI no pasan por `Chat.close`, por lo que antes nunca llegaban a
+`queueRetroDistill`. El disparo nuevo es un tick de `init()` que SOLO spawnea el
+runner desacoplado `bin/cwc-retro-sweep-runner.js` (regla dura 2); el barrido
+determinístico y de 0 TOKENS vive en `sweep-shared.js`, y la destilación real
+sigue en `cwc-retro-runner.js`. Estado operativo en
+`~/.cwc-data/retro-sweep.json`, lock pid-aware con heartbeat en
+`retro-sweep.lock` y log en `retro-sweep.log`; `retro-swept.json` es el
+registro DURABLE que NUNCA se poda. Solo considera transcripts con
+`entrypoint:'cli'`, quietos hace 6 h, de hasta 14 días, procesa como máximo 5
+por corrida y saltea archivos mayores a 8 MB. Marca en el registro durable
+también los descartados por el filtro híbrido, para converger en vez de
+reevaluarlos cada hora. LIMITACIÓN CONOCIDA y deliberada: barre solo el HOME
+del host; los transcripts TUI de inquilinos bajo
+`~/.cwc-users/<id>/.claude/projects/` quedan fuera y se cubren en otro bug.

@@ -67,7 +67,10 @@
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
-  espejo de contexto a Tolkien (`tolkien-context`) y **`pad-backbone`**
+  **`onboard-provisioning`** (console:BUG-2118: `ok` si no hay altas o todas
+  están completas; `warn` si alguna quedó `failed` o lleva más de 10 minutos
+  en `pending`), espejo de contexto a Tolkien (`tolkien-context`) y
+  **`pad-backbone`**
   (2026-07-12, Gap #3 / TASK-296): lee las Conventions del Pad LOCAL por HTTP
   (0 tokens, NO MCP → no toca la regla 6, vía `core/pad-service-client.js`) y
   verifica (a) que el Pad local RESPONDE —si no, warn: tasks/learning/retro/

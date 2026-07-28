@@ -23,6 +23,12 @@
   existencia. El admin conserva acceso total. Una tmux autorizada todavía puede
   morir entre el listado y el click; el chequeo de existencia evita devolver
   200 y abrir una pestaña fantasma.
+- La rama `attach` resuelve su `cwd` con `safeCwd(cwd, owner)`, igual que la rama
+  de creación normal: sin eso la `Session` nacía con `config.home`
+  (`/home/nmosquera`, el HOME del HOST) aunque el dueño fuera un inquilino, y el
+  pty envoltorio se spawneaba fuera de su workspace (`console:BUG-2119`). Si el
+  destino pedido no existe se cae al root del dueño en vez de fallar: el cwd real
+  de los panes lo define la tmux a la que se adjunta, no este pty envoltorio.
 - El guard `canUseTmuxSession` y su lookup por prefijo viven en
   `terminal/sessions.js` y son la fuente única compartida con `tmux/index.js`.
   No dupliques el criterio: dos copias pueden divergir y reabrir el aislamiento.

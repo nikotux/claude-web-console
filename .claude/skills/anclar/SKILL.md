@@ -2,6 +2,8 @@
 name: anclar
 description: "🧭 Paso 0 de CUALQUIER trabajo no trivial (CONVE-1957 / CONVE-1958): guarda el pedido original VERBATIM en Pad y destila sus criterios de aceptación observables, para que la resolución tenga un Norte contra el cual contrastarse. Úsalo al ARRANCAR un proyecto, ticket, PR, bug o refactor — antes de rutear, agrupar u orquestar. Sin ancla, el contraste final no tiene contra qué medir."
 argument-hint: "[el pedido original, o la ref del ítem de Pad a anclar]"
+cwc-share: catalog
+cwc-default: true
 ---
 
 # 🧭 Anclar el pedido original
@@ -71,14 +73,16 @@ Trabajo trivial (un typo, una consulta) no necesita ancla. Mismo umbral que la R
 
 ## Mundos
 
-En el mundo INTERNO el ancla se escribe en el Pad `console`. Para el mundo EXTERNO (Tolkien)
-el ancla se escribe en el Pad `tolkien` desde una sesión de ESE mundo — nunca desde acá
-(Regla 12: el cruce es por plan-puente, jamás una escritura directa).
+En el mundo INTERNO el ancla se escribe en el workspace de Pad del usuario que corre la
+skill. Si sos el dueño de la consola puede ser `console`; si sos un inquilino es TU
+workspace (`tenant-<usuario>`), nunca el de otro usuario. Para un mundo EXTERNO, el ancla
+se escribe desde una sesión de ESE mundo — nunca desde el interno (Regla 12: el cruce es
+por plan-puente, jamás una escritura directa).
 
 ## Cierre
 
 Cerrá siempre con la línea `🎾 Pelota: …`.
 
 ---
-*Fuente de verdad: `CONVE-1957` (convención) + `CONVE-1958` (contrato) en Pad `console`.
-Si el procedimiento cambia, actualizá ahí primero y resincronizá este archivo.*
+*Fuente de verdad: `CONVE-1957` (convención) + `CONVE-1958` (contrato) en el workspace Pad
+del usuario. Si el procedimiento cambia, actualizá ahí primero y resincronizá este archivo.*

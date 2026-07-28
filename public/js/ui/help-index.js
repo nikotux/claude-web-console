@@ -130,7 +130,7 @@ export const HELP_INDEX = [
     get title() { return t('core.help.topic.sys-skills.title', 'Skills'); },
     icon: 'sparkle',
     group: 'sistema',
-    get blurb() { return t('core.help.topic.sys-skills.blurb', 'Censo read-only de skills de Claude Code y playbooks de Pad, sin usar tokens.'); },
+    get blurb() { return t('core.help.topic.sys-skills.blurb', 'Catálogo personal y censo de skills de Claude Code con playbooks de Pad, sin usar tokens.'); },
     load: () => import('./../modules/system/help/skills.js'),
   },
   {

@@ -2,6 +2,8 @@
 name: module-scan
 description: "🔬 Loop MICRO del programa de modularización (PLAYB-26, scope backend): escanea UN módulo de Mi Consola, descubre lo escapado (código huérfano/sin registrar), arregla lo seguro y lo registra en Pad — sin romper nada, verificando cada paso, un módulo por vez. Úsalo al revisar/consolidar un módulo backend (trigger on-review), no solo para el programa de modularización original — cualquier auditoría módulo-por-módulo futura lo reusa tal cual."
 argument-hint: "[module: nombre del módulo a escanear, ej. health, comms, tickets]"
+cwc-share: host-only
+cwc-default: false
 ---
 
 # 🔬 Escanear y consolidar un módulo (loop de modularización)

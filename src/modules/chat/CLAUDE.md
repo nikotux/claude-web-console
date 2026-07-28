@@ -206,12 +206,76 @@ la sesión trabajando adentro, borrar su worktree y dejar al chat apuntando a un
 `cwd` inexistente. Como defensa inmediata, `_startEngine()` verifica que `cwd`
 exista ANTES de spawnear y empuja un error visible al chat en vez de dejar al
 motor morir y reintentar en silencio. Como reconciliación,
-`ChatManager._sweepDeadEnvRefs()` suelta `chat.tolkienEnv` cuando el worktree ya
-no existe en disco; corre al rehidratar y después de cada ciclo del reaper.
+`ChatManager._sweepDeadEnvRefs()` corre al rehidratar y después de cada ciclo
+del reaper, y hace DOS cosas: (1) suelta `chat.tolkienEnv` cuando el worktree
+ya no existe en disco; y (2) vía `_repairOrphanCwd(chat)`,
+`console:BUG-2142` — AUTO-REPARA el `cwd` huérfano:
+si el `cwd` de un chat no cerrado cae bajo `ENVS_DIR` (contención verificada
+con `path.relative`, no con `startsWith` de strings) y ya no existe, lo repunta
+a `config.projectDir` —solo si esa carpeta existe—, mueve el transcript con
+`moveTranscript()`, recarga `history` con `loadTranscriptEvents()`, fija
+`resume = sessionId` y empuja un aviso visible a la conversación. Hizo falta
+porque la protección por `activeChatIds` solo cubre chats con el motor VIVO.
+Un chat que se durmió solo por inactividad (auto-sueño) NO está protegido, así
+que su entorno se desmonta a las 6 h —comportamiento deseado—. Faltaba reparar
+el lado del chat: sin eso quedaba apuntando a la nada para siempre y solo se
+recuperaba mudándolo a mano. El guard de `_startEngine()` avisa pero no repara.
 Además el reaper pasa a `reapEnvs()` los `activeChatIds` de chats no cerrados,
 no archivados y con `alive` true: un entorno cuyo chat tiene el motor VIVO es
 intocable por el corte de idle (el teardown explícito por `closedChatIds` se
 mantiene).
+TRASPASO INICIAL AL ENTORNO — `console:BUG-2092`: el ciclo de vida de arriba
+asume que la sesión LLEGÓ a su worktree. Ese traspaso podía no ocurrir nunca.
+`moveTranscript()` hacía `copyFileSync` sin verificar el origen, y el SDK NO
+escribe el `.jsonl` hasta que el turno CIERRA — pero la auto-provisión dispara a
+mitad de turno (el hook denegó la primera escritura), así que el archivo todavía
+no existía y el `ENOENT` abortaba un `handoff()` por lo demás correcto: entorno
+creado, `cwd` viejo, motor muerto con `status` stale. Cuatro piezas lo cierran.
+(1) `moveTranscript()` devuelve `{moved:false, reason:'sin-transcript-en-origen'}`
+en vez de tirar cuando no hay NADA que mover — el destino crea el transcript al
+reanudar con `--session-id`; el invariante copia→verifica→borra se conserva para
+el caso normal. (2) `handoff()` recarga `history` SOLO si
+`transcriptExists(dest, sid)`: sin ese guard, el handoff ahora exitoso dejaba
+`loadTranscriptEvents()` devolviendo `[]` y BLANQUEABA la conversación en
+pantalla. (3) `Chat._waitTurnIdle(TURN_IDLE_WAIT_MS = 60 s)` espera el cierre del
+turno antes de mudar, para que el transcript exista y el contexto del turno en
+curso no se pierda; es un `await` ACOTADO dentro de la operación, no un
+`setTimeout` colgado del proceso (regla 2). (4) `Chat._insideTolkienEnv()`
+separa «tengo entorno» de «estoy DENTRO del entorno» — la distinción es el
+corazón del bug. `_wantsTolkienEnv()` ya no corta por `if (this.tolkienEnv)`
+sino por `if (this._insideTolkienEnv())`: con el entorno creado pero la sesión
+todavía en el Tolkien BASE, el hook DEBE seguir instalado, porque sin él el
+próximo runner escribía directo en el repo base compartido, sin aislamiento y
+sin aviso (peor que el deadlock: el deadlock se nota). Y
+`provisionTolkienEnvForChat()` deja de rendirse con un early-return: si hay
+entorno y la sesión sigue afuera, REINTENTA la mudanza cuando el worktree existe,
+o suelta la referencia y provisiona de cero cuando ya no está. La mudanza vive en
+`ChatManager._moveChatIntoEnv(chat, worktree, { reused })`, compartida por la
+provisión nueva y por el reintento — una sola implementación, no dos copias que diverjan
+(`console:CONVE-2085`). El complemento del lado del runner es el throttle del
+hook (ver la ficha de `src/core/`): con el latch original, un runner vivo pedía
+el entorno UNA sola vez y el reintento no tenía quién lo disparara.
+REPARACIÓN ÚNICA DEL `cwd` HUÉRFANO: `ChatManager._repairOrphanCwd(chat)`
+tiene UNA definición y DOS call-sites: `_sweepDeadEnvRefs()`, durante el
+barrido periódico, y `provisionTolkienEnvForChat()`, en el instante exacto en
+que el entorno vuelve a hacer falta. La extracción es pura y no cambia el
+comportamiento observable del sweep; responde a `console:CONVE-2085`: dos
+lugares que deben comportarse igual comparten función, no comentarios.
+REPROVISIÓN PEREZOSA (`console:BUG-2142` / `console:PLAN-2172`):
+`provisionTolkienEnvForChat()` llama a `_repairOrphanCwd(chat)` ANTES del
+despacho por las tres ramas de `console:BUG-2092`. Es deliberado y NO pertenece
+a R3: el estado más común —`tolkienEnv` ya limpiado por el sweep y `cwd`
+todavía apuntando al worktree desmontado— no entra en NINGUNA de las tres
+ramas y moría en la guarda `chat.cwd !== config.projectDir`. Llamar siempre al
+helper es seguro porque hace early-return si el `cwd` existe; R1 y R2, con
+`cwd` válido por definición, no se ven afectadas. Reparado el `cwd`, la
+provisión reconstruye el entorno sobre la rama `cwc-env/<envId>` sobreviviente:
+no necesita lógica propia de reconstrucción, porque `createWorktree()` ya se
+reengancha sobre la rama existente e ignora el `baseRef`.
+`_moveChatIntoEnv(chat, worktree, { reused })` deja DOS variantes de nota:
+«entorno nuevo» o «se RECUPERÓ tu entorno sobre tu rama de siempre». El dato
+viene de `createWorktree()`; si `reused` llegara como `undefined`, se degrada a
+`false` y nunca rompe.
 F3 · ARCHIVAR-NO-BORRAR (2026-07-14, PEND-462; INDEPENDIENTE del move —
 ya NO es efecto del handoff): acción MANUAL para aparcar un chat terminado
 y revivirlo ante feedback días después. `Chat.archive()` (aparca revivible: duerme

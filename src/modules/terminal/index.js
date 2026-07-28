@@ -121,8 +121,23 @@ export default {
             console.warn('[terminal] Adjuntado a sesión muerta — owner:', String(owner).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
             return res.status(400).json({ error: `La sesión "${attach.session}" ya no existe: su terminal se cerró. Creá una nueva desde "Nueva sesión".` });
           }
+          // console:BUG-2119: sin esto la Session nacía con cwd = config.home
+          // (el HOME del HOST) aunque el dueño fuera un inquilino, y el pty
+          // envoltorio se spawneaba ahí. Mismo clamp que la rama de creación:
+          // el cwd cae dentro de userFileRoot(owner), jamás en el home global.
+          // El cliente manda `cwd` en el MISMO body que `attach` (main.js), así
+          // que un destino inexistente no puede convertir un adjuntado válido en
+          // un 500: se cae al root del dueño, que siempre existe. El cwd real de
+          // los panes lo define la tmux destino, no este pty envoltorio.
+          let attachCwd = safeCwd(cwd, owner);
+          try {
+            if (!fs.statSync(attachCwd).isDirectory()) throw new Error('not-directory');
+          } catch {
+            attachCwd = safeCwd(undefined, owner);
+          }
           const session = sessionManager.create({
             attach: { socket: socketPath, session: attach.session },
+            cwd: attachCwd,
             title: title || attach.session,
             owner,
           });

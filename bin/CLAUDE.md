@@ -131,6 +131,12 @@ JSON contiene `claudeAiOauth.accessToken` y luego ejecuta best-effort
 `claude auth status --json` con salida redactada. FAIL-CLOSED: rechaza al
 usuario HOST antes de crear el job, porque su credencial real solo se
 administra con su propio CLI. Timeout duro: 10 min.
+### bin/cwc-claude-token-refresh.js  CLI de diagnóstico/renovación del OAuth de Claude por
+usuario. Usa `core/claude-oauth.js`; sin argumento opera sobre el host y con
+`<userId>` sobre ese inquilino. Imprime únicamente owner/estado/refreshed/
+vencimiento/suscripción, nunca el token ni otra credencial. Si no hay
+credenciales o el refresh token venció, explica el motivo probable y sale 1.
+Uso: `node bin/cwc-claude-token-refresh.js [userId]`.
 ### bin/cwc-codex-login-runner.js  LOGIN GUIADO de Codex por usuario para onboarding y ⚙ Sistema
 → Conexiones: runner PTY de `codex login --device-auth` (el login normal
 abre callback en localhost:1455, inservible desde un navegador contra un
@@ -365,6 +371,16 @@ ignora) — verificado con `kill -9` a mitad de corrida (quedó `running` con 3/
 PRs persistidos y el relanzamiento completó los 5 que faltaban). Lógica en
 `src/modules/retro/verify-shared.js`. Lo disparan `POST /api/retro/verify`
 (admin) y el auto-cebado por vencimiento de `GET /api/retro`.
+### bin/cwc-retro-sweep-runner.js BARRIDO de sesiones TUI para Mejora Continua
+(BUG-2068), determinístico y **0 TOKENS**: no usa el SDK, por lo que la regla 6
+no aplica. Corre DESACOPLADO por la regla dura 2; estado/lock/log en
+`~/.cwc-data/retro-sweep.json`, `retro-sweep.lock` y `retro-sweep.log`, más
+`retro-swept.json` como registro DURABLE que NUNCA se poda. Flags:
+`--dry-run`, `--json`, `--quiet-ms=N`, `--max-age-days=N`, `--max=N`. Lo
+dispara el tick de `init()` del módulo `retro`; la destilación real la sigue
+haciendo `cwc-retro-runner.js`, porque este runner solo descubre transcripts
+quietos y los encola mediante `queueRetroDistill`. Lógica compartida en
+`src/modules/retro/sweep-shared.js`.
 ### bin/cwc-tasks-analyze-runner.js ANÁLISIS GENERAL IA del tablero de Pendientes (botón "🧠
 Análisis general" de las pestañas Tareas/Planes), DESACOPLADO del
 server (regla de oro; sonnet, 1 turno, CERO herramientas — doble capa
@@ -700,6 +716,17 @@ contacto sin depender del server. Subcomandos: log/query/list/
 contacts/contact-add/scan. Estado file-based en ~/.cwc-data/comms/
 ### bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 ### bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
+### bin/cwc-unifi-scan.js       CLI del escaneo ESTRUCTURAL del UDM Pro a Pad (colección
+`infraestructura-de-red`, PLAN-774). Wrapper delgado de `scanToPad()` de
+`src/modules/unifi/inventory-shared.js`. NO usa el SDK (0 tokens, la
+regla 6 no aplica) y es SOLO-LECTURA sobre el router: jamás escribe al
+UDM Pro; lo único que escribe es Pad. `--dry-run`/`-n` reporta los
+contadores sin ninguna escritura. Re-ejecutable e idempotente: upsert
+por campo `uid`; una entidad ausente del escaneo se marca
+`status='retirado'` + `lastSeen`, NUNCA se archiva (verificado
+2026-07-28, console:PLAN-2138), y si reaparece vuelve a `presente` sin
+duplicarse. Imprime `Creados/Actualizados/Retirados/Errores` y sale 1 si
+el escaneo falla.
 ### bin/cwc-tolkien-refresh-runner.js  refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de
 importers Zoho), DESACOPLADO (regla de oro/regla 2: operación larga que
 DEBE sobrevivir a un reinicio de la web). NO usa el SDK (0 tokens:

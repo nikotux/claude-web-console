@@ -225,6 +225,7 @@ Detalle completo: `src/modules/tickets/CLAUDE.md`.
 - 🔒 | se crea `src/modules/<n>/` | Contrato · Módulo BACKEND nuevo — 9 obligaciones verificables | pad_item get CONVE-1944 (~3 KB) | manual
 - 🔒 | se va a cerrar/reportar un cambio en Mi Consola | Contrato · Cerrar CUALQUIER cambio — 10 obligaciones verificables | pad_item get CONVE-1945 (~4 KB) | manual
 - 🔒 | se arranca o se cierra CUALQUIER trabajo no trivial (proyecto, ticket, PR, bug, refactor) | Contrato · Anclar y contrastar cualquier trabajo — 8 obligaciones verificables | pad_item get CONVE-1958 (~3 KB) | manual
+- 🔒 | vas a crear o modificar una skill | Contrato · Catálogo instalable de skills — clasificación, defaults y aislamiento | pad_item get console:PLAN-2181 (~3 KB) | manual
 - 🔒 | se va a citar un ref de Pad en un artefacto que cruza mundos (plan-puente, CLAUDE.local.md de Tolkien, comunicación a Chris) | Convención · Citado de refs con MUNDO explícito (`console:BUG-1`, nunca `BUG-1`) | pad_item get CONVE-2056 (~3 KB) | manual
 
 ### Si hace falta el mapa entre subsistemas
@@ -300,7 +301,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `onboard/` | alta self-service de usuarios por token de invitación (SP7 multi-tenant) | Su `publicRouter` se monta ANTES del gate de auth: lo único que lo protege es la validación del token + un rate-limit por IP en memoria. Todo endpoint que agregues ahí queda expuesto sin login. |
 | `env-vars/` | capa de config de instancia (identidad + cliente) | Nunca guarda secretos: esos viven en `.env` y `~/.claude`. |
 | `unifi/` | puente SOLO-LECTURA al UDM Pro | Jamás escribe al router. |
-| `skills/` | censo read-only de skills, cruzado con los playbooks de Pad | Solo lectura a propósito. |
+| `skills/` | censo de skills + catálogo instalable por usuario (`catalog`/`host-only`) | `user_owned`: una skill propia homónima nunca se pisa ni se borra. Las sesiones abiertas no ven instalaciones nuevas: los runners cargan sus skills al nacer. |
 | `files/` | explorador y gestor de archivos con papelera recuperable | `resolveWithinRoot()` solo confina la ruta como string: hay que confirmar con `realpathSync()` que la ruta REAL siga dentro del root, o un symlink escapa. |
 | `stats/` | telemetría del host, servidor y usuarios | El porcentaje de CPU es un delta global compartido: la primera llamada da 0 y `/api/stats` y `health` consumen el mismo `prevCpu`. |
 | `tmux/` | observación y control de sesiones tmux existentes | El guard de no-admin es fail-closed: exige socket, prefijo, sesión viva y owner coincidente; lo ajeno o desconocido responde `404`. |
@@ -319,6 +320,11 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   el inventario es "qué existe AHORA" — se regenera solo al abrir un chat de la
   consola (o a mano con `node bin/cwc-inventory.js`). Es la Fase 3 del "sistema
   nervioso".
+- **Skills compartibles = clasificación explícita:** toda skill agregada a
+  `.claude/skills/` declara `cwc-share: catalog|host-only` y `cwc-default:
+  true|false`; sin clasificar es `host-only` (fail-closed). Una `catalog` no
+  cablea el workspace Pad `console`, rutas del HOME del dueño ni asume que el
+  usuario es Niko: la ejecutará otro usuario en su propio espacio.
 - **Colores/espaciado:** solo variables de `tokens.css` (o `color-mix` sobre
   ellas). Acento único terracota `--cwc-accent`. Para sombras/velos existen
   `--cwc-shadow-sm/md/lg`, `--cwc-shadow-ink` y `--cwc-scrim`; blanco puro es

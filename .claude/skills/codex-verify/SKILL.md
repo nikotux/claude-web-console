@@ -2,6 +2,8 @@
 name: codex-verify
 description: "🔎 Corre una revisión INDEPENDIENTE con Codex (GPT) —modelo distinto al implementador Claude, read-only siempre— sobre un módulo/ruta/PR/diff, y registra los hallazgos VERIFICADOS en Pad como BUG colgado del módulo (PLAYB-36). Complementa, nunca reemplaza, las auditorías Claude (Salud/Coherencia de Mi Consola). Úsalo al cerrar una revisión de código (trigger on-review) cuando quieras una segunda opinión de un modelo distinto al que escribió el código."
 argument-hint: "[target: ref de módulo DOC de Pad | ruta src/modules/<x> | PR/diff] [mode: diff|full, def diff] [since: base ref opcional]"
+cwc-share: catalog
+cwc-default: true
 ---
 
 # 🔎 Verificar código con Codex (revisión independiente)
@@ -49,4 +51,4 @@ Si Codex agotó su cuota OpenAI (pasó antes, reset lejano): seguir con verifica
 Cerrá siempre con la línea `🎾 Pelota: …`.
 
 ---
-*Fuente de verdad: `PLAYB-36` en Pad `console`. Si el procedimiento cambia, actualizar ahí primero y resincronizar este archivo.*
+*Fuente de verdad: `PLAYB-36` en el workspace Pad del usuario. Si el procedimiento cambia, actualizar ahí primero y resincronizar este archivo.*
