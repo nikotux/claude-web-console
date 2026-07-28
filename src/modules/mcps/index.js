@@ -15,18 +15,17 @@
 //   · Re-verificar          → invalida caché y re-corre `claude mcp list`.
 //   · Reciclar runners      → el front llama a /api/admin/restart-runners (ya
 //                             existe): un runner vivo re-lee credenciales/MCP.
-//   · Desconectar (logout)  → `claude mcp logout <name>` (admin).
+//   · Desconectar (logout)  → `claude mcp logout <name>` en el HOME del dueño.
 //   · Reconectar (OAuth)    → Fase 2, runner pty bin/cwc-mcp-login-runner.js
 //                             (login-shared.js) — el server solo orquesta.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { isAdmin } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { runAdaptivePool } from '../../core/pool.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import {
-  spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS, runMcpGet,
+  commandEnvFor, spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS, runMcpGet,
 } from './login-shared.js';
 import { buildKeyring, refreshDerived } from './keyring-shared.js';
 import {
@@ -123,44 +122,65 @@ function enrich(server, cliCfg, projectMcp, cwd) {
   };
 }
 
-const STORE_FILE = path.join(os.homedir(), '.cwc-data', 'mcps-census.json');
-const KEYRING_FILE = path.join(os.homedir(), '.cwc-data', 'keyring.json');
+export function mcpsPathsFor(scope) {
+  return {
+    store: path.join(scope.dataDir, 'mcps-census.json'),
+    keyring: path.join(scope.dataDir, 'keyring.json'),
+    claudeJson: path.join(scope.home, '.claude.json'),
+  };
+}
+
 const CHECK_TIMEOUT_MS = 15000;
 // Abrir el panel no debe costar consultas de red ni subprocesos: el estado de
 // una conexión no cambia minuto a minuto, y para urgencias existe Re-verificar.
 const AUTO_RECHECK_MS = 12 * 60 * 60 * 1000;
-const checking = new Set();        // claves "<world>:<name>" con chequeo en vuelo
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
-let storeMemo = null;
-let keyringMemo = null;
-let keyringInFlight = null;
+// Todo estado en memoria queda particionado por usuario. Nunca una promesa,
+// snapshot o Set de chequeos de un principal puede satisfacer a otro.
+const runtimeByUser = new Map();
+
+function runtimeFor(scope) {
+  let state = runtimeByUser.get(scope.user);
+  if (!state) {
+    state = {
+      checking: new Set(),
+      storeMemo: null,
+      keyringMemo: null,
+      keyringInFlight: null,
+    };
+    runtimeByUser.set(scope.user, state);
+  }
+  return state;
+}
 
 function itemKey(world, name) {
   return `${world}:${name}`;
 }
 
-function loadStore() {
-  if (storeMemo) return storeMemo;
-  const raw = readJson(STORE_FILE);
-  storeMemo = raw && raw.items && typeof raw.items === 'object' ? { items: raw.items, savedAt: raw.savedAt } : { items: {} };
-  return storeMemo;
+function loadStore(scope) {
+  const state = runtimeFor(scope);
+  if (state.storeMemo) return state.storeMemo;
+  const raw = readJson(mcpsPathsFor(scope).store);
+  state.storeMemo = raw && raw.items && typeof raw.items === 'object' ? { items: raw.items, savedAt: raw.savedAt } : { items: {} };
+  return state.storeMemo;
 }
 
-function saveStore() {
+function saveStore(scope) {
   try {
-    const store = loadStore();
+    const store = loadStore(scope);
     store.savedAt = Date.now();
-    writeJsonAtomic(STORE_FILE, store, { space: 2 });
+    writeJsonAtomic(mcpsPathsFor(scope).store, store, { space: 2 });
   } catch { /* best-effort: el request nunca depende del store persistido */ }
 }
 
-function scheduleChecks(targets) {
+function scheduleChecks(scope, targets) {
+  const { checking } = runtimeFor(scope);
   const list = [];
   try {
     for (const t of targets || []) {
       const world = String(t.world || '');
       const name = String(t.name || '');
-      const cwd = t.cwd || worldCwd(world);
+      const cwd = t.cwd || worldCwd(scope, world);
       if (!cwd || !name) continue;
       const key = itemKey(world, name);
       if (checking.has(key)) continue;
@@ -172,25 +192,25 @@ function scheduleChecks(targets) {
     // chequeos idempotentes. No es un job de usuario que requiera runner aparte.
     runAdaptivePool(list, async ({ cwd, name, key }) => {
       try {
-        const r = await runMcpGet(cwd, name, CHECK_TIMEOUT_MS);
+        const r = await runMcpGet(scope, cwd, name, CHECK_TIMEOUT_MS);
         const entry = { status: r.status, statusRaw: r.statusRaw || '', checkedAt: Date.now() };
         if (r.error) entry.error = r.error;
         if (r.timedOut) entry.timedOut = true;
         if (r.timeoutMs) entry.timeoutMs = r.timeoutMs;
-        loadStore().items[key] = entry;
-        saveStore();
+        loadStore(scope).items[key] = entry;
+        saveStore(scope);
       } catch (e) {
-        loadStore().items[key] = {
+        loadStore(scope).items[key] = {
           status: { code: 'error', light: 'danger', label: 'Error de conexión' },
           statusRaw: '',
           checkedAt: Date.now(),
           error: String(e.message || e || '').trim().slice(0, 300),
         };
-        saveStore();
+        saveStore(scope);
       } finally {
         checking.delete(key);
       }
-    }, { max: 4 }).then(() => saveStore()).catch(() => {
+    }, { max: 4 }).then(() => saveStore(scope)).catch(() => {
       for (const t of list) checking.delete(t.key);
     });
   } catch {
@@ -198,10 +218,10 @@ function scheduleChecks(targets) {
   }
 }
 
-function targetsFromCensus(data, pred) {
+function targetsFromCensus(scope, data, pred) {
   const out = [];
   for (const w of data.worlds || []) {
-    const cwd = worldCwd(w.world);
+    const cwd = worldCwd(scope, w.world);
     if (!cwd) continue;
     for (const s of w.servers || []) {
       if (!pred || pred(s, w)) out.push({ world: w.world, cwd, name: s.name });
@@ -210,7 +230,8 @@ function targetsFromCensus(data, pred) {
   return out;
 }
 
-function refreshCheckingFlags(data) {
+function refreshCheckingFlags(scope, data) {
+  const { checking } = runtimeFor(scope);
   for (const w of data.worlds || []) {
     for (const s of w.servers || []) s.checking = checking.has(s.key);
     w.missing = (w.servers || []).map((s) => {
@@ -229,15 +250,16 @@ function missingReason(s) {
   return null;
 }
 
-function buildCensus() {
-  const cliCfg = readJson(path.join(os.homedir(), '.claude.json')) || {};
-  const store = loadStore();
+function buildCensus(scope) {
+  const cliCfg = readJson(mcpsPathsFor(scope).claudeJson) || {};
+  const store = loadStore(scope);
+  const { checking } = runtimeFor(scope);
   const now = Date.now();
   const worlds = [];
   const readableWorlds = new Set();
   const liveKeys = new Set();
   for (const w of WORLDS) {
-    const cwd = worldCwd(w.world);
+    const cwd = worldCwd(scope, w.world);
     // Sin cwd resuelto (p.ej. Tolkien sin su directorio configurado) no hay que
     // caer silenciosamente al cwd de la propia Consola: mostraría los MCP
     // servers de Mi Consola bajo la etiqueta de otro mundo. Reportar el error
@@ -280,7 +302,7 @@ function buildCensus() {
     worlds.push({
       world: w.world,
       label: w.label,
-      cwd: '~/' + path.relative(os.homedir(), cwd),
+      cwd: '~/' + path.relative(scope.home, cwd),
       servers,
       hasWarnings: conflicts.length > 0,
       conflicts,
@@ -296,7 +318,7 @@ function buildCensus() {
     delete store.items[key];
     pruned = true;
   }
-  if (pruned) saveStore();
+  if (pruned) saveStore(scope);
   return { worlds, generatedAt: Date.now(), checkTimeoutMs: CHECK_TIMEOUT_MS };
 }
 
@@ -315,39 +337,41 @@ function keyringSnapshotForDisk(data) {
   };
 }
 
-async function getKeyring({ fresh = false } = {}) {
+async function getKeyring(scope, { fresh = false } = {}) {
+  const state = runtimeFor(scope);
+  const keyringFile = mcpsPathsFor(scope).keyring;
   const now = Date.now();
-  if (!keyringMemo) {
-    const snap = readJson(KEYRING_FILE);
-    if (validKeyringSnapshot(snap)) keyringMemo = snap;
+  if (!state.keyringMemo) {
+    const snap = readJson(keyringFile);
+    if (validKeyringSnapshot(snap)) state.keyringMemo = snap;
   }
-  const ageMs = keyringMemo?.generatedAt ? now - keyringMemo.generatedAt : Infinity;
-  if (!fresh && keyringMemo && ageMs < AUTO_RECHECK_MS) return hydrateKeyringSnapshot(keyringMemo);
-  if (keyringInFlight) {
+  const ageMs = state.keyringMemo?.generatedAt ? now - state.keyringMemo.generatedAt : Infinity;
+  if (!fresh && state.keyringMemo && ageMs < AUTO_RECHECK_MS) return hydrateKeyringSnapshot(state.keyringMemo);
+  if (state.keyringInFlight) {
     try {
-      return hydrateKeyringSnapshot(await keyringInFlight);
+      return hydrateKeyringSnapshot(await state.keyringInFlight);
     } catch (e) {
-      if (keyringMemo) return hydrateKeyringSnapshot(keyringMemo, { stale: true, staleReason: String(e?.message || e || '').slice(0, 300) });
+      if (state.keyringMemo) return hydrateKeyringSnapshot(state.keyringMemo, { stale: true, staleReason: String(e?.message || e || '').slice(0, 300) });
       throw e;
     }
   }
-  keyringInFlight = (async () => {
-    const data = await buildKeyring();
-    keyringMemo = data;
-    try { writeJsonAtomic(KEYRING_FILE, keyringSnapshotForDisk(data), { space: 2 }); } catch { /* best-effort: el snapshot no bloquea la respuesta */ }
+  state.keyringInFlight = (async () => {
+    const data = await buildKeyring(scope);
+    state.keyringMemo = data;
+    try { writeJsonAtomic(keyringFile, keyringSnapshotForDisk(data), { space: 2 }); } catch { /* best-effort: el snapshot no bloquea la respuesta */ }
     return data;
   })();
   try {
-    return hydrateKeyringSnapshot(await keyringInFlight);
+    return hydrateKeyringSnapshot(await state.keyringInFlight);
   } catch (e) {
-    const snap = keyringMemo || readJson(KEYRING_FILE);
+    const snap = state.keyringMemo || readJson(keyringFile);
     if (validKeyringSnapshot(snap)) {
-      keyringMemo = snap;
+      state.keyringMemo = snap;
       return hydrateKeyringSnapshot(snap, { stale: true, staleReason: String(e?.message || e || '').slice(0, 300) });
     }
     throw e;
   } finally {
-    keyringInFlight = null;
+    state.keyringInFlight = null;
   }
 }
 
@@ -359,18 +383,19 @@ export default {
     // Autenticados (no expone secretos, solo estado/vencimientos). 0 tokens de IA.
     router.get('/mcps/keyring', async (req, res) => {
       try {
-        res.json(await getKeyring({ fresh: req.query.fresh === '1' }));
+        const scope = systemScopeFor(req);
+        res.json(await getKeyring(scope, { fresh: req.query.fresh === '1' }));
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
     });
 
     // Login guiado de Infisical: desbloquea el MCP `tolkien-mordor` cuando la
-    // sesión del CLI vence. Admin porque escribe credenciales locales.
+    // sesión del CLI vence. Cada dueño escribe únicamente su credencial.
     router.post('/mcps/infisical/login', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
       try {
-        const id = spawnInfisicalLogin();
+        const scope = systemScopeFor(req);
+        const id = spawnInfisicalLogin(scope);
         res.json({ ok: true, id });
       } catch (e) {
         res.status(500).json({ error: e.message });
@@ -380,10 +405,10 @@ export default {
     // El token pegado es secreto: se manda al runner por archivo 0600 y nunca se
     // devuelve ni se loguea desde este endpoint.
     router.post('/mcps/infisical/login-token', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
       const { id, value } = req.body || {};
       try {
-        writeInfisicalLoginToken(id, value);
+        const scope = systemScopeFor(req);
+        writeInfisicalLoginToken(scope, id, value);
         res.json({ ok: true });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });
@@ -391,11 +416,11 @@ export default {
     });
 
     router.get('/mcps/infisical/login/:id', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
       try {
-        const job = readInfisicalLoginJob(req.params.id);
+        const scope = systemScopeFor(req);
+        const job = readInfisicalLoginJob(scope, req.params.id);
         if (!job) return res.status(404).json({ error: 'no existe' });
-        if (job.status === 'done') keyringMemo = null;
+        if (job.status === 'done') runtimeFor(scope).keyringMemo = null;
         res.json(job);
       } catch (e) {
         res.status(500).json({ error: e.message });
@@ -405,24 +430,25 @@ export default {
     // Censo + estado (autenticados; el estado no expone secretos).
     router.get('/mcps', (req, res) => {
       try {
-        const data = buildCensus();
+        const scope = systemScopeFor(req);
+        const data = buildCensus(scope);
         const targets = req.query.fresh === '1'
-          ? targetsFromCensus(data)
-          : targetsFromCensus(data, (s) => s.stale || !s.checkedAt);
-        scheduleChecks(targets);
-        res.json(refreshCheckingFlags(data));
+          ? targetsFromCensus(scope, data)
+          : targetsFromCensus(scope, data, (s) => s.stale || !s.checkedAt);
+        scheduleChecks(scope, targets);
+        res.json(refreshCheckingFlags(scope, data));
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
     });
 
-    // Re-verificar: programa todos los checks (admin — consume un poco de CPU/red).
+    // Re-verificar: programa los checks del propio usuario.
     router.post('/mcps/refresh', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
       try {
-        const data = buildCensus();
-        scheduleChecks(targetsFromCensus(data));
-        res.json(refreshCheckingFlags(data));
+        const scope = systemScopeFor(req);
+        const data = buildCensus(scope);
+        scheduleChecks(scope, targetsFromCensus(scope, data));
+        res.json(refreshCheckingFlags(scope, data));
       }
       catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -430,10 +456,11 @@ export default {
     // Health-check puntual: feedback inmediato en la tarjeta sin recargar todo.
     router.post('/mcps/check', (req, res) => {
       try {
+        const scope = systemScopeFor(req);
         const { world, name } = req.body || {};
-        const cwd = worldCwd(world);
+        const cwd = worldCwd(scope, world);
         if (!cwd || !NAME_RE.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
-        scheduleChecks([{ world, cwd, name }]);
+        scheduleChecks(scope, [{ world, cwd, name }]);
         res.json({ ok: true, key: itemKey(world, name) });
       } catch (e) {
         res.status(500).json({ error: e.message });
@@ -443,12 +470,12 @@ export default {
     // Desconectar: limpia las credenciales OAuth guardadas (vía CLI oficial).
     router.post('/mcps/logout', (req, res) => {
       try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+        const scope = systemScopeFor(req);
         const { world, name } = req.body || {};
-        const cwd = worldCwd(world);
+        const cwd = worldCwd(scope, world);
         if (!cwd || !NAME_RE.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
-        execFile('claude', ['mcp', 'logout', name], { cwd, timeout: 20000, env: process.env }, (err, stdout, stderr) => {
-          scheduleChecks([{ world, cwd, name }]); // el estado cambió
+        execFile('claude', ['mcp', 'logout', name], { cwd, timeout: 20000, env: commandEnvFor(scope) }, (err, stdout, stderr) => {
+          scheduleChecks(scope, [{ world, cwd, name }]); // el estado cambió
           if (err) return res.status(500).json({ error: (stderr || err.message || '').trim().slice(0, 300) });
           res.json({ ok: true, output: String(stdout || '').trim().slice(0, 300) });
         });
@@ -459,12 +486,12 @@ export default {
 
     // --- Fase 2: reconexión OAuth guiada (runner pty) ---
     router.post('/mcps/login', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
-      const { world, name } = req.body || {};
-      const cwd = worldCwd(world);
-      if (!cwd || !NAME_RE.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
       try {
-        const id = spawnLogin(world, name);
+        const scope = systemScopeFor(req);
+        const { world, name } = req.body || {};
+        const cwd = worldCwd(scope, world);
+        if (!cwd || !NAME_RE.test(String(name || ''))) return res.status(400).json({ error: 'parámetros inválidos' });
+        const id = spawnLogin(scope, world, name);
         res.json({ ok: true, id });
       } catch (e) {
         res.status(500).json({ error: e.message });
@@ -473,10 +500,10 @@ export default {
 
     // Pegar la URL de redirect (localhost:.../callback?code=...) al pty.
     router.post('/mcps/login-code', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
       const { id, value } = req.body || {};
       try {
-        writeLoginCode(id, value);
+        const scope = systemScopeFor(req);
+        writeLoginCode(scope, id, value);
         res.json({ ok: true });
       } catch (e) {
         // El status se deriva de la marca explícita del error (badRequest),
@@ -489,11 +516,12 @@ export default {
     // Poll del estado del login guiado (0 tokens, solo lee disco).
     router.get('/mcps/login/:id', (req, res) => {
       try {
-        const job = readLoginJob(req.params.id);
+        const scope = systemScopeFor(req);
+        const job = readLoginJob(scope, req.params.id);
         if (!job) return res.status(404).json({ error: 'no existe' });
         if (job.status === 'done') {
-          const cwd = worldCwd(job.world);
-          if (cwd && NAME_RE.test(String(job.name || ''))) scheduleChecks([{ world: job.world, cwd, name: job.name }]);
+          const cwd = worldCwd(scope, job.world);
+          if (cwd && NAME_RE.test(String(job.name || ''))) scheduleChecks(scope, [{ world: job.world, cwd, name: job.name }]);
         }
         res.json(job);
       } catch (e) {

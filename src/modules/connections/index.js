@@ -13,7 +13,12 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
 import { config } from '../../core/config.js';
-import { hasCodexCreds, hostUser } from '../../core/user-space.js';
+import {
+  hasCodexCreds,
+  hostUser,
+  userClaudeDir,
+  userOauthTokenPath,
+} from '../../core/user-space.js';
 import {
   PROVIDERS,
   isProvider,
@@ -49,6 +54,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
 const CODEX_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
+const CLAUDE_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-claude-login-runner.js');
+const CLAUDE_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'claude-login-jobs');
 function codexLoginJobPath(user) { return path.join(CODEX_LOGIN_JOBS_DIR, `${user}.json`); }
 function readCodexLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(codexLoginJobPath(user), 'utf8')); } catch { return null; }
@@ -60,6 +67,58 @@ function writeCodexLoginJob(user, job) {
     JSON.stringify({ ...job, user, ts: Date.now() }),
     { mode: 0o600 },
   );
+}
+function claudeLoginJobPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.json`); }
+function claudeLoginCodePath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.code`); }
+function claudeLoginLogPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.log`); }
+function readClaudeLoginJob(user) {
+  try { return JSON.parse(fs.readFileSync(claudeLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+function writeClaudeLoginJob(user, job) {
+  fs.mkdirSync(CLAUDE_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    claudeLoginJobPath(user),
+    JSON.stringify({ ...job, user, ts: Date.now() }),
+    { mode: 0o600 },
+  );
+}
+function claudeLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-claude-login-runner.js');
+  } catch {
+    return false;
+  }
+}
+function cleanClaudeLoginJob(user) {
+  for (const file of [
+    claudeLoginJobPath(user),
+    claudeLoginCodePath(user),
+    claudeLoginLogPath(user),
+  ]) {
+    try { fs.unlinkSync(file); } catch (e) {
+      if (e?.code !== 'ENOENT') throw e;
+    }
+  }
+}
+function claudeCredentialSource(user) {
+  try {
+    const data = JSON.parse(
+      fs.readFileSync(path.join(userClaudeDir(user), '.credentials.json'), 'utf8'),
+    );
+    if (
+      typeof data?.claudeAiOauth?.accessToken === 'string'
+      && data.claudeAiOauth.accessToken.length > 0
+    ) {
+      return 'credentials';
+    }
+  } catch { /* fallback al setup-token */ }
+  try {
+    if (fs.existsSync(userOauthTokenPath(user))) return 'setup-token';
+  } catch { /* sin credencial */ }
+  return null;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -339,6 +398,97 @@ export default {
         return res.status(500).json({ error: 'No pude cancelar el login de Codex: ' + e.message });
       }
       res.json({ ok: true });
+    });
+
+    // Igual que Codex, estas rutas deben quedar antes de '/:provider/...'.
+    // El login completo de Claude es solo para inquilinos: el HOME real del
+    // host queda fail-closed y se administra exclusivamente desde su CLI.
+    r.post('/claude/login/start', (req, res) => {
+      const user = userOf(req);
+      if (user === hostUser()) {
+        return res.status(400).json({
+          error: 'El usuario host debe administrar su credencial con el CLI de Claude.',
+        });
+      }
+
+      const job = readClaudeLoginJob(user);
+      const reserved = job?.status === 'starting'
+        && !!job.ts
+        && (Date.now() - job.ts) < 30_000;
+      if (reserved || claudeLoginRunnerAlive(job)) {
+        return res.json({ status: job.status || 'starting' });
+      }
+
+      try {
+        // Reserva síncrona antes del spawn: dos requests del mismo usuario no
+        // pueden lanzar dos PTY, aun antes de que el hijo publique su pid.
+        writeClaudeLoginJob(user, { status: 'starting' });
+        try { fs.unlinkSync(claudeLoginCodePath(user)); } catch (e) {
+          if (e?.code !== 'ENOENT') throw e;
+        }
+        spawn(process.execPath, [CLAUDE_LOGIN_RUNNER, '--user', user], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      } catch (e) {
+        try { writeClaudeLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Claude.' }); } catch { /* noop */ }
+        return res.status(500).json({ error: 'No pude lanzar el login de Claude: ' + e.message });
+      }
+      res.json({ status: 'starting' });
+    });
+
+    r.get('/claude/login/status', (req, res) => {
+      const job = readClaudeLoginJob(userOf(req));
+      if (!job) return res.json({ status: 'idle' });
+      res.json({
+        status: job.status || 'error',
+        ...(job.url ? { url: job.url } : {}),
+        ...(job.error ? { error: job.error } : {}),
+      });
+    });
+
+    r.post('/claude/login/code', (req, res) => {
+      const user = userOf(req);
+      const job = readClaudeLoginJob(user);
+      if (!job || job.status !== 'waiting-code' || !claudeLoginRunnerAlive(job)) {
+        return res.status(400).json({ error: 'No hay un login de Claude esperando un código.' });
+      }
+
+      const rawCode = req.body?.code;
+      if (typeof rawCode !== 'string') {
+        return res.status(400).json({ error: 'El código de autorización no es válido.' });
+      }
+      const code = rawCode.trim();
+      if (!code || code.length > 512 || /[\r\n]/.test(code)) {
+        return res.status(400).json({ error: 'El código de autorización no es válido.' });
+      }
+
+      try {
+        fs.writeFileSync(claudeLoginCodePath(user), code, { mode: 0o600 });
+        fs.chmodSync(claudeLoginCodePath(user), 0o600);
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude enviar el código al login de Claude: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
+    r.post('/claude/login/cancel', (req, res) => {
+      const user = userOf(req);
+      const job = readClaudeLoginJob(user);
+      try {
+        if (claudeLoginRunnerAlive(job)) {
+          process.kill(Number(job.pid), 'SIGTERM');
+        }
+        cleanClaudeLoginJob(user);
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude cancelar el login de Claude: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
+    r.get('/claude/status', (req, res) => {
+      const source = claudeCredentialSource(userOf(req));
+      res.json({ connected: source !== null, source });
     });
 
     r.post('/:provider/connect', asyncHandler(async (req, res) => {

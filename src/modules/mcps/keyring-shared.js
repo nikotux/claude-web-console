@@ -5,7 +5,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
+import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import {
   infisicalDependents,
@@ -13,6 +13,7 @@ import {
   probeInfisicalStatus,
   readInfisicalIdentity,
 } from './infisical-shared.js';
+import { commandEnvFor } from './login-shared.js';
 
 export const EXPIRY_WARN_MS = 2 * 24 * 60 * 60 * 1000; // < 2 días => preventivo
 // Las credenciales auto-renovables no deben avisar antes de vencer: su ciclo
@@ -227,9 +228,9 @@ export function refreshDerived(items) {
   });
 }
 
-function runFile(cmd, args, { cwd, timeout }) {
+function runFile(cmd, args, { cwd, timeout, env }) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout, env: process.env, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout, env, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ err, stdout: stdout || '', stderr: stderr || '' });
     });
   });
@@ -274,11 +275,12 @@ function httpAlive(url, timeoutMs = 3000) {
   });
 }
 
-export async function serviceActive(name) {
+export async function serviceActive(scope, name) {
   try {
     const { stdout, stderr } = await runFile('systemctl', ['--user', 'is-active', name], {
-      cwd: os.homedir(),
+      cwd: scope.home,
       timeout: 4000,
+      env: commandEnvFor(scope),
     });
     return firstNonEmpty(cleanText(stdout), cleanText(stderr), 'unknown').split('\n')[0];
   } catch (e) {
@@ -286,13 +288,27 @@ export async function serviceActive(name) {
   }
 }
 
-export async function probeClaudeOauth() {
+export async function probeClaudeOauth(scope) {
   try {
-    const creds = readJson(path.join(os.homedir(), '.claude', '.credentials.json'));
+    const creds = readJson(path.join(scope.claudeDir, '.credentials.json'));
     const oauth = creds?.claudeAiOauth || {};
     const expiresAt = toMs(oauth.expiresAt);
     const expiresInMs = expiresIn(expiresAt);
     const autoRefresh = true;
+    const isolatedToken = !scope.isHost && fs.existsSync(path.join(scope.claudeDir, 'oauth-token'));
+    if (expiresAt == null && isolatedToken) {
+      return item({
+        id: 'claude-oauth',
+        family: 'engines',
+        label: 'Claude OAuth',
+        role: 'credencial principal de Claude Code',
+        light: 'ok',
+        statusLabel: 'Configurado',
+        detail: 'token propio del usuario presente · vencimiento no expuesto',
+        dependents: ['todos los chats, runners y motores headless del usuario'],
+        action: reconnectActionFor({ id: 'claude-oauth' }),
+      });
+    }
     const light = expiresAt == null ? 'danger' : expiryLight(expiresAt, { autoRefresh });
     const subscription = oauth.subscriptionType || 'sin plan detectado';
     return item({
@@ -315,9 +331,9 @@ export async function probeClaudeOauth() {
   }
 }
 
-export async function probeCodexCli() {
+export async function probeCodexCli(scope) {
   try {
-    const auth = readJson(path.join(os.homedir(), '.codex', 'auth.json'));
+    const auth = readJson(path.join(scope.home, '.codex', 'auth.json'));
     const lastRefresh = toMs(auth?.last_refresh);
     const expiresAt = lastRefresh == null ? null : lastRefresh + 10 * DAY_MS;
     const expiresInMs = expiresIn(expiresAt);
@@ -343,9 +359,9 @@ export async function probeCodexCli() {
   }
 }
 
-export async function probePadCloud() {
+export async function probePadCloud(scope) {
   try {
-    const creds = readJson(path.join(os.homedir(), '.claude', '.credentials.json'));
+    const creds = readJson(path.join(scope.claudeDir, '.credentials.json'));
     const oauth = creds?.mcpOAuth || {};
     const entries = Object.entries(oauth);
     const found = entries.find(([k]) => k.startsWith('pad|')) || entries.find(([k]) => k.startsWith('pad-cloud-backup|'));
@@ -376,12 +392,12 @@ export async function probePadCloud() {
   }
 }
 
-export async function probeInfisicalKey() {
+export async function probeInfisicalKey(scope) {
   try {
-    const cliCfg = readJson(path.join(os.homedir(), '.claude.json')) || {};
+    const cliCfg = readJson(path.join(scope.home, '.claude.json')) || {};
     const dependents = infisicalDependents(cliCfg);
-    const identity = readInfisicalIdentity();
-    const [status, project] = await Promise.all([probeInfisicalStatus(), probeInfisicalProject()]);
+    const identity = readInfisicalIdentity(scope);
+    const [status, project] = await Promise.all([probeInfisicalStatus(scope), probeInfisicalProject(scope)]);
     const expiresAt = status?.ok && status.expiresInMs != null ? Date.now() + status.expiresInMs : null;
     const expiresInMs = status?.ok ? status.expiresInMs : null;
     let light = 'danger';
@@ -418,9 +434,13 @@ export async function probeInfisicalKey() {
   }
 }
 
-export async function probeGithubCli() {
+export async function probeGithubCli(scope) {
   try {
-    const { err, stdout, stderr } = await runFile('gh', ['auth', 'status'], { cwd: os.homedir(), timeout: 8000 });
+    const { err, stdout, stderr } = await runFile('gh', ['auth', 'status'], {
+      cwd: scope.home,
+      timeout: 8000,
+      env: commandEnvFor(scope),
+    });
     const out = cleanText(`${stdout}\n${stderr}`).split('\n').filter((line) => !/Token:/i.test(line)).join('\n');
     const login = out.match(/Logged in to\s+(\S+)\s+account\s+([^\s]+)/);
     const scopes = out.match(/^\s*-\s*Token scopes:\s*(.+)$/m)?.[1]?.trim() || null;
@@ -454,9 +474,9 @@ export async function probeGithubCli() {
   }
 }
 
-export async function probePadLocal() {
+export async function probePadLocal(scope) {
   try {
-    const creds = readJson(path.join(os.homedir(), '.pad', 'credentials.json'));
+    const creds = readJson(path.join(scope.home, '.pad', 'credentials.json'));
     const hasToken = hasSessionToken(creds);
     const url = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
     const live = await httpAlive(url, 3000);
@@ -484,10 +504,10 @@ function parseHeartbeatTs(ts) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function probeWhatsapp() {
+export async function probeWhatsapp(scope) {
   try {
-    const hb = readJson(path.join(os.homedir(), '.cwc-data', 'comms', 'whatsapp-daemon.json')) || {};
-    const service = await serviceActive('whatsapp-bridge.service');
+    const hb = readJson(path.join(scope.dataDir, 'comms', 'whatsapp-daemon.json')) || {};
+    const service = await serviceActive(scope, 'whatsapp-bridge.service');
     const ts = parseHeartbeatTs(hb.ts);
     const ageMs = ts == null ? null : Date.now() - ts;
     const heartbeatOk = hb.state === 'ready' && ageMs != null && ageMs < 5 * 60 * 1000;
@@ -514,10 +534,10 @@ export async function probeWhatsapp() {
   }
 }
 
-export async function probeServices() {
+export async function probeServices(scope) {
   try {
     const names = ['claude-web-console', 'pad-local', 'tolkien-console'];
-    const states = await Promise.all(names.map(async (name) => [name, await serviceActive(name)]));
+    const states = await Promise.all(names.map(async (name) => [name, await serviceActive(scope, name)]));
     return states.map(([name, state]) => item({
       id: `service-${name}`,
       family: 'services',
@@ -537,7 +557,7 @@ export async function probeServices() {
 
 export async function probeZeroTier() {
   try {
-    const ifaces = os.networkInterfaces();
+    const ifaces = networkInterfaces();
     for (const [name, addrs] of Object.entries(ifaces)) {
       if (!name.startsWith('zt')) continue;
       const ipv4 = (addrs || []).find((a) => a.family === 'IPv4' && !a.internal);
@@ -573,18 +593,24 @@ export async function probeZeroTier() {
 
 // Corre TODAS las sondas en paralelo. Ninguna puede tumbar a otra: cada una se
 // resuelve por separado y un fallo se convierte en su propia tarjeta en rojo.
-export async function buildKeyring() {
+export async function buildKeyring(scope) {
   const probes = [
-    ['claude-oauth', probeClaudeOauth],
-    ['codex-cli', probeCodexCli],
-    ['pad-cloud', probePadCloud],
-    ['infisical', probeInfisicalKey],
-    ['github-cli', probeGithubCli],
-    ['pad-local', probePadLocal],
-    ['whatsapp', probeWhatsapp],
-    ['services', probeServices],
-    ['zerotier', probeZeroTier],
+    ['claude-oauth', () => probeClaudeOauth(scope)],
+    ['codex-cli', () => probeCodexCli(scope)],
+    ['pad-cloud', () => probePadCloud(scope)],
+    ['infisical', () => probeInfisicalKey(scope)],
+    ['github-cli', () => probeGithubCli(scope)],
+    ['pad-local', () => probePadLocal(scope)],
   ];
+  // Servicios e interfaz de red pertenecen a la instalación del host, no al
+  // llavero de un inquilino. El host conserva exactamente sus tarjetas previas.
+  if (scope.isHost) {
+    probes.push(
+      ['whatsapp', () => probeWhatsapp(scope)],
+      ['services', () => probeServices(scope)],
+      ['zerotier', probeZeroTier],
+    );
+  }
   const settled = await Promise.allSettled(probes.map(([, fn]) => fn()));
   const items = settled.flatMap((r, i) => {
     if (r.status === 'fulfilled') return Array.isArray(r.value) ? r.value : [r.value];

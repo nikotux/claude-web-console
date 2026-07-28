@@ -14,10 +14,12 @@ import { provisionUserPad } from '../../core/pad-provision.js';
 import { provisionUserWorkspace } from '../../core/workspace-provision.js';
 import { createUser, isValidUsername, listUsers, setUserLang } from '../../core/users.js';
 import {
+  ensureCliOnboarded,
   ensureUserSpace,
   hasCodexCreds,
   hasInfisicalCreds,
   readUserOauthToken,
+  userClaudeDir,
 } from '../../core/user-space.js';
 import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite, consumeInvite } from '../../core/onboard-tokens.js';
 import { provisionTolkienMcp, tolkienMcpStatus } from './tolkien-mcp-shared.js';
@@ -122,12 +124,14 @@ publicRouter.post('/validate', (req, res) => {
     const lockedTo = meta.lockedTo || null;
     const status = meta.status || null;
     const hasToken = !!(lockedTo && readUserOauthToken(lockedTo));
+    const hasClaudeAccount = !!(lockedTo && hasClaudeAccountCreds(lockedTo));
     const hasCodex = !!(lockedTo && hasCodexCreds(lockedTo));
     const hasInfisical = !!(lockedTo && hasInfisicalCreds(lockedTo));
     const hasTolkienMcp = !!(lockedTo && tolkienMcpStatus(lockedTo).registered);
     const pending = lockedTo
       ? [
         !hasToken && 'claude',
+        !hasClaudeAccount && 'account',
         !hasCodex && 'codex',
         !hasInfisical && 'infisical',
       ].filter(Boolean)
@@ -140,6 +144,7 @@ publicRouter.post('/validate', (req, res) => {
       status,
       lockedTo,
       hasToken,
+      hasClaudeAccount,
       hasCodex,
       hasInfisical,
       hasTolkienMcp,
@@ -181,7 +186,7 @@ publicRouter.post('/register', (req, res) => {
   if (lang === 'es' || lang === 'en') {
     try { setUserLang(username, lang); } catch { /* best-effort: el default sigue siendo 'es' */ }
   }
-  try { ensureUserSpace(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
+  try { ensureUserSpace(username); ensureCliOnboarded(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
   // Provisionar el Pad PROPIO del inquilino (B2-F3), best-effort y sin bloquear
   // el registro: si el Pad local está caído, el chat funciona igual y el
   // provisioning se reintenta lazy al primer uso (F8). NUNCA await acá.
@@ -202,6 +207,8 @@ publicRouter.post('/register', (req, res) => {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ONBOARD_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-onboard-runner.js');
 const JOBS_DIR = path.join(config.home, '.cwc-data', 'onboard-jobs');
+const CLAUDE_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-claude-login-runner.js');
+const CLAUDE_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'claude-login-jobs');
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
 const CODEX_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
 const INFISICAL_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-infisical-login-runner.js');
@@ -216,6 +223,40 @@ function runnerAlive(job) {
   try { process.kill(pid, 0); } catch { return false; }
   try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-onboard-runner.js'); }
   catch { return false; }
+}
+function claudeLoginJobPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.json`); }
+function claudeLoginCodePath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.code`); }
+function readClaudeLoginJob(user) {
+  try { return JSON.parse(fs.readFileSync(claudeLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+function writeClaudeLoginJob(user, job) {
+  fs.mkdirSync(CLAUDE_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    claudeLoginJobPath(user),
+    JSON.stringify({ ...job, user, ts: Date.now() }),
+    { mode: 0o600 },
+  );
+}
+function claudeLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-claude-login-runner.js');
+  } catch {
+    return false;
+  }
+}
+function hasClaudeAccountCreds(user) {
+  try {
+    const data = JSON.parse(
+      fs.readFileSync(path.join(userClaudeDir(user), '.credentials.json'), 'utf8'),
+    );
+    return typeof data?.claudeAiOauth?.accessToken === 'string'
+      && data.claudeAiOauth.accessToken.length > 0;
+  } catch {
+    return false;
+  }
 }
 function codexJobPath(user) { return path.join(CODEX_JOBS_DIR, `${user}.json`); }
 function readCodexJob(user) { try { return JSON.parse(fs.readFileSync(codexJobPath(user), 'utf8')); } catch { return null; } }
@@ -302,6 +343,82 @@ publicRouter.post('/creds-code', (req, res) => {
     fs.writeFileSync(path.join(JOBS_DIR, `${v.lockedTo}.code`), clean, { mode: 0o600 });
   } catch (e) {
     return res.status(500).json({ error: 'No pude guardar el código: ' + e.message });
+  }
+  res.json({ ok: true });
+});
+
+// El setup-token obligatorio alcanza para correr modelos, pero no tiene los
+// scopes de cuenta que necesita el medidor de uso. Este login completo es
+// OPCIONAL y comparte runner/job con ⚙ Sistema → Uso para poder retomarlo.
+publicRouter.post('/claude-account-start', (req, res) => {
+  const { token } = req.body || {};
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const user = step.user;
+  if (hasClaudeAccountCreds(user)) {
+    return res.json({ ok: true, already: true, connected: true });
+  }
+
+  const job = readClaudeLoginJob(user);
+  const reserved = job?.status === 'starting'
+    && !!job.ts
+    && (Date.now() - job.ts) < 30_000;
+  if (reserved || claudeLoginRunnerAlive(job)) {
+    return res.json({ ok: true, already: true, status: job.status || 'starting' });
+  }
+
+  try {
+    writeClaudeLoginJob(user, { status: 'starting' });
+    try { fs.unlinkSync(claudeLoginCodePath(user)); } catch (e) {
+      if (e?.code !== 'ENOENT') throw e;
+    }
+    spawn(process.execPath, [CLAUDE_LOGIN_RUNNER, '--user', user], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } catch (e) {
+    try { writeClaudeLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Claude.' }); } catch { /* noop */ }
+    return res.status(500).json({ error: 'No pude lanzar el login de Claude: ' + e.message });
+  }
+  res.json({ ok: true, status: 'starting' });
+});
+
+publicRouter.get('/claude-account-status', (req, res) => {
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const job = readClaudeLoginJob(step.user);
+  if (hasClaudeAccountCreds(step.user)) return res.json({ status: 'ok' });
+  if (!job) return res.json({ status: 'idle' });
+  res.json({
+    status: job.status || 'error',
+    ...(job.url ? { url: job.url } : {}),
+    ...(job.error ? { error: job.error } : {}),
+  });
+});
+
+publicRouter.post('/claude-account-code', (req, res) => {
+  const { token } = req.body || {};
+  const step = stepUser(token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const job = readClaudeLoginJob(step.user);
+  if (!job || job.status !== 'waiting-code' || !claudeLoginRunnerAlive(job)) {
+    return res.status(400).json({ error: 'No hay un login de Claude esperando un código.' });
+  }
+
+  const rawCode = req.body?.code;
+  if (typeof rawCode !== 'string') {
+    return res.status(400).json({ error: 'El código de autorización no es válido.' });
+  }
+  const code = rawCode.trim();
+  if (!code || code.length > 512 || /[\r\n]/.test(code)) {
+    return res.status(400).json({ error: 'El código de autorización no es válido.' });
+  }
+
+  try {
+    fs.writeFileSync(claudeLoginCodePath(step.user), code, { mode: 0o600 });
+    fs.chmodSync(claudeLoginCodePath(step.user), 0o600);
+  } catch (e) {
+    return res.status(500).json({ error: 'No pude enviar el código al login de Claude: ' + e.message });
   }
   res.json({ ok: true });
 });

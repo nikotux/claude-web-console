@@ -5,11 +5,27 @@
 ### interfono/                INTERFONO entre sesiones: panel + canal HUMANO. Solo LEE el bus
 (core/bus.js) — 0 tokens. GET /api/interfono (directory + messages +
 claims con verdict de evaluateClaim + ts) · POST /send {to,text}
-(mensaje manual desde la web a una sesión o 'all') · POST
-/claim-release {file} (admin, libera un claim zombi a mano). La
+(mensaje manual desde la web a una sesión propia; host/admin también a
+cualquiera o 'all') · POST /claim-release {file} (claim propio, o cualquiera
+para host/admin). La
 mensajería/claims AUTOMÁTICOS NO pasan por acá: los generan los hooks
 de Claude Code (bin/cwc-bus.js). Frontend: pestaña "Interfono" del
 menú ⚙ Sistema (system/interfono-panel.js).
+SCOPE POR DUEÑO (`console:PLAN-2117`, B6): host/admin conserva la respuesta
+completa y en el mismo orden/formato histórico. Para un no-admin, el conjunto
+de handles propios se reconstruye SIN caché en cada request: `claude:<sessionId>`
+y la TUI oculta `tmux:cwct-<terminalId>` salen de `ChatManager.list(principal)`
+(`chat.owner`); las terminales `tmux:cwc-<id>` salen de `loadOwners()` sobre
+`session-owners.json`. El `pane_pid` del directorio es solo diagnóstico y el
+`--owner` del runner no se usa como fallback: ninguno es una identidad durable
+del bus ni
+persisten igual que las fuentes canónicas. Directorio, mensajes (`from` o `to`
+propio), claims, lápidas y bitácora se filtran con esos handles. Send resuelve
+solo dentro del directorio propio (sin broadcast); claim-release acepta el
+claim propio o cualquier claim para host/admin. Handles viejos/nulos, chats ya
+ausentes del registro, tmux sin owner y otros formatos sin pista canónica se
+tratan como AJENOS para un no-admin (fail-closed). El panel mantiene ocultas
+las acciones globales y rotula explícitamente “tus sesiones”.
 MENSAJES HUÉRFANOS (`console:BUG-2074`): allMessages() de core/bus.js
 agrega el campo DERIVADO `undeliverable:true` cuando el destino no figura
 en el directorio vivo; NO se persiste. La medición fue 25/36 mensajes para

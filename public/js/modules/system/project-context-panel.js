@@ -17,8 +17,8 @@
 //
 // No son copias: son los mismos archivos que Claude Code (o el prompt de
 // "Trabajar en Chat") lee de verdad — guardar acá cambia comportamiento
-// real. Edición gateada por isAdmin (frontend Y backend); textEditorDialog
-// para editar.
+// real. Los contextos work/pr son propios del usuario autenticado y editables
+// por su dueño; los demás permisos admin de este panel se mantienen.
 import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
@@ -578,7 +578,7 @@ export function mountProjectContextPanel(el, ctx) {
       const firstLine = (bfContent.split('\n').find((l) => l.trim()) || t('system.projectContext.emptyValue', '(vacío)')).slice(0, 90);
       ctxRow().innerHTML = `
         <span class="hp-detail"><b>${esc(firstLine)}</b><br>${fmtSize(bfContent.length)}${data.isDefault ? ` · ${t('system.projectContext.viewingDefaultValue', 'viendo el valor por defecto')}` : ''}</span>
-        ${isAdmin ? `<span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-ref="ctxEdit" title="${t('system.projectContext.editContextTooltip', 'Editar contexto')}">${icon('edit', { size: 13 })}</button></span>` : ''}`;
+        <span class="bk-actions"><button class="btn-ghost btn--sm btn--icon" data-ref="ctxEdit" title="${t('system.projectContext.editContextTooltip', 'Editar contexto')}">${icon('edit', { size: 13 })}</button></span>`;
       ctxRow().querySelector('[data-ref="ctxEdit"]')?.addEventListener('click', editBugfixContext);
     } catch {
       if (alive && ctxRow()) ctxRow().innerHTML = `<span class="hp-empty">${t('system.projectContext.contextReadError', 'No se pudo leer el contexto.')}</span>`;
@@ -586,14 +586,14 @@ export function mountProjectContextPanel(el, ctx) {
   }
 
   // ===== Verificador del ESPEJO a Tolkien (solo sub-proyectos de Tickets&Feat) =====
-  // El subset work+pr se espeja a ~/tolkien/CLAUDE.local.md (local, no versionado)
-  // que auto-carga en TODA sesión de Tolkien. Este bloque muestra si está al día
-  // y ofrece re-sincronizar a mano. La nota explica QUÉ es y dónde aterriza.
+  // El subset work+pr se espeja al CLAUDE.local.md del clon propio del usuario
+  // (local, no versionado), que auto-carga en TODA sesión de Tolkien. Este bloque
+  // muestra si está al día y ofrece re-sincronizar a mano.
   const SYNC_UI = {
-    ok: { cls: 'pj-sync--ok', ico: '✅', msgKey: 'system.projectContext.syncOk', msg: 'Espejo al día en <code>~/tolkien/CLAUDE.local.md</code>.' },
-    stale: { cls: 'pj-sync--warn', ico: '⚠️', msgKey: 'system.projectContext.syncStale', msg: 'El espejo quedó <b>desactualizado</b> — re-sincronizá.' },
-    missing: { cls: 'pj-sync--warn', ico: '⚠️', msgKey: 'system.projectContext.syncMissing', msg: 'Falta la sección gestionada en <code>CLAUDE.local.md</code> — re-sincronizá.' },
-    unavailable: { cls: 'pj-sync--warn', ico: '❓', msgKey: 'system.projectContext.syncUnavailable', msg: 'No pude leer <code>~/tolkien/CLAUDE.local.md</code> (¿Tolkien presente?).' },
+    ok: { cls: 'pj-sync--ok', ico: '✅', msgKey: 'system.projectContext.syncOkForUser', msg: 'Espejo al día en {file}.' },
+    stale: { cls: 'pj-sync--warn', ico: '⚠️', msgKey: 'system.projectContext.syncStaleForUser', msg: 'El espejo en {file} quedó <b>desactualizado</b> — re-sincronizá.' },
+    missing: { cls: 'pj-sync--warn', ico: '⚠️', msgKey: 'system.projectContext.syncMissingForUser', msg: 'Falta la sección gestionada en {file} — re-sincronizá.' },
+    unavailable: { cls: 'pj-sync--warn', ico: '❓', msgKey: 'system.projectContext.syncUnavailableForUser', msg: 'No pude leer {file} (¿Tolkien presente?).' },
   };
   async function loadSync() {
     const box = syncBox();
@@ -603,12 +603,14 @@ export function mountProjectContextPanel(el, ctx) {
     try { s = await (await fetch('/api/tickets/context-sync')).json(); } catch { /* red caída */ }
     if (!alive || !syncBox()) return;
     const u = SYNC_UI[s.status] || SYNC_UI.unavailable;
-    const resyncBtn = (isAdmin && s.status !== 'ok')
+    const mirrorFile = `<code>${esc(s.file || 'CLAUDE.local.md')}</code>`;
+    const statusMessage = t(u.msgKey, u.msg, { file: mirrorFile });
+    const resyncBtn = s.status !== 'ok'
       ? `<button class="btn-ghost btn--sm" data-ref="resync">${t('system.projectContext.resync', 'Re-sincronizar')}</button>` : '';
     syncBox().className = `pj-sync ${u.cls}`;
     syncBox().innerHTML = `
-      <div class="pj-sync-line"><span class="pj-sync-ico">${u.ico}</span><span>${t(u.msgKey, u.msg)}</span>${resyncBtn}</div>
-      <p class="pj-sync-note">${t('system.projectContext.syncNote', 'Al guardar acá, este contexto se publica como texto físico en <code>~/tolkien/CLAUDE.local.md</code> (archivo <b>local, NO versionado</b>) para que <b>toda</b> sesión de Tolkien lo cargue sola. La fuente completa vive en esta consola.')}</p>`;
+      <div class="pj-sync-line"><span class="pj-sync-ico">${u.ico}</span><span>${statusMessage}</span>${resyncBtn}</div>
+      <p class="pj-sync-note">${t('system.projectContext.syncNoteForUser', 'Al guardar acá, tu contexto se publica como texto físico en {file} (archivo <b>local, NO versionado</b>) para que <b>toda</b> sesión de Tolkien lo cargue sola. Tu fuente completa vive en esta consola.', { file: mirrorFile })}</p>`;
     syncBox().querySelector('[data-ref="resync"]')?.addEventListener('click', async (e) => {
       const btn = e.currentTarget; btn.disabled = true; btn.textContent = t('system.projectContext.syncing', 'Sincronizando…');
       try {

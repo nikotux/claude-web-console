@@ -1,13 +1,12 @@
 // modules/skills/index.js — pestaña "Skills" de ⚙ Sistema: censo READ-ONLY de
 // las skills de Claude Code (SKILL.md) cruzadas con los Playbooks de Pad
-// local (workspace `console`). 0 tokens IA — todo determinístico (fs + HTTP
-// plano ya cacheado a Pad), mismo espíritu que core/inventory.js.
+// del principal de la request. 0 tokens IA — todo determinístico (fs + HTTP
+// plano ya cacheado por el cliente de Pad), mismo espíritu que core/inventory.js.
 //
-// Fuentes escaneadas (ver CLAUDE.md "Los Playbooks activos son PROCEDIMIENTOS
-// INVOCABLES"): .claude/skills/*/SKILL.md de Consola (este repo) + Tolkien
-// (config.projectDir) + global (~/.claude/skills, scope usuario — aplica a
-// cualquier proyecto). Cada SKILL.md que termina con el pie "Fuente de
-// verdad: `PLAYB-<n>` en Pad `console`" se vincula al playbook correspondiente
+// Fuentes escaneadas: el host conserva Consola (este repo) + Tolkien
+// (config.projectDir) + global; cada inquilino ve solo su global y su clon de
+// Tolkien. Cada SKILL.md que termina con el pie "Fuente de verdad:
+// `PLAYB-<n>`" se vincula al playbook correspondiente del Pad de ese principal
 // (convención ya usada por module-scan/codex-verify/rutear/agrupar/orquestar).
 // Un playbook `status:active` con `invocation_slug` que NINGÚN SKILL.md
 // referencia queda listado aparte como CANDIDATO — coherente con MC-683
@@ -17,20 +16,28 @@
 // Solo lectura a propósito (decisión explícita 2026-07-19): sin crear/editar
 // SKILL.md ni playbooks desde acá todavía.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
+import { reqPadContext } from '../../core/pad-context.js';
 import * as pad from '../../core/pad-service-client.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 
 const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const GLOBAL_SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 
-const WORLDS = [
-  { world: 'console', label: '🏠 Mi Consola', dir: path.join(CONSOLE_ROOT, '.claude', 'skills'), scope: 'project' },
-  { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(config.projectDir || '', '.claude', 'skills'), scope: 'project' },
-  { world: 'global', label: '🌐 Global (usuario)', dir: GLOBAL_SKILLS_DIR, scope: 'user' },
-];
+export function skillSourcesFor(scope) {
+  const sources = scope.isHost
+    ? [
+        { world: 'console', label: '🏠 Mi Consola', dir: path.join(CONSOLE_ROOT, '.claude', 'skills'), scope: 'project' },
+        { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(config.projectDir || '', '.claude', 'skills'), scope: 'project' },
+        { world: 'global', label: '🌐 Global (usuario)', dir: path.join(scope.claudeDir, 'skills'), scope: 'user' },
+      ]
+    : [
+        { world: 'global', label: '🌐 Global (usuario)', dir: path.join(scope.claudeDir, 'skills'), scope: 'user' },
+        { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(scope.workspace, 'tolkien', '.claude', 'skills'), scope: 'project' },
+      ];
+  return sources.filter((source) => fs.existsSync(source.dir));
+}
 
 // Frontmatter YAML MINIMAL (mismo criterio que chat/index.js `skillDescription`:
 // no vale la pena parsear YAML de verdad para esto) — soporta líneas planas
@@ -60,7 +67,7 @@ function parseFrontmatter(raw) {
 
 const PAD_REF_RE = /Fuente de verdad:\s*`(PLAYB-\d+)`/;
 
-function readSkillDir({ world, label, dir, scope }) {
+function readSkillDir({ world, label, dir, scope }, home) {
   let names = [];
   try {
     names = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
@@ -87,7 +94,7 @@ function readSkillDir({ world, label, dir, scope }) {
       description: fm.description || '',
       argumentHint: fm['argument-hint'] || '',
       allowedTools,
-      path: '~/' + path.relative(os.homedir(), file),
+      path: '~/' + path.relative(home, file),
       padRef: padMatch ? padMatch[1] : null,
       pad: null, // se completa abajo si hay match
     });
@@ -105,11 +112,12 @@ export default {
   registerHttp(router) {
     router.get('/skills', async (req, res) => {
       try {
-        const skills = WORLDS.flatMap(readSkillDir);
+        const scope = systemScopeFor(req);
+        const skills = skillSourcesFor(scope).flatMap((source) => readSkillDir(source, scope.home));
 
         let padItems = [];
         let padAvailable = true;
-        const r = await pad.listItems('playbooks', { workspace: 'console' });
+        const r = await pad.listItems('playbooks', { ctx: reqPadContext(req) });
         if (r.ok && Array.isArray(r.data)) {
           padItems = r.data.map((it) => ({ ...it, parsedFields: parsePadFields(it.fields) }));
         } else {

@@ -122,6 +122,44 @@ export function readUserOauthToken(userId) {
   } catch { return null; }
 }
 
+// BUG-2104: sin esta clave, el CLI interactivo del inquilino muestra el
+// onboarding/login aunque tenga CLAUDE_CODE_OAUTH_TOKEN. Es siempre un merge:
+// jamás reemplaza el resto del estado real guardado en .claude.json.
+export function ensureCliOnboarded(userId) {
+  let tempPath;
+  try {
+    const id = sanitizeUserId(userId);
+    if (id === HOST_USER) return false;
+    const target = path.join(userSpace(id), '.claude.json');
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(target, 'utf8'));
+    } catch (e) {
+      if (e?.code !== 'ENOENT') return false;
+      state = {};
+    }
+    if (!state || typeof state !== 'object' || Array.isArray(state)) return false;
+    if (state.hasCompletedOnboarding === true) return false;
+
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(
+      tempPath,
+      JSON.stringify({ ...state, hasCompletedOnboarding: true }, null, 2) + '\n',
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' },
+    );
+    fs.chmodSync(tempPath, 0o600);
+    fs.renameSync(tempPath, target);
+    tempPath = null;
+    return true;
+  } catch (e) {
+    if (tempPath && e?.code !== 'EEXIST') {
+      try { fs.unlinkSync(tempPath); } catch { /* best-effort */ }
+    }
+    return false;
+  }
+}
+
 // Token per-dev del MCP hosteado de Tolkien; gemelo del oauth-token del usuario.
 export function userTolkienMcpTokenPath(userId) {
   return path.join(userClaudeDir(userId), 'tolkien-mcp-token');

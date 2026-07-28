@@ -11,14 +11,15 @@
 //   (mensajes cliente->servidor en JSON: {type:'input'|'resize'|'ping'})
 //   (servidor->cliente: binario = salida PTY; texto JSON = control)
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { sessionManager } from './sessions.js';
+import { canUseTmuxSession, sessionManager } from './sessions.js';
 import { config } from '../../core/config.js';
 import { clampToRoot } from '../../core/paths.js';
 import { principalOf } from '../../core/auth.js';
 import { userFileRoot, hostUser } from '../../core/user-space.js';
-import { validateSocketPath, isValidSessionName } from '../../core/tmux.js';
+import { validateSocketPath, isValidSessionName, tmuxSessionExists } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd } from '../../core/claude-state.js';
 import { recordRecent, listRecents } from '../../core/recents.js';
@@ -99,13 +100,26 @@ export default {
       let createdId = null;
 
       try {
-        // Adjuntado a una sesión tmux existente (de cualquier socket): validamos
-        // socket + nombre para no ejecutar tmux con argumentos arbitrarios.
+        // Adjuntado a una sesión tmux existente: validamos socket + nombre para
+        // no ejecutar tmux con argumentos arbitrarios; luego aplicamos ownership.
         if (attach) {
           const socketPath = validateSocketPath(attach.socket);
           if (!socketPath || !isValidSessionName(attach.session)) {
             console.warn('[terminal] Adjuntado rechazado — owner:', String(owner).slice(0, 200), '· socket:', String(attach.socket).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
             return res.status(400).json({ error: 'Destino de adjuntado inválido.' });
+          }
+          // validateSocketPath normaliza a ruta absoluta; el guard compartido
+          // compara el nombre lógico del socket, igual que el módulo tmux.
+          if (!canUseTmuxSession(principalOf(req), path.basename(socketPath), attach.session)) {
+            console.warn('[terminal] Adjuntado DENEGADO por ownership — owner:', String(owner).slice(0, 200), '· socket:', String(attach.socket).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
+            return res.status(404).json({ error: 'Sesión inexistente.' });
+          }
+          // Entre el listado que pintó la tarjeta y este click la tmux pudo
+          // morir. Sin este guard el attach devolvía 200 y abría una pestaña
+          // fantasma que se cerraba sola, sin decir por qué (console:PLAN-2115).
+          if (!tmuxSessionExists(socketPath, attach.session)) {
+            console.warn('[terminal] Adjuntado a sesión muerta — owner:', String(owner).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
+            return res.status(400).json({ error: `La sesión "${attach.session}" ya no existe: su terminal se cerró. Creá una nueva desde "Nueva sesión".` });
           }
           const session = sessionManager.create({
             attach: { socket: socketPath, session: attach.session },
@@ -117,9 +131,14 @@ export default {
         }
 
         // Modelo inicial opcional (lanzador): se arranca `claude --model <x>`.
+        // El texto va DIRECTO al modal del usuario: nombrar el modelo y los
+        // válidos, porque "Modelo inválido." no le decía a nadie qué hacer.
+        // Caso real: el launcher mandaba el alias de chat 'tandem' en una
+        // sesión TUI (console:PLAN-2115).
         if (model != null && !VALID_MODELS.has(model)) {
+          const pedido = String(model).slice(0, 40);
           console.warn('[terminal] Modelo rechazado — owner:', String(owner).slice(0, 200), '· modelo:', String(model).slice(0, 200));
-          return res.status(400).json({ error: 'Modelo inválido.' });
+          return res.status(400).json({ error: `El modelo "${pedido}" no existe para una sesión de terminal. Elegí uno de: ${[...VALID_MODELS].join(', ')}.` });
         }
 
         if (runClaude != null && typeof runClaude !== 'boolean') {
@@ -128,6 +147,14 @@ export default {
         }
 
         const cwdAbs = safeCwd(cwd, owner);
+        try {
+          if (!fs.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
+        } catch {
+          console.warn('[terminal] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
+          const requested = typeof cwd === 'string' ? cwd.trim() : '';
+          const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
+          return res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
+        }
         // Nombre ÚNICO de tarjeta: el display name de una sesión tmux es
         // customTitle || basename(cwd) — si el basename ya está en uso (por
         // otra tmux O una conversación de chat), se persiste "tolkien 1" como

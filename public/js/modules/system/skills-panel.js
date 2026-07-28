@@ -1,7 +1,7 @@
 // modules/system/skills-panel.js — pestaña "Skills" de ⚙ Sistema: censo
 // READ-ONLY de las skills de Claude Code (SKILL.md) cruzadas con los
-// Playbooks de Pad local, agrupadas por mundo (🏠 Mi Consola / 🌳 Tolkien /
-// 🌐 Global). Reusa el look de tarjeta colapsable de health-review-modal
+// Playbooks de Pad del usuario, agrupadas según los mundos que devuelve el
+// backend. Reusa el look de tarjeta colapsable de health-review-modal
 // (.hr-collapsible/.hr-finding/.hr-f-*) — casi sin CSS nuevo, solo 2
 // modificadores de color para el estado de sincronía con Pad.
 //
@@ -11,13 +11,6 @@ import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
-
-const WORLD_ORDER = ['console', 'tolkien', 'global'];
-const WORLD_META = {
-  console: { open: true },
-  tolkien: { open: false },
-  global: { open: false },
-};
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -90,25 +83,18 @@ export function mountSkillsPanel(el) {
     });
   }
 
-  function worldLabel(w) {
-    return {
-      console: `🏠 ${t('system.skills.worldConsole', 'Mi Consola')}`,
-      tolkien: `🌳 ${t('system.skills.worldTolkien', 'Tolkien')}`,
-      global: `🌐 ${t('system.skills.worldGlobal', 'Global (usuario)')}`,
-    }[w] || w;
-  }
-
   function render(d) {
-    const byWorld = new Map(WORLD_ORDER.map((w) => [w, []]));
-    for (const sk of d.skills || []) (byWorld.get(sk.world) || byWorld.get('global')).push(sk);
+    const byWorld = new Map();
+    for (const sk of d.skills || []) {
+      const world = sk.world || 'unknown';
+      if (!byWorld.has(world)) byWorld.set(world, { label: sk.worldLabel || world, skills: [] });
+      byWorld.get(world).skills.push(sk);
+    }
 
-    const groups = WORLD_ORDER.map((w) => {
-      const list = byWorld.get(w);
-      if (!list.length) return '';
-      const meta = WORLD_META[w];
-      return `<details class="hr-collapsible"${meta.open ? ' open' : ''}>
-        <summary>${worldLabel(w)} (${list.length})</summary>
-        <div class="hr-findings">${list.map(skillCard).join('')}</div>
+    const groups = [...byWorld.values()].map((group, i) => {
+      return `<details class="hr-collapsible"${i === 0 ? ' open' : ''}>
+        <summary>${esc(group.label)} (${group.skills.length})</summary>
+        <div class="hr-findings">${group.skills.map(skillCard).join('')}</div>
       </details>`;
     }).join('');
 

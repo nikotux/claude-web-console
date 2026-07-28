@@ -3,8 +3,9 @@
 //
 // Botón ⚙ en el pie → modal con:
 //   ⚙️ Configuración   → Conexiones (MCP) · Skills · Idioma · Variables de entorno · Proyectos
-//   🩺 Diagnóstico     → Salud · Interfono
+//   🩺 Diagnóstico     → Salud · Dashboard · Actualizaciones · UniFi · Interfono
 //   🛠️ Administración  → Backup · Usuarios          (solo admins)
+// No-admin: Conexiones · Skills · Idioma · Proyectos · Interfono.
 //
 // Desktop (≥720px): rail de grupos+items a la izquierda + panel a la derecha
 // (master-detail). Móvil (<720px): drill-down — se ve el índice, tocás un ítem
@@ -36,8 +37,8 @@ export default {
       const isAdmin = !!me?.admin;
       const m = dialog.openModal({ title: t('system.menu.title', 'Sistema'), width: 880 });
 
-      // Grupos → items. Configuración/Diagnóstico para todos (edición gateada
-      // adentro por admin); Administración solo admins.
+      // Grupos → items. Diagnóstico del server + config de instancia y
+      // Administración son admin-only; lo per-usuario queda visible para todos.
       const groups = [
         {
           label: `⚙️ ${t('system.menu.groupConfig', 'Configuración')}`,
@@ -45,17 +46,23 @@ export default {
             { emoji: '🔌', label: t('system.menu.connections', 'Conexiones'), mount: (c) => mountMcpsPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🧩', label: t('system.menu.skills', 'Skills'), mount: (c) => mountSkillsPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🌐', label: t('system.menu.language', 'Idioma'), mount: (c) => mountLanguagePanel(c, ctx) },
-            { emoji: '🪪', label: t('system.menu.envVars', 'Variables de entorno'), mount: (c) => mountEnvVarsPanel(c, { ...ctx, isAdmin }) },
+            ...(isAdmin
+              ? [{ emoji: '🪪', label: t('system.menu.envVars', 'Variables de entorno'), mount: (c) => mountEnvVarsPanel(c, { ...ctx, isAdmin }) }]
+              : []),
             { emoji: '📁', label: t('system.menu.projects', 'Proyectos'), mount: (c) => mountProjectContextPanel(c, { ...ctx, isAdmin }) },
           ],
         },
         {
           label: `🩺 ${t('system.menu.groupDiagnostics', 'Diagnóstico')}`,
           items: [
-            { emoji: '❤️', label: t('system.menu.health', 'Salud'), mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
-            { emoji: '📊', label: t('system.menu.dashboard', 'Dashboard'), mount: (c) => mountDashboardPanel(c, { ...ctx, isAdmin }) },
-            { emoji: '🔄', label: t('system.menu.updates', 'Actualizaciones'), mount: (c) => mountUpdatesPanel(c, { ...ctx, isAdmin }) },
-            { emoji: '🛰️', label: t('system.menu.unifi', 'UniFi'), mount: (c) => mountUnifiPanel(c, { ...ctx, isAdmin }) },
+            ...(isAdmin
+              ? [
+                  { emoji: '❤️', label: t('system.menu.health', 'Salud'), mount: (c) => mountHealthPanel(c, { ...ctx, isAdmin }) },
+                  { emoji: '📊', label: t('system.menu.dashboard', 'Dashboard'), mount: (c) => mountDashboardPanel(c, { ...ctx, isAdmin }) },
+                  { emoji: '🔄', label: t('system.menu.updates', 'Actualizaciones'), mount: (c) => mountUpdatesPanel(c, { ...ctx, isAdmin }) },
+                  { emoji: '🛰️', label: t('system.menu.unifi', 'UniFi'), mount: (c) => mountUnifiPanel(c, { ...ctx, isAdmin }) },
+                ]
+              : []),
             { emoji: '📡', label: t('system.menu.interfono', 'Interfono'), mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
           ],
         },
@@ -68,7 +75,7 @@ export default {
               ],
             }]
           : []),
-      ];
+      ].filter((g) => g.items.length);
 
       // Aplanamos a una lista con índice global para el ruteo.
       const flat = [];

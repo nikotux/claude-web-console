@@ -51,22 +51,23 @@ export default {
     }
 
     async function load(force) {
-      if (busy || !isAdmin) return;
+      if (busy) return;
+      const forced = !!force && isAdmin;
       busy = true;
       // Solo mostramos el placeholder "leyendo…" en la PRIMERA carga o en un
       // refresh manual (↻). En el auto-refresh de fondo (cada 60s) NO pisamos
       // el contenido: si no, la altura salta (1 línea "leyendo…" ↔ 2 líneas de
       // resumen) y parece que la sección se contrae/expande sola (reportado
       // por el usuario 2026-07-07).
-      if (!data || force) render();
+      if (!data || forced) render();
       try {
-        const res = await fetch(`/api/tickets/dashboard${force ? '?force=1' : ''}`);
+        const res = await fetch(`/api/tickets/dashboard${forced ? '?force=1' : ''}`);
         data = await res.json();
       } catch (e) {
         data = { error: `Error de red: ${e?.message || e}` };
       } finally {
         busy = false;
-        refs.open.hidden = !isAdmin;
+        refs.open.hidden = false;
         render();
       }
     }
@@ -81,15 +82,11 @@ export default {
     ctx.whoami?.then?.((me) => {
       isAdmin = !!me?.admin;
       refs.refresh.disabled = !isAdmin;
-      if (isAdmin) {
-        refs.open.hidden = false;
-        load(false);
-        // Auto-refresh del resumen cada 60s: lee del snapshot (instantáneo,
-        // sin forzar) — el backend ya se re-computa solo en background.
-        setInterval(() => { if (!document.hidden && !busy) load(false); }, 60_000);
-      } else {
-        refs.sum.innerHTML = `<span class="bf-sub">${t('tickets.sidebar.adminRequired', 'requiere admin')}</span>`;
-      }
+      refs.open.hidden = false;
+      load(false);
+      // Auto-refresh del resumen cada 60s: lee del snapshot (instantáneo,
+      // sin forzar) — el backend ya se re-computa solo en background.
+      setInterval(() => { if (!document.hidden && !busy) load(false); }, 60_000);
     });
   },
 };

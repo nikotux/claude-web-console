@@ -7,7 +7,7 @@
 // en el menú ⋯: renombrar / cambiar modelo / matar (diálogos propios).
 // La plomería (nombre tmux, socket, ruta) va al tooltip.
 // Las sesiones externas (no cwc-*) quedan en "Otras sesiones tmux", colapsado.
-import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel, CODEX_MODEL_OPTIONS, codexEffortsFor, DEFAULT_CODEX_MODEL } from '../../ui/models.js';
+import { modelColor, modelIcon, CHAT_MODEL_OPTIONS, TUI_MODEL_OPTIONS, EFFORT_OPTIONS, effortLabel, CODEX_MODEL_OPTIONS, codexEffortsFor, DEFAULT_CODEX_MODEL } from '../../ui/models.js';
 import { dismissablePopup } from '../../ui/popup.js';
 import { pacman, pacClass } from '../../ui/pacman.js';
 import { placeFor, resolvePlace, PLACES, LIMBO_PLACE } from '../../ui/places.js';
@@ -53,18 +53,7 @@ function chatModelLabel(c) {
 // sea) no se veía hasta volver a modo Chat (bug reportado 2026-07-05).
 const bareNameOf = (terminalId) => `cwct-${terminalId}`;
 
-// Modelo de una sesión TUI (tmux, vía `/model` tecleado real): NO incluye
-// AutoTux — el CLI real no conoce ese alias, y el router (core/model-router.js)
-// solo gestiona el chat visual del SDK por ahora. Lista SEPARADA a propósito
-// de CHAT_MODEL_OPTIONS (ui/models.js), que sí lleva AutoTux primero.
-const TUI_MODEL_OPTIONS = [
-  ['opusplan', 'Opus plan'],
-  ['fable', 'Fable'],
-  ['opus', 'Opus 5'],
-  ['sonnet', 'Sonnet'],
-  ['haiku', 'Haiku'],
-  ['default', 'Default de la cuenta'],
-];
+// Modelos de una sesión TUI: fuente única en ui/models.js (sin alias de chat).
 
 // Estado visual de los hijos de cada chat: vive fuera del DOM porque el poll de
 // 8 s actualiza tarjetas en su lugar y puede reconstruir solo el contenido
@@ -405,7 +394,9 @@ export default {
       // caía en verde "esperando input", así que 40+ chats dormidos mentían en
       // verde y solo se veían 2 estados. `alive` viene de /api/chat/list.
       if (c.alive) {
-        const perms = (c.pendingPerms || []).length;
+        // El array viene VACÍO en chats ajenos (el server solo manda el conteo
+        // para no popupear permisos de otro usuario — ver ChatManager.list).
+        const perms = (c.pendingPerms || []).length || c.pendingPermsCount || 0;
         return { state: 'waiting', label: perms ? t('sessions.dot.waitingPerm', 'esperando tu permiso ({n})', { n: perms }) : t('sessions.dot.waitingLive', 'esperando tu input') };
       }
       return { state: 'dormant', label: t('sessions.dot.dormant', 'dormido · tocá para retomar') };

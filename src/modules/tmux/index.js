@@ -17,7 +17,12 @@ import { config } from '../../core/config.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd, stateForPane } from '../../core/claude-state.js';
-import { sessionManager, PREFIX, BARE_PREFIX } from '../terminal/sessions.js';
+import {
+  canUseTmuxSession,
+  consoleSession,
+  PREFIX,
+  BARE_PREFIX,
+} from '../terminal/sessions.js';
 // Títulos humanos custom (renombrar tarjetas sin tocar el nombre tmux, que es
 // plomería y sostiene la rehidratación): persisten en titles.json vía el core
 // compartido (core/session-names.js — también los usa el módulo terminal para
@@ -40,27 +45,7 @@ function worldFromCwd(cwd) {
   return 'otros';
 }
 
-// Ownership guard (BUG-685, espejo de ownedSession de terminal/index.js): un
-// inquilino no-admin SOLO puede operar (kill/set-model/title) sobre SU sesión de
-// la consola. Admin/host (owner null) → todo (retrocompat: controla todos los
-// sockets). Para un no-admin exige: socket cwc + sesión de la consola (cwc-/cwct-)
-// cuya Session.owner coincida. Otro socket, sesión ajena, o sin dueño conocido
-// (p.ej. rehidratada tras un reinicio → owner=null) → false (fail-closed).
-function consoleSession(socketName, session) {
-  if (socketName !== config.tmuxSocket) return null;
-  let id = null;
-  if (session.startsWith(BARE_PREFIX)) id = session.slice(BARE_PREFIX.length);
-  else if (session.startsWith(PREFIX)) id = session.slice(PREFIX.length);
-  else return null;
-  return sessionManager.get(id) || null;
-}
-
-function ownsSession(req, socketName, session) {
-  const p = principalOf(req);
-  if (p.admin) return true;
-  const s = consoleSession(socketName, session);
-  return !!s && s.owner === p.username;
-}
+function ownsSession(req, socketName, session) { return canUseTmuxSession(principalOf(req), socketName, session); }
 
 // Mapa sesión→panes del socket (para el estado por pane del observador).
 // Best-effort: si list-panes falla, se devuelve un mapa vacío y el estado cae

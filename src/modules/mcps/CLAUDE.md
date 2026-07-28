@@ -12,11 +12,13 @@ Causa raíz: `buildCensus()` recorría mundos con `for … await` (SERIAL),
 `claude mcp list` health-chequeaba TODOS los servers de un mundo en un
 solo comando con timeout de 30 s, la caché era solo memoria (restart =
 panel vacío) y el front reemplazaba todo por spinner esperando el fetch
-entero. Rediseño: el censo se DESCUBRE desde config (`~/.claude.json`
-local+user + `.mcp.json` del repo): instantáneo, 0 subprocess; la salud
+entero. Rediseño: el censo se DESCUBRE desde config
+(`<scope.home>/.claude.json` local+user + `.mcp.json` de los proyectos
+propios): instantáneo, 0 subprocess; la salud
 se chequea POR ITEM con `claude mcp get <name>` (un solo server, ~3 s),
 en pool acotado (`core/pool.js`, max 4) y timeout propio de 15 s.
-Estado persistido POR ITEM en `~/.cwc-data/mcps-census.json` (atómico)
+Estado persistido POR ITEM en `<scope.dataDir>/mcps-census.json` (atómico;
+para el host conserva exactamente `~/.cwc-data/mcps-census.json`)
 con `checkedAt`/`stale`; el GET responde YA con el último dato conocido
 y dispara chequeos en segundo plano (fire-and-forget: idempotentes y
 re-disparados en el próximo poll, por eso NO necesitan runner
@@ -33,22 +35,27 @@ reconexión). El conflicto de scopes ya no se lee de su salida: se detecta
 comparando config (mismo nombre en >1 scope con endpoints distintos) y se
 muestra con detalle real + comandos `claude mcp remove … -s <scope>`
 copiables; la consola NUNCA decide cuál borrar.
-EL LLAVERO (`keyring-shared.js` + `infisical-shared.js`, 2026-07-22):
+EL LLAVERO (`keyring-shared.js` + `infisical-shared.js`, 2026-07-22;
+aislamiento multiusuario 2026-07-27, `PLAN-2117`):
 el panel mostraba las PUERTAS (MCP) pero nunca el LLAVERO. Infisical no
 es MCP ni cuenta: es la llave de la que cuelga `tolkien-mordor` (scope
 local, arranca con `infisical run …`). Y no era la excepción: hay una
 llave detrás de casi todo. `GET /mcps/keyring` (autenticados, 0 tokens IA,
-caché 60 s + `?fresh=1` + snapshot `~/.cwc-data/keyring.json` con
-degradación `stale`) devuelve 11 tarjetas en 3 familias: 🧠 Motores
+caché CLAVEADA POR USUARIO + `?fresh=1` + snapshot
+`<scope.dataDir>/keyring.json` con degradación `stale`) devuelve para el host
+las 11 tarjetas históricas en 3 familias: 🧠 Motores
 (Claude OAuth vía `expiresAt` · Codex CLI vía `last_refresh`, vencimiento
 ESTIMADO a 10 días) · 🔑 Llaves (Infisical · `gh auth status` · Pad local
 token+HTTP · Pad cloud `mcpOAuth.expiresAt`) · 🔌 Servicios (WhatsApp por
 heartbeat · systemd · ZeroTier por interfaz `zt*`, no `zerotier-cli` que
-pide root). Cada item lleva `dependents` (qué se rompe si cae; los de
+pide root). Un inquilino recibe solo sus seis sondas de credenciales; WhatsApp,
+systemd y ZeroTier son estado de la instalación y no entran en su llavero.
+Cada item lleva `dependents` (qué se rompe si cae; los de
 Infisical se DERIVAN de los MCP cuyo `command === 'infisical'`, no
 hardcodeados) y `action` (`infisical-login` o comando copiable).
 SEGURIDAD: allowlist explícita de campos, jamás un spread:
-`~/.infisical/infisical-config.json` contiene `vaultBackendPassphrase` y
+`<scope.home>/.infisical/infisical-config.json` contiene
+`vaultBackendPassphrase` y
 NUNCA sale; de `infisical run --projectId … --silent -- true` se mira
 SOLO exit code y stderr (nunca stdout: hoy corre `true`, pero si cambia
 el comando ese canal traería secretos); de `gh auth status` se filtra la
@@ -72,29 +79,33 @@ your browser: …/login?callback_port=N` y luego espera `Paste your browser
 token here:`. Como el navegador corre en la máquina de Niko y el callback
 apunta al localhost del server, el camino real es pegar el token. Runner
 PTY (node-pty: `claude mcp login` y este exigen TTY) con estado en
-`~/.cwc-data/infisical-login/<id>.json`, id fijo `infisical` (una sola
-sesión por máquina) y timeout de inactividad de 10 min. El token pegado
+`<scope.dataDir>/infisical-login/<id>.json`, id fijo `infisical` (una sola
+sesión por usuario) y timeout de inactividad de 10 min. El token pegado
 es SECRETO: llega por archivo 0600 que el runner BORRA apenas lo escribe
 al pty, nunca entra al JSON del job ni a logs, y el buffer del pty (que
 lo ecoa) jamás se vuelca a estado; solo se expone la URL. Igual que el
 runner de MCP, NUNCA declara éxito por exit code: re-verifica con
-`infisical login status` antes de escribir `done`. Endpoints admin
+`infisical login status` antes de escribir `done`. Endpoints del dueño
 `POST /mcps/infisical/login` · `/login-token` ·
 `GET /mcps/infisical/login/:id`. En la UI, una tarjeta MCP stdio con
 `command === 'infisical'` que NO esté conectada ofrece directo
 `🔑 Reconectar Infisical`: el botón que arregla la causa real, en la
 tarjeta que falló.
-ACCIONES MCP (admin; Regla 4: NUNCA editan `~/.claude.json` a mano — van
-por la vía CLI oficial `claude mcp`, que gestiona su archivo, igual que
+ACCIONES MCP (del dueño; Regla 4: NUNCA editan `.claude.json` a mano — van
+por la vía CLI oficial `claude mcp`, ejecutada con HOME/cwd del usuario, igual que
 onboarding usa `claude setup-token`): `POST /mcps/logout {world,name}`
-(`claude mcp logout`, limpia OAuth) · reciclar runners lo hace el FRONT
-vía `/api/admin/restart-runners` (existente). Enable/disable de servers
+(`claude mcp logout`, limpia SU OAuth) · reciclar runners sigue siendo
+acción global/admin y lo hace el FRONT vía `/api/admin/restart-runners`
+(existente y oculto para no-admins). Enable/disable de servers
 `.mcp.json` se DESCARTÓ (editaría `~/.claude.json` a mano). Reconexión
 OAuth guiada (`login-shared.js` + `bin/cwc-mcp-login-runner.js`):
 `claude mcp login <name>` EXIGE TTY → runner PTY, captura URL de
 authorize, espera la URL de redirect pegada y re-verifica antes de dar
-éxito. Estado en `~/.cwc-data/mcp-login/<world>-<name>.json`; endpoints
+éxito. Estado en `<scope.dataDir>/mcp-login/<world>-<name>.json`; endpoints
 `POST /mcps/login` · `POST /mcps/login-code {id,value}` ·
-`GET /mcps/login/:id`. `login-shared.js` e `infisical-shared.js` usan
-`config.projectDir` para cwd/lecturas READ-ONLY de Tolkien → entradas
-explícitas en `CROSS_WORLD_ALLOW`, no enlazan los Pad ni cruzan datos.
+`GET /mcps/login/:id`. Los mundos se resuelven por scope: host conserva la
+Consola real y `~/tolkien`; un inquilino usa
+`<scope.workspace>/mi-espacio` y `<scope.workspace>/tolkien`. Ningún camino
+usa la config global del proyecto ni HOME del host. Store, llavero, promesa en vuelo y
+Set de checks viven en un mapa en memoria por `scope.user`: no hay caché
+global capaz de cruzar datos entre usuarios.

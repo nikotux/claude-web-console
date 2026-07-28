@@ -16,6 +16,9 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
    runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
    paralelo → orquestador desacoplado (`bin/cwc-healthfix-orchestrator.js`);
+   login completo de Claude por inquilino → runner PTY desacoplado
+   (`bin/cwc-claude-login-runner.js`, estado por usuario en
+   `~/.cwc-data/claude-login-jobs/`);
    consulta EN VIVO de un ticket en Zoho Desk → runner desacoplado
    (`bin/cwc-desk-runner.js`); ANÁLISIS GENERAL IA del tablero de Pendientes
    (duplicados/unificables/completar info, por tareas o planes) → runner

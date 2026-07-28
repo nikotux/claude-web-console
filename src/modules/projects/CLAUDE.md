@@ -19,14 +19,17 @@ GET/POST /:key/context/section/:i = UN fragmento — el POST exige el
 `hash` (sha256/16) del texto ABIERTO y si el archivo cambió en el
 medio (otra sesión de Claude editándolo) responde 409 sin pisar
 nada. GUARDIÁN con IA (POST /:key/context/section/:i/analyze,
-admin, valida hash ANTES de gastar tokens): corrida corta del SDK
+admin o dueño de su proyecto, valida hash ANTES de gastar tokens):
+corrida corta del SDK
 (haiku, 1 turno, CERO herramientas — las dos capas de la regla 6
 acá deniegan TODO) que compara sección vieja vs nueva y devuelve
 {removed, added, modified, risk ok|atencion|critico, riskWhy,
 summary}. DESACOPLADA a runner (regla de oro, 2026-07-05: antes
 corría INLINE en el handler y un deploy a mitad la perdía con los
-tokens gastados): el POST persiste el job en
-~/.cwc-data/projects-analyze/<id>.json (id DETERMINÍSTICO por
+tokens gastados): el POST persiste el job en el `.cwc-data` del
+usuario que lo pidió (`<userDataDir>/projects-analyze/<id>.json`;
+para el host sigue siendo `~/.cwc-data/projects-analyze/<id>.json`)
+(id DETERMINÍSTICO por
 proyecto+sección+hash+contenido: un reintento reusa el MISMO job,
 sin runner duplicado — lock implícito por identidad), spawnea
 bin/cwc-projects-analyze-runner.js detached y responde YA
@@ -34,7 +37,11 @@ bin/cwc-projects-analyze-runner.js detached y responde YA
 SOLO lee disco (0 tokens; staleness ⇒ error, nunca cuelga) y el
 front encuesta cada 2 s tolerando fetch fallidos (deploy en el
 medio). Lógica compartida en projects/analyze-shared.js (prompt +
-parseo + jobs con poda >24 h). La UI lo muestra en un modal de CONFIRMACIÓN FORZADA
+parseo + jobs con poda >24 h). BLINDAJE ANTICONSUMO: el host conserva
+su entorno completo; un inquilino corre con `userRunnerEnv` y su
+`CLAUDE_CODE_OAUTH_TOKEN`, y sin credencial propia el POST falla cerrado
+con un mensaje para conectar su cuenta (nunca usa la cuenta Claude del
+server). La UI lo muestra en un modal de CONFIRMACIÓN FORZADA
 (reviewChange en project-context-panel.js) — solo "Confirmar y
 guardar" escribe, "Seguir editando" vuelve al editor sin tocar
 nada, y si la IA falla cae a un diff local (renderDiff) con la

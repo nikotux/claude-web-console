@@ -25,6 +25,16 @@ POST /codex/cancel; lanzan `bin/cwc-codex-login-runner.js`, que corre
 `codex login --device-auth`. Device-auth es obligatorio en el server
 remoto porque el login normal abre un callback en localhost:1455, que el
 navegador remoto no puede devolverle al server.
+Claude suma endpoints AUTENTICADOS y estrictamente por-usuario:
+POST /claude/login/start · GET /claude/login/status ·
+POST /claude/login/code · POST /claude/login/cancel · GET /claude/status.
+Lanzan desacoplado `bin/cwc-claude-login-runner.js`, cuyo estado vive en
+`~/.cwc-data/claude-login-jobs/<user>.json`; status solo expone
+status/url/error y `/claude/status` solo informa si la fuente es
+`credentials`, `setup-token` o null, nunca el token. El login completo es
+FAIL-CLOSED para el HOST: `/claude/login/start` devuelve 400 y el runner
+también aborta antes de tocar su HOME. Ninguna ruta acepta un usuario por
+query/body/header ni permite que un admin opere el job ajeno.
 GOTCHAS DUROS (todos verificados en vivo, cuestan caro re-descubrirlos):
 (1) ZOHO NO usa el scope `offline_access` — el refresh token se obtiene
 pasando `access_type=offline` en el intercambio; sin eso Zoho devuelve
@@ -43,3 +53,5 @@ cuando el registro en memoria `activePolls` no tiene un poller vivo.
 ANTES de `'/:provider/...'`; si no, `/codex/status` matchea
 `'/:provider/status'` con `provider='codex'` y devuelve 400
 `"Proveedor desconocido"`.
+(7) ORDEN DE RUTAS CLAUDE: `/claude/login/*` y `/claude/status` también
+DEBEN registrarse ANTES de `'/:provider/...'` por el mismo motivo.

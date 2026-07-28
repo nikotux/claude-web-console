@@ -218,10 +218,12 @@ propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
 `workspace/` — helpers en `src/core/user-space.js` (`userSpace`/`userDataDir`/
 `userClaudeDir`/`userFileRoot`/`userCodexDir`/`userCodexAuthPath`/`hasCodexCreds`/
 `userInfisicalDir`/`userInfisicalConfigPath`/`hasInfisicalCreds`/`userPadDir`/`readUserOauthToken`/
-`userTolkienMcpTokenPath`/`readUserTolkienMcpToken`/`hasTolkienMcpToken`/
+`ensureCliOnboarded`/`userTolkienMcpTokenPath`/`readUserTolkienMcpToken`/`hasTolkienMcpToken`/
 `readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
 HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
 `config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.
+`ensureCliOnboarded` mergea `hasCompletedOnboarding: true` en el `.claude.json`
+del inquilino para que su CLI no muestre login si ya tiene OAuth; jamás toca al host.
 No hay usuarios de SO ni sudo/setuid: el aislamiento se logra apuntando cada
 runner a un directorio de config por-usuario (decisión 🅰, `decision-1784076518`).
 `GET /api/whoami` devuelve `{type, username, admin, lang, host}`: `host` siempre
@@ -231,6 +233,10 @@ Los helpers de Infisical apuntan a
 `<userSpace>/.infisical/infisical-config.json`, que es donde el CLI persiste su
 sesión; para el host conservan `~/.infisical/` y para un inquilino quedan dentro
 de su raíz aislada.
+`system-scope.js` es la fuente única del menú Sistema: traduce la request o su
+principal a `{user, isHost, admin, home, dataDir, claudeDir, workspace,
+padWorkspace}` sin derivar rutas del proceso. Para el host (y el token maestro)
+devuelve exactamente las rutas históricas y el workspace Pad `console`.
 
 **Blindaje anticonsumo (regla dura, FAIL-CLOSED, `decision-1784080554`).** Es el
 riesgo #1 de seguridad/costo y HOY el default estaba roto (el runner heredaba
@@ -251,6 +257,10 @@ lo aplican `list(principal)` (filtro de visibilidad: `owner === username` salvo
 admin) y `ownedChat(req, id)` (guard: ajeno o inexistente ⇒ null ⇒ 404, sin
 revelar que existe); el cwd se clampa con `safeCwd(cwd, owner)` =
 `clampToRoot(userFileRoot(owner || hostUser()), cwd)`, JAMÁS al home global.
+GOTCHA: `clampToRoot` solo garantiza confinamiento, no existencia. Un destino
+relativo ajeno se resuelve DENTRO del root del inquilino y puede producir una
+ruta inexistente; todo consumidor de `safeCwd` debe validar además que el
+resultado exista y sea un directorio antes de arrancar una sesión o runner.
 Además, los dos mundos POR usuario (🏠 "Mi espacio" — "Mi Consola" renombrada
 para no-admins; el admin conserva "Mi Consola" real, el repo · 🌳 su clon de
 Tolkien) tampoco se cruzan entre sí.

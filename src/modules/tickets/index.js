@@ -10,6 +10,7 @@
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { hostUser } from '../../core/user-space.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import { reqPadContext } from '../../core/pad-context.js';
 import { getTicketState, listDepartments } from './desk-mcp-client.js';
 import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolvedInfo } from './sources.js';
@@ -81,10 +82,13 @@ export default {
   registerHttp(router) {
     const r = express.Router();
 
+    // El snapshot es del equipo y se refresca una vez cada 60 s con las credenciales
+    // del host: leerlo no cuesta por usuario. Escribir afuera, gastar tokens o tocar
+    // el Pad `console` sigue reservado al admin.
+
     // Detalle de un ticket: del snapshot (instantáneo). Fallback a lectura viva
     // sólo si el ticket no estaba en el último snapshot (ej. cerrado viejo).
     r.get('/ticket/:id', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const ctx = reqPadContext(req);
         const actor = actorOf(req);
@@ -111,7 +115,6 @@ export default {
     // Detalle completo de un PR (body, conversaciones, checks, archivos). Del
     // snapshot (instantáneo); fallback a lectura viva si no estaba cacheado.
     r.get('/pr/:number', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const ctx = reqPadContext(req);
         const actor = actorOf(req);
@@ -129,7 +132,6 @@ export default {
     });
 
     r.get('/departments', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json({ departments: await listDepartments() }); }
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
@@ -138,9 +140,10 @@ export default {
     // inmediato y espera (botón "Actualizar"). Si aún no hay snapshot (arranque
     // en frío sin disco), computa uno.
     r.get('/dashboard', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        if (req.query.force === '1' || !getSnapshot()) await refreshNow();
+        // Un no-admin lee el snapshot compartido; forzar golpea Zoho/GitHub.
+        const forced = (req.query.force === '1') && isAdmin(req);
+        if (forced || !getSnapshot()) await refreshNow();
         const s = getSnapshot();
         if (!s || !s.dashboard) return res.json({ loading: true, error: s?.error || null });
         const you = actorOf(req)?.username || null;
@@ -175,9 +178,10 @@ export default {
     //   · Si el store todavía no tuvo su 1ª pasada (arranque en frío) → loading:true
     //     para que el front muestre "generando…" + reintente, en vez de vaciar.
     r.get('/resolved', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        if (req.query.force === '1' || req.query.force === 'true') {
+        // Un no-admin lee el snapshot compartido; forzar golpea Zoho/GitHub.
+        const forced = (req.query.force === '1' || req.query.force === 'true') && isAdmin(req);
+        if (forced) {
           refreshResolved({ force: true }).catch(() => {}); // dispara y NO espera (no bloquea el request)
         }
         const { tickets: rawTickets, prs: rawPrs, meta } = readResolved();
@@ -231,33 +235,39 @@ export default {
     // panel de contextos (system/project-context-panel) y se inyectan en
     // "Trabajar en el chat".
     r.get('/context', (req, res) => {
+      const scope = systemScopeFor(req);
       const kind = req.query.kind === 'pr' ? 'pr' : 'work';
-      const context = getContext(kind);
+      const context = getContext(kind, scope);
       res.json({ kind, context, isDefault: context === DEFAULT_CONTEXTS[kind] });
     });
     r.post('/context', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const scope = systemScopeFor(req);
       const kind = req.body?.kind === 'pr' ? 'pr' : 'work';
       const text = String(req.body?.context ?? '');
       if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
-      saveContext(kind, text);
-      res.json({ ok: true, kind, context: getContext(kind), sync: verifySync() });
+      saveContext(kind, text, scope);
+      res.json({
+        ok: true,
+        kind,
+        context: getContext(kind, scope),
+        sync: verifySync(scope),
+      });
     });
 
-    // Verificador del ESPEJO a Tolkien: ¿el subset work+pr en ~/tolkien/
-    // CLAUDE.local.md está al día con el master de la consola? El panel lo
+    // Verificador del ESPEJO a Tolkien: ¿el subset work+pr en el clon propio
+    // del solicitante está al día con su master? El panel lo
     // muestra como badge (✅ al día / ⚠️ desactualizado / ❌ falta) y el check
     // rápido de Salud consume el MISMO estado. 0 tokens, solo lee disco.
-    r.get('/context-sync', (_req, res) => {
-      res.json(verifySync());
+    r.get('/context-sync', (req, res) => {
+      res.json(verifySync(systemScopeFor(req)));
     });
     // Re-sincronizar a mano (botón "Re-sincronizar" del panel): re-renderiza el
     // subset desde el master y lo escribe en CLAUDE.local.md.
     r.post('/context-sync', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      const r2 = syncToTolkien();
+      const scope = systemScopeFor(req);
+      const r2 = syncToTolkien(scope);
       if (!r2.ok) return res.status(502).json({ error: `No se pudo sincronizar con Tolkien: ${r2.reason}` });
-      res.json({ ok: true, sync: verifySync() });
+      res.json({ ok: true, sync: verifySync(scope) });
     });
 
     // ===== Contexto adicional + Histórico del trabajo (meta-store por ítem) =====
@@ -318,7 +328,6 @@ export default {
     });
     // Leer la metadata de un ítem (contexto + histórico) sin el snapshot completo.
     r.get('/meta/:key', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const ctx = reqPadContext(req);
         res.json({ meta: await getMeta(keyOf(req.params.key), ctx) });

@@ -3,13 +3,17 @@
 // 2026-07-05: diferenciar de un vistazo MI CONSOLA de Tolkien en launcher,
 // Proyectos y tarjetas de Sesiones).
 //
-// La clave es la ruta RELATIVA al home ('claude-web-console', 'tolkien').
+// La clave es la ruta RELATIVA al home ('claude-web-console', 'mi-espacio',
+// 'tolkien').
 // placeFor() normaliza: acepta rel o absoluta (/home/<user>/...) y con o sin
 // barra final. Devuelve {rel, label, ico, cls} o null si la carpeta no es un
 // lugar conocido (ahí el caller usa su fallback genérico: basename + 'folder').
 // cls es el modificador CSS opcional del diferenciador visual (style.css).
+export const MYSPACE_PLACE = { rel: 'mi-espacio', label: 'Mi espacio', ico: 'home', cls: 'is-console' };
+
 export const PLACES = [
   { rel: 'claude-web-console', label: 'Mi Consola', ico: 'console', cls: 'is-console' },
+  MYSPACE_PLACE,
   { rel: 'tolkien', label: 'Tolkien', ico: 'gitBranch', cls: '' },
 ];
 
@@ -19,7 +23,12 @@ export const PLACES = [
 export const LIMBO_PLACE = { rel: '__limbo', label: '🌗 Limbo (alto riesgo)', ico: 'relay', cls: 'is-limbo' };
 
 export function placeFor(p) {
-  const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
+  // En rutas de inquilino, después de quitar /home/<host>/ todavía queda el
+  // prefijo de su workspace; se recorta para recuperar el lugar relativo real.
+  const rel = String(p || '')
+    .replace(/^\/home\/[^/]+\/?/, '')
+    .replace(/^\.cwc-users\/[A-Za-z0-9_.-]+\/workspace\/?/, '')
+    .replace(/\/+$/, '');
   return PLACES.find((x) => x.rel === rel) || null;
 }
 

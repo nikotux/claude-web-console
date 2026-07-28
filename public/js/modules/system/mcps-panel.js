@@ -5,7 +5,8 @@
 // DESDE LA VENTANA:
 //   · 🔄 Re-verificar        · ♻️ Reciclar runners (global)
 //   · 🔐 Reconectar (OAuth guiado, Fase 2) · ⏻ Desconectar · 📋 Copiar comando
-// El backend es el módulo `mcps` (GET /api/mcps + acciones admin).
+// El backend es el módulo `mcps` (GET /api/mcps + acciones del dueño; solo
+// reciclar runners sigue siendo una acción global/admin).
 //
 // Segunda sección "🔗 Cuentas conectadas" (PLAN-781): conexiones por-USUARIO
 // para que Microsoft use el calendario de esa persona y Zoho Desk publique
@@ -1070,7 +1071,9 @@ export function mountMcpsPanel(el, ctx = {}) {
       return;
     }
     if (act === 'copy') {
-      const cmd = `cd ${world === 'tolkien' ? '~/tolkien' : '~/claude-web-console'} && claude mcp login ${name}`;
+      const cwd = (lastData?.worlds || []).find((w) => w.world === world)?.cwd
+        || (world === 'tolkien' ? '~/tolkien' : '~/claude-web-console');
+      const cmd = `cd ${cwd} && claude mcp login ${name}`;
       copyCommandText(cmd);
       return;
     }
@@ -1171,9 +1174,11 @@ export function mountMcpsPanel(el, ctx = {}) {
         setBody(`
           <p class="hr-f-detail">🟢 <b>${t('system.mcps.infisicalRestored', 'Sesión de Infisical restablecida')}</b></p>
           ${email}${expires}
-          <p class="hr-f-file">${t('system.mcps.infisicalRecycleHint', 'Los motores vivos tienen la config vieja: reciclá runners para que relean la sesión.')}</p>
+          <p class="hr-f-file">${isAdmin
+    ? t('system.mcps.infisicalRecycleHint', 'Los motores vivos tienen la config vieja: reciclá runners para que relean la sesión.')
+    : t('system.mcps.infisicalOwnerHint', 'La credencial propia quedó guardada. Los motores nuevos ya la toman; un administrador puede reciclar los que siguen vivos.')}</p>
           <div class="mcp-acts">
-            <button class="btn btn--sm" data-ref="recycle2">♻️ ${t('system.mcps.recycleRunnersTitle', 'Reciclar runners')}</button>
+            ${isAdmin ? `<button class="btn btn--sm" data-ref="recycle2">♻️ ${t('system.mcps.recycleRunnersTitle', 'Reciclar runners')}</button>` : ''}
             <button class="btn-ghost btn--sm" data-ref="close2">${t('system.mcps.close', 'Cerrar')}</button>
           </div>`);
         m.body.querySelector('[data-ref="recycle2"]')?.addEventListener('click', () => { recycleRunners(); });
@@ -1321,12 +1326,14 @@ export function mountMcpsPanel(el, ctx = {}) {
         if (timer) clearInterval(timer);
         setBody(`
           <p class="hr-f-detail">🟢 <b>${t('system.mcps.reconnected', 'Reconectado.')}</b> ${t('system.mcps.authenticatedMessage', '"{name}" quedó autenticado.', { name: esc(name) })}</p>
-          <p class="hr-f-file">${t('system.mcps.recycleAfterReconnect', 'Para que los chats vivos tomen la credencial fresca, reciclá los runners.')}</p>
+          <p class="hr-f-file">${isAdmin
+    ? t('system.mcps.recycleAfterReconnect', 'Para que los chats vivos tomen la credencial fresca, reciclá los runners.')
+    : t('system.mcps.ownerReconnectHint', 'La credencial propia quedó guardada. Los chats nuevos ya la toman; un administrador puede reciclar los runners vivos.')}</p>
           <div class="mcp-acts">
-            <button class="btn btn--sm" data-ref="recycle2">♻️ ${t('system.mcps.recycleRunnersTitle', 'Reciclar runners')}</button>
+            ${isAdmin ? `<button class="btn btn--sm" data-ref="recycle2">♻️ ${t('system.mcps.recycleRunnersTitle', 'Reciclar runners')}</button>` : ''}
             <button class="btn-ghost btn--sm" data-ref="close2">${t('system.mcps.close', 'Cerrar')}</button>
           </div>`);
-        m.body.querySelector('[data-ref="recycle2"]').addEventListener('click', () => { recycleRunners(); });
+        m.body.querySelector('[data-ref="recycle2"]')?.addEventListener('click', () => { recycleRunners(); });
         m.body.querySelector('[data-ref="close2"]').addEventListener('click', () => { m.close?.(); load(true); });
       } else if (job.status === 'error') {
         if (timer) clearInterval(timer);

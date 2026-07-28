@@ -47,7 +47,9 @@ export function mountInterfonoPanel(el, ctx) {
       <button class="btn-ghost btn--sm btn--icon" data-ref="reload" title="${t('system.interfono.refresh', 'Refrescar')}">${icon('refresh', { size: 13 })}</button>
       ${helpBtn('sys-interfono')}
     </div>
-    <p class="if-hint">${t('system.interfono.hint', 'Las sesiones de Claude se avisan y evitan pisarse solas. Acá lo ves y podés escribirles vos.')}</p>
+    <p class="if-hint">${isAdmin
+      ? t('system.interfono.hint', 'Las sesiones de Claude se avisan y evitan pisarse solas. Acá lo ves y podés escribirles vos.')
+      : t('system.interfono.hintOwn', 'Tus sesiones de Claude se avisan y evitan pisarse solas. Acá ves únicamente su actividad y podés escribirles vos.')}</p>
 
     <div class="if-send" data-ref="send">
       <select class="if-select" data-ref="to"></select>
@@ -58,22 +60,30 @@ export function mountInterfonoPanel(el, ctx) {
     </div>
 
     <details class="if-group" open>
-      <summary><span class="if-gtitle">${t('system.interfono.activeSessions', 'Sesiones activas')}</span> <span class="if-count" data-ref="dir-n"></span></summary>
+      <summary><span class="if-gtitle">${isAdmin
+        ? t('system.interfono.activeSessions', 'Sesiones activas')
+        : t('system.interfono.activeSessionsOwn', 'Tus sesiones activas')}</span> <span class="if-count" data-ref="dir-n"></span></summary>
       <div class="if-list" data-ref="dir">${pacman({ size: 'sm' })}</div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">${t('system.interfono.fileClaims', 'Reservas de archivo')}</span> <span class="if-count" data-ref="claims-n"></span></summary>
+      <summary><span class="if-gtitle">${isAdmin
+        ? t('system.interfono.fileClaims', 'Reservas de archivo')
+        : t('system.interfono.fileClaimsOwn', 'Reservas de tus sesiones')}</span> <span class="if-count" data-ref="claims-n"></span></summary>
       <div class="if-list" data-ref="claims"></div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">${t('system.interfono.recentMessages', 'Mensajes recientes')}</span> <span class="if-count" data-ref="msgs-n"></span></summary>
+      <summary><span class="if-gtitle">${isAdmin
+        ? t('system.interfono.recentMessages', 'Mensajes recientes')
+        : t('system.interfono.recentMessagesOwn', 'Mensajes de tus sesiones')}</span> <span class="if-count" data-ref="msgs-n"></span></summary>
       <div class="if-list" data-ref="msgs"></div>
     </details>
 
     <details class="if-group">
-      <summary><span class="if-gtitle">${t('system.interfono.deliveryLog', 'Bitácora de entrega')}</span> <span class="if-count" data-ref="deliv-n"></span></summary>
+      <summary><span class="if-gtitle">${isAdmin
+        ? t('system.interfono.deliveryLog', 'Bitácora de entrega')
+        : t('system.interfono.deliveryLogOwn', 'Bitácora de tus sesiones')}</span> <span class="if-count" data-ref="deliv-n"></span></summary>
       <div class="if-list" data-ref="deliv"></div>
     </details>`;
 
@@ -85,7 +95,9 @@ export function mountInterfonoPanel(el, ctx) {
 
   function renderDir(dir) {
     refs['dir-n'].textContent = dir.length ? `(${dir.length})` : '(0)';
-    refs.to.innerHTML = `<option value="all">📢 ${t('system.interfono.allBroadcast', 'Todas (broadcast)')}</option>` +
+    refs.to.innerHTML = (isAdmin
+      ? `<option value="all">📢 ${t('system.interfono.allBroadcast', 'Todas (broadcast)')}</option>`
+      : '') +
       dir.map((e) => `<option value="${esc(e.handle)}">${KIND_ICON[e.kind] || '•'} ${esc(e.name)}${e.packageRef ? ` · ${esc(e.packageRef)}` : ''}${e.world ? ` · ${WORLD_ICON(e.world)}` : ''}${e.archived ? ' · 📦' : ''}</option>`).join('');
     refs.dir.innerHTML = dir.length ? dir.map((e) => `
       <div class="if-item">
@@ -94,7 +106,9 @@ export function mountInterfonoPanel(el, ctx) {
         ${e.world ? `<span class="if-world" title="${t('system.interfono.worldTitle', 'Mundo')}: ${esc(e.world)}">${WORLD_ICON(e.world)} ${esc(e.world)}</span>` : ''}
         ${e.archived ? `<span class="if-arch">📦 ${t('system.interfono.archivedSession', 'archivada')}</span>` : ''}
         <span class="if-sub">${esc(e.cwd || '')}</span>
-      </div>`).join('') : `<div class="hp-empty">${t('system.interfono.noActiveSessions', 'No hay otras sesiones activas.')}</div>`;
+      </div>`).join('') : `<div class="hp-empty">${isAdmin
+      ? t('system.interfono.noActiveSessions', 'No hay otras sesiones activas.')
+      : t('system.interfono.noActiveSessionsOwn', 'No tenés sesiones activas en el Interfono.')}</div>`;
   }
 
   function renderClaims(claims) {

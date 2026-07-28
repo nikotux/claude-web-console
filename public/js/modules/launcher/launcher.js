@@ -1,12 +1,13 @@
 // modules/launcher/launcher.js — "Nueva sesión": LA acción prominente de la app.
 //
 // Modal lanzador completo: tipo (Chat/Claude TUI/Terminal), modelo cuando
-// corresponde y destino con atajos fijos (Tolkien/Mi Consola — los lugares
-// con identidad salen de ui/places.js: nombre + ícono + diferenciador) más un
-// navegador de carpetas con breadcrumb (GET /api/files/list, solo directorios).
+// corresponde y destino con atajos fijos (Tolkien/lugar propio — Mi Consola
+// para host/admin, Mi espacio para inquilinos no-admin; su identidad sale de
+// ui/places.js) más un navegador de carpetas con breadcrumb
+// (GET /api/files/list, solo directorios).
 // [Iniciar] crea y enfoca la sesión.
-import { placeFor } from '../../ui/places.js';
-import { CHAT_MODEL_OPTIONS } from '../../ui/models.js';
+import { MYSPACE_PLACE, placeFor } from '../../ui/places.js';
+import { CHAT_MODEL_OPTIONS, TUI_MODEL_OPTIONS, CHAT_ONLY_MODELS } from '../../ui/models.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
@@ -15,18 +16,17 @@ import { helpBtn } from '../../ui/help.js';
 // usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
 const CONSOLE_PLACE = placeFor('claude-web-console');
 
-// AutoTux (2026-07-06): predeterminado de TODA conversación de Chat nueva —
-// fuente única en ui/models.js (mismo listado/orden que el picker de
-// Sesiones). "Claude (TUI)" usa una lista SIN AutoTux (TUI_MODELS abajo): el
-// CLI real de esas sesiones no conoce ese alias — ver core/model-router.js.
+// AutoTux (2026-07-06): predeterminado de TODA conversación de Chat nueva.
+// Las opciones del chat y la lista sin alias para el CLI real vienen de la
+// fuente única ui/models.js (CHAT_MODEL_OPTIONS/TUI_MODEL_OPTIONS).
 const MODELS = CHAT_MODEL_OPTIONS;
-const TUI_MODELS = CHAT_MODEL_OPTIONS.filter(([v]) => v !== 'auto');
 
 export default {
   name: 'launcher',
 
   mount(el, ctx) {
     const { icon, dialog, bus, openSession } = ctx;
+    let homePlace = CONSOLE_PLACE;
 
     // Botón compacto: misma altura/diseño que el ☰ de colapsar (rail-btn),
     // con tipografía acorde. Va al lado del toggle en la cabecera derecha.
@@ -50,6 +50,15 @@ export default {
 
     async function open() {
       if (modal) return;
+      const user = await Promise.resolve(ctx.whoami).catch(() => null);
+      if (modal) return;
+      const showConsoleShortcut = !user
+        || user.type === 'token'
+        || !!user.admin
+        || (!!user.username && user.username === user.host);
+      // Sin identidad conservamos el destino histórico. Host/admin ve el repo
+      // real; únicamente un inquilino no-admin usa su mi-espacio aislado.
+      homePlace = showConsoleShortcut ? CONSOLE_PLACE : MYSPACE_PLACE;
       // Ancho angosto (360): con solo 3 tarjetas por fila + dropdown + CTA, 440
       // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido
       // del usuario 2026-07-10).
@@ -94,7 +103,7 @@ export default {
         <div class="ln-model-row" ${st.type === 'terminal' ? 'hidden' : ''}>
           <label class="ln-sec-title" for="ln-model">${t('launcher.model', 'Modelo')}</label>
           <select id="ln-model" class="ln-model">
-            ${(st.type === 'chat' ? MODELS : TUI_MODELS).map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
+            ${(st.type === 'chat' ? MODELS : TUI_MODEL_OPTIONS).map(([v, l]) => `<option value="${v}" ${v === st.model ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
         <button class="btn btn--block ln-start" ${st.dest ? '' : 'disabled'}>${icon('play', { size: 15 })}<span>${st.dest ? t('launcher.startIn', 'Iniciar en {dest}', { dest: st.dest.label }) : t('launcher.pickDest', 'Elegí un destino')}</span></button>`;
@@ -103,9 +112,11 @@ export default {
       for (const b of body.querySelectorAll('.ln-type')) {
         b.addEventListener('click', () => {
           st.type = b.dataset.type;
-          // AutoTux ('auto') no existe fuera de "Chat": el CLI real de una
-          // sesión TUI/terminal no conoce ese alias (ver TUI_MODELS arriba).
-          if (st.type !== 'chat' && st.model === 'auto') st.model = 'opusplan';
+          // Los alias de chat ('auto' AutoTux, 'tandem' Tándem) no existen para
+          // el CLI real de una sesión TUI/terminal: sin este saneo el <select>
+          // muestra la primera opción pero st.model conserva el alias (el evento
+          // 'change' nunca dispara) y el backend responde 400 — console:PLAN-2115.
+          if (st.type !== 'chat' && CHAT_ONLY_MODELS.includes(st.model)) st.model = 'opusplan';
           render();
         });
       }
@@ -122,15 +133,19 @@ export default {
         <button class="btn-ghost ln-dest ln-card ${cls} ${st.dest?.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
           ${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span>
         </button>`;
-      // Grid 3 tarjetas: Tolkien · Mi Consola · Otra carpeta (abre el navegador).
+      // Grid: Tolkien · lugar propio · Otra carpeta. Host/admin ve el repo de la
+      // consola; un inquilino no-admin ve mi-espacio dentro de su workspace.
       // Identidad de ui/places.js; el tinte de la consola es .ln-dest--console.
       // "Otra carpeta" queda activa si el destino es una carpeta navegada (≠ los
       // dos proyectos), para que la selección se vea al volver del navegador.
-      const other = !!st.dest && st.dest.rel !== st.project.rel && st.dest.rel !== CONSOLE_PLACE.rel;
+      const other = !!st.dest && st.dest.rel !== st.project.rel && st.dest.rel !== homePlace.rel;
+      const homeLabel = homePlace.rel === MYSPACE_PLACE.rel
+        ? t('launcher.place.mySpace', homePlace.label)
+        : t('launcher.place.console', homePlace.label);
       return `
         <div class="ln-dests">
           ${card(st.project.rel, st.project.name, 'gitBranch')}
-          ${card(CONSOLE_PLACE.rel, CONSOLE_PLACE.label, CONSOLE_PLACE.ico, 'ln-dest--console')}
+          ${card(homePlace.rel, homeLabel, homePlace.ico, 'ln-dest--console')}
           <button class="btn-ghost ln-card ln-browse-open ${other ? 'active' : ''}">${icon('folder', { size: 22 })}<span class="ln-card-label">${t('launcher.otherFolder', 'Otra carpeta')}</span></button>
         </div>`;
     }

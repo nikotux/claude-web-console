@@ -118,6 +118,19 @@ después, porque Ink trata un `\r` pegado a texto largo como parte del pegado y
 nunca envía; verificado en el log del PTY (35 chars se enviaban, 92 no). Era la
 causa raíz de los canjes que morían en `exchanging`.
 SIGTERM/SIGINT dejan `error:cancelado` y matan el PTY; timeout duro: 10 min.
+### bin/cwc-claude-login-runner.js  LOGIN COMPLETO de Claude por INQUILINO para
+⚙ Sistema → Conexiones: runner PTY de `claude auth login --claudeai` con
+HOME/workspace aislados mediante `userRunnerEnv`. Antes del spawn borra
+explícitamente `CLAUDE_CODE_OAUTH_TOKEN`: si el CLI ve el setup-token se
+considera ya autenticado y no ofrece el login de cuenta. Publica
+estado/URL en `~/.cwc-data/claude-login-jobs/<user>.json`, recibe el código
+por `<user>.code` mode 600 sin loguearlo y deja el volcado redactado en
+`<user>.log`. El CLI escribe por sí mismo
+`<userSpace>/.claude/.credentials.json`; el runner declara `ok` solo si ese
+JSON contiene `claudeAiOauth.accessToken` y luego ejecuta best-effort
+`claude auth status --json` con salida redactada. FAIL-CLOSED: rechaza al
+usuario HOST antes de crear el job, porque su credencial real solo se
+administra con su propio CLI. Timeout duro: 10 min.
 ### bin/cwc-codex-login-runner.js  LOGIN GUIADO de Codex por usuario para onboarding y ⚙ Sistema
 → Conexiones: runner PTY de `codex login --device-auth` (el login normal
 abre callback en localhost:1455, inservible desde un navegador contra un
@@ -249,10 +262,16 @@ Sites.Selected es app-only) y el gate del CLI es el único acotamiento real.
 ### bin/cwc-projects-analyze-runner.js análisis IA (guardián) de UN cambio de sección de contexto
 (CLAUDE.md) del módulo projects, DESACOPLADO del server (haiku, 1
 turno, CERO herramientas — doble capa regla 6 deniega TODO).
-Interfaz por archivos: ~/.cwc-data/projects-analyze/<id>.json
+Interfaz por archivos PER-USUARIO:
+`<userDataDir>/projects-analyze/<id>.json`
 (job con before/after que escribe el POST; el runner persiste el
-veredicto en el MISMO archivo). Lógica compartida en
-src/modules/projects/analyze-shared.js
+veredicto en el MISMO archivo; para el host la ruta sigue siendo
+`~/.cwc-data/projects-analyze/<id>.json`). Recibe `<id> <owner>`; sin
+owner asume host solo para compatibilidad con jobs viejos. El host conserva
+`process.env`; un inquilino arranca con `userRunnerEnv` y SU token OAuth,
+después de `_env-boot.js` + redacción de secretos. Sin credencial propia el
+server NO lo spawnea (fail-closed, nunca consume la cuenta Claude del host).
+Lógica compartida en src/modules/projects/analyze-shared.js
 ### bin/cwc-commitmsg-runner.js generación IA del mensaje de commit del botón "Commit (sin push)"
 del panel Backup, DESACOPLADA del server (haiku, 1 turno, CERO
 herramientas — doble capa regla 6 deniega TODO; el diff viaja en

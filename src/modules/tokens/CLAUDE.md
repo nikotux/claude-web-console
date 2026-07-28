@@ -25,13 +25,22 @@ que deja el onboarding). Ninguna credencial viaja al cliente ni se loguea.
 
 GOTCHA (verificado 2026-07-27 comparando host e inquilino en el mismo instante):
 el setup-token `sk-ant-oat01` de `.claude/oauth-token` que deja el onboarding NO
-habilita `api.anthropic.com/api/oauth/usage`; Anthropic responde 429, no 401. Por
-eso un usuario sin `.credentials.json` propia recibe `{unavailable:true}`:
+cumple los scopes del medidor: `/api/oauth/profile` responde 403
+`OAuth token does not meet scope requirement any_of(user:profile, user:office)`
+y `/api/oauth/usage` enmascara el mismo rechazo como 429. Por eso un usuario sin
+`.credentials.json` propia recibe `{unavailable:true}`:
 `reason:'setup-token'` si Anthropic rechaza el fallback, o
-`reason:'sin-credencial'` si no hay ninguno. El front omite en silencio la sección
-Claude (Codex puede aparecer igual) y el consumo local se sigue calculando desde
-los transcripts. Si luego aparece una `.credentials.json` propia, el camino 1 la
-toma automáticamente y los límites vuelven a mostrarse sin cambios.
+`reason:'sin-credencial'` si no hay ninguno. SOLO en ese estado, `/limits`
+adjunta `localUsage` con `windowTokens/windowCost` (últimas 5 h),
+`todayTokens/todayCost`, `totalTokens/totalCost` y `updatedAt`, derivados del
+`cachedSummary(false, owner)` de los transcripts propios del usuario. Es
+best-effort: si el summary falla se omite el bloque sin romper `unavailable`, y
+nunca se persiste en `plan-limits.json`. El front lo muestra como
+“Claude · tu consumo”: es la alternativa honesta a porcentajes inalcanzables,
+calculada localmente y no reportada por Anthropic. Si tampoco hay `localUsage`,
+Claude se omite en silencio (Codex puede aparecer igual). Si luego aparece una
+`.credentials.json` propia, el camino 1 la toma automáticamente y los límites
+reales vuelven a mostrarse sin cambios ni `localUsage`.
 
 ### tokens/                   uso local (GET /summary: transcripts jsonl deduplicados, caché
 por mtime+size; buildSummary parsea los .jsonl de cada dir en
@@ -52,7 +61,8 @@ pasarlos a dólares ($100 llegaba como 10000; se usa el campo, no un
 /100 hardcodeado). `utilization` YA viene en % (0-100)),
 vía el endpoint OAuth de uso de Anthropic con el accessToken vigente
 de `.claude/.credentials.json`; el fallback `.claude/oauth-token` se prueba
-pero, si Anthropic lo rechaza, devuelve el marcador `unavailable` descripto arriba;
+pero, si Anthropic lo rechaza, devuelve el marcador `unavailable` + la alternativa
+local `localUsage` descripta arriba;
 los archivos SOLO se leen, el token nunca viaja al cliente, caché
 120 s (subido de 60 s: el medidor OAuth tira 429 si se lo consulta
 seguido) y ?fresh=1 la saltea — jamás refrescar credenciales desde acá.

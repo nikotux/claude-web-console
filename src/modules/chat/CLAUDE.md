@@ -399,6 +399,23 @@ popup). OJO: pollTabStatus (main.js) consulta /api/chat/list
 aunque NO haya pestañas abiertas — el centro debe avisar de
 chats lanzados desde otro dispositivo; no "optimizar" ese early
 return de vuelta.
+AISLAMIENTO POR DUEÑO (2026-07-27, reporte de Niko: "las
+preguntas que se le hacen a Richie me aparecen a mí también"):
+un ADMIN sigue viendo TODOS los chats en /api/chat/list
+(visibilidad de gestión, sin cambios), pero los pendientes
+INTERACTIVOS de un chat AJENO viajan VACÍOS: ChatManager.list()
+vacía pendingPerms/pendingInterfono de todo chat cuyo dueño no
+sea el principal y expone en su lugar pendingPermsCount/
+pendingInterfonoCount. Así el centro global no popupea la
+pregunta de un inquilino en la pantalla del host (que además
+podía RESPONDERLA por él: POST /api/chat/permission deja operar
+al admin vía ownedChat). La comparación de dueño normaliza ambos
+lados con hostUser() porque los chats legacy tienen owner:null =
+el host; sin esa normalización el host se silenciaba sus PROPIOS
+chats viejos. La tarjeta de Sesiones conserva el badge "esperando
+tu permiso (n)" leyendo el conteo (sessions.js). El camino WS
+instantáneo (eventos cwc:perm-request de ChatTab) NO se tocó:
+solo dispara si el admin ABRE a propósito la pestaña de ese chat.
 AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
 _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
 READ-ONLY doble capa regla 6 con TODA herramienta denegada) que

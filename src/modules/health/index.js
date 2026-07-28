@@ -16,7 +16,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
   writeLock, clearLock,
@@ -58,6 +58,59 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+
+// collectActiveRunners() conserva la forma pública histórica y no expone el
+// owner ni el archivo que respalda cada fila. Para scopear sin tocar esa
+// respuesta, recuperamos el owner del MISMO lock/job que el collector leyó.
+const RUNNER_STATE_FILES = new Map([
+  ['health-review', 'health-review.lock'],
+  ['healthfix', 'healthfix.lock'],
+  ['healthfix-batch', 'healthfix-batch.lock'],
+  ['optimize', 'optimize.lock'],
+  ['coherence', 'coherence.lock'],
+  ['comms-scan', 'comms/comms.lock'],
+  ['comms-teams', 'comms/teams.lock'],
+  ['comms-chatbot', 'comms/chatbot.lock'],
+  ['learning-analyze', 'learning-analysis.json'],
+  ['tolkien-refresh', 'tolkien-refresh.json'],
+  ['whatsapp', 'comms/whatsapp-daemon.json'],
+  ['retro-curate', 'retro-curation.json'],
+  ['health-scan', 'health-scan.lock'],
+  ['desk', 'desk.lock'],
+  ['investigate', 'investigate.lock'],
+  ['ticket-investigate', 'ticket-investigate.lock'],
+]);
+const RUNNER_STATE_DIRS = new Map([
+  ['tasks-analyze', ''],
+  ['learning-explain', ''],
+  ['learning-context', ''],
+  ['commitmsg', 'commitmsg'],
+  ['projects-analyze', 'projects-analyze'],
+  ['audio', 'audio'],
+  ['comms-analyze', 'comms/analyze'],
+  ['ticket-context', 'ticket-context'],
+  ['retro', 'retro'],
+]);
+
+function activeRunnerOwner(runner) {
+  if (typeof runner?.owner === 'string' && runner.owner) return runner.owner;
+  const key = String(runner?.key || '');
+  const colon = key.indexOf(':');
+  const family = colon === -1 ? key : key.slice(0, colon);
+  let relative = RUNNER_STATE_FILES.get(family);
+  if (!relative && colon !== -1 && RUNNER_STATE_DIRS.has(family)) {
+    const basename = key.slice(colon + 1);
+    if (!basename || path.basename(basename) !== basename) return null;
+    relative = path.join(RUNNER_STATE_DIRS.get(family), `${basename}.json`);
+  }
+  if (!relative) return null;
+  try {
+    const state = JSON.parse(fss.readFileSync(path.join(DATA_DIR, relative), 'utf8'));
+    return typeof state?.owner === 'string' && state.owner ? state.owner : null;
+  } catch {
+    return null;
+  }
+}
 
 const run = (file, args, opts = {}) => new Promise((resolve) => {
   execFile(file, args, { timeout: 15000, ...opts }, (err, out, errOut) => {
@@ -894,8 +947,9 @@ export default {
   registerHttp(router) {
     const r = express.Router();
 
-    // Chequeos rápidos, en vivo (cualquier usuario autenticado).
+    // Chequeos rápidos, en vivo (admin-only: diagnóstico del server).
     r.get('/checks', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await runChecks()); }
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
@@ -914,6 +968,7 @@ export default {
     // ?force=1 ignora el caché del inventario y re-escanea YA (botón
     // "refrescar" del front); sin el flag, sirve el caché si nada cambió.
     r.get('/scan', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const { inventory, regenerated } = generateInventory({ force: req.query.force === '1' });
         // Fuente única: inventory.js ya calcula unregistered con la regla correcta
@@ -953,25 +1008,35 @@ export default {
     // Estado de la revisión: progreso + hallazgos (lo escribe el runner) +
     // si hay una corriendo (lock fresco). El front encuesta esto en vivo.
     r.get('/review', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json({ ...enrichReview(readReview()), running: isRunning(), fixing: isFixing() });
     });
 
-    // Foto EN VIVO de los procesos/runners en segundo plano (panel de Actividad
-    // en Segundo Plano). 0 tokens, solo lectura de locks/jobs en ~/.cwc-data. Los
-    // SUBAGENTES (chats delegando) NO salen de acá: el front los toma de
-    // /api/chat/list que ya encuesta. `dominantModel` = el modelo más frecuente
-    // entre los procesos con modelo (para el semáforo). Abierto a autenticados.
+    // Foto EN VIVO de los procesos/runners en segundo plano, consumida por el
+    // panel de Sesiones de TODOS los usuarios. Owner-scoped: admin/host/token
+    // maestro ve la foto histórica completa; un inquilino ve solo sus jobs.
+    // Los SUBAGENTES no salen de acá: el front los toma de /api/chat/list.
+    // `dominantModel` = el modelo más frecuente entre los procesos visibles.
     r.get('/active-runners', (req, res) => {
-      const processes = collectActiveRunners();
+      const principal = principalOf(req);
+      const admin = isAdmin(req);
+      let processes = collectActiveRunners();
+      if (!admin) {
+        // FAIL-CLOSED: si el job no declara dueño o no podemos leerlo, jamás se
+        // muestra a un no-admin. La capa global de auth conserva el 401 vigente.
+        processes = principal?.username
+          ? processes.filter((p) => activeRunnerOwner(p) === principal.username)
+          : [];
+      }
       const counts = {};
       for (const p of processes) if (p.model) counts[p.model] = (counts[p.model] || 0) + 1;
       const dominantModel = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
       res.json({ processes, processCount: processes.length, dominantModel });
     });
 
-    // Registro DURABLE de bugs resueltos (historial + recurrencias). Abierto a
-    // autenticados; es solo lectura de lo ya arreglado.
+    // Registro DURABLE de bugs resueltos (historial + recurrencias). Admin-only.
     r.get('/solved', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const solved = readSolved().sort((a, b) => (b.lastResolvedAt || 0) - (a.lastResolvedAt || 0));
       res.json({ solved });
     });
@@ -995,6 +1060,7 @@ export default {
 
     // Invariantes PROPUESTOS por el auto-fix, PENDIENTES de aprobación (Fase 5).
     r.get('/invariant-proposals', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json({ proposals: readProposals().filter((p) => p.status !== 'done') });
     });
     // Aprobar (→ invariants-learned.json, se verifica el regex) o descartar.
@@ -1075,6 +1141,7 @@ export default {
     // Estado del BATCH de resolución (Fase B). El front lo polea; sobrevive al
     // reinicio de la web (runner desacoplado + archivo).
     r.get('/batch', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json({ batch: readBatch(), running: isBatchRunning() });
     });
 
@@ -1127,8 +1194,9 @@ export default {
 
     // ===== Optimización IA (censo de motores + análisis con propuestas) =====
     // CENSO determinístico (0 tokens, en vivo): qué modelo/turnos/blindaje usa
-    // cada corrida del SDK. Abierto a autenticados (solo lee el repo con regex).
+    // cada corrida del SDK. Admin-only (solo lee el repo con regex).
     r.get('/ai-census', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json({ generatedAt: Date.now(), engines: aiEnginesCensus() }); }
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
@@ -1136,6 +1204,7 @@ export default {
     // Estado del análisis: resultado persistido (lo escribe el runner) + si hay
     // uno corriendo (lock fresco, con fase). El front encuesta esto. 0 tokens.
     r.get('/optimization', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json({ ...readOpt(), running: isOptRunning(), progress: readOptLock() });
     });
 
@@ -1179,8 +1248,9 @@ export default {
 
     // ===== Coherencia (grafo de dependencias + cableado entre motores) =====
     // CENSO determinístico (0 tokens, en vivo): grafo quién-usa-a-quién + uso de
-    // los servicios transversales + hallazgos de cableado. Autenticados.
+    // los servicios transversales + hallazgos de cableado. Admin-only.
     r.get('/coherence-census', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const census = coherenceCensus();
         res.json({ generatedAt: Date.now(), census, findings: evaluateCoherence(census) });
@@ -1190,6 +1260,7 @@ export default {
     // Estado del análisis IA: resultado persistido (lo escribe el runner) + si
     // hay uno corriendo (lock fresco, con fase). El front encuesta esto. 0 tokens.
     r.get('/coherence', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json({ ...readCoh(), running: isCohRunning(), progress: readCohLock() });
     });
 
@@ -1250,6 +1321,7 @@ export default {
     // archivos de resultado (review/optimization/coherence.json) + el overlay
     // health-scan.json. Arrancar+encuestar (patrón /review).
     r.get('/scan-all', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const scan = scanStatus(readScan());
       // VEREDICTO EN VIVO también para el Escaneo unificado (mismo problema que
       // /review ya resolvía): `scan.verdict` es una FOTO de la síntesis (sonnet)

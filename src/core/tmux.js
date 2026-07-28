@@ -78,3 +78,19 @@ export function validateSocketPath(socketPath) {
 export function isValidSessionName(name) {
   return typeof name === 'string' && /^[A-Za-z0-9._@:-]{1,128}$/.test(name);
 }
+
+// ¿Existe la sesión `name` en ese socket? Usa `has-session -t =nombre` (el `=`
+// fuerza coincidencia EXACTA; sin él tmux acepta prefijos). Devuelve false ante
+// cualquier error: socket muerto, server sin sesiones, nombre inexistente.
+export function tmuxSessionExists(socketPath, name) {
+  if (!socketPath || !isValidSessionName(name)) return false;
+  try {
+    execFileSync('tmux', ['-S', socketPath, 'has-session', '-t', `=${name}`], {
+      env: tmuxEnv(),
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -12,11 +12,63 @@
 // HTTP:
 //   GET  /api/interfono              -> { directory, messages, claims+verdict, tombstones }
 //   POST /api/interfono/send {to,text} -> mensaje manual desde la consola
-//   POST /api/interfono/claim-release {file} (admin) -> libera un claim a mano
+//   POST /api/interfono/claim-release {file} -> libera un claim propio o, si
+//        es host/admin, cualquiera
 import express from 'express';
-import { isAdmin, principalOf } from '../../core/auth.js';
 import * as bus from '../../core/bus.js';
 import { readDeliveries } from '../../core/interfono-log.js';
+import { loadOwners } from '../../core/session-names.js';
+import { systemScopeFor } from '../../core/system-scope.js';
+import { manager as chatManager } from '../chat/index.js';
+
+// Handles del bus cuyo dueño es el usuario del request. No se cachean: tanto
+// chat.owner como session-owners.json pueden cambiar mientras el panel está
+// abierto y el endpoint se consulta cada 5 s.
+//
+// - claude:<sessionId> y tmux:cwct-<terminalId> salen de Chat.list(), que ya
+//   aplica el owner scopeado (las cwct-* son la vista TUI de ese mismo chat).
+// - tmux:cwc-<id> sale del registro durable de dueños de terminal.
+// Cualquier otro handle queda fuera (fail-closed).
+function ownedHandlesFor(scope) {
+  const handles = new Set();
+  const principal = { username: scope.user, admin: false };
+  for (const chat of chatManager.list(principal)) {
+    if (chat.sessionId) handles.add(`claude:${chat.sessionId}`);
+    if (chat.viewMode === 'tui' && chat.terminalId) {
+      handles.add(`tmux:cwct-${chat.terminalId}`);
+    }
+  }
+  for (const [id, owner] of Object.entries(loadOwners())) {
+    if (owner === scope.user) handles.add(`tmux:cwc-${id}`);
+  }
+  return handles;
+}
+
+function visibleToOwner(row, ownedHandles) {
+  return ownedHandles.has(row?.from) || ownedHandles.has(row?.to);
+}
+
+// El frontend manda handles exactos del <select>. Conservamos además nombre y
+// PKG-N para clientes existentes, pero resolvemos SOLO dentro del directorio
+// propio: un error nunca enumera ni confirma sesiones ajenas.
+function resolveOwnedTarget(arg, directory) {
+  const q = String(arg || '').trim();
+  if (!q || /^(all|todos|todas|broadcast)$/i.test(q)) return null;
+  const byHandle = directory.find((entry) => entry.handle === q);
+  if (byHandle) return { handle: byHandle.handle, name: byHandle.name, entry: byHandle };
+  const upper = q.toUpperCase();
+  const byPackage = directory.filter((entry) => String(entry.packageRef || '').toUpperCase() === upper);
+  if (byPackage.length === 1) {
+    const [entry] = byPackage;
+    return { handle: entry.handle, name: entry.name, entry };
+  }
+  const lc = q.toLowerCase();
+  const exact = directory.filter((entry) => entry.name.toLowerCase() === lc);
+  const pool = exact.length ? exact : directory.filter((entry) => entry.name.toLowerCase().includes(lc));
+  if (pool.length !== 1) return null;
+  const [entry] = pool;
+  return { handle: entry.handle, name: entry.name, entry };
+}
 
 export default {
   name: 'interfono',
@@ -27,8 +79,21 @@ export default {
     // Estado completo para el panel (semáforo por claim vía evaluateClaim).
     r.get('/', (req, res) => {
       try {
-        const directory = bus.buildDirectory();
-        const claims = bus.allClaims().map((c) => ({ ...c, verdict: bus.evaluateClaim(c) }));
+        const scope = systemScopeFor(req);
+        const privileged = scope.admin || scope.isHost;
+        const fullDirectory = bus.buildDirectory();
+        const ownedHandles = privileged ? null : ownedHandlesFor(scope);
+        const directory = privileged
+          ? fullDirectory
+          : fullDirectory.filter((entry) => ownedHandles.has(entry.handle));
+        const allClaims = bus.allClaims().map((c) => ({ ...c, verdict: bus.evaluateClaim(c) }));
+        const claims = privileged
+          ? allClaims
+          : allClaims.filter((claim) => ownedHandles.has(claim.handle));
+        const allMessages = bus.allMessages(fullDirectory);
+        const messages = privileged
+          ? allMessages
+          : allMessages.filter((message) => visibleToOwner(message, ownedHandles));
         // R6 ("nada se pierde en silencio"): lápidas de claims robados aún no
         // entregadas al handle afectado — solo LECTURA (tombstonesFor no
         // marca delivered; eso lo hace únicamente el hook-inject real de una
@@ -36,7 +101,7 @@ export default {
         const tombstones = bus.tombstonesFor(directory.map((e) => e.handle));
         res.json({
           directory,
-          messages: bus.allMessages(directory),
+          messages,
           claims,
           tombstones,
           ts: Date.now(),
@@ -52,7 +117,15 @@ export default {
     r.get('/deliveries', (req, res) => {
       try {
         const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
-        res.json({ deliveries: readDeliveries(limit), ts: Date.now() });
+        const scope = systemScopeFor(req);
+        const privileged = scope.admin || scope.isHost;
+        const ownedHandles = privileged ? null : ownedHandlesFor(scope);
+        const deliveries = privileged
+          ? readDeliveries(limit)
+          : readDeliveries(1000)
+            .filter((delivery) => visibleToOwner(delivery, ownedHandles))
+            .slice(0, limit);
+        res.json({ deliveries, ts: Date.now() });
       } catch (e) {
         res.status(500).json({ error: 'No se pudo leer la bitácora.', detail: String(e?.message || e) });
       }
@@ -65,10 +138,20 @@ export default {
         if (!to || !text || !String(text).trim()) {
           return res.status(400).json({ error: 'Faltan destino o mensaje.' });
         }
-        const target = bus.resolveTarget(to);
-        if (target.error) return res.status(404).json({ error: target.error });
-        const who = principalOf(req);
-        const from = who?.username ? `consola (${who.username})` : 'consola web';
+        const scope = systemScopeFor(req);
+        const privileged = scope.admin || scope.isHost;
+        const ownedHandles = privileged ? null : ownedHandlesFor(scope);
+        const target = privileged
+          ? bus.resolveTarget(to)
+          : resolveOwnedTarget(
+            to,
+            bus.buildDirectory().filter((entry) => ownedHandles.has(entry.handle)),
+          );
+        if (!target || target.error) {
+          const error = privileged ? target?.error : 'No encontré una sesión propia con ese destino.';
+          return res.status(404).json({ error });
+        }
+        const from = `consola (${scope.user})`;
         const msg = bus.sendMessage({
           from: 'web:console', fromName: from,
           to: target.handle, toName: target.name, text: String(text),
@@ -81,14 +164,20 @@ export default {
       }
     });
 
-    // Liberar un claim a mano (red de seguridad humana para zombis). Admin.
+    // Liberar un claim a mano (red de seguridad humana para zombis). El panel
+    // solo muestra esta acción global al admin; el backend también admite que
+    // un no-admin libere un claim propio, nunca uno ajeno.
     r.post('/claim-release', express.json(), (req, res) => {
       try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+        const scope = systemScopeFor(req);
+        const privileged = scope.admin || scope.isHost;
         const { file, handle } = req.body || {};
         const claim = file ? bus.getClaim(file) : null;
         if (!claim) return res.status(404).json({ error: 'No hay un claim para ese archivo.' });
-        const target = handle || claim.handle;
+        if (!privileged && !ownedHandlesFor(scope).has(claim.handle)) {
+          return res.status(404).json({ error: 'No hay un claim propio para ese archivo.' });
+        }
+        const target = privileged ? (handle || claim.handle) : claim.handle;
         const ok = bus.releaseFile(claim.file, [target]);
         res.json({ ok, file: claim.file });
       } catch (e) {

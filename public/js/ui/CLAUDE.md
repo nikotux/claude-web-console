@@ -6,6 +6,10 @@
 `placeFor()` conserva la resolución exacta de `PLACES`; `resolvePlace()` suma
 los worktrees efímeros `~/.cwc-data/tolkien-envs/<envId>/tree` como una capa
 aislada de Tolkien, con `envId` e ícono propio, sin cambiar launcher ni "Abrir en".
+`PLACES` incluye `mi-espacio` como “Mi espacio” (ícono `home`, descriptor
+exportado `MYSPACE_PLACE`). `placeFor()` también recorta el prefijo absoluto
+`/home/<host>/.cwc-users/<user>/workspace/`, para que las rutas de inquilinos
+recuperen la misma identidad de lugar que las rutas relativas y las del host.
 Contraparte BACKEND del mismo concepto: `src/core/worlds.js` (`worldLabelFor(cwd)`), que también reconoce esos worktrees como Tolkien. Son DOS capas deliberadas — frontend y backend no comparten módulos y `ui/places.js` es la fuente frontend por diseño —, no una copia olvidada de la otra: si cambia la ruta de los entornos hay que tocar las dos (`console:BUG-2074` nació justamente de dos copias desincronizadas del mismo helper).
 
 ### public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
@@ -159,6 +163,12 @@ E2E: caudal crudo 29-38k→100% siempre ANTES; DESPUÉS backend ponderado
 también (coherente con el resto de la app que cuenta cache read ×0.1).)
 
 ## Gotchas de esta carpeta
+
+- `models.js` es la fuente ÚNICA de las listas de modelos:
+  `CHAT_MODEL_OPTIONS` incluye los alias exclusivos del chat (`auto`, `tandem`)
+  y toda superficie que lance el CLI real (launcher, submenú de Sesiones) debe
+  usar `TUI_MODEL_OPTIONS` / `CHAT_ONLY_MODELS`, nunca filtrar por su cuenta.
+  El filtro duplicado fue la causa del 400 de `console:PLAN-2115`.
 
 - `renderMarkdown()` (public/js/ui/markdown.js) DEVUELVE UN NODO DOM ya
   sanitizado, NO un string. Interpolarlo en un template de innerHTML

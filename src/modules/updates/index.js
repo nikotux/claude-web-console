@@ -96,8 +96,9 @@ export default {
   name: 'updates',
 
   registerHttp(router) {
-    // Censo (autenticados; no expone secretos, solo versiones).
+    // Censo admin-only: forma parte del diagnóstico del server.
     router.get('/updates', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await census({ fresh: req.query.fresh === '1' })); }
       catch (e) { res.status(500).json({ error: String(e.message || e).slice(0, 300) }); }
     });
@@ -155,6 +156,7 @@ export default {
     // Verificación de sintaxis a demanda (node --check) — el semáforo de Salud
     // completo lo trae el front de GET /api/health/checks aparte.
     router.get('/updates/verify', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await syntaxCheck()); }
       catch (e) { res.status(500).json({ error: String(e.message || e).slice(0, 300) }); }
     });
@@ -204,6 +206,7 @@ export default {
 
     // Estado del job orquestado (0 tokens, solo lee disco; status EFECTIVO).
     router.get('/updates/run-status', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       res.json(effectiveStatus(readJob()));
     });
 
@@ -218,7 +221,10 @@ export default {
       catch (e) { writeRisk({ running: false, phase: 'error', error: 'No se pudo iniciar el análisis.' }); res.status(500).json({ error: String(e.message || e).slice(0, 200) }); }
     });
     // Veredictos de riesgo (0 tokens, solo lee disco).
-    router.get('/updates/risk', (req, res) => { res.json(effectiveRisk(readRisk())); });
+    router.get('/updates/risk', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      res.json(effectiveRisk(readRisk()));
+    });
 
     // Arreglar SOLO las vulnerabilidades (npm audit fix seguro, sin reiniciar).
     // Reversible con git. Corre node --check después.

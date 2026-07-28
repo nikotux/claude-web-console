@@ -8,8 +8,9 @@
 módulo es la puerta de alta de inquilinos: un admin ya autenticado emite una
 invitación, el usuario nuevo entra por `/onboard`, se auto-registra con ese
 token y después configura su propia credencial Claude con `claude setup-token`
-corriendo en SU HOME aislado, conecta Codex e Infisical en pasos propios y
-cierra el wizard consumiendo la invitación. Si vuelve con el mismo token
+corriendo en SU HOME aislado. Después ofrece, como pasos opcionales, conectar la
+cuenta Claude completa para medir el consumo real del plan, Codex e Infisical,
+y cierra el wizard consumiendo la invitación. Si vuelve con el mismo token
 consumido, puede completar los pasos pendientes sin volver a registrar. La
 implementación vive en
 `src/modules/onboard/index.js`; la persistencia/estado de invitaciones está en
@@ -39,14 +40,16 @@ entre procesos y se resetea al reiniciar el server.
 
 Endpoints públicos reales:
 `POST /api/onboard/public/validate` llama `validateInvite(req.body?.token)` y
-devuelve `{valid, admin, reason, status, lockedTo, hasToken, hasCodex,
-hasInfisical, hasTolkienMcp, pending, resume}`. `valid` conserva EXACTAMENTE la semántica
+devuelve `{valid, admin, reason, status, lockedTo, hasToken,
+hasClaudeAccount, hasCodex, hasInfisical, hasTolkienMcp, pending, resume}`.
+`valid` conserva EXACTAMENTE la semántica
 estricta de `validateInvite`: una invitación consumida sigue devolviendo
 `valid:false` con razón `ya usado`. Solo en ese caso el endpoint cae a
 `peekInvite(token)` para recuperar `status` y `lockedTo`; si ese usuario existe
 y la invitación no está revocada, `resume:true` habilita exclusivamente la
-reentrada al checklist. Los cuatro `has*` son booleanos, nunca secretos, y
-`pending` filtra en orden `['claude','codex','infisical']` los que falten.
+reentrada al checklist. Los cinco `has*` son booleanos, nunca secretos, y
+`pending` filtra en orden `['claude','account','codex','infisical']` los que
+falten.
 Cuando no hay `lockedTo`, `pending:[]` y `resume:false`. Esta separación es el
 blindaje central: `/register` NO usa `resume` ni `peekInvite`, sigue exigiendo
 `validateInvite`, por lo que un token consumido jamás puede crear otro usuario.
@@ -90,6 +93,37 @@ exclusivamente del lado servidor.
 exige token locked a un usuario, trimmea el código y acepta solo valores no
 vacíos de hasta 4000 chars. Escribe `~/.cwc-data/onboard-jobs/<user>.code` mode
 600 para que el runner PTY lo lea e inyecte por stdin.
+
+El paso `account`, ubicado después de `creds` y antes de `codex`, es opcional.
+Existe porque la credencial de `claude setup-token` permite correr modelos pero
+no trae scopes de cuenta: se comprobó que
+`GET api.anthropic.com/api/oauth/profile` responde `403 OAuth token does not
+meet scope requirement any_of(user:profile, user:office)` y que el medidor de
+uso responde 429. El login completo agrega `user:profile`; con esa credencial
+el medidor respondió 200 y puede mostrar los porcentajes reales de la sesión de
+5 horas y de la semana.
+
+Sus tres endpoints públicos son:
+
+- `POST /api/onboard/public/claude-account-start`, body `{token}`.
+- `GET /api/onboard/public/claude-account-status?token=...`.
+- `POST /api/onboard/public/claude-account-code`, body `{token, code}`.
+
+Los tres resuelven el usuario exclusivamente mediante `stepUser(token)`: nunca
+aceptan un `user` por body o query. Reutilizan
+`bin/cwc-claude-login-runner.js` y
+`~/.cwc-data/claude-login-jobs/<user>.{json,code,log}`, los mismos que
+`connections`, para que un flujo iniciado en onboarding pueda retomarse desde
+⚙ Sistema → Uso y viceversa. El runner ejecuta
+`claude auth login --claudeai` con HOME aislado y sin
+`CLAUDE_CODE_OAUTH_TOKEN`, publica la URL, recibe el código por el buzón `.code`
+y deja `<userSpace>/.claude/.credentials.json`.
+
+`claude-account-status` expone únicamente `{status, url?, error?}`: nunca pid,
+rutas ni logs. `claude-account-code` exige un runner vivo en `waiting-code` y
+aplica la misma validación que `connections`: string, `trim()`, no vacío, hasta
+512 caracteres y sin `\r`/`\n` internos después del trim. Al terminar en
+`-status`, el polling usa el bucket amplio del rate-limit público.
 
 `POST /api/onboard/public/codex-start` recibe `{token}` y usa el mismo
 `stepUser`, incluida la reentrada segura con token consumido. El paso usa
@@ -185,8 +219,11 @@ guarda en `userOauthTokenPath(USER)` mode 600
 `done`, sin consumir la invitación. El server solo usa `readUserOauthToken` en
 `creds-status` para publicar `hasToken`; el secreto no viaja al cliente.
 
-Después, el wizard ofrece Codex y luego Infisical. `codex-start` lanza
-`bin/cwc-codex-login-runner.js`, que usa device-auth y persiste el job en
+Después del setup-token, el wizard ofrece la cuenta Claude completa, Codex e
+Infisical. La primera corre `claude auth login --claudeai` mediante el mismo
+runner/job compartido con `connections`; es saltable porque solo habilita los
+porcentajes del plan y no condiciona la ejecución de modelos. `codex-start`
+lanza `bin/cwc-codex-login-runner.js`, que usa device-auth y persiste el job en
 `~/.cwc-data/codex-login-jobs/<user>.json`. `infisical-start` lanza su runner
 con HOME/cwd aislados para que el CLI escriba
 `~/.cwc-users/<user>/.infisical/infisical-config.json`; Infisical NO provee
@@ -200,6 +237,11 @@ reabrirse. Al entrar al checklist final, el front llama best-effort a
 `POST /public/finish`, que dispara otro intento de provisioning y consume la
 invitación. Así queda `locked` durante registro, Claude, Codex e Infisical,
 alineado con la decisión de `PLAN-500`.
+
+Contrato de alta: todo usuario nuevo nace con `setup-token` obligatorio para
+ejecutar Claude, más cuenta Claude completa opcional para los porcentajes de
+consumo, Codex opcional e Infisical opcional. La secuencia visible es
+`token → register → creds → account → codex → infisical → done`.
 
 ### Gotchas reales
 TTL default duplicado deliberadamente: `index.js` usa `DEFAULT_TTL_H = 24` para
@@ -219,6 +261,10 @@ camino estricto e independiente por `validateInvite(token, { forUsername })`:
 un token consumido nunca vuelve a reservar una invitación ni a crear una
 cuenta. El estado del wizard NO se persiste en el navegador: la fuente de
 verdad es la invitación, las credenciales detectadas y los jobs persistidos.
+El paso `account` no reemplaza `creds`: resuelve otro contrato de autorización.
+No uses la existencia de `oauth-token` como señal de scopes de cuenta; la señal
+es `claudeAiOauth.accessToken` dentro de
+`<userSpace>/.claude/.credentials.json`.
 
 El store de invitaciones no cachea en memoria: `validateInvite`, `peekInvite`,
 `lockInvite`, `revokeInvite` y `listInvites` leen el JSON desde disco en cada
@@ -239,7 +285,8 @@ de Pad/workspace son best-effort.
 puede relanzar desde la UI aunque todavía parezca fresco. El runner conserva el
 timeout duro de 10 min y solo guarda el OAuth token y marca `done`: no consume
 la invitación. El ciclo de vida es `locked` durante TODO el wizard (registro →
-Claude → Codex → Infisical → cierre) y pasa a `consumed` recién en
+Claude setup-token → cuenta Claude → Codex → Infisical → cierre) y pasa a
+`consumed` recién en
 `POST /public/finish`; si el usuario abandona antes, queda locked a SU username
 hasta morir por TTL. Tras el consumo, los status siguen consultables por
 `peekInvite` y los starts de pasos pendientes pueden reingresar por `stepUser`.

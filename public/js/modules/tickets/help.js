@@ -134,7 +134,7 @@ export default function ticketsHelp() {
             type: 'kv',
             items: [
               { k: t('tickets.help.buttons.search.k', 'Buscar'), v: t('tickets.help.buttons.search.v', 'Abre un campo: escribí el número y presioná Enter para ir directo al ticket.') },
-              { k: t('tickets.help.buttons.refresh.k', 'Actualizar'), v: t('tickets.help.buttons.refresh.v', 'Fuerza el refresco de la vista visible. Es determinístico y no consume tokens de IA.') },
+              { k: t('tickets.help.buttons.refresh.k', 'Actualizar'), v: t('tickets.help.buttons.refresh.v', 'Sólo para admin: fuerza una relectura de Zoho/GitHub. El resto del equipo ve el snapshot compartido, actualizado cada 60 s.') },
               { k: t('tickets.help.buttons.lane.k', 'Carriles'), v: t('tickets.help.buttons.lane.v', 'Filtran las tarjetas por categoría; tocá de nuevo el carril activo para quitar el filtro desde el resumen.') },
               { k: t('tickets.help.buttons.mine.k', 'Míos'), v: t('tickets.help.buttons.mine.v', 'Muestra sólo los ítems que tenés tomados.') },
               { k: t('tickets.help.buttons.owner.k', 'Dueño'), v: t('tickets.help.buttons.owner.v', 'Filtra tickets por agente de Desk y PRs por autor de GitHub.') },

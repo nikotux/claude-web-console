@@ -20,6 +20,14 @@ la sesión se autentica por token y ese username es nulo, contra `whoami.host`;
 `owner:null` sigue siendo propio por retrocompatibilidad con sesiones históricas
 del host. El estado abierto del grupo ajeno se persiste en `localStorage` bajo
 `cwc.sessions.others.open`.
+El launcher resuelve `ctx.whoami` antes de pintar sus destinos fijos: host/admin
+ve “Mi Consola” (`claude-web-console`) y un inquilino no-admin ve “Mi espacio”
+(`mi-espacio`), que existe dentro de SU workspace. `PLACES` conserva las dos
+identidades completas (label + ícono + clase) para el launcher, Sesiones y el
+navegador de archivos; el filtro por usuario vive únicamente en el launcher,
+no en `PLACES`. GOTCHA: todos esos destinos son RUTAS RELATIVAS. El clamp del
+backend las resuelve dentro del workspace propio del inquilino, de modo que
+ofrecerle un destino inexistente ahí termina en un 400 del backend.
 En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
 SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
 (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se
@@ -77,7 +85,7 @@ stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
 master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
 .sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·
 Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Dashboard ·
-Actualizaciones · Interfono — Dashboard = pestaña propia desde PLAN-752, antes
+Actualizaciones · UniFi · Interfono — Dashboard = pestaña propia desde PLAN-752, antes
 sub-modal del Escaneo de Salud; Actualizaciones = censo de versiones de terceros,
 módulo `updates`, PLAN-779) · 🛠️ Administración (Backup · Usuarios, solo admins). system.js arma
 grupos→items aplanados con índice global; en DESKTOP (≥720px) rail de
@@ -86,8 +94,13 @@ MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
 índice, tocás un ítem → el panel ocupa todo con "‹ Sistema" (.sys-back)
 para volver. isMobile()=matchMedia(max-width:719px) decide auto-select
 desktop vs índice móvil. CSS .sys-* en style.css (reemplazó .sys-tabs/
-.sys-tab/.sys-body). La pestaña Conexiones = mountMcpsPanel (módulo `mcps`,
-ver arriba). La pestaña Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
+.sys-tab/.sys-body).
+Acceso: un no-admin ve Conexiones · Skills · Idioma · Proyectos · Interfono.
+Salud · Dashboard · Actualizaciones · UniFi · Variables de entorno son admin-only.
+Criterio: diagnóstico del SERVER y config de INSTANCIA requieren admin; las
+preferencias y conexiones del usuario quedan disponibles para todos.
+La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba). La pestaña
+Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
 traducción de contenido en Fase 2 vía Orquestador Interno) es la primera pieza
 de INTERNACIONALIZACIÓN de la consola: `language-panel.js` (self-service, NO
 admin-gated — es preferencia PERSONAL de cuenta, no config del sistema) deja
@@ -360,9 +373,35 @@ parpadea); drawChart() (crear) solo al abrir y al cambiar rango/métrica.
 El toggle $/tok re-dibuja de la serie cacheada (0 fetch); cambiar rango
 trae datos solo si faltan en caché (Día del summary, Semana/Mes de
 /history). SUMMARY_TTL_MS subido 4 s→15 s (menos re-parseos). reexporta
-fetchLimits/fmtReset/renderLimits (renderLimits(el,data,{windows}) — el
+fetchLimits/fmtReset/renderLimits/openClaudeConnectModal
+(`renderLimits(el,data,{windows})` — el
 pie plan-limits.js lo reusa sin windows: créditos colapsables ahí también,
-sin token-counts); destroyChart en onClose (sin leaks de Chart.js))
+sin token-counts). Si `/api/tokens/limits` responde `unavailable:true` +
+`localUsage`, el modal grande muestra “Claude · tu consumo” y, debajo de la
+nota de que faltan porcentajes, “Conectar mi cuenta de Claude”; la versión
+`compact:true` del pie integra la nota corta “Sin % del plan para esta cuenta.”
+y el enlace “Conectar cuenta” en el mismo renglón, con ajuste natural si el
+ancho no alcanza. `usage.js` exporta
+`openClaudeConnectModal` y `plan-limits.js` lo consume con el `dialog` de su
+`ctx`; al conectarse pide límites frescos y repinta el pie sin recargar. El
+flujo abre un `openModal` propio y refleja exclusivamente el estado persistido
+por el server:
+`POST /api/connections/claude/login/start`, polling rearmable cada 1,5 s de
+`GET /api/connections/claude/login/status` (`starting|waiting-url|url|
+waiting-code|verifying|ok|error`), `POST .../login/code` con `{code}` y
+`POST .../login/cancel` al cerrar a mitad de camino. El polling se limpia al
+cerrar, ocultar el documento o alcanzar un estado terminal, y se retoma al
+volver a mostrar la pestaña. PLAN-2106: toda respuesta no terminal que incluya
+`url` mantiene arriba el enlace seguro para abrir/copiar — también en
+`waiting-code` y `verifying`—, porque el navegador del servidor no puede
+abrirlo por el usuario; en `waiting-code` conviven debajo el input y su error
+reintentable, sin reconstruir el campo en cada poll ni perder valor/foco.
+`waiting-code` se puede retomar al reabrir porque el front no guarda estado.
+Al llegar a `ok`, vuelve a pedir `/api/tokens/limits?fresh=1` y repinta Uso
+sin recargar la página. El estado de conexión expuesto por el backend es
+`GET /api/connections/claude/status` (`connected`, `source:
+credentials|setup-token|null`). `destroyChart` corre en onClose (sin leaks
+de Chart.js))
 
 CONVENCIÓN DE AYUDA: cada módulo frontend lleva su propio `help.js` (o
 `help/<panel>.js` en `system`) y exporta default una función que devuelve el

@@ -242,6 +242,25 @@ con Playwright (mock de las 3 fuentes). Capa de PROFUNDIDAD DE
 CAMPO (desaturar/achicar lo automático para que los chats salten)
 queda como pulido futuro, no implementado.
 
+### public/js/onboard/onboard.js — wizard público de alta
+
+Secuencia de siete posiciones:
+`token → register → creds → account → codex → infisical → done`. `creds`
+(`claude setup-token`) es obligatorio para trabajar; `account` conecta la
+cuenta Claude completa y es opcional, igual que Codex e Infisical. Su objetivo
+es habilitar en el panel Uso los porcentajes reales de la sesión de 5 horas y
+de la semana; si se omite, el usuario sigue trabajando y solo ve sus tokens
+consumidos.
+
+El paso `account` pollea `claude-account-status`, limpia el poll al salir y
+conserva la URL recibida. Si existe URL, el enlace y el campo de código deben
+seguir visibles en cualquier estado no terminal (`starting`, `waiting-url`,
+`url`, `waiting-code`, `verifying`): el CLI corre en el servidor sin entorno
+gráfico, no puede abrir el navegador del usuario y el runner pasa de `url` a
+`waiting-code` casi de inmediato. El indicador tiene siempre siete columnas;
+los índices son token 1, register 2, creds 3, account 4, Codex 5, Infisical 6 y
+done 7.
+
 ## Gotchas de esta carpeta
 
 - `apiCreateSession` (`js/main.js`) propaga el campo `error` que devuelve el

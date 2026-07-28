@@ -9,10 +9,12 @@
     username: '',
     admin: false,
     lang: 'es',
+    account: '',
     codex: '',
     infisical: '',
     url: '',
     credsNote: '',
+    accountUrl: '',
     codexUrl: '',
     codexCode: '',
     infisicalUrl: '',
@@ -37,7 +39,7 @@
   }
 
   function setStep(step) {
-    if (['creds', 'codex', 'infisical'].includes(state.step) && step !== state.step) clearPoll();
+    if (['creds', 'account', 'codex', 'infisical'].includes(state.step) && step !== state.step) clearPoll();
     state.step = step;
     state.error = '';
     loading = '';
@@ -54,6 +56,9 @@
     if (step === 'claude') {
       setStep('creds');
       startCreds();
+    } else if (step === 'account') {
+      setStep('account');
+      startAccount();
     } else if (step === 'codex') {
       setStep('codex');
       startCodex();
@@ -79,7 +84,8 @@
       return;
     }
 
-    if (step === 'claude') startNamedStep('codex');
+    if (step === 'claude') startNamedStep('account');
+    else if (step === 'account') startNamedStep('codex');
     else if (step === 'codex') startNamedStep('infisical');
     else startNamedStep('done');
   }
@@ -93,7 +99,8 @@
       return;
     }
 
-    if (step === 'codex') startNamedStep('infisical');
+    if (step === 'account') startNamedStep('codex');
+    else if (step === 'codex') startNamedStep('infisical');
     else startNamedStep('done');
   }
 
@@ -151,9 +158,9 @@
 
     const steps = document.createElement('div');
     steps.className = 'ob-steps';
-    steps.style.gridTemplateColumns = 'repeat(6, 1fr)';
+    steps.style.gridTemplateColumns = 'repeat(7, 1fr)';
     steps.setAttribute('aria-label', 'Progreso del onboarding');
-    for (let i = 1; i <= 6; i += 1) {
+    for (let i = 1; i <= 7; i += 1) {
       const step = document.createElement('span');
       step.className = i <= activeStep ? 'ob-step is-active' : 'ob-step';
       steps.appendChild(step);
@@ -212,6 +219,7 @@
         state.pending = Array.isArray(data.pending) ? data.pending.slice() : [];
         state.checklist = {
           claude: Boolean(data.hasToken),
+          account: Boolean(data.hasClaudeAccount),
           codex: Boolean(data.hasCodex),
           infisical: Boolean(data.hasInfisical),
         };
@@ -367,10 +375,11 @@
   }
 
   function renderPending() {
-    const stepNumbers = { claude: 3, codex: 4, infisical: 5 };
+    const stepNumbers = { claude: 3, account: 4, codex: 5, infisical: 6 };
     const activeStep = stepNumbers[state.pending[0]] || 2;
     const items = [
       ['claude', 'Cuenta de Claude'],
+      ['account', 'Claude · tu consumo (opcional)'],
       ['codex', 'Codex (opcional)'],
       ['infisical', 'Infisical (acceso a Tolkien)'],
     ];
@@ -580,9 +589,209 @@
     renderSpinner('Preparando…');
   }
 
+  function renderAccountBase() {
+    root.replaceChildren();
+    root.appendChild(header(
+      'Claude · tu consumo (opcional)',
+      'Conectá tu cuenta para ver el uso real de tu plan.',
+      4
+    ));
+    root.appendChild(textEl('p', 'ob-note', 'Esto habilita los porcentajes reales de tu sesión de 5 horas y de tu semana.'));
+    root.appendChild(textEl('p', 'ob-note', 'Sin este paso, el panel Uso solo mostrará tus tokens consumidos. No es requisito para empezar a trabajar: podés conectarlo más tarde desde el bloque Claude · tu consumo.'));
+  }
+
+  function appendAccountSkip() {
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+      state.account = 'skipped';
+      advanceSkipped('account');
+    }));
+    root.appendChild(actions);
+  }
+
+  function renderAccountSpinner(text) {
+    renderAccountBase();
+    const line = document.createElement('div');
+    line.className = 'ob-spinner-line';
+    line.appendChild(document.createElement('span')).className = 'ob-spinner';
+    line.appendChild(textEl('span', '', text));
+    root.appendChild(line);
+    appendAccountSkip();
+  }
+
+  async function startAccount() {
+    clearPoll();
+    state.accountUrl = '';
+    state.error = '';
+    currentJobKey = '';
+    renderAccountSpinner('Preparando…');
+
+    try {
+      const data = await apiJson('/claude-account-start', {
+        method: 'POST',
+        body: { token: state.token },
+      });
+      if (state.step !== 'account') return;
+      if (data.connected === true) {
+        state.account = 'connected';
+        advanceCompleted('account');
+        return;
+      }
+      pollId = setInterval(pollAccount, 1500);
+      pollAccount();
+    } catch (err) {
+      clearPoll();
+      renderAccountStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function pollAccount() {
+    try {
+      const data = await apiJson(
+        '/claude-account-status?token=' + encodeURIComponent(state.token),
+        { method: 'GET' }
+      );
+      pollFails = 0;
+      renderAccountStatus(data || {});
+    } catch (err) {
+      pollFails += 1;
+      if (pollFails < 5) return;
+      clearPoll();
+      renderAccountStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function sendAccountCode() {
+    const codeEl = document.getElementById('ob-account-code');
+    const code = codeEl ? codeEl.value.trim() : '';
+    if (!code) {
+      state.error = 'Pegá el código de autorización.';
+      renderAccountStatus({ status: 'waiting-code', url: state.accountUrl });
+      return;
+    }
+
+    exchanging = true;
+    state.error = '';
+    updateAccountCodeButton('verifying');
+
+    try {
+      await apiJson('/claude-account-code', {
+        method: 'POST',
+        body: { token: state.token, code },
+      });
+      renderAccountStatus({ status: 'verifying', url: state.accountUrl });
+    } catch (err) {
+      exchanging = false;
+      state.error = err.message;
+      renderAccountStatus({ status: 'waiting-code', url: state.accountUrl });
+    }
+  }
+
+  function updateAccountCodeButton(status) {
+    const btn = document.getElementById('ob-account-code-btn');
+    if (!btn) return;
+    const waiting = status === 'waiting-code';
+    btn.disabled = exchanging || !waiting;
+    btn.textContent = exchanging || status === 'verifying'
+      ? 'Verificando…'
+      : (waiting ? 'Confirmar código' : 'Esperando al servidor…');
+  }
+
+  function renderAccountAuthorization(status) {
+    renderAccountBase();
+
+    const list = document.createElement('ol');
+    list.className = 'ob-list';
+
+    const first = document.createElement('li');
+    first.appendChild(textEl('span', '', 'La página no se abre sola porque el CLI corre en un servidor sin entorno gráfico. Abrí este enlace y autorizá con tu cuenta de Claude:'));
+    first.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.className = 'ob-url';
+    link.href = state.accountUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = state.accountUrl;
+    first.appendChild(link);
+    const copy = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+      try {
+        await navigator.clipboard.writeText(state.accountUrl);
+        copy.textContent = 'Copiado';
+      } catch (err) {
+        copy.textContent = 'No se pudo copiar';
+      }
+      window.setTimeout(function () {
+        copy.textContent = 'Copiar enlace';
+      }, 1800);
+    });
+    first.appendChild(copy);
+    list.appendChild(first);
+
+    const second = document.createElement('li');
+    second.appendChild(textEl('span', '', 'Copiá el código que te da Claude y pegalo acá:'));
+    const row = document.createElement('div');
+    row.className = 'ob-code-row';
+    const code = input('ob-account-code', 'text', 'Código de autorización', 'one-time-code');
+    const confirm = button('Confirmar código', 'btn', sendAccountCode);
+    confirm.id = 'ob-account-code-btn';
+    row.appendChild(code);
+    row.appendChild(confirm);
+    second.appendChild(row);
+    list.appendChild(second);
+
+    root.appendChild(list);
+    const err = message();
+    if (err) root.appendChild(err);
+    updateAccountCodeButton(status);
+    appendAccountSkip();
+  }
+
+  function renderAccountStatus(job) {
+    if (state.step !== 'account') return;
+
+    const status = job.status || 'starting';
+    const url = job.url || state.accountUrl || '';
+    const error = job.error || '';
+    const jobKey = [status, url, error, state.error].join('|');
+
+    if (status === 'ok') {
+      clearPoll();
+      state.account = 'connected';
+      advanceCompleted('account');
+      return;
+    }
+
+    if (status === 'error') {
+      clearPoll();
+      currentJobKey = jobKey;
+      renderAccountBase();
+      root.appendChild(textEl('p', 'ob-error', error || 'No se pudo conectar la cuenta de Claude.'));
+      const actions = document.createElement('div');
+      actions.className = 'ob-actions';
+      actions.appendChild(button('Reintentar', 'btn', startAccount));
+      root.appendChild(actions);
+      appendAccountSkip();
+      return;
+    }
+
+    if (jobKey === currentJobKey && url) return;
+    currentJobKey = jobKey;
+
+    if (url) {
+      state.accountUrl = url;
+      exchanging = status === 'verifying';
+      renderAccountAuthorization(status);
+      return;
+    }
+
+    exchanging = status === 'verifying';
+    renderAccountSpinner(status === 'verifying' ? 'Verificando el código…' : 'Preparando…');
+  }
+
   function renderCodexBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectar Codex (opcional)', 'Autorizá Codex para usar el modo Tándem.', 4));
+    root.appendChild(header('Conectar Codex (opcional)', 'Autorizá Codex para usar el modo Tándem.', 5));
     root.appendChild(textEl('p', 'ob-note', 'Codex es el ejecutor del modo Tándem (Claude razona, Codex escribe el código). Sin Codex tus chats usan AutoTux; podés conectarlo más tarde desde ⚙ Sistema → Conexiones.'));
   }
 
@@ -740,7 +949,7 @@
 
   function renderInfisicalBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectá Infisical', 'Es lo que le da acceso a las herramientas de Tolkien.', 5));
+    root.appendChild(header('Conectá Infisical', 'Es lo que le da acceso a las herramientas de Tolkien.', 6));
     root.appendChild(textEl('p', 'ob-note', 'Infisical guarda los secretos del proyecto. Sin esta conexión, el MCP de Tolkien queda sin credenciales y las herramientas de Desk/Teams no funcionan. Podés conectarlo más tarde desde ⚙ Sistema → MCPs.'));
   }
 
@@ -931,13 +1140,17 @@
 
   function renderDone() {
     root.replaceChildren();
-    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 6));
+    root.appendChild(header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 7));
     const list = document.createElement('ul');
     list.className = 'ob-list';
+    const accountConnected = state.account === 'connected' || (state.checklist && state.checklist.account);
     const codexConnected = state.codex === 'connected' || (state.checklist && state.checklist.codex);
     const infisicalConnected = state.infisical === 'connected' || (state.checklist && state.checklist.infisical);
     list.appendChild(textEl('li', '', '✅ Cuenta creada (' + state.username + ')'));
-    list.appendChild(textEl('li', '', '✅ Cuenta de Claude conectada'));
+    list.appendChild(textEl('li', '', '✅ Claude listo para trabajar (setup-token)'));
+    list.appendChild(textEl('li', '', accountConnected
+      ? '✅ Claude · tu consumo conectado'
+      : '⏭ Claude · tu consumo omitido — lo podés conectar después'));
     list.appendChild(textEl('li', '', codexConnected
       ? '✅ Codex conectado'
       : '⏭ Codex omitido — lo podés conectar después'));
@@ -961,6 +1174,7 @@
     else if (state.step === 'pending') renderPending();
     else if (state.step === 'register') renderRegister();
     else if (state.step === 'creds') renderSpinner('Preparando…');
+    else if (state.step === 'account') renderAccountSpinner('Preparando…');
     else if (state.step === 'codex') renderCodexSpinner('Preparando…');
     else if (state.step === 'infisical') renderInfisicalSpinner('Preparando…');
     else renderDone();

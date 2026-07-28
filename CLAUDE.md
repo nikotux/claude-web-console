@@ -196,7 +196,7 @@ Detalle completo: `src/core/CLAUDE.md`. Modelo aprobado (`PLAN-500` master, `PLA
 
 **No-cruce por usuario × mundo.** La vieja "confianza plena entre autenticados" del WS queda DEROGADA para no-admins: cada usuario ve/adjunta SOLO lo suyo (`list(principal)`, `ownedChat`), y el cwd se clampa con `safeCwd(cwd, owner)` a `userFileRoot(owner)`, JAMÁS al home global. Todo estado user-scoped resuelve su dir con `resolveDataDir()` — PROHIBIDO hardcodear `~/.cwc-data` del host. Una operación de Pad de un inquilino usa SU token y SU workspace (`tenant-<id>`), nunca la credencial del host ni el workspace `console`.
 
-Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. OJO: `terminal/sessions.js` todavía NO es owner-scoped — su entrada es un contrato FORWARD.
+Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. El PTY de `terminal/sessions.js` ya es owner-scoped y fail-closed (BUG-2104).
 
 ## NO MODIFICAR (generado o estado de runtime)
 
@@ -280,7 +280,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | Módulo | Qué es | Lo que más duele |
 |---|---|---|
 | `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". |
-| `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). Aún NO es owner-scoped (contrato forward del multi-tenant). |
+| `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). La rama `attach` es owner-scoped con candado estricto y comparte el guard con `tmux` desde `terminal/sessions.js`. |
 | `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
 | `tasks/` | Pendientes: tablero privado (PEND / PLAN) | Backend en **Pad LOCAL** (colecciones `pendientes`/`planes`), no file-based. Ojo con el rate limit al pedir links por ítem. |
 | `learning/` | 🎓 Aprendizaje: temas de estudio de Niko | Backend en **Pad LOCAL** (`temas-de-aprendizaje`/`rutas-de-aprendizaje`). "Explicame esto" navega el código read-only. |

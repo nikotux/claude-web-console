@@ -220,6 +220,20 @@ function limRowHtml(pctRaw, metaParts, pace = null) {
     </div>`;
 }
 
+// Fila del consumo calculado desde transcripts cuando Anthropic no habilita los
+// porcentajes del plan. Mantiene la estructura visual de las filas de límite,
+// pero reemplaza porcentaje/barra por tokens + costo equivalente.
+function localUsageRowHtml(tokens, cost) {
+  return `
+    <div class="lim-row">
+      <div class="lim-line">
+        <span class="lim-label"></span>
+        <span class="lim-meta"><span class="lim-meta-l">${fmtCost(cost)}</span></span>
+        <span class="lim-pct" style="color:var(--cwc-text)">${fmtTokens(tokens)} ${t('usage.unit.tok', 'tok')}</span>
+      </div>
+    </div>`;
+}
+
 // Créditos de uso EXTRA (extra_usage de Claude) — fila COLAPSABLE (<details>,
 // contraída por defecto). Devuelve {html, labelText} para asignar el label por
 // textContent afuera.
@@ -291,10 +305,11 @@ export function renderLimits(el, data, opts = {}) {
   const windows = opts.windows || null;
   const compact = !!opts.compact;
   const claudeAvailable = !data.unavailable;
+  const localUsage = data.unavailable ? data.localUsage : null;
   // Etiquetas que se rellenan por textContent (traen nombres del server, evita
   // inyección). Se acumulan en ORDEN DE RENDER (Claude primero, luego Codex).
   const labelTexts = [];
-  const rows = (data.limits || []).map((l) => {
+  const rows = claudeAvailable ? (data.limits || []).map((l) => {
     const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
     const wt = windowTokFor(l, windows);
     labelTexts.push(l.label);
@@ -312,7 +327,18 @@ export function renderLimits(el, data, opts = {}) {
       pace = { expectedPct: info?.expectedPct ?? null, etaText, ratioText };
     }
     return limRowHtml(l.percent, [t('usage.remaining', 'queda {n}%', { n: 100 - pct }), fmtReset(l.resetsAt, compact), wt != null ? t('usage.approxTok', '≈ {tok} tok', { tok: fmtTokens(wt) }) : ''], pace);
-  }).join('');
+  }).join('') : '';
+
+  const localRows = localUsage
+    ? [
+      [t('usage.local.window5h', 'Últimas 5 h'), localUsage.windowTokens, localUsage.windowCost],
+      [t('usage.local.today', 'Hoy'), localUsage.todayTokens, localUsage.todayCost],
+      ...(compact ? [] : [[t('usage.local.total', 'Total'), localUsage.totalTokens, localUsage.totalCost]]),
+    ].map(([label, tokens, cost]) => {
+      labelTexts.push(label);
+      return localUsageRowHtml(tokens, cost);
+    }).join('')
+    : '';
 
   const creditsHtml = !claudeAvailable || opts.credits === false ? '' : claudeCreditsHtml(data.credits);
 
@@ -326,11 +352,19 @@ export function renderLimits(el, data, opts = {}) {
     for (const l of data.codex.limits) labelTexts.push(l.label);
   }
 
+  const localNoteHtml = compact
+    ? `${t('usage.local.noteShort', 'Sin % del plan para esta cuenta.')} <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.connectShort', 'Conectar cuenta')}</a>`
+    : t('usage.local.note', 'Consumo medido localmente; el % del plan no está disponible para esta cuenta.');
+
   const claudeHtml = claudeAvailable ? `
     <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.claude.head', 'Claude')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${staleHtml}
     ${rows || `<div class="lim-err">${t('usage.claude.noWindows', 'Anthropic no reportó ventanas de límite.')}</div>`}
-    ${creditsHtml}` : '';
+    ${creditsHtml}` : localUsage ? `
+    <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.local.head', 'Claude · tu consumo')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
+    ${localRows}
+    <div class="lim-sub">${localNoteHtml}</div>
+    ${compact ? '' : `<div class="mcp-acts"><button type="button" class="btn-ghost btn--sm" data-usage-connect>${t('usage.local.connect', 'Conectar mi cuenta de Claude')}</button></div>`}` : '';
 
   el.innerHTML = `
     ${claudeHtml}
@@ -338,7 +372,337 @@ export function renderLimits(el, data, opts = {}) {
   // Etiquetas (Claude + Codex) por textContent, en el mismo orden de render.
   const labels = el.querySelectorAll('.lim-row .lim-label');
   labelTexts.forEach((txt, i) => { if (labels[i]) labels[i].textContent = txt; });
+  el.querySelector('[data-usage-connect]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    opts.onConnect?.();
+  });
   ensureFlowDirector();
+}
+
+// Login self-service de Claude. El runner vive en el server: el frontend solo
+// refleja /login/status y nunca persiste el estado del flujo.
+export function openClaudeConnectModal(dialog, onConnected) {
+  let closed = false;
+  let flowActive = false;
+  let terminal = false;
+  let pollTimer = null;
+  let loginUrl = '';
+  let codeDraft = '';
+  let connectedHandled = false;
+  let currentStatus = 'idle';
+
+  const m = dialog.openModal({
+    title: t('usage.connect.title', 'Conectar mi cuenta de Claude'),
+    width: 520,
+    onClose: () => {
+      closed = true;
+      stopPolling();
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (flowActive && !terminal) {
+        fetch('/api/connections/claude/login/cancel', { method: 'POST' }).catch(() => {});
+      }
+    },
+  });
+
+  function stopPolling() {
+    if (pollTimer != null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function schedulePoll(delay = 1500) {
+    stopPolling();
+    if (closed || terminal || !flowActive || document.hidden) return;
+    pollTimer = setTimeout(checkStatus, delay);
+  }
+
+  async function request(path, options = {}) {
+    let res;
+    try {
+      res = await fetch(path, options);
+    } catch {
+      throw new Error(t('usage.connect.networkError', 'No se pudo contactar al servidor.'));
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || t('usage.connect.requestError', 'La solicitud falló ({status}).', { status: res.status }));
+    }
+    return data;
+  }
+
+  function renderIntro(message = '') {
+    if (closed) return;
+    flowActive = false;
+    terminal = false;
+    currentStatus = 'idle';
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step1', '1. Antes de empezar')}</p>
+      <p class="dlg-msg">${t('usage.connect.explain', 'La consola abrirá una sesión de login con Anthropic. Autorizá la cuenta en el navegador y volvé con el código para que Uso pueda mostrar los porcentajes reales de tu plan.')}</p>
+      <p class="lim-err" data-ref="message"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-ref="start">${t('usage.connect.start', 'Empezar')}</button>
+      </div>`;
+    const messageEl = m.body.querySelector('[data-ref="message"]');
+    messageEl.textContent = message;
+    m.body.querySelector('[data-ref="start"]').addEventListener('click', start);
+  }
+
+  function safeLoginUrl(raw) {
+    try {
+      const parsed = new URL(raw);
+      return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function authorizationHtml() {
+    if (!loginUrl) return '';
+    return `
+      <p class="dlg-msg">${t('usage.connect.openLinkRequired', 'Abrí este enlace en el navegador de quien está usando la consola. Este paso es obligatorio: no se abre solo porque el servidor no tiene navegador.')}</p>
+      <a class="mcp-oauth-link conn-scopes" data-ref="link" href="${esc(loginUrl)}" target="_blank" rel="noopener noreferrer">${esc(loginUrl)}</a>
+      <div class="mcp-acts">
+        <button type="button" class="btn-ghost btn--sm" data-ref="copy">${t('usage.connect.copy', 'Copiar enlace')}</button>
+      </div>
+      <p class="lim-sub" data-ref="copy-message"></p>`;
+  }
+
+  function bindCopyLink() {
+    const copy = m.body.querySelector('[data-ref="copy"]');
+    const messageEl = m.body.querySelector('[data-ref="copy-message"]');
+    if (!copy || !messageEl) return;
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(loginUrl);
+        messageEl.textContent = t('usage.connect.copied', 'Enlace copiado.');
+      } catch {
+        messageEl.textContent = t('usage.connect.copyError', 'No se pudo copiar automáticamente; podés copiar el enlace de arriba.');
+      }
+    });
+  }
+
+  function renderWaiting(status) {
+    if (closed) return;
+    currentStatus = status;
+    const text = status === 'verifying'
+      ? t('usage.connect.verifying', 'Verificando el código con Anthropic…')
+      : status === 'waiting-url'
+        ? t('usage.connect.waitingUrl', 'Preparando el enlace de autorización…')
+        : t('usage.connect.starting', 'Iniciando la sesión de login…');
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step2', '2. Autorizar')}</p>
+      ${authorizationHtml()}
+      <div class="cwc-loading">${pacman()}${text}</div>`;
+    bindCopyLink();
+  }
+
+  function renderUrl() {
+    if (closed) return;
+    currentStatus = 'url';
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step2', '2. Autorizar')}</p>
+      ${authorizationHtml()}
+      <p class="lim-sub">${t('usage.connect.waitingAuthorization', 'Esperando la autorización…')}</p>`;
+    bindCopyLink();
+  }
+
+  function renderCode(message = '') {
+    if (closed) return;
+    const previousInput = m.body.querySelector('[data-ref="code"]');
+    const restoreFocus = document.activeElement === previousInput;
+    const selectionStart = previousInput?.selectionStart;
+    const selectionEnd = previousInput?.selectionEnd;
+    const enteringCode = currentStatus !== 'waiting-code';
+    if (previousInput) codeDraft = previousInput.value;
+    currentStatus = 'waiting-code';
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step2', '2. Autorizar')}</p>
+      ${authorizationHtml()}
+      <p class="dlg-msg">${t('usage.connect.pasteCode', 'Pegá el código que te dio Anthropic para terminar la conexión.')}</p>
+      <input type="text" class="dlg-input" data-ref="code" autocomplete="off" placeholder="${esc(t('usage.connect.codePlaceholder', 'Código de autorización'))}">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-ref="send">${t('usage.connect.send', 'Enviar')}</button>
+      </div>
+      <p class="lim-err" data-ref="code-message"></p>`;
+    bindCopyLink();
+    const input = m.body.querySelector('[data-ref="code"]');
+    const send = m.body.querySelector('[data-ref="send"]');
+    const messageEl = m.body.querySelector('[data-ref="code-message"]');
+    input.value = codeDraft;
+    messageEl.textContent = message;
+    input.addEventListener('input', () => { codeDraft = input.value; });
+    const submit = async () => {
+      codeDraft = input.value;
+      const code = input.value.trim();
+      if (!code) {
+        messageEl.textContent = t('usage.connect.codeRequired', 'Pegá el código antes de enviarlo.');
+        input.focus();
+        return;
+      }
+      stopPolling();
+      send.disabled = true;
+      input.disabled = true;
+      messageEl.textContent = t('usage.connect.sending', 'Enviando el código…');
+      try {
+        const data = await request('/api/connections/claude/login/code', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        if (closed) return;
+        if (data.ok) {
+          await finishOk();
+          return;
+        }
+        renderWaiting('verifying');
+        schedulePoll(0);
+      } catch (err) {
+        if (closed) return;
+        messageEl.textContent = err.message;
+        send.disabled = false;
+        input.disabled = false;
+        schedulePoll();
+      }
+    };
+    send.addEventListener('click', submit);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submit();
+    });
+    if (restoreFocus || enteringCode) {
+      input.focus();
+      if (restoreFocus && selectionStart != null && selectionEnd != null) {
+        input.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
+  }
+
+  function renderError(message) {
+    if (closed) return;
+    terminal = true;
+    flowActive = false;
+    currentStatus = 'error';
+    stopPolling();
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step3', '3. Resultado')}</p>
+      <p class="dlg-msg">${t('usage.connect.failed', 'No se pudo conectar la cuenta.')}</p>
+      <p class="lim-err" data-ref="error"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn-ghost" data-ref="retry">${t('usage.connect.retry', 'Reintentar')}</button>
+      </div>`;
+    m.body.querySelector('[data-ref="error"]').textContent = message;
+    m.body.querySelector('[data-ref="retry"]').addEventListener('click', start);
+  }
+
+  async function finishOk() {
+    if (closed || connectedHandled) return;
+    connectedHandled = true;
+    terminal = true;
+    flowActive = false;
+    currentStatus = 'ok';
+    stopPolling();
+    m.body.innerHTML = `
+      <p class="conn-h">${t('usage.connect.step3', '3. Resultado')}</p>
+      <p class="dlg-msg">${t('usage.connect.success', 'Tu cuenta de Claude quedó conectada. Actualizando los porcentajes de Uso…')}</p>
+      <p class="lim-sub" data-ref="refresh"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-ref="close">${t('usage.connect.close', 'Cerrar')}</button>
+      </div>`;
+    const refreshEl = m.body.querySelector('[data-ref="refresh"]');
+    m.body.querySelector('[data-ref="close"]').addEventListener('click', m.close);
+    try {
+      await onConnected();
+      if (!closed) refreshEl.textContent = t('usage.connect.refreshed', 'Los datos de Uso se actualizaron.');
+    } catch (err) {
+      if (!closed) refreshEl.textContent = err.message || t('usage.connect.refreshError', 'La cuenta se conectó, pero no se pudieron actualizar los datos de Uso.');
+    }
+  }
+
+  function applyStatus(data) {
+    if (closed) return;
+    const status = data?.status;
+    if (status === 'ok') {
+      finishOk();
+      return;
+    }
+    if (status === 'error') {
+      renderError(data.error || t('usage.connect.unknownError', 'Anthropic no pudo completar la conexión.'));
+      return;
+    }
+    let urlChanged = false;
+    if (data?.url) {
+      const nextUrl = safeLoginUrl(data.url);
+      if (!nextUrl) {
+        renderError(t('usage.connect.invalidUrl', 'El servidor devolvió un enlace de autorización inválido.'));
+        return;
+      }
+      urlChanged = nextUrl !== loginUrl;
+      loginUrl = nextUrl;
+    }
+    if (status === 'waiting-code') {
+      if (currentStatus !== status || urlChanged) {
+        renderCode(data.error || '');
+      } else if (data.error) {
+        const messageEl = m.body.querySelector('[data-ref="code-message"]');
+        if (messageEl) messageEl.textContent = data.error;
+      }
+    } else if (status === 'url') {
+      if (!loginUrl) {
+        renderError(t('usage.connect.invalidUrl', 'El servidor devolvió un enlace de autorización inválido.'));
+        return;
+      }
+      if (currentStatus !== status || urlChanged) renderUrl();
+    } else if (['starting', 'waiting-url', 'verifying'].includes(status)) {
+      if (currentStatus !== status || urlChanged) renderWaiting(status);
+    }
+    else {
+      renderIntro();
+      return;
+    }
+    if (terminal) return;
+    flowActive = true;
+    terminal = false;
+    schedulePoll();
+  }
+
+  async function checkStatus() {
+    stopPolling();
+    if (closed || terminal || document.hidden) return;
+    try {
+      const data = await request('/api/connections/claude/login/status');
+      applyStatus(data);
+    } catch (err) {
+      renderError(err.message);
+    }
+  }
+
+  async function start() {
+    if (closed) return;
+    loginUrl = '';
+    codeDraft = '';
+    connectedHandled = false;
+    terminal = false;
+    flowActive = true;
+    renderWaiting('starting');
+    try {
+      const data = await request('/api/connections/claude/login/start', { method: 'POST' });
+      if (closed) return;
+      applyStatus(data);
+      if (!terminal && flowActive && !pollTimer) schedulePoll(0);
+    } catch (err) {
+      renderError(err.message);
+    }
+  }
+
+  function onVisibility() {
+    if (document.hidden) stopPolling();
+    else if (!closed && flowActive && !terminal) schedulePoll(0);
+    else if (!closed && currentStatus === 'idle') checkStatus();
+  }
+
+  document.addEventListener('visibilitychange', onVisibility);
+  renderIntro();
+  checkStatus();
 }
 
 // Un modelo se considera "consumiendo AHORA" si su transcript se tocó hace < 2 min.
@@ -622,14 +986,14 @@ export default {
       // 'update' la actualiza en el lugar (sin parpadeo, para el auto-refresh).
       function paint(chartMode) {
         if (cache.limits) {
-          const hasCodex = cache.limits.codex && Array.isArray(cache.limits.codex.limits);
-          if (cache.limits.unavailable && !hasCodex) {
-            limsEl.hidden = true;
-            limsEl.innerHTML = '';
-          } else {
-            limsEl.hidden = false;
-            renderLimits(limsEl, cache.limits, { windows: cache.summary?.windows });
-          }
+          limsEl.hidden = false;
+          renderLimits(limsEl, cache.limits, {
+            windows: cache.summary?.windows,
+            onConnect: () => openClaudeConnectModal(dialog, async () => {
+              cache.limits = await fetchLimits(true);
+              paint('update');
+            }),
+          });
         }
         const liveKeys = liveKeysFrom(cache.summary);
         const s = seriesFor();

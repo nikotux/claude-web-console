@@ -25,36 +25,43 @@ export default {
     const r = express.Router();
 
     r.get('/devices', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getDevices()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/clients', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getClients()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/health', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getHealth()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/radios', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getRadios()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/wan', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getWan()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/audit', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await buildVoiceAudit()); }
       catch (err) { send502(res, err); }
     });
 
     r.get('/client', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await findClient(req.query.q || '')); }
       catch (err) { send502(res, err); }
     });

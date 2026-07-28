@@ -102,6 +102,10 @@ export default function usageHelp() {
                 v: t('usage.help.buttons.reload.v', 'Vuelve a leer transcripts y límites en ese momento; no dispara un runner de IA ni consume tokens.'),
               },
               {
+                k: t('usage.help.buttons.connect.k', 'Conectar mi cuenta de Claude'),
+                v: t('usage.help.buttons.connect.v', 'Aparece cuando la credencial actual no permite leer el medidor de Anthropic. Abre la autorización de tu cuenta para mostrar los porcentajes reales del plan; el proceso no consume tokens.'),
+              },
+              {
                 k: t('usage.help.buttons.range.k', 'Día · Semana · Mes'),
                 v: t('usage.help.buttons.range.v', 'Cambia el período de General y Tendencia: hoy por hora, últimos 7 días o últimos 30 días.'),
               },

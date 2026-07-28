@@ -1182,6 +1182,7 @@ class Chat {
       cwd: this.cwd,
       command: { file: 'claude', args: ['--resume', this.sessionId] },
       title: this.title,
+      owner: this.owner,
     });
     this.terminalId = term.id;
     this.viewMode = 'tui';
@@ -2392,6 +2393,7 @@ class ChatManager {
           cwd: chat.cwd,
           command: { file: 'claude', args: ['--resume', s.sessionId] },
           title: chat.title,
+          owner: chat.owner,
         });
         chat.terminalId = term.id;
         chat.viewMode = 'tui';
@@ -2487,12 +2489,33 @@ class ChatManager {
     return n;
   }
 
+  // Un ADMIN ve TODOS los chats (visibilidad de gestión), pero los pendientes
+  // INTERACTIVOS de un chat ajeno NO son suyos: el centro global de popups
+  // (public/js/ui/perm-center.js) los levanta de acá por el poll de 8 s y le
+  // hacía aparecer al host las preguntas AskUserQuestion de un inquilino —
+  // confuso y peligroso (podía responder por el otro sin darse cuenta).
+  // Se vacían `pendingPerms`/`pendingInterfono` del chat ajeno y se conserva
+  // solo el CONTEO, que es lo que necesita la tarjeta de Sesiones para seguir
+  // mostrando "esperando permiso (n)" sin popupear nada.
+  // OJO: los chats legacy tienen `owner: null` = el HOST, así que la
+  // comparación normaliza ambos lados con hostUser() — si no, al host se le
+  // silenciarían sus PROPIOS chats viejos.
   list(principal) {
     const all = [...this.chats.values()].filter((c) => !c.closed);
+    const me = (principal && principal.username) || hostUser();
     const visible = (principal && principal.admin)
       ? all
       : all.filter((c) => c.owner === (principal ? principal.username : null));
-    return visible.map((c) => c.info());
+    return visible.map((c) => {
+      const info = c.info();
+      info.pendingPermsCount = (info.pendingPerms || []).length;
+      info.pendingInterfonoCount = (info.pendingInterfono || []).length;
+      if ((c.owner || hostUser()) !== me) {
+        info.pendingPerms = [];
+        info.pendingInterfono = [];
+      }
+      return info;
+    });
   }
 }
 
@@ -2550,6 +2573,15 @@ export default {
       }
       const principal = principalOf(req);
       const owner = principal.username;
+      const cwdAbs = safeCwd(cwd, owner);
+      try {
+        if (!fss.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
+      } catch {
+        console.warn('[chat] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
+        const requested = typeof cwd === 'string' ? cwd.trim() : '';
+        const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
+        return res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
+      }
       // SP9-5 (TASK-671): tope de sesiones vivas por-usuario (admin exento).
       if (!principal.admin) {
         const live = manager.countLiveByOwner(owner);
@@ -2569,7 +2601,7 @@ export default {
       }
       const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
       const chat = manager.create({
-        cwd: safeCwd(cwd, owner),
+        cwd: cwdAbs,
         model: modelChoice,
         permissionMode: modeChoice,
         resume: resume || null,

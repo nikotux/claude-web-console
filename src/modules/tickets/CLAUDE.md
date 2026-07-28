@@ -11,6 +11,22 @@ de tickets/features/PRs es **`tickets/`** (Bugs v2 · "One Front Door"): dashboa
 determinístico (snapshot Zoho/GitHub cada 60 s, sin IA) con ventanas de detalle
 en MODAL — `public/js/modules/tickets/{ticket-detail,pr-detail}.js` (clases `.bv2-*`).
 
+## Permisos del tablero
+
+| Quién | Puede hacer | Por qué |
+|---|---|---|
+| Cualquier usuario autenticado | Ver el dashboard, resueltos, departamentos, detalles de tickets/PRs y metadata; tomar tickets y soltar los propios | Lee el snapshot compartido del equipo, refrescado una vez cada 60 s con las credenciales del host, y usa claims locales: no agrega costo por usuario. |
+| Cada usuario autenticado | Editar sus contextos `work`/`pr` y sincronizarlos a `CLAUDE.local.md` de su propio clon de Tolkien | El scope de la request impide que un inquilino lea o escriba los archivos del host. |
+| Sólo admin | Analizar contexto con IA | Consume tokens. |
+| Sólo admin | Guardar, editar o borrar contexto adicional | Escribe en el Pad `console`. |
+| Sólo admin | Forzar el refresco | Golpea Zoho/GitHub; los no-admin sólo leen el snapshot compartido. El arranque en frío sí puede generar el primer snapshot para cualquier autenticado. |
+
+Gotcha de `claim`: al tomar un ticket, `assignInZohoBestEffort(id,
+externalUserOf(req))` intenta asignarlo en Zoho con la cuenta OAuth del usuario que
+lo toma, nunca con la del host para un usuario autenticado. Si no conectó Zoho en
+⚙ Sistema → Conexiones, el claim local funciona igual y la asignación en Desk
+simplemente no ocurre.
+
 VISTA TABLA ANCHA — expandir columna a "Excel" (2026-07-14, PEND-487, pedido de
 Niko): las columnas del dashboard (Nuevos · Vencidos · En progreso · Resueltos)
 cortaban el listado a 12 filas (`ticketList(items, max=12)`, `dashboard.js`) con un
@@ -78,7 +94,7 @@ CONSUME TOKENS bajo confirm) · `GET /meta/context-analyze/:job` (poll, 0 tokens
 CONTEXTOS DE TRABAJO EDITABLES (migrado de v1 al chat v2, 2026-07-08). Además de
 los DOS bloques por-ítem de arriba (contexto adicional + histórico), cada chat de
 "Continuar en el chat" / "Trabajar esto en un chat" (ticket, feature y PR) inyecta
-DOS contextos GLOBALES editables — los mismos de la v1 (bugfixes), que estaban en
+DOS contextos POR USUARIO editables — los mismos de la v1 (bugfixes), que estaban en
 disco (`~/.cwc-data/bugfix-context.md` = 'work' · `bugfix-pr-context.md` = 'pr') y
 servidos por `GET/POST /api/tickets/context?kind=work|pr` (`tickets/context-store.js`)
 pero YA NO se inyectaban en ningún chat (agujero de la migración): 'work' = CÓMO se
@@ -99,6 +115,18 @@ Profundo ADEMÁS sigue en la memoria de Tolkien (`…tolkien/memory/pensamiento-
 y hermanas), que auto-carga en TODA sesión de Tolkien (incluidas TUI) — solapamiento
 deliberado (pedido de Niko 2026-07-08): la memoria cubre las TUI/chats manuales, el
 contexto inyectado cubre los chats abiertos desde el botón de un ticket v2.
+
+AISLAMIENTO POR USUARIO (PLAN-2117 B3, 2026-07-27): los cuatro endpoints
+`GET/POST /context` y `GET/POST /context-sync` resuelven `systemScopeFor(req)` y
+solo operan sobre ese scope. El host conserva byte por byte los masters históricos
+en `~/.cwc-data/bugfix-*.md` y el espejo en `<config.projectDir>`. Un inquilino usa
+`<scope.dataDir>/bugfix-*.md` y `<scope.workspace>/tolkien/CLAUDE.local.md`. Mientras
+sus masters no existen, `getContext()` lee los del host como semilla sin escribirlos;
+el primer guardado materializa `work` y `pr` en su dataDir y desde ahí quedan
+desacoplados. El host es fuente de semilla solo de LECTURA: ninguna escritura de un
+inquilino puede resolver a sus rutas. Si el clon propio todavía no existe, guardar el
+master funciona y `syncToTolkien()` devuelve un skip best-effort sin crear el clon.
+
 ESPEJO A TOLKIEN — BLINDAJE (2026-07-10, pedido de Niko: "que CUALQUIER sesión que
 vaya a hacer el push de un PR tenga SIEMPRE estas instrucciones que yo puedo editar,
 blindados a futuro"). Problema: la inyección al prompt del tablero
@@ -110,8 +138,8 @@ de Claude Code (`CLAUDE.md` + `CLAUDE.local.md` + memorias); la inyección one-s
 tablero es estructuralmente incapaz de garantizar. SOLUCIÓN (enfoque ESPEJO, no
 referencia — el texto viaja FÍSICO, no un "andá a leer allá" que dependa de que el
 modelo obedezca): al guardar un contexto, `saveContext` (`tickets/context-store.js`)
-además de escribir el master en `~/.cwc-data/bugfix-*.md` ESPEJA el subset work+pr a una
-SECCIÓN GESTIONADA de `~/tolkien/CLAUDE.local.md` — archivo LOCAL, ya excluido del repo
+además de escribir el master del usuario ESPEJA el subset work+pr a una SECCIÓN
+GESTIONADA del `CLAUDE.local.md` de su propio clon — archivo LOCAL, ya excluido del repo
 (`.git/info/exclude`, NUNCA se comitea), que Claude Code auto-carga en CADA sesión de
 Tolkien (chat/TUI/launcher/reanudada). `syncToTolkien()` reemplaza SOLO lo que está entre
 los marcadores `<!-- cwc:tickets-context:start/end -->` (todo lo que Niko escribió a mano
@@ -199,11 +227,11 @@ lo afectan. Quien más empuja el peso hacia arriba es `## 6.`, que
 `retro/promote-shared.js` apendea SIN TOPE: cuando ese warning aparezca, la
 acción es podar el maestro, no subir el presupuesto.
 
-El procedimiento largo (fases, checklists y lecciones registradas) se genera en
-`~/tolkien/.cwc-ticket-playbook.md`, archivo local no versionado y excluido por
-`.git/info/exclude`. La fuente de verdad siguen siendo los masters editables desde
-⚙ Sistema → Proyectos (`~/.cwc-data/bugfix-context.md` y
-`bugfix-pr-context.md`); el playbook se regenera al guardar o re-sincronizar.
+El procedimiento largo (fases, checklists y lecciones registradas) se genera junto
+al espejo, en `.cwc-ticket-playbook.md` del clon propio, archivo local no versionado
+y excluido por `.git/info/exclude`. La fuente de verdad son los masters por usuario
+editables desde ⚙ Sistema → Proyectos; el playbook se regenera al guardar o
+re-sincronizar.
 
 Fail-safe obligatorio: si los títulos cambian y ninguna sección matchea las reglas
 esperadas, ese contexto se espeja completo como antes y se loguea un aviso. Nunca se

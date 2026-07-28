@@ -17,24 +17,37 @@
 // solo baja lo necesario para trabajar tickets/features/PR. Un verificador
 // (verifySync) avisa si el espejo quedó desincronizado en vez de fallar callado.
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 import { findForeignRefsForTolkien, replaceForeignRefsForTolkien } from '../../core/pad-world-refs.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 
 export { findForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const CONTEXT_FILES = {
-  work: path.join(DATA_DIR, 'bugfix-context.md'),
-  pr: path.join(DATA_DIR, 'bugfix-pr-context.md'),
+const CONTEXT_FILENAMES = {
+  work: 'bugfix-context.md',
+  pr: 'bugfix-pr-context.md',
 };
 
-// Archivo LOCAL de Tolkien que auto-carga en toda sesión (no versionado).
-const TOLKIEN_LOCAL_MD = path.join(config.projectDir, 'CLAUDE.local.md');
-// Playbook LOCAL de Tolkien: procedimiento largo, no auto-cargado; se lee a demanda.
-const TOLKIEN_PLAYBOOK_MD = path.join(config.projectDir, '.cwc-ticket-playbook.md');
+function hostScope() {
+  return systemScopeFor({ type: 'token', admin: true });
+}
+
+// Función pura: no toca disco ni congela rutas al importar el módulo.
+// Host conserva EXACTAMENTE sus ubicaciones históricas; cada inquilino guarda
+// los masters bajo su dataDir privado y espeja dentro de SU clon de Tolkien.
+export function contextPathsFor(scope = hostScope(), kind = 'work') {
+  if (!CONTEXT_FILENAMES[kind]) throw new Error(`Contexto desconocido: ${kind}`);
+  const projectDir = scope.isHost ? config.projectDir : path.join(scope.workspace, 'tolkien');
+  return {
+    storeFile: path.join(scope.dataDir, CONTEXT_FILENAMES[kind]),
+    mirrorFile: path.join(projectDir, 'CLAUDE.local.md'),
+    playbookFile: path.join(projectDir, '.cwc-ticket-playbook.md'),
+    projectDir,
+  };
+}
+
 // Marcadores de la sección que gestionamos NOSOTROS. Todo lo que Niko escribió
 // a mano en CLAUDE.local.md queda FUERA de estos marcadores y no se toca jamás.
 const MARK_START = '<!-- cwc:tickets-context:start -->';
@@ -110,8 +123,17 @@ export const DEFAULT_CONTEXTS = {
   ].join('\n'),
 };
 
-export function getContext(kind = 'work') {
-  try { return fss.readFileSync(CONTEXT_FILES[kind], 'utf8'); } catch { return DEFAULT_CONTEXTS[kind]; }
+export function getContext(kind = 'work', scope = hostScope()) {
+  const { storeFile } = contextPathsFor(scope, kind);
+  try {
+    return fss.readFileSync(storeFile, 'utf8');
+  } catch (err) {
+    // Semilla lazy y de SOLO LECTURA: mientras el inquilino no guardó su copia,
+    // ve el master vigente del host. El primer guardado materializa sus archivos
+    // privados; desde ese momento quedan desacoplados de cambios futuros del host.
+    if (!scope.isHost && err?.code === 'ENOENT') return getContext(kind, hostScope());
+    return DEFAULT_CONTEXTS[kind];
+  }
 }
 
 // ---- Espejo a Tolkien -------------------------------------------------------
@@ -176,15 +198,16 @@ function sanitizeForTolkien(text, lessonTitles) {
   return { rendered, sanitizedRefs };
 }
 
-function splitContextForMirror(kind, text = getContext(kind)) {
-  const split = splitTopSections(text);
+function splitContextForMirror(kind, text, scope = hostScope()) {
+  const source = text ?? getContext(kind, scope);
+  const split = splitTopSections(source);
   const ruleSections = split.sections.filter((section) => sectionMatches(kind, section));
   if (!ruleSections.length && split.sections.length) {
     console.warn(`[tickets/context-store] PEND-1864: ninguna sección de regla matcheó para ${kind}; se espeja completo.`);
     return {
       preamble: split.preamble,
-      mirror: text.trim(),
-      playbook: text.trim(),
+      mirror: source.trim(),
+      playbook: source.trim(),
       failSafe: true,
     };
   }
@@ -212,13 +235,13 @@ function playbookPointer(contextName) {
 // documento para que un future-Niko que abra CLAUDE.local.md sepa qué es y no
 // lo confunda con un objeto raro. Se genera desde el master (work + pr), pero
 // baja solo REGLA; el procedimiento largo queda en .cwc-ticket-playbook.md.
-function renderManagedSectionResult(overrides = {}) {
+function renderManagedSectionResult(overrides = {}, scope = hostScope()) {
   const sources = {
-    work: overrides.work ?? getContext('work'),
-    pr: overrides.pr ?? getContext('pr'),
+    work: overrides.work ?? getContext('work', scope),
+    pr: overrides.pr ?? getContext('pr', scope),
   };
-  const work = splitContextForMirror('work', sources.work);
-  const pr = splitContextForMirror('pr', sources.pr);
+  const work = splitContextForMirror('work', sources.work, scope);
+  const pr = splitContextForMirror('pr', sources.pr, scope);
   const raw = [
     '## ⚙️ Contexto de trabajo · Tickets / Features / PR — gestionado por Mi Consola',
     '',
@@ -249,13 +272,13 @@ function renderManagedSectionResult(overrides = {}) {
   return { rendered, sanitizedRefs };
 }
 
-export function renderManagedSection(overrides = {}) {
-  return renderManagedSectionResult(overrides).rendered;
+export function renderManagedSection(overrides = {}, scope = hostScope()) {
+  return renderManagedSectionResult(overrides, scope).rendered;
 }
 
-export function renderPlaybook() {
-  const work = splitContextForMirror('work');
-  const pr = splitContextForMirror('pr');
+export function renderPlaybook(scope = hostScope()) {
+  const work = splitContextForMirror('work', undefined, scope);
+  const pr = splitContextForMirror('pr', undefined, scope);
   return [
     '# Playbook local de tickets/features/PR — generado por Mi Consola',
     '',
@@ -274,28 +297,28 @@ export function renderPlaybook() {
 }
 
 // Bloque completo con marcadores (lo que buscamos/reemplazamos en el archivo).
-function managedBlockResult(overrides = {}) {
-  const { rendered, sanitizedRefs } = renderManagedSectionResult(overrides);
+function managedBlockResult(overrides = {}, scope = hostScope()) {
+  const { rendered, sanitizedRefs } = renderManagedSectionResult(overrides, scope);
   return {
     block: `${MARK_START}\n${rendered}\n${MARK_END}`,
     sanitizedRefs,
   };
 }
 
-function managedBlock(overrides = {}) {
-  return managedBlockResult(overrides).block;
+function managedBlock(overrides = {}, scope = hostScope()) {
+  return managedBlockResult(overrides, scope).block;
 }
 
 // El escritor de `## 6. Feedback adoptado` usa esta misma medición ANTES de
 // guardar. Así el presupuesto no depende de un warning posterior al sync ni
 // duplica el número en otro módulo.
-export function measureMirrorBytes(overrides = {}) {
-  return Buffer.byteLength(managedBlock(overrides), 'utf8');
+export function measureMirrorBytes(overrides = {}, scope = hostScope()) {
+  return Buffer.byteLength(managedBlock(overrides, scope), 'utf8');
 }
 
-function ensureGitExclude() {
+function ensureGitExclude(projectDir) {
   try {
-    const exclude = path.join(config.projectDir, '.git', 'info', 'exclude');
+    const exclude = path.join(projectDir, '.git', 'info', 'exclude');
     let text = '';
     try { text = fss.readFileSync(exclude, 'utf8'); } catch { text = ''; }
     const line = '.cwc-ticket-playbook.md';
@@ -310,12 +333,12 @@ function ensureGitExclude() {
   }
 }
 
-function writePlaybook() {
-  const next = `${renderPlaybook()}\n`;
+function writePlaybook(scope, playbookFile) {
+  const next = `${renderPlaybook(scope)}\n`;
   let existing = null;
-  try { existing = fss.readFileSync(TOLKIEN_PLAYBOOK_MD, 'utf8'); } catch { /* no existe aún */ }
+  try { existing = fss.readFileSync(playbookFile, 'utf8'); } catch { /* no existe aún */ }
   if (existing === next) return { ok: true, changed: false };
-  writeFileAtomic(TOLKIEN_PLAYBOOK_MD, next, { mode: 0o644 });
+  writeFileAtomic(playbookFile, next, { mode: 0o644 });
   return { ok: true, changed: true };
 }
 
@@ -323,9 +346,18 @@ function writePlaybook() {
 // preservando byte a byte todo lo que esté fuera de los marcadores. Devuelve
 // { ok, reason?, created? }. best-effort: si Tolkien no existe, no rompe el
 // guardado del master — el verificador lo reportará como 'unavailable'.
-export function syncToTolkien() {
+export function syncToTolkien(scope = hostScope()) {
   try {
-    const { block, sanitizedRefs } = managedBlockResult();
+    const {
+      mirrorFile, playbookFile, projectDir,
+    } = contextPathsFor(scope);
+    // El onboarding puede no haber clonado Tolkien todavía. Para inquilinos no
+    // creamos el repo ni directorios en su nombre: el master ya quedó guardado
+    // y el espejo se intentará de nuevo cuando el clon exista.
+    if (!scope.isHost && !fss.existsSync(projectDir)) {
+      return { ok: true, skipped: true, reason: 'tolkien-ausente' };
+    }
+    const { block, sanitizedRefs } = managedBlockResult({}, scope);
     const foreignRefs = findForeignRefsForTolkien(block);
     if (foreignRefs.length) {
       const detail = foreignRefs.map(({ ref, line }) => `  - ${ref} (línea ${line})`).join('\n');
@@ -333,11 +365,11 @@ export function syncToTolkien() {
       return { ok: false, reason: 'foreign-refs', foreignRefs, sanitizedRefs };
     }
 
-    ensureGitExclude();
-    const playbook = writePlaybook();
+    ensureGitExclude(projectDir);
+    const playbook = writePlaybook(scope, playbookFile);
     let existing = '';
     let fileExisted = false;
-    try { existing = fss.readFileSync(TOLKIEN_LOCAL_MD, 'utf8'); fileExisted = true; } catch { /* no existe aún */ }
+    try { existing = fss.readFileSync(mirrorFile, 'utf8'); fileExisted = true; } catch { /* no existe aún */ }
 
     const mirrorBytes = Buffer.byteLength(block, 'utf8');
     if (mirrorBytes > MIRROR_BUDGET) {
@@ -357,7 +389,8 @@ export function syncToTolkien() {
       next = `${existing}${sep}${block}\n`;
     } else {
       // Archivo nuevo: cabecera mínima + el bloque.
-      next = `# Reglas personales de Nico para sesiones en este repo (NO versionado)\n\n${block}\n`;
+      const owner = scope.isHost ? 'Nico' : scope.user;
+      next = `# Reglas personales de ${owner} para sesiones en este repo (NO versionado)\n\n${block}\n`;
     }
 
     if (next === existing) {
@@ -369,7 +402,7 @@ export function syncToTolkien() {
       };
     }
     // 0o644: archivo de texto legible (el master en ~/.cwc-data queda 0o600).
-    writeFileAtomic(TOLKIEN_LOCAL_MD, next, { mode: 0o644 });
+    writeFileAtomic(mirrorFile, next, { mode: 0o644 });
     return {
       ok: true,
       created: !fileExisted,
@@ -394,35 +427,36 @@ function extractManaged(text) {
 //   stale       — existe pero difiere (quedó viejo / editado a mano).
 //   missing     — el archivo existe pero NO tiene el bloque gestionado.
 //   unavailable — no se puede leer CLAUDE.local.md (Tolkien ausente, etc.).
-export function verifySync() {
+export function verifySync(scope = hostScope()) {
+  const { mirrorFile, playbookFile } = contextPathsFor(scope);
   try {
     let text = '';
-    try { text = fss.readFileSync(TOLKIEN_LOCAL_MD, 'utf8'); }
-    catch { return { status: 'unavailable', file: TOLKIEN_LOCAL_MD }; }
+    try { text = fss.readFileSync(mirrorFile, 'utf8'); }
+    catch { return { status: 'unavailable', file: mirrorFile }; }
     const present = extractManaged(text);
-    if (present == null) return { status: 'missing', file: TOLKIEN_LOCAL_MD };
-    const expected = renderManagedSection().trim();
+    if (present == null) return { status: 'missing', file: mirrorFile };
+    const expected = renderManagedSection({}, scope).trim();
     const mirrorBytes = Buffer.byteLength(expected, 'utf8');
     if (present !== expected) {
       return {
         status: 'stale',
-        file: TOLKIEN_LOCAL_MD,
+        file: mirrorFile,
         mirrorBytes,
         mirrorBudget: MIRROR_BUDGET,
         mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
       };
     }
 
-    const expectedPlaybook = `${renderPlaybook()}\n`;
+    const expectedPlaybook = `${renderPlaybook(scope)}\n`;
     let playbook = '';
-    try { playbook = fss.readFileSync(TOLKIEN_PLAYBOOK_MD, 'utf8'); }
+    try { playbook = fss.readFileSync(playbookFile, 'utf8'); }
     catch {
       return {
         status: 'stale',
-        file: TOLKIEN_LOCAL_MD,
+        file: mirrorFile,
         detail: 'playbook-missing',
         playbookStatus: 'playbook-missing',
-        playbookFile: TOLKIEN_PLAYBOOK_MD,
+        playbookFile,
         mirrorBytes,
         mirrorBudget: MIRROR_BUDGET,
         mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
@@ -431,10 +465,10 @@ export function verifySync() {
     if (playbook !== expectedPlaybook) {
       return {
         status: 'stale',
-        file: TOLKIEN_LOCAL_MD,
+        file: mirrorFile,
         detail: 'playbook-stale',
         playbookStatus: 'playbook-stale',
-        playbookFile: TOLKIEN_PLAYBOOK_MD,
+        playbookFile,
         mirrorBytes,
         mirrorBudget: MIRROR_BUDGET,
         mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
@@ -442,20 +476,20 @@ export function verifySync() {
     }
     return {
       status: 'ok',
-      file: TOLKIEN_LOCAL_MD,
+      file: mirrorFile,
       playbookStatus: 'ok',
-      playbookFile: TOLKIEN_PLAYBOOK_MD,
+      playbookFile,
       mirrorBytes,
       mirrorBudget: MIRROR_BUDGET,
       mirrorOverBudget: mirrorBytes > MIRROR_BUDGET,
     };
   } catch (err) {
-    return { status: 'unavailable', file: TOLKIEN_LOCAL_MD, reason: err?.message || String(err) };
+    return { status: 'unavailable', file: mirrorFile, reason: err?.message || String(err) };
   }
 }
 
-export function saveContext(kind, text) {
-  if (!CONTEXT_FILES[kind]) throw new Error(`Contexto desconocido: ${kind}`);
+export function saveContext(kind, text, scope = hostScope()) {
+  const { storeFile } = contextPathsFor(scope, kind);
   // Atómico (tmp+rename): editar el contexto desde el panel no puede dejar el
   // .md a medias si algo falla justo ahí (lo lee cada chat de trabajo).
   // Cap generoso (2026-07-10): antes 20.000 — el manual `work` v3.0 (6 fases +
@@ -464,8 +498,20 @@ export function saveContext(kind, text) {
   // completa. OJO: PEND-1864 separa REGLA (CLAUDE.local.md) de REFERENCIA
   // (.cwc-ticket-playbook.md) para no auto-cargar el procedimiento largo en
   // cada sesión de Tolkien.
-  writeFileAtomic(CONTEXT_FILES[kind], String(text).slice(0, 60000));
+  if (!scope.isHost) {
+    // En el primer guardado se materializa también el hermano faltante desde el
+    // host. Así work+pr quedan congelados como un par propio y cambios posteriores
+    // del host no se filtran indirectamente al espejo del inquilino.
+    for (const sibling of Object.keys(CONTEXT_FILENAMES)) {
+      if (sibling === kind) continue;
+      const siblingFile = contextPathsFor(scope, sibling).storeFile;
+      if (!fss.existsSync(siblingFile)) {
+        writeFileAtomic(siblingFile, getContext(sibling, hostScope()));
+      }
+    }
+  }
+  writeFileAtomic(storeFile, String(text).slice(0, 60000));
   // Espejar el subset a Tolkien (best-effort: si falla, el master ya quedó
   // guardado y el verificador lo marcará desincronizado).
-  syncToTolkien();
+  syncToTolkien(scope);
 }

@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { userWorkspace, hostUser } from '../../core/user-space.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
   listContextSections, readContextSection, writeContextSection, hashOf,
@@ -48,16 +49,27 @@ const displayName = (n) => (n ? n[0].toUpperCase() + n.slice(1) : 'Tolkien');
 // (su workspace) + su clon de Tolkien SOLO si existe (aislamiento: nunca el
 // Tolkien del host). Cada entrada lleva `userId` (dueño, para scopear memorias)
 // y `own` (true = espacio propio del inquilino -> self-edit permitido).
-function projectsFor(principal) {
-  const username = principal?.username || null;
+export function projectsFor(principal) {
+  // PLAN-2117: el token maestro/admin ES el host; sin principal no es nadie.
+  if (!principal) {
+    const error = new Error('projectsFor: request sin principal');
+    error.statusCode = 401;
+    throw error;
+  }
+  const username = principal.username || null;
   const admin = !!principal?.admin;
-  if (admin || !username) {
+  if (principal.type === 'token' || admin) {
     // host/admin (incl. principal por token): comportamiento actual intacto.
     const host = hostUser();
     return {
       tolkien: { name: displayName(config.projectName), dir: config.projectDir, userId: host, own: false },
       console: { name: 'Mi Consola', dir: CONSOLE_DIR, userId: host, own: false },
     };
+  }
+  if (!username) {
+    const error = new Error('projectsFor: principal sin username');
+    error.statusCode = 403;
+    throw error;
   }
   const out = {
     'mi-espacio': { name: 'Mi espacio', dir: userWorkspace(username), userId: username, own: true },
@@ -69,7 +81,14 @@ function projectsFor(principal) {
 }
 
 function project(req, res) {
-  const set = projectsFor(principalOf(req));
+  let set;
+  try {
+    set = projectsFor(principalOf(req));
+  } catch (e) {
+    const status = e.statusCode || 500;
+    res.status(status).json({ error: status === 401 || status === 403 ? 'No autorizado.' : 'No se pudo resolver el proyecto.' });
+    return null;
+  }
   const key = req.params.key;
   const p = Object.prototype.hasOwnProperty.call(set, key) ? set[key] : null;
   if (!p) { res.status(404).json({ error: `Proyecto desconocido: ${key}` }); return null; }
@@ -88,7 +107,7 @@ function canWrite(req, p) {
 // Compara la sección ANTERIOR vs la NUEVA con una corrida corta del SDK
 // (haiku, 1 turno, CERO herramientas). DESACOPLADO (regla de oro 2026-07-04):
 // la corrida NO vive en el handler Express — el POST persiste el job en
-// ~/.cwc-data/projects-analyze/<id>.json y spawnea
+// <dataDir-del-dueño>/projects-analyze/<id>.json y spawnea
 // bin/cwc-projects-analyze-runner.js detached; el front encuesta el GET (solo
 // lee disco, 0 tokens). Un reinicio del server (deploy) a mitad del análisis
 // ya no lo pierde: el runner sobrevive y el resultado queda persistido.
@@ -104,8 +123,9 @@ export default {
       try {
         const set = projectsFor(principalOf(req));
         res.json(Object.entries(set).map(([key, p]) => ({ key, name: p.name, dir: p.dir })));
-      } catch {
-        res.status(500).json({ error: 'No se pudo listar los proyectos.' });
+      } catch (e) {
+        const status = e.statusCode || 500;
+        res.status(status).json({ error: status === 401 || status === 403 ? 'No autorizado.' : 'No se pudo listar los proyectos.' });
       }
     });
 
@@ -176,16 +196,26 @@ export default {
           return res.status(409).json({ error: 'El contexto cambió desde que abriste esta sección. Recargá y reintentá.' });
         }
         const after = String(req.body?.content ?? '');
-        const id = analyzeJobId(req.params.key, req.params.i, sec.hash, after);
-        const job = readAnalyzeJob(id);
-        if (job && (isFreshRunning(job) || job.status === 'done')) {
-          return res.json({ ok: true, id, ...jobResult(job) });
+        const owner = systemScopeFor(req).user;
+        const id = analyzeJobId(req.params.key, req.params.i, sec.hash, after, owner);
+        const job = readAnalyzeJob(id, owner);
+        if (job && (isFreshRunning(job, owner) || job.status === 'done')) {
+          return res.json({ ok: true, id, ...jobResult(job, owner) });
         }
-        writeAnalyzeJob(id, {
+        const pending = {
           status: 'running', key: req.params.key, section: String(req.params.i),
           before: sec.text, after, startedAt: Date.now(), updatedAt: Date.now(),
-        });
-        spawnAnalyzeRunner(id);
+        };
+        writeAnalyzeJob(id, pending, owner);
+        try {
+          spawnAnalyzeRunner(id, owner);
+        } catch (e) {
+          writeAnalyzeJob(id, {
+            ...pending, status: 'error', analysis: null,
+            error: String(e?.message || e).slice(0, 300), updatedAt: Date.now(),
+          }, owner);
+          throw e;
+        }
         res.json({ ok: true, id, status: 'running', analysis: null, error: null });
       } catch (e) {
         res.status(e.badRequest ? 400 : (e.conflict ? 409 : 500)).json({ error: String(e?.message || e).slice(0, 300) });
@@ -202,9 +232,10 @@ export default {
         if (!/^[0-9a-f]{24}$/.test(String(req.params.id))) {
           return res.status(400).json({ error: 'Id de análisis inválido.' });
         }
-        const job = readAnalyzeJob(req.params.id);
+        const owner = systemScopeFor(req).user;
+        const job = readAnalyzeJob(req.params.id, owner);
         if (!job) return res.status(404).json({ error: 'Análisis inexistente (¿expiró?).' });
-        res.json({ ok: true, id: req.params.id, ...jobResult(job) });
+        res.json({ ok: true, id: req.params.id, ...jobResult(job, owner) });
       } catch (e) {
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }

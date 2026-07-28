@@ -8,11 +8,10 @@
 // esa sigue siendo exclusivamente archivo local (.env / ~/.claude), fuera del
 // alcance de este panel a propósito.
 //
-// Admin-gating igual al panel de Proyectos: GET abierto a cualquier
-// autenticado (para que se vea la config activa), POST solo admin.
+// Config de instancia: toda la superficie HTTP es admin-only.
 //
 // HTTP:
-//   GET  /api/env-vars          -> { identity, client } (valores activos)
+//   GET  /api/env-vars          -> { identity, client } (admin)
 //   POST /api/env-vars {patch}  -> guarda (deep-merge), admin
 import express from 'express';
 import { isAdmin } from '../../core/auth.js';
@@ -67,6 +66,7 @@ export default {
     const r = express.Router();
 
     r.get('/', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
         const inst = loadInstance();
         res.json({ identity: inst.identity, client: inst.client, needsRestart: false });

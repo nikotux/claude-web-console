@@ -18,7 +18,7 @@
 //   Uso. `models[].lastMtime` es el timestamp del ÚLTIMO mensaje de ESE modelo
 //   (no el mtime del archivo): así el Pac-Man "consumiendo ahora" no titila en
 //   modelos secundarios del mismo transcript.
-//   GET /api/tokens/limits   -> { limits[], credits, subscription, updatedAt, stale?, codex? }
+//   GET /api/tokens/limits   -> { limits[], credits, subscription, updatedAt, stale?, codex?, localUsage? }
 //   % usado y reset de las ventanas del PLAN (sesión 5 h / semanales) + los
 //   CRÉDITOS de uso extra (extra_usage), vía el endpoint OAuth de Anthropic con
 //   el token del CLI (solo lectura). El último resultado bueno se PERSISTE en
@@ -602,6 +602,30 @@ async function cachedSummary(fresh, owner = hostUser()) {
   return slot.promise;
 }
 
+// Alternativa local cuando Anthropic no puede exponer los porcentajes del plan.
+// Reusa el summary cacheado (nunca fuerza fresh) y es estrictamente best-effort:
+// un fallo leyendo transcripts no puede romper la respuesta `unavailable`.
+export async function withLocalUsage(result, owner) {
+  if (!result?.unavailable) return result;
+  try {
+    const summary = await cachedSummary(false, owner);
+    return {
+      ...result,
+      localUsage: {
+        windowTokens: Number(summary.windows?.h5) || 0,
+        windowCost: Number(summary.windows?.h5Cost) || 0,
+        todayTokens: Number(summary.today?.tokens) || 0,
+        todayCost: Number(summary.today?.cost) || 0,
+        totalTokens: Number(summary.totals?.tokens) || 0,
+        totalCost: Number(summary.totals?.cost) || 0,
+        updatedAt: summary.updatedAt,
+      },
+    };
+  } catch {
+    return result;
+  }
+}
+
 // ===== Límites del PLAN (lo que muestra claude.ai): % por ventana + reset ==
 // Fuente: el endpoint OAuth de uso de Anthropic — el MISMO que consulta el
 // /usage del CLI — con el accessToken de ~/.claude/.credentials.json (la
@@ -1080,7 +1104,7 @@ export default {
               slot.promise = null;
             });
         }
-        const result = await slot.promise;
+        const result = await withLocalUsage(await slot.promise, owner);
         res.json({ ...result, codex: await codexP });
       } catch (err) {
         // FALLBACK: antes un 429/corte de red devolvía el error y el dato

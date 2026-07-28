@@ -5,18 +5,32 @@
 //
 // Patrón calcado de onboard (bin/cwc-onboard-runner.js): `claude mcp login`
 // EXIGE un TTY (stdin no-terminal aborta) → node-pty. Estado en archivos
-// (~/.cwc-data/mcp-login/<id>.json) → sobrevive a un reinicio del server: si el
+// (<scope.dataDir>/mcp-login/<id>.json) → sobrevive a un reinicio del server: si el
 // pty muere, el job queda 'error'/stale y el usuario reintenta (Regla 2).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { config } from '../../core/config.js';
+import { readUserOauthToken, userRunnerEnv } from '../../core/user-space.js';
 
-const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const RUNNER = path.join(CONSOLE_ROOT, 'bin', 'cwc-mcp-login-runner.js');
-const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'mcp-login');
+function consoleRootFor() {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+}
+
+function runnerFor() {
+  return path.join(consoleRootFor(), 'bin', 'cwc-mcp-login-runner.js');
+}
+
+function jobsDirFor(scope) {
+  return path.join(scope.dataDir, 'mcp-login');
+}
+
+export function commandEnvFor(scope) {
+  if (!scope || scope.isHost) return process.env;
+  const env = userRunnerEnv(scope.user, { oauthToken: readUserOauthToken(scope.user) });
+  if (env.HOME !== scope.home) throw new Error('HOME del usuario no coincide con systemScope');
+  return env;
+}
 
 // --- Parseo del estado que imprime `claude mcp list` (FUENTE ÚNICA: la usan
 // tanto el censo del módulo `mcps` como el runner de login, que la necesita
@@ -51,9 +65,9 @@ export function parseList(stdout) {
   return { servers, hasWarnings };
 }
 
-export function runMcpList(cwd) {
+export function runMcpList(cwd, scope = null) {
   return new Promise((resolve) => {
-    execFile('claude', ['mcp', 'list'], { cwd, timeout: 30000, env: process.env, maxBuffer: 4 * 1024 * 1024 },
+    execFile('claude', ['mcp', 'list'], { cwd, timeout: 30000, env: commandEnvFor(scope), maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
         // `claude mcp list` sale 0 aun con diagnostics; el health-check tarda por
         // los HTTP. Si falla del todo, devolvemos vacío + el error para la UI.
@@ -67,13 +81,13 @@ export function runMcpList(cwd) {
 // A diferencia de `claude mcp list` (que chequea TODOS los servers del mundo en
 // un comando y por eso un server colgado bloquea el mundo entero), esto acota
 // el daño a la tarjeta de ese server — es la base de la resiliencia por item.
-export function runMcpGet(cwd, name, timeoutMs = 15000) {
+export function runMcpGet(scope, cwd, name, timeoutMs = 15000) {
   return new Promise((resolve) => {
     if (!/^[A-Za-z0-9_-]+$/.test(String(name || ''))) {
       resolve({ status: { code: 'error', light: 'danger', label: 'nombre inválido' }, statusRaw: '', error: 'nombre inválido' });
       return;
     }
-    execFile('claude', ['mcp', 'get', name], { cwd, timeout: timeoutMs, env: process.env, maxBuffer: 1024 * 1024 },
+    execFile('claude', ['mcp', 'get', name], { cwd, timeout: timeoutMs, env: commandEnvFor(scope), maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
         const out = `${stdout || ''}\n${stderr || ''}`;
         const statusRaw = (out.match(/^\s*Status:\s*(.+)$/m)?.[1] || '').trim();
@@ -98,19 +112,27 @@ export const WORLDS = [
   { world: 'tolkien', label: '🌳 Tolkien' },
 ];
 
-export function worldCwd(world) {
-  if (world === 'console') return CONSOLE_ROOT;
-  if (world === 'tolkien') return config.projectDir || null;
+export function worldCwd(scope, world) {
+  if (world === 'console') {
+    return scope.isHost ? consoleRootFor() : path.join(scope.workspace, 'mi-espacio');
+  }
+  if (world === 'tolkien') return path.join(scope.workspace, 'tolkien');
   return null;
 }
 
 const idOk = (id) => /^[A-Za-z0-9_-]+$/.test(String(id || ''));
-const jobFile = (id) => path.join(JOBS_DIR, `${id}.json`);
-const codeFile = (id) => path.join(JOBS_DIR, `${id}.url`);
 
-export function readLoginJob(id) {
+function jobFileFor(scope, id) {
+  return path.join(jobsDirFor(scope), `${id}.json`);
+}
+
+function codeFileFor(scope, id) {
+  return path.join(jobsDirFor(scope), `${id}.url`);
+}
+
+export function readLoginJob(scope, id) {
   if (!idOk(id)) return null;
-  try { return JSON.parse(fs.readFileSync(jobFile(id), 'utf8')); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(jobFileFor(scope, id), 'utf8')); } catch { return null; }
 }
 
 // El usuario pega la URL de redirect completa (localhost:.../callback?code=…)
@@ -121,33 +143,33 @@ function badRequest(message) {
   return e;
 }
 
-export function writeLoginCode(id, value) {
+export function writeLoginCode(scope, id, value) {
   if (!idOk(id)) throw badRequest('id inválido');
   const v = String(value || '').trim();
   if (!v || v.length > 4000 || /[\r\n]/.test(v)) throw badRequest('valor inválido');
-  fs.mkdirSync(JOBS_DIR, { recursive: true });
-  fs.writeFileSync(codeFile(id), v, { mode: 0o600 });
+  fs.mkdirSync(jobsDirFor(scope), { recursive: true });
+  fs.writeFileSync(codeFileFor(scope, id), v, { mode: 0o600 });
 }
 
 const TERMINAL = new Set(['done', 'error']);
 
-export function spawnLogin(world, name) {
-  const cwd = worldCwd(world);
+export function spawnLogin(scope, world, name) {
+  const cwd = worldCwd(scope, world);
   if (!cwd) throw new Error('mundo desconocido');
   if (!/^[A-Za-z0-9_-]+$/.test(String(name || ''))) throw new Error('nombre inválido');
   const id = `${world}-${name}`;
-  fs.mkdirSync(JOBS_DIR, { recursive: true });
+  fs.mkdirSync(jobsDirFor(scope), { recursive: true });
   // Dedup: un job fresco no-terminal se reusa (no relanzamos otro pty).
-  const existing = readLoginJob(id);
+  const existing = readLoginJob(scope, id);
   if (existing && !TERMINAL.has(existing.status) && Date.now() - (existing.ts || 0) < 10 * 60 * 1000) return id;
-  try { fs.unlinkSync(codeFile(id)); } catch { /* noop */ }
-  fs.writeFileSync(jobFile(id), JSON.stringify({ id, world, name, status: 'starting', ts: Date.now() }), { mode: 0o600 });
-  const child = spawn('node', [RUNNER, '--cwd', cwd, '--name', name, '--id', id], {
-    detached: true, stdio: 'ignore', env: process.env,
+  try { fs.unlinkSync(codeFileFor(scope, id)); } catch { /* noop */ }
+  fs.writeFileSync(jobFileFor(scope, id), JSON.stringify({ id, world, name, status: 'starting', ts: Date.now() }), { mode: 0o600 });
+  const child = spawn('node', [runnerFor(), '--cwd', cwd, '--name', name, '--id', id], {
+    detached: true, stdio: 'ignore', env: commandEnvFor(scope),
   });
   child.on('error', (err) => {
     try {
-      fs.writeFileSync(jobFile(id), JSON.stringify({ id, world, name, status: 'error', error: String(err.message || err), ts: Date.now() }), { mode: 0o600 });
+      fs.writeFileSync(jobFileFor(scope, id), JSON.stringify({ id, world, name, status: 'error', error: String(err.message || err), ts: Date.now() }), { mode: 0o600 });
     } catch { /* best-effort */ }
   });
   child.unref();

@@ -14,6 +14,13 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { resolveModelArg } from '../../core/claude-model.js';
+import {
+  ensureCliOnboarded,
+  ensureUserSpace,
+  hostUser,
+  readUserOauthToken,
+  userRunnerEnv,
+} from '../../core/user-space.js';
 // Títulos humanos custom (titles.json), compartidos con el módulo tmux: se
 // consultan acá para que una sesión rehidratada tras un reinicio de Node
 // recupere el título que tenía antes de reiniciar (ver rehydrate() abajo —
@@ -28,6 +35,30 @@ const PREFIX = 'cwc-'; // prefijo de nombres de sesión tmux de este proyecto
 // (bare). Distinto de PREFIX a propósito: no se listan ni se rehidratan como
 // terminales normales, pero al vivir en tmux SOBREVIVEN un crash del server.
 const BARE_PREFIX = 'cwct-';
+
+// Lookup compartido con el módulo tmux: reconoce únicamente sesiones creadas
+// por la consola en su socket propio. Devuelve null ante cualquier destino
+// externo o sesión que ya no tenga una envoltura viva en sessionManager.
+export function consoleSession(socketName, sessionName) {
+  if (socketName !== config.tmuxSocket) return null;
+  let id = null;
+  if (sessionName.startsWith(BARE_PREFIX)) id = sessionName.slice(BARE_PREFIX.length);
+  else if (sessionName.startsWith(PREFIX)) id = sessionName.slice(PREFIX.length);
+  else return null;
+  return sessionManager.get(id) || null;
+}
+
+// ¿Este principal puede adjuntarse/controlar la tmux <socketName>/<sessionName>?
+// Admin: todo (auditar y rescatar sesiones ajenas es parte de su rol).
+// No-admin (candado ESTRICTO, decisión de Niko 2026-07-27): SOLO sesiones de la
+// consola (socket propio + prefijo conocido) cuyo Session.owner sea él. Otro
+// socket, tmux externa u owner desconocido/null ⇒ false. Fail-closed: nunca se
+// adivina el dueño de una sesión.
+export function canUseTmuxSession(principal, socketName, sessionName) {
+  if (principal.admin) return true;
+  const session = consoleSession(socketName, sessionName);
+  return !!session && session.owner === principal.username;
+}
 
 // Base para args de tmux sobre nuestro socket + config aislados.
 function tmuxArgs(...rest) {
@@ -88,17 +119,68 @@ class Session {
   }
 
   spawn({ runClaude = false, model = null } = {}) {
-    const env = { ...process.env, TERM: 'xterm-256color' };
+    // BUG-2104: espejo del blindaje anticonsumo del chat para inquilinos; el
+    // host conserva exactamente el entorno completo anterior.
+    const isTenant = !!this.owner && this.owner !== hostUser();
+    let env;
+    if (isTenant) {
+      ensureUserSpace(this.owner);
+      // Repara también inquilinos existentes al spawnear; es idempotente y la
+      // segunda vez no escribe.
+      ensureCliOnboarded(this.owner);
+      const oauthToken = readUserOauthToken(this.owner);
+      // FAIL-CLOSED: correr `claude` sin credencial propia caería a la cuenta del
+      // server (blindaje anticonsumo). Un shell pelado NO necesita token.
+      const needsClaude = this.bare || runClaude;
+      if (needsClaude && !oauthToken) {
+        this.alive = false;
+        throw new Error(`El usuario ${this.owner} no tiene credencial propia de Claude: completá el paso de credenciales del onboarding antes de abrir una sesión de Claude.`);
+      }
+      env = { ...userRunnerEnv(this.owner, { oauthToken }), TERM: 'xterm-256color' };
+    } else {
+      env = { ...process.env, TERM: 'xterm-256color' };  // host: retrocompat TOTAL
+    }
     delete env.TMUX;
     delete env.TMUX_PANE;
+    let tmuxEnvArgs = [];
+    if (isTenant) {
+      const tmuxEnv = new Map();
+      try {
+        const globalEnv = execFileSync('tmux', tmuxArgs('show-environment', '-g'), {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        for (const line of globalEnv.split('\n')) {
+          const separator = line.indexOf('=');
+          const key = line.startsWith('-')
+            ? line.slice(1)
+            : separator === -1 ? line : line.slice(0, separator);
+          if (key && (key.startsWith('CWC_') || /(TOKEN|KEY|SECRET|PASSWORD|PASS|CREDENTIAL)/i.test(key))) {
+            tmuxEnv.set(key, '');
+          }
+        }
+      } catch {
+        // Best-effort: si no se puede leer, seguimos con la allowlist existente.
+      }
+      // El server tmux es compartido: su entorno global se filtra a cada pane.
+      // `-e CLAVE=` en este mismo new-session es la única forma de neutralizarlo
+      // al crear el primer pane; la allowlist owner-scoped se aplica después.
+      for (const key of ['HOME', 'CWC_DATA_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'PATH', 'TERM', 'LANG', 'TZ', 'NODE_EXTRA_CA_CERTS']) {
+        if (env[key] !== undefined) tmuxEnv.set(key, env[key]);
+      }
+      tmuxEnvArgs = [...tmuxEnv].flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+    }
 
     if (this.bare) {
       // tmux oculta corriendo el comando DIRECTO (sin shell debajo): cuando
       // `claude` sale, la sesión tmux muere y el pty también (waitForExit).
       // new-session -A: si la tmux sobrevivió a un reinicio del server, se
       // re-adjunta (el comando se ignora) en vez de lanzar otro claude.
+      // También ignora los -e si ya existe: hay que matar y recrear una sesión
+      // creada con el entorno viejo para que tome el aislamiento nuevo.
       const args = tmuxArgs(
         'new-session', '-A',
+        ...tmuxEnvArgs,
         '-s', this.tmuxName,
         '-x', String(this.cols),
         '-y', String(this.rows),
@@ -122,8 +204,11 @@ class Session {
         args = ['-S', this.attachSpec.socket, 'attach-session', '-d', '-t', this.attachSpec.session];
       } else {
         // new-session -A: adjunta si existe, crea si no (idempotente = rehidratación).
+        // Si ya existe, tmux ignora los -e: para actualizar el entorno viejo
+        // hay que matar y recrear esa sesión.
         args = tmuxArgs(
           'new-session', '-A',
+          ...tmuxEnvArgs,
           '-s', this.tmuxName,
           '-x', String(this.cols),
           '-y', String(this.rows),
@@ -355,9 +440,9 @@ class SessionManager {
   // Sesión "bare" (tmux oculta cwct-): la usa el modo TUI del chat para correr
   // `claude --resume <sessionId>`. Acepta `id` explícito para RE-ADJUNTAR una
   // tmux que sobrevivió a un reinicio del server (new-session -A la retoma).
-  createBare({ cwd, command, title, id = null } = {}) {
+  createBare({ cwd, command, title, id = null, owner = null } = {}) {
     const sid = id && !this.sessions.has(id) ? id : this._nextId();
-    const session = new Session({ id: sid, cwd, title, bare: true, command });
+    const session = new Session({ id: sid, cwd, title, bare: true, command, owner });
     try {
       session.spawn();
     } catch (e) {

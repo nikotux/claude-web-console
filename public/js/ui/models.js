@@ -68,6 +68,19 @@ export const CHAT_MODEL_OPTIONS = [
   ['default', 'Default de la cuenta'],
 ];
 
+// Alias que SOLO entiende el chat visual del SDK: 'auto' (AutoTux, gestionado
+// por core/model-router.js) y 'tandem' (modo Tándem, Claude razona + Codex
+// ejecuta). El CLI real de una sesión TUI/terminal no los conoce y el backend
+// los rechaza con 400 (VALID_MODELS de core/claude-model.js).
+export const CHAT_ONLY_MODELS = ['auto', 'tandem'];
+
+// Modelos ofrecibles a una sesión que corre el CLI real (TUI/PTY). FUENTE
+// ÚNICA: el launcher y el submenú "Cambiar modelo" de Sesiones consumen ESTA
+// lista. Cuando cada uno filtraba por su cuenta, el launcher dejó pasar
+// 'tandem' y toda sesión "Claude TUI" con el modelo por defecto moría en un
+// 400 "Modelo inválido." (console:PLAN-2115).
+export const TUI_MODEL_OPTIONS = CHAT_MODEL_OPTIONS.filter(([v]) => !CHAT_ONLY_MODELS.includes(v));
+
 // Los 4 niveles que AutoTux gestiona de verdad (haiku→sonnet→opus→fable,
 // core/model-router.js MODEL_LEVELS). Fuera de esta lista (opusplan/default)
 // el router no tiene margen para moverse aunque modelChoice sea 'auto'.

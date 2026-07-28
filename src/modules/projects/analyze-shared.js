@@ -13,9 +13,11 @@
 // archivo. El endpoint GET (y el front, por polling) solo leen el job — igual
 // patrón que health/shared.js (readReview/writeReview + runner desacoplado).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -23,8 +25,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'projects-analyze');
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'projects-analyze.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-projects-analyze-runner.js');
 
 export const ANALYZE_TIMEOUT_MS = 60 * 1000;
@@ -33,12 +33,20 @@ export const ANALYZE_TIMEOUT_MS = 60 * 1000;
 // siga diciendo 'running' — nadie más va a actualizarlo.
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+export function analyzeDirFor(owner) {
+  return path.join(userDataDir(owner), 'projects-analyze');
 }
 
-function jobPath(id) {
-  return path.join(DATA_DIR, `${id}.json`);
+export function analyzeLogFor(owner) {
+  return path.join(userDataDir(owner), 'projects-analyze.log');
+}
+
+function ensureDir(owner) {
+  fs.mkdirSync(analyzeDirFor(owner), { recursive: true, mode: 0o700 });
+}
+
+function jobPath(id, owner) {
+  return path.join(analyzeDirFor(owner), `${id}.json`);
 }
 
 // Identidad DETERMINÍSTICA del job: mismo (proyecto, sección, hash de lo
@@ -46,12 +54,13 @@ function jobPath(id) {
 // del POST antes de que termine el primero apunta al MISMO job en vez de
 // spawnear un runner duplicado (lock implícito por identidad, sin archivo
 // .lock aparte — no hay carrera real porque nada relee/pisa el job de otro).
-export function analyzeJobId(key, i, hash, after) {
+export function analyzeJobId(key, i, hash, after, owner) {
+  analyzeDirFor(owner); // valida que el dueño sea explícito y esté saneado
   return crypto.createHash('sha1').update(`${key}|${i}|${hash}|${after}`).digest('hex').slice(0, 24);
 }
 
-export function readAnalyzeJob(id) {
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); }
+export function readAnalyzeJob(id, owner) {
+  try { return JSON.parse(fs.readFileSync(jobPath(id, owner), 'utf8')); }
   catch { return null; }
 }
 
@@ -60,35 +69,38 @@ export function readAnalyzeJob(id) {
 // Se poda lo más viejo que un día en cada escritura — no amerita un cron
 // aparte para algo tan liviano.
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-function pruneOldJobs() {
+function pruneOldJobs(owner) {
+  const dataDir = analyzeDirFor(owner);
   let files = [];
-  try { files = fs.readdirSync(DATA_DIR); } catch { return; }
+  try { files = fs.readdirSync(dataDir); } catch { return; }
   const now = Date.now();
   for (const f of files) {
     if (!f.endsWith('.json')) continue;
-    const full = path.join(DATA_DIR, f);
+    const full = path.join(dataDir, f);
     try {
       if (now - fs.statSync(full).mtimeMs > MAX_AGE_MS) fs.unlinkSync(full);
     } catch { /* noop */ }
   }
 }
 
-export function writeAnalyzeJob(id, data) {
-  ensureDir();
-  writeJsonAtomic(jobPath(id), data); // atómico tmp-por-PID (BUG-12)
-  pruneOldJobs();
+export function writeAnalyzeJob(id, data, owner) {
+  ensureDir(owner);
+  writeJsonAtomic(jobPath(id, owner), data); // atómico tmp-por-PID (BUG-12)
+  pruneOldJobs(owner);
 }
 
 // ¿Sigue 'corriendo' de verdad? (no superó el corte por staleness).
-export function isFreshRunning(job) {
+export function isFreshRunning(job, owner) {
+  analyzeDirFor(owner); // el contrato del job siempre incluye dueño explícito
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= ANALYZE_STALE_MS;
 }
 
 // Estado EFECTIVO para servir al front (GET y respuesta inmediata del POST
 // cuando el job ya existía): si quedó 'running' más allá del corte, se
 // reporta como error sin depender de que alguien más lo actualice.
-export function jobResult(job) {
-  if (job.status === 'running' && !isFreshRunning(job)) {
+export function jobResult(job, owner) {
+  analyzeDirFor(owner); // fail-closed también para resultados ya terminales
+  if (job.status === 'running' && !isFreshRunning(job, owner)) {
     return { status: 'error', analysis: null, error: 'El análisis no respondió a tiempo (el runner se interrumpió). Reintentá.' };
   }
   return { status: job.status, analysis: job.analysis || null, error: job.error || null };
@@ -96,15 +108,34 @@ export function jobResult(job) {
 
 // Lanza el runner DETACHED (unref): no depende del ciclo de vida del proceso
 // Express — un reinicio de la web a mitad de la corrida NO lo mata.
-export function spawnAnalyzeRunner(id) {
-  ensureDir();
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
+export function spawnAnalyzeRunner(id, owner) {
+  const dataDir = analyzeDirFor(owner);
+  const logFile = analyzeLogFor(owner);
+  let env;
+  if (owner === hostUser()) {
+    env = process.env; // host: retrocompat exacta
+  } else {
+    const oauthToken = readUserOauthToken(owner);
+    if (!oauthToken) {
+      const error = new Error('Necesitás conectar tu cuenta de Claude para usar el análisis.');
+      error.conflict = true;
+      throw error;
+    }
+    env = userRunnerEnv(owner, { oauthToken });
+  }
+
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  const logFd = fs.openSync(logFile, 'a');
+  let child;
+  try {
+    child = spawn(process.execPath, [RUNNER, id, owner], {
+      detached: true, stdio: ['ignore', logFd, logFd], env,
+    });
+  } finally {
+    fs.closeSync(logFd);
+  }
   child.unref();
-  fs.closeSync(logFd);
 }
 
 export function analyzePrompt(before, after) {

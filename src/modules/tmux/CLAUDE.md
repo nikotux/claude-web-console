@@ -34,6 +34,7 @@ Escribe indirectamente `titles.json` en la raíz del repo mediante `core/session
 ## Lo que más duele
 
 - El guard de un no-admin es fail-closed: exige el socket `config.tmuxSocket`, prefijo conocido y una sesión viva en `sessionManager` con owner coincidente. Sesiones ajenas o sin dueño conocido responden como inexistentes (`404`) para no revelar su existencia.
+- `ownsSession` es solo un wrapper de `canUseTmuxSession`, cuya implementación y lookup por prefijo viven en `terminal/sessions.js` como fuente única compartida con la rama `attach`; este movimiento no cambió el comportamiento estricto de `tmux`.
 - El `owner` del censo sale del mismo lookup de `sessionManager` que usa el guard `ownsSession`; vale `null` cuando la sesión no se reconoce. La barra de Sesiones lo usa para agrupar las sesiones ajenas en una sección aparte.
 - `GET /sessions` primero construye el universo completo para podar correctamente y recién después filtra la respuesta. Filtrar antes haría que una consulta de un inquilino borre títulos válidos de otros usuarios.
 - No se poda nada si falla la enumeración de sockets; si falla solo `list-sessions` de un socket, se preservan las claves de ese socket. Un fallo transitorio de tmux no equivale a “sesión muerta”.

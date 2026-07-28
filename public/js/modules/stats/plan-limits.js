@@ -10,14 +10,14 @@
 // dispara ninguna corrida del SDK. Poll 5 s SIN `fresh` → el caché de 60 s del
 // server hace que solo ~1 de cada 12 lecturas golpee a Anthropic; el resto es
 // instantáneo. Pausa con la pestaña en segundo plano (patrón de stats.js).
-import { fetchLimits, renderLimits } from '../usage/usage.js';
+import { fetchLimits, openClaudeConnectModal, renderLimits } from '../usage/usage.js';
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { t } from '../../ui/i18n.js';
 
 const POLL_MS = 5000;
 
 function canRender(data) {
-  return !data?.unavailable || !!(data.codex && Array.isArray(data.codex.limits));
+  return !data?.unavailable || !!data.localUsage || !!(data.codex && Array.isArray(data.codex.limits));
 }
 
 export default {
@@ -25,42 +25,70 @@ export default {
 
   async mount(el, ctx) {
     el.hidden = true;
+    const { dialog } = ctx;
 
     // classList.add (no className=): el wrapper puede traer clases de layout
     // (p.ej. only-expanded) que NO hay que pisar.
     el.classList.add('plan-lims');
     let firstOk = false;
+    let requestVersion = 0;
+    let freshInFlight = false;
+    let freshPromise = null;
+
+    function paint(data) {
+      if (!canRender(data)) {
+        el.hidden = true;
+        el.innerHTML = '';
+        firstOk = true;
+        return;
+      }
+      el.hidden = false;
+      renderLimits(el, data, {
+        credits: false,
+        compact: true,
+        onConnect: () => openClaudeConnectModal(dialog, refreshFresh),
+      });
+      firstOk = true;
+    }
+
+    function refreshFresh() {
+      if (freshPromise) return freshPromise;
+      freshInFlight = true;
+      const version = ++requestVersion;
+      freshPromise = fetchLimits(true)
+        .then((data) => {
+          if (version === requestVersion) {
+            writeCache('plan-limits', data);
+            paint(data);
+          }
+        })
+        .finally(() => {
+          freshInFlight = false;
+          freshPromise = null;
+        });
+      return freshPromise;
+    }
+
     // Cache-then-network: pinta las últimas barras conocidas al instante.
     const cachedLim = readCache('plan-limits');
     if (cachedLim) {
       try {
-        if (canRender(cachedLim.data)) {
-          el.hidden = false;
-          renderLimits(el, cachedLim.data, { credits: false, compact: true });
-        } else {
-          el.innerHTML = '';
-        }
-        firstOk = true;
+        paint(cachedLim.data);
       } catch { /* noop */ }
     }
     async function tick() {
-      if (document.hidden) return;
+      if (document.hidden || freshInFlight) return;
+      const version = ++requestVersion;
       try {
         const data = await fetchLimits(); // sin fresh: reusa el caché de 60 s
-        writeCache('plan-limits', data);
-        if (!canRender(data)) {
-          el.hidden = true;
-          el.innerHTML = '';
-          firstOk = true;
-          return;
+        if (version === requestVersion) {
+          writeCache('plan-limits', data);
+          paint(data);
         }
-        el.hidden = false;
-        renderLimits(el, data, { credits: false, compact: true });
-        firstOk = true;
       } catch {
         // Sin datos aún (token vencido / sin red): mostramos una nota discreta
         // solo si nunca llegó a pintar; si ya había datos, dejamos los viejos.
-        if (!firstOk) {
+        if (version === requestVersion && !firstOk) {
           el.hidden = false;
           el.innerHTML = `<div class="lim-head">${t('stats.limits.title', 'Límites del plan')}</div><div class="lim-err">${t('stats.limits.noData', 'sin datos')}</div>`;
         }
