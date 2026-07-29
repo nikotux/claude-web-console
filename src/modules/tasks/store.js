@@ -7,9 +7,9 @@
 // LOCAL self-hosted (workspace `console`), vía src/core/pad-service-client.js.
 // TODAS las funciones son ahora ASYNC (antes eran síncronas) — mismos NOMBRES y
 // mismas firmas de argumentos que antes, así que el único caller (index.js) solo
-// necesitó sumar `await`. El LOG DE ACTIVIDAD (`listActivity`/appendActivity) NO
-// se tocó a propósito (decisión de alcance del plan de migración): sigue 100%
-// local en ~/.cwc-data/tasks-activity.json, síncrono, atómico.
+// necesitó sumar `await`. El LOG DE ACTIVIDAD (`listActivity`/appendActivity)
+// sigue local, síncrono y atómico, pero vive en el dataDir del dueño que
+// `index.js` resuelve por operación.
 //
 // GOTCHAS CRÍTICOS descubiertos con pruebas reales contra el server (ver también
 // los comentarios en pad-service-client.js, fuente de verdad de estos matices):
@@ -48,7 +48,6 @@
 // Modelo de un evento de actividad (SIN CAMBIOS, sigue 100% local):
 //   { id, ts, kind, entity, refId, title, detail }
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { runAdaptivePool } from '../../core/pool.js';
@@ -57,9 +56,6 @@ import {
   listComments, addComment as padAddComment, deleteComment as padDeleteComment,
   listLinks, addLink, deleteLink, setParent,
 } from '../../core/pad-service-client.js';
-
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const ACT_FILE = path.join(DATA_DIR, 'tasks-activity.json');
 
 const TASKS_COLLECTION = 'pendientes';
 const PLANS_COLLECTION = 'planes';
@@ -70,8 +66,12 @@ export const TYPES = ['task', 'idea', 'nota', 'feature'];
 export const PLAN_STATUSES = ['active', 'done', 'cancelled', 'proposed'];
 const MAX_ACTIVITY = 300; // poda del log (uso personal, volumen chico)
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+function activityFile(dataDir) {
+  return path.join(dataDir, 'tasks-activity.json');
+}
+
+function ensureDir(dataDir) {
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 }
 
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
@@ -238,26 +238,26 @@ async function tasksForProgress(ctx = null) {
 }
 
 // ===== LOG DE ACTIVIDAD (SIN CAMBIOS: append-only local, con poda) =====
-function loadActivity() {
+function loadActivity(dataDir) {
   try {
-    const raw = JSON.parse(fs.readFileSync(ACT_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(activityFile(dataDir), 'utf8'));
     return Array.isArray(raw.events) ? raw.events : [];
   } catch { return []; }
 }
-function saveActivity(events) {
-  ensureDir();
-  writeJsonAtomic(ACT_FILE, { events }); // atómico tmp-por-PID (fix B4 2026-07-11)
+function saveActivity(dataDir, events) {
+  ensureDir(dataDir);
+  writeJsonAtomic(activityFile(dataDir), { events }); // atómico tmp-por-PID (fix B4 2026-07-11)
 }
 let actCounter = 0;
-function appendActivity(ev) {
-  const events = loadActivity();
+function appendActivity(dataDir, ev) {
+  const events = loadActivity(dataDir);
   actCounter += 1;
   events.push({ id: `A${Date.now()}-${actCounter}`, ts: Date.now(), ...ev });
-  saveActivity(events.slice(-MAX_ACTIVITY)); // conservar los más recientes
+  saveActivity(dataDir, events.slice(-MAX_ACTIVITY)); // conservar los más recientes
 }
 // Los N eventos más recientes primero (para el panel "Actividad reciente").
-export function listActivity(limit = 40) {
-  return loadActivity().slice(-limit).reverse();
+export function listActivity(dataDir, limit = 40) {
+  return loadActivity(dataDir).slice(-limit).reverse();
 }
 
 // ===== PLANES (progreso derivado de sus tareas) =====
@@ -280,7 +280,7 @@ export async function listPlans(ctx = null) {
     (rank[a.status] - rank[b.status]) || ((b.createdAt || 0) - (a.createdAt || 0)));
 }
 
-export async function createPlan(input = {}, ctx = null) {
+export async function createPlan(dataDir, input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Plan sin título';
   const fields = {
     status: normPlanStatus(input.status),
@@ -296,13 +296,13 @@ export async function createPlan(input = {}, ctx = null) {
   const blocks = [];
   for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks', { ctx }); if (lr.ok) blocks.push(target); }
 
-  appendActivity({ kind: 'created', entity: 'plan', refId: ref, title });
+  appendActivity(dataDir, { kind: 'created', entity: 'plan', refId: ref, title });
   const fresh = await getItem(ref, { ctx });
   const plan = planFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
   return plansWithProgress([plan], await tasksForProgress(ctx))[0];
 }
 
-export async function updatePlan(id, patch = {}, ctx = null) {
+export async function updatePlan(dataDir, id, patch = {}, ctx = null) {
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updatePlan', 'Plan', cur);
   const f = parseFields(cur.data);
@@ -328,12 +328,12 @@ export async function updatePlan(id, patch = {}, ctx = null) {
 
   const fresh = await getItem(id, { ctx });
   const blocks = await blocksOf(id, null, ctx);
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'plan', refId: id, title: fresh.data?.title, detail: statusChanged || null });
+  appendActivity(dataDir, { kind: statusChanged ? 'status' : 'updated', entity: 'plan', refId: id, title: fresh.data?.title, detail: statusChanged || null });
   const plan = planFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
   return plansWithProgress([plan], await tasksForProgress(ctx))[0];
 }
 
-export async function deletePlan(id, ctx = null) {
+export async function deletePlan(dataDir, id, ctx = null) {
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deletePlan', 'Plan', cur);
   const blocks = await blocksOf(id, null, ctx);
@@ -343,7 +343,7 @@ export async function deletePlan(id, ctx = null) {
   // padre fue archivado — no hace falta cascada manual).
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deletePlan', r);
-  appendActivity({ kind: 'deleted', entity: 'plan', refId: id, title: removed.title });
+  appendActivity(dataDir, { kind: 'deleted', entity: 'plan', refId: id, title: removed.title });
   return removed;
 }
 
@@ -391,7 +391,7 @@ export async function listTasks(ctx = null) {
   return { tasks: sorted, counts, plans: plansWithProgress(plans, tasks) };
 }
 
-export async function createTask(input = {}, ctx = null) {
+export async function createTask(dataDir, input = {}, ctx = null) {
   const status = normStatus(input.status);
   const title = clampStr(input.title, 200).trim() || 'Sin título';
   const fields = {
@@ -421,12 +421,12 @@ export async function createTask(input = {}, ctx = null) {
   const blocks = [];
   for (const target of blockIds) { const lr = await addLink(ref, target, 'blocks', { ctx }); if (lr.ok) blocks.push(target); }
 
-  appendActivity({ kind: 'created', entity: 'task', refId: ref, title });
+  appendActivity(dataDir, { kind: 'created', entity: 'task', refId: ref, title });
   const fresh = await getItem(ref, { ctx });
   return taskFromPadItem(fresh.ok ? fresh.data : r.data, blocks);
 }
 
-export async function updateTask(id, patch = {}, ctx = null) {
+export async function updateTask(dataDir, id, patch = {}, ctx = null) {
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateTask', 'Tarea', cur);
   const f = parseFields(cur.data);
@@ -468,19 +468,19 @@ export async function updateTask(id, patch = {}, ctx = null) {
 
   const fresh = await getItem(id, { ctx });
   const blocks = await blocksOf(id, null, ctx);
-  if (statusChanged) appendActivity({ kind: statusChanged === 'hecha' ? 'completed' : 'status', entity: 'task', refId: id, title: fresh.data?.title, detail: statusChanged });
-  else appendActivity({ kind: 'updated', entity: 'task', refId: id, title: fresh.data?.title });
+  if (statusChanged) appendActivity(dataDir, { kind: statusChanged === 'hecha' ? 'completed' : 'status', entity: 'task', refId: id, title: fresh.data?.title, detail: statusChanged });
+  else appendActivity(dataDir, { kind: 'updated', entity: 'task', refId: id, title: fresh.data?.title });
   return taskFromPadItem(fresh.ok ? fresh.data : cur.data, blocks);
 }
 
-export async function deleteTask(id, ctx = null) {
+export async function deleteTask(dataDir, id, ctx = null) {
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteTask', 'Tarea', cur);
   const blocks = await blocksOf(id, null, ctx);
   const removed = taskFromPadItem(cur.data, blocks);
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteTask', r);
-  appendActivity({ kind: 'deleted', entity: 'task', refId: id, title: removed.title });
+  appendActivity(dataDir, { kind: 'deleted', entity: 'task', refId: id, title: removed.title });
   return removed;
 }
 
@@ -488,14 +488,14 @@ export async function deleteTask(id, ctx = null) {
 // kind = 'task' | 'plan' — solo se usa para el LOG DE ACTIVIDAD local (Pad
 // direcciona el ítem por su ref, que ya es único cruzando ambas colecciones).
 // Agregar un comentario también deja un evento en el log.
-export async function addComment(kind, id, text, ctx = null) {
+export async function addComment(dataDir, kind, id, text, ctx = null) {
   const clean = clampStr(text, 4000).trim();
   if (!clean) { const e = new Error('El comentario está vacío.'); e.bad = true; throw e; }
   const r = await padAddComment(id, clean, { ctx });
   if (!r.ok) throw notFoundOr500('addComment', 'Ítem', r);
   const c = { id: r.data.id, ts: tsMs(r.data.created_at), text: r.data.body };
   const titleR = await getItem(id, { ctx });
-  appendActivity({ kind: 'comment', entity: kind, refId: id, title: titleR.ok ? titleR.data.title : id, detail: clean.slice(0, 80) });
+  appendActivity(dataDir, { kind: 'comment', entity: kind, refId: id, title: titleR.ok ? titleR.data.title : id, detail: clean.slice(0, 80) });
   return c;
 }
 export async function deleteComment(kind, id, cid, ctx = null) {
@@ -507,11 +507,11 @@ export async function deleteComment(kind, id, cid, ctx = null) {
 // referencian (excluye 'comment', que ya viene de Pad), desc. Best-effort: si
 // Pad no responde los comentarios, igual devuelve los eventos del log local
 // (nunca cuelga ni tira una excepción sin control).
-export async function timelineFor(kind, id, ctx = null) {
+export async function timelineFor(dataDir, kind, id, ctx = null) {
   const events = [];
   const cr = await listComments(id, { ctx });
   if (cr.ok) for (const c of cr.data) events.push({ type: 'comment', ts: tsMs(c.created_at), cid: c.id, text: c.body });
-  for (const ev of loadActivity()) {
+  for (const ev of loadActivity(dataDir)) {
     if (ev.refId === id && ev.kind !== 'comment') events.push({ type: 'event', ts: ev.ts, kind: ev.kind, detail: ev.detail || null });
   }
   events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -521,10 +521,10 @@ export async function timelineFor(kind, id, ctx = null) {
 // Alta EN LOTE desde una propuesta del módulo audio (el usuario ya aprobó cada
 // una en la UI). Devuelve las tareas creadas. Secuencial (no paralelo): mantiene
 // el orden de creación en el log de actividad, igual que antes.
-export async function createFromAudio(jobId, items = [], ctx = null) {
+export async function createFromAudio(dataDir, jobId, items = [], ctx = null) {
   const created = [];
   for (const it of Array.isArray(items) ? items.slice(0, 50) : []) {
-    created.push(await createTask({ ...it, source: 'audio', sourceRef: jobId }, ctx));
+    created.push(await createTask(dataDir, { ...it, source: 'audio', sourceRef: jobId }, ctx));
   }
   return created;
 }

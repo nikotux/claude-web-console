@@ -291,12 +291,13 @@ export function aiEnginesCensus() {
 // determinístico (0 tokens), parsea los imports/require RELATIVOS entre los
 // archivos de src/ y bin/ para saber QUIÉN USA A QUIÉN, detecta el consumo de
 // los servicios transversales canónicos (comms, bus/interfono, inventory,
-// tokens, paths, sdk-settings) y marca señales crudas (llamadas a `gh`, motores
-// del SDK, runners y si respetan la regla de oro). Es la FOTO que interpreta el
-// runner de Coherencia (bin/cwc-coherence-runner.js): el censo dice "qué se
-// usa"; el análisis IA propone "qué debería usarse". A diferencia de la
-// Revisión de Salud (audita NODOS: cada módulo por dentro), esto mira las
-// ARISTAS (cómo se relacionan los módulos entre sí).
+// tokens, paths, sdk-settings, user-space, data-dir, system-scope, pad-context)
+// y marca señales crudas (llamadas a `gh`, persistencia, motores del SDK,
+// runners y si respetan la regla de oro). Es la FOTO que interpreta el runner
+// de Coherencia (bin/cwc-coherence-runner.js): el censo dice "qué se usa"; el
+// análisis IA propone "qué debería usarse". A diferencia de la Revisión de
+// Salud (audita NODOS: cada módulo por dentro), esto mira las ARISTAS (cómo se
+// relacionan los módulos entre sí).
 const CANON_SERVICES = [
   { key: 'comms', label: 'Comunicaciones (contexto de contactos/Chris)', match: (f) => f.startsWith('src/modules/comms/') },
   { key: 'bus', label: 'Interfono / bus entre sesiones', match: (f) => f === 'src/core/bus.js' },
@@ -304,7 +305,47 @@ const CANON_SERVICES = [
   { key: 'tokens', label: 'Uso de tokens (buildSummary)', match: (f) => f === 'src/modules/tokens/index.js' },
   { key: 'paths', label: 'Validación de rutas (resolveWithinHome/clampToHome)', match: (f) => f === 'src/core/paths.js' },
   { key: 'sdk-settings', label: 'settingSources (fuente única headless/chat)', match: (f) => f === 'src/core/sdk-settings.js' },
+  { key: 'user-space', label: 'Espacio por usuario (userDataDir/userClaudeDir/userRunnerEnv)', match: (f) => f === 'src/core/user-space.js' },
+  { key: 'data-dir', label: 'Directorio de datos del dueño (resolveDataDir)', match: (f) => f === 'src/core/data-dir.js' },
+  { key: 'system-scope', label: 'Superficie de Sistema por usuario (systemScopeFor)', match: (f) => f === 'src/core/system-scope.js' },
+  { key: 'pad-context', label: 'Pad per-usuario (token y workspace del dueño)', match: (f) => f === 'src/core/pad-context.js' },
 ];
+
+// Señal de persistencia propia: acceso síncrono a una ruta con nombre de
+// estado/datos, o mención explícita de `.cwc-data`. Es deliberadamente un LEAD:
+// no decide si el dato es user-scoped; la regla de Coherencia cruza esta señal
+// con el consumo de los cuatro transversales multi-tenant.
+const USER_STATE_PERSISTENCE = {
+  detects: (t) => /\.cwc-data/.test(t)
+    || /\b(?:writeFileSync|readFileSync|appendFileSync)\s*\(\s*(?:path\.join\s*\([^)]*(?:data|state|store|cache|history|job|log)|[A-Z_]*(?:DATA|STATE|STORE|CACHE|HISTORY|JOB|LOG|FILE)[A-Z_]*)/i.test(t),
+  // EXENCIONES hand-authored: su persistencia es GLOBAL a propósito, no estado
+  // propio de un usuario. Si aparece otro caso global legítimo, se suma acá con
+  // su motivo; no se debilita el detector. Las entradas con `/` eximen un archivo
+  // exacto; las demás, el módulo completo. Hace falta esa granularidad porque un
+  // módulo puede tener a la vez estado global intencional y estado de usuario:
+  // eximirlo entero escondería este último.
+  exclude: [
+    'interfono', // el bus entre sesiones es global; cada mensaje lleva su owner
+    'health', // auditoría/locks/resultados de Salud describen al sistema completo
+    'backup', // snapshots, git y jobs de commit describen al repo de la consola
+    'comms', // fuentes/cachés de canales externos compartidos, no estado de sesión
+    'tolkien', // repo, worktrees y DB plantilla son infraestructura global admin
+    'stats', // telemetría del HOST: statfs(config.home) es el disco del server y USERS_ROOT es la raíz de TODOS los usuarios
+    'updates', // censo de versiones de terceros del SISTEMA (node, npm, CLIs): no hay estado de usuario
+    'files', // ya resuelve por dueño: los handlers pasan root = userFileRoot(principalOf(req)); config.home es solo el DEFAULT de retrocompat de statSafeSync
+    'connections', // registro GLOBAL con owner en el nombre del archivo (codexLoginJobPath(user) => <user>.json), patrón permitido por la sección Multi-tenant de CLAUDE.md
+    'src/modules/seguimientos/index.js', // solo compone la ruta del índice de WhatsApp, recurso GLOBAL de comms (ya eximido); su propio estado —snapshot, historia y lock— sí resuelve por dueño
+    'src/modules/tickets/claims-store.js', // los claims son COMPARTIDOS por diseño: permiten ver que OTRO tomó el ticket; aislarlos por usuario rompería el hard lock documentado
+    'src/modules/tickets/refresher.js', // bugs-v2-snapshot.json es la caché del snapshot de Zoho/GitHub, fuente externa compartida (mismo criterio que comms)
+    'src/modules/tickets/sources.js', // tickets-resolved.json es estado de tickets de Zoho, compartido como el snapshot
+    'src/modules/tickets/pad-client.js', // lee el Pad CLOUD de Tolkien, que es de Chris y READ-ONLY global (Regla 12)
+    'src/modules/chat/codex-shared.js', // corre DENTRO del runner, donde os.homedir() ya resuelve al HOME aislado del dueño (documentado en el propio archivo)
+    'src/modules/chat/aduana.js', // suelo NEUTRAL entre PERSONAS (Regla dura 16): una sala no pertenece a ningún mundo ni a un dueño, y el host la aloja como infraestructura compartida — decisión de Niko 2026-07-29 (console:PLAN-2274), evaluada contra la alternativa de alojarla en el espacio del anfitrión
+  ],
+};
+
+const userStatePersistenceExempts = (module, file = '') => USER_STATE_PERSISTENCE.exclude
+  .some((entry) => (entry.includes('/') ? entry === file : entry === module));
 
 // Patrones CANÓNICOS del proyecto (3ª dimensión de coherencia: propagación).
 // Cada patrón probado (paralelismo, caché incremental, runner desacoplado…)
@@ -494,6 +535,9 @@ export function coherenceCensus() {
       // Excluye este mismo archivo: su texto contiene el regex `ghRe` como
       // literal y se auto-matchearía (falso positivo del censor).
       callsGh: f !== 'src/core/inventory.js' && ghRe.test(t),
+      persists: USER_STATE_PERSISTENCE.detects(t),
+      // Detecta una ruta anclada al PROCESO (HOME del server) en vez de al dueño.
+      processRooted: /\bos\.homedir\s*\(\s*\)|\bconfig\.home\b/.test(t),
     };
   });
 
@@ -518,11 +562,28 @@ export function coherenceCensus() {
     if (!modUsedBy.has(e.moduleTo)) modUsedBy.set(e.moduleTo, new Set());
     modUsedBy.get(e.moduleTo).add(e.moduleFrom);
   }
-  const modules = [...new Set(nodes.map((n) => n.module))].sort().map((m) => ({
-    module: m,
-    uses: [...(modUses.get(m) || [])].sort(),
-    usedBy: [...(modUsedBy.get(m) || [])].sort(),
-  }));
+  const modules = [...new Set(nodes.map((n) => n.module))].sort().map((m) => {
+    const moduleNodes = nodes.filter((n) => n.module === m);
+    const persistenceFiles = moduleNodes.filter((n) => n.persists).map((n) => n.file);
+    // Solo el server necesita esta alarma: bin/ recibe el HOME del dueño vía
+    // userRunnerEnv y src/core/ define los helpers, por eso ambos quedan fuera.
+    const processRootedFiles = moduleNodes
+      .filter((n) => n.file.startsWith('src/modules/')
+        && n.persists
+        && n.processRooted
+        && !userStatePersistenceExempts(m, n.file))
+      .map((n) => n.file);
+    return {
+      module: m,
+      isBackend: moduleNodes.some((n) => n.file.startsWith('src/modules/')),
+      uses: [...(modUses.get(m) || [])].sort(),
+      usedBy: [...(modUsedBy.get(m) || [])].sort(),
+      persists: persistenceFiles.length > 0,
+      persistenceFiles,
+      processRootedFiles,
+      persistenceExempt: userStatePersistenceExempts(m),
+    };
+  });
 
   // Servicios transversales: quién los consume (por aristas resueltas, excluyendo
   // los archivos del propio servicio).

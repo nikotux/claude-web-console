@@ -17,28 +17,31 @@
 // retroactivo: transcripts de aprendizaje ya generados antes de esto quedan
 // contados en 'consola' (no hay señal para re-separarlos).
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import { userDataDir } from '../../core/user-space.js';
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 // El módulo tokens lee este MISMO archivo por su cuenta (misma convención que
 // chat-session-ids.json, que chat/index.js y tokens/index.js declaran por
 // separado): si cambia el nombre, actualizar LEARNING_IDS_FILE en tokens/index.js.
-export const LEARNING_IDS_FILE = path.join(DATA_DIR, 'learning-session-ids.json');
+export function learningIdsFileFor(owner = null) {
+  return path.join(owner ? userDataDir(owner) : resolveDataDir(), 'learning-session-ids.json');
+}
 
 // Registra un sessionId de aprendizaje (idempotente). Re-lee el archivo antes de
 // escribir para no pisar el id que otro runner concurrente pudo agregar.
-export function registerLearningSession(id) {
+export function registerLearningSession(id, owner = null) {
   try {
     if (!id || typeof id !== 'string') return;
+    const file = learningIdsFileFor(owner);
     const set = new Set();
     try {
-      const arr = JSON.parse(fss.readFileSync(LEARNING_IDS_FILE, 'utf8'));
+      const arr = JSON.parse(fss.readFileSync(file, 'utf8'));
       if (Array.isArray(arr)) for (const x of arr) if (typeof x === 'string' && x) set.add(x);
     } catch { /* primera vez: el archivo todavía no existe */ }
     if (set.has(id)) return;
     set.add(id);
-    writeJsonAtomic(LEARNING_IDS_FILE, [...set]); // atómico por-PID (fix B3 2026-07-11): 3 runners escriben este mismo archivo
+    writeJsonAtomic(file, [...set]); // atómico por-PID (fix B3 2026-07-11): 3 runners escriben este mismo archivo
   } catch { /* best-effort */ }
 }

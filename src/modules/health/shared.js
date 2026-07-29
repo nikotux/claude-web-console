@@ -66,24 +66,33 @@ export const LOCK_FRESH_MS = 20000;             // lock más viejo que esto = ru
 // movido / sección renombrada) devuelve '' y unitPrompt cae a la instrucción
 // vieja de consultar el archivo — nunca se pierde cobertura.
 let _hardRules = null;
+function markdownH2Section(lines, headingPattern) {
+  const start = lines.findIndex((line) => headingPattern.test(line));
+  if (start === -1) return '';
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) { end = i; break; }
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
 export function hardRulesText() {
   if (_hardRules !== null) return _hardRules;
   try {
     const lines = fss.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8').split('\n');
-    const start = lines.findIndex((l) => /^##\s+Reglas duras/.test(l));
-    if (start === -1) { _hardRules = ''; return _hardRules; }
-    let end = lines.length;
-    for (let i = start + 1; i < lines.length; i++) {
-      if (/^##\s/.test(lines[i])) { end = i; break; }
-    }
-    const hardRules = lines.slice(start, end).join('\n').trim();
+    const hardRules = markdownH2Section(lines, /^##\s+Reglas duras/);
+    if (!hardRules) { _hardRules = ''; return _hardRules; }
+    // El recorte terminaba exactamente donde empieza el modelo multiusuario y
+    // dejaba al auditor ciego a la familia de reglas que hoy más importa.
+    const multiTenant = markdownH2Section(lines, /^##\s+Multi-tenant/);
+    const auditRules = multiTenant ? `${hardRules}\n\n${multiTenant}` : hardRules;
     let catalog = '';
     try {
       catalog = fss.readFileSync(path.join(ROOT, 'docs', 'reglas-catalogo.md'), 'utf8').trim();
     } catch {}
     _hardRules = catalog
-      ? `${hardRules}\n\n===== CATÁLOGO DE LAS REGLAS (docs/reglas-catalogo.md) =====\n\n${catalog}`
-      : hardRules;
+      ? `${auditRules}\n\n===== CATÁLOGO DE LAS REGLAS (docs/reglas-catalogo.md) =====\n\n${catalog}`
+      : auditRules;
   } catch { _hardRules = ''; }
   return _hardRules;
 }
@@ -173,6 +182,25 @@ function listJs(absDir, { max = 40 } = {}) {
   return out.slice(0, max);
 }
 
+// Lista hermana de listJs: los CSS entran para que los invariantes de
+// convenciones visuales (guard [hidden], tokens de color) tengan una unidad
+// donde verificarse.
+function listCss(absDir, { max = 40 } = {}) {
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fss.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git') continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.css$/.test(e.name)) out.push(path.relative(ROOT, p));
+    }
+  };
+  walk(absDir);
+  return out.slice(0, max);
+}
+
 // Descubre las UNIDADES a auditar. Cada una: { name, label, files[] }.
 // El orden es el del barrido; el front lo espeja como grilla de estado.
 export function discoverUnits() {
@@ -215,6 +243,7 @@ export function discoverUnits() {
     files: [
       'public/js/main.js',
       ...listJs(path.join(ROOT, 'public', 'js', 'ui')),
+      ...listCss(path.join(ROOT, 'public', 'css')),
     ].filter((f) => fss.existsSync(path.join(ROOT, f))),
   });
   units.push({

@@ -1775,6 +1775,16 @@ html, body {
 .chat-md pre code { background: none; padding: 0; font-size: var(--cwc-fs-sm); }
 .chat-md table { border-collapse: collapse; margin: .4rem 0; font-size: var(--cwc-fs-sm); }
 .chat-md th, .chat-md td { border: 1px solid var(--cwc-border-soft); padding: .25rem .5rem; }
+.md-bar {
+  display: inline-block; vertical-align: middle; width: 60px; height: 6px;
+  border-radius: 3px; background: var(--cwc-bg-chip); overflow: hidden; margin-right: .35rem;
+}
+.md-bar-fill { display: block; height: 100%; background: var(--cwc-accent); border-radius: 3px; }
+.md-bar-num {
+  font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.chat-md td:has(.md-bar) { white-space: nowrap; }
 .md-codewrap { position: relative; margin: .45rem 0; }
 .md-copy {
   position: absolute; top: .35rem; right: .35rem;
@@ -1783,22 +1793,36 @@ html, body {
   padding: .2rem .35rem; cursor: pointer; opacity: .7; display: inline-flex;
 }
 .md-copy:hover { opacity: 1; border-color: var(--cwc-accent); color: var(--cwc-accent); }
-/* Diagramas ```mermaid``` del chat — ver enhanceMermaidBlocks en ui/markdown.js */
+/* Diagramas ```mermaid``` INLINE con encaje proporcional: se leen dentro del
+   mensaje; "Ampliar" sigue como ayuda extra, no como requisito de lectura. */
 .md-mermaid {
-  position: relative;
-  margin: .45rem 0; padding: .6rem .7rem; text-align: center;
-  background: var(--cwc-bg-elevated); border: 1px solid var(--cwc-border);
-  border-radius: var(--cwc-radius-md); color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
+  position: relative; display: flex; flex-direction: column;
+  margin: .6rem 0; padding: .2rem 0;
+  color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
 }
-/* Canvas interno: el diagrama vive acá como PREVIEW acotado (scroll si excede).
-   El holder NO scrollea → el badge "Ampliar" queda pinneado a la esquina. */
-.md-mermaid-canvas { overflow: auto; max-height: 340px; }
-.md-mermaid svg { max-width: 100%; height: auto; }
+/* El holder no scrollea; el canvas solo acota diagramas extremos sin
+   convertir los normales en miniaturas. */
+.md-mermaid-canvas {
+  overflow: auto; overflow-x: auto; overscroll-behavior-x: contain;
+  max-height: 70vh; padding: .2rem 0;
+}
+/* El selector amplio pisaba el ícono del badge; solo escala el SVG del diagrama. */
+.md-mermaid-canvas > svg { display: block; margin: 0 auto; max-width: none; }
+.md-mermaid--pan::after {
+  content: ''; position: absolute; right: 0; bottom: .2rem;
+  width: 28px; height: calc(100% - 2rem); pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--cwc-bg) 85%, transparent)
+  );
+}
+.md-mermaid .cwc-icon { width: auto; height: auto; max-width: none; flex: none; }
 .md-mermaid--zoomable { cursor: zoom-in; }
-.md-mermaid--zoomable:hover { border-color: var(--cwc-accent); }
+.md-mermaid--zoomable:hover { filter: brightness(1.06); }
 /* Badge "🔍 Ampliar" SIEMPRE visible (affordance en móvil, sin hover/cursor) */
 .md-mermaid-zoom-btn {
-  position: absolute; top: .4rem; right: .4rem; z-index: 1;
+  align-self: flex-end; margin-bottom: .25rem; position: static;
   display: inline-flex; align-items: center; gap: .25rem;
   padding: .18rem .45rem; font-size: var(--cwc-fs-xs);
   color: var(--cwc-text-secondary); cursor: zoom-in;
@@ -1808,14 +1832,33 @@ html, body {
 }
 .md-mermaid-zoom-btn:hover { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 .md-mermaid-zoom-btn .cwc-icon { flex: none; }
-@media (max-width: 768px) { .md-mermaid-canvas { max-height: 240px; } }
+@media (max-width: 768px) { .md-mermaid-canvas { max-height: 62vh; } }
 .md-mermaid-zoom-body { text-align: center; }
-.md-mermaid-zoom-body svg { width: 100%; height: auto; max-width: none; }
-.md-mermaid-src { margin: .3rem 0; font-size: var(--cwc-fs-sm); }
-.md-mermaid-src summary { cursor: pointer; color: var(--cwc-text-dim); }
-.md-mermaid-src summary:hover { color: var(--cwc-text-secondary); }
-.md-mermaid-src .md-codewrap { margin-top: .3rem; }
-.md-mermaid-error { color: var(--cwc-warn); font-size: var(--cwc-fs-sm); margin: .3rem 0; }
+.md-mermaid-zoom-body svg { max-width: 100%; max-height: 86vh; width: auto; height: auto; }
+.md-mermaid-src, .md-chart-src { margin: .3rem 0; font-size: var(--cwc-fs-sm); }
+.md-mermaid-src summary, .md-chart-src summary { cursor: pointer; color: var(--cwc-text-dim); }
+.md-mermaid-src summary:hover, .md-chart-src summary:hover { color: var(--cwc-text-secondary); }
+.md-mermaid-src .md-codewrap, .md-chart-src .md-codewrap { margin-top: .3rem; }
+.md-mermaid-error, .md-chart-error {
+  color: var(--cwc-warn); font-size: var(--cwc-fs-sm); margin: .3rem 0;
+}
+
+/* Los gráficos de datos comparten el flujo del texto: sin marco ni superficie
+   propia, solo reservan el alto que Chart.js necesita para dibujar. */
+.md-chart { margin: .7rem 0; }
+.md-chart-title {
+  font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
+  margin-bottom: .3rem; font-weight: 600;
+}
+.md-chart-box { position: relative; width: 100%; height: 260px; }
+.md-chart--round .md-chart-box { height: 220px; }
+.chat-md table.md-chart-data {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+@media (max-width: 768px) {
+  .md-chart-box, .md-chart--round .md-chart-box { height: 200px; }
+}
 .chat-error { color: var(--cwc-danger-strong); font-size: var(--cwc-fs-sm); }
 .chat-closed-note { text-align: center; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); padding: .4rem; }
 .chat-switch-note { text-align: center; color: var(--cwc-accent); font-size: var(--cwc-fs-sm); padding: .4rem; }

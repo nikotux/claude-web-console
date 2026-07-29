@@ -18,14 +18,15 @@ de oro) + TEXTO PURO read-only doble capa (regla 6: sonnet, maxTurns
 herramientas; la transcripción condensada viaja en el prompt). El
 runner, tras destilar, hace el UPSERT determinístico en Pad local
 (NO es tool del modelo — HTTP desde Node, como audio escribe su job).
-`console:PLAN-2186` (2026-07-28): cerrar un chat de un INQUILINO no destilaba NINGUNA lección. `readTranscript(cwd, sessionId)` armaba la ruta
-contra `os.homedir()`, devolvía `null` para un inquilino y `queueRetroDistill` hacía un early-return SILENCIOSO — recibía el `owner`
-(lo usa para el Pad) pero nunca la ruta. Ahora `readTranscript(cwd, sessionId, claudeDir = null)` y
-`queueRetroDistill({ …, claudeDir })`; sin `claudeDir` la ruta es idéntica a la de antes (el HOME del host), así que el host no se entera.
-`retro/shared.js` NO importa `core/user-space.js` a propósito: le arrastraría `core/config.js` y su `CWC_TOKEN` a los runners de `bin/`
-que lo consumen — quien conoce al dueño (`chat/index.js`) pasa `userClaudeDir(owner || hostUser())` ya resuelto. OJO: el barrido de
-sesiones TUI (`sweep-shared.js`) sigue SIN descubrir inquilinos —usa `~/.cwc-users` sólo para EXCLUIRLOS—, así que
-`console:BUG-2151` sigue abierto tal cual; acá sólo se le pasó el `.claude` del host, que es el único que ese barrido conoce.
+AISLAMIENTO MULTI-TENANT (`console:PLAN-2267`, B7; absorbe
+`console:TASK-2122`): el borde HTTP deriva `systemScopeFor(req).user` y toda
+persistencia propia —jobs, logs, locks, actividad, feedback, curaduría y
+verificación— resuelve su ruta POR OPERACIÓN con `userDataDir(owner)`. Un
+runner de inquilino recibe HOME y `CWC_DATA_DIR` aislados mediante
+`userRunnerEnv`; dentro del runner los helpers caen en `resolveDataDir()`. El
+transcript se lee desde `userClaudeDir(owner)` o desde el `claudeDir` ya
+resuelto por el llamador. No quedan constantes de módulo que congelen el HOME
+del server; el host conserva las rutas históricas bajo `~/.cwc-data`.
 STORE = Pad LOCAL (store.js, workspace 'console', colección
 'mejora-continua'/MC, molde de learning/store.js: async, read-modify-
 write). 1 lección = 1 item {status propuesta|aprobada|promovida|
@@ -390,9 +391,11 @@ registro DURABLE que NUNCA se poda. Solo considera transcripts con
 `entrypoint:'cli'`, quietos hace 6 h, de hasta 14 días, procesa como máximo 5
 por corrida y saltea archivos mayores a 8 MB. Marca en el registro durable
 también los descartados por el filtro híbrido, para converger en vez de
-reevaluarlos cada hora. LIMITACIÓN CONOCIDA y deliberada: barre solo el HOME
-del host; los transcripts TUI de inquilinos bajo
-`~/.cwc-users/<id>/.claude/projects/` quedan fuera y se cubren en otro bug.
+reevaluarlos cada hora. `console:BUG-2151` quedó resuelto: el censo incluye el
+`.claude/projects` del host y el de cada inquilino bajo
+`~/.cwc-users/<id>/`; cada candidato lleva su `owner` hasta
+`queueRetroDistill`, el job owner-scoped y `padContextForUser(owner)`. Una TUI
+de inquilino se destila en su workspace `tenant-<id>`, nunca en `console`.
 
 ## 🩸 Pozo COMÚN entre usuarios (`console:PLAN-2222`, F1+F2 hechas 2026-07-28)
 
@@ -402,7 +405,7 @@ Las lecciones dejaron de morir en el cajón de cada usuario. Existe un TERCER wo
 
 **PRIVACIDAD:** `sourceChats` NUNCA cruza al pozo. Se comparte la lección destilada, no el rastro de qué conversación privada la produjo. Un cambio futuro que lo copie "para tener trazabilidad" es una fuga, no una mejora.
 
-**Disparo:** `upsertLesson(input, ctx, sharedCtx)` ganó un tercer parámetro. Publica sola tras crear O actualizar, siempre que el project efectivo sea `tolkien`, haya `sharedCtx`, no haya opt-out y el fingerprint no esté vetado. Es best-effort y aislada en su try/catch: **el pozo jamás puede romper una destilación** — mismo criterio que `linkLessonToSun`. El `sharedBy` se deriva del `ctx.workspace` del dueño (`tenant-(.+)` → ese userId; `console` o sin ctx → `'host'`) y NO de `core/user-space.js`, que le arrastraría `core/config.js` a los cuatro runners de `bin/` con env limpio (convención `console:PLAN-2186`).
+**Disparo:** `upsertLesson(input, ctx, sharedCtx)` ganó un tercer parámetro. Publica sola tras crear O actualizar, siempre que el project efectivo sea `tolkien`, haya `sharedCtx`, no haya opt-out y el fingerprint no esté vetado. Es best-effort y aislada en su try/catch: **el pozo jamás puede romper una destilación** — mismo criterio que `linkLessonToSun`. El `sharedBy` y el directorio privado se derivan del `ctx.workspace` del dueño (`tenant-(.+)` → ese userId; `console` o sin ctx → host), de modo que opt-out, veto, lock y actividad usan el mismo scope que el Pad.
 
 **Válvula de retiro (C4):** `POST /:id/unshare` (auth normal, NO admin — cada uno retira lo suyo) saca la donación propia Y marca el fingerprint en `<dataDir>/retro-unshared.json`, registro DURABLE. Sin esa marca, la próxima destilación lo republicaría en silencio. `GET`/`POST /share-optout` cortan la publicación automática por usuario, en `<dataDir>/retro-share-optout.json`. Los dos resuelven su ruta con `resolveDataDir()` POR OPERACIÓN, nunca con una constante de módulo (invariante «dato user-scoped nunca global»). OJO ORDEN: `/share-optout` es LITERAL y va ANTES de la paramétrica `/:id`.
 

@@ -8,11 +8,11 @@
 // incrementa el contador. Nada se auto-aplica (status arranca 'propuesta').
 // La efectividad combina señal interna con evidencia externa del medidor
 // (verify-shared.js / cwc-retro-verify-runner.js).
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { hostUser, userDataDir } from '../../core/user-space.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem, listLinks, addLink,
 } from '../../core/pad-service-client.js';
@@ -36,7 +36,6 @@ const MC_SUN_BY_CATEGORY = {
   herramienta: 'ARQUI-1316',
 };
 export const MC_ID_RE = /^MC-\d+$/;
-const ACTIVITY_FILE = path.join(os.homedir(), '.cwc-data', 'retro-activity.json');
 const ACTIVITY_MAX = 300;
 
 // 'feedback-cliente' (2026-07-19): retroalimentación puntual de un cliente/
@@ -89,10 +88,10 @@ async function linkLessonToSun(ref, category, ctx) {
 async function shareTolkienLesson(lesson, ctx, sharedCtx) {
   try {
     if (lesson?.project !== 'tolkien' || !sharedCtx) return;
-    if (isShareOptedOut() || isUnsharedFingerprint(lesson.fingerprint)) return;
-    // No importamos core/user-space.js: store.js también corre en bin/ con env
-    // limpio y ese import arrastraría core/config.js (console:PLAN-2186). El
-    // workspace ya contiene la identidad necesaria y `console`/ctx nulo son host.
+    const dataDir = userDataDir(ownerFor(ctx));
+    if (isShareOptedOut(dataDir) || isUnsharedFingerprint(lesson.fingerprint, dataDir)) return;
+    // El workspace Pad conserva la identidad cuando el caller no pasa owner:
+    // `tenant-*` resuelve su userDataDir y `console`/ctx nulo resuelve al host.
     const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
     const sharedBy = tenant ? tenant[1] : 'host';
     const result = await shareLessonToPool(lesson, sharedCtx, {
@@ -110,28 +109,41 @@ async function shareTolkienLesson(lesson, ctx, sharedCtx) {
 // podrían ambas NO encontrar el fingerprint y crear DUPLICADOS). O_EXCL con toma
 // del lock viejo (runner muerto) y BEST-EFFORT: si no lo consigue en el deadline
 // sigue sin lock — nunca bloquea la destilación.
-const UPSERT_LOCK = path.join(os.homedir(), '.cwc-data', 'retro', 'upsert.lock');
 const UPSERT_LOCK_STALE_MS = 30_000;
-async function withUpsertLock(fn) {
+
+function ownerFor(ctx = null, owner = null) {
+  if (owner) return owner;
+  const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
+  return tenant ? tenant[1] : hostUser();
+}
+export function retroActivityFileFor(owner) {
+  return path.join(userDataDir(owner), 'retro-activity.json');
+}
+function upsertLockFor(ctx = null) {
+  return path.join(userDataDir(ownerFor(ctx)), 'retro', 'upsert.lock');
+}
+
+async function withUpsertLock(fn, ctx = null) {
+  const upsertLock = upsertLockFor(ctx);
   const deadline = Date.now() + 15_000;
   let held = false;
-  try { fs.mkdirSync(path.dirname(UPSERT_LOCK), { recursive: true, mode: 0o700 }); } catch { /* noop */ }
+  try { fs.mkdirSync(path.dirname(upsertLock), { recursive: true, mode: 0o700 }); } catch { /* noop */ }
   while (!held && Date.now() < deadline) {
     try {
-      const fd = fs.openSync(UPSERT_LOCK, 'wx'); // O_EXCL: falla con EEXIST si ya existe
+      const fd = fs.openSync(upsertLock, 'wx'); // O_EXCL: falla con EEXIST si ya existe
       fs.writeSync(fd, String(Date.now()));
       fs.closeSync(fd);
       held = true;
     } catch (e) {
       if (e.code !== 'EEXIST') break; // error inesperado: seguí sin lock (best-effort)
       let ts = 0;
-      try { ts = Number(fs.readFileSync(UPSERT_LOCK, 'utf8')) || 0; } catch { /* noop */ }
-      if (Date.now() - ts > UPSERT_LOCK_STALE_MS) { try { fs.unlinkSync(UPSERT_LOCK); } catch { /* noop */ } continue; }
+      try { ts = Number(fs.readFileSync(upsertLock, 'utf8')) || 0; } catch { /* noop */ }
+      if (Date.now() - ts > UPSERT_LOCK_STALE_MS) { try { fs.unlinkSync(upsertLock); } catch { /* noop */ } continue; }
       await new Promise((r) => setTimeout(r, 100 + Math.floor(Math.random() * 120)));
     }
   }
   try { return await fn(); }
-  finally { if (held) { try { fs.unlinkSync(UPSERT_LOCK); } catch { /* noop */ } } }
+  finally { if (held) { try { fs.unlinkSync(upsertLock); } catch { /* noop */ } } }
 }
 
 function parseFields(item) {
@@ -265,7 +277,7 @@ function lessonFromPadItem(item, verify = null) {
 export async function listLessons(ctx = null) {
   const r = await listItems(COLLECTION, { ctx });   // sin all:true (ver gotcha del cliente)
   if (!r.ok) throw padError('listLessons', r);
-  const verify = readVerifyState();
+  const verify = readVerifyState(ownerFor(ctx));
   const lessons = r.data.map((it) => lessonFromPadItem(it, verify));
   const order = { propuesta: 0, aprobada: 1, promovida: 2, descartada: 3 };
   lessons.sort((a, b) => (order[a.status] - order[b.status]) || (b.recurrence - a.recurrence) || (b.updatedAt - a.updatedAt));
@@ -278,7 +290,7 @@ export async function getLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   const r = await getItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('getLesson', 'Lección', r);
-  return lessonFromPadItem(r.data, readVerifyState());
+  return lessonFromPadItem(r.data, readVerifyState(ownerFor(ctx)));
 }
 
 // Crea la lección o, si ya existe una con el mismo fingerprint, le suma
@@ -312,13 +324,13 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       };
       const r = await updateItem(existing.ref, { fields: updatedFields }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
-      appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` });
+      appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` }, ctx);
       // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
       await linkLessonToSun(existing.ref, f.category || category, ctx);
       const fresh = await getItem(existing.ref, { ctx });
       const lesson = lessonFromPadItem(
         fresh.ok ? fresh.data : { ...existing, fields: updatedFields },
-        readVerifyState(),
+        readVerifyState(ownerFor(ctx)),
       );
       await shareTolkienLesson(lesson, ctx, sharedCtx);
       return { created: false, lesson };
@@ -342,18 +354,18 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       fields,
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
-    appendActivity({ kind: 'nueva', refId: r.data.ref, title });
+    appendActivity({ kind: 'nueva', refId: r.data.ref, title }, ctx);
     await linkLessonToSun(r.data.ref, category, ctx);
     const fresh = await getItem(r.data.ref, { ctx });
     const lesson = lessonFromPadItem(
       fresh.ok ? fresh.data : {
         ...r.data, ref: r.data.ref, title, content, fields,
       },
-      readVerifyState(),
+      readVerifyState(ownerFor(ctx)),
     );
     await shareTolkienLesson(lesson, ctx, sharedCtx);
     return { created: true, lesson };
-  });
+  }, ctx);
 }
 
 export async function setStatus(id, status, ctx = null) {
@@ -365,9 +377,9 @@ export async function setStatus(id, status, ctx = null) {
   const f = parseFields(cur.data);
   const r = await updateItem(id, { fields: { ...f, status: st } }, { ctx });   // read-modify-write: fields completo
   if (!r.ok) throw padError('setStatus', r);
-  appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st });
+  appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st }, ctx);
   const fresh = await getItem(id, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState());
+  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState(ownerFor(ctx)));
 }
 
 // Cambia SOLO el destino sugerido. La promoción real es otra decisión humana.
@@ -379,9 +391,9 @@ export async function setDestination(id, destination, ctx = null) {
   const f = parseFields(cur.data);
   const r = await updateItem(id, { fields: { ...f, destination } }, { ctx });
   if (!r.ok) throw padError('setDestination', r);
-  appendActivity({ kind: 'redestinada', refId: id, title: cur.data.title, detail: destination });
+  appendActivity({ kind: 'redestinada', refId: id, title: cur.data.title, detail: destination }, ctx);
   const fresh = await getItem(id, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields: { ...f, destination } }, readVerifyState());
+  return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields: { ...f, destination } }, readVerifyState(ownerFor(ctx)));
 }
 
 // Marca una lección como PROMOVIDA a un destino real + snapshotea la
@@ -406,9 +418,9 @@ export async function markPromoted(id, target, ctx = null) {
     },
   }, { ctx });
   if (!r.ok) throw padError('markPromoted', r);
-  appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target });
+  appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target }, ctx);
   const fresh = await getItem(id, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState());
+  return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState(ownerFor(ctx)));
 }
 
 // Fusiona lecciones (Fase 5, curaduría): conserva keepId sumándole la
@@ -443,31 +455,33 @@ export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
   const newRec = (parseInt(kf.recurrence, 10) || 1) + addRec;
   const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50), sourceRefs: refs } }, { ctx });
   if (!r.ok) throw padError('mergeLessons', r);
-  appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` });
+  appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` }, ctx);
   const fresh = await getItem(keepId, { ctx });
-  return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data, readVerifyState());
+  return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data, readVerifyState(ownerFor(ctx)));
 }
 
 export async function deleteLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('deleteLesson', 'Lección', r);
-  appendActivity({ kind: 'borrada', refId: id, title: id });
+  appendActivity({ kind: 'borrada', refId: id, title: id }, ctx);
   return { ok: true };
 }
 
 // ===== Actividad local (append-only, patrón learning/tasks) =====
-function loadActivity() {
-  try { const a = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8')); return Array.isArray(a) ? a : []; }
+function loadActivity(owner) {
+  try { const a = JSON.parse(fs.readFileSync(retroActivityFileFor(owner), 'utf8')); return Array.isArray(a) ? a : []; }
   catch { return []; }
 }
-export function listActivity(limit = 40) {
-  return loadActivity().slice(0, Math.max(1, Math.min(100, Number(limit) || 40)));
+export function listActivity(limit = 40, owner = hostUser()) {
+  return loadActivity(owner).slice(0, Math.max(1, Math.min(100, Number(limit) || 40)));
 }
-function appendActivity(ev) {
+function appendActivity(ev, ctx = null) {
   try {
-    const list = loadActivity();
+    const owner = ownerFor(ctx);
+    const list = loadActivity(owner);
     list.unshift({ id: `E${Date.now()}-${Math.floor(Math.random() * 1000)}`, ts: Date.now(), ...ev });
-    writeJsonAtomic(ACTIVITY_FILE, list.slice(0, ACTIVITY_MAX));
+    fs.mkdirSync(userDataDir(owner), { recursive: true, mode: 0o700 });
+    writeJsonAtomic(retroActivityFileFor(owner), list.slice(0, ACTIVITY_MAX));
   } catch { /* best-effort */ }
 }

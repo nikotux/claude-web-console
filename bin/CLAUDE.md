@@ -118,6 +118,33 @@ después, porque Ink trata un `\r` pegado a texto largo como parte del pegado y
 nunca envía; verificado en el log del PTY (35 chars se enviaban, 92 no). Era la
 causa raíz de los canjes que morían en `exchanging`.
 SIGTERM/SIGINT dejan `error:cancelado` y matan el PTY; timeout duro: 10 min.
+### bin/cwc-tolkien-setup-runner.js  PREPARACIÓN DESACOPLADA del clon Tolkien de
+un inquilino: configura en SU `.npmrc` el store compartido
+`/home/nmosquera/.cwc-shared/pnpm-store` sin pisar otras claves, corre
+`pnpm install --frozen-lockfile` con HOME aislado por `userRunnerEnv` y termina
+con `pnpm typecheck`. El host saltea la configuración del store y conserva el
+suyo. Estado atómico, reanudable por pasos (`store`/`install`/`typecheck`) en
+`~/.cwc-data/tolkien-setup/<user>.json`; log completo redactado en
+`<user>.log`; ambos mode 600 y siempre en el HOME del HOST.
+GOTCHAS: resuelve pnpm a ruta absoluta porque el env limpio puede no encontrarlo
+(`CWC_TOLKIEN_PNPM_BIN` permite fijarla); solo reintenta una vez sin
+`--frozen-lockfile` si la salida demuestra que el lockfile no coincide. El
+install tiene timeout duro de 20 min, configurable con
+`CWC_TOLKIEN_INSTALL_TIMEOUT_MS`. SIGTERM/SIGINT matan el grupo de pnpm y dejan
+estado `error` persistido. Uso:
+`node bin/cwc-tolkien-setup-runner.js --user <username>`.
+### bin/cwc-tolkien-stack-runner.js  EJECUTOR DESACOPLADO del stack N2
+Postgres+Redis propio de un usuario (console:PLAN-2264 B4). Recibe
+`--user <username> --action up|down`; lee exclusivamente la identidad ya
+persistida por `tolkien/stack.js` en
+`~/.cwc-data/tolkien-stacks/<user>.json`, aplica los guards de proyecto/puertos
+y pasa las cinco variables de aislamiento al proceso externo. Primera subida:
+`scripts/onboard.sh --yes` del clon del usuario; siguientes:
+`docker compose up -d postgres redis`. Bajada: `docker compose down` (sin `-v`,
+conserva Postgres) SOLO después de reconciliar otra vez los claims bajo lock.
+Un claim vivo o `unknown` cancela el down; no existe TTL/reaper. Estado y log
+son host-owned, atómicos/0600; el comando de un inquilino usa
+`userRunnerEnv`, HOME/workspace propios y nunca el entorno completo del host.
 ### bin/cwc-claude-login-runner.js  LOGIN COMPLETO de Claude por INQUILINO para
 ⚙ Sistema → Conexiones: runner PTY de `claude auth login --claudeai` con
 HOME/workspace aislados mediante `userRunnerEnv`. Antes del spawn borra
@@ -147,6 +174,16 @@ HOST — no en el HOME aislado — porque lo spawnea y consulta el server.
 Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
 NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
 `cancelled` del job y corta el PTY. Timeout duro: 15 min.
+### bin/cwc-gh-login-runner.js  LOGIN GUIADO de GitHub por usuario durante
+onboarding: runner PTY de `gh auth login --hostname github.com --git-protocol
+https --web` con `userRunnerEnv(user)` y HOME/workspace aislados. Publica la URL
+fija `https://github.com/login/device`, el código de un solo uso, estado y `pid`
+en `~/.cwc-data/gh-login-jobs/<user>.json`; toda escritura es atómica y mode
+600. El log `<user>.log` también es mode 600 y TODA salida pasa por redacción
+de `gh[pousr]_*` y `github_pat_*`. El éxito se confirma con `gh auth status` en
+el mismo HOME y después corre obligatoriamente `gh auth setup-git` para dejar
+operativo el push HTTPS. `GH_BROWSER=true` evita intentar abrir un navegador en
+el server: el usuario aprueba desde el wizard. Timeout duro: 15 min.
 ### bin/_env-boot.js           bootstrap explícito del `.env` del REPO para runners cuyo
 `cwd` está fuera del repo. Resuelve el fallo de `core/config.js` en procesos de
 INQUILINO spawneados con `userRunnerEnv`: `dotenv/config` buscaría el `.env`
@@ -214,6 +251,16 @@ los mismos review/optimization/coherence.json + el overlay
 health-scan.json. Lógica en src/modules/health/scan-shared.js.
 Ver "Verificación de salud" (Escaneo unificado). Regla de oro +
 regla 6 (cada query su allowlist read-only doble capa)
+### bin/cwc-docker-hygiene-runner.js  runner config-free y desacoplado para
+higiene de Docker (PLAN-2268). `--report` es el modo default, NO destructivo:
+releva `docker system df`, volúmenes/imágenes dangling y proyectos Compose con
+contenedores, y escribe atómicamente
+`~/.cwc-data/docker-hygiene/report.json` mode 600 para el check rápido de
+Salud. `--prune` SIN `--yes` solo lista lo que haría. El barrido real exige
+`--prune --yes`, vuelve a leer proyectos/candidatos inmediatamente antes y
+NUNCA borra un volumen cuyo nombre contenga un proyecto Compose activo; no
+toca contenedores. Docker ausente/daemon inaccesible termina limpio y deja
+`status: unavailable`. No automatizar el modo confirmado: lo aprueba un humano.
 ### bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 ### bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
 allowlist fixToolAllowed, node --check, sin reinicio — excepción

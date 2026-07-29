@@ -22,6 +22,18 @@ abren sesión: /resolve · /resolve-bulk · /scan-updates · /standup.
 La sesión lee las 4 fuentes (Desk/correo/Teams por MCP + WhatsApp
 por Read del índice) pero SOLO escribe al ticket y con aprobación
 explícita (limboFooter()).
+REGLA DURA 8 — AISLAMIENTO (console:PLAN-2274): snapshot, historia,
+lock y estado de refresh pertenecen al DUEÑO. `index.js` resuelve
+`userDataDir(owner)` POR OPERACIÓN (principal sin owner → usuario host,
+retrocompat) y pasa esa ruta como PRIMER parámetro a store/history/
+refresher; el runner recibe la misma ruta por `--data-dir` y, para
+inquilinos, `userRunnerEnv(owner)`. Los módulos compartidos con el
+runner NO importan user-space. El candado de refresh es un Set por
+`dataDir`, no un booleano global: dos dueños no se bloquean entre sí.
+ÚNICA EXCEPCIÓN: `comms/whatsapp.json` sigue bajo el HOME del host
+porque es un recurso GLOBAL de `comms` para canales externos
+compartidos, no estado propio de Seguimientos. Con esto Seguimientos
+resolvió su parte de `console:PLAN-2274`.
 CALENDARIO — sync con Microsoft/Outlook (2026-07-21): el cuadrante
 📅 tiene DOS capas de datos independientes, no confundirlas. (a)
 VENCIMIENTOS de tickets: salen del `dueDate` del snapshot de Zoho;

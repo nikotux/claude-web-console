@@ -137,6 +137,14 @@ export const HELP_INDEX = [
     load: () => import('./../modules/system/help/mcps.js'),
   },
   {
+    id: 'sys-my-config',
+    get title() { return t('system.myconfig.help.indexTitle', 'Mi configuración'); },
+    icon: 'checklist',
+    group: 'sistema',
+    get blurb() { return t('system.myconfig.help.indexBlurb', 'Checklist personal de capacidades, credenciales y provisioning.'); },
+    load: () => import('./../modules/system/help.js'),
+  },
+  {
     id: 'sys-skills',
     get title() { return t('core.help.topic.sys-skills.title', 'Skills'); },
     icon: 'sparkle',

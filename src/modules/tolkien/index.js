@@ -9,6 +9,9 @@
 //   GET  /api/tolkien/status  -> estado local (sin red)
 //   POST /api/tolkien/fetch   -> git fetch (red) + estado
 //   POST /api/tolkien/update  -> stash/pull/pop + estado
+//   POST /api/tolkien/stack/up   -> claim + arranque N2 owner-scoped
+//   POST /api/tolkien/stack/down -> baja solo sin claims vivos
+//   GET  /api/tolkien/stack/status -> estado N2 persistido del owner
 //
 // El contexto (CLAUDE.md) y las memorias editables viven en el módulo
 // GENÉRICO `projects` (src/modules/projects/), no acá: sirve tanto a este
@@ -19,7 +22,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
+import { hostUser } from '../../core/user-space.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
 import {
   runCmd, spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
@@ -31,12 +35,18 @@ import { teardownEnv, reattachEnvs, spawnEnvProvision, unitActive } from './env-
 import {
   spawnTemplateBuild, readTemplateJob, writeTemplateJob, templateStatus, isTemplateBuilding,
 } from './template-shared.js';
+import {
+  requestStackDown,
+  requestStackUp,
+  stackStatus,
+} from './stack.js';
 
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
 const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
+const stackOwner = (req) => principalOf(req)?.username || hostUser();
 
 // El refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de importers Zoho)
 // vive en refresh-shared.js + el runner desacoplado bin/cwc-tolkien-refresh-runner.js
@@ -221,6 +231,55 @@ export default {
 
   registerHttp(router) {
     const r = express.Router();
+
+    // Stack N2 owner-scoped: el usuario del body nunca decide el dueño. Cada
+    // sesión viva reclama el stack propio del principal autenticado; el trabajo
+    // de Docker queda en el runner desacoplado y este request vuelve enseguida.
+    r.post('/stack/up', async (req, res) => {
+      const sessionId = String(req.body?.sessionId || '');
+      if (!sessionId) return res.status(400).json({ error: 'Falta sessionId para reclamar el stack.' });
+      try {
+        const owner = stackOwner(req);
+        const result = await requestStackUp(owner, sessionId, { tmuxSocket: config.tmuxSocket });
+        return res.status(result.started ? 202 : 200).json({
+          ok: true,
+          started: result.started,
+          stack: stackStatus(owner),
+        });
+      } catch (err) {
+        const message = String(err?.message || err);
+        const conflict = /sesión .*no está confirmada|GUARD DURO|puertos/i.test(message);
+        return res.status(conflict ? 409 : 500).json({ error: message });
+      }
+    });
+
+    // "Apagar" no equivale a liberar a la fuerza: primero reconcilia TODOS los
+    // claims con la autoridad de liveness existente. Si queda uno vivo o hay
+    // incertidumbre, el stack se conserva y se informa sin ejecutar down.
+    r.post('/stack/down', async (req, res) => {
+      try {
+        const owner = stackOwner(req);
+        const result = await requestStackDown(owner, { tmuxSocket: config.tmuxSocket });
+        return res.status(result.started ? 202 : 200).json({
+          ok: true,
+          started: result.started,
+          pending: !!result.pending,
+          claimed: !!result.claimed,
+          checks: result.checks || [],
+          stack: stackStatus(owner),
+        });
+      } catch (err) {
+        return res.status(500).json({ error: String(err?.message || err) });
+      }
+    });
+
+    r.get('/stack/status', (req, res) => {
+      try {
+        return res.json(stackStatus(stackOwner(req)));
+      } catch (err) {
+        return res.status(500).json({ error: String(err?.message || err) });
+      }
+    });
 
     // Arranca el refresh en un RUNNER DESACOPLADO (idempotente si ya corre).
     // Vuelve al toque; el estado se persiste en disco y se consulta por GET.

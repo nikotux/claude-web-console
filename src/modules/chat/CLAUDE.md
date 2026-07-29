@@ -1450,6 +1450,16 @@ la conversación se evaporaría cuando el chat se duerme (Regla dura 2).
 absurdo. `pruneSala` SÍ usa tmp+rename porque ahí sí reemplaza el conjunto
 completo.
 
+ALOJAMIENTO GLOBAL DELIBERADO (`console:PLAN-2274`): `ADUANA_ROOT` vive bajo el
+HOME del HOST a propósito, no por omisión. Una sala es suelo neutral entre
+personas (Regla dura 16), no pertenece a ningún dueño, y el host la aloja como
+infraestructura compartida. Se evaluó alojarla en el espacio del anfitrión
+—quien crea la sala paga los turnos— y Niko descartó esa alternativa el
+2026-07-29. Por eso `src/modules/chat/aduana.js` está eximido de la regla
+`aislamiento` de Coherencia; si algún día se revierte esta decisión, hay que
+quitar su entrada de `USER_STATE_PERSISTENCE.exclude` en
+`src/core/inventory.js`.
+
 LOS DOS CANALES son deliberadamente distintos. `say()` difunde y persiste, pero
 NUNCA toca el motor: cuesta 0 tokens y permite que dos personas escriban a la
 vez sin esperar turno. `cut()`/`_dispatchCut()` es la ÚNICA vía al SDK. El corte

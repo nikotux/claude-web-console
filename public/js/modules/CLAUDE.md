@@ -424,6 +424,8 @@ botón propio porque su widget son tres gauges sin header; se llega desde el
 hub "Guía de la consola".
 
 ### public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
+`chat/help.js` documenta en “Gráficos y diagramas” los gráficos inline,
+micro-barras y diagramas Mermaid disponibles dentro de los mensajes.
 
 ## Gotchas de esta carpeta
 

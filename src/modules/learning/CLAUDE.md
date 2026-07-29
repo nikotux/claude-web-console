@@ -20,9 +20,9 @@ colecciones `temas-de-aprendizaje`/TDA y `rutas-de-aprendizaje`/RDA). Un
 tema = 1 item TDA; `routeId` → relación `parent` hacia una RDA;
 `contextoEntradas`/`explanation`(+model/at/fingerprint/files/versions,
 empaquetado en UN campo JSON) → custom fields tipo `json` del item. El LOG
-de actividad (`listActivity`/`learning-activity.json`) y las funciones
-puras `normScope`/`contextoText` NO se tocaron — siguen exactamente igual
-(decisión de alcance). `learning.json` viejo queda como respaldo histórico,
+de actividad (`listActivity`/`learning-activity.json`) es local y privado
+por dueño; las funciones puras `normScope`/`contextoText` siguen exactamente
+igual. `learning.json` viejo queda como respaldo histórico,
 ya no se lee. 6 consumidores migrados: `learning/index.js`,
 `explain-shared.js`, `analyze-shared.js`, `tasks/analyze-shared.js`
 (análisis cruzado), `chat/index.js` (write-back de "Profundizar en chat" +
@@ -46,6 +46,14 @@ POST /:id/context/:cid/delete (borrar entrada — literal ANTES de la
 paramétrica /:cid) · POST /:id/context-analyze (spawn runner) · GET
 /:id/context-analyze/:jobId (poll, 0 tokens). Job en
 ~/.cwc-data/learning-explain-<id>.json + learning-explain.log.
+AISLAMIENTO MULTI-TENANT (`console:PLAN-2267`, B7): el borde HTTP deriva
+`systemScopeFor(req).user`; jobs, logs, análisis, contexto, explicaciones,
+registro de session ids y actividad resuelven la ruta POR OPERACIÓN con
+`userDataDir(owner)`. Los runners de inquilino reciben `CWC_DATA_DIR` y HOME
+aislados mediante `userRunnerEnv`; dentro del runner los helpers caen en
+`resolveDataDir()`. No hay constantes de módulo que congelen el HOME del server.
+Para el host, `userDataDir(hostUser())` sigue apuntando a `~/.cwc-data`, sin
+migrar ni renombrar ningún archivo.
 REGENERACIÓN INTELIGENTE + CONTEXTO ADICIONAL + VENTANA POR SECCIONES
 (2026-07-10, pedido de Niko: "no quiero un documento — quiero secciones
 organizadas, y que Regenerar no arranque de cero si no hace falta"). TRES

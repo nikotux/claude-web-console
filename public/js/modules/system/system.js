@@ -23,6 +23,7 @@ import { mountSkillsPanel } from './skills-panel.js';
 import { mountMcpsPanel } from './mcps-panel.js';
 import { mountUpdatesPanel } from './updates-panel.js';
 import { mountLanguagePanel } from './language-panel.js';
+import { mountMyConfigPanel } from './my-config-panel.js';
 import { t } from '../../ui/i18n.js';
 
 export default {
@@ -43,6 +44,9 @@ export default {
         {
           label: `⚙️ ${t('system.menu.groupConfig', 'Configuración')}`,
           items: [
+            ...(me?.type === 'user'
+              ? [{ emoji: '✅', label: t('system.menu.myConfig', 'Mi configuración'), mount: (c) => mountMyConfigPanel(c, { ...ctx, me }) }]
+              : []),
             { emoji: '🔌', label: t('system.menu.connections', 'Conexiones'), mount: (c) => mountMcpsPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🧩', label: t('system.menu.skills', 'Skills'), mount: (c) => mountSkillsPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🌐', label: t('system.menu.language', 'Idioma'), mount: (c) => mountLanguagePanel(c, ctx) },

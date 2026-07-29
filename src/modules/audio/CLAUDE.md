@@ -10,9 +10,18 @@ aprobación del usuario. CONSUME TOKENS ⇒ RUNNER DESACOPLADO
 (bin/cwc-audio-runner.js, regla de oro) + READ-ONLY blindado (regla 6:
 sonnet, 1 turno, CERO herramientas — las dos capas PreToolUse+
 canUseTool deniegan TODO; el texto viaja entero en el prompt, nunca
-lee/escribe disco). shared.js: jobs en ~/.cwc-data/audio/<id>.json (id
-DETERMINÍSTICO por contenido: reintento reusa el MISMO job, no gasta
-de nuevo; poda >30 días) + prompt + parseo + spawn detached, patrón
+lee/escribe disco). REGLA DURA 8 / AISLAMIENTO (console:BUG-2270,
+primer hallazgo de la regla `aislamiento` de Coherencia): los jobs
+viven en el directorio de datos DEL DUEÑO (`userDataDir(owner)`),
+resuelto POR OPERACIÓN en index.js. Los GET quedan aislados de forma
+ESTRUCTURAL — cada usuario lista/lee su directorio, no hay un filtro en
+memoria que pueda olvidarse. index.js pasa `dataDir` como parámetro a
+shared.js porque shared es compartido con el runner y NO puede importar
+user-space (arrastraría config/CWC_TOKEN al env limpio). El runner recibe
+la misma ruta por `--data-dir` y, si falta, cae a `resolveDataDir()`.
+shared.js: jobs en <dataDir-del-dueño>/audio/<id>.json (id DETERMINÍSTICO
+por contenido: reintento reusa el MISMO job, no gasta de nuevo; poda >30
+días) + prompt + parseo + spawn detached, patrón
 projects/analyze-shared+commitmsg-shared. TÍTULO GENERADO POR IA
 (pedido del usuario 2026-07-06): el prompt pide un `title` corto
 (parseAudio lo extrae) y el runner lo aplica al job si titleAuto (el

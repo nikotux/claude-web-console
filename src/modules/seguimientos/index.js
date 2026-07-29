@@ -15,10 +15,10 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { principalOf } from '../../core/auth.js';
-import { hostUser } from '../../core/user-space.js';
+import { userDataDir, userRunnerEnv, hostUser } from '../../core/user-space.js';
 import { manager } from '../chat/index.js';
 import { textOnlyQuery } from '../../core/text-only-query.js';
-import { ensureDir, readSnapshot, writeSnapshot } from './store.js';
+import { readSnapshot, writeSnapshot } from './store.js';
 import { refreshNow, isRefreshing } from './refresher.js';
 import { readHistory } from './history-store.js';
 import { fetchCalendar } from './calendar-source.js';
@@ -27,11 +27,13 @@ import { OWNER_TYPE_LIST } from './classify-shared.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_ROOT = path.join(__dirname, '..', '..', '..');
 const RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-seguimientos-runner.js');
+// Recurso GLOBAL del módulo `comms`: indexa canales externos compartidos y no
+// es estado propio ni por-dueño de `seguimientos`, por eso no se migra.
 const WHATSAPP_FILE = path.join(os.homedir(), '.cwc-data', 'comms', 'whatsapp.json');
 const DAY_MS = 86400000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function userOf(req) {
+function ownerOf(req) {
   const p = principalOf(req);
   // El token maestro no identifica a Niko en particular; mantenemos la misma
   // caída al usuario host que usan las conexiones OAuth.
@@ -86,30 +88,38 @@ function limboFooter() {
 export default {
   name: 'seguimientos',
 
-  init() { ensureDir(); },
-
   registerHttp(router) {
     const r = express.Router();
 
     // Snapshot completo del dashboard (frentes + conteos). 0 tokens: solo disco.
     r.get('/', (req, res) => {
+      const dataDir = userDataDir(ownerOf(req));
       // ownerTypes: taxonomía servida desde el backend (fuente única en
       // classify-shared.js) para que el front no la duplique a mano.
-      res.json({ ...readSnapshot(), ownerTypes: OWNER_TYPE_LIST, refreshing: isRefreshing() });
+      res.json({ ...readSnapshot(dataDir), ownerTypes: OWNER_TYPE_LIST, refreshing: isRefreshing(dataDir) });
     });
 
     // Dispara la ADUANA (Zoho Desk read-only → snapshot). Responde YA; el front
     // encuesta GET / hasta que `refreshing` pase a false. 0 tokens (determinístico).
     r.post('/refresh', (req, res) => {
-      if (isRefreshing()) return res.json({ started: false, running: true });
-      refreshNow().catch((e) => console.error('[seguimientos] refresh:', e.message));
+      const dataDir = userDataDir(ownerOf(req));
+      if (isRefreshing(dataDir)) return res.json({ started: false, running: true });
+      refreshNow(dataDir).catch((e) => console.error('[seguimientos] refresh:', e.message));
       res.json({ started: true });
     });
 
     // Dispara el CLASIFICADOR IA (runner desacoplado, regla de oro — consume
     // tokens Haiku). Responde YA; el front encuesta GET / hasta `classifying`=false.
     r.post('/classify', (req, res) => {
-      const child = spawn(process.execPath, [RUNNER], { detached: true, stdio: 'ignore', cwd: path.join(__dirname, '..', '..', '..') });
+      const owner = ownerOf(req);
+      const dataDir = userDataDir(owner);
+      const runnerEnv = owner === hostUser() ? undefined : userRunnerEnv(owner);
+      const child = spawn(process.execPath, [RUNNER, '--data-dir', dataDir], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.join(__dirname, '..', '..', '..'),
+        env: runnerEnv ?? process.env,
+      });
       child.unref();
       res.json({ started: true });
     });
@@ -120,8 +130,9 @@ export default {
     // Los frentes de Desk son del mundo externo → la sesión abre en cwd Tolkien
     // (ahí viven las tools para actuar el ticket).
     r.post('/resolve', (req, res) => {
+      const dataDir = userDataDir(ownerOf(req));
       const key = String(req.body?.key || '');
-      const snap = readSnapshot();
+      const snap = readSnapshot(dataDir);
       const f = (snap.frentes || []).find((x) => String(x.key) === key);
       if (!f) return res.status(404).json({ error: 'Frente no encontrado.' });
       const prompt = [
@@ -144,15 +155,16 @@ export default {
       });
       try { chat.sendUser(prompt); } catch { /* el chat queda creado igual */ }
       f.sessionRef = chat.info().id;
-      writeSnapshot(snap);
+      writeSnapshot(dataDir, snap);
       res.json({ chatId: chat.info().id });
     });
 
     // RESOLVER EN LOTE (F5): varios frentes seleccionados → UNA sesión con el
     // contexto de TODOS (p.ej. si me bloquea la misma persona en varios ítems).
     r.post('/resolve-bulk', (req, res) => {
+      const dataDir = userDataDir(ownerOf(req));
       const keys = Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [];
-      const snap = readSnapshot();
+      const snap = readSnapshot(dataDir);
       const sel = (snap.frentes || []).filter((f) => keys.includes(String(f.key)));
       if (!sel.length) return res.status(404).json({ error: 'Sin frentes seleccionados.' });
       const lines = sel.map((f) => `- #${f.key} — ${f.title} · pelota: ${f.ownerBall || '?'} (${f.ownerType || '?'})${f.nextAction ? ` · próxima: ${f.nextAction}` : ''}${f.webUrl ? ` · ${f.webUrl}` : ''}`);
@@ -167,15 +179,16 @@ export default {
       try { chat.sendUser(prompt); } catch { /* noop */ }
       const id = chat.info().id;
       for (const f of sel) f.sessionRef = id;
-      writeSnapshot(snap);
+      writeSnapshot(dataDir, snap);
       res.json({ chatId: id, count: sel.length });
     });
 
     // ACTUALIZACIONES (G4/G5): abre una SESIÓN-LIMBO que escanea las 4 fuentes
     // por updates de mis tickets y propone un plan de actualización (aplica con OK).
     r.post('/scan-updates', (req, res) => {
+      const dataDir = userDataDir(ownerOf(req));
       const keys = Array.isArray(req.body?.keys) && req.body.keys.length ? req.body.keys.map(String) : null;
-      const snap = readSnapshot();
+      const snap = readSnapshot(dataDir);
       const sel = keys ? (snap.frentes || []).filter((f) => keys.includes(String(f.key))) : (snap.frentes || []);
       const lines = sel.slice(0, 40).map((f) => `- #${f.key} — ${f.title}${f.ownerBall ? ` · pelota: ${f.ownerBall}` : ''}`);
       const prompt = [
@@ -197,7 +210,8 @@ export default {
     // hay por hacer / qué llegó / qué terminamos / qué está trabado y puede
     // actualizar tickets SOLO con aprobación (Limbo). `digest` opcional del front.
     r.post('/standup', (req, res) => {
-      const snap = readSnapshot();
+      const dataDir = userDataDir(ownerOf(req));
+      const snap = readSnapshot(dataDir);
       const frentes = snap.frentes || [];
       const c = snap.counts || {};
       const digest = req.body?.digest && typeof req.body.digest === 'object' ? req.body.digest : null;
@@ -236,9 +250,10 @@ export default {
 
     // VISTA CON IA (G6): filtro por lenguaje natural → devuelve las keys que matchean.
     r.post('/ai-filter', async (req, res) => {
+      const dataDir = userDataDir(ownerOf(req));
       const q = String(req.body?.query || '').slice(0, 500).trim();
       if (!q) return res.status(400).json({ error: 'Pedido vacío.' });
-      const snap = readSnapshot();
+      const snap = readSnapshot(dataDir);
       const items = (snap.frentes || []).map((f) => ({ key: f.key, title: f.title, domain: f.domain, ownerBall: f.ownerBall, ownerType: f.ownerType, involucrados: f.involucrados, nextAction: f.nextAction, daysIdle: f.daysIdle, status: f.status }));
       const prompt = `Tenés estos frentes (tickets). Devolvé SOLO un array JSON con los "key" que matcheen este pedido en lenguaje natural, sin explicación.\nPedido: "${q}"\n\nFrentes:\n${JSON.stringify(items)}\n\nSalida: ["key",...] (solo los que matchean; [] si ninguno).`;
       try {
@@ -251,7 +266,8 @@ export default {
 
     // Historia diaria para los gráficos de tendencia de Métricas (0 tokens).
     r.get('/history', (req, res) => {
-      res.json({ days: readHistory() });
+      const dataDir = userDataDir(ownerOf(req));
+      res.json({ days: readHistory(dataDir) });
     });
 
     // Calendario Microsoft: HTTP determinístico y best-effort. Si Graph falla,
@@ -265,7 +281,7 @@ export default {
         return res.status(400).json({ error: 'Rango inválido.' });
       }
       try {
-        const out = await fetchCalendar(userOf(req), {
+        const out = await fetchCalendar(ownerOf(req), {
           from: `${from}T00:00:00-05:00`,
           to: `${to}T23:59:59-05:00`,
           fresh: req.query.fresh === '1',
@@ -278,7 +294,8 @@ export default {
 
     // Ping del módulo (diagnóstico de que cargó y hay snapshot).
     r.get('/health', (req, res) => {
-      const snap = readSnapshot();
+      const dataDir = userDataDir(ownerOf(req));
+      const snap = readSnapshot(dataDir);
       res.json({ ok: true, frentes: snap.frentes.length, updatedAt: snap.updatedAt });
     });
 

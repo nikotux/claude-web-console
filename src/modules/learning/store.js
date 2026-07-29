@@ -54,16 +54,13 @@
 // Modelo de un evento de actividad (SIN CAMBIOS, sigue 100% local):
 //   { id, ts, kind, refId, title, detail }
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { hostUser, userDataDir } from '../../core/user-space.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
   deleteLink, setParent,
 } from '../../core/pad-service-client.js';
-
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const ACT_FILE = path.join(DATA_DIR, 'learning-activity.json');
 
 const TOPICS_COLLECTION = 'temas-de-aprendizaje';
 const ROUTES_COLLECTION = 'rutas-de-aprendizaje';
@@ -75,8 +72,16 @@ export const ROUTE_STATUSES = ['activa', 'propuesta', 'completada', 'archivada']
 const MAX_ACTIVITY = 300;
 const ROUTE_ID_RE = /^RDA-\d+$/;
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+function ownerFor(ctx = null, owner = null) {
+  if (owner) return owner;
+  const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
+  return tenant ? tenant[1] : hostUser();
+}
+export function learningActivityFileFor(owner) {
+  return path.join(userDataDir(owner), 'learning-activity.json');
+}
+function ensureDir(ctx = null, owner = null) {
+  fs.mkdirSync(userDataDir(ownerFor(ctx, owner)), { recursive: true, mode: 0o700 });
 }
 
 const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
@@ -173,26 +178,27 @@ async function topicsForProgress(ctx = null) {
 }
 
 // ===== LOG DE ACTIVIDAD (SIN CAMBIOS: append-only local, con poda) =====
-function loadActivity() {
+function loadActivity(ctx = null, owner = null) {
   try {
-    const raw = JSON.parse(fs.readFileSync(ACT_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(learningActivityFileFor(ownerFor(ctx, owner)), 'utf8'));
     return Array.isArray(raw.events) ? raw.events : [];
   } catch { return []; }
 }
-function saveActivity(events) {
-  writeJsonAtomic(ACT_FILE, { events }); // atómico tmp-por-PID (fix B3 2026-07-11)
+function saveActivity(events, ctx = null, owner = null) {
+  ensureDir(ctx, owner);
+  writeJsonAtomic(learningActivityFileFor(ownerFor(ctx, owner)), { events }); // atómico tmp-por-PID (fix B3 2026-07-11)
 }
 let actCounter = 0;
-function appendActivity(ev) {
-  const events = loadActivity();
+function appendActivity(ev, ctx = null, owner = null) {
+  const events = loadActivity(ctx, owner);
   actCounter += 1;
   // pid en el id (BUG-29): actCounter es por-proceso; server + runner en el mismo
   // ms generaban el mismo id. El pid lo hace único entre procesos.
   events.push({ id: `A${Date.now()}-${process.pid.toString(36)}-${actCounter}`, ts: Date.now(), ...ev });
-  saveActivity(events.slice(-MAX_ACTIVITY));
+  saveActivity(events.slice(-MAX_ACTIVITY), ctx, owner);
 }
-export function listActivity(limit = 40) {
-  return loadActivity().slice(-limit).reverse();
+export function listActivity(limit = 40, owner = hostUser()) {
+  return loadActivity(null, owner).slice(-limit).reverse();
 }
 
 // ===== RUTAS DE APRENDIZAJE (progreso derivado de sus temas) =====
@@ -220,7 +226,7 @@ export async function createRoute(input = {}, ctx = null) {
   const r = await createItem(ROUTES_COLLECTION, { title, content: clampStr(input.description, 4000), fields }, { ctx });
   if (!r.ok) throw padError('createRoute', r);
   const ref = r.data.ref;
-  appendActivity({ kind: 'created', entity: 'route', refId: ref, title });
+  appendActivity({ kind: 'created', entity: 'route', refId: ref, title }, ctx);
   const fresh = await getItem(ref, { ctx });
   const route = routeFromPadItem(fresh.ok ? fresh.data : r.data);
   return routesWithProgress([route], await topicsForProgress(ctx))[0];
@@ -246,7 +252,7 @@ export async function updateRoute(id, patch = {}, ctx = null) {
   if (!r.ok) throw padError('updateRoute', r);
 
   const fresh = await getItem(id, { ctx });
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'route', refId: id, title: fresh.data?.title, detail: statusChanged || null });
+  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'route', refId: id, title: fresh.data?.title, detail: statusChanged || null }, ctx);
   const route = routeFromPadItem(fresh.ok ? fresh.data : cur.data);
   return routesWithProgress([route], await topicsForProgress(ctx))[0];
 }
@@ -261,7 +267,7 @@ export async function deleteRoute(id, ctx = null) {
   // manual.
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteRoute', r);
-  appendActivity({ kind: 'deleted', entity: 'route', refId: id, title: removed.title });
+  appendActivity({ kind: 'deleted', entity: 'route', refId: id, title: removed.title }, ctx);
   return removed;
 }
 
@@ -317,7 +323,7 @@ export async function createTopic(input = {}, ctx = null) {
   const routeCandidate = clampStr(input.routeId, 20).trim();
   if (routeCandidate && ROUTE_ID_RE.test(routeCandidate)) await setParent(ref, routeCandidate, { ctx });
 
-  appendActivity({ kind: 'created', refId: ref, title });
+  appendActivity({ kind: 'created', refId: ref, title }, ctx);
   const fresh = await getItem(ref, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : r.data);
 }
@@ -362,7 +368,7 @@ export async function updateTopic(id, patch = {}, ctx = null) {
   }
 
   const fresh = await getItem(id, { ctx });
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', refId: id, title: fresh.data?.title, detail: statusChanged || null });
+  appendActivity({ kind: statusChanged ? 'status' : 'updated', refId: id, title: fresh.data?.title, detail: statusChanged || null }, ctx);
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
 
@@ -398,7 +404,7 @@ export async function saveExplanation(id, { explanation, model, scope, fingerpri
   if (scope) nextFields.scope = normScope(scope);
   const r = await updateItem(id, { fields: nextFields }, { ctx });
   if (!r.ok) throw padError('saveExplanation', r);
-  appendActivity({ kind: 'explained', refId: id, title: cur.data.title, detail: nextExp.model || null });
+  appendActivity({ kind: 'explained', refId: id, title: cur.data.title, detail: nextExp.model || null }, ctx);
   const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
@@ -437,7 +443,7 @@ export async function addContexto(id, { text, source } = {}, ctx = null) {
   const nextList = [entry, ...list].slice(0, MAX_CONTEXT_ENTRIES);
   const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
   if (!r.ok) throw padError('addContexto', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: entry.source });
+  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: entry.source }, ctx);
   const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
@@ -470,7 +476,7 @@ export async function updateContextoEntry(id, entryId, text, ctx = null) {
   entry.at = Date.now();
   const r = await updateItem(id, { fields: { ...f, contextoEntradas: list } }, { ctx });
   if (!r.ok) throw padError('updateContextoEntry', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'edit' });
+  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'edit' }, ctx);
   const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
@@ -485,7 +491,7 @@ export async function deleteContextoEntry(id, entryId, ctx = null) {
   if (nextList.length === before) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
   const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
   if (!r.ok) throw padError('deleteContextoEntry', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'delete' });
+  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'delete' }, ctx);
   const fresh = await getItem(id, { ctx });
   return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
 }
@@ -496,6 +502,6 @@ export async function deleteTopic(id, ctx = null) {
   const removed = topicFromPadItem(cur.data);
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw padError('deleteTopic', r);
-  appendActivity({ kind: 'deleted', refId: id, title: removed.title });
+  appendActivity({ kind: 'deleted', refId: id, title: removed.title }, ctx);
   return removed;
 }

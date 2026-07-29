@@ -69,7 +69,13 @@
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
   **`onboard-provisioning`** (console:BUG-2118: `ok` si no hay altas o todas
   están completas; `warn` si alguna quedó `failed` o lleva más de 10 minutos
-  en `pending`), espejo de contexto a Tolkien (`tolkien-context`) y
+  en `pending`), **`docker-hygiene`** (PLAN-2268, 0 tokens: lee solamente
+  `~/.cwc-data/docker-hygiene/report.json`, nunca invoca Docker desde el
+  request; `warn` desde 20 volúmenes dangling o 5 GB reclamables totales, o
+  si el reporte lleva más de 24 h; `ok` con nota si todavía no existe o Docker
+  figura `unavailable`. El barrido NUNCA es automático: se simula con
+  `node bin/cwc-docker-hygiene-runner.js --prune` y solo un humano agrega
+  `--yes`), espejo de contexto a Tolkien (`tolkien-context`) y
   **`pad-backbone`**
   (2026-07-12, Gap #3 / TASK-296): lee las Conventions del Pad LOCAL por HTTP
   (0 tokens, NO MCP → no toca la regla 6, vía `core/pad-service-client.js`) y
@@ -374,7 +380,11 @@
   barrido MÓDULO POR MÓDULO. La corrida vive en un RUNNER DETACHED
   (bin/cwc-health-runner.js, patrón triage — un reinicio del server a mitad
   NO la mata). discoverUnits() (health/shared.js) arma ~16 unidades: core +
-  cada src/modules/* (+ su runner de bin/) + frontend-core + frontend-modules;
+  cada src/modules/* (+ su runner de bin/) + frontend-core + frontend-modules.
+  `frontend-core` incluye ahora los `.css` de `public/css/` mediante `listCss`,
+  helper hermano de `listJs`: antes NINGÚN CSS entraba en ninguna unidad, por
+  lo que el SEED del guard `[hidden]` nunca se inyectaba — era un séptimo
+  invariante muerto, esta vez entre los seeds.
   cada una se audita read-only (doble capa, regla 6) con el modelo que dicta
   `auditModelFor(unit)` de health/shared.js — FUENTE ÚNICA, el runner NO
   hardcodea el modelo — buscando bugs Y violaciones de reglas → findings
@@ -404,35 +414,65 @@
   no editan código y mutan UN solo objeto `state` en memoria (cada uno su
   casillero) + la caché se escribe UNA vez en la barrera → nadie pisa a otro.
   INVARIANTES + FOCO (Fase 4 del sistema nervioso):
-  health/invariants.js lista aserciones {match, text} (seed de los gotchas
+  health/invariants.js lista aserciones
+  `{match, text, exclude?, origen?}` (seeds + aprendidos de los gotchas
   conocidos: simetría mode/model en chat, validación de rutas, settingSources
   headless sin user, bind ZeroTier, guard [hidden], integridad de secciones en
-  projects…); unitPrompt inyecta SOLO los invariantes que matchean los archivos
-  de la unidad y le pide verificar CADA uno citando el código — así caza bugs
-  sutiles que el barrido genérico pierde. El foco acota el pedido de CLAUDE.md a
-  las reglas duras, que van INYECTADAS pre-masticadas en el prompt (optimización
-  IA 2026-07-05: hardRulesText() de health/shared.js recorta la sección
-  "## Reglas duras" UNA vez en Node y la mete en unitPrompt, mismo patrón que
-  invBlock — el auditor ya NO hace un Read de CLAUDE.md entero por unidad; si la
-  extracción falla, fallback a la instrucción vieja de consultar el archivo).
-  OJO: unitFingerprint ahora hashea TAMBIÉN los invariantes aplicables Y las
-  reglas duras inyectadas → editar un invariante o una regla dura fuerza
-  re-auditar las unidades que toca.
+  projects…). `match` admite VARIOS globs separados por coma: `compileMatch`
+  compila cada uno y los une con `|`; también tolera un comentario entre
+  paréntesis y lo descarta. `exclude` enumera rutas relativas EXACTAS donde la
+  regla no aplica por diseño, en paridad con el campo homónimo de
+  `CANONICAL_PATTERNS` de core/inventory.js. `origen` conserva de qué bug o
+  lección nació la regla, pero NO se inyecta al prompt a propósito:
+  `unitFingerprint` hashea los textos y sumar metadata al prompt invalidaría
+  la caché sin mejorar la auditoría. unitPrompt inyecta SOLO los invariantes
+  que matchean los archivos de la unidad, menos sus excludes, y le pide
+  verificar CADA uno citando el código — así caza bugs sutiles que el barrido
+  genérico pierde. El foco acota el pedido de CLAUDE.md a dos secciones que
+  `hardRulesText()` inyecta pre-masticadas con el extractor común
+  `markdownH2Section`: `## Reglas duras` Y `## Multi-tenant`. Antes el recorte
+  terminaba justo en el encabezado Multi-tenant y el auditor quedaba CIEGO al
+  modelo multiusuario: los tres prompts de Salud tenían CERO menciones de
+  owner/tenant/user-scoped. El auditor ya NO hace un Read de CLAUDE.md entero
+  por unidad; si la extracción falla, conserva el fallback a la instrucción de
+  consultar el archivo.
+  AVISO DE CACHÉ (`console:PLAN-2252`): `unitFingerprint` hashea los textos de
+  los invariantes aplicables, las reglas duras inyectadas Y la lista de archivos
+  de la unidad. La depuración de aprendidos, la inyección de Multi-tenant y la
+  incorporación de CSS cambian esos insumos; el próximo Escaneo re-audita
+  TODAS las unidades con sonnet. Es esperado.
   LOOP QUE APRENDE (Fase 5 del sistema nervioso, cierre): al resolver un bug de
   una clase que conviene blindar, el auto-fix runner emite una línea
   "PROPOSED-INVARIANT <texto> | <match>" (o NO-INVARIANT); addProposal la guarda
   PENDIENTE en ~/.cwc-data/health-invariant-proposals.json (NUNCA se auto-aplica
   — decisión del usuario). El modal de salud muestra "🧠 Invariantes propuestos"
   con Aprobar/Descartar (GET /invariant-proposals · POST /invariant-proposals/:id
-  {approve|reject}, admin). Aprobar → appendLearnedInvariant valida el regex y lo
-  suma a src/modules/health/invariants-learned.json (JSON de DATOS en el repo,
-  NO código; se commitea y revisa). BUG-1977: antes comparaba el texto completo
-  contra los 400 caracteres persistidos y una entrada larga se duplicaba; ahora
-  normaliza `match`/`text` a 200/400 ANTES de comparar y guardar, conservando el
-  formato y deduplicando también contra entradas históricas. invariants.js mergea
-  SEED_INVARIANTS + loadLearned(). Así el bug resuelto no puede regresar sin que
-  salte. Al final
-  SONNET sintetiza el veredicto (solo procesa los hallazgos, no re-lee código). Interfaz por archivos: health-review.json
+  {approve|reject}, admin). Aprobar → appendLearnedInvariant valida el patrón y
+  lo suma a src/modules/health/invariants-learned.json (JSON de DATOS en el
+  repo, NO código; se commitea y revisa). Además RECHAZA un patrón que no
+  matchee ningún archivo real del repo mediante el helper interno `repoFiles()`,
+  con fail-open si el disco no se puede leer. Motivo: `console:BUG-2253` — 6
+  invariantes aprendidos estuvieron ~25 días inertes porque su glob con coma o
+  paréntesis compilaba como RegExp válido pero no matcheaba nada; la validación
+  vieja preguntaba «¿es compilable?» y no «¿encuentra algo?». A diferencia de
+  la cicatriz ya documentada del `**`, esta falla era SILENCIOSA. BUG-1977:
+  antes comparaba el texto completo contra los 400 caracteres persistidos y
+  una entrada larga se duplicaba; ahora normaliza `match`/`text` a 200/400
+  ANTES de comparar y guardar, conservando el formato y deduplicando también
+  contra entradas históricas. invariants.js mergea SEED_INVARIANTS +
+  loadLearned(). Así el bug resuelto no puede regresar sin que salte.
+  DEPURACIÓN 2026-07-29 (`console:PLAN-2252`): los aprendidos pasaron de 84 a
+  36. Los 84 eran de una consola pre-multiusuario: 83 se aprobaron entre el 3
+  y el 5 de julio de 2026 y `core/user-space.js` nació el 19 de julio; ~49
+  duplicaban 12 ideas, 6 estaban muertos, 2 repetían un SEED y 1 era una regla
+  de lint. Los 36 nuevos enuncian la PROPIEDAD que debe ser cierta —no la
+  técnica que la implementa—, muestran cómo se ve la violación y traen
+  `origen`. TRES son NUEVOS y cubren el aislamiento multi-tenant: estado
+  user-scoped resuelto por dueño, listados filtrados por owner y spawn con
+  credencial propia. Medición por escaneo completo: ANTES 974 inyecciones y
+  235 KB de prompt; DESPUÉS 470 inyecciones y 190 KB.
+  Al final SONNET sintetiza el veredicto (solo procesa los hallazgos, no re-lee
+  código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +
   health-review.lock (heartbeat => running). POST responde INMEDIATO
   (arrancar+encuestar); el front encuesta GET /review. UI = SUB-VENTANA

@@ -17,6 +17,7 @@ import {
   userTolkienMcpTokenPath,
   userWorkspace,
 } from '../../core/user-space.js';
+import { markProvisionStep } from './provision-state.js';
 
 const TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 4 * 1024 * 1024;
@@ -96,7 +97,7 @@ export function tolkienMcpStatus(userId) {
   return status;
 }
 
-export async function provisionTolkienMcp(userId, { force = false } = {}) {
+async function provisionTolkienMcpResult(userId, { force = false } = {}) {
   try {
     const id = sanitizeUserId(userId);
     if (id === hostUser()) return { ok: true, skipped: true, reason: 'host' };
@@ -181,4 +182,15 @@ export async function provisionTolkienMcp(userId, { force = false } = {}) {
   } catch (error) {
     return { ok: false, error: redact(error?.message || error).slice(0, 500) };
   }
+}
+
+export async function provisionTolkienMcp(userId, options = {}) {
+  const result = await provisionTolkienMcpResult(userId, options);
+  markProvisionStep(
+    userId,
+    'tolkien-mcp',
+    result.ok ? 'ok' : 'failed',
+    result.ok ? null : (result.error || result.reason || 'Fallo desconocido.'),
+  );
+  return result;
 }

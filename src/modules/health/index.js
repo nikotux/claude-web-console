@@ -59,6 +59,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+const DOCKER_HYGIENE_REPORT = path.join(DATA_DIR, 'docker-hygiene', 'report.json');
+const DOCKER_HYGIENE_FRESH_MS = 24 * 60 * 60 * 1000;
+const DOCKER_HYGIENE_VOLUME_WARN = 20;
+const DOCKER_HYGIENE_BYTES_WARN = 5 * 1000 ** 3;
 
 // collectActiveRunners() conserva la forma pública histórica y no expone el
 // owner ni el archivo que respalda cada fila. Para scopear sin tocar esa
@@ -420,6 +424,55 @@ function checkOnboardProvisioning() {
     return { id, label, status: 'warn', detail: `${parts.join(' · ')} — ese inquilino quedó sin su Pad o sin el clon de su workspace` };
   }
   return { id, label, status: 'ok', detail: `${states.length} alta(s) con provisioning completo` };
+}
+
+// PLAN-2268: Salud solo lee la foto generada por el runner desacoplado. Nunca
+// consulta el daemon Docker desde el request rápido ni barre automáticamente.
+function checkDockerHygiene() {
+  const id = 'docker-hygiene';
+  const label = 'Higiene de Docker';
+  let report;
+  try {
+    report = JSON.parse(fss.readFileSync(DOCKER_HYGIENE_REPORT, 'utf8'));
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      return { id, label, status: 'ok', detail: 'sin reporte todavía · Docker es opcional; generar con node bin/cwc-docker-hygiene-runner.js --report' };
+    }
+    return { id, label, status: 'warn', detail: 'report.json ilegible · regenerar con node bin/cwc-docker-hygiene-runner.js --report' };
+  }
+  if (report?.status === 'unavailable') {
+    return { id, label, status: 'ok', detail: 'Docker no disponible · no afecta la salud de la consola' };
+  }
+
+  const danglingVolumes = Number(report?.volumes?.dangling);
+  const danglingImages = Number(report?.images?.dangling);
+  const volumeBytes = Number(report?.volumes?.bytes);
+  const imageBytes = Number(report?.images?.bytes);
+  const ts = Number(report?.ts);
+  if (![danglingVolumes, danglingImages, volumeBytes, imageBytes, ts].every(Number.isFinite)) {
+    return { id, label, status: 'warn', detail: 'report.json incompleto · regenerar con node bin/cwc-docker-hygiene-runner.js --report' };
+  }
+
+  const reclaimableBytes = volumeBytes + imageBytes;
+  const humanBytes = (bytes) => `${(bytes / 1000 ** 3).toFixed(2)} GB (${bytes} bytes)`;
+  if (danglingVolumes >= DOCKER_HYGIENE_VOLUME_WARN || reclaimableBytes >= DOCKER_HYGIENE_BYTES_WARN) {
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `${danglingVolumes} volumen(es) y ${danglingImages} imagen(es) dangling · ${humanBytes(reclaimableBytes)} reclamables · simular con node bin/cwc-docker-hygiene-runner.js --prune; el barrido humano exige --prune --yes`,
+    };
+  }
+  const age = Date.now() - ts;
+  if (age < 0 || age > DOCKER_HYGIENE_FRESH_MS) {
+    return { id, label, status: 'warn', detail: `reporte viejo (${Math.max(0, Math.floor(age / 3600000))} h) · actualizar con node bin/cwc-docker-hygiene-runner.js --report` };
+  }
+  return {
+    id,
+    label,
+    status: 'ok',
+    detail: `reporte fresco · ${danglingVolumes} volumen(es) y ${danglingImages} imagen(es) dangling · ${humanBytes(reclaimableBytes)} reclamables`,
+  };
 }
 
 function checkTolkienEnvs() {
@@ -800,6 +853,7 @@ async function runChecks() {
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     Promise.resolve(checkOnboardProvisioning()),
+    Promise.resolve(checkDockerHygiene()),
     checkPadBackbone(),
     checkPadIndex(),
     checkPadBootstrap(),

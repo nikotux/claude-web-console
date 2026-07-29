@@ -34,12 +34,12 @@
 // contextoAdicional/contextoAt. `historico` (custom field json) = array de
 // {at, sessionId, resumen, files[]} tal cual, mismo tope HISTORY_MAX de 40.
 //
-// `extractSessionWork()` (mismo archivo) es PURA — lee un transcript .jsonl,
-// no hace NINGÚN I/O de meta-store — se queda 100% igual, sin tocar.
+// `extractSessionWork()` (mismo archivo) es PURA respecto de meta-store/Pad:
+// lee un transcript .jsonl desde el claudeDir ya resuelto para su dueño.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { encodeCwd } from '../../core/claude-model.js';
+import { resolveDataDir } from '../../core/data-dir.js';
 import { findItemByTitle, createItem, updateItem, addLink } from '../../core/pad-service-client.js';
 
 const COLLECTION = 'contexto-de-tickets';
@@ -51,6 +51,13 @@ const HISTORY_MAX = 40;     // tope de entradas de histórico por ítem
 const CONTEXT_MAX = 20000;  // tope de chars del contexto adicional
 const SUMMARY_MAX = 4000;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+let resolveClaudeDirForOwner = null;
+
+// El server inyecta userClaudeDir sin obligar a este archivo —también importado
+// por el runner— a arrastrar core/user-space.js → core/config.js/CWC_TOKEN.
+export function setTicketClaudeDirResolver(resolver) {
+  resolveClaudeDirForOwner = typeof resolver === 'function' ? resolver : null;
+}
 
 function keyOf(id) { return String(id); }
 function blankEntry() { return { contextoAdicional: '', contextoAt: null, historico: [] }; }
@@ -181,13 +188,40 @@ export async function appendHistorico(id, { sessionId, resumen, files }, ctx = n
 // Porta la lógica del board v1 (archivado _archived/.../store.js): recorre el
 // transcript .jsonl y saca los archivos editados (rutas relativas al cwd) + el
 // último texto sustancial del asistente (el cierre suele resumir qué se hizo).
-// PURA — sin I/O de meta-store/Pad — SIN CAMBIOS respecto a la versión file-based.
-function transcriptPath(cwdAbs, sessionId) {
-  return path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwdAbs), `${sessionId}.jsonl`);
+// PURA respecto de meta-store/Pad; el claudeDir del dueño es parte de la firma.
+function transcriptPath(claudeDir, cwdAbs, sessionId) {
+  return path.join(claudeDir, 'projects', encodeCwd(cwdAbs), `${sessionId}.jsonl`);
 }
-export function extractSessionWork(cwdAbs, sessionId) {
+
+// Compatibilidad transitoria para los dos callers históricos de chat/index.js,
+// que está fuera del alcance de PLAN-2274: un chat de inquilino siempre tiene
+// cwd confinado a ~/.cwc-users/<owner>/workspace, de donde recuperamos el owner
+// y se la entregamos al resolver userClaudeDir(owner) inyectado por index.js.
+// Los callers nuevos deben pasar siempre (claudeDir, cwdAbs, sessionId).
+function claudeDirForLegacyCwd(cwdAbs) {
+  const parts = path.resolve(cwdAbs).split(path.sep);
+  const usersAt = parts.lastIndexOf('.cwc-users');
+  const tenantOwner = usersAt >= 0 && parts[usersAt + 2] === 'workspace'
+    ? parts[usersAt + 1]
+    : null;
+  if (resolveClaudeDirForOwner) return resolveClaudeDirForOwner(tenantOwner);
+  if (tenantOwner) {
+    const userRoot = parts.slice(0, usersAt + 2).join(path.sep) || path.sep;
+    return path.join(userRoot, '.claude');
+  }
+  // Fallback config-free para importaciones standalone: resolveDataDir() honra
+  // CWC_DATA_DIR y conserva ~/.cwc-data → ~/.claude para el host.
+  return path.join(path.dirname(resolveDataDir()), '.claude');
+}
+
+export function extractSessionWork(claudeDir, cwdAbs, sessionId) {
+  if (sessionId === undefined) {
+    sessionId = cwdAbs;
+    cwdAbs = claudeDir;
+    claudeDir = claudeDirForLegacyCwd(cwdAbs);
+  }
   let raw;
-  try { raw = fs.readFileSync(transcriptPath(cwdAbs, sessionId), 'utf8'); } catch { return null; }
+  try { raw = fs.readFileSync(transcriptPath(claudeDir, cwdAbs, sessionId), 'utf8'); } catch { return null; }
   const files = new Set();
   let summary = '';
   let lastText = '';

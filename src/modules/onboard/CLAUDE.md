@@ -8,14 +8,25 @@
 módulo es la puerta de alta de inquilinos: un admin ya autenticado emite una
 invitación, el usuario nuevo entra por `/onboard`, se auto-registra con ese
 token y después configura su propia credencial Claude con `claude setup-token`
-corriendo en SU HOME aislado. Después ofrece, como pasos opcionales, conectar la
-cuenta Claude completa para medir el consumo real del plan, Codex e Infisical,
-y cierra el wizard consumiendo la invitación. Si vuelve con el mismo token
+corriendo en SU HOME aislado. Después ofrece la cuenta Claude completa como
+paso opcional; Codex, Infisical y GitHub son obligatorios y el backend no deja
+consumir la invitación mientras falte alguno. Si vuelve con el mismo token
 consumido, puede completar los pasos pendientes sin volver a registrar. La
 implementación vive en
 `src/modules/onboard/index.js`; la persistencia/estado de invitaciones está en
 `src/core/onboard-tokens.js`; el paso PTY de credenciales está delegado a
 `bin/cwc-onboard-runner.js`.
+
+### Catálogo de capacidades (capabilities.js)
+`capabilities.js` es la fuente única del orden y la obligatoriedad declarada de
+los pasos del onboarding. La tabla `CAPABILITIES` reúne identidad, etiqueta,
+detector y rutas de inicio y estado de cada paso. `/validate` deriva de ese
+catálogo tanto los booleanos de estado como `pending`, siempre en el orden
+declarado. `/finish` hace cumplir `required` con `blockingFor(user)`: un cliente
+viejo o un `curl` no pueden saltear el gate. GitHub ocupa `order:5` y se detecta
+con `hasGithubAuth(user)`, que corre `gh auth status` con HOME y entorno aislados
+del usuario. Para agregar un paso nuevo se modifica esa tabla; el frontend
+recibe orden, etiqueta y obligatoriedad desde `/validate`.
 
 ### ⚠️ Lo más importante — superficie PÚBLICA
 `publicRouter` en `src/modules/onboard/index.js` se monta desde
@@ -41,15 +52,16 @@ entre procesos y se resetea al reiniciar el server.
 Endpoints públicos reales:
 `POST /api/onboard/public/validate` llama `validateInvite(req.body?.token)` y
 devuelve `{valid, admin, reason, status, lockedTo, hasToken,
-hasClaudeAccount, hasCodex, hasInfisical, hasTolkienMcp, pending, resume}`.
+hasClaudeAccount, hasCodex, hasInfisical, hasGithub, hasTolkienMcp, pending,
+capabilities, resume}`.
 `valid` conserva EXACTAMENTE la semántica
 estricta de `validateInvite`: una invitación consumida sigue devolviendo
 `valid:false` con razón `ya usado`. Solo en ese caso el endpoint cae a
 `peekInvite(token)` para recuperar `status` y `lockedTo`; si ese usuario existe
 y la invitación no está revocada, `resume:true` habilita exclusivamente la
-reentrada al checklist. Los cinco `has*` son booleanos, nunca secretos, y
-`pending` filtra en orden `['claude','account','codex','infisical']` los que
-falten.
+reentrada al checklist. Los seis `has*` son booleanos, nunca secretos;
+`capabilities` expone solo `{id,required,labelEs,complete}` y `pending` conserva
+el orden del catálogo para los pasos que falten.
 Cuando no hay `lockedTo`, `pending:[]` y `resume:false`. Esta separación es el
 blindaje central: `/register` NO usa `resume` ni `peekInvite`, sigue exigiendo
 `validateInvite`, por lo que un token consumido jamás puede crear otro usuario.
@@ -93,12 +105,37 @@ si `starting`/`exchanging` tiene más de 30 s, y calcula `hasToken` con
 `note` diagnóstico, done/error/stale y booleano `hasToken`; el `pid` queda
 exclusivamente del lado servidor.
 
-`GET /api/onboard/public/provision-status?token=...` usa
-`peekInvite(token)` como gate y resuelve el usuario incluso con la invitación
-ya consumida. Devuelve `{status, steps:{pad,workspace,skills}, stale}` con los
+`GET /api/onboard/public/provision-status?token=...` usa `stepUser(token)` como
+gate y resuelve el usuario incluso con la invitación ya consumida. Devuelve
+`{status, steps:{pad,workspace,skills,tolkien-mcp}, stale}` con los
 estados reales del provisioning posterior al alta; no expone secretos ni rutas
 y los errores ya saneados se recortan antes de responder. Por su sufijo
 `-status` entra en el bucket amplio de polling del rate-limit público.
+
+`POST /api/onboard/public/provision-retry` recibe `{token}`, resuelve el usuario
+con `stepUser`, vuelve a disparar `provisionNewUser(user)` —idempotente— y
+responde el mismo estado público. Como no termina en `-status`, consume el
+bucket de acciones.
+
+`POST /api/onboard/public/smoke` recibe exclusivamente `{token}`, resuelve el
+usuario con `stepUser` y ejecuta `runSmokeChecks(user)` antes de que el wizard
+muestre “listo”. Como no termina en `-status`, usa el bucket estricto de
+ACCIONES. Devuelve cinco resultados `{id,labelEs,status,detail,fixHint}` y cada
+sonda tiene try/catch y timeout propio: un servicio colgado o un fallo no evita
+que las otras cuatro terminen. Todas las ejecuciones parten de
+`userRunnerEnv(user)`; la respuesta nunca incluye tokens, rutas absolutas ni
+salida cruda de comandos.
+
+Las cinco sondas viven en `smoke.js`: `chat` valida la credencial Claude contra
+el listado read-only de modelos, sin generar texto ni consumir tokens;
+`terminal` inicia un PTY real en `userWorkspace(user)` y verifica el cwd real
+con `path.relative`; `mcp` corre `claude mcp list` y exige
+`tolkien-mordor`; `pad` hace solo un GET al workspace `tenant-<user>` con el
+token propio, sin fallback al host y sin crear ítems; `tolkien` lee el job
+persistido por `cwc-tolkien-setup-runner.js` y resume los estados
+store/install/build/typecheck, sin relanzar la instalación. Un job Tolkien
+inexistente queda `skip` con el comando explícito para lanzarlo. Todo `fail`
+lleva un `fixHint` accionable.
 
 `POST /api/onboard/public/creds-code` recibe `{token, code}`. Valida token,
 exige token locked a un usuario, trimmea el código y acepta solo valores no
@@ -145,6 +182,14 @@ deduplica y persiste el job en
 /api/onboard/public/codex-status?token=...` usa `peekInvite`, lee ese job y
 devuelve URL, código y estado sin exponer credenciales.
 
+`POST /api/onboard/public/github-start` y `GET
+/api/onboard/public/github-status?token=...` resuelven el usuario
+exclusivamente con `stepUser`; nunca aceptan `user` por body/query. El start
+reserva atómicamente `~/.cwc-data/gh-login-jobs/<user>.json` mode 600 y lanza
+detached `bin/cwc-gh-login-runner.js --user <user>`. El status devuelve solo
+estado, URL fija `https://github.com/login/device`, código de un solo uso,
+done/error/stale y el booleano `connected`. Por su sufijo usa el bucket amplio.
+
 `POST /api/onboard/public/infisical-start` recibe `{token}`, resuelve el usuario
 con `stepUser`, deduplica un job fresco y escribe sincrónicamente `starting`
 mode 600 antes de lanzar detached
@@ -166,9 +211,11 @@ el archivo inmediatamente. El valor no entra al JSON del job, logs ni
 respuestas HTTP.
 
 `POST /api/onboard/public/finish` recibe `{token}`, valida que siga locked a un
-usuario y llama `consumeInvite(token)`. Es el cierre explícito del wizard; si el
-consumo devuelve false responde `{ok:true, already:true}` para tolerar
-reintentos, y en el caso normal responde `{ok:true}`.
+usuario y evalúa `blockingFor(user)` ANTES de cualquier consumo. Si falta una
+capacidad obligatoria responde 409 con
+`{error:"Faltan pasos obligatorios: …",blocking:[ids]}` y deja la invitación
+intacta. Solo sin bloqueos llama `consumeInvite(token)`; si devuelve false
+responde `{ok:true,already:true}` para tolerar reintentos.
 
 ### Superficie ADMIN
 La superficie admin vive en el `apiRouter` post-auth por
@@ -212,15 +259,26 @@ El tercer paso instala en `<userClaudeDir>/skills/` todas las skills del
 catálogo de `<repo>/.claude/skills/` marcadas `cwc-default: true`. Si el
 catálogo no tiene ninguna default, el paso `skills` termina `ok`: un catálogo
 vacío no debe impedir ni degradar el alta.
-Después de un clon exitoso, `tolkien-mcp-shared.js` registra idempotentemente el
-MCP HTTP `tolkien-mordor`; `/public/finish` lo reintenta best-effort.
+Después de resolver el workspace —clonado o ya existente—,
+`tolkien-mcp-shared.js` registra idempotentemente el MCP HTTP
+`tolkien-mordor`; `/public/finish` lo reintenta best-effort.
 
 `provision-state.js` persiste el resultado de ese trabajo en el HOME del HOST,
 igual que `onboard-jobs/`, porque es estado de administración del alta y no
 dato user-scoped del inquilino. Cada registro vive en
 `~/.cwc-data/onboard-provisioning/<user>.json`, mode 600 y con escritura
 atómica, con forma
-`{user, startedAt, ts, status, steps:{pad,workspace,skills}}`.
+`{user, startedAt, ts, status, steps:{pad,workspace,skills,tolkien-mcp}}`.
+`provisionTolkienMcp` marca siempre su resultado `ok|failed`, igual que los
+otros pasos. `listProvisionStates()` descarta registros cuyo usuario ya no
+existe para que Salud no conserve fantasmas; `deleteProvisionState(user)`
+expone la limpieza idempotente para el flujo de baja.
+
+`provision-user.js` concentra el provisioning completo posterior a `createUser`.
+Su `provisionNewUser(username)` prepara el espacio y dispara Pad, workspace,
+Tolkien MCP y skills sin esperar los trabajos diferidos. Tanto el wizard como
+el alta administrativa llaman esta única función para no mantener dos
+secuencias que deban evolucionar en paralelo.
 
 Para credenciales Claude, `creds-start` spawnea el runner PTY. El runner llama
 `ensureUserSpace(USER)`, arma `userRunnerEnv(USER)` con HOME/CWC_DATA_DIR del
@@ -241,10 +299,14 @@ guarda en `userOauthTokenPath(USER)` mode 600
 `done`, sin consumir la invitación. El server solo usa `readUserOauthToken` en
 `creds-status` para publicar `hasToken`; el secreto no viaja al cliente.
 
-Después del setup-token, el wizard ofrece la cuenta Claude completa, Codex e
-Infisical. La primera corre `claude auth login --claudeai` mediante el mismo
-runner/job compartido con `connections`; es saltable porque solo habilita los
-porcentajes del plan y no condiciona la ejecución de modelos. `codex-start`
+Después del setup-token, el wizard ofrece la cuenta Claude completa y exige
+Codex, Infisical y GitHub. Antes del cierre agrega el paso `smoke`: muestra las
+cinco sondas como pendientes, reemplaza cada una por ✅/❌/⏭ y solo presenta
+“Terminar” cuando las cinco están verdes. Un fallo muestra su `fixHint` y un
+reintento por prueba; también permite “Continuar igual” para no encerrar al
+usuario. La primera corre `claude auth login --claudeai`
+mediante el mismo runner/job compartido con `connections`; es la única
+capacidad saltable porque solo habilita los porcentajes del plan. `codex-start`
 lanza `bin/cwc-codex-login-runner.js`, que usa device-auth y persiste el job en
 `~/.cwc-data/codex-login-jobs/<user>.json`. `infisical-start` lanza su runner
 con HOME/cwd aislados para que el CLI escriba
@@ -257,13 +319,15 @@ registra el override local en SU `.claude.json`. El flujo es idempotente: si la
 entrada ya existe no acuña otro token. Un runner vivo no toma el MCP nuevo hasta
 reabrirse. Al entrar al checklist final, el front llama best-effort a
 `POST /public/finish`, que dispara otro intento de provisioning y consume la
-invitación. Así queda `locked` durante registro, Claude, Codex e Infisical,
+invitación solo si `blockingFor` queda vacío. Así queda `locked` durante
+registro, Claude, Codex, Infisical y GitHub,
 alineado con la decisión de `PLAN-500`.
 
 Contrato de alta: todo usuario nuevo nace con `setup-token` obligatorio para
 ejecutar Claude, más cuenta Claude completa opcional para los porcentajes de
-consumo, Codex opcional e Infisical opcional. La secuencia visible es
-`token → register → creds → account → codex → infisical → done`.
+consumo, y Codex/Infisical/GitHub obligatorios. La secuencia visible y la barra
+de progreso se derivan del orden que devuelve el catálogo; el frontend no
+mantiene una segunda lista manual.
 
 ### Gotchas reales
 TTL default duplicado deliberadamente: `index.js` usa `DEFAULT_TTL_H = 24` para
@@ -274,10 +338,10 @@ Todo endpoint de polling nuevo que se agregue al `publicRouter` tiene que entrar
 en el bucket de estado (`*-status`); de lo contrario volverá a consumir el
 presupuesto de acciones y repetirá el auto-bloqueo del wizard.
 
-El estado de provisioning NO se reintenta solo. Si el server muere a mitad del
-proceso, el registro queda `pending` para siempre y lo delata el check
-`onboard-provisioning` de Salud. Un reintento automático exigiría un runner
-desacoplado por la regla dura 2 y quedó fuera de alcance de console:BUG-2118.
+El estado de provisioning no se reintenta solo, pero el wizard muestra los
+cuatro pasos y ofrece `POST /provision-retry`. El reintento vuelve a ejecutar el
+flujo idempotente; incluso un workspace ya existente (`skipped`) vuelve a
+intentar Tolkien MCP.
 
 El wizard es REANUDABLE por token: con una invitación `locked`, el front salta
 el registro y retoma según `pending`; con una `consumed`, `/validate` sigue

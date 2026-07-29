@@ -242,6 +242,28 @@ export default function chatHelp() {
         ],
       },
       {
+        title: t('chat.help.viz.title', 'Gráficos y diagramas'),
+        icon: 'pulse',
+        blocks: [
+          {
+            type: 'p',
+            text: t('chat.help.viz.charts', 'Cuando la IA muestra datos cuantitativos, pueden aparecer gráficos dibujados directamente dentro del mensaje.'),
+          },
+          {
+            type: 'p',
+            text: t('chat.help.viz.mermaid', 'Los diagramas Mermaid se leen a ancho completo; el botón “Ampliar” los abre en grande para recorrer estructuras y flujos complejos.'),
+          },
+          {
+            type: 'p',
+            text: t('chat.help.viz.source', 'Debajo de cada visualización hay un desplegable “Ver datos del gráfico” o “Ver código Mermaid” con la fuente exacta para copiar.'),
+          },
+          {
+            type: 'p',
+            text: t('chat.help.viz.tokens', 'Los gráficos se dibujan en tu navegador y NO consumen tokens.'),
+          },
+        ],
+      },
+      {
         title: t('chat.help.pacSection', 'Estados del Pac-Man'),
         wide: true,
         blocks: [

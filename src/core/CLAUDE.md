@@ -190,7 +190,15 @@ generateInventory({force}) es ON-DEMAND: solo re-parsea si cambió
 algún mtime/fingerprint. Lo dispara `bin/cwc-inventory.js`. Las
 fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
 unidades cuyo fingerprint cambió), F3 contexto de chats nuevos,
-F4 invariantes, F5 loop que aprende. NADIE lo importa aún —
+F4 invariantes, F5 loop que aprende. Para Coherencia, `CANON_SERVICES`
+incorpora los CUATRO transversales del aislamiento multi-tenant:
+`user-space`, `data-dir`, `system-scope` y `pad-context`; el censo expone
+además la señal `persists` por módulo (LEAD por regex), con exenciones
+hand-authored en `USER_STATE_PERSISTENCE.exclude` para los módulos cuyo estado
+es global A PROPÓSITO: interfono, health, backup, comms y tolkien. Esa señal
+alimenta la regla `aislamiento` de `health/coherence-shared.js`, que marca un
+módulo backend que persiste estado sin consumir ninguno de los cuatro
+(`console:PLAN-2252`). NADIE lo importa aún —
 standalone en F1, cero riesgo al server) ·
 worlds(FUENTE ÚNICA de worldLabelFor(cwd): etiqueta humana "Mi Consola" /
 "Tolkien" / basename, o null si cwd está vacío. `console:BUG-2074`: reemplaza

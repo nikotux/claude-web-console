@@ -6,18 +6,20 @@ import { pullDeskData, enrichFrentes } from './desk-source.js';
 import { readSnapshot, writeSnapshot } from './store.js';
 import { appendHistory } from './history-store.js';
 
-let running = false;
+// El candado es por dueño (representado por su dataDir): un refresh lento de
+// un usuario no debe bloquear ni compartir estado con el refresh de otro.
+const runningDataDirs = new Set();
 
-export function isRefreshing() { return running; }
+export function isRefreshing(dataDir) { return runningDataDirs.has(dataDir); }
 
 // Refresca el snapshot: trae open+done de Desk → enriquece → conteos → persiste.
 // Preserva la clasificación IA previa (override/ownerBall) por `id` si el frente
 // no cambió. `done` alimenta las métricas; no entra a la tabla de tickets.
-export async function refreshNow() {
-  if (running) return readSnapshot();
-  running = true;
+export async function refreshNow(dataDir) {
+  if (isRefreshing(dataDir)) return readSnapshot(dataDir);
+  runningDataDirs.add(dataDir);
   try {
-    const prev = readSnapshot();
+    const prev = readSnapshot(dataDir);
     const prevById = new Map((prev.frentes || []).map((f) => [f.id, f]));
     const { open, done } = await pullDeskData();
     const frentes = open.map((f) => {
@@ -41,9 +43,9 @@ export async function refreshNow() {
     // Registro diario para las tendencias de Métricas (best-effort).
     const byProject = {}; const byDomain = {};
     for (const f of frentes) { const p = f.project || 'Otros'; byProject[p] = (byProject[p] || 0) + 1; byDomain[f.domain || 'otros'] = (byDomain[f.domain || 'otros'] || 0) + 1; }
-    appendHistory({ open: frentes.length, done: done.length, blocked: frentes.filter((f) => f.statusType === 'On Hold').length, byProject, byDomain });
-    return writeSnapshot({ frentes, done, counts, updatedAt: new Date().toISOString(), refreshing: false });
+    appendHistory(dataDir, { open: frentes.length, done: done.length, blocked: frentes.filter((f) => f.statusType === 'On Hold').length, byProject, byDomain });
+    return writeSnapshot(dataDir, { frentes, done, counts, updatedAt: new Date().toISOString(), refreshing: false });
   } finally {
-    running = false;
+    runningDataDirs.delete(dataDir);
   }
 }

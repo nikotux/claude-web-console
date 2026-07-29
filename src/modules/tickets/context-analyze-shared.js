@@ -12,7 +12,6 @@
 // interpreta el texto que viaja entero en el prompt. El runner deniega TODO en
 // las dos capas (PreToolUse + canUseTool). NUNCA lee ni escribe archivos.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -21,16 +20,30 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'ticket-context');
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'ticket-context.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-ticket-context-runner.js');
 
 export const CONTEXT_TIMEOUT_MS = 4 * 60 * 1000;
 export const CONTEXT_STALE_MS = CONTEXT_TIMEOUT_MS + 30 * 1000;
 export const MAX_TRANSCRIPT = 120 * 1000; // ~120k chars: tope defensivo
 
-function ensureDir() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
-function jobPath(id) { return path.join(DATA_DIR, `${id}.json`); }
+// dataDir llega resuelto por operación desde el server (o por argumento en el
+// runner): este módulo es compartido y no puede importar core/user-space.js,
+// porque arrastraría core/config.js y CWC_TOKEN al entorno limpio del inquilino.
+function contextDir(dataDir) {
+  return path.join(dataDir, 'ticket-context');
+}
+
+function logFile(dataDir) {
+  return path.join(dataDir, 'ticket-context.log');
+}
+
+function ensureDir(dataDir) {
+  fs.mkdirSync(contextDir(dataDir), { recursive: true, mode: 0o700 });
+}
+
+function jobPath(dataDir, id) {
+  return path.join(contextDir(dataDir), `${id}.json`);
+}
 
 // Identidad DETERMINÍSTICA por (clave del ítem + transcripción): el MISMO texto
 // sobre el MISMO ticket reusa el job (lock implícito por identidad, no re-gasta).
@@ -38,23 +51,24 @@ export function contextJobId(key, transcript) {
   return crypto.createHash('sha1').update(`${key}\n${transcript}`).digest('hex').slice(0, 24);
 }
 
-export function readJob(id) {
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); } catch { return null; }
+export function readJob(dataDir, id) {
+  try { return JSON.parse(fs.readFileSync(jobPath(dataDir, id), 'utf8')); } catch { return null; }
 }
-export function writeJob(id, job) {
-  ensureDir();
-  const tmp = `${jobPath(id)}.tmp`;
+export function writeJob(dataDir, id, job) {
+  ensureDir(dataDir);
+  const tmp = `${jobPath(dataDir, id)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(job), { mode: 0o600 });
-  fs.renameSync(tmp, jobPath(id));
-  pruneOld();
+  fs.renameSync(tmp, jobPath(dataDir, id));
+  pruneOld(dataDir);
 }
-function pruneOld() {
+function pruneOld(dataDir) {
+  const dir = contextDir(dataDir);
   const PRUNE_MS = 30 * 24 * 3600 * 1000;
   try {
     const now = Date.now();
-    for (const f of fs.readdirSync(DATA_DIR)) {
+    for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.json')) continue;
-      const p = path.join(DATA_DIR, f);
+      const p = path.join(dir, f);
       try { if (now - fs.statSync(p).mtimeMs > PRUNE_MS) fs.unlinkSync(p); } catch { /* noop */ }
     }
   } catch { /* noop */ }
@@ -64,8 +78,8 @@ export function isFreshRunning(job) {
 }
 // Estado efectivo: si quedó 'running' pero el runner murió (pasó STALE), lo
 // reporta como error para que el front no encueste para siempre.
-export function jobResult(id) {
-  const job = readJob(id);
+export function jobResult(dataDir, id) {
+  const job = readJob(dataDir, id);
   if (!job) return null;
   if (job.status === 'running' && (Date.now() - (job.updatedAt || job.startedAt || 0)) > CONTEXT_STALE_MS) {
     return { ...job, status: 'error', error: 'La corrida se quedó sin responder (runner caído).' };
@@ -73,12 +87,29 @@ export function jobResult(id) {
   return job;
 }
 
-export function spawnRunner(id) {
-  ensureDir();
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+export function spawnRunner(dataDir, id, env) {
+  ensureDir(dataDir);
+  const log = logFile(dataDir);
+  fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
+  const logFd = fs.openSync(log, 'a');
+  const child = spawn(process.execPath, [RUNNER, id, '--data-dir', dataDir], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: env ?? process.env,
+  });
+  child.on('error', (err) => {
+    try { fs.appendFileSync(log, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); }
+    catch { /* noop */ }
+    try {
+      const job = readJob(dataDir, id);
+      if (job && job.status === 'running') {
+        writeJob(dataDir, id, {
+          ...job,
+          status: 'error',
+          result: null,
+          error: 'No se pudo iniciar el runner de contexto del ticket.',
+          updatedAt: Date.now(),
+        });
+      }
+    } catch { /* noop */ }
   });
   child.unref();
   fs.closeSync(logFd);

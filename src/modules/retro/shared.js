@@ -6,21 +6,22 @@
 // Patrón calcado de audio/shared.js (job file-based determinístico + spawn
 // detached + staleness pasiva). REGLA DE ORO: todo lo que corre en el tiempo va
 // en el runner desacoplado; acá solo va el filtro determinístico (0 tokens, lee
-// el transcript) + la plomería del job. NO importa el SDK ni core/config.js (el
-// runner carga este archivo: no debe arrastrar dependencias que hagan exit).
+// el transcript) + la plomería del job. NO importa el SDK; el runner carga este
+// archivo y resuelve su data dir desde el CWC_DATA_DIR aislado de su dueño.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { encodeCwd } from '../../core/claude-model.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userClaudeDir, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
-const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'retro');
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'retro.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-runner.js');
 
 export const RETRO_TIMEOUT_MS = 4 * 60 * 1000;
@@ -40,31 +41,49 @@ const MIN_USER_TURNS = 3;        // filtro híbrido: menos que esto y sin códig
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // ===== Job file-based (server escribe 'running', runner escribe 'done') =====
-function jobPath(id) { return path.join(DATA_DIR, `${id}.json`); }
-function ensureDir() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
+function dataDirFor(owner = null) {
+  return owner ? userDataDir(owner) : resolveDataDir();
+}
+export function retroJobsDirFor(owner = null) {
+  return path.join(dataDirFor(owner), 'retro');
+}
+function jobPath(id, owner = null) { return path.join(retroJobsDirFor(owner), `${id}.json`); }
+function ensureDir(owner = null) { fs.mkdirSync(retroJobsDirFor(owner), { recursive: true, mode: 0o700 }); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro.log'); }
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para destilar la sesión.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
+}
 
 export function retroJobId(sessionId) {
   return crypto.createHash('sha1').update(String(sessionId || '')).digest('hex').slice(0, 24);
 }
 
-export function readRetroJob(id) {
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); }
+export function readRetroJob(id, owner = null) {
+  try { return JSON.parse(fs.readFileSync(jobPath(id, owner), 'utf8')); }
   catch { return null; }
 }
 
-export function writeRetroJob(id, data) {
-  ensureDir();
-  writeJsonAtomic(jobPath(id), data);   // tmp por-PID: server y runner escriben el mismo archivo
-  pruneOldJobs();
+export function writeRetroJob(id, data, owner = null) {
+  ensureDir(owner);
+  writeJsonAtomic(jobPath(id, owner), data);   // tmp por-PID: server y runner escriben el mismo archivo
+  pruneOldJobs(owner);
 }
 
-function pruneOldJobs() {
+function pruneOldJobs(owner = null) {
+  const dataDir = retroJobsDirFor(owner);
   let files = [];
-  try { files = fs.readdirSync(DATA_DIR); } catch { return; }
+  try { files = fs.readdirSync(dataDir); } catch { return; }
   const now = Date.now();
   for (const f of files) {
     if (!f.endsWith('.json')) continue;
-    const full = path.join(DATA_DIR, f);
+    const full = path.join(dataDir, f);
     try { if (now - fs.statSync(full).mtimeMs > MAX_AGE_MS) fs.unlinkSync(full); }
     catch { /* noop */ }
   }
@@ -82,20 +101,21 @@ export function jobResult(job) {
 }
 
 // ===== Spawn desacoplado (regla de oro) =====
-export function spawnRetroRunner(id) {
-  ensureDir();
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnRetroRunner(id, owner = null) {
+  ensureDir(owner);
+  const logFile = logFileFor(owner);
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  const logFd = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
   child.on('error', (err) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); }
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); }
     catch { /* noop */ }
     try {
-      const job = readRetroJob(id);
+      const job = readRetroJob(id, owner);
       if (job && job.status === 'running') {
-        writeRetroJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de mejora continua.', updatedAt: Date.now() });
+        writeRetroJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de mejora continua.', updatedAt: Date.now() }, owner);
       }
     } catch { /* noop */ }
   });
@@ -117,10 +137,10 @@ function clampMiddle(s, max) {
 // Lee el jsonl del transcript de la sesión y arma: turnos reales del usuario,
 // archivos tocados por herramientas de edición, y un texto CONDENSADO
 // (usuario/asistente/marcadores de tool) para alimentar la destilación.
-export function readTranscript(cwd, sessionId, claudeDir = null) {
-  // En multi-tenant, el .claude es el del DUEÑO. El llamador lo pasa ya
-  // resuelto porque este módulo no importa user-space a propósito.
-  const base = claudeDir || path.join(os.homedir(), '.claude');
+export function readTranscript(cwd, sessionId, claudeDir = null, owner = null) {
+  // En multi-tenant, el .claude es el del DUEÑO. El llamador puede pasarlo ya
+  // resuelto; si no, se deriva con userClaudeDir(owner).
+  const base = claudeDir || userClaudeDir(owner || hostUser());
   const file = path.join(base, 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
@@ -172,19 +192,22 @@ function classifyProject(cwd) {
 // Best-effort total: cualquier falla se traga (nunca bloquea el cierre del chat).
 export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId, owner, claudeDir } = {}) {
   if (!cwd || !sessionId) return;
-  const sig = readTranscript(cwd, sessionId, claudeDir);
+  const effectiveOwner = owner || hostUser();
+  const sig = readTranscript(cwd, sessionId, claudeDir, effectiveOwner);
   if (!sig) return;
   // FILTRO: solo destilamos chats con sustancia (tocó código, o conversación de
   // varios turnos, o fue trabajo de ticket/tema). Los triviales ("gracias") no gastan tokens.
   const substantive = sig.files.size > 0 || sig.userTurns >= MIN_USER_TURNS || !!ticketNumber || !!learningId;
   if (!substantive) return;
   const id = retroJobId(sessionId);
-  const existing = readRetroJob(id);
+  const existing = readRetroJob(id, effectiveOwner);
   if (existing && (existing.status === 'done' || isFreshRunning(existing))) return; // dedup: no re-gastar
   writeRetroJob(id, {
     id,
     status: 'running',
     startedAt: Date.now(),
+    // Registros históricos del barrido host usaban null; conservar ese byte
+    // mientras la ruta efectiva igual se resuelve con el hostUser.
     owner: owner || null,
     context: sig.condensed,
     meta: {
@@ -198,8 +221,8 @@ export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, l
     },
     result: null,
     error: null,
-  });
-  spawnRetroRunner(id);
+  }, effectiveOwner);
+  spawnRetroRunner(id, effectiveOwner);
 }
 
 // ===== Prompt de destilación (texto puro, doble deny en el runner) =====

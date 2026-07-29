@@ -21,7 +21,39 @@ desde abajo, con grip + swipe-down para cancelar + botones full-width
 táctiles 44px; devuelve Promise<boolean> igual que confirmDialog. Lo usa
 el botón "Detener" del chat (chat-tab.js: confirma antes de enviar
 {type:'interrupt'} — Parar/Cancelar). Estilos .dlg-sheet* en ui.css) ·
-markdown.js (sanitizado ALLOWLIST) · diff.js · popup.js (dismissablePopup) ·
+markdown.js (renderer sanitizado por ALLOWLIST + TRES mejoras posteriores:
+`enhanceChartBlocks(root)` convierte bloques `chart` con JSON en Chart.js
+(`doughnut|pie|bar|hbar|line`, hasta 6 por mensaje; `hbar` normaliza a
+`bar` + `indexAxis:'y'`; bar/line admiten hasta 4 series). El JSON del
+modelo NUNCA llega a `new Chart()`: `parseChartSpec()` valida y normaliza
+campo por campo con allowlist estricta, topes (`CHART_MAX_CHARS=8000`, 24
+labels de 40 chars) y `chartConfig()` reconstruye la config desde cero;
+JSON/type inválido degrada a fuente visible + `.md-chart-error` sin romper
+el mensaje. `chartTheme()` toma CERO hex: lee con `getComputedStyle` la
+paleta `CHART_PALETTE` de tokens.css y la cicla con módulo. `liveCharts`
+destruye al siguiente barrido las instancias cuyo canvas ya no está
+conectado, porque Chart.js retiene canvas/listener de resize. Cada figure
+incluye tabla `.md-chart-data` sr-only con `clip-path` — NUNCA
+`display:none`, que también la ocultaría del lector — y la fuente queda
+plegada en `.md-chart-src` ("Ver datos del gráfico").
+`enhanceInlineBars(root)` convierte SOLO una celda `td`/`th` cuyo texto
+completo matchea `{bar:NN}` en micro-barra + porcentaje, creando nodos DOM
+después del sanitizado. Mermaid ya NO es miniatura: `fitMermaidSvg(canvasEl)`
+encaja el SVG proporcionalmente como `object-fit:contain` desde su `viewBox`
+(fallback defensivo a `getBBox()`), limpia `width`/`height` y los
+`maxWidth`/`minWidth` inline de Mermaid sin borrar el `background`, y calcula
+`fitScale=min(anchoDisponible/w,altoMax/h,MERMAID_MAX_SCALE)`; el tope 2.2
+evita que un diagrama mínimo se vuelva un cartel. El piso de legibilidad
+`MERMAID_MIN_SCALE=0.85` se aplica como
+`max(fitScale,min(MERMAID_MIN_SCALE,altoMax/h))`: ese `min` interno es
+DELIBERADO para que un diagrama muy alto pueda bajar de 0.85 y siempre entre.
+Ese alto se lee de `max-height` en el CSS del canvas (padding descontado;
+fallback `innerHeight*0.70`), no se duplica en JS. El fit corre al insertar,
+en el siguiente `requestAnimationFrame` y mediante un `ResizeObserver` por
+canvas; `mermaidObservers`, como `liveCharts`, desconecta targets muertos al
+siguiente barrido. Si sobra ancho, el holder recibe `.md-mermaid--pan`, scroll
+horizontal y una pista para deslizar o usar "Ampliar") · diff.js · popup.js
+(dismissablePopup) ·
 code.js (resaltado hljs COMPARTIDO para detalles de tool calls y
 diffs: SOLO con lenguaje confiable — extensión conocida o bash
 explícito, nada de autodetección sobre logs — y con topes de
@@ -179,6 +211,31 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   string para innerHTML, tomá `renderMarkdown(x).innerHTML` (learning.js usa
   el helper `mdHtml` para eso — sigue siendo seguro porque el nodo ya pasó
   por sanitize()).
+
+- El ORDEN de `renderMarkdown()` es parte del contrato de seguridad:
+  `sanitize → enhanceInlineBars → enhanceCodeBlocks → enhanceChartBlocks →
+  enhanceMermaidBlocks`. `enhanceInlineBars` va DESPUÉS de `sanitize()` y
+  usa `createElement`, por eso `SPAN` NO necesita entrar al ALLOWLIST. Si se
+  mueve antes del sanitizado o se reescribe con `innerHTML`, se abre un
+  agujero: no cambiar ese orden sin revisar de nuevo todo el límite de
+  confianza.
+
+- Mermaid: NUNCA usar `.md-mermaid svg` para dimensionar el diagrama; también
+  alcanza el `<svg>` del ícono dentro de `.md-mermaid-zoom-btn` y estira la
+  lupa a ~70px (bug real de la primera versión). El selector correcto es
+  `.md-mermaid-canvas > svg`; el blindaje
+  `.md-mermaid .cwc-icon { width:auto; height:auto; max-width:none; flex:none; }`
+  evita que una regla futura del canvas vuelva a deformar el badge.
+
+- Mermaid: NUNCA forzar `width:100%` sobre un SVG con `viewBox`: deforma el
+  encuadre en vez de hacer un fit proporcional. Caso medido: un mindmap
+  natural de 127×476 terminó en 1076×4037 px (×8.5) dentro de un canvas de
+  665 px; el usuario veía apenas el 16% del diagrama.
+
+- Mermaid: el `max-height` de `.md-mermaid-canvas` en CSS es la FUENTE DE
+  VERDAD y `fitMermaidSvg()` lo lee con `getComputedStyle`; no duplicar ese
+  número en JS. El valor JS de 70% y el móvil CSS de 62vh se desincronizaron
+  en silencio y dejaron un flowchart TD de 591 px dentro de una caja de 523.
 
 - Pac-Man — MOTOR de estados (pedido del usuario 2026-07-05, reemplaza el
   loader binario working/dormido de antes): catálogo ÚNICO en

@@ -9,7 +9,7 @@
 // sin golpear Zoho en cada apertura.
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { hostUser } from '../../core/user-space.js';
+import { userDataDir, userClaudeDir, userRunnerEnv, hostUser } from '../../core/user-space.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import { reqPadContext } from '../../core/pad-context.js';
 import { getTicketState, listDepartments } from './desk-mcp-client.js';
@@ -19,11 +19,15 @@ import { enrich } from './derive.js';
 import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
 import { getContext, saveContext, DEFAULT_CONTEXTS, verifySync, syncToTolkien } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
-import { getMeta, saveContexto, clearContexto } from './meta-store.js';
+import { getMeta, saveContexto, clearContexto, setTicketClaudeDirResolver } from './meta-store.js';
 import { getTicket as zohoGetTicket, assignTicket as zohoAssignTicket } from '../../core/zoho-desk-client.js';
 import {
   contextJobId, readJob, writeJob, spawnRunner, jobResult, isFreshRunning, MAX_TRANSCRIPT,
 } from './context-analyze-shared.js';
+
+// meta-store también lo importa el runner con env limpio: inyectamos acá el
+// helper server-side en vez de hacerle importar core/user-space.js.
+setTicketClaudeDirResolver((owner) => userClaudeDir(owner || hostUser()));
 
 // Actor de la request para los claims: usuario logueado, o "token-maestro" si
 // entró por el token admin. Cuando existan agentes con identidad propia, pasarán
@@ -43,6 +47,10 @@ function actorOf(req) {
 function externalUserOf(req) {
   return principalOf(req)?.username || hostUser();
 }
+
+// Dueño de todo estado privado de la operación. El principal ausente conserva
+// el HOME real del host por retrocompatibilidad.
+const ownerOf = (req) => principalOf(req)?.username || hostUser();
 
 // Al TOMAR un ticket, además asignarlo en Zoho al usuario que lo toma (PLAN-781):
 // "lo tomo yo" y "soy su dueño en Desk" son la misma cosa, y así el trabajo queda
@@ -279,32 +287,56 @@ export default {
     // mismo ítem = mismo job, no re-gasta). Responde YA; el front encuesta el GET.
     r.post('/meta/context-analyze', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const owner = ownerOf(req);
+      const dataDir = userDataDir(owner);
       const key = keyOf(req.body?.key);
       const transcript = String(req.body?.transcript ?? '').slice(0, MAX_TRANSCRIPT);
       if (!key) return res.status(400).json({ error: 'Falta la clave del ítem.' });
       if (transcript.trim().length < 20) return res.status(400).json({ error: 'Pegá una transcripción (mín. 20 caracteres).' });
       const id = contextJobId(key, transcript);
-      const existing = readJob(id);
+      const existing = readJob(dataDir, id);
       if (existing && (existing.status === 'done' || isFreshRunning(existing))) {
         return res.json({ id, status: existing.status }); // reusa (no relanza ni gasta)
       }
       const now = Date.now();
-      writeJob(id, {
+      writeJob(dataDir, id, {
         id, key,
-        owner: principalOf(req)?.username || null,
+        owner,
         itemTitle: String(req.body?.itemTitle ?? '').slice(0, 300),
         itemDesc: String(req.body?.itemDesc ?? '').slice(0, 4000),
         transcript,
         status: 'running', result: null, rendered: null, error: null,
         startedAt: now, updatedAt: now,
       });
-      spawnRunner(id);
+      try {
+        const padCtx = reqPadContext(req);
+        const runnerEnv = owner === hostUser()
+          ? undefined
+          : {
+              ...userRunnerEnv(owner),
+              ...(padCtx?.url ? { CWC_PAD_URL: padCtx.url } : {}),
+              ...(padCtx?.workspace ? { CWC_PAD_WORKSPACE: padCtx.workspace } : {}),
+            };
+        spawnRunner(dataDir, id, runnerEnv);
+      } catch (spawnErr) {
+        const msg = String(spawnErr?.message || spawnErr).slice(0, 300);
+        writeJob(dataDir, id, {
+          id, key, owner,
+          itemTitle: String(req.body?.itemTitle ?? '').slice(0, 300),
+          itemDesc: String(req.body?.itemDesc ?? '').slice(0, 4000),
+          transcript,
+          status: 'error', result: null, rendered: null, error: msg,
+          startedAt: now, updatedAt: Date.now(),
+        });
+        return res.status(500).json({ error: msg });
+      }
       res.json({ id, status: 'running' });
     });
     // Poll del job (solo lee disco, 0 tokens).
     r.get('/meta/context-analyze/:jobId', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      const job = jobResult(String(req.params.jobId).replace(/[^a-f0-9]/gi, ''));
+      const dataDir = userDataDir(ownerOf(req));
+      const job = jobResult(dataDir, String(req.params.jobId).replace(/[^a-f0-9]/gi, ''));
       if (!job) return res.status(404).json({ error: 'Job inexistente.' });
       // No devolvemos la transcripción entera de vuelta (puede ser grande).
       const { transcript, ...rest } = job;

@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { userWorkspace, ensureUserSpace, hostUser, sanitizeUserId } from './user-space.js';
 
@@ -13,6 +14,8 @@ import { userWorkspace, ensureUserSpace, hostUser, sanitizeUserId } from './user
 const STRATEGY = (process.env.CWC_CLONE_STRATEGY || 'shallow').toLowerCase();
 const REFERENCE_BASE = process.env.CWC_CLONE_REFERENCE_BASE || ''; // clon base para --reference
 const CLONE_TIMEOUT_MS = Number(process.env.CWC_CLONE_TIMEOUT_MS) || 180000;
+const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const TOLKIEN_SETUP_RUNNER = fileURLToPath(new URL('../../bin/cwc-tolkien-setup-runner.js', import.meta.url));
 
 // Arma los args de `git clone` segun la estrategia.
 function cloneArgs(source, dest) {
@@ -23,6 +26,26 @@ function cloneArgs(source, dest) {
     return ['clone', '--reference', REFERENCE_BASE, '--dissociate', source, dest];
   }
   return ['clone', '--depth', '1', '--single-branch', '--branch', 'main', source, dest]; // default shallow
+}
+
+// Lanza best-effort la preparación pesada del clon en un runner desacoplado.
+// El caller futuro debe invocarla únicamente después de un clone exitoso; no
+// altera provisionUserWorkspace ni convierte el setup en parte de su promesa.
+export function launchTolkienSetupRunner(userId) {
+  try {
+    const id = sanitizeUserId(userId);
+    const child = spawn(process.execPath, [TOLKIEN_SETUP_RUNNER, '--user', id], {
+      cwd: PROJECT_ROOT,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    });
+    child.once('error', () => { /* best-effort: el job reporta errores propios */ });
+    child.unref();
+    return { ok: true, pid: child.pid };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e).slice(0, 200) };
+  }
 }
 
 // Provisiona (idempotente, best-effort) el clon de trabajo del inquilino.

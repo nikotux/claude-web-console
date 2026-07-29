@@ -17,9 +17,13 @@
 // Las propuestas NUNCA se auto-aplican: la UI las muestra y el usuario aprueba
 // cada una; aplicar reusa el CRUD determinístico de store.js.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
+import { padContextForUser } from '../../core/pad-context.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { listTopics, listRoutes } from './store.js';
@@ -27,24 +31,40 @@ import { listTopics, listRoutes } from './store.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const LOG_FILE = path.join(DATA_DIR, 'learning-analyze.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-learning-analyze-runner.js');
-const FILE = path.join(DATA_DIR, 'learning-analysis.json');
 
 export const ANALYZE_TIMEOUT_MS = 4 * 60 * 1000;
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+function dataDirFor(owner = null) {
+  return owner ? userDataDir(owner) : resolveDataDir();
 }
-export function readAnalysisJob() {
-  try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); }
+export function analysisFileFor(owner = null) {
+  return path.join(dataDirFor(owner), 'learning-analysis.json');
+}
+function logFileFor(owner = null) {
+  return path.join(dataDirFor(owner), 'learning-analyze.log');
+}
+function ensureDir(owner = null) {
+  fs.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 });
+}
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para analizar el aprendizaje.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
+}
+export function readAnalysisJob(owner = null) {
+  try { return JSON.parse(fs.readFileSync(analysisFileFor(owner), 'utf8')); }
   catch { return null; }
 }
-export function writeAnalysisJob(data) {
-  ensureDir();
-  writeJsonAtomic(FILE, data); // tmp-por-PID (BUG-30): sin colisión del tmp de nombre fijo en respawn
+export function writeAnalysisJob(data, owner = null) {
+  ensureDir(owner);
+  writeJsonAtomic(analysisFileFor(owner), data); // tmp-por-PID (BUG-30): sin colisión del tmp de nombre fijo en respawn
 }
 export function isFreshRunning(job) {
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= ANALYZE_STALE_MS;
@@ -56,11 +76,12 @@ export function jobResult(job) {
   }
   return { status: job.status, result: job.result || null, error: job.error || null };
 }
-export function spawnLearningAnalyzeRunner() {
-  ensureDir();
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnLearningAnalyzeRunner(owner) {
+  ensureDir(owner);
+  const logFile = logFileFor(owner);
+  const logFd = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
   child.unref();
   fs.closeSync(logFd);
@@ -72,10 +93,11 @@ export function spawnLearningAnalyzeRunner() {
 // ahora son promesas (llaman al Pad local por HTTP). Sus dos call sites
 // (POST /analyze de index.js y bin/cwc-learning-analyze-runner.js) ya lo esperan
 // con await.
-export async function buildContext() {
-  const { topics } = await listTopics();
+export async function buildContext(ctx = null) {
+  const effectiveCtx = ctx || padContextForUser(readAnalysisJob()?.owner || null);
+  const { topics } = await listTopics(effectiveCtx);
   if (!topics.length) return null;
-  const routes = await listRoutes();
+  const routes = await listRoutes(effectiveCtx);
   const context = {
     topics: topics.map((t) => ({
       id: t.id,

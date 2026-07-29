@@ -12,24 +12,37 @@
 // retro (destino sugerido 'contexto': al adoptarla, se inyecta sola en TODO
 // chat de bug futuro).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const LOG_FILE = path.join(DATA_DIR, 'retro-feedback.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-feedback-runner.js');
 
 export const FEEDBACK_TIMEOUT_MS = 4 * 60 * 1000;
 export const FEEDBACK_STALE_MS = FEEDBACK_TIMEOUT_MS + 30 * 1000;
 
-function ensureDir() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
-function jobPath(id) { return path.join(DATA_DIR, `retro-feedback-${id}.json`); }
+function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function ensureDir(owner = null) { fs.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); }
+function jobPath(id, owner = null) { return path.join(dataDirFor(owner), `retro-feedback-${id}.json`); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-feedback.log'); }
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para interpretar feedback.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
+}
 
 // id DETERMINÍSTICO por texto+ticket: reintentar el mismo pegado reusa el
 // MISMO job (no gasta tokens de nuevo), mismo patrón que tickets/learning.
@@ -37,12 +50,12 @@ export function feedbackJobId(text, ticketRef) {
   return crypto.createHash('sha1').update(`${ticketRef || ''}\n${text}`).digest('hex').slice(0, 24);
 }
 
-export function readFeedbackJob(id) {
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); } catch { return null; }
+export function readFeedbackJob(id, owner = null) {
+  try { return JSON.parse(fs.readFileSync(jobPath(id, owner), 'utf8')); } catch { return null; }
 }
-export function writeFeedbackJob(id, data) {
-  ensureDir();
-  writeJsonAtomic(jobPath(id), data);
+export function writeFeedbackJob(id, data, owner = null) {
+  ensureDir(owner);
+  writeJsonAtomic(jobPath(id, owner), data);
 }
 export function isFeedbackFreshRunning(job) {
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= FEEDBACK_STALE_MS;
@@ -55,17 +68,18 @@ export function feedbackJobResult(job) {
   return { status: job.status, result: job.result || null, error: job.error || null };
 }
 
-export function spawnRetroFeedbackRunner(id) {
-  ensureDir();
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnRetroFeedbackRunner(id, owner) {
+  ensureDir(owner);
+  const logFile = logFileFor(owner);
+  const logFd = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
   child.on('error', (err) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); } catch { /* noop */ }
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); } catch { /* noop */ }
     try {
-      const job = readFeedbackJob(id);
-      if (job && job.status === 'running') writeFeedbackJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de feedback.', updatedAt: Date.now() });
+      const job = readFeedbackJob(id, owner);
+      if (job && job.status === 'running') writeFeedbackJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de feedback.', updatedAt: Date.now() }, owner);
     } catch { /* noop */ }
   });
   child.unref();

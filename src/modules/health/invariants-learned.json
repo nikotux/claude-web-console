@@ -1,422 +1,222 @@
 [
   {
-    "match": "src/modules/*/index.js",
-    "text": "Toda función que decide spawnear un proceso exclusivo (uno-a-la-vez) debe chequear y escribir su propio lock de forma sincrónica dentro de esa misma función, sin depender del lock que escriba el proceso hijo",
-    "addedAt": 1783117415270
+    "match": "src/modules/**/index.js",
+    "text": "Ninguna excepción de un handler HTTP puede escapar a Express: no hay middleware de errores global ni handler de unhandledRejection, así que el cliente recibiría HTML o la request quedaría colgada. Todo handler r.get/post/put/delete que haga I/O (fs, tmux, spawn, JSON.parse, await que pueda lanzar) responde JSON desde su propio catch. Violación: cuerpo de handler con await riesgoso y sin catch.",
+    "origen": "Fusiona los aprendidos #40 #46 #50 #52 #55 #60 #69 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/*.js",
-    "text": "Todo campo booleano recibido en req.body que se pasa a una función core (createUser/setAdmin) debe validarse con `typeof x === 'boolean'` antes de usarse, nunca coercionado con `!!x`",
-    "addedAt": 1783124364478
+    "text": "El código de estado de un catch debe reflejar de QUIÉN fue la culpa, y eso solo lo sabe el punto que lanzó: un 4xx hardcodeado convierte un fallo del servidor en 'culpa del cliente' y esconde el bug. El error se marca al lanzarlo (.badRequest→400, .conflict→409) y el catch deriva de esa propiedad; lo no reconocido es 500. Violación: .status(400) fijo como única salida de un catch.",
+    "origen": "Fusiona #71 #73 #75 #77 #78 #79 #81 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/**/*.js",
-    "text": "Toda función que parsea /proc/*info con regex debe validar que cada campo requerido fue efectivamente encontrado (no asumir match) antes de usarlo en una división o resta, y debe tener un fallback numérico explícito cuando el campo falta",
-    "addedAt": 1783124378106
+    "match": "src/modules/**/index.js",
+    "text": "Un booleano del cliente coercionado con !! convierte la string 'false' en true: la validación se salta sin que nadie se entere. Todo campo booleano de req.body se rechaza con 400 si typeof !== 'boolean', ANTES de coercionarlo o pasarlo a una función de core — vale especialmente para los que deciden rol o privilegio (isAdmin, setAdmin). Violación: !!req.body.x sin chequeo de tipo previo.",
+    "origen": "Fusiona #2 #35 #49 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/terminal/*.js",
-    "text": "ningún array de Buffers del PTY se serializa vía Array.prototype.join/toString antes de reenviarse por WebSocket; el replay/broadcast debe usar Buffer.concat o enviar Buffers directamente",
-    "addedAt": 1783124382250
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "todo callback registrado vía `.on(...)`/`onData`/`onExit` de un emitter externo (node-pty, ws, child_process) debe envolver su cuerpo en try/catch antes de delegar a un método propio",
-    "addedAt": 1783124384450
+    "match": "src/modules/**/index.js",
+    "text": "Un array de rutas o ítems que llega del cliente sin tope permite que una sola request haga N operaciones de filesystem: es amplificación barata de denegación de servicio. Todo endpoint que itere sobre un array del cliente valida su longitud contra un máximo explícito antes de tocar disco y responde 400 si lo excede. Violación: for/map sobre req.body.paths sin comparar .length contra una constante.",
+    "origen": "Generaliza #7, que vigilaba solo files/index.js — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/admin/**/*.js",
-    "text": "Toda ruta HTTP que elimine o modifique el propio recurso de identidad del usuario autenticado (username, cuenta, sesión) debe comparar el target contra principalOf(req).username y rechazar con 409 si coinciden",
-    "addedAt": 1783124385810
-  },
-  {
-    "match": "src/modules/files/index.js",
-    "text": "Todo endpoint que reciba un array de rutas/ítems desde el cliente (req.body.paths, req.body.items, etc.) debe validar su longitud contra un máximo explícito antes de iterar sobre el filesystem",
-    "addedAt": 1783124387515
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Toda función async que hace fetch mutante (POST/DELETE) a /api/** debe chequear res.ok y mostrar el error al usuario en un catch, nunca silenciarlo con catch(()=>{}) o try/finally sin catch",
-    "addedAt": 1783124389116
+    "text": "Un admin que se borra, se degrada o se renombra a sí mismo puede dejar la consola sin ningún administrador, y no hay forma de revertirlo desde la UI. Toda ruta que modifique o elimine la identidad de un usuario compara el target contra principalOf(req).username y responde 409 si coinciden; un no-admin nunca altera la cuenta de otro. Violación: PUT/DELETE /users/:username sin esa comparación.",
+    "origen": "Fusiona #6 #31 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/*.js",
-    "text": "antes de cualquier writeFileSync que reconstruya un archivo a partir de fragmentos parseados, el código debe verificar explícitamente join(split(original)) === original (o el invariante de reconstrucción declarado) y abortar si falla, en vez de confiar implícitamente en la función de split",
-    "addedAt": 1783124390490
+    "text": "Todo estado que pertenece a UN usuario resuelve su directorio a partir del DUEÑO del dato, no del proceso: en el server os.homedir()/config.home dan siempre el HOME del host y le filtrarían al inquilino los datos de otro. Se usa userDataDir(owner)/resolveDataDir() por operación, nunca una constante de módulo. Violación: path.join(os.homedir(),'.cwc-data') para estado de usuario.",
+    "origen": "Reemplaza al aprendido #47, que exigía respaldo en ~/.cwc-data del host — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/index.js",
-    "text": "Todo handler POST/PUT/DELETE que llame a sessionManager.create() (o equivalente que haga spawn de un proceso) debe estar envuelto en try-catch con limpieza (kill+remove) en el catch",
-    "addedAt": 1783124391857
+    "text": "Un listado sin filtro por dueño le muestra a un usuario el trabajo de otro, y el aislamiento se cae en silencio: no rompe nada, solo revela. Toda operación que enumere, adjunte o lea recursos de usuario filtra por owner — un no-admin ve SOLO lo suyo, un admin ve todo, y lo ajeno o inexistente responde 404 sin revelar que existe. Violación: un list()/get() nuevo que no reciba el principal.",
+    "origen": "Familia declarada en la sección Multi-tenant de CLAUDE.md; no existía como invariante — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "exclude": [
+      "src/modules/terminal/sessions.js",
+      "src/modules/chat/runner-link.js"
+    ],
+    "text": "Un proceso spawneado en nombre de un inquilino que hereda ...process.env se lleva el HOME, las credenciales y el token del HOST: los turnos los pagaría el admin. El env se arma por allowlist con HOME, CWC_DATA_DIR y OAuth del dueño, y sin credencial propia el proceso NO arranca (fail-closed). Violación: env con ...process.env en un spawn cuyo owner no es el host.",
+    "origen": "Familia Blindaje anticonsumo de CLAUDE.md; los archivos excluidos ya tienen su SEED específico — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "public/js/modules/**/*.js",
+    "text": "Un endpoint que falla responde JSON de error o HTML, y llamar a .json() a ciegas o lanza o entrega un objeto vacío que el código trata como éxito: el usuario ve que 'no pasó nada'. Todo fetch a /api/** verifica res.ok antes de usar el body y muestra el error con dialog.alertDialog. Violación: fetch().then(r=>r.json()) sin chequear ok, o un .catch(()=>{}) vacío.",
+    "origen": "Fusiona #8 #33 #34 #36 #38 #39 #58 #59 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "public/js/**/*.js",
+    "text": "Un fetch de poller sin timeout se acumula: si el server tarda, cada intervalo abre otra request y la pestaña termina con decenas colgadas. Todo fetch invocado desde setInterval pasa el signal de un AbortController con timeout explícito. Violación: setInterval con fetch sin signal.",
+    "origen": "Fusiona #20 #25 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "public/js/ui/*.js",
+    "text": "Un render sin tope sobre datos externos puede crear decenas de miles de nodos y congelar la pestaña; el usuario no distingue eso de un cuelgue. Todo render de contenido externo o del usuario trunca su entrada o sus nodos con un límite explícito y avisa visiblemente que truncó. Violación: un map() sobre datos de la API que genera nodos sin cota.",
+    "origen": "Fusiona #19 #53 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "public/js/ui/*.js",
+    "text": "Interpolar una variable dentro de un atributo HTML sin escapar permite cerrar la comilla e inyectar otro atributo: basta un título de sesión o un nombre de archivo con comillas. Todo valor no literal dentro de un atributo pasa por escapeAttr/escapeHtml. Violación: un template-string con interpolación dentro de las comillas de un atributo.",
+    "origen": "Reescribe #54 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Un spawn que falla lanza sincrónicamente, y un callback de emitter externo (node-pty, ws, child_process, archiver) que lanza tumba el proceso entero: no hay quien lo atrape aguas arriba. Todo spawn y todo cuerpo de callback .on()/onData/onExit va en try/catch con log, y en la rama de error NO se registra la entidad a medio crear. Violación: pty.spawn o .on('data') sin protección.",
+    "origen": "Fusiona #5 #10 #18 #28 #29 #30 #43 #61 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Un Map de módulo usado como caché crece sin techo mientras el proceso viva: es una fuga de memoria lenta que solo se nota en un server que no se reinicia. Todo Map/objeto de módulo que cachee resultados declara una constante MAX_* y expulsa (FIFO/LRU) en el punto del .set(). No aplica a registros de entidades vivas. Violación: cache.set() sin control de tamaño.",
+    "origen": "Fusiona #27 #44 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/index.js",
-    "text": "Toda función que envuelve múltiples llamadas a git()/execFile con callback-based promises que solo resuelven (nunca rechazan) debe verificar explícitamente `code !== 0` de cada resultado usado para construir la respuesta, o lanzar/propagar un error en su lugar",
-    "addedAt": 1783124395033
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo endpoint que haga stash→pull/merge --ff-only→pop debe, si el pop falla, revertir el HEAD al estado previo al pull (o devolver 409 documentando el estado) — nunca responder 200 dejando la rama avanzada con el stash sin reaplicar",
-    "addedAt": 1783124396282
-  },
-  {
-    "match": "src/core/*.js, src/modules/*/index.js",
-    "text": "Toda función loadX/saveX de I/O en core/*.js que se use desde un handler HTTP debe exponer su éxito/fracaso (retorno boolean o throw) y el handler debe verificarlo antes de responder 200",
-    "addedAt": 1783124397565
+    "text": "Dos requests concurrentes que encuentran la caché vencida disparan dos llamadas externas caras, y la segunda puede sobrescribir el timestamp de control con datos viejos. La llamada se deduplica con una promesa compartida en vuelo, y el timestamp se asigna DENTRO del then que la resuelve, nunca tras un await en el handler. Violación: asignar el timestamp después del await.",
+    "origen": "Fusiona #22 #41 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/**/*.js",
-    "text": "toda función wrapper de execFile/exec en src/**/*.js debe rechazar la promesa cuando err.killed, err.signal, o err.code no es numérico, en vez de convertir cualquier error en {code}",
-    "addedAt": 1783124398611
+    "text": "Un wrapper de execFile que convierte todo error en {code} borra la diferencia entre 'el comando falló' y 'lo mató un timeout o una señal': el llamador lee un éxito vacío. El wrapper rechaza cuando err.killed, err.signal o err.code no es numérico, y quien lo use verifica code!==0 antes de construir la respuesta. Violación: un catch que devuelve un valor de éxito.",
+    "origen": "Fusiona #13 #14 #37 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/*/index.js",
-    "text": "toda respuesta JSON de status() en módulos que hagan stash/pull/pop debe incluir un campo que refleje estado git persistido (ej. stash pendiente) detectable tras un reinicio, sin depender de variables en memoria",
-    "addedAt": 1783124400401
+    "match": "src/modules/**/index.js",
+    "text": "El lock que escribe el proceso hijo llega tarde: entre el spawn y su escritura entra un segundo spawn y corren dos procesos exclusivos a la vez. La función que decide spawnear chequea y escribe el lock sincrónicamente ella misma, antes del spawn. Violación: depender del lock del hijo para la exclusión.",
+    "origen": "Reescribe #1, el aprendido más viejo — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/terminal/sessions.js, src/modules/tmux/index.js",
-    "text": "Toda sesión rehidratada cuyo `titleKey(config.tmuxSocket, tmuxName)` tenga entrada en titles.json debe recibir ese valor como `session.title` (no basename(cwd))",
-    "addedAt": 1783124401903
+    "match": "src/core/*.js, src/modules/files/**/*.js, src/modules/projects/**/*.js",
+    "text": "resolveWithinHome confina la ruta como STRING: un symlink dentro del árbol permitido apunta afuera y la escritura escapa igual. Antes de mutar el filesystem hay que confirmar con realpathSync que la carpeta contenedora REAL sigue dentro del root, y toda ruta relativa se valida ANTES de persistirla, no solo al restaurarla. Violación: mkdir/rename/write tras resolveWithinHome sin verificación real.",
+    "origen": "Fusiona #23 #45 #72 #82 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/chat/index.js",
-    "text": "Todo case del switch en _onRunnerEvent que muta un campo persistente de estado (this.permissionMode, this.model, this.sessionId, etc.) debe llamar this.onUpdate?.() en el mismo case",
-    "addedAt": 1783124403518
+    "match": "src/modules/projects/*.js, src/modules/**/memory.js",
+    "text": "Reconstruir un archivo desde fragmentos parseados y escribirlo sin verificar la reconstrucción destruye el original cuando el parser falla en un caso no previsto: el usuario pierde el contenido sin aviso. Antes del write hay que comprobar que join(split(original)) === original y abortar si no coincide. Violación: writeFileSync de fragmentos sin esa comprobación.",
+    "origen": "Reescribe #9 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/**/*.js",
-    "text": "Ninguna llamada a `.spawn(` dentro de un `for`/`while` en src/modules/**/*.js debe estar fuera de un bloque try/catch",
-    "addedAt": 1783124404774
-  },
-  {
-    "match": "public/js/ui/*.js",
-    "text": "Ningún bucle de renderizado de UI debe crear más de un número acotado (p. ej. 1000) de nodos DOM por bloque de contenido derivado de datos externos/usuario sin paginación o truncado explícito",
-    "addedAt": 1783124558509
-  },
-  {
-    "match": "public/js/*.js",
-    "text": "Todo fetch() dentro de una función invocada por setInterval en el frontend debe usar AbortController con timeout explícito",
-    "addedAt": 1783124559401
-  },
-  {
-    "match": "public/js/ui/*.js",
-    "text": "ningún archivo bajo public/js/ui/**/*.js debe contener la cadena \"highlightAuto\"",
-    "addedAt": 1783124560086
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo endpoint que cachea el resultado de una llamada externa costosa (fetch a Anthropic/API remota) con TTL debe usar una promesa compartida en vuelo para deduplicar requests concurrentes que llegan dentro de la misma ventana de staleness",
-    "addedAt": 1783124560521
-  },
-  {
-    "match": "src/core/*.js",
-    "text": "Todo módulo que persiste una ruta relativa proveniente de un caller externo debe llamar a resolveWithinHome()/clampToHome() y descartar el valor si retorna null/home antes de escribir a disco",
-    "addedAt": 1783124562531
-  },
-  {
-    "match": "src/modules/files/index.js",
-    "text": "Todo llamado a archiver.glob() en el proyecto debe incluir `follow: false` (o `maxDepth`) para no seguir symlinks recursivamente",
-    "addedAt": 1783124562940
-  },
-  {
-    "match": "public/js/*.js",
-    "text": "Todo `fetch(...)` invocado desde un poller periódico (setInterval) en public/js/*.js debe pasar `{signal}` de un AbortController con timeout",
-    "addedAt": 1783124563321
+    "match": "src/modules/**/memory.js, src/modules/projects/index.js",
+    "text": "Un archivo que puede editarse desde la UI y desde una escritura automática se pisa en silencio si el POST no sabe qué contenido vio el editor. El endpoint acepta un hash del contenido esperado y responde 409 si el actual no coincide. Violación: un POST que sobrescribe un archivo leído por GET sin verificar hash.",
+    "origen": "Fusiona #57 #83 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/memory.js",
-    "text": "Ninguna función write* de src/modules/*/memory.js debe truncar contenido con .slice(0, MAX_SIZE) antes de escribir a disco; debe lanzar error si Buffer.byteLength(contenido) > MAX_SIZE",
-    "addedAt": 1783124564041
+    "text": "Truncar con .slice(0, MAX) antes de escribir guarda una versión mutilada que el usuario cree completa: el daño es silencioso e irreversible. Si el contenido excede el máximo se lanza un error con {badRequest:true}; nunca se recorta. Violación: .slice(0, MAX_SIZE) en el camino de escritura.",
+    "origen": "Reescribe #26 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/**/*.js",
-    "text": "Todo Map/objeto module-level usado como caché de archivos o resultados debe tener un límite de tamaño explícito (constante MAX/TTL) y lógica de expulsión antes de `.set()`",
-    "addedAt": 1783124564471
+    "match": "src/modules/files/index.js",
+    "text": "Un archiver que sigue symlinks puede empaquetar todo el disco, dos entradas top-level con el mismo nombre se pisan dentro del zip, y un stream destruido sin responder deja al cliente esperando para siempre. glob() va con follow:false, los nombres de entrada se hacen únicos antes de agregarlos, y el handler de 'error' intenta el JSON 500 antes del destroy. Violación: cualquiera de las tres.",
+    "origen": "Fusiona #24 #62 #64 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/terminal/sessions.js",
-    "text": "Todo método de SessionManager que llame a `new Session(...).spawn(...)` debe envolver el spawn() en try/catch con console.error antes de propagar o registrar la sesión",
-    "addedAt": 1783124567117
+    "match": "src/modules/tolkien/*.js",
+    "text": "Una secuencia stash→pull→pop deja el repo en un estado intermedio si un paso falla, y responder 200 igual hace creer que todo salió bien mientras el stash quedó sin reaplicar. Cada paso verifica su código de salida, un stash no benigno aborta antes del pull, un pop fallido revierte el HEAD o responde 409, y el rollback también se verifica. Violación: asumir el éxito de un comando de recuperación.",
+    "origen": "Fusiona #11 #12 #15 #48 #65 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/**/*.js",
-    "text": "Todo pty.spawn()/child_process.spawn() en el código debe estar envuelto en try/catch (o su promesa debe tener .catch) antes de registrar handlers sobre el proceso devuelto",
-    "addedAt": 1783124567505
+    "match": "src/modules/**/index.js",
+    "text": "Una variable en memoria que forma parte de una respuesta de estado desaparece al reiniciar el server y el cliente ve 'todo normal' sobre un estado que no es. Todo estado que sobreviva al request se persiste en el directorio de datos DE SU DUEÑO y se recarga al iniciar el módulo. Violación: un status() que reporta desde una variable de módulo sin respaldo en disco.",
+    "origen": "Fusiona #15 y la parte sana de #47 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "src/modules/terminal/*.js",
-    "text": "Todo callback pasado a proc.onExit/proc.onData de un pty/emitter externo debe tener su cuerpo envuelto en try/catch con logging en el catch",
-    "addedAt": 1783126394461
+    "text": "Los bytes que salen por el WebSocket deben ser byte-idénticos a los que emitió el PTY: cualquier conversión implícita a string por el camino corrompe UTF-8 multibyte y secuencias de escape, y la terminal muestra basura. El replay y el broadcast operan sobre Buffers. Violación: join()/toString() sobre un array de Buffers antes de enviarlo.",
+    "origen": "Reescribe #4, que prescribía Buffer.concat en vez de la propiedad — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
-    "match": "src/modules/admin/*.js",
-    "text": "Todo endpoint que permite modificar o eliminar un recurso de \"usuario\" (PUT/DELETE /users/:username) debe rechazar con 409 cuando principalOf(req).username === username del path",
-    "addedAt": 1783126395632
-  },
-  {
-    "match": "src/modules/chat/index.js",
-    "text": "En chat/index.js, toda rama \"motor dormido\" (`if (this.link) {...} else {...}`) de un setter de estado persistente (mode, model, etc.) debe llamar `this.onUpdate?.()` tras `this._push()`",
-    "addedAt": 1783126396522
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Todo `fetch(...)` seguido de `.json()` debe verificar `res.ok` (o envolver el `.json()` en `.catch()`) antes de asumir que el body es JSON válido",
-    "addedAt": 1783126397092
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Toda función que hace fetch POST a /api/* y usa res.ok debe tener un catch que llame dialog.alertDialog (o equivalente) para no tragarse errores silenciosamente",
-    "addedAt": 1783126397697
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo campo booleano recibido en req.body debe rechazar valores no-boolean con 400 antes de coercionarse con `!!` o pasarse a una función core",
-    "addedAt": 1783126398197
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Todo `await res.json()` seguido de un chequeo `res.ok` debe usar `.catch(() => ({}))` (o verificar res.ok antes de parsear) para no perder el mensaje de error ante bodies no-JSON",
-    "addedAt": 1783126399767
-  },
-  {
-    "match": "src/core/**/*.js",
-    "text": "Todo wrapper de execFileSync/execFile con opción throwOnError=false debe re-lanzar (o propagar como rechazo) cuando err.killed===true o err.signal esté seteado, en vez de devolver un valor de éxito vacío",
-    "addedAt": 1783126400632
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Todo `fetch(...).then(r => r.json())` sobre endpoints propios debe verificar `res.ok` antes de parsear/usar el body, propagando el mensaje de error del servidor",
-    "addedAt": 1783126401236
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Todo `fetch(...).then((r) => r.json())` en public/js/modules/**/*.js debe verificar `r.ok` antes de parsear JSON",
-    "addedAt": 1783126401832
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo handler HTTP de router (`r.get`/`r.post`/etc.) que ejecuta I/O (tmux, filesystem) debe envolver su cuerpo en try/catch y responder JSON con status 500 en el catch, nunca dejar propagar la excepción",
-    "addedAt": 1783126402483
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "En cualquier endpoint con promesa compartida (`xxxBuildPromise`/`xxxFetchPromise`) y caché con TTL, la variable de timestamp de control (`xxxAt`) solo debe asignarse dentro del `.then()`/callback que resuelve la promesa compartida, nunca después de un `await` sobre esa promesa en el handler del request.",
-    "addedAt": 1783126403152
-  },
-  {
-    "match": "src/modules/tmux/*.js",
-    "text": "Toda llamada a saveTitles(...) en src/modules/tmux/index.js debe estar dentro de un `if (!saveTitles(...))` (o equivalente que use su valor de retorno)",
-    "addedAt": 1783126404347
-  },
-  {
-    "match": "src/modules/terminal/sessions.js",
-    "text": "Todo método público de SessionManager que invoque `new Session(...).spawn(...)` debe capturar la excepción con `try/catch`, loguear con `console.error` y NO llamar `this.sessions.set(...)` en la rama de error",
-    "addedAt": 1783126405266
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo `Map` module-level usado como caché (no como registro de entidades vivas) debe tener una constante `MAX_*` y lógica de expulsión (FIFO/LRU) en su punto de `set()`",
-    "addedAt": 1783126409017
-  },
-  {
-    "match": "src/core/*.js",
-    "text": "Toda función que persiste un campo `*Rel`/`*originalRel` derivado de una ruta de usuario en un archivo JSON de estado debe validarlo con resolveWithinHome/clampToHome ANTES de escribir a disco, no solo al leerlo/restaurarlo",
-    "addedAt": 1783126410126
-  },
-  {
-    "match": "src/modules/*/index.js (handlers `r.post`/`r.put`/`r.delete` async)",
-    "text": "Todo handler HTTP async en modules/*/index.js que haga `await` sobre una función capaz de lanzar (spawn de procesos, tmux, filesystem) debe envolver esa llamada en try/catch con respuesta 5xx, dado que no hay middleware global de errores ni handler de unhandledRejection que lo cubra",
-    "addedAt": 1783126411336
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Toda variable en memoria que forma parte de la respuesta JSON de un endpoint GET de estado (status()) debe tener un respaldo en disco bajo ~/.cwc-data/ que se cargue al iniciar el módulo",
-    "addedAt": 1783126412557
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Toda rama de código que ejecuta un comando de rollback/recuperación (git reset, restore, checkout, etc.) tras un fallo debe verificar su código de salida y reflejarlo en la respuesta/mensaje al cliente, nunca asumir éxito fijo",
-    "addedAt": 1783131993051
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo endpoint que acepta un campo booleano en req.body debe responder 400 si ese campo está presente y typeof !== 'boolean', antes de coercionarlo o pasarlo a una función core",
-    "addedAt": 1783131994268
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo handler Express en src/modules/**/*.js que invoque una función que pueda lanzar (I/O de fs, JSON.parse, etc.) debe estar envuelto en try/catch y responder JSON en el catch, nunca dejar que la excepción llegue al manejador de errores por defecto de Express",
-    "addedAt": 1783131995117
-  },
-  {
-    "match": "public/js/ui/dialog.js",
-    "text": "Ningún test/código debe registrar un listener `document.addEventListener('keydown', ..., true)` que cierre un modal sin antes verificar que ese modal es el tope de una pila global de modales abiertos",
-    "addedAt": 1783131995838
-  },
-  {
-    "match": "src/modules/*/index.js",
-    "text": "Todo handler de router registrado con router.get/post/put/delete que hace await de I/O debe envolver su cuerpo en try/catch y responder res.status(500).json({error:...}) en el catch",
-    "addedAt": 1783131996533
-  },
-  {
-    "match": "public/js/ui/*.js",
-    "text": "Todo render de contenido externo/usuario (modelo, diffs, código) debe truncar su entrada o sus nodos DOM resultantes con un tope explícito y un aviso visible de truncado, nunca generar un número no acotado de nodos DOM.",
-    "addedAt": 1783132000877
-  },
-  {
-    "match": "public/js/ui/*.js",
-    "text": "Ningún template-string en public/js/ui/*.js interpola una variable no literal dentro de un atributo HTML (`attr=\"${...}\"`) sin pasarla antes por una función de escape (escapeAttr/escapeHtml)",
-    "addedAt": 1783132001998
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo handler registrado vía `r.get/post/put/delete(...)` en registerHttp debe envolver su cuerpo en try/catch con una respuesta res.status(500).json({error:...}) en el catch",
-    "addedAt": 1783132309933
-  },
-  {
-    "match": "src/core/*.js",
-    "text": "Ninguna función exportada en core/*.js debe declarar un parámetro con el mismo nombre que un import de nivel de módulo (evita shadowing de defensas de validación de rutas)",
-    "addedAt": 1783132376637
-  },
-  {
-    "match": "src/modules/**/index.js, src/modules/**/memory.js",
-    "text": "Todo endpoint POST que sobreescribe un archivo completo leído previamente vía GET debe aceptar un hash opcional del contenido esperado y responder 409 (no pisar en silencio) si el hash no coincide con el contenido actual en disco",
-    "addedAt": 1783132378236
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Todo POST mutante a /api/** en public/js/modules/**/*.js debe revisar res.ok y/o data.error y mostrar dialog.alertDialog en el error (nunca un catch vacío)",
-    "addedAt": 1783132464023
-  },
-  {
-    "match": "public/js/modules/**/*.js",
-    "text": "Toda función que hace fetch mutante (POST/PUT/DELETE) a /api/** debe chequear res.ok y nunca silenciarlo con .catch(() => {})/.catch(() => ({})) sin propagar el fallo",
-    "addedAt": 1783132465697
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo handler registrado vía `router.get/post/put/delete` en src/modules/**/index.js debe envolver su cuerpo en try/catch y responder `res.status(500).json({error})` en el catch",
-    "addedAt": 1783134421759
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo callback registrado con `.on('error', ...)` sobre un EventEmitter externo (archiver, node-pty, ws, child_process) debe envolver su cuerpo completo en try/catch antes de invocar res.status/json/destroy o cualquier API que pueda lanzar",
-    "addedAt": 1783134422922
-  },
-  {
-    "match": "src/modules/files/index.js",
-    "text": "En cualquier ruta que agregue múltiples entradas top-level a un mismo archiver/zip a partir de una selección de items, los nombres asignados a esas entradas (name/prefix) deben ser únicos entre sí antes de llamar a archive.file()/archive.glob()",
-    "addedAt": 1783134424337
-  },
-  {
-    "match": "src/modules/tmux/index.js",
-    "text": "GET /api/tmux/sessions nunca borra una entrada de titles.json cuyo socket dueño falló su consulta list-sessions en esa misma petición",
-    "addedAt": 1783134427572
-  },
-  {
-    "match": "src/modules/files/index.js",
-    "text": "Todo handler `archive.on('error', ...)` en endpoints de streaming zip debe intentar `res.status(500).json({error})` antes de `res.destroy()`, nunca destruir sin intentar JSON primero",
-    "addedAt": 1783136644042
-  },
-  {
-    "match": "src/modules/tolkien/index.js",
-    "text": "Tras cualquier `git stash push` no benigno (code!==0 y stdout+stderr no matchea /No local changes/), el handler debe retornar/abortar antes de ejecutar `git pull`",
-    "addedAt": 1783136649087
-  },
-  {
-    "match": "src/modules/**/*.js (cualquier ruta que sirva archivos de usuario)",
-    "text": "Ningún endpoint que sirva contenido subido por el usuario (`res.sendFile`/`res.download`/streaming de archivos) debe dejar que el Content-Type se derive de la extensión del archivo sin pasar por una allowlist explícita de tipos \"seguros para render inline\"; todo lo demás debe ir con `Content-Disposition: attachment`.",
-    "addedAt": 1783136793913
+    "match": "src/modules/tmux/*.js, src/modules/terminal/sessions.js",
+    "text": "Un list-sessions que falla y se lee como 'no hay sesiones' hace que el código borre los títulos de sesiones vivas: el error se convierte en pérdida de datos. La consulta va con throwOnError y se envuelve por socket; ante un fallo NO se poda ninguna entrada de titles.json, y toda escritura de títulos verifica su valor de retorno. Violación: tratar el catch como lista vacía.",
+    "origen": "Fusiona #16 #42 #63 #70 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "bin/*.js",
-    "text": "Todo `fs.writeFileSync(P, ...)` en bin/*.js debe estar precedido en el mismo archivo por un `fs.mkdirSync(path.dirname(P), { recursive: true })` (o equivalente) para el mismo path P",
-    "addedAt": 1783260848797
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Toda promesa lanzada con `Promise.race([p, ...])` donde `p` puede seguir viva tras perder la carrera debe tener un `.catch()` adjunto en el mismo statement o inmediatamente después de su creación",
-    "addedAt": 1783260852776
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "Todo handler registrado vía r.get/post/put/delete(...) en registerHttp debe envolver su cuerpo en try/catch con una respuesta res.status(500).json en el catch",
-    "addedAt": 1783260854842
-  },
-  {
-    "match": "src/modules/tmux/index.js",
-    "text": "Toda llamada a listSessionsForSocket(sock) en src/modules/tmux/index.js debe pasar { throwOnError: true } y envolver en try/catch por-socket (nunca leer un fallo de tmux list-sessions como \"socket vacío\")",
-    "addedAt": 1783260856657
-  },
-  {
-    "match": "src/modules/**/index.js",
-    "text": "En cualquier catch de handler HTTP que hace I/O de filesystem, el status code debe derivarse de una propiedad explícita del error (`.badRequest`/`.conflict`) y nunca ser un 4xx hardcodeado por defecto — el fallback no reconocido debe ser 500.",
-    "addedAt": 1783260955842
-  },
-  {
-    "match": "src/modules/files/index.js",
-    "text": "Todo endpoint de escritura/borrado en src/modules/files/index.js que reciba una ruta vía resolveWithinHome debe validar con statSafeSync (o equivalente que resuelva symlinks) que la ruta real de la carpeta contenedora siga dentro de homeReal() antes de llamar a cualquier fss.*Sync/moveToTrash que mute el filesystem",
-    "addedAt": 1783260957451
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo `throw new Error(...)` dentro de src/modules/*/*.js que representa una validación de input del usuario (tamaño excedido, formato inválido, etc.) debe llevar `{ badRequest: true }` (o `{ conflict: true }` si es un conflicto de concurrencia), y toda ruta Express que haga `catch (e) { res.status(...) }` debe chequear `e.badRequest`/`e.conflict` antes de caer a 500, para que los 5xx queden reserv",
-    "addedAt": 1783260958864
-  },
-  {
-    "match": "bin/install-*.js",
-    "text": "Ningún contenido de comando .md generado (grep `!\\`` en bin/install-*.js) interpola una variable de plantilla shell (`$ARGUMENTS`, `$1`, etc.) sin encomillarla dentro del backtick de ejecución",
-    "addedAt": 1783260960432
-  },
-  {
-    "match": "src/modules/projects/index.js",
-    "text": "Todo catch de endpoint bajo /:key/context/section/** debe mapear e.badRequest→400 y e.conflict→409 antes de default 500",
-    "addedAt": 1783261848280
-  },
-  {
-    "match": "src/modules/files/**/*.js",
-    "text": "Para toda entrada con symlink:true en la respuesta de /list, size y mtimeMs deben provenir del mismo stat (el que determina type) — nunca mezclar fs.stat (target) para type con fs.lstat (enlace) para size/mtimeMs",
-    "addedAt": 1783261849625
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "Todo catch de ruta HTTP que responde 4xx a partir de una excepción capturada debe derivar el código de una propiedad explícita del error (`.badRequest`/`.conflict`/etc.), nunca un status 4xx hardcodeado por defecto; fallback no reconocido = 500",
-    "addedAt": 1783261851126
-  },
-  {
-    "match": "src/modules/projects/*.js",
-    "text": "Todo `throw new Error(...)` disparado por una validación de tamaño/formato de input de usuario en src/modules/projects/*.js debe incluir `{ badRequest: true }`, y toda ruta POST/PUT en src/modules/projects/index.js debe mapear `e.badRequest ? 400 : 500` en su catch",
-    "addedAt": 1783261852790
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "En todo catch de un handler HTTP, el status de la respuesta debe derivar de una propiedad explícita del error (p.ej. `.badRequest`/`.upstream`/`.conflict`) marcada en el punto donde se lanza, nunca de un literal `.status(NNN)` hardcodeado como único camino para todos los errores del bloque try.",
-    "addedAt": 1783261858049
-  },
-  {
-    "match": "src/modules/*/index.js",
-    "text": "Ningún endpoint HTTP de src/modules/**/index.js que modifique el estado de una sesión tmux externa (send-keys, resize, etc.) debe hacer más de una llamada a runTmux con throwOnError:true por request cuando esas llamadas representan pasos de una misma operación lógica (p. ej. escribir texto + Enter); deben encadenarse en una sola invocación tmux (`;`) o usar un único comando.",
-    "addedAt": 1783261864467
-  },
-  {
-    "match": "src/modules/**/*.js",
-    "text": "En cualquier catch genérico de una ruta HTTP, el status de respuesta debe ser 500 salvo que el error capturado exponga explícitamente `.badRequest` (→400) o `.conflict` (→409); nunca un 4xx hardcodeado sin distinguir el tipo de error.",
-    "addedAt": 1783261912969
-  },
-  {
-    "match": "src/modules/files/index.js, src/core/trash.js",
-    "text": "Todo handler que haga mkdirSync/renameSync/writeFile sobre una ruta derivada de resolveWithinHome() debe validar con statSafeSync (o equivalente basado en realpathSync) que la carpeta contenedora REAL sigue dentro de homeReal() antes de mutar el filesystem",
-    "addedAt": 1783261945179
-  },
-  {
-    "match": "src/modules/**/memory.js",
-    "text": "Toda función write*() en src/modules/*/memory.js (o equivalente) que persista un archivo editable tanto por un admin desde la UI como por una escritura automática/externa concurrente debe aceptar un expectedHash opcional y rechazar con error .conflict si el hash actual no coincide, en vez de pisar en silencio",
-    "addedAt": 1783262012728
+    "text": "Un writeFileSync sobre un directorio que todavía no existe hace fallar al runner en su primera corrida de una instalación limpia, que es justo el escenario donde nadie está mirando. Todo write a una ruta de estado va precedido de mkdirSync(dirname, {recursive:true}). Violación: writeFileSync sin mkdir previo para ese mismo path.",
+    "origen": "Reescribe #67 — console:PLAN-2252",
+    "addedAt": 1785298968518
   },
   {
     "match": "bin/**/*.js",
-    "text": "[MC-850] Scripts de verificación E2E que usan node_modules van en el repo, no en /tmp — Al escribir un script temporal de verificación (Playwright, Node) que depende de las dependencias del proyecto, crearlo directamente dentro del repo (o una subcarpeta tipo /tmp-scripts del propio proyecto) desde el arranque, no en /tmp, para evitar el paso extra de reubicarlo tras el fallo de resolución de mód…",
-    "addedAt": 1785086729494
+    "text": "Un script temporal de verificación creado en /tmp no resuelve los módulos del proyecto y falla por resolución de dependencias, obligando a reubicarlo después del error. Todo script de verificación que dependa de node_modules nace dentro del repo. Violación: crear el script en /tmp.",
+    "origen": "MC-850 de Mejora Continua — reescribe #84",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/stats/*.js",
+    "text": "Parsear /proc con regex y usar el resultado sin verificar que el campo se encontró produce NaN silencioso en una división o resta, y el gauge muestra un número inventado. Cada campo requerido se comprueba antes de usarse y tiene un fallback numérico explícito. Violación: usar el resultado de un match sin chequear que existe.",
+    "origen": "Reescribe #3 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "public/js/ui/dialog.js",
+    "text": "Un listener de keydown en captura que cierra 'el modal' cierra el equivocado cuando hay dos abiertos: el usuario pierde el diálogo de arriba y queda mirando el de abajo. Antes de cerrar hay que verificar que ese modal es el tope de la pila global de modales abiertos. Violación: un handler de Escape que cierra sin consultar la pila.",
+    "origen": "Reescribe #51 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/core/*.js",
+    "text": "Un parámetro que se llama igual que un import del módulo lo tapa dentro de la función: la defensa que creías estar llamando (una validación de rutas, por ejemplo) pasa a ser el argumento que te pasaron. Ninguna función exportada de core declara un parámetro homónimo de un import de nivel de módulo. Violación: un parámetro con el nombre de un import del propio archivo.",
+    "origen": "Reescribe #56 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/**/index.js",
+    "text": "Servir un archivo subido por el usuario con el Content-Type derivado de su extensión permite que un .html o .svg propio se ejecute como script en el origen de la consola, con la sesión de quien lo abra. El tipo sale de una allowlist de formatos seguros para render inline; todo lo demás va con Content-Disposition: attachment. Violación: sendFile de contenido de usuario sin allowlist.",
+    "origen": "Revive y reescribe #66, que estaba MUERTO por su patrón — console:BUG-2253",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/**/*.js",
+    "text": "Una promesa que pierde un Promise.race sigue viva, y si después rechaza no hay quien la escuche: Node la reporta como unhandled rejection y puede tumbar el proceso. Toda promesa pasada a un race que pueda seguir viva lleva su .catch() adjunto en el mismo statement. Violación: un race con una promesa sin catch propio.",
+    "origen": "Reescribe #68 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "bin/install-*.js",
+    "text": "Una variable de plantilla shell sin comillas dentro del backtick de un comando .md generado permite que un argumento con espacios o metacaracteres se expanda como comando: el instalador escribe la puerta y el usuario la abre sin saber. Toda interpolación de plantilla dentro de un backtick de ejecución va encomillada. Violación: una variable de plantilla sin comillas en el comando generado.",
+    "origen": "Reescribe #74 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/files/**/*.js",
+    "text": "Mezclar stat (que sigue el symlink) para el tipo con lstat (el enlace) para el tamaño produce una fila que describe dos archivos distintos: el usuario ve una carpeta que pesa 4 KB o un archivo con la fecha equivocada. Para una entrada con symlink:true, type, size y mtimeMs salen todos del MISMO stat. Violación: dos llamadas distintas alimentando la misma fila.",
+    "origen": "Reescribe #76 — console:PLAN-2252",
+    "addedAt": 1785298968518
+  },
+  {
+    "match": "src/modules/tmux/*.js",
+    "text": "Escribir texto y mandar Enter en dos invocaciones separadas de tmux deja una ventana entre ambas: si la segunda falla, la sesión queda con una línea a medio escribir que el usuario no pidió. Los pasos de una misma operación lógica se encadenan en una sola invocación. Violación: dos llamadas a tmux para un mismo send-keys lógico.",
+    "origen": "Reescribe #80 — console:PLAN-2252",
+    "addedAt": 1785298968518
   }
 ]

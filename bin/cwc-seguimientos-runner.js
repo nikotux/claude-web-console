@@ -7,20 +7,27 @@
 // dashboard. Lo dispara POST /api/seguimientos/classify (dedup por lock).
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { resolveDataDir } from '../src/core/data-dir.js';
 import { readSnapshot, writeSnapshot } from '../src/modules/seguimientos/store.js';
 import { classifyFrentes } from '../src/modules/seguimientos/classify-shared.js';
 
-const DIR = path.join(os.homedir(), '.cwc-data', 'seguimientos');
+const args = process.argv.slice(2);
+const dataDirIndex = args.indexOf('--data-dir');
+// La ruta explícita del server tiene prioridad; sin ella, resolveDataDir()
+// conserva CWC_DATA_DIR y el fallback retrocompatible del host.
+const dataDir = dataDirIndex < 0 ? resolveDataDir() : args[dataDirIndex + 1];
+const DIR = dataDir ? path.join(dataDir, 'seguimientos') : '';
 const LOCK = path.join(DIR, 'classify.lock');
 
 function setFlag(v) {
-  const s = readSnapshot();
+  const s = readSnapshot(dataDir);
   s.classifying = v;
-  writeSnapshot(s);
+  writeSnapshot(dataDir, s);
 }
 
 async function main() {
+  if (!dataDir) { console.error('[seguimientos] falta la ruta después de --data-dir.'); process.exit(1); return; }
+  fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
   // Dedup: lock fresco (<10 min) ⇒ ya hay una clasificación corriendo.
   try {
     const st = fs.statSync(LOCK);
@@ -29,7 +36,7 @@ async function main() {
   fs.writeFileSync(LOCK, String(process.pid));
   setFlag(true);
   try {
-    const snap = readSnapshot();
+    const snap = readSnapshot(dataDir);
     const frentes = snap.frentes || [];
     if (!frentes.length) { console.error('[seguimientos] sin frentes que clasificar'); return; }
 
@@ -45,7 +52,7 @@ async function main() {
     const kept = classified.filter((f) => !f.isBackend);
     const excluded = classified.length - kept.length;
     const counts = { ...(snap.counts || {}), total: kept.length, classified: n, backendExcluded: excluded };
-    writeSnapshot({ ...snap, frentes: kept, counts, classifying: false, classifiedAt: new Date().toISOString() });
+    writeSnapshot(dataDir, { ...snap, frentes: kept, counts, classifying: false, classifiedAt: new Date().toISOString() });
     console.error(`[seguimientos] clasificados ${n}/${frentes.length} · excluidos backend: ${excluded}`);
   } finally {
     setFlag(false);

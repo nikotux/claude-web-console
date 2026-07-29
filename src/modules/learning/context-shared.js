@@ -16,17 +16,18 @@
 // DOS capas (hook PreToolUse + canUseTool deniegan TODO). El texto de la
 // transcripción viaja entero en el prompt; nunca lee/escribe disco.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const LOG_FILE = path.join(DATA_DIR, 'learning-context.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-learning-context-runner.js');
 
 export const CONTEXT_MAX_TURNS = 1;
@@ -45,8 +46,22 @@ export const MAX_TRANSCRIPT = 120000;
 // Cero herramientas: ninguna tool está permitida (regla 6, doble capa).
 export function contextToolAllowed() { return false; }
 
-function ensureDir() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
-function jobPath(id) { return path.join(DATA_DIR, `learning-context-${id}.json`); }
+function dataDirFor(owner = null) {
+  return owner ? userDataDir(owner) : resolveDataDir();
+}
+function ensureDir(owner = null) { fs.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); }
+function jobPath(id, owner = null) { return path.join(dataDirFor(owner), `learning-context-${id}.json`); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'learning-context.log'); }
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para interpretar la charla.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
+}
 
 // id DETERMINÍSTICO por tema+transcripción: un reintento con el mismo texto
 // reusa el MISMO job (no gasta tokens de nuevo), mismo patrón que tickets.
@@ -54,12 +69,12 @@ export function contextJobId(topicId, transcript) {
   return crypto.createHash('sha1').update(`${topicId}\n${transcript}`).digest('hex').slice(0, 24);
 }
 
-export function readContextJob(id) {
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); } catch { return null; }
+export function readContextJob(id, owner = null) {
+  try { return JSON.parse(fs.readFileSync(jobPath(id, owner), 'utf8')); } catch { return null; }
 }
-export function writeContextJob(id, data) {
-  ensureDir();
-  writeJsonAtomic(jobPath(id), data); // tmp-por-PID (BUG-30)
+export function writeContextJob(id, data, owner = null) {
+  ensureDir(owner);
+  writeJsonAtomic(jobPath(id, owner), data); // tmp-por-PID (BUG-30)
 }
 export function isContextFreshRunning(job) {
   return !!job && job.status === 'running' && (Date.now() - job.startedAt) <= CONTEXT_STALE_MS;
@@ -72,11 +87,11 @@ export function contextJobResult(job) {
   return { status: job.status, error: job.error || null };
 }
 
-export function spawnLearningContextRunner(id) {
-  ensureDir();
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnLearningContextRunner(id, owner) {
+  ensureDir(owner);
+  const logFd = fs.openSync(logFileFor(owner), 'a');
   const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
   child.unref();
   fs.closeSync(logFd);

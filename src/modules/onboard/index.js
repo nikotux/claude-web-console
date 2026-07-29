@@ -9,39 +9,31 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
-import { provisionUserPad } from '../../core/pad-provision.js';
-import { provisionUserWorkspace } from '../../core/workspace-provision.js';
 import { createUser, isValidUsername, listUsers, setUserLang } from '../../core/users.js';
 import {
-  ensureCliOnboarded,
   ensureUserSpace,
   hasCodexCreds,
   hasInfisicalCreds,
   readUserOauthToken,
-  userClaudeDir,
 } from '../../core/user-space.js';
 import { generateInvite, listInvites, revokeInvite, validateInvite, peekInvite, lockInvite, consumeInvite } from '../../core/onboard-tokens.js';
-import { installDefaults } from '../skills/catalog.js';
-import { provisionTolkienMcp, tolkienMcpStatus } from './tolkien-mcp-shared.js';
-import { startProvision, markProvisionStep, readProvisionState } from './provision-state.js';
+import {
+  blockingFor,
+  CAPABILITIES,
+  capabilityStatus,
+  hasClaudeAccountCreds,
+  hasGithubAuth,
+  pendingFor,
+} from './capabilities.js';
+import { tolkienMcpStatus } from './tolkien-mcp-shared.js';
+import { readProvisionState } from './provision-state.js';
+import { provisionNewUser, provisionTolkienBestEffort } from './provision-user.js';
+import { myConfigRouter } from './my-config.js';
+import { runSmokeChecks } from './smoke.js';
 
 const DEFAULT_TTL_H = 24;
-
-function redact(s) {
-  return String(s || '')
-    .replace(/mcp_[A-Za-z0-9_-]+/g, 'mcp_****')
-    .replace(/sk-[A-Za-z0-9_-]+/g, 'sk-****');
-}
-
-async function provisionTolkienBestEffort(user) {
-  try {
-    const result = await provisionTolkienMcp(user);
-    if (!result.ok) console.error('[onboard] provisioning de Tolkien MCP best-effort falló:', redact(result.error || result.reason));
-  } catch (e) {
-    console.error('[onboard] provisioning de Tolkien MCP best-effort excepción:', redact(e?.message || e));
-  }
-}
 
 // Rate-limit por IP para la superficie PÚBLICA: las acciones conservan el tope
 // anti fuerza-bruta, mientras los *-status tienen un bucket separado y más
@@ -125,19 +117,22 @@ publicRouter.post('/validate', (req, res) => {
     }
     const lockedTo = meta.lockedTo || null;
     const status = meta.status || null;
-    const hasToken = !!(lockedTo && readUserOauthToken(lockedTo));
-    const hasClaudeAccount = !!(lockedTo && hasClaudeAccountCreds(lockedTo));
-    const hasCodex = !!(lockedTo && hasCodexCreds(lockedTo));
-    const hasInfisical = !!(lockedTo && hasInfisicalCreds(lockedTo));
+    const capability = capabilityStatus(lockedTo);
+    const hasToken = capability.claude;
+    const hasClaudeAccount = capability.account;
+    const hasCodex = capability.codex;
+    const hasInfisical = capability.infisical;
+    const hasGithub = capability.github;
     const hasTolkienMcp = !!(lockedTo && tolkienMcpStatus(lockedTo).registered);
-    const pending = lockedTo
-      ? [
-        !hasToken && 'claude',
-        !hasClaudeAccount && 'account',
-        !hasCodex && 'codex',
-        !hasInfisical && 'infisical',
-      ].filter(Boolean)
-      : [];
+    const pending = pendingFor(lockedTo);
+    const capabilities = [...CAPABILITIES]
+      .sort((a, b) => a.order - b.order)
+      .map((item) => ({
+        id: item.id,
+        required: item.required,
+        labelEs: item.labelEs,
+        complete: !!capability[item.id],
+      }));
     const resume = !!(lockedTo && status !== 'revoked' && userExists(lockedTo));
     res.json({
       valid: v.valid,
@@ -149,8 +144,10 @@ publicRouter.post('/validate', (req, res) => {
       hasClaudeAccount,
       hasCodex,
       hasInfisical,
+      hasGithub,
       hasTolkienMcp,
       pending,
+      capabilities,
       resume,
     });
   } catch (e) {
@@ -189,53 +186,7 @@ publicRouter.post('/register', (req, res) => {
   if (lang === 'es' || lang === 'en') {
     try { setUserLang(username, lang); } catch { /* best-effort: el default sigue siendo 'es' */ }
   }
-  try { ensureUserSpace(username); ensureCliOnboarded(username); } catch { /* best-effort: el space se re-asegura al spawnear */ }
-  // El provisioning sigue corriendo DESPUÉS de responder — deliberado, para no
-  // bloquear el alta — pero su resultado YA NO se pierde en el journal: queda
-  // persistido para el checklist final del wizard y para el check
-  // `onboard-provisioning` de Salud (console:BUG-2118).
-  startProvision(username);
-  // Pad PROPIO del inquilino (B2-F3): si el Pad local está caído, el chat
-  // funciona igual y el provisioning se reintenta lazy al primer uso (F8).
-  // NUNCA await acá.
-  provisionUserPad(username, { name: username })
-    .then((r) => {
-      if (!r.ok) console.error('[onboard] provisioning de Pad best-effort falló:', r.error);
-      markProvisionStep(username, 'pad', r.ok ? 'ok' : 'failed', r.ok ? null : r.error);
-    })
-    .catch((e) => {
-      console.error('[onboard] provisioning de Pad best-effort excepción:', e?.message || e);
-      markProvisionStep(username, 'pad', 'failed', e?.message || e);
-    });
-  // Clon del repo de trabajo (Tolkien) en el workspace del inquilino
-  // (SP9-7/TASK-673), best-effort e idempotente. `skipped` es el host: cuenta
-  // como paso resuelto, no como fallo.
-  provisionUserWorkspace(username)
-    .then(async (r) => {
-      const done = !!(r.ok || r.skipped);
-      if (!done) console.error('[onboard] clon de workspace best-effort falló:', r.error);
-      markProvisionStep(username, 'workspace', done ? 'ok' : 'failed', done ? null : r.error);
-      if (r.ok) await provisionTolkienBestEffort(username);
-    })
-    .catch((e) => {
-      console.error('[onboard] clon de workspace excepción:', e?.message || e);
-      markProvisionStep(username, 'workspace', 'failed', e?.message || e);
-    });
-  // Skills base del catálogo, best-effort. Se difiere con una Promise para que
-  // la copia síncrona de archivos no bloquee el handler ni demore la respuesta.
-  // NUNCA await acá.
-  Promise.resolve()
-    .then(() => installDefaults(userClaudeDir(username)))
-    .then((r) => {
-      const failed = r.failed.map((item) => item.dirName);
-      const error = failed.length ? `Skills del catálogo fallidas: ${failed.join(', ')}` : null;
-      if (error) console.error('[onboard] provisioning de skills best-effort falló:', error);
-      markProvisionStep(username, 'skills', error ? 'failed' : 'ok', error);
-    })
-    .catch((e) => {
-      console.error('[onboard] provisioning de skills best-effort excepción:', e?.message || e);
-      markProvisionStep(username, 'skills', 'failed', e?.message || e);
-    });
+  provisionNewUser(username);
   res.json({ ok: true, username });
 });
 
@@ -246,6 +197,8 @@ const CLAUDE_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-c
 const CLAUDE_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'claude-login-jobs');
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
 const CODEX_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
+const GH_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-gh-login-runner.js');
+const GH_JOBS_DIR = path.join(config.home, '.cwc-data', 'gh-login-jobs');
 const INFISICAL_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-infisical-login-runner.js');
 const INFISICAL_JOBS_DIR = path.join(config.home, '.cwc-data', 'infisical-login');
 function jobPath(user) { return path.join(JOBS_DIR, `${user}.json`); }
@@ -282,19 +235,20 @@ function claudeLoginRunnerAlive(job) {
     return false;
   }
 }
-function hasClaudeAccountCreds(user) {
+function codexJobPath(user) { return path.join(CODEX_JOBS_DIR, `${user}.json`); }
+function readCodexJob(user) { try { return JSON.parse(fs.readFileSync(codexJobPath(user), 'utf8')); } catch { return null; } }
+function ghJobPath(user) { return path.join(GH_JOBS_DIR, `${user}.json`); }
+function readGhJob(user) { try { return JSON.parse(fs.readFileSync(ghJobPath(user), 'utf8')); } catch { return null; } }
+function ghLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
   try {
-    const data = JSON.parse(
-      fs.readFileSync(path.join(userClaudeDir(user), '.credentials.json'), 'utf8'),
-    );
-    return typeof data?.claudeAiOauth?.accessToken === 'string'
-      && data.claudeAiOauth.accessToken.length > 0;
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-gh-login-runner.js');
   } catch {
     return false;
   }
 }
-function codexJobPath(user) { return path.join(CODEX_JOBS_DIR, `${user}.json`); }
-function readCodexJob(user) { try { return JSON.parse(fs.readFileSync(codexJobPath(user), 'utf8')); } catch { return null; } }
 function infisicalJobPath(user) { return path.join(INFISICAL_JOBS_DIR, `${user}.json`); }
 function infisicalTokenPath(user) { return path.join(INFISICAL_JOBS_DIR, `${user}.token`); }
 function readInfisicalJob(user) {
@@ -362,27 +316,45 @@ publicRouter.get('/creds-status', (req, res) => {
 
 // Estado del provisioning posterior al alta (lo pollea el checklist final del
 // wizard — console:BUG-2118). Mismo gate que los demás *-status del router
-// PÚBLICO: la invitación es la única llave, `peekInvite` resuelve el usuario aun
+// PÚBLICO: la invitación es la única llave, `stepUser` resuelve el usuario aun
 // con el token ya consumido, y el sufijo `-status` lo mete en el bucket amplio
 // del rate-limit. NO expone rutas ni secretos: el motivo ya se guardó saneado en
 // disco y acá se recorta.
-publicRouter.get('/provision-status', (req, res) => {
-  const token = req.query?.token;
-  let p;
-  try {
-    p = peekInvite(token);
-  } catch (e) {
-    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
-  }
-  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
-  const state = p.lockedTo ? readProvisionState(p.lockedTo) : null;
-  if (!state) return res.json({ status: 'idle', steps: {} });
+function publicProvisionState(user) {
+  const state = user ? readProvisionState(user) : null;
+  if (!state) return { status: 'idle', steps: {} };
   const steps = {};
   for (const [name, s] of Object.entries(state.steps || {})) {
     steps[name] = { status: s.status, ...(s.error ? { error: String(s.error).slice(0, 160) } : {}) };
   }
   const stale = state.status === 'pending' && !!state.ts && (Date.now() - state.ts) > 10 * 60 * 1000;
-  res.json({ status: state.status || 'pending', steps, stale });
+  return { status: state.status || 'pending', steps, stale };
+}
+
+publicRouter.get('/provision-status', (req, res) => {
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  res.json(publicProvisionState(step.user));
+});
+
+publicRouter.post('/provision-retry', (req, res) => {
+  const step = stepUser(req.body?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  provisionNewUser(step.user);
+  res.json(publicProvisionState(step.user));
+});
+
+// Pruebas reales previas al cierre. Es una ACCIÓN (no termina en *-status)
+// porque consulta servicios externos y debe conservar el rate-limit estricto.
+// El usuario sale únicamente de la invitación; nunca se acepta por body.
+publicRouter.post('/smoke', async (req, res) => {
+  const step = stepUser(req.body?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  try {
+    res.json(await runSmokeChecks(step.user));
+  } catch {
+    res.status(500).json({ error: 'No se pudieron ejecutar las pruebas de verificación.' });
+  }
 });
 
 // Recibe el código pegado por el usuario → lo deja en un archivo que el runner lee.
@@ -484,8 +456,8 @@ publicRouter.post('/claude-account-code', (req, res) => {
 });
 
 // Codex usa device-auth porque el login normal abre un callback en
-// localhost:1455, inservible desde un server remoto. Este paso es OPCIONAL:
-// sin Codex, el chat degrada a AutoTux (BUG-1875).
+// localhost:1455, inservible desde un server remoto. Es obligatorio y /finish
+// vuelve a comprobar la credencial en el servidor.
 publicRouter.post('/codex-start', (req, res) => {
   const { token } = req.body || {};
   const step = stepUser(token);
@@ -528,6 +500,57 @@ publicRouter.get('/codex-status', (req, res) => {
     error: job.error || null,
     stale: !!stale,
     connected,
+  });
+});
+
+// GitHub usa el device flow del CLI: el runner publica el código de un solo
+// uso y corre siempre con el HOME aislado del usuario resuelto por el token.
+publicRouter.post('/github-start', (req, res) => {
+  const step = stepUser(req.body?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const user = step.user;
+  if (hasGithubAuth(user)) {
+    return res.json({ ok: true, already: true, connected: true });
+  }
+  const job = readGhJob(user);
+  const reserved = job?.status === 'starting'
+    && !!job.ts
+    && (Date.now() - job.ts) < 30_000;
+  if (reserved || (
+    ['starting', 'awaiting-auth', 'setup-git'].includes(job?.status)
+    && ghLoginRunnerAlive(job)
+  )) {
+    return res.json({ ok: true, already: true, status: job.status || 'starting' });
+  }
+  try {
+    writeJsonAtomic(ghJobPath(user), {
+      status: 'starting',
+      user,
+      ts: Date.now(),
+    }, { mode: 0o600 });
+    spawn(process.execPath, [GH_LOGIN_RUNNER, '--user', user], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } catch (e) {
+    return res.status(500).json({ error: 'No pude lanzar el login de GitHub: ' + e.message });
+  }
+  res.json({ ok: true, status: 'starting' });
+});
+
+publicRouter.get('/github-status', (req, res) => {
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+  const job = readGhJob(step.user) || { status: 'idle' };
+  const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30_000;
+  res.json({
+    status: job.status,
+    url: job.url || null,
+    code: job.code || null,
+    done: !!job.done,
+    error: job.error || null,
+    stale,
+    connected: hasGithubAuth(step.user),
   });
 });
 
@@ -603,7 +626,7 @@ publicRouter.post('/infisical-token', (req, res) => {
 });
 
 // PLAN-500: el consumo vive en el cierre explícito, no en el runner de Claude,
-// para que Claude y los pasos posteriores (Codex/Infisical) validen el token
+// para que Claude y los pasos posteriores (Codex/Infisical/GitHub) validen el token
 // durante TODO el wizard. Si el usuario abandona antes, queda locked a SU
 // username hasta el TTL: es la misma ventana que ya existía entre registro y
 // credenciales.
@@ -617,6 +640,16 @@ publicRouter.post('/finish', (req, res) => {
   }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
+  const blocking = blockingFor(v.lockedTo);
+  if (blocking.length) {
+    const labels = blocking.map((id) => (
+      CAPABILITIES.find((capability) => capability.id === id)?.labelEs || id
+    ));
+    return res.status(409).json({
+      error: `Faltan pasos obligatorios: ${labels.join(', ')}.`,
+      blocking,
+    });
+  }
   void provisionTolkienBestEffort(v.lockedTo);
   try {
     if (!consumeInvite(token)) return res.json({ ok: true, already: true });
@@ -630,6 +663,7 @@ export default {
   name: 'onboard',
   registerHttp(router) {
     const r = express.Router();
+    r.use(myConfigRouter);
     r.post('/admin/invite', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo admin.' });
       if (req.body?.admin !== undefined && typeof req.body.admin !== 'boolean') {

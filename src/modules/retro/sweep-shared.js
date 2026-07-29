@@ -6,26 +6,21 @@
 //
 // retro-swept.json es un registro DURABLE que NUNCA se poda, con el mismo
 // espíritu que chat-session-ids.json: evita reevaluar para siempre tanto lo
-// encolado como lo descartado por el filtro híbrido. LIMITACIÓN CONOCIDA: este
-// barrido mira SOLO el HOME del host (os.homedir()). Las sesiones TUI de
-// INQUILINOS viven bajo ~/.cwc-users/<id>/.claude/projects/ y quedan fuera de
-// forma deliberada; su cobertura está registrada como un bug separado.
+// encolado como lo descartado por el filtro híbrido. El barrido enumera el
+// `.claude/projects` del host y de cada inquilino, y conserva el owner hasta el
+// job/runner/Pad de destino.
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import {
+  hostUser, userClaudeDir, userDataDir, userSpace,
+} from '../../core/user-space.js';
 import { queueRetroDistill, readRetroJob, retroJobId } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
-export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-export const SWEEP_STATE_FILE = path.join(DATA_DIR, 'retro-sweep.json');
-export const SWEEP_LOCK_FILE = path.join(DATA_DIR, 'retro-sweep.lock');
-export const SWEEP_LOG_FILE = path.join(DATA_DIR, 'retro-sweep.log');
-export const SWEPT_FILE = path.join(DATA_DIR, 'retro-swept.json');
-
 // Una ventana corta partiría en dos una sesión larga que simplemente hizo una pausa.
 export const SWEEP_QUIET_MS = 6 * 60 * 60 * 1000;
 export const SWEEP_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -46,14 +41,20 @@ const EMPTY_STATE = {
   error: null,
 };
 
+function dataDir() { return userDataDir(hostUser()); }
+function sweepStateFile() { return path.join(dataDir(), 'retro-sweep.json'); }
+function sweepLockFile() { return path.join(dataDir(), 'retro-sweep.lock'); }
+function sweepLogFile() { return path.join(dataDir(), 'retro-sweep.log'); }
+function sweptFile() { return path.join(dataDir(), 'retro-swept.json'); }
+
 export function ensureDir() {
-  try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
+  try { fss.mkdirSync(dataDir(), { recursive: true, mode: 0o700 }); }
   catch { /* noop */ }
 }
 
 export function readSwept() {
   try {
-    const data = JSON.parse(fss.readFileSync(SWEPT_FILE, 'utf8'));
+    const data = JSON.parse(fss.readFileSync(sweptFile(), 'utf8'));
     if (!data?.sessions || typeof data.sessions !== 'object' || Array.isArray(data.sessions)) {
       return { sessions: {} };
     }
@@ -66,13 +67,13 @@ export function readSwept() {
 export function writeSwept(data) {
   try {
     ensureDir();
-    writeJsonAtomic(SWEPT_FILE, { ...data, updatedAt: Date.now() });
+    writeJsonAtomic(sweptFile(), { ...data, updatedAt: Date.now() });
   } catch { /* best-effort */ }
 }
 
 export function readSweepState() {
   try {
-    const data = JSON.parse(fss.readFileSync(SWEEP_STATE_FILE, 'utf8'));
+    const data = JSON.parse(fss.readFileSync(sweepStateFile(), 'utf8'));
     if (!data || typeof data !== 'object' || Array.isArray(data)) return { ...EMPTY_STATE };
     return { ...EMPTY_STATE, ...data };
   } catch {
@@ -83,25 +84,25 @@ export function readSweepState() {
 export function writeSweepState(data) {
   try {
     ensureDir();
-    writeJsonAtomic(SWEEP_STATE_FILE, { ...EMPTY_STATE, ...data });
+    writeJsonAtomic(sweepStateFile(), { ...EMPTY_STATE, ...data });
   } catch { /* best-effort */ }
 }
 
 export function writeSweepLock(state) {
   try {
     ensureDir();
-    fss.writeFileSync(SWEEP_LOCK_FILE, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 });
+    fss.writeFileSync(sweepLockFile(), JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 });
   } catch { /* noop */ }
 }
 
 export function clearSweepLock() {
-  try { fss.unlinkSync(SWEEP_LOCK_FILE); }
+  try { fss.unlinkSync(sweepLockFile()); }
   catch { /* noop */ }
 }
 
 export function readSweepLock() {
   try {
-    const l = JSON.parse(fss.readFileSync(SWEEP_LOCK_FILE, 'utf8'));
+    const l = JSON.parse(fss.readFileSync(sweepLockFile(), 'utf8'));
     if (Date.now() - l.ts >= SWEEP_LOCK_FRESH_MS) return null; // heartbeat vencido
     // pid-aware: un lock fresco cuyo proceso YA murió (kill -9, reinicio) no puede
     // bloquear el reintento — el heartbeat solo no alcanza dentro de su ventana.
@@ -123,9 +124,10 @@ export function isSweepRunning() {
 // volver spawn, antes de que el runner ejecute su chequeo pid-aware.
 export function spawnRetroSweepRunner(args = []) {
   ensureDir();
+  const logFile = sweepLogFile();
   let logFd = null;
   try {
-    logFd = fss.openSync(SWEEP_LOG_FILE, 'a');
+    logFd = fss.openSync(logFile, 'a');
     const child = spawn(process.execPath, [RUNNER, ...args], {
       detached: true,
       stdio: ['ignore', logFd, logFd],
@@ -135,7 +137,7 @@ export function spawnRetroSweepRunner(args = []) {
     child.on('error', (err) => {
       try {
         fss.appendFileSync(
-          SWEEP_LOG_FILE,
+          logFile,
           `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`,
         );
       } catch { /* noop */ }
@@ -147,7 +149,7 @@ export function spawnRetroSweepRunner(args = []) {
   } catch (err) {
     try {
       fss.appendFileSync(
-        SWEEP_LOG_FILE,
+        logFile,
         `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`,
       );
     } catch { /* noop */ }
@@ -216,21 +218,22 @@ export function transcriptMeta(file) {
   return { entrypoint, cwd, title };
 }
 
-export function knownSessionIds() {
+export function knownSessionIds(owner = hostUser()) {
   const ids = new Set();
+  const ownerDataDir = userDataDir(owner);
 
   // Cinturón y tirantes: entrypoint === 'cli' ya deja fuera los motores del
   // SDK, pero un chat que pasó a modo TUI escribe líneas cli en el MISMO
   // transcript y Chat.close ya lo cubre.
   try {
-    const data = JSON.parse(fss.readFileSync(path.join(DATA_DIR, 'chat-session-ids.json'), 'utf8'));
+    const data = JSON.parse(fss.readFileSync(path.join(ownerDataDir, 'chat-session-ids.json'), 'utf8'));
     if (Array.isArray(data)) {
       for (const id of data) if (typeof id === 'string' && id) ids.add(id);
     }
   } catch { /* best-effort independiente */ }
 
   try {
-    const data = JSON.parse(fss.readFileSync(path.join(DATA_DIR, 'chats.json'), 'utf8'));
+    const data = JSON.parse(fss.readFileSync(path.join(ownerDataDir, 'chats.json'), 'utf8'));
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item?.sessionId === 'string' && item.sessionId) ids.add(item.sessionId);
@@ -239,14 +242,14 @@ export function knownSessionIds() {
   } catch { /* best-effort independiente */ }
 
   try {
-    const data = JSON.parse(fss.readFileSync(path.join(DATA_DIR, 'learning-session-ids.json'), 'utf8'));
+    const data = JSON.parse(fss.readFileSync(path.join(ownerDataDir, 'learning-session-ids.json'), 'utf8'));
     if (Array.isArray(data)) {
       for (const id of data) if (typeof id === 'string' && id) ids.add(id);
     }
   } catch { /* best-effort independiente */ }
 
   try {
-    const data = JSON.parse(fss.readFileSync(path.join(DATA_DIR, 'bugfixes.json'), 'utf8'));
+    const data = JSON.parse(fss.readFileSync(path.join(ownerDataDir, 'bugfixes.json'), 'utf8'));
     if (Array.isArray(data)) {
       for (const item of data) {
         if (typeof item?.sessionId === 'string' && item.sessionId) ids.add(item.sessionId);
@@ -257,56 +260,74 @@ export function knownSessionIds() {
   return ids;
 }
 
+function ownersWithClaudeHomes() {
+  const host = hostUser();
+  const owners = [host];
+  const tenantsRoot = path.join(userSpace(host), '.cwc-users');
+  let entries = [];
+  try { entries = fss.readdirSync(tenantsRoot, { withFileTypes: true }); }
+  catch { return owners; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      // userClaudeDir valida el id con la misma whitelist de todo user-space.
+      userClaudeDir(entry.name);
+      owners.push(entry.name);
+    } catch { /* directorio fuera del contrato: no se barre */ }
+  }
+  return owners;
+}
+
 export function listTuiTranscripts({
   maxAgeMs = SWEEP_MAX_AGE_MS,
   now = Date.now(),
 } = {}) {
   const items = [];
   const stats = { scanned: 0, viejo: 0, grande: 0, noCli: 0 };
-  const claudeDir = path.join(os.homedir(), '.claude');
-  const projectsDir = path.join(claudeDir, 'projects');
-  const tenantsDir = path.join(os.homedir(), '.cwc-users');
-  let dirs = [];
-  try { dirs = fss.readdirSync(projectsDir, { withFileTypes: true }); }
-  catch { return { items, stats }; }
-
-  for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    const projectDir = path.join(projectsDir, dir.name);
-    let files = [];
-    try { files = fss.readdirSync(projectDir, { withFileTypes: true }); }
+  for (const owner of ownersWithClaudeHomes()) {
+    const claudeDir = userClaudeDir(owner);
+    const projectsDir = path.join(claudeDir, 'projects');
+    let dirs = [];
+    try { dirs = fss.readdirSync(projectsDir, { withFileTypes: true }); }
     catch { continue; }
 
-    for (const entry of files) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-      stats.scanned += 1;
-      const file = path.join(projectDir, entry.name);
-      let stat;
-      try { stat = fss.statSync(file); } catch { continue; }
-      if (now - stat.mtimeMs > maxAgeMs) {
-        stats.viejo += 1;
-        continue;
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      const projectDir = path.join(projectsDir, dir.name);
+      let files = [];
+      try { files = fss.readdirSync(projectDir, { withFileTypes: true }); }
+      catch { continue; }
+
+      for (const entry of files) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+        stats.scanned += 1;
+        const file = path.join(projectDir, entry.name);
+        let stat;
+        try { stat = fss.statSync(file); } catch { continue; }
+        if (now - stat.mtimeMs > maxAgeMs) {
+          stats.viejo += 1;
+          continue;
+        }
+        if (stat.size > SWEEP_MAX_BYTES) {
+          stats.grande += 1;
+          continue;
+        }
+        const meta = transcriptMeta(file);
+        if (meta.entrypoint !== 'cli' || !meta.cwd) {
+          stats.noCli += 1;
+          continue;
+        }
+        items.push({
+          sessionId: entry.name.slice(0, -'.jsonl'.length),
+          owner,
+          cwd: meta.cwd,
+          title: meta.title,
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          file,
+          claudeDir,
+        });
       }
-      if (stat.size > SWEEP_MAX_BYTES) {
-        stats.grande += 1;
-        continue;
-      }
-      const meta = transcriptMeta(file);
-      const resolvedCwd = meta.cwd ? path.resolve(meta.cwd) : '';
-      const isTenant = resolvedCwd === tenantsDir || resolvedCwd.startsWith(`${tenantsDir}${path.sep}`);
-      if (meta.entrypoint !== 'cli' || !meta.cwd || isTenant) {
-        stats.noCli += 1;
-        continue;
-      }
-      items.push({
-        sessionId: entry.name.slice(0, -'.jsonl'.length),
-        cwd: meta.cwd,
-        title: meta.title,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        file,
-        claudeDir,
-      });
     }
   }
 
@@ -321,7 +342,11 @@ export async function sweepTuiTranscripts({
   now = Date.now(),
 } = {}) {
   const { items, stats } = listTuiTranscripts({ maxAgeMs, now });
-  const known = knownSessionIds();
+  const knownByOwner = new Map();
+  const knownFor = (owner) => {
+    if (!knownByOwner.has(owner)) knownByOwner.set(owner, knownSessionIds(owner));
+    return knownByOwner.get(owner);
+  };
   const swept = readSwept();
   const skipped = {
     esChat: 0,
@@ -333,9 +358,12 @@ export async function sweepTuiTranscripts({
   const eligible = [];
 
   for (const item of items) {
-    if (known.has(item.sessionId)) {
+    const sweptKey = item.owner === hostUser()
+      ? item.sessionId
+      : `${item.owner}:${item.sessionId}`;
+    if (knownFor(item.owner).has(item.sessionId)) {
       skipped.esChat += 1;
-    } else if (swept.sessions[item.sessionId]) {
+    } else if (swept.sessions[sweptKey]) {
       skipped.yaBarrido += 1;
     } else if (now - item.mtimeMs < quietMs) {
       skipped.activo += 1;
@@ -355,6 +383,7 @@ export async function sweepTuiTranscripts({
     for (const item of selected) {
       candidates.push({
         sessionId: item.sessionId,
+        owner: item.owner,
         cwd: item.cwd,
         title: item.title,
         mtimeMs: item.mtimeMs,
@@ -369,22 +398,27 @@ export async function sweepTuiTranscripts({
           cwd: item.cwd,
           sessionId: item.sessionId,
           title: item.title,
-          owner: null,
+          owner: item.owner === hostUser() ? null : item.owner,
           claudeDir: item.claudeDir,
         });
       } catch { /* una sesión fallida no bloquea las demás */ }
-      job = readRetroJob(retroJobId(item.sessionId));
+      job = readRetroJob(retroJobId(item.sessionId), item.owner);
       const didQueue = !!job;
       if (didQueue) queued += 1;
       else trivial += 1;
-      swept.sessions[item.sessionId] = {
+      const sweptKey = item.owner === hostUser()
+        ? item.sessionId
+        : `${item.owner}:${item.sessionId}`;
+      swept.sessions[sweptKey] = {
         at: Date.now(),
+        owner: item.owner,
         mtimeMs: item.mtimeMs,
         queued: didQueue,
         reason: didQueue ? 'encolado' : 'filtro-trivial',
       };
       candidates.push({
         sessionId: item.sessionId,
+        owner: item.owner,
         cwd: item.cwd,
         title: item.title,
         mtimeMs: item.mtimeMs,

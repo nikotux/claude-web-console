@@ -9,18 +9,15 @@
 // archivos, lock con heartbeat pid-aware y progreso incremental REANUDABLE;
 // sobrevive a un reinicio de la interfaz web.
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import { hostUser, userDataDir, userRunnerEnv } from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-export const VERIFY_FILE = path.join(DATA_DIR, 'retro-verify.json');
-export const VERIFY_LOCK_FILE = path.join(DATA_DIR, 'retro-verify.lock');
-export const VERIFY_LOG_FILE = path.join(DATA_DIR, 'retro-verify.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-verify-runner.js');
 
 export const VERIFY_HEARTBEAT_MS = 5000;
@@ -31,7 +28,11 @@ export const PR_ENTRY_TTL_MS = 30 * 60 * 1000;
 export const ROUND_EXCERPT = 240;
 export const MAX_ROUNDS_PER_PR = 40;
 
-function ensureDir() { try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
+function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+export function verifyFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.json'); }
+function lockFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.lock'); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.log'); }
+function ensureDir(owner = null) { try { fss.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
 
 export function emptyVerifyState() {
   return {
@@ -46,14 +47,16 @@ export function emptyVerifyState() {
   };
 }
 
-let _memo = { mtimeMs: -1, size: -1, data: null };
+const memoByFile = new Map();
 
-export function readVerifyState() {
+export function readVerifyState(owner = null) {
+  const file = verifyFileFor(owner);
+  const memo = memoByFile.get(file);
   try {
-    const stat = fss.statSync(VERIFY_FILE);
-    if (_memo.data && _memo.mtimeMs === stat.mtimeMs && _memo.size === stat.size) return _memo.data;
-    const data = JSON.parse(fss.readFileSync(VERIFY_FILE, 'utf8'));
-    _memo = { mtimeMs: stat.mtimeMs, size: stat.size, data };
+    const stat = fss.statSync(file);
+    if (memo?.data && memo.mtimeMs === stat.mtimeMs && memo.size === stat.size) return memo.data;
+    const data = JSON.parse(fss.readFileSync(file, 'utf8'));
+    memoByFile.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, data });
     // SOLO LECTURA para consumidores: el objeto está compartido por el memo.
     return data;
   } catch {
@@ -61,20 +64,21 @@ export function readVerifyState() {
   }
 }
 
-export function writeVerifyState(data) {
-  ensureDir();
-  writeJsonAtomic(VERIFY_FILE, data);
-  _memo = { mtimeMs: -1, size: -1, data: null };
+export function writeVerifyState(data, owner = null) {
+  ensureDir(owner);
+  const file = verifyFileFor(owner);
+  writeJsonAtomic(file, data);
+  memoByFile.delete(file);
 }
 
-export function writeVerifyLock(state) {
-  try { ensureDir(); fss.writeFileSync(VERIFY_LOCK_FILE, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 }); }
+export function writeVerifyLock(state, owner = null) {
+  try { ensureDir(owner); fss.writeFileSync(lockFileFor(owner), JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 }); }
   catch { /* noop */ }
 }
-export function clearVerifyLock() { try { fss.unlinkSync(VERIFY_LOCK_FILE); } catch { /* noop */ } }
-export function readVerifyLock() {
+export function clearVerifyLock(owner = null) { try { fss.unlinkSync(lockFileFor(owner)); } catch { /* noop */ } }
+export function readVerifyLock(owner = null) {
   try {
-    const l = JSON.parse(fss.readFileSync(VERIFY_LOCK_FILE, 'utf8'));
+    const l = JSON.parse(fss.readFileSync(lockFileFor(owner), 'utf8'));
     if (Date.now() - l.ts >= VERIFY_LOCK_FRESH_MS) return null; // heartbeat vencido
     // pid-aware: un lock fresco cuyo proceso YA murió (kill -9, reinicio) no puede
     // bloquear el reintento — el heartbeat solo no alcanza dentro de su ventana.
@@ -84,24 +88,26 @@ export function readVerifyLock() {
     return l;
   } catch { return null; }
 }
-export function isVerifyRunning() { return !!readVerifyLock(); }
-export function isVerifyStale(state) {
-  const s = state || readVerifyState();
+export function isVerifyRunning(owner = null) { return !!readVerifyLock(owner); }
+export function isVerifyStale(state, owner = null) {
+  const s = state || readVerifyState(owner);
   return !s?.scannedAt || (Date.now() - s.scannedAt) > VERIFY_TTL_MS;
 }
 
 // Spawn con reserva SINCRÓNICA del lock usando el pid REAL del hijo: el pid ya
 // existe al volver spawn, antes de que el runner ejecute su chequeo pid-aware.
-export function spawnRetroVerifyRunner({ full = false } = {}) {
-  ensureDir();
-  const logFd = fss.openSync(VERIFY_LOG_FILE, 'a');
+export function spawnRetroVerifyRunner({ full = false, owner = null } = {}) {
+  ensureDir(owner);
+  const logFile = logFileFor(owner);
+  const logFd = fss.openSync(logFile, 'a');
+  const env = owner && owner !== hostUser() ? userRunnerEnv(owner) : process.env;
   const child = spawn(process.execPath, [RUNNER, ...(full ? ['--full'] : [])], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env,
   });
-  writeVerifyLock({ pid: child.pid });
+  writeVerifyLock({ pid: child.pid }, owner);
   child.on('error', (err) => {
-    try { fss.appendFileSync(VERIFY_LOG_FILE, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
-    try { clearVerifyLock(); } catch { /* noop */ }
+    try { fss.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+    try { clearVerifyLock(owner); } catch { /* noop */ }
   });
   child.unref();
   fss.closeSync(logFd);

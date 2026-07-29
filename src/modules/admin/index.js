@@ -11,6 +11,7 @@ import express from 'express';
 import { execFileSync } from 'node:child_process';
 import { isAdmin, principalOf, invalidateSessionsForUser } from '../../core/auth.js';
 import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
+import { provisionNewUser } from '../onboard/provision-user.js';
 
 function requireAdmin(req, res, next) {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
@@ -65,6 +66,11 @@ export default {
       }
       try {
         createUser(username, password, typeof admin === 'boolean' ? admin : false);
+        try {
+          provisionNewUser(username);
+        } catch (e) {
+          console.error('[admin] provisioning inicial best-effort falló:', e?.message || e);
+        }
         res.json({ ok: true });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });

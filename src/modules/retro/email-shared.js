@@ -16,18 +16,17 @@
 // graph_create_draft/graph_list_attachments/graph_save_attachment NUNCA
 // pasan, aunque el MCP los tenga.
 import fss from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-export const EMAIL_SCAN_FILE = path.join(DATA_DIR, 'retro-email-scan.json');
-export const EMAIL_LOCK_FILE = path.join(DATA_DIR, 'retro-email.lock');
-export const EMAIL_LOG_FILE = path.join(DATA_DIR, 'retro-email.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-email-runner.js');
 
 export const EMAIL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -43,42 +42,57 @@ export const emailReadAllowed = (name) => {
   return EMAIL_READ_TOOLS.has(m[1]);
 };
 
-function ensureDir() { try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
-
-export function readEmailScan() {
-  try { return JSON.parse(fss.readFileSync(EMAIL_SCAN_FILE, 'utf8')); } catch { return { items: [], lastReceivedAt: null, scannedAt: 0, error: null }; }
+function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function scanFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email-scan.json'); }
+function lockFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email.lock'); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email.log'); }
+function ensureDir(owner = null) { try { fss.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para traer feedback del correo.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
 }
-export function writeEmailScan(data) { ensureDir(); writeJsonAtomic(EMAIL_SCAN_FILE, data); }
 
-export function writeEmailLock(state) {
-  try { ensureDir(); fss.writeFileSync(EMAIL_LOCK_FILE, JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 }); }
+export function readEmailScan(owner = null) {
+  try { return JSON.parse(fss.readFileSync(scanFileFor(owner), 'utf8')); } catch { return { items: [], lastReceivedAt: null, scannedAt: 0, error: null }; }
+}
+export function writeEmailScan(data, owner = null) { ensureDir(owner); writeJsonAtomic(scanFileFor(owner), data); }
+
+export function writeEmailLock(state, owner = null) {
+  try { ensureDir(owner); fss.writeFileSync(lockFileFor(owner), JSON.stringify({ ...state, ts: Date.now() }), { mode: 0o600 }); }
   catch { /* noop */ }
 }
-export function clearEmailLock() { try { fss.unlinkSync(EMAIL_LOCK_FILE); } catch { /* noop */ } }
-export function readEmailLock() {
+export function clearEmailLock(owner = null) { try { fss.unlinkSync(lockFileFor(owner)); } catch { /* noop */ } }
+export function readEmailLock(owner = null) {
   try {
-    const l = JSON.parse(fss.readFileSync(EMAIL_LOCK_FILE, 'utf8'));
+    const l = JSON.parse(fss.readFileSync(lockFileFor(owner), 'utf8'));
     if (Date.now() - l.ts >= EMAIL_LOCK_FRESH_MS) return null;
     return l;
   } catch { return null; }
 }
-export function isEmailScanRunning() { return !!readEmailLock(); }
+export function isEmailScanRunning(owner = null) { return !!readEmailLock(owner); }
 
 // Spawn con reserva SINCRÓNICA del lock usando el pid REAL del hijo (mismo
 // patrón que bugs/index.js:spawnTriage / comms-teams): child_process.spawn
 // devuelve el pid YA antes de que el hijo ejecute su propio código, así que
 // escribir el lock JUSTO DESPUÉS gana la carrera contra el propio chequeo
 // pid-aware del runner (ver bin/cwc-retro-email-runner.js).
-export function spawnRetroEmailRunner() {
-  ensureDir();
-  const logFd = fss.openSync(EMAIL_LOG_FILE, 'a');
+export function spawnRetroEmailRunner(owner) {
+  ensureDir(owner);
+  const logFile = logFileFor(owner);
+  const logFd = fss.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
-  writeEmailLock({ pid: child.pid });
+  writeEmailLock({ pid: child.pid }, owner);
   child.on('error', (err) => {
-    try { fss.appendFileSync(EMAIL_LOG_FILE, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
-    try { clearEmailLock(); } catch { /* noop */ }
+    try { fss.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+    try { clearEmailLock(owner); } catch { /* noop */ }
   });
   child.unref();
   fss.closeSync(logFd);

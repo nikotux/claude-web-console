@@ -16,10 +16,18 @@ colecciones `pendientes`/PEND y `planes`/PLAN, SEPARADAS a propósito de la
 bitácora técnica del programa de modularización). `id` T<n> → `ref`
 PEND-<n>; `planId` → relación `parent` hacia un PLAN; `blocks[]` →
 relación `link_type=blocks`; `comments[]` → comentarios nativos del item.
-El LOG de actividad (`listActivity`/`tasks-activity.json`) NO se tocó —
-sigue exactamente igual (decisión de alcance, ya atómico). `tasks.json`
-viejo queda como respaldo histórico, ya no se lee. Migración 1-vía ya
-ejecutada: 61 tareas + 14 planes reales, 0 discrepancias. También migrado
+REGLA DURA 8 — AISLAMIENTO (console:BUG-2272, hallazgo de Coherencia
+`aislamiento`): los TRES archivos en disco (`tasks-activity.json`,
+`tasks-analysis-<scope>.json`, `tasks-analyze.log`) viven en el directorio
+de datos del DUEÑO. `index.js` resuelve ese dataDir POR OPERACIÓN desde el
+principal (owner ausente → host, retrocompat) y lo pasa como PRIMER
+parámetro a store/analyze-shared; el runner recibe la misma ruta por
+`--data-dir` y, para inquilinos, el env/credencial del dueño. PROHIBIDO
+reintroducir `os.homedir()` o constantes de módulo para esas rutas.
+Las tareas/planes NO están en disco y siguen SIN CAMBIOS en el Pad LOCAL
+(`pendientes`/`planes`). `tasks.json` viejo queda como respaldo histórico
+inerte: no se lee, migra, borra ni toca. Migración 1-vía ya ejecutada:
+61 tareas + 14 planes reales, 0 discrepancias. También migrado
 `tasks/analyze-shared.js` (2º consumidor de store.js, análisis IA general).
 FASE 2 ✅ (2026-07-06): (A) PLANES que agrupan tareas con
 progreso % (id PLAN-<n>, secuencia planSeq; status active/proposed/
@@ -27,7 +35,7 @@ done/cancelled; taskCount/doneCount/pct DERIVADOS al leer, NUNCA
 persistidos; borrar un plan DESASIGNA sus tareas, no las borra). La
 tarea gana `planId` (validado contra planes existentes) y `type`
 (task/idea/nota/feature). (B) LOG de actividad REAL persistido en
-~/.cwc-data/tasks-activity.json (append-only, poda a 300 eventos):
+<dataDir-del-dueño>/tasks-activity.json (append-only, poda a 300 eventos):
 cada create/update/status/complete/delete de tarea Y plan registra un
 evento {id,ts,kind,entity,refId,title,detail} — el panel "Actividad
 reciente" lee ESTO (antes se derivaba de timestamps, sin historial).
@@ -109,7 +117,8 @@ nunca lee/escribe disco). scope='tasks'|'plans': junta TODAS las tareas (o
 planes) + los INFORMES de audio (summary/tareas propuestas/plan) y devuelve
 {resumen, duplicados[{keep,remove[]}], unificables[{ids[],title,description}],
 completar[{id,description,tags[]}]}. Estado persistido por alcance en
-~/.cwc-data/tasks-analysis-<scope>.json (patrón audio: status running/done/
+<dataDir-del-dueño>/tasks-analysis-<scope>.json y log del runner en
+<dataDir-del-dueño>/tasks-analyze.log (patrón audio: status running/done/
 error + dedup por corrida fresca, NO hay lock aparte); POST
 /api/tasks/analyze {scope} (admin) arranca+responde YA · GET
 /api/tasks/analysis?scope=... solo lee disco (0 tokens); el front encuesta.

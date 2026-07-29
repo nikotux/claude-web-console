@@ -102,6 +102,13 @@ fs-sm en filas densas, paddings/min-height grandes): chat (.chat-input/
 .task-*), tickets (.bv2-sum-main), gestor (.fm-body/.fm-item/.fm-toolbar).
 REGLA: al agregar UI nueva, heredar de los primitivos y usar fs-sm/fs-xs
 para filas/controles densos; fs-lg/fs-xl SOLO para títulos prominentes.
+### public/css/style.css       estilos de módulos y del chat. Los bloques
+`.md-chart*` (Chart.js + tabla accesible) y `.md-bar*` (micro-barras inline)
+pertenecen al renderer Markdown. El gráfico va SIN borde, fondo ni padding
+lateral A PROPÓSITO — pedido de Niko: se lee como parte del mensaje, no como
+un objeto pegado. `.md-mermaid*` contiene el desborde con scroll horizontal
+y `.md-mermaid--pan` muestra la pista para deslizar. El `max-height` de
+`.md-mermaid-canvas` es la FUENTE DE VERDAD del alto: el JS lo lee del CSS.
 ### public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 ### public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 ### public/raw.html + js/rawview/raw.js + css/raw.css   Vista Raw (PLAN-544, pedido

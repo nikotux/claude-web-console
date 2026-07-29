@@ -30,8 +30,9 @@
 // a ser async (habla con Pad local) — todas las rutas de acá suman `await` y los
 // ids cambiaron de formato LT<n>/LR<n> a TDA-<n>/RDA-<n> (ver store.js).
 import express from 'express';
-import { isAdmin, principalOf } from '../../core/auth.js';
+import { isAdmin } from '../../core/auth.js';
 import { reqPadContext } from '../../core/pad-context.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import {
   listTopics, getTopic, createTopic, updateTopic, deleteTopic, listActivity,
   listRoutes, createRoute, updateRoute, deleteRoute,
@@ -68,8 +69,9 @@ export default {
 
     r.get('/activity', (req, res) => {
       try {
+        const owner = systemScopeFor(req).user;
         const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-        res.json({ events: listActivity(limit) });
+        res.json({ events: listActivity(limit, owner) });
       } catch { res.status(500).json({ error: 'No se pudo leer la actividad.' }); }
     });
 
@@ -117,7 +119,8 @@ export default {
     // ----- Análisis IA del aprendizaje (organiza/agrupa/sugiere). Lee disco, 0 tokens.
     r.get('/analysis', (req, res) => {
       try {
-        const job = readAnalysisJob();
+        const owner = systemScopeFor(req).user;
+        const job = readAnalysisJob(owner);
         res.json({ ...analyzeResult(job), updatedAt: job?.updatedAt || 0 });
       } catch { res.status(500).json({ error: 'No se pudo leer el análisis.' }); }
     });
@@ -125,12 +128,17 @@ export default {
     r.post('/analyze', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       try {
-        const existing = readAnalysisJob();
+        const owner = systemScopeFor(req).user;
+        const ctx = reqPadContext(req);
+        const existing = readAnalysisJob(owner);
         if (existing && isAnalyzeRunning(existing)) return res.json(analyzeResult(existing));
-        const built = await buildAnalyzeContext();
+        const built = await buildAnalyzeContext(ctx);
         if (!built) return res.status(400).json({ error: 'No hay temas para analizar.' });
-        writeAnalysisJob({ status: 'running', result: null, error: null, startedAt: Date.now(), updatedAt: Date.now() });
-        spawnLearningAnalyzeRunner();
+        writeAnalysisJob({
+          status: 'running', result: null, error: null, owner,
+          startedAt: Date.now(), updatedAt: Date.now(),
+        }, owner);
+        spawnLearningAnalyzeRunner(owner);
         res.json({ status: 'running', result: null, error: null });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
@@ -146,11 +154,12 @@ export default {
     // regeneración completa"). Admin porque consume tokens (salvo el no-op).
     r.post('/:id/explain', async (req, res) => {
       const ctx = reqPadContext(req);
+      const owner = systemScopeFor(req).user;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       try {
-        const existing = readExplainJob(id);
+        const existing = readExplainJob(id, owner);
         if (existing && isFreshRunning(existing)) return res.json({ id, ...jobResult(existing) });
         const topic = await getTopic(id, ctx);
         if (!topic) return res.status(404).json({ error: 'Tema inexistente.' });
@@ -162,7 +171,7 @@ export default {
         const mode = (!force && topic.explanation) ? 'adapt' : 'full';
         writeExplainJob(id, {
           id, status: 'running', error: null, mode,
-          owner: principalOf(req)?.username || null,
+          owner,
           topic: {
             title: topic.title, area: topic.area, scope: topic.scope,
             notes: topic.notes, question: topic.question, contextoAdicional: contextoText(topic),
@@ -170,8 +179,8 @@ export default {
             reason: check.reason,
           },
           startedAt: Date.now(), updatedAt: Date.now(),
-        });
-        spawnLearningExplainRunner(id);
+        }, owner);
+        spawnLearningExplainRunner(id, owner);
         res.json({ id, status: 'running', mode, error: null });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
@@ -180,7 +189,8 @@ export default {
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
       try {
-        const job = readExplainJob(id);
+        const owner = systemScopeFor(req).user;
+        const job = readExplainJob(id, owner);
         res.json({ id, ...jobResult(job), mode: job?.mode || null, updatedAt: job?.updatedAt || 0 });
       } catch { res.status(500).json({ error: 'No se pudo leer el estado.' }); }
     });
@@ -219,6 +229,7 @@ export default {
     // desacoplado, dedup por job determinístico (mismo tema+texto = mismo job).
     r.post('/:id/context-analyze', async (req, res) => {
       const ctx = reqPadContext(req);
+      const owner = systemScopeFor(req).user;
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tema inválido.' });
@@ -228,18 +239,18 @@ export default {
         const topic = await getTopic(id, ctx);
         if (!topic) return res.status(404).json({ error: 'Tema inexistente.' });
         const jobId = contextJobId(id, transcript);
-        const existing = readContextJob(jobId);
+        const existing = readContextJob(jobId, owner);
         if (existing && (existing.status === 'done' || isContextFreshRunning(existing))) {
           return res.json({ id: jobId, status: existing.status });
         }
         const now = Date.now();
         writeContextJob(jobId, {
           id: jobId, topicId: id, itemTitle: topic.title, itemDesc: topic.notes,
-          owner: principalOf(req)?.username || null,
+          owner,
           transcript, status: 'running', result: null, rendered: null, error: null,
           startedAt: now, updatedAt: now,
-        });
-        spawnLearningContextRunner(jobId);
+        }, owner);
+        spawnLearningContextRunner(jobId, owner);
         res.json({ id: jobId, status: 'running' });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
@@ -247,7 +258,8 @@ export default {
     r.get('/:id/context-analyze/:jobId', (req, res) => {
       const jobId = String(req.params.jobId).replace(/[^a-f0-9]/gi, '');
       try {
-        const job = readContextJob(jobId);
+        const owner = systemScopeFor(req).user;
+        const job = readContextJob(jobId, owner);
         res.json({ id: jobId, ...contextJobResult(job), updatedAt: job?.updatedAt || 0 });
       } catch { res.status(500).json({ error: 'No se pudo leer el estado.' }); }
     });

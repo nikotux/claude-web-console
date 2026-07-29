@@ -18,6 +18,30 @@ SDK (0 tokens: comandos locales psql/infisical/pnpm — la regla 6 no
 aplica). `runCmd` (exec local) se movió a refresh-shared y RECHAZA ante
 terminación anormal (timeout/kill/spawn-fail sin código numérico), igual
 que `git()` — el `gh` de /branches lo importa de ahí.
+STACK N2 POR INQUILINO (console:PLAN-2264, bloque B4): un usuario puede
+reclamar a demanda SU Postgres + Redis sin caer sobre el proyecto Compose del
+usuario de SO compartido. `stack.js` persiste en el HOME DEL HOST
+`~/.cwc-data/tolkien-stacks/<user>.json` (atómico, mode 600) una identidad
+estable: `COMPOSE_PROJECT_NAME=tolkien-<usuario-de-consola>` + índice propio
+para los cuatro puertos DB/Redis/console/API. La primera asignación reserva los
+cuatro contra asignaciones persistidas y bindings reales; cada subida los
+revalida y solo tolera un binding si Docker demuestra que pertenece al mismo
+proyecto. GUARD DURO: un inquilino nunca puede resolver a `tolkien-nmosquera`
+ni compartir proyecto/puerto con otro usuario. `POST /stack/up {sessionId}`
+agrega el claim owner-scoped y dispara
+`bin/cwc-tolkien-stack-runner.js`; `POST /stack/down` NO fuerza nada: reconcilia
+claims y solo dispara `docker compose down` si quedaron cero; `GET
+/stack/status` consulta el estado persistido. El runner inyecta SIEMPRE las
+cinco variables de identidad; la primera subida invoca el `scripts/onboard.sh`
+EXTERNO del clon con `--yes`, las siguientes hacen `compose up` directo.
+CLAIMS SIN TTL (criterio C7): cada entrada es `{sessionId,owner,ts}` y solo se
+retira ante liveness `dead` confirmado. Se reutilizan `chats.json` (un chat
+dormido/archivado sigue vivo), el socket del chat-runner como señal positiva y
+`tmux has-session -t =nombre` + `session-owners.json` para terminales. Archivo
+ausente/corrupto, owner dudoso o error de inspección = `unknown` ⇒ CONSERVAR.
+El runner vuelve a reconciliar bajo lock inmediatamente antes de `down`; ese
+lock también impide aceptar un claim nuevo a mitad del apagado. Nunca hay
+reaper, TTL ni timer propio para decidir la vida de este stack.
 ENTORNOS TOLKIEN EFÍMEROS POR SESIÓN (PLAN-1815, 2026-07-24): resuelve
 el choque de sesiones PARALELAS que editan Tolkien sobre la ÚNICA carpeta
 ~/tolkien. Modelo: `~/tolkien` = repo BASE (.git compartido, main fresco,
@@ -140,6 +164,15 @@ tras Actualizar y al abrir la ventana.
 
 ## Gotchas de esta carpeta
 
+- Stack N2 ≠ entornos efímeros: el primero es UN Postgres+Redis persistente por
+  USUARIO y vive por referencia contada de sesiones; los segundos son
+  worktree+DB+dev-server por CHAT. No reutilizar el reaper idle de entornos para
+  el stack N2: aunque una sesión lleve una semana quieta, su claim se conserva
+  hasta confirmar que murió.
+- `scripts/onboard.sh` pertenece al repo EXTERNO de Tolkien: no se modifica
+  desde Mi Consola. El aislamiento se aplica únicamente inyectando
+  `COMPOSE_PROJECT_NAME`, `DB_HOST_PORT`, `REDIS_HOST_PORT`,
+  `CONSOLE_HOST_PORT` y `API_HOST_PORT` desde el runner.
 - `isEnvAlive` describe el DEV-SERVER, no el entorno. No filtrar por esa señal
   decisiones sobre recursos persistentes (puerto, DB, marco o limpieza): el
   criterio correcto casi siempre es si el worktree existe en disco. atCap() es

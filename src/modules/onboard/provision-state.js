@@ -1,6 +1,6 @@
 // modules/onboard/provision-state.js — estado PERSISTIDO del provisioning que
 // corre DESPUÉS de responder /register (console:BUG-2118). El registro contesta
-// ok:true sin esperar a Pad, workspace ni skills — es deliberado, para no
+// ok:true sin esperar a Pad, workspace, skills ni Tolkien MCP — es deliberado, para no
 // bloquear el alta —, así que si alguno falla el único
 // rastro era un console.error en el journal que nadie mira en ese momento y el
 // inquilino quedaba sin Pad o sin clon del repo sin saber por qué. Acá el
@@ -14,9 +14,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../../core/config.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { listUsers } from '../../core/users.js';
 
 export const PROVISION_DIR = path.join(config.home, '.cwc-data', 'onboard-provisioning');
-export const PROVISION_STEPS = ['pad', 'workspace', 'skills'];
+export const PROVISION_STEPS = ['pad', 'workspace', 'skills', 'tolkien-mcp'];
 const USER_RE = /^[a-zA-Z0-9_.-]{1,32}$/; // mismo whitelist que isValidUsername
 const ERROR_MAX = 200;
 
@@ -83,12 +84,27 @@ export function markProvisionStep(user, step, status, error) {
   return state;
 }
 
+// La baja de un usuario puede limpiar explícitamente su estado administrativo.
+// Es idempotente: si el archivo ya no existe, igual se considera resuelto.
+export function deleteProvisionState(user) {
+  const file = filePath(user);
+  if (!file) return false;
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    return false;
+  }
+}
+
 // Censo para Salud: todos los estados persistidos, el más reciente primero.
 export function listProvisionStates() {
   let names = [];
   try { names = fs.readdirSync(PROVISION_DIR).filter((n) => n.endsWith('.json')); } catch { return []; }
+  const existingUsers = new Set(listUsers().map((user) => user.username));
   return names
     .map((n) => readProvisionState(n.slice(0, -5)))
-    .filter(Boolean)
+    .filter((state) => state && existingUsers.has(state.user))
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }

@@ -8,7 +8,10 @@
 // parte "receta/rules" del cerebro (viven en el repo, humano-autoradas). La
 // Fase 5 (loop que aprende) PROPONE nuevas acá cuando el auto-fix resuelve algo.
 //
-// Cada invariante: { match: RegExp (contra rel path de archivo), text: string }.
+// Cada invariante: { match, text, exclude?, origen? }. `match` es un RegExp en
+// memoria y, en los aprendidos persistidos, uno o varios globs separados por
+// coma contra rutas relativas. `text` es la regla; `exclude` enumera rutas
+// relativas exactas donde no aplica; `origen` conserva su procedencia.
 import fss from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,7 +85,9 @@ export const SEED_INVARIANTS = [
     text: 'BIND EXCLUSIVO: el server escucha SOLO en la IP ZeroTier (core/zerotier.js). Jamás 0.0.0.0 ni 127.0.0.1 como address de listen.',
   },
   {
-    match: /public\/css\/(ui|style)\.css$/,
+    // discoverUnits agrupa el frontend por JS; main.js ancla este guard global
+    // a esa unidad aunque los CSS no formen parte de su lista de archivos.
+    match: /public\/css\/(ui|style)\.css$|public\/js\/main\.js$/,
     text: 'GUARD [hidden]: existe `[hidden]{display:none!important}` global en ui.css. Cualquier regla `display` de autor sobre un elemento ocultable debe respetarlo (no pisarlo sin contemplar [hidden]).',
   },
   {
@@ -119,6 +124,17 @@ export function globToRegExp(glob) {
   return `${re}$`;
 }
 
+// El modelo que propone invariantes escribe listas separadas por coma y agrega
+// comentarios entre paréntesis. Antes ambos producían un patrón inerte que no
+// fallaba al compilar pero tampoco matcheaba archivos (console:BUG-2253).
+export function compileMatch(spec) {
+  const parts = String(spec || '').replace(/\([^)]*\)/g, ' ').split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.length) throw new Error('El patrón de archivos no es válido.');
+  return new RegExp(parts.map(globToRegExp).join('|'));
+}
+
 // Carga los aprendidos y compila su `match` (glob) a RegExp; un patrón malo se
 // descarta sin romper el auditor (try/catch por entrada).
 function loadLearned() {
@@ -126,7 +142,15 @@ function loadLearned() {
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); } catch { return []; }
   if (!Array.isArray(arr)) return [];
   return arr.map((e) => {
-    try { return { match: new RegExp(globToRegExp(e.match)), text: String(e.text), learned: true }; }
+    try {
+      return {
+        match: compileMatch(e.match),
+        text: String(e.text),
+        exclude: Array.isArray(e.exclude) ? e.exclude : [],
+        origen: e.origen ? String(e.origen) : '',
+        learned: true,
+      };
+    }
     catch { return null; }
   }).filter(Boolean);
 }
@@ -140,19 +164,52 @@ export function allInvariants() {
 // Invariantes que aplican a una unidad (por sus archivos). Devuelve textos.
 export function invariantsFor(unit) {
   const files = unit?.files || [];
-  return allInvariants().filter((inv) => files.some((f) => inv.match.test(f))).map((inv) => inv.text);
+  return allInvariants().filter((inv) => {
+    const ex = inv.exclude || [];
+    return files.some((f) => !ex.includes(f) && inv.match.test(f));
+  }).map((inv) => inv.text);
+}
+
+let _repoFiles = null;
+
+// Lista los archivos reales auditables para impedir que se aprueben patrones
+// compilables pero inertes. Si el disco no se puede leer, falla abierto.
+function repoFiles() {
+  if (_repoFiles) return _repoFiles;
+  try {
+    const root = path.resolve(__dirname, '..', '..', '..');
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of fss.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory() && (entry.name === 'node_modules' || entry.name.startsWith('.'))) continue;
+        const target = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(target);
+        else if (entry.isFile()) files.push(path.relative(root, target).split(path.sep).join('/'));
+      }
+    };
+    for (const base of ['src', 'bin', 'public']) walk(path.join(root, base));
+    _repoFiles = files;
+  } catch {
+    _repoFiles = [];
+  }
+  return _repoFiles;
 }
 
 // Agrega un invariante APROBADO al JSON de aprendidos (repo). Valida el regex
 // ANTES de persistir; lanza si el match es inválido o falta texto. Es la única
 // escritura "código-adyacente" del flujo, admin-gated y con aprobación humana.
-export function appendLearnedInvariant({ match, text }) {
+export function appendLearnedInvariant({ match, text, exclude, origen }) {
   const m = String(match || '').trim();
   const t = String(text || '').trim();
   if (!m || !t) throw new Error('Faltan match o texto del invariante.');
   // El match es un GLOB (`src/modules/**/*.js`), no un regex — se valida
   // compilando su conversión, así `**` no revienta al aprobar.
-  try { new RegExp(globToRegExp(m)); } catch { throw new Error('El patrón de archivos no es válido.'); }
+  let re;
+  try { re = compileMatch(m); } catch { throw new Error('El patrón de archivos no es válido.'); }
+  const files = repoFiles();
+  if (files.length && !files.some((f) => re.test(f))) {
+    throw new Error('El patrón no coincide con ningún archivo del repo.');
+  }
   let arr = [];
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }
   // BUG-1977: la dedup debe comparar exactamente la representación que queda
@@ -162,6 +219,11 @@ export function appendLearnedInvariant({ match, text }) {
     text: t.slice(0, LEARNED_TEXT_MAX),
   };
   if (arr.some((e) => e?.match === persisted.match && e?.text === persisted.text)) return;
-  arr.push({ ...persisted, addedAt: Date.now() });
+  arr.push({
+    ...persisted,
+    ...(Array.isArray(exclude) && exclude.length ? { exclude } : {}),
+    ...(typeof origen === 'string' && origen.trim() ? { origen: origen.trim().slice(0, 200) } : {}),
+    addedAt: Date.now(),
+  });
   fss.writeFileSync(LEARNED_FILE, JSON.stringify(arr, null, 2));
 }

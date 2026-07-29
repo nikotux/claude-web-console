@@ -19,6 +19,11 @@ No mantiene un modelo propio: el CRUD delega en `core/users.js` y el reciclado b
 | DELETE | `/api/admin/users/:username` | Elimina una cuenta; rechaza la autoeliminación. |
 | POST | `/api/admin/restart-runners` | Envía `SIGTERM` a cada `cwc-chat-runner.js` vivo y devuelve PIDs terminados y fallos individuales. |
 
+El alta por `POST /api/admin/users` llama `provisionNewUser(username)` después
+de crear la cuenta. Comparte así la misma preparación de espacio, Pad,
+workspace, Tolkien MCP y skills que el wizard, sin duplicar la secuencia. El
+provisioning es best-effort: un fallo no cambia el alta ni su status HTTP.
+
 ## Archivos
 
 - `index.js`: define el gate administrativo, los cinco handlers HTTP y la detección de runners vivos con `pgrep`.

@@ -3,8 +3,8 @@
 // window.marked (bundle local) parsea; después sanitizamos por ALLOWLIST
 // sobre un DOM desconectado (a prueba de HTML crudo del modelo, sin depender
 // de los internals de marked ni de librerías extra). Los bloques de código se
-// resaltan con window.hljs y ganan botón de copiar. Los bloques ```mermaid```
-// se renderizan a SVG con window.mermaid (2026-07-11) — ver enhanceMermaidBlocks.
+// resaltan con window.hljs y ganan botón de copiar. Los bloques ```chart``` y
+// ```mermaid``` se enriquecen después sin confiar en HTML/config del modelo.
 import { icon } from './icons.js';
 import { openModal } from './dialog.js';
 import { t } from './i18n.js';
@@ -81,11 +81,401 @@ function enhanceCodeBlocks(root) {
   }
 }
 
+const CHART_MAX_PER_MSG = 6;
+const CHART_MAX_CHARS = 8000;
+const CHART_TYPES = new Set(['doughnut', 'pie', 'bar', 'line', 'hbar']);
+const CHART_PALETTE = [
+  '--cwc-accent',
+  '--cwc-accent-cool',
+  '--cwc-warn',
+  '--cwc-ok',
+  '--cwc-cat-video',
+  '--cwc-info',
+  '--cwc-danger',
+  '--cwc-cat-archive',
+];
+const liveCharts = new Set();
+
+// Lee la paleta viva del documento porque un tema puede cambiar los tokens sin
+// recargar el módulo; enhanceChartBlocks guarda una sola lectura por render.
+function chartTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const token = (name) => css.getPropertyValue(name).trim();
+  return {
+    palette: CHART_PALETTE.map(token),
+    text: token('--cwc-text-secondary'),
+    grid: token('--cwc-border-soft'),
+    font: token('--cwc-font-ui'),
+  };
+}
+
+function parseChartSpec(src) {
+  if (src.length > CHART_MAX_CHARS) return null;
+  let raw;
+  try {
+    raw = JSON.parse(src);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (typeof raw.type !== 'string' || !CHART_TYPES.has(raw.type)) return null;
+  if (!Array.isArray(raw.labels) || !Array.isArray(raw.data)) return null;
+
+  let labels = raw.labels.slice(0, 24).map((label) => String(label).slice(0, 40));
+  let series;
+  const numericData = raw.data.slice(0, 24);
+  if (numericData.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    const length = Math.min(labels.length, numericData.length);
+    if (!length) return null;
+    labels = labels.slice(0, length);
+    series = [{ label: '', data: numericData.slice(0, length) }];
+  } else {
+    const multiAllowed = raw.type === 'bar' || raw.type === 'hbar' || raw.type === 'line';
+    if (!multiAllowed || !raw.data.length) return null;
+    const candidates = raw.data.slice(0, 4);
+    if (!candidates.every((item) =>
+      item && typeof item === 'object' && !Array.isArray(item) &&
+      typeof item.label === 'string' && Array.isArray(item.data) &&
+      item.data.slice(0, 24).every((value) => typeof value === 'number' && Number.isFinite(value))
+    )) return null;
+    const length = Math.min(labels.length, ...candidates.map((item) => Math.min(item.data.length, 24)));
+    if (!length) return null;
+    labels = labels.slice(0, length);
+    series = candidates.map((item) => ({
+      label: item.label.slice(0, 40),
+      data: item.data.slice(0, length),
+    }));
+  }
+
+  return {
+    type: raw.type === 'hbar' ? 'bar' : raw.type,
+    indexAxis: raw.type === 'hbar' ? 'y' : 'x',
+    title: typeof raw.title === 'string' ? raw.title.slice(0, 120) : '',
+    labels,
+    series,
+    unit: typeof raw.unit === 'string' ? raw.unit.slice(0, 8) : '',
+    stacked: (raw.type === 'bar' || raw.type === 'hbar') && raw.stacked === true,
+  };
+}
+
+function formatChartValue(value, unit) {
+  return unit ? `${value}${unit === '%' ? '%' : ` ${unit}`}` : String(value);
+}
+
+function chartDataTable(spec) {
+  const table = document.createElement('table');
+  table.className = 'md-chart-data';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  const labelHead = document.createElement('th');
+  labelHead.scope = 'col';
+  labelHead.textContent = t('core.markdown.chartLabel', 'Categoría');
+  headRow.appendChild(labelHead);
+  if (spec.series.length === 1) {
+    const valueHead = document.createElement('th');
+    valueHead.scope = 'col';
+    valueHead.textContent = spec.series[0].label || t('core.markdown.chartValue', 'Valor');
+    headRow.appendChild(valueHead);
+  } else {
+    for (const item of spec.series) {
+      const seriesHead = document.createElement('th');
+      seriesHead.scope = 'col';
+      seriesHead.textContent = item.label;
+      headRow.appendChild(seriesHead);
+    }
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  spec.labels.forEach((label, index) => {
+    const row = document.createElement('tr');
+    const rowHead = document.createElement('th');
+    rowHead.scope = 'row';
+    rowHead.textContent = label;
+    row.appendChild(rowHead);
+    for (const item of spec.series) {
+      const value = document.createElement('td');
+      value.textContent = formatChartValue(item.data[index], spec.unit);
+      row.appendChild(value);
+    }
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+function chartConfig(spec, theme) {
+  const round = spec.type === 'doughnut' || spec.type === 'pie';
+  const multi = spec.series.length > 1;
+  const datasets = spec.series.map((item, seriesIndex) => {
+    const color = theme.palette[seriesIndex % theme.palette.length];
+    const dataset = {
+      label: item.label,
+      data: item.data.slice(),
+    };
+    if (round) {
+      dataset.backgroundColor = spec.labels.map((_, index) => theme.palette[index % theme.palette.length]);
+      dataset.borderWidth = 0;
+    } else if (spec.type === 'line') {
+      dataset.borderColor = color;
+      dataset.backgroundColor = color;
+      dataset.tension = 0.3;
+      dataset.pointRadius = 2;
+      dataset.borderWidth = 2;
+      dataset.fill = false;
+    } else {
+      dataset.backgroundColor = multi
+        ? color
+        : spec.labels.map((_, index) => theme.palette[index % theme.palette.length]);
+      dataset.borderRadius = 3;
+      dataset.borderWidth = 0;
+    }
+    return dataset;
+  });
+
+  const legend = {
+    display: round || multi,
+    position: round
+      ? (window.matchMedia?.('(max-width: 768px)').matches ? 'top' : 'right')
+      : 'top',
+    labels: {
+      color: theme.text,
+      font: { family: theme.font, size: 11 },
+    },
+  };
+  const plugins = {
+    legend,
+    title: { display: false },
+  };
+  if (spec.unit) {
+    plugins.tooltip = {
+      callbacks: {
+        label: (ctx) => {
+          const parsed = round ? ctx.parsed : (spec.indexAxis === 'y' ? ctx.parsed.x : ctx.parsed.y);
+          const label = round ? ctx.label : ctx.dataset.label;
+          const prefix = label ? `${label}: ` : '';
+          return `${prefix}${formatChartValue(parsed, spec.unit)}`;
+        },
+      },
+    };
+  }
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    indexAxis: spec.indexAxis,
+    plugins,
+  };
+  if (spec.type === 'doughnut') options.cutout = '58%';
+  if (!round) {
+    const numericAxis = spec.indexAxis === 'y' ? 'x' : 'y';
+    options.scales = {
+      x: {
+        stacked: spec.stacked,
+        beginAtZero: numericAxis === 'x',
+        grid: { display: false },
+        ticks: {
+          color: theme.text,
+          font: { family: theme.font, size: 11 },
+          ...(spec.unit && numericAxis === 'x'
+            ? { callback: (value) => formatChartValue(value, spec.unit) }
+            : {}),
+        },
+      },
+      y: {
+        stacked: spec.stacked,
+        beginAtZero: numericAxis === 'y',
+        grid: { color: theme.grid },
+        ticks: {
+          color: theme.text,
+          font: { family: theme.font, size: 11 },
+          ...(spec.unit && numericAxis === 'y'
+            ? { callback: (value) => formatChartValue(value, spec.unit) }
+            : {}),
+        },
+      },
+    };
+  }
+  return { type: spec.type, data: { labels: spec.labels.slice(), datasets }, options };
+}
+
+function showChartError(wrap) {
+  const note = document.createElement('div');
+  note.className = 'md-chart-error';
+  note.textContent = t('core.markdown.chartError', '⚠ No se pudo interpretar este gráfico — datos abajo.');
+  wrap.before(note);
+}
+
+function enhanceChartBlocks(root) {
+  // Chart.js conserva canvas y listeners de resize aunque el chat descarte sus
+  // nodos; barrer los desconectados en cada render evita que esa retención crezca.
+  for (const inst of [...liveCharts]) {
+    if (inst.canvas?.isConnected) continue;
+    try { inst.destroy(); } catch { /* la instancia ya podía estar destruida */ }
+    liveCharts.delete(inst);
+  }
+
+  let rendered = 0;
+  let theme = null; // una lectura de computed styles alcanza para todo el mensaje
+  for (const wrap of root.querySelectorAll('.md-codewrap')) {
+    const code = wrap.querySelector('code.language-chart');
+    if (!code || rendered >= CHART_MAX_PER_MSG) continue;
+    const spec = parseChartSpec(code.textContent || '');
+    const ChartCtor = window.Chart;
+    if (!spec || typeof ChartCtor !== 'function') {
+      showChartError(wrap);
+      continue;
+    }
+
+    const figure = document.createElement('figure');
+    figure.className = `md-chart${spec.type === 'doughnut' || spec.type === 'pie' ? ' md-chart--round' : ''}`;
+    if (spec.title) {
+      const caption = document.createElement('figcaption');
+      caption.className = 'md-chart-title';
+      caption.textContent = spec.title;
+      figure.appendChild(caption);
+    }
+    const box = document.createElement('div');
+    box.className = 'md-chart-box';
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('aria-hidden', 'true');
+    box.appendChild(canvas);
+    figure.appendChild(box);
+    figure.appendChild(chartDataTable(spec));
+
+    const details = document.createElement('details');
+    details.className = 'md-chart-src';
+    const summary = document.createElement('summary');
+    summary.textContent = t('core.markdown.viewChartData', 'Ver datos del gráfico');
+    details.appendChild(summary);
+    wrap.replaceWith(figure, details);
+    details.appendChild(wrap);
+
+    let inst = null;
+    try {
+      theme ||= chartTheme();
+      // La config se reconstruye desde la allowlist; el objeto JSON del modelo
+      // nunca llega a Chart.js ni se mezcla con sus opciones ejecutables.
+      inst = new ChartCtor(canvas, chartConfig(spec, theme));
+      liveCharts.add(inst);
+      rendered += 1;
+    } catch {
+      try { inst?.destroy(); } catch { /* constructor incompleto */ }
+      try { ChartCtor.getChart?.(canvas)?.destroy(); } catch { /* sin registro */ }
+      figure.remove();
+      details.before(wrap);
+      details.remove();
+      showChartError(wrap);
+    }
+  }
+}
+
+function enhanceInlineBars(root) {
+  // Corre DESPUÉS de sanitize() y crea nodos propios con createElement: por eso
+  // SPAN no necesita entrar al ALLOWLIST que protege el HTML crudo del modelo.
+  const pattern = /^\{bar:(\d{1,3}(?:\.\d+)?)\}$/;
+  for (const cell of root.querySelectorAll('td, th')) {
+    if (cell.children.length) continue;
+    const match = cell.textContent.trim().match(pattern);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value)) continue;
+    const clamped = Math.min(100, Math.max(0, value));
+    const formatted = Number.isInteger(clamped) ? String(clamped) : clamped.toFixed(1);
+
+    const bar = document.createElement('span');
+    bar.className = 'md-bar';
+    bar.title = `${formatted}%`;
+    const fill = document.createElement('span');
+    fill.className = 'md-bar-fill';
+    fill.style.width = `${clamped}%`;
+    bar.appendChild(fill);
+    const number = document.createElement('span');
+    number.className = 'md-bar-num';
+    number.textContent = `${formatted}%`;
+    cell.replaceChildren(bar, number);
+  }
+}
+
 // Tope de líneas por diagrama: un ```mermaid``` gigante (o alucinado) puede
 // generar un SVG desproporcionado que rompe el layout. Los diagramas reales
 // (flowchart, secuencia, ER, gantt) rara vez pasan de unas pocas decenas.
 const MERMAID_MAX_LINES = 400;
+// Al ser vectorial se puede ampliar sin pixelar, pero sin este tope un
+// diagrama de tres nodos podría convertirse en un cartel desproporcionado.
+const MERMAID_MAX_SCALE = 2.2;
+// Por debajo de ~0.85 el texto de los nodos (15px) baja de ~13px y deja de
+// leerse cómodo en un teléfono; preferimos scroll horizontal antes que un
+// diagrama ilegible.
+const MERMAID_MIN_SCALE = 0.85;
+const mermaidObservers = new Set();
 let mermaidSeq = 0;
+
+// `width:100%` deformaba el encuadre al escalar siempre por ancho; con viewBox
+// hay que encajar por el eje que MÁS sobresale, como `object-fit: contain`.
+function fitMermaidSvg(canvasEl) {
+  const svg = canvasEl.querySelector('svg');
+  if (!svg) return;
+
+  const vb = svg.viewBox?.baseVal;
+  let naturalW = Number(vb?.width);
+  let naturalH = Number(vb?.height);
+  if (!Number.isFinite(naturalW) || naturalW <= 0 ||
+      !Number.isFinite(naturalH) || naturalH <= 0) {
+    try {
+      const bbox = svg.getBBox();
+      naturalW = Number(bbox.width);
+      naturalH = Number(bbox.height);
+    } catch {
+      return;
+    }
+  }
+  if (!Number.isFinite(naturalW) || naturalW <= 0 ||
+      !Number.isFinite(naturalH) || naturalH <= 0) return;
+
+  const availW = canvasEl.clientWidth || canvasEl.getBoundingClientRect().width;
+  if (!availW) return;
+
+  svg.removeAttribute('width');
+  svg.removeAttribute('height');
+  svg.style.maxWidth = '';
+  svg.style.minWidth = '';
+
+  // El límite de altura vive en CSS (`.md-mermaid-canvas`), que ya distingue
+  // desktop/móvil; duplicarlo en JS lo desincroniza en silencio (70% vs 62vh).
+  const fallbackMaxH = Math.max(220, window.innerHeight * 0.70);
+  const cs = getComputedStyle(canvasEl);
+  const cssMaxH = parseFloat(cs.maxHeight);
+  const paddingTop = parseFloat(cs.paddingTop);
+  const paddingBottom = parseFloat(cs.paddingBottom);
+  const verticalPadding =
+    (Number.isFinite(paddingTop) ? paddingTop : 0) +
+    (Number.isFinite(paddingBottom) ? paddingBottom : 0);
+  const contentMaxH = cssMaxH - verticalPadding;
+  const maxH = Number.isFinite(cssMaxH) && cssMaxH > 0 && contentMaxH > 0
+    ? contentMaxH
+    : fallbackMaxH;
+  const fitScale = Math.min(availW / naturalW, maxH / naturalH, MERMAID_MAX_SCALE);
+  // Piso de legibilidad: si el encaje exacto obligaría a achicar demasiado,
+  // preferimos el tamaño mínimo legible y que el canvas scrollee en horizontal.
+  // Limitar el piso por maxH / naturalH es deliberado: nunca debe superar el
+  // alto máximo; un diagrama muy alto sí puede bajar de 0.85 para entrar.
+  const scale = Math.max(fitScale, Math.min(MERMAID_MIN_SCALE, maxH / naturalH));
+  const svgWidth = Math.round(naturalW * scale);
+  svg.style.width = `${svgWidth}px`;
+  svg.style.height = `${Math.round(naturalH * scale)}px`;
+
+  const holder = canvasEl.closest('.md-mermaid');
+  if (holder) {
+    const overflows = svgWidth > canvasEl.clientWidth + 2;
+    holder.classList.toggle('md-mermaid--pan', overflows);
+    canvasEl.title = overflows
+      ? t('core.markdown.panHint', 'Deslizá para ver el resto — o tocá Ampliar')
+      : '';
+  }
+}
 
 // Detecta ```mermaid``` (ya pasó por sanitize: sigue siendo un <code
 // class="language-mermaid"> dentro de un <pre>, envuelto en .md-codewrap por
@@ -96,6 +486,12 @@ let mermaidSeq = 0;
 // bloque es enorme, se deja el código fuente visible tal cual (ya lo dejó
 // enhanceCodeBlocks) y no se rompe el resto del mensaje.
 function enhanceMermaidBlocks(root) {
+  for (const entry of [...mermaidObservers]) {
+    if (entry.target.isConnected) continue;
+    entry.obs.disconnect();
+    mermaidObservers.delete(entry);
+  }
+
   const wraps = root.querySelectorAll('.md-codewrap');
   for (const wrap of wraps) {
     const code = wrap.querySelector('code.language-mermaid');
@@ -127,16 +523,21 @@ function enhanceMermaidBlocks(root) {
       mermaidSeq += 1;
       return mermaid.render(`md-mermaid-${Date.now()}-${mermaidSeq}`, src);
     }).then(({ svg }) => {
-      // El SVG va en un canvas interno con scroll acotado (max-height en CSS):
-      // un diagrama complejo se muestra como PREVIEW/miniatura (como la
-      // miniatura de una imagen adjunta) en vez de un muro ilegible que ocupa
-      // media pantalla — se lee entero al ampliarlo. El badge queda FUERA del
-      // canvas (hijo directo del holder relativo) para no scrollear con él.
+      // El SVG vive inline con encaje proporcional para leerse como parte del
+      // mensaje; "Ampliar" queda como ayuda extra. El badge va fuera del canvas
+      // y en su propia fila del flujo para no tapar contenido.
       holder.innerHTML = '';
       const canvas = document.createElement('div');
       canvas.className = 'md-mermaid-canvas';
       canvas.innerHTML = svg;
       holder.appendChild(canvas);
+      fitMermaidSvg(canvas);
+      requestAnimationFrame(() => fitMermaidSvg(canvas));
+      if (typeof ResizeObserver === 'function') {
+        const obs = new ResizeObserver(() => fitMermaidSvg(canvas));
+        obs.observe(canvas);
+        mermaidObservers.add({ obs, target: canvas });
+      }
       // Click para ampliar: mismo patrón que el lightbox de imágenes del chat
       // (chat-tab.js `_lightbox` → openModal genérico) — el navegador ya deja
       // hacer zoom/pan nativo (pinch, Ctrl+scroll) sobre el contenido del
@@ -154,7 +555,7 @@ function enhanceMermaidBlocks(root) {
       // stopPropagation: el badge abre el zoom una sola vez (sin él, el click
       // burbujea al holder y se abrirían dos modales).
       zoomBtn.addEventListener('click', (e) => { e.stopPropagation(); openMermaidZoom(holder); });
-      holder.appendChild(zoomBtn);
+      holder.insertBefore(zoomBtn, canvas);
       holder.addEventListener('click', () => openMermaidZoom(holder));
       holder.dispatchEvent(new CustomEvent('cwc:mermaid-rendered', { bubbles: true }));
     }).catch(() => {
@@ -175,15 +576,24 @@ function openMermaidZoom(holder) {
   const m = openModal({ title: t('core.markdown.diagram', 'Diagrama'), width: 'min(94vw, 1100px)' });
   m.body.classList.add('md-mermaid-zoom-body');
   const clone = svg.cloneNode(true);
-  // Mermaid deja un `style="max-width:NNNpx"` INLINE en el SVG (tamaño chico
-  // para caber en la burbuja del chat). Un style inline le gana en
-  // especificidad a la regla `.md-mermaid-zoom-body svg{max-width:none}` de
-  // style.css, así que el diagrama quedaba diminuto arriba a la izquierda con
-  // el modal casi vacío. Pisamos ese estilo inline DESPUÉS de clonar (un set
-  // por JS también es inline, pero se aplica después → gana al de mermaid).
-  clone.style.maxWidth = 'none';
-  clone.style.width = '100%';
-  clone.style.height = 'auto';
+  clone.removeAttribute('width');
+  clone.removeAttribute('height');
+  clone.style.maxWidth = '';
+  clone.style.minWidth = '';
+  const vb = clone.viewBox?.baseVal;
+  if (Number.isFinite(vb?.width) && vb.width > 0 &&
+      Number.isFinite(vb?.height) && vb.height > 0) {
+    if (vb.width >= vb.height) {
+      clone.style.width = '100%';
+      clone.style.height = 'auto';
+    } else {
+      clone.style.height = `min(86vh, ${Math.round(vb.height * MERMAID_MAX_SCALE)}px)`;
+      clone.style.width = 'auto';
+    }
+  } else {
+    clone.style.width = 'auto';
+    clone.style.height = 'auto';
+  }
   m.body.appendChild(clone);
 }
 
@@ -214,7 +624,9 @@ export function renderMarkdown(text) {
   try {
     el.innerHTML = marked.parse(src, { breaks: true, gfm: true });
     sanitize(el);
+    enhanceInlineBars(el);
     enhanceCodeBlocks(el);
+    enhanceChartBlocks(el);
     enhanceMermaidBlocks(el);
     if (truncated) {
       const trunc = document.createElement('p');

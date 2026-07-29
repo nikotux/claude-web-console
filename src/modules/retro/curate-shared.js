@@ -9,29 +9,45 @@
 // `context` {lessons, rules} y lo escribe en el job; el runner solo lee el job y
 // prompt-ea. Corrida TEXTO PURO read-only (regla 6) en bin/cwc-retro-curate-runner.js.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 import { PROMOTE_TARGETS } from './promote-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
-const JOB_FILE = path.join(os.homedir(), '.cwc-data', 'retro-curation.json');
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'retro-curate.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-curate-runner.js');
 
 export const CURATE_TIMEOUT_MS = 4 * 60 * 1000;
 export const CURATE_STALE_MS = CURATE_TIMEOUT_MS + 30 * 1000;
 
-export function readCurationJob() {
-  try { return JSON.parse(fs.readFileSync(JOB_FILE, 'utf8')); }
+function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function jobFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-curation.json'); }
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-curate.log'); }
+function runnerEnvFor(owner) {
+  if (!owner || owner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(owner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para curar el registro.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(owner, { oauthToken });
+}
+
+export function readCurationJob(owner = null) {
+  try { return JSON.parse(fs.readFileSync(jobFileFor(owner), 'utf8')); }
   catch { return null; }
 }
-export function writeCurationJob(data) {
-  fs.mkdirSync(path.dirname(JOB_FILE), { recursive: true, mode: 0o700 });
-  writeJsonAtomic(JOB_FILE, data); // atómico tmp-por-PID (server 'running' + runner 'done')
+export function writeCurationJob(data, owner = null) {
+  const jobFile = jobFileFor(owner);
+  fs.mkdirSync(path.dirname(jobFile), { recursive: true, mode: 0o700 });
+  writeJsonAtomic(jobFile, data); // atómico tmp-por-PID (server 'running' + runner 'done')
 }
 
 export function isFreshRunning(job) {
@@ -45,17 +61,18 @@ export function jobResult(job) {
   return { status: job.status, result: job.result || null, error: job.error || null };
 }
 
-export function spawnRetroCurateRunner() {
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnRetroCurateRunner(owner) {
+  const logFile = logFileFor(owner);
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  const logFd = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
   });
   child.on('error', (err) => {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] spawn FAIL curate: ${err?.message || err}\n`); } catch { /* noop */ }
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL curate: ${err?.message || err}\n`); } catch { /* noop */ }
     try {
-      const job = readCurationJob();
-      if (job && job.status === 'running') writeCurationJob({ ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de curaduría.', updatedAt: Date.now() });
+      const job = readCurationJob(owner);
+      if (job && job.status === 'running') writeCurationJob({ ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de curaduría.', updatedAt: Date.now() }, owner);
     } catch { /* noop */ }
   });
   child.unref();

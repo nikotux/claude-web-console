@@ -55,7 +55,7 @@ export const cohToolAllowed = readOnlyToolAllowed;
 const COH_RISK_VALUES = ['bajo', 'medio', 'alto'];
 const COH_TIPO_VALUES = ['cableado', 'dedup', 'fuente-unica', 'regla-oro', 'blindaje', 'espejo', 'adopcion', 'convencion', 'otro'];
 const COH_SEVERIDAD_VALUES = ['info', 'aviso', 'alto'];
-const COH_CATEGORIA_VALUES = ['reuso', 'fuente-unica', 'regla-oro', 'blindaje', 'huerfano', 'registro', 'convencion', 'adopcion'];
+const COH_CATEGORIA_VALUES = ['reuso', 'fuente-unica', 'regla-oro', 'blindaje', 'huerfano', 'registro', 'convencion', 'adopcion', 'aislamiento'];
 export const COH_RISKS = new Set(COH_RISK_VALUES);
 export const COH_TIPOS = new Set(COH_TIPO_VALUES);
 export const COH_SEVERIDADES = new Set(COH_SEVERIDAD_VALUES);
@@ -130,6 +130,44 @@ export function evaluateCoherence(census) {
     findings.push({ ...f, id: findingId(f) });
   };
   const svc = Object.fromEntries((census.services || []).map((s) => [s.key, s]));
+
+  // Regla 0: un módulo backend que persiste estado propio debe pasar por al
+  // menos uno de los transversales de aislamiento multi-tenant. La señal de
+  // persistencia y las exenciones globales hand-authored nacen en el censo.
+  const TENANT_SERVICES = ['user-space', 'data-dir', 'system-scope', 'pad-context'];
+  if (TENANT_SERVICES.every((key) => svc[key]?.exists)) {
+    const tenantConsumers = new Set(TENANT_SERVICES.flatMap((key) => svc[key].consumerModules || []));
+    for (const m of census.modules || []) {
+      const processRootedFiles = m.processRootedFiles || [];
+      const consumesTenantService = tenantConsumers.has(m.module);
+      const hasUnmigratedModule = m.isBackend && m.persists && !consumesTenantService;
+      if (m.persistenceExempt || (!hasUnmigratedModule && processRootedFiles.length === 0)) continue;
+
+      const detalle = hasUnmigratedModule
+        ? `El módulo backend "${m.module}" muestra persistencia propia (${(m.persistenceFiles || []).join(', ') || 'archivo no identificado'}) pero no consume ningún transversal multi-tenant (user-space, data-dir, system-scope ni pad-context): el estado de un usuario podría caer en una ruta global.`
+        : `El módulo backend "${m.module}" ya consume al menos un transversal multi-tenant, pero estos archivos derivan su ruta del proceso en vez del dueño: ${processRootedFiles.join(', ')}.`;
+      const sugerencia = hasUnmigratedModule
+        ? `Hacer que "${m.module}" resuelva toda ruta user-scoped desde el owner/principal de la operación usando uno de los transversales multi-tenant, sin constantes de módulo ligadas al HOME del server.`
+        : `Migrar los archivos señalados de "${m.module}" para que cada operación resuelva su ruta desde el owner/principal, sin depender del HOME del server.`;
+      const pasos = hasUnmigratedModule
+        ? [
+          `Revisar en ${(m.persistenceFiles || []).join(', ') || `src/modules/${m.module}/`} qué estado pertenece a un usuario y de dónde sale hoy su ruta`,
+          'Resolver la ruta con userDataDir(owner) del principal de la request, o con resolveDataDir() cuando el runner ya recibe CWC_DATA_DIR, en vez de una constante de módulo',
+          'Si usa Pad, derivar token y workspace con pad-context para el dueño; verificar con dos usuarios que lectura y escritura no se crucen',
+        ]
+        : [
+          `Migrar ${processRootedFiles.join(', ')} para eliminar os.homedir()/config.home de sus rutas persistentes`,
+          `En ${processRootedFiles.join(', ')}, resolver la ruta por operación con userDataDir(owner) del principal`,
+          'Verificar con dos usuarios que cada operación lee y escribe únicamente dentro del directorio de su dueño',
+        ];
+      add({
+        categoria: 'aislamiento', severidad: 'alto', foco: m.module,
+        detalle,
+        sugerencia,
+        pasos,
+      });
+    }
+  }
 
   // Regla 1: los módulos del ciclo de tickets/features deberían consumir `comms`
   // (necesitan el contexto de Chris/PR). Es el hallazgo que originó el módulo.

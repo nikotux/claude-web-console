@@ -19,7 +19,6 @@
 // Las propuestas NUNCA se auto-aplican: la UI las muestra y el usuario aprueba
 // cada una; aplicar reusa el CRUD determinístico de store.js (delete/update).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { spawn } from 'node:child_process';
@@ -31,32 +30,34 @@ import { listTopics as listLearningTopics } from '../learning/store.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const LOG_FILE = path.join(DATA_DIR, 'tasks-analyze.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-tasks-analyze-runner.js');
 
 export const SCOPES = ['tasks', 'plans', 'global'];
 export const ANALYZE_TIMEOUT_MS = 4 * 60 * 1000;
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+function ensureDir(dataDir) {
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+}
+function logFile(dataDir) {
+  return path.join(dataDir, 'tasks-analyze.log');
 }
 export function normScope(s) {
   return SCOPES.includes(s) ? s : 'tasks';
 }
-function jobPath(scope) {
-  return path.join(DATA_DIR, `tasks-analysis-${normScope(scope)}.json`);
+function jobPath(dataDir, scope) {
+  return path.join(dataDir, `tasks-analysis-${normScope(scope)}.json`);
 }
 
-export function readAnalysisJob(scope) {
-  try { return JSON.parse(fs.readFileSync(jobPath(scope), 'utf8')); }
+export function readAnalysisJob(dataDir, scope) {
+  try { return JSON.parse(fs.readFileSync(jobPath(dataDir, scope), 'utf8')); }
   catch { return null; }
 }
-export function writeAnalysisJob(scope, data) {
+export function writeAnalysisJob(dataDir, scope, data) {
+  ensureDir(dataDir);
   // atómico tmp-por-PID (fix B4 2026-07-11): lo escriben DOS procesos (server → 'running',
   // runner → 'done'/'error') — el tmp de nombre fijo podía colisionar en el respawn por stale.
-  writeJsonAtomic(jobPath(scope), data);
+  writeJsonAtomic(jobPath(dataDir, scope), data);
 }
 
 export function isFreshRunning(job) {
@@ -71,11 +72,11 @@ export function jobResult(job) {
   return { status: job.status, result: job.result || null, error: job.error || null };
 }
 
-export function spawnTasksAnalyzeRunner(scope) {
-  ensureDir();
-  const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, normScope(scope)], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+export function spawnTasksAnalyzeRunner(dataDir, scope, env) {
+  ensureDir(dataDir);
+  const logFd = fs.openSync(logFile(dataDir), 'a');
+  const child = spawn(process.execPath, [RUNNER, normScope(scope), '--data-dir', dataDir], {
+    detached: true, stdio: ['ignore', logFd, logFd], env: env ?? process.env,
   });
   child.unref();
   fs.closeSync(logFd);
@@ -84,10 +85,10 @@ export function spawnTasksAnalyzeRunner(scope) {
 // ===== Contexto determinístico que va en el prompt (0 tokens de recolección) =====
 // Junta los informes de audio con su detalle (summary + tareas propuestas + plan)
 // para que el modelo pueda COMPLETAR info faltante de las tareas.
-function reportsContext() {
+function reportsContext(dataDir) {
   const out = [];
-  for (const j of listAudioJobs()) {
-    const job = readAudioJob(j.id);
+  for (const j of listAudioJobs(dataDir)) {
+    const job = readAudioJob(dataDir, j.id);
     const r = job?.result;
     if (!r) continue;
     out.push({
@@ -130,7 +131,7 @@ function plansBrief(plans, tasks) {
 // este es el SEGUNDO consumidor directo de store.js además de tasks/index.js
 // (detectado durante la migración; sus dos call sites — el endpoint POST
 // /analyze y bin/cwc-tasks-analyze-runner.js — ya lo esperan con await).
-export async function buildContext(scope) {
+export async function buildContext(dataDir, scope) {
   const s = normScope(scope);
   if (s === 'global') {
     // Vista HOLÍSTICA: tareas + planes + informes juntos, para reorganizar todo
@@ -138,7 +139,7 @@ export async function buildContext(scope) {
     // todavía no se cargaron). El modelo ve qué tareas ya tienen plan y cuáles no.
     const { tasks } = await listTasks();
     const plans = await listPlans();
-    const reports = reportsContext();
+    const reports = reportsContext(dataDir);
     // Temas del Banco de conocimiento YA existentes: para NO duplicarlos al
     // sugerir temas nuevos derivados del trabajo pendiente (puente Pendientes → Aprendizaje).
     let learningTopics = [];
@@ -161,7 +162,7 @@ export async function buildContext(scope) {
       status: p.status,
       tasks: tasks.filter((t) => t.planId === p.id).map((t) => t.title),
     }));
-    return { context: { plans: items, reports: reportsContext() }, count: plans.length };
+    return { context: { plans: items, reports: reportsContext(dataDir) }, count: plans.length };
   }
   const { tasks } = await listTasks();
   if (!tasks.length) return null;
@@ -175,7 +176,7 @@ export async function buildContext(scope) {
     tags: t.tags || [],
     planId: t.planId || null,
   }));
-  return { context: { tasks: items, reports: reportsContext() }, count: tasks.length };
+  return { context: { tasks: items, reports: reportsContext(dataDir) }, count: tasks.length };
 }
 
 // Prompt HOLÍSTICO (scope 'global'): reorganiza tareas + planes + informes.

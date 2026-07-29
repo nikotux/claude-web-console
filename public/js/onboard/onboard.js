@@ -1,6 +1,7 @@
-(function () {
+(async function () {
   'use strict';
 
+  const { t } = await import('/js/ui/i18n.js');
   const API = '/api/onboard/public';
   const root = document.getElementById('onboard-root');
   const state = {
@@ -12,16 +13,25 @@
     account: '',
     codex: '',
     infisical: '',
+    github: '',
     url: '',
     credsNote: '',
     accountUrl: '',
     codexUrl: '',
     codexCode: '',
     infisicalUrl: '',
+    githubUrl: '',
+    githubCode: '',
     pending: [],
+    capabilities: [],
     checklist: null,
     provision: null,
     provisionPolling: false,
+    provisionRetrying: false,
+    provisionError: '',
+    smoke: [],
+    smokeRunning: false,
+    smokeError: '',
     finishSent: false,
     error: '',
   };
@@ -41,7 +51,7 @@
   }
 
   function setStep(step) {
-    if (['creds', 'account', 'codex', 'infisical'].includes(state.step) && step !== state.step) clearPoll();
+    if (['creds', 'account', 'codex', 'infisical', 'github'].includes(state.step) && step !== state.step) clearPoll();
     state.step = step;
     state.error = '';
     loading = '';
@@ -58,22 +68,40 @@
     render();
   }
 
-  // console:BUG-2118: el alta responde ok:true antes de que terminen el Pad y el
-  // clon del workspace del inquilino. El checklist final consulta el estado real
-  // y lo muestra, en vez de dar por hecho que salió bien. Nunca bloquea el
-  // cierre del wizard: si el poll falla, el checklist simplemente no muestra
-  // esas líneas.
+  // El alta responde antes de completar el espacio del inquilino. Pendientes y
+  // cierre consultan el estado real, y un fallo se puede reintentar sin crear
+  // otra cuenta.
   function pollProvision(tries) {
     if (!state.token) return;
     apiJson('/provision-status?token=' + encodeURIComponent(state.token), {})
       .then(function (data) {
         state.provision = data;
-        if (state.step === 'done') render();
+        state.provisionError = '';
+        if (state.step === 'pending' || state.step === 'done') render();
         if (data.status === 'pending' && tries < 20) {
           setTimeout(function () { pollProvision(tries + 1); }, 3000);
         }
       })
       .catch(function () { /* el checklist no bloquea el cierre del wizard */ });
+  }
+
+  function capabilityMeta(id) {
+    return state.capabilities.find(function (item) { return item.id === id; }) || null;
+  }
+
+  function capabilityRequired(id) {
+    return capabilityMeta(id)?.required === true;
+  }
+
+  function applyValidation(data) {
+    state.pending = Array.isArray(data.pending) ? data.pending.slice() : [];
+    state.capabilities = Array.isArray(data.capabilities) ? data.capabilities.slice() : [];
+    state.checklist = Object.fromEntries(state.capabilities.map(function (item) {
+      return [item.id, item.complete === true];
+    }));
+    state.codex = data.hasCodex ? 'connected' : '';
+    state.infisical = data.hasInfisical ? 'connected' : '';
+    state.github = data.hasGithub ? 'connected' : '';
   }
 
   function startNamedStep(step) {
@@ -89,8 +117,12 @@
     } else if (step === 'infisical') {
       setStep('infisical');
       startInfisical();
+    } else if (step === 'github') {
+      setStep('github');
+      startGithub();
     } else {
-      setStep('done');
+      setStep('smoke');
+      runSmokeChecks();
     }
   }
 
@@ -99,33 +131,30 @@
   }
 
   function advanceCompleted(step) {
-    if (state.checklist) {
-      state.checklist[step] = true;
-      state.pending = state.pending.filter(function (item) {
-        return item !== step;
-      });
-      startNextPending();
-      return;
-    }
-
-    if (step === 'claude') startNamedStep('account');
-    else if (step === 'account') startNamedStep('codex');
-    else if (step === 'codex') startNamedStep('infisical');
-    else startNamedStep('done');
+    if (state.checklist) state.checklist[step] = true;
+    state.pending = state.pending.filter(function (item) {
+      return item !== step;
+    });
+    startNextPending();
   }
 
   function advanceSkipped(step) {
-    if (state.checklist) {
-      state.pending = state.pending.filter(function (item) {
-        return item !== step;
-      });
-      startNextPending();
-      return;
-    }
+    state.pending = state.pending.filter(function (item) {
+      return item !== step;
+    });
+    startNextPending();
+  }
 
-    if (step === 'account') startNamedStep('codex');
-    else if (step === 'codex') startNamedStep('infisical');
-    else startNamedStep('done');
+  function appendSkip(step, onSkip) {
+    if (capabilityRequired(step)) return;
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    actions.appendChild(button(
+      t('onboard.action.skip', 'Omitir por ahora'),
+      'btn-ghost',
+      onSkip
+    ));
+    root.appendChild(actions);
   }
 
   function setError(message) {
@@ -172,7 +201,20 @@
     return el;
   }
 
-  function header(title, hint, activeStep) {
+  function progressKey() {
+    if (state.step === 'pending') return state.pending[0] || 'done';
+    if (state.step === 'creds') return 'claude';
+    return state.step;
+  }
+
+  function progressOrder() {
+    return ['token', 'register'].concat(
+      state.capabilities.map(function (item) { return item.id; }),
+      ['smoke', 'done']
+    );
+  }
+
+  function header(title, hint) {
     const frag = document.createDocumentFragment();
     const head = document.createElement('div');
     head.className = 'ob-head';
@@ -182,9 +224,11 @@
 
     const steps = document.createElement('div');
     steps.className = 'ob-steps';
-    steps.style.gridTemplateColumns = 'repeat(7, 1fr)';
-    steps.setAttribute('aria-label', 'Progreso del onboarding');
-    for (let i = 1; i <= 7; i += 1) {
+    const order = progressOrder();
+    const activeStep = Math.max(1, order.indexOf(progressKey()) + 1);
+    steps.style.gridTemplateColumns = `repeat(${order.length}, 1fr)`;
+    steps.setAttribute('aria-label', t('onboard.progress.label', 'Progreso del onboarding'));
+    for (let i = 1; i <= order.length; i += 1) {
       const step = document.createElement('span');
       step.className = i <= activeStep ? 'ob-step is-active' : 'ob-step';
       steps.appendChild(step);
@@ -237,20 +281,17 @@
       const data = await apiJson('/validate', { method: 'POST', body: { token } });
       state.token = token;
       state.admin = Boolean(data.admin);
+      applyValidation(data);
 
       if (data.resume === true) {
         state.username = data.lockedTo || '';
-        state.pending = Array.isArray(data.pending) ? data.pending.slice() : [];
-        state.checklist = {
-          claude: Boolean(data.hasToken),
-          account: Boolean(data.hasClaudeAccount),
-          codex: Boolean(data.hasCodex),
-          infisical: Boolean(data.hasInfisical),
-        };
-        state.codex = data.hasCodex ? 'connected' : '';
-        state.infisical = data.hasInfisical ? 'connected' : '';
-        if (state.pending.length) setStep('pending');
-        else setStep('done');
+        if (state.pending.length) {
+          setStep('pending');
+          pollProvision(0);
+        } else {
+          setStep('smoke');
+          runSmokeChecks();
+        }
         return;
       }
 
@@ -299,8 +340,13 @@
       });
       if (!data.ok) throw new Error(data.error || 'No se pudo crear la cuenta.');
       state.username = username;
-      setStep('creds');
-      startCreds();
+      const validation = await apiJson('/validate', {
+        method: 'POST',
+        body: { token: state.token },
+      });
+      applyValidation(validation);
+      pollProvision(0);
+      startNextPending();
     } catch (err) {
       setError(err.message);
     }
@@ -369,7 +415,7 @@
 
   function renderToken() {
     root.replaceChildren();
-    root.appendChild(header('Bienvenido/a', 'Usá tu invitación para configurar el acceso.', 1));
+    root.appendChild(header('Bienvenido/a', 'Usá tu invitación para configurar el acceso.'));
 
     const form = document.createElement('form');
     form.className = 'ob-form';
@@ -398,43 +444,113 @@
     token.focus();
   }
 
-  function renderPending() {
-    const stepNumbers = { claude: 3, account: 4, codex: 5, infisical: 6 };
-    const activeStep = stepNumbers[state.pending[0]] || 2;
-    const items = [
-      ['claude', 'Cuenta de Claude'],
-      ['account', 'Claude · tu consumo (opcional)'],
-      ['codex', 'Codex (opcional)'],
-      ['infisical', 'Infisical (acceso a Tolkien)'],
-    ];
+  const PROVISION_LABELS = {
+    pad: ['Pad', 'Preparando Pad…'],
+    workspace: ['Workspace', 'Preparando el workspace…'],
+    skills: ['Skills', 'Instalando skills…'],
+    'tolkien-mcp': ['MCP de Tolkien', 'Configurando el MCP de Tolkien…'],
+  };
 
+  function provisionText(name, step) {
+    const labels = PROVISION_LABELS[name] || [name, `Preparando ${name}…`];
+    const label = t(`onboard.provision.${name}.label`, labels[0]);
+    if (!step || step.status === 'pending') {
+      return '⏳ ' + t(`onboard.provision.${name}.pending`, labels[1]);
+    }
+    if (step.status === 'ok') {
+      return '✅ ' + t('onboard.provision.ready', '{step}: listo.', { step: label });
+    }
+    return '⚠️ ' + t('onboard.provision.failed', '{step}: falló.', { step: label })
+      + (step.error ? ' (' + step.error + ')' : '');
+  }
+
+  async function retryProvision() {
+    state.provisionRetrying = true;
+    state.provisionError = '';
+    render();
+    try {
+      state.provision = await apiJson('/provision-retry', {
+        method: 'POST',
+        body: { token: state.token },
+      });
+      state.provisionRetrying = false;
+      render();
+      pollProvision(0);
+    } catch (error) {
+      state.provisionRetrying = false;
+      state.provisionError = error.message;
+      render();
+    }
+  }
+
+  function appendProvisionState(container) {
+    const block = document.createElement('div');
+    block.className = 'ob-provision';
+    block.appendChild(textEl(
+      'p',
+      'ob-label',
+      t('onboard.provision.title', 'Preparación de tu espacio')
+    ));
+    const list = document.createElement('ul');
+    list.className = 'ob-list';
+    const steps = state.provision?.steps || {};
+    Object.keys(PROVISION_LABELS).forEach(function (name) {
+      list.appendChild(textEl('li', '', provisionText(name, steps[name])));
+    });
+    block.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    const retry = button(
+      state.provisionRetrying
+        ? t('onboard.provision.retrying', 'Reintentando…')
+        : t('onboard.action.retry', 'Reintentar'),
+      'btn-ghost',
+      retryProvision
+    );
+    retry.disabled = state.provisionRetrying
+      || !state.provision
+      || (state.provision.status === 'pending' && state.provision.stale !== true);
+    actions.appendChild(retry);
+    block.appendChild(actions);
+    if (state.provisionError) {
+      block.appendChild(textEl('p', 'ob-error', state.provisionError));
+    }
+    container.appendChild(block);
+  }
+
+  function renderPending() {
     root.replaceChildren();
     root.appendChild(header(
-      'Te falta completar tu configuración',
-      'Entraste como ' + state.username + '. Estos son los pasos que quedaron pendientes.',
-      activeStep
+      t('onboard.pending.title', 'Te falta completar tu configuración'),
+      t('onboard.pending.hint', 'Entraste como {user}. Estos son los pasos que quedaron pendientes.', {
+        user: state.username,
+      })
     ));
 
     const form = document.createElement('div');
     form.className = 'ob-form';
     const list = document.createElement('ul');
     list.className = 'ob-list';
-    items.forEach(function (item) {
-      const complete = state.checklist && state.checklist[item[0]];
-      list.appendChild(textEl('li', '', (complete ? '✅ ' : '⬜ ') + item[1]));
+    state.capabilities.forEach(function (item) {
+      const complete = state.checklist && state.checklist[item.id];
+      const optional = item.required ? '' : t('onboard.pending.optional', ' (opcional)');
+      const label = t(`onboard.capability.${item.id}`, item.labelEs || item.id);
+      list.appendChild(textEl('li', '', (complete ? '✅ ' : '⬜ ') + label + optional));
     });
     form.appendChild(list);
+    appendProvisionState(form);
 
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
-    actions.appendChild(button('Continuar', 'btn', startNextPending));
+    actions.appendChild(button(t('onboard.pending.continue', 'Continuar'), 'btn', startNextPending));
     form.appendChild(actions);
     root.appendChild(form);
   }
 
   function renderRegister() {
     root.replaceChildren();
-    root.appendChild(header('Creá tu usuario', 'Elegí las credenciales para entrar a la consola.', 2));
+    root.appendChild(header('Creá tu usuario', 'Elegí las credenciales para entrar a la consola.'));
 
     const form = document.createElement('form');
     form.className = 'ob-form';
@@ -488,7 +604,7 @@
 
   function renderCredsBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectá tu cuenta de Claude', 'Autorizá Claude para terminar la configuración.', 3));
+    root.appendChild(header('Conectá tu cuenta de Claude', 'Autorizá Claude para terminar la configuración.'));
   }
 
   function renderSpinner(text) {
@@ -617,21 +733,17 @@
     root.replaceChildren();
     root.appendChild(header(
       'Claude · tu consumo (opcional)',
-      'Conectá tu cuenta para ver el uso real de tu plan.',
-      4
+      'Conectá tu cuenta para ver el uso real de tu plan.'
     ));
     root.appendChild(textEl('p', 'ob-note', 'Esto habilita los porcentajes reales de tu sesión de 5 horas y de tu semana.'));
     root.appendChild(textEl('p', 'ob-note', 'Sin este paso, el panel Uso solo mostrará tus tokens consumidos. No es requisito para empezar a trabajar: podés conectarlo más tarde desde el bloque Claude · tu consumo.'));
   }
 
   function appendAccountSkip() {
-    const actions = document.createElement('div');
-    actions.className = 'ob-actions';
-    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+    appendSkip('account', function () {
       state.account = 'skipped';
       advanceSkipped('account');
-    }));
-    root.appendChild(actions);
+    });
   }
 
   function renderAccountSpinner(text) {
@@ -815,18 +927,22 @@
 
   function renderCodexBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectar Codex (opcional)', 'Autorizá Codex para usar el modo Tándem.', 5));
-    root.appendChild(textEl('p', 'ob-note', 'Codex es el ejecutor del modo Tándem (Claude razona, Codex escribe el código). Sin Codex tus chats usan AutoTux; podés conectarlo más tarde desde ⚙ Sistema → Conexiones.'));
+    root.appendChild(header(
+      t('onboard.codex.title', 'Conectá Codex'),
+      t('onboard.codex.hint', 'Autorizá Codex para usar el modo Tándem.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.codex.note', 'Codex es obligatorio: ejecuta el código del modo Tándem con la cuenta aislada de tu usuario.')
+    ));
   }
 
   function appendCodexSkip() {
-    const actions = document.createElement('div');
-    actions.className = 'ob-actions';
-    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+    appendSkip('codex', function () {
       state.codex = 'skipped';
       advanceSkipped('codex');
-    }));
-    root.appendChild(actions);
+    });
   }
 
   function renderCodexSpinner(text) {
@@ -973,18 +1089,22 @@
 
   function renderInfisicalBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectá Infisical', 'Es lo que le da acceso a las herramientas de Tolkien.', 6));
-    root.appendChild(textEl('p', 'ob-note', 'Infisical guarda los secretos del proyecto. Sin esta conexión, el MCP de Tolkien queda sin credenciales y las herramientas de Desk/Teams no funcionan. Podés conectarlo más tarde desde ⚙ Sistema → MCPs.'));
+    root.appendChild(header(
+      t('onboard.infisical.title', 'Conectá Infisical'),
+      t('onboard.infisical.hint', 'Es lo que le da acceso a las herramientas de Tolkien.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.infisical.note', 'Infisical es obligatorio: guarda los secretos que necesitan el MCP de Tolkien y sus herramientas.')
+    ));
   }
 
   function appendInfisicalSkip() {
-    const actions = document.createElement('div');
-    actions.className = 'ob-actions';
-    actions.appendChild(button('Omitir por ahora', 'btn-ghost', function () {
+    appendSkip('infisical', function () {
       state.infisical = 'skipped';
       advanceSkipped('infisical');
-    }));
-    root.appendChild(actions);
+    });
   }
 
   function renderInfisicalSpinner(text) {
@@ -1162,51 +1282,381 @@
     renderInfisicalSpinner('Preparando…');
   }
 
+  function renderGithubBase() {
+    root.replaceChildren();
+    root.appendChild(header(
+      t('onboard.github.title', 'Conectá GitHub'),
+      t('onboard.github.hint', 'Autorizá el CLI para trabajar con tus repositorios por HTTPS.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.github.note', 'GitHub es obligatorio. La sesión y la configuración Git quedan en el HOME aislado de tu usuario.')
+    ));
+  }
+
+  function renderGithubSpinner(text) {
+    renderGithubBase();
+    const line = document.createElement('div');
+    line.className = 'ob-spinner-line';
+    line.appendChild(document.createElement('span')).className = 'ob-spinner';
+    line.appendChild(textEl('span', '', text));
+    root.appendChild(line);
+  }
+
+  async function startGithub() {
+    clearPoll();
+    state.githubUrl = '';
+    state.githubCode = '';
+    state.error = '';
+    currentJobKey = '';
+    renderGithubSpinner(t('onboard.github.preparing', 'Preparando…'));
+
+    try {
+      const data = await apiJson('/github-start', {
+        method: 'POST',
+        body: { token: state.token },
+      });
+      if (state.step !== 'github') return;
+      if (data.connected === true) {
+        state.github = 'connected';
+        advanceCompleted('github');
+        return;
+      }
+      pollId = setInterval(pollGithub, 3000);
+      pollGithub();
+    } catch (err) {
+      clearPoll();
+      renderGithubStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  async function pollGithub() {
+    try {
+      const data = await apiJson(
+        '/github-status?token=' + encodeURIComponent(state.token),
+        { method: 'GET' }
+      );
+      pollFails = 0;
+      renderGithubStatus(data || {});
+    } catch (err) {
+      pollFails += 1;
+      if (pollFails < 5) return;
+      clearPoll();
+      renderGithubStatus({ status: 'error', error: err.message });
+    }
+  }
+
+  function renderGithubAwaitingAuth() {
+    renderGithubBase();
+    const list = document.createElement('ol');
+    list.className = 'ob-list';
+
+    const first = document.createElement('li');
+    first.appendChild(textEl('span', '', t('onboard.github.open', 'Abrí este enlace:')));
+    first.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.className = 'ob-url';
+    link.href = state.githubUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = state.githubUrl;
+    first.appendChild(link);
+    const copyLink = button(
+      t('onboard.action.copyLink', 'Copiar enlace'),
+      'btn-ghost ob-copy',
+      async function () {
+        try {
+          await navigator.clipboard.writeText(state.githubUrl);
+          copyLink.textContent = t('onboard.action.copied', 'Copiado');
+        } catch (err) {
+          copyLink.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
+        }
+        window.setTimeout(function () {
+          copyLink.textContent = t('onboard.action.copyLink', 'Copiar enlace');
+        }, 1800);
+      }
+    );
+    first.appendChild(copyLink);
+    list.appendChild(first);
+
+    const second = document.createElement('li');
+    second.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.github.code', 'Código de un solo uso:')
+    ));
+    second.appendChild(textEl('p', 'ob-title', state.githubCode));
+    const copyCode = button(
+      t('onboard.action.copyCode', 'Copiar código'),
+      'btn-ghost ob-copy',
+      async function () {
+        try {
+          await navigator.clipboard.writeText(state.githubCode);
+          copyCode.textContent = t('onboard.action.copied', 'Copiado');
+        } catch (err) {
+          copyCode.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
+        }
+        window.setTimeout(function () {
+          copyCode.textContent = t('onboard.action.copyCode', 'Copiar código');
+        }, 1800);
+      }
+    );
+    second.appendChild(copyCode);
+    list.appendChild(second);
+    root.appendChild(list);
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.github.authorize', 'Pegá el código en GitHub y aprobá el acceso. Esta pantalla avanza sola al terminar.')
+    ));
+  }
+
+  function renderGithubStatus(job) {
+    if (state.step !== 'github') return;
+    const status = job.status || (job.done ? 'done' : 'starting');
+    const url = job.url || state.githubUrl || '';
+    const code = job.code || state.githubCode || '';
+    const stale = job.stale === true;
+    const error = job.error || '';
+    const jobKey = [status, url, code, stale ? 'stale' : '', error].join('|');
+
+    if (job.connected === true || job.done === true || status === 'done') {
+      clearPoll();
+      state.github = 'connected';
+      advanceCompleted('github');
+      return;
+    }
+
+    if (status === 'error' || stale) {
+      clearPoll();
+      currentJobKey = jobKey;
+      renderGithubBase();
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        error || t('onboard.github.interrupted', 'Parece que el login de GitHub se interrumpió.')
+      ));
+      const actions = document.createElement('div');
+      actions.className = 'ob-actions';
+      actions.appendChild(button(
+        t('onboard.action.retry', 'Reintentar'),
+        'btn',
+        startGithub
+      ));
+      root.appendChild(actions);
+      return;
+    }
+
+    if (jobKey === currentJobKey && status === 'awaiting-auth') return;
+    currentJobKey = jobKey;
+
+    if (status === 'awaiting-auth' && url && code) {
+      state.githubUrl = url;
+      state.githubCode = code;
+      renderGithubAwaitingAuth();
+      return;
+    }
+
+    renderGithubSpinner(status === 'setup-git'
+      ? t('onboard.github.setupGit', 'Configurando Git para HTTPS…')
+      : t('onboard.github.preparing', 'Preparando…'));
+  }
+
+  const SMOKE_CHECKS = [
+    ['chat', 'Chat con Claude'],
+    ['terminal', 'Terminal'],
+    ['mcp', 'MCP de Tolkien'],
+    ['pad', 'Workspace de Pad'],
+    ['tolkien', 'Compilación de Tolkien'],
+  ];
+
+  function pendingSmokeChecks() {
+    return SMOKE_CHECKS.map(function (item) {
+      return {
+        id: item[0],
+        labelEs: item[1],
+        status: 'pending',
+        detail: t('onboard.smoke.pending', 'Verificando…'),
+        fixHint: null,
+      };
+    });
+  }
+
+  async function runSmokeChecks(retryId) {
+    state.smokeRunning = true;
+    state.smokeError = '';
+    if (!state.smoke.length) {
+      state.smoke = pendingSmokeChecks();
+    } else if (retryId) {
+      state.smoke = state.smoke.map(function (check) {
+        return check.id === retryId
+          ? { ...check, status: 'pending', detail: t('onboard.smoke.pending', 'Verificando…') }
+          : check;
+      });
+    }
+    render();
+    try {
+      const checks = await apiJson('/smoke', {
+        method: 'POST',
+        body: { token: state.token },
+      });
+      if (!Array.isArray(checks) || checks.length !== SMOKE_CHECKS.length) {
+        throw new Error(t('onboard.smoke.invalidResponse', 'El servidor devolvió una verificación incompleta.'));
+      }
+      state.smoke = checks;
+    } catch (error) {
+      state.smokeError = error.message;
+    } finally {
+      state.smokeRunning = false;
+      render();
+    }
+  }
+
+  function smokeIcon(status) {
+    if (status === 'ok') return '✅';
+    if (status === 'fail') return '❌';
+    if (status === 'skip') return '⏭';
+    return '⏳';
+  }
+
+  function renderSmoke() {
+    root.replaceChildren();
+    const failed = state.smoke.some(function (check) { return check.status === 'fail'; });
+    const skipped = state.smoke.some(function (check) { return check.status === 'skip'; });
+    const allOk = state.smoke.length === SMOKE_CHECKS.length
+      && state.smoke.every(function (check) { return check.status === 'ok'; });
+    root.appendChild(header(
+      allOk
+        ? t('onboard.smoke.readyTitle', '✅ Todo funciona')
+        : t('onboard.smoke.title', 'Verificamos tu acceso'),
+      allOk
+        ? t('onboard.smoke.readyHint', 'Las cinco pruebas reales terminaron bien.')
+        : t('onboard.smoke.hint', 'Probamos cada puerta antes de dar por terminada la configuración.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.smoke.chatCost', 'La prueba de chat valida la credencial sin generar una respuesta: no consume tokens.')
+    ));
+
+    const list = document.createElement('ul');
+    list.className = 'ob-list';
+    state.smoke.forEach(function (check) {
+      const item = document.createElement('li');
+      item.appendChild(textEl(
+        'span',
+        '',
+        `${smokeIcon(check.status)} ${t(`onboard.smoke.${check.id}.label`, check.labelEs || check.id)}`
+      ));
+      if (check.detail) item.appendChild(textEl('p', 'ob-note', check.detail));
+      if (check.status === 'fail' && check.fixHint) {
+        item.appendChild(textEl('p', 'ob-error', check.fixHint));
+        const retry = button(
+          t('onboard.smoke.retryOne', 'Reintentar esta prueba'),
+          'btn-ghost',
+          function () { runSmokeChecks(check.id); }
+        );
+        retry.disabled = state.smokeRunning;
+        item.appendChild(retry);
+      }
+      list.appendChild(item);
+    });
+    root.appendChild(list);
+
+    if (state.smokeError) {
+      root.appendChild(textEl('p', 'ob-error', state.smokeError));
+    } else if (failed) {
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        t('onboard.smoke.failedHint', 'Hay funciones que todavía no van a funcionar. Podés corregirlas ahora o continuar igual.')
+      ));
+    } else if (skipped && !state.smokeRunning) {
+      root.appendChild(textEl(
+        'p',
+        'ob-note',
+        t('onboard.smoke.skippedHint', 'Alguna preparación todavía no terminó. Podés reintentar o continuar igual.')
+      ));
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'ob-actions';
+    if (state.smokeError) {
+      const retryAll = button(
+        t('onboard.smoke.retryAll', 'Reintentar verificación'),
+        'btn-ghost',
+        function () { runSmokeChecks(); }
+      );
+      retryAll.disabled = state.smokeRunning;
+      actions.appendChild(retryAll);
+    }
+    if (!state.smokeRunning && state.smoke.length) {
+      actions.appendChild(button(
+        allOk
+          ? t('onboard.smoke.finish', 'Terminar')
+          : t('onboard.smoke.continueAnyway', 'Continuar igual'),
+        allOk ? 'btn' : 'btn-ghost',
+        function () { setStep('done'); }
+      ));
+    }
+    root.appendChild(actions);
+  }
+
   function renderDone() {
     root.replaceChildren();
     const provFailed = !!(state.provision && state.provision.status === 'failed');
     root.appendChild(provFailed
-      ? header('⚠️ Casi listo', 'Tu cuenta quedó creada, pero algo de tu espacio no se pudo preparar.', 7)
-      : header('✅ ¡Listo!', 'Tu cuenta quedó configurada.', 7));
+      ? header(
+        t('onboard.done.partialTitle', '⚠️ Casi listo'),
+        t('onboard.done.partialHint', 'Tu cuenta quedó creada, pero algo de tu espacio no se pudo preparar.')
+      )
+      : header(
+        t('onboard.done.title', '✅ ¡Listo!'),
+        t('onboard.done.hint', 'Tu cuenta quedó configurada.')
+      ));
     const list = document.createElement('ul');
     list.className = 'ob-list';
-    const accountConnected = state.account === 'connected' || (state.checklist && state.checklist.account);
-    const codexConnected = state.codex === 'connected' || (state.checklist && state.checklist.codex);
-    const infisicalConnected = state.infisical === 'connected' || (state.checklist && state.checklist.infisical);
-    list.appendChild(textEl('li', '', '✅ Cuenta creada (' + state.username + ')'));
-    const provStepLine = function (key, okText, pendingText, failText) {
-      const prov = state.provision;
-      if (!prov || prov.status === 'idle') return null;
-      const s = (prov.steps && prov.steps[key]) || null;
-      if (!s) return null;
-      if (s.status === 'ok') return '✅ ' + okText;
-      if (s.status === 'failed') return '⚠️ ' + failText + (s.error ? ' (' + s.error + ')' : '');
-      return '⏳ ' + pendingText;
-    };
-    [
-      provStepLine('pad', 'Tu espacio de Pad quedó creado', 'Creando tu espacio de Pad…',
-        'Tu espacio de Pad NO se pudo crear — avisale al administrador'),
-      provStepLine('workspace', 'Tu copia del repo de trabajo quedó lista', 'Clonando tu repo de trabajo…',
-        'Tu copia del repo de trabajo NO se pudo clonar — avisale al administrador'),
-    ].forEach(function (text) {
-      if (text) list.appendChild(textEl('li', '', text));
+    list.appendChild(textEl(
+      'li',
+      '',
+      '✅ ' + t('onboard.done.accountCreated', 'Cuenta creada ({user})', { user: state.username })
+    ));
+    state.capabilities.forEach(function (item) {
+      const connected = state[item.id] === 'connected'
+        || (state.checklist && state.checklist[item.id]);
+      const label = t(`onboard.capability.${item.id}`, item.labelEs || item.id);
+      let text;
+      if (connected) {
+        text = '✅ ' + t('onboard.done.connected', '{step}: conectado.', { step: label });
+      } else if (item.required) {
+        text = '⚠️ ' + t('onboard.done.requiredMissing', '{step}: falta completar.', {
+          step: label,
+        });
+      } else {
+        text = '⏭ ' + t('onboard.done.skipped', '{step}: omitido; podés conectarlo después.', {
+          step: label,
+        });
+      }
+      list.appendChild(textEl('li', '', text));
     });
-    list.appendChild(textEl('li', '', '✅ Claude listo para trabajar (setup-token)'));
-    list.appendChild(textEl('li', '', accountConnected
-      ? '✅ Claude · tu consumo conectado'
-      : '⏭ Claude · tu consumo omitido — lo podés conectar después'));
-    list.appendChild(textEl('li', '', codexConnected
-      ? '✅ Codex conectado'
-      : '⏭ Codex omitido — lo podés conectar después'));
-    list.appendChild(textEl('li', '', infisicalConnected
-      ? '✅ Infisical conectado'
-      : '⏭ Infisical omitido — lo podés conectar después'));
-    list.appendChild(textEl('li', '', '✅ Idioma: ' + (state.lang === 'en' ? 'English' : 'Español')));
+    list.appendChild(textEl(
+      'li',
+      '',
+      '✅ ' + t('onboard.done.language', 'Idioma: {lang}', {
+        lang: state.lang === 'en' ? 'English' : 'Español',
+      })
+    ));
     root.appendChild(list);
-    root.appendChild(textEl('p', 'ob-note', 'Cuando entres, en ⚙ Sistema → Conexiones podés conectar Microsoft y Zoho.'));
+    appendProvisionState(root);
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.done.connections', 'Cuando entres, en ⚙ Sistema → Conexiones podés conectar Microsoft y Zoho.')
+    ));
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
-    actions.appendChild(button('Ir a iniciar sesión', 'btn', function () {
+    actions.appendChild(button(t('onboard.done.login', 'Ir a iniciar sesión'), 'btn', function () {
       window.location.href = '/login';
     }));
     root.appendChild(actions);
@@ -1221,6 +1671,8 @@
     else if (state.step === 'account') renderAccountSpinner('Preparando…');
     else if (state.step === 'codex') renderCodexSpinner('Preparando…');
     else if (state.step === 'infisical') renderInfisicalSpinner('Preparando…');
+    else if (state.step === 'github') renderGithubSpinner(t('onboard.github.preparing', 'Preparando…'));
+    else if (state.step === 'smoke') renderSmoke();
     else renderDone();
   }
 

@@ -7,8 +7,8 @@
 //
 // FUENTE DE VERDAD: Pad LOCAL (colecciones `pendientes`/`planes`, ver store.js
 // para el detalle completo de la migración 2026-07-12, ROAD-110/TASK-123). El
-// LOG de actividad sigue local (~/.cwc-data/tasks-activity.json). El CRUD ahora
-// es ASYNC (llamadas HTTP al Pad local) — no necesita runner desacoplado: no
+// LOG de actividad sigue local en el dataDir del dueño. El CRUD ahora es ASYNC
+// (llamadas HTTP al Pad local) — no necesita runner desacoplado: no
 // hay corrida en background atada al proceso, cada request espera su propia
 // respuesta de Pad y responde. Si Pad local está caído, las rutas responden
 // 500 con un mensaje claro (nunca cuelgan ni tiran una excepción sin control).
@@ -31,8 +31,9 @@
 // /analysis se registran ANTES de la paramétrica /:id (que valida ^PEND-\d+$) para que Express
 // no las capture como id.
 import express from 'express';
-import { isAdmin } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import { reqPadContext } from '../../core/pad-context.js';
+import { userDataDir, userRunnerEnv, hostUser } from '../../core/user-space.js';
 import {
   listTasks, listCounts, createTask, updateTask, deleteTask, createFromAudio,
   listActivity, listPlans, createPlan, updatePlan, deletePlan,
@@ -52,6 +53,7 @@ import {
 const ID_RE = /^PEND-\d+$/;
 const PLAN_ID_RE = /^PLAN-\d+$/;
 const CID_RE = /^[0-9a-fA-F-]{8,64}$/;
+const ownerOf = (req) => principalOf(req)?.username || hostUser();
 
 export default {
   name: 'tasks',
@@ -78,8 +80,9 @@ export default {
 
     r.get('/activity', (req, res) => {
       try {
+        const dataDir = userDataDir(ownerOf(req));
         const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-        res.json({ events: listActivity(limit) });
+        res.json({ events: listActivity(dataDir, limit) });
       } catch { res.status(500).json({ error: 'No se pudo leer la actividad.' }); }
     });
 
@@ -92,8 +95,9 @@ export default {
     // ANÁLISIS GENERAL IA (dup/unificar/completar). Lee disco, 0 tokens.
     r.get('/analysis', (req, res) => {
       try {
+        const dataDir = userDataDir(ownerOf(req));
         const scope = normScope(req.query.scope);
-        const job = readAnalysisJob(scope);
+        const job = readAnalysisJob(dataDir, scope);
         res.json({ scope, ...jobResult(job), updatedAt: job?.updatedAt || 0 });
       } catch { res.status(500).json({ error: 'No se pudo leer el análisis.' }); }
     });
@@ -104,8 +108,10 @@ export default {
     r.post('/analyze', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       try {
+        const owner = ownerOf(req);
+        const dataDir = userDataDir(owner);
         const scope = normScope(req.body?.scope);
-        const existing = readAnalysisJob(scope);
+        const existing = readAnalysisJob(dataDir, scope);
         if (existing && isFreshRunning(existing)) {
           return res.json({ scope, ...jobResult(existing) });
         }
@@ -113,20 +119,21 @@ export default {
         // `await buildContext` — ese await abría la ventana TOCTOU para que un
         // 2º POST del mismo scope también viera "no corriendo" y spawneara un
         // 2º runner que pisa el job (BUG-9). Se libera si no hay datos o si falla.
-        writeAnalysisJob(scope, {
+        writeAnalysisJob(dataDir, scope, {
           scope, status: 'running', result: null, error: null,
           startedAt: Date.now(), updatedAt: Date.now(),
         });
         try {
-          const built = await buildContext(scope);
+          const built = await buildContext(dataDir, scope);
           if (!built) {
-            writeAnalysisJob(scope, { scope, status: 'idle', result: null, error: null, startedAt: 0, updatedAt: Date.now() });
+            writeAnalysisJob(dataDir, scope, { scope, status: 'idle', result: null, error: null, startedAt: 0, updatedAt: Date.now() });
             return res.status(400).json({ error: scope === 'plans' ? 'No hay planes para analizar.' : 'No hay tareas para analizar.' });
           }
-          spawnTasksAnalyzeRunner(scope);
+          const runnerEnv = owner === hostUser() ? undefined : userRunnerEnv(owner);
+          spawnTasksAnalyzeRunner(dataDir, scope, runnerEnv);
           res.json({ scope, status: 'running', result: null, error: null });
         } catch (inner) {
-          writeAnalysisJob(scope, { scope, status: 'error', result: null, error: String(inner?.message || inner).slice(0, 200), startedAt: Date.now(), updatedAt: Date.now() });
+          writeAnalysisJob(dataDir, scope, { scope, status: 'error', result: null, error: String(inner?.message || inner).slice(0, 200), startedAt: Date.now(), updatedAt: Date.now() });
           throw inner;
         }
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
@@ -135,17 +142,19 @@ export default {
     r.post('/', async (req, res) => {
       const ctx = reqPadContext(req);
       try {
+        const dataDir = userDataDir(ownerOf(req));
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'La tarea necesita un título.' });
-        res.json({ task: await createTask(b, ctx) });
+        res.json({ task: await createTask(dataDir, b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/from-audio', async (req, res) => {
       const ctx = reqPadContext(req);
       try {
+        const dataDir = userDataDir(ownerOf(req));
         const jobId = String(req.body?.jobId || '').slice(0, 64) || null;
-        const created = await createFromAudio(jobId, req.body?.tasks, ctx);
+        const created = await createFromAudio(dataDir, jobId, req.body?.tasks, ctx);
         res.json({ created });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
@@ -154,25 +163,28 @@ export default {
     r.post('/plans', async (req, res) => {
       const ctx = reqPadContext(req);
       try {
+        const dataDir = userDataDir(ownerOf(req));
         const b = req.body || {};
         if (!String(b.title || '').trim()) return res.status(400).json({ error: 'El plan necesita un título.' });
-        res.json({ plan: await createPlan(b, ctx) });
+        res.json({ plan: await createPlan(dataDir, b, ctx) });
       } catch (e) { res.status(500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/plans/:id/delete', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { await deletePlan(id, ctx); res.json({ ok: true }); }
+      try { await deletePlan(dataDir, id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.get('/plans/:id/timeline', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json(await timelineFor('plan', id, ctx)); }
+      try { res.json(await timelineFor(dataDir, 'plan', id, ctx)); }
       catch { res.status(500).json({ error: 'No se pudo leer el timeline.' }); }
     });
 
@@ -194,26 +206,29 @@ export default {
 
     r.post('/plans/:id/comment', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json({ comment: await addComment('plan', id, req.body?.text, ctx) }); }
+      try { res.json({ comment: await addComment(dataDir, 'plan', id, req.body?.text, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : e.bad ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/plans/:id', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!PLAN_ID_RE.test(id)) return res.status(400).json({ error: 'Id de plan inválido.' });
-      try { res.json({ plan: await updatePlan(id, req.body || {}, ctx) }); }
+      try { res.json({ plan: await updatePlan(dataDir, id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     // ----- Tareas (paramétricas al final) -----
     r.get('/:id/timeline', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json(await timelineFor('task', id, ctx)); }
+      try { res.json(await timelineFor(dataDir, 'task', id, ctx)); }
       catch { res.status(500).json({ error: 'No se pudo leer el timeline.' }); }
     });
 
@@ -235,25 +250,28 @@ export default {
 
     r.post('/:id/comment', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json({ comment: await addComment('task', id, req.body?.text, ctx) }); }
+      try { res.json({ comment: await addComment(dataDir, 'task', id, req.body?.text, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : e.bad ? 400 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id/delete', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { await deleteTask(id, ctx); res.json({ ok: true }); }
+      try { await deleteTask(dataDir, id, ctx); res.json({ ok: true }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 
     r.post('/:id', async (req, res) => {
       const ctx = reqPadContext(req);
+      const dataDir = userDataDir(ownerOf(req));
       const id = String(req.params.id);
       if (!ID_RE.test(id)) return res.status(400).json({ error: 'Id de tarea inválido.' });
-      try { res.json({ task: await updateTask(id, req.body || {}, ctx) }); }
+      try { res.json({ task: await updateTask(dataDir, id, req.body || {}, ctx) }); }
       catch (e) { res.status(e.notFound ? 404 : 500).json({ error: String(e?.message || e).slice(0, 300) }); }
     });
 

@@ -127,6 +127,40 @@ desacoplados. El host es fuente de semilla solo de LECTURA: ninguna escritura de
 inquilino puede resolver a sus rutas. Si el clon propio todavía no existe, guardar el
 master funciona y `syncToTolkien()` devuelve un skip best-effort sin crear el clon.
 
+REGLA DURA 8 — MÓDULO MIXTO (console:PLAN-2274, 2026-07-29): `tickets` combina
+estado GLOBAL deliberado con estado PRIVADO por dueño; no se puede aplicar una
+única política de rutas a toda la carpeta.
+
+- GLOBALES A PROPÓSITO: `claims-store.js` coordina un único lock de equipo por
+  ticket/PR; el snapshot de `refresher.js` es la vista compartida, refrescada una
+  vez con las credenciales del host; `tickets-resolved.json` de `sources.js` es
+  el histórico compartido que alimenta esa misma vista; y `pad-client.js` es el
+  cliente del Pad cloud del workspace compartido de Tolkien. Separarlos por
+  usuario rompería coordinación, duplicaría el refresh o cambiaría de mundo.
+- USER-SCOPED: los jobs y el log de `context-analyze-shared.js` viven bajo
+  `<userDataDir(owner)>/ticket-context/` y
+  `<userDataDir(owner)>/ticket-context.log`. `index.js` resuelve el dueño POR
+  OPERACIÓN desde `principalOf(req)` (ausente → `hostUser()`, retrocompat), pasa
+  `dataDir` como PRIMER parámetro y spawnea al inquilino con
+  `userRunnerEnv(owner)`. URL/workspace de Pad viajan sin secretos; la credencial
+  se lee desde el `HOME/.pad` del dueño. El runner recibe la ruta por
+  `--data-dir` y solo cae a `resolveDataDir()` si no vino;
+  `context-analyze-shared.js` NO importa `core/user-space.js`.
+- USER-SCOPED: la lectura del transcript en `meta-store.js` parte del
+  `userClaudeDir(owner)` correspondiente y arma
+  `<claudeDir>/projects/<encodeCwd(cwd)>/<sessionId>.jsonl`; nunca usa el
+  `.claude` del host para un chat de inquilino. Su firma nueva recibe
+  `claudeDir` primero. Como `meta-store.js` también lo importa el runner,
+  `index.js` le inyecta el resolver `userClaudeDir` sin arrastrar
+  `core/config.js` al proceso aislado. Los dos callers históricos de
+  `chat/index.js`, fuera del alcance de PLAN-2274, conservan compatibilidad: el
+  dueño se recupera del workspace confinado
+  `~/.cwc-users/<owner>/workspace` y se pasa al resolver inyectado.
+
+PROHIBIDO reintroducir `os.homedir()` o constantes de módulo en esos dos estados
+privados. También está prohibido “arreglar” los cuatro globales anteriores
+volviéndolos user-scoped: su alcance compartido es parte del diseño.
+
 ESPEJO A TOLKIEN — BLINDAJE (2026-07-10, pedido de Niko: "que CUALQUIER sesión que
 vaya a hacer el push de un PR tenga SIEMPRE estas instrucciones que yo puedo editar,
 blindados a futuro"). Problema: la inyección al prompt del tablero

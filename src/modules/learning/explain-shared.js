@@ -15,9 +15,12 @@
 // permisos pre-aprobados). NUNCA escribe código. Mismo blindaje que el auditor
 // de Salud y el optimizador.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
+import {
+  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
+} from '../../core/user-space.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -27,8 +30,6 @@ import { normScope, contextoText } from './store.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (la consola)
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const LOG_FILE = path.join(DATA_DIR, 'learning-explain.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-learning-explain-runner.js');
 
 export const EXPLAIN_MAX_TURNS = 24;
@@ -50,25 +51,28 @@ export function explainToolAllowed(name) {
   return ['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name);
 }
 
-function ensureDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+function dataDirFor(owner = null) {
+  return owner ? userDataDir(owner) : resolveDataDir();
+}
+function ensureDir(owner = null) {
+  fs.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 });
 }
 const ID_RE = /^TDA-\d+$/;
 export function validId(id) {
   return ID_RE.test(String(id || ''));
 }
-function jobPath(id) {
-  return path.join(DATA_DIR, `learning-explain-${id}.json`);
+function jobPath(id, owner = null) {
+  return path.join(dataDirFor(owner), `learning-explain-${id}.json`);
 }
 
-export function readExplainJob(id) {
+export function readExplainJob(id, owner = null) {
   if (!validId(id)) return null;
-  try { return JSON.parse(fs.readFileSync(jobPath(id), 'utf8')); }
+  try { return JSON.parse(fs.readFileSync(jobPath(id, owner), 'utf8')); }
   catch { return null; }
 }
-export function writeExplainJob(id, data) {
-  ensureDir();
-  writeJsonAtomic(jobPath(id), data); // tmp-por-PID (BUG-30)
+export function writeExplainJob(id, data, owner = null) {
+  ensureDir(owner);
+  writeJsonAtomic(jobPath(id, owner), data); // tmp-por-PID (BUG-30)
 }
 
 export function isFreshRunning(job) {
@@ -134,11 +138,20 @@ export function checkStaleness(topic) {
   return { stale: false, reason: null };
 }
 
-export function spawnLearningExplainRunner(id) {
-  ensureDir();
-  const logFd = fs.openSync(LOG_FILE, 'a');
+export function spawnLearningExplainRunner(id, owner) {
+  ensureDir(owner);
+  const logFile = path.join(dataDirFor(owner), 'learning-explain.log');
+  const oauthToken = owner && owner !== hostUser() ? readUserOauthToken(owner) : null;
+  if (owner && owner !== hostUser() && !oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para generar una explicación.');
+    error.conflict = true;
+    throw error;
+  }
+  const logFd = fs.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: owner && owner !== hostUser() ? userRunnerEnv(owner, { oauthToken }) : process.env,
   });
   child.unref();
   fs.closeSync(logFd);

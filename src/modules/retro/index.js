@@ -38,7 +38,7 @@
 // OJO ORDEN: las literales /activity, /targets, /share-optout, /pool, /hygiene,
 // /verify, /feedback, /email-*, /teams-* van ANTES de la paramétrica /:id.
 import express from 'express';
-import { isAdmin, principalOf } from '../../core/auth.js';
+import { isAdmin } from '../../core/auth.js';
 import { reqPadContext, reqSharedPadContext } from '../../core/pad-context.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import { deleteItem as padDeleteItem } from '../../core/pad-service-client.js';
@@ -152,6 +152,7 @@ export default {
 
     r.get('/', async (req, res) => {
       try {
+        const owner = systemScopeFor(req).user;
         const ctx = reqPadContext(req);
         // La aplicabilidad la calcula el BACKEND: el tablero la duplicaba con un
         // NEED_DIR propio y quedaba ciego a cualquier destino con reglas nuevas.
@@ -176,8 +177,8 @@ export default {
           const own = !ctx || !ctx.workspace || ctx.workspace === 'console';
           if (isAdmin(req) && own
             && lessons.some((l) => l.category === 'feedback-cliente' && l.status === 'promovida')
-            && !isVerifyRunning() && isVerifyStale(readVerifyState())) {
-            spawnRetroVerifyRunner();
+            && !isVerifyRunning(owner) && isVerifyStale(readVerifyState(owner), owner)) {
+            spawnRetroVerifyRunner({ owner });
           }
         } catch { /* best-effort: nunca rompe el listado */ }
       }
@@ -185,7 +186,10 @@ export default {
     });
 
     r.get('/activity', (req, res) => {
-      try { res.json({ events: listActivity(Number(req.query.limit) || 40) }); }
+      try {
+        const owner = systemScopeFor(req).user;
+        res.json({ events: listActivity(Number(req.query.limit) || 40, owner) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
@@ -312,24 +316,27 @@ export default {
         const text = String(b.text || '').trim();
         if (!text) return res.status(400).json({ error: 'Falta el texto a interpretar.' });
         const ticketRef = String(b.ticketRef || '').trim().slice(0, 24) || null;
+        const owner = systemScopeFor(req).user;
         const id = feedbackJobId(text, ticketRef);
-        const existing = readFeedbackJob(id);
+        const existing = readFeedbackJob(id, owner);
         if (existing && (existing.status === 'done' || isFeedbackFreshRunning(existing))) {
           return res.json({ id, ...feedbackJobResult(existing) });
         }
-        const owner = principalOf(req)?.username || null;
         writeFeedbackJob(id, {
           id, status: 'running', startedAt: Date.now(), owner,
           text: text.slice(0, 20000), ticketRef, project: String(b.project || '').trim() || null,
           result: null, error: null,
-        });
-        spawnRetroFeedbackRunner(id);
+        }, owner);
+        spawnRetroFeedbackRunner(id, owner);
         res.json({ id, status: 'running' });
       } catch (e) { sendErr(res, e); }
     });
 
     r.get('/feedback/:jobId', (req, res) => {
-      try { res.json({ id: req.params.jobId, ...feedbackJobResult(readFeedbackJob(req.params.jobId)) }); }
+      try {
+        const owner = systemScopeFor(req).user;
+        res.json({ id: req.params.jobId, ...feedbackJobResult(readFeedbackJob(req.params.jobId, owner)) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
@@ -337,14 +344,18 @@ export default {
     r.post('/email-refresh', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de correo consume tokens (requiere administrador).' });
       try {
-        if (isEmailScanRunning()) return res.json({ status: 'running' });
-        spawnRetroEmailRunner();
+        const owner = systemScopeFor(req).user;
+        if (isEmailScanRunning(owner)) return res.json({ status: 'running' });
+        spawnRetroEmailRunner(owner);
         res.json({ status: 'running' });
       } catch (e) { sendErr(res, e); }
     });
 
     r.get('/email-scan', (req, res) => {
-      try { res.json({ ...readEmailScan(), running: isEmailScanRunning() }); }
+      try {
+        const owner = systemScopeFor(req).user;
+        res.json({ ...readEmailScan(owner), running: isEmailScanRunning(owner) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
@@ -352,14 +363,18 @@ export default {
     r.post('/teams-refresh', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de Teams consume tokens (requiere administrador).' });
       try {
-        if (isTeamsFeedbackScanRunning()) return res.json({ status: 'running' });
-        spawnRetroTeamsRunner();
+        const owner = systemScopeFor(req).user;
+        if (isTeamsFeedbackScanRunning(owner)) return res.json({ status: 'running' });
+        spawnRetroTeamsRunner(owner);
         res.json({ status: 'running' });
       } catch (e) { sendErr(res, e); }
     });
 
     r.get('/teams-scan', (req, res) => {
-      try { res.json({ ...readTeamsFeedbackScan(), running: isTeamsFeedbackScanRunning() }); }
+      try {
+        const owner = systemScopeFor(req).user;
+        res.json({ ...readTeamsFeedbackScan(owner), running: isTeamsFeedbackScanRunning(owner) });
+      }
       catch (e) { sendErr(res, e); }
     });
 
@@ -367,14 +382,15 @@ export default {
     r.post('/curate', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'La curaduría consume tokens (requiere administrador).' });
       try {
+        const owner = systemScopeFor(req).user;
         const ctx = reqPadContext(req);
-        if (isCurateRunning(readCurationJob())) return res.json({ status: 'running' });
+        if (isCurateRunning(readCurationJob(owner))) return res.json({ status: 'running' });
         // Reserva SINCRÓNICA del lock (mismo tick que el check) para cerrar la
         // ventana TOCTOU: el `await listLessons()` (HTTP a Pad) de por medio
         // dejaba pasar a un 2º request que también veía "no corriendo" y
         // spawneaba una 2ª curaduría. Escribimos el job 'running' YA; recién
         // después traemos las lecciones y completamos el `context`.
-        writeCurationJob({ status: 'running', startedAt: Date.now(), context: null, result: null, error: null });
+        writeCurationJob({ status: 'running', startedAt: Date.now(), owner, context: null, result: null, error: null }, owner);
         try {
           const { lessons } = await listLessons(ctx);
           const active = lessons.filter((l) => l.status !== 'descartada')
@@ -390,22 +406,22 @@ export default {
               body: l.body,
             }));
           if (active.length < 2) {
-            writeCurationJob({ status: 'idle', startedAt: 0, context: null, result: null, error: null }); // liberar el lock reservado
+            writeCurationJob({ status: 'idle', startedAt: 0, owner, context: null, result: null, error: null }, owner); // liberar el lock reservado
             return res.status(400).json({ error: 'Hacen falta al menos 2 lecciones vigentes para curar.' });
           }
-          writeCurationJob({ status: 'running', startedAt: Date.now(), context: { lessons: active, rules: hardRulesText() }, result: null, error: null });
-          spawnRetroCurateRunner();
+          writeCurationJob({ status: 'running', startedAt: Date.now(), owner, context: { lessons: active, rules: hardRulesText() }, result: null, error: null }, owner);
+          spawnRetroCurateRunner(owner);
           res.json({ status: 'running' });
         } catch (inner) {
           // liberar el lock reservado para no bloquear el reintento
-          try { writeCurationJob({ status: 'error', startedAt: Date.now(), context: null, result: null, error: String(inner?.message || inner).slice(0, 200) }); } catch { /* noop */ }
+          try { writeCurationJob({ status: 'error', startedAt: Date.now(), owner, context: null, result: null, error: String(inner?.message || inner).slice(0, 200) }, owner); } catch { /* noop */ }
           throw inner;
         }
       } catch (e) { sendErr(res, e); }
     });
 
     r.get('/curation', (req, res) => {
-      try { res.json(curationResult(readCurationJob())); }
+      try { res.json(curationResult(readCurationJob(systemScopeFor(req).user))); }
       catch (e) { sendErr(res, e); }
     });
 
@@ -446,23 +462,25 @@ export default {
     r.post('/verify', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Verificar la efectividad requiere administrador.' });
       try {
-        if (isVerifyRunning()) return res.json({ status: 'running' });
-        spawnRetroVerifyRunner({ full: !!req.body?.full });
+        const owner = systemScopeFor(req).user;
+        if (isVerifyRunning(owner)) return res.json({ status: 'running' });
+        spawnRetroVerifyRunner({ full: !!req.body?.full, owner });
         res.json({ status: 'running' });
       } catch (e) { sendErr(res, e); }
     });
 
     r.get('/verify', (req, res) => {
       try {
-        const st = readVerifyState();
+        const owner = systemScopeFor(req).user;
+        const st = readVerifyState(owner);
         res.json({
-          running: isVerifyRunning(),
+          running: isVerifyRunning(owner),
           status: st.status || 'idle',
           scannedAt: st.scannedAt || 0,
           progress: st.progress || { done: 0, total: 0 },
           summary: st.summary || null,
           lessons: st.lessons || {},
-          stale: isVerifyStale(st),
+          stale: isVerifyStale(st, owner),
           error: st.error || null,
         });
       } catch (e) { sendErr(res, e); }

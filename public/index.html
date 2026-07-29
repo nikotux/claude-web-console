@@ -33,10 +33,30 @@
       window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
         const css = getComputedStyle(document.documentElement);
         const v = (name) => css.getPropertyValue(name).trim();
-        mermaid.initialize({
+        const cfg = {
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'base',
+          fontFamily: v('--cwc-font-ui'),
+          fontSize: 15,
+          maxTextSize: 90000,
+          flowchart: {
+            useMaxWidth: false,
+            htmlLabels: true,
+            curve: 'basis',
+            padding: 12,
+            nodeSpacing: 46,
+            rankSpacing: 52,
+            diagramPadding: 10,
+          },
+          mindmap: { useMaxWidth: false, padding: 14 },
+          sequence: { useMaxWidth: false, diagramMarginX: 12, diagramMarginY: 12 },
+          er: { useMaxWidth: false },
+          gantt: { useMaxWidth: false },
+          class: { useMaxWidth: false },
+          state: { useMaxWidth: false },
+          journey: { useMaxWidth: false },
+          pie: { useMaxWidth: false },
           themeVariables: {
             background: v('--cwc-bg-elevated'),
             primaryColor: v('--cwc-accent-bg'),
@@ -53,8 +73,35 @@
             edgeLabelBackground: v('--cwc-bg-elevated'),
             errorBkgColor: v('--cwc-danger'),
             errorTextColor: v('--cwc-text'),
+            fontSize: '15px',
+            nodeTextColor: v('--cwc-text'),
+            mainBkg: v('--cwc-bg-chip'),
+            titleColor: v('--cwc-text'),
+            defaultLinkColor: v('--cwc-text-dim'),
+            noteBkgColor: v('--cwc-bg-panel'),
+            noteTextColor: v('--cwc-text'),
+            noteBorderColor: v('--cwc-border'),
+            actorBkg: v('--cwc-bg-chip'),
+            actorBorder: v('--cwc-border-strong'),
+            actorTextColor: v('--cwc-text'),
+            signalColor: v('--cwc-text-dim'),
+            signalTextColor: v('--cwc-text-secondary'),
+            pie1: v('--cwc-accent'),
+            pie2: v('--cwc-accent-cool'),
+            pie3: v('--cwc-warn'),
+            pie4: v('--cwc-ok'),
+            pie5: v('--cwc-cat-video'),
+            pie6: v('--cwc-info'),
+            pie7: v('--cwc-danger'),
+            pie8: v('--cwc-cat-archive'),
           },
-        });
+        };
+        try {
+          mermaid.initialize({ ...cfg, look: 'neo' });
+        } catch {
+          console.warn('mermaid: look "neo" no soportado, usando classic');
+          mermaid.initialize(cfg);
+        }
         window.mermaid = mermaid;
         return mermaid;
       }).catch((err) => {
