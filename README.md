@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-29 05:50 — main
+- Agregar soporte multi-tenant y catálogo de skills compartidas
+- Aduana, papelera y pool común de lecciones
+
 ### 2026-07-28 02:42 — main
 - Soportar multi-inquilino, mejorar onboarding, agrupar sesiones
 - Agregar autenticación multi-tenant de Claude + UI adaptativa por rol
