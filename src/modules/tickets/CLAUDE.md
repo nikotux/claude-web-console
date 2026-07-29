@@ -159,6 +159,27 @@ semáforo global. La inyección del tablero se CONSERVA como redundancia inofens
 
 ## Gotchas de esta carpeta
 
+- **Enrich de Desk con RETRY — antes se perdían tickets en silencio** (BUG-2188,
+  2026-07-28, hallazgo de Nico: "el dashboard no muestra nuevos bugs pero el
+  triage del TUI sí"). `sources.js:loadFresh()` pide `desk_get_ticket` uno por
+  uno para cada ticket listado (pool concurrencia 5, `ENRICH_CONCURRENCY`);
+  medido en vivo que ~16% de esas llamadas (20/128 en la corrida real) fallaban
+  con `timeout MCP: desk_get_ticket` (20s, `CALL_TIMEOUT_MS` de
+  `desk-mcp-client.js`) bajo el volumen agregado de los 2 departamentos, y el
+  `pool()` las descartaba SIN reintento ni aviso — un ticket real (p.ej. recién
+  creado, sin nada raro) simplemente desaparecía de los 3 buckets esa vuelta.
+  Además el regex de "hay que bajar la velocidad" (`RATE_LIMIT_RE`) no
+  reconocía `timeout` como señal de sobrecarga, así que el backoff adaptativo
+  nunca se disparaba para la causa dominante de pérdida. Fix: `pool()` ahora
+  acepta `{retries}` y reintenta cada ítem antes de rendirse (`ENRICH_RETRIES=2`
+  en el enrich de tickets); el regex pasó a `OVERLOAD_RE` e incluye `timeout`;
+  `loadFresh()`/`cacheInfo()` exponen `failedCount`/`failedNumbers` (antes
+  invisibles) y loguean los números que siguen fallando tras los reintentos.
+  Verificado en vivo: la misma corrida que antes perdía #767/#770 ahora los
+  recupera y logueó 0 fallos residuales (antes 20). Costo: el refresh forzado
+  pasó de ~2min a ~2m48s bajo el mismo volumen — aceptado, corre en background
+  cada 60s, nunca bloquea al usuario.
+
 - **SEGUNDA vía a Pad: cliente MCP del BACKEND** (`src/modules/tickets/pad-client.js`,
   documentado 2026-07-11): distinta del MCP del chat de arriba. Es un cliente
   `@modelcontextprotocol/sdk` (`Client` + `StreamableHTTPClientTransport`) que habla

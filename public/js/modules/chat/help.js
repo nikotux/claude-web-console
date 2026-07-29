@@ -26,6 +26,106 @@ function pacmanRow(state, name, desc) {
   </div>`;
 }
 
+function peerColorsRow(name, desc) {
+  const dots = Array.from({ length: 6 }, (_, i) => `<i class="chat-help-peer-dot peer-${i + 1}"></i>`).join('');
+  return `<div class="hlp-leg">
+    <span class="hlp-leg-ic chat-help-peer-colors" aria-hidden="true">${dots}</span>
+    <b>${esc(name)}</b><span>${esc(desc)}</span>
+  </div>`;
+}
+
+function salaSections() {
+  return [
+    {
+      title: t('chat.help.sala.what.title', 'Qué es una sala'),
+      blocks: [
+        {
+          type: 'p',
+          text: t('chat.help.sala.what.text', 'Aduana es una sala colaborativa: varias personas comparten un único hilo, conversan entre ellas y deciden cuándo enviar todo lo hablado desde el último corte a la IA.'),
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.first.title', 'Primeros pasos en la sala'),
+      blocks: [
+        {
+          type: 'steps',
+          items: [
+            t('chat.help.sala.first.step1', 'Escribí un mensaje y tocá Enviar: aparece en el hilo compartido sin llamar a la IA.'),
+            t('chat.help.sala.first.step2', 'Esperá o conversá hasta reunir el contexto que necesiten. El contador muestra cuántos mensajes hay desde el último corte.'),
+            t('chat.help.sala.first.step3', 'Tocá ✦ Enviar a la IA cuando quieran iniciar un turno. Si está ocupada, el corte queda pendiente.'),
+            t('chat.help.sala.first.step4', 'Seguí la respuesta en el mismo hilo; cualquier participante ve la conversación completa.'),
+          ],
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.legend.title', 'Leyenda de la sala'),
+      blocks: [
+        {
+          type: 'legend',
+          items: [
+            {
+              emoji: '✦',
+              name: t('chat.help.sala.legend.ai.name', 'Enviar a la IA'),
+              desc: t('chat.help.sala.legend.ai.desc', 'manda todos los mensajes acumulados desde el corte anterior'),
+            },
+            {
+              emoji: '✂',
+              name: t('chat.help.sala.legend.cut.name', 'Corte'),
+              desc: t('chat.help.sala.legend.cut.desc', 'marca exactamente qué bloque de la conversación recibió la IA'),
+            },
+          ],
+        },
+        {
+          type: 'html',
+          html: peerColorsRow(
+            t('chat.help.sala.legend.colors.name', 'Colores'),
+            t('chat.help.sala.legend.colors.desc', 'identifican de forma estable a cada participante'),
+          ),
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.tokens.title', 'Qué consume tokens'),
+      blocks: [
+        {
+          type: 'kv',
+          items: [
+            {
+              k: t('chat.help.sala.tokens.people.k', 'Hablar entre personas'),
+              v: t('chat.help.sala.tokens.people.v', 'No consume tokens: son mensajes internos de la sala.'),
+            },
+            {
+              k: t('chat.help.sala.tokens.ai.k', '✦ Enviar a la IA'),
+              v: t('chat.help.sala.tokens.ai.v', 'Sí consume tokens: inicia un turno con todo lo acumulado desde el último corte.'),
+            },
+          ],
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.warning.title', 'Ojo con esto'),
+      blocks: [
+        {
+          type: 'note',
+          tone: 'warn',
+          text: t('chat.help.sala.warning.text', 'Los turnos de IA los paga el anfitrión de la sala. Las personas invitadas ven todo el hilo compartido, incluidos los mensajes anteriores y las respuestas de la IA.'),
+        },
+      ],
+    },
+  ];
+}
+
+export function salaHelp() {
+  return {
+    title: t('chat.help.sala.title', 'Sala de Aduana'),
+    icon: 'sparkle',
+    intro: t('chat.help.sala.intro', 'Una conversación compartida para coordinarse entre personas y llamar a la IA solamente cuando el grupo lo decide.'),
+    sections: salaSections(),
+  };
+}
+
 export default function chatHelp() {
   return {
     title: t('chat.help.title', 'Ayuda del chat'),
@@ -185,6 +285,7 @@ export default function chatHelp() {
           },
         ],
       },
+      ...salaSections(),
       {
         title: t('chat.help.buttons.title', 'Botones y acciones'),
         wide: true,

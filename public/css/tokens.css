@@ -33,6 +33,20 @@
          segundo acento de marca — solo barra/detalles del hablante IA) ===== */
   --cwc-accent-cool: #5b8fc7;
 
+  /* ===== Identidad de participantes (salas de Aduana) ===== */
+  --cwc-peer-1: #78a6d8;
+  --cwc-peer-1-bg: #162333;
+  --cwc-peer-2: #c08bd9;
+  --cwc-peer-2-bg: #291c31;
+  --cwc-peer-3: #65b8a6;
+  --cwc-peer-3-bg: #142a28;
+  --cwc-peer-4: #d69b62;
+  --cwc-peer-4-bg: #2d2117;
+  --cwc-peer-5: #d47f9d;
+  --cwc-peer-5-bg: #2c1a24;
+  --cwc-peer-6: #a8b86b;
+  --cwc-peer-6-bg: #252817;
+
   /* ===== Estados semánticos ===== */
   --cwc-ok: #6c9e6e;
   --cwc-warn: #c9a94e;

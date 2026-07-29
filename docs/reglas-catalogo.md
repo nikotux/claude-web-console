@@ -179,3 +179,32 @@ huérfanos del 2026-07-25). La LEY corta está en la Regla 11 del `CLAUDE.md`.
     es la Ley 1 (read-only); escribir solo a tickets con OK es un write acotado
     a UN destino con aprobación (Ley 3), sin sync de Pads → no es un puente
     bidireccional vivo. Detalle en `CONVE-554`.
+
+## Catálogo · Regla 16
+
+16. **🛃 Aduana — cuarto espacio, neutral entre PERSONAS** (acuñada por Niko
+    2026-07-28; detalle completo en `console:PLAN-2198`). Una sala permite que
+    varios usuarios de confianza distinta compartan UN chat sin darle al
+    invitado acceso operativo al mundo del anfitrión. Sus 6 leyes, en corto:
+    (1) **suelo neutral** — raíz propia
+    `~/.cwc-aduana/salas/<salaId>`, fuera de todo mundo real, con contención por
+    `path.relative`; (2) **nada entra sin declararlo** — solo adjuntos o
+    referencias explícitas, nunca contexto ambiental; (3) **nada sale sin
+    visado** — los resultados salen como artefactos que se aplican al destino
+    con aprobación, nunca por escritura directa de la sala; (4) **todo aporte
+    lleva pasaporte** — autoría persistida y auditable; (5) **permisos del
+    suelo** — jamás `bypassPermissions`; (6) **aportes como datos** — cada
+    mensaje llega al modelo atribuido a una persona, nunca como instrucción de
+    sistema. La IA arranca muda: `say` conversa y persiste con 0 tokens; solo el
+    botón de corte invoca al motor, usando la credencial y cuota del anfitrión.
+
+    La raíz, la validación y el log viven en
+    `src/modules/chat/aduana.js`; `worldLabelFor` reconoce Aduana en backend y
+    vive en `src/core/worlds.js`, mientras `salaPlaceFor` representa el mismo
+    lugar en frontend desde `public/js/ui/places.js`. La familia de invariantes
+    **«Aduana — suelo neutral»** de
+    `src/modules/health/invariants.js` audita la separación física, la
+    contención segura, la prohibición de `bypassPermissions`, el canal `say`
+    sin motor, la atribución de aportes y la persistencia independiente del
+    proceso. Compartir no relaja la Regla 12: quien no es dueño ni participante
+    explícito sigue recibiendo 404 sin saber que el chat existe.

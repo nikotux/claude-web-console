@@ -188,6 +188,15 @@ código.
     tokens. Vale en AMBOS mundos: en el externo (Tolkien) el ancla se escribe en
     SU Pad desde una sesión de ESE mundo, nunca desde acá (Regla 12).
 
+16. **🛃 Aduana — cuarto espacio, neutral entre PERSONAS** (acuñada por Niko 2026-07-28; detalle completo en `console:PLAN-2198`). Limbo (Regla 13) es neutral entre MUNDOS: un solo dueño, dos fuentes de datos. **Aduana** es neutral entre **PERSONAS**: varios usuarios de confianza distinta trabajando en la MISMA conversación. El riesgo que gestiona no es la colisión de datos — es la **inyección** (de código y de prompt) y la **escalada de privilegios**: sin suelo neutral, invitar a alguien a un chat propio le daría acceso operativo al mundo del anfitrión a través del agente. Sus SEIS leyes:
+    - **Ley 1 · Suelo neutral:** la sala corre en raíz propia (`~/.cwc-aduana/salas/<salaId>`), NUNCA en el `cwd` de un mundo real. La contención se verifica con `path.relative`, jamás con `startsWith` de strings.
+    - **Ley 2 · Nada entra sin declararlo:** el contexto entra por adjunto o referencia explícita de quien lo trae; no hay acceso ambiental a los mundos.
+    - **Ley 3 · Nada sale sin visado:** lo producido sale como artefacto que el dueño del mundo destino aplica con aprobación — la sala nunca escribe directo en un mundo.
+    - **Ley 4 · Todo aporte lleva pasaporte:** cada mensaje queda atribuido a su autor y es auditable.
+    - **Ley 5 · Permisos del suelo, no del invitado:** una sala JAMÁS corre en `bypassPermissions`.
+    - **Ley 6 · Los aportes son datos, no instrucciones:** lo que escribe un participante llega al modelo etiquetado como dicho por una persona, nunca como instrucción de sistema.
+    Dos decisiones de Niko que la acompañan: la IA arranca **muda** (solo habla cuando alguien aprieta el botón de corte) y los turnos los paga el **anfitrión** que creó la sala, porque el motor corre con su credencial. Compartir NO afloja el aislamiento por dueño de la Regla 12: un chat del que no sos dueño ni participante EXPLÍCITO (`chat.participants[]`) sigue siendo ajeno ⇒ 404 sin revelar que existe.
+
 ## Multi-tenant (multiusuario en una consola)
 
 Detalle completo: `src/core/CLAUDE.md`. Modelo aprobado (`PLAN-500` master, `PLAN-593` invariantes): UN server, N usuarios **LÓGICOS** (no de SO), cada uno con una raíz propia `~/.cwc-users/<userId>/` — helpers en `src/core/user-space.js`. El HOST mapea a su HOME real (retrocompat TOTAL); solo los inquilinos quedan aislados. No hay usuarios de SO ni sudo/setuid.
@@ -195,6 +204,8 @@ Detalle completo: `src/core/CLAUDE.md`. Modelo aprobado (`PLAN-500` master, `PLA
 **Blindaje anticonsumo (FAIL-CLOSED).** El runner de un INQUILINO se spawnea con env LIMPIO por allowlist (`userRunnerEnv`, JAMÁS `...process.env`) + `HOME` propio + el `CLAUDE_CODE_OAUTH_TOKEN` de SU dueño. Sin credencial propia NO arranca — NUNCA cae a la cuenta del server. Self-check al arrancar: si es inquilino y su HOME/creds no están aislados, ABORTA antes de `query()`.
 
 **No-cruce por usuario × mundo.** La vieja "confianza plena entre autenticados" del WS queda DEROGADA para no-admins: cada usuario ve/adjunta SOLO lo suyo (`list(principal)`, `ownedChat`), y el cwd se clampa con `safeCwd(cwd, owner)` a `userFileRoot(owner)`, JAMÁS al home global. Todo estado user-scoped resuelve su dir con `resolveDataDir()` — PROHIBIDO hardcodear `~/.cwc-data` del host. Una operación de Pad de un inquilino usa SU token y SU workspace (`tenant-<id>`), nunca la credencial del host ni el workspace `console`.
+
+Pad tiene un tercer destino: `comunidad`, pozo común de Mejora Continua (`console:PLAN-2222`), donde se agregan las lecciones de Tolkien de todos los usuarios y la recurrencia se cuenta ENTRE PERSONAS. Cada uno escribe con su token; nada ajeno se auto-aplica.
 
 Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. El PTY de `terminal/sessions.js` ya es owner-scoped y fail-closed (BUG-2104).
 
@@ -280,12 +291,12 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 | Módulo | Qué es | Lo que más duele |
 |---|---|---|
-| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". |
+| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". Una sala 🛃 Aduana usa el canal `say` (0 tokens): la IA solo habla cuando alguien aprieta el botón de corte. |
 | `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). La rama `attach` es owner-scoped con candado estricto y comparte el guard con `tmux` desde `terminal/sessions.js`. |
 | `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
 | `tasks/` | Pendientes: tablero privado (PEND / PLAN) | Backend en **Pad LOCAL** (colecciones `pendientes`/`planes`), no file-based. Ojo con el rate limit al pedir links por ítem. |
 | `learning/` | 🎓 Aprendizaje: temas de estudio de Niko | Backend en **Pad LOCAL** (`temas-de-aprendizaje`/`rutas-de-aprendizaje`). "Explicame esto" navega el código read-only. |
-| `retro/` | Mejora Continua: destila lecciones de proceso al cerrar chats | Lecciones en Pad (`mejora-continua`), consultadas por tarea desde el índice enrutador. Incluye "💬 Feedback de Chris". |
+| `retro/` | Mejora Continua: destila lecciones de proceso al cerrar chats | Lecciones en Pad (`mejora-continua`), consultadas por tarea desde el índice enrutador; el pozo `comunidad` suma recurrencia entre personas sin auto-aplicar aportes ajenos. Incluye "💬 Feedback de Chris". |
 | `audio/` | interpreta una transcripción → resumen + tareas propuestas | Nada se auto-aplica: el usuario aprueba cada tarea. |
 | `tickets/` | módulo **VIVO** del ciclo ticket/feature/PR (Bugs v2) | Su detalle todavía vive en la sección "Módulo VIVO `tickets/`" de este archivo. Meta-store en Pad LOCAL (`contexto-de-tickets`). |
 | `seguimientos/` | dashboard del trabajo humano-accionable (primer habitante de **Limbo**) | Lee siempre del snapshot en disco, nunca de Zoho en vivo. Escribe SOLO al ticket y con aprobación. |

@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { resolveDataDir } from '../../core/data-dir.js';
+import { hostUser } from '../../core/user-space.js';
 
 const FILE = path.join(resolveDataDir(), 'session-packages.json');
 
@@ -25,11 +26,11 @@ function save(db) { try { writeJsonAtomic(FILE, db); } catch { /* best-effort */
 
 // Asigna un ref nuevo (PKG-<n>) incremental. Se llama UNA vez por conversación
 // (en create); el ref se persiste en chats.json y sobrevive a los moves.
-export function nextPackageRef() {
+export function nextPackageRef(owner = null) {
   const db = load();
   db.seq = (db.seq || 0) + 1;
   const ref = `PKG-${db.seq}`;
-  db.items[ref] = { ref, status: 'active', createdAt: Date.now(), updatedAt: Date.now() };
+  db.items[ref] = { ref, owner, status: 'active', createdAt: Date.now(), updatedAt: Date.now() };
   save(db);
   return ref;
 }
@@ -45,6 +46,7 @@ export function upsertPackage(rec) {
   const prev = db.items[rec.ref];
   const next = {
     ref: rec.ref,
+    owner: rec.owner ?? prev?.owner ?? null,
     chatId: rec.chatId ?? prev?.chatId ?? null,
     sessionId: rec.sessionId ?? prev?.sessionId ?? null,
     cwd: rec.cwd ?? prev?.cwd ?? null,
@@ -60,20 +62,29 @@ export function upsertPackage(rec) {
     next.history.push({ at: Date.now(), event: String(rec.event).slice(0, 24), world: next.world });
     if (next.history.length > 30) next.history = next.history.slice(-30);
   }
-  const KEYS = ['chatId', 'sessionId', 'cwd', 'world', 'title', 'status'];
+  const KEYS = ['owner', 'chatId', 'sessionId', 'cwd', 'world', 'title', 'status'];
   const unchanged = prev && KEYS.every((k) => prev[k] === next[k]) && (prev.tags || []).join('|') === (next.tags || []).join('|');
   if (unchanged && !rec.event) return; // nada cambió y no hay evento nuevo que loguear
   db.items[rec.ref] = next;
   save(db);
 }
 
+// No filtra por dueño: el endpoint que expone el detalle valida el principal aparte.
 export function getPackage(ref) { return load().items?.[ref] || null; }
-export function listPackages() { return Object.values(load().items || {}); }
+// Un owner ausente/null es el HOST (registros previos al multi-tenant): hay que
+// normalizar ambos lados o el host se silencia sus propios paquetes viejos,
+// con el mismo criterio que ChatManager.list.
+const normOwner = (o) => (o == null ? hostUser() : o);
+function sameOwner(a, b) { return normOwner(a) === normOwner(b); }
+export function listPackages(owner) {
+  const all = Object.values(load().items || {});
+  return owner === undefined ? all : all.filter((p) => sameOwner(p.owner, owner));
+}
 
 // F5: buscar paquetes por texto (ref/título/mundo). Case-insensitive, tope 20.
-export function searchPackages(q) {
+export function searchPackages(q, owner) {
   const s = String(q || '').trim().toLowerCase();
-  const all = listPackages().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const all = listPackages(owner).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   if (!s) return all.slice(0, 20);
   return all.filter((p) =>
     String(p.ref || '').toLowerCase().includes(s)

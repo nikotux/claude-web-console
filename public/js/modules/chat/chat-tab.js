@@ -222,6 +222,12 @@ const MODES = [
 const riskOf = (mode) => (MODES.find(([v]) => v === mode) || [])[2] || 'ok';
 const modeLabel = (mode) => { const e = MODES.find(([v]) => v === mode); return e ? t(e[3], e[1]) : mode; };
 
+export function peerToneFor(username) {
+  let hash = 0;
+  for (const ch of String(username || '')) hash = ((hash * 31) + ch.codePointAt(0)) >>> 0;
+  return `peer-${(hash % 6) + 1}`;
+}
+
 export class ChatTab {
   constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
     this.id = id;
@@ -252,6 +258,13 @@ export class ChatTab {
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
     this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
     this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
+    this.isSala = null;           // null hasta que llegue el primer history
+    this.participants = [];
+    this.me = null;
+    this._salaSayCount = 0;
+    this._cutPending = false;
+    this._lastTypingSent = 0;
+    this._typingTimers = new Map();
     // Adjuntos pendientes de ESTE mensaje (subidos a disco, aún sin enviar).
     // Cada uno: {name|null, type, mime, size, uploading, error?, localUrl?, origName}.
     // Se limpian al enviar. Ver _uploadFiles/_renderTray/_submit.
@@ -268,6 +281,7 @@ export class ChatTab {
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="${t('chat.header.menuTitle', 'Abrir panel lateral')}">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
           <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
+          <span class="chat-peers" aria-label="${t('chat.sala.participants', 'Participantes')}" hidden></span>
           <span class="chat-flow" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: t('chat.pac.waitingTitle', 'Esperando tu mensaje') })}
           <span class="chat-model-pill" title="${t('chat.header.modelPillTitle', 'Router de modelo automático')}" hidden></span>
@@ -279,16 +293,19 @@ export class ChatTab {
         <div class="chat-msgs"></div>
         <div class="chat-atttray" hidden></div>
         <div class="chat-composer">
+          <span class="chat-typing" hidden></span>
           <input type="file" class="chat-file-input" multiple hidden>
           <button class="btn-ghost btn--icon chat-attach" title="${t('chat.composer.attachTitle', 'Adjuntar archivo (imagen, PDF, texto…)')}">${icon('paperclip', { size: 16 })}</button>
           <button class="btn-ghost btn--icon chat-pkgref" title="${t('chat.composer.pkgrefTitle', 'Referenciar otro paquete-sesión (F5)')}">${icon('externalLink', { size: 16 })}</button>
           <textarea class="chat-input" rows="1" enterkeyhint="send" placeholder="${t('chat.composer.inputPlaceholder', 'Escribí o dictá un mensaje…')}"></textarea>
+          <button class="btn btn--sm chat-cut-btn" type="button" hidden disabled>${t('chat.sala.cutButton', '✦ Enviar a la IA ({count})', { count: 0 })}</button>
           <button class="btn btn--icon chat-send" title="${t('chat.common.send', 'Enviar')}">${icon('play', { size: 16 })}</button>
           <button class="btn-ghost btn--icon chat-stop" title="${t('chat.composer.stopTitle', 'Detener')}" hidden>${icon('close', { size: 16 })}</button>
         </div>
       </div>`;
 
     this.worldEl = container.querySelector('.chat-world');
+    this.peersEl = container.querySelector('.chat-peers');
     this.msgsEl = container.querySelector('.chat-msgs');
     // Un diagrama Mermaid renderiza asíncrono (después de que su mensaje ya
     // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
@@ -304,7 +321,9 @@ export class ChatTab {
       if (d) { this.inputEl.value = d; requestAnimationFrame(() => this._autosize()); }
     } catch { /* localStorage no disponible: sin respaldo, no rompe */ }
     this.sendBtn = container.querySelector('.chat-send');
+    this.cutBtn = container.querySelector('.chat-cut-btn');
     this.stopBtn = container.querySelector('.chat-stop');
+    this.typingEl = container.querySelector('.chat-typing');
     this.modeEl = container.querySelector('.chat-mode');
     this.aliveEl = container.querySelector('.chat-alive');
     this.modelPillEl = container.querySelector('.chat-model-pill');
@@ -321,6 +340,9 @@ export class ChatTab {
       window.dispatchEvent(new Event('cwc:open-sidebar'));
     });
     this.sendBtn.addEventListener('click', () => this._submit());
+    this.cutBtn.addEventListener('click', () => {
+      if (this.isSala && this._salaSayCount > 0 && !this._cutPending) this._send({ type: 'cut' });
+    });
     // Confirmación antes de detener (pedido del usuario 2026-07-07): ventana en
     // escritorio, "menú de deslizamiento" (bottom sheet) en móvil. Cancelar
     // aborta la operación; Parar envía el interrupt.
@@ -358,7 +380,16 @@ export class ChatTab {
       // BUG-498: respaldar el borrador en cada tecla (barato; cubre reconexión,
       // disable y reconstrucción total del pane).
       try { localStorage.setItem(this._draftKey, this.inputEl.value); } catch { /* noop */ }
+      this._sendTyping();
     });
+
+    fetch('/api/whoami', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((me) => {
+        this.me = me?.username || me?.host || null;
+        this._refreshSalaIdentity();
+      })
+      .catch(() => { /* sin identidad: la sala sigue funcionando, sin alineación propia */ });
 
     // ===== Adjuntos (Fase 3): UN solo botón 📎 + pegar + arrastrar =====
     // La consola detecta el tipo de cada archivo sola (no hay botones por tipo).
@@ -538,12 +569,7 @@ export class ChatTab {
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
-      // Prompt precargado (p.ej. desde un ticket): se envía UNA sola vez, no en
-      // las reconexiones.
-      if (this.initialPrompt && !this._sentInitial) {
-        this._sentInitial = true;
-        this._send({ type: 'user', text: this.initialPrompt });
-      }
+      this._sendInitialPrompt();
     };
     ws.onmessage = (ev) => {
       let m;
@@ -557,16 +583,26 @@ export class ChatTab {
     ws.onerror = () => ws.close();
   }
 
+  _sendInitialPrompt() {
+    // En la primera conexión esperamos history para saber si corresponde
+    // `user` (chat común) o `say` (sala). En reconexiones el dato ya está.
+    if (!this.initialPrompt || this._sentInitial || this.isSala === null) return;
+    this._sentInitial = true;
+    this._send({ type: this.isSala ? 'say' : 'user', text: this.initialPrompt });
+  }
+
   _submit() {
     const text = this.inputEl.value.trim();
     // Adjuntos LISTOS (subidos, con name del server). Los que fallaron no viajan.
     const ready = this.pending.filter((p) => p.name && !p.error);
     if (!text && !ready.length) return;
+    if (this.isSala && !text) return;
     if (this.pending.some((p) => p.uploading)) return; // esperar a que terminen de subir
     this._slashClose();
     this._slashSuppressed = null;
     const attachments = ready.map((p) => ({ name: p.name, type: p.type, mime: p.mime }));
-    this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
+    if (this.isSala) this._send({ type: 'say', text });
+    else this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
     for (const p of this.pending) { if (p.localUrl) URL.revokeObjectURL(p.localUrl); }
     this.pending = [];
     this._renderTray();
@@ -578,6 +614,15 @@ export class ChatTab {
 
   _send(obj) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+  }
+
+  _sendTyping() {
+    if (!this.isSala || !this.inputEl.value.trim()) return;
+    const now = Date.now();
+    if (now - this._lastTypingSent < 2000) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this._lastTypingSent = now;
+    this._send({ type: 'typing' });
   }
 
   // ===== Adjuntos (Fase 3): subida a disco + bandeja de pendientes =====
@@ -713,6 +758,12 @@ export class ChatTab {
   _onEvent(m) {
     switch (m.type) {
       case 'history':
+        this.isSala = !!m.isSala;
+        this.participants = Array.isArray(m.participants) ? m.participants : [];
+        this._salaSayCount = 0;
+        this._cutPending = false;
+        this._clearTyping();
+        this._renderSalaState();
         this.msgsEl.innerHTML = '';
         this.streamEl = null;
         // BUG-498: una reconexión/history exitosa REVIVE el composer si un `closed`
@@ -747,6 +798,7 @@ export class ChatTab {
         this._effort = m.effort || null;           // eje thinking effort (PEND-391 #3): 2ª línea del banderín
         this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
+        this._sendInitialPrompt();
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
         this._readyResolve = null;
@@ -755,6 +807,17 @@ export class ChatTab {
         this.slashCommands = Array.isArray(m.slashCommands) ? m.slashCommands : [];
         this._metaSeen = true;
         if (this._slashPop) this._slashUpdate(); // refresco en vivo si está abierto
+        break;
+      case 'say': this._say(m); break;
+      case 'cut': this._cut(m); break;
+      case 'cut-pending':
+        this._cutPending = true;
+        this._renderCutButton();
+        break;
+      case 'typing': this._typing(m); break;
+      case 'participants':
+        this.participants = Array.isArray(m.participants) ? m.participants : [];
+        this._renderPeers();
         break;
       case 'user': this._closeStream(); this._bubble('user', m.text, m.attachments); break;
       case 'assistant': this._assistantFinal(m.text); break;
@@ -844,6 +907,122 @@ export class ChatTab {
         break;
       default: break;
     }
+  }
+
+  _localTime(ts) {
+    const date = new Date(ts);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  _say(m) {
+    if (!this.isSala) return;
+    const by = String(m.by || '');
+    const el = document.createElement('div');
+    el.className = `chat-msg chat-say ${peerToneFor(by)}`;
+    el.dataset.by = by;
+    el.classList.toggle('chat-say--own', !!this.me && by === this.me);
+
+    const label = document.createElement('span');
+    label.className = 'chat-say-label';
+    label.textContent = t('chat.sala.sayLabel', '{name} · {time}', { name: by, time: this._localTime(m.ts) });
+    const body = document.createElement('span');
+    body.className = 'chat-say-text';
+    body.textContent = m.text || '';
+    el.append(label, body);
+    this.msgsEl.appendChild(el);
+    this._salaSayCount++;
+    this._renderCutButton();
+    this._scroll();
+  }
+
+  _cut(m) {
+    if (!this.isSala) return;
+    const el = document.createElement('div');
+    el.className = 'chat-cut';
+    el.textContent = t('chat.sala.cutLine', '✂ {name} envió a la IA · {time}', {
+      name: String(m.by || ''),
+      time: this._localTime(m.ts),
+    });
+    this.msgsEl.appendChild(el);
+    this._salaSayCount = 0;
+    this._cutPending = false;
+    this._renderCutButton();
+    this._scroll();
+  }
+
+  _typing(m) {
+    if (!this.isSala || !m.by || m.by === this.me) return;
+    const by = String(m.by);
+    clearTimeout(this._typingTimers.get(by));
+    const timer = setTimeout(() => {
+      this._typingTimers.delete(by);
+      this._renderTyping();
+    }, 4000);
+    this._typingTimers.set(by, timer);
+    this._renderTyping();
+  }
+
+  _clearTyping() {
+    for (const timer of this._typingTimers.values()) clearTimeout(timer);
+    this._typingTimers.clear();
+    this._renderTyping();
+  }
+
+  _renderTyping() {
+    if (!this.typingEl) return;
+    const names = [...this._typingTimers.keys()].filter((name) => name !== this.me);
+    this.typingEl.hidden = !this.isSala || names.length === 0;
+    if (!names.length) {
+      this.typingEl.textContent = '';
+    } else if (names.length === 1) {
+      this.typingEl.textContent = t('chat.sala.typingOne', '{name} está escribiendo…', { name: names[0] });
+    } else {
+      this.typingEl.textContent = t('chat.sala.typingMany', '{names} están escribiendo…', { names: names.join(', ') });
+    }
+  }
+
+  _renderSalaState() {
+    this.container.querySelector('.chat-view')?.classList.toggle('chat-view--sala', !!this.isSala);
+    this._renderPeers();
+    this._renderCutButton();
+    this._renderTyping();
+  }
+
+  _renderCutButton() {
+    if (!this.cutBtn) return;
+    this.cutBtn.hidden = !this.isSala;
+    this.cutBtn.disabled = !this.isSala || this._salaSayCount === 0 || this._cutPending;
+    this.cutBtn.textContent = this._cutPending
+      ? t('chat.sala.cutPending', 'IA ocupada · queda pendiente')
+      : t('chat.sala.cutButton', '✦ Enviar a la IA ({count})', { count: this._salaSayCount });
+  }
+
+  _renderPeers() {
+    if (!this.peersEl) return;
+    this.peersEl.replaceChildren();
+    const people = [...this.participants];
+    if (this.me && !people.some((p) => p?.user === this.me)) people.unshift({ user: this.me, role: null });
+    const seen = new Set();
+    for (const participant of people) {
+      const username = String(participant?.user || '');
+      if (!username || seen.has(username)) continue;
+      seen.add(username);
+      const chip = document.createElement('span');
+      chip.className = `chat-peer ${peerToneFor(username)}`;
+      chip.title = t('chat.sala.participantTitle', 'Participante: {name}', { name: username });
+      const parts = username.trim().split(/\s+/).filter(Boolean);
+      chip.textContent = ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+      this.peersEl.appendChild(chip);
+    }
+    this.peersEl.hidden = !this.isSala || !this.peersEl.children.length;
+  }
+
+  _refreshSalaIdentity() {
+    for (const el of this.msgsEl?.querySelectorAll('.chat-say') || []) {
+      el.classList.toggle('chat-say--own', !!this.me && el.dataset.by === this.me);
+    }
+    this._renderPeers();
+    this._renderTyping();
   }
 
   _bubble(kind, text, attachments = null) {
@@ -1403,7 +1582,9 @@ export class ChatTab {
 
   _setWorking(on) {
     this.stopBtn.hidden = !on;
-    this.sendBtn.hidden = on;
+    // En Aduana las personas pueden seguir hablando mientras la IA trabaja;
+    // el botón ✦ encola el próximo corte si hace falta.
+    this.sendBtn.hidden = on && !this.isSala;
     this._working = on;
     // Un turno nuevo (u "off") arranca sin subagentes delegados pendientes:
     // evita que un tool_result perdido de un turno anterior deje el header
@@ -1465,6 +1646,7 @@ export class ChatTab {
   dispose() {
     this.closedByUser = true;
     this._slashClose();
+    this._clearTyping();
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }
   }

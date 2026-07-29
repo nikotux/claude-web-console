@@ -28,7 +28,24 @@ import fs from 'node:fs';
 import multer from 'multer';
 import { resolveDataDir } from '../../core/data-dir.js';
 
-export const ATTACH_ROOT = path.join(resolveDataDir(), 'chat-attachments');
+// Resolutor de data-dir POR CHAT, inyectado por el SERVER (el único que sabe de
+// quién es cada conversación). Sin inyectar → resolveDataDir() de siempre: el
+// runner y los CLIs de bin/ ya corren con el HOME/CWC_DATA_DIR de su dueño.
+// NO se importa core/user-space.js acá a propósito: arrastraría core/config.js
+// (CWC_TOKEN) a un módulo que consumen el runner de inquilino y bin/*.
+let chatDataDirResolver = null;
+export function setChatDataDirResolver(fn) {
+  chatDataDirResolver = typeof fn === 'function' ? fn : null;
+}
+function dataDirForChat(chatId) {
+  if (chatDataDirResolver) {
+    try {
+      const d = chatDataDirResolver(chatId);
+      if (d && typeof d === 'string') return d;
+    } catch { /* un resolver roto nunca puede tumbar un adjunto */ }
+  }
+  return resolveDataDir();
+}
 
 // Id de chat: `c<pid>-<seq>` (ver ChatManager.create). Whitelist estricta.
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -80,10 +97,11 @@ export function classifyAttachment(mime, name) {
 // Carpeta absoluta de adjuntos del chat (o null si el id es inválido).
 export function chatAttachDir(chatId) {
   if (!ID_RE.test(String(chatId || ''))) return null;
-  return path.join(ATTACH_ROOT, chatId);
+  return path.join(dataDirForChat(chatId), 'chat-attachments', chatId);
 }
 
 // Ruta RELATIVA al home para el deep-link del Explorador (?path=…).
+// Para un inquilino es relativa a SU espacio, que el Explorador clampeado a userFileRoot no alcanza (limitación conocida).
 export function attachRelForExplorer(chatId) {
   if (!ID_RE.test(String(chatId || ''))) return null;
   return path.join('.cwc-data', 'chat-attachments', chatId);

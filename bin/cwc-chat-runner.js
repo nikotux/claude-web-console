@@ -59,11 +59,11 @@ const SOCK = args.sock;
 const MODEL = args.model || null;
 let currentModel = MODEL; // puede cambiar en vivo (set_model) o al resolverse el init del SDK
 let mode = PERMISSION_MODES.has(args.mode) ? args.mode : 'default';
-const RESUME = args.resume || null;
+let RESUME = args.resume || null;
 // BUG-496: sessionId FORZADO — CREA la conversación con NUESTRO UUID (chat nuevo,
 // durable desde el segundo cero) en vez de esperar al `system/init`. Exactamente
 // uno con RESUME (el SDK prohíbe combinarlos sin forkSession). Lo decide el server.
-const SESSION_ID = args['session-id'] || null;
+let SESSION_ID = args['session-id'] || null;
 // Eje thinking effort (PEND-391 #3): opción de SPAWN del Agent SDK (no hay
 // setEffort() en vivo). Whitelist estricta; cualquier otro valor => sin effort
 // (el SDK aplica el default del modelo). No confundir con 'auto'/'default' del
@@ -366,6 +366,28 @@ function setStatus(state) {
 // otro runner vivo para esta conversación, salimos sin lanzar un claude de más.
 const input = makeInput();
 let q = null;
+let sawInit = false;
+let lastUserPush = null;
+
+// El HOME de ESTE proceso es el del DUEÑO (multi-tenant), así que es la única
+// autoridad sobre dónde vive el transcript; el server puede haber elegido mal
+// --session-id vs --resume porque resuelve la ruta contra su propio HOME.
+function reconcileSessionArgs() {
+  const sid = RESUME || SESSION_ID;
+  if (!sid) return;
+  let exists = false;
+  try {
+    exists = fs.existsSync(path.join(os.homedir(), '.claude', 'projects', encodeCwd(CWD), `${sid}.jsonl`));
+  } catch { return; } // sin certeza, respetamos lo que decidió el server
+  if (exists && !RESUME) {
+    RESUME = sid; SESSION_ID = null;
+    log(`la sesión ${sid} YA tiene transcript en este HOME: corrijo --session-id -> --resume`);
+  } else if (!exists && !SESSION_ID) {
+    SESSION_ID = sid; RESUME = null;
+    log(`la sesión ${sid} no tiene transcript en este HOME: corrijo --resume -> --session-id`);
+  }
+}
+
 function startEngine() {
   // Opciones armadas por el NÚCLEO de gobernanza (core/tool-policy.js): fuente
   // única que garantiza `allowDangerouslySkipPermissions` para que el modo
@@ -432,6 +454,7 @@ function startEngine() {
 function onMessage(m) {
   lastActivity = Date.now();
   if (m.type === 'system' && m.subtype === 'init') {
+    sawInit = true;
     sessionId = m.session_id || sessionId;
     // Los comandos slash disponibles (built-ins + skills + custom del cwd)
     // vienen SOLO en el init: la lista del init es la fuente de verdad.
@@ -585,19 +608,41 @@ function approveAllPending() {
   pendingPerms.clear();
 }
 
+let sessionRetried = false;
+
 async function pump() {
-  try {
-    for await (const m of q) onMessage(m);
-  } catch (err) {
-    emit({ type: 'error', message: String(err?.message || err).slice(0, 400) });
-    log('motor con error:', err?.message || err);
-  } finally {
-    for (const [, p] of pendingPerms) p.resolve({ behavior: 'deny', message: 'Conversación cerrada.' });
-    pendingPerms.clear();
-    // Anuncia la muerte del motor y sale: el runner ES una vida del motor.
-    emit({ type: 'closed', resumable: !closedByUser && !!sessionId }, { record: false });
-    shutdown(0);
+  for (;;) {
+    try {
+      for await (const m of q) onMessage(m);
+      break;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      // El CLI rechaza el id (ya existe, o no existe): es un error de ARRANQUE,
+      // no del turno. Reintentamos UNA vez con el modo opuesto en vez de dejar
+      // la conversación muerta para siempre.
+      const collision = /Session ID .* is already in use/i.test(msg);
+      const missing = /No conversation found with session ID/i.test(msg);
+      if (!sessionRetried && !sawInit && (collision || missing)) {
+        sessionRetried = true;
+        const sid = RESUME || SESSION_ID;
+        if (collision) { RESUME = sid; SESSION_ID = null; } else { SESSION_ID = sid; RESUME = null; }
+        log(`arranque rechazado (${msg.slice(0, 120)}): reintento con ${RESUME ? '--resume' : '--session-id'}`);
+        // El motor nunca llegó al init, así que ese turno no se procesó: si el
+        // SDK ya se llevó el mensaje de la cola, lo reponemos para no perderlo.
+        if (lastUserPush && input.size() === 0) input.push(lastUserPush);
+        startEngine();
+        continue;
+      }
+      emit({ type: 'error', message: msg.slice(0, 400) });
+      log('motor con error:', err?.message || err);
+      break;
+    }
   }
+  for (const [, p] of pendingPerms) p.resolve({ behavior: 'deny', message: 'Conversación cerrada.' });
+  pendingPerms.clear();
+  // Anuncia la muerte del motor y sale: el runner ES una vida del motor.
+  emit({ type: 'closed', resumable: !closedByUser && !!sessionId }, { record: false });
+  shutdown(0);
 }
 
 function shutdown(code) {
@@ -634,12 +679,14 @@ function handleCommand(c, msg) {
     // content = string sin adjuntos (camino histórico) o array de bloques
     // image/document/text según el tipo de cada archivo (attachments.js LEE el
     // disco y arma los bloques de visión / inline / referencia).
-    input.push({
+    const userPush = {
       type: 'user',
       message: { role: 'user', content: buildUserContent(ID, msg.text, atts) },
       parent_tool_use_id: null,
       session_id: sessionId || '',
-    });
+    };
+    lastUserPush = userPush;
+    input.push(userPush);
     return;
   }
   if (msg.t === 'perm') {
@@ -793,5 +840,6 @@ server.listen(SOCK, () => {
   try { fs.chmodSync(SOCK, 0o600); } catch { /* noop */ }
   log(`runner ${ID} escuchando en ${SOCK} (cwd=${CWD}, resume=${RESUME || 'nueva'})`);
 });
+reconcileSessionArgs();
 startEngine();
 pump();

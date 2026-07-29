@@ -90,6 +90,8 @@ export function makeInput() {
   let done = false;
   return {
     push(msg) { queue.push(msg); notify?.(); },
+    // Permite saber si el mensaje sigue sin consumirse al reintentar el motor.
+    size() { return queue.length; },
     end() { done = true; notify?.(); },
     async *gen() {
       for (;;) {

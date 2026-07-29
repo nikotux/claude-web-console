@@ -1275,6 +1275,214 @@ con "todo local, render client-side") — Mermaid sigue siendo la elección; el
 ahorro real de tokens es usar ÁRBOL HTML/CSS o TABLAS para jerarquías/
 comparaciones y reservar Mermaid para flujos con ciclos.
 
+CHAT DE INQUILINO QUE NO REVIVÍA — RUTA DEL TRANSCRIPT POR DUEÑO
+(`console:BUG-2185`, 2026-07-28, reporte de Niko: «se le desconectó, la idea es
+que no se le cierren las cosas y si quedan en inactividad puedan revivir»). El
+runner de un INQUILINO corre con `HOME=~/.cwc-users/<owner>/` y el SDK le
+escribe el transcript en
+`~/.cwc-users/<owner>/.claude/projects/<encodeCwd(cwd)>/<sid>.jsonl`. Pero
+`transcriptExists()`, `loadTranscriptEvents()` y `chatProjectDir()` resolvían
+SIEMPRE contra `os.homedir()` — el HOME del SERVER. Consecuencia en cadena: el
+server nunca veía el transcript del inquilino, `_startEngine` elegía
+`--session-id` (CREAR) en vez de `--resume` (RETOMAR), y el CLI salía con
+`Error: Session ID <uuid> is already in use` en CADA relanzamiento. Un chat de
+inquilino que se dormía por inactividad quedaba MUERTO PARA SIEMPRE (medido: 4
+de 6 chats de inquilinos, el 100% de los que tenían historia; el host, intacto,
+porque su `homedir()` ES el correcto). El segundo síntoma del mismo error era
+que `loadTranscriptEvents` devolvía `[]`, así que un chat de inquilino que
+revivía lo hacía EN BLANCO. FIX EN TRES CAPAS. (1) SERVER:
+`chatProjectDir(cwd, owner)` resuelve con `userClaudeDir(owner || hostUser())` —
+para el host devuelve exactamente su `~/.claude` real, así que la retrocompat
+es total; `transcriptExists(cwd, sid, owner)`,
+`loadTranscriptEvents(cwd, sid, untilMs, owner)` (el `owner` va CUARTO, después
+de `untilMs`, para no romper el call-site que ya lo pasaba posicionalmente),
+`moveTranscript(sid, from, to, owner)` y `writeHandoffManifest(..., {owner})` lo
+toman, y los 13 call-sites lo pasan (`this.owner` en Chat, `chat.owner` en
+ChatManager — OJO: `chat.owner = s.owner || null` se asigna en `rehydrate()`
+ANTES de todos sus usos, no mover esa línea). El handler `GET /package/:ref`
+resuelve el dueño por `manager.chats.get(pkg.chatId)?.owner` porque el registro
+de paquetes no lo guarda. (2) RUNNER: el runner es el ÚNICO proceso que corre
+con el HOME correcto por construcción, así que es la AUTORIDAD sobre esa
+decisión — `reconcileSessionArgs()` (`bin/cwc-chat-runner.js`, corre justo antes
+de `startEngine()`) mira su propio `os.homedir()` y corrige
+`--session-id`↔`--resume` si el server se equivocó. Por eso `RESUME` y
+`SESSION_ID` pasaron de `const` a `let`. (3) RED DE SEGURIDAD: `pump()` dejó de
+ser un `try/catch/finally` plano y es un bucle que, ante un rechazo de ARRANQUE
+del CLI (`already in use` o `No conversation found with session ID`) y con
+`sawInit === false`, reintenta UNA vez con el modo opuesto en vez de matar la
+conversación; si el SDK ya se llevó el mensaje de la cola lo repone
+(`lastUserPush` + el nuevo `input.size()` de `chat/shared.js`). El bloque de
+limpieza (deny de permisos pendientes + `closed` + `shutdown(0)`) corre ahora
+DESPUÉS del bucle, no en un `finally`. LO QUE NO ERA: abrir la sesión en dos
+dispositivos a la vez no tiene nada que ver — `clients` es un Set,
+`_ensureEngine` dedupea con `_engineP` y el spawn-lock cubre el cruce entre
+procesos; los dos dispositivos veían el mismo chat ya roto. VERIFICADO EN
+CALIENTE: el chat `c1679169-1` (owner `rarboleda`) pasó de 4 arranques seguidos
+con `resume=nueva` + `already in use` a `resume=ed0a5f66-…` con el motor vivo, y
+su historial rehidrató 58 eventos desde el transcript del inquilino (antes, 0).
+FUERA DE ALCANCE deliberado: los otros dos `os.homedir()` del módulo
+(`enrichSlashCommands` para las skills y la lectura de `~/.claude.json` del
+manifiesto de handoff) y `readTranscript()` de `retro/shared.js` (ya registrado
+en `console:BUG-2151`). LECCIÓN: toda ruta que dependa del HOME es
+multi-tenant-sensible — si la calcula el SERVER hay que resolverla por DUEÑO, y
+si la puede calcular el proceso que YA corre con ese HOME, mejor que la calcule
+él.
+
+SEGUNDA OLA MULTI-TENANT — EL ESTADO EN ARCHIVOS (`console:PLAN-2186`,
+2026-07-28, pedido de Niko: «analizá qué otras funcionalidades pueden ir por esa
+misma línea que no viajen y que puedan estar rotas para de una vez hacer el fix
+completo»). Barrido de la MISMA clase de bug que `console:BUG-2185`, esta vez
+sobre el estado que vive en ARCHIVOS. PATRÓN RAÍZ, y es lo único que hay que
+recordar: una CONSTANTE DE MÓDULO calculada al importar
+(`const X = path.join(resolveDataDir(), …)`) es correcta en un RUNNER —que nace
+con el `HOME`/`CWC_DATA_DIR` de su dueño— y MENTIROSA en el SERVER, que atiende a
+todos los usuarios desde un proceso con el HOME del host. Una vez congelada al
+importar, NO HAY DÓNDE pasarle el dueño: no es un olvido, es que no se podía.
+Cuatro casos en este módulo.
+(a) ADJUNTOS (el que reportó Niko: «ni adjuntando ni con ctrl+v su consola puede
+ver o interpretar adjuntos»): `ATTACH_ROOT` congelaba el data-dir del proceso,
+así que el server guardaba el adjunto de un inquilino en
+`~/.cwc-data/chat-attachments/<chatId>/` mientras su runner lo buscaba en
+`~/.cwc-users/<owner>/.cwc-data/…` — se veía la miniatura (la sirve el server)
+pero el modelo abría una carpeta VACÍA, y rompía igual la dirección inversa (las
+imágenes que el modelo lee o genera, que el runner materializa en el espacio del
+inquilino y el server servía desde el del host). FIX: `ATTACH_ROOT` murió y
+`chatAttachDir(chatId)` resuelve por un RESOLVER INYECTADO —
+`setChatDataDirResolver(fn)`, que el server registra junto al
+`new ChatManager()` con `userDataDir(chat.owner || hostUser())`. La firma NO
+cambió, así que los ~8 call-sites (multer, `attachPath`, `existingAttachments`,
+`buildUserContent`, `materializeIntoChat`, `core/tool-policy.js`, el runner y los
+CLIs de `bin/`) se arreglaron solos; sin resolver registrado cae a
+`resolveDataDir()`, que es lo correcto para el runner y los CLIs.
+(b) PAQUETES-SESIÓN: `session-packages.json` es GLOBAL a propósito (contador
+`seq` compartido y `core/bus.js` lo lee), así que NO se separó por usuario: cada
+ítem lleva `owner` y las lecturas filtran, igual que
+`ChatManager.list(principal)`. OJO CON LA NORMALIZACIÓN — se detectó y corrigió
+ANTES de desplegar: el host se representa de DOS formas (los 282 paquetes
+previos al multi-tenant tienen el campo AUSENTE; los nuevos,
+`owner:"nmosquera"`), así que `sameOwner` normaliza ambos lados con
+`hostUser()`. Sin eso el host se silenciaba sus propios 282 paquetes en el
+picker «🔗 Referenciar paquete» — el MISMO modo de falla que ya documenta
+`ChatManager.list`. Medido tras el fix: host 282 · inquilino 0 · sin filtro 282.
+`GET /package/:ref` además responde 404 (sin revelar existencia) si el paquete
+es de otro dueño; un admin sí puede verlo.
+(c) PRESIÓN DE VENTANA DE AUTOTUX: `readWindowPressure()` leía el
+`plan-limits.json` del HOST, o sea el AutoTux de un inquilino decidía
+«conservar» mirando el consumo de Niko (el módulo `tokens` ya resolvía ese
+archivo por dueño desde `console:BUG-1874`; faltaba el otro lado). Ahora recibe
+el data-dir: `readWindowPressure(userDataDir(this.owner || hostUser()))`.
+(d) SKILLS Y MCP: `enrichSlashCommands` describía las skills del HOST y el
+manifiesto de handoff listaba SUS MCP; ahora salen de `userClaudeDir(owner)` y
+`userSpace(owner)`. Con esto `chat/index.js` quedó con CERO `os.homedir()` — es
+el chequeo rápido de que no volvió a colarse.
+VERIFICADO EN CALIENTE: un PNG subido por API al chat de un inquilino aterriza
+en SU espacio y su runner lo lee; el mismo PNG subido a un chat del host sigue
+cayendo en `~/.cwc-data` y NO se cuela en el del inquilino; la miniatura
+responde 200 desde el lado correcto. Los adjuntos que habían quedado atrapados
+en el espacio del host se MIGRARON (comparando SHA-256 para no pisar nada).
+FUERA DE ALCANCE deliberado: `core/bus.js` y `chats.json` son globales POR
+DISEÑO (son de la máquina, no de un usuario), y «Abrir carpeta del chat» sigue
+sin funcionar para un inquilino porque su Explorador está clampeado a
+`userFileRoot`, que a propósito NO expone `.cwc-data` —resolverlo exige una
+decisión de seguridad, no un fix mecánico—.
+
+PAPELERA DE CONVERSACIONES — 30 días, copia y no movimiento
+(`console:PLAN-2217`, 2026-07-28, pedido de Niko: «cuando cierre una sesión se
+vaya a papelera de reciclaje … que dure 30 días y a los 30 días sí se borre
+definitivamente»). `Chat.close()` deposita mediante `chat/trash.js` una COPIA
+durante 30 días de la metadata, el transcript `.jsonl` y la carpeta de adjuntos
+del paquete-sesión, tanto para «⋯ → Cerrar conversación» como para el reaper que
+cierra las dormidas a las 24 h. Los ORIGINALES NO SE MUEVEN NI SE BORRAN: es una
+RED DE SEGURIDAD, no una jaula, y por eso retomar desde el lanzador una
+conversación ya cerrada sigue funcionando igual que antes. El layout se separa
+POR DUEÑO:
+`<userDataDir(owner)>/chat-trash/index.json` +
+`chat-trash/<trashId>/{meta.json,transcript/<sid>.jsonl,attachments/}`; cada
+usuario tiene índice y copias en SU espacio y los tres endpoints resuelven al
+dueño con `principalOf(req)`, así que solo lista y opera su propia papelera:
+`GET /api/chat/trash`, `POST /api/chat/trash/restore {id}` y
+`POST /api/chat/trash/purge {id}`. La ruta se deriva POR OPERACIÓN desde
+`owner`, nunca queda congelada en una constante de módulo: es exactamente la
+lección multi-tenant de `console:BUG-2185`/`console:PLAN-2186`.
+
+DURABILIDAD Y LÍMITES: `trashChat` tolera que `close()` se invoque más de una
+vez y no duplica una entrada del mismo `chatId` creada hace menos de 5 minutos.
+Primero crea el directorio y escribe SINCRÓNICAMENTE `meta.json` + `index.json`
+con `hasTranscript:false`/`hasAttachments:false`; recién después intenta las
+copias, de modo que una falla de I/O puede dejar una copia incompleta pero NUNCA
+hacer desaparecer el registro. El SDK puede no haber flusheado todavía el
+`.jsonl` en el instante del cierre, por lo que `hasTranscript` puede nacer
+legítimamente en `false`: `listChatTrash` hace REPARACIÓN PEREZOSA y vuelve a
+copiarlo si el original ya apareció. Se eligió ese punto durable de reintento en
+vez de un `setTimeout`, que dejaría trabajo colgado de la vida del proceso y
+violaría la Regla dura 2. Antes de copiar adjuntos se mide recursivamente su
+tamaño; si supera 200 MB se marca `attachmentsSkipped`, se conserva el
+transcript y se evita que un paquete gigante llene el disco en silencio. La
+retención está fijada por `CHAT_TRASH_TTL_DAYS = 30`: se purgan vencidos al
+arrancar `init()` —recorriendo host e inquilinos conocidos— y cada vez que el
+dueño lista su papelera, SIN timers ni promesas vivas.
+
+RESTAURAR está deliberadamente dividido en dos capas. El backend repone
+transcript y adjuntos SOLO si ya no existen en sus rutas originales, elimina la
+entrada de la papelera y devuelve
+`{sessionId,cwd,title,model,permissionMode,ticket}`; NO reabre el chat. El
+frontend toma esos datos y llama después a `POST /api/chat/create` con
+`resume:sessionId`: menos acoplamiento entre almacenamiento y ciclo de vida de
+la conversación. En el header del panel Sesiones, el botón 🗑 abre un modal con
+entradas colapsables (`<details>`), días restantes, «Restaurar» y «Eliminar ya»;
+esta última exige confirmación y purga de forma irreversible. FUERA DE ALCANCE
+por decisión explícita de Niko: las sesiones tmux NO entran en esta papelera;
+«Matar sesión» sigue siendo irreversible. NO CONFUNDIR con
+`src/core/trash.js`, que implementa la papelera de ARCHIVOS del Explorador:
+comparte el TTL de 30 días, pero es otra cosa.
+
+ADUANA — sala colaborativa multiusuario en suelo neutral (`console:PLAN-2198`,
+2026-07-28, pedido de Niko). Varias personas comparten UN chat, hablan entre
+ellas sin gastar tokens y cualquiera decide cuándo llamar a la IA. `aduana.js`
+le da raíz propia en `~/.cwc-aduana/salas/<salaId>`: `safeSalaId` aplica una
+whitelist y la contención se prueba con `path.relative`, nunca con `startsWith`.
+La conversación humana se guarda en el log append-only `sala.jsonl`, operado
+por `appendSay`/`appendCut`/`readSala`/`pruneSala`, porque esos mensajes NO viven
+en el transcript del SDK: el SDK solo conoce sus propios turnos y, sin este log,
+la conversación se evaporaría cuando el chat se duerme (Regla dura 2).
+`appendSay` y `appendCut` usan `appendFileSync` a propósito, no el tmp+rename de
+`CONVE-5`: reescribir el archivo entero por cada mensaje append-only sería
+absurdo. `pruneSala` SÍ usa tmp+rename porque ahí sí reemplaza el conjunto
+completo.
+
+LOS DOS CANALES son deliberadamente distintos. `say()` difunde y persiste, pero
+NUNCA toca el motor: cuesta 0 tokens y permite que dos personas escriban a la
+vez sin esperar turno. `cut()`/`_dispatchCut()` es la ÚNICA vía al SDK. El corte
+es MANUAL por decisión de Niko y reemplazó una ventana de fusión automática de
+4–8 s que se estuvo diseñando: si dos personas cortan casi a la vez, el segundo
+encuentra `_sinceCut` ya vaciado y es un no-op. La colisión de invocaciones
+DESAPARECE por construcción en vez de arbitrarse con una cola, y no quedan
+timers colgados del proceso (Regla dura 2). Este punto de control vive en
+`Chat`, NO en el runner: `bin/cwc-chat-runner.js` hace `input.push()` sobre la
+cola del SDK y después de ese push ya no se puede inspeccionar, reordenar ni
+fusionar nada.
+
+CORTE PENDIENTE Y REPLAY: si la IA está ocupada, el corte queda en `_cutPending`
+y `_setStatus('waiting')` lo despacha ante el evento REAL de fin de turno, sin
+`setTimeout`; el pendiente se limpia ANTES de despachar para no recursar.
+`_rebuildSalaHistory()` reconstruye el hilo usando los `cut` como anclas: cada
+corte disparó exactamente un turno, por lo que el turno k del transcript va
+después del corte k; cualquier sobrante va al final en vez de romper el render.
+
+LAS CUATRO COMPUERTAS conservan la frontera por dueño. `ownedChat` quedó
+INTACTO para las acciones de dueño y se sumó `participantChat` para las
+acciones de participar; cambiaron el guard del WS, `list(principal)` y el
+vaciado de `pendingPerms`. **Compartido ≠ ajeno**: el aislamiento del
+2026-07-27 sigue intacto y se abre SOLO la sala en la que el usuario figura
+como participante. Interrumpir y responder permisos corresponde a quien hizo
+el corte (`_lastCutBy`) y al dueño; cambiar modelo/modo/effort, invitar y
+revocar corresponde solo al dueño, porque él paga los turnos.
+
+IDENTIDAD VISUAL: `--cwc-peer-1…6` se asigna por HASH del username, nunca por
+una lista cableada, de modo que un usuario nuevo entra sin tocar código. Los
+rótulos de hora se formatean siempre en la zona de QUIEN MIRA, nunca en la del
+server.
+
 ## Gotchas de esta carpeta
 
 - Arranque multi-tenant: el runner de un INQUILINO nace con el env limpio de

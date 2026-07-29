@@ -203,15 +203,17 @@ export function decideUpAxis({ hard = false, level = -1, effortIndex = -1, lastC
 }
 
 // F4 (PEND-405): presión de la ventana de rate-limit (0 tokens — solo lee el
-// snapshot plan-limits.json que el módulo tokens persiste). Devuelve el % MÁXIMO
-// usado entre las ventanas (sesión 5h / semanal), 0..100, o null si no hay dato.
-// El router se pone conservador (decideUpAxis conserve) cuando supera el umbral,
-// porque el objetivo real (#5) es no QUEMAR esa ventana.
+// snapshot plan-limits.json que el módulo tokens persiste). El llamador pasa el
+// data-dir del dueño; sin argumento conserva el archivo del HOST. Este núcleo NO
+// importa user-space a propósito: también lo consume bin/cwc-test-model-router.js.
+// Devuelve el % MÁXIMO usado entre las ventanas (sesión 5h / semanal), 0..100, o
+// null si no hay dato. El router se pone conservador al superar el umbral.
 const PLAN_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'plan-limits.json');
 export const WINDOW_PRESSURE_CONSERVE = 75; // ≥75% usado ⇒ conservar (effort, no tier)
-export function readWindowPressure() {
+export function readWindowPressure(dataDir = null) {
   try {
-    const obj = JSON.parse(fs.readFileSync(PLAN_LIMITS_FILE, 'utf8'));
+    const file = dataDir ? path.join(dataDir, 'plan-limits.json') : PLAN_LIMITS_FILE;
+    const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!obj || !Array.isArray(obj.limits)) return null;
     const pcts = obj.limits.map((l) => (typeof l.percent === 'number' ? l.percent : null)).filter((p) => p != null);
     return pcts.length ? Math.max(...pcts) : null;

@@ -18,6 +18,9 @@ import {
 } from '../../core/pad-service-client.js';
 import { readVerifyState, verifyForLesson } from './verify-shared.js';
 import { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-shared.js';
+import {
+  isShareOptedOut, isUnsharedFingerprint, shareLessonToPool,
+} from './pool.js';
 
 const COLLECTION = 'mejora-continua';
 // Sol de cada lección según su categoría: los 7 buckets `MC · *` de la
@@ -77,6 +80,28 @@ async function linkLessonToSun(ref, category, ctx) {
     if (!linkR?.ok) console.error('[retro] no pude enlazar la lección a su sol en Pad:', linkR?.error || linkR);
   } catch (err) {
     console.error('[retro] no pude enlazar la lección a su sol en Pad:', err?.message || err);
+  }
+}
+
+// Publicación automática al pozo COMÚN (console:PLAN-2222, C3). Best-effort y
+// aislada: el pozo es accesorio y JAMÁS puede romper la destilación — mismo
+// criterio que linkLessonToSun.
+async function shareTolkienLesson(lesson, ctx, sharedCtx) {
+  try {
+    if (lesson?.project !== 'tolkien' || !sharedCtx) return;
+    if (isShareOptedOut() || isUnsharedFingerprint(lesson.fingerprint)) return;
+    // No importamos core/user-space.js: store.js también corre en bin/ con env
+    // limpio y ese import arrastraría core/config.js (console:PLAN-2186). El
+    // workspace ya contiene la identidad necesaria y `console`/ctx nulo son host.
+    const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
+    const sharedBy = tenant ? tenant[1] : 'host';
+    const result = await shareLessonToPool(lesson, sharedCtx, {
+      sharedBy,
+      sharedFrom: lesson.id,
+    });
+    if (!result?.ok) console.error('[retro] no pude publicar la lección en el pozo común:', result?.error || result);
+  } catch (err) {
+    console.error('[retro] no pude publicar la lección en el pozo común:', err?.message || err);
   }
 }
 
@@ -260,7 +285,7 @@ export async function getLesson(id, ctx = null) {
 // recurrencia + registra el chat de origen (NO duplica, NO resucita el estado:
 // una lección ya descartada sigue descartada pero su contador crece = señal de
 // "esto sigue pasando"). Lo llama el runner tras destilar.
-export async function upsertLesson(input = {}, ctx = null) {
+export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
   const title = clampStr(input.title, 200).trim() || 'Lección sin título';
   const category = oneOf(input.category, CATS, 'nota');
   const fingerprint = input.fingerprint || computeFingerprint(category, title);
@@ -282,35 +307,52 @@ export async function upsertLesson(input = {}, ctx = null) {
       const chats = parseJsonField(f.sourceChats, []);
       if (src && !chats.some((c) => c.sessionId && c.sessionId === src.sessionId)) chats.unshift(src);
       const mergedRefs = normRefs([...parseJsonField(f.sourceRefs, []), ...refs]);
-      const r = await updateItem(existing.ref, { fields: { ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50), sourceRefs: mergedRefs } }, { ctx });
+      const updatedFields = {
+        ...f, recurrence: String(rec), sourceChats: chats.slice(0, 50), sourceRefs: mergedRefs,
+      };
+      const r = await updateItem(existing.ref, { fields: updatedFields }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
       appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` });
       // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
       await linkLessonToSun(existing.ref, f.category || category, ctx);
       const fresh = await getItem(existing.ref, { ctx });
-      return { created: false, lesson: lessonFromPadItem(fresh.ok ? fresh.data : existing, readVerifyState()) };
+      const lesson = lessonFromPadItem(
+        fresh.ok ? fresh.data : { ...existing, fields: updatedFields },
+        readVerifyState(),
+      );
+      await shareTolkienLesson(lesson, ctx, sharedCtx);
+      return { created: false, lesson };
     }
 
+    const content = bodyOf(input.observation, input.lesson);
+    const fields = {
+      status: 'propuesta',
+      category,
+      project: oneOf(input.project, PROJS, 'otros'),
+      destination: oneOf(input.destination, DESTS, 'registro'),
+      recurrence: '1',
+      confidence: oneOf(input.confidence, CONFS, 'media'),
+      fingerprint,
+      sourceChats: src ? [src] : [],
+      sourceRefs: refs,
+    };
     const r = await createItem(COLLECTION, {
       title,
-      content: bodyOf(input.observation, input.lesson),
-      fields: {
-        status: 'propuesta',
-        category,
-        project: oneOf(input.project, PROJS, 'otros'),
-        destination: oneOf(input.destination, DESTS, 'registro'),
-        recurrence: '1',
-        confidence: oneOf(input.confidence, CONFS, 'media'),
-        fingerprint,
-        sourceChats: src ? [src] : [],
-        sourceRefs: refs,
-      },
+      content,
+      fields,
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
     appendActivity({ kind: 'nueva', refId: r.data.ref, title });
     await linkLessonToSun(r.data.ref, category, ctx);
     const fresh = await getItem(r.data.ref, { ctx });
-    return { created: true, lesson: lessonFromPadItem(fresh.ok ? fresh.data : r.data, readVerifyState()) };
+    const lesson = lessonFromPadItem(
+      fresh.ok ? fresh.data : {
+        ...r.data, ref: r.data.ref, title, content, fields,
+      },
+      readVerifyState(),
+    );
+    await shareTolkienLesson(lesson, ctx, sharedCtx);
+    return { created: true, lesson };
   });
 }
 

@@ -40,20 +40,33 @@ let inFlight = null;    // promesa de carga en curso (dedup de requests concurre
 // resultados EN ORDEN, y los errores por item no tumban el lote (se capturan como
 // {__error}). El techo se fija en `n` (max=start=min) para NO cambiar la carga a
 // Zoho (rate-limit): la concurrencia base es idéntica a la anterior; lo que se
-// GANA es el back-off adaptativo cuando Zoho tira 429/overload (ctl.backoff()).
-const RATE_LIMIT_RE = /429|rate.?limit|too many|overload/i;
-async function pool(items, n, fn) {
+// GANA es el back-off adaptativo cuando Zoho tira 429/overload/timeout (ctl.backoff()).
+//
+// RETRY (BUG-2188, 2026-07-28): medido en vivo que ~16% de los enrich de una
+// pasada real (145 tickets) fallaban por `timeout MCP: desk_get_ticket` (20s,
+// CALL_TIMEOUT_MS de desk-mcp-client.js) bajo la concurrencia agregada de las
+// DOS departamentos juntas — y se descartaban SIN reintento ni aviso, así que
+// un ticket real (p.ej. recién creado) desaparecía del dashboard esa vuelta.
+// Cada item ahora reintenta hasta ENRICH_RETRIES veces ANTES de rendirse; el
+// backoff de la 1ª falla ya pausa nuevos lanzamientos (15s) y baja la
+// concurrencia, así que el reintento cae con menos presión sobre Zoho.
+const OVERLOAD_RE = /429|rate.?limit|too many|overload|timeout/i;
+const ENRICH_RETRIES = 2;
+async function pool(items, n, fn, { retries = 0 } = {}) {
   const out = new Array(items.length);
   // Índice estable por item: runAdaptivePool no garantiza orden de finalización,
   // así que se guarda el idx original con cada item para escribir en su casillero.
   const indexed = items.map((item, idx) => ({ item, idx }));
   await runAdaptivePool(indexed, async ({ item, idx }, ctl) => {
-    try { out[idx] = await fn(item, idx); }
-    catch (err) {
-      const msg = String(err?.message || err);
-      if (RATE_LIMIT_RE.test(msg)) ctl.backoff(); // señal de sobrecarga → baja la concurrencia
-      out[idx] = { __error: msg, item };
+    let lastMsg = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try { out[idx] = await fn(item, idx); return; }
+      catch (err) {
+        lastMsg = String(err?.message || err);
+        if (OVERLOAD_RE.test(lastMsg)) ctl.backoff(); // señal de sobrecarga → baja la concurrencia
+      }
     }
+    out[idx] = { __error: lastMsg, item }; // se rindió tras `retries` reintentos
   }, { min: n, start: n, max: n });
   return out;
 }
@@ -73,10 +86,17 @@ async function loadFresh() {
 
   // 3) Enriquecer sólo esos (customFields + modifiedTime + closedTime).
   //    getTicketState acepta el ID interno directo (no re-resuelve).
-  const enriched = await pool(toEnrich, ENRICH_CONCURRENCY, (s) => getTicketState(s.id));
+  const enriched = await pool(toEnrich, ENRICH_CONCURRENCY, (s) => getTicketState(s.id), { retries: ENRICH_RETRIES });
   const tickets = enriched.filter((t) => t && t.found && !t.__error);
+  // Los que siguen fallando TRAS los reintentos: se conservan sus números para
+  // que cacheInfo() los exponga (antes desaparecían sin dejar rastro, BUG-2188).
+  const failed = enriched.filter((t) => t && t.__error).map((t) => t.item?.ticketNumber).filter(Boolean);
+  if (failed.length) console.error(`[tickets] ${failed.length} ticket(s) no se pudieron enriquecer esta pasada (#${failed.join(', #')})`);
 
-  return { at: Date.now(), tickets, totalListed: allStubs.length, enrichedCount: tickets.length };
+  return {
+    at: Date.now(), tickets, totalListed: allStubs.length, enrichedCount: tickets.length,
+    failedCount: failed.length, failedNumbers: failed,
+  };
 }
 
 // Devuelve los tickets enriquecidos (todos los depts), usando el cache si está
@@ -287,6 +307,10 @@ export function cacheInfo() {
     at: cache?.at ?? null,
     count: cache?.tickets?.length ?? 0,
     totalListed: cache?.totalListed ?? null,
+    // BUG-2188: cuántos tickets se cayeron de la última pasada (timeout tras
+    // los reintentos) — antes invisible, un ticket real podía faltar sin rastro.
+    failedCount: cache?.failedCount ?? 0,
+    failedNumbers: cache?.failedNumbers ?? [],
     ttlMs: CACHE_TTL_MS,
   };
 }

@@ -18,7 +18,13 @@
   para que un chat cerrado/olvidado no se atribuya como "Motores headless" en
   el panel de Uso (fable/opus fantasma, hallazgo de la Optimización IA
   2026-07-05; backfill histórico one-time hecho desde los logs de
-  ~/.cwc-data/chats/*.log) —, sockets/logs de runners, caché
+  ~/.cwc-data/chats/*.log) —, `chat-trash/` PAPELERA DE CONVERSACIONES bajo el
+  data-dir de CADA dueño (`~/.cwc-data/` para el host y el espacio propio del
+  inquilino): `chat-trash/index.json` + una carpeta
+  `chat-trash/<trashId>/` por entrada con `meta.json`,
+  `transcript/<sid>.jsonl` y `attachments/`; retención 30 días
+  (`CHAT_TRASH_TTL_DAYS`), con purga de vencidos al arrancar el módulo y al
+  listar la papelera —, sockets/logs de runners, caché
   tickets/salud — incluida `triage-cache.json`, caché INCREMENTAL por ticket
   del triage (fingerprint status+subject + TTL 12 h; borrarla solo fuerza
   un triage completo) —, `desk-live/<ticket>.json` resultado de la consulta a Zoho Desk
@@ -120,4 +126,3 @@
   `~/.cwc-backups/`, `~/.cwc-trash/`, `~/.cwc-state/`
   (observador — OJO: `claude-state.js` PODA todo .json de `~/.cwc-state` sin
   `ts` fresco; nunca guardar ahí nada ajeno al observador)
-

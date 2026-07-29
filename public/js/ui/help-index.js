@@ -22,6 +22,17 @@ export const HELP_INDEX = [
     load: () => import('./../modules/chat/help.js'),
   },
   {
+    id: 'sala',
+    get title() { return t('chat.help.sala.indexTitle', 'Sala de Aduana'); },
+    icon: 'sparkle',
+    group: 'trabajo',
+    get blurb() { return t('chat.help.sala.indexBlurb', 'Conversación compartida, cortes, participantes y consumo de tokens.'); },
+    load: async () => {
+      const topic = await import('./../modules/chat/help.js');
+      return { default: topic.salaHelp };
+    },
+  },
+  {
     id: 'sessions',
     get title() { return t('core.help.topic.sessions.title', 'Sesiones'); },
     icon: 'terminal',

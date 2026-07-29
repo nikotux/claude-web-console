@@ -9,11 +9,17 @@
 //   GET  /api/retro                 -> { lessons, counts }
 //   GET  /api/retro/activity        -> { events }
 //   GET  /api/retro/targets         -> { targets }   (destinos de promoción cableados)
+//   GET  /api/retro/share-optout    -> { optOut }
+//   POST /api/retro/share-optout    -> { optOut }
+//   GET  /api/retro/pool            -> { lessons, counts }
+//   POST /api/retro/pool/adopt-all  -> { ok, adopted, alreadyHad, failed, errors, total }
+//   POST /api/retro/pool/:ref/adopt -> { ok, lesson, created }
 //   GET  /api/retro/hygiene         -> hallazgos determinísticos (0 tokens)
 //   POST /api/retro/hygiene/apply   -> { deleted, skipped } (ADMIN)
 //   POST /api/retro/verify          -> { status }    (ADMIN; dispara medidor 0 tokens)
 //   GET  /api/retro/verify          -> { status, progress, summary, lessons, ... }
 //   GET  /api/retro/:id             -> { lesson }
+//   POST /api/retro/:id/unshare     -> { ok, removed, remaining }
 //   POST /api/retro/:id/approve     -> { lesson }   (status 'aprobada')
 //   POST /api/retro/:id/dismiss     -> { lesson }   (status 'descartada')
 //   POST /api/retro/:id/promote {target?,kind?,match?,contract?,rule?} -> { lesson }   (ADMIN; target ∈ memoria|claude-md|contexto|convencion|contrato|invariante)
@@ -29,16 +35,17 @@
 //   GET  /api/retro/email-scan                       -> { items, scannedAt, running, ... }
 //   POST /api/retro/teams-refresh                     -> { status }     (escaneo del DM de Teams con 'chris')
 //   GET  /api/retro/teams-scan                        -> { items, scannedAt, running, ... }
-// OJO ORDEN: las literales /activity, /targets, /hygiene, /verify, /feedback,
-// /email-*, /teams-* van ANTES de la paramétrica /:id.
+// OJO ORDEN: las literales /activity, /targets, /share-optout, /pool, /hygiene,
+// /verify, /feedback, /email-*, /teams-* van ANTES de la paramétrica /:id.
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { reqPadContext } from '../../core/pad-context.js';
+import { reqPadContext, reqSharedPadContext } from '../../core/pad-context.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import { deleteItem as padDeleteItem } from '../../core/pad-service-client.js';
 import { hardRulesText } from '../health/shared.js';
 import {
   listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted,
-  mergeLessons, upsertLesson, setDestination,
+  mergeLessons, upsertLesson, setDestination, MC_ID_RE,
 } from './store.js';
 import { PROMOTE_TARGETS, promote, applicableTargetsFor, targetBlockReason } from './promote-shared.js';
 import {
@@ -56,12 +63,72 @@ import {
   SWEEP_EVERY_MS, SWEEP_BOOT_DELAY_MS, isSweepRunning, spawnRetroSweepRunner,
 } from './sweep-shared.js';
 import { scanHygiene } from './hygiene-shared.js';
+import {
+  isShareOptedOut, setShareOptOut, markUnsharedFingerprint, unshareLessonFromPool,
+  listPoolLessons, getPoolLesson,
+} from './pool.js';
 
 function sendErr(res, e) {
   if (e?.badRequest) return res.status(400).json({ error: e.message });
   if (e?.notFound) return res.status(404).json({ error: e.message });
   if (e?.conflict) return res.status(409).json({ error: e.message });
   return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+}
+
+function sharedByForContext(ctx) {
+  const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
+  return tenant ? tenant[1] : 'host';
+}
+
+function lessonPartsFromBody(content) {
+  const body = String(content || '').trim();
+  const marker = '**Lección:**';
+  const markerAt = body.indexOf(marker);
+  if (markerAt < 0) return { observation: '', lesson: body };
+  return {
+    // Es el inverso tolerante del bodyOf de store.js: conserva el formato
+    // canónico sin guardar las etiquetas Markdown dentro de cada parte.
+    observation: body.slice(0, markerAt).replace(/^\*\*Observación:\*\*\s*/, '').trim(),
+    lesson: body.slice(markerAt + marker.length).trim(),
+  };
+}
+
+async function poolLessonsForOwner(pooledLessons, ctx) {
+  const { lessons: own } = await listLessons(ctx);
+  const ownFingerprints = new Set(own.map((lesson) => lesson.fingerprint).filter(Boolean));
+  const userId = sharedByForContext(ctx);
+  return pooledLessons.map((lesson) => ({
+    ...lesson,
+    mine: lesson.sharedBy.includes(userId),
+    adopted: ownFingerprints.has(lesson.fingerprint),
+  }));
+}
+
+function isPoolLessonAdoptable(lesson) {
+  // Un único criterio alimenta tanto el contador visible como la adopción real:
+  // así el lote nunca promete una selección distinta de la que luego trae.
+  return !lesson.mine && !lesson.adopted;
+}
+
+function adoptionInputFromPoolLesson(poolLesson) {
+  const parts = lessonPartsFromBody(poolLesson.content);
+  return {
+    title: poolLesson.title,
+    category: poolLesson.category,
+    observation: parts.observation,
+    lesson: parts.lesson,
+    project: 'tolkien',
+    destination: poolLesson.destination,
+    confidence: poolLesson.confidence,
+    sourceRefs: poolLesson.sourceRefs,
+    fingerprint: poolLesson.fingerprint,
+  };
+}
+
+function adoptPoolLesson(poolLesson, ctx) {
+  // El tercer argumento queda deliberadamente en null: traer una copia al
+  // registro propio no debe republicarla ni inflar la recurrencia del pozo.
+  return upsertLesson(adoptionInputFromPoolLesson(poolLesson), ctx, null);
 }
 
 export default {
@@ -125,6 +192,116 @@ export default {
     r.get('/targets', (req, res) => {
       try { res.json({ targets: PROMOTE_TARGETS }); }
       catch (e) { sendErr(res, e); }
+    });
+
+    // Deben ir antes de /:id: Express interpretaría "share-optout" como un MC
+    // y la válvula quedaría inaccesible. El dataDir se deriva del principal en
+    // cada request para que el server no congele ni mezcle el estado del host.
+    r.get('/share-optout', (req, res) => {
+      try { res.json({ optOut: isShareOptedOut(systemScopeFor(req).dataDir) }); }
+      catch (e) { sendErr(res, e); }
+    });
+
+    r.post('/share-optout', (req, res) => {
+      try {
+        if (typeof req.body?.optOut !== 'boolean') {
+          return res.status(400).json({ error: 'optOut debe ser booleano.' });
+        }
+        const optOut = setShareOptOut(req.body.optOut, systemScopeFor(req).dataDir);
+        return res.json({ optOut });
+      } catch (e) { return sendErr(res, e); }
+    });
+
+    // Las rutas del pozo deben preceder a /:id: "pool" es un segmento literal,
+    // no una referencia MC del registro propio.
+    r.get('/pool', async (req, res) => {
+      try {
+        const ctx = reqPadContext(req);
+        const pooled = await listPoolLessons(reqSharedPadContext(req));
+        if (!pooled.ok) {
+          // El pozo es una ayuda comunitaria, no una dependencia del tablero.
+          return res.json({
+            lessons: [],
+            counts: { total: 0, mine: 0, adoptable: 0 },
+            unavailable: true,
+          });
+        }
+
+        const lessons = await poolLessonsForOwner(pooled.lessons, ctx);
+        return res.json({
+          lessons,
+          counts: {
+            total: lessons.length,
+            mine: lessons.filter((lesson) => lesson.mine).length,
+            adoptable: lessons.filter(isPoolLessonAdoptable).length,
+          },
+        });
+      } catch (e) { return sendErr(res, e); }
+    });
+
+    // Debe preceder a /pool/:ref/adopt: de otro modo Express tomaría
+    // "adopt-all" como :ref. Usa auth normal, no admin, porque cada principal
+    // sólo escribe en SU registro y no altera el registro de otro usuario.
+    r.post('/pool/adopt-all', async (req, res) => {
+      try {
+        const ctx = reqPadContext(req);
+        const pooled = await listPoolLessons(reqSharedPadContext(req));
+        if (!pooled.ok) {
+          // El pozo es accesorio: su indisponibilidad nunca rompe al caller.
+          return res.json({ ok: false, unavailable: true, adopted: 0 });
+        }
+
+        const lessons = await poolLessonsForOwner(pooled.lessons, ctx);
+        const adoptable = lessons.filter(isPoolLessonAdoptable);
+        let adopted = 0;
+        let alreadyHad = lessons.length - adoptable.length;
+        const errors = [];
+
+        // Secuencial a propósito: cada upsert toma un lock de archivo y Pad
+        // aplica rate-limit. Un fallo aislado se informa y no frena el resto.
+        for (const lesson of adoptable) {
+          try {
+            const result = await adoptPoolLesson(lesson, ctx);
+            if (result.created) adopted += 1;
+            else alreadyHad += 1; // cubre una adopción concurrente tras el listado
+          } catch (err) {
+            errors.push({
+              ref: lesson.ref,
+              error: String(err?.message || err).slice(0, 300),
+            });
+          }
+        }
+
+        // Ley 6 de Aduana (Regla dura 16): adoptar en lote baja la fricción de
+        // TRAER, nunca la de APLICAR. upsertLesson crea propuestas; promover a
+        // memoria/claude-md/contexto/contrato/invariante sigue siendo humano.
+        return res.json({
+          ok: true,
+          adopted,
+          alreadyHad,
+          failed: errors.length,
+          errors,
+          total: lessons.length,
+        });
+      } catch (e) { return sendErr(res, e); }
+    });
+
+    r.post('/pool/:ref/adopt', async (req, res) => {
+      try {
+        const ref = String(req.params.ref || '');
+        if (!MC_ID_RE.test(ref)) return res.status(400).json({ error: 'Id inválido.' });
+        const pooled = await getPoolLesson(ref, reqSharedPadContext(req));
+        if (!pooled.ok || !pooled.lesson) {
+          return res.status(404).json({ error: pooled.error || 'Lección del pozo inexistente.' });
+        }
+
+        const ctx = reqPadContext(req);
+        // Ley 6 de Aduana (Regla dura 16): un aporte ajeno es dato, no
+        // instrucción. La copia nace propuesta y sólo el dueño humano del
+        // destino puede promoverla; esta ruta jamás toca ningún destino.
+        const adopted = await adoptPoolLesson(pooled.lesson, ctx);
+        return res.json({ ok: true, lesson: adopted.lesson, created: adopted.created });
+      } catch (e) { return sendErr(res, e); }
     });
 
     // ===== Feedback de Chris: ingesta MANUAL (pegar correo/Teams/llamada) =====
@@ -250,7 +427,7 @@ export default {
           return res.json({ lesson: await setDestination(String(b.id || ''), destination, ctx) });
         }
         if (action === 'consolidate') {
-          const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' }, ctx);
+          const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' }, ctx, reqSharedPadContext(req));
           for (const mid of (Array.isArray(b.ids) ? b.ids : [])) {
             if (mid === created.lesson.id) continue; // si el dedup reusó una fuente, NO borres la consolidada (bug de pérdida de datos)
             try { await deleteLesson(mid, ctx); } catch { /* noop */ }
@@ -332,6 +509,27 @@ export default {
         res.json({ lesson: await getLesson(req.params.id, ctx) });
       }
       catch (e) { sendErr(res, e); }
+    });
+
+    // Cada principal sólo retira SU aporte: el pozo conserva la lección mientras
+    // queden otros donantes. El veto durable evita que una redestilación futura
+    // deshaga silenciosamente la decisión humana.
+    r.post('/:id/unshare', async (req, res) => {
+      try {
+        const ctx = reqPadContext(req);
+        const lesson = await getLesson(req.params.id, ctx);
+        const result = await unshareLessonFromPool(
+          lesson.fingerprint,
+          reqSharedPadContext(req),
+          { sharedBy: sharedByForContext(ctx) },
+        );
+        markUnsharedFingerprint(lesson.fingerprint, systemScopeFor(req).dataDir);
+        res.json({
+          ok: !!result?.ok,
+          removed: !!result?.removed,
+          remaining: Number(result?.remaining) || 0,
+        });
+      } catch (e) { sendErr(res, e); }
     });
 
     r.post('/:id/approve', async (req, res) => {

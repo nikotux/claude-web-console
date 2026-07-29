@@ -12,7 +12,7 @@
 // provisioning lazy que llena ese token.)
 import { readUserPadToken, userPadWorkspace, hostUser } from './user-space.js';
 import { principalOf } from './auth.js';
-import { provisionUserPad } from './pad-provision.js';
+import { provisionUserPad, SHARED_WORKSPACE, readHostPadToken } from './pad-provision.js';
 
 // MISMA URL que usan pad-service-client.js y pad-provision.js.
 const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
@@ -26,6 +26,23 @@ export function padContextForUser(userId) {
     url: PAD_URL,
     token: readUserPadToken(userId, PAD_URL), // puede ser null si aún no provisionado (ver contrato)
     workspace: userPadWorkspace(userId),
+  };
+}
+
+// Ctx del POZO COMÚN (console:PLAN-2222). A diferencia de padContextForUser,
+// SIEMPRE devuelve un ctx con workspace explícito — también para el host, que
+// si no caería al default `console` de pad-service-client.
+// FAIL-CLOSED: un inquilino sin token propio viaja con token:null y la op falla
+// limpio (403). NUNCA se cae al token del host: una donación escrita con la
+// credencial de Niko falsearía la autoría (C2/C5 del plan).
+export function sharedPadContextForUser(userId) {
+  if (!userId || userId === hostUser()) {
+    return { url: PAD_URL, token: readHostPadToken(), workspace: SHARED_WORKSPACE };
+  }
+  return {
+    url: PAD_URL,
+    token: readUserPadToken(userId, PAD_URL),
+    workspace: SHARED_WORKSPACE,
   };
 }
 
@@ -58,5 +75,15 @@ export function reqPadContext(req) {
   // background (dedup + cooldown). ctx tiene su workspace tenant-* igual, así que
   // este request falla limpio (403/sin token) sin contaminar el Pad del host.
   if (ctx && !ctx.token) maybeLazyProvision(userId);
+  return ctx;
+}
+
+// El pozo comparte workspace, no identidad: conserva la credencial del principal
+// y sólo dispara el mismo provisioning lazy cuando falta la del inquilino.
+export function reqSharedPadContext(req) {
+  const p = principalOf(req);
+  const userId = p?.username || null;
+  const ctx = sharedPadContextForUser(userId);
+  if (userId && userId !== hostUser() && !ctx.token) maybeLazyProvision(userId);
   return ctx;
 }

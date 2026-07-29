@@ -320,6 +320,7 @@ function checkFichasModulo() {
 const CROSS_WORLD_ALLOW = new Set([
   'src/core/bus.js',                       // interfono: etiqueta el MUNDO de una sesión por su cwd (PLAN-469), no cruza datos
   'src/core/worlds.js',                    // fuente ÚNICA de worldLabelFor(cwd): etiqueta el MUNDO de un cwd comparando paths, no cruza datos (extraído de bus.js + chat/index.js, que tenían copias divergentes)
+  'src/modules/health/invariants.js',      // solo TEXTOS de auditoría: la familia «Aduana — suelo neutral» NOMBRA config.projectDir para PROHIBIR que una sala lo use como cwd (Regla 16); no lee ni escribe nada de otro mundo
   'src/modules/chat/index.js',             // EL canal del paquete-sesión (handoff/worldLabelFor) — canónico
   'src/modules/tickets/context-store.js',  // syncToTolkien → CLAUDE.local.md
   'src/modules/tickets/index.js',

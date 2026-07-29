@@ -111,6 +111,36 @@ export default function retroHelp() {
         ],
       },
       {
+        title: t('retro.pool.help.title', '🌍 De la comunidad'),
+        blocks: [
+          {
+            type: 'note',
+            text: t('retro.pool.help.what', 'El pozo reúne lecciones de proceso que otras personas compartieron. Publicar es automático únicamente para lecciones de Tolkien, salvo que apagues el interruptor.'),
+          },
+          {
+            type: 'kv',
+            items: [
+              {
+                k: t('retro.pool.help.adopt.k', '👍 Adoptar'),
+                v: t('retro.pool.help.adopt.v', 'Siempre es manual: nada que venga de otra persona se aplica solo a tu registro ni a tus destinos de trabajo.'),
+              },
+              {
+                k: t('retro.pool.help.adoptAll.k', '👍 Adoptar todas (N)'),
+                v: t('retro.pool.help.adoptAll.v', 'Trae como propuestas solo las lecciones que no son tuyas ni tenés ya. Adoptar no es aplicar: cada lección queda en tu lista y vos decidís después su destino.'),
+              },
+              {
+                k: t('retro.pool.help.recurrence.k', 'le pasó a N'),
+                v: t('retro.pool.help.recurrence.v', 'Indica cuántas personas o veces vivieron la misma lección; un número mayor ayuda a reconocer patrones compartidos.'),
+              },
+              {
+                k: t('retro.pool.help.unshare.k', 'Retirar del pozo'),
+                v: t('retro.pool.help.unshare.v', 'Retira tu donación sin borrar tu lección. La decisión vale hacia adelante: no vuelve a publicarse sola, aunque después podés compartir una versión futura.'),
+              },
+            ],
+          },
+        ],
+      },
+      {
         title: t('retro.help.buttons.title', 'Botones y acciones'),
         wide: true,
         blocks: [

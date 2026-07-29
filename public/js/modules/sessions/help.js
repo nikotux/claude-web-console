@@ -100,6 +100,10 @@ export default function sessionsHelp() {
                 v: t('sessions.help.buttons.refresh.v', 'Vuelve a consultar sesiones y trabajos sin iniciar una tarea de IA ni consumir tokens.'),
               },
               {
+                k: t('sessions.help.buttons.trash.k', 'Papelera'),
+                v: t('sessions.help.buttons.trash.v', 'Guarda durante 30 días las conversaciones cerradas, junto con su historial y los archivos de su paquete. Restaurar vuelve a abrir la conversación con su historial.'),
+              },
+              {
                 k: t('sessions.help.buttons.jobs.k', '▸ + número'),
                 v: t('sessions.help.buttons.jobs.v', 'Despliega los subagentes y trabajos en segundo plano de esa conversación.'),
               },
@@ -125,7 +129,7 @@ export default function sessionsHelp() {
           {
             type: 'note',
             tone: 'warn',
-            text: t('sessions.help.warning.text', 'Cerrar una conversación conserva su historial para retomarla; matar una sesión tmux termina todo lo que esté corriendo adentro y puede interrumpir trabajo externo.'),
+            text: t('sessions.help.warning.text', 'Cerrar una conversación la mueve a la papelera durante 30 días. “Eliminar ya” borra definitivamente su historial y sus archivos y es irreversible; matar una sesión tmux termina todo lo que esté corriendo adentro y puede interrumpir trabajo externo.'),
           },
         ],
       },

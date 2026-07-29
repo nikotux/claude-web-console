@@ -18,6 +18,14 @@ de oro) + TEXTO PURO read-only doble capa (regla 6: sonnet, maxTurns
 herramientas; la transcripción condensada viaja en el prompt). El
 runner, tras destilar, hace el UPSERT determinístico en Pad local
 (NO es tool del modelo — HTTP desde Node, como audio escribe su job).
+`console:PLAN-2186` (2026-07-28): cerrar un chat de un INQUILINO no destilaba NINGUNA lección. `readTranscript(cwd, sessionId)` armaba la ruta
+contra `os.homedir()`, devolvía `null` para un inquilino y `queueRetroDistill` hacía un early-return SILENCIOSO — recibía el `owner`
+(lo usa para el Pad) pero nunca la ruta. Ahora `readTranscript(cwd, sessionId, claudeDir = null)` y
+`queueRetroDistill({ …, claudeDir })`; sin `claudeDir` la ruta es idéntica a la de antes (el HOME del host), así que el host no se entera.
+`retro/shared.js` NO importa `core/user-space.js` a propósito: le arrastraría `core/config.js` y su `CWC_TOKEN` a los runners de `bin/`
+que lo consumen — quien conoce al dueño (`chat/index.js`) pasa `userClaudeDir(owner || hostUser())` ya resuelto. OJO: el barrido de
+sesiones TUI (`sweep-shared.js`) sigue SIN descubrir inquilinos —usa `~/.cwc-users` sólo para EXCLUIRLOS—, así que
+`console:BUG-2151` sigue abierto tal cual; acá sólo se le pasó el `.claude` del host, que es el único que ese barrido conoce.
 STORE = Pad LOCAL (store.js, workspace 'console', colección
 'mejora-continua'/MC, molde de learning/store.js: async, read-modify-
 write). 1 lección = 1 item {status propuesta|aprobada|promovida|
@@ -385,3 +393,21 @@ también los descartados por el filtro híbrido, para converger en vez de
 reevaluarlos cada hora. LIMITACIÓN CONOCIDA y deliberada: barre solo el HOME
 del host; los transcripts TUI de inquilinos bajo
 `~/.cwc-users/<id>/.claude/projects/` quedan fuera y se cubren en otro bug.
+
+## 🩸 Pozo COMÚN entre usuarios (`console:PLAN-2222`, F1+F2 hechas 2026-07-28)
+
+Las lecciones dejaron de morir en el cajón de cada usuario. Existe un TERCER workspace de Pad —**`comunidad`**, ni `console` ni un `tenant-*`— con una sola colección `mejora-continua`, donde se agregan las lecciones de **`project: tolkien`** de TODOS los usuarios. El valor no es "ver lo del otro": es que la **recurrencia se cuenta ENTRE PERSONAS**. Antes, tres personas tropezando con lo mismo producían tres lecciones con contador 1 cada una y el semáforo se quedaba verde; ahora es UNA con contador 3.
+
+**Puente:** `pool.js` (nuevo). `shareLessonToPool(lesson, sharedCtx, {sharedBy, sharedFrom})` es idempotente por `fingerprint`: si el ítem ya está, suma el userId a `sharedBy[]` y sube `recurrence`; si el donante ya figura, es no-op. `unshareLessonFromPool(fp, sharedCtx, {sharedBy})` quita al donante y **borra el ítem solo cuando se va el último**. Los campos `sharedBy` (json) y `sharedFrom` (text) se agregaron al schema de la colección del pozo a mano — un campo fuera del schema lo RECHAZA el server de Pad con 500, mismo gotcha que `sourceRefs` en su día.
+
+**PRIVACIDAD:** `sourceChats` NUNCA cruza al pozo. Se comparte la lección destilada, no el rastro de qué conversación privada la produjo. Un cambio futuro que lo copie "para tener trazabilidad" es una fuga, no una mejora.
+
+**Disparo:** `upsertLesson(input, ctx, sharedCtx)` ganó un tercer parámetro. Publica sola tras crear O actualizar, siempre que el project efectivo sea `tolkien`, haya `sharedCtx`, no haya opt-out y el fingerprint no esté vetado. Es best-effort y aislada en su try/catch: **el pozo jamás puede romper una destilación** — mismo criterio que `linkLessonToSun`. El `sharedBy` se deriva del `ctx.workspace` del dueño (`tenant-(.+)` → ese userId; `console` o sin ctx → `'host'`) y NO de `core/user-space.js`, que le arrastraría `core/config.js` a los cuatro runners de `bin/` con env limpio (convención `console:PLAN-2186`).
+
+**Válvula de retiro (C4):** `POST /:id/unshare` (auth normal, NO admin — cada uno retira lo suyo) saca la donación propia Y marca el fingerprint en `<dataDir>/retro-unshared.json`, registro DURABLE. Sin esa marca, la próxima destilación lo republicaría en silencio. `GET`/`POST /share-optout` cortan la publicación automática por usuario, en `<dataDir>/retro-share-optout.json`. Los dos resuelven su ruta con `resolveDataDir()` POR OPERACIÓN, nunca con una constante de módulo (invariante «dato user-scoped nunca global»). OJO ORDEN: `/share-optout` es LITERAL y va ANTES de la paramétrica `/:id`.
+
+**Verificado E2E en vivo el 2026-07-28** (host + un donante simulado, con limpieza posterior): 2 donantes ⇒ 1 ítem con `recurrence: 2` y `sharedBy: ["host","rarboleda"]` · re-donar el mismo ⇒ no-op · retirar uno ⇒ queda el otro y `recurrence` baja a 1 · retirar al último ⇒ el ítem se borra · con el veto puesto, re-destilar sube la recurrencia del registro PROPIO pero **no** republica.
+
+**Lo que este pozo NO hace (y no debe hacer):** una lección ajena no se auto-aplica jamás. Adoptarla al registro propio y promoverla a `memoria`/`claude-md`/`contrato`/`invariante` sigue siendo un acto humano del dueño del destino — si no, el pozo sería un canal de inyección de prompt entre compañeros (ley 6 de Aduana, Regla dura 16). Esa adopción es `TASK-2228`, todavía pendiente junto con la vitrina del tablero.
+
+**Adopción en lote (`C11`, enmienda E1 de `console:PLAN-2222`).** `POST /pool/adopt-all` trae de una vez todas las comunitarias adoptables al registro propio. **No es admin**: cada usuario adopta sobre lo suyo, así que restringirlo al anfitrión no protegería nada y dejaría a los inquilinos sin el beneficio. Nace de una medición: de 134 lecciones de Tolkien, 32 llegan al contexto de tickets y **ninguna venía de otro usuario**, porque el puente exige dos actos humanos por lección — con 20 donaciones ajenas serían 40 clicks y el pozo moriría de abandono. Tres detalles que ya mordieron y no hay que reintroducir: (a) la ruta literal `/pool/adopt-all` va **antes** de la paramétrica `/pool/:ref/adopt`, o `:ref` la captura; (b) el criterio de «adoptable» (`isPoolLessonAdoptable`) lo comparten `GET /pool` y el lote — si divergen, el botón promete un número y adopta otro; (c) el botón vive dentro del `<summary>`, así que su handler hace `stopPropagation` o el click pliega el `<details>` además de disparar la acción. La adopción es **secuencial** a propósito (Pad tiene rate-limit y `upsertLesson` toma un lock) y un fallo individual no aborta el lote: se reporta `{adopted, alreadyHad, failed, errors[]}`. **El gate sigue intacto**: las copias nacen `propuesta` y la promoción a un destino real sigue siendo un acto humano por lección — adoptar en lote baja la fricción de TRAER, nunca la de APLICAR.

@@ -36,6 +36,7 @@ export function placeFor(p) {
 // src/modules/tolkien/env-store.js (`~/.cwc-data/tolkien-envs`), y
 // worktreePathFor(id) resuelve cada árbol como `<ENVS_DIR>/<id>/tree`.
 const TOLKIEN_ENV_RE = /^\.cwc-data\/tolkien-envs\/([A-Za-z0-9._-]+)\/tree$/;
+const ADUANA_SALA_RE = /^\.cwc-aduana\/salas\/([A-Za-z0-9._-]+)$/;
 
 export function envPlaceFor(p) {
   const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
@@ -45,8 +46,18 @@ export function envPlaceFor(p) {
     : null;
 }
 
+// A diferencia de LIMBO_PLACE, que es un ESTADO de la sesión y conserva el cwd
+// de Tolkien, Aduana sí tiene cwd real y propio; por eso se resuelve por ruta.
+export function salaPlaceFor(p) {
+  const rel = String(p || '').replace(/^\/home\/[^/]+\/?/, '').replace(/\/+$/, '');
+  const m = rel.match(ADUANA_SALA_RE);
+  return m
+    ? { rel: '__aduana', salaId: m[1], label: '🛃 Aduana', ico: 'relay', cls: 'is-aduana', sala: true }
+    : null;
+}
+
 // Resolución ampliada para superficies que deben reconocer también la capa
 // aislada; placeFor() conserva a propósito su contrato de lugares exactos.
 export function resolvePlace(p) {
-  return placeFor(p) || envPlaceFor(p);
+  return placeFor(p) || envPlaceFor(p) || salaPlaceFor(p);
 }

@@ -263,7 +263,8 @@ export function listTuiTranscripts({
 } = {}) {
   const items = [];
   const stats = { scanned: 0, viejo: 0, grande: 0, noCli: 0 };
-  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  const claudeDir = path.join(os.homedir(), '.claude');
+  const projectsDir = path.join(claudeDir, 'projects');
   const tenantsDir = path.join(os.homedir(), '.cwc-users');
   let dirs = [];
   try { dirs = fss.readdirSync(projectsDir, { withFileTypes: true }); }
@@ -304,6 +305,7 @@ export function listTuiTranscripts({
         mtimeMs: stat.mtimeMs,
         size: stat.size,
         file,
+        claudeDir,
       });
     }
   }
@@ -368,6 +370,7 @@ export async function sweepTuiTranscripts({
           sessionId: item.sessionId,
           title: item.title,
           owner: null,
+          claudeDir: item.claudeDir,
         });
       } catch { /* una sesión fallida no bloquea las demás */ }
       job = readRetroJob(retroJobId(item.sessionId));

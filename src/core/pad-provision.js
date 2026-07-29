@@ -5,11 +5,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
-import { userPadWorkspace, writeUserPadToken, readUserPadToken, userPadDir, ensureUserSpace } from './user-space.js';
+import { userPadWorkspace, writeUserPadToken, readUserPadToken, userPadDir, ensureUserSpace, userSpace } from './user-space.js';
 
 const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
 // Las 6 colecciones que los módulos de inquilino usan (se clonan de 'console').
 const TENANT_COLLECTIONS = ['pendientes', 'planes', 'temas-de-aprendizaje', 'rutas-de-aprendizaje', 'mejora-continua', 'contexto-de-tickets'];
+// Pozo COMÚN de Mejora Continua (console:PLAN-2222): workspace neutral donde
+// las lecciones de `project: tolkien` de TODOS los usuarios se agregan y suman
+// recurrencia entre personas. No es de nadie: ni `console` ni un `tenant-*`.
+export const SHARED_WORKSPACE = process.env.CWC_PAD_SHARED_WORKSPACE || 'comunidad';
+const SHARED_COLLECTION = 'mejora-continua';
 const SLEEP_MS = 400; // espaciar llamadas (rate-limit del Pad)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -20,6 +25,10 @@ function readAdminToken() {
     const raw = JSON.parse(fs.readFileSync(path.join(config.home, '.pad', 'credentials.json'), 'utf8'));
     return raw?.credentials?.[PAD_URL]?.token || null;
   } catch { return null; }
+}
+
+export function readHostPadToken() {
+  return readAdminToken();
 }
 
 async function padFetch(method, urlPath, { token, body } = {}) {
@@ -37,6 +46,104 @@ async function padFetch(method, urlPath, { token, body } = {}) {
 // token vence y hay que re-loguear).
 function randomPassword() {
   return 'Cwc-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 6).toUpperCase() + '9!';
+}
+
+// Garantiza el workspace neutral y su colección canónica. Todo el flujo usa la
+// credencial admin porque el espacio no pertenece a ningún inquilino; cualquier
+// falla se devuelve como dato para que el pozo jamás bloquee el alta principal.
+export async function ensureSharedWorkspace() {
+  try {
+    const admin = readAdminToken();
+    if (!admin) return { ok: false, workspace: SHARED_WORKSPACE, error: 'Sin token admin del Pad local' };
+
+    const wsList = await padFetch('GET', '/api/v1/workspaces', { token: admin });
+    if (wsList.status !== 200) {
+      return { ok: false, workspace: SHARED_WORKSPACE, error: `listar workspaces falló: ${wsList.status} ${JSON.stringify(wsList.data).slice(0, 120)}` };
+    }
+    const workspaces = Array.isArray(wsList.data) ? wsList.data : (wsList.data?.workspaces || []);
+    if (!workspaces.some((w) => w.slug === SHARED_WORKSPACE)) {
+      await sleep(SLEEP_MS);
+      const created = await padFetch('POST', '/api/v1/workspaces', {
+        token: admin,
+        body: { name: 'Comunidad', slug: SHARED_WORKSPACE, template: 'blank' },
+      });
+      if (created.status !== 201) {
+        return { ok: false, workspace: SHARED_WORKSPACE, error: `workspace compartido falló: ${created.status} ${JSON.stringify(created.data).slice(0, 120)}` };
+      }
+    }
+    await sleep(SLEEP_MS);
+
+    const srcCols = await padFetch('GET', '/api/v1/workspaces/console/collections', { token: admin });
+    if (srcCols.status !== 200) {
+      return { ok: false, workspace: SHARED_WORKSPACE, error: `colección fuente falló: ${srcCols.status} ${JSON.stringify(srcCols.data).slice(0, 120)}` };
+    }
+    const src = Array.isArray(srcCols.data) ? srcCols.data : (srcCols.data?.collections || []);
+    const sourceCollection = src.find((c) => c.slug === SHARED_COLLECTION);
+    if (!sourceCollection) {
+      return { ok: false, workspace: SHARED_WORKSPACE, error: `No existe la colección fuente ${SHARED_COLLECTION}` };
+    }
+    await sleep(SLEEP_MS);
+
+    const existing = await padFetch('GET', `/api/v1/workspaces/${SHARED_WORKSPACE}/collections`, { token: admin });
+    if (existing.status !== 200) {
+      return { ok: false, workspace: SHARED_WORKSPACE, error: `listar colecciones compartidas falló: ${existing.status} ${JSON.stringify(existing.data).slice(0, 120)}` };
+    }
+    const collections = Array.isArray(existing.data) ? existing.data : (existing.data?.collections || []);
+    if (!collections.some((c) => c.slug === SHARED_COLLECTION)) {
+      await sleep(SLEEP_MS);
+      // schema TAL CUAL (string crudo del GET; re-encode lo rompe — DOC-633).
+      const created = await padFetch('POST', `/api/v1/workspaces/${SHARED_WORKSPACE}/collections`, {
+        token: admin,
+        body: {
+          name: sourceCollection.name,
+          slug: sourceCollection.slug,
+          icon: sourceCollection.icon,
+          schema: sourceCollection.schema,
+        },
+      });
+      if (created.status !== 201) {
+        return { ok: false, workspace: SHARED_WORKSPACE, error: `colección compartida falló: ${created.status} ${JSON.stringify(created.data).slice(0, 120)}` };
+      }
+    }
+
+    return { ok: true, workspace: SHARED_WORKSPACE };
+  } catch (e) {
+    return { ok: false, workspace: SHARED_WORKSPACE, error: String(e?.message || e).slice(0, 200) };
+  }
+}
+
+// La API no permite revocar invitaciones pendientes: consultar miembros E
+// invitaciones antes del POST es la barrera que evita duplicados irreversibles.
+export async function inviteUserToSharedWorkspace(userId) {
+  try {
+    // BUG-2233: no invitar cuentas borradas o cuyo alta ya no tiene espacio vivo.
+    if (!fs.existsSync(userSpace(userId))) return { ok: false, error: 'usuario sin espacio en disco' };
+
+    const admin = readAdminToken();
+    if (!admin) return { ok: false, invited: false, error: 'Sin token admin del Pad local' };
+    const email = userId + '@console.local';
+    const current = await padFetch('GET', `/api/v1/workspaces/${SHARED_WORKSPACE}/members`, { token: admin });
+    if (current.status !== 200) {
+      return { ok: false, invited: false, error: `listar membresía compartida falló: ${current.status} ${JSON.stringify(current.data).slice(0, 120)}` };
+    }
+    const members = Array.isArray(current.data?.members) ? current.data.members : [];
+    const invitations = Array.isArray(current.data?.invitations) ? current.data.invitations : [];
+    if (members.some((m) => m.user_email === email) || invitations.some((i) => i.email === email)) {
+      return { ok: true, invited: false };
+    }
+    await sleep(SLEEP_MS);
+
+    const invited = await padFetch('POST', `/api/v1/workspaces/${SHARED_WORKSPACE}/members/invite`, {
+      token: admin,
+      body: { email, role: 'editor' },
+    });
+    if (invited.status !== 201) {
+      return { ok: false, invited: false, error: `invitación compartida falló: ${invited.status} ${JSON.stringify(invited.data).slice(0, 120)}` };
+    }
+    return { ok: true, invited: true };
+  } catch (e) {
+    return { ok: false, invited: false, error: String(e?.message || e).slice(0, 200) };
+  }
 }
 
 // Provisiona (idempotente) el Pad del inquilino. Devuelve {ok, workspace, error?, alreadyProvisioned?}.
@@ -96,7 +203,21 @@ export async function provisionUserPad(userId, { name } = {}) {
       await sleep(SLEEP_MS);
     }
 
-    return { ok: true, workspace: wsSlug };
+    // El pozo es accesorio: sus dos pasos quedan aislados para que ni crear el
+    // espacio común ni sumar membresía puedan convertir un alta válida en error.
+    const shared = {};
+    try {
+      shared.workspace = await ensureSharedWorkspace();
+    } catch (e) {
+      shared.workspace = { ok: false, workspace: SHARED_WORKSPACE, error: String(e?.message || e).slice(0, 200) };
+    }
+    try {
+      shared.membership = await inviteUserToSharedWorkspace(userId);
+    } catch (e) {
+      shared.membership = { ok: false, invited: false, error: String(e?.message || e).slice(0, 200) };
+    }
+
+    return { ok: true, workspace: wsSlug, shared };
   } catch (e) {
     return { ok: false, error: String(e?.message || e).slice(0, 200) };
   }

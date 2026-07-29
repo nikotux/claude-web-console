@@ -9,7 +9,7 @@ import {
   feedbackPrompt, parseFeedback, readFeedbackJob, writeFeedbackJob,
 } from '../src/modules/retro/feedback-shared.js';
 import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
-import { padContextForUser } from '../src/core/pad-context.js';
+import { padContextForUser, sharedPadContextForUser } from '../src/core/pad-context.js';
 import { textOnlyQuery } from '../src/core/text-only-query.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-feedback]', ...a);
@@ -38,7 +38,7 @@ async function interpret(job, ctx) {
   return parsed.items;
 }
 
-async function persist(items, job, ctx) {
+async function persist(items, job, ctx, sharedCtx) {
   let created = 0;
   let merged = 0;
   let lastErr = null;
@@ -58,7 +58,7 @@ async function persist(items, job, ctx) {
         confidence: it.confidence,
         fingerprint,
         sourceRefs: refs,
-      }, ctx);
+      }, ctx, sharedCtx);
       if (r?.created) created += 1; else merged += 1;
     } catch (err) { lastErr = err; log('no pude guardar feedback:', err?.message || err); }
   }
@@ -76,9 +76,10 @@ async function main() {
   const job = readFeedbackJob(id);
   if (!job) { log(`job ${id} inexistente (¿se limpió antes de arrancar?).`); process.exit(0); return; }
   const ctx = padContextForUser(job.owner || null);
+  const sharedCtx = sharedPadContextForUser(job.owner || null);
   try {
     const items = await interpret(job, ctx);
-    const summary = await persist(items, job, ctx);
+    const summary = await persist(items, job, ctx, sharedCtx);
     const cur = readFeedbackJob(id);
     if (!cur) { log(`job ${id} fue borrado durante la corrida; no lo recreo.`); return; }
     writeFeedbackJob(id, { ...cur, status: 'done', result: summary, error: null, updatedAt: Date.now() });

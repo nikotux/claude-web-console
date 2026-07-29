@@ -121,6 +121,9 @@ export default {
       let hygiene = null;    // barrido determinístico de Pad (0 tokens)
       let pollTimer = null;
       let lastData = { lessons: [] };
+      let pool = { lessons: [], counts: { adoptable: 0 }, unavailable: true };
+      let poolOptOut = null;
+      let poolOpen = false;
       const m = dialog.openModal({ title: t('retro.board.title', '🔄 Mejora Continua'), width: 'min(880px, 96vw)', onClose: () => { if (pollTimer) clearTimeout(pollTimer); } });
       m.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('retro'));
       const body = m.body;
@@ -316,7 +319,60 @@ export default {
           </details>`;
       };
 
+      const poolLessonCard = (l) => {
+        const refs = Array.isArray(l.sourceRefs) ? l.sourceRefs : [];
+        const donors = Array.isArray(l.sharedBy) ? l.sharedBy : [];
+        const refsChips = refs.map((r) => `<span class="bb-chip bb-chip--info" title="${esc(t('retro.pool.refTitle', 'Lección vinculada a {ref}', { ref: r }))}" data-ref-filter="${esc(r)}">${esc(r)}</span>`).join('');
+        let action = '';
+        if (l.adopted) {
+          action = `<span class="mc-pool-owned">${t('retro.pool.alreadyOwned', '✓ ya la tenés')}</span>`;
+        } else if (l.mine) {
+          if (l.sharedFrom) action = `<button class="btn-ghost btn--sm" data-act="pool-unshare">${t('retro.pool.unshare', 'Retirar del pozo')}</button>`;
+        } else {
+          action = `<button class="btn btn--sm" data-act="pool-adopt">${t('retro.pool.adopt', '👍 Adoptar')}</button>`;
+        }
+        return `
+          <details class="mc-lesson mc-pool-lesson" data-pool-ref="${esc(l.ref)}" data-shared-from="${esc(l.sharedFrom || '')}">
+            <summary>
+              <span class="mc-cat" title="${esc(l.category)}">${CAT_ICON[l.category] || '📝'}</span>
+              <span class="mc-title">${esc(l.title)}</span>
+              <span class="bb-chip bb-chip--muted">${esc(l.category || t('retro.pool.noCategory', 'sin categoría'))}</span>
+              ${l.recurrence > 1 ? `<span class="bb-chip bb-chip--warn mc-pool-recurrence" title="${esc(t('retro.pool.recurrenceTitle', 'Esta experiencia fue compartida por {n} personas o veces', { n: l.recurrence }))}">${t('retro.pool.recurrence', 'le pasó a {n}', { n: l.recurrence })}</span>` : ''}
+              ${refsChips}
+            </summary>
+            <div class="mc-body">
+              <div class="mc-md">${mdMini(l.content)}</div>
+              <div class="mc-pool-donors bf-sub">${t('retro.pool.sharedBy', 'Compartida por')}: ${donors.length ? donors.map(esc).join(', ') : t('retro.pool.anonymous', 'la comunidad')}</div>
+              <div class="mc-acts">${action}</div>
+            </div>
+          </details>`;
+      };
+
+      const poolHtml = () => {
+        const lessons = pool.lessons || [];
+        const adoptable = pool.counts?.adoptable ?? lessons.filter((l) => !l.adopted && !l.mine).length;
+        const optOutUnavailable = poolOptOut === null;
+        return `
+          <details class="mc-group mc-pool" data-role="pool" ${poolOpen ? 'open' : ''}>
+            <summary>
+              <span class="mc-pool-title">${t('retro.pool.title', '🌍 De la comunidad')}</span>
+              <span class="bb-chip bb-chip--muted">${adoptable}</span>
+              ${!pool.unavailable && adoptable > 0 ? `<button class="btn btn--sm mc-pool-adopt-all" data-act="pool-adopt-all">${t('retro.pool.adoptAll', '👍 Adoptar todas ({n})', { n: adoptable })}</button>` : ''}
+              <label class="mc-pool-toggle" title="${t('retro.pool.toggleTitle', 'Controla la publicación automática de tus lecciones de Tolkien')}">
+                <input type="checkbox" data-role="pool-optout" ${poolOptOut === false ? 'checked' : ''} ${optOutUnavailable ? 'disabled' : ''}>
+                <span>${t('retro.pool.toggle', 'Publicar mis lecciones de Tolkien')}</span>
+              </label>
+            </summary>
+            <div class="mc-group-body">
+              <div class="mc-pool-help bf-sub">${t('retro.pool.toggleHelp', 'Si lo apagás, tus lecciones futuras de Tolkien no se publican; las que retires no vuelven a publicarse solas.')}</div>
+              ${pool.unavailable ? `<div class="mc-pool-unavailable bf-sub">${t('retro.pool.unavailable', 'El pozo comunitario no está disponible por ahora.')}</div>` : (lessons.length ? lessons.map(poolLessonCard).join('') : `<div class="bf-sub">${t('retro.pool.empty', 'No hay lecciones comunitarias para mostrar todavía.')}</div>`)}
+            </div>
+          </details>`;
+      };
+
       const render = (data) => {
+        const renderedPool = body.querySelector('[data-role="pool"]');
+        if (renderedPool) poolOpen = renderedPool.open;
         lastData = data;
         const all = data.lessons || [];
         const openHist = pendingOpenHistory; pendingOpenHistory = false;
@@ -343,6 +399,7 @@ export default {
           ${hygieneHtml()}
           ${feedbackComposer()}
           ${feedbackHistoryHtml(all, openHist)}
+          ${poolHtml()}
           ${refFilter ? `<div class="bf-sub" style="margin:.4rem 0"><span class="bb-chip bb-chip--info">${t('retro.render.filterBy', 'Filtrando por')} ${esc(refFilter)}</span> <button class="btn-ghost btn--sm" data-act="clear-ref-filter">${t('retro.render.clearFilter', '✕ quitar filtro')}</button></div>` : ''}
           ${curationHtml()}
           ${total ? (visible.length ? groups : `<div class="bf-sub" style="padding:1rem">${t('retro.render.noRef', 'Nada con esa referencia todavía.')}</div>`) : `<div class="bf-sub" style="padding:1rem">${t('retro.render.empty', 'Todavía no hay lecciones. Se destilan solas al cerrar chats con sustancia (que tocaron código o de varios turnos), o registrá feedback de Chris arriba.')}</div>`}`;
@@ -350,11 +407,15 @@ export default {
 
       const reload = async () => {
         try {
-          const [data, hygieneResult] = await Promise.all([
+          const [data, hygieneResult, poolResult, optOutResult] = await Promise.all([
             getJSON('/api/retro'),
             getJSON('/api/retro/hygiene').catch((e) => ({ error: e.message })),
+            getJSON('/api/retro/pool').catch(() => ({ lessons: [], counts: { adoptable: 0 }, unavailable: true })),
+            getJSON('/api/retro/share-optout').catch(() => null),
           ]);
           hygiene = hygieneResult;
+          pool = poolResult;
+          poolOptOut = typeof optOutResult?.optOut === 'boolean' ? optOutResult.optOut : null;
           render(data);
         }
         catch (e) { body.innerHTML = `<div class="bf-err" style="padding:1rem">${esc(e.message)}</div>`; }
@@ -400,6 +461,10 @@ export default {
       };
 
       body.addEventListener('click', async (ev) => {
+        if (ev.target.closest('.mc-pool-toggle')) {
+          ev.stopPropagation();
+          return;
+        }
         const refChip = ev.target.closest('[data-ref-filter]');
         if (refChip && !ev.target.closest('[data-act]')) {
           refFilter = refChip.dataset.refFilter;
@@ -410,6 +475,7 @@ export default {
         if (!btn) return;
         const act = btn.dataset.act;
         ev.preventDefault();
+        if (act === 'pool-adopt-all') ev.stopPropagation();
         try {
           if (act === 'clear-ref-filter') { refFilter = ''; render(lastData); return; }
           if (act === 'email-scan') {
@@ -542,6 +608,74 @@ export default {
             const ix = curation.destinos.indexOf(d); if (ix >= 0) curation.destinos.splice(ix, 1);
             await reload(); await loadSummary(); return;
           }
+          if (act === 'pool-adopt') {
+            const poolCard = btn.closest('[data-pool-ref]');
+            const poolRef = poolCard?.dataset.poolRef;
+            if (!poolRef) return;
+            btn.disabled = true;
+            await postJSON(`/api/retro/pool/${encodeURIComponent(poolRef)}/adopt`);
+            await reload();
+            await loadSummary();
+            return;
+          }
+          if (act === 'pool-adopt-all') {
+            const adoptable = pool.counts?.adoptable ?? (pool.lessons || []).filter((l) => !l.adopted && !l.mine).length;
+            if (!adoptable) return;
+            const ok = await dialog.confirmDialog({
+              title: t('retro.pool.adoptAllConfirmTitle', 'Adoptar todas'),
+              message: adoptable === 1
+                ? t('retro.pool.adoptAllConfirmMessageSingular', 'Vas a traer {n} lección de otra persona a TU lista como propuesta. No se aplica a ningún destino: después vos decidís a dónde va. ¿Continuar?', { n: adoptable })
+                : t('retro.pool.adoptAllConfirmMessage', 'Vas a traer {n} lecciones de otras personas a TU lista como propuestas. No se aplican a ningún destino: después vos decidís, una por una, a dónde va cada una. ¿Continuar?', { n: adoptable }),
+            });
+            if (!ok) return;
+            btn.disabled = true;
+            btn.textContent = t('retro.pool.adoptingAll', 'Adoptando…');
+            const result = await postJSON('/api/retro/pool/adopt-all');
+            await reload();
+            await loadSummary();
+            if (result.unavailable) {
+              await dialog.alertDialog({
+                title: t('retro.pool.adoptAllResultTitle', 'Adopción en lote'),
+                message: t('retro.pool.adoptAllUnavailable', 'El pozo comunitario no está disponible por ahora. No se adoptó ninguna lección.'),
+              });
+            } else if ((result.failed || 0) > 0) {
+              const errors = (result.errors || []).map((item) => `${item.ref}: ${item.error}`).join('; ');
+              await dialog.alertDialog({
+                title: t('retro.pool.adoptAllPartialTitle', 'Adopción en lote parcial'),
+                message: `${t('retro.pool.adoptAllPartial', 'Se agregaron {adopted} como propuestas, {alreadyHad} ya estaban en tu lista y {failed} fallaron (de {total} en total).', {
+                  adopted: result.adopted || 0,
+                  alreadyHad: result.alreadyHad || 0,
+                  failed: result.failed || 0,
+                  total: result.total || 0,
+                })}${errors ? ` ${t('retro.pool.adoptAllErrors', 'Detalles: {errors}', { errors })}` : ''}`,
+              });
+            } else {
+              const adopted = result.adopted || 0;
+              await dialog.alertDialog({
+                title: t('retro.pool.adoptAllResultTitle', 'Adopción en lote'),
+                message: adopted === 1
+                  ? t('retro.pool.adoptAllSuccessSingular', 'Listo: {adopted} lección se agregó a tu lista como propuesta; ya tenías {alreadyHad} en tu lista.', {
+                    adopted,
+                    alreadyHad: result.alreadyHad || 0,
+                  })
+                  : t('retro.pool.adoptAllSuccess', 'Listo: {adopted} lecciones se agregaron a tu lista como propuestas; ya tenías {alreadyHad} en tu lista.', {
+                    adopted,
+                    alreadyHad: result.alreadyHad || 0,
+                  }),
+              });
+            }
+            return;
+          }
+          if (act === 'pool-unshare') {
+            const poolCard = btn.closest('[data-shared-from]');
+            const sharedFrom = poolCard?.dataset.sharedFrom;
+            if (!sharedFrom) return;
+            btn.disabled = true;
+            await postJSON(`/api/retro/${encodeURIComponent(sharedFrom)}/unshare`);
+            await reload();
+            await loadSummary();
+            return;
+          }
           // --- acciones sobre una lección ---
           const card = btn.closest('.mc-lesson');
           const id = card?.dataset.id;
@@ -577,6 +711,20 @@ export default {
           await dialog.alertDialog({ title: t('retro.dlg.failed', 'No se pudo'), message: e.message });
           btn.disabled = false;
           await reload(); // reflejar el estado REAL (p.ej. promoción revertida en el server)
+        }
+      });
+
+      body.addEventListener('change', async (ev) => {
+        const toggle = ev.target.closest('[data-role="pool-optout"]');
+        if (!toggle) return;
+        toggle.disabled = true;
+        try {
+          const result = await postJSON('/api/retro/share-optout', { optOut: !toggle.checked });
+          poolOptOut = !!result.optOut;
+          render(lastData);
+        } catch (e) {
+          await dialog.alertDialog({ title: t('retro.dlg.failed', 'No se pudo'), message: e.message });
+          await reload();
         }
       });
 

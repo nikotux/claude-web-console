@@ -20,7 +20,7 @@ import {
   EMAIL_TIMEOUT_MS, EMAIL_HEARTBEAT_MS,
 } from '../src/modules/retro/email-shared.js';
 import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
-import { padContextForUser } from '../src/core/pad-context.js';
+import { padContextForUser, sharedPadContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-email]', ...a);
 const FEEDBACK_CONTACT_ID = 'chris';
@@ -88,7 +88,7 @@ async function fetchEmail(contact, self, sinceIso, existing = []) {
   return out;
 }
 
-async function persist(items, ctx) {
+async function persist(items, ctx, sharedCtx) {
   let created = 0;
   let merged = 0;
   let lastErr = null;
@@ -109,7 +109,7 @@ async function persist(items, ctx) {
         confidence: it.confidence,
         fingerprint,
         sourceRefs: it.refs,
-      }, ctx);
+      }, ctx, sharedCtx);
       if (r?.created) created += 1; else merged += 1;
     } catch (err) { lastErr = err; log('no pude guardar feedback:', err?.message || err); }
   }
@@ -128,11 +128,12 @@ async function run() {
   const self = readSelf();
   const prev = readEmailScan();
   const ctx = padContextForUser(null); // corrida bajo botón admin del host ⇒ Pad de 'console' (retrocompat)
+  const sharedCtx = sharedPadContextForUser(null); // mismo principal host, pero workspace común explícito
   const existing = await feedbackForDedup(ctx);
   const out = await fetchEmail(contact, self, prev.lastReceivedAt || null, existing);
   const parsed = parseEmailScan(out);
   if (!parsed) throw new Error('No se pudo interpretar el escaneo de correo (respuesta inválida).');
-  const summary = await persist(parsed.items, ctx);
+  const summary = await persist(parsed.items, ctx, sharedCtx);
   writeEmailScan({
     items: parsed.items,
     lastReceivedAt: parsed.lastReceivedAt || prev.lastReceivedAt || null,

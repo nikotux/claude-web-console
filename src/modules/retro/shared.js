@@ -29,6 +29,10 @@ export const RETRO_STALE_MS = RETRO_TIMEOUT_MS + 30 * 1000;
 // El caller debe priorizar bien: si deja promovidas fuera de esta ventana, el
 // medidor de efectividad pierde recurrencias y queda ciego.
 export const RETRO_DEDUP_LIMIT = 120;
+// El pozo comparte el mismo presupuesto: las propias mandan porque son las que
+// el usuario ve en su tablero, pero cada lista le presta a la otra su sobrante.
+export const RETRO_DEDUP_LIMIT_OWN = 90;
+export const RETRO_DEDUP_LIMIT_POOL = 30;
 const MAX_CONTEXT = 60 * 1000;   // tope del texto condensado que viaja al modelo
 const MAX_TRANSCRIPT_FILES = 40;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -113,8 +117,11 @@ function clampMiddle(s, max) {
 // Lee el jsonl del transcript de la sesión y arma: turnos reales del usuario,
 // archivos tocados por herramientas de edición, y un texto CONDENSADO
 // (usuario/asistente/marcadores de tool) para alimentar la destilación.
-export function readTranscript(cwd, sessionId) {
-  const file = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
+export function readTranscript(cwd, sessionId, claudeDir = null) {
+  // En multi-tenant, el .claude es el del DUEÑO. El llamador lo pasa ya
+  // resuelto porque este módulo no importa user-space a propósito.
+  const base = claudeDir || path.join(os.homedir(), '.claude');
+  const file = path.join(base, 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const lines = raw.split('\n').filter(Boolean);
@@ -163,9 +170,9 @@ function classifyProject(cwd) {
 
 // Encola una destilación al cerrar un chat, SI supera el filtro híbrido.
 // Best-effort total: cualquier falla se traga (nunca bloquea el cierre del chat).
-export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId, owner } = {}) {
+export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId, owner, claudeDir } = {}) {
   if (!cwd || !sessionId) return;
-  const sig = readTranscript(cwd, sessionId);
+  const sig = readTranscript(cwd, sessionId, claudeDir);
   if (!sig) return;
   // FILTRO: solo destilamos chats con sustancia (tocó código, o conversación de
   // varios turnos, o fue trabajo de ticket/tema). Los triviales ("gracias") no gastan tokens.
@@ -196,17 +203,35 @@ export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, l
 }
 
 // ===== Prompt de destilación (texto puro, doble deny en el runner) =====
-// `existing` = lecciones YA registradas ({category, title}) para el dedup "vs
-// seen": si el modelo repite un concepto ya presente, le pedimos reusar su
-// título EXACTO → el fingerprint coincide → sube la recurrencia en vez de
-// duplicar (la recurrencia por título solo es frágil sin esta guía).
-export function retroPrompt(job, existing = []) {
+// `existing` y `poolExisting` = lecciones YA registradas ({category, title});
+// si el modelo repite un concepto, debe reusar el título EXACTO para que el
+// fingerprint coincida y suba la recurrencia en vez de crear un duplicado.
+export function retroPrompt(job, existing = [], poolExisting = []) {
   const meta = job?.meta || {};
   const filesLine = (meta.files || []).length ? `\nArchivos tocados en la sesión: ${(meta.files || []).join(', ')}` : '';
-  const existingBlock = existing.length
-    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.slice(0, RETRO_DEDUP_LIMIT).map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
+  // Se calculan ambos cupos antes de recortar: si una lista no llena su parte,
+  // la otra aprovecha ese lugar sin superar nunca el techo total del prompt.
+  let ownLimit = Math.min(existing.length, RETRO_DEDUP_LIMIT_OWN);
+  let poolLimit = Math.min(poolExisting.length, RETRO_DEDUP_LIMIT_POOL);
+  let remaining = RETRO_DEDUP_LIMIT - ownLimit - poolLimit;
+  const ownExtra = Math.min(Math.max(0, existing.length - ownLimit), remaining);
+  ownLimit += ownExtra;
+  remaining -= ownExtra;
+  poolLimit += Math.min(Math.max(0, poolExisting.length - poolLimit), remaining);
+  const ownOmitted = Math.max(0, existing.length - ownLimit);
+  const poolOmitted = Math.max(0, poolExisting.length - poolLimit);
+  if (ownOmitted) console.warn(`[retro] dedup propio: ${ownOmitted} lección(es) quedaron fuera del tope compartido de ${RETRO_DEDUP_LIMIT}.`);
+  if (poolOmitted) console.warn(`[retro] dedup pozo común: ${poolOmitted} lección(es) quedaron fuera del tope compartido de ${RETRO_DEDUP_LIMIT}.`);
+
+  const ownVisible = existing.slice(0, ownLimit);
+  const poolVisible = poolExisting.slice(0, poolLimit);
+  const existingBlock = ownVisible.length
+    ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${ownVisible.map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
     : '';
-  return `Sos un analista de PROCESO de un equipo de desarrollo. Te paso la TRANSCRIPCIÓN CONDENSADA de una sesión de trabajo de Claude Code sobre el proyecto "${meta.project || 'otros'}" (título: "${meta.title || 's/título'}").${filesLine}${existingBlock}
+  const poolBlock = poolVisible.length
+    ? `\n\nLECCIONES YA REGISTRADAS POR OTROS USUARIOS (pozo común). Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${poolVisible.map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
+    : '';
+  return `Sos un analista de PROCESO de un equipo de desarrollo. Te paso la TRANSCRIPCIÓN CONDENSADA de una sesión de trabajo de Claude Code sobre el proyecto "${meta.project || 'otros'}" (título: "${meta.title || 's/título'}").${filesLine}${existingBlock}${poolBlock}
 
 Tu ÚNICA tarea: destilar LECCIONES DE PROCESO / METODOLOGÍA / FLUJO DE TRABAJO que convenga sistematizar para que las PRÓXIMAS sesiones trabajen mejor. NO son bugs de código, NO es un resumen de qué se hizo.
 

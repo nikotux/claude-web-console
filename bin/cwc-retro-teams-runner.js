@@ -21,7 +21,7 @@ import {
   TEAMS_FB_TIMEOUT_MS, TEAMS_FB_HEARTBEAT_MS,
 } from '../src/modules/retro/teams-feedback-shared.js';
 import { upsertLesson, computeFingerprint, listLessons } from '../src/modules/retro/store.js';
-import { padContextForUser } from '../src/core/pad-context.js';
+import { padContextForUser, sharedPadContextForUser } from '../src/core/pad-context.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-teams]', ...a);
 const FEEDBACK_CONTACT_ID = 'chris';
@@ -87,7 +87,7 @@ async function fetchTeams(contact, self, sinceIso, existing = []) {
   return out;
 }
 
-async function persist(items, ctx) {
+async function persist(items, ctx, sharedCtx) {
   let created = 0;
   let merged = 0;
   let lastErr = null;
@@ -108,7 +108,7 @@ async function persist(items, ctx) {
         confidence: it.confidence,
         fingerprint,
         sourceRefs: it.refs,
-      }, ctx);
+      }, ctx, sharedCtx);
       if (r?.created) created += 1; else merged += 1;
     } catch (err) { lastErr = err; log('no pude guardar feedback:', err?.message || err); }
   }
@@ -125,11 +125,12 @@ async function run() {
   const self = readSelf();
   const prev = readTeamsFeedbackScan();
   const ctx = padContextForUser(null); // corrida bajo botón admin del host ⇒ Pad de 'console'
+  const sharedCtx = sharedPadContextForUser(null); // mismo principal host, pero workspace común explícito
   const existing = await feedbackForDedup(ctx);
   const out = await fetchTeams(contact, self, prev.lastProcessedAt || null, existing);
   const parsed = parseTeamsFeedback(out);
   if (!parsed) throw new Error('No se pudo interpretar el escaneo de Teams (respuesta inválida).');
-  const summary = await persist(parsed.items, ctx);
+  const summary = await persist(parsed.items, ctx, sharedCtx);
   writeTeamsFeedbackScan({
     items: parsed.items,
     lastProcessedAt: parsed.lastProcessedAt || prev.lastProcessedAt || null,

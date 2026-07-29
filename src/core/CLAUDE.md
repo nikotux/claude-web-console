@@ -288,6 +288,17 @@ estado user-scoped resuelve su dir con `resolveDataDir()` (`src/core/data-dir.js
 honra `CWC_DATA_DIR`). PROHIBIDO hardcodear `path.join(os.homedir(), '.cwc-data')`
 para estado de usuario — se colaría al root del host y cruzaría inquilinos.
 
+`console:PLAN-2186` (2026-07-28) — CONVENCIÓN: un módulo COMPARTIDO entre el server y un runner NO importa
+`core/user-space.js`. Hacerlo le arrastra `core/config.js` y su exigencia de `CWC_TOKEN` a un runner de inquilino
+con env limpio o a un CLI de `bin/`. En su lugar RECIBE la ruta ya resuelta, o un resolver inyectado por el
+server, que es el único que sabe de quién es cada dato: el parámetro `dataDir` de `readWindowPressure()`
+en `core/model-router.js` (antes leía el `plan-limits.json` del host, así que el AutoTux de un inquilino
+conservaba ventana mirando el consumo de Niko), `setChatDataDirResolver()` en `chat/attachments.js` y el
+parámetro `claudeDir` de `readTranscript()` en `retro/shared.js`. El complemento es el invariante «DATO
+USER-SCOPED NUNCA GLOBAL» de `health/invariants.js`, que ahora prohíbe explícitamente derivar una ruta
+user-scoped de una CONSTANTE DE MÓDULO calculada al importar — el patrón exacto por el que se colaron
+los seis casos.
+
 **Pad por usuario (`decision-1784076526`, `DOC-633`).** Pad LOCAL multi-cuenta
 (modelo Postgres-like: UN motor, datos aislados por cuenta/workspace — NO un Pad
 por usuario). Una operación de Pad en nombre de un inquilino usa SU token
@@ -298,6 +309,34 @@ NUNCA se escribe data de un inquilino con la credencial ÚNICA del host (token d
 ctx viaja con `token:null` y la op falla limpio (403) SIN contaminar `console`
 (hay lazy-provisioning en background). El host conserva `console`+`~/.pad` por
 retrocompat.
+
+**Pozo COMÚN de Mejora Continua (`console:PLAN-2222`, F1 hecha 2026-07-28).**
+Existe un TERCER destino de Pad además de `console` y los `tenant-*`: el
+workspace **`comunidad`** (`SHARED_WORKSPACE` en **`pad-provision.js`**, override
+por `CWC_PAD_SHARED_WORKSPACE`), neutral, con una sola colección
+`mejora-continua`. Es donde las lecciones de `project: tolkien` de TODOS los
+usuarios se agregan y suman recurrencia ENTRE PERSONAS — la señal que hoy se
+cuenta por individuo. **`ensureSharedWorkspace()`** lo crea idempotente con el
+token admin; **`inviteUserToSharedWorkspace(userId)`** suma al usuario como
+`editor`. Los dos corren best-effort al final de
+**`provisionUserPad`**, cada uno en su try/catch: **el pozo jamás puede convertir
+un alta válida en error** — es accesorio, no parte del alta. El ctx se deriva con
+**`sharedPadContextForUser(userId)`** /
+**`reqSharedPadContext(req)`** (**`pad-context.js`**), que a diferencia de
+**`padContextForUser`** SIEMPRE devuelve workspace explícito (también para el
+host, que si no caería al default `console`) y conserva el fail-closed: un
+inquilino sin token propio viaja con `token:null` y la op falla limpio — NUNCA se
+cae al token del host, porque una donación escrita con la credencial de Niko
+falsearía la autoría. GOTCHA 1: La API de Pad **no expone revocación de
+invitaciones pendientes**: `POST /api/v1/workspaces/<slug>/members/invite` crea,
+pero ningún método/ruta las borra (`DELETE` sobre esa ruta responde `Member not
+found`; sirve para miembros reales, no para pendientes). Por eso
+**`inviteUserToSharedWorkspace`** consulta `members` E `invitations` ANTES de
+invitar: una invitación de más no se puede deshacer por API. GOTCHA 2: El
+`template:'blank'` de Pad NO crea un workspace vacío: `comunidad` nació además
+con `conventions` y `playbooks` (esta última con 1 ítem del template). Son ruido
+inerte —ningún módulo de la consola las lee— y no se pueden borrar porque Pad
+prohíbe eliminar colecciones seeded.
 
 **File-spaces.** `userFileRoot(userId)` confina al inquilino a su `workspace/`
 (el explorador se clampa a esa raíz); el host conserva su home completo. El

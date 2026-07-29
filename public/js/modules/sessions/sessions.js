@@ -89,6 +89,7 @@ export default {
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon sess-bgbtn--idle" data-ref="bg" title="${t('sessions.bg.title', 'Trabajos en segundo plano')}">${icon('relay', { size: 14 })}<span class="sess-bg-n">0</span></button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('sessions.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="trash" title="${t('sessions.trash.title', 'Papelera de conversaciones (30 días)')}">${icon('trash', { size: 14 })}</button>
         ${helpBtn('sessions')}
       </header>
       <div class="sess-list" data-ref="list"></div>`;
@@ -101,6 +102,7 @@ export default {
     let lastData = { sessions: [], chats: [], runners: { processes: [], processCount: 0, dominantModel: null } };
     let hasRendered = false;
     let bgModal = null;
+    let trashModal = null;
     me = null;
     hostName = null;
     iAmAdmin = false;
@@ -111,6 +113,7 @@ export default {
       if (hasRendered) render(lastData);
     }).catch(() => { /* El primer render conserva el comportamiento histórico. */ });
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
+    el.querySelector('[data-ref="trash"]').addEventListener('click', openTrashModal);
     bgBtn.addEventListener('click', openBgModal);
     bus.addEventListener('sessions-changed', refresh);
 
@@ -137,6 +140,32 @@ export default {
         return `<span class="sess-place is-env" title="${escapeHtml(title)}">${icon(p.ico, { size: 11 })}</span>`;
       }
       return `<span class="sess-place ${p.cls}" title="${p.label}">${icon(p.ico, { size: 11 })}</span>`;
+    };
+
+    const participantUsers = (c) => (Array.isArray(c.participants) ? c.participants : [])
+      .map((p) => String(p?.user || '').trim())
+      .filter(Boolean);
+    const isChatOwner = (c) => !!c.owner && c.owner === whoAmI();
+    const isChatParticipant = (c) => participantUsers(c).includes(whoAmI());
+    const participantInitials = (user) => {
+      const parts = String(user).split(/[^A-Za-z0-9]+/).filter(Boolean);
+      if (!parts.length) return '?';
+      return (parts.length > 1 ? parts.slice(0, 2).map((part) => part[0]).join('') : parts[0].slice(0, 2)).toUpperCase();
+    };
+    const appendParticipantChip = (main, c) => {
+      const users = participantUsers(c);
+      let chip = main.querySelector('.sess-participants');
+      if (!users.length) {
+        chip?.remove();
+        return;
+      }
+      if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'sess-mode sess-participants';
+        main.querySelector('.sess-row1')?.appendChild(chip);
+      }
+      chip.title = t('sessions.collab.participantNames', 'Participantes: {users}', { users: users.join(', ') });
+      chip.textContent = users.map(participantInitials).join(' · ');
     };
 
     function fmtAgo(ms) {
@@ -341,6 +370,143 @@ export default {
         onClose: () => { bgModal = null; },
       });
       renderBgModal(lastData);
+    }
+
+    function trashLeadHtml() {
+      return `<p class="dlg-msg">${t('sessions.trash.lead', 'Las conversaciones que cerrás se guardan acá 30 días —con su historial y sus archivos— y recién después se borran definitivamente.')}</p>`;
+    }
+
+    function trashDate(value) {
+      const ms = tsMs(value);
+      if (!ms) return t('sessions.trash.unknownDate', 'Fecha desconocida');
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(ms);
+    }
+
+    function renderTrashModal(modal, items) {
+      if (trashModal !== modal) return;
+      if (!items.length) {
+        modal.body.innerHTML = `${trashLeadHtml()}<p class="sess-bg-empty">${t('sessions.trash.empty', 'La papelera está vacía.')}</p>`;
+        return;
+      }
+      modal.body.innerHTML = `${trashLeadHtml()}<div class="sess-bg-modal">${items.map((item, index) => {
+        const daysLeft = Math.max(0, Number(item.daysLeft) || 0);
+        const daysClass = daysLeft <= 3 ? 'bb-chip--danger' : 'bb-chip--muted';
+        const title = item.title || t('sessions.trash.untitled', 'Conversación sin título');
+        const cwd = item.cwd || t('sessions.trash.unknownFolder', 'Carpeta desconocida');
+        const history = item.hasTranscript
+          ? t('sessions.trash.historySaved', 'Historial guardado')
+          : t('sessions.trash.historyMissing', 'Sin historial guardado');
+        let attachments = item.hasAttachments
+          ? t('sessions.trash.filesSaved', 'Archivos del paquete guardados')
+          : t('sessions.trash.filesMissing', 'Sin archivos del paquete');
+        if (item.attachmentsSkipped) attachments = t('sessions.trash.tooBig', 'Los archivos eran muy grandes y no se copiaron');
+        return `
+          <details class="sess-bg-group" data-trash-index="${index}">
+            <summary>
+              <span class="sess-bg-name">${escapeHtml(title)}</span>
+              <span class="bb-chip ${daysClass}">${escapeHtml(t('sessions.trash.daysLeft', '{n} día(s)', { n: daysLeft }))}</span>
+            </summary>
+            <div class="sess-kids sess-kids--modal">
+              <div class="sess-kid">
+                <span class="sess-kid-label" title="${escapeHtml(cwd)}">${escapeHtml(t('sessions.trash.folder', 'Carpeta: {cwd}', { cwd }))}</span>
+              </div>
+              <div class="sess-kid">
+                <span class="sess-kid-label">${escapeHtml(t('sessions.trash.closedAt', 'Cerrada: {date}', { date: trashDate(item.deletedAt) }))}</span>
+              </div>
+              <div class="bb-chips">
+                <span class="bb-chip ${item.hasTranscript ? 'bb-chip--ok' : 'bb-chip--muted'}">${escapeHtml(history)}</span>
+                <span class="bb-chip ${item.attachmentsSkipped ? 'bb-chip--danger' : (item.hasAttachments ? 'bb-chip--ok' : 'bb-chip--muted')}">${escapeHtml(attachments)}</span>
+              </div>
+              <div class="sess-pick-actions">
+                <button class="btn-ghost btn--danger" data-act="purge">${t('sessions.trash.purge', 'Eliminar ya')}</button>
+                <button class="btn" data-act="restore">${t('sessions.trash.restore', 'Restaurar')}</button>
+              </div>
+            </div>
+          </details>`;
+      }).join('')}</div>`;
+
+      modal.body.querySelectorAll('[data-trash-index]').forEach((row) => {
+        const item = items[Number(row.dataset.trashIndex)];
+        row.querySelector('[data-act="restore"]').addEventListener('click', () => restoreTrashItem(modal, item));
+        row.querySelector('[data-act="purge"]').addEventListener('click', () => purgeTrashItem(modal, item));
+      });
+    }
+
+    async function loadTrashModal(modal) {
+      if (trashModal !== modal) return;
+      modal.body.innerHTML = `${trashLeadHtml()}<div class="cwc-loading"><span class="cwc-spinner"></span>${t('sessions.trash.loading', 'Cargando papelera…')}</div>`;
+      try {
+        const res = await fetch('/api/chat/trash');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t('sessions.trash.loadError', 'No se pudo cargar la papelera.'));
+        renderTrashModal(modal, Array.isArray(data.items) ? data.items : []);
+      } catch (e) {
+        if (trashModal === modal) modal.body.innerHTML = `${trashLeadHtml()}<p class="sess-bg-empty">${escapeHtml(e.message)}</p>`;
+        dialog.alertDialog({ title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'), message: e.message });
+      }
+    }
+
+    async function restoreTrashItem(modal, item) {
+      try {
+        const restoreRes = await fetch('/api/chat/trash/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: item.id }),
+        });
+        const restoreData = await restoreRes.json().catch(() => ({}));
+        if (!restoreRes.ok) throw new Error(restoreData.error || t('sessions.trash.restoreError', 'No se pudo restaurar la conversación.'));
+        const restored = restoreData.restored || {};
+        const createRes = await fetch('/api/chat/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cwd: restored.cwd,
+            model: restored.model,
+            permissionMode: restored.permissionMode,
+            resume: restored.sessionId,
+            title: restored.title,
+          }),
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        if (!createRes.ok) throw new Error(createData.error || t('sessions.trash.reopenError', 'La conversación se restauró, pero no se pudo reabrir.'));
+        modal.close();
+        if (createData.chat) openChatView(createData.chat);
+        await refresh();
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'), message: e.message });
+      }
+    }
+
+    async function purgeTrashItem(modal, item) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.trash.purgeTitle', 'Eliminar conversación definitivamente'),
+        message: t('sessions.trash.purgeConfirm', '“{title}” se borrará ahora. Esta acción es definitiva e irreversible.', { title: item.title || t('sessions.trash.untitled', 'Conversación sin título') }),
+        confirmLabel: t('sessions.trash.purge', 'Eliminar ya'),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/chat/trash/purge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: item.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t('sessions.trash.purgeError', 'No se pudo eliminar la conversación.'));
+        await loadTrashModal(modal);
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'), message: e.message });
+      }
+    }
+
+    function openTrashModal() {
+      if (trashModal) { loadTrashModal(trashModal); return; }
+      trashModal = dialog.openModal({
+        title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'),
+        width: 620,
+        onClose: () => { trashModal = null; },
+      });
+      loadTrashModal(trashModal);
     }
 
     function tickLiveTimes() {
@@ -623,6 +789,7 @@ export default {
             <span class="sess-live"></span>
           </span>
         </span>`;
+      appendParticipantChip(main, c);
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
       main.addEventListener('click', () => (c.archived ? reviveChat(c, { open: true }) : openChatView(c)));
       main.addEventListener('keydown', (e) => {
@@ -746,6 +913,8 @@ export default {
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>`}
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>`}
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>`}
+        ${c.isSala && (isChatOwner(c) || iAmAdmin) ? `<button class="cwc-popup-item" data-act="collab">${icon('relay', { size: 15 })}<span>${t('sessions.menu.inviteSala', '🤝 Invitar a la sala')}</span></button>` : ''}
+        ${c.isSala && !isChatOwner(c) && isChatParticipant(c) ? `<button class="cwc-popup-item" data-act="leave-sala">${icon('close', { size: 15 })}<span>${t('sessions.menu.leaveSala', 'Salir de la sala')}</span></button>` : ''}
         <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.folder', 'Abrir carpeta del chat')}</span></button>
         <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>${t('sessions.menu.close', 'Cerrar conversación')}</span></button>`;
       document.body.appendChild(menu);
@@ -760,8 +929,174 @@ export default {
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
       menu.querySelector('[data-act="world"]')?.addEventListener('click', () => act(() => moveChatWorld(c)));
       menu.querySelector('[data-act="archive"]')?.addEventListener('click', () => act(() => archiveChat(c)));
+      menu.querySelector('[data-act="collab"]')?.addEventListener('click', () => act(() => openCollabModal(c)));
+      menu.querySelector('[data-act="leave-sala"]')?.addEventListener('click', () => act(() => leaveSala(c)));
       menu.querySelector('[data-act="folder"]').addEventListener('click', () => act(() => openChatFolder(c)));
       menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+    }
+
+    function collabIcon(name) {
+      const holder = document.createElement('span');
+      holder.innerHTML = icon(name, { size: 13 });
+      return holder;
+    }
+
+    async function collabPost(action, c, user) {
+      const res = await fetch(`/api/chat/collab/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: c.id, ...(user ? { user } : {}) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || t('sessions.collab.actionError', 'No se pudo actualizar la sala.'));
+      if (Array.isArray(data.participants)) c.participants = data.participants;
+      return data;
+    }
+
+    function openCollabModal(c) {
+      const modal = dialog.openModal({ title: t('sessions.collab.title', '🤝 Participantes de la sala'), width: 440 });
+
+      const load = async () => {
+        const loading = document.createElement('div');
+        loading.className = 'cwc-loading';
+        const spinner = document.createElement('span');
+        spinner.className = 'cwc-spinner';
+        const loadingText = document.createElement('span');
+        loadingText.textContent = t('sessions.collab.loading', 'Cargando participantes…');
+        loading.append(spinner, loadingText);
+        modal.body.replaceChildren(loading);
+
+        try {
+          const res = await fetch(`/api/chat/collab/candidates?id=${encodeURIComponent(c.id)}`);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || t('sessions.collab.loadError', 'No se pudieron cargar los participantes.'));
+
+          const content = document.createElement('div');
+          content.className = 'sess-bg-modal';
+
+          const currentTitle = document.createElement('strong');
+          currentTitle.textContent = t('sessions.collab.current', 'Participantes actuales');
+          content.appendChild(currentTitle);
+
+          const current = document.createElement('div');
+          current.className = 'sess-bg-group';
+          if (c.owner) {
+            const ownerRow = document.createElement('div');
+            ownerRow.className = 'sess-kid';
+            const ownerName = document.createElement('span');
+            ownerName.className = 'sess-kid-label';
+            ownerName.textContent = c.owner;
+            const ownerRole = document.createElement('span');
+            ownerRole.className = 'bb-chip bb-chip--muted';
+            ownerRole.textContent = t('sessions.collab.owner', 'Dueño');
+            ownerRow.append(ownerName, ownerRole);
+            current.appendChild(ownerRow);
+          }
+
+          const participants = Array.isArray(c.participants) ? c.participants : [];
+          for (const participant of participants) {
+            const user = String(participant?.user || '').trim();
+            if (!user) continue;
+            const row = document.createElement('div');
+            row.className = 'sess-kid';
+            const name = document.createElement('span');
+            name.className = 'sess-kid-label';
+            name.textContent = user;
+            const revoke = document.createElement('button');
+            revoke.className = 'btn-ghost btn--sm';
+            revoke.append(collabIcon('close'), document.createTextNode(t('sessions.collab.revoke', 'Revocar')));
+            revoke.addEventListener('click', async () => {
+              const ok = await dialog.confirmDialog({
+                title: t('sessions.collab.revokeTitle', 'Revocar acceso'),
+                message: t('sessions.collab.revokeMessage', '“{user}” perderá el acceso a esta sala.', { user }),
+                confirmLabel: t('sessions.collab.revoke', 'Revocar'),
+                danger: true,
+              });
+              if (!ok) return;
+              try {
+                revoke.disabled = true;
+                await collabPost('revoke', c, user);
+                await load();
+                refresh();
+              } catch (e) {
+                revoke.disabled = false;
+                dialog.alertDialog({ title: t('sessions.collab.title', '🤝 Participantes de la sala'), message: e.message });
+              }
+            });
+            row.append(name, revoke);
+            current.appendChild(row);
+          }
+          content.appendChild(current);
+
+          const inviteTitle = document.createElement('strong');
+          inviteTitle.textContent = t('sessions.collab.inviteTitle', 'Invitar a la sala');
+          content.appendChild(inviteTitle);
+
+          const candidates = Array.isArray(data.users) ? data.users : [];
+          const candidateList = document.createElement('div');
+          candidateList.className = 'sess-menu-list';
+          if (!candidates.length) {
+            const empty = document.createElement('p');
+            empty.className = 'sess-plumbing';
+            empty.textContent = t('sessions.collab.noCandidates', 'No hay más usuarios disponibles para invitar.');
+            candidateList.appendChild(empty);
+          }
+          for (const candidate of candidates) {
+            const user = String(candidate?.username || '').trim();
+            if (!user) continue;
+            const invite = document.createElement('button');
+            invite.className = 'btn-ghost sess-menu-item';
+            const label = document.createElement('span');
+            label.textContent = user;
+            invite.append(collabIcon('relay'), label);
+            invite.addEventListener('click', async () => {
+              const ok = await dialog.confirmDialog({
+                title: t('sessions.collab.inviteConfirmTitle', 'Invitar a {user}', { user }),
+                message: t('sessions.collab.inviteConsequences', '(1) Los turnos de la sala los pagás vos, porque el motor corre con tu credencial; (2) la persona invitada va a ver TODO el hilo de la conversación.'),
+                confirmLabel: t('sessions.collab.inviteConfirm', 'Invitar a {user}', { user }),
+              });
+              if (!ok) return;
+              try {
+                invite.disabled = true;
+                await collabPost('invite', c, user);
+                await load();
+                refresh();
+              } catch (e) {
+                invite.disabled = false;
+                dialog.alertDialog({ title: t('sessions.collab.title', '🤝 Participantes de la sala'), message: e.message });
+              }
+            });
+            candidateList.appendChild(invite);
+          }
+          content.appendChild(candidateList);
+          modal.body.replaceChildren(content);
+        } catch (e) {
+          const error = document.createElement('p');
+          error.className = 'sess-bg-empty';
+          error.textContent = e.message;
+          modal.body.replaceChildren(error);
+          dialog.alertDialog({ title: t('sessions.collab.title', '🤝 Participantes de la sala'), message: e.message });
+        }
+      };
+
+      load();
+    }
+
+    async function leaveSala(c) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.collab.leaveTitle', 'Salir de la sala'),
+        message: t('sessions.collab.leaveMessage', 'Vas a dejar de participar en “{title}” y perderás el acceso a su conversación.', { title: c.title }),
+        confirmLabel: t('sessions.collab.leaveConfirm', 'Salir de la sala'),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await collabPost('leave', c);
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.collab.leaveTitle', 'Salir de la sala'), message: e.message });
+      } finally {
+        refresh();
+      }
     }
 
     // F3: archivar (aparcar revivible) una conversación desde el menú ⋯.
@@ -1268,6 +1603,7 @@ export default {
             if (icEl) icEl.innerHTML = icon(isTui ? 'terminal' : 'sparkle', { size: 12 });
             const modeEl = cardEl.querySelector('.sess-mode');
             if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? t('sessions.mode.terminal', 'En modo Terminal (TUI)') : t('sessions.mode.chat', 'En modo Chat'); }
+            appendParticipantChip(cardEl, c);
             // Refrescar el chip de modelo: con motor vivo el cambio de modelo se
             // confirma por eco (this.model queda stale un instante), así que sin
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.

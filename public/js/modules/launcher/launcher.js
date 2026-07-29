@@ -66,6 +66,8 @@ export default {
       modal.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('launcher'));
       st.view = 'list';
       st.dest = null;
+      if (st.type === 'sala') st.dest = freshSalaDest();
+      if (st.type === 'sala' && !MODELS.some(([value]) => value === st.model)) st.model = 'tandem';
       render();
       // Solo el estado de Tolkien (para el atajo): los recientes ya no se listan
       // en "Abrir en" (pedido del usuario: solo Tolkien · Consola · otra carpeta).
@@ -83,6 +85,39 @@ export default {
       return parts.length ? parts[parts.length - 1] : '~';
     }
 
+    function freshSalaDest() {
+      const random = globalThis.crypto?.randomUUID?.().replaceAll('-', '').slice(0, 10)
+        || Math.random().toString(36).slice(2, 12);
+      const salaId = `sala-${Date.now().toString(36)}-${random}`.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+      return {
+        rel: `.cwc-aduana/salas/${salaId}`,
+        label: t('launcher.aduana.newSala', '🛃 Nueva sala'),
+        sala: true,
+      };
+    }
+
+    async function ensureSalaFolder(dest) {
+      const salaId = String(dest?.rel || '').split('/').pop();
+      if (!/^[A-Za-z0-9._-]{1,64}$/.test(salaId)) {
+        throw new Error(t('launcher.aduana.invalidId', 'No se pudo generar un identificador válido para la sala.'));
+      }
+      const steps = [
+        { path: '', name: '.cwc-aduana' },
+        { path: '.cwc-aduana', name: 'salas' },
+        { path: '.cwc-aduana/salas', name: salaId },
+      ];
+      for (const [index, step] of steps.entries()) {
+        const res = await fetch('/api/files/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(step),
+        });
+        if (res.ok || (res.status === 409 && index < steps.length - 1)) continue;
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || t('launcher.aduana.mkdirError', 'No se pudo preparar la carpeta de la sala.'));
+      }
+    }
+
     function render() {
       if (!modal) return;
       const body = modal.body;
@@ -97,6 +132,7 @@ export default {
           ${typeCard('chat', 'sparkle', t('launcher.type.chat', 'Chat'))}
           ${typeCard('claude', 'keyboard', t('launcher.type.claudeTui', 'Claude TUI'))}
           ${typeCard('terminal', 'terminal', t('launcher.type.terminal', 'Terminal'))}
+          ${typeCard('sala', 'relay', t('launcher.type.aduanaSala', '🛃 Sala'))}
         </div>
         <div class="ln-sec-title">${t('launcher.section.project', 'Proyecto')}</div>
         <div class="ln-area">${st.view === 'list' ? listHTML() : browseHTML()}</div>
@@ -108,10 +144,36 @@ export default {
         </div>
         <button class="btn btn--block ln-start" ${st.dest ? '' : 'disabled'}>${icon('play', { size: 15 })}<span>${st.dest ? t('launcher.startIn', 'Iniciar en {dest}', { dest: st.dest.label }) : t('launcher.pickDest', 'Elegí un destino')}</span></button>`;
 
+      if (st.type === 'sala') {
+        const area = body.querySelector('.ln-area');
+        if (area) {
+          area.hidden = true;
+          if (area.previousElementSibling) area.previousElementSibling.hidden = true;
+        }
+        const select = body.querySelector('#ln-model');
+        if (select) {
+          const options = MODELS.map(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.selected = value === st.model;
+            return option;
+          });
+          select.replaceChildren(...options);
+        }
+      }
+
       // Tipo
       for (const b of body.querySelectorAll('.ln-type')) {
         b.addEventListener('click', () => {
           st.type = b.dataset.type;
+          if (st.type === 'sala') {
+            st.dest = freshSalaDest();
+            if (!MODELS.some(([value]) => value === st.model)) st.model = 'tandem';
+            render();
+            return;
+          }
+          if (st.dest?.sala) st.dest = null;
           // Los alias de chat ('auto' AutoTux, 'tandem' Tándem) no existen para
           // el CLI real de una sesión TUI/terminal: sin este saneo el <select>
           // muestra la primera opción pero st.model conserva el alias (el evento
@@ -228,6 +290,16 @@ export default {
       const dest = st.dest;
       if (!dest) return; // botón deshabilitado sin destino; guarda por si acaso
       modal.close();
+      if (st.type === 'sala') {
+        try {
+          await ensureSalaFolder(dest);
+        } catch (e) {
+          dialog.alertDialog({ title: t('launcher.aduana.createErrorTitle', 'No se pudo crear la sala'), message: e.message });
+          return;
+        }
+        await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'default' });
+        return;
+      }
       if (st.type === 'chat') {
         // Default "Todo" (bypassPermissions) para chat nuevo del lanzador.
         await ctx.openChat({ cwd: dest.rel, model: st.model, mode: 'bypassPermissions' });

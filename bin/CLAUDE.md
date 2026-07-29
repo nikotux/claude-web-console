@@ -173,6 +173,19 @@ hubiera terminado y sobrevivía incluso a `systemctl restart` del server porque
 `warnBgKilled()` excluye los `ready` para no decir que siguen corriendo.
 El sweep Codex corre junto a `sweepBgFromTranscript()` en AMBOS puntos:
 intervalo de 20 s y chequeo de auto-siesta.
+`console:BUG-2185` (2026-07-28): `reconcileSessionArgs()` corre justo antes de `startEngine()` y corrige
+`--session-id`↔`--resume` mirando el transcript en el `os.homedir()` de ESTE proceso — que en multi-tenant
+es el del DUEÑO, no el del server. El runner es la autoridad de esa decisión porque es el único que corre
+con el HOME correcto. Por eso `RESUME`/`SESSION_ID` son `let`. Además `pump()` es ahora un bucle que
+reintenta UNA vez con el modo opuesto si el CLI rechaza el id al arrancar (`already in use` /
+`No conversation found`) y `sawInit` sigue en false, reponiendo el mensaje del usuario si hiciera falta: un chat no puede volver a quedar muerto para siempre por esta clase de error.
+### bin/cwc-test-chat-trash.js  test funcional determinista y AISLADO de
+`src/modules/chat/trash.js`. No usa SDK ni consume tokens; apunta
+`CWC_HOME`/`HOME`/`CWC_DATA_DIR` a un `mkdtemp` que borra en `finally`, por lo
+que no toca la papelera real. Imprime 35 aserciones agrupadas T1..T6: copia del
+transcript · reparación perezosa · idempotencia · purga a los 30 días ·
+restaurar · purga manual y multiusuario. Uso:
+`node bin/cwc-test-chat-trash.js`; termina con `N pass / M fail` + exit code.
 ### bin/cwc-codex-runner.js     ejecutor DESACOPLADO de UNA delegación Tándem a Codex
 (`--job <id>`). Es config-free: no importa `core/config.js` y resuelve el
 directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Al pasar a `running`
