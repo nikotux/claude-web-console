@@ -68,7 +68,14 @@ owner/phase/targetDate/comments[]/blocks[]. Todo se normaliza en
 store.js (dueDate/targetDate = YYYY-MM-DD validado; blocks = ids
 EXISTENTES T<n>|PLAN-<n>, sin el propio, tope 30 — pueden CRUZAR
 tarea↔plan como en Pad); `blockedBy` NO se persiste, se deriva en el
-front (quién te tiene en su blocks). COMENTARIOS append+borrar
+front (quién te tiene en su blocks). REGLA DEL ETA (console:CONVE-807,
+adopción console:PEND-2297): `dueState` = vencida|hoy|proxima|null se
+DERIVA al leer desde `dueDate` contra el día local de Medellín
+(`tokens/time.js#localTodayStr`); una tarea `hecha` siempre devuelve null.
+`dueState` NUNCA se persiste ni se manda a Pad. El tablero marca por sí solo
+las vencidas y las que vencen hoy en tarjeta y detalle, y muestra el total de
+vencidas en el header; las próximas no se resaltan. El campo visible se llama
+“Fecha comprometida (ETA)”. COMENTARIOS append+borrar
 (sin editar): POST /:id/comment {text} + POST /:id/comment/:cid/delete
 (id ^C\d+-\d+$) y sus gemelos /plans/:id/comment[...]; addComment deja
 además un evento 'comment' en el log. TIMELINE por ítem: GET

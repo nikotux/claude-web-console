@@ -1,8 +1,8 @@
-// Vista Raw v3 — de wallpaper a monitor cardíaco (PLAN-544).
+// Vista Raw v6 — paneles llenos por líneas, sin cap arbitrario de chars.
+// El cursor dejó de ser circular: al agotar el log queda quieto, sin replay.
+// El tick ya no lee layout; la vista abre a todos y los endpoints filtran dueño.
 //
-// La queja de v2: la lluvia se sentía como fondo estático, desconectada de los
-// flujos — todo caía parejo, trabajés o no. v3 conecta el MOVIMIENTO a los
-// momentos reales, con 5 mecanismos:
+// La lluvia conecta el MOVIMIENTO a los momentos reales, con 5 mecanismos:
 //   1. ENERGÍA POR SESIÓN — cada banda tiene su propia energía (0..1) que decae;
 //      en reposo cae lenta y tenue (casi congelada), trabajando cae rápida,
 //      brillante y densa. El contraste hace legible "qué sesión trabaja".
@@ -29,16 +29,26 @@ const IGNITE_MS = 1100;         // duración del destello de nacimiento
 const DIE_MS = 1000;            // duración de la disolución
 const ENERGY_TAU = 1.0;         // constante de decaimiento de energía (s)
 const PENDING_CAP = 6000;
-const LOG_CAP = 4000;           // chars del log legible por sesión
+const LOG_CAP = 40000;          // el seed del backend ahora trae hasta 40.000 chars
 const LOG_TICK_MS = 90;         // cadencia de la máquina de escribir
-const IDLE_VEL = 1.2;           // filas/s de una banda en reposo
+const LOG_LINE_PX = 14.85;      // font-size 11px × line-height 1.35 de .raw-log-code
+const IDLE_COLLAPSE_MS = 60000;  // un minuto sin producir nada → sale de la grilla
+const DOZING_BAR_PX = 22;        // alto de la fila de chips (0 si no hay ninguna)
+// Ancho real de un carácter del panel de log. Se mide en un canvas PROPIO —
+// NO en `ctx`, que tiene la fuente de 16px de la lluvia y quedaría corrupto.
+// measureText no toca el DOM ni fuerza layout.
+const LOG_FONT = "11px 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
+const logMeasureCtx = document.createElement('canvas').getContext('2d');
+logMeasureCtx.font = LOG_FONT;
+const LOG_CHAR_PX = logMeasureCtx.measureText('0'.repeat(100)).width / 100 || 6.6;
+const IDLE_VEL = 3;             // a 1,2 filas/s la lluvia en reposo se veía congelada
 const FAST_VEL = 30;            // filas/s a energía plena
 const AMBIENT_VEL = 1.0;        // columnas sin dueño
 const FADE_ALPHA = 0.12;
 const FONT_SIZE = 16;
 const TERM_POLL_MS = 3000;
 const PROC_POLL_MS = 1500;
-const HEALTH_POLL_MS = 60000;
+const HEALTH_POLL_MS = 300000;
 const HEALTH_SERVICES = { systemd: 'Consola web', 'pad-backbone': 'Pad local', tmux: 'tmux' };
 const SHELL_GLYPHS = '$#~/\\|<>[](){};:=+-*.,_% abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
@@ -57,7 +67,9 @@ const WORLD = {
 
 const canvas = document.getElementById('raw-canvas');
 const ctx = canvas.getContext('2d');
+const emptyEl = document.getElementById('raw-empty');
 const feedEl = document.getElementById('raw-feed');
+const dozingEl = document.getElementById('raw-dozing');
 const labelsEl = document.getElementById('raw-labels');
 const logsEl = document.getElementById('raw-logs');
 const procsEl = document.getElementById('raw-procs');
@@ -71,6 +83,7 @@ const rcCodexTps = document.getElementById('rc-codex-tps');
 const logPanels = new Map(); // sessionId -> <div.raw-log>
 const labelPanels = new Map(); // sessionId -> <div.raw-label>
 const seeded = new Set();    // sesiones ya sembradas con su texto reciente
+const seedTries = new Map(); // sid -> intentos (el seed se reintenta si vino vacío)
 let stripHealth = [];   // servicios desde /api/health/checks (LED por status)
 let stripDaemons = [];  // procesos-servicio desde /active-runners (WhatsApp)
 
@@ -80,7 +93,14 @@ let owner = [];         // sessionId | null por columna
 let bands = [];         // { sid, start, width }
 let bandBySid = new Map();
 let layoutSig = '';
+let dozingBarH = 0;
 let lastTs = 0;
+let logMaxLines = 40;
+let logCols = 60;
+let termFullPending = true;
+let isAdminUser = false;
+let meUser = null;   // username propio; con token maestro cae al host
+let meHost = null;   // username del host de la consola
 
 function restoreCounter(k) {
   const v = Number(localStorage.getItem('cwc:rawcount:' + k));
@@ -143,30 +163,49 @@ function resizeCanvas() {
   relayout();
 }
 
+// Dormida = no está trabajando Y hace más de un minuto que no produce texto.
+// Se mide contra bornAtMs además de lastTextTs para darle su minuto de gracia a
+// una sesión recién descubierta que todavía no escribió nada (lastTextTs = 0).
+// Nacer y morir tienen animación propia: no se colapsa en el medio.
+function isDormant(s, now) {
+  if (!s) return false;
+  if (s.status === 'working' || s.delegating) return false;
+  if (s.phase === 'igniting' || s.phase === 'dying') return false;
+  return now - Math.max(s.lastTextTs || 0, s.bornAtMs || 0) > IDLE_COLLAPSE_MS;
+}
+
 // Bandas contiguas por sesión, intercaladas a lo ancho (incluye las que agonizan
 // para que la disolución se vea en su lugar).
 function relayout() {
-  const active = [...state.sessions.keys()].sort();
-  const sig = active.join('|') + '@' + totalCols;
+  const all = [...state.sessions.keys()].sort();
+  const now = Date.now();
+  let dozing = all.filter((sid) => isDormant(state.sessions.get(sid), now));
+  let awake = all.filter((sid) => !dozing.includes(sid));
+  // Caso borde: si TODAS están dormidas, se muestran normalmente. Si no, la vista
+  // quedaría en negro con una fila de chips arriba y nada más.
+  if (!awake.length) { awake = all; dozing = []; }
+  const dozingH = dozing.length ? DOZING_BAR_PX : 0;
+  const sig = awake.join('|') + '#' + dozing.join('|') + '@' + totalCols;
   if (sig === layoutSig) return;
   layoutSig = sig;
+  dozingBarH = dozingH;
 
   owner = new Array(totalCols).fill(null);
   bands = [];
   bandBySid = new Map();
-  if (active.length) {
-    const weights = active.map((sid) => {
+  if (awake.length) {
+    const weights = awake.map((sid) => {
       const s = state.sessions.get(sid);
       return s && s.isSub ? 0.6 : 1;
     });
     const totalW = weights.reduce((a, b) => a + b, 0) || 1;
     let acc = 0;
-    active.forEach((sid, i) => {
+    awake.forEach((sid, i) => {
       // Slot proporcional al peso (subagente = banda más angosta), borde a borde.
       const s0 = Math.floor((acc / totalW) * totalCols);
       acc += weights[i];
       const s1 = Math.floor((acc / totalW) * totalCols);
-      const gut = active.length > 1 ? Math.min(4, Math.max(1, Math.floor((s1 - s0) * 0.12))) : 0;
+      const gut = awake.length > 1 ? Math.min(4, Math.max(1, Math.floor((s1 - s0) * 0.12))) : 0;
       const start = s0;
       const width = Math.max(3, (s1 - s0) - gut);
       for (let c = start; c < start + width && c < totalCols; c++) owner[c] = sid;
@@ -177,6 +216,7 @@ function relayout() {
   }
   layoutLabels();
   syncLogPanels();
+  renderDozing(dozing);
 }
 
 // Un panel de log legible por banda, bajo su rótulo, hasta cerca del fondo.
@@ -184,8 +224,13 @@ function relayout() {
 function syncLogPanels() {
   const slotPx = bands.length ? canvas.width / bands.length : canvas.width;
   const panelW = Math.max(60, slotPx - 16);
-  const top = 22; // pegado bajo el rótulo (márgenes 0)
+  const top = 22 + dozingBarH; // pegado bajo el rótulo (márgenes 0)
   const height = Math.max(120, window.innerHeight - top - 30); // llena casi todo el alto
+  const prevLines = logMaxLines;
+  const prevCols = logCols;
+  logMaxLines = Math.max(6, Math.floor((height - 8) / LOG_LINE_PX)); // -8 = padding vertical del código
+  const gutterPx = String(logMaxLines).length * LOG_CHAR_PX + 11; // dígitos + padding + borde
+  logCols = Math.max(20, Math.floor((panelW - gutterPx - 16) / LOG_CHAR_PX));
   const present = new Set();
   for (const b of bands) {
     present.add(b.sid);
@@ -205,6 +250,12 @@ function syncLogPanels() {
     el.style.width = `${panelW}px`;
     el.style.height = `${height}px`;
     if (s) el.style.color = sessionHSL(b.sid, s.world, 'idle');
+    if (born || el._gutLines !== logMaxLines) {
+      el._gutLines = logMaxLines;
+      let g = '';
+      for (let ln = 1; ln <= logMaxLines; ln++) g += ln + '\n';
+      el._gut.textContent = g;
+    }
     if (born) requestAnimationFrame(() => el.classList.add('raw-log--in'));
     else if (el._out) { el._out = false; clearTimeout(el._outT); el.classList.remove('raw-log--out'); el.classList.add('raw-log--in'); }
   }
@@ -217,46 +268,79 @@ function syncLogPanels() {
     }
   }
   for (const b of bands) seedSession(b.sid); // poblar bandas ociosas con su texto reciente
+  if (prevLines !== logMaxLines || prevCols !== logCols) {
+    for (const s of state.sessions.values()) s.display = fitLines(s.raw);
+  }
 }
 
 // Trae UNA vez el texto reciente de una sesión para que su banda no arranque vacía.
 async function seedSession(sid) {
   if (seeded.has(sid)) return;
   if (/[:~]/.test(sid)) { seeded.add(sid); return; }
-  seeded.add(sid);
+  const tries = (seedTries.get(sid) || 0) + 1;
+  seedTries.set(sid, tries);
+  if (tries >= 3) seeded.add(sid); // se agotaron los reintentos: no insistir más
   const r = await fetchJson(`/api/tokens/stream/seed?sid=${encodeURIComponent(sid)}`);
   const s = state.sessions.get(sid);
-  if (s && r && r.text && !s.log) s.log = r.text.slice(-LOG_CAP);
+  if (!s) return;
+  if (r && r.text && !s.log) {
+    // El PASADO se vuelca de golpe (no tiene sentido tipear 40.000 chars viejos):
+    // el panel nace lleno y la máquina de escribir arranca recién con lo NUEVO.
+    s.log = r.text.slice(-LOG_CAP);
+    s.cursor = s.log.length;
+    s.raw = s.log;
+    s.display = fitLines(s.raw);
+    seeded.add(sid); // ya tiene historial: listo
+  }
 }
 
-// Máquina de escribir: escribe el texto real de corrido (más rápido si la sesión
-// tiene energía) y hace tail-scroll. Al llegar al final del log RECICLA desde el
-// principio (cursor circular) → siempre hay texto de consola fluyendo en cada
-// banda, aunque la sesión deje de producir salida nueva.
+// Convierte el texto lógico en EXACTAMENTE `logMaxLines` líneas visuales:
+// primero envuelve cada línea lógica al ancho real del panel (`.raw-log-code`
+// es white-space:pre y no envuelve solo — sin esto un párrafo de 540 chars
+// ocupaba UNA línea, se cortaba al borde derecho y el panel quedaba 87% vacío),
+// después recorta las viejas si sobran y rellena con vacías ARRIBA si faltan,
+// para que el texto quede anclado abajo como una terminal real.
+function fitLines(text) {
+  const out = [];
+  for (const logical of String(text || '').split('\n')) {
+    if (!logical.length) { out.push(''); continue; }
+    for (let i = 0; i < logical.length; i += logCols) out.push(logical.slice(i, i + logCols));
+  }
+  if (out.length > logMaxLines) return out.slice(-logMaxLines).join('\n');
+  if (out.length < logMaxLines) return '\n'.repeat(logMaxLines - out.length) + out.join('\n');
+  return out.join('\n');
+}
+
+// Máquina de escribir: escribe solo el texto nuevo y, al agotarlo, deja el panel
+// quieto. Los volcados directos de seed/capture-pane se pintan sin tocar layout.
 function typewriterTick() {
   if (state.stopped) return;
   for (const [sid, el] of logPanels) {
     const s = state.sessions.get(sid);
     if (!s || !s.log.length) continue;
+    if (s.cursor >= s.log.length) {
+      if (el._txt !== s.display && el._code) {
+        el._txt = s.display;
+        el._code.textContent = s.display;
+      }
+      continue;
+    }
     const rate = 2 + Math.round(7 * Math.min(1, s.energy));
     let add = '';
-    for (let k = 0; k < rate; k++) { add += s.log[s.cursor % s.log.length]; s.cursor++; }
-    s.cursor %= s.log.length;
-    s.display = (s.display + add).slice(-1600);
+    for (let k = 0; k < rate; k++) {
+      if (s.cursor >= s.log.length) break;
+      add += s.log[s.cursor];
+      s.cursor++;
+    }
+    s.raw += add;
+    const rawCap = Math.max(4000, logMaxLines * logCols * 2);
+    if (s.raw.length > rawCap) s.raw = s.raw.slice(s.raw.length - rawCap);
+    s.display = fitLines(s.raw);
     if (el._txt === s.display) continue;
     el._txt = s.display;
-    const code = el._code, gut = el._gut;
-    if (!code || !gut) continue;
+    const code = el._code;
+    if (!code) continue;
     code.textContent = s.display;
-    const nLines = s.display.split('\n').length;
-    if (el._nLines !== nLines) {
-      el._nLines = nLines;
-      let g = '';
-      for (let ln = 1; ln <= nLines; ln++) g += ln + '\n';
-      gut.textContent = g;
-    }
-    code.scrollTop = code.scrollHeight;
-    gut.scrollTop = code.scrollTop; // el gutter sigue al código (misma altura de línea)
   }
 }
 
@@ -282,6 +366,25 @@ function bandLabel(s, sid) {
   const name = s.title || `${WORLD[wk].label} · ${sid.slice(0, 4)}`;
   return `${statusGlyph(s)} ${WORLD[wk].ico} ${name.slice(0, 24)} · ${s.model || s.source}`;
 }
+
+// Cada dormida queda como un chip compacto con el color de su sesión. Es solo
+// identidad: "esto sigue abierto"; el detalle vuelve cuando despierta.
+function renderDozing(list) {
+  if (!dozingEl) return;
+  dozingEl.hidden = !list.length;
+  dozingEl.innerHTML = '';
+  for (const sid of list) {
+    const s = state.sessions.get(sid);
+    if (!s) continue;
+    const chip = document.createElement('div');
+    chip.className = 'raw-doze-chip';
+    chip.style.color = sessionHSL(sid, s.world, 'label');
+    chip.style.borderLeftColor = sessionHSL(sid, s.world, 'idle');
+    chip.textContent = bandLabel(s, sid).slice(0, 26);
+    dozingEl.appendChild(chip);
+  }
+}
+
 function layoutLabels() {
   const present = new Set();
   for (const b of bands) {
@@ -294,6 +397,7 @@ function layoutLabels() {
     if (!el) { el = document.createElement('div'); el.className = 'raw-label'; labelsEl.appendChild(el); labelPanels.set(b.sid, el); born = true; }
     else if (el._out) { el._out = false; clearTimeout(el._outT); el.classList.remove('raw-label--out'); }
     el.style.left = `${Math.min(b.start * FONT_SIZE, Math.max(0, canvas.width - 210))}px`;
+    el.style.top = (2 + dozingBarH) + 'px';
     el.style.color = sessionHSL(b.sid, s.world, 'label');
     el.style.borderLeftColor = sessionHSL(b.sid, s.world, 'idle');
     const txt = bandLabel(s, b.sid);
@@ -434,9 +538,9 @@ function upsertSession(sid, patch) {
     s = {
       source: 'claude', world: null, model: null,
       buf: '', read: 0, energy: 0.92,
-      log: '', cursor: 0, display: '',
+      log: '', cursor: 0, raw: '', display: '',
       status: 'text', chatAlive: false, delegating: false,
-      phase: 'igniting', bornAt: performance.now(), dyingAt: 0,
+      phase: 'igniting', bornAt: performance.now(), bornAtMs: Date.now(), dyingAt: 0,
       lastTextTs: 0, lastFeedTs: 0,
     };
     state.sessions.set(sid, s);
@@ -465,9 +569,13 @@ function ingestFragment(f) {
   s.lastTextTs = Date.now();
   s.buf += (s.buf ? '  ·  ' : '') + f.text;
   if (s.buf.length - s.read > PENDING_CAP) { s.buf = s.buf.slice(s.buf.length - PENDING_CAP); s.read = 0; }
-  // log legible (una línea por fragmento): la máquina de escribir lo recicla.
+  // log legible (una línea por fragmento): la máquina escribe solo lo nuevo.
   s.log += f.text + '\n';
-  if (s.log.length > LOG_CAP) s.log = s.log.slice(s.log.length - LOG_CAP);
+  if (s.log.length > LOG_CAP) {
+    const cut = s.log.length - LOG_CAP;   // al podar el principio hay que correr el cursor la misma cantidad
+    s.log = s.log.slice(cut);
+    s.cursor = Math.max(0, s.cursor - cut);
+  }
   s.energy = Math.min(1.15, s.energy + 0.5); // pico
   rippleBand(f.sessionId);
   const now = Date.now();
@@ -507,7 +615,9 @@ function accumTokens(map, side) {
 function updateSessionsLine() {
   const working = [...state.sessions.values()].filter((s) => s.status === 'working' || s.delegating).length;
   const n = state.sessions.size;
-  rcSessions.textContent = `${n} sesión${n === 1 ? '' : 'es'} · ${working} activa${working === 1 ? '' : 's'}`;
+  // "sesión" pierde la tilde en plural: no se puede armar pegando el sufijo.
+  rcSessions.textContent = `${n} ${n === 1 ? 'sesión' : 'sesiones'} · ${working} activa${working === 1 ? '' : 's'}`;
+  if (emptyEl) emptyEl.hidden = bands.length > 0;
 }
 
 function pad12(v) {
@@ -526,10 +636,14 @@ function renderCounters(dt) {
   if (state.shown.codex < state.tok.codex) state.shown.codex = state.tok.codex;
   state.tok.claude = Math.max(state.tok.claude, state.shown.claude);
   state.tok.codex = Math.max(state.tok.codex, state.shown.codex);
-  rcClaudeNum.textContent = pad12(state.shown.claude);
-  rcCodexNum.textContent = pad12(state.shown.codex);
-  rcClaudeTps.textContent = `${state.claudeTps.toFixed(0)} t/s`;
-  rcCodexTps.textContent = `${state.codexTps.toFixed(0)} t/s`;
+  const cs = pad12(state.shown.claude);
+  if (rcClaudeNum._v !== cs) { rcClaudeNum._v = cs; rcClaudeNum.textContent = cs; }
+  const os = pad12(state.shown.codex);
+  if (rcCodexNum._v !== os) { rcCodexNum._v = os; rcCodexNum.textContent = os; }
+  const ct = `${state.claudeTps.toFixed(0)} t/s`;
+  if (rcClaudeTps._v !== ct) { rcClaudeTps._v = ct; rcClaudeTps.textContent = ct; }
+  const ot = `${state.codexTps.toFixed(0)} t/s`;
+  if (rcCodexTps._v !== ot) { rcCodexTps._v = ot; rcCodexTps.textContent = ot; }
 }
 
 function persistCounters(ts) {
@@ -547,6 +661,17 @@ async function fetchJson(url) {
     if (!r.ok) return null;
     return await r.json();
   } catch { return null; }
+}
+
+// La Vista Raw es un monitor PERSONAL: aunque seas admin y /api/chat/list te
+// devuelva los chats de todos, acá solo entran los tuyos. Un chat SIN owner es
+// anterior al multi-tenant y se considera del host. Si whoami todavía no
+// respondió (meUser null) no se filtra nada: la vista no puede quedarse en
+// blanco por una request lenta, y las otras dos fuentes ya cortan en el backend.
+function isMine(c) {
+  if (!meUser) return true;
+  if (!c.owner) return meUser === meHost;
+  return c.owner === meUser;
 }
 
 async function pollOnce() {
@@ -570,6 +695,7 @@ async function pollOnce() {
   if (chatList?.chats) {
     const aliveIds = new Set();
     for (const c of chatList.chats) {
+      if (!isMine(c)) continue;
       if (!c.sessionId) continue;
       const existed = state.sessions.has(c.sessionId);
       if (c.alive) {
@@ -601,7 +727,8 @@ async function pollOnce() {
   }
 
   if (pruneSessions()) structuralChange = true;
-  if (structuralChange) relayout(); else layoutLabels(); // labels reflejan estado aunque no cambie el layout
+  relayout();      // sale temprano solo si el layoutSig no cambió
+  layoutLabels();  // los rótulos reflejan el estado aunque el layout no cambie
   updateSessionsLine();
 }
 
@@ -631,7 +758,8 @@ function renderStrip() {
 // fase como banda; 'service' va a la tira de latidos.
 async function pollProcs() {
   if (state.stopped) return;
-  const r = await fetchJson('/api/health/active-runners');
+  // La vista es personal: se fuerza el filtro por dueño también para el admin.
+  const r = await fetchJson('/api/health/active-runners?mine=1');
   const services = [];
   const jobIds = new Set();
   let changed = false;
@@ -652,13 +780,15 @@ async function pollProcs() {
   stripDaemons = services.map((p) => ({ label: p.label, meta: `${p.phase ? p.phase + ' · ' : ''}${fmtElapsed(p.startedAt)}`, status: 'ok' }));
   renderStrip();
   if (pruneSessions()) changed = true;
-  if (changed) relayout(); else layoutLabels();
+  relayout();      // sale temprano solo si el layoutSig no cambió
+  layoutLabels();  // los rótulos reflejan el estado aunque el layout no cambie
 }
 
 // C: terminales bash (capture-pane). Excluye isClaude (ya llueve por transcript).
 async function pollTerminals() {
   if (state.stopped) return;
-  const r = await fetchJson('/api/tmux/raw-feed');
+  const r = await fetchJson(`/api/tmux/raw-feed${termFullPending ? '?full=1' : ''}`);
+  if (r) termFullPending = false;
   const present = new Set();
   let changed = false;
   for (const t of (r && r.terminals) || []) {
@@ -666,29 +796,47 @@ async function pollTerminals() {
     const id = 'term:' + t.name;
     present.add(id);
     const { s, born } = upsertSession(id, { source: 'term', world: 'terminal', model: 'bash', title: t.customTitle || undefined });
-    s.chatAlive = true; s.status = t.attached ? 'working' : 'waiting'; s.lastTextTs = Date.now();
+    s.chatAlive = true; s.status = t.attached ? 'working' : 'waiting';
     if (t.text && t.text !== s._pane) {
+      // lastTextTs marca "produjo algo NUEVO", no "sigue existiendo": si se pisara en
+      // cada poll, una terminal quieta parecería activa para siempre y nunca colapsaría.
+      // No la mata: sigue viva por chatAlive, que sí se refresca en cada poll.
+      s.lastTextTs = Date.now();
       s._pane = t.text;
       s.log = t.text.slice(-LOG_CAP);
+      s.cursor = s.log.length;      // un pane es una pantalla completa: se muestra, no se retipea
+      s.raw = s.log;
+      s.display = fitLines(s.raw);
       s.buf = t.text.slice(-PENDING_CAP); s.read = 0;
       s.energy = Math.min(1.1, s.energy + 0.25);
     }
-    if (born) changed = true;
+    if (born) { changed = true; termFullPending = true; }
   }
   for (const [sid, s] of state.sessions) {
     if (s.source === 'term' && !present.has(sid)) { s.chatAlive = false; s.lastTextTs = 0; }
   }
   if (pruneSessions()) changed = true;
-  if (changed) relayout(); else layoutLabels();
+  relayout();      // sale temprano solo si el layoutSig no cambió
+  layoutLabels();  // los rótulos reflejan el estado aunque el layout no cambie
 }
 
 function scheduleProcs() { if (state.stopped) return; pollProcs().finally(() => { if (!state.stopped) setTimeout(scheduleProcs, PROC_POLL_MS); }); }
 function scheduleTerminals() { if (state.stopped) return; pollTerminals().finally(() => { if (!state.stopped) setTimeout(scheduleTerminals, TERM_POLL_MS); }); }
 
-// Servicios (signos vitales) desde los chequeos rápidos: 0 tokens pero /checks es
-// pesado (corre node --check de todo) → poll lento (60s). LED por status.
+// La tira de servicios sale de /api/health/checks, que es admin-only (403 para
+// un inquilino) y además caro (~5,7 s: corre node --check de todo src/ y bin/).
+// Se consulta el principal UNA vez y los no-admin ni lo piden.
+async function initAdminFlag() {
+  const me = await fetchJson('/api/whoami');
+  meHost = me?.host || null;
+  meUser = me?.username || me?.host || null;
+  isAdminUser = !!(me && me.admin);
+  if (isAdminUser) setTimeout(scheduleHealth, 10000); // diferido: no compite con el arranque
+}
+
+// Servicios (signos vitales) desde los chequeos de salud. LED por status.
 async function pollHealth() {
-  if (state.stopped) return;
+  if (state.stopped || !isAdminUser) return;
   const r = await fetchJson('/api/health/checks');
   const checks = (r && r.checks) || [];
   stripHealth = checks
@@ -696,7 +844,10 @@ async function pollHealth() {
     .map((c) => ({ label: HEALTH_SERVICES[c.id], meta: c.status === 'ok' ? '' : String(c.detail || c.status).slice(0, 22), status: c.status }));
   renderStrip();
 }
-function scheduleHealth() { if (state.stopped) return; pollHealth().finally(() => { if (!state.stopped) setTimeout(scheduleHealth, HEALTH_POLL_MS); }); }
+function scheduleHealth() {
+  if (state.stopped || !isAdminUser) return;
+  pollHealth().finally(() => { if (!state.stopped && isAdminUser) setTimeout(scheduleHealth, HEALTH_POLL_MS); });
+}
 
 function schedulePoll() {
   if (state.stopped) return;
@@ -729,4 +880,4 @@ setInterval(typewriterTick, LOG_TICK_MS);
 schedulePoll();
 scheduleProcs();
 scheduleTerminals();
-scheduleHealth();
+initAdminFlag();

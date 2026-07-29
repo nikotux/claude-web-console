@@ -405,7 +405,16 @@ function enhanceInlineBars(root) {
 const MERMAID_MAX_LINES = 400;
 // Al ser vectorial se puede ampliar sin pixelar, pero sin este tope un
 // diagrama de tres nodos podría convertirse en un cartel desproporcionado.
-const MERMAID_MAX_SCALE = 2.2;
+// 1.5 no es arbitrario: es el techo que ya exhiben los diagramas normales en
+// desktop (medidos 1.23-1.50, limitados por alto o ancho disponible), así que
+// bajarlo de 2.2 a 1.5 NO cambia ningún diagrama real — solo deja de inflar a
+// los chicos (mindmaps de pocos nodos), que era el caso que se veía de cartel.
+const MERMAID_MAX_SCALE = 1.5;
+// El modal "Ampliar" conserva el tope viejo A PROPÓSITO: ahí el diagrama es el
+// contenido principal de una ventana dedicada, no una figura embebida en el
+// mensaje. Antes ambos casos compartían constante y bajar la inline habría
+// achicado también el zoom, que es exactamente lo contrario de lo que se pide.
+const MERMAID_ZOOM_MAX_SCALE = 2.2;
 // Por debajo de ~0.85 el texto de los nodos (15px) baja de ~13px y deja de
 // leerse cómodo en un teléfono; preferimos scroll horizontal antes que un
 // diagrama ilegible.
@@ -587,7 +596,7 @@ function openMermaidZoom(holder) {
       clone.style.width = '100%';
       clone.style.height = 'auto';
     } else {
-      clone.style.height = `min(86vh, ${Math.round(vb.height * MERMAID_MAX_SCALE)}px)`;
+      clone.style.height = `min(86vh, ${Math.round(vb.height * MERMAID_ZOOM_MAX_SCALE)}px)`;
       clone.style.width = 'auto';
     }
   } else {

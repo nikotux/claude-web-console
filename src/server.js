@@ -231,10 +231,16 @@ async function main() {
   // Gestor de archivos (subpágina): cualquier usuario autenticado.
   app.get('/archivos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'archivos.html')));
 
-  // Vista Raw (subpágina, PLAN-544): muestra el texto en vivo de las sesiones
-  // del host, así que desde BUG-1874 es exclusiva de administradores.
+  // Vista Raw (subpágina, PLAN-544): cualquier usuario autenticado, y cada uno
+  // ve SOLO lo suyo. El aislamiento NO lo hace esta ruta (sirve un HTML estático
+  // sin datos): lo garantiza cada endpoint que la vista consume, todos ya
+  // fail-closed por principal — /api/tokens/{flow,stream,stream/seed} resuelven
+  // el owner del principal autenticado y nunca de la query (BUG-1874),
+  // /api/chat/list filtra con manager.list(principalOf(req)), /api/tmux/raw-feed
+  // con ownsSession() y /api/health/active-runners descarta todo job sin dueño
+  // legible. Si mañana la vista consume un endpoint nuevo, ESE endpoint tiene
+  // que traer su propio filtro por principal: acá ya no hay red de contención.
   app.get('/raw', (req, res) => {
-    if (!isAdmin(req)) return res.status(403).send('Solo administradores.');
     res.sendFile(path.join(PUBLIC_DIR, 'raw.html'));
   });
 

@@ -20,13 +20,28 @@ implementación vive en
 ### Catálogo de capacidades (capabilities.js)
 `capabilities.js` es la fuente única del orden y la obligatoriedad declarada de
 los pasos del onboarding. La tabla `CAPABILITIES` reúne identidad, etiqueta,
-detector y rutas de inicio y estado de cada paso. `/validate` deriva de ese
-catálogo tanto los booleanos de estado como `pending`, siempre en el orden
-declarado. `/finish` hace cumplir `required` con `blockingFor(user)`: un cliente
-viejo o un `curl` no pueden saltear el gate. GitHub ocupa `order:5` y se detecta
-con `hasGithubAuth(user)`, que corre `gh auth status` con HOME y entorno aislados
-del usuario. Para agregar un paso nuevo se modifica esa tabla; el frontend
-recibe orden, etiqueta y obligatoriedad desde `/validate`.
+detector y rutas de inicio y estado de cada paso. `required` admite el boolean
+histórico o un objeto segmentado; sus claves quedan abiertas deliberadamente
+porque el eje útil puede ser un perfil de trabajo y no un enum fijo de roles.
+Con el modelo binario actual `requiredFor(capability, user)` resuelve `admin` o
+`usuario` y devuelve siempre un boolean. Si el usuario es desconocido, falta su
+segmento o el valor no es booleano, hace fail-closed (`true`): mostrar un paso de
+más es recuperable, mientras que dar por listo a un usuario incompleto lo deja
+mal provisionado.
+
+La forma segmentada vive SOLO en `CAPABILITIES` y nunca debe emitirse cruda por
+HTTP. Tanto `/validate` como `/my-config` deben pasarla por `requiredFor`: los
+consumidores de `public/js/onboard/onboard.js` en las lecturas alrededor de las
+líneas 93, 537 y 1632 evaluarían un objeto como truthy y convertirían
+silenciosamente todos esos casos en obligatorios.
+
+`/validate` deriva del catálogo tanto los booleanos de estado como `pending`,
+siempre en el orden declarado. `/finish` hace cumplir la obligatoriedad resuelta
+con `blockingFor(user)`: un cliente viejo o un `curl` no pueden saltear el gate.
+GitHub ocupa `order:5` y se detecta con `hasGithubAuth(user)`, que corre
+`gh auth status` con HOME y entorno aislados del usuario. Para agregar un paso
+nuevo se modifica esa tabla; el frontend recibe orden, etiqueta y obligatoriedad
+ya resuelta desde `/validate`.
 
 ### ⚠️ Lo más importante — superficie PÚBLICA
 `publicRouter` en `src/modules/onboard/index.js` se monta desde
@@ -273,6 +288,17 @@ atómica, con forma
 otros pasos. `listProvisionStates()` descarta registros cuyo usuario ya no
 existe para que Salud no conserve fantasmas; `deleteProvisionState(user)`
 expone la limpieza idempotente para el flujo de baja.
+
+Todos los directorios de jobs —`onboard-jobs`, `claude-login-jobs`,
+`codex-login-jobs`, `gh-login-jobs`, `infisical-login`,
+`onboard-provisioning` y `tolkien-setup`— viven en el HOME del HOST a propósito,
+con el dueño en el NOMBRE de cada archivo. El motivo de fondo es que el
+onboarding crea el espacio del usuario, así que su propio estado no puede
+depender de que ese espacio ya exista. Por eso el módulo está eximido de la
+regla `aislamiento` de Coherencia (`console:PLAN-2274`). Si algún día el alta
+empieza a escribir estado que sí pertenezca a un usuario ya provisionado, hay
+que quitar `onboard` de `USER_STATE_PERSISTENCE.exclude` en
+`src/core/inventory.js` para que el detector vuelva a vigilarlo.
 
 `provision-user.js` concentra el provisioning completo posterior a `createUser`.
 Su `provisionNewUser(username)` prepara el espacio y dispara Pad, workspace,

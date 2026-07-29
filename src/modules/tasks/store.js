@@ -40,7 +40,10 @@
 //
 // Modelo de una tarea (shape que YA consumía el frontend, sin cambios):
 //   { id, title, description, type, status, priority, tags[], planId, owner,
-//     estimate, dueDate, blocks[], source, sourceRef, createdAt, updatedAt, doneAt }
+//     estimate, dueDate, dueState, blocks[], source, sourceRef, createdAt,
+//     updatedAt, doneAt }
+//   dueState = 'vencida'|'hoy'|'proxima'|null, DERIVADO al leer según el día
+//   local de Medellín; nunca se persiste en Pad.
 // Modelo de un plan:
 //   { id: 'PLAN-<n>', title, description, status, owner, phase, targetDate,
 //     blocks[], createdAt, updatedAt }
@@ -51,6 +54,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { runAdaptivePool } from '../../core/pool.js';
+import { localTodayStr } from '../tokens/time.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
   listComments, addComment as padAddComment, deleteComment as padDeleteComment,
@@ -133,20 +137,30 @@ function notFoundOr500(action, entityLabel, r) {
   return padError(action, r);
 }
 
+export function deriveDueState(dueDate, status) {
+  if (!dueDate || status === 'hecha') return null;
+  const today = localTodayStr();
+  if (dueDate < today) return 'vencida';
+  if (dueDate === today) return 'hoy';
+  return 'proxima';
+}
+
 function taskFromPadItem(item, blocks = []) {
   const f = parseFields(item);
+  const status = normStatus(f.status);
   return {
     id: item.ref,
     title: item.title || 'Sin título',
     description: item.content || '',
     type: normType(f.type),
-    status: normStatus(f.status),
+    status,
     priority: normPriority(f.priority),
     tags: parseTagsField(item),
     planId: item.parent_ref || null,
     owner: f.owner || '',
     estimate: f.estimate || '',
     dueDate: f.dueDate || '',
+    dueState: deriveDueState(f.dueDate, status),
     blocks,
     source: f.source === 'audio' ? 'audio' : 'manual',
     sourceRef: f.sourceRef || null,
@@ -459,7 +473,16 @@ export async function updateTask(dataDir, id, patch = {}, ctx = null) {
     if (patch.planId) {
       const pid = clampStr(patch.planId, 20).trim();
       if (PLAN_ID_RE.test(pid)) await setParent(id, pid, { ctx });
-    } else if (cur.data.parent_link_id) {
+    } else if (cur.data.parent_link_id && PLAN_ID_RE.test(String(cur.data.parent_ref || ''))) {
+      // Simetría con la rama de arriba: el tablero SOLO gestiona padres que son
+      // PLANes, así que solo puede borrar un padre que sea un PLAN. Sin este
+      // guard, un ítem cuyo padre es ARQUI/CONVE/DOC/PEND llega al formulario
+      // con un planId que ningún <option> matchea, el select cae a "" y guardar
+      // —aunque no se cambie nada— borra esa arista en silencio. Medido el
+      // 2026-07-29 (console:BUG-2327): 65 ítems expuestos. Agravante: parent_ref
+      // es un campo DERIVADO y puede corresponder a un `implements`, no a un
+      // `parent` (console:CONVE-2057), así que el borrado ciego podía llevarse
+      // una arista de referencia que este módulo ni siquiera representa.
       await deleteLink(cur.data.parent_link_id, { ctx });
     }
   }

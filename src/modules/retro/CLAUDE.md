@@ -372,11 +372,11 @@ las TRES vías garantizan `tolkien` por separado — default en manual,
 asignación propia en correo y asignación propia en Teams. No depender de
 que otra capa infiera el proyecto.
 
-## Linkeo automático al grafo de Pad (BUG-1878)
+## Linkeo automático al grafo de Pad (BUG-1878 · console:PEND-2281)
 
-Toda lección que se crea en `mejora-continua` recibe un link `implements` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. La convención que crea o actualiza `promoteToConvention` recibe `implements` hacia la lección de origen.
+Toda lección que se crea en `mejora-continua` recibe un link `parent` hacia su bucket `MC · *` de la colección `arquitectura`, elegido por su `category` (mapa exportado `MC_SUN_BY_CATEGORY` en `store.js`). El camino de lección RECURRENTE también lo intenta, así que una lección vieja que quedó huérfana se auto-sana al reincidir. Desde `console:PEND-2281`, si el `parent` correcto ya existe o acaba de crearse también borra el viejo `implements` redundante hacia ESE mismo sol; un `parent` hacia otro target se conserva y la lección se salta sin escribir. La convención que crea o actualiza `promoteToConvention` conserva su link de referencia `implements` hacia la lección de origen.
 
-Los tres links son BEST-EFFORT (nunca rompen la destilación ni la promoción) y se SALTAN cuando el `ctx` es de un inquilino (workspace `tenant-*`), porque los ítems `ARQUI-*` solo existen en el workspace `console` del host. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz; detalle en `docs/pad-grafo.md`.
+El link jerárquico de la lección, su limpieza histórica y el link de referencia de la convención son BEST-EFFORT (nunca rompen la destilación ni la promoción) y se SALTAN cuando el `ctx` es de un inquilino (workspace `tenant-*`), porque los ítems `ARQUI-*` solo existen en el workspace `console` del host. Regla: `CONVE-1257` del Pad + regla dura 11 del `CLAUDE.md` raíz; detalle en `docs/pad-grafo.md`.
 
 ### Barrido de sesiones TUI (BUG-2068)
 

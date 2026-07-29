@@ -31,18 +31,48 @@
   },
   {
     "match": "src/modules/**/*.js",
+    "facets": {
+      "plano": [
+        "usuario",
+        "mixto"
+      ],
+      "familia": [
+        "backend",
+        "runner"
+      ]
+    },
     "text": "Todo estado que pertenece a UN usuario resuelve su directorio a partir del DUEÑO del dato, no del proceso: en el server os.homedir()/config.home dan siempre el HOME del host y le filtrarían al inquilino los datos de otro. Se usa userDataDir(owner)/resolveDataDir() por operación, nunca una constante de módulo. Violación: path.join(os.homedir(),'.cwc-data') para estado de usuario.",
     "origen": "Reemplaza al aprendido #47, que exigía respaldo en ~/.cwc-data del host — console:PLAN-2252",
     "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/index.js",
+    "facets": {
+      "plano": [
+        "usuario",
+        "mixto"
+      ],
+      "familia": [
+        "backend",
+        "runner"
+      ]
+    },
     "text": "Un listado sin filtro por dueño le muestra a un usuario el trabajo de otro, y el aislamiento se cae en silencio: no rompe nada, solo revela. Toda operación que enumere, adjunte o lea recursos de usuario filtra por owner — un no-admin ve SOLO lo suyo, un admin ve todo, y lo ajeno o inexistente responde 404 sin revelar que existe. Violación: un list()/get() nuevo que no reciba el principal.",
     "origen": "Familia declarada en la sección Multi-tenant de CLAUDE.md; no existía como invariante — console:PLAN-2252",
     "addedAt": 1785298968518
   },
   {
     "match": "src/modules/**/*.js",
+    "facets": {
+      "plano": [
+        "usuario",
+        "mixto"
+      ],
+      "familia": [
+        "backend",
+        "runner"
+      ]
+    },
     "exclude": [
       "src/modules/terminal/sessions.js",
       "src/modules/chat/runner-link.js"

@@ -492,7 +492,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 Detalle completo: `src/modules/health/CLAUDE.md` (se carga solo al tocar el módulo).
 
-- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, tmux del socket `cwc`, runners de chat, observador, TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad y cruces entre mundos (`cross-world`).
+- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, tmux del socket `cwc`, runners de chat, observador, TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad, facetas (una unidad sin clase declarada o código de `src/` fuera del radar salta acá) y cruces entre mundos (`cross-world`).
 - **Escaneo de Salud unificado** (UN botón, CONSUME TOKENS): corre Revisión + Optimización + Coherencia bajo un pool adaptativo compartido, en el orquestador desacoplado `bin/cwc-health-scan-runner.js`. Incremental por fingerprint de contenido; el modo `full` ignora las cachés. Cruza cada hallazgo contra los BUGs de Pad (🆕 nuevo · 🔗 rastreado · ⚠️ regresión).
 - **Auto-fix** (`bin/cwc-healthfix-runner.js`): la ÚNICA corrida que escribe código sin supervisión — excepción documentada de la regla 6. Allowlist `fixToolAllowed` (Read/Grep/Glob/Edit/Write + Bash SOLO `node --check`); NUNCA reinicia el servicio. Los hallazgos CRÍTICOS (server/bind, auth, config, TLS, registry, blindaje read-only headless, runners) NO se auto-resuelven: el gate los rechaza en el BACKEND, no solo en la UI.
 - Nada se auto-aplica: propuestas de Optimización/Coherencia e invariantes aprendidos requieren aprobación humana explícita.

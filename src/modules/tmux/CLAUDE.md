@@ -7,14 +7,14 @@
 
 Observa y controla sesiones existentes de los sockets tmux del usuario del sistema: lista sesiones, publica un feed de panes, guarda títulos humanos, inyecta cambios de modelo y mata sesiones. No crea ni adjunta terminales; esas operaciones pertenecen al módulo `terminal`.
 
-No es admin-gated con `isAdmin`. Aplica autorización por principal: un admin ve y opera todo; un no-admin solo puede acceder a una sesión `cwc-`/`cwct-` del socket de la consola cuyo `Session.owner` coincida con su username.
+No es admin-gated con `isAdmin`. Aplica autorización por principal: un admin ve y opera todo; un no-admin solo puede acceder a una sesión `cwc-`/`cwct-` del socket de la consola cuyo `Session.owner` coincida con su username. La excepción documentada es `/raw-feed`: como alimenta un monitor personal y no una superficie de administración, aplica dueño estricto sin bypass de admin.
 
 ## Endpoints
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
 | GET | `/api/tmux/sessions` | Enumera sesiones, estado/modelo, título custom y `owner` (username o `null`); filtra la salida por dueño y poda títulos huérfanos solo con enumeración confiable. |
-| GET | `/api/tmux/raw-feed` | Devuelve hasta 20 terminales propias `cwc-`, excluye TUI ocultas `cwct-` y captura las últimas 30 líneas con texto limitado a 4000 caracteres. |
+| GET | `/api/tmux/raw-feed` | Monitor personal: devuelve hasta 20 terminales `cwc-` del dueño estricto, sin bypass de admin; una sesión histórica sin dueño se considera del host. Excluye TUI ocultas `cwct-`. Sin flag captura 30 líneas/4.000 caracteres para el poll de 3 s; `?full=1` captura 600 líneas/40.000 caracteres una sola vez al descubrir la terminal. |
 | POST | `/api/tmux/title` | Guarda o borra el título de `{ socket, session, title }`; recorta a 60 caracteres. |
 | POST | `/api/tmux/set-model` | Valida `{ socket, session, model }` e inyecta `/model <modelo>` + Enter en tmux. |
 | POST | `/api/tmux/kill` | Mata la sesión validada por `{ socket, session }`. |
@@ -39,6 +39,6 @@ Escribe indirectamente `titles.json` en la raíz del repo mediante `core/session
 - `GET /sessions` primero construye el universo completo para podar correctamente y recién después filtra la respuesta. Filtrar antes haría que una consulta de un inquilino borre títulos válidos de otros usuarios.
 - No se poda nada si falla la enumeración de sockets; si falla solo `list-sessions` de un socket, se preservan las claves de ese socket. Un fallo transitorio de tmux no equivale a “sesión muerta”.
 - El estado se busca primero por pane (`stateForPane`) y solo cae a cwd (`stateForCwd`) si no hay observación exacta. Invertirlo vuelve a mezclar dos sesiones de Claude que trabajan en la misma carpeta.
-- `raw-feed` solo incluye sesiones `owned`, excluye `cwct-` porque esas TUI ya aparecen por transcript y marca `isClaude` según el observador para evitar duplicados en frontend.
+- `raw-feed` solo incluye sesiones `owned`, excluye `cwct-` porque esas TUI ya aparecen por transcript y marca `isClaude` según el observador para evitar duplicados en frontend. Es la única ruta del módulo sin bypass de admin: compara contra `s.owner` y, por retrocompatibilidad, reserva al host las sesiones anteriores al multi-tenant cuyo owner es `null`.
 - `/set-model` conserva texto + Enter en una única invocación tmux y `/kill` usa `throwOnError`; de otro modo una sesión que muere durante la operación podría recibir texto parcial o producir un falso `ok: true`.
 - `saveTitles()` no lanza: hay que comprobar su boolean. `/title` devuelve `500` si el guardado no fue durable; no respondas éxito solo porque el objeto en memoria cambió.

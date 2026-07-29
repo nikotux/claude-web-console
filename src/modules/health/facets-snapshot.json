@@ -1,0 +1,1681 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-29T15:02:17.576Z",
+  "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
+  "counts": {
+    "pad": 207,
+    "manual": 2
+  },
+  "entries": {
+    "fe:audio": {
+      "ref": "ARQUI-1707",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:chat": {
+      "ref": "ARQUI-1709",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:launcher": {
+      "ref": "ARQUI-1711",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:learning": {
+      "ref": "ARQUI-1713",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:mobile": {
+      "ref": "ARQUI-1715",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:plan-limits": {
+      "ref": "ARQUI-1721",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:retro": {
+      "ref": "ARQUI-1717",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:sessions": {
+      "ref": "ARQUI-1719",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:system": {
+      "ref": "ARQUI-1724",
+      "plano": "mixto",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:tasks": {
+      "ref": "ARQUI-1742",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:terminal": {
+      "ref": "ARQUI-1744",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:tickets": {
+      "ref": "ARQUI-1746",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:tolkien": {
+      "ref": "ARQUI-1752",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "fe:usage": {
+      "ref": "ARQUI-1754",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/audio/audio.js": {
+      "ref": "ARQUI-1708",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/chat/chat-tab.js": {
+      "ref": "ARQUI-1710",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/launcher/launcher.js": {
+      "ref": "ARQUI-1712",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/learning/learning.js": {
+      "ref": "ARQUI-1714",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/mobile/auxbar.js": {
+      "ref": "ARQUI-1716",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/retro/retro.js": {
+      "ref": "ARQUI-1718",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/sessions/sessions.js": {
+      "ref": "ARQUI-1720",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/stats/plan-limits.js": {
+      "ref": "ARQUI-1722",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/stats/stats.js": {
+      "ref": "ARQUI-1723",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/backup-panel.js": {
+      "ref": "ARQUI-1725",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/coherence-modal.js": {
+      "ref": "ARQUI-1726",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/dashboard-panel.js": {
+      "ref": "ARQUI-1727",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/env-vars-panel.js": {
+      "ref": "ARQUI-1728",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/health-panel.js": {
+      "ref": "ARQUI-1729",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/health-resolve-all.js": {
+      "ref": "ARQUI-1730",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/health-review-modal.js": {
+      "ref": "ARQUI-1731",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/health-scan-modal.js": {
+      "ref": "ARQUI-1732",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/interfono-panel.js": {
+      "ref": "ARQUI-1733",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/language-panel.js": {
+      "ref": "ARQUI-1734",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/mcps-panel.js": {
+      "ref": "ARQUI-1735",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/optimize-modal.js": {
+      "ref": "ARQUI-1736",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/project-context-panel.js": {
+      "ref": "ARQUI-1737",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/skills-panel.js": {
+      "ref": "ARQUI-1738",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/system.js": {
+      "ref": "ARQUI-1739",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/updates-panel.js": {
+      "ref": "ARQUI-1740",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/system/users.js": {
+      "ref": "ARQUI-1741",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tasks/tasks.js": {
+      "ref": "ARQUI-1743",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/terminal/terminal.js": {
+      "ref": "ARQUI-1745",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tickets/dashboard.js": {
+      "ref": "ARQUI-1747",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tickets/meta-panel.js": {
+      "ref": "ARQUI-1748",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tickets/pr-detail.js": {
+      "ref": "ARQUI-1749",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tickets/ticket-detail.js": {
+      "ref": "ARQUI-1750",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tickets/tickets.js": {
+      "ref": "ARQUI-1751",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/tolkien/tolkien.js": {
+      "ref": "ARQUI-1753",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:public/js/modules/usage/usage.js": {
+      "ref": "ARQUI-1755",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "pad"
+    },
+    "file:src/modules/admin/index.js": {
+      "ref": "ARQUI-1393",
+      "plano": "usuario",
+      "audiencia": "admin",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/audio/index.js": {
+      "ref": "ARQUI-1587",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/audio/shared.js": {
+      "ref": "ARQUI-1588",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/backup/commitmsg-shared.js": {
+      "ref": "ARQUI-1411",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/backup/index.js": {
+      "ref": "ARQUI-1412",
+      "plano": "central",
+      "audiencia": "admin",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/attachments.js": {
+      "ref": "ARQUI-1424",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/codex-tool.js": {
+      "ref": "ARQUI-1425",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/index.js": {
+      "ref": "ARQUI-1426",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/packages.js": {
+      "ref": "ARQUI-1427",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/runner-link.js": {
+      "ref": "ARQUI-1428",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/chat/shared.js": {
+      "ref": "ARQUI-1429",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/analyze-shared.js": {
+      "ref": "ARQUI-1700",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/chatbot-shared.js": {
+      "ref": "ARQUI-1701",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/gateway-shared.js": {
+      "ref": "ARQUI-1702",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/pr-read-shared.js": {
+      "ref": "ARQUI-1703",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/shared.js": {
+      "ref": "ARQUI-1704",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/teams-shared.js": {
+      "ref": "ARQUI-1705",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/comms/whatsapp-transcribe.js": {
+      "ref": "ARQUI-1706",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/connections/index.js": {
+      "ref": "ARQUI-1681",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/env-vars/index.js": {
+      "ref": "ARQUI-1621",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/files/index.js": {
+      "ref": "ARQUI-1355",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/coherence-shared.js": {
+      "ref": "ARQUI-1452",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/index.js": {
+      "ref": "ARQUI-1453",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/invariants.js": {
+      "ref": "ARQUI-1454",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/optimize-shared.js": {
+      "ref": "ARQUI-1455",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/pad-writeback-shared.js": {
+      "ref": "ARQUI-1456",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/policy.js": {
+      "ref": "ARQUI-1457",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/pool.js": {
+      "ref": "ARQUI-1458",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/proposal-runner-shared.js": {
+      "ref": "ARQUI-1459",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/scan-shared.js": {
+      "ref": "ARQUI-1460",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/shared.js": {
+      "ref": "ARQUI-1461",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/health/worktree.js": {
+      "ref": "ARQUI-1462",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/interfono/index.js": {
+      "ref": "ARQUI-1532",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/analyze-shared.js": {
+      "ref": "ARQUI-1562",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/context-shared.js": {
+      "ref": "ARQUI-1563",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/explain-shared.js": {
+      "ref": "ARQUI-1564",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/index.js": {
+      "ref": "ARQUI-1565",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/session-log.js": {
+      "ref": "ARQUI-1566",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/learning/store.js": {
+      "ref": "ARQUI-1567",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/mcps/index.js": {
+      "ref": "ARQUI-1651",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/mcps/infisical-shared.js": {
+      "ref": "ARQUI-1652",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/mcps/keyring-shared.js": {
+      "ref": "ARQUI-1653",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/mcps/login-shared.js": {
+      "ref": "ARQUI-1654",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/onboard/index.js": {
+      "ref": "ARQUI-1645",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/projects/analyze-shared.js": {
+      "ref": "ARQUI-1514",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/projects/index.js": {
+      "ref": "ARQUI-1515",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/projects/memory.js": {
+      "ref": "ARQUI-1516",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/projects/personalization.js": {
+      "ref": "ARQUI-1517",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/curate-shared.js": {
+      "ref": "ARQUI-1595",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/email-shared.js": {
+      "ref": "ARQUI-1596",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/feedback-shared.js": {
+      "ref": "ARQUI-1597",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/index.js": {
+      "ref": "ARQUI-1598",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/promote-shared.js": {
+      "ref": "ARQUI-1599",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/shared.js": {
+      "ref": "ARQUI-1600",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/store.js": {
+      "ref": "ARQUI-1601",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/retro/teams-feedback-shared.js": {
+      "ref": "ARQUI-1602",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/calendar-source.js": {
+      "ref": "ARQUI-1626",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/classify-shared.js": {
+      "ref": "ARQUI-1627",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/desk-source.js": {
+      "ref": "ARQUI-1628",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/history-store.js": {
+      "ref": "ARQUI-1629",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/index.js": {
+      "ref": "ARQUI-1630",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/refresher.js": {
+      "ref": "ARQUI-1631",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/seguimientos/store.js": {
+      "ref": "ARQUI-1632",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/skills/index.js": {
+      "ref": "ARQUI-1649",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/stats/index.js": {
+      "ref": "ARQUI-1370",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tasks/analyze-shared.js": {
+      "ref": "ARQUI-1538",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tasks/index.js": {
+      "ref": "ARQUI-1539",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tasks/store.js": {
+      "ref": "ARQUI-1540",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/terminal/index.js": {
+      "ref": "ARQUI-1348",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/terminal/sessions.js": {
+      "ref": "ARQUI-1349",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/claims-store.js": {
+      "ref": "ARQUI-1487",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/context-analyze-shared.js": {
+      "ref": "ARQUI-1488",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/context-store.js": {
+      "ref": "ARQUI-1489",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/derive.js": {
+      "ref": "ARQUI-1490",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/desk-mcp-client.js": {
+      "ref": "ARQUI-1491",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/index.js": {
+      "ref": "ARQUI-1492",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/meta-store.js": {
+      "ref": "ARQUI-1493",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/pad-client.js": {
+      "ref": "ARQUI-1494",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/refresher.js": {
+      "ref": "ARQUI-1495",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/sources.js": {
+      "ref": "ARQUI-1496",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tickets/views.js": {
+      "ref": "ARQUI-1497",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tmux/index.js": {
+      "ref": "ARQUI-1386",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/codex-usage.js": {
+      "ref": "ARQUI-1373",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/flow.js": {
+      "ref": "ARQUI-1374",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/history-store.js": {
+      "ref": "ARQUI-1375",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/index.js": {
+      "ref": "ARQUI-1376",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/stream.js": {
+      "ref": "ARQUI-1377",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tokens/time.js": {
+      "ref": "ARQUI-1378",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tolkien/index.js": {
+      "ref": "ARQUI-1400",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/tolkien/refresh-shared.js": {
+      "ref": "ARQUI-1401",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/unifi/client.js": {
+      "ref": "ARQUI-1691",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/unifi/index.js": {
+      "ref": "ARQUI-1692",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/unifi/inventory-shared.js": {
+      "ref": "ARQUI-1693",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/unifi/unifi-tool.js": {
+      "ref": "ARQUI-1694",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/updates/analyze-shared.js": {
+      "ref": "ARQUI-1666",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/updates/index.js": {
+      "ref": "ARQUI-1667",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/updates/orchestrate-shared.js": {
+      "ref": "ARQUI-1668",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "file:src/modules/updates/shared.js": {
+      "ref": "ARQUI-1669",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:admin": {
+      "ref": "ARQUI-1392",
+      "plano": "usuario",
+      "audiencia": "admin",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:audio": {
+      "ref": "ARQUI-1289",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:backup": {
+      "ref": "ARQUI-1410",
+      "plano": "central",
+      "audiencia": "admin",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:chat": {
+      "ref": "ARQUI-1423",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:comms": {
+      "ref": "ARQUI-1278",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:connections": {
+      "ref": "ARQUI-1297",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:env-vars": {
+      "ref": "ARQUI-1301",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:files": {
+      "ref": "ARQUI-1354",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:health": {
+      "ref": "ARQUI-1281",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:interfono": {
+      "ref": "ARQUI-1531",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:learning": {
+      "ref": "ARQUI-1287",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:mcps": {
+      "ref": "ARQUI-1298",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:onboard": {
+      "ref": "ARQUI-1644",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:projects": {
+      "ref": "ARQUI-1513",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:retro": {
+      "ref": "ARQUI-1594",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:seguimientos": {
+      "ref": "ARQUI-1625",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:skills": {
+      "ref": "ARQUI-1299",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:stats": {
+      "ref": "ARQUI-1369",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:tasks": {
+      "ref": "ARQUI-1537",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:terminal": {
+      "ref": "ARQUI-1347",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:tickets": {
+      "ref": "ARQUI-1275",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:tmux": {
+      "ref": "ARQUI-1385",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:tokens": {
+      "ref": "ARQUI-1291",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:tolkien": {
+      "ref": "ARQUI-1399",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:unifi": {
+      "ref": "ARQUI-1690",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:updates": {
+      "ref": "ARQUI-1300",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "run:cwc-audio-runner": {
+      "ref": "ARQUI-1756",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-chat-runner": {
+      "ref": "ARQUI-1757",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-coherence-runner": {
+      "ref": "ARQUI-1758",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-commitmsg-runner": {
+      "ref": "ARQUI-1759",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-comms-analyze-runner": {
+      "ref": "ARQUI-1760",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-comms-chatbot-runner": {
+      "ref": "ARQUI-1761",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-comms-runner": {
+      "ref": "ARQUI-1762",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-comms-send-runner": {
+      "ref": "ARQUI-1763",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-comms-teams-runner": {
+      "ref": "ARQUI-1764",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-health-runner": {
+      "ref": "ARQUI-1765",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-health-scan-runner": {
+      "ref": "ARQUI-1766",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-healthfix-runner": {
+      "ref": "ARQUI-1767",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-infisical-login-runner": {
+      "ref": "ARQUI-1768",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-learning-analyze-runner": {
+      "ref": "ARQUI-1769",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-learning-context-runner": {
+      "ref": "ARQUI-1770",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-learning-explain-runner": {
+      "ref": "ARQUI-1771",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-mcp-login-runner": {
+      "ref": "ARQUI-1772",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-observe": {
+      "ref": "ARQUI-1773",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-onboard-runner": {
+      "ref": "ARQUI-1774",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-optimize-runner": {
+      "ref": "ARQUI-1775",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-projects-analyze-runner": {
+      "ref": "ARQUI-1776",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-retro-curate-runner": {
+      "ref": "ARQUI-1777",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-retro-email-runner": {
+      "ref": "ARQUI-1778",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-retro-feedback-runner": {
+      "ref": "ARQUI-1779",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-retro-runner": {
+      "ref": "ARQUI-1780",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-retro-teams-runner": {
+      "ref": "ARQUI-1781",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-seguimientos-runner": {
+      "ref": "ARQUI-1782",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-tasks-analyze-runner": {
+      "ref": "ARQUI-1783",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-ticket-context-runner": {
+      "ref": "ARQUI-1784",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-tolkien-refresh-runner": {
+      "ref": "ARQUI-1785",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-updates-analyze-runner": {
+      "ref": "ARQUI-1786",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:cwc-updates-runner": {
+      "ref": "ARQUI-1787",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:install-observer": {
+      "ref": "ARQUI-1788",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "run:uninstall-observer": {
+      "ref": "ARQUI-1789",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "runner",
+      "fuente": "pad"
+    },
+    "unit:core": {
+      "plano": "mixto",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "manual"
+    },
+    "unit:frontend-core": {
+      "plano": "mixto",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "frontend",
+      "fuente": "manual"
+    }
+  }
+}

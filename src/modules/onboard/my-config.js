@@ -8,6 +8,7 @@ import {
   CAPABILITIES,
   capabilityStatus,
   pendingFor,
+  requiredFor,
 } from './capabilities.js';
 import { readProvisionState } from './provision-state.js';
 import { provisionNewUser } from './provision-user.js';
@@ -28,7 +29,7 @@ function configStatus(user) {
     .map((capability) => ({
       id: capability.id,
       order: capability.order,
-      required: capability.required,
+      required: requiredFor(capability, user),
       labelEs: capability.labelEs,
       complete: !!status[capability.id],
       startPath: capability.startPath,

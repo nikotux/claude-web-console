@@ -16,7 +16,7 @@ No mantiene un modelo propio: el CRUD delega en `core/users.js` y el reciclado b
 | GET | `/api/admin/users` | Lista cuentas como `{ username, admin }`; nunca devuelve hashes. |
 | POST | `/api/admin/users` | Crea una cuenta desde `{ username, password, admin? }`; `admin`, si viene, debe ser boolean. |
 | PUT | `/api/admin/users/:username` | Cambia `password` y/o `admin`; exige al menos un cambio válido y rechaza que un admin se modifique a sí mismo. |
-| DELETE | `/api/admin/users/:username` | Elimina una cuenta; rechaza la autoeliminación. |
+| DELETE | `/api/admin/users/:username` | Elimina una cuenta, invalida sus sesiones web y ejecuta la baja recuperable de sus recursos; rechaza la autoeliminación. |
 | POST | `/api/admin/restart-runners` | Envía `SIGTERM` a cada `cwc-chat-runner.js` vivo y devuelve PIDs terminados y fallos individuales. |
 
 El alta por `POST /api/admin/users` llama `provisionNewUser(username)` después
@@ -24,17 +24,62 @@ de crear la cuenta. Comparte así la misma preparación de espacio, Pad,
 workspace, Tolkien MCP y skills que el wizard, sin duplicar la secuencia. El
 provisioning es best-effort: un fallo no cambia el alta ni su status HTTP.
 
+La baja por `DELETE /api/admin/users/:username` conserva este orden contractual:
+
+1. Borra **primero** el workspace Pad exacto `tenant-<usuario>` con el token del
+   inquilino. Va antes que el espacio local porque ese token vive dentro de
+   `.cwc-users/<usuario>/.pad/credentials.json`; después ya no estaría disponible.
+   El DELETE del Pad es soft y restaurable.
+2. Quita al usuario del pozo común `comunidad` con el token admin del host. Es
+   el único recurso Pad compartido que toca un inquilino: si la membresía
+   sobrevive, una cuenta eliminada conserva escritura sobre las lecciones de
+   todos. Antes del DELETE aplica G5 (email exactamente
+   `<usuario>@console.local`, case-sensitive), G6 (nunca quitar un `owner`) y G7
+   (si hay más de un match exacto, no quitar ninguno). La API de Pad no permite
+   revocar invitaciones pendientes, solo miembros reales; si el usuario nunca
+   aceptó, su invitación queda sin posibilidad de borrado por API.
+3. Detecta sesiones tmux vivas registradas a nombre del usuario. Como no existe
+   un helper owner-scoped para enumerarlas y matarlas, no inventa uno: las deja
+   vivas y agrega sus nombres a `warnings`.
+4. Mueve **todo** `~/.cwc-users/<usuario>` a la papelera recuperable por 30 días.
+   El trade-off aceptado es que durante ese plazo las credenciales siguen
+   legibles y el token Pad sigue válido; el workspace Pad ya fue eliminado.
+5. Borra los archivos `<usuario>.*` de los siete directorios de jobs del HOME
+   host (`onboard-jobs`, `claude-login-jobs`, `codex-login-jobs`, `codex-jobs`,
+   `gh-login-jobs`, `infisical-login`, `tolkien-setup`) y el estado durable de
+   `onboard-provisioning`.
+6. Revoca las invitaciones no consumidas ni revocadas cuyo `lockedTo` sea el
+   usuario.
+
+Antes de tocar recursos aplica cuatro guards fail-closed: G1 sanea el username;
+G2 prohíbe explícitamente dar de baja al **host**, porque su `userSpace()` es el
+HOME real; G3 verifica contención con `path.relative` bajo el `USERS_ROOT`
+compartido; G4 exige borrar solo un slug que empiece con `tenant-`. Este último
+evita iterar los workspaces visibles con el token y borrar `comunidad`, el pozo
+común de todos los usuarios. G5–G7 se aplican después de listar la membresía,
+pero antes de quitar a alguien del pozo compartido.
+
+La respuesta exitosa ahora es `{ ok: true, cleanup }`. Un cleanup completo tiene
+la forma `{ ok: true, user, trash: { status, id? }, pad: { status, slug?, error? },
+shared: { status, workspace?, reason?, error? }, jobs: { removed: [...] },
+invites: { revoked }, warnings: [...] }`. Cada paso es best-effort y acumula
+avisos sin abortar los posteriores. Si un guard rechazó la baja segura después
+de quitar la cuenta de `users.json`, el endpoint mantiene HTTP exitoso y
+devuelve `cleanup: { ok: false, error }`.
+
 ## Archivos
 
-- `index.js`: define el gate administrativo, los cinco handlers HTTP y la detección de runners vivos con `pgrep`.
+- `index.js`: define el gate administrativo, los cinco handlers HTTP, conecta la baja profunda y detecta runners vivos con `pgrep`.
+- `../../core/user-deprovision.js`: orquesta la baja best-effort, sus guards y el reporte estructurado.
 
 Las validaciones y persistencia de cuentas viven en `core/users.js`; la identidad, `isAdmin` y la revocación de sesiones viven en `core/auth.js`.
 
 ## Estado
 
-Este módulo **no escribe en `~/.cwc-data/`**.
+Este módulo no mantiene un store propio. El CRUD y la baja escriben
+indirectamente mediante los helpers de core y onboard.
 
-El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core/users.js`. Su forma es `{ "users": [{ "username", "hash", "admin", "lang"? }] }`; los hashes son `scrypt$salt$derivedKey`, el archivo se fuerza a modo `0600` y no tiene poda automática. El endpoint de runners no persiste estado.
+El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core/users.js`. Su forma es `{ "users": [{ "username", "hash", "admin", "lang"? }] }`; los hashes son `scrypt$salt$derivedKey`, el archivo se fuerza a modo `0600` y no tiene poda automática. La baja también mueve el espacio del inquilino a `~/.cwc-trash/`, borra jobs administrativos bajo `~/.cwc-data/`, elimina su workspace Pad y revoca invitaciones asociadas. El endpoint de runners no persiste estado.
 
 ## Lo que más duele
 

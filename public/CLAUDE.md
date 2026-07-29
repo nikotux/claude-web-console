@@ -109,6 +109,11 @@ lateral A PROPÓSITO — pedido de Niko: se lee como parte del mensaje, no como
 un objeto pegado. `.md-mermaid*` contiene el desborde con scroll horizontal
 y `.md-mermaid--pan` muestra la pista para deslizar. El `max-height` de
 `.md-mermaid-canvas` es la FUENTE DE VERDAD del alto: el JS lo lee del CSS.
+La tabla accesible `.md-chart-data` es sr-only pero NO está escopada a
+`.chat-md` (el renderer también se usa en Aprendizaje y Pendientes) y depende
+de que `.md-chart` sea `position:relative` para no escaparse del scroller del
+chat; `#body` lleva `overflow:clip` como guard para que ningún desborde vuelva
+a hacer scrollear el documento.
 ### public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 ### public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 ### public/raw.html + js/rawview/raw.js + css/raw.css   Vista Raw (PLAN-544, pedido
@@ -248,6 +253,59 @@ latidos arriba-derecha (`#raw-procs`, LED que pulsa — un servicio
 con Playwright (mock de las 3 fuentes). Capa de PROFUNDIDAD DE
 CAMPO (desaturar/achicar lo automático para que los chats salten)
 queda como pulido futuro, no implementado.
+v6 — la vista dejó de ser admin-only: la ruta `/raw` de `server.js`
+ya no gatea y cada usuario ve SOLO lo suyo porque TODOS los endpoints
+que consume filtran por principal (`tokens` con `ownerOf` tras BUG-1874,
+`chat/list` con `manager.list(principal)`, `tmux/raw-feed` con
+`ownsSession`, `active-runners` fail-closed por dueño). Un endpoint nuevo
+que se sume a la vista DEBE traer su propio filtro, porque en la ruta ya no
+queda red. `/api/health/checks` sigue siendo admin-only y caro (~5,7 s de
+CPU): el front lo pide SOLO si `/api/whoami` dice admin, diferido 10 s y
+cada 5 min. El panel de log ahora se mide en LÍNEAS (`logMaxLines`, alto ÷
+14,85 px), no en chars, y el texto se ENVUELVE en JS al ancho real
+(`logCols`, medido con `measureText` en un canvas propio para no pisar la
+fuente de la lluvia). Sin ese wrap, un párrafo de transcript de 540 chars
+ocupaba una sola línea, se cortaba al borde derecho y dejaba el panel casi
+vacío igual. `s.raw` conserva el texto lógico y `s.display` el texto ya
+envuelto y ajustado: son DOS cosas distintas a propósito, porque concatenar
+sobre el ya envuelto duplicaría los cortes. Desapareció el cap de 1600 que
+dejaba media pantalla negra y se rellena con líneas vacías arriba para quedar
+anclado abajo como una terminal. El cursor de la máquina de escribir YA NO
+es circular: al agotar el log el panel queda quieto y lleno en vez de repetir
+la misma línea 19 veces; si se vuelve a tocar, ojo con `s.cursor` cuando se
+poda `s.log`: hay que restarle lo podado. El seed largo (40.000 chars) y el
+`capture-pane` de terminal se VUELCAN de golpe al display — el pasado no se
+tipea, la máquina arranca con lo nuevo. El tick ya NO lee `scrollHeight` ni
+escribe `scrollTop` (eran ~66 re-layouts sincrónicos por segundo) y
+`.raw-log-code` perdió su `text-shadow`: esas dos eran las causas de la
+lentitud.
+v7 — una sesión que no produce texto por más de `IDLE_COLLAPSE_MS` (60 s) y
+que no está `working` ni delegando SALE del reparto de columnas: las sesiones
+que trabajan se reparten ese ancho y la dormida se colapsa a un chip en la
+fila superior `#raw-dozing`, que se oculta entera cuando no hay ninguna
+dormida. Una dormida NUNCA desaparece por estar quieta (decisión de Niko):
+solo la borra cerrar el chat o matar la tmux, como siempre. Caso borde: si
+TODAS están dormidas, se muestran normalmente para no dejar la vista negra
+con solo chips. El colapso reutiliza las animaciones de entrada/salida que ya
+tenían paneles y rótulos, sin mecanismo nuevo. Gotcha: `lastTextTs` en
+`pollTerminals` marca «produjo algo nuevo», no «sigue existiendo»; pisarlo en
+cada poll haría que ninguna terminal colapse jamás.
+v8 — la Vista Raw es un **monitor personal**: muestra SOLO lo del usuario que
+la abre, incluso si es admin. Antes no era así y el admin veía el
+`capture-pane` EN VIVO de las terminales de otros usuarios (medido: dos
+terminales de `rarboleda` en la vista de Niko). El corte está en **tres lugares
+distintos y por razones distintas**: `/api/tmux/raw-feed` filtra por dueño
+estricto en el BACKEND (es el único endpoint del módulo tmux donde el admin no
+ve todo); `/api/health/active-runners` se pide con `?mine=1`; y
+`/api/chat/list` se filtra en el CLIENTE con `isMine()`, porque ese endpoint lo
+comparte toda la app y ahí el admin sí debe ver todo — se puede filtrar del
+lado del navegador sin riesgo porque solo transporta metadatos, no el texto
+en vivo. `/api/tokens/stream` **ya estaba** bien: `ownerOf()` (BUG-1874) no
+tiene excepción de admin. De hecho ESA era la incoherencia que destapó el
+problema — para el mismo usuario, los transcripts mostraban solo lo suyo
+mientras terminales y chats mostraban todo. Para ver lo ajeno siguen estando
+el panel de Sesiones, la pestaña tmux y el modal de trabajos en segundo plano,
+que sí son superficie de administración.
 
 ### public/js/onboard/onboard.js — wizard público de alta
 

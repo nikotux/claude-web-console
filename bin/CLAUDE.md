@@ -2,6 +2,47 @@
 # bin — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+### bin/cwc-pad-mold.js    auditor y migrador serial del molde declarativo de
+workspaces Pad de inquilinos. Sin flags o con `--audit` abre
+`~/.pad/pad.db` read-only y lista todos los `tenant-*` activos con versión
+registrada, colecciones presentes/faltantes y divergencias de prefijo y schema,
+sin escribir; el schema se compara byte a byte contra el molde.
+`--apply <workspace-slug>` completa/corrige uno y `--apply-all` hace lo mismo;
+obtiene el token propio con `readUserPadToken`, escribe únicamente por
+`core/pad-service-client.js`, respeta rate-limit y continúa ante `sin-token`.
+Un prefijo divergente se corrige solo si la colección no tiene ítems no
+archivados: con datos se reporta para decisión humana porque cambiarlo
+alteraría los refs visibles. Un schema divergente se reconcilia únicamente
+cuando el molde conserva todo el string actual y agrega fields al final; otra
+divergencia queda para decisión humana. Al verificar las diez colecciones, sus
+prefijos y schemas registra la versión en `~/.cwc-data/pad-mold-state.json`.
+Blindaje doble: solo acepta el patrón
+`tenant-*` y además excluye explícitamente `console`, `tolkien` y `comunidad`;
+nunca puede escribir en esos tres workspaces.
+### bin/cwc-pad-facets.js    clasificador one-shot de los cuatro campos de facetas
+de CONVE-2279 en `arquitectura`. Sin flags hace dry-run completo; solo escribe
+con `--apply`, admite filtros y JSON, y fija el workspace a `console`. Deriva
+`plano` y `audiencia` de señales del código o de la topología, mientras
+`perfil` NO se deriva: las decisiones viven en `MANUAL_FACETS`, con default
+`general` para módulos no declarados y herencia hacia archivos, endpoints y
+runners. Expande el schema mediante cirugía sobre su string JSON crudo,
+conservando byte a byte el prefijo por el contrato de `DOC-633`.
+### bin/cwc-facets-snapshot.js    generador determinístico de la foto local de
+facetas que consume Salud. Lee `~/.pad/pad.db` en modo solo lectura/query-only
+y escribe `src/modules/health/facets-snapshot.json`, JSON de datos versionado
+en el repo; no consulta la red. Es idempotente: compara el contenido útil sin
+`generatedAt` y no reescribe si nada cambió, para no ensuciar git solo por la
+fecha. Sin flags actualiza la foto; `--check` no escribe y sale con código 1 si
+difiere, `--json` emite el resumen estructurado y `--help` muestra el uso. NO
+es un runner: no corre en el tiempo, no tiene lock ni estado; es un CLI
+one-shot que se ejecuta a mano, en particular después de
+`cwc-pad-facets.js --apply`.
+### bin/cwc-pad-arch-gen.js    generador del árbol `arquitectura` desde el inventario
+determinístico: crea/adopta/actualiza raíz, subsistemas, módulos, archivos,
+endpoints y runners, reconcilia sus links `parent` y puede retirar sobrantes
+con `--prune`; `--dry-run`/`-n` no escribe. Al actualizar o adoptar mezcla
+`kind`/`status`/`uid` sobre los fields frescos para conservar las facetas:
+el PATCH de Pad reemplaza `fields` completo y un literal las borraría.
 ### bin/cwc-pad-graph-fix.js    reparación one-shot e idempotente del grafo de Pad en el
 workspace `console`: reparenta PLAN-507/PLAN-272 desde nodos ARQUI retirados
 a sus sucesores y borra exclusivamente links `implements` cuyo target coincide
@@ -26,6 +67,91 @@ revalida cada arista con `listLinks` antes de recrearla y aborta al primer
 error. El workspace está fijado a `console`: nunca opera sobre `tolkien`.
 Existe porque `parent_ref` es derivado de la arista disponible, sin importar
 su tipo, y por lo tanto no implica la existencia de un link `parent` propio.
+### bin/cwc-pad-wikilinks-fix.js    reparación one-shot de wiki-links rotos en el
+Pad LOCAL del workspace `console`: transforma `[[console:BUG-1]]` y
+`[[tolkien:BUG-1]]` en la sintaxis de alias
+`[[BUG-1|console:BUG-1]]` / `[[BUG-1|tolkien:BUG-1]]`. El alias conserva el
+mundo explícito como texto visible —convención `CONVE-2056` para evitar
+colisiones entre refs— y a la vez permite que Pad resuelva el target como ref;
+por eso no se quita el prefijo. Es idempotente porque la forma nueva ya no
+matchea el patrón viejo. Sin flags hace dry-run completo; `--apply` relee cada
+ítem por REST y actualiza solo `content` con concurrencia optimista. El
+reemplazo ignora bloques cercados (backticks o tildes) y código inline para
+alinearse con el parser de Pad, que no interpreta wiki-links dentro de código,
+y evitar corromper ejemplos pedagógicos que enseñan la sintaxis. El
+workspace está fijado por código a `console`: nunca opera sobre `tolkien` ni
+`tenant-*`.
+### bin/cwc-pad-mc-parent.js    migración one-shot, serial e idempotente de la
+jerarquía de `mejora-continua` en el Pad LOCAL. Deriva el bucket `MC · *`
+exclusivamente desde `fields.category` usando el mapa exportado
+`MC_SUN_BY_CATEGORY` de `retro/store.js`: no usa un mapa manual. Sin flags
+hace DRY-RUN completo; solo escribe con `--apply` explícito y admite
+`--ref MC-n`, `--limit N` y `--json`. El dry-run abre `~/.pad/pad.db`
+read-only/query-only y relee las aristas vivas con un SELECT por ítem justo
+antes de decidir; `--apply` hace esa relectura fresca con `listLinks` y la
+caché compartida deshabilitada. Crea el link `parent` con `setParent` si falta
+y borra únicamente el `implements` redundante hacia ese mismo sol. Si ya
+existe un `parent` hacia otro target, conserva el dato y salta el ítem sin
+escribir. Opera siempre en el workspace `console`, en serie y con reintento
+ante 429; nunca toca `tolkien` ni `tenant-*`.
+### bin/cwc-pad-schema-expand.js    expansor APPEND-ONLY del `schema` de una
+colección de Pad (`console:PEND-2286`). Nació para el paso EXPAND del
+expand/contract (`console:CONVE-2278`, principio 3): antes de mover ítems a una
+colección destino hay que declarar ahí los campos que el origen traía, o
+`pad_item move` los descarta en silencio. Exige `--workspace` y `--collection`
+(sin default: escribir en el workspace equivocado es el riesgo principal) y uno
+o más `--field '<json>'`. Dry-run por defecto; `--apply` para escribir,
+`--backup-db` para el respaldo WAL-aware previo a la primera escritura.
+Es idempotente: una `key` que ya existe se reporta `ya-declarado` y se omite.
+Construye el schema nuevo por CIRUGÍA DE STRING —`actual.slice(0,-2) + ',' +
+sufijo + ']}'`— y NUNCA re-serializando el JSON (`DOC-633`: el schema es un
+string crudo). Antes de escribir se autoverifica: prefijo viejo intacto, el
+schema creció, la cuenta de `fields` cuadra, y cada field viejo sigue byte a
+byte en su mismo índice. Después de escribir RELEE la DB con una conexión nueva
+y falla si el resultado no coincide byte a byte — esa verificación es su razón
+de ser, porque el PATCH del server devuelve éxito sin garantizar el contenido.
+A diferencia de `cwc-pad-mold.js`, este SÍ puede operar sobre `console`: aquel
+protege `console` por diseño (`EXCLUDED_WORKSPACES`) y romper esa protección
+para un one-off habría sido peor que tener una herramienta aparte.
+### bin/cwc-pad-move-items.js    movedor GENÉRICO de ítems entre colecciones
+del Pad LOCAL, con el workspace `console` fijado por código: rechaza un
+`CWC_PAD_WORKSPACE` distinto y nunca toca `tolkien` ni `tenant-*`. Exige
+`--from` y `--to`; acepta `--ref` repetible —sin refs toma todos los ítems vivos
+de `--from`—, `--limit`, `--set clave=valor`, `--map-status viejo=nuevo`,
+`--preserve campoOrigen=campoDestino`, `--backup-db`, `--apply` y `--json`.
+Sin `--apply` es dry-run total. Es idempotente: un ítem que ya está en destino
+se cuenta como `ya-en-destino` y no vuelve a moverse; uno que está en una
+tercera colección se salta como `fuera-de-alcance`. Opera en serie, reintenta
+ante 429 con el mismo `withRateRetry` que los CLIs vecinos y lee el estado
+previo de `~/.pad/pad.db` en modo read-only/query-only.
+La semántica REAL de `move` se midió en la primera ejecución de la historia del
+Pad (2026-07-29, `console:PEND-2284`; hasta ese día
+`item_collection_moves` tenía 0 filas): conserva el UUID del ítem,
+`item_number`, `slug`, `content`, `created_at`, sus comentarios, sus versiones
+y TODAS las aristas de `item_links` en ambas direcciones —los hijos siguen
+colgando solos y no hay que reparentar nada—, pero el ref cambia de prefijo y el
+server aplica el schema del destino con pérdida silenciosa. Un campo que no
+existe en el schema destino se descarta sin avisar y un valor de `select` fuera
+de las `options` del destino se reemplaza por el `default` del destino. Por eso
+el CLI reporta `campo-descartado` y `valor-fuera-de-enum` en el dry-run, y por
+eso existen `--preserve` y `--map-status`.
+Segunda ejecución en volumen (2026-07-29, `console:PEND-2286`): 245 ítems de
+`tasks` a `pendientes` en tandas de 50, ~8,5 s por tanda. Verificado contra el
+backup previo, ítem por ítem: 245/245 conservaron número de ref, `slug`,
+`created_at` y contenido byte a byte; los 1029 valores de campo sobrevivieron;
+las 2464 aristas del workspace quedaron idénticas antes y después. Apareció un
+TERCER modo de falla que F6 no había visto: el server rechaza el `update` de
+status posterior al move si el ítem tiene un "hijo" no terminal, y **cuenta los
+`implements` como hijos** (`console:BUG-2325`) — 6 ítems `done` quedaron en el
+default `pendiente` con el CLI reportando el error pero el move ya aplicado. Se
+corrigieron con `force=true`. Moraleja operativa: **el resumen del CLI no es
+evidencia suficiente; toda migración en lote se verifica comparando la DB contra
+el backup previo.**
+`--backup-db` usa `backup()` de `node:sqlite`, un backup online y WAL-aware, y
+NO `copyFileSync`: `~/.pad/pad.db` corre en `journal_mode=wal` y una copia plana
+del archivo principal deja afuera las páginas del WAL. Si el backup falla, la
+corrida ABORTA con exit 1 antes de mover nada. Este CLI es el camino que reusa
+la fase F8 (`console:PEND-2285`) para mover las colecciones de conocimiento.
 ### bin/cwc-whatsapp-daemon.js  puente WhatsApp ↔ Comunicaciones (Baileys, servicio systemd
 whatsapp-bridge.service, sesión emparejada, estado persistido
 ~/.cwc-data/comms/whatsapp*, PLAN-447 — ver el detalle completo en

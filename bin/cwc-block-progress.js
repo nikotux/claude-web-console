@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bin/cwc-block-progress.js — escritor DETERMINÍSTICO del control-plane del
 // Orquestador Interno (CONVE-654 / PLAN-642). 0 tokens, sin SDK: un BLOQUE marca
-// su tarea (PEND/TASK) hecha y/o su PLAN-bloque en Pad-CONSOLE, desde CUALQUIER
+// su tarea (PEND) hecha y/o su PLAN-bloque en Pad-CONSOLE, desde CUALQUIER
 // cwd — incluido un bloque que corre en cwd=Tolkien, que NO puede tocar el
 // Pad-console con su MCP (Regla 12/Limbo). Escribe SIEMPRE contra el Pad LOCAL
 // self-hosted (workspace 'console' = el plano de control), vía el binario `pad`
@@ -12,14 +12,13 @@
 // bin/cwc-bus.js send / `/btw`); esto es solo el estado persistente en Pad.
 //
 // Uso:
-//   cwc-block-progress task  <TASK-ref|PEND-ref> <status> [--note "texto"]
+//   cwc-block-progress task  <PEND-ref>          <status> [--note "texto"]
 //   cwc-block-progress block <PLAN-ref>          <status> [--note "texto"]
 //   cwc-block-progress done  <ref> [--note "texto"]        # atajo: status del tipo terminal
 // Ejemplos:
-//   cwc-block-progress task TASK-612 hecha --note "N2b self-check + invariante"
+//   cwc-block-progress task PEND-612 hecha --note "N2b self-check + invariante"
 //   cwc-block-progress block PLAN-592 active --note "arrancó B-A"
-// Estados válidos según la colección del ref (el binario pad valida el enum):
-//   tasks:      todo | doing | done
+// Estados válidos para `pendientes` y `planes` (el binario pad valida el enum):
 //   pendientes: pendiente | en-progreso | hecha
 //   planes:     active | proposed | done | cancelled
 // Exit: 0 ok · 2 error de uso · 1 fallo al escribir Pad.

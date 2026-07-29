@@ -4,7 +4,7 @@
 // la pestaña "Usuarios" del modal Sistema como la página /admin (admin.js).
 import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
-import { confirmDialog, promptDialog } from '../../ui/dialog.js';
+import { alertDialog, confirmDialog, promptDialog } from '../../ui/dialog.js';
 import { t } from '../../ui/i18n.js';
 
 const API = '/api/admin';
@@ -46,6 +46,12 @@ export function mountUsersPanel(el) {
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
 
+  let host = null;
+  const hostReady = fetch('/api/whoami', { cache: 'no-store' })
+    .then((res) => res.ok ? res.json() : null)
+    .then((me) => { host = me?.host || null; })
+    .catch(() => {});
+
   async function onboardApi(path, opts) {
     const res = await fetch('/api/onboard' + path, opts);
     if (!res.ok) {
@@ -64,6 +70,7 @@ export function mountUsersPanel(el) {
   async function load() {
     try {
       const { users } = await api('/users');
+      await hostReady;
       render(users);
     } catch (e) {
       msg(e.message);
@@ -100,21 +107,33 @@ export function mountUsersPanel(el) {
         if (p) update(u.username, { password: p });
       });
 
-      const del = document.createElement('button');
-      del.className = 'btn-ghost btn--sm btn--icon btn--danger';
-      del.innerHTML = icon('trash', { size: 13 });
-      del.title = t('system.users.deleteUserTitle', 'Eliminar usuario');
-      del.addEventListener('click', async () => {
-        const ok = await confirmDialog({
-          title: t('system.users.deleteUserTitle', 'Eliminar usuario'),
-          message: t('system.users.deleteUserMessage', 'Se elimina la cuenta "{username}". Sus sesiones dejarán de valer.', { username: u.username }),
-          confirmLabel: t('system.users.deleteConfirm', 'Eliminar'),
-          danger: true,
-        });
-        if (ok) remove(u.username);
-      });
+      actions.append(adm, pw);
 
-      actions.append(adm, pw, del);
+      // El usuario host no se da de baja desde esta UI.
+      if (!host || u.username !== host) {
+        const del = document.createElement('button');
+        del.className = 'btn-ghost btn--sm btn--icon btn--danger';
+        del.innerHTML = icon('trash', { size: 13 });
+        del.title = t('system.users.deleteUserTitle', 'Eliminar usuario');
+        del.addEventListener('click', async () => {
+          const ok = await confirmDialog({
+            title: t('system.users.deleteUserTitle', 'Eliminar usuario'),
+            message: t(
+              'system.users.deleteUserMessage',
+              'Se elimina la cuenta "{username}" y se cierran sus sesiones.\n\n' +
+                'Su espacio de trabajo (workspace, clon del repo, chats y credenciales) se mueve a la papelera y se puede recuperar durante 30 días.\n\n' +
+                'Su workspace de Pad "tenant-{username}" se borra. El Pad lo conserva como borrado y se puede restaurar desde ahí.\n\n' +
+                '⚠️ Sus credenciales quedan dentro de la papelera durante esos 30 días.',
+              { username: u.username },
+            ),
+            confirmLabel: t('system.users.deleteConfirm', 'Eliminar'),
+            danger: true,
+          });
+          if (ok) remove(u.username);
+        });
+        actions.append(del);
+      }
+
       row.append(name, actions);
       refs.list.append(row);
     }
@@ -233,9 +252,73 @@ export function mountUsersPanel(el) {
 
   async function remove(username) {
     try {
-      await api('/users/' + encodeURIComponent(username), { method: 'DELETE' });
+      const result = await api('/users/' + encodeURIComponent(username), { method: 'DELETE' });
+      const cleanup = result?.cleanup ?? {};
+      const lines = [t('system.users.cleanupLead', 'La cuenta se eliminó. Sobre la limpieza:')];
+      let title = t('system.users.userDeleted', 'Usuario eliminado.');
+
+      if (cleanup?.ok === false) {
+        title = t('system.users.cleanupFailedTitle', 'Cuenta eliminada; limpieza fallida');
+        lines.push(t(
+          'system.users.cleanupFailed',
+          '❌ Error de limpieza: {error}',
+          { error: cleanup?.error ?? t('system.users.cleanupUnknownError', 'Error sin detalle.') },
+        ));
+      } else {
+        const trashStatus = cleanup?.trash?.status ?? '';
+        if (trashStatus === 'moved') {
+          lines.push(t('system.users.cleanupTrashMoved', 'Espacio movido a la papelera (recuperable 30 días)'));
+        } else if (trashStatus === 'absent') {
+          lines.push(t('system.users.cleanupTrashAbsent', 'No tenía espacio en disco'));
+        }
+
+        const padStatus = cleanup?.pad?.status ?? '';
+        const padSlug = cleanup?.pad?.slug ?? `tenant-${username}`;
+        if (padStatus === 'deleted') {
+          lines.push(t('system.users.cleanupPadDeleted', 'Workspace de Pad {slug} eliminado', { slug: padSlug }));
+        } else if (padStatus === 'not-found') {
+          lines.push(t('system.users.cleanupPadAbsent', 'No tenía workspace de Pad'));
+        } else if (padStatus === 'no-token') {
+          lines.push(t('system.users.cleanupPadNoToken', '⚠️ Sin credencial de Pad: su workspace {slug} sigue existiendo', { slug: padSlug }));
+        } else if (padStatus === 'failed') {
+          lines.push(t(
+            'system.users.cleanupPadFailed',
+            '⚠️ No se pudo borrar su workspace de Pad: {error}',
+            { error: cleanup?.pad?.error ?? t('system.users.cleanupUnknownError', 'Error sin detalle.') },
+          ));
+        }
+
+        const removedJobs = Array.isArray(cleanup?.jobs?.removed) ? cleanup.jobs.removed : [];
+        if (removedJobs.length) {
+          lines.push(t(
+            'system.users.cleanupJobsRemoved',
+            '{count} archivo(s) de trabajos eliminado(s)',
+            { count: removedJobs.length },
+          ));
+        }
+
+        const revokedInvites = Number.isFinite(cleanup?.invites?.revoked) ? cleanup.invites.revoked : 0;
+        if (revokedInvites) {
+          lines.push(t(
+            'system.users.cleanupInvitesRevoked',
+            '{count} invitación(es) revocada(s)',
+            { count: revokedInvites },
+          ));
+        }
+
+        const warnings = Array.isArray(cleanup?.warnings) ? cleanup.warnings : [];
+        for (const warning of warnings) {
+          lines.push(`⚠️ ${warning}`);
+        }
+
+        if (lines.length === 1) {
+          lines.push(t('system.users.cleanupNoReport', '⚠️ El servidor no devolvió detalles de la limpieza.'));
+        }
+      }
+
       msg(t('system.users.userDeleted', 'Usuario eliminado.'), true);
-      load();
+      await load();
+      await alertDialog({ title, message: lines.join('\n') });
     } catch (e) { msg(e.message); }
   }
 

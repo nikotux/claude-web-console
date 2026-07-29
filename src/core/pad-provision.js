@@ -1,15 +1,14 @@
 // core/pad-provision.js — provisiona el Pad PROPIO de un inquilino (B2, DOC-633):
-// registra su cuenta (admin-mediado), crea su workspace aislado y clona las
-// colecciones de 'console'. Best-effort: nunca tira. El token del inquilino
+// registra su cuenta (admin-mediado), crea su workspace aislado y aplica el
+// molde declarativo versionado. Best-effort: nunca tira. El token del inquilino
 // queda en su espacio (~/.cwc-users/<u>/.pad), invisible para Niko a nivel app-Pad.
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { MOLD, recordMoldVersion } from './pad-mold.js';
 import { userPadWorkspace, writeUserPadToken, readUserPadToken, userPadDir, ensureUserSpace, userSpace } from './user-space.js';
 
 const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
-// Las 6 colecciones que los módulos de inquilino usan (se clonan de 'console').
-const TENANT_COLLECTIONS = ['pendientes', 'planes', 'temas-de-aprendizaje', 'rutas-de-aprendizaje', 'mejora-continua', 'contexto-de-tickets'];
 // Pozo COMÚN de Mejora Continua (console:PLAN-2222): workspace neutral donde
 // las lecciones de `project: tolkien` de TODOS los usuarios se agregan y suman
 // recurrencia entre personas. No es de nadie: ni `console` ni un `tenant-*`.
@@ -98,6 +97,7 @@ export async function ensureSharedWorkspace() {
           name: sourceCollection.name,
           slug: sourceCollection.slug,
           icon: sourceCollection.icon,
+          prefix: sourceCollection.prefix,
           schema: sourceCollection.schema,
         },
       });
@@ -189,19 +189,25 @@ export async function provisionUserPad(userId, { name } = {}) {
     }
     await sleep(SLEEP_MS);
 
-    // 3) COLECCIONES: clonar las 6 de 'console' (schema STRING crudo, DOC-633).
-    const srcCols = await padFetch('GET', '/api/v1/workspaces/console/collections', { token: admin });
-    const src = Array.isArray(srcCols.data) ? srcCols.data : (srcCols.data?.collections || []);
+    // 3) COLECCIONES: aplicar el molde versionado (schema STRING crudo, DOC-633).
     const existing = await padFetch('GET', `/api/v1/workspaces/${wsSlug}/collections`, { token });
+    if (existing.status !== 200) {
+      return { ok: false, error: `listar colecciones falló: ${existing.status} ${JSON.stringify(existing.data).slice(0, 120)}` };
+    }
     const existSlugs = new Set((Array.isArray(existing.data) ? existing.data : (existing.data?.collections || [])).map((c) => c.slug));
-    for (const slug of TENANT_COLLECTIONS) {
-      if (existSlugs.has(slug)) continue;
-      const col = src.find((c) => c.slug === slug);
-      if (!col) continue;
-      // schema TAL CUAL (string crudo del GET; re-encode lo rompe — DOC-633).
-      await padFetch('POST', `/api/v1/workspaces/${wsSlug}/collections`, { token, body: { name: col.name, slug: col.slug, icon: col.icon, schema: col.schema } });
+    for (const col of MOLD) {
+      if (existSlugs.has(col.slug)) continue;
+      // schema TAL CUAL (string crudo del molde; re-encode lo rompe — DOC-633).
+      const created = await padFetch('POST', `/api/v1/workspaces/${wsSlug}/collections`, {
+        token,
+        body: { name: col.name, slug: col.slug, icon: col.icon, prefix: col.prefix, schema: col.schema },
+      });
+      if (created.status !== 201) {
+        return { ok: false, error: `colección ${col.slug} falló: ${created.status} ${JSON.stringify(created.data).slice(0, 120)}` };
+      }
       await sleep(SLEEP_MS);
     }
+    recordMoldVersion(wsSlug);
 
     // El pozo es accesorio: sus dos pasos quedan aislados para que ni crear el
     // espacio común ni sumar membresía puedan convertir un alta válida en error.

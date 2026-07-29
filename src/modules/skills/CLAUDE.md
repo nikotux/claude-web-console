@@ -21,6 +21,13 @@ fail-closed como `cwc-share: host-only` + `cwc-default: false`: nunca se
 comparte. El hash corto SHA-256 cubre todos los archivos de la skill, incluidos
 `references/` y `scripts/`, para señalar copias desactualizadas.
 
+Cada GET `/api/skills` reconcilia los defaults nuevos antes del censo. El ledger
+per-usuario `<scope.dataDir>/skills-defaults-offered.json` recuerda cuáles ya se
+ofrecieron: una skill desinstalada deliberadamente NO se reinstala. Una colisión
+con una skill propia también queda ofrecida (nunca se pisa); un fallo de I/O no,
+para reintentarlo en la próxima carga. El alta usa la misma reconciliación y el
+mismo ledger mediante `installDefaults()`.
+
 POST `/api/skills/install` `{dirName}` copia la skill al
 `<scope.claudeDir>/skills/<dirName>/`; POST `/api/skills/uninstall` `{dirName}`
 elimina esa copia. Ambos derivan el scope por request, validan `dirName` con

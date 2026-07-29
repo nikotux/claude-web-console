@@ -14,6 +14,7 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 const CONSOLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MARKER_NAME = '.cwc-catalog.json';
 const MARKER_SOURCE = 'console-catalog';
+const DEFAULTS_OFFERED_NAME = 'skills-defaults-offered.json';
 
 export const CATALOG_DIR = path.join(CONSOLE_ROOT, '.claude', 'skills');
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/;
@@ -307,17 +308,64 @@ export function uninstallSkill(claudeDir, dirName) {
   return { ok: true, dirName };
 }
 
-export function installDefaults(claudeDir) {
+export function reconcileDefaults(claudeDir, dataDir) {
+  const offeredPath = path.join(dataDir, DEFAULTS_OFFERED_NAME);
+  let rawOffered = [];
+  try {
+    const record = JSON.parse(fs.readFileSync(offeredPath, 'utf8'));
+    if (record && Array.isArray(record.offered)) {
+      rawOffered = record.offered.filter((dirName) => typeof dirName === 'string');
+    }
+  } catch {
+    // Registro ausente o corrupto: falla abierto para no romper la carga.
+  }
+
+  const offered = new Set(rawOffered);
   const installed = [];
+  const skipped = [];
   const failed = [];
   for (const entry of listCatalog().filter((item) => item.isDefault)) {
+    if (offered.has(entry.dirName)) continue;
     try {
       const result = installSkill(claudeDir, entry.dirName);
-      if (result.ok) installed.push(entry.dirName);
-      else failed.push({ dirName: entry.dirName, error: result.error || result.code });
+      if (result.ok) {
+        installed.push(entry.dirName);
+        offered.add(entry.dirName);
+      } else if (result.code === 'user_owned') {
+        skipped.push(entry.dirName);
+        offered.add(entry.dirName);
+      } else {
+        failed.push({
+          dirName: entry.dirName,
+          code: result.code || 'install_failed',
+          error: result.error || result.code || 'No se pudo instalar la skill.',
+        });
+      }
     } catch (error) {
-      failed.push({ dirName: entry.dirName, error: String(error?.message || error) });
+      failed.push({
+        dirName: entry.dirName,
+        code: error?.code || 'install_failed',
+        error: String(error?.message || error),
+      });
     }
   }
-  return { installed, failed };
+
+  // El registro recuerda qué defaults ya se ofrecieron para respetar una
+  // desinstalación deliberada. `user_owned` también cuenta como evaluada porque
+  // nunca debe pisarse; un fallo de I/O no se registra y así puede reintentarse.
+  if (offered.size !== new Set(rawOffered).size) {
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    writeJsonAtomic(offeredPath, {
+      offered: [...offered].sort((a, b) => a.localeCompare(b)),
+    }, { mode: 0o600, space: 2 });
+  }
+
+  return { installed, skipped, failed };
+}
+
+export function installDefaults(
+  claudeDir,
+  dataDir = path.join(path.dirname(path.resolve(claudeDir)), '.cwc-data'),
+) {
+  return reconcileDefaults(claudeDir, dataDir);
 }

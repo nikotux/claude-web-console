@@ -343,7 +343,10 @@ fragmentos, texto por-fragmento capado a 2000 chars — es muestreo para
 la lluvia, no volcado); `?since=<seq>` devuelve solo lo nuevo (multi-
 ventana safe, sin cursor por-cliente). 0 tokens, SOLO-LECTURA, efímero.
 Baseline igual que flow.js (primer poll vacío, la lluvia no vomita el
-histórico). Lo consume public/js/rawview/raw.js (ver raw.html en el mapa).
+histórico). El seed puntual de una sesión lee hasta 512 KB de cola del
+transcript y devuelve como máximo 40.000 caracteres, suficiente para llenar de
+una el panel de log de ~64 líneas de la Vista Raw. Lo consume
+public/js/rawview/raw.js (ver raw.html en el mapa).
 
 ## Gotchas de esta carpeta
 

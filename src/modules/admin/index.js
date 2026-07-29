@@ -11,6 +11,8 @@ import express from 'express';
 import { execFileSync } from 'node:child_process';
 import { isAdmin, principalOf, invalidateSessionsForUser } from '../../core/auth.js';
 import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
+import { deprovisionUser } from '../../core/user-deprovision.js';
+import { hostUser } from '../../core/user-space.js';
 import { provisionNewUser } from '../onboard/provision-user.js';
 
 function requireAdmin(req, res, next) {
@@ -116,17 +118,35 @@ export default {
       }
     });
 
-    r.delete('/users/:username', (req, res) => {
+    r.delete('/users/:username', async (req, res) => {
       const { username } = req.params;
       const principal = principalOf(req);
       if (principal && principal.username === username) {
         return res.status(409).json({ error: 'No puedes eliminar tu propio usuario.' });
       }
+      // El host no se da de baja por esta vía: su espacio ES el HOME real del server
+      // (userSpace(host) === config.home) y su workspace de Pad es `console`, no un
+      // `tenant-*`. deprovisionUser ya lo rechaza con su guard G2, pero para cuando
+      // llega ahí `deleteUser` ya lo sacó de users.json y el host queda sin cuenta.
+      // Por eso el corte va acá arriba: el guard viejo solo cubría la
+      // autoeliminación y con el token maestro (principal sin username) no aplicaba.
+      if (username === hostUser()) {
+        return res.status(409).json({ error: 'No se puede eliminar al usuario host de la consola.' });
+      }
       try {
         deleteUser(username);
         // Usuario eliminado ⇒ ninguna sesión suya puede seguir viva.
         invalidateSessionsForUser(username);
-        res.json({ ok: true });
+        let cleanup = null;
+        try {
+          cleanup = await deprovisionUser(username);
+        } catch (e) {
+          // Un guard que salta acá significa que el username no era dado de
+          // baja de forma segura (host, ruta fuera de la raíz multi-tenant).
+          // El usuario ya salió de users.json: se informa sin romper la respuesta.
+          cleanup = { ok: false, error: e.message };
+        }
+        res.json({ ok: true, cleanup });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }

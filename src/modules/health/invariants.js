@@ -2,19 +2,23 @@
 //
 // FASE 4 del "sistema nervioso": aserciones que DEBEN cumplirse siempre. El
 // auditor de salud inyecta en cada unidad SOLO los invariantes que le aplican
-// (por `match` contra sus rutas de archivo) y los verifica sí o sí — así caza
-// bugs SUTILES que el barrido genérico se pierde (p.ej. asimetrías en archivos
-// grandes). Están seedeados de los gotchas conocidos de CLAUDE.md; son la
-// parte "receta/rules" del cerebro (viven en el repo, humano-autoradas). La
-// Fase 5 (loop que aprende) PROPONE nuevas acá cuando el auto-fix resuelve algo.
+// (por `match` contra sus rutas o por `facets` contra su clase) y los verifica
+// sí o sí — así caza bugs SUTILES que el barrido genérico se pierde (p.ej.
+// asimetrías en archivos grandes). Están seedeados de los gotchas conocidos de
+// CLAUDE.md; son la parte "receta/rules" del cerebro (viven en el repo,
+// humano-autoradas). La Fase 5 (loop que aprende) PROPONE nuevas acá cuando el
+// auto-fix resuelve algo.
 //
-// Cada invariante: { match, text, exclude?, origen? }. `match` es un RegExp en
+// Cada invariante: { match?, facets?, text, exclude?, origen? }. `match` (ruta)
+// y `facets` (clase) son caminos INDEPENDIENTES: alcanza con que uno matchee;
+// sin ninguno de los dos el invariante no aplica nunca. `match` es un RegExp en
 // memoria y, en los aprendidos persistidos, uno o varios globs separados por
 // coma contra rutas relativas. `text` es la regla; `exclude` enumera rutas
 // relativas exactas donde no aplica; `origen` conserva su procedencia.
 import fss from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { facetsForUnit, isValidFacetPredicate, matchesFacets } from './facets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Invariantes APRENDIDOS (Fase 5): propuestos por el auto-fix y APROBADOS por
@@ -135,23 +139,28 @@ export function compileMatch(spec) {
   return new RegExp(parts.map(globToRegExp).join('|'));
 }
 
-// Carga los aprendidos y compila su `match` (glob) a RegExp; un patrón malo se
-// descarta sin romper el auditor (try/catch por entrada).
+// Carga los aprendidos y compila su `match` opcional (glob) a RegExp. Cada
+// camino se valida por separado: un dato malo no elimina la cobertura sana del
+// otro camino.
 function loadLearned() {
   let arr;
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); } catch { return []; }
   if (!Array.isArray(arr)) return [];
   return arr.map((e) => {
-    try {
-      return {
-        match: compileMatch(e.match),
-        text: String(e.text),
-        exclude: Array.isArray(e.exclude) ? e.exclude : [],
-        origen: e.origen ? String(e.origen) : '',
-        learned: true,
-      };
+    let match = null;
+    if (typeof e?.match === 'string' && e.match.trim()) {
+      try { match = compileMatch(e.match); } catch { /* el camino por faceta puede seguir sano */ }
     }
-    catch { return null; }
+    const facets = isValidFacetPredicate(e?.facets) ? e.facets : null;
+    if (!match && !facets) return null;
+    return {
+      ...(match ? { match } : {}),
+      ...(facets ? { facets } : {}),
+      text: String(e.text),
+      exclude: Array.isArray(e.exclude) ? e.exclude : [],
+      origen: e.origen ? String(e.origen) : '',
+      learned: true,
+    };
   }).filter(Boolean);
 }
 
@@ -161,13 +170,37 @@ export function allInvariants() {
   return [...SEED_INVARIANTS, ...loadLearned()];
 }
 
-// Invariantes que aplican a una unidad (por sus archivos). Devuelve textos.
-export function invariantsFor(unit) {
+// El orden es parte del contrato: unitFingerprint (health/shared.js) hashea los
+// textos aplicables. Path va primero y conserva el orden histórico para no
+// invalidar la caché incremental y re-auditar ~16 unidades con sonnet.
+export function invariantsForDetailed(unit) {
   const files = unit?.files || [];
-  return allInvariants().filter((inv) => {
+  const invariants = allInvariants();
+  const unitFacets = facetsForUnit(unit);
+  const found = [];
+  const seen = new Set();
+  const add = (inv, via) => {
+    if (seen.has(inv.text)) return;
+    seen.add(inv.text);
+    found.push({ text: inv.text, via });
+  };
+
+  for (const inv of invariants) {
+    if (!inv.match) continue;
     const ex = inv.exclude || [];
-    return files.some((f) => !ex.includes(f) && inv.match.test(f));
-  }).map((inv) => inv.text);
+    if (files.some((f) => !ex.includes(f) && inv.match.test(f))) add(inv, 'path');
+  }
+  for (const inv of invariants) {
+    if (!inv.facets) continue;
+    const ex = inv.exclude || [];
+    if (!files.some((f) => !ex.includes(f))) continue;
+    if (matchesFacets(inv.facets, unitFacets)) add(inv, 'faceta');
+  }
+  return found;
+}
+
+export function invariantsFor(unit) {
+  return invariantsForDetailed(unit).map((entry) => entry.text);
 }
 
 let _repoFiles = null;

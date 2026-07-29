@@ -147,7 +147,7 @@ export default {
                 <input type="text" data-f="owner" maxlength="120" placeholder="${t('tasks.form.phOwner', 'Quién es responsable')}" value="${esc(tk.owner || '')}" /></label>
               <label class="task-fld"><span>${t('tasks.form.estimate', 'Estimación')}</span>
                 <input type="text" data-f="estimate" maxlength="40" placeholder="${t('tasks.form.phEstimate', 'ej: 1d, 4h')}" value="${esc(tk.estimate || '')}" /></label>
-              <label class="task-fld"><span>${t('tasks.form.targetDate', 'Fecha objetivo')}</span>
+              <label class="task-fld"><span>${t('tasks.form.targetDate', 'Fecha comprometida (ETA)')}</span>
                 <input type="date" data-f="dueDate" value="${esc(tk.dueDate || '')}" /></label>
             </div>
             <label class="task-fld"><span>${t('tasks.form.plan', 'Plan')}</span>
@@ -273,6 +273,7 @@ export default {
       const learningCtx = { icon, dialog, bus: ctx.bus, whoami: ctx.whoami, openChat: ctx.openChat };
 
       function renderTabs() {
+        const overdue = tasks.filter((tk) => tk.dueState === 'vencida').length;
         tabsEl.innerHTML = TABS.map((t) => {
           let n = '';
           if (t.key === 'tareas') n = (counts.pendiente || 0) + (counts['en-progreso'] || 0);
@@ -280,7 +281,9 @@ export default {
           else if (t.key === 'informes') n = audio.length;
           const badge = (n !== '' && n) ? ` <span class="tk-tab-n">${n}</span>` : '';
           return `<button class="tk-tab${t.key === tab ? ' on' : ''}" data-tab="${t.key}">${t.label}${badge}</button>`;
-        }).join('');
+        }).join('') + (overdue
+          ? `<span class="task-due-count">${t('tasks.due.overdueCount', '{n} vencida(s)', { n: overdue })}</span>`
+          : '');
       }
 
       // ---------- pestaña Tareas: cuadritos en columnas (estilo Bugs v2) ----------
@@ -292,6 +295,11 @@ export default {
         const ty = typeOf(tk.type);
         const plan = tk.planId ? plans.find((p) => p.id === tk.planId) : null;
         const src = tk.source === 'audio' ? '🎙️ ' : '';
+        const due = tk.dueState === 'vencida'
+          ? `<span class="task-due task-due--overdue">🔴 ${t('tasks.due.overdue', 'Vencida')} · ${fmtDay(tk.dueDate)}</span>`
+          : tk.dueState === 'hoy'
+            ? `<span class="task-due task-due--today">🟡 ${t('tasks.due.today', 'Vence hoy')}</span>`
+            : '';
         return `<div class="task-cardv2 task-cardv2--${tk.status}" data-open="${tk.id}" role="button" tabindex="0" title="${t('tasks.card.openTitle', 'Abrir {id}', { id: tk.id })}">
           <div class="task-cardv2-top">
             <span class="task-type" title="${ty.label}">${ty.emoji}</span>
@@ -300,7 +308,7 @@ export default {
             <span class="task-cardv2-status" title="${st.label}">${st.emoji}</span>
           </div>
           <div class="task-cardv2-title">${src}${esc(tk.title)}</div>
-          ${plan ? `<div class="task-cardv2-foot"><span class="task-plan">🗺️ ${esc(plan.title)}</span></div>` : ''}
+          ${(plan || due) ? `<div class="task-cardv2-foot">${plan ? `<span class="task-plan">🗺️ ${esc(plan.title)}</span>` : ''}${due}</div>` : ''}
         </div>`;
       }
 
@@ -387,13 +395,18 @@ export default {
             ].join('');
           }
           const st = statusOf(item.status); const pr = prioOf(item.priority); const ty = typeOf(item.type);
+          const dueState = item.dueState === 'vencida'
+            ? ` · <span class="task-due task-due--overdue">🔴 ${t('tasks.due.overdue', 'Vencida')}</span>`
+            : item.dueState === 'hoy'
+              ? ` · <span class="task-due task-due--today">🟡 ${t('tasks.due.today', 'Vence hoy')}</span>`
+              : '';
           return [
             propRow(t('tasks.form.status', 'Estado'), `${st.emoji} ${st.label}`),
             propRow(t('tasks.form.priority', 'Prioridad'), `${pr.emoji} ${pr.label}`),
             propRow(t('tasks.form.type', 'Tipo'), `${ty.emoji} ${ty.label}`),
             propRow(t('tasks.form.owner', 'Owner'), item.owner ? esc(item.owner) : '—'),
             propRow(t('tasks.form.estimate', 'Estimación'), item.estimate ? esc(item.estimate) : '—'),
-            propRow(t('tasks.form.targetDate', 'Fecha objetivo'), item.dueDate ? fmtDay(item.dueDate) : '—'),
+            propRow(t('tasks.form.targetDate', 'Fecha comprometida (ETA)'), item.dueDate ? `${fmtDay(item.dueDate)}${dueState}` : '—'),
           ].join('');
         }
         function relHtml() {

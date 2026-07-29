@@ -30,6 +30,17 @@ Aplicás la regla normativa **CONVE-807**, dictada por Chris (cswenor) en su reu
 4. Agregá un comentario que explique el acuerdo si aporta contexto, pero nunca lo uses en lugar de `dueDate`.
 5. En la fecha acordada, comprobá el estado y reclamá o escalá citando el compromiso.
 
+La regla también aplica al tablero interno de **Pendientes**. El ítem de Pad
+lleva el campo `dueDate` en formato `YYYY-MM-DD`: se define desde el tablero,
+en **Fecha comprometida (ETA)**, o por MCP:
+
+```text
+pad_item action=update ref=PEND-n field=["dueDate=YYYY-MM-DD"]
+```
+
+El tablero deriva el estado según el día local y marca automáticamente las
+tareas vencidas; `dueDate` sigue siendo el dato persistido y el marcado no.
+
 Aplicá la regla también fuera del equipo: proveedores, administraciones y clientes.
 
 ## Antipatrón que motivó la regla

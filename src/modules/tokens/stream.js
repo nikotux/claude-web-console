@@ -274,8 +274,10 @@ async function computeStream(owner, state) {
 // que su banda tenga log desde el arranque (si no, una sesión ociosa desde que se
 // abrió la vista quedaría sin texto). Lee la cola del transcript de ESA sesión —
 // NO toca los cursores ni el dedup del streaming (extractor propio sin seenIds).
-const SEED_TAIL_BYTES = 96 * 1024;
-const SEED_TEXT_CAP = 3000;
+// v6: el panel de log de la Vista Raw mide ~64 líneas; con 3.000 chars llegaba
+// a la mitad y el resto quedaba negro. 40.000 alcanza para llenarlo de una.
+const SEED_TAIL_BYTES = 512 * 1024;
+const SEED_TEXT_CAP = 40000;
 
 function seedTextFromLine(obj) {
   if (obj?.type !== 'assistant') return null;

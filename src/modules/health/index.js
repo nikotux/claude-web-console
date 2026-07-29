@@ -17,6 +17,7 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { hostUser } from '../../core/user-space.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
   writeLock, clearLock,
@@ -25,8 +26,10 @@ import {
   readProposals, writeProposals,
   readBatch, writeBatch, writeBatchLock, clearBatchLock, isBatchRunning,
   collectActiveRunners,
+  discoverUnits,
 } from './shared.js';
 import { appendLearnedInvariant } from './invariants.js';
+import { facetsForUnit, loadFacetsSnapshot } from './facets.js';
 import { classifyFinding } from './policy.js';
 import { rulesStatus } from './finding-rules.js';
 import { attemptStats } from '../../core/closed-envelope.js';
@@ -311,6 +314,58 @@ function checkFichasModulo() {
   return { id, label, status: 'ok', detail: `${required.length} fichas presentes` };
 }
 
+// CONVE-2279: comprueba que las unidades auditadas tengan clase declarada y
+// que no haya código de src/ fuera del radar estructural de discoverUnits().
+// Es determinístico, local y no consume tokens.
+export function checkFacetas() {
+  const id = 'facetas';
+  const label = 'Facetas del Edificio (invariantes por clase)';
+  const snapshot = loadFacetsSnapshot();
+  if (!snapshot) {
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: 'sin snapshot de facetas: toda unidad recibe el trato más restrictivo · regeneralo con `node bin/cwc-facets-snapshot.js`',
+    };
+  }
+
+  const units = discoverUnits();
+  const unknown = units.filter((unit) => !facetsForUnit(unit, snapshot).known).map((unit) => unit.name);
+  const orphans = [];
+  const srcEntries = fss.readdirSync(path.join(ROOT, 'src'), { withFileTypes: true });
+  for (const entry of srcEntries) {
+    if (entry.isDirectory() && entry.name !== 'core' && entry.name !== 'modules') {
+      orphans.push(`src/${entry.name}`);
+    } else if (entry.isFile() && entry.name.endsWith('.js') && entry.name !== 'server.js') {
+      orphans.push(`src/${entry.name}`);
+    }
+  }
+
+  if (unknown.length || orphans.length) {
+    const sample = (items) => {
+      const names = items.slice(0, 5).join(', ');
+      return items.length > 5 ? `${names} y ${items.length - 5} más` : names;
+    };
+    const problems = [];
+    if (unknown.length) problems.push(`unidades sin facetas: ${sample(unknown)}`);
+    if (orphans.length) problems.push(`código huérfano: ${sample(orphans)}`);
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `${problems.join(' · ')} · declarar las facetas del nodo en el Pad (\`node bin/cwc-pad-facets.js --apply\`) y regenerar el snapshot con \`node bin/cwc-facets-snapshot.js\``,
+    };
+  }
+
+  return {
+    id,
+    label,
+    status: 'ok',
+    detail: `${units.length} unidad(es) con facetas declaradas · ${Object.keys(snapshot.entries).length} entradas en el snapshot`,
+  };
+}
+
 // F7 (PLAN-373/PEND-466) — AUDIT de CRUCES ENTRE MUNDOS. GRANDFATHER de los
 // cruces LEGÍTIMOS conocidos (los que hoy tocan el mundo externo Tolkien —
 // mapeados en DOC-468) + DETECCIÓN de cualquier cruce NUEVO: un archivo que
@@ -358,7 +413,10 @@ const CROSS_WORLD_RE = /config\.projectDir|CLAUDE\.local\.md/;
 // propósito: los ítems abiertos ESA misma mañana nacieron cuando la convención
 // todavía no existía, y marcarlos sería reprochar historia.
 const ANCLA_SINCE = '2026-07-26T15:09:20Z';
-const ANCLA_COLLECTIONS = ['planes', 'tasks', 'bugs'];
+// `pendientes` reemplazó a `tasks` acá el 2026-07-29 (console:PEND-2286): la
+// fusión dejó `tasks` vacía, y auditar una colección vacía es perder cobertura
+// en silencio. `pendientes` es la colección canónica de trabajo.
+const ANCLA_COLLECTIONS = ['planes', 'pendientes', 'bugs'];
 const ANCLA_MAX_PARENT_DEPTH = 12;
 // Medido el 2026-07-26 sobre la respuesta real de `pad_set_workspace console`:
 // 72.751 B. Redondeo inmediato hacia arriba = 73.000 B (249 B de margen);
@@ -657,7 +715,7 @@ export async function checkPadBootstrap(fetchBootstrap = padLocal.getBootstrap) 
 // Audita la Regla dura 15 (ancla del pedido original, CONVE-1957/CONVE-1958):
 // todo trabajo no trivial guarda en Pad el pedido VERBATIM + sus criterios de
 // aceptación, y sin eso el contraste final no tiene contra qué medir. El pedido
-// original se declara una sola vez en la raíz: planes/tasks/bugs hijos lo heredan
+// original se declara una sola vez en la raíz: planes/pendientes/bugs hijos lo heredan
 // de cualquier ancestro unido por links `parent` reales. Read-only por HTTP plano
 // (NO MCP, no toca el blindaje de la regla 6), 0 tokens.
 // GRANDFATHERING: solo audita los ítems creados a partir de ANCLA_SINCE (la
@@ -850,6 +908,7 @@ async function runChecks() {
     checkUnifiBridge(),
     Promise.resolve(checkTolkienContextSync()),
     Promise.resolve(checkFichasModulo()),
+    Promise.resolve(checkFacetas()),
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     Promise.resolve(checkOnboardProvisioning()),
@@ -1105,6 +1164,10 @@ export default {
     // Los SUBAGENTES no salen de acá: el front los toma de /api/chat/list.
     // `dominantModel` = el modelo más frecuente entre los procesos visibles.
     r.get('/active-runners', (req, res) => {
+      // ?mine=1 → filtrar SIEMPRE por dueño, incluso siendo admin. Lo usa la Vista
+      // Raw, que es un monitor personal. Sin el flag, el comportamiento no cambia:
+      // el modal "Trabajos en segundo plano" sigue mostrándole todo al admin.
+      const onlyMine = req.query.mine === '1' || req.query.mine === 'true';
       const principal = principalOf(req);
       const admin = isAdmin(req);
       let processes = collectActiveRunners();
@@ -1114,6 +1177,13 @@ export default {
         processes = principal?.username
           ? processes.filter((p) => activeRunnerOwner(p) === principal.username)
           : [];
+      }
+      if (onlyMine) {
+        const me = principal?.username || hostUser();
+        processes = processes.filter((p) => {
+          const owner = activeRunnerOwner(p);
+          return owner === me || (owner == null && me === hostUser());
+        });
       }
       const counts = {};
       for (const p of processes) if (p.model) counts[p.model] = (counts[p.model] || 0) + 1;

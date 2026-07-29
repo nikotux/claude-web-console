@@ -12,12 +12,19 @@
   <canvas id="raw-canvas"></canvas>
 
   <!-- Logs de terminal legibles por sesión: el texto real escribiéndose de
-       corrido, semitransparente, tail-scroll al llegar al fondo (detrás de los
-       rótulos, delante de la lluvia). -->
+       corrido, semitransparente y anclado abajo (detrás de los rótulos,
+       delante de la lluvia). -->
   <div id="raw-logs" class="raw-logs"></div>
+
+  <!-- Fila de sesiones dormidas: las que llevan más de un minuto quietas salen de
+       la grilla de columnas y se colapsan acá, para no desperdiciar ancho. -->
+  <div id="raw-dozing" class="raw-dozing" hidden></div>
 
   <!-- Rótulos tenues por banda de sesión (posicionados por JS sobre el canvas). -->
   <div id="raw-labels" class="raw-labels"></div>
+
+  <!-- Estado vacío: se muestra solo si no hay ninguna banda (raw.js lo alterna). -->
+  <div id="raw-empty" class="raw-empty" hidden>sin sesiones activas</div>
 
   <!-- Feed legible (abajo-izquierda). -->
   <div id="raw-feed" class="raw-feed"></div>

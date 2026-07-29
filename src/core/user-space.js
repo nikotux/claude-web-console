@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.js';
 
-const USERS_ROOT = path.join(config.home, '.cwc-users');
+export const USERS_ROOT = path.join(config.home, '.cwc-users');
 // El usuario HOST (el admin que corre el server hoy) mapea a su HOME real:
 // retrocompat total — sus creds/datos/config se quedan donde están, cero
 // reubicación. Solo los usuarios NUEVOS obtienen un root aislado. Se puede

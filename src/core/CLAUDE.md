@@ -31,6 +31,19 @@ lanzar. Exports: `refreshClaudeOauth(owner)`,
 `getValidClaudeAccessToken(owner)`) ·
 paths(resolveWithinHome/clampToHome — TODA validación de
 rutas del cliente pasa por acá; nunca startsWith crudo) ·
+arch-uid(fuente ÚNICA del mapeo entre el `uid` de un nodo de
+`arquitectura` y la ruta del repo que representa: `mod:<n>` →
+`src/modules/<n>`, `fe:<n>` → `public/js/modules/<n>`, `run:<n>` →
+`bin/<n>.js` y `file:<ruta>` → la ruta tal cual; cualquier otro prefijo
+devuelve `null`. `uidTarget()` valida primero este dato venido del Pad y
+rechaza `..`, rutas absolutas o cualquier escape de la raíz. Es un módulo puro
+que importa solo `node:path`, sin `config.js`, porque lo usan tanto los CLIs
+`bin/cwc-pad-facets.js` y `bin/cwc-facets-snapshot.js` como
+`modules/health/facets.js` dentro de runners con entorno limpio; existe para
+que el mapeo no viva duplicado en tres lados (`console:CONVE-2085`).
+`uidFamily()` deriva `backend`/`frontend`/`runner` del prefijo: `familia` NO
+es un cuarto eje de `CONVE-2279`, sino metadata para impedir que un invariante
+de backend se inyecte en una unidad frontend) ·
 pad-world-refs(frontera compartida entre los mundos: detector de refs
 foráneos para Tolkien + reemplazo controlado; listas cerradas de
 prefijos, con `TASK-*` interno distinto de `TTASK-*` externo) ·
@@ -100,6 +113,21 @@ que alcanzaría a otro workspace). Un runner vivo no lo toma hasta
 "Reabrir para cambios"/chat nuevo. Llevarlo a sesiones TUI = Frente B
 diferido. La regla 6 (blindaje read-only headless) NO pasa
 por acá: esos runners arman sus propias allowlists.
+VISUALIZACIÓN INLINE: `VIZ_INSTRUCTION` se agrega al system prompt de
+TODO chat (cualquier usuario y ambos mundos) porque el renderer
+`public/js/ui/markdown.js` es universal. Avisa los tres formatos que el
+navegador entiende: bloque `chart` con JSON, bloque `mermaid` y `{bar:NN}`
+solo dentro de una celda de tabla Markdown. Esto NO viola la Regla 12:
+describe una capacidad del renderer de la consola y no toca recursos del
+mundo externo, el mismo criterio por el que `sessionFolderRule` ya se inyecta
+en chats de Tolkien. El propio texto PROHÍBE usar esa sintaxis en artefactos
+que salen de la consola —descripciones de PR, comentarios de tickets de Zoho,
+ítems del Pad de Tolkien, correos y mensajes de Teams— porque ahí quedaría
+como JSON o texto crudo. La guía larga, con paleta y ejemplos copiables, vive
+en la skill `graficar` (`cwc-share: catalog`, `cwc-default: true`), instalada
+a todo usuario nuevo por `installDefaults()` de
+`src/modules/skills/catalog.js`. Como siempre, un runner YA VIVO no incorpora
+esta instrucción hasta "Reabrir para cambios" o una conversación nueva.
 AUTONOMÍA EJECUTABLE (2026-07-25): `AUTONOMY_INSTRUCTION` se agrega al
 system prompt de TODO chat, no sólo Tándem, porque la convención de la
 pelota es global. `declaresBallMine(text)` mira únicamente las últimas 3
@@ -315,8 +343,50 @@ derivados por `padContextForUser`/`reqPadContext` (`src/core/pad-context.js`).
 NUNCA se escribe data de un inquilino con la credencial ÚNICA del host (token de
 `~/.pad`) ni en el workspace `console`. Sin token propio provisionado (aún), el
 ctx viaja con `token:null` y la op falla limpio (403) SIN contaminar `console`
-(hay lazy-provisioning en background). El host conserva `console`+`~/.pad` por
-retrocompat.
+(hay lazy-provisioning en background). Desde `console:BUG-2287`,
+`pad-service-client.resolveCtx` distingue ausencia de ctx de ctx presente: sin
+ctx conserva `console`+`~/.pad` por retrocompat; con ctx, `ctx.token` es la ÚNICA
+credencial válida y `null` falla cerrado, sin pedir prestado el token del host.
+`moveItem(ref, targetCollectionSlug, opts)` llama a
+`POST /api/v1/workspaces/{ws}/items/{ref}/move` con body
+`{ target_collection }`: el move cambia el prefijo del ref, conserva su número
+y aplica el schema del destino, descartando en silencio los campos que ese
+schema no declara.
+
+**Molde declarativo de Pad (`pad-mold.js`, v5).** Un workspace nuevo ya no
+recibe una fotocopia del schema EN VIVO de `console`: `MOLD` congela en el repo
+las nueve colecciones canónicas, en orden (`pendientes`, `planes`,
+`temas-de-aprendizaje`, `rutas-de-aprendizaje`, `mejora-continua`,
+`contexto-de-tickets`, `bugs`, `arquitectura`, `docs`). La v4 sumó al schema de
+`arquitectura` los cuatro campos de facetas de CONVE-2279. La **v5**
+(2026-07-29, `console:PEND-2286`) resolvió la tensión que la v4 dejaba abierta:
+`tasks` SALIÓ del molde porque sus 245 ítems se fusionaron en `pendientes`, hoy
+la colección canónica y única de trabajo (`console:CONVE-2278`). En el mismo
+movimiento el schema de `pendientes` ganó cuatro campos —`phase`, `model`,
+`effort`, `executor`— que NO son una ampliación sino una corrección: los ítems
+del tablero ya los guardaban sin que el schema los declarara. Se declararon
+**sin `default`** a propósito: con default, cada PEND nuevo nacería con un
+`model=sonnet` inventado.
+⚠️ RETIRAR UNA ENTRADA DEL MOLDE NO ES UNA ORDEN DE BORRADO RETROACTIVO. Un
+workspace `tenant-*` provisionado con v4 conserva su colección `tasks` intacta;
+verificado leyendo `bin/cwc-pad-mold.js`, cuyas tres funciones de comparación
+(`missingCollections`, `prefixDivergences`, `schemaDivergences`) iteran `MOLD` y
+nunca `present` — una colección viva en el tenant y ausente del molde le es
+literalmente invisible, y no existe ningún camino de borrado en ese CLI. Lo que
+sí ve el auditor tras la v5 es `schema-divergente=pendientes` (append-only, por
+lo tanto migrable con `--apply`) y la versión desactualizada.
+Cambiar el molde exige subir `MOLD_VERSION`; así dos altas hechas en días distintos
+parten del mismo contrato y tienen un camino explícito de migración. Cada entrada declara
+`prefix`: es parte del contrato porque forma el ref visible de todos sus ítems
+(`PEND-387`) y no puede quedar librado a la derivación de Pad. GOTCHA CRÍTICO
+(`DOC-633`): `schema` es un **string JSON crudo**, no un objeto; cada literal del
+molde debe permanecer byte por byte idéntico a la DB fuente y viajar hasta el
+POST sin `JSON.parse` ni re-serialización del JSON interno. Al completar todas
+las colecciones, `provisionUserPad` registra
+`{ "<workspace>": { "version", "ts" } }` en
+`~/.cwc-data/pad-mold-state.json`, estado administrativo en el HOME del HOST,
+con escritura atómica y mode 600. El CLI de auditoría/migración vive en
+`bin/cwc-pad-mold.js`.
 
 **Pozo COMÚN de Mejora Continua (`console:PLAN-2222`, F1 hecha 2026-07-28).**
 Existe un TERCER destino de Pad además de `console` y los `tenant-*`: el

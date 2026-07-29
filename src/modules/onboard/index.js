@@ -26,6 +26,7 @@ import {
   hasClaudeAccountCreds,
   hasGithubAuth,
   pendingFor,
+  requiredFor,
 } from './capabilities.js';
 import { tolkienMcpStatus } from './tolkien-mcp-shared.js';
 import { readProvisionState } from './provision-state.js';
@@ -129,7 +130,7 @@ publicRouter.post('/validate', (req, res) => {
       .sort((a, b) => a.order - b.order)
       .map((item) => ({
         id: item.id,
-        required: item.required,
+        required: requiredFor(item, lockedTo),
         labelEs: item.labelEs,
         complete: !!capability[item.id],
       }));

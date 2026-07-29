@@ -25,11 +25,11 @@ html, body {
   inset: 0;
   display: block;
   background: var(--raw-bg);
-  opacity: 0.4;
+  opacity: 0.55;
 }
 
 /* Logs de terminal por sesión: texto real escribiéndose de corrido,
-   semitransparente para no tapar la lluvia, tail-scroll al llegar al fondo. */
+   semitransparente para no tapar la lluvia, anclado al fondo. */
 .raw-logs {
   position: fixed;
   inset: 0;
@@ -71,7 +71,41 @@ html, body {
   white-space: pre;
   overflow: hidden;
   color: currentColor;
-  text-shadow: 0 0 3px currentColor;
+  /* sin text-shadow: pintarlo sobre miles de chars, 11 veces por segundo, era
+     uno de los dos costos que trababan la vista. El glow queda en rótulos y
+     contadores, que son 20 chars. */
+}
+
+/* Fila de sesiones dormidas: una sesión quieta hace más de un minuto sale de la
+   grilla —sus columnas vuelven al pozo y se las reparten las que trabajan— y
+   queda acá como chip. Ocupa una sola línea y desaparece si no hay ninguna. */
+.raw-dozing {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 76px;            /* deja libres los botones ✕ y ? de la esquina */
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.raw-doze-chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 1px 6px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(1, 6, 3, 0.62);
+  border-left: 2px solid currentColor;
+  opacity: 0.55;          /* más tenue que un rótulo activo: está dormida */
 }
 
 /* Rótulos de banda de sesión: fila superior tenue, pegada al borde. */
@@ -254,3 +288,22 @@ html, body {
 .raw-proc-dot--warn { background: #e0a83a; box-shadow: 0 0 6px #e0a83a; }
 .raw-proc-dot--fail { background: #e0563a; box-shadow: 0 0 6px #e0563a; }
 .raw-proc-meta { opacity: 0.6; font-size: 9px; }
+
+/* Estado vacío: sin ninguna banda la vista era un rectángulo negro sin
+   explicación — sobre todo para un usuario que recién entra y no tiene nada
+   corriendo. */
+.raw-empty {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--raw-green);
+  opacity: 0.4;
+  text-shadow: 0 0 8px var(--raw-green);
+  pointer-events: none;
+  user-select: none;
+}

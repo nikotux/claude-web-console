@@ -42,8 +42,12 @@ después del sanitizado. Mermaid ya NO es miniatura: `fitMermaidSvg(canvasEl)`
 encaja el SVG proporcionalmente como `object-fit:contain` desde su `viewBox`
 (fallback defensivo a `getBBox()`), limpia `width`/`height` y los
 `maxWidth`/`minWidth` inline de Mermaid sin borrar el `background`, y calcula
-`fitScale=min(anchoDisponible/w,altoMax/h,MERMAID_MAX_SCALE)`; el tope 2.2
-evita que un diagrama mínimo se vuelva un cartel. El piso de legibilidad
+`fitScale=min(anchoDisponible/w,altoMax/h,MERMAID_MAX_SCALE)`; el tope inline
+1.5 evita que un diagrama mínimo se vuelva un cartel (bajado desde 2.2 el
+2026-07-29 a pedido de Niko: los diagramas reales ya escalaban 1.23-1.50, así
+que solo cambia los chicos). El modal "Ampliar" usa su propia constante
+`MERMAID_ZOOM_MAX_SCALE` = 2.2 — no volver a unificarlas: compartir la constante
+hacía que bajar la inline achicara también el zoom. El piso de legibilidad
 `MERMAID_MIN_SCALE=0.85` se aplica como
 `max(fitScale,min(MERMAID_MIN_SCALE,altoMax/h))`: ese `min` interno es
 DELIBERADO para que un diagrama muy alto pueda bajar de 0.85 y siempre entre.
@@ -337,3 +341,18 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   sido Opus 5 (costean igual, $5/$25, pero no es el mismo modelo). Regla: si
   el texto describe qué está corriendo AHORA → `tierName`; si describe consumo
   YA registrado → `modelName`.
+
+- Un sr-only `position:absolute` DENTRO de un contenedor con scroll solo queda
+  contenido si su containing block también está adentro. `table.md-chart-data`
+  (la tabla accesible de cada gráfico) no lo tenía: su ancestro posicionado más
+  cercano era `.terminal-pane` (`position:absolute; inset:0`, FUERA de
+  `.chat-msgs`), así que el scroller no la recortaba y su posición estática —a
+  ~4-5 mil px en un chat largo— inflaba el scroll del DOCUMENTO. Medido:
+  `document.scrollHeight` 5160 px vs `innerHeight` 945; ocultando solo esas
+  tablas bajaba a 945 exacto. Se veía como "la consola se rompió": la página
+  scrolleaba, `#app` (100dvh) se iba hacia arriba y quedaba media pantalla
+  negra. Fix: `.md-chart { position: relative }` + `top/left:0` en la tabla.
+  Segundo detalle del mismo bug: una `<table>` IGNORA `width:1px;height:1px`
+  (nunca baja de su min-content: medía 166×140), así que el truco sr-only de
+  1×1 px no la achica — solo `clip-path` la esconde. Si agregás otro sr-only,
+  anclalo a un padre `position:relative` que viva dentro del scroller.

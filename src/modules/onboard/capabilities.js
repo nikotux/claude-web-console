@@ -10,6 +10,7 @@ import {
   userRunnerEnv,
   userSpace,
 } from '../../core/user-space.js';
+import { listUsers } from '../../core/users.js';
 
 // Detecta la credencial de cuenta completa que habilita el medidor de consumo.
 export function hasClaudeAccountCreds(user) {
@@ -40,6 +41,9 @@ export function hasGithubAuth(user) {
   }
 }
 
+// `required` admite un boolean o un objeto segmentado. Las claves del objeto
+// quedan deliberadamente abiertas: hoy resolvemos el rol binario, pero el eje
+// útil futuro puede ser el perfil de trabajo y no un enum fijo de roles.
 export const CAPABILITIES = [
   // Habilita ejecutar Claude con la credencial propia del usuario.
   {
@@ -101,6 +105,23 @@ function detected(capability, user) {
   }
 }
 
+export function requiredFor(capability, user) {
+  if (typeof capability?.required === 'boolean') return capability.required;
+
+  const segmented = capability?.required;
+  if (!segmented || typeof segmented !== 'object' || Array.isArray(segmented)) return true;
+
+  const knownUser = typeof user === 'string'
+    ? listUsers().find((candidate) => candidate.username === user)
+    : null;
+  if (!knownUser) return true;
+
+  const segment = knownUser.admin ? 'admin' : 'usuario';
+  // Ante un segmento ausente o inválido cerramos el gate: pedir un paso de más
+  // es recuperable; dar el alta incompleta deja al usuario mal provisionado.
+  return typeof segmented[segment] === 'boolean' ? segmented[segment] : true;
+}
+
 export function capabilityStatus(user) {
   if (!user) return Object.fromEntries(CAPABILITIES.map((capability) => [capability.id, false]));
   return Object.fromEntries(
@@ -120,7 +141,7 @@ export function blockingFor(user) {
   if (!user) return [];
   return [...CAPABILITIES]
     .sort((a, b) => a.order - b.order)
-    .filter((capability) => capability.required && !detected(capability, user))
+    .filter((capability) => requiredFor(capability, user) && !detected(capability, user))
     .map((capability) => capability.id);
 }
 

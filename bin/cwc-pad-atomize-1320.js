@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { createItem, findItemByTitle, setParent } from '../src/core/pad-service-client.js';
 
+// 2026-07-29 (console:PEND-2286): la colección `tasks` se fusionó en `pendientes`.
+// Este one-off apunta ahora a `pendientes`; conserva su idempotencia porque
+// `findItemByTitle` busca por TÍTULO y los títulos sobrevivieron intactos al move.
+
 const PARENT = 'PLAN-1320';
 const TASKS = [
   { title:'A1 · Criterio de parent-primario vs referencia', phase:'A', executor:'claude', model:'opus', effort:'high', content:'Diseñar la regla determinística de cuál de los N padres de un ítem es su HOGAR estructural (link parent) y cuáles quedan como REFERENCIA (implements), por tipo de ítem. Salida: criterio documentado para A3.' },
@@ -43,17 +47,16 @@ async function withRateRetry(operation) {
 }
 
 async function ensureTask(task) {
-  const found = await withRateRetry(() => findItemByTitle('tasks', task.title));
+  const found = await withRateRetry(() => findItemByTitle('pendientes', task.title));
   if (found?.ref) {
     stats.existed += 1;
     return found.ref;
   }
 
-  const w = await withRateRetry(() => createItem('tasks', {
+  const w = await withRateRetry(() => createItem('pendientes', {
     title: task.title,
     content: task.content,
     fields: {
-      status: 'todo',
       priority: 'media',
       phase: task.phase,
       model: task.model,

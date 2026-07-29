@@ -86,7 +86,13 @@ html, body {
 
 /* ===== Layout de la app ===== */
 #app { display: flex; flex-direction: column; height: 100dvh; }
-#body { display: flex; flex: 1; min-height: 0; }
+/* Guard estructural: la app es una cáscara fija de 100dvh con scrollers
+   internos — el DOCUMENTO no debe scrollear nunca. Sin este recorte, cualquier
+   descendiente que se escape (pasó con la tabla sr-only de los gráficos)
+   agranda el área scrolleable y empuja `#app` fuera de la pantalla, dejando
+   media ventana en negro. En móvil esta misma contención ya existía dentro del
+   @media (max-width:768px); acá se generaliza a desktop. */
+#body { display: flex; flex: 1; min-height: 0; overflow: hidden; overflow: clip; }
 
 /* ===== Cabecera del panel (colapsar + nueva sesión) ===== */
 .sb-head {
@@ -1845,15 +1851,26 @@ html, body {
 
 /* Los gráficos de datos comparten el flujo del texto: sin marco ni superficie
    propia, solo reservan el alto que Chart.js necesita para dibujar. */
-.md-chart { margin: .7rem 0; }
+/* `position:relative` es FUNCIONAL, no cosmético: ancla la tabla sr-only
+   `.md-chart-data` (absolute) DENTRO de la figura, y por lo tanto dentro del
+   contenedor con scroll del chat. Sin esto su containing block era
+   `.terminal-pane` (fuera del scroller) y su caja inflaba el scroll del
+   DOCUMENTO: medido 5160px de alto con 3 gráficos → la app se iba de pantalla. */
+.md-chart { margin: .7rem 0; position: relative; }
 .md-chart-title {
   font-size: var(--cwc-fs-sm); color: var(--cwc-text-secondary);
   margin-bottom: .3rem; font-weight: 600;
 }
 .md-chart-box { position: relative; width: 100%; height: 260px; }
 .md-chart--round .md-chart-box { height: 220px; }
-.chat-md table.md-chart-data {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+/* Tabla accesible del gráfico: invisible pero legible por lectores de pantalla.
+   SIN escopar a `.chat-md`: el mismo renderer se usa en Aprendizaje y Pendientes,
+   donde la regla no alcanzaba y la tabla se veía CRUDA debajo del gráfico.
+   `top/left:0` la fija al origen de `.md-chart` (que es `position:relative`):
+   una `<table>` ignora `width/height:1px` (nunca baja de su min-content, mide
+   ~166×140), así que sin anclarla su posición estática quedaba muy abajo. */
+table.md-chart-data {
+  position: absolute; top: 0; left: 0; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 @media (max-width: 768px) {
@@ -2825,6 +2842,13 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 .task-cardv2-title { font-size: var(--cwc-fs-sm); color: var(--cwc-text); font-weight: 600; word-break: break-word; line-height: 1.3; }
 .task-cardv2--hecha .task-cardv2-title { text-decoration: line-through; }
 .task-cardv2-foot { display: flex; flex-wrap: wrap; gap: .3rem; }
+.task-due {
+  display: inline-flex; align-items: center; width: fit-content; white-space: nowrap;
+  font-size: var(--cwc-fs-xs); font-weight: 700; border: 1px solid currentColor;
+  border-radius: var(--cwc-radius-sm); padding: .05rem .35rem;
+}
+.task-due--overdue { color: var(--cwc-danger); background: color-mix(in srgb, var(--cwc-danger) 10%, var(--cwc-bg-chip)); }
+.task-due--today { color: var(--cwc-warn); background: color-mix(in srgb, var(--cwc-warn) 10%, var(--cwc-bg-chip)); }
 
 /* --- Detalle de una tarea (modal / ventana nueva) --- */
 .task-detail-card { width: 92vw; max-width: 560px; }
@@ -3011,6 +3035,12 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 
 /* ===== Pendientes: pestañas del tablero (espejo de .bb-tabs del board de Bugs) ===== */
 .tk-tabs { display: flex; gap: .1rem; border-bottom: 1px solid var(--cwc-border); }
+.task-due-count {
+  align-self: center; margin-left: auto; white-space: nowrap; color: var(--cwc-danger);
+  font-size: var(--cwc-fs-xs); font-weight: 700; padding: .1rem .4rem;
+  border: 1px solid var(--cwc-danger); border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-danger) 10%, var(--cwc-bg-chip));
+}
 .tk-tab {
   background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer;
   padding: .3rem .6rem; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm); font-weight: 600;

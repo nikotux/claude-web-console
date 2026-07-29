@@ -334,6 +334,7 @@ const USER_STATE_PERSISTENCE = {
     'updates', // censo de versiones de terceros del SISTEMA (node, npm, CLIs): no hay estado de usuario
     'files', // ya resuelve por dueño: los handlers pasan root = userFileRoot(principalOf(req)); config.home es solo el DEFAULT de retrocompat de statSafeSync
     'connections', // registro GLOBAL con owner en el nombre del archivo (codexLoginJobPath(user) => <user>.json), patrón permitido por la sección Multi-tenant de CLAUDE.md
+    'onboard', // estado del ALTA, no del usuario: el onboarding CREA el espacio del inquilino, así que su job no puede vivir dentro de él (ensureUserSpace corre best-effort justo antes de startProvision). Cada job lleva su dueño en el nombre (<user>.json/.code/.token) y guarda credenciales en curso: van en el host, con mode 600 — mismo caso que connections
     'src/modules/seguimientos/index.js', // solo compone la ruta del índice de WhatsApp, recurso GLOBAL de comms (ya eximido); su propio estado —snapshot, historia y lock— sí resuelve por dueño
     'src/modules/tickets/claims-store.js', // los claims son COMPARTIDOS por diseño: permiten ver que OTRO tomó el ticket; aislarlos por usuario rompería el hard lock documentado
     'src/modules/tickets/refresher.js', // bugs-v2-snapshot.json es la caché del snapshot de Zoho/GitHub, fuente externa compartida (mismo criterio que comms)

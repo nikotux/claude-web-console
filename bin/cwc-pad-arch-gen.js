@@ -250,13 +250,14 @@ function logDry(action, detail) {
 }
 
 async function ensureDesiredItem(node, byUid, byTitleKind, uidToRef) {
-  const wantFields = { kind: node.kind, status: 'vigente', uid: node.uid };
   const wantContent = node.content;
 
   try {
     if (byUid.has(node.uid)) {
       const item = byUid.get(node.uid);
       const fields = parseFields(item);
+      // El PATCH reemplaza `fields`: un literal borraría las facetas de CONVE-2279.
+      const wantFields = { ...fields, kind: node.kind, status: 'vigente', uid: node.uid };
       uidToRef.set(node.uid, item.ref);
       if ((item.content || '') !== wantContent || item.title !== node.title || !sameFields(fields, wantFields)) {
         if (dryRun) {
@@ -279,6 +280,9 @@ async function ensureDesiredItem(node, byUid, byTitleKind, uidToRef) {
     const adoptKey = titleKindKey(node.title, node.kind);
     if (byTitleKind.has(adoptKey)) {
       const item = byTitleKind.get(adoptKey);
+      const fields = parseFields(item);
+      // El PATCH reemplaza `fields`: un literal borraría las facetas de CONVE-2279.
+      const wantFields = { ...fields, kind: node.kind, status: 'vigente', uid: node.uid };
       byTitleKind.delete(adoptKey);
       uidToRef.set(node.uid, item.ref);
       if (dryRun) {
@@ -305,7 +309,7 @@ async function ensureDesiredItem(node, byUid, byTitleKind, uidToRef) {
       title: node.title,
       content: wantContent,
       tags: [],
-      fields: wantFields,
+      fields: { kind: node.kind, status: 'vigente', uid: node.uid },
     }));
     if (w.ok && w.data?.ref) {
       uidToRef.set(node.uid, w.data.ref);

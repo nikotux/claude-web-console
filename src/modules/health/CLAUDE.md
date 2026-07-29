@@ -76,7 +76,13 @@
   figura `unavailable`. El barrido NUNCA es automático: se simula con
   `node bin/cwc-docker-hygiene-runner.js --prune` y solo un humano agrega
   `--yes`), espejo de contexto a Tolkien (`tolkien-context`) y
-  **`pad-backbone`**
+  **`facetas`** (`checkFacetas`, `console:PEND-2283`, 0 tokens): avisa si falta
+  la foto local de facetas, si alguna unidad de `discoverUnits()` no tiene
+  clase declarada o si aparece código en `src/` fuera del radar estructural
+  (un subdirectorio distinto de `core`/`modules`, o un `.js` suelto distinto
+  de `server.js`). Una unidad sin clase no queda abierta: recibe el trato más
+  restrictivo mientras se corrige la clasificación y se regenera la foto.
+  Y **`pad-backbone`**
   (2026-07-12, Gap #3 / TASK-296): lee las Conventions del Pad LOCAL por HTTP
   (0 tokens, NO MCP → no toca la regla 6, vía `core/pad-service-client.js`) y
   verifica (a) que el Pad local RESPONDE —si no, warn: tasks/learning/retro/
@@ -98,8 +104,9 @@
   aparte. El `src/modules/chat/index.js` (handoff/worldLabelFor) está en el
   allowlist como EL canal canónico del paquete-sesión.
   Y **`ancla`** (2026-07-26, Regla dura 15 / CONVE-1957 / CONVE-1958):
-  `checkAncla` audita por HTTP plano (0 tokens, NO MCP) los PLANes, TASKs y BUGs
-  ACTIVOS del Pad local: el ancla completa (`## 📌 Pedido original (verbatim)` +
+  `checkAncla` audita por HTTP plano (0 tokens, NO MCP) los ítems ACTIVOS de las
+  colecciones de `ANCLA_COLLECTIONS` = `['planes', 'pendientes', 'bugs']`:
+  el ancla completa (`## 📌 Pedido original (verbatim)` +
   `## 🎯 Criterios de aceptación`) puede vivir en el propio ítem o heredarse de
   un ancestro; solo la raíz de la constelación la declara. La herencia recorre
   exclusivamente links reales
@@ -115,6 +122,15 @@
   para señalar deriva NUEVA, no para reprochar historia. Falta de ancla ⇒ `warn` con
   conteos por colección, refs (máx 5) y el remedio ("corré la skill `anclar`");
   Pad caído ⇒ `warn`, nunca `fail` (mismo criterio que `pad-backbone`).
+  CAMBIO 2026-07-29 (`console:PEND-2286`): `ANCLA_COLLECTIONS` decía `tasks` y
+  ahora dice `pendientes`. La fusión de F7 dejó `tasks` vacía y después retirada,
+  y auditar una colección vacía es perder cobertura EN SILENCIO — el check habría
+  seguido en verde sin mirar nada. Medido contra el Pad vivo, el cambio lleva los
+  ítems auditados de 39 a 47 y destapa 2 sin ancla (`console:PEND-1966` y
+  `console:PEND-2297`), que pasan el check a `warn`. No es una regresión: es el
+  auditor viendo por fin la colección donde vive el trabajo. Los 2 quedaron
+  registrados en `console:PEND-2326`. Lección generalizable: **si una migración
+  vacía una colección, hay que mudar también a sus AUDITORES**.
   Y **`pad-bootstrap`** (2026-07-26, BUG-2047): check hermano de `pad-index`
   porque auditan canales de naturaleza distinta — el índice y sus destinos los
   controla este repo; el bootstrap lo genera Pad server. Lee por HTTP plano el
@@ -138,6 +154,13 @@
   dev-server, no si una sesión sigue trabajando dentro del worktree. El caso
   que originó el check estaba `'down'` con una sesión adentro, por eso se
   verifica todo worktree existente.
+- **Runners activos** (`GET /api/health/active-runners`): sin flags conserva el
+  contrato histórico —un no-admin ve solo sus jobs con owner declarado
+  (fail-closed) y el admin ve todos, como requiere el modal "Trabajos en segundo
+  plano"—. `?mine=1` (también acepta `mine=true`) fuerza el filtro por dueño
+  incluso para el admin; lo usa la Vista Raw porque es un monitor personal. En
+  ese modo, un runner sin dueño declarado se considera del host por
+  retrocompatibilidad.
 - **Dashboard del proyecto** (PESTAÑA PROPIA "📊 Dashboard" del grupo
   Diagnóstico del menú Sistema — `system/dashboard-panel.js`,
   `mountDashboardPanel`. REDISEÑO 2026-07-19 PLAN-752: antes era una subsección
@@ -436,11 +459,52 @@
   owner/tenant/user-scoped. El auditor ya NO hace un Read de CLAUDE.md entero
   por unidad; si la extracción falla, conserva el fallback a la instrucción de
   consultar el archivo.
-  AVISO DE CACHÉ (`console:PLAN-2252`): `unitFingerprint` hashea los textos de
+  AVISO DE CACHÉ HISTÓRICO (`console:PLAN-2252`): `unitFingerprint` hashea los textos de
   los invariantes aplicables, las reglas duras inyectadas Y la lista de archivos
   de la unidad. La depuración de aprendidos, la inyección de Multi-tenant y la
-  incorporación de CSS cambian esos insumos; el próximo Escaneo re-audita
-  TODAS las unidades con sonnet. Es esperado.
+  incorporación de CSS cambiaron esos insumos; el Escaneo inmediatamente
+  posterior re-auditó TODAS las unidades con sonnet. Fue esperado.
+  FACETAS PARA INVARIANTES (`console:PEND-2283`, obligación 5 de
+  `console:CONVE-2279`): antes `invariantsFor(unit)` filtraba únicamente por
+  regex de ruta; una unidad ubicada fuera de los paths previstos recibía CERO
+  exigencias en silencio (fail-open). Ahora un invariante de
+  `invariants.js` puede declarar `{match?, facets?, text, ...}` y
+  `invariantsForDetailed(unit)` arma la UNIÓN de dos caminos independientes:
+  primero agrega los que matchean por path, en el mismo orden histórico, y
+  después los que matchean solo por faceta, deduplicados por `text`;
+  `invariantsFor(unit)` sigue devolviendo únicamente sus textos. Es EXPAND,
+  no reemplazo: el enganche por path permanece como fallback y su resultado
+  no cambió para ninguna unidad.
+  `facets.js` resuelve la clase de cada unidad —`plano`, `audiencia` y
+  `perfil` de CONVE-2279, más `familia` derivada del prefijo del uid— desde
+  `facets-snapshot.json`. Si no encuentra facetas conocidas falla CERRADO:
+  sintetiza `plano:'usuario'` (con la familia inferida) para darle el trato
+  más restrictivo, en vez de dejar la unidad sin exigencias. La foto es JSON
+  de datos versionado, con el mismo criterio que `invariants-learned.json`, y
+  contiene 209 entradas: 207 nodos de `arquitectura` del Pad + `unit:core` y
+  `unit:frontend-core`, declaradas a mano porque esas unidades compuestas no
+  tienen nodo propio. El auditor NO consulta Pad en tiempo de auditoría: corre
+  dentro de runners con entorno limpio y no puede depender de red.
+  `bin/cwc-facets-snapshot.js` abre `~/.pad/pad.db` en modo solo lectura y
+  regenera esa foto local. GOTCHA OPERATIVO: después de reclasificar nodos con
+  `bin/cwc-pad-facets.js --apply` hay que regenerarla o Salud seguirá viendo
+  la clasificación vieja; `node bin/cwc-facets-snapshot.js --check` no escribe
+  y sale con código 1 si quedó desactualizada.
+  Se engancharon por faceta exactamente TRES invariantes aprendidos de
+  aislamiento multi-tenant de `console:PLAN-2252`: estado user-scoped resuelto
+  por dueño, listados filtrados por `owner` y spawn con credencial propia.
+  Comparten el predicado
+  `{plano:['usuario','mixto'], familia:['backend','runner']}`. El cuarto
+  invariante con consciencia de dueño —el admin que no puede auto-degradarse—
+  NO se engancha por faceta a propósito: describe una superficie concreta, el
+  CRUD de usuarios, no una clase arquitectónica.
+  CICATRIZ DE CACHÉ MEDIDA ANTES DE ACEPTAR EL CAMBIO:
+  `unitFingerprint` hashea los textos aplicables y el orden «path primero,
+  faceta después» es parte del contrato. En las 29 unidades, la lista obtenida
+  por path quedó BYTE A BYTE idéntica; la ÚNICA que gana invariantes es `core`
+  (+3), porque `src/core/*` no matcheaba `src/modules/**`. Por eso el próximo
+  Escaneo de Salud re-audita `core` con sonnet y reusa la caché del resto: NO
+  es un re-audit masivo.
   LOOP QUE APRENDE (Fase 5 del sistema nervioso, cierre): al resolver un bug de
   una clase que conviene blindar, el auto-fix runner emite una línea
   "PROPOSED-INVARIANT <texto> | <match>" (o NO-INVARIANT); addProposal la guarda

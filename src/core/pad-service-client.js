@@ -61,13 +61,14 @@ function readSessionToken(serverUrl) {
   }
 }
 
-// Resuelve la identidad de la operación: si opts.ctx viene (inquilino), usa su
-// url/token/workspace; si no, cae al HOST (token de Niko de ~/.pad + 'console').
-// RETROCOMPAT: sin ctx, idéntico al comportamiento histórico.
+// Resuelve la identidad de la operación. Sin ctx es el HOST y conserva el
+// comportamiento histórico (token de Niko de ~/.pad + 'console'). CON ctx, su
+// token es la ÚNICA credencial válida: si falta debe fallar limpio, nunca pedir
+// prestada la del host (console:BUG-2287).
 function resolveCtx(opts = {}) {
   const ctx = opts.ctx || null;
   const url = (ctx && ctx.url) || DEFAULT_URL;
-  const token = (ctx && ctx.token) || readSessionToken(url);
+  const token = ctx ? (ctx.token || null) : readSessionToken(url);
   const workspace = (ctx && ctx.workspace) || opts.workspace || DEFAULT_WORKSPACE;
   return { url, token, workspace };
 }
@@ -216,6 +217,32 @@ export async function listCollections(opts = {}) {
   return request('GET', `/api/v1/workspaces/${workspace}/collections`, { url, token });
 }
 
+// Crea una colección conservando `schema` como string crudo. El caller es
+// responsable de NO parsearlo/re-serializarlo antes de llegar acá (DOC-633).
+export async function createCollection(collection, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('POST', `/api/v1/workspaces/${workspace}/collections`, {
+    body: {
+      name: collection.name,
+      slug: collection.slug,
+      icon: collection.icon,
+      prefix: collection.prefix,
+      schema: collection.schema,
+    },
+    url,
+    token,
+  });
+}
+
+export async function updateCollection(collectionSlug, fields, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('PATCH', `/api/v1/workspaces/${workspace}/collections/${collectionSlug}`, {
+    body: fields,
+    url,
+    token,
+  });
+}
+
 // Bootstrap consolidado que consume `pad_set_workspace`. Va directo a doFetch
 // (sin caché) porque Salud audita el tamaño REAL de la respuesta HTTP de esta
 // corrida; reserializar el objeto o servir un hit sin sus bytes escondería
@@ -283,6 +310,17 @@ export async function createItem(collectionSlug, fields, opts = {}) {
 export async function updateItem(ref, fields, opts = {}) {
   const { url, token, workspace } = resolveCtx(opts);
   return request('PATCH', `/api/v1/workspaces/${workspace}/items/${ref}`, { body: fields, url, token });
+}
+
+// Mover cambia el ref (cambia el prefijo y conserva el número) y el server
+// aplica el schema de la colección destino.
+export async function moveItem(ref, targetCollectionSlug, opts = {}) {
+  const { url, token, workspace } = resolveCtx(opts);
+  return request('POST', `/api/v1/workspaces/${workspace}/items/${ref}/move`, {
+    body: { target_collection: targetCollectionSlug },
+    url,
+    token,
+  });
 }
 
 export async function deleteItem(ref, opts = {}) {

@@ -14,6 +14,7 @@ import express from 'express';
 import path from 'node:path';
 import { principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
+import { hostUser } from '../../core/user-space.js';
 import { listSockets, runTmux, validateSocketPath, isValidSessionName } from '../../core/tmux.js';
 import { modelForCwd, VALID_MODELS } from '../../core/claude-model.js';
 import { stateForCwd, stateForPane } from '../../core/claude-state.js';
@@ -210,7 +211,21 @@ export default {
     // (corre Claude Code) → el frontend las omite para no duplicar; las bash sí
     // se muestran. Tope de 20 para no spawnear demasiados capture-pane.
     r.get('/raw-feed', (req, res) => {
+      // La Vista Raw es un monitor PERSONAL, no una herramienta de administración:
+      // es el ÚNICO endpoint de este módulo donde el admin NO ve todo. `ownsSession`
+      // delega en canUseTmuxSession, que arranca con `if (principal.admin) return true`,
+      // y con ese bypass la vista de Niko mostraba el capture-pane EN VIVO de las
+      // terminales de otro usuario. Para ver lo ajeno están el panel de Sesiones y la
+      // pestaña tmux, que sí son superficie de administración.
+      const principal = principalOf(req);
+      const me = principal?.username || hostUser();   // token maestro ⇒ el host
       try {
+        // ?full=1 → histórico largo del pane (para que la Vista Raw llene el panel al
+        // descubrir la terminal). El poll periódico va SIN el flag y sigue barato:
+        // capture-pane de 30 líneas por sesión cada 3 s. El histórico se pide una vez.
+        const full = req.query.full === '1' || req.query.full === 'true';
+        const scrollback = full ? '-600' : '-30';
+        const textCap = full ? 40000 : 4000;
         const titles = loadTitles();
         const out = [];
         for (const sock of listSockets()) {
@@ -219,13 +234,16 @@ export default {
           for (const s of sessions) {
             if (!s.owned) continue;
             if (s.name.startsWith(BARE_PREFIX)) continue; // TUI oculta de chat → ya llueve por transcript
-            // multi-tenant (BUG-685, mismo guard que title/set-model/kill): un
-            // no-admin solo ve el feed de SUS propias sesiones; admin/host ven todo.
-            if (!ownsSession(req, s.socketName, s.name)) continue;
+            // Retrocompat: `s.owner` sale del mismo lookup confiable de
+            // `consoleSession` que usa el guard. Una sesión SIN dueño registrado
+            // se considera del host — son las anteriores al multi-tenant, y si no
+            // la vista del host se quedaría sin sus propias terminales viejas.
+            const sessionOwner = s.owner ?? null;
+            if (!(sessionOwner === me || (sessionOwner === null && me === hostUser()))) continue;
             if (out.length >= 20) break;
             if (!isValidSessionName(s.name)) continue;
             let text = '';
-            try { text = runTmux(sock.path, ['capture-pane', '-p', '-t', s.name, '-S', '-30'], { throwOnError: false }) || ''; } catch { text = ''; }
+            try { text = runTmux(sock.path, ['capture-pane', '-p', '-t', s.name, '-S', scrollback], { throwOnError: false }) || ''; } catch { text = ''; }
             out.push({
               name: s.name,
               socketName: s.socketName,
@@ -234,7 +252,7 @@ export default {
               isClaude: !!s.state,
               attached: s.attached,
               customTitle: titles[titleKey(s.socketName, s.name)] || null,
-              text: text.slice(-4000),
+              text: text.slice(-textCap),
             });
           }
         }

@@ -103,6 +103,21 @@ export const AUTONOMY_INSTRUCTION = [
   'Cuando el sistema te devuelva el control, retomá por el próximo paso concreto: no vuelvas a saludar ni repitas el resumen anterior.',
 ].join('\n');
 
+// Se agrega al system prompt de TODO chat (cualquier mundo): el renderer que
+// dibuja es universal y propio de la consola. El detalle largo vive en la skill
+// `graficar`; esto solo avisa al modelo que la capacidad existe.
+export const VIZ_INSTRUCTION = [
+  'VISUALIZACIONES INLINE — en el chat de esta consola podés dibujar gráficos y diagramas DENTRO del mensaje; se renderizan en el navegador del usuario y ese render no consume tokens.',
+  'Para un gráfico usá un bloque de código con lenguaje `chart` y cuerpo JSON: `{"type":"doughnut|pie|bar|hbar|line","title":"…","labels":[…],"data":[…],"unit":"%"}`. `data` puede ser un array de números o, solo para bar/line, hasta 4 series `{"label":…,"data":[…]}`; máximo 24 categorías y 6 gráficos por mensaje.',
+  'Para estructura, jerarquía, flujo o mapa mental usá un bloque de código con lenguaje `mermaid`: `flowchart`, `mindmap` o `sequenceDiagram`.',
+  'Dentro de una celda de tabla Markdown, el texto `{bar:NN}` SOLO se convierte en una micro-barra con su porcentaje.',
+  'Elegí dona para una distribución que suma un todo; barras para comparar magnitudes (`hbar` si las etiquetas son largas); línea para evolución temporal; Mermaid para estructura o jerarquía; `{bar:NN}` para un dato suelto dentro de un cuadro.',
+  'Con 1 o 2 valores el texto comunica mejor. No repitas la misma tabla junto al gráfico: su fuente ya queda plegada en “Ver datos del gráfico”. No uses más de 2 gráficos por respuesta salvo que pidan un tablero, y NUNCA inventes un número: si no se midió, decilo.',
+  'Ubicá cada gráfico inmediatamente DESPUÉS de la frase que lo introduce, y usá la frase siguiente para interpretarlo; no lo relegues como anexo al final.',
+  '**LÍMITE IMPORTANTE:** esta sintaxis SOLO se renderiza dentro del chat de esta consola. NUNCA la uses en artefactos que salen de acá —descripciones de PR, comentarios de tickets de Zoho, ítems del Pad de Tolkien, correos o mensajes de Teams— porque otra persona vería JSON o texto crudo; ahí usá tabla o texto plano.',
+  'La skill `graficar` contiene la guía completa, la paleta y ejemplos copiables; invocala antes de crear una visualización no trivial.',
+].join('\n');
+
 export const AUTONOMY_CONTINUE_REASON = [
   'Declaraste que la pelota es tuya.',
   'Seguí YA con el próximo paso concreto, sin esperar al usuario.',
@@ -352,13 +367,15 @@ export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, 
   // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
   // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
   // (repo de la consola) — Tolkien no lo recibe (regla 12), (3) la instrucción
-  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex)
-  // y (4) el contrato global de autonomía de la línea final `🎾 Pelota: …`.
+  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex),
+  // (4) la instrucción global de visualizaciones inline y (5) el contrato
+  // global de autonomía de la línea final `🎾 Pelota: …`.
   const appends = [];
   const folderRule = sessionFolderRule(chatId);
   if (folderRule) appends.push(folderRule);
   if (isConsoleCwd(cwd)) appends.push(CONSOLE_PAD_BOOTSTRAP);
   if (tandem) appends.push(TANDEM_INSTRUCTION);
+  appends.push(VIZ_INSTRUCTION);
   appends.push(AUTONOMY_INSTRUCTION);
   const appendText = appends.join('\n\n');
   return {

@@ -28,6 +28,7 @@ import {
   catalogStateFor,
   installSkill,
   parseFrontmatter,
+  reconcileDefaults,
   uninstallSkill,
 } from './catalog.js';
 
@@ -93,6 +94,13 @@ export default {
     router.get('/skills', async (req, res) => {
       try {
         const scope = systemScopeFor(req);
+        let reconciled = null;
+        try {
+          const result = reconcileDefaults(scope.claudeDir, scope.dataDir);
+          if (result.installed.length > 0) reconciled = result;
+        } catch {
+          // Accesorio: una reconciliación fallida jamás rompe la carga del panel.
+        }
         const skills = skillSourcesFor(scope).flatMap((source) => readSkillDir(source, scope.home));
 
         let padItems = [];
@@ -138,6 +146,7 @@ export default {
           padOnly,
           padAvailable,
           catalog: catalogStateFor(scope.claudeDir),
+          ...(reconciled ? { reconciled } : {}),
         });
       } catch (e) {
         res.status(500).json({ error: String(e.message || e) });

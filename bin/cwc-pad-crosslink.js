@@ -5,10 +5,8 @@ const REF_RE = /\b(DOC|BUG|TASK|PLAN|PEND|ROAD|CONVE|PLAYB|FB|FEAT|TDA|RDA|CDT|M
 const TARGET = [
   'docs',
   'bugs',
-  'tasks',
-  'roadmap-items',
-  'features',
-  'feedback',
+  'pendientes',
+  'planes',
   'conventions',
   'playbooks',
   'contexto-de-tickets',

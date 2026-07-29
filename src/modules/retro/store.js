@@ -14,7 +14,8 @@ import crypto from 'node:crypto';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { hostUser, userDataDir } from '../../core/user-space.js';
 import {
-  listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem, listLinks, addLink,
+  listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
+  listLinks, setParent, deleteLink,
 } from '../../core/pad-service-client.js';
 import { readVerifyState, verifyForLesson } from './verify-shared.js';
 import { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-shared.js';
@@ -26,7 +27,7 @@ const COLLECTION = 'mejora-continua';
 // Sol de cada lección según su categoría: los 7 buckets `MC · *` de la
 // colección `arquitectura` (ver CONVE-1257 / regla dura 11 del CLAUDE.md).
 // Sin este link la lección queda huérfana en el grafo de Pad (BUG-1878).
-const MC_SUN_BY_CATEGORY = {
+export const MC_SUN_BY_CATEGORY = Object.freeze({
   procedimiento: 'ARQUI-1310',
   metodologia: 'ARQUI-1311',
   convencion: 'ARQUI-1312',
@@ -34,7 +35,7 @@ const MC_SUN_BY_CATEGORY = {
   nota: 'ARQUI-1314',
   regla: 'ARQUI-1315',
   herramienta: 'ARQUI-1316',
-};
+});
 export const MC_ID_RE = /^MC-\d+$/;
 const ACTIVITY_MAX = 300;
 
@@ -60,23 +61,68 @@ function padSunApplies(ctx) {
   return !ws || ws === 'console';
 }
 
-// BUG-1878: aplica CONVE-1257 / regla dura 11 sin arriesgar la destilación;
-// la consulta previa mantiene idempotentes los reintentos y la auto-sanación.
+function linkTargetRef(link) {
+  return link?.target_ref || link?.target?.ref || link?.target_item?.ref || null;
+}
+
+// Máquina de estados compartida con cwc-pad-mc-parent.js: solo clasifica
+// aristas salientes reales y nunca decide topología desde `parent_ref`.
+export function planLessonSunLinks(ref, sun, links = []) {
+  const outgoing = (Array.isArray(links) ? links : []).filter(
+    (link) => !link?.source_ref || link.source_ref === ref,
+  );
+  const parents = outgoing.filter((link) => link?.link_type === 'parent');
+  const parentToSun = parents.some((link) => linkTargetRef(link) === sun);
+  const foreignParents = parentToSun
+    ? []
+    : parents.filter((link) => linkTargetRef(link) !== sun);
+  const implementsToDelete = outgoing.filter(
+    (link) => link?.link_type === 'implements' && linkTargetRef(link) === sun,
+  );
+  return {
+    createParent: !parentToSun && foreignParents.length === 0,
+    foreignParents,
+    implementsToDelete,
+    parentToSun,
+  };
+}
+
+// BUG-1878 + console:PEND-2281: cada lección cuelga de su sol con `parent`.
+// La consulta previa mantiene idempotentes los reintentos; si el parent correcto
+// ya existe (o acaba de crearse), limpia el viejo `implements` redundante.
+// Todo es best-effort para no arriesgar la destilación.
 async function linkLessonToSun(ref, category, ctx) {
   try {
     const sun = MC_SUN_BY_CATEGORY[category];
     if (!sun || !padSunApplies(ctx)) return;
     const linksR = await listLinks(ref, { ctx });
-    const links = linksR?.ok && Array.isArray(linksR.data) ? linksR.data : [];
-    const alreadyLinked = links.some((link) => {
-      if (link?.link_type !== 'implements') return false;
-      if (link.source_ref && link.source_ref !== ref) return false;
-      const targetRef = link.target_ref || link.target?.ref || link.target_item?.ref;
-      return targetRef === sun;
-    });
-    if (alreadyLinked) return;
-    const linkR = await addLink(ref, sun, 'implements', { ctx });
-    if (!linkR?.ok) console.error('[retro] no pude enlazar la lección a su sol en Pad:', linkR?.error || linkR);
+    if (!linksR?.ok) {
+      console.error('[retro] no pude leer los links de la lección en Pad:', linksR?.error || linksR);
+      return;
+    }
+    const plan = planLessonSunLinks(ref, sun, linksR.data);
+    if (plan.foreignParents.length > 0) {
+      const targets = plan.foreignParents.map(linkTargetRef).filter(Boolean).join(', ') || 'desconocido';
+      console.warn(`[retro] ${ref} conserva parent ajeno (${targets}); no se reemplaza por ${sun}`);
+      return;
+    }
+    if (plan.createParent) {
+      const parentR = await setParent(ref, sun, { ctx });
+      if (!parentR?.ok) {
+        console.error('[retro] no pude fijar el parent de la lección a su sol en Pad:', parentR?.error || parentR);
+        return;
+      }
+    }
+    for (const link of plan.implementsToDelete) {
+      if (!link?.id) {
+        console.error(`[retro] no pude borrar implements redundante de ${ref} a ${sun}: link sin id`);
+        continue;
+      }
+      const deleteR = await deleteLink(link.id, { ctx });
+      if (!deleteR?.ok) {
+        console.error(`[retro] no pude borrar implements redundante de ${ref} a ${sun}:`, deleteR?.error || deleteR);
+      }
+    }
   } catch (err) {
     console.error('[retro] no pude enlazar la lección a su sol en Pad:', err?.message || err);
   }

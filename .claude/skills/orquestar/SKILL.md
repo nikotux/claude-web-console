@@ -49,8 +49,21 @@ curl -sk -X POST -H "x-cwc-token: $TOKEN" -H 'Content-Type: application/json' \
 **Gotchas de Tándem al spawnear (2026-07-21):**
 - **Tándem es el default del sistema**: un `create` sin `model` ya nace en Tándem. Pasá el `model` EXPLÍCITO del ejecutor del bloque siempre, para no depender del default.
 - `/create` **no** acepta la config fina del protocolo. Si el bloque necesita otro razonador o ejecutor Codex, mandá después: `POST /api/chat/model {"model":"tandem","tandem":{"reasonerModel":"opus","reasonerEffort":"high","codexModel":"gpt-5.6-sol","codexEffort":"high"}}` (esos son los defaults; solo hace falta si querés otra cosa).
+- **En la respuesta de `/create`, `model` es el modelo RAZONADOR** (p. ej. `opus`); el ejecutor real está en **`modelChoice`**. Ver `model:"opus"` NO significa que Tándem no se aplicó: confirmalo en `modelChoice` o en `tandemActive` de `GET /api/chat/list`.
 - **Verificá que el motor arrancó en Tándem** antes de inyectar el primer mensaje: `tandemActive` en `/api/chat/list` debe ser `true`. Si es `false`/`null`, el runner vivo todavía no corre en Tándem (cambiar de ejecutor exige respawn — throttle de 30 s, solo si está ocioso).
+- **El módulo `ws` no resuelve desde `/tmp`**, que es donde el orquestador puede escribir sus scripts auxiliares bajo Tándem. Importalo por ruta ABSOLUTA desde `node_modules` del repo; es CommonJS y el named export falla:
+  ```js
+  import pkg from '/ruta/al/repo/node_modules/ws/index.js';
+  const { WebSocket } = pkg;
+  ```
+- **Cambiar el modo no libera un permiso que ya quedó colgado**: respondelo explícitamente por el mismo WS con `{type:'permission_response', id:'<id-del-permiso>', approved:true}`. El `id` sale de `pendingPerms` en `GET /api/chat/list`.
 - **Un bloque = un ejecutor** (CONVE-654): no mezcles tareas Claude-puro y Tándem en la misma sesión-bloque; cada salto cuesta un respawn del runner.
+
+Una vez fijado Tándem y verificado `tandemActive:true`, y **ANTES de inyectar el primer mensaje**, fijá el modo por el mismo WS:
+```js
+ws.send(JSON.stringify({ type: 'set_mode', mode: 'bypassPermissions' }));
+```
+**Esto no saltea la frontera de escritura de Tándem.** La sesión-bloque corre en Tándem y su hook `PreToolUse` deniega estructuralmente `Edit`/`Write`/`MultiEdit` y las escrituras por Bash fuera de `/tmp`: `bypassPermissions` elimina las INTERRUPCIONES, no le da capacidad de escribir archivos. Todo el código sigue pasando obligatoriamente por `delegate_to_codex`. Es la misma postura de las sesiones de trabajo normales del launcher, cuyo default ya es «Todo»: el humano es el gate del SPAWN, no de cada tool call.
 
 Luego inyectás el **primer mensaje** por WS (la URL WebSocket correspondiente a `$CONSOLE_URL`, ruta `/ws/chat?id=<id>`, header `x-cwc-token`) con el **prompt self-contained del bloque** (ver plantilla abajo). Si el detalle exacto del WS te falla, consultá CONVE-641 (recipe verificado). Registrá en Pad: marcá el PLAN-bloque `active` y anotá en un comentario el `chatId` + `PKG-ref` de la sesión-bloque para rastrearla.
 
@@ -85,6 +98,7 @@ curl -sk -H "x-cwc-token: $TOKEN" "$CONSOLE_URL/api/chat/list"  # alive, status 
 - **sesión muerta + tareas sin terminar** → CAÍDO → **auto-retry una vez** (única auto-acción).
 - **viva + working/delegating** → sana, esperá.
 - **viva + ociosa + sin señal + heartbeat viejo** (updated_at de sus tareas sin avanzar) → **reportá al usuario** con diagnóstico (típico: permiso trabado — revisá `pendingPerms` del chat).
+  Con el `set_mode` del Paso 3, un permiso trabado ya no debería ser el caso normal: si aparece, el modo no se aplicó o una tool fue denegada por el hook de Tándem y hay que revisarla aparte.
 - **viva + ociosa + todas las tareas hechas + sin señal** → tratá como `done` (señal perdida).
 - **viva + `tandemActive:false` en un bloque ruteado a Tándem** → el motor no arrancó en Tándem (respawn pendiente o throttle): avisá al usuario para "Reabrir para cambios"; NO le encargues código a esa sesión mientras tanto.
 Sin timeouts mágicos. Barrido: **oportunista** en cada señal (revisás el estado de TODOS los activos, gratis) + **wakeup de respaldo** por si TODOS murieron sin avisar:
