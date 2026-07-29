@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-29 20:04 — main
+- Implementar facetas, migrar tasks→pendientes y mejorar herramientas Pad
+
 ### 2026-07-29 13:39 — main
 - Aislar datos por usuario + runners Tolkien + gráficos inline
 
