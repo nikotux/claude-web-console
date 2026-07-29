@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-29 13:39 — main
+- Aislar datos por usuario + runners Tolkien + gráficos inline
+
 ### 2026-07-29 05:50 — main
 - Agregar soporte multi-tenant y catálogo de skills compartidas
 - Aduana, papelera y pool común de lecciones
