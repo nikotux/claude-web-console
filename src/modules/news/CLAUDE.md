@@ -14,7 +14,7 @@ permite a cada principal autenticado conservar su propia marca de lectura.
 
 | Método | Ruta | Acceso | Efecto |
 |---|---|---|---|
-| GET | `/api/news` | Autenticado | Entradas visibles, no leídas, última lectura y rol. |
+| GET | `/api/news` | Autenticado | Entradas visibles, no leídas, última lectura y rol. Para admin suma `job` (generación viva leída de disco) y `pending` (commits sin redactar). |
 | POST | `/api/news/seen` | Autenticado | Marca la hora actual como leída para ese principal. |
 | PATCH | `/api/news/:id` | Admin | Edita campos visibles u oculta una entrada. |
 | DELETE | `/api/news/:id` | Admin | Borra una entrada. |
@@ -58,3 +58,11 @@ por lo tanto no tiene Bash, Edit, Write, WebFetch ni MCP.
 - El texto visible nunca toma nombres de archivo ni SHAs del modelo sin
   validación; esos datos quedan únicamente en `tech`.
 - Todo `:id` se valida con `/^[a-f0-9]{6,32}$/` antes de construir una ruta.
+- El `jobId` NO se guarda en el navegador: el panel se re-engancha buscando en
+  `~/.cwc-data/news/` el job `running` más reciente y no vencido
+  (`findRunningNewsJob`). Si alguien vuelve a atar el indicador a una variable
+  de memoria del front, cerrar el panel vuelve a hacer desaparecer una
+  generación en curso.
+- `pending` sale de `git rev-list --count` contra el último commit de la última
+  entrada `auto`; ante cualquier error de git devuelve `0` a propósito — es un
+  dato cosmético y nunca puede romper el listado.

@@ -99,8 +99,11 @@ import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAl
 import {
   appendSay, appendReact, appendCut, appendOrquestado, appendOrigin,
   readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
+  salaLogPath, readsPath, pruneSalas,
   ADUANA_WORKSPACE, ADUANA_SALAS_COLLECTION,
-  MAX_SAY_LEN, MAX_SAY_ATTACHMENTS, MAX_MENTIONS, REACTIONS,
+  MAX_SAY_LEN, MAX_SAY_ATTACHMENTS, MAX_MENTIONS,
+  MAX_REPLY_TO_LEN, MAX_REPLY_TO_BY_LEN, MAX_REPLY_TO_TEXT_LEN,
+  SALA_TTL_DAYS, REACTIONS,
 } from './aduana.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
@@ -135,6 +138,36 @@ export function parseMentions(text, knownUsers) {
     if (mentions.length >= MAX_MENTIONS) break;
   }
   return mentions;
+}
+
+function normalizeReply(reply) {
+  if (!reply || typeof reply !== 'object' || typeof reply.replyTo !== 'string') return null;
+  const replyTo = reply.replyTo.trim().slice(0, MAX_REPLY_TO_LEN);
+  if (!replyTo) return null;
+  return {
+    replyTo,
+    replyToBy: String(reply.replyToBy ?? '').trim().slice(0, MAX_REPLY_TO_BY_LEN),
+    replyToText: String(reply.replyToText ?? '').trim().slice(0, MAX_REPLY_TO_TEXT_LEN),
+  };
+}
+
+function replyFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const nested = payload.reply;
+  if (
+    nested
+    && typeof nested === 'object'
+    && !Array.isArray(nested)
+    && Object.prototype.hasOwnProperty.call(nested, 'replyTo')
+  ) return nested;
+  if (!Object.prototype.hasOwnProperty.call(payload, 'replyTo')) return null;
+  // El cliente manda estos campos planos; aceptar ambas formas evita que una
+  // desconexión de contrato haga desaparecer la cita en silencio.
+  return {
+    replyTo: payload.replyTo,
+    replyToBy: payload.replyToBy,
+    replyToText: payload.replyToText,
+  };
 }
 
 // Respuesta de AskUserQuestion desde el cliente: mapa texto-de-pregunta -> label
@@ -697,7 +730,9 @@ export function buildSalaPrompt(items, chat, opts = {}) {
         .filter(Boolean)
         .slice(0, MAX_SAY_ATTACHMENTS);
       const passport = attachmentNames.length ? `[adjunta: ${attachmentNames.join(', ')}]` : '';
-      return `<${String(item?.by || hostUser())}>: ${[text, passport].filter(Boolean).join(' ')}`;
+      const replyBy = String(item?.replyToBy ?? '').trim();
+      const replyLabel = replyBy ? ` (respondiendo a ${replyBy})` : '';
+      return `<${String(item?.by || hostUser())}>${replyLabel}: ${[text, passport].filter(Boolean).join(' ')}`;
     });
   const droppedAttachments = Math.max(0, Number(opts?.droppedAttachments) || 0);
   // El límite del turno nunca debe convertir una pérdida en silencio: la sala
@@ -705,6 +740,10 @@ export function buildSalaPrompt(items, chat, opts = {}) {
   const overflowNote = droppedAttachments
     ? `[NOTA: se compartieron ${droppedAttachments} adjuntos más de los que caben en un turno; solo los primeros ${MAX_ATTACHMENTS} llegaron a vos. Pediles que te manden el resto en el próximo corte si los necesitás.]`
     : null;
+  const actaInstructions = chat?.salaPadRef ? [
+    `El acta de esta sala vive en el cuerpo del ítem ${chat.salaPadRef} de tu Pad; mantenela con estas secciones: ## ✅ Acordado, ## ⏳ Pendiente (con responsable), ## ❓ Abierto.`,
+    'Actualizala SOLO si este corte aportó algo nuevo: un acuerdo, un pendiente o un punto abierto; si no, no la toques.',
+  ] : [];
   return [
     `[SALA DE ADUANA · ${participants} participantes]`,
     'Lo que sigue son mensajes de PERSONAS conversando entre ellas en una sala compartida.',
@@ -716,6 +755,7 @@ export function buildSalaPrompt(items, chat, opts = {}) {
     '--- fin de la conversación ---',
     '',
     ...(overflowNote ? [overflowNote] : []),
+    ...actaInstructions,
     'Respondé al hilo. Si te dirigís a alguien en particular, nombralo.',
     'La PRIMERA línea de tu respuesta debe ser exactamente `@para: <nombres separados por coma>`, o `@para: todos` si le hablás a toda la sala.',
     `Nombres válidos (usá estos exactos, no inventes variantes): ${validNames.join(', ')}.`,
@@ -797,6 +837,10 @@ class Chat {
     this._provisioningEnv = false;
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
     this.salaPadRef = null;   // Aduana v3: ref SALA-<n> del ítem-sol de esta sala. Persiste para no duplicarlo al reiniciar.
+    this.salaLogId = null;    // sala de origen cuyo hilo humano conserva un chat que salió de Aduana; persiste
+    this._acta = null;        // caché efímera del cuerpo del ítem-sol; nunca se lee desde los polls de UI
+    this._cutCount = 0;       // cortes despachados; se reconstruye desde sala.jsonl al rehidratar
+    this._actaRefreshPending = false; // el próximo fin REAL de turno debe recargar el acta
     this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
     this.owner = null;        // multi-tenant (N6): username del usuario dueño (de principalOf al crear). null = host/admin. Persiste. Gobierna el aislamiento del runner (runner-link.spawnRunner).
     this.participants = [];   // 🛃 Aduana: [{user, role}] de los INVITADOS. El dueño NO está acá (es this.owner). Persiste.
@@ -853,10 +897,51 @@ class Chat {
     this._reads = null; // caché lazy de reads.json; writeRead la refresca
   }
 
-  // Un chat es SALA si su cwd cae en el mundo Aduana. El salaId es el basename,
-  // porque la sala vive en <ADUANA_ROOT>/<salaId> (contrato de aduana.js).
-  _salaId() { return worldLabelFor(this.cwd) === 'Aduana' ? path.basename(this.cwd) : null; }
-  isSala() { return !!this._salaId(); }
+  // isSala describe el suelo ACTUAL. El origen del log puede seguir siendo una
+  // sala después de mudar el chat a otro mundo y queda guardado en salaLogId.
+  _salaLogSource() {
+    if (this.isSala()) return path.basename(this.cwd);
+    try { return this.salaLogId ? safeSalaId(this.salaLogId) : null; }
+    catch { return null; }
+  }
+  _salaId() { return this._salaLogSource(); }
+  isSala() { return worldLabelFor(this.cwd) === 'Aduana'; }
+
+  _actaPayload() {
+    if (!this._acta) return null;
+    // Tres cortes evita falsos positivos permanentes: que un corte no aporte
+    // nada nuevo al acta es un desenlace normal y correcto.
+    return {
+      text: this._acta.text,
+      at: this._acta.at,
+      stale: (this._cutCount - this._acta.cuts) >= 3,
+    };
+  }
+
+  async loadActa() {
+    if (!this.salaPadRef) return null;
+    try {
+      const current = await getItem(this.salaPadRef, { workspace: ADUANA_WORKSPACE });
+      if (!current.ok) throw new Error(current.error || `no se pudo leer ${this.salaPadRef}`);
+      const item = current.data;
+      const text = typeof item?.content === 'string' ? item.content : '';
+      const at = item?.updated_at || null;
+      // `cuts` marca cuándo vimos por primera vez esta versión. Las recargas
+      // idénticas no rejuvenecen el acta y así `stale` puede llegar al umbral.
+      const changed = !this._acta || this._acta.text !== text || this._acta.at !== at;
+      this._acta = {
+        text,
+        at,
+        cuts: changed ? this._cutCount : this._acta.cuts,
+      };
+      const payload = this._actaPayload();
+      this._broadcast({ type: 'acta', ...payload });
+      return payload;
+    } catch (err) {
+      console.warn(`[chat] no pude leer el acta de ${this.salaPadRef}:`, err?.message || err);
+      return null;
+    }
+  }
 
   async ensureSalaPadItem() {
     if (!this.isSala()) return null;
@@ -1012,8 +1097,10 @@ class Chat {
   // justo después del corte k. Si los conteos no cuadran (transcript podado,
   // log podado), lo que sobra se agrega al final en vez de romper el render.
   _rebuildSalaHistory(transcriptEvents) {
+    const salaId = this._salaLogSource();
+    if (!salaId) return transcriptEvents;
     let recs;
-    try { recs = readSala(this._salaId(), { limit: 2000 }); }
+    try { recs = readSala(salaId, { limit: 2000 }); }
     catch { return transcriptEvents; }
     if (!recs.length) return transcriptEvents;
 
@@ -1035,6 +1122,7 @@ class Chat {
     const reactions = reactionsFromRecords(recs);
     this._reactions = reactions;
     let turnIndex = 0;
+    let cutCount = 0;
     let sinceCut = [];
     for (const rec of recs) {
       if (rec?.t === 'origin') {
@@ -1066,6 +1154,13 @@ class Chat {
           ...(Array.isArray(rec.mentions) && rec.mentions.length
             ? { mentions: rec.mentions }
             : {}),
+          ...(typeof rec.replyTo === 'string' && rec.replyTo
+            ? {
+              replyTo: rec.replyTo,
+              replyToBy: rec.replyToBy,
+              replyToText: rec.replyToText,
+            }
+            : {}),
         };
         rebuilt.push(say);
         sinceCut.push(say);
@@ -1085,6 +1180,7 @@ class Chat {
           snippet: rec.snippet,
         });
       } else if (rec?.t === 'cut') {
+        cutCount += 1;
         rebuilt.push({
           type: 'cut',
           by: rec.by,
@@ -1100,6 +1196,7 @@ class Chat {
     for (; turnIndex < turns.length; turnIndex += 1) rebuilt.push(...turns[turnIndex]);
     // El log es la fuente durable del buzón: tras reiniciar, también deben poder
     // cortarse los `say` posteriores al último corte, no solo volver a pintarse.
+    this._cutCount = cutCount;
     this._sinceCut = sinceCut;
     return rebuilt;
   }
@@ -1109,7 +1206,7 @@ class Chat {
     // reconstruyéndolo desde el transcript.
     if (this.resume) {
       const events = loadTranscriptEvents(this.cwd, this.resume, null, this.owner);
-      this.history = this.isSala() ? this._rebuildSalaHistory(events) : events;
+      this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     this._ensureEngine();
     return this;
@@ -1592,7 +1689,7 @@ class Chat {
     // y reabrir el motor sobre la misma sesión.
     if (this.sessionId) {
       const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner);
-      this.history = this.isSala() ? this._rebuildSalaHistory(events) : events;
+      this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     this.viewMode = 'chat';
     await this._ensureEngine();
@@ -1658,7 +1755,7 @@ class Chat {
     // algo) y levantar un runner FRESCO sobre la misma sesión.
     if (this.sessionId) {
       const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner);
-      this.history = this.isSala() ? this._rebuildSalaHistory(events) : events;
+      this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     // BUG-504: el lock del spawn anterior es basura verificada; el socket ya cerró.
     releaseSpawnLock(this.id, this._spawnPid);
@@ -1691,15 +1788,16 @@ class Chat {
     this.link?.send(msg);
   }
 
-  // Conversación HUMANA de una sala: se difunde a todos los clientes y se
-  // persiste, pero NUNCA llega al motor — cuesta 0 tokens. Es lo que permite
-  // que dos personas hablen a la vez sin esperar turno de la IA.
-  say(text, by, attachments = null) {
+  // Conversación HUMANA de una sala: se difunde, se persiste y entra al buzón
+  // del próximo corte. A diferencia de una reacción, el `say` sí llega al
+  // motor cuando la sala corta y por lo tanto consume tokens.
+  say(text, by, attachments = null, reply = null) {
     if (this.closed || !this.isSala()) return null;
     const t = String(text || '').trim();
     const atts = existingAttachments(this.id, attachments);
     if (!t && !atts.length) return null;
     const mentions = parseMentions(t, this._salaUsers());
+    const safeReply = normalizeReply(reply);
     const ts = Date.now();
     const rec = {
       type: 'say',
@@ -1710,6 +1808,7 @@ class Chat {
       reactions: {},
       ...(atts.length ? { attachments: atts } : {}),
       ...(mentions.length ? { mentions } : {}),
+      ...(safeReply || {}),
     };
     this.lastActivity = rec.ts;
     this._push(rec);            // history + broadcast a TODOS los adjuntos
@@ -1722,6 +1821,7 @@ class Chat {
         ts: rec.ts,
         attachments: atts,
         mentions,
+        ...(safeReply || {}),
       });
     } catch { /* best-effort */ }
     this.onUpdate?.();
@@ -1806,6 +1906,8 @@ class Chat {
     const rec = { type: 'cut', by, ts: Date.now(), count: items.length, authors };
     this._push(rec);
     try { appendCut(this._salaId(), { by, ts: rec.ts, count: items.length, authors }); } catch { /* best-effort */ }
+    this._cutCount += 1;
+    this._actaRefreshPending = true;
     this._lastCutBy = by;
     this._setStatus('working');
     const prompt = buildSalaPrompt(items, this, { droppedAttachments: dropped });
@@ -2354,6 +2456,7 @@ class Chat {
 
   close() {
     void this.closeSalaPadItem();
+    const salaId = this.isSala() ? this._salaId() : null;
     try {
       trashChat({
         chatId: this.id,
@@ -2369,6 +2472,8 @@ class Chat {
           ? path.join(chatProjectDir(this.cwd, this.owner), `${this.sessionId}.jsonl`)
           : null,
         attachDir: chatAttachDir(this.id),
+        salaLogPath: salaId ? salaLogPath(salaId) : null,
+        salaReadsPath: salaId ? readsPath(salaId) : null,
       });
     } catch (err) {
       console.error('[chat] no pude depositar la conversación en la papelera:', err?.message);
@@ -2532,6 +2637,8 @@ class Chat {
     // mitad de un Task) se limpia SIEMPRE — evita que un tool_result perdido
     // (interrupt, crash) deje la tarjeta pegada en "delegando" para siempre.
     if (state === 'waiting') {
+      const refreshActa = this._actaRefreshPending && this.isSala();
+      this._actaRefreshPending = false;
       this._delegatingIds.clear();
       this._delegatingSince = null;
       this._endTurnRouter(); // AutoTux v2: restaura override + escala por insuficiencia
@@ -2541,6 +2648,9 @@ class Chat {
         this.status = state;
         this._broadcast({ type: 'status', state });
       }
+      // El evento real de fin de turno llega después de las tools/MCP: ese es
+      // el margen seguro para leer, sin dejar timers colgados del proceso.
+      if (refreshActa) void this.loadActa();
       if (this._cutPending) {
         // Se limpia ANTES de despachar: _dispatchCut vuelve a entrar con
         // 'working' y conservar el pendiente abriría una recursión.
@@ -2598,6 +2708,7 @@ class Chat {
       isSala: this.isSala(),
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
       salaPadRef: this.salaPadRef,
+      acta: this._actaPayload(),
       tolkienEnv: this.tolkienEnv || null,
       pendingPrompt: this.pendingPrompt,
       ...extra,
@@ -2613,6 +2724,7 @@ class Chat {
       extra = { salaUnread: unread.count, salaMentions: unread.mentions };
     }
     ws.send(JSON.stringify(this._historyPayload(extra)));
+    if (this.isSala() && this.salaPadRef) void this.loadActa();
   }
 
   detach(ws) { this.clients.delete(ws); }
@@ -2795,6 +2907,8 @@ class ChatManager {
       } catch { /* best-effort */ }
     }
     // 4. Flipear el mundo EN EL LUGAR: mismo chat, nuevo cwd, resume de la MISMA sid.
+    const sourceSalaId = chat.isSala() ? chat._salaId() : null;
+    if (sourceSalaId) chat.salaLogId = sourceSalaId;
     chat.cwd = dest;
     // BUG-2086: si la sesión se va del worktree de su entorno efímero, la
     // referencia al entorno deja de aplicar (provisionTolkienEnvForChat muda
@@ -2808,7 +2922,10 @@ class ChatManager {
     // destino todavía no tiene .jsonl: recargar lo dejaría en blanco y perderíamos
     // los eventos que la conversación ya tiene en memoria. Solo recargamos cuando
     // el transcript existe de verdad en el destino.
-    if (transcriptExists(dest, chat.sessionId, chat.owner)) chat.history = loadTranscriptEvents(dest, chat.sessionId, null, chat.owner);
+    if (transcriptExists(dest, chat.sessionId, chat.owner)) {
+      const events = loadTranscriptEvents(dest, chat.sessionId, null, chat.owner);
+      chat.history = chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events;
+    }
     // Al salir del suelo neutral, los pasaportes de invitados dejan de valer:
     // ningún participante conserva acceso al mundo real de destino.
     if (worldLabelFor(fromCwd) === 'Aduana' && worldLabelFor(dest) !== 'Aduana') {
@@ -3001,7 +3118,10 @@ class ChatManager {
     if (chat.sessionId) {
       // console:BUG-2153: sin transcript de origen, el destino queda sin .jsonl
       // y recargarlo blanquearía los eventos que todavía viven en memoria.
-      if (transcriptExists(toCwd, chat.sessionId, chat.owner)) chat.history = loadTranscriptEvents(toCwd, chat.sessionId, null, chat.owner);
+      if (transcriptExists(toCwd, chat.sessionId, chat.owner)) {
+        const events = loadTranscriptEvents(toCwd, chat.sessionId, null, chat.owner);
+        chat.history = chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events;
+      }
     }
     chat.resume = chat.sessionId;
     chat._push({
@@ -3042,6 +3162,7 @@ class ChatManager {
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
         packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
         salaPadRef: c.salaPadRef || null,
+        salaLogId: c.salaLogId || null,
         limbo: c.limbo || false, // 🌗 sesión-Limbo (alto riesgo)
         owner: c.owner || null, // multi-tenant (N6)
         participants: Array.isArray(c.participants) ? c.participants : [],
@@ -3108,6 +3229,7 @@ class ChatManager {
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
       if (s.salaPadRef) chat.salaPadRef = s.salaPadRef;
+      try { chat.salaLogId = s.salaLogId ? safeSalaId(s.salaLogId) : null; } catch { chat.salaLogId = null; }
       if (s.tolkienEnv) chat.tolkienEnv = s.tolkienEnv;
       chat.owner = s.owner || null; // multi-tenant (N6)
       chat.participants = Array.isArray(s.participants) ? s.participants : [];
@@ -3143,7 +3265,7 @@ class ChatManager {
         chat.terminalId = term.id;
         chat.viewMode = 'tui';
         const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner);
-        chat.history = (chat.isSala() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
+        chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
       } else {
         // ¿El runner sobrevivió? (crash del server con turno en curso)
         const link = await tryConnectRunner(chat.id);
@@ -3158,7 +3280,7 @@ class ChatManager {
           chat._bgTasks = Array.isArray(hello.bgTasks) ? hello.bgTasks : [];
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null, chat.owner);
           const events = [...base, ...(hello.events || [])];
-          chat.history = (chat.isSala() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
+          chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
           if (Array.isArray(hello.slashCommands) && hello.slashCommands.length) {
             chat.slashCommands = enrichSlashCommands(chat.cwd, hello.slashCommands, chat.owner);
@@ -3169,7 +3291,7 @@ class ChatManager {
         } else {
           link?.close();
           const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner);
-          chat.history = (chat.isSala() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX); // dormida
+          chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX); // dormida
         }
       }
       this.chats.set(s.id, chat);
@@ -3279,6 +3401,44 @@ class ChatManager {
 }
 
 const manager = new ChatManager();
+
+function salaKeepIdsForPrune(owners) {
+  const keepIds = new Set();
+  const addId = (id) => {
+    try { if (id) keepIds.add(safeSalaId(id)); } catch { /* una referencia inválida no protege carpetas */ }
+  };
+  const addCwd = (cwd) => {
+    if (typeof cwd === 'string' && worldLabelFor(cwd) === 'Aduana') addId(path.basename(cwd));
+  };
+
+  for (const chat of manager.chats.values()) {
+    if (chat.closed) continue;
+    addCwd(chat.cwd);
+    addId(chat.salaLogId);
+  }
+
+  // init() poda antes de que termine rehydrate(); chats.json contiene solo
+  // conversaciones abiertas y protege las mismas referencias durante esa ventana.
+  let saved = [];
+  try {
+    const parsed = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8'));
+    if (Array.isArray(parsed)) saved = parsed;
+  } catch { /* sin snapshot todavía */ }
+  for (const chat of saved) {
+    addCwd(chat?.cwd);
+    addId(chat?.salaLogId);
+  }
+
+  for (const owner of Array.isArray(owners) ? owners : []) {
+    try {
+      for (const item of listChatTrash(owner)) addCwd(item?.cwd);
+    } catch (err) {
+      console.error(`[chat] no pude leer la papelera de ${owner} para proteger salas:`, err?.message);
+    }
+  }
+  return [...keepIds];
+}
+
 // Multi-tenant: los adjuntos de un chat viven en el .cwc-data de SU DUEÑO. El
 // server es el único que sabe de quién es cada chat, así que se lo enseña al
 // subsistema de adjuntos (que es compartido con el runner y con bin/*).
@@ -3444,8 +3604,12 @@ export default {
         console.error('[chat] no pude listar usuarios para la purga inicial:', err?.message);
       }
       autoPurgeAllChatTrash(owners);
+      pruneSalas({
+        keepIds: salaKeepIdsForPrune(owners),
+        maxAgeMs: SALA_TTL_DAYS * 86400000,
+      });
     } catch (err) {
-      console.error('[chat] purga inicial de la papelera falló:', err?.message);
+      console.error('[chat] purga inicial de papelera/salas falló:', err?.message);
     }
     manager.rehydrate().then((n) => {
       if (n) console.log(`[chat] ${n} conversación(es) rehidratada(s)`);
@@ -3604,6 +3768,7 @@ export default {
         req.body?.text,
         principalOf(req).username || hostUser(),
         req.body?.attachments,
+        replyFromPayload(req.body),
       );
       if (!rec) return res.status(400).json({ error: 'No se pudo publicar el mensaje en la sala.' });
       res.json({ ok: true, say: rec });
@@ -4087,7 +4252,7 @@ export default {
           const atts = existingAttachments(chat.id, msg.attachments);
           if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts);
         } else if (msg.type === 'say' && typeof msg.text === 'string') {
-          chat.say(msg.text, p.username || hostUser(), msg.attachments);
+          chat.say(msg.text, p.username || hostUser(), msg.attachments, replyFromPayload(msg));
         } else if (msg.type === 'react') {
           chat.react({ by: p.username || hostUser(), msgId: msg.msgId, emoji: msg.emoji });
         } else if (msg.type === 'cut') {

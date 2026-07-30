@@ -6,8 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import pty from 'node-pty';
+import { spawn, spawnSync } from 'node:child_process';
 import { writeJsonAtomic } from '../src/core/atomic-write.js';
 import {
   ensureUserSpace,
@@ -146,18 +145,19 @@ writeState({ status: 'starting' });
 
 let proc;
 try {
-  proc = pty.spawn('gh', [
+  // Deliberadamente NO usamos PTY: con TTY, `gh` entra en modo interactivo y
+  // se cuelga esperando respuestas que no logra leer del PTY. Sin TTY va
+  // directo al device flow y emite el código por stderr.
+  proc = spawn('gh', [
     'auth',
     'login',
     '--hostname', 'github.com',
     '--git-protocol', 'https',
     '--web',
   ], {
-    name: 'xterm-color',
-    cols: 1000,
-    rows: 50,
     cwd,
     env,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 } catch (error) {
   writeState({
@@ -169,7 +169,6 @@ try {
 
 let output = '';
 let currentCode = '';
-let enterSent = false;
 let terminal = false;
 let cancelled = false;
 let timeoutTimer = null;
@@ -195,7 +194,7 @@ function cancel() {
 process.once('SIGTERM', cancel);
 process.once('SIGINT', cancel);
 
-proc.onData((data) => {
+function processOutput(data) {
   try {
     output += data;
     if (output.length > 200_000) output = output.slice(-100_000);
@@ -211,19 +210,20 @@ proc.onData((data) => {
         });
       }
     }
-    // `gh` pide Enter antes de intentar abrir el navegador. El navegador real
-    // lo abre el usuario desde el wizard; este Enter solo deja al CLI esperando
-    // la aprobación del device flow.
-    if (currentCode && !enterSent && /press enter|presion[aá].*enter/i.test(clean)) {
-      enterSent = true;
-      proc.write('\r');
-    }
   } catch (error) {
     stop('error', 'Fallo procesando gh auth login: ' + (error?.message || error));
   }
+}
+
+proc.stdout.on('data', processOutput);
+proc.stderr.on('data', processOutput);
+
+proc.on('error', (error) => {
+  stop('error', 'No pude lanzar gh auth login: ' + redactSecrets(error?.message || error));
+  process.exit(1);
 });
 
-proc.onExit(({ exitCode }) => {
+proc.on('exit', (code) => {
   clearTimer();
   if (output) logLine(stripAnsi(output));
   if (terminal || cancelled) {
@@ -234,7 +234,7 @@ proc.onExit(({ exitCode }) => {
   if (!githubConnected()) {
     writeState({
       status: 'error',
-      error: `gh auth login terminó (code ${exitCode}) sin una sesión válida.`,
+      error: `gh auth login terminó (code ${code}) sin una sesión válida.`,
     });
     process.exit(1);
     return;

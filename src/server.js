@@ -167,8 +167,16 @@ async function main() {
   // usuario nuevo no tiene cuenta; el flujo se gatea por el token de invitación).
   app.get('/onboard', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'onboard.html')));
   app.get('/js/onboard/onboard.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'onboard', 'onboard.js')));
-  // TODO el CSS que usa login.html debe ser público: si falta uno acá, el 401
-  // devuelve JSON y el navegador lo rechaza por MIME (login sin estilos).
+  // `onboard.js` hace `await import('/js/ui/i18n.js')` en su PRIMERA línea: si
+  // ese módulo cae en el gate, el 401 rechaza la promesa del IIFE y el wizard
+  // no renderiza NADA (tarjeta vacía). El wizard no llama `initI18n`, así que
+  // se queda en 'es' y nunca pide los diccionarios `/i18n/en/*.json`.
+  app.get('/js/ui/i18n.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'ui', 'i18n.js')));
+  // TODO asset que use una página PÚBLICA (login/onboard) debe estar en esta
+  // lista — CSS, JS y también los módulos que un script público cargue con
+  // `import()` dinámico. Si falta uno, el gate responde 401 JSON: un CSS
+  // ausente deja la página sin estilos, pero un módulo JS ausente RECHAZA el
+  // import y la página queda VACÍA (pasó con `/js/ui/i18n.js` y `/onboard`).
   app.get('/css/style.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'style.css')));
   app.get('/css/tokens.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'tokens.css')));
   app.get('/css/ui.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'ui.css')));

@@ -301,13 +301,21 @@ Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
 NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
 `cancelled` del job y corta el PTY. Timeout duro: 15 min.
 ### bin/cwc-gh-login-runner.js  LOGIN GUIADO de GitHub por usuario durante
-onboarding: runner PTY de `gh auth login --hostname github.com --git-protocol
-https --web` con `userRunnerEnv(user)` y HOME/workspace aislados. Publica la URL
-fija `https://github.com/login/device`, el código de un solo uso, estado y `pid`
-en `~/.cwc-data/gh-login-jobs/<user>.json`; toda escritura es atómica y mode
-600. El log `<user>.log` también es mode 600 y TODA salida pasa por redacción
-de `gh[pousr]_*` y `github_pat_*`. El éxito se confirma con `gh auth status` en
-el mismo HOME y después corre obligatoriamente `gh auth setup-git` para dejar
+onboarding: corre `gh auth login --hostname github.com --git-protocol https
+--web` SIN PTY, con stdin ignorado y stdout/stderr por pipe, usando
+`userRunnerEnv(user)` y HOME/workspace aislados. Es deliberado y
+contraintuitivo: con TTY, `gh` entra en modo interactivo, pregunta `Authenticate
+Git with your GitHub credentials?` antes del device code y NO lee la respuesta
+del PTY (probado con `y`, Enter diferido, varias secuencias y
+`--insecure-storage`), por lo que el login queda colgado para siempre en
+`starting`. Sin TTY emite directamente el código y la URL por stderr y espera la
+aprobación; por eso el runner lee stdout Y stderr, ya que leer solo stdout vuelve
+invisible el código. Publica la URL fija `https://github.com/login/device`, el
+código de un solo uso, estado y `pid` en
+`~/.cwc-data/gh-login-jobs/<user>.json`; toda escritura es atómica y mode 600.
+El log `<user>.log` también es mode 600 y TODA salida pasa por redacción de
+`gh[pousr]_*` y `github_pat_*`. El éxito se confirma con `gh auth status` en el
+mismo HOME y después corre obligatoriamente `gh auth setup-git` para dejar
 operativo el push HTTPS. `GH_BROWSER=true` evita intentar abrir un navegador en
 el server: el usuario aprueba desde el wizard. Timeout duro: 15 min.
 ### bin/_env-boot.js           bootstrap explícito del `.env` del REPO para runners cuyo

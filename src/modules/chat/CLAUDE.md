@@ -1620,6 +1620,120 @@ editable— y la marca del hilo no es clickeable, porque no existe un puente de
 navegación desde `chat-tab.js` hacia `openChatView` y no se inventó uno para
 esto.
 
+PAD PROPIO DE LA SALA (`console:PLAN-2406`, 2026-07-30). Existe el workspace
+de Pad `aduana`, hermano de `console`, `tolkien` y `comunidad`: cada SALA es un
+ÍTEM-SOL `aduana:SALA-n` de la colección `salas`, y de él cuelgan sus acuerdos
+en la colección `acuerdos`, cuyo prefijo real es `ACUER`. NO hay un workspace
+por sala porque las salas son efímeras y eso acumularía decenas de mundos
+imposibles de cruzar. También se descartó hacerla una colección de `console`
+por SEGURIDAD: `console` es el mundo interno de Niko y permitir que un invitado
+escriba ahí es exactamente lo que Aduana impide (Regla 16 · Ley 5). El MCP se
+inyecta al SPAWNEAR el runner con `aduanaPadMcpServer()` en
+`core/tool-policy.js`, enganchado donde `bin/cwc-chat-runner.js` arma
+`mcpServers`, y NO en `~/.claude.json`: los MCP se declaran por carpeta de
+proyecto, no hay globales y cada sala nace en una carpeta nueva, de modo que
+configurarlo allí dejaría muda a la siguiente. EL AISLAMIENTO TIENE DOS CAPAS Y
+LAS DOS HACEN FALTA: `--workspace aduana` en los args del MCP es solo el
+DEFAULT, porque la documentación del propio MCP dice que un `workspace`
+explícito siempre gana; la capa AUTORITATIVA es el hook `PreToolUse`
+`aduanaPadGuardHook()`, que deniega toda tool `mcp__pad*` cuyo `workspace` sea
+distinto de `aduana`, y deja pasar un input sin `workspace` para que mande el
+default. Es el patrón de `console:BUG-780`: `canUseTool` no servía porque
+`bypassPermissions` lo shadowea. Se verificó E2E y en negativo: en una sala
+real el modelo creó `aduana:ACUER-4`, colgado de `aduana:SALA-3`, e intentó
+crear otro ítem en `console`; el hook lo DENEGÓ y una búsqueda posterior
+confirmó que no existe. `aduanaPadMcpServer()` devuelve `null` si falta el
+binario de Pad, para que un binario ausente en el espacio de un inquilino no
+impida abrir la sala. `chat.salaPadRef` se PERSISTE; sin esa referencia, cada
+reinicio del server crearía otro ítem-sol para la misma sala.
+
+REACCIONES (`console:PLAN-2407`). El juego es CERRADO: 👍 de acuerdo, ❓ dudas
+y 🔴 bloquea. Un picker completo daría demasiada superficie para convertir la
+reacción en decoración; con tres, el conteo se entiende de un vistazo. Lo que
+justifica el bloque es que una reacción se difunde y persiste pero NO entra a
+`_sinceCut`, por lo que no viaja al modelo ni se paga como contexto: antes,
+cada «dale» u «ok» era un mensaje cobrado en todos los turnos siguientes, y se
+verificó que un corte con tres reacciones no contiene ningún rastro de ellas.
+Para poder apuntarlas hubo que dar ID a los mensajes de sala: los nuevos nacen
+con `id` y los viejos lo derivan de `by + ts + hash(text)`, porque el log es
+append-only y no se puede reescribir para agregárselo. La limitación conocida
+es que dos mensajes idénticos del mismo autor en el mismo milisegundo
+compartirían ID. Las reacciones son EVENTOS, no estado: quitarlas apendea un
+record con `off:true` y el agregado se reconstruye recorriendo el log en orden.
+Guardar solo el estado final obligaría a reescribir el archivo entero en cada
+toque, justo lo que `appendSay` evita.
+
+ACTA VIVA (`console:PLAN-2408`). El acta es el CUERPO del ítem-sol
+`aduana:SALA-n`, no un archivo aparte: así sobrevive al cierre de la sala,
+queda consultable y conserva debajo todo lo decidido. LA IA la escribe vía el
+MCP y el server solo la LEE para enviarla al panel, porque interpretar la
+conversación corresponde al modelo. Tiene tres secciones fijas:
+`## ✅ Acordado`, `## ⏳ Pendiente` —con responsable— y `## ❓ Abierto`. La
+instrucción se suma al prompt de CADA corte, ocupa dos líneas y mide 276
+caracteres; también ordena actualizar SOLO si el corte aportó algo nuevo, pues
+sin esa condición cada corte gastaría una escritura repitiendo lo mismo. El
+bloque se incluye únicamente cuando la sala tiene `salaPadRef`. La recarga del
+acta se engancha al evento REAL de fin de turno, nunca a un `setTimeout` (Regla
+dura 2), y se cachea en memoria para no consultar Pad en cada poll. `stale` se
+marca recién tras 3 o más cortes sin actualizar: hacerlo al primero produciría
+falsos positivos permanentes, porque «no hubo nada nuevo que anotar» es un
+resultado normal. Se verificó que, tras un corte con contenido real, la IA
+escribió las tres secciones con un acuerdo, un pendiente con responsable y
+fecha, y un punto abierto. Como NOTA DE ESTRUCTURA, el panel exigió envolver el
+hilo en `.chat-main` dentro de `.chat-body`, donde antes `.chat-msgs` era hijo
+directo; se verificó que tanto el panel lateral `.chat-raw` como el hilo de un
+chat normal siguen intactos.
+
+A · LA SALA COMO CONTENEDOR: TRES AGUJEROS CERRADOS (`console:PLAN-2426`,
+2026-07-30). Una auditoría comparó qué contiene una sala frente a una sesión
+normal y encontró la diferencia decisiva: su memoria vive en DOS lugares. El
+transcript del SDK y los adjuntos acompañan al chat, pero la conversación entre
+personas vive aparte, en `sala.jsonl`; resguardo, mudanza y limpieza solo
+conocían el primero. `console:BUG-2423` hizo que la papelera respalde también
+`sala.jsonl` y `reads.json` bajo `<entrada>/sala/`, declare `meta.hasSala`,
+aplique la misma reparación perezosa del transcript y restaure cada archivo
+solo si ya no existe el original. Antes guardaba el adjunto pero no los mensajes
+humanos —medido con una sala de un adjunto y dos mensajes—: la carpeta no se
+borraba, así que no había pérdida inmediata, pero la red de seguridad prometía
+algo que no cumplía. `console:BUG-2424` fijó la decisión de Niko de CONSERVAR la
+conversación al mover una sala a otro mundo. Antes `isSala()` pasaba a `false`,
+`_rebuildSalaHistory()` dejaba de correr y el hilo seguía visible solo por estar
+en memoria, para desaparecer en el primer reinicio: la peor variante porque
+parecía haber funcionado. Ahora `Chat.salaLogId` persiste la sala de origen,
+`_salaLogSource()` decide de dónde leer el hilo humano y TODOS los call-sites de
+reconstrucción lo usan: `start`, `_toChat`, `reopen`, `handoff`,
+`_repairOrphanCwd` y las tres ramas de `rehydrate`; donde antes quedaban cero
+mensajes tras reiniciar, ahora sobreviven. OJO: `isSala()` describe desde
+entonces el suelo ACTUAL mirando el `cwd`, mientras `_salaId()` devuelve el
+ORIGEN del log, incluso en un chat que ya no es sala. Por eso todos los métodos
+que escriben en el log —`say`, `react`, `cut` y `orquestado`— conservan su guard
+`isSala()` al inicio, y cualquier escritor nuevo tiene que llevarlo.
+`console:BUG-2425` agregó `pruneSalas({keepIds, maxAgeMs})`, que poda carpetas
+con el mismo TTL de 30 días de las papeleras, sin timers: corre en `init()` y
+donde ya corre `autoPurgeAllChatTrash`. `keepIds` protege las salas de chats
+vivos, las referenciadas por un `salaLogId` y las presentes en alguna papelera.
+EL ORDEN NO ERA NEGOCIABLE: sin resolver primero `console:BUG-2423`, la poda
+habría borrado conversaciones que nadie había respaldado.
+
+B · RESPONDER CITANDO (`console:PLAN-2426` · F4). Es el CUARTO botón de la fila
+de acciones del mensaje, junto a las tres reacciones, pero NO es una reacción:
+una reacción es una señal sin contenido, se togglea y no entra al corte;
+responder produce un `say` normal, sí entra al buzón y sí se paga. La fila dejó
+por eso de ser «reacciones» para representar acciones sobre el mensaje. El
+record guarda `replyTo`, `replyToBy` y `replyToText`, este último como fragmento
+de 100 caracteres. Esa DENORMALIZACIÓN es deliberada: sin autor y fragmento
+habría que rebuscar el original en un log de miles de líneas que además se
+poda, y la cita se rompería cuando el mensaje citado ya no existiera. Lo que la
+hace más que un adorno es que `buildSalaPrompt` emite `<niko> (respondiendo a
+richi): …`; antes el modelo recibía una lista PLANA y no podía saber qué
+contestaba a qué cuando tres personas hablaban cruzado. El texto citado NO se
+duplica en el prompt porque ya aparece más arriba en la misma conversación. EL
+GOTCHA que costó una vuelta fue que el frontend enviaba los campos de la cita
+PLANOS en la raíz del mensaje mientras el backend los leía ANIDADOS bajo
+`reply`: el mensaje salía bien, pero la cita se perdía en silencio. Ahora
+`replyFromPayload()` acepta ambas formas y lo usan los DOS caminos de entrada,
+WS y HTTP, para que no puedan volver a divergir.
+
 LAS CUATRO COMPUERTAS conservan la frontera por dueño. `ownedChat` quedó
 INTACTO para las acciones de dueño y se sumó `participantChat` para las
 acciones de participar; cambiaron el guard del WS, `list(principal)` y el

@@ -64,6 +64,25 @@ function transcriptCopyPath(owner, meta) {
   return path.join(dir, 'transcript', path.basename(meta.transcriptPath));
 }
 
+function salaCopyDir(owner, meta) {
+  const dir = itemDir(owner, meta?.trashId);
+  return dir ? path.join(dir, 'sala') : null;
+}
+
+function copySalaFiles(owner, meta) {
+  if (typeof meta?.salaLogPath !== 'string' || !meta.salaLogPath || !fs.existsSync(meta.salaLogPath)) {
+    return false;
+  }
+  const destDir = salaCopyDir(owner, meta);
+  if (!destDir) return false;
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(meta.salaLogPath, path.join(destDir, 'sala.jsonl'));
+  if (typeof meta.salaReadsPath === 'string' && meta.salaReadsPath && fs.existsSync(meta.salaReadsPath)) {
+    fs.copyFileSync(meta.salaReadsPath, path.join(destDir, 'reads.json'));
+  }
+  return true;
+}
+
 function persistMetaAndIndex(owner, meta, items) {
   writeMeta(owner, meta);
   writeIndex(owner, items);
@@ -71,7 +90,7 @@ function persistMetaAndIndex(owner, meta, items) {
 
 export function trashChat({
   chatId, owner, title, cwd, sessionId, packageRef, model, permissionMode,
-  ticket, transcriptPath, attachDir,
+  ticket, transcriptPath, attachDir, salaLogPath, salaReadsPath,
 }) {
   if (!SAFE_ID_RE.test(String(chatId || ''))) return null;
 
@@ -104,8 +123,11 @@ export function trashChat({
       ticket: ticket || null,
       transcriptPath: typeof transcriptPath === 'string' ? transcriptPath : null,
       attachDir: typeof attachDir === 'string' ? attachDir : null,
+      salaLogPath: typeof salaLogPath === 'string' ? salaLogPath : null,
+      salaReadsPath: typeof salaReadsPath === 'string' ? salaReadsPath : null,
       hasTranscript: false,
       hasAttachments: false,
+      hasSala: false,
       attachmentsSkipped: false,
     };
 
@@ -124,6 +146,15 @@ export function trashChat({
       }
     } catch (err) {
       console.error('[chat-trash] no pude copiar el transcript:', err?.message);
+    }
+
+    try {
+      if (copySalaFiles(owner, meta)) {
+        meta.hasSala = true;
+        persistMetaAndIndex(owner, meta, index.items);
+      }
+    } catch (err) {
+      console.error('[chat-trash] no pude copiar la conversación de la sala:', err?.message);
     }
 
     try {
@@ -154,17 +185,38 @@ export function listChatTrash(owner) {
   let repaired = false;
 
   for (const meta of index.items) {
-    if (meta?.hasTranscript !== false || typeof meta?.transcriptPath !== 'string') continue;
-    if (!SAFE_ID_RE.test(String(meta?.trashId || '')) || !fs.existsSync(meta.transcriptPath)) continue;
-    try {
-      const dest = transcriptCopyPath(owner, meta);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(meta.transcriptPath, dest);
-      meta.hasTranscript = true;
-      writeMeta(owner, meta);
-      repaired = true;
-    } catch (err) {
-      console.error('[chat-trash] no pude reparar el transcript pendiente:', err?.message);
+    if (
+      meta?.hasTranscript === false
+      && typeof meta?.transcriptPath === 'string'
+      && SAFE_ID_RE.test(String(meta?.trashId || ''))
+      && fs.existsSync(meta.transcriptPath)
+    ) {
+      try {
+        const dest = transcriptCopyPath(owner, meta);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(meta.transcriptPath, dest);
+        meta.hasTranscript = true;
+        writeMeta(owner, meta);
+        repaired = true;
+      } catch (err) {
+        console.error('[chat-trash] no pude reparar el transcript pendiente:', err?.message);
+      }
+    }
+    if (
+      meta?.hasSala === false
+      && typeof meta?.salaLogPath === 'string'
+      && SAFE_ID_RE.test(String(meta?.trashId || ''))
+      && fs.existsSync(meta.salaLogPath)
+    ) {
+      try {
+        if (copySalaFiles(owner, meta)) {
+          meta.hasSala = true;
+          writeMeta(owner, meta);
+          repaired = true;
+        }
+      } catch (err) {
+        console.error('[chat-trash] no pude reparar la conversación de sala pendiente:', err?.message);
+      }
     }
   }
   if (repaired) {
@@ -187,6 +239,7 @@ export function listChatTrash(owner) {
         daysLeft: Math.max(0, Math.ceil((expiresAt - now) / 86400000)),
         hasTranscript: meta.hasTranscript,
         hasAttachments: meta.hasAttachments,
+        hasSala: meta.hasSala,
         attachmentsSkipped: meta.attachmentsSkipped,
         packageRef: meta.packageRef,
         model: meta.model,
@@ -222,6 +275,22 @@ export function restoreChatTrash(id, owner) {
     ) {
       fs.mkdirSync(path.dirname(meta.attachDir), { recursive: true });
       fs.cpSync(attachmentsCopy, meta.attachDir, { recursive: true });
+    }
+
+    const salaCopy = dir ? path.join(dir, 'sala') : null;
+    if (typeof meta.cwd === 'string' && meta.cwd && salaCopy) {
+      const salaLogCopy = path.join(salaCopy, 'sala.jsonl');
+      const salaReadsCopy = path.join(salaCopy, 'reads.json');
+      const salaLogDest = path.join(meta.cwd, 'sala.jsonl');
+      const salaReadsDest = path.join(meta.cwd, 'reads.json');
+      if (!fs.existsSync(salaLogDest) && fs.existsSync(salaLogCopy)) {
+        fs.mkdirSync(meta.cwd, { recursive: true });
+        fs.copyFileSync(salaLogCopy, salaLogDest);
+      }
+      if (!fs.existsSync(salaReadsDest) && fs.existsSync(salaReadsCopy)) {
+        fs.mkdirSync(meta.cwd, { recursive: true });
+        fs.copyFileSync(salaReadsCopy, salaReadsDest);
+      }
     }
 
     const remaining = index.items.filter((item) => item?.trashId !== id);

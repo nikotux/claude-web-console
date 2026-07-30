@@ -16,7 +16,11 @@ export const MAX_SAY_LEN = 4000;
 export const MAX_SAY_ATTACHMENTS = 8;
 export const MAX_CUT_AUTHORS = 12;
 export const MAX_MENTIONS = 12;
+export const MAX_REPLY_TO_LEN = 128;
+export const MAX_REPLY_TO_BY_LEN = 80;
+export const MAX_REPLY_TO_TEXT_LEN = 100;
 export const SALA_LOG_MAX_LINES = 5000;
+export const SALA_TTL_DAYS = 30;
 export const REACTIONS = ['👍', '❓', '🔴'];
 
 const SALA_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -87,6 +91,41 @@ export function readsPath(id) {
   return path.join(salaRoot(id), 'reads.json');
 }
 
+export function pruneSalas({ keepIds = [], maxAgeMs } = {}) {
+  let removed = 0;
+  try {
+    const ageLimit = Number(maxAgeMs);
+    if (!Number.isFinite(ageLimit) || ageLimit < 0) return 0;
+    const keep = new Set();
+    for (const id of Array.isArray(keepIds) ? keepIds : []) {
+      try { keep.add(safeSalaId(id)); } catch { /* ids ajenos no protegen carpetas */ }
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(ADUANA_ROOT, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.isDirectory() || keep.has(entry.name)) continue;
+      try {
+        const id = safeSalaId(entry.name);
+        const stat = fs.statSync(salaLogPath(id));
+        if (!stat.isFile() || now - stat.mtimeMs <= ageLimit) continue;
+        fs.rmSync(salaRoot(id), { recursive: true, force: true });
+        removed += 1;
+      } catch (err) {
+        console.error(`[aduana] no pude podar la sala ${entry.name}:`, err?.message);
+      }
+    }
+  } catch (err) {
+    console.error('[aduana] la poda de salas falló:', err?.message);
+  }
+  return removed;
+}
+
 export function readReads(id) {
   let raw;
   try {
@@ -136,7 +175,9 @@ export function writeRead(id, username, ts) {
   return reads;
 }
 
-export function appendSay(id, { id: msgId, by, text, ts, attachments, mentions }) {
+export function appendSay(id, {
+  id: msgId, by, text, ts, attachments, mentions, replyTo, replyToBy, replyToText,
+}) {
   ensureSala(id);
   const recTs = ts || Date.now();
   const safeMsgId = typeof msgId === 'string' && msgId
@@ -165,6 +206,9 @@ export function appendSay(id, { id: msgId, by, text, ts, attachments, mentions }
     safeMentions.push(name);
     if (safeMentions.length >= MAX_MENTIONS) break;
   }
+  const safeReplyTo = String(replyTo ?? '').trim().slice(0, MAX_REPLY_TO_LEN);
+  const safeReplyToBy = String(replyToBy ?? '').trim().slice(0, MAX_REPLY_TO_BY_LEN);
+  const safeReplyToText = String(replyToText ?? '').trim().slice(0, MAX_REPLY_TO_TEXT_LEN);
   const rec = {
     t: 'say',
     id: safeMsgId,
@@ -173,6 +217,13 @@ export function appendSay(id, { id: msgId, by, text, ts, attachments, mentions }
     ts: recTs,
     ...(safeAttachments.length ? { attachments: safeAttachments } : {}),
     ...(safeMentions.length ? { mentions: safeMentions } : {}),
+    // Denormalización deliberada: conservar autor y fragmento permite pintar
+    // la cita y armar contexto aunque el mensaje original ya haya sido podado.
+    ...(safeReplyTo ? {
+      replyTo: safeReplyTo,
+      replyToBy: safeReplyToBy,
+      replyToText: safeReplyToText,
+    } : {}),
   };
   // Es append-only: el tmp+rename de CONVE-5 reescribiría el archivo entero
   // por mensaje; un append chico obtiene atomicidad del O_APPEND de POSIX.

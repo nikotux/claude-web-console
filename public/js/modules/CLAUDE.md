@@ -494,3 +494,12 @@ El cierre del rediseño, en la misma jornada, unificó cada turno de la IA en UN
   dejaban sin cap (TUI reconectada · chat dormido), igual que la 3ª (runner
   vivo) — así el payload del hito 85 queda acotado aunque el transcript en disco
   sea gigante.
+
+- Panel de Novedades (`system/news-panel.js`): el estado de una generación en
+  curso NO vive en el panel. `load()` pregunta a `GET /api/news` si hay un job
+  vivo (`data.job`) y, si lo hay, reanuda el polling con el Pac-Man — cerrar y
+  reabrir la pestaña ya no pierde el hilo. El contador del botón
+  (`✍️ Redactar ahora (N)`) sale de `data.pending` y se repinta con
+  `resetGenerateButton()`, que es el ÚNICO lugar que escribe la etiqueta: si
+  alguien vuelve a asignar `textContent` a mano en otro punto, el contador
+  desaparece en silencio tras la primera generación.

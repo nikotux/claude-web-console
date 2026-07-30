@@ -110,6 +110,23 @@ function salaSections() {
           type: 'p',
           text: t('chat.help.sala.people.unread', 'El separador “mensajes nuevos” marca el punto donde arrancaste a leer esta vez. Queda en el hilo aunque el contador ya se haya marcado como leído.'),
         },
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.reactions', 'Podés reaccionar a un mensaje con 👍, ❓ o 🔴 para alinearse sin escribir. Reaccionar no consume tokens ni entra al contexto de la IA; en cambio, un mensaje escrito sí entra al próximo corte.'),
+        },
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.quoteReply', 'El cuarto botón de esa fila permite responder citando un mensaje. La cita queda visible en tu respuesta y, al tocarla, te lleva al mensaje original. A diferencia de reaccionar, responder sí consume tokens porque es un mensaje que entra al próximo corte.'),
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.minutes.title', 'Acta de la sala'),
+      blocks: [
+        {
+          type: 'p',
+          text: t('chat.help.sala.minutes.text', 'Arriba del hilo está el acta con lo acordado, lo pendiente y lo que quedó abierto. La IA la actualiza en cada corte cuando hay algo nuevo que anotar; si pasa mucho tiempo sin actualizarse, la sala te avisa.'),
+        },
       ],
     },
     {
@@ -131,6 +148,14 @@ function salaSections() {
             {
               k: t('chat.help.sala.tokens.people.k', 'Enviar en la sala (say)'),
               v: t('chat.help.sala.tokens.people.v', 'No consume tokens: hablar entre personas son mensajes internos de la sala.'),
+            },
+            {
+              k: t('chat.help.sala.tokens.reactions.k', 'Reaccionar con 👍, ❓ o 🔴'),
+              v: t('chat.help.sala.tokens.reactions.v', 'No consume tokens: las reacciones no entran al próximo corte ni viajan como contexto a la IA.'),
+            },
+            {
+              k: t('chat.help.sala.tokens.quoteReply.k', 'Responder citando'),
+              v: t('chat.help.sala.tokens.quoteReply.v', 'Sí consume tokens: es un mensaje que entra al próximo corte; la cita visible enlaza al mensaje original.'),
             },
             {
               k: t('chat.help.sala.tokens.ai.k', '✦ Enviar a la IA'),

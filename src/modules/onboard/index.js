@@ -517,11 +517,19 @@ publicRouter.post('/github-start', (req, res) => {
   const reserved = job?.status === 'starting'
     && !!job.ts
     && (Date.now() - job.ts) < 30_000;
+  const alive = ghLoginRunnerAlive(job);
   if (reserved || (
-    ['starting', 'awaiting-auth', 'setup-git'].includes(job?.status)
-    && ghLoginRunnerAlive(job)
+    ['awaiting-auth', 'setup-git'].includes(job?.status)
+    && alive
+  ) || (
+    job?.status === 'starting'
+    && alive
+    && (Date.now() - (job.ts || 0)) <= 60_000
   )) {
     return res.json({ ok: true, already: true, status: job.status || 'starting' });
+  }
+  if (job?.status === 'starting' && alive) {
+    try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
   }
   try {
     writeJsonAtomic(ghJobPath(user), {

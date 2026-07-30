@@ -44,9 +44,9 @@ function classifyLocal(file) {
 const ATT_KIND_LABEL = { image: 'imagen', pdf: 'PDF', text: 'archivo', binary: 'archivo' };
 const ATT_KIND_I18N = { image: ['chat.att.image', 'imagen'], pdf: ['chat.att.pdf', 'PDF'], text: ['chat.att.file', 'archivo'], binary: ['chat.att.file', 'archivo'] };
 const SALA_REACTIONS = [
-  { emoji: '👍', label: 'de acuerdo' },
-  { emoji: '❓', label: 'tengo dudas' },
-  { emoji: '🔴', label: 'esto bloquea' },
+  { emoji: '👍', labelKey: 'chat.sala.reactionAgree', label: 'de acuerdo' },
+  { emoji: '❓', labelKey: 'chat.sala.reactionDoubt', label: 'tengo dudas' },
+  { emoji: '🔴', labelKey: 'chat.sala.reactionBlock', label: 'esto bloquea' },
 ];
 const SALA_REACTION_EMOJIS = new Set(SALA_REACTIONS.map(({ emoji }) => emoji));
 
@@ -314,6 +314,7 @@ export class ChatTab {
     this._salaSayCount = 0;
     this._cutPending = false;
     this._lastCutAuthors = [];
+    this._replyTo = null;
     this._orchestratedChatIds = new Set();
     this._pendingPromptActive = false;
     this._streamRaw = '';
@@ -372,6 +373,13 @@ export class ChatTab {
           <span>${t('chat.orchestrate.pendingNotice', 'Este texto llegó de una sala de Aduana y se envía cuando vos quieras.')}</span>
           <button type="button" class="btn-ghost btn--sm chat-pending-prompt-dismiss">${t('chat.orchestrate.discard', 'Descartar')}</button>
         </div>
+        <div class="chat-replybar" hidden>
+          <span class="chat-replybar-copy">
+            <span class="chat-quote-author"></span>
+            <span class="chat-replybar-text"></span>
+          </span>
+          <button type="button" class="btn-ghost btn--icon chat-replybar-dismiss" title="${t('chat.sala.cancelReplyTitle', 'Cancelar respuesta')}">${icon('close', { size: 13 })}</button>
+        </div>
         <div class="chat-composer">
           <span class="chat-typing" hidden></span>
           <input type="file" class="chat-file-input" multiple hidden>
@@ -427,6 +435,12 @@ export class ChatTab {
     this.pendingPromptEl.querySelector('.chat-pending-prompt-dismiss').addEventListener('click', () => {
       this._discardPendingPrompt();
     });
+    this.replyBarEl = container.querySelector('.chat-replybar');
+    this.replyAuthorEl = this.replyBarEl.querySelector('.chat-quote-author');
+    this.replyTextEl = this.replyBarEl.querySelector('.chat-replybar-text');
+    this.replyBarEl.querySelector('.chat-replybar-dismiss').addEventListener('click', () => {
+      this._clearReply();
+    });
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
@@ -451,6 +465,12 @@ export class ChatTab {
     this.modeEl.addEventListener('change', () => this._modeChanged());
     this.inputEl.addEventListener('keydown', (e) => {
       if (this._slashKeydown(e)) return; // slash o @ consumió la tecla
+      if (e.key === 'Escape' && !this.inputEl.value.trim() && this._replyTo) {
+        e.preventDefault();
+        e.stopPropagation();
+        this._clearReply();
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this._submit();
@@ -784,8 +804,10 @@ export class ChatTab {
     this._slashClose();
     this._slashSuppressed = null;
     const attachments = ready.map((p) => ({ name: p.name, type: p.type, mime: p.mime }));
-    if (this.isSala) this._send({ type: 'say', text, ...(attachments.length ? { attachments } : {}) });
+    const reply = this.isSala && this._replyTo ? { ...this._replyTo } : {};
+    if (this.isSala) this._send({ type: 'say', text, ...(attachments.length ? { attachments } : {}), ...reply });
     else this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
+    if (this.isSala) this._clearReply();
     for (const p of this.pending) { if (p.localUrl) URL.revokeObjectURL(p.localUrl); }
     this.pending = [];
     this._renderTray();
@@ -1341,6 +1363,36 @@ export class ChatTab {
     el.classList.toggle('chat-say--own', !!this.me && by === this.me);
     if (group.children.length > 1) el.classList.add('chat-say--cont');
 
+    if (m.replyTo) {
+      const replyToBy = String(m.replyToBy || '');
+      const quote = document.createElement('div');
+      quote.className = `chat-quote ${this._avatarKeyFor(replyToBy).tone}`;
+
+      const quoteAuthor = document.createElement('span');
+      quoteAuthor.className = 'chat-quote-author';
+      quoteAuthor.textContent = replyToBy;
+      const quoteText = document.createElement('span');
+      quoteText.className = 'chat-quote-text';
+      quoteText.textContent = String(m.replyToText || '').slice(0, 100);
+      quote.append(quoteAuthor, quoteText);
+
+      const quotedSay = this._findSay(m.replyTo);
+      if (quotedSay) {
+        quote.classList.add('chat-quote--link');
+        quote.tabIndex = 0;
+        quote.setAttribute('role', 'button');
+        quote.title = t('chat.sala.quoteJumpTitle', 'Ir al mensaje citado');
+        const jump = () => this._flashSay(quotedSay);
+        quote.addEventListener('click', jump);
+        quote.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          jump();
+        });
+      }
+      el.appendChild(quote);
+    }
+
     const body = document.createElement('span');
     body.className = 'chat-say-text';
     if (Array.isArray(m.mentions) && m.mentions.length) {
@@ -1401,18 +1453,28 @@ export class ChatTab {
       fragment.appendChild(button);
     }
     // Filtra los usados: sin esto se duplican como pastilla e invitación.
-    for (const { emoji, label } of SALA_REACTIONS) {
+    for (const { emoji, labelKey, label } of SALA_REACTIONS) {
       const users = row._reactions.get(emoji) || [];
       if (users.length) continue;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'chat-react chat-react--add';
       button.textContent = emoji;
-      button.title = `${emoji} ${label}`;
-      button.setAttribute('aria-label', `${emoji} ${label}`);
+      const reactionLabel = t(labelKey, label);
+      button.title = `${emoji} ${reactionLabel}`;
+      button.setAttribute('aria-label', `${emoji} ${reactionLabel}`);
       button.addEventListener('click', () => this._toggleReaction(row.dataset.msgId, emoji));
       fragment.appendChild(button);
     }
+    const reply = document.createElement('button');
+    reply.type = 'button';
+    reply.className = 'chat-react chat-react--reply';
+    reply.innerHTML = icon('externalLink', { size: 13 });
+    const replyLabel = t('chat.sala.replyTitle', 'Responder citando este mensaje');
+    reply.title = replyLabel;
+    reply.setAttribute('aria-label', replyLabel);
+    reply.addEventListener('click', () => this._startReply(row.dataset.msgId));
+    fragment.appendChild(reply);
     row.replaceChildren(fragment);
   }
 
@@ -1423,6 +1485,40 @@ export class ChatTab {
       if (el.dataset.msgId === wanted) return el;
     }
     return null;
+  }
+
+  _startReply(msgId) {
+    if (!this.isSala) return;
+    const say = this._findSay(msgId);
+    if (!say) return;
+    const replyToBy = String(say.dataset.by || '');
+    const replyToText = String(say.querySelector('.chat-say-text')?.textContent || '').trim().slice(0, 100);
+    this._replyTo = { replyTo: String(msgId), replyToBy, replyToText };
+    this.replyAuthorEl.className = `chat-quote-author ${this._avatarKeyFor(replyToBy).tone}`;
+    this.replyAuthorEl.textContent = replyToBy;
+    this.replyTextEl.textContent = replyToText;
+    this.replyBarEl.hidden = false;
+    this.inputEl.focus();
+  }
+
+  _clearReply() {
+    this._replyTo = null;
+    if (!this.replyBarEl) return;
+    this.replyBarEl.hidden = true;
+    this.replyAuthorEl.textContent = '';
+    this.replyTextEl.textContent = '';
+  }
+
+  _flashSay(say) {
+    say.scrollIntoView({ block: 'center' });
+    say.classList.remove('chat-say--flash');
+    void say.offsetWidth;
+    say.classList.add('chat-say--flash');
+    clearTimeout(say._flashTimer);
+    say._flashTimer = setTimeout(() => {
+      say.classList.remove('chat-say--flash');
+      say._flashTimer = null;
+    }, 1200);
   }
 
   _toggleReaction(msgId, emoji) {

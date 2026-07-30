@@ -184,6 +184,7 @@ export function mountNewsPanel(el, ctx) {
   const generateButton = el.querySelector('[data-news-generate]');
   let alive = true;
   let generating = false;
+  let pendingCount = 0;
   let openIds = null;
   let entriesById = new Map();
   let seenPending = false;
@@ -255,6 +256,8 @@ export function mountNewsPanel(el, ctx) {
 
   function render(data) {
     const entries = Array.isArray(data.entries) ? data.entries : [];
+    pendingCount = Number(data.pending) || 0;
+    if (!generating) resetGenerateButton();
     entriesById = new Map(entries.map((entry) => [String(entry.id), entry]));
     if (openIds === null) openIds = initialOpenIds(entries, data.lastSeen);
     else openIds = new Set([...openIds].filter((id) => entriesById.has(id)));
@@ -285,6 +288,15 @@ export function mountNewsPanel(el, ctx) {
     try {
       const data = await requestJson('/api/news');
       if (isPanelAlive()) render(data);
+      if (isPanelAlive() && !generating && data.job?.id) {
+        generating = true;
+        if (generateButton) {
+          generateButton.disabled = true;
+          generateButton.innerHTML = `${pacman({ state: 'delegating', size: 'sm' })}<span>${t('news.generate.running', 'Redactando…')}</span>`;
+        }
+        setJobStatus(`${pacman({ state: 'delegating', size: 'sm' })}<span>${t('news.generate.resumed', 'Ya hay una redacción en curso: seguimos esperándola…')}</span>`);
+        scheduleJobPoll(String(data.job.id));
+      }
     } catch (error) {
       if (isPanelAlive()) showPanelError(error.message);
     }
@@ -442,6 +454,16 @@ export function mountNewsPanel(el, ctx) {
     });
   }
 
+  function resetGenerateButton() {
+    if (!generateButton) return;
+    generateButton.disabled = false;
+    const label = t('news.generate', '✍️ Redactar ahora');
+    generateButton.textContent = pendingCount > 0 ? `${label} (${pendingCount})` : label;
+    generateButton.title = pendingCount > 0
+      ? t('news.generate.pending', '{count} commit(s) sin redactar desde la última novedad', { count: pendingCount })
+      : t('news.generate.hint', 'Redacta novedades a partir del progreso reciente');
+  }
+
   function setJobStatus(html, tone = '') {
     jobStatus.hidden = false;
     jobStatus.className = `news-job${tone ? ` news-job--${tone}` : ''}`;
@@ -470,10 +492,7 @@ export function mountNewsPanel(el, ctx) {
           return;
         }
         generating = false;
-        if (generateButton) {
-          generateButton.disabled = false;
-          generateButton.textContent = t('news.generate', '✍️ Redactar ahora');
-        }
+        resetGenerateButton();
         if (job.status === 'done') {
           setJobStatus(t('news.generate.done', '✅ Listo: se publicaron {count} novedades.', { count: Number(job.count) || 0 }), 'ok');
           openIds = null;
@@ -487,10 +506,7 @@ export function mountNewsPanel(el, ctx) {
           return;
         }
         generating = false;
-        if (generateButton) {
-          generateButton.disabled = false;
-          generateButton.textContent = t('news.generate', '✍️ Redactar ahora');
-        }
+        resetGenerateButton();
         setJobStatus(esc(error.message), 'error');
       }
     }, 2000);
@@ -508,8 +524,7 @@ export function mountNewsPanel(el, ctx) {
       scheduleJobPoll(job.id);
     } catch (error) {
       generating = false;
-      generateButton.disabled = false;
-      generateButton.textContent = t('news.generate', '✍️ Redactar ahora');
+      resetGenerateButton();
       setJobStatus(esc(error.message), 'error');
     }
   });

@@ -204,6 +204,17 @@ reserva atómicamente `~/.cwc-data/gh-login-jobs/<user>.json` mode 600 y lanza
 detached `bin/cwc-gh-login-runner.js --user <user>`. El status devuelve solo
 estado, URL fija `https://github.com/login/device`, código de un solo uso,
 done/error/stale y el booleano `connected`. Por su sufijo usa el bucket amplio.
+El runner corre `gh auth login` SIN PTY, con stdin ignorado y stdout/stderr por
+pipe. Es deliberado y contraintuitivo: con TTY, `gh` entra en modo interactivo,
+pregunta `Authenticate Git with your GitHub credentials?` antes del device code
+y NO lee la respuesta del PTY (probado con `y`, Enter diferido, varias
+secuencias y `--insecure-storage`), dejando el login colgado para siempre en
+`starting`. Sin TTY emite directamente el código y la URL por stderr y espera
+la aprobación; por eso el runner lee stdout Y stderr, ya que leer solo stdout
+deja el código invisible. Conserva `GH_BROWSER=true`, redacta tokens, confirma
+la sesión antes de ejecutar `gh auth setup-git` y aplica un timeout duro de 15
+min. `github-start` considera colgado y termina un runner vivo que lleve más de
+60 s en `starting` antes de relanzarlo.
 
 `POST /api/onboard/public/infisical-start` recibe `{token}`, resuelve el usuario
 con `stepUser`, deduplica un job fresco y escribe sincrónicamente `starting`

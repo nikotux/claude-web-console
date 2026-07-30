@@ -401,3 +401,15 @@ clon del workspace; si alguno falla, el título se degrada a
   vacío unos segundos tras caer el splash. No agrega velocidad real: es
   percepción; la espera del HTML inicial solo la mejora cache/compresión
   (pendiente).
+
+- Toda página PÚBLICA (`login.html`, `onboard.html`) solo puede depender de
+  assets registrados a mano en `src/server.js` ANTES del gate de auth. La
+  trampa concreta fue que `onboard.js`, aunque público, hacía
+  `await import('/js/ui/i18n.js')` en su primera línea y ese módulo no era
+  público: el 401 rechazaba la promesa del IIFE, el wizard no renderizaba y
+  quedaba una tarjeta vacía sobre fondo negro. No se detectó antes porque en un
+  navegador CON sesión el import atraviesa el gate y todo se ve bien; el bug
+  solo aparece sin cookie, justo el estado del único público real del
+  onboarding, un usuario nuevo. Regla: probar `/onboard` y `/login` SIEMPRE en
+  un contexto limpio (ventana privada o contexto nuevo de Playwright), nunca
+  en la pestaña donde ya estás logueado.

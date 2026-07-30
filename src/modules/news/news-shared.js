@@ -222,6 +222,30 @@ export function newsJobResult(job) {
   return result;
 }
 
+// El front se re-engancha por polling al estado persistido en disco, no a una
+// variable de memoria que desaparece al cerrar el panel.
+export function findRunningNewsJob() {
+  let files;
+  try {
+    files = fs.readdirSync(JOBS_DIR);
+  } catch {
+    return null;
+  }
+
+  let latest = null;
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    const id = file.slice(0, -'.json'.length);
+    if (!NEWS_ID_RE.test(id)) continue;
+    const job = readNewsJob(id);
+    if (!job) continue;
+    const startedAt = Number(job.startedAt) || 0;
+    if (job.status !== 'running' || Date.now() - startedAt > NEWS_STALE_MS) continue;
+    if (!latest || startedAt > latest.startedAt) latest = { id, startedAt };
+  }
+  return latest;
+}
+
 export function spawnNewsRunner(jobId) {
   ensureJobsDir();
   fs.mkdirSync(path.dirname(NEWS_LOG_FILE), { recursive: true, mode: 0o700 });

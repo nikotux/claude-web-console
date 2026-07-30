@@ -10,6 +10,7 @@ import {
   ROOT,
   NEWS_ID_RE,
   deleteEntry,
+  findRunningNewsJob,
   newsJobResult,
   parseNewsGitLog,
   readNews,
@@ -94,18 +95,41 @@ async function generationInput() {
   };
 }
 
+async function pendingCommitCount() {
+  try {
+    const since = latestAutoCommit(readNews());
+    const out = since
+      ? await git(['rev-list', '--count', `${since}..HEAD`])
+      : await git(['rev-list', '--count', '-n', '10', 'HEAD']);
+    return Number(out) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export default {
   name: 'news',
 
   registerHttp(router) {
-    router.get('/news', (req, res) => {
+    router.get('/news', async (req, res) => {
       const key = principalKey(req);
       if (!key) return res.status(401).json({ error: 'No autorizado.' });
       const admin = isAdmin(req);
       const lastSeen = Number(readSeen()[key] || 0);
       const entries = readNews().filter((entry) => admin || entry.hidden !== true);
       const unread = entries.filter((entry) => Number(entry.createdAt || 0) > lastSeen).length;
-      res.json({ entries, unread, lastSeen, isAdmin: admin });
+      let job = null;
+      let pending = 0;
+      if (admin) {
+        try {
+          job = findRunningNewsJob();
+          pending = await pendingCommitCount();
+        } catch {
+          job = null;
+          pending = 0;
+        }
+      }
+      res.json({ entries, unread, lastSeen, isAdmin: admin, job, pending });
     });
 
     router.post('/news/seen', (req, res) => {

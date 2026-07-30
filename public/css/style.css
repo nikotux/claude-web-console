@@ -1744,6 +1744,7 @@ html, body {
   background: var(--peer-bg); color: var(--cwc-text);
   border: 1px solid color-mix(in srgb, var(--peer-tone) 28%, var(--cwc-border));
   border-bottom-left-radius: var(--cwc-radius-sm);
+  transition: background-color .6s ease;
 }
 .chat-say--own {
   align-self: flex-end;
@@ -1813,6 +1814,27 @@ html, body {
 .chat-say-group-head time { color: var(--cwc-text-dim); font-weight: 400; }
 .chat-say--cont { margin-top: -.05rem; }
 .chat-say--cont .chat-say-label { display: none; }
+.chat-quote {
+  display: flex; align-items: baseline; gap: .3rem; min-width: 0;
+  margin-bottom: .2rem; padding: .12rem .3rem;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  border-left: 2px solid var(--peer-tone);
+  background: color-mix(in srgb, var(--peer-tone) 7%, transparent);
+  color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); line-height: 1.25;
+}
+.chat-quote-author {
+  flex: none; color: var(--peer-tone); font-weight: 600;
+}
+.chat-quote-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-quote--link { cursor: pointer; }
+.chat-quote--link:focus-visible {
+  outline: 1px solid var(--cwc-accent); outline-offset: 1px;
+}
+.chat-say--flash {
+  background: color-mix(in srgb, var(--cwc-accent) 28%, var(--peer-bg));
+}
 .chat-reacts {
   display: flex; flex-wrap: wrap; align-items: center; gap: .18rem;
   min-height: 1.15rem; margin-top: .18rem;
@@ -1843,6 +1865,15 @@ html, body {
   color: var(--cwc-text); opacity: 1;
   background: color-mix(in srgb, var(--cwc-accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--cwc-accent) 45%, var(--cwc-border));
+}
+.chat-react--reply {
+  min-width: 1.15rem; padding: 0;
+  color: var(--cwc-text-dim); background: transparent; border-color: transparent;
+}
+.chat-react--reply:hover, .chat-react--reply:focus-visible {
+  color: var(--cwc-accent);
+  background: color-mix(in srgb, var(--cwc-accent) 10%, transparent);
+  border-color: transparent;
 }
 .chat-react:focus-visible {
   outline: 1px solid var(--cwc-accent); outline-offset: 1px;
@@ -1990,6 +2021,22 @@ html, body {
 }
 .chat-pending-prompt .chat-pending-prompt-dismiss {
   flex: none; padding: .12rem .3rem; color: var(--cwc-accent);
+}
+.chat-replybar {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .25rem .7rem;
+  border-top: 1px solid color-mix(in srgb, var(--cwc-accent) 24%, var(--cwc-border));
+  background: color-mix(in srgb, var(--cwc-accent) 8%, var(--cwc-bg-panel));
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs);
+}
+.chat-replybar-copy {
+  display: flex; align-items: baseline; gap: .3rem; min-width: 0; flex: 1;
+}
+.chat-replybar-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-replybar-dismiss {
+  flex: none; margin-left: auto; color: var(--cwc-text-dim);
 }
 /* Móvil: burbujas a pantalla (casi) completa. Los topes de arriba (90%/75%)
    son para paneles ANCHOS de desktop — en un teléfono regalaban ~35px a la
