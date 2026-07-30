@@ -101,6 +101,14 @@
   --cwc-model-codex: #3ec9c0;
   --cwc-model-unknown: #8a8a8a;
 
+  /* ===== Panel raw del chat (estética "Matrix" del detalle de herramientas).
+         Vive acá y no suelto en style.css porque style.css es compartido y la
+         regla del repo es cero hex fuera de este archivo. La página /raw tiene
+         su propia paleta en raw.css: es standalone y es otra excepción. ===== */
+  --cwc-matrix-bg: #010402;
+  --cwc-matrix-fg: #3cff6e;
+  --cwc-matrix-dim: #0f4a24;
+
   /* ===== Escala tipográfica ÚNICA (5 tamaños; nada fuera de esta escala
          salvo texto decorativo dentro de íconos) ===== */
   --cwc-fs-xs: .7rem;    /* metadatos, subtítulos de fila, pies */

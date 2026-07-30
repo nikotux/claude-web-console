@@ -65,6 +65,7 @@ import { config } from '../../core/config.js';
 import { principalOf } from '../../core/auth.js';
 import { listUsers } from '../../core/users.js';
 import { padContextForUser } from '../../core/pad-context.js';
+import { createItem, getItem, updateItem, isAvailable } from '../../core/pad-service-client.js';
 import { clampToHome, clampToRoot } from '../../core/paths.js';
 import { userFileRoot, userClaudeDir, userDataDir, userSpace, hostUser, hasCodexCreds } from '../../core/user-space.js';
 import { readPrefs } from '../../core/user-prefs.js';
@@ -75,6 +76,7 @@ import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { worldLabelFor } from '../../core/worlds.js';
 import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
+import { projectsFor } from '../projects/index.js';
 import { queueRetroDistill } from '../retro/shared.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
@@ -95,8 +97,10 @@ import {
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
 import {
-  appendSay, appendCut, appendOrigin, readSala, ensureSala, safeSalaId,
-  MAX_SAY_LEN, MAX_SAY_ATTACHMENTS,
+  appendSay, appendReact, appendCut, appendOrquestado, appendOrigin,
+  readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
+  ADUANA_WORKSPACE, ADUANA_SALAS_COLLECTION,
+  MAX_SAY_LEN, MAX_SAY_ATTACHMENTS, MAX_MENTIONS, REACTIONS,
 } from './aduana.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
@@ -112,6 +116,26 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 const MAX_SESSIONS_PER_USER = Number(process.env.CWC_MAX_SESSIONS_PER_USER) || 20;
 
 const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
+const MENTION_USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+export function parseMentions(text, knownUsers) {
+  const realByLower = new Map();
+  for (const user of Array.isArray(knownUsers) ? knownUsers : []) {
+    const real = String(user ?? '').trim();
+    if (real) realByLower.set(real.toLowerCase(), real);
+  }
+  const mentions = [];
+  const seen = new Set();
+  for (const match of String(text ?? '').matchAll(/@([A-Za-z0-9._-]{1,64})/g)) {
+    const real = realByLower.get(match[1].toLowerCase());
+    const key = real?.toLowerCase();
+    if (!real || seen.has(key)) continue;
+    seen.add(key);
+    mentions.push(real);
+    if (mentions.length >= MAX_MENTIONS) break;
+  }
+  return mentions;
+}
 
 // Respuesta de AskUserQuestion desde el cliente: mapa texto-de-pregunta -> label
 // elegido (string; multiSelect = labels con coma). Se sanea antes de reenviarla
@@ -661,6 +685,10 @@ function writeHandoffManifest(destId, { fromCwd, toCwd, title, task, ref, owner 
 // no como una instrucción de sistema ni como si la hubiera escrito una sola voz.
 export function buildSalaPrompt(items, chat, opts = {}) {
   const participants = 1 + (Array.isArray(chat?.participants) ? chat.participants.length : 0);
+  const validNames = [...new Set([
+    chat?.owner || hostUser(),
+    ...(Array.isArray(chat?.participants) ? chat.participants.map((participant) => participant?.user) : []),
+  ].map((name) => String(name || '').trim()).filter(Boolean))];
   const lines = (Array.isArray(items) ? items : [])
     .map((item) => {
       const text = String(item?.text || '');
@@ -689,6 +717,9 @@ export function buildSalaPrompt(items, chat, opts = {}) {
     '',
     ...(overflowNote ? [overflowNote] : []),
     'Respondé al hilo. Si te dirigís a alguien en particular, nombralo.',
+    'La PRIMERA línea de tu respuesta debe ser exactamente `@para: <nombres separados por coma>`, o `@para: todos` si le hablás a toda la sala.',
+    `Nombres válidos (usá estos exactos, no inventes variantes): ${validNames.join(', ')}.`,
+    'Esa línea es METADATO: el sistema la procesa para colorear la respuesta y no se le muestra a nadie. No la omitas ni repitas los nombres por cortesía; después seguí con tu respuesta normal.',
   ].join('\n');
 }
 
@@ -760,14 +791,17 @@ class Chat {
     this.closed = false;      // conversación terminada de verdad (cerrada por el usuario)
     this.archived = false;    // F3: aparcada (revivible) — no borrada. Handoff archiva el origen; también manual. Persiste, no spawnea motor, no la poda el reaper.
     this._pendingHandoffNote = null; // F2: manifiesto a inyectar UNA vez en el 1er turno del destino tras un handoff (efímero, no persiste)
+    this.pendingPrompt = null; // Aduana: texto esperando visado humano en el composer; persiste hasta enviar o descartar
     this.tolkienEnv = null;
     this._lastEnvTouch = 0;
     this._provisioningEnv = false;
     this.packageRef = null;   // F2(b): ref ESTABLE del paquete-sesión (PKG-<n>) — sobrevive a los moves (el mundo cambia, el ref no). Lo asigna create(); persiste.
+    this.salaPadRef = null;   // Aduana v3: ref SALA-<n> del ítem-sol de esta sala. Persiste para no duplicarlo al reiniciar.
     this.limbo = false;       // 🌗 SESIÓN-LIMBO (Regla 13): sesión de ALTO RIESGO con herramientas de ambos mundos (la lanza el dashboard Seguimientos). La marca create({limbo:true}); persiste → grupo "Limbo" en Sesiones.
     this.owner = null;        // multi-tenant (N6): username del usuario dueño (de principalOf al crear). null = host/admin. Persiste. Gobierna el aislamiento del runner (runner-link.spawnRunner).
     this.participants = [];   // 🛃 Aduana: [{user, role}] de los INVITADOS. El dueño NO está acá (es this.owner). Persiste.
     this._sinceCut = [];      // mensajes humanos desde el último corte (buffer del próximo turno)
+    this._reactions = new Map(); // agregado msgId -> { emoji: [usuarios] }
     this._cutPending = null;  // corte pedido con la IA ocupada; se despacha al volver a 'waiting'
     this._lastCutBy = null;   // quién disparó el turno en curso (gobierna interrumpir y responder permisos)
     this._spawnedTandem = false; // flag real del runner adoptado/spawneado; nunca debe quedar undefined tras rehydrate
@@ -781,6 +815,8 @@ class Chat {
     this.link = null;        // RunnerLink al runner (motor desacoplado)
     this._spawnPid = null;    // pid efímero para liberar después el spawn-lock propio (BUG-504)
     this._engineP = null;     // promesa del arranque en curso (dedup)
+    this._salaPadItemP = null; // promesa de alta/sync del ítem-sol en curso (dedup; no persiste)
+    this._salaPadCloseP = null; // cierre del ítem-sol en curso (dedup; no persiste)
     this._engineStopping = false; // cierre esperado (traspaso/sueño pedido): no anunciar 'closed'
     this._engineWaiters = [];     // callbacks al morir el motor (traspaso a TUI)
     this._pendingModelAuto = [];  // COLA FIFO de flags auto por set_model en vuelo (BUG-24)
@@ -814,12 +850,138 @@ class Chat {
     // Throttle del clasificador relativo: no reclasificar si ya se clasificó
     // hace poco con el mismo nivel vigente (reduce llamadas + volatilidad).
     this._routerClassifyThrottle = 0;
+    this._reads = null; // caché lazy de reads.json; writeRead la refresca
   }
 
   // Un chat es SALA si su cwd cae en el mundo Aduana. El salaId es el basename,
   // porque la sala vive en <ADUANA_ROOT>/<salaId> (contrato de aduana.js).
   _salaId() { return worldLabelFor(this.cwd) === 'Aduana' ? path.basename(this.cwd) : null; }
   isSala() { return !!this._salaId(); }
+
+  async ensureSalaPadItem() {
+    if (!this.isSala()) return null;
+    if (this._salaPadItemP) return this._salaPadItemP;
+
+    const opts = { workspace: ADUANA_WORKSPACE };
+    this._salaPadItemP = (async () => {
+      try {
+        if (!await isAvailable(opts)) {
+          console.warn(`[chat] Pad no disponible; la sala ${this.id} sigue sin sincronizar su ítem-sol.`);
+          return null;
+        }
+
+        const salaId = this._salaId();
+        const title = this.title || salaId;
+        const participantes = this.participants
+          .map((participant) => String(participant?.user || '').trim())
+          .filter(Boolean);
+
+        if (this.salaPadRef) {
+          const current = await getItem(this.salaPadRef, opts);
+          if (!current.ok) throw new Error(current.error || `no se pudo leer ${this.salaPadRef}`);
+          const currentFields = current.data?.fields;
+          if (!currentFields || typeof currentFields !== 'object' || Array.isArray(currentFields)) {
+            throw new Error(`${this.salaPadRef} no devolvió un objeto fields válido`);
+          }
+          const updated = await updateItem(this.salaPadRef, {
+            title,
+            fields: {
+              ...currentFields,
+              chatId: this.id,
+              participantes,
+            },
+          }, opts);
+          if (!updated.ok) throw new Error(updated.error || `no se pudo actualizar ${this.salaPadRef}`);
+          return this.salaPadRef;
+        }
+
+        const created = await createItem(ADUANA_SALAS_COLLECTION, {
+          title,
+          fields: {
+            status: 'activa',
+            salaId,
+            chatId: this.id,
+            anfitrion: this.owner || hostUser(),
+            participantes,
+          },
+        }, opts);
+        const ref = created?.data?.ref;
+        if (!created.ok || !ref) throw new Error(created.error || 'Pad respondió sin ref para la sala');
+        this.salaPadRef = ref;
+        this.onUpdate?.();
+        return ref;
+      } catch (err) {
+        console.error(`[chat] no pude sincronizar el ítem-sol de la sala ${this.id}:`, err?.message || err);
+        return null;
+      }
+    })().finally(() => {
+      this._salaPadItemP = null;
+    });
+    return this._salaPadItemP;
+  }
+
+  async closeSalaPadItem() {
+    if (!this.isSala()) return null;
+    if (this._salaPadCloseP) return this._salaPadCloseP;
+
+    const opts = { workspace: ADUANA_WORKSPACE };
+    this._salaPadCloseP = (async () => {
+      try {
+        if (this._salaPadItemP) await this._salaPadItemP;
+        if (!this.salaPadRef) return null;
+        if (!await isAvailable(opts)) {
+          console.warn(`[chat] Pad no disponible; no pude cerrar el ítem-sol ${this.salaPadRef}.`);
+          return null;
+        }
+        const current = await getItem(this.salaPadRef, opts);
+        if (!current.ok) throw new Error(current.error || `no se pudo leer ${this.salaPadRef}`);
+        const currentFields = current.data?.fields;
+        if (!currentFields || typeof currentFields !== 'object' || Array.isArray(currentFields)) {
+          throw new Error(`${this.salaPadRef} no devolvió un objeto fields válido`);
+        }
+        const updated = await updateItem(this.salaPadRef, {
+          fields: { ...currentFields, status: 'cerrada' },
+        }, opts);
+        if (!updated.ok) throw new Error(updated.error || `no se pudo cerrar ${this.salaPadRef}`);
+        return this.salaPadRef;
+      } catch (err) {
+        console.error(`[chat] no pude cerrar el ítem-sol de la sala ${this.id}:`, err?.message || err);
+        return null;
+      }
+    })().finally(() => {
+      this._salaPadCloseP = null;
+    });
+    return this._salaPadCloseP;
+  }
+
+  _salaUsers() {
+    return [...new Set([
+      this.owner || hostUser(),
+      ...this.participants.map((participant) => participant?.user),
+    ].map((username) => String(username || '').trim()).filter(Boolean))];
+  }
+
+  salaUnreadFor(username) {
+    const user = typeof username === 'string' ? username.trim() : '';
+    if (!this.isSala() || !MENTION_USERNAME_RE.test(user)) return { count: 0, mentions: 0, lastTs: 0 };
+    if (!this._reads) {
+      try { this._reads = readReads(this._salaId()); }
+      catch { this._reads = {}; }
+    }
+    const mark = Number(this._reads[user]) || 0;
+    let count = 0;
+    let mentions = 0;
+    let lastTs = 0;
+    for (const event of this.history) {
+      if (event?.type !== 'say') continue;
+      const eventTs = Number(event.ts) || 0;
+      lastTs = eventTs;
+      if (eventTs <= mark || event.by === user) continue;
+      count += 1;
+      if (Array.isArray(event.mentions) && event.mentions.includes(user)) mentions += 1;
+    }
+    return { count, mentions, lastTs };
+  }
 
   // El DUEÑO siempre participa; un invitado, si está en participants.
   // Se normaliza con hostUser() porque los chats legacy tienen owner:null = host.
@@ -832,13 +994,16 @@ class Chat {
   addParticipant(user, role = 'writer') {
     if (this.participants.some((p) => p.user === user)) return false;
     this.participants.push({ user, role });
+    void this.ensureSalaPadItem();
     return true;
   }
 
   removeParticipant(user) {
     const before = this.participants.length;
     this.participants = this.participants.filter((p) => p.user !== user);
-    return this.participants.length !== before;
+    const changed = this.participants.length !== before;
+    if (changed) void this.ensureSalaPadItem();
+    return changed;
   }
 
   // El transcript del SDK NO conoce los mensajes humanos, y sala.jsonl no conoce
@@ -867,6 +1032,8 @@ class Chat {
     }
 
     const rebuilt = [...preamble];
+    const reactions = reactionsFromRecords(recs);
+    this._reactions = reactions;
     let turnIndex = 0;
     let sinceCut = [];
     for (const rec of recs) {
@@ -885,19 +1052,46 @@ class Chat {
           fromWorld: rec.fromWorld,
         });
       } else if (rec?.t === 'say') {
+        const id = sayId(rec);
         const say = {
           type: 'say',
+          id,
           by: rec.by,
           text: rec.text,
           ts: rec.ts,
+          reactions: reactions.get(id) || {},
           ...(Array.isArray(rec.attachments) && rec.attachments.length
             ? { attachments: rec.attachments }
+            : {}),
+          ...(Array.isArray(rec.mentions) && rec.mentions.length
+            ? { mentions: rec.mentions }
             : {}),
         };
         rebuilt.push(say);
         sinceCut.push(say);
+      } else if (rec?.t === 'react') {
+        // Se pliega sobre su `say`: una reacción no toca el buzón ni avanza
+        // turnIndex. Los `cut` siguen siendo las únicas anclas del transcript.
+        continue;
+      } else if (rec?.t === 'orquestado') {
+        // Marca informativa: no entra al buzón humano ni consume un turno del
+        // transcript. Los `cut` siguen siendo las únicas anclas de alineación.
+        rebuilt.push({
+          type: 'orquestado',
+          by: rec.by,
+          ts: rec.ts,
+          world: rec.world,
+          chatId: rec.chatId,
+          snippet: rec.snippet,
+        });
       } else if (rec?.t === 'cut') {
-        rebuilt.push({ type: 'cut', by: rec.by, ts: rec.ts, count: rec.count });
+        rebuilt.push({
+          type: 'cut',
+          by: rec.by,
+          ts: rec.ts,
+          count: rec.count,
+          ...(Array.isArray(rec.authors) && rec.authors.length ? { authors: rec.authors } : {}),
+        });
         sinceCut = [];
         if (turnIndex < turns.length) rebuilt.push(...turns[turnIndex]);
         turnIndex += 1;
@@ -1404,6 +1598,8 @@ class Chat {
     await this._ensureEngine();
     // Reenviar el history recargado + anunciar el nuevo modo. Payload COMPLETO
     // (BUG-495): conserva los banderines de modelo/mundo en el header.
+    // No lleva unread/mentions: este respawn se reenvía a todos y la marca visual
+    // de mensajes nuevos solo corresponde al attach inicial de cada usuario.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify(this._historyPayload()));
@@ -1475,6 +1671,8 @@ class Chat {
     // Reenviar el history recargado a los clientes conectados + anunciar la
     // reapertura (mismo patrón que _toChat). Payload COMPLETO (BUG-495): sin él
     // el header perdía los banderines de modelo y mundo al reabrir.
+    // No lleva unread/mentions: este respawn se reenvía a todos y la marca visual
+    // de mensajes nuevos solo corresponde al attach inicial de cada usuario.
     for (const ws of this.clients) {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify(this._historyPayload()));
@@ -1501,19 +1699,78 @@ class Chat {
     const t = String(text || '').trim();
     const atts = existingAttachments(this.id, attachments);
     if (!t && !atts.length) return null;
+    const mentions = parseMentions(t, this._salaUsers());
+    const ts = Date.now();
     const rec = {
       type: 'say',
+      id: `m${ts.toString(36)}-${Math.random().toString(36).slice(2, 6).padEnd(4, '0')}`,
       by: String(by || hostUser()),
       text: t.slice(0, MAX_SAY_LEN),
-      ts: Date.now(),
+      ts,
+      reactions: {},
       ...(atts.length ? { attachments: atts } : {}),
+      ...(mentions.length ? { mentions } : {}),
     };
-    this.lastActivity = Date.now();
+    this.lastActivity = rec.ts;
     this._push(rec);            // history + broadcast a TODOS los adjuntos
     this._sinceCut.push(rec);   // entra en el próximo corte
     try {
-      appendSay(this._salaId(), { by: rec.by, text: rec.text, ts: rec.ts, attachments: atts });
+      appendSay(this._salaId(), {
+        id: rec.id,
+        by: rec.by,
+        text: rec.text,
+        ts: rec.ts,
+        attachments: atts,
+        mentions,
+      });
     } catch { /* best-effort */ }
+    this.onUpdate?.();
+    return rec;
+  }
+
+  react({ by, msgId, emoji }) {
+    if (this.closed || !this.isSala() || !REACTIONS.includes(emoji)) return null;
+    const user = typeof by === 'string' ? by.trim() : '';
+    const target = typeof msgId === 'string' ? msgId.trim() : '';
+    if (!user || user.length > 80 || !target || target.length > 128) return null;
+
+    const current = this._reactions.get(target) || {};
+    const users = Array.isArray(current[emoji]) ? current[emoji] : [];
+    const off = users.includes(user);
+    const nextUsers = off ? users.filter((name) => name !== user) : [...users, user];
+    const next = { ...current };
+    if (nextUsers.length) next[emoji] = nextUsers;
+    else delete next[emoji];
+    if (Object.keys(next).length) this._reactions.set(target, next);
+    else this._reactions.delete(target);
+
+    for (const event of this.history) {
+      if (event?.type === 'say' && event.id === target) event.reactions = next;
+    }
+
+    const rec = { type: 'react', msgId: target, emoji, by: user, off, ts: Date.now() };
+    this.lastActivity = rec.ts;
+    // Deliberadamente NO entra a `_sinceCut`: una reacción jamás debe viajar
+    // al modelo ni volver a cobrarse como contexto en los turnos siguientes.
+    this._broadcast(rec);
+    try { appendReact(this._salaId(), rec); } catch { /* best-effort */ }
+    this.onUpdate?.();
+    return rec;
+  }
+
+  orquestado({ by, world, chatId, snippet }) {
+    if (this.closed || !this.isSala()) return null;
+    const rec = {
+      type: 'orquestado',
+      by: String(by || hostUser()).trim().slice(0, 80),
+      ts: Date.now(),
+      world: String(world || '').trim().slice(0, 40),
+      chatId: String(chatId || '').trim().slice(0, 64),
+      snippet: String(snippet || '').trim().slice(0, 200),
+    };
+    this.lastActivity = rec.ts;
+    this._push(rec);
+    try { appendOrquestado(this._salaId(), rec); } catch { /* best-effort */ }
     this.onUpdate?.();
     return rec;
   }
@@ -1535,6 +1792,7 @@ class Chat {
 
   _dispatchCut(by) {
     const items = this._sinceCut.splice(0); // vaciar ANTES de despachar: hace el corte idempotente
+    const authors = [...new Set(items.map((item) => String(item?.by || '')).filter(Boolean))];
     const cutAtts = [];
     let dropped = 0;
     // Cada `say` ya pasó por disco; acá solo se impone el límite conjunto porque
@@ -1545,9 +1803,9 @@ class Chat {
         else dropped += 1;
       }
     }
-    const rec = { type: 'cut', by, ts: Date.now(), count: items.length };
+    const rec = { type: 'cut', by, ts: Date.now(), count: items.length, authors };
     this._push(rec);
-    try { appendCut(this._salaId(), { by, ts: rec.ts, count: items.length }); } catch { /* best-effort */ }
+    try { appendCut(this._salaId(), { by, ts: rec.ts, count: items.length, authors }); } catch { /* best-effort */ }
     this._lastCutBy = by;
     this._setStatus('working');
     const prompt = buildSalaPrompt(items, this, { droppedAttachments: dropped });
@@ -1876,6 +2134,7 @@ class Chat {
         if (!title || this.closed || title === this.title) return;
         this.title = title;
         this.onUpdate?.(); // persiste vía el manager (mismo camino que el resto)
+        void this.ensureSalaPadItem();
       })
       .catch(() => { /* mejor conservar el título viejo que molestar el turno */ })
       .finally(() => { this._titleBusy = false; });
@@ -2094,6 +2353,7 @@ class Chat {
   }
 
   close() {
+    void this.closeSalaPadItem();
     try {
       trashChat({
         chatId: this.id,
@@ -2245,6 +2505,12 @@ class Chat {
     return { ok: true };
   }
 
+  clearPendingPrompt() {
+    this.pendingPrompt = null;
+    this.onUpdate?.();
+    return { ok: true };
+  }
+
   // F2(b): refleja el estado ACTUAL del paquete-sesión en el registro durable
   // (packages.js). Se llama en los eventos de ciclo de vida (create/move/archive/
   // revive/close) — no en el hot path. `status` derivado si no se pasa. Best-effort.
@@ -2331,7 +2597,9 @@ class Chat {
       participants: this.participants.map((p) => ({ user: p.user, role: p.role })),
       isSala: this.isSala(),
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
+      salaPadRef: this.salaPadRef,
       tolkienEnv: this.tolkienEnv || null,
+      pendingPrompt: this.pendingPrompt,
       ...extra,
     };
   }
@@ -2339,7 +2607,12 @@ class Chat {
   attach(ws) {
     this.lastActivity = Date.now(); // abrir la vista cuenta como actividad
     this.clients.add(ws);
-    ws.send(JSON.stringify(this._historyPayload()));
+    let extra;
+    if (this.isSala() && ws._cwcUser) {
+      const unread = this.salaUnreadFor(ws._cwcUser);
+      extra = { salaUnread: unread.count, salaMentions: unread.mentions };
+    }
+    ws.send(JSON.stringify(this._historyPayload(extra)));
   }
 
   detach(ws) { this.clients.delete(ws); }
@@ -2357,6 +2630,7 @@ class Chat {
       mode: this.permissionMode, status: this.status, alive: this.alive,
       archived: this.archived, // F3: aparcada revivible (el front la agrupa en "Archivados")
       packageRef: this.packageRef, // F2(b): ref estable del paquete-sesión (PKG-<n>)
+      salaPadRef: this.salaPadRef,
       limbo: this.limbo, // 🌗 sesión-Limbo → grupo "Limbo" (alto riesgo) en Sesiones
       owner: this.owner || null, // multi-tenant (N6)
       participants: this.participants.map((p) => ({ user: p.user, role: p.role })),
@@ -2408,8 +2682,9 @@ class ChatManager {
         // Dormidas sin uso 24 h: recién ahí se descarta la tarjeta (la
         // conversación sigue retomable desde el lanzador vía transcript). Las
         // ARCHIVADAS (F3) NO se podan: son revivibles a propósito (feedback días
-        // después) — sobreviven hasta que el usuario las cierre a mano.
-        if (!c.closed && !c.archived && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
+        // después), y una instrucción de Aduana pendiente tampoco: todavía no
+        // tiene transcript desde el cual recuperarse. Sobreviven hasta el visado.
+        if (!c.closed && !c.archived && !c.pendingPrompt && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
           c.close();
           this.chats.delete(id);
           dirty = true;
@@ -2450,7 +2725,7 @@ class ChatManager {
     }
   }
 
-  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, limbo = false, owner = null }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, limbo = false, owner = null, pendingPrompt = null, startEngine = true }) {
     const id = `c${process.pid}-${++this._seq}`;
     // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
     // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
@@ -2467,12 +2742,14 @@ class ChatManager {
     chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(id);
     // El dueño debe fijarse antes de crear el paquete: nextPackageRef lo persiste.
     chat.owner = owner || null; // multi-tenant (N6): dueño de la conversación → aislamiento del runner
+    chat.pendingPrompt = typeof pendingPrompt === 'string' && pendingPrompt ? pendingPrompt : null;
     chat.packageRef = nextPackageRef(chat.owner); // F2(b): ref estable del paquete (sobrevive moves)
     chat.limbo = !!limbo; // 🌗 sesión-Limbo (alto riesgo, ambos mundos) — dashboard Seguimientos
     chat._syncPackage('active', 'created');
-    chat.start();
+    if (startEngine) chat.start();
     this.chats.set(id, chat);
     this.persist();
+    if (chat.isSala()) void chat.ensureSalaPadItem();
     return chat;
   }
 
@@ -2549,6 +2826,8 @@ class ChatManager {
     chat._setStatus('waiting');
     // 6. Avisar a los clientes abiertos: recargar history + anunciar el mundo nuevo.
     //    Payload COMPLETO (BUG-495): el header del destino nace con modelo+mundo.
+    // No lleva unread/mentions: este respawn se reenvía a todos y la marca visual
+    // de mensajes nuevos solo corresponde al attach inicial de cada usuario.
     for (const ws of chat.clients) {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify(chat._historyPayload()));
@@ -2609,6 +2888,7 @@ class ChatManager {
       }
     }
     this.persist();
+    void chat.ensureSalaPadItem();
     return { ok: true, chat: chat.info(), salaId };
   }
 
@@ -2761,11 +3041,13 @@ class ChatManager {
         sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
         packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
+        salaPadRef: c.salaPadRef || null,
         limbo: c.limbo || false, // 🌗 sesión-Limbo (alto riesgo)
         owner: c.owner || null, // multi-tenant (N6)
         participants: Array.isArray(c.participants) ? c.participants : [],
         ticket: c.ticket || null,
         learningId: c.learningId || null,
+        pendingPrompt: c.pendingPrompt || null,
         tolkienEnv: c.tolkienEnv || null,
         // AutoTux: QUÉ ELIGIÓ la persona (separado de `model`, el real). Se
         // persiste explícito porque `model` solo no alcanza para distinguir
@@ -2821,9 +3103,11 @@ class ChatManager {
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
+      chat.pendingPrompt = typeof s.pendingPrompt === 'string' && s.pendingPrompt ? s.pendingPrompt : null;
       chat.lastActivity = s.lastActivity || Date.now();
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
+      if (s.salaPadRef) chat.salaPadRef = s.salaPadRef;
       if (s.tolkienEnv) chat.tolkienEnv = s.tolkienEnv;
       chat.owner = s.owner || null; // multi-tenant (N6)
       chat.participants = Array.isArray(s.participants) ? s.participants : [];
@@ -2907,6 +3191,9 @@ class ChatManager {
       }, 30 * 60 * 1000).unref?.();
     }
     if (adoptedRunnerTandem) this.persist();
+    for (const chat of this.chats.values()) {
+      if (chat.isSala()) void chat.ensureSalaPadItem();
+    }
     this._cleanupOrphans();
     return count;
   }
@@ -2974,6 +3261,11 @@ class ChatManager {
       const info = c.info();
       info.pendingPermsCount = (info.pendingPerms || []).length;
       info.pendingInterfonoCount = (info.pendingInterfono || []).length;
+      if (c.isSala() && c.isParticipant(me)) {
+        const unread = c.salaUnreadFor(me);
+        info.salaUnread = unread.count;
+        info.salaMentions = unread.mentions;
+      }
       // Compartido ≠ ajeno: solo se abren los pendientes de la sala en la que
       // SÍ participás; un admin no participante sigue sin ver ni responder los
       // permisos de un chat ajeno (aislamiento del 2026-07-27).
@@ -3017,6 +3309,119 @@ function participantChat(req, id) {
   if (p.admin) return chat;
   return chat.isParticipant(p.username) ? chat : null;
 }
+
+// Camino único de creación HTTP. `/create` y la salida visada de Aduana pasan
+// por las mismas validaciones, defaults por usuario, cupo y aislamiento de cwd.
+// Las opciones extra son internas: ningún body público puede evitar el arranque
+// normal del motor ni inyectar un pendingPrompt por su cuenta.
+function createChatForRequest(req, res, body = {}, { pendingPrompt = null, startEngine = true } = {}) {
+  const { cwd, model, permissionMode, resume, title, ticket, learningId } = body || {};
+  // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
+  // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
+  // reconoce Claude Code). 'tandem' es otro sentinel propio (PLAN-507).
+  if (model != null && model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) {
+    res.status(400).json({ error: 'Modelo inválido.' });
+    return null;
+  }
+  if (permissionMode != null && !PERMISSION_MODES.has(permissionMode)) {
+    res.status(400).json({ error: 'Modo de permisos inválido.' });
+    return null;
+  }
+  if (resume != null && !UUID_RE.test(resume)) {
+    res.status(400).json({ error: 'Sesión a retomar inválida.' });
+    return null;
+  }
+  const principal = principalOf(req);
+  const owner = principal.username;
+  const cwdAbs = safeCwd(cwd, owner);
+  try {
+    if (!fss.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
+  } catch {
+    console.warn('[chat] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
+    const requested = typeof cwd === 'string' ? cwd.trim() : '';
+    const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
+    res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
+    return null;
+  }
+  // SP9-5 (TASK-671): tope de sesiones vivas por-usuario (admin exento).
+  if (!principal.admin) {
+    const live = manager.countLiveByOwner(owner);
+    if (live >= MAX_SESSIONS_PER_USER) {
+      res.status(429).json({ error: `Llegaste al máximo de ${MAX_SESSIONS_PER_USER} sesiones abiertas. Cerrá o archivá alguna para abrir otra.` });
+      return null;
+    }
+  }
+  const prefs = readPrefs(owner);
+  // Default per-user cuando el body NO especifica (el body explícito gana).
+  let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'tandem');
+  if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'tandem';
+  // BUG-1875 — Tándem sin ejecutor Codex es un default roto para un inquilino;
+  // degradar a AutoTux evita fallar en la primera delegación. Tándem se puede elegir a mano igual.
+  if (modelChoice === 'tandem' && !hasCodexCreds(owner || hostUser())) {
+    console.warn(`[BUG-1875] Usuario ${owner || hostUser()} sin credencial Codex; el chat nuevo degrada de Tándem a AutoTux.`);
+    modelChoice = 'auto';
+  }
+  const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
+  const chat = manager.create({
+    cwd: cwdAbs,
+    model: modelChoice,
+    permissionMode: modeChoice,
+    resume: resume || null,
+    title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
+    // Vínculo al bug de Desk: al cerrar la conversación deja el registro
+    // del fix propuesto (módulo bugfixes).
+    ticket: ticket?.number
+      ? { number: String(ticket.number).slice(0, 40), url: /^https?:\/\//.test(ticket.url || '') ? String(ticket.url).slice(0, 400) : null }
+      : null,
+    // Vínculo a un tema de Aprendizaje: al cerrar el chat "Profundizar",
+    // deja un resumen como entrada 'chat' del tema (write-back, módulo learning).
+    learningId: /^TDA-\d+$/.test(String(learningId || '')) ? String(learningId) : null,
+    owner,
+    pendingPrompt,
+    startEngine,
+  });
+  // Default de effort per-user: sólo para modelo FIJO (auto/tandem lo manejan solos).
+  if (prefs.defaultEffort && prefs.defaultEffort !== 'auto' && modelChoice !== 'auto' && modelChoice !== 'tandem') {
+    try { chat.setEffort(prefs.defaultEffort); } catch { /* best-effort */ }
+  }
+  return chat;
+}
+
+function orchestrationWorldFor(principal, rawWorld) {
+  const world = typeof rawWorld === 'string' ? rawWorld.trim().toLowerCase() : '';
+  const isConsole = world === 'console' || world === 'claude-web-console' || world === 'mi-espacio';
+  if (!isConsole && world !== 'tolkien') {
+    return { error: 'El mundo destino no es válido. Elegí Mi Consola o Tolkien desde el selector.' };
+  }
+
+  let projects;
+  try {
+    projects = projectsFor(principal);
+  } catch {
+    return { error: 'No se pudieron resolver los mundos disponibles para tu usuario. Volvé a iniciar sesión y reintentá.' };
+  }
+  const project = world === 'tolkien'
+    ? projects.tolkien
+    : (projects.console || projects['mi-espacio']);
+  if (!project?.dir) {
+    const label = world === 'tolkien' ? 'Tolkien' : 'Mi Consola';
+    const action = world === 'tolkien'
+      ? 'Terminá la preparación de Tolkien o elegí Mi Consola.'
+      : 'Terminá la preparación de tu espacio y reintentá.';
+    return { error: `${label} no está disponible para tu usuario. ${action}` };
+  }
+
+  try {
+    const cwd = safeCwd(project.dir, principal.username);
+    if (path.resolve(cwd) !== path.resolve(project.dir)) {
+      return { error: 'Ese mundo no pertenece a tu espacio de trabajo. Elegí un destino disponible para tu usuario.' };
+    }
+    return { world: world === 'tolkien' ? 'tolkien' : 'claude-web-console', cwd };
+  } catch {
+    return { error: 'No se pudo validar el mundo destino para tu usuario. Elegí otro destino.' };
+  }
+}
+
 // Expuesto para el dashboard "Seguimientos" (F3): lanzar una SESIÓN de
 // resolución con el contexto de un frente (bucle session-céntrico de PLAN-553).
 // Chat también se exporta para poder verificar el replay de Aduana sin levantar
@@ -3051,78 +3456,25 @@ export default {
     const r = express.Router();
 
     r.post('/create', (req, res) => {
-      const { cwd, model, permissionMode, resume, title, ticket, learningId } = req.body || {};
-      // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
-      // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
-      // reconoce Claude Code). 'tandem' es otro sentinel propio (PLAN-507).
       // DEFAULT DEL SISTEMA = 'tandem' (Niko 2026-07-21): sin `model` en el
       // pedido y sin preferencia per-user, toda conversación nueva arranca en
       // el protocolo Tándem (Opus high razona · Codex gpt-5.6-sol high ejecuta),
       // que probó mejor distribución de carga que AutoTux. La preferencia
       // per-user (defaultModelChoice) sigue ganando sobre este fallback, y el
       // `model` explícito del body gana sobre ambos.
-      if (model != null && model !== 'auto' && model !== 'tandem' && !VALID_MODELS.has(model)) {
-        return res.status(400).json({ error: 'Modelo inválido.' });
-      }
-      if (permissionMode != null && !PERMISSION_MODES.has(permissionMode)) {
-        return res.status(400).json({ error: 'Modo de permisos inválido.' });
-      }
-      if (resume != null && !UUID_RE.test(resume)) {
-        return res.status(400).json({ error: 'Sesión a retomar inválida.' });
-      }
-      const principal = principalOf(req);
-      const owner = principal.username;
-      const cwdAbs = safeCwd(cwd, owner);
-      try {
-        if (!fss.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
-      } catch {
-        console.warn('[chat] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
-        const requested = typeof cwd === 'string' ? cwd.trim() : '';
-        const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
-        return res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
-      }
-      // SP9-5 (TASK-671): tope de sesiones vivas por-usuario (admin exento).
-      if (!principal.admin) {
-        const live = manager.countLiveByOwner(owner);
-        if (live >= MAX_SESSIONS_PER_USER) {
-          return res.status(429).json({ error: `Llegaste al máximo de ${MAX_SESSIONS_PER_USER} sesiones abiertas. Cerrá o archivá alguna para abrir otra.` });
-        }
-      }
-      const prefs = readPrefs(owner);
-      // Default per-user cuando el body NO especifica (el body explícito gana).
-      let modelChoice = (model != null && model !== '') ? model : (prefs.defaultModelChoice || 'tandem');
-      if (!(modelChoice === 'auto' || modelChoice === 'tandem' || VALID_MODELS.has(modelChoice))) modelChoice = 'tandem'; // defensivo
-      // BUG-1875 — Tándem sin ejecutor Codex es un default roto para un inquilino;
-      // degradar a AutoTux evita fallar en la primera delegación. Tándem se puede elegir a mano igual.
-      if (modelChoice === 'tandem' && !hasCodexCreds(owner || hostUser())) {
-        console.warn(`[BUG-1875] Usuario ${owner || hostUser()} sin credencial Codex; el chat nuevo degrada de Tándem a AutoTux.`);
-        modelChoice = 'auto';
-      }
-      const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
-      const chat = manager.create({
-        cwd: cwdAbs,
-        model: modelChoice,
-        permissionMode: modeChoice,
-        resume: resume || null,
-        title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
-        // Vínculo al bug de Desk: al cerrar la conversación deja el registro
-        // del fix propuesto (módulo bugfixes).
-        ticket: ticket?.number
-          ? { number: String(ticket.number).slice(0, 40), url: /^https?:\/\//.test(ticket.url || '') ? String(ticket.url).slice(0, 400) : null }
-          : null,
-        // Vínculo a un tema de Aprendizaje: al cerrar el chat "Profundizar",
-        // deja un resumen como entrada 'chat' del tema (write-back, módulo learning).
-        learningId: /^TDA-\d+$/.test(String(learningId || '')) ? String(learningId) : null,
-        owner,
-      });
-      // Default de effort per-user: sólo para modelo FIJO (auto/tandem lo manejan solos).
-      if (prefs.defaultEffort && prefs.defaultEffort !== 'auto' && modelChoice !== 'auto' && modelChoice !== 'tandem') {
-        try { chat.setEffort(prefs.defaultEffort); } catch { /* best-effort */ }
-      }
+      const chat = createChatForRequest(req, res, req.body);
+      if (!chat) return;
       res.json({ chat: chat.info() });
     });
 
     r.get('/list', (req, res) => res.json({ chats: manager.list(principalOf(req)) }));
+
+    r.post('/pending-prompt/clear', (req, res) => {
+      const chat = ownedChat(req, req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      if (chat.isSala()) return res.status(400).json({ error: 'Una sala de Aduana no tiene un prompt propio para visar.' });
+      res.json(chat.clearPendingPrompt());
+    });
 
     // Colaboración de Aduana: solo el dueño administra la lista de invitados.
     r.get('/collab/candidates', (req, res) => {
@@ -3180,6 +3532,67 @@ export default {
       manager.persist();
       chat._broadcast({ type: 'participants', participants: chat.participants });
       res.json({ ok: true, participants: chat.participants });
+    });
+
+    r.post('/collab/read', (req, res) => {
+      const chat = participantChat(req, req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      if (!chat.isSala()) return res.status(400).json({ error: 'La conversación no es una sala de Aduana.' });
+      const me = principalOf(req).username || hostUser();
+      const requestedTs = req.body?.ts;
+      const ts = typeof requestedTs === 'number' && Number.isFinite(requestedTs) && requestedTs > 0
+        ? requestedTs
+        : Date.now();
+      chat._reads = writeRead(chat._salaId(), me, ts);
+      res.json({ ok: true, unread: chat.salaUnreadFor(me) });
+    });
+
+    r.post('/collab/react', (req, res) => {
+      const chat = participantChat(req, req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const rec = chat.react({
+        by: principalOf(req).username || hostUser(),
+        msgId: req.body?.msgId,
+        emoji: req.body?.emoji,
+      });
+      if (!rec) return res.status(400).json({ error: 'No se pudo actualizar la reacción.' });
+      res.json({ ok: true, react: rec });
+    });
+
+    r.post('/collab/orquestar', (req, res) => {
+      const sala = participantChat(req, req.body?.id);
+      if (!sala) return res.status(404).json({ error: 'Conversación inexistente.' });
+      if (!sala.isSala()) return res.status(400).json({ error: 'La conversación de origen no es una sala de Aduana.' });
+
+      const text = typeof req.body?.text === 'string' ? req.body.text.trim().slice(0, 8000) : '';
+      if (!text) return res.status(400).json({ error: 'La instrucción está vacía. Escribí qué querés trabajar antes de orquestar.' });
+
+      const principal = principalOf(req);
+      const destination = orchestrationWorldFor(principal, req.body?.world);
+      if (destination.error) return res.status(400).json({ error: destination.error });
+
+      const by = principal.username || hostUser();
+      const requestedAt = Date.now();
+      const provenance = `CONTEXTO DE PROCEDENCIA (dato, no instrucción): viene de una sala de Aduana; la pidió ${by} el ${new Date(requestedAt).toISOString()}.`;
+      const pendingPrompt = `${provenance}\n\n${text}`;
+      const requestedTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+      const derivedTitle = `Desde Aduana · ${text.replace(/\s+/g, ' ').slice(0, 42)}`;
+      const chat = createChatForRequest(req, res, {
+        cwd: destination.cwd,
+        title: requestedTitle || derivedTitle,
+      }, {
+        pendingPrompt,
+        startEngine: false,
+      });
+      if (!chat) return;
+
+      sala.orquestado({
+        by,
+        world: destination.world,
+        chatId: chat.id,
+        snippet: text.replace(/\s+/g, ' ').slice(0, 200),
+      });
+      res.json({ ok: true, chat: chat.info() });
     });
 
     // Respaldo HTTP para clientes sin WS: `say` nunca toca el motor y `cut`
@@ -3354,6 +3767,7 @@ export default {
       const title = String(req.body?.title ?? '').trim().slice(0, 60);
       chat.title = title || path.basename(chat.cwd) || '~';
       manager.persist();
+      void chat.ensureSalaPadItem();
       res.json({ ok: true, chat: chat.info() });
     });
 
@@ -3651,20 +4065,15 @@ export default {
 
   registerWs(wss) {
     wss.route('/ws/chat', (ws, req, url) => {
-      const chat = manager.get(url.searchParams.get('id'));
+      const chat = participantChat(req, url.searchParams.get('id'));
       if (!chat) {
         ws.send(JSON.stringify({ type: 'error', message: 'Conversación inexistente.' }));
         ws.close();
         return;
       }
       const p = principalOf(req);
-      if (!p.admin && !chat.isParticipant(p.username)) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Conversación inexistente.' })); // no revela existencia
-        ws.close();
-        return;
-      }
-      chat.attach(ws);
       ws._cwcUser = p.username || hostUser();
+      chat.attach(ws);
       ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -3679,6 +4088,8 @@ export default {
           if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts);
         } else if (msg.type === 'say' && typeof msg.text === 'string') {
           chat.say(msg.text, p.username || hostUser(), msg.attachments);
+        } else if (msg.type === 'react') {
+          chat.react({ by: p.username || hostUser(), msgId: msg.msgId, emoji: msg.emoji });
         } else if (msg.type === 'cut') {
           chat.cut(p.username || hostUser());
         } else if (msg.type === 'typing') {

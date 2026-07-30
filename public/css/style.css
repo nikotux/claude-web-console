@@ -1758,13 +1758,149 @@ html, body {
   font-weight: 700; line-height: 1.2; white-space: normal;
 }
 .chat-say-text { white-space: pre-wrap; }
-.chat-cut, .chat-origin {
+/* Aduana v2: identidad visual estable y agrupación de intervenciones por autor.
+   Las siluetas heredan el tono peer-N; el grupo conserva .chat-say como fallback. */
+.chat-acta {
+  flex: none; margin: .45rem .9rem 0; padding: .3rem .45rem;
+  background: var(--cwc-bg-panel);
+  border: 1px solid color-mix(in srgb, var(--cwc-border) 72%, transparent);
+  border-radius: var(--cwc-radius-lg);
+}
+.chat-acta-head {
+  display: flex; align-items: center; gap: .35rem; min-width: 0;
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs);
+  line-height: 1.3; list-style: none; cursor: pointer;
+}
+.chat-acta-head::-webkit-details-marker { display: none; }
+.chat-acta-head::before {
+  content: '▸'; flex: none; color: var(--cwc-text-dim);
+  transition: transform .15s ease;
+}
+.chat-acta[open] > .chat-acta-head::before { transform: rotate(90deg); }
+.chat-acta-label { flex: none; font-weight: 600; white-space: nowrap; }
+.chat-acta-meta {
+  display: flex; align-items: center; justify-content: flex-end; gap: .4rem;
+  min-width: 0; margin-left: auto; overflow: hidden; white-space: nowrap;
+}
+.chat-acta-at {
+  flex: none; color: var(--cwc-text-dimmer); font-variant-numeric: tabular-nums;
+}
+.chat-acta--stale .chat-acta-stale {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  color: var(--cwc-warn); font-weight: 500;
+}
+.chat-acta-body {
+  padding: .45rem .2rem .1rem; color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-sm); line-height: 1.45;
+}
+.cwc-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: var(--peer-tone); background: var(--peer-bg);
+  border: 1px solid color-mix(in srgb, var(--peer-tone) 55%, var(--cwc-border));
+  flex: none;
+}
+.cwc-avatar svg { width: 62%; height: 62%; }
+.chat-say-group {
+  display: flex; flex-direction: column; align-self: flex-start;
+  max-width: 76%; gap: .15rem; padding-left: .35rem;
+  border-left: 2px solid color-mix(in srgb, var(--peer-tone) 45%, transparent);
+}
+.chat-say-group > .chat-say { max-width: 100%; }
+.chat-say-group-head {
+  display: flex; align-items: center; gap: .3rem;
+  color: var(--peer-tone); font-weight: 700; font-size: var(--cwc-fs-xs);
+}
+.chat-say-group-head time { color: var(--cwc-text-dim); font-weight: 400; }
+.chat-say--cont { margin-top: -.05rem; }
+.chat-say--cont .chat-say-label { display: none; }
+.chat-reacts {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .18rem;
+  min-height: 1.15rem; margin-top: .18rem;
+  color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs);
+  line-height: 1.2; white-space: normal;
+}
+.chat-react {
+  display: inline-flex; align-items: center; justify-content: center; gap: .16rem;
+  min-height: 1.15rem; padding: 0 .28rem;
+  border: 1px solid color-mix(in srgb, var(--cwc-text-dim) 30%, var(--cwc-border));
+  border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-bg-panel) 70%, transparent);
+  color: var(--cwc-text-dim); font: inherit; font-size: var(--cwc-fs-xs);
+  line-height: 1.2; cursor: pointer;
+}
+.chat-react-count { font-variant-numeric: tabular-nums; }
+.chat-react--mine {
+  color: var(--cwc-accent); font-weight: 700;
+  background: color-mix(in srgb, var(--cwc-accent) 22%, var(--cwc-bg-panel));
+  border-color: color-mix(in srgb, var(--cwc-accent) 68%, var(--cwc-border));
+}
+.chat-react--add {
+  color: var(--cwc-text-dimmer); background: transparent;
+  border-color: color-mix(in srgb, var(--cwc-text-dimmer) 18%, transparent);
+  opacity: .55;
+}
+.chat-react--add:hover, .chat-react--add:focus-visible {
+  color: var(--cwc-text); opacity: 1;
+  background: color-mix(in srgb, var(--cwc-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--cwc-accent) 45%, var(--cwc-border));
+}
+.chat-react:focus-visible {
+  outline: 1px solid var(--cwc-accent); outline-offset: 1px;
+}
+.chat-ai-to {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .25rem;
+  margin-bottom: .25rem; font-size: var(--cwc-fs-xs);
+}
+.chat-ai-to-chip {
+  color: var(--peer-tone); background: var(--peer-bg);
+  border: 1px solid color-mix(in srgb, var(--peer-tone) 42%, var(--cwc-border));
+  border-radius: var(--cwc-radius-sm); padding: .05rem .3rem;
+}
+.chat-mention {
+  color: var(--peer-tone); font-weight: 600;
+  background: color-mix(in srgb, var(--peer-tone) 10%, transparent);
+  border-radius: var(--cwc-radius-sm); padding: 0 .12rem;
+}
+.chat-mention--me {
+  background: color-mix(in srgb, var(--peer-tone) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent) 48%, transparent);
+  padding: 0 .16rem;
+}
+.chat-newline-sep {
+  align-self: stretch; display: flex; align-items: center; gap: .45rem;
+  color: var(--cwc-accent); font-size: var(--cwc-fs-xs); font-weight: 600;
+  text-align: center; white-space: nowrap;
+}
+.chat-newline-sep::before, .chat-newline-sep::after {
+  content: ''; flex: 1;
+  border-top: 1px solid color-mix(in srgb, var(--cwc-accent) 45%, transparent);
+}
+.sess-badge--unread, .sess-badge--mention {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.2em; padding: 0 .28rem; border-radius: var(--cwc-radius-sm);
+  font-size: var(--cwc-fs-xs); line-height: 1.2; font-variant-numeric: tabular-nums;
+}
+.sess-badge--unread {
+  color: var(--cwc-text-secondary);
+  background: color-mix(in srgb, var(--cwc-text-secondary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cwc-text-secondary) 28%, transparent);
+}
+.sess-badge--mention {
+  color: var(--cwc-accent); font-weight: 700;
+  background: color-mix(in srgb, var(--cwc-accent) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent) 55%, transparent);
+}
+.chat-msg.assistant--addressed {
+  border-left: 3px solid var(--peer-tone, var(--cwc-border));
+}
+.chat-cut, .chat-origin, .chat-orquestado {
   align-self: stretch; display: flex; align-items: center; gap: .55rem;
   color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
   text-align: center; white-space: nowrap;
 }
 .chat-cut::before, .chat-cut::after,
-.chat-origin::before, .chat-origin::after {
+.chat-origin::before, .chat-origin::after,
+.chat-orquestado::before, .chat-orquestado::after {
   content: ''; flex: 1; border-top: 1px solid var(--cwc-divider);
 }
 .chat-origin {
@@ -1774,18 +1910,87 @@ html, body {
 .chat-origin::before, .chat-origin::after {
   border-top-color: color-mix(in srgb, var(--cwc-accent) 38%, var(--cwc-divider));
 }
+.chat-orq-btn {
+  position: absolute; top: 0; right: 0;
+  display: inline-flex; align-items: center; gap: .2rem;
+  padding: .08rem .25rem; border: 0; background: none;
+  color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs);
+  line-height: 1.2; cursor: pointer; opacity: .72;
+}
+.chat-orq-btn:hover, .chat-orq-btn:focus-visible {
+  color: var(--cwc-accent); opacity: 1;
+}
 /* El asistente no lleva caja: texto sobre el fondo con barra fría al margen
    (identidad propia, distinta del acento terracota del usuario). */
 .chat-assistant {
-  align-self: flex-start; max-width: 90%;
+  align-self: flex-start; max-width: 90%; position: relative;
   background: none; border: 0; border-radius: 0;
   border-left: 2px solid color-mix(in srgb, var(--cwc-accent-cool) 55%, transparent);
   padding: .1rem 0 .1rem .8rem;
 }
+.chat-assistant--orchestrable { padding-top: 1.25rem; }
 .chat-assistant.streaming::after {
   content: '▍'; color: var(--cwc-accent); animation: chat-caret 1s steps(2) infinite;
 }
 @keyframes chat-caret { 50% { opacity: 0; } }
+/* Turno de la IA unificado: una sola caja envuelve todo lo que dijo e hizo
+   (mensajes, tools, imágenes devueltas, permisos y el costo del turno), igual
+   que el mensaje del usuario va en la suya. La caja es DELIBERADAMENTE más
+   sobria que la del usuario —fondo de panel y borde neutro, no el terracota
+   del acento— para que de un vistazo se siga distinguiendo quién habla; la
+   barra fría de la izquierda queda como firma de la IA. */
+.chat-aigroup {
+  align-self: flex-start; max-width: 90%;
+  display: flex; flex-direction: column; gap: .75rem;
+  padding: .55rem .75rem;
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border);
+  border-left: 2px solid color-mix(in srgb, var(--cwc-accent-cool) 55%, transparent);
+  border-radius: var(--cwc-radius-lg);
+  border-bottom-left-radius: var(--cwc-radius-sm);
+}
+.chat-aigroup:empty { display: none; }
+/* Dentro de la caja el mensaje ya no necesita su propio margen ni su barra:
+   los pone el grupo. Sin esto quedarían dos barras frías paralelas. */
+.chat-aigroup > .chat-assistant {
+  max-width: 100%; border-left: 0; padding: 0;
+}
+.chat-aigroup > .chat-assistant.chat-assistant--orchestrable { padding-top: 1.25rem; }
+
+.chat-orq-modal { display: flex; flex-direction: column; gap: .45rem; }
+.chat-orq-label {
+  display: flex; flex-direction: column; gap: .25rem;
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); font-weight: 600;
+}
+.chat-orq-modal-worlds { display: flex; gap: .35rem; flex-wrap: wrap; }
+.chat-orq-world {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .3rem .5rem; border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-input);
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); cursor: pointer;
+}
+.chat-orq-world:hover { border-color: var(--cwc-border-strong); color: var(--cwc-text); }
+.chat-orq-world.is-active {
+  border-color: var(--cwc-accent); color: var(--cwc-accent);
+  background: color-mix(in srgb, var(--cwc-accent) 12%, var(--cwc-bg-input));
+}
+.chat-orq-text { min-height: 7rem; resize: vertical; }
+.chat-orq-help {
+  margin: 0; color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
+  line-height: 1.35;
+}
+.chat-pending-prompt {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .25rem .7rem; border-top: 1px solid color-mix(in srgb, var(--cwc-accent) 30%, var(--cwc-border));
+  background: color-mix(in srgb, var(--cwc-accent) 9%, var(--cwc-bg-panel));
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs);
+}
+.chat-pending-prompt > span {
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-pending-prompt .chat-pending-prompt-dismiss {
+  flex: none; padding: .12rem .3rem; color: var(--cwc-accent);
+}
 /* Móvil: burbujas a pantalla (casi) completa. Los topes de arriba (90%/75%)
    son para paneles ANCHOS de desktop — en un teléfono regalaban ~35px a la
    derecha del asistente (bug reportado). Todo sigue en %/rem, cero píxeles
@@ -1793,15 +1998,108 @@ html, body {
 @media (max-width: 768px) {
   .chat-msgs { padding-left: .55rem; padding-right: .55rem; }
   .chat-assistant { max-width: 100%; }
+  .chat-aigroup { max-width: 100%; padding: .5rem .55rem; }
   .chat-user { max-width: 88%; }
   .chat-say { max-width: 90%; }
+  .chat-say-group { max-width: 90%; }
 }
 
-/* Tool calls consecutivos: grupo con fila flex-wrap de chips compactos y UN
-   detalle expandible de ancho completo DEBAJO de la fila (fuera del flujo
-   flex). Tipografía un paso abajo del texto del mensaje. */
-.chat-toolgroup { align-self: stretch; display: flex; flex-direction: column; gap: .4rem; }
-.ctg-row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: flex-start; }
+/* Tool calls consecutivos: el grupo ya NO pinta un chip por herramienta (una
+   sola frase podía arrastrar 22 casillas idénticas y la conversación se leía
+   entre las rejas). Queda UN Pac-Man con el conteo, y el detalle se abre en el
+   panel lateral .chat-raw. El chip sigue existiendo como componente porque lo
+   usa la tarjeta de PERMISO (.cp-chip) y el centro global de permisos. */
+/* El grupo queda como contenedor LÓGICO: su botón se muda al final del último
+   párrafo del mensaje anterior para no gastar un renglón propio (el gap de
+   .chat-msgs es .75rem, así que un div vacío costaba casi dos líneas). Vacío
+   ⇒ no existe visualmente; con botón adentro (turno que arranca ejecutando,
+   sin texto previo) se comporta como antes. */
+.chat-toolgroup { align-self: stretch; display: flex; }
+.chat-toolgroup:empty { display: none; }
+.ctg-pac {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .15rem .45rem; border-radius: var(--cwc-radius-sm);
+  background: none; border: 1px solid transparent; cursor: pointer;
+  color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs);
+  vertical-align: middle;
+  margin-left: .35rem;
+  translate: 0 -1px;
+}
+.ctg-pac:hover { border-color: var(--cwc-border); color: var(--cwc-text-secondary); }
+.ctg-pac--active {
+  border-color: color-mix(in srgb, var(--cwc-accent) 45%, transparent);
+  color: var(--cwc-text);
+}
+.ctg-pac--fail { color: var(--cwc-danger); }
+.ctg-count { font-variant-numeric: tabular-nums; }
+.ctg-empty { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
+/* Dentro del párrafo del mensaje: el botón no debe estirar la línea ni
+   heredar el line-height del texto. */
+.chat-assistant .ctg-pac { line-height: 1; }
+
+/* ===== Split del área del chat: mensajes 2/3 + panel de detalle 1/3 =====
+   .chat-body es la fila; el header, la bandeja de adjuntos y el composer
+   siguen siendo hermanos de .chat-view y no se mueven. */
+.chat-body { flex: 1; display: flex; min-height: 0; }
+.chat-main {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.chat-raw {
+  flex: 0 0 33%; min-width: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--cwc-border);
+  background: var(--cwc-matrix-bg);
+  font-family: var(--cwc-font-mono);
+}
+.chat-raw-head {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .3rem .5rem; border-bottom: 1px solid var(--cwc-matrix-dim);
+}
+.chat-raw-title {
+  flex: 1; min-width: 0; font-size: var(--cwc-fs-xs);
+  color: var(--cwc-matrix-fg); text-shadow: 0 0 6px var(--cwc-matrix-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-raw-close { color: var(--cwc-matrix-fg); }
+.chat-raw-body { flex: 1; overflow: auto; padding: .4rem; }
+.craw-item {
+  border-left: 2px solid var(--cwc-matrix-dim);
+  padding: .3rem 0 .3rem .5rem; margin-bottom: .5rem;
+}
+.craw-item--fail { border-left-color: var(--cwc-danger); }
+.craw-item--run { border-left-color: var(--cwc-accent); }
+.craw-head {
+  display: flex; align-items: center; gap: .3rem;
+  font-size: var(--cwc-fs-xs); color: var(--cwc-matrix-fg);
+  text-shadow: 0 0 6px var(--cwc-matrix-dim);
+  margin-bottom: .25rem;
+}
+.craw-name { font-weight: 600; }
+.craw-sum {
+  flex: 1; min-width: 0; opacity: .65; font-weight: 400;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* El contenido reusa .ct-body/.ct-cmd/.ct-out (mismo resaltado de ui/code.js y
+   ui/diff.js). Acá solo se reviste: el diff conserva su tinte +/- porque un
+   diff ilegible no sirve de nada, por más linda que sea la piel. */
+.chat-raw .ct-cmd, .chat-raw .ct-out {
+  background: color-mix(in srgb, var(--cwc-matrix-fg) 5%, var(--cwc-matrix-bg));
+  color: color-mix(in srgb, var(--cwc-matrix-fg) 82%, var(--cwc-white));
+  border: 1px solid var(--cwc-matrix-dim);
+}
+.chat-raw .ct-out.err { border-color: var(--cwc-danger); }
+.chat-raw .ctg-empty { color: color-mix(in srgb, var(--cwc-matrix-fg) 45%, transparent); }
+
+/* Móvil: un tercio de teléfono es ilegible — el panel pasa a overlay casi a
+   pantalla completa sobre el área de mensajes. */
+@media (max-width: 768px) {
+  .chat-body { position: relative; }
+  .chat-raw {
+    position: absolute; inset: 0 0 0 auto; width: 92%;
+    flex: none; z-index: 5; box-shadow: var(--cwc-shadow-lg);
+  }
+}
+
 .chat-toolchip {
   position: relative; display: inline-flex; align-items: center; gap: .4rem;
   max-width: 100%; min-height: 30px; padding: 0 .55rem;
@@ -1821,14 +2119,7 @@ html, body {
    entre filas de chips SOLO en punteros gruesos (para que no se solapen). */
 @media (pointer: coarse) {
   .chat-toolchip::after { content: ''; position: absolute; inset: -7px 0; }
-  .ctg-row { row-gap: .9rem; }
 }
-.ctg-detail {
-  width: 100%; background: var(--cwc-bg-panel);
-  border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
-  animation: msg-in .18s ease; /* la regla global de reduced-motion la anula */
-}
-.ctg-empty { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); }
 .ct-body { padding: .45rem .5rem; display: flex; flex-direction: column; gap: .35rem; font-size: var(--cwc-fs-sm); }
 /* Vista de EDITOR (pedido del usuario): las líneas NO se envuelven — se
    conserva la indentación/tabulado real y se scrollea horizontal, como en

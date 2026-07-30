@@ -12,10 +12,11 @@ import { pacman, pacClass } from '../../ui/pacman.js';
 import { openModal, confirmDialog, confirmSheet } from '../../ui/dialog.js';
 import { fillCode, langForPath } from '../../ui/code.js';
 import { modelColor, modelName, tierName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MODELS, effortLabel } from '../../ui/models.js';
-import { resolvePlace } from '../../ui/places.js';
+import { PLACES, placeFor, resolvePlace } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
+import { avatarFor, avatarNodeFrom } from '../../ui/avatars.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -42,6 +43,12 @@ function classifyLocal(file) {
 }
 const ATT_KIND_LABEL = { image: 'imagen', pdf: 'PDF', text: 'archivo', binary: 'archivo' };
 const ATT_KIND_I18N = { image: ['chat.att.image', 'imagen'], pdf: ['chat.att.pdf', 'PDF'], text: ['chat.att.file', 'archivo'], binary: ['chat.att.file', 'archivo'] };
+const SALA_REACTIONS = [
+  { emoji: '👍', label: 'de acuerdo' },
+  { emoji: '❓', label: 'tengo dudas' },
+  { emoji: '🔴', label: 'esto bloquea' },
+];
+const SALA_REACTION_EMOJIS = new Set(SALA_REACTIONS.map(({ emoji }) => emoji));
 
 // REGLA DE SEGURIDAD (Fase 9 · 4): clasificador de comandos destructivos.
 // Un permiso de Bash clasificado acá nace con el detalle EXPANDIDO — el atajo
@@ -228,6 +235,26 @@ export function peerToneFor(username) {
   return `peer-${(hash % 6) + 1}`;
 }
 
+export function stripAddressees(text, { final = false } = {}) {
+  const raw = String(text ?? '');
+  const newline = raw.indexOf('\n');
+  if (newline !== -1) {
+    const match = raw.slice(0, newline).match(/^@para:[ \t]*(.*)$/i);
+    if (match) {
+      const addressees = match[1].split(',').map((name) => name.trim()).filter(Boolean);
+      return { addressees, text: raw.slice(newline + 1), pending: false };
+    }
+  } else if (!final) {
+    const lower = raw.toLowerCase();
+    if ('@para:'.startsWith(lower) || lower.startsWith('@para:')) {
+      return { addressees: null, text: '', pending: true };
+    }
+  }
+  // En el texto final preferimos mostrar una marca cruda una vez (feo pero
+  // visible) antes que comernos la respuesta entera sin que el usuario lo note.
+  return { addressees: null, text: raw, pending: false };
+}
+
 export class ChatTab {
   constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
     this.id = id;
@@ -252,8 +279,18 @@ export class ChatTab {
     this._slashActive = 0;        // índice de la fila activa (↑↓)
     this._slashItems = [];        // filas visibles tras el filtro
     this._slashSuppressed = null; // texto con el que se cerró con Esc (no reabrir)
+    this._slashKind = null;       // 'slash' o 'mention': un solo popup compartido
+    this._mentionRange = null;    // fragmento @query que reemplaza la opción elegida
+    this._mentionSuppressed = null;
     this._working = false;        // motor Pac-Man del header (ver _renderPacState)
     this._delegatingCount = 0;    // subagentes Task/Agent pendientes del turno actual
+    // Índice id-de-tool → { rec, group } para que _toolResult() encuentre su
+    // registro SIN buscarlo en el DOM: desde el rediseño del panel lateral el
+    // chip ya no existe como elemento, así que un querySelector devolvería
+    // null y el resultado (salida, ok/fail, imágenes) se perdería en silencio.
+    this._toolIndex = new Map();
+    // Grupo cuyo panel lateral está abierto (null = panel cerrado).
+    this._rawGroup = null;
     this._model = null;           // modelo REAL en curso (haiku/sonnet/opus/fable/opusplan/...)
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
     this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
@@ -261,8 +298,26 @@ export class ChatTab {
     this.isSala = null;           // null hasta que llegue el primer history
     this.participants = [];
     this.me = null;
+    this._avatarKeys = new Map();
+    this._unreadAtOpen = 0;
+    this._newSepEl = null;
+    this._lastSayTs = null;
+    this._lastReadTs = null;
+    this._markReadTimer = null;
+    this._markReadQueuedTs = null;
+    this._markReadLastAt = 0;
+    this._markReadInFlight = false;
+    this._readGeneration = 0;
+    this._historyRendering = false;
+    this._historySayIndex = 0;
+    this._historySayTotal = 0;
     this._salaSayCount = 0;
     this._cutPending = false;
+    this._lastCutAuthors = [];
+    this._orchestratedChatIds = new Set();
+    this._pendingPromptActive = false;
+    this._streamRaw = '';
+    this._streamAddresseesResolved = false;
     this._lastTypingSent = 0;
     this._typingTimers = new Map();
     // Adjuntos pendientes de ESTE mensaje (subidos a disco, aún sin enviar).
@@ -290,8 +345,33 @@ export class ChatTab {
           </select>
           ${helpBtn('chat')}
         </header>
-        <div class="chat-msgs"></div>
+        <div class="chat-body">
+          <div class="chat-main">
+            <details class="chat-acta" hidden>
+              <summary class="chat-acta-head">
+                <span class="chat-acta-label">${t('chat.sala.actaLabel', 'Acta de la sala')}</span>
+                <span class="chat-acta-meta">
+                  <span class="chat-acta-stale" hidden>${t('chat.sala.actaStale', 'Puede estar desactualizada')}</span>
+                  <time class="chat-acta-at" hidden></time>
+                </span>
+              </summary>
+              <div class="chat-acta-body"></div>
+            </details>
+            <div class="chat-msgs"></div>
+          </div>
+          <aside class="chat-raw" hidden>
+            <header class="chat-raw-head">
+              <span class="chat-raw-title"></span>
+              <button type="button" class="btn-ghost btn--icon chat-raw-close" title="${t('chat.raw.close', 'Cerrar el detalle')}">${icon('close', { size: 14 })}</button>
+            </header>
+            <div class="chat-raw-body"></div>
+          </aside>
+        </div>
         <div class="chat-atttray" hidden></div>
+        <div class="chat-pending-prompt" hidden>
+          <span>${t('chat.orchestrate.pendingNotice', 'Este texto llegó de una sala de Aduana y se envía cuando vos quieras.')}</span>
+          <button type="button" class="btn-ghost btn--sm chat-pending-prompt-dismiss">${t('chat.orchestrate.discard', 'Descartar')}</button>
+        </div>
         <div class="chat-composer">
           <span class="chat-typing" hidden></span>
           <input type="file" class="chat-file-input" multiple hidden>
@@ -306,7 +386,15 @@ export class ChatTab {
 
     this.worldEl = container.querySelector('.chat-world');
     this.peersEl = container.querySelector('.chat-peers');
+    this.actaEl = container.querySelector('.chat-acta');
+    this.actaBodyEl = container.querySelector('.chat-acta-body');
+    this.actaAtEl = container.querySelector('.chat-acta-at');
+    this.actaStaleEl = container.querySelector('.chat-acta-stale');
     this.msgsEl = container.querySelector('.chat-msgs');
+    this.rawEl = container.querySelector('.chat-raw');
+    this.rawBodyEl = container.querySelector('.chat-raw-body');
+    this.rawTitleEl = container.querySelector('.chat-raw-title');
+    container.querySelector('.chat-raw-close').addEventListener('click', () => this._rawClose());
     // Un diagrama Mermaid renderiza asíncrono (después de que su mensaje ya
     // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
     // criterio "siempre pinea al final" que usa _scroll() en todo el resto.
@@ -316,9 +404,11 @@ export class ChatTab {
     // El value del textarea vive SOLO en el DOM; lo respaldamos en localStorage por
     // id de chat → sobrevive incluso a un `new ChatTab` (misma clave por this.id).
     this._draftKey = `cwc:chat-draft:${this.id}`;
+    this._pendingDraftKey = `cwc:chat-pending-prompt:${this.id}`;
     try {
       const d = localStorage.getItem(this._draftKey);
       if (d) { this.inputEl.value = d; requestAnimationFrame(() => this._autosize()); }
+      this._pendingPromptActive = localStorage.getItem(this._pendingDraftKey) === '1';
     } catch { /* localStorage no disponible: sin respaldo, no rompe */ }
     this.sendBtn = container.querySelector('.chat-send');
     this.cutBtn = container.querySelector('.chat-cut-btn');
@@ -333,6 +423,10 @@ export class ChatTab {
     this.pkgRefBtn?.addEventListener('click', () => this._openPackagePicker());
     this.fileInput = container.querySelector('.chat-file-input');
     this.trayEl = container.querySelector('.chat-atttray');
+    this.pendingPromptEl = container.querySelector('.chat-pending-prompt');
+    this.pendingPromptEl.querySelector('.chat-pending-prompt-dismiss').addEventListener('click', () => {
+      this._discardPendingPrompt();
+    });
 
     // ☰ (solo visible en móvil): pide el panel lateral al shell. En móvil el
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
@@ -356,27 +450,27 @@ export class ChatTab {
     });
     this.modeEl.addEventListener('change', () => this._modeChanged());
     this.inputEl.addEventListener('keydown', (e) => {
-      if (this._slashKeydown(e)) return; // el autocompletado consumió la tecla
+      if (this._slashKeydown(e)) return; // slash o @ consumió la tecla
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this._submit();
       }
     });
-    // Esc cierra los detalles de tool calls expandidos (Fase 9 · 3). El Esc
+    // Esc cierra el panel lateral de tool calls. El Esc
     // del popup de comandos slash se maneja antes (captura en dismissablePopup).
     this.container.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       let closed = false;
-      for (const chip of this.msgsEl.querySelectorAll('.chat-toolgroup .chat-toolchip.active')) {
-        this._toolCollapse(chip.closest('.chat-toolgroup'));
+      if (this._rawGroup) {
+        this._rawClose();
         closed = true;
       }
       if (closed) e.stopPropagation();
     });
-    // Autogrow del textarea (hasta ~6 líneas) + autocompletado de comandos.
+    // Autogrow del textarea (hasta ~6 líneas) + autocompletado slash/@.
     this.inputEl.addEventListener('input', () => {
       this._autosize();
-      this._slashUpdate();
+      this._slashUpdate(); // en sala también detecta @query justo antes del cursor
       // BUG-498: respaldar el borrador en cada tecla (barato; cubre reconexión,
       // disable y reconstrucción total del pane).
       try { localStorage.setItem(this._draftKey, this.inputEl.value); } catch { /* noop */ }
@@ -387,7 +481,9 @@ export class ChatTab {
       .then((res) => res.json())
       .then((me) => {
         this.me = me?.username || me?.host || null;
+        if (this.isSala) this._rebuildAvatarKeys();
         this._refreshSalaIdentity();
+        if (this._slashPop && this._slashKind === 'mention') this._slashUpdate();
       })
       .catch(() => { /* sin identidad: la sala sigue funcionando, sin alineación propia */ });
 
@@ -431,13 +527,49 @@ export class ChatTab {
 
   _slashUpdate() {
     const q = this._slashQuery();
-    if (q == null) { this._slashClose(); return; }
-    if (!this._slashPop) this._slashOpen();
-    this._slashRender(q);
+    const mention = this._mentionQuery();
+    if (this._slashPop) {
+      if (this._slashKind === 'slash') {
+        if (q == null) this._slashClose();
+        else this._slashRender(q);
+      } else if (this._slashKind === 'mention') {
+        if (mention == null) this._slashClose();
+        else this._mentionRender(mention);
+      }
+      return;
+    }
+    if (q != null) {
+      this._slashOpen('slash');
+      this._slashRender(q);
+    } else if (mention != null) {
+      this._slashOpen('mention');
+      this._mentionRender(mention);
+    }
   }
 
-  _slashOpen() {
+  _mentionQuery() {
+    if (!this.isSala) {
+      this._mentionSuppressed = null;
+      return null;
+    }
+    const start = this.inputEl.selectionStart;
+    const end = this.inputEl.selectionEnd;
+    if (start == null || end == null || start !== end) return null;
+    const before = this.inputEl.value.slice(0, start);
+    const match = before.match(/(?:^| )@([A-Za-z0-9._-]*)$/);
+    if (!match) {
+      this._mentionSuppressed = null;
+      return null;
+    }
+    const at = match.index + (match[0][0] === ' ' ? 1 : 0);
+    const signature = `${this.inputEl.value}\u0000${start}`;
+    if (this._mentionSuppressed === signature) return null;
+    return { query: match[1].toLocaleLowerCase(), start: at, end: start, signature };
+  }
+
+  _slashOpen(kind = 'slash') {
     this._slashActive = 0; // el popup nace resaltando la mejor coincidencia
+    this._slashKind = kind;
     const pop = document.createElement('div');
     pop.className = 'chat-slash-pop';
     // Los taps en las filas no deben robar el foco del input (teclado abierto).
@@ -448,9 +580,15 @@ export class ChatTab {
       onDismiss: () => {
         // Cierre externo (Esc/tap afuera): no reabrir hasta que cambie el texto.
         if (this._slashPop === pop) {
-          this._slashSuppressed = this.inputEl.value;
+          if (kind === 'mention') {
+            this._mentionSuppressed = `${this.inputEl.value}\u0000${this.inputEl.selectionStart}`;
+          } else {
+            this._slashSuppressed = this.inputEl.value;
+          }
           this._slashPop = null;
           this._slashDismiss = null;
+          this._slashKind = null;
+          this._mentionRange = null;
         }
         pop.remove();
       },
@@ -463,6 +601,9 @@ export class ChatTab {
     const dismiss = this._slashDismiss;
     this._slashPop = null;
     this._slashDismiss = null;
+    this._slashKind = null;
+    this._mentionRange = null;
+    this._slashItems = [];
     dismiss(); // el onDismiss ve _slashPop !== pop y no marca suppressed
   }
 
@@ -517,12 +658,54 @@ export class ChatTab {
     this._slashFit();
   }
 
+  _mentionRender(match) {
+    const pop = this._slashPop;
+    if (!pop) return;
+    const query = match.query;
+    this._mentionRange = { start: match.start, end: match.end };
+    this._slashItems = this._salaUsers()
+      .sort((a, b) => a.localeCompare(b))
+      .filter((username) => username.toLocaleLowerCase().startsWith(query));
+    this._slashActive = 0;
+    pop.replaceChildren();
+    if (!this._slashItems.length) {
+      this._slashClose();
+      return;
+    }
+    this._slashItems.forEach((username, i) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'chat-slash-item' + (i === this._slashActive ? ' active' : '');
+      row.appendChild(this._avatarNodeFor(username, { size: 18 }));
+      const name = document.createElement('span');
+      name.className = 'csi-name';
+      name.textContent = username;
+      row.appendChild(name);
+      row.addEventListener('click', () => this._slashPick(username));
+      pop.appendChild(row);
+    });
+    this._slashFit();
+  }
+
   _slashPick(c) {
+    const kind = this._slashKind;
+    const mentionRange = this._mentionRange;
     this._slashClose();
     this._slashSuppressed = null;
-    this.inputEl.value = `/${c.name} `;
-    this.inputEl.focus();
-    this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
+    this._mentionSuppressed = null;
+    if (kind === 'mention' && mentionRange) {
+      const before = this.inputEl.value.slice(0, mentionRange.start);
+      const after = this.inputEl.value.slice(mentionRange.end);
+      this.inputEl.value = `${before}@${c} ${after}`;
+      const cursor = before.length + String(c).length + 2;
+      this.inputEl.focus();
+      this.inputEl.setSelectionRange(cursor, cursor);
+      this._autosize();
+    } else {
+      this.inputEl.value = `/${c.name} `;
+      this.inputEl.focus();
+      this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
+    }
   }
 
   // Teclas mientras el popup está abierto. Devuelve true si la consumió.
@@ -609,6 +792,66 @@ export class ChatTab {
     this.inputEl.value = '';
     this.inputEl.style.height = 'auto';
     try { localStorage.removeItem(this._draftKey); } catch { /* noop */ } // BUG-498: enviado OK → sin borrador
+    if (this._pendingPromptActive) this._clearPendingPrompt();
+    this.inputEl.focus();
+  }
+
+  _applyPendingPrompt(prompt) {
+    const text = typeof prompt === 'string' ? prompt : '';
+    if (!text.trim()) {
+      this._setPendingPromptActive(false);
+      return;
+    }
+    // Un marcador local conserva el aviso si la vista se reconstruyó mientras
+    // la persona editaba el texto precargado. Sin ese marcador, un composer no
+    // vacío es un borrador propio y jamás se pisa ni se reclama como pendiente.
+    if (!this._pendingPromptActive && this.inputEl.value) {
+      this.pendingPromptEl.hidden = true;
+      return;
+    }
+    if (!this.inputEl.value) {
+      this.inputEl.value = text;
+      requestAnimationFrame(() => this._autosize());
+    }
+    this._setPendingPromptActive(true);
+  }
+
+  _setPendingPromptActive(active) {
+    this._pendingPromptActive = !!active;
+    if (this.pendingPromptEl) this.pendingPromptEl.hidden = !this._pendingPromptActive;
+    try {
+      if (this._pendingPromptActive) localStorage.setItem(this._pendingDraftKey, '1');
+      else localStorage.removeItem(this._pendingDraftKey);
+    } catch { /* localStorage no disponible: el estado en memoria alcanza */ }
+  }
+
+  async _clearPendingPrompt({ clearInput = false } = {}) {
+    if (clearInput) {
+      this.inputEl.value = '';
+      this.inputEl.style.height = 'auto';
+      try { localStorage.removeItem(this._draftKey); } catch { /* noop */ }
+    }
+    this._setPendingPromptActive(false);
+    try {
+      const res = await fetch('/api/chat/pending-prompt/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: this.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || t('chat.orchestrate.clearFailFallback', 'No se pudo limpiar la instrucción pendiente.'));
+      }
+    } catch (err) {
+      this._line('chat-error', t('chat.orchestrate.clearFail', 'No se pudo limpiar la instrucción pendiente: {message}', {
+        message: String(err?.message || err),
+      }));
+    }
+  }
+
+  _discardPendingPrompt() {
+    if (!this._pendingPromptActive) return;
+    this._clearPendingPrompt({ clearInput: true });
     this.inputEl.focus();
   }
 
@@ -760,11 +1003,28 @@ export class ChatTab {
       case 'history':
         this.isSala = !!m.isSala;
         this.participants = Array.isArray(m.participants) ? m.participants : [];
+        if (this.isSala) this._rebuildAvatarKeys();
+        this._renderActa(m.acta);
+        this._unreadAtOpen = this.isSala ? (m.salaUnread || 0) : 0;
+        this._newSepEl = null;
+        this._lastSayTs = null;
+        this._lastReadTs = null;
+        this._readGeneration++;
+        clearTimeout(this._markReadTimer);
+        this._markReadTimer = null;
+        this._markReadQueuedTs = null;
         this._salaSayCount = 0;
         this._cutPending = false;
+        this._lastCutAuthors = [];
+        this._orchestratedChatIds.clear();
+        this._streamRaw = '';
+        this._streamAddresseesResolved = false;
         this._clearTyping();
         this._renderSalaState();
         this.msgsEl.innerHTML = '';
+        // El índice apunta a grupos que acaban de desaparecer del DOM.
+        this._toolIndex.clear();
+        this._rawClose();
         this.streamEl = null;
         // BUG-498: una reconexión/history exitosa REVIVE el composer si un `closed`
         // previo lo dejó deshabilitado (antes `disabled=true` no se revertía nunca).
@@ -775,7 +1035,14 @@ export class ChatTab {
         if (m.packageRef) this._packageRef = m.packageRef; // F5: para excluirse del picker
         // Puede venir de la caché por cwd del server (init aún pendiente).
         if (Array.isArray(m.slashCommands) && m.slashCommands.length) this.slashCommands = m.slashCommands;
+        this._historyRendering = this.isSala;
+        this._historySayIndex = 0;
+        this._historySayTotal = this.isSala ? m.events.filter((ev) => ev?.type === 'say').length : 0;
         for (const ev of m.events) this._onEvent(ev);
+        this._historyRendering = false;
+        this._applyPendingPrompt(m.pendingPrompt);
+        if (this.isSala && this._unreadAtOpen === 0) this._lastReadTs = this._lastSayTs;
+        if (this.isSala && this._unreadAtOpen > 0 && document.visibilityState === 'visible') this._markRead();
         // Si el usuario eligió un modo que el server TODAVÍA no confirmó, no lo
         // pisamos con el modo (posiblemente viejo) del history: reafirmamos el
         // elegido y lo REENVIAMOS (reconciliación tras reconexión / set_mode
@@ -806,10 +1073,21 @@ export class ChatTab {
       case 'meta':
         this.slashCommands = Array.isArray(m.slashCommands) ? m.slashCommands : [];
         this._metaSeen = true;
-        if (this._slashPop) this._slashUpdate(); // refresco en vivo si está abierto
+        if (this._slashPop && this._slashKind === 'slash') this._slashUpdate(); // refresco en vivo si está abierto
         break;
-      case 'say': this._say(m); break;
+      case 'say': {
+        const markAfterPaint = !this._historyRendering
+          && this.isSala
+          && document.visibilityState === 'visible'
+          && this._isNearMessagesBottom();
+        this._say(m);
+        if (markAfterPaint) this._markRead();
+        break;
+      }
+      case 'react': this._react(m); break;
       case 'cut': this._cut(m); break;
+      case 'acta': this._renderActa(m); break;
+      case 'orquestado': this._orquestado(m); break;
       case 'origin': this._origin(m); break;
       case 'cut-pending':
         this._cutPending = true;
@@ -818,7 +1096,9 @@ export class ChatTab {
       case 'typing': this._typing(m); break;
       case 'participants':
         this.participants = Array.isArray(m.participants) ? m.participants : [];
-        this._renderPeers();
+        if (this.isSala) this._rebuildAvatarKeys();
+        this._refreshSalaIdentity();
+        if (this._slashPop && this._slashKind === 'mention') this._slashUpdate();
         break;
       case 'user': this._closeStream(); this._bubble('user', m.text, m.attachments); break;
       case 'assistant': this._assistantFinal(m.text); break;
@@ -915,31 +1195,271 @@ export class ChatTab {
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
 
+  _renderActa(acta) {
+    if (!this.actaEl) return;
+    const text = typeof acta?.text === 'string' ? acta.text : '';
+    if (!this.isSala || !text.trim()) {
+      this.actaEl.hidden = true;
+      this.actaBodyEl.replaceChildren();
+      return;
+    }
+
+    const wasOpen = this.actaEl.open;
+    const localAt = this._localTime(acta?.at);
+    this.actaBodyEl.replaceChildren(renderMarkdown(text));
+    this.actaAtEl.textContent = localAt
+      ? t('chat.sala.actaUpdated', 'Actualizada {time}', { time: localAt })
+      : '';
+    this.actaAtEl.hidden = !localAt;
+    this.actaStaleEl.hidden = !acta?.stale;
+    this.actaEl.classList.toggle('chat-acta--stale', !!acta?.stale);
+    this.actaEl.hidden = false;
+    this.actaEl.open = wasOpen;
+  }
+
+  _salaUsers() {
+    const users = this.participants.map((participant) => String(participant?.user || '')).filter(Boolean);
+    if (this.me) users.push(String(this.me));
+    return [...new Set(users)];
+  }
+
+  _rebuildAvatarKeys() {
+    this._avatarKeys = new Map();
+    const taken = [];
+    // Sin este orden canónico, dos navegadores desempatarían las colisiones
+    // en distinto orden y terminarían viendo los avatares cruzados.
+    const users = this._salaUsers().sort((a, b) => a.localeCompare(b));
+    for (const username of users) {
+      const avatar = avatarFor(username, { taken });
+      this._avatarKeys.set(username, avatar);
+      taken.push(avatar.key);
+    }
+  }
+
+  _avatarKeyFor(username) {
+    const name = String(username || '');
+    let avatar = this._avatarKeys.get(name);
+    if (!avatar) {
+      const taken = [...this._avatarKeys.values()].map((entry) => entry.key);
+      avatar = avatarFor(name, { taken });
+      this._avatarKeys.set(name, avatar);
+    }
+    return avatar;
+  }
+
+  _avatarNodeFor(username, { size = 22, title = '' } = {}) {
+    const name = String(username || '');
+    const assigned = this._avatarKeyFor(name);
+    let el = null;
+    try {
+      el = avatarNodeFrom(assigned, { size, title });
+    } catch {
+      // Las iniciales conservan la identidad mínima si falla el avatar visual.
+    }
+    if (el?.classList) return el;
+    const fallback = document.createElement('span');
+    const px = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 22;
+    fallback.className = `cwc-avatar ${assigned.tone}`;
+    fallback.style.width = `${px}px`;
+    fallback.style.height = `${px}px`;
+    fallback.title = title;
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    fallback.textContent = ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+    return fallback;
+  }
+
+  _sayTextNodes(text, mentions) {
+    const fragment = document.createDocumentFragment();
+    const raw = String(text ?? '');
+    const names = [...new Set(
+      (Array.isArray(mentions) ? mentions : []).map((username) => String(username || '')).filter(Boolean),
+    )].sort((a, b) => b.length - a.length);
+    if (!names.length) {
+      fragment.appendChild(document.createTextNode(raw));
+      return fragment;
+    }
+
+    const escaped = names.map((username) => username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const mentionRe = new RegExp(`(^|[^A-Za-z0-9._-])@(${escaped.join('|')})(?![A-Za-z0-9._-])`, 'g');
+    let cursor = 0;
+    let match;
+    while ((match = mentionRe.exec(raw)) !== null) {
+      const username = match[2];
+      const mentionStart = match.index + match[1].length;
+      if (mentionStart > cursor) fragment.appendChild(document.createTextNode(raw.slice(cursor, mentionStart)));
+      const span = document.createElement('span');
+      span.className = `chat-mention ${this._avatarKeyFor(username).tone}`;
+      span.classList.toggle('chat-mention--me', !!this.me && username === this.me);
+      span.dataset.username = username;
+      span.textContent = `@${username}`;
+      fragment.appendChild(span);
+      cursor = mentionStart + username.length + 1;
+    }
+    if (cursor < raw.length) fragment.appendChild(document.createTextNode(raw.slice(cursor)));
+    return fragment;
+  }
+
   _say(m) {
     if (!this.isSala) return;
+    if (this._historyRendering) {
+      const unread = Math.min(this._historySayTotal, Math.max(0, Number(this._unreadAtOpen) || 0));
+      if (!this._newSepEl && unread > 0 && this._historySayIndex === this._historySayTotal - unread) {
+        const sep = document.createElement('div');
+        sep.className = 'chat-newline-sep';
+        sep.textContent = t('chat.sala.newMessages', 'mensajes nuevos');
+        this.msgsEl.appendChild(sep);
+        this._newSepEl = sep;
+      }
+      this._historySayIndex++;
+    }
     const by = String(m.by || '');
-    const el = document.createElement('div');
-    el.className = `chat-msg chat-say ${peerToneFor(by)}`;
-    el.dataset.by = by;
-    el.classList.toggle('chat-say--own', !!this.me && by === this.me);
+    const avatar = this._avatarKeyFor(by);
+    const last = this.msgsEl.lastElementChild;
+    let group = last?.classList.contains('chat-say-group') && last.dataset.by === by ? last : null;
+    if (!group) {
+      group = document.createElement('div');
+      group.className = `chat-say-group ${avatar.tone}`;
+      group.dataset.by = by;
+      group.classList.toggle('chat-say-group--own', !!this.me && by === this.me);
 
-    const label = document.createElement('span');
-    label.className = 'chat-say-label';
-    label.textContent = t('chat.sala.sayLabel', '{name} · {time}', { name: by, time: this._localTime(m.ts) });
+      const head = document.createElement('div');
+      head.className = 'chat-say-group-head';
+      const title = t('chat.sala.participantTitle', 'Participante: {name}', { name: by });
+      const avatarNode = this._avatarNodeFor(by, { size: 22, title });
+      const label = document.createElement('span');
+      label.className = 'chat-say-label';
+      label.textContent = t('chat.sala.sayLabel', '{name} · {time}', { name: by, time: this._localTime(m.ts) });
+      head.append(avatarNode, label);
+      group.appendChild(head);
+      this.msgsEl.appendChild(group);
+    }
+
+    const el = document.createElement('div');
+    el.className = `chat-msg chat-say ${avatar.tone}`;
+    el.dataset.by = by;
+    el.dataset.msgId = String(m.id ?? '');
+    el.classList.toggle('chat-say--own', !!this.me && by === this.me);
+    if (group.children.length > 1) el.classList.add('chat-say--cont');
+
     const body = document.createElement('span');
     body.className = 'chat-say-text';
-    body.textContent = m.text || '';
-    if (typeof m.text === 'string' && m.text) el.append(label, body);
-    else el.append(label);
+    if (Array.isArray(m.mentions) && m.mentions.length) {
+      body.appendChild(this._sayTextNodes(m.text || '', m.mentions));
+    } else {
+      body.textContent = m.text || '';
+    }
+    if (typeof m.text === 'string' && m.text) el.appendChild(body);
     if (Array.isArray(m.attachments) && m.attachments.length) el.appendChild(this._attsEl(m.attachments));
-    this.msgsEl.appendChild(el);
+    el.appendChild(this._reactionRow(el.dataset.msgId, m.reactions));
+    group.appendChild(el);
+    if (m.ts != null) this._lastSayTs = m.ts;
     this._salaSayCount++;
     this._renderCutButton();
     this._scroll();
   }
 
+  _normalizedReactions(reactions) {
+    const normalized = new Map();
+    for (const { emoji } of SALA_REACTIONS) {
+      const rawUsers = reactions && typeof reactions === 'object' ? reactions[emoji] : null;
+      const users = Array.isArray(rawUsers)
+        ? [...new Set(rawUsers.map((username) => String(username || '')).filter(Boolean))]
+        : [];
+      normalized.set(emoji, users);
+    }
+    return normalized;
+  }
+
+  _reactionRow(msgId, reactions) {
+    const row = document.createElement('div');
+    row.className = 'chat-reacts';
+    row._reactions = this._normalizedReactions(reactions);
+    row.dataset.msgId = msgId;
+    this._renderReactions(row);
+    return row;
+  }
+
+  _renderReactions(row) {
+    if (!row?._reactions) return;
+    const fragment = document.createDocumentFragment();
+    for (const { emoji } of SALA_REACTIONS) {
+      const users = row._reactions.get(emoji) || [];
+      if (!users.length) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'chat-react';
+      button.classList.toggle('chat-react--mine', !!this.me && users.includes(this.me));
+      button.title = users.join(', ');
+      button.setAttribute('aria-label', `${emoji}: ${users.join(', ')}`);
+      const mark = document.createElement('span');
+      mark.textContent = emoji;
+      const count = document.createElement('span');
+      count.className = 'chat-react-count';
+      count.textContent = String(users.length);
+      button.append(mark, count);
+      button.addEventListener('click', () => this._toggleReaction(row.dataset.msgId, emoji));
+      fragment.appendChild(button);
+    }
+    // Filtra los usados: sin esto se duplican como pastilla e invitación.
+    for (const { emoji, label } of SALA_REACTIONS) {
+      const users = row._reactions.get(emoji) || [];
+      if (users.length) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'chat-react chat-react--add';
+      button.textContent = emoji;
+      button.title = `${emoji} ${label}`;
+      button.setAttribute('aria-label', `${emoji} ${label}`);
+      button.addEventListener('click', () => this._toggleReaction(row.dataset.msgId, emoji));
+      fragment.appendChild(button);
+    }
+    row.replaceChildren(fragment);
+  }
+
+  _findSay(msgId) {
+    const wanted = String(msgId ?? '');
+    if (!wanted) return null;
+    for (const el of this.msgsEl?.querySelectorAll('.chat-say[data-msg-id]') || []) {
+      if (el.dataset.msgId === wanted) return el;
+    }
+    return null;
+  }
+
+  _toggleReaction(msgId, emoji) {
+    if (!this.isSala || !SALA_REACTION_EMOJIS.has(emoji)) return;
+    const say = this._findSay(msgId);
+    const row = say?.querySelector('.chat-reacts');
+    if (!row) return;
+    if (this.me) {
+      const users = row._reactions.get(emoji) || [];
+      row._reactions.set(
+        emoji,
+        users.includes(this.me) ? users.filter((username) => username !== this.me) : [...users, this.me],
+      );
+      this._renderReactions(row);
+    }
+    this._send({ type: 'react', msgId: String(msgId), emoji });
+  }
+
+  _react(m) {
+    if (!this.isSala || !SALA_REACTION_EMOJIS.has(m.emoji)) return;
+    const say = this._findSay(m.msgId);
+    const row = say?.querySelector('.chat-reacts');
+    const by = String(m.by || '');
+    if (!row || !by) return;
+    const users = row._reactions.get(m.emoji) || [];
+    row._reactions.set(
+      m.emoji,
+      m.off
+        ? users.filter((username) => username !== by)
+        : (users.includes(by) ? users : [...users, by]),
+    );
+    this._renderReactions(row);
+  }
+
   _cut(m) {
     if (!this.isSala) return;
+    this._lastCutAuthors = Array.isArray(m.authors) && m.authors.length ? m.authors : (m.by ? [m.by] : []);
     const el = document.createElement('div');
     el.className = 'chat-cut';
     el.textContent = t('chat.sala.cutLine', '✂ {name} envió a la IA · {time}', {
@@ -950,6 +1470,26 @@ export class ChatTab {
     this._salaSayCount = 0;
     this._cutPending = false;
     this._renderCutButton();
+    this._scroll();
+  }
+
+  _orquestado(m) {
+    if (!this.isSala) return;
+    const chatId = String(m.chatId || '');
+    if (chatId && this._orchestratedChatIds.has(chatId)) return;
+    if (chatId) this._orchestratedChatIds.add(chatId);
+    const rawWorld = String(m.world || '').trim();
+    const knownWorld = placeFor(rawWorld) || PLACES.find((place) => place.label === rawWorld);
+    const world = knownWorld?.label || rawWorld || t('chat.orchestrate.unknownWorld', 'otro mundo');
+    const by = String(m.by || '').trim() || t('chat.orchestrate.unknownPerson', 'alguien');
+    const el = document.createElement('div');
+    el.className = 'chat-orquestado';
+    el.textContent = t('chat.orchestrate.threadLine', '⇱ {name} orquestó esto a {world} · {time}', {
+      name: by,
+      world,
+      time: this._localTime(m.ts),
+    });
+    this.msgsEl.appendChild(el);
     this._scroll();
   }
 
@@ -1025,19 +1565,51 @@ export class ChatTab {
       const username = String(participant?.user || '');
       if (!username || seen.has(username)) continue;
       seen.add(username);
-      const chip = document.createElement('span');
-      chip.className = `chat-peer ${peerToneFor(username)}`;
-      chip.title = t('chat.sala.participantTitle', 'Participante: {name}', { name: username });
-      const parts = username.trim().split(/\s+/).filter(Boolean);
-      chip.textContent = ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+      const title = t('chat.sala.participantTitle', 'Participante: {name}', { name: username });
+      let chip;
+      if (this.isSala) {
+        chip = this._avatarNodeFor(username, { size: 22, title });
+        chip.classList.add('chat-peer');
+      } else {
+        chip = document.createElement('span');
+        chip.className = `chat-peer ${peerToneFor(username)}`;
+        chip.title = title;
+        const parts = username.trim().split(/\s+/).filter(Boolean);
+        chip.textContent = ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+      }
       this.peersEl.appendChild(chip);
     }
     this.peersEl.hidden = !this.isSala || !this.peersEl.children.length;
   }
 
   _refreshSalaIdentity() {
+    if (!this.isSala) {
+      this._renderPeers();
+      this._renderTyping();
+      return;
+    }
+    for (const group of this.msgsEl?.querySelectorAll('.chat-say-group[data-by]') || []) {
+      const avatar = this._avatarKeyFor(group.dataset.by);
+      for (let i = 1; i <= 6; i++) group.classList.remove(`peer-${i}`);
+      group.classList.add(avatar.tone);
+      group.classList.toggle('chat-say-group--own', !!this.me && group.dataset.by === this.me);
+      const head = group.querySelector('.chat-say-group-head');
+      const title = t('chat.sala.participantTitle', 'Participante: {name}', { name: group.dataset.by });
+      head?.firstElementChild?.replaceWith(this._avatarNodeFor(group.dataset.by, { size: 22, title }));
+    }
     for (const el of this.msgsEl?.querySelectorAll('.chat-say') || []) {
+      const avatar = this._avatarKeyFor(el.dataset.by);
+      for (let i = 1; i <= 6; i++) el.classList.remove(`peer-${i}`);
+      el.classList.add(avatar.tone);
       el.classList.toggle('chat-say--own', !!this.me && el.dataset.by === this.me);
+      this._renderReactions(el.querySelector('.chat-reacts'));
+    }
+    for (const el of this.msgsEl?.querySelectorAll('.chat-mention[data-username]') || []) {
+      const username = el.dataset.username;
+      const avatar = this._avatarKeyFor(username);
+      for (let i = 1; i <= 6; i++) el.classList.remove(`peer-${i}`);
+      el.classList.add(avatar.tone);
+      el.classList.toggle('chat-mention--me', !!this.me && username === this.me);
     }
     this._renderPeers();
     this._renderTyping();
@@ -1060,32 +1632,213 @@ export class ChatTab {
     }
     // Adjuntos: miniaturas (imágenes) / chips (PDF, texto, binarios) bajo el texto.
     if (attachments && attachments.length) el.appendChild(this._attsEl(attachments));
-    this.msgsEl.appendChild(el);
+    const host = String(kind).includes('assistant') ? this._aiHost() : this.msgsEl;
+    host.appendChild(el);
     this._scroll();
     return el;
   }
 
   _stream(text) {
     if (!this.streamEl) this.streamEl = this._bubble('assistant streaming', '');
-    this.streamEl.textContent += text;
+    if (!this.isSala) {
+      this.streamEl.textContent += text;
+      this._scroll();
+      return;
+    }
+    const delta = String(text || '');
+    this._streamRaw += delta;
+    if (this._streamAddresseesResolved) {
+      this.streamEl.textContent += delta;
+    } else {
+      const parsed = stripAddressees(this._streamRaw);
+      this.streamEl.textContent = parsed.text;
+      this._streamAddresseesResolved = !parsed.pending;
+    }
     this._scroll();
   }
 
   // Texto final del asistente: reemplaza la burbuja de streaming (texto plano)
   // por la versión renderizada en markdown.
   _assistantFinal(text) {
-    const md = renderMarkdown(text);
+    const parsed = this.isSala ? stripAddressees(text, { final: true }) : { addressees: null, text, pending: false };
+    const md = renderMarkdown(parsed.text);
+    let addressees = [];
+    if (this.isSala) {
+      const known = this._salaUsers();
+      const knownByLower = new Map(known.map((name) => [name.toLocaleLowerCase(), name]));
+      const declared = parsed.addressees;
+      const requested = declared?.some((name) => ['todos', 'all'].includes(name.toLocaleLowerCase()))
+        ? known
+        : (declared?.length ? declared : this._lastCutAuthors);
+      const seen = new Set();
+      for (const requestedName of requested) {
+        const name = knownByLower.get(String(requestedName || '').trim().toLocaleLowerCase());
+        const lower = name?.toLocaleLowerCase();
+        if (name && !seen.has(lower)) {
+          seen.add(lower);
+          addressees.push(name);
+        }
+      }
+    }
+    const decorate = (el) => {
+      if (!addressees.length) return;
+      const to = document.createElement('div');
+      to.className = 'chat-ai-to';
+      for (const name of addressees) {
+        const chip = document.createElement('span');
+        chip.className = `chat-ai-to-chip ${this._avatarKeyFor(name).tone}`;
+        chip.textContent = name;
+        to.appendChild(chip);
+      }
+      el.classList.add('assistant--addressed');
+      el.style.setProperty('--peer-tone', `var(--cwc-${this._avatarKeyFor(addressees[0]).tone})`);
+      el.replaceChildren(to, md);
+    };
+    let answerEl;
     if (this.streamEl) {
       this.streamEl.classList.remove('streaming');
       this.streamEl.replaceChildren(md);
+      decorate(this.streamEl);
+      answerEl = this.streamEl;
       this.streamEl = null;
     } else {
       const el = document.createElement('div');
       el.className = 'chat-msg chat-assistant';
       el.appendChild(md);
-      this.msgsEl.appendChild(el);
+      decorate(el);
+      this._aiHost().appendChild(el);
+      answerEl = el;
     }
+    if (this.isSala) this._addOrchestrateButton(answerEl, parsed.text);
+    this._streamRaw = '';
+    this._streamAddresseesResolved = false;
     this._scroll();
+  }
+
+  _addOrchestrateButton(el, text) {
+    if (!el || !this.isSala) return;
+    el.classList.add('chat-assistant--orchestrable');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chat-orq-btn';
+    btn.title = t('chat.orchestrate.buttonTitle', 'Crear una conversación nueva con esta instrucción');
+    const ico = document.createElement('span');
+    ico.innerHTML = icon('externalLink', { size: 12 });
+    const label = document.createElement('span');
+    label.textContent = t('chat.orchestrate.button', 'Orquestar');
+    btn.append(ico, label);
+    btn.addEventListener('click', () => this._openOrchestrateModal(text));
+    el.prepend(btn);
+  }
+
+  _openOrchestrateModal(sourceText) {
+    const worlds = PLACES
+      .filter((place) => ['claude-web-console', 'tolkien'].includes(place.rel))
+      .map((place) => placeFor(place.rel))
+      .filter(Boolean);
+    let selected = null;
+    const m = openModal({ title: t('chat.orchestrate.modalTitle', 'Orquestar a otro mundo'), width: 520 });
+    const body = document.createElement('div');
+    body.className = 'chat-orq-modal';
+
+    const worldLabel = document.createElement('div');
+    worldLabel.className = 'chat-orq-label';
+    worldLabel.textContent = t('chat.orchestrate.worldLabel', 'Mundo destino');
+    const worldOptions = document.createElement('div');
+    worldOptions.className = 'chat-orq-modal-worlds';
+    const worldButtons = worlds.map((place) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `chat-orq-world ${place.cls || ''}`.trim();
+      button.dataset.world = place.rel;
+      button.setAttribute('aria-pressed', 'false');
+      const ico = document.createElement('span');
+      ico.innerHTML = icon(place.ico, { size: 15 });
+      const label = document.createElement('span');
+      label.textContent = place.label;
+      button.append(ico, label);
+      button.addEventListener('click', () => {
+        selected = place;
+        for (const option of worldButtons) {
+          const active = option === button;
+          option.classList.toggle('is-active', active);
+          option.setAttribute('aria-pressed', String(active));
+        }
+        syncCreateState();
+      });
+      worldOptions.appendChild(button);
+      return button;
+    });
+
+    const textLabel = document.createElement('label');
+    textLabel.className = 'chat-orq-label';
+    textLabel.textContent = t('chat.orchestrate.textLabel', 'Instrucción');
+    const textarea = document.createElement('textarea');
+    textarea.className = 'dlg-input chat-orq-text';
+    textarea.rows = 7;
+    textarea.value = String(sourceText || '');
+    textLabel.appendChild(textarea);
+
+    const help = document.createElement('p');
+    help.className = 'chat-orq-help';
+    help.textContent = t('chat.orchestrate.help', 'Se crea una conversación nueva en ese mundo con este texto esperando en el composer; no se ejecuta nada hasta que la abras y la envíes.');
+    const error = document.createElement('p');
+    error.className = 'dlg-editor-err';
+    error.hidden = true;
+
+    const actions = document.createElement('div');
+    actions.className = 'dlg-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn-ghost btn--sm';
+    cancel.textContent = t('chat.common.cancel', 'Cancelar');
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.className = 'btn btn--sm';
+    create.textContent = t('chat.orchestrate.create', 'Crear sesión');
+    actions.append(cancel, create);
+    body.append(worldLabel, worldOptions, textLabel, help, error, actions);
+    m.body.appendChild(body);
+
+    const syncCreateState = () => {
+      create.disabled = !selected || !textarea.value.trim();
+    };
+    textarea.addEventListener('input', syncCreateState);
+    cancel.addEventListener('click', () => m.close());
+    create.addEventListener('click', async () => {
+      const outgoingText = textarea.value.trim();
+      if (!selected || !outgoingText) return;
+      create.disabled = true;
+      cancel.disabled = true;
+      error.hidden = true;
+      try {
+        const res = await fetch('/api/chat/collab/orquestar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: this.id, world: selected.rel, text: outgoingText }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || t('chat.orchestrate.createFailFallback', 'No se pudo crear la sesión.'));
+        }
+        this._orquestado({
+          by: this.me || t('chat.orchestrate.you', 'Vos'),
+          ts: Date.now(),
+          world: selected.rel,
+          chatId: data.chat?.id,
+          snippet: outgoingText.slice(0, 160),
+        });
+        m.close();
+      } catch (err) {
+        error.textContent = String(err?.message || err);
+        error.hidden = false;
+        cancel.disabled = false;
+        syncCreateState();
+      }
+    });
+    syncCreateState();
+    textarea.focus();
+    textarea.select();
   }
 
   _closeStream() {
@@ -1093,73 +1846,196 @@ export class ChatTab {
       this.streamEl.classList.remove('streaming');
       this.streamEl = null;
     }
+    this._streamRaw = '';
+    this._streamAddresseesResolved = false;
   }
 
-  // ===== Tool calls: chips agrupados horizontalmente (Fase 9 · 3) =====
-  // Tool calls consecutivos (sin texto/permiso/costo en el medio) comparten un
-  // grupo: fila flex con wrap + UN detalle expandible de ancho completo debajo.
-  // La condición "consecutivos" sale sola del DOM: si el último hijo de la
-  // lista es un grupo, el chip nuevo se suma ahí; cualquier otro elemento
-  // intermedio corta el grupo.
-  _toolGroup() {
+  // ===== Turno de la IA: una sola caja para todo lo que dijo/hizo =====
+  // Antes cada mensaje, permiso, tira de imágenes y la línea de costo eran
+  // hermanos sueltos de .chat-msgs y el turno se leía fragmentado, mientras el
+  // mensaje del usuario sí iba en una caja. Ahora todo eso cuelga de UN
+  // contenedor. El corte sale solo del DOM, igual que .chat-say-group y que
+  // los grupos de tools: apenas entra al hilo algo que no es de la IA (un
+  // mensaje del usuario, un corte de Aduana), lastElementChild deja de ser el
+  // grupo y el próximo elemento de IA abre uno nuevo.
+  _aiHost() {
     const last = this.msgsEl.lastElementChild;
-    if (last && last.classList.contains('chat-toolgroup')) return last;
+    if (last && last.classList.contains('chat-aigroup')) return last;
     const g = document.createElement('div');
-    g.className = 'chat-toolgroup';
-    g.innerHTML = '<div class="ctg-row"></div><div class="ctg-detail" hidden></div>';
+    g.className = 'chat-aigroup';
     this.msgsEl.appendChild(g);
     return g;
   }
 
-  // Chip compacto: el resumen se trunca a ~40 caracteres (el detalle completo
-  // vive en el bloque expandible; para Bash el resumen es el inicio REAL del
-  // comando, nunca una paráfrasis). El detalle se construye PEREZOSO al abrir.
+  // ===== Tool calls: grupos compactos con Pac-Man =====
+  // Tool calls consecutivos (sin texto/permiso/costo en el medio) comparten un
+  // grupo. La condición "consecutivos" sale sola del DOM: si el último hijo de
+  // la lista es un grupo, el registro nuevo se suma ahí; cualquier otro
+  // elemento intermedio corta el grupo.
+  _toolGroup() {
+    const host = this._aiHost();
+    const last = host.lastElementChild;
+    if (last && last.classList.contains('chat-toolgroup')) return last;
+    const g = document.createElement('div');
+    g.className = 'chat-toolgroup';
+    // Registros de las tools del grupo (id, name, summary, detail, output…).
+    // El detalle YA NO vive en el DOM del hilo: se pinta a demanda en el panel.
+    g._tools = [];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ctg-pac';
+    btn.innerHTML = `${pacman({ state: 'working', size: 'sm' })}<span class="ctg-count"></span>`;
+    btn.addEventListener('click', () => this._rawToggle(g));
+    // El botón se guarda por REFERENCIA porque puede terminar viviendo FUERA
+    // del grupo (colgado del mensaje anterior): un querySelector sobre el
+    // grupo devolvería null y el Pac-Man se quedaría congelado en 'working'.
+    g._pacBtn = btn;
+    // El grupo entra igual al hilo aunque quede vacío: es el ancla de
+    // .chat-toolimgs (group.after) y el que lleva la clase .active.
+    host.appendChild(g);
+    const anchor = this._pacAnchor(last);
+    (anchor || g).appendChild(btn);
+    return g;
+  }
+
+  // Dónde cuelga el Pac-Man para no gastar un renglón propio: al final de la
+  // última línea del mensaje anterior. Sólo se mete dentro del último párrafo
+  // si el mensaje TERMINA en párrafo — si termina en tabla, código, gráfico o
+  // diagrama, el Pac-Man quedaría enterrado en medio del contenido, así que
+  // se cuelga del mensaje entero. Devuelve null si no hay mensaje al que
+  // pegarse (un turno que arranca ejecutando, sin texto previo).
+  _pacAnchor(prev) {
+    if (!prev || !prev.classList.contains('chat-assistant')) return null;
+    const md = prev.lastElementChild;
+    const lastBlock = md && md.children.length ? md.children[md.children.length - 1] : null;
+    if (lastBlock && lastBlock.tagName === 'P') return lastBlock;
+    return prev;
+  }
+
+  // Ya NO crea un chip por herramienta: guarda el registro en el grupo y
+  // refresca su Pac-Man. El detalle se pinta a demanda en el panel lateral.
   _toolCard(m) {
     const group = this._toolGroup();
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'chat-toolchip';
-    if (m.id) chip.dataset.toolId = m.id;
-    // Chip SOLO íconos: consola (= herramienta ejecutada) + tipo (leyenda en
-    // el "?" del header). Nombre y resumen quedan en el tooltip y el detalle.
-    chip.innerHTML = `${icon('terminal', { size: 14 })}${icon(toolTypeIcon(m.name), { size: 13, className: 'ct-type' })}`;
-    chip.title = `${m.name}${m.summary ? ` — ${m.summary}` : ''}`;
-    chip._detail = m.detail || null;         // datos crudos para el render perezoso
-    chip._summary = String(m.summary || ''); // fallback del detalle (tools sin input propio)
-    chip._output = null;                     // {ok, text} cuando llegue el tool_result
-    // Motor Pac-Man: un Task/Agent abre la espera de un subagente — mismo
-    // matcher que TOOL_TYPE_ICONS/toolTypeIcon, acá para pintar 'delegating'
-    // en el header mientras el subagente no vuelva con su tool_result.
-    chip._isDelegate = /^(Task|Agent)/i.test(m.name || '');
-    if (chip._isDelegate) { this._delegatingCount++; this._renderPacState(); }
-    chip.addEventListener('click', () => this._toolToggle(group, chip));
-    group.querySelector('.ctg-row').appendChild(chip);
+    const rec = {
+      id: m.id || null,
+      name: m.name || '',
+      summary: String(m.summary || ''),
+      detail: m.detail || null,
+      output: null,                              // {ok, text} cuando llegue el tool_result
+      isDelegate: /^(Task|Agent)/i.test(m.name || ''),
+      delegateDone: false,
+    };
+    group._tools.push(rec);
+    if (rec.id) this._toolIndex.set(rec.id, { rec, group });
+    // Motor Pac-Man del header: un Task/Agent abre la espera de un subagente.
+    if (rec.isDelegate) { this._delegatingCount++; this._renderPacState(); }
+    this._toolGroupSync(group);
+    if (this._rawGroup === group) this._rawRender();
     this._scroll();
+  }
+
+  // Estado del Pac-Man del grupo + contador. Cuál gana: si queda alguna tool
+  // sin resultado, el grupo sigue vivo ('delegating' si la pendiente es un
+  // subagente, si no 'working'); ya terminado, 'error' si alguna falló y
+  // 'dormant' si salió todo bien.
+  _toolGroupSync(group) {
+    const tools = group._tools || [];
+    const pending = tools.filter((t) => !t.output);
+    const state = pending.length
+      ? (pending.some((t) => t.isDelegate) ? 'delegating' : 'working')
+      : (tools.some((t) => t.output && !t.output.ok) ? 'error' : 'dormant');
+    const btn = group._pacBtn;
+    if (!btn) return;
+    const pacEl = btn.querySelector('.cwc-pacman');
+    if (pacEl) pacEl.className = pacClass(state, { size: 'sm' });
+    const countEl = btn.querySelector('.ctg-count');
+    if (countEl) countEl.textContent = String(tools.length);
+    btn.title = t('chat.tool.groupTitle', '{count} herramienta(s) — tocá para ver el detalle', { count: tools.length });
+    btn.classList.toggle('ctg-pac--fail', state === 'error');
+  }
+
+  // ===== Panel lateral de detalle (1/3 del área del chat) =====
+  // Reemplaza al viejo detalle inline: el hilo queda limpio y el detalle
+  // técnico vive al costado, donde puede ser largo sin empujar la conversación.
+  _rawToggle(group) {
+    if (this._rawGroup === group) { this._rawClose(); return; }
+    this._rawGroup = group;
+    for (const g of this.msgsEl.querySelectorAll('.chat-toolgroup.active')) {
+      g.classList.remove('active');
+      g._pacBtn?.classList.remove('ctg-pac--active');
+    }
+    group.classList.add('active');
+    group._pacBtn?.classList.add('ctg-pac--active');
+    this.rawEl.hidden = false;
+    this.container.querySelector('.chat-view').classList.add('chat-view--raw');
+    this._rawRender();
+    this._scroll();
+  }
+
+  _rawClose() {
+    this._rawGroup = null;
+    for (const g of this.msgsEl.querySelectorAll('.chat-toolgroup.active')) {
+      g.classList.remove('active');
+      g._pacBtn?.classList.remove('ctg-pac--active');
+    }
+    if (this.rawEl) this.rawEl.hidden = true;
+    this.rawBodyEl?.replaceChildren();
+    this.container.querySelector('.chat-view')?.classList.remove('chat-view--raw');
+  }
+
+  // Pinta el detalle de TODAS las tools del grupo abierto, una debajo de otra.
+  _rawRender() {
+    const group = this._rawGroup;
+    if (!group || !this.rawBodyEl) return;
+    const tools = group._tools || [];
+    this.rawTitleEl.textContent = t('chat.raw.title', '{count} herramienta(s)', { count: tools.length });
+    const frag = document.createDocumentFragment();
+    for (const rec of tools) {
+      const item = document.createElement('div');
+      item.className = 'craw-item';
+      if (rec.output) item.classList.add(rec.output.ok ? 'craw-item--ok' : 'craw-item--fail');
+      else item.classList.add('craw-item--run');
+      const head = document.createElement('div');
+      head.className = 'craw-head';
+      head.innerHTML = `${icon(toolTypeIcon(rec.name), { size: 12, className: 'craw-ico' })}<span class="craw-name"></span>`;
+      head.querySelector('.craw-name').textContent = rec.name || '?';
+      if (rec.summary) {
+        const sum = document.createElement('span');
+        sum.className = 'craw-sum';
+        sum.textContent = rec.summary;
+        head.appendChild(sum);
+      }
+      item.appendChild(head);
+      item.appendChild(this._toolDetailBody(rec));
+      frag.appendChild(item);
+    }
+    this.rawBodyEl.replaceChildren(frag);
+    this.rawBodyEl.scrollTop = 0;
   }
 
   // Construye el cuerpo del detalle a demanda (lazy, Fase 7): diff para
   // Edit/Write, comando para Bash, y la salida si ya llegó.
-  _toolDetailBody(chip) {
+  _toolDetailBody(rec) {
     const body = document.createElement('div');
     body.className = 'ct-body';
-    const d = chip._detail;
+    const d = rec.detail;
     if (d && (d.old != null || d.new != null)) body.appendChild(renderDiff(d));
-    else if (d?.command || chip._summary) {
+    else if (d?.command || rec.summary) {
       // Con el chip mínimo (solo íconos), el resumen del server es la única
       // pista del input para tools sin detalle propio (Read, etc.).
       // Comandos Bash: resaltados como en un editor (ui/code.js).
       const pre = document.createElement('pre');
       pre.className = 'ct-cmd';
-      fillCode(pre, d?.command || chip._summary, d?.command ? 'bash' : null);
+      fillCode(pre, d?.command || rec.summary, d?.command ? 'bash' : null);
       body.appendChild(pre);
     }
-    if (chip._output) {
+    if (rec.output) {
       const pre = document.createElement('pre');
-      pre.className = 'ct-out' + (chip._output.ok ? '' : ' err');
-      if (chip._output.text) {
+      pre.className = 'ct-out' + (rec.output.ok ? '' : ' err');
+      if (rec.output.text) {
         // Salida con sintaxis SOLO si la extensión del archivo es confiable
         // (Read/Write de un .js, .css, etc.); logs/errores quedan planos.
-        fillCode(pre, chip._output.text, chip._output.ok ? langForPath(chip._summary) : null);
+        fillCode(pre, rec.output.text, rec.output.ok ? langForPath(rec.summary) : null);
       } else {
         pre.textContent = t('chat.tool.noOutput', '(sin salida)');
       }
@@ -1174,59 +2050,31 @@ export class ChatTab {
     return body;
   }
 
-  // Un solo chip expandido por grupo: tocar otro cambia el detalle; tocar el
-  // activo (o Esc, ver constructor) lo cierra.
-  _toolToggle(group, chip) {
-    const det = group.querySelector('.ctg-detail');
-    const active = group.querySelector('.chat-toolchip.active');
-    if (active === chip) { this._toolCollapse(group); return; }
-    active?.classList.remove('active');
-    chip.classList.add('active');
-    det.replaceChildren(this._toolDetailBody(chip));
-    det.hidden = false;
-    det.scrollIntoView({ block: 'nearest' });
-  }
-
-  _toolCollapse(group) {
-    group.querySelector('.chat-toolchip.active')?.classList.remove('active');
-    const det = group.querySelector('.ctg-detail');
-    det.hidden = true;
-    det.replaceChildren();
-  }
-
   _toolResult(m) {
     if (!m.id) return;
-    const chip = this.msgsEl.querySelector(`.chat-toolchip[data-tool-id="${CSS.escape(m.id)}"]`);
-    if (!chip) return;
-    if (chip._isDelegate && !chip._delegateDone) {
-      chip._delegateDone = true; // guarda: un tool_result por id, nunca decrementar dos veces
+    const hit = this._toolIndex.get(m.id);
+    if (!hit) return;
+    const { rec, group } = hit;
+    if (rec.isDelegate && !rec.delegateDone) {
+      rec.delegateDone = true; // guarda: un tool_result por id, nunca decrementar dos veces
       this._delegatingCount = Math.max(0, this._delegatingCount - 1);
       this._renderPacState();
     }
-    chip._output = { ok: !!m.ok, text: m.output || '' };
-    chip.classList.add(m.ok ? 'done' : 'fail');
-    // Imágenes que DEVOLVIÓ la herramienta (Read de un PNG, screenshot…): el
-    // runner las materializó en la carpeta de adjuntos del chat y mandó solo
-    // las referencias {name,type,mime}. Se muestran como miniatura clickeable
-    // (→ lightbox) bajo el grupo del tool, reusando _attsEl de los adjuntos —
-    // así se VEN sin tocar nada, no escondidas en el detalle. Guard por id: un
-    // replay (hello.events al reconectar) no debe duplicar la tira.
+    rec.output = { ok: !!m.ok, text: m.output || '' };
+    this._toolGroupSync(group);
+    // Imágenes que DEVOLVIÓ la herramienta (Read de un PNG, screenshot…): se
+    // muestran como miniatura clickeable BAJO el grupo, no escondidas en el
+    // panel — se VEN sin tocar nada. Guard por id: un replay no las duplica.
     if (Array.isArray(m.images) && m.images.length
         && !this.msgsEl.querySelector(`.chat-toolimgs[data-tool-id="${CSS.escape(m.id)}"]`)) {
-      const group = chip.closest('.chat-toolgroup');
-      if (group) {
-        const strip = this._attsEl(m.images);
-        strip.classList.add('chat-toolimgs');
-        strip.dataset.toolId = m.id;
-        group.after(strip);
-        this._scroll();
-      }
+      const strip = this._attsEl(m.images);
+      strip.classList.add('chat-toolimgs');
+      strip.dataset.toolId = m.id;
+      group.after(strip);
+      this._scroll();
     }
-    // Si justo está expandido, el detalle se refresca en vivo con la salida.
-    if (chip.classList.contains('active')) {
-      const det = chip.closest('.chat-toolgroup').querySelector('.ctg-detail');
-      det.replaceChildren(this._toolDetailBody(chip));
-    }
+    // Si el panel de ESTE grupo está abierto, el detalle se refresca en vivo.
+    if (this._rawGroup === group) this._rawRender();
   }
 
   // Solicitud de permiso COMPACTA (rediseño a pedido: el nombre de la función
@@ -1275,7 +2123,7 @@ export class ChatTab {
     }
     // Regla de seguridad: los comandos destructivos nacen EXPANDIDOS.
     if (m.tool === 'Bash' && isDestructiveCommand(m.detail?.command || m.summary)) toggle(true);
-    this.msgsEl.appendChild(el);
+    this._aiHost().appendChild(el);
     this._scroll();
   }
 
@@ -1304,7 +2152,7 @@ export class ChatTab {
       onCancel: () => this._send({ type: 'permission_response', id: m.id, allow: false }),
     }));
 
-    this.msgsEl.appendChild(el);
+    this._aiHost().appendChild(el);
     this._scroll();
   }
 
@@ -1329,10 +2177,9 @@ export class ChatTab {
     return body;
   }
 
-  // Al decidir, la tarjeta colapsa a un chip de registro con el veredicto que
-  // se integra al grupo horizontal de tool calls (punto 3): al grupo anterior
-  // si lo hay, o a uno nuevo en su lugar (el tool_use aprobado que llegue
-  // después se suma solo al mismo grupo).
+  // Al decidir, la tarjeta colapsa a un chip de registro del permiso. Queda
+  // fuera de los grupos de tools: esos grupos ahora muestran solo su Pac-Man
+  // y reservan el panel lateral exclusivamente para ejecuciones.
   _permClose(m) {
     const el = this.msgsEl.querySelector(`[data-perm-id="${m.id}"]`);
     if (!el) return;
@@ -1342,22 +2189,10 @@ export class ChatTab {
     chip.innerHTML = `${icon(m.allow ? 'check' : 'close', { size: 13 })}<span class="ct-name"></span>`;
     chip.querySelector('.ct-name').textContent = m.allow ? t('chat.perm.allowed', 'Permitido') : t('chat.perm.denied', 'Denegado');
     chip.title = `${el._tool || ''} ${el._summary || ''}`.trim();
-    chip._detail = el._detail || (el._summary ? { command: el._summary } : null);
-    chip._summary = el._summary || '';
-    chip._output = null;
-    const prev = el.previousElementSibling;
-    let group;
-    if (prev && prev.classList.contains('chat-toolgroup')) {
-      group = prev;
-      el.remove();
-    } else {
-      group = document.createElement('div');
-      group.className = 'chat-toolgroup';
-      group.innerHTML = '<div class="ctg-row"></div><div class="ctg-detail" hidden></div>';
-      el.replaceWith(group);
-    }
-    chip.addEventListener('click', () => this._toolToggle(group, chip));
-    group.querySelector('.ctg-row').appendChild(chip);
+    const row = document.createElement('div');
+    row.className = 'chat-perm-row';
+    row.appendChild(chip);
+    el.replaceWith(row);
   }
 
   // El usuario eligió un modo en el select. "Todo" (bypassPermissions del SDK)
@@ -1556,7 +2391,7 @@ export class ChatTab {
       el.className = 'chat-turn-cost';
       const tok = m.usage ? ` · ${m.usage.output} tok` : '';
       el.textContent = `$${m.costUsd.toFixed(4)}${tok}${m.ms ? ` · ${(m.ms / 1000).toFixed(1)}s` : ''}`;
-      this.msgsEl.appendChild(el);
+      this._aiHost().appendChild(el);
       this._scroll();
     }
   }
@@ -1624,6 +2459,61 @@ export class ChatTab {
       : state === 'working' ? t('chat.pac.workingTitle', 'Trabajando…') : t('chat.pac.waitingTitle', 'Esperando tu mensaje');
   }
 
+  _isNearMessagesBottom() {
+    if (!this.msgsEl) return false;
+    return this.msgsEl.scrollHeight - this.msgsEl.scrollTop - this.msgsEl.clientHeight < 80;
+  }
+
+  _markRead() {
+    if (!this.isSala || this._lastSayTs == null || document.visibilityState !== 'visible') return;
+    if (this._lastSayTs === this._lastReadTs) return;
+    this._markReadQueuedTs = this._lastSayTs;
+    this._scheduleMarkRead();
+  }
+
+  _scheduleMarkRead() {
+    if (this._markReadTimer || this._markReadInFlight || this._markReadQueuedTs == null) return;
+    const wait = Math.max(0, 3000 - (Date.now() - this._markReadLastAt));
+    if (wait > 0) {
+      this._markReadTimer = setTimeout(() => {
+        this._markReadTimer = null;
+        this._scheduleMarkRead();
+      }, wait);
+      return;
+    }
+    this._flushMarkRead();
+  }
+
+  async _flushMarkRead() {
+    const ts = this._markReadQueuedTs;
+    if (!this.isSala || ts == null || ts === this._lastReadTs) {
+      this._markReadQueuedTs = null;
+      return;
+    }
+    this._markReadQueuedTs = null;
+    this._markReadInFlight = true;
+    this._markReadLastAt = Date.now();
+    const generation = this._readGeneration;
+    try {
+      const res = await fetch('/api/chat/collab/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: this.id, ts }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok || generation !== this._readGeneration) return;
+      this._lastReadTs = ts;
+      this._unreadAtOpen = 0;
+      // Marcar leído actualiza el contador, no la marca visual de esta apertura:
+      // el separador permanece hasta que un nuevo history repinte todo el hilo.
+    } catch {
+      // El próximo say elegible o una nueva apertura vuelve a intentar.
+    } finally {
+      this._markReadInFlight = false;
+      this._scheduleMarkRead();
+    }
+  }
+
   _scroll() {
     // Coalesce: durante el streaming llegan muchos _scroll() por segundo; sin
     // esto cada token forzaría un reflow (lee scrollHeight). Con rAF se hace a
@@ -1665,6 +2555,7 @@ export class ChatTab {
     this.closedByUser = true;
     this._slashClose();
     this._clearTyping();
+    clearTimeout(this._markReadTimer);
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }
   }

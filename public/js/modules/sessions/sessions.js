@@ -541,31 +541,43 @@ export default {
     // por el observador. `tmuxByName` (armado en render/updateInPlace desde
     // el mismo fetch de /api/tmux/sessions) trae ese estado en vivo.
     function chatDotInfo(c, tmuxByName) {
-      if (c.viewMode === 'tui' && c.terminalId) {
-        const bare = tmuxByName.get(bareNameOf(c.terminalId));
-        const st = bare?.state?.status;
-        if (st === 'working') return { state: 'working', label: t('sessions.dot.workingTui', 'trabajando (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
-        if (st === 'stale') return { state: 'stale', label: t('sessions.dot.staleTui', 'sin señales (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
-        return { state: 'waiting', label: bare ? t('sessions.dot.waitingTui', 'esperando input (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) : t('sessions.dot.tuiMode', 'en modo TUI') };
-      }
-      // Delegando a un subagente (Task tool): más específico que "trabajando"
-      // a secas, así que manda sobre c.status==='working' cuando aplica.
-      if (c.delegating) {
-        const n = c.delegatingCount || 0;
-        return { state: 'delegating', label: n > 1 ? t('sessions.dot.delegatingN', 'delegando a {n} subagentes…', { n }) : t('sessions.dot.delegating', 'delegando a un subagente…') };
-      }
-      if (c.status === 'working') return { state: 'working', label: t('sessions.dot.workingShort', 'trabajando') };
-      // Distinguir VIVO-esperándote (motor corriendo, tu turno real → verde) de
-      // DORMIDO (motor apagado, no pasa nada → gris). Antes TODO lo no-working
-      // caía en verde "esperando input", así que 40+ chats dormidos mentían en
-      // verde y solo se veían 2 estados. `alive` viene de /api/chat/list.
-      if (c.alive) {
-        // El array viene VACÍO en chats ajenos (el server solo manda el conteo
-        // para no popupear permisos de otro usuario — ver ChatManager.list).
-        const perms = (c.pendingPerms || []).length || c.pendingPermsCount || 0;
-        return { state: 'waiting', label: perms ? t('sessions.dot.waitingPerm', 'esperando tu permiso ({n})', { n: perms }) : t('sessions.dot.waitingLive', 'esperando tu input') };
-      }
-      return { state: 'dormant', label: t('sessions.dot.dormant', 'dormido · tocá para retomar') };
+      let hasPendingPerms = false;
+      const info = (() => {
+        if (c.viewMode === 'tui' && c.terminalId) {
+          const bare = tmuxByName.get(bareNameOf(c.terminalId));
+          const st = bare?.state?.status;
+          if (st === 'working') return { state: 'working', label: t('sessions.dot.workingTui', 'trabajando (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
+          if (st === 'stale') return { state: 'stale', label: t('sessions.dot.staleTui', 'sin señales (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
+          return { state: 'waiting', label: bare ? t('sessions.dot.waitingTui', 'esperando input (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) : t('sessions.dot.tuiMode', 'en modo TUI') };
+        }
+        // Delegando a un subagente (Task tool): más específico que "trabajando"
+        // a secas, así que manda sobre c.status==='working' cuando aplica.
+        if (c.delegating) {
+          const n = c.delegatingCount || 0;
+          return { state: 'delegating', label: n > 1 ? t('sessions.dot.delegatingN', 'delegando a {n} subagentes…', { n }) : t('sessions.dot.delegating', 'delegando a un subagente…') };
+        }
+        if (c.status === 'working') return { state: 'working', label: t('sessions.dot.workingShort', 'trabajando') };
+        // Distinguir VIVO-esperándote (motor corriendo, tu turno real → verde) de
+        // DORMIDO (motor apagado, no pasa nada → gris). Antes TODO lo no-working
+        // caía en verde "esperando input", así que 40+ chats dormidos mentían en
+        // verde y solo se veían 2 estados. `alive` viene de /api/chat/list.
+        if (c.alive) {
+          // El array viene VACÍO en chats ajenos (el server solo manda el conteo
+          // para no popupear permisos de otro usuario — ver ChatManager.list).
+          const perms = (c.pendingPerms || []).length || c.pendingPermsCount || 0;
+          hasPendingPerms = Boolean(perms);
+          return { state: 'waiting', label: perms ? t('sessions.dot.waitingPerm', 'esperando tu permiso ({n})', { n: perms }) : t('sessions.dot.waitingLive', 'esperando tu input') };
+        }
+        return { state: 'dormant', label: t('sessions.dot.dormant', 'dormido · tocá para retomar') };
+      })();
+
+      // Prioridad de avisos: permiso > mención > no leídos. El aviso de sala
+      // enriquece el texto sin reemplazar el estado real de la conversación.
+      const mentions = Math.max(0, Number(c.salaMentions) || 0);
+      const unread = Math.max(0, Number(c.salaUnread) || 0);
+      if (!hasPendingPerms && mentions) info.label = t('sessions.dot.mention', 'te nombraron ({n})', { n: mentions });
+      else if (!hasPendingPerms && unread) info.label = t('sessions.dot.unread', '{n} mensajes nuevos', { n: unread });
+      return info;
     }
 
     async function fetchAll() {
@@ -790,6 +802,7 @@ export default {
           </span>
         </span>`;
       appendParticipantChip(main, c);
+      syncSalaBadge(main, c);
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
       main.addEventListener('click', () => (c.archived ? reviveChat(c, { open: true }) : openChatView(c)));
       main.addEventListener('keydown', (e) => {
@@ -813,6 +826,27 @@ export default {
       syncKids(elCard, c);
       syncInterfonoBadge(elCard, c); // señal pasiva del interfono (Fase 2)
       return elCard;
+    }
+
+    // Contador compacto de actividad de sala. Comparte la primera fila con los
+    // badges existentes y se actualiza sin reconstruir la tarjeta.
+    function syncSalaBadge(cardEl, c) {
+      const mentions = Math.max(0, Number(c.salaMentions) || 0);
+      const unread = Math.max(0, Number(c.salaUnread) || 0);
+      let badge = cardEl.querySelector('.sess-badge--mention, .sess-badge--unread');
+      const count = mentions || unread;
+      if (!count) { if (badge) badge.remove(); return; }
+      if (!badge) {
+        badge = document.createElement('span');
+        const row = cardEl.querySelector('.sess-row1');
+        if (!row) return;
+        row.insertBefore(badge, row.querySelector('.sess-mode'));
+      }
+      badge.className = mentions ? 'sess-badge--mention' : 'sess-badge--unread';
+      badge.textContent = count;
+      badge.title = mentions
+        ? t('sessions.badge.mention', 'Te nombraron ({n})', { n: count })
+        : t('sessions.badge.unread', '{n} mensajes nuevos', { n: count });
     }
 
     // Badge PASIVO del Interfono (rediseño 2026-07-10, Fase 2): reemplaza al
@@ -1636,6 +1670,7 @@ export default {
             const modeEl = cardEl.querySelector('.sess-mode');
             if (modeEl) { modeEl.textContent = isTui ? 'TUI' : ''; modeEl.title = isTui ? t('sessions.mode.terminal', 'En modo Terminal (TUI)') : t('sessions.mode.chat', 'En modo Chat'); }
             appendParticipantChip(cardEl, c);
+            syncSalaBadge(cardEl, c);
             // Refrescar el chip de modelo: con motor vivo el cambio de modelo se
             // confirma por eco (this.model queda stale un instante), así que sin
             // esto el poll nunca reflejaba el modelo nuevo hasta un rebuild total.

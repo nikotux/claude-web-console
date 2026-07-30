@@ -33,6 +33,7 @@ import {
 import {
   chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, tolkienEnvPreToolUseHook,
   lessonsPreToolUseHook, autonomyStopHook, mergeHookSets, isConsoleCwd,
+  aduanaPadMcpServer, aduanaPadGuardHook,
 } from '../src/core/tool-policy.js';
 import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
@@ -46,6 +47,7 @@ import {
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
 import { hostUser } from '../src/core/user-space.js';
+import { worldLabelFor } from '../src/core/worlds.js';
 
 // ---- argv ----
 const args = {};
@@ -393,6 +395,7 @@ function startEngine() {
   // única que garantiza `allowDangerouslySkipPermissions` para que el modo
   // "Todo" (bypassPermissions) realmente saltee permisos. Ver ese archivo.
   const mcpServers = {};
+  const isAduana = worldLabelFor(CWD) === 'Aduana';
   if (TANDEM) {
     mcpServers.codex = createCodexToolServer({
       cwd: CWD,
@@ -409,8 +412,13 @@ function startEngine() {
   } catch (e) {
     console.error('[runner] no se pudo cargar la tool unifi:', e?.message);
   }
+  if (isAduana) {
+    const padServer = aduanaPadMcpServer();
+    if (padServer) mcpServers.pad = padServer;
+  }
   const hookSets = [];
   if (TANDEM) hookSets.push(tandemPreToolUseHook());
+  if (isAduana) hookSets.push(aduanaPadGuardHook());
   if (TOLKIEN_ENV_AUTO) {
     hookSets.push(tolkienEnvPreToolUseHook({
       onNeed: () => emit({ type: 'tolkien-env-needed', chatId: ID }, { record: false }),

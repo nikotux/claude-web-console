@@ -92,18 +92,53 @@ function salaSections() {
       ],
     },
     {
+      title: t('chat.help.sala.people.title', 'Personas, menciones y lectura'),
+      blocks: [
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.identity', 'Cada participante tiene un avatar y un color propios. Ese color se repite en su nombre, en sus mensajes y en las menciones dirigidas a esa persona; los mensajes seguidos de un mismo autor se agrupan en un solo bloque.'),
+        },
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.reply', 'La respuesta de la IA indica a quién le está contestando. Si responde a varias personas, vas a ver los colores de todas.'),
+        },
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.mentions', 'Escribí @ para abrir la lista de participantes y mencionar a alguien. A la persona mencionada le queda un aviso más fuerte que el de “mensajes nuevos”.'),
+        },
+        {
+          type: 'p',
+          text: t('chat.help.sala.people.unread', 'El separador “mensajes nuevos” marca el punto donde arrancaste a leer esta vez. Queda en el hilo aunque el contador ya se haya marcado como leído.'),
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.orchestrate.title', 'Orquestar una respuesta'),
+      blocks: [
+        {
+          type: 'note',
+          tone: 'info',
+          text: t('chat.help.sala.orchestrate.text', 'El botón Orquestar crea una conversación nueva en el mundo que elijas y deja ese texto esperando en el composer para que puedas revisarlo o editarlo. No ejecuta nada hasta que vos abras esa conversación y envíes el mensaje.'),
+        },
+      ],
+    },
+    {
       title: t('chat.help.sala.tokens.title', 'Qué consume tokens'),
       blocks: [
         {
           type: 'kv',
           items: [
             {
-              k: t('chat.help.sala.tokens.people.k', 'Hablar entre personas'),
-              v: t('chat.help.sala.tokens.people.v', 'No consume tokens: son mensajes internos de la sala.'),
+              k: t('chat.help.sala.tokens.people.k', 'Enviar en la sala (say)'),
+              v: t('chat.help.sala.tokens.people.v', 'No consume tokens: hablar entre personas son mensajes internos de la sala.'),
             },
             {
               k: t('chat.help.sala.tokens.ai.k', '✦ Enviar a la IA'),
               v: t('chat.help.sala.tokens.ai.v', 'Sí consume tokens: inicia un turno con todo lo acumulado desde el último corte.'),
+            },
+            {
+              k: t('chat.help.sala.tokens.orchestrate.k', 'Orquestar'),
+              v: t('chat.help.sala.tokens.orchestrate.v', 'No consume tokens por sí mismo: el consumo empieza después, si enviás el mensaje desde la conversación nueva.'),
             },
           ],
         },
@@ -146,7 +181,7 @@ export default function chatHelp() {
               t('chat.help.first.step1', 'Elegí el modo de permisos en el selector del header.'),
               t('chat.help.first.step2', 'Escribí o dictá el pedido; si hace falta, tocá Adjuntar o Referenciar paquete para sumar contexto.'),
               t('chat.help.first.step3', 'Tocá Enviar o presioná Enter. Usá Shift+Enter para agregar una línea sin enviar.'),
-              t('chat.help.first.step4', 'Respondé las preguntas y permisos que aparezcan; tocá cada chip de acción para ver su detalle.'),
+              t('chat.help.first.step4', 'Respondé las preguntas y permisos que aparezcan; tocá el Pac-Man de cada bloque para ver en el panel lateral qué herramientas se ejecutaron.'),
               t('chat.help.first.step5', 'Si querés cortar una respuesta en curso, tocá Detener y confirmá.'),
             ],
           },
@@ -228,7 +263,7 @@ export default function chatHelp() {
         blocks: [
           {
             type: 'p',
-            text: t('chat.help.iconsIntro', 'Cada acción del asistente aparece en el hilo como un chip de dos íconos: la consola (ejecutó una herramienta) + el tipo. Tocá el chip para ver el detalle completo; el borde marca el resultado (verde ok · rojo error).'),
+            text: t('chat.help.iconsIntro', 'Las herramientas que ejecuta el asistente ya no ocupan el hilo: cada bloque de trabajo se resume en un Pac-Man con el número de herramientas que corrió. Tocalo y el detalle completo —comando, cambios y resultado— se abre en un panel a la derecha. El Pac-Man se mueve mientras el bloque trabaja, queda quieto al terminar y se pone rojo si algo falló.'),
           },
           {
             type: 'html',
@@ -332,7 +367,11 @@ export default function chatHelp() {
               { k: t('chat.help.buttons.send.k', 'Enviar'), v: t('chat.help.buttons.send.v', 'Manda el mensaje y pone a trabajar al asistente; ese trabajo consume tokens.') },
               { k: t('chat.help.buttons.stop.k', 'Detener'), v: t('chat.help.buttons.stop.v', 'Interrumpe la respuesta en curso después de confirmar.') },
               { k: t('chat.help.buttons.permission.k', 'Permitir / Denegar'), v: t('chat.help.buttons.permission.v', 'Aprueba o rechaza una acción puntual cuando el modo exige permiso.') },
-              { k: t('chat.help.buttons.tool.k', 'Chip de acción'), v: t('chat.help.buttons.tool.v', 'Abre el comando, archivo, resultado o error completo de una herramienta.') },
+              { k: t('chat.help.buttons.tool.k', 'Pac-Man del bloque'), v: t('chat.help.buttons.tool.v', 'Abre el panel lateral con el comando, archivo, resultado o error de cada herramienta de ese bloque. Volvé a tocarlo (o usá ✕ / Esc) para cerrarlo.') },
+              {
+                k: t('chat.help.buttons.rawpanel.k', 'Panel de detalle'),
+                v: t('chat.help.buttons.rawpanel.v', 'Ocupa un tercio a la derecha; en el teléfono se abre casi a pantalla completa. Muestra solo las herramientas del bloque que tocaste.'),
+              },
               { k: t('chat.help.buttons.answer.k', 'Responder pregunta'), v: t('chat.help.buttons.answer.v', 'Elegí una opción o escribí otra respuesta; Enviar se habilita al completar todas. Cancelar rechaza la pregunta.') },
               { k: t('chat.help.buttons.retry.k', 'Reintentar / Ignorar'), v: t('chat.help.buttons.retry.v', 'Si aparece la sugerencia de un modelo más fuerte, vos decidís si rehacer el último turno; nunca cambia solo. Reintentar consume tokens.') },
             ],
@@ -345,7 +384,7 @@ export default function chatHelp() {
           {
             type: 'note',
             tone: 'danger',
-            text: t('chat.help.warning.text', '“Todo” puede ejecutar comandos, editar archivos y usar la red sin volver a preguntarte. Detener corta lo que sigue, pero no deshace acciones ya completadas; revisá los chips antes de aprobar algo sensible.'),
+            text: t('chat.help.warning.text', '“Todo” puede ejecutar comandos, editar archivos y usar la red sin volver a preguntarte. Detener corta lo que sigue, pero no deshace acciones ya completadas; revisá el detalle en el panel lateral antes de aprobar algo sensible.'),
           },
         ],
       },

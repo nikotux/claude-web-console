@@ -1522,6 +1522,104 @@ autor; con 10 adjuntos en el buzón viajan 8 y la nota avisa de los 2 restantes;
 tras reiniciar el server, los 7 `say` se reconstruyen desde `sala.jsonl` con sus
 adjuntos; y Playwright confirma las miniaturas en la burbuja con 0 errores JS.
 
+IDENTIDAD VISUAL v2 (`console:PLAN-2374`, 2026-07-30).
+`public/js/ui/avatars.js` es un primitivo nuevo: 12 siluetas SVG RELLENAS
+—rombo, triángulo, hexágono, estrella, gota, luna, rayo, cruz, ancla, hoja, ola
+y anillo— por los 6 tonos `--cwc-peer-*` dan 72 combinaciones. Son rellenas y
+no de trazo como `icons.js` porque a 22 px el detalle fino desaparece y lo que
+se reconoce es la silueta. La asignación usa un hash FNV-1a del username y es
+DETERMINÍSTICA a propósito: «aleatorio» significa que el usuario no elige, no
+que se sortee en cada render; un sorteo por render cambiaría el avatar en cada
+recarga y destruiría la identificación rápida que el avatar existe para dar.
+El desempate es POR SALA —dos avatares iguales solo confunden dentro de la misma
+conversación— y se resuelve sobre la lista de participantes ORDENADA
+ALFABÉTICAMENTE: sin ese orden canónico, dos navegadores desempatarían distinto
+y verían los avatares cruzados. Los mensajes consecutivos del mismo autor se
+agrupan en `.chat-say-group`, con una guía vertical de su color y UN solo
+rótulo; «consecutivos» se deduce del DOM, igual que el agrupado de chips de
+herramientas, sin sumar estado. La respuesta de la IA se colorea por
+DESTINATARIO: el modelo lo declara en la primera línea con `@para: nombre`, el
+prompt del corte le pasa los nombres válidos de la sala y el FRONT parsea y
+oculta esa línea. Se hace en el front a propósito: parsearla en el server
+obligaría a retener el primer delta del streaming hasta completar la línea, es
+decir, meter mano en el camino más caliente del chat; en el front alcanza con
+acumular el crudo y pintar la versión limpia, y el mismo parseo sirve para el
+replay del transcript. El fallback NO es opcional: si el modelo no declara
+nada, se usan los AUTORES DEL CORTE, que el server ya conoce gratis y envía en
+el evento `cut` como `authors[]`; sin eso, un turno sin declaración dejaría la
+burbuja sin color y se leería como un bug. GOTCHA que costó encontrar:
+`stripAddressees` tiene un modo `final`. Durante el streaming, un texto que
+empieza con `@para:` pero todavía no tiene salto de línea queda «pendiente» y no
+se pinta, evitando el parpadeo; aplicar la misma regla al texto FINAL hacía
+DESAPARECER la respuesta entera cuando el modelo contestaba en una sola línea.
+En el texto final, ante la duda, se muestra la marca cruda: feo pero visible, en
+vez de comerse el contenido sin que nadie se entere.
+
+ATENCIÓN: MENCIONES Y NO LEÍDOS (`console:PLAN-2375`). Las menciones se
+resuelven EN EL SERVER contra los usuarios reales de la sala mediante
+`parseMentions` y viajan en el record de `say` como `mentions[]`. Un
+`@cualquiercosa` que no corresponde a nadie se ignora en silencio y queda como
+texto plano, para que escribir un arroba suelto no genere avisos fantasma; el
+front resalta SOLO lo que manda el server, nunca lo que detecte por su cuenta.
+Las marcas de lectura viven en `<salaRoot>/reads.json` como `{username: ts}` y
+se escriben con tmp+rename porque se reemplaza el conjunto entero, no se
+apendea. Están en la SALA y no en el espacio de cada usuario porque la sala es
+suelo neutral compartido; repartirlas obligaría a abrir N archivos de N
+espacios para un contador que se pide en cada poll. Una marca NUNCA retrocede:
+si llega un `ts` menor o igual se conserva el guardado; sin esa guarda, un
+cliente que reconecta con un evento viejo podría «des-leer» mensajes y hacer
+reaparecer el contador. `salaUnreadFor(username)` cuenta sobre `history`, que ya
+está EN MEMORIA, y nunca lee disco: es la decisión de performance del bloque,
+porque el poll de la UI pide `/api/chat/list` cada pocos segundos para TODAS las
+conversaciones. Los contadores se exponen en `ChatManager.list(principal)`
+siguiendo el molde de `pendingPermsCount` y SOLO para las salas donde ese
+principal participa: el estado de lectura de otro nunca se expone, preservando
+el aislamiento del 2026-07-27. El separador «mensajes nuevos» necesita el dato
+POR USUARIO, mientras `_historyPayload()` es por conversación; se resuelve en
+`attach(ws)`, que sí conoce al usuario del socket mediante `ws._cwcUser`. OJO:
+esa asignación tuvo que MOVERSE antes de `attach()`, porque estaba después. Los
+tres reenvíos de `history` tras un respawn NO llevan ese dato a propósito,
+porque salen para todos los clientes a la vez. El separador NO se borra al
+marcar leído: marcar leído afecta el contador —lo que se verá la próxima vez—,
+mientras el separador es la marca visual de ESTA lectura y permanece hasta que
+el hilo se repinta; como `_markRead()` se dispara al abrir, borrarlo ahí lo
+hacía aparecer y desaparecer en el mismo instante. GOTCHA de estado: los avisos
+de sala NO pisan el estado del Pac-Man. Se intentó devolver
+`state:'mention'`/`state:'unread'`, pero esos estados no existen en
+`PAC_STATES`, así que `resolveState()` los degradaba a `dormant` y una sala VIVA
+con una mención se veía gris de «dormida». Rige la regla de siempre: el Pac-Man
+comunica el ESTADO, el badge comunica el aviso y el badge nunca duplica el
+estado.
+
+SALIDA ORQUESTADA (`console:PLAN-2376`). `POST /api/chat/collab/orquestar`
+recibe `{id, world, text}` y crea una conversación NUEVA en un mundo real con el
+texto elegido de la sala. Usa el guard `participantChat` porque orquestar es una
+acción de participar, no de dueño. El dueño de la sesión nueva es QUIEN APRIETA
+el botón, no el anfitrión de la sala: nace en SU mundo con SU credencial y sus
+turnos los paga él. El `cwd` se resuelve con `projectsFor(principal)` de quien
+orquesta y se valida con `safeCwd`, para que a un inquilino no se le cuele un
+mundo ajeno. LA LEY 3 ES LITERAL: la instrucción llega PRECARGADA en el
+composer, NO enviada. La sesión nace con `startEngine:false`, dormida y sin
+runner. Se evaluó inyectarla como primer turno automático —más cómodo— y se
+descartó: permitiría que la sala dispare trabajo en el mundo de otra persona
+sin que esa persona lo vea primero. El visado es el acto físico de apretar
+enviar. `pendingPrompt` se PERSISTE en el chat; sin eso, un reinicio del server
+antes de que el destinatario abra la sesión perdería la instrucción en silencio.
+La creación reusa `createChatForRequest` con el flag nuevo `startEngine`, cuyo
+default es `true`, así que la creación normal no cambió en nada. Solo viaja el
+texto elegido más una línea de procedencia etiquetada como «dato, no
+instrucción» (Ley 6). NO viaja el hilo de la sala: la Ley 2 vale también hacia
+afuera y, como la persona edita el texto antes de confirmar, declara
+explícitamente qué sale. La sala recuerda lo que ya derivó con un record
+`orquestado` en `sala.jsonl`; sin esa memoria, dos personas pueden orquestar lo
+mismo dos veces. Al reconstruir el hilo, ese record NO avanza el índice de
+turnos ni resetea el buzón: las anclas que alinean el transcript de la IA con el
+log humano son los `cut`. LIMITACIÓN CONOCIDA de v1: el botón vive solo en la
+burbuja de la IA —un mensaje humano se orquesta pegándolo en el modal, que es
+editable— y la marca del hilo no es clickeable, porque no existe un puente de
+navegación desde `chat-tab.js` hacia `openChatView` y no se inventó uno para
+esto.
+
 LAS CUATRO COMPUERTAS conservan la frontera por dueño. `ownedChat` quedó
 INTACTO para las acciones de dueño y se sumó `participantChat` para las
 acciones de participar; cambiaron el guard del WS, `list(principal)` y el

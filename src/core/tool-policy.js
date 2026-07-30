@@ -26,6 +26,8 @@
 // 'default' algunas acciones NO piden permiso — eso es la allowlist del usuario,
 // no un bug de la consola.
 
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settingSourcesFor } from './sdk-settings.js';
@@ -226,6 +228,59 @@ export function tandemPreToolUseHook() {
         }
         if (input.tool_name === 'Bash' && isWritingBashCommand(input.tool_input?.command || '')) {
           return deny('Modo Tándem: Bash es solo para inspección y verificación (leer, node --check, tests). Para escribir archivos usá delegate_to_codex.');
+        }
+        return {};
+      }],
+    }],
+  };
+}
+
+export function aduanaPadMcpServer() {
+  try {
+    const command = process.env.CWC_PAD_BIN || path.join(os.homedir(), '.local', 'bin', 'pad');
+    if (!fs.existsSync(command)) return null;
+    // La fuente de verdad de este default es pad-service-client.js (DEFAULT_URL);
+    // si cambia allá, hay que cambiarlo también acá.
+    const url = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+    return {
+      type: 'stdio',
+      command,
+      // Fija el default de la sesión MCP: el modelo no tiene que elegir workspace
+      // ni puede equivocarse por omisión. El hook inferior blinda los explícitos.
+      args: ['mcp', 'serve', '--url', url, '--workspace', 'aduana'],
+      env: {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Capa AUTORITATIVA de aislamiento: --workspace sólo fija el default y un
+// workspace explícito lo reemplaza. PreToolUse sigue aplicando incluso cuando
+// bypassPermissions shadowea canUseTool (console:BUG-780).
+export function aduanaPadGuardHook() {
+  const deny = (permissionDecisionReason) => ({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason,
+    },
+  });
+  return {
+    PreToolUse: [{
+      hooks: [async (input) => {
+        const toolName = String(input?.tool_name || '').trim().toLowerCase();
+        const toolInput = input?.tool_input;
+        const hasWorkspace = toolInput !== null
+          && typeof toolInput === 'object'
+          && Object.prototype.hasOwnProperty.call(toolInput, 'workspace');
+        const isPadTool = toolName.startsWith('mcp__pad');
+        const isSetWorkspace = toolName === 'pad_set_workspace'
+          || toolName.endsWith('__pad_set_workspace');
+        if ((isPadTool || isSetWorkspace)
+          && hasWorkspace
+          && String(toolInput.workspace).trim().toLowerCase() !== 'aduana') {
+          return deny('Sala de Aduana: solo podés escribir en su propio Pad (workspace `aduana`); no se permite seleccionar otro workspace.');
         }
         return {};
       }],
