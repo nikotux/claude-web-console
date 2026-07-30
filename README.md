@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-30 17:47 — main
+- Sumar módulo Novedades y modernizar diagramas Mermaid con paleta
+
 ### 2026-07-29 20:04 — main
 - Implementar facetas, migrar tasks→pendientes y mejorar herramientas Pad
 
