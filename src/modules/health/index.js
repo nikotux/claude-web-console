@@ -17,7 +17,9 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { hostUser } from '../../core/user-space.js';
+import { hostUser, readInfisicalAccountEmail, userSpace } from '../../core/user-space.js';
+import { listUsers } from '../../core/users.js';
+import { ownerForSession } from '../../core/session-names.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
   writeLock, clearLock,
@@ -37,8 +39,10 @@ import { aiEnginesCensus, generateInventory, coherenceCensus } from '../../core/
 import { systemSnapshot } from '../stats/index.js';
 import { verifySync as verifyTolkienContextSync } from '../tickets/context-store.js';
 import { listEnvs, ENVS_DIR } from '../tolkien/env-store.js';
+import { CAPABILITIES, requiredFor } from '../onboard/capabilities.js';
 import { listProvisionStates } from '../onboard/provision-state.js';
 import { verifyEnvContext } from '../tolkien/env-shared.js';
+import { tmuxArgs } from '../terminal/sessions.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
   readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
@@ -149,6 +153,125 @@ async function checkTmux() {
   const tui = names.filter((n) => n.startsWith('cwct-')).length;
   const otras = names.length - term - tui;
   return { id: 'tmux', label: 'Servidor tmux (cwc)', status: 'ok', detail: `${term} terminal(es) · ${tui} TUI(s) de chat${otras ? ` · ${otras} ajena(s)` : ''}` };
+}
+
+// BUG-2350: el server tmux conserva un entorno GLOBAL independiente del
+// proceso Node. Si HOME queda apuntando al espacio de un inquilino, una sesión
+// posterior puede heredar sus credenciales. Auditamos tanto la causa latente
+// (HOME global) como el HOME efectivo de cada pane, siempre contra el owner
+// durable de session-owners.json.
+export async function checkTmuxOwner() {
+  const id = 'tmux-owner';
+  const label = 'Aislamiento HOME de tmux';
+  try {
+    let expectedHostHome;
+    try {
+      expectedHostHome = userSpace(hostUser());
+    } catch (err) {
+      return {
+        id,
+        label,
+        status: 'warn',
+        detail: `no pude resolver el HOME esperado del host: ${String(err?.message || err).slice(0, 180)}`,
+      };
+    }
+
+    const [panesResult, globalResult] = await Promise.all([
+      run('tmux', tmuxArgs('list-panes', '-a', '-F', '#{session_name}|#{pane_pid}')),
+      run('tmux', tmuxArgs('show-environment', '-g')),
+    ]);
+    const uncertainty = [];
+    let globalIssue = null;
+
+    if (globalResult.err) {
+      const reason = globalResult.errOut || globalResult.err?.message || 'error desconocido';
+      uncertainty.push(`no pude leer el entorno global de tmux: ${String(reason).replace(/\s+/g, ' ').slice(0, 180)}`);
+    } else {
+      const homeLine = globalResult.out.split('\n').find((line) => line.startsWith('HOME='));
+      if (homeLine) {
+        const actualGlobalHome = homeLine.slice('HOME='.length);
+        if (actualGlobalHome !== expectedHostHome) {
+          globalIssue = `HOME global=${actualGlobalHome || '<vacío>'} (esperado ${expectedHostHome}) — fuga latente`;
+        }
+      }
+    }
+
+    if (panesResult.err) {
+      const reason = panesResult.errOut || panesResult.err?.message || 'error desconocido';
+      uncertainty.unshift(`no pude enumerar los panes de tmux: ${String(reason).replace(/\s+/g, ' ').slice(0, 180)}`);
+      if (globalIssue) uncertainty.push(globalIssue);
+      return { id, label, status: 'warn', detail: uncertainty.join(' · ') };
+    }
+
+    const paneLines = panesResult.out.split('\n').filter(Boolean);
+    const mismatches = [];
+    for (const line of paneLines) {
+      const separator = line.lastIndexOf('|');
+      const sessionName = separator === -1 ? '' : line.slice(0, separator);
+      const panePid = separator === -1 ? '' : line.slice(separator + 1);
+      if (!sessionName || !/^\d+$/.test(panePid)) {
+        uncertainty.push(`pane ilegible en la salida de tmux: ${line.slice(0, 160)}`);
+        continue;
+      }
+
+      let sessionId = sessionName;
+      if (sessionName.startsWith('cwct-')) sessionId = sessionName.slice('cwct-'.length);
+      else if (sessionName.startsWith('cwc-')) sessionId = sessionName.slice('cwc-'.length);
+
+      let owner = null;
+      try { owner = ownerForSession(sessionId); } catch { /* helper durable best-effort */ }
+      if (!owner) {
+        uncertainty.push(`${sessionName}: dueño no resuelto en session-owners.json`);
+        continue;
+      }
+
+      let expectedHome;
+      try {
+        expectedHome = userSpace(owner);
+      } catch (err) {
+        uncertainty.push(`${sessionName}: dueño declarado ${owner}, HOME esperado no resoluble (${String(err?.message || err).slice(0, 120)})`);
+        continue;
+      }
+
+      let actualHome;
+      try {
+        const entries = fss.readFileSync(path.join('/proc', panePid, 'environ')).toString('utf8').split('\0');
+        const homeEntry = entries.find((entry) => entry.startsWith('HOME='));
+        actualHome = homeEntry ? homeEntry.slice('HOME='.length) : null;
+      } catch (err) {
+        uncertainty.push(`${sessionName}: dueño declarado ${owner}, no pude leer /proc/${panePid}/environ (${String(err?.code || err?.message || err).slice(0, 120)})`);
+        continue;
+      }
+
+      if (actualHome !== expectedHome) {
+        mismatches.push(`${sessionName}: dueño declarado ${owner}, HOME real=${actualHome ?? '<ausente>'} (esperado ${expectedHome})`);
+      }
+    }
+
+    if (mismatches.length) {
+      const extras = [...(globalIssue ? [globalIssue] : []), ...uncertainty];
+      return {
+        id,
+        label,
+        status: 'fail',
+        detail: `${mismatches.join(' · ')}${extras.length ? ` · ${extras.join(' · ')}` : ''}`,
+      };
+    }
+    if (globalIssue || uncertainty.length) {
+      return { id, label, status: 'warn', detail: [globalIssue, ...uncertainty].filter(Boolean).join(' · ') };
+    }
+    if (!paneLines.length) {
+      return { id, label, status: 'ok', detail: 'sin panes · HOME global sano' };
+    }
+    return { id, label, status: 'ok', detail: `${paneLines.length} pane(s) con HOME acorde a su dueño · HOME global sano` };
+  } catch (err) {
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `auditoría tmux-owner degradada: ${String(err?.message || err).replace(/\s+/g, ' ').slice(0, 200)}`,
+    };
+  }
 }
 
 function checkRunners() {
@@ -482,6 +605,73 @@ function checkOnboardProvisioning() {
     return { id, label, status: 'warn', detail: `${parts.join(' · ')} — ese inquilino quedó sin su Pad o sin el clon de su workspace` };
   }
   return { id, label, status: 'ok', detail: `${states.length} alta(s) con provisioning completo` };
+}
+
+// PLAN-2337 C7: foto determinística de los pasos requeridos del wizard para
+// cada inquilino. Reusa el catálogo y los detectores reales del onboarding:
+// duplicar acá una lista o mirar solo presencia volvería a introducir falsos
+// verdes. La colisión Infisical host↔inquilino es una regresión confirmada y
+// tiene prioridad sobre cualquier `warn` por pasos pendientes. Usa `fail` y no
+// un estado propio porque el frontend deriva la clase CSS como
+// `hp-dot--${status}`: un estado nuevo se renderiza sin color en silencio.
+export async function checkOnboarding() {
+  const id = 'onboarding';
+  const label = 'Onboarding de inquilinos';
+  let tenants;
+  try {
+    const host = hostUser();
+    tenants = listUsers().filter((user) => user?.username && user.username !== host);
+  } catch {
+    return { id, label, status: 'warn', detail: 'no pude enumerar los inquilinos para auditar su onboarding' };
+  }
+  if (!tenants.length) return { id, label, status: 'ok', detail: 'sin inquilinos' };
+
+  let hostEmail = null;
+  try { hostEmail = readInfisicalAccountEmail(hostUser()); } catch { /* identidad desconocida: no afirmar colisión */ }
+
+  const incomplete = [];
+  const infisicalCollisions = [];
+  for (const tenant of tenants) {
+    const user = tenant.username;
+    const missing = [];
+    for (const capability of [...CAPABILITIES].sort((a, b) => a.order - b.order)) {
+      let required = true;
+      try { required = requiredFor(capability, user); } catch { /* fail-closed: exigir el paso */ }
+      if (!required) continue;
+      let complete = false;
+      try { complete = !!(await capability.detect(user)); } catch { /* fail-closed: paso no cumplido */ }
+      if (!complete) missing.push(capability.labelEs || capability.id);
+    }
+    if (missing.length) incomplete.push({ user, missing });
+
+    let tenantEmail = null;
+    try { tenantEmail = readInfisicalAccountEmail(user); } catch { /* sin identidad verificable */ }
+    if (hostEmail && tenantEmail && tenantEmail === hostEmail) infisicalCollisions.push(user);
+  }
+
+  const missingText = incomplete
+    .map(({ user, missing }) => `${user}: ${missing.join(', ')} pendientes`)
+    .join(' · ');
+  if (infisicalCollisions.length) {
+    const collisionText = infisicalCollisions
+      .map((user) => `${user}: credencial Infisical del host en espacio ajeno`)
+      .join(' · ');
+    return {
+      id,
+      label,
+      status: 'fail',
+      detail: `${collisionText}${missingText ? ` · pasos requeridos: ${missingText}` : ''}`,
+    };
+  }
+  if (incomplete.length) {
+    return { id, label, status: 'warn', detail: missingText };
+  }
+  return {
+    id,
+    label,
+    status: 'ok',
+    detail: `${tenants.length} inquilino(s) con capacidades requeridas completas`,
+  };
 }
 
 // PLAN-2268: Salud solo lee la foto generada por el runner desacoplado. Nunca
@@ -897,6 +1087,7 @@ async function runChecks() {
     Promise.resolve(checkServer()),
     checkSystemd(),
     checkTmux(),
+    checkTmuxOwner(),
     Promise.resolve(checkRunners()),
     Promise.resolve(checkObserver()),
     Promise.resolve(checkCert()),
@@ -912,6 +1103,7 @@ async function runChecks() {
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     Promise.resolve(checkOnboardProvisioning()),
+    checkOnboarding(),
     Promise.resolve(checkDockerHygiene()),
     checkPadBackbone(),
     checkPadIndex(),

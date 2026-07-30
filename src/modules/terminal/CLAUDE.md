@@ -39,11 +39,15 @@
   sesión que corre `claude` falla cerrado si no hay credencial. El spawn además
   garantiza `hasCompletedOnboarding: true` en su `.claude.json`, porque sin esa
   clave el CLI interactivo queda en onboarding aunque tenga credencial válida.
-  Como el server tmux es compartido con el host, cada `new-session` debe recibir
-  las variables críticas y el OAuth opcional mediante `-e`, y neutralizar con `-e CLAVE=` las
-  variables de su entorno global que sean secretos o empiecen con `CWC_`. Con
-  `-A`, una sesión ya creada conserva su env viejo durante la rehidratación: hay
-  que matarla y recrearla para que tome el aislamiento nuevo.
+  El server tmux es compartido y de vida larga: conserva el entorno del primer
+  cliente que lo levantó, y los panes nuevos heredan ese entorno del server, no
+  el del cliente que ejecuta `new-session`. Por eso tanto el host como los
+  inquilinos deben pasar explícitamente con `-e` la allowlist crítica y las
+  variables runtime `CWC_*`/`TOLKIEN_*` presentes en su propio env
+  (`console:BUG-2350`). Solo los inquilinos neutralizan además con `-e CLAVE=`
+  los secretos y `CWC_*` encontrados en el entorno global de tmux. Con `-A`,
+  tmux ignora los `-e` si la sesión ya existe: una sesión creada con el entorno
+  viejo debe matarse y recrearse; no se corrige en caliente al rehidratar.
 - IMPORTANTE: el HOME owner-scoped es una MITIGACIÓN, no aislamiento real. El
   inquilino sigue ejecutando como el mismo usuario de SO: desde su shell puede
   navegar a `/home/nmosquera` o adjuntarse con `tmux -S` a sesiones ajenas. El

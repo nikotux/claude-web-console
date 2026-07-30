@@ -122,10 +122,7 @@ async function resolveTicketId(ticketNumberOrId) {
 
 // ===== API pública determinística (sin IA) =====
 
-export async function getTicketState(ticketNumberOrId) {
-  const ticketId = await resolveTicketId(ticketNumberOrId);
-  const t = await callTool('desk_get_ticket', { ticket_id: ticketId });
-  if (t?.errorCode) throw new Error(`Zoho Desk: ${t.errorCode} — ${t.message || 'sin detalle'}`);
+export function normalizeTicket(t) {
   return {
     found: true,
     id: t.id ?? null,
@@ -155,6 +152,13 @@ export async function getTicketState(ticketNumberOrId) {
     webUrl: t.webUrl ?? null,
     raw: t,
   };
+}
+
+export async function getTicketState(ticketNumberOrId) {
+  const ticketId = await resolveTicketId(ticketNumberOrId);
+  const t = await callTool('desk_get_ticket', { ticket_id: ticketId });
+  if (t?.errorCode) throw new Error(`Zoho Desk: ${t.errorCode} — ${t.message || 'sin detalle'}`);
+  return normalizeTicket(t);
 }
 
 // Agentes de Desk (para resolver assigneeId -> nombre del propietario).

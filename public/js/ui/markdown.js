@@ -422,6 +422,21 @@ const MERMAID_MIN_SCALE = 0.85;
 const mermaidObservers = new Set();
 let mermaidSeq = 0;
 
+// Clases semánticas de la paleta (`A:::ok`) sin obligar a escribir el classDef
+// en CADA diagrama: si el source no lo define, se lo anexamos con los colores
+// ya resueltos por index.html. Solo en flowchart/graph — en mindmap las clases
+// las resuelve el themeCSS, y un classDef ahí ROMPE la sintaxis.
+function withMermaidPrelude(src) {
+  const pal = window.__cwcMermaidPalette;
+  if (!pal || !pal.roles) return src;
+  const head = src.split('\n').find((l) => l.trim() && !l.trim().startsWith('%%')) || '';
+  if (!/^\s*(flowchart|graph)\b/.test(head)) return src;
+  const defs = Object.entries(pal.roles)
+    .filter(([name]) => !new RegExp(`classDef\\s+${name}\\b`).test(src))
+    .map(([name, r]) => `classDef ${name} fill:${r.fill},stroke:${r.stroke},color:${r.color},stroke-width:1.5px`);
+  return defs.length ? `${src}\n${defs.join('\n')}\n` : src;
+}
+
 // `width:100%` deformaba el encuadre al escalar siempre por ancho; con viewBox
 // hay que encajar por el eje que MÁS sobresale, como `object-fit: contain`.
 function fitMermaidSvg(canvasEl) {
@@ -527,10 +542,12 @@ function enhanceMermaidBlocks(root) {
     // Dispara la carga LAZY de Mermaid recién ahora que hay un bloque real
     // (PEND-621). Fallback al comportamiento viejo si el loader no existe.
     const ready = window.__loadMermaid ? window.__loadMermaid() : (window.mermaidReady || Promise.resolve(window.mermaid || null));
+    let renderId = null;
     ready.then((mermaid) => {
       if (!mermaid) throw new Error('mermaid no disponible');
       mermaidSeq += 1;
-      return mermaid.render(`md-mermaid-${Date.now()}-${mermaidSeq}`, src);
+      renderId = `md-mermaid-${Date.now()}-${mermaidSeq}`;
+      return mermaid.render(renderId, withMermaidPrelude(src));
     }).then(({ svg }) => {
       // El SVG vive inline con encaje proporcional para leerse como parte del
       // mensaje; "Ampliar" queda como ayuda extra. El badge va fuera del canvas
@@ -568,6 +585,14 @@ function enhanceMermaidBlocks(root) {
       holder.addEventListener('click', () => openMermaidZoom(holder));
       holder.dispatchEvent(new CustomEvent('cwc:mermaid-rendered', { bubbles: true }));
     }).catch(() => {
+      // Cinturón + tirantes sobre `suppressErrorRendering` (index.html): si una
+      // versión futura de Mermaid vuelve a dejar su div temporal colgado de
+      // <body> al fallar, lo barremos acá. `d<id>` es el div de render y
+      // `i<id>` el iframe del modo sandbox.
+      if (renderId) {
+        document.getElementById(`d${renderId}`)?.remove();
+        document.getElementById(`i${renderId}`)?.remove();
+      }
       holder.remove();
       details.open = false;
       const note = document.createElement('div');

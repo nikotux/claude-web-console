@@ -123,7 +123,12 @@ mundo externo, el mismo criterio por el que `sessionFolderRule` ya se inyecta
 en chats de Tolkien. El propio texto PROHÍBE usar esa sintaxis en artefactos
 que salen de la consola —descripciones de PR, comentarios de tickets de Zoho,
 ítems del Pad de Tolkien, correos y mensajes de Teams— porque ahí quedaría
-como JSON o texto crudo. La guía larga, con paleta y ejemplos copiables, vive
+como JSON o texto crudo. Es el ÚNICO camino por el que una sesión de Tolkien
+se entera de las capacidades de render de la consola: la skill `graficar` no
+viaja con ella. Por eso resume ahí la paleta semántica de Mermaid para
+`flowchart`/`graph` (`:::key`, `:::ok`, `:::warn`, `:::bad`, `:::info`,
+`:::cool`, `:::deep`, `:::muted`) y advierte que `:::` no existe en `mindmap`
+ni en `sequenceDiagram`. La guía larga, con paleta y ejemplos copiables, vive
 en la skill `graficar` (`cwc-share: catalog`, `cwc-default: true`), instalada
 a todo usuario nuevo por `installDefaults()` de
 `src/modules/skills/catalog.js`. Como siempre, un runner YA VIVO no incorpora

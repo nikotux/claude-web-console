@@ -38,7 +38,7 @@ Mensaje IA: POST
 /commit-message captura diff+archivos EN NODE, escribe el job en
 ~/.cwc-data/commitmsg/<id>.json (id determinístico por estado del
 árbol ⇒ doble click = mismo job) y spawnea
-bin/cwc-commitmsg-runner.js DETACHED (regla de oro; haiku, 1
+bin/cwc-commitmsg-runner.js DETACHED (regla de oro; sonnet, 1
 turno, CERO herramientas — regla 6 con TODO denegado, patrón
 projects/analyze-shared); GET /commit-message/:id solo lee disco
 y el diálogo encuesta cada 1.5 s — si la IA falla, el mensaje se
@@ -59,6 +59,9 @@ recién stageados; si no hay nada nuevo, no toca el README) y
 (2) reafirma la descripción del repo en GitHub (inglés, resume
 consola+módulos) vía `gh repo edit` (best-effort: si falta gh/auth
 no rompe el push, ver campo `description` de la respuesta).
+(3) encola la redacción de 🆕 Novedades (`bin/cwc-news-runner.js`)
+fire-and-forget: un fallo ahí jamás convierte el push en error, y los commits
+`cwc backup …` viajan en el detalle técnico pero se omiten del prompt.
 PULL desde GitHub (POST /pull, admin): restauración del código —
 mismas guardas, fetch + stash→merge --ff-only→pop (patrón
 tolkien/update: NUNCA descarta trabajo ni fuerza nada; divergencia

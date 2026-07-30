@@ -6,7 +6,7 @@
 // El endpoint POST /api/backup/commit-message (modules/backup/index.js) solo
 // escribe el job PENDIENTE en ~/.cwc-data/commitmsg/<id>.json (con el diff ya
 // capturado por el server) y spawnea esto; acá se hace la corrida real (SDK,
-// haiku, 1 turno, CERO herramientas — dos capas de denegación, regla 6: el
+// sonnet, 1 turno, CERO herramientas — dos capas de denegación, regla 6: el
 // diff viaja entero en el prompt) y se persiste el resultado en el MISMO
 // archivo. El front encuesta GET /commit-message/:id hasta que status deja de
 // ser 'running'. Mismo patrón que bin/cwc-projects-analyze-runner.js.
@@ -22,7 +22,7 @@ const id = process.argv[2];
 async function runGeneration(job) {
   const text = await textOnlyQuery(commitMsgPrompt(job), {
     cwd: ROOT,
-    model: 'haiku',
+    model: 'sonnet',
     effort: 'low',
     maxTurns: 1,
     timeoutMs: COMMITMSG_TIMEOUT_MS,

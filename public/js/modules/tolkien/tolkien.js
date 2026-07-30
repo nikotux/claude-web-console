@@ -15,6 +15,10 @@
 // stash→pull→pop si estás en main) · 💽 data. La línea 🌿 abre la ventana de PRs
 // con "Poner al día" (rebase de la rama actual sobre main). El auto-fetch cada
 // 5 min mantiene fresco el "detrás" (la consulta gh de /branches NO va ahí).
+// El panel es ADMIN-ONLY (todos sus endpoints devuelven 403 al resto): si
+// ctx.whoami no es admin, se oculta y no arranca ningún poll. Y el auto-fetch
+// (mount/interval/visibilitychange) falla SIEMPRE EN SILENCIO — el modal de
+// error es exclusivo del click en 🔄 Buscar cambios.
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
@@ -24,10 +28,23 @@ export default {
   name: 'tolkien',
 
   mount(el, ctx) {
-    const { icon, dialog } = ctx;
+    const { icon, dialog, whoami } = ctx;
     let current = null;
     let busy = false;
     let dataBusy = false;
+    let lastFetchTs = 0;
+    // El panel entero de Tolkien es admin-only: TODOS sus endpoints devuelven 403
+    // a un no-admin. Antes se montaba igual y el auto-fetch le tiraba un modal de
+    // "solo un administrador…" en CADA visibilitychange. Ahora: si no es admin, el
+    // panel se oculta y NINGÚN poll arranca.
+    let isAdminUser = null;                 // null = todavía no resuelto
+    const adminReady = Promise.resolve(whoami)
+      .then((me) => {
+        isAdminUser = !!me?.admin;
+        if (!isAdminUser) { el.innerHTML = ''; el.hidden = true; }
+        return isAdminUser;
+      })
+      .catch(() => { isAdminUser = false; el.innerHTML = ''; el.hidden = true; return false; });
     // Mis PRs abiertos sin mergear (de gh). null = todavía no consultado.
     let branchesData = null;
     let branchesBusy = false;
@@ -374,22 +391,36 @@ export default {
       });
     }
 
-    async function checkRemote() {
+    // `interactive: true` SOLO desde el click del botón "Buscar cambios". Los
+    // chequeos de FONDO (mount, interval de 5 min, visibilitychange) fallan en
+    // SILENCIO: un poll automático nunca debe abrir un modal bloqueante.
+    async function checkRemote({ interactive = false } = {}) {
       if (busy) return;
       busy = true; render();
       try {
         const res = await fetch('/api/tolkien/fetch', { method: 'POST' });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (data.status) current = data.status;
+        // 409 = otro fetch/update ya está corriendo sobre el mismo .git (el
+        // flag `busy` del backend es global y compartido entre pestañas). No es
+        // un error del usuario: esa otra operación deja el repo fresco igual.
+        // Nunca se avisa, ni siquiera en modo interactivo.
+        if (res.status === 409) return;
         if (!res.ok || data.error) {
+          if (!interactive) return;
           await dialog.alertDialog({
             title: t('tolkien.fetch.failTitle', 'No se pudo buscar cambios'),
             message: data.error || t('tolkien.fetch.failMsg', 'No se pudo comprobar el estado remoto (respuesta inválida del servidor).'),
           });
         }
       } catch {
+        if (!interactive) return;
         await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.fetch.netError', 'No se pudo buscar cambios (error de red o del servidor).') });
-      } finally { busy = false; render(); }
+      } finally {
+        lastFetchTs = Date.now();
+        busy = false;
+        render();
+      }
     }
 
     const fmtLog = (log) => Array.isArray(log)
@@ -556,10 +587,11 @@ export default {
     });
 
     refs.update.addEventListener('click', doUpdate);
-    refs.fetch.addEventListener('click', checkRemote); // Buscar cambios (fetch)
+    refs.fetch.addEventListener('click', () => checkRemote({ interactive: true })); // Buscar cambios (fetch) — ÚNICO camino que muestra modal si falla
     refs.refreshData.addEventListener('click', doRefreshData); // Actualizar data local (importers)
 
     (async () => {
+      if (!(await adminReady)) return;   // no-admin: panel oculto, cero polls
       await loadStatus();
       loadEnvs();
       checkRemote();
@@ -567,9 +599,16 @@ export default {
     })();
 
     const CHECK_MS = 5 * 60 * 1000;
-    setInterval(() => { if (!document.hidden) checkRemote(); }, CHECK_MS);
+    setInterval(() => { if (!document.hidden && isAdminUser) checkRemote(); }, CHECK_MS);
     const ENVS_CHECK_MS = 6000;
-    setInterval(() => { if (!document.hidden && hasTransitionEnvs()) loadEnvs(); }, ENVS_CHECK_MS);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRemote(); });
+    setInterval(() => { if (!document.hidden && isAdminUser && hasTransitionEnvs()) loadEnvs(); }, ENVS_CHECK_MS);
+    // Alternar ventanas rápido disparaba una RÁFAGA de fetch que chocaba contra
+    // el flag `busy` global del backend (409). Throttle: como mucho uno por minuto.
+    const VIS_THROTTLE_MS = 60 * 1000;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || !isAdminUser) return;
+      if (Date.now() - lastFetchTs < VIS_THROTTLE_MS) return;
+      checkRemote();
+    });
   },
 };

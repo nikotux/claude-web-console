@@ -10,6 +10,7 @@ import { config } from '../../core/config.js';
 
 export const ADUANA_ROOT = path.join(config.home, '.cwc-aduana', 'salas');
 export const MAX_SAY_LEN = 4000;
+export const MAX_SAY_ATTACHMENTS = 8;
 export const SALA_LOG_MAX_LINES = 5000;
 
 const SALA_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -42,13 +43,28 @@ export function salaLogPath(id) {
   return path.join(salaRoot(id), 'sala.jsonl');
 }
 
-export function appendSay(id, { by, text, ts }) {
+export function appendSay(id, { by, text, ts, attachments }) {
   ensureSala(id);
+  const safeAttachments = [];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    if (!attachment || typeof attachment !== 'object' || typeof attachment.name !== 'string') continue;
+    const name = attachment.name.trim().slice(0, 200);
+    if (!name) continue;
+    // El llamador ya comprobó el archivo en disco; acá se conserva solo el
+    // pasaporte mínimo para que el log siga siendo seguro y estable al reabrir.
+    safeAttachments.push({
+      name,
+      type: String(attachment.type ?? '').slice(0, 120),
+      mime: String(attachment.mime ?? '').slice(0, 120),
+    });
+    if (safeAttachments.length >= MAX_SAY_ATTACHMENTS) break;
+  }
   const rec = {
     t: 'say',
     by: String(by),
     text: String(text).slice(0, MAX_SAY_LEN),
     ts: ts || Date.now(),
+    ...(safeAttachments.length ? { attachments: safeAttachments } : {}),
   };
   // Es append-only: el tmp+rename de CONVE-5 reescribiría el archivo entero
   // por mensaje; un append chico obtiene atomicidad del O_APPEND de POSIX.

@@ -241,6 +241,50 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   número en JS. El valor JS de 70% y el móvil CSS de 62vh se desincronizaron
   en silencio y dejaron un flowchart TD de 591 px dentro de una caja de 523.
 
+- Mermaid — PALETA SEMÁNTICA (2026-07-30, `console:PLAN-2353`): los colores NO se
+  escriben en el diagrama. `public/index.html` resuelve los tokens de `tokens.css` a
+  HEX en runtime (Mermaid pasa cada color por khroma, que NO entiende `color-mix()`
+  ni `var()`), arma ocho roles — `key ok warn bad info cool deep muted` — y los
+  publica en `window.__cwcMermaidPalette`. `withMermaidPrelude(src)` de markdown.js
+  lee esa paleta y ANEXA los `classDef` faltantes al source antes de renderizar, así
+  `A:::ok` funciona sin que el autor escriba un solo hex. Dos límites que ya
+  costaron una iteración: el preludio se aplica SOLO a `flowchart`/`graph` (un
+  `classDef` dentro de un `mindmap` rompe la sintaxis), y el `<details>` "Ver código
+  Mermaid" muestra el source ORIGINAL, sin el preludio — es lo que el usuario
+  escribió, no lo que se renderizó.
+
+- Mermaid — `:::clase` NO EXISTE en `mindmap` ni en `sequenceDiagram`: Mermaid dibuja
+  el texto literal dentro del nodo (verificado: `Permisos:::warn` aparecía así en
+  pantalla). En mindmap el color entra por CSS: Mermaid marca cada rama con
+  `section-0`, `section-1`, … y `section-root`, y el `themeCSS` de index.html las
+  pinta con la escala. Por eso las ramas se colorean solas y el autor no escribe
+  nada. La escala del mindmap va ROTADA en 1 porque la raíz ya usa el acento.
+
+- Mermaid — con `look: 'neo'` el borde de cada nodo es un GRADIENTE SVG
+  (`stroke: url(#…-gradient)`) derivado de `primaryBorderColor`, no el color plano.
+  Consecuencia medida: poner el acento en `primaryBorderColor` teñía de terracota
+  TODOS los nodos y clusters, incluidos los neutros, y el color dejaba de significar
+  algo. `primaryBorderColor` se queda en `--cwc-border-strong` y el acento se reserva
+  para `:::key`, que gana porque las clases pisan el `stroke` con `!important`.
+
+- Mermaid — la píldora de las etiquetas de arista va en `.edgeLabel p:not(:empty)`,
+  NUNCA en `.edgeLabel .label span` / `foreignObject div`. Esos contenedores existen
+  también para las aristas SIN etiqueta y quedaban dibujados como una pastilla gris
+  suelta en la esquina superior izquierda del diagrama (medido: `background:
+  rgb(24,28,41)` y borde de 1px en un `.edgeLabel` con `textContent` vacío).
+
+- Mermaid: `suppressErrorRendering: true` en la config de `index.html` NO es
+  cosmético. Sin ese flag, cuando el parseo falla Mermaid 11.16 dibuja su
+  "bomba" de error (`Syntax error in text`) en el div temporal `div#d<id>` que
+  cuelga de `document.body` y tira la excepción ANTES de ejecutar su propio
+  limpiador — el div queda huérfano al final de la página, uno por cada
+  diagrama fallido (los ids son únicos, así que el `removeExistingElements` del
+  render siguiente tampoco lo barre) y su alto sin acotar infla el scroll del
+  documento, igual que el bug de la tabla `sr-only` de los gráficos. El aviso
+  real al usuario lo pone `enhanceMermaidBlocks()` con `.md-mermaid-error`; su
+  `.catch()` además borra `d<id>`/`i<id>` como red de seguridad por si una
+  versión futura cambia el comportamiento del flag.
+
 - Pac-Man — MOTOR de estados (pedido del usuario 2026-07-05, reemplaza el
   loader binario working/dormido de antes): catálogo ÚNICO en
   `ui/pacman.js` (`PAC_STATES`) + CSS puro en `ui.css` (sección "Pac-Man —

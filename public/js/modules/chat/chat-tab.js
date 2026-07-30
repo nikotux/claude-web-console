@@ -596,12 +596,12 @@ export class ChatTab {
     // Adjuntos LISTOS (subidos, con name del server). Los que fallaron no viajan.
     const ready = this.pending.filter((p) => p.name && !p.error);
     if (!text && !ready.length) return;
-    if (this.isSala && !text) return;
+    // En una sala también se puede enviar solo un adjunto.
     if (this.pending.some((p) => p.uploading)) return; // esperar a que terminen de subir
     this._slashClose();
     this._slashSuppressed = null;
     const attachments = ready.map((p) => ({ name: p.name, type: p.type, mime: p.mime }));
-    if (this.isSala) this._send({ type: 'say', text });
+    if (this.isSala) this._send({ type: 'say', text, ...(attachments.length ? { attachments } : {}) });
     else this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
     for (const p of this.pending) { if (p.localUrl) URL.revokeObjectURL(p.localUrl); }
     this.pending = [];
@@ -928,7 +928,9 @@ export class ChatTab {
     const body = document.createElement('span');
     body.className = 'chat-say-text';
     body.textContent = m.text || '';
-    el.append(label, body);
+    if (typeof m.text === 'string' && m.text) el.append(label, body);
+    else el.append(label);
+    if (Array.isArray(m.attachments) && m.attachments.length) el.appendChild(this._attsEl(m.attachments));
     this.msgsEl.appendChild(el);
     this._salaSayCount++;
     this._renderCutButton();

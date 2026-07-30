@@ -4,7 +4,7 @@
 // REGLA DE ORO: toda corrida IA sobrevive a un reinicio de la web. El endpoint
 // POST /api/backup/commit-message solo escribe el job PENDIENTE acá y spawnea
 // bin/cwc-commitmsg-runner.js DETACHED (unref); el runner hace la corrida
-// (haiku, 1 turno, CERO herramientas — regla 6 con TODO denegado: el diff va
+// (sonnet, 1 turno, CERO herramientas — regla 6 con TODO denegado: el diff va
 // entero en el prompt) y persiste el resultado en el MISMO archivo. El front
 // encuesta GET /commit-message/:id — mismo patrón que projects/analyze-shared.
 import fs from 'node:fs';

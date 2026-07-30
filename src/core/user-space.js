@@ -59,8 +59,7 @@ export function hasCodexCreds(userId) {
 }
 
 // El CLI de Infisical guarda su sesión en
-// ~/.infisical/infisical-config.json; alcanza con detectar ese archivo dentro
-// del espacio del usuario.
+// ~/.infisical/infisical-config.json dentro del espacio del usuario.
 export function userInfisicalDir(userId) {
   return path.join(userSpace(userId), '.infisical');
 }
@@ -69,12 +68,27 @@ export function userInfisicalConfigPath(userId) {
   return path.join(userInfisicalDir(userId), 'infisical-config.json');
 }
 
+// Email de la cuenta Infisical logueada en el espacio de ese usuario (o null).
+export function readInfisicalAccountEmail(userId) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(userInfisicalConfigPath(userId), 'utf8'));
+    const email = raw?.loggedInUserEmail;
+    return typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null;
+  } catch { return null; }
+}
+
+// Una credencial de Infisical solo cuenta para el usuario si es SUYA. La cuenta
+// del host apareciendo en el espacio de un inquilino es un falso verde: no habilita
+// el paso del wizard (console:BUG-2338).
 export function hasInfisicalCreds(userId) {
   try {
-    return fs.existsSync(userInfisicalConfigPath(userId));
-  } catch {
-    return false;
-  }
+    const id = sanitizeUserId(userId);
+    const email = readInfisicalAccountEmail(id);
+    if (!email) return false;
+    if (id === hostUser()) return true;
+    const hostEmail = readInfisicalAccountEmail(hostUser());
+    return !(hostEmail && email === hostEmail);
+  } catch { return false; }
 }
 
 // Directorio de datos persistentes de la consola para ese usuario.

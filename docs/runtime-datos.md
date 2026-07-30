@@ -77,7 +77,15 @@
   análisis IA de secciones de contexto (módulo projects; poda >24 h en cada
   escritura) + `projects-analyze.log` de su runner, `commitmsg/<id>.json` jobs
   de la generación IA del mensaje de commit (módulo backup; misma poda >24 h) +
-  `commitmsg.log` de su runner, `tolkien-refresh.json` job del refresh DESACOPLADO
+  `commitmsg.log` de su runner,
+  `news.json` registro de 🆕 Novedades con formato
+  `{entries:[{id,createdAt,emoji,category,title,summary,bullets,tryIt,tech:{commits,files},source,hidden,editedAt,editedBy}]}`;
+  se ordena por `createdAt` descendente y se poda a 200 entradas,
+  `news-seen.json` mapa `{<principal>:<lastSeenMs>}` de última lectura por
+  usuario (sin poda), `news/<jobId>.json` job de redacción con formato
+  `{status,startedAt,commits,files,count,error,updatedAt?,rawTail?}` (poda de
+  jobs >24 h en cada escritura) + `news.log` de `bin/cwc-news-runner.js`,
+  `tolkien-refresh.json` job del refresh DESACOPLADO
   de la DB LOCAL de Tolkien (lo reserva POST /api/tolkien/refresh-data, lo completa
   `bin/cwc-tolkien-refresh-runner.js`; staleness 12 min) + `tolkien-refresh.log`,
   `tasks.json` registro PRIVADO de las tareas

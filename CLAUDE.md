@@ -301,6 +301,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `tickets/` | módulo **VIVO** del ciclo ticket/feature/PR (Bugs v2) | Su detalle todavía vive en la sección "Módulo VIVO `tickets/`" de este archivo. Meta-store en Pad LOCAL (`contexto-de-tickets`). |
 | `seguimientos/` | dashboard del trabajo humano-accionable (primer habitante de **Limbo**) | Lee siempre del snapshot en disco, nunca de Zoho en vivo. Escribe SOLO al ticket y con aprobación. |
 | `interfono/` | panel + canal humano del bus entre sesiones | **Solo LEE** el bus; la mensajería automática la escriben los hooks vía `bin/cwc-bus.js`. |
+| `news/` | 🆕 Novedades: changelog alegre para los usuarios, que se monta solo en cada push | El redactor es la ÚNICA corrida read-only que LEE código para escribir texto de usuario (Read/Grep/Glob). Publica sin revisión previa: lo que redacte lo ven todos los usuarios. |
 | `health/` | chequeos rápidos + revisión IA + auto-fix | Su detalle vive en la sección "Verificación de salud" de este archivo. El auto-fix es la ÚNICA corrida que escribe código sin supervisión. |
 | `tolkien/` | git del repo trackeado + entornos efímeros por sesión | "Actualizar" adelanta tu `main` LOCAL aunque estés en una rama feature. Los entornos son worktrees + DB clonada + dev-server systemd. |
 | `projects/` | edita el CLAUDE.md y las memorias REALES de cada proyecto | Excepción deliberada a la regla 4: lo que guardás acá cambia el comportamiento de la próxima sesión. Edición por SECCIONES con guard de hash. |

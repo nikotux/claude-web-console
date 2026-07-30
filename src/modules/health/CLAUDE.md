@@ -67,9 +67,30 @@
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
+  **`tmux-owner`** (`console:BUG-2350`, 0 tokens): para cada pane del socket
+  `cwc`, compara el `HOME` efectivo leído de `/proc/<pane_pid>/environ` con
+  `userSpace(owner)`, resolviendo el dueño durable mediante
+  `ownerForSession`; además compara el `HOME` global del server tmux con el
+  espacio del host para detectar la fuga latente antes de que afecte un pane.
+  Existe porque un HOME global de inquilino puede hacer que una sesión del
+  host herede credenciales ajenas. Devuelve `fail` ante un pane con HOME
+  incorrecto, `warn` ante HOME global incorrecto o mediciones irresolubles, y
+  `ok` solo cuando todo lo medible coincide (incluido el caso explícito sin
+  panes). Su status viaja al CSS como `hp-dot--${status}`: los únicos valores
+  permitidos son `ok|warn|fail`, o el indicador queda sin color en silencio.
   **`onboard-provisioning`** (console:BUG-2118: `ok` si no hay altas o todas
   están completas; `warn` si alguna quedó `failed` o lleva más de 10 minutos
-  en `pending`), **`docker-hygiene`** (PLAN-2268, 0 tokens: lee solamente
+  en `pending`), **`onboarding`** (`console:PLAN-2337`, criterios C6/C7, 0
+  tokens): recorre cada usuario no-host y reusa `CAPABILITIES` +
+  `requiredFor` + el `detect` real de cada capacidad requerida del wizard,
+  sin duplicar el catálogo; devuelve `warn` nombrando al inquilino y sus pasos
+  pendientes, `ok` si todos están completos o `ok: sin inquilinos` si no hay
+  ninguno. Además compara la identidad Infisical con
+  `readInfisicalAccountEmail`: si la cuenta de un inquilino coincide con la
+  del host devuelve `fail`, porque es una regresión de aislamiento y no un
+  onboarding válido. El status viaja al CSS mediante `hp-dot--${status}` y los
+  únicos estados válidos son `ok|warn|fail`; agregar otro lo renderiza sin
+  color en silencio. **`docker-hygiene`** (PLAN-2268, 0 tokens: lee solamente
   `~/.cwc-data/docker-hygiene/report.json`, nunca invoca Docker desde el
   request; `warn` desde 20 volúmenes dangling o 5 GB reclamables totales, o
   si el reporte lleva más de 24 h; `ok` con nota si todavía no existe o Docker
@@ -535,6 +556,14 @@
   user-scoped resuelto por dueño, listados filtrados por owner y spawn con
   credencial propia. Medición por escaneo completo: ANTES 974 inyecciones y
   235 KB de prompt; DESPUÉS 470 inyecciones y 190 KB.
+  INVARIANTE DE IDENTIDAD 2026-07-29 (`console:PLAN-2337`, C6;
+  `console:BUG-2338`): una credencial personal de Infisical, GitHub, Claude,
+  Codex o Pad encontrada bajo `~/.cwc-users/<id>/` solo cuenta si su identidad
+  pertenece a ese inquilino. Presencia de archivo/token/sesión no alcanza:
+  aceptar allí la identidad del host es una regresión de aislamiento y, si la
+  identidad no puede verificarse, el detector falla cerrado y reporta la
+  capacidad como no cumplida. El seed se inyecta por path en
+  `core/user-space.js`, `modules/onboard/**` y `modules/mcps/**`.
   Al final SONNET sintetiza el veredicto (solo procesa los hallazgos, no re-lee
   código). Interfaz por archivos: health-review.json
   (progreso incremental: units[].status, done/total, findings[]) +

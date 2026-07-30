@@ -32,13 +32,15 @@
 //      repo en GitHub sincronizada con GITHUB_DESCRIPTION (inglés, resume
 //      toda la consola + sus módulos). Si falta `gh`/auth/red, NO rompe el
 //      push (que ya ocurrió) — solo se informa en la respuesta.
+//   3. Encola la redacción de "🆕 Novedades" en cwc-news-runner.js, detached.
+//      Su fallo tampoco demora ni convierte en error un push ya exitoso.
 //
 // Commit SIN push (POST /api/backup/commit, admin) — commit local descriptivo
 // de los cambios trackeados (+ untracked seleccionados con la MISMA guarda de
 // 3 capas del push). No toca el remote, no actualiza el changelog (eso sigue
 // siendo del push), no reinicia nada; reversible con git reset --soft. El
 // mensaje puede generarse con IA (POST /commit-message → job + runner
-// desacoplado bin/cwc-commitmsg-runner.js, haiku 1 turno CERO herramientas,
+// desacoplado bin/cwc-commitmsg-runner.js, sonnet 1 turno CERO herramientas,
 // regla 6; GET /commit-message/:id solo lee disco) — siempre editable, con
 // fallback manual si la corrida falla.
 //
@@ -53,6 +55,7 @@
 // del stash conflictuó o npm falló, NO se reinicia (un server que arranca
 // sobre archivos con marcas de conflicto entra en crash-loop) — se avisa.
 import express from 'express';
+import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -63,6 +66,9 @@ import {
   commitMsgJobId, readCommitMsgJob, writeCommitMsgJob, spawnCommitMsgRunner,
   isFreshRunning, jobResult,
 } from './commitmsg-shared.js';
+import {
+  parseNewsGitLog, spawnNewsRunner, writeNewsJob,
+} from '../news/news-shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(__dirname, '..', '..', '..');
@@ -586,9 +592,10 @@ export default {
         // Changelog EN INGLÉS en README.md: commits locales hechos pero aún
         // no pusheados + los archivos recién stageados en este push. Si no
         // hay nada nuevo que contar, el README no se toca (sin entradas vacías).
-        const priorSubjects = beforeRef
-          ? lines((await git(['log', '--reverse', '--format=%s', `${beforeRef}..HEAD`])).out)
+        const priorCommits = beforeRef
+          ? parseNewsGitLog((await git(['log', '--reverse', '--format=%H%x09%s%x09%b', `${beforeRef}..HEAD`])).out)
           : [];
+        const priorSubjects = priorCommits.map((commit) => commit.subject);
         const fileStatuses = staged.length
           ? lines((await git(['diff', '--cached', '--name-status'])).out)
               // Excluir el README raíz (lo toca el propio changelog) mirando los
@@ -606,15 +613,42 @@ export default {
         }
 
         let committed = null;
+        let committedFull = null;
+        let committedSubject = null;
         if (staged.length) {
-          const c = await git(['commit', '-m', `cwc backup ${stamp()}`]);
+          committedSubject = `cwc backup ${stamp()}`;
+          const c = await git(['commit', '-m', committedSubject]);
           if (c.code !== 0) return res.status(500).json({ error: `No se pudo commitear: ${c.stderr || c.out}` });
           committed = (await git(['rev-parse', '--short', 'HEAD'])).out;
+          committedFull = (await git(['rev-parse', 'HEAD'])).out;
         }
 
         // Push EXCLUSIVAMENTE al remote personal, rama actual. Nunca --all/--force.
         const p = await git(['push', REMOTE, `HEAD:${branch}`], { timeout: 120000 });
         if (p.code !== 0) return res.status(500).json({ error: `Falló el push: ${p.stderr || p.out || 'error de git'}` });
+
+        // Novedades se genera fire-and-forget DESPUÉS del push exitoso. Un
+        // fallo al escribir/spawnear este job jamás convierte el push en error.
+        try {
+          const commits = [
+            ...priorCommits,
+            ...(committedFull ? [{ sha: committedFull, subject: committedSubject, body: '' }] : []),
+          ];
+          if (commits.length) {
+            const newsJobId = crypto.randomBytes(12).toString('hex');
+            writeNewsJob(newsJobId, {
+              status: 'running',
+              startedAt: Date.now(),
+              commits,
+              files: staged,
+              count: null,
+              error: null,
+            });
+            spawnNewsRunner(newsJobId);
+          }
+        } catch (newsError) {
+          console.error('[backup] no se pudo lanzar Novedades (el push sí salió):', newsError?.message || newsError);
+        }
 
         // Descripción del repo en GitHub: best-effort, NO rompe el push si falla.
         const description = await updateGithubDescription(g.url);
@@ -652,7 +686,7 @@ export default {
           return res.status(409).json({ error: 'No hay cambios para describir.' });
         }
 
-        // Diff para el prompt: tope de 30k chars (haiku no necesita más). Un
+        // Diff para el prompt: tope de 30k chars (sonnet no necesita más). Un
         // diff gigante puede reventar el maxBuffer default de execFile — en
         // ese caso se cae al resumen --stat (la lista de archivos ya viaja).
         let diff = '';

@@ -49,6 +49,7 @@ export default function skillsHelp() {
             { k: t('system.help.skills.buttons.catalog.k', '📦 Catálogo'), v: t('system.help.skills.buttons.catalog.v', 'Expande o contrae la lista accionable; el encabezado resume sus tres estados.') },
             { k: t('system.help.skills.buttons.install.k', 'Instalar'), v: t('system.help.skills.buttons.install.v', 'Copia la skill del catálogo a tu espacio personal. No consume tokens.') },
             { k: t('system.help.skills.buttons.update.k', 'Actualizar'), v: t('system.help.skills.buttons.update.v', 'Reemplaza tu copia administrada por la versión actual del catálogo. No consume tokens.') },
+            { k: t('system.help.skills.buttons.reinstall.k', 'Reinstalar'), v: t('system.help.skills.buttons.reinstall.v', 'Vuelve a copiar la versión del catálogo sobre tu copia local; sirve si la editaste a mano o dudás de que esté sincronizada y reemplaza lo que tengas. No consume tokens.') },
             { k: t('system.help.skills.buttons.remove.k', 'Quitar'), v: t('system.help.skills.buttons.remove.v', 'Pide confirmación y borra únicamente tu copia administrada por el catálogo.') },
             { k: t('system.help.skills.buttons.world.k', 'Grupo de mundo'), v: t('system.help.skills.buttons.world.v', 'Expande o contrae el inventario de ese origen.') },
             { k: t('system.help.skills.buttons.card.k', 'Tarjeta de skill'), v: t('system.help.skills.buttons.card.v', 'Muestra descripción, argumentos, herramientas permitidas, vínculo con Pad y ruta del SKILL.md.') },

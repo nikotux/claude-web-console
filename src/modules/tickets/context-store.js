@@ -22,6 +22,8 @@ import { writeFileAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 import { findForeignRefsForTolkien, replaceForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 import { systemScopeFor } from '../../core/system-scope.js';
+import { hostUser, userWorkspace } from '../../core/user-space.js';
+import { listUsers } from '../../core/users.js';
 
 export { findForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 
@@ -342,10 +344,46 @@ function writePlaybook(scope, playbookFile) {
   return { ok: true, changed: true };
 }
 
+// Una vez que el espejo del host quedó completo, replica ESE MISMO archivo a
+// cada clon provisionado. Cada usuario es best-effort e independiente: un clon
+// ausente se saltea y un fallo no cambia el resultado exitoso del espejo host.
+function syncHostMirrorToTenants(content) {
+  const summary = { reached: 0, failed: [] };
+  let users;
+  try {
+    users = listUsers();
+  } catch (err) {
+    const reason = err?.message || String(err);
+    summary.failed.push({ user: '*', reason });
+    console.warn(`[tickets/context-store] No se pudieron enumerar los inquilinos para el espejo: ${reason}`);
+    return summary;
+  }
+
+  const host = hostUser();
+  for (const user of users) {
+    const id = user?.username;
+    if (!id || id === host) continue;
+    try {
+      const projectDir = path.join(userWorkspace(id), 'tolkien');
+      if (!fss.existsSync(projectDir) || !fss.existsSync(path.join(projectDir, '.git'))) continue;
+      const mirrorFile = path.join(projectDir, 'CLAUDE.local.md');
+      writeFileAtomic(mirrorFile, content, { mode: 0o644 });
+      summary.reached += 1;
+    } catch (err) {
+      const reason = err?.message || String(err);
+      summary.failed.push({ user: id, reason });
+      console.warn(`[tickets/context-store] No se pudo espejar CLAUDE.local.md al inquilino ${id}: ${reason}`);
+    }
+  }
+  return summary;
+}
+
 // Reemplaza (o inserta al final) el bloque gestionado en CLAUDE.local.md,
 // preservando byte a byte todo lo que esté fuera de los marcadores. Devuelve
-// { ok, reason?, created? }. best-effort: si Tolkien no existe, no rompe el
-// guardado del master — el verificador lo reportará como 'unavailable'.
+// { ok, reason?, created?, tenantSync? }. best-effort: si Tolkien no existe,
+// no rompe el guardado del master — el verificador lo reportará como
+// 'unavailable'. En el scope host, el fan-out a inquilinos ocurre DESPUÉS de
+// completar este espejo y tampoco puede volverlo fallido.
 export function syncToTolkien(scope = hostScope()) {
   try {
     const {
@@ -394,20 +432,24 @@ export function syncToTolkien(scope = hostScope()) {
     }
 
     if (next === existing) {
+      const tenantSync = scope.isHost ? syncHostMirrorToTenants(next) : null;
       return {
         ok: true,
         reason: 'sin-cambios',
         playbookChanged: playbook.changed,
         sanitizedRefs,
+        ...(tenantSync ? { tenantSync } : {}),
       };
     }
     // 0o644: archivo de texto legible (el master en ~/.cwc-data queda 0o600).
     writeFileAtomic(mirrorFile, next, { mode: 0o644 });
+    const tenantSync = scope.isHost ? syncHostMirrorToTenants(next) : null;
     return {
       ok: true,
       created: !fileExisted,
       playbookChanged: playbook.changed,
       sanitizedRefs,
+      ...(tenantSync ? { tenantSync } : {}),
     };
   } catch (err) {
     return { ok: false, reason: err?.message || String(err) };

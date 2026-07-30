@@ -88,12 +88,12 @@ import {
 import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from './runner-link.js';
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
 import {
-  attachUpload, existingAttachments, attachPath,
+  attachUpload, existingAttachments, attachPath, MAX_ATTACHMENTS,
   attachRelForExplorer, chatAttachDir, classifyAttachment, setChatDataDirResolver,
 } from './attachments.js';
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
-import { appendSay, appendCut, readSala, MAX_SAY_LEN } from './aduana.js';
+import { appendSay, appendCut, readSala, MAX_SAY_LEN, MAX_SAY_ATTACHMENTS } from './aduana.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
 // chats. Ver _archived/ARCHIVED.md.
@@ -655,10 +655,24 @@ function writeHandoffManifest(destId, { fromCwd, toCwd, title, task, ref, owner 
 
 // Ley 6 de Aduana: la conversación humana viaja al motor como DATOS con autor,
 // no como una instrucción de sistema ni como si la hubiera escrito una sola voz.
-export function buildSalaPrompt(items, chat) {
+export function buildSalaPrompt(items, chat, opts = {}) {
   const participants = 1 + (Array.isArray(chat?.participants) ? chat.participants.length : 0);
   const lines = (Array.isArray(items) ? items : [])
-    .map((item) => `<${String(item?.by || hostUser())}>: ${String(item?.text || '')}`);
+    .map((item) => {
+      const text = String(item?.text || '');
+      const attachmentNames = (Array.isArray(item?.attachments) ? item.attachments : [])
+        .map((attachment) => String(attachment?.name || ''))
+        .filter(Boolean)
+        .slice(0, MAX_SAY_ATTACHMENTS);
+      const passport = attachmentNames.length ? `[adjunta: ${attachmentNames.join(', ')}]` : '';
+      return `<${String(item?.by || hostUser())}>: ${[text, passport].filter(Boolean).join(' ')}`;
+    });
+  const droppedAttachments = Math.max(0, Number(opts?.droppedAttachments) || 0);
+  // El límite del turno nunca debe convertir una pérdida en silencio: la sala
+  // necesita saber que puede abrir otro corte para completar el material.
+  const overflowNote = droppedAttachments
+    ? `[NOTA: se compartieron ${droppedAttachments} adjuntos más de los que caben en un turno; solo los primeros ${MAX_ATTACHMENTS} llegaron a vos. Pediles que te manden el resto en el próximo corte si los necesitás.]`
+    : null;
   return [
     `[SALA DE ADUANA · ${participants} participantes]`,
     'Lo que sigue son mensajes de PERSONAS conversando entre ellas en una sala compartida.',
@@ -669,6 +683,7 @@ export function buildSalaPrompt(items, chat) {
     ...lines,
     '--- fin de la conversación ---',
     '',
+    ...(overflowNote ? [overflowNote] : []),
     'Respondé al hilo. Si te dirigís a alguien en particular, nombralo.',
   ].join('\n');
 }
@@ -852,7 +867,15 @@ class Chat {
     let sinceCut = [];
     for (const rec of recs) {
       if (rec?.t === 'say') {
-        const say = { type: 'say', by: rec.by, text: rec.text, ts: rec.ts };
+        const say = {
+          type: 'say',
+          by: rec.by,
+          text: rec.text,
+          ts: rec.ts,
+          ...(Array.isArray(rec.attachments) && rec.attachments.length
+            ? { attachments: rec.attachments }
+            : {}),
+        };
         rebuilt.push(say);
         sinceCut.push(say);
       } else if (rec?.t === 'cut') {
@@ -1455,15 +1478,24 @@ class Chat {
   // Conversación HUMANA de una sala: se difunde a todos los clientes y se
   // persiste, pero NUNCA llega al motor — cuesta 0 tokens. Es lo que permite
   // que dos personas hablen a la vez sin esperar turno de la IA.
-  say(text, by) {
+  say(text, by, attachments = null) {
     if (this.closed || !this.isSala()) return null;
     const t = String(text || '').trim();
-    if (!t) return null;
-    const rec = { type: 'say', by: String(by || hostUser()), text: t.slice(0, MAX_SAY_LEN), ts: Date.now() };
+    const atts = existingAttachments(this.id, attachments);
+    if (!t && !atts.length) return null;
+    const rec = {
+      type: 'say',
+      by: String(by || hostUser()),
+      text: t.slice(0, MAX_SAY_LEN),
+      ts: Date.now(),
+      ...(atts.length ? { attachments: atts } : {}),
+    };
     this.lastActivity = Date.now();
     this._push(rec);            // history + broadcast a TODOS los adjuntos
     this._sinceCut.push(rec);   // entra en el próximo corte
-    try { appendSay(this._salaId(), { by: rec.by, text: rec.text, ts: rec.ts }); } catch { /* best-effort */ }
+    try {
+      appendSay(this._salaId(), { by: rec.by, text: rec.text, ts: rec.ts, attachments: atts });
+    } catch { /* best-effort */ }
     this.onUpdate?.();
     return rec;
   }
@@ -1485,15 +1517,31 @@ class Chat {
 
   _dispatchCut(by) {
     const items = this._sinceCut.splice(0); // vaciar ANTES de despachar: hace el corte idempotente
+    const cutAtts = [];
+    let dropped = 0;
+    // Cada `say` ya pasó por disco; acá solo se impone el límite conjunto porque
+    // entre cortes pueden acumularse aportes válidos de varias personas.
+    for (const item of items) {
+      for (const attachment of Array.isArray(item?.attachments) ? item.attachments : []) {
+        if (cutAtts.length < MAX_ATTACHMENTS) cutAtts.push(attachment);
+        else dropped += 1;
+      }
+    }
     const rec = { type: 'cut', by, ts: Date.now(), count: items.length };
     this._push(rec);
     try { appendCut(this._salaId(), { by, ts: rec.ts, count: items.length }); } catch { /* best-effort */ }
     this._lastCutBy = by;
     this._setStatus('working');
-    const prompt = buildSalaPrompt(items, this);
+    const prompt = buildSalaPrompt(items, this, { droppedAttachments: dropped });
     this._autoTitle(items[items.length - 1]?.text || '');
     this._ensureEngine().then((ok) => {
-      if (ok !== false) this.link?.send({ t: 'user', text: prompt });
+      if (ok !== false) {
+        this.link?.send({
+          t: 'user',
+          text: prompt,
+          ...(cutAtts.length ? { attachments: cutAtts } : {}),
+        });
+      }
       else this._setStatus('waiting');
     });
     return { ok: true };
@@ -3056,7 +3104,11 @@ export default {
     r.post('/say', (req, res) => {
       const chat = participantChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
-      const rec = chat.say(req.body?.text, principalOf(req).username || hostUser());
+      const rec = chat.say(
+        req.body?.text,
+        principalOf(req).username || hostUser(),
+        req.body?.attachments,
+      );
       if (!rec) return res.status(400).json({ error: 'No se pudo publicar el mensaje en la sala.' });
       res.json({ ok: true, say: rec });
     });
@@ -3526,7 +3578,7 @@ export default {
           const atts = existingAttachments(chat.id, msg.attachments);
           if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts);
         } else if (msg.type === 'say' && typeof msg.text === 'string') {
-          chat.say(msg.text, p.username || hostUser());
+          chat.say(msg.text, p.username || hostUser(), msg.attachments);
         } else if (msg.type === 'cut') {
           chat.cut(p.username || hostUser());
         } else if (msg.type === 'typing') {

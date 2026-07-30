@@ -12,7 +12,11 @@ import { isAdmin, principalOf } from '../../core/auth.js';
 import { userDataDir, userClaudeDir, userRunnerEnv, hostUser } from '../../core/user-space.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import { reqPadContext } from '../../core/pad-context.js';
-import { getTicketState, listDepartments } from './desk-mcp-client.js';
+import {
+  getTicketState,
+  normalizeTicket,
+  listDepartments as listDepartmentsMcp,
+} from './desk-mcp-client.js';
 import { getPrDetail, readResolved, refreshResolved, findResolvedTicket, resolvedInfo } from './sources.js';
 import { buildResolved } from './views.js';
 import { enrich } from './derive.js';
@@ -20,7 +24,11 @@ import { getSnapshot, refreshNow, startRefresher } from './refresher.js';
 import { getContext, saveContext, DEFAULT_CONTEXTS, verifySync, syncToTolkien } from './context-store.js';
 import { getActiveClaim, withClaim, claim as claimTicket, release as releaseTicket } from './claims-store.js';
 import { getMeta, saveContexto, clearContexto, setTicketClaudeDirResolver } from './meta-store.js';
-import { getTicket as zohoGetTicket, assignTicket as zohoAssignTicket } from '../../core/zoho-desk-client.js';
+import {
+  getTicket as zohoGetTicket,
+  listDepartments as listDepartmentsForUser,
+  assignTicket as zohoAssignTicket,
+} from '../../core/zoho-desk-client.js';
 import {
   contextJobId, readJob, writeJob, spawnRunner, jobResult, isFreshRunning, MAX_TRANSCRIPT,
 } from './context-analyze-shared.js';
@@ -113,7 +121,12 @@ export default {
         if (resolvedRaw) {
           return res.json({ ...withClaim(enrich(resolvedRaw, Date.now())), meta, you, youAdmin, cached: true, fromResolved: true, generatedAt: resolvedInfo().at || null });
         }
-        const data = await getTicketState(req.params.id);
+        const username = externalUserOf(req);
+        // Fail-closed: si un inquilino no conectó Zoho, la lectura debe fallar;
+        // jamás se usa el MCP del host como respaldo.
+        const data = username === hostUser()
+          ? await getTicketState(req.params.id)
+          : normalizeTicket(await zohoGetTicket(username, req.params.id));
         res.json({ ...withClaim(data), meta, you, youAdmin });
       } catch (err) {
         res.status(500).json({ found: false, error: String(err?.message || err).slice(0, 300) });
@@ -140,7 +153,15 @@ export default {
     });
 
     r.get('/departments', async (req, res) => {
-      try { res.json({ departments: await listDepartments() }); }
+      try {
+        const username = externalUserOf(req);
+        // Fail-closed: si un inquilino no conectó Zoho, la lectura debe fallar;
+        // jamás se usa el MCP del host como respaldo.
+        const departments = username === hostUser()
+          ? await listDepartmentsMcp()
+          : await listDepartmentsForUser(username);
+        res.json({ departments });
+      }
       catch (err) { res.status(500).json({ error: String(err?.message || err).slice(0, 300) }); }
     });
 

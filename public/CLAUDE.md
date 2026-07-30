@@ -109,6 +109,12 @@ lateral A PROPÓSITO — pedido de Niko: se lee como parte del mensaje, no como
 un objeto pegado. `.md-mermaid*` contiene el desborde con scroll horizontal
 y `.md-mermaid--pan` muestra la pista para deslizar. El `max-height` de
 `.md-mermaid-canvas` es la FUENTE DE VERDAD del alto: el JS lo lee del CSS.
+A diferencia del gráfico, el diagrama SÍ lleva LÁMINA (fondo `--cwc-bg-panel`,
+borde y `--cwc-radius-lg` sobre `.md-mermaid-canvas`, decisión de Niko el
+2026-07-30): un diagrama se lee como FIGURA y necesita un borde que diga dónde
+empieza, mientras que el gráfico va al hilo del texto. Si se toca la lámina hay
+que mover con ella el degradado de `.md-mermaid--pan::after`, que se mezcla
+contra el fondo de la lámina y no contra `--cwc-bg`.
 La tabla accesible `.md-chart-data` es sr-only pero NO está escopada a
 `.chat-md` (el renderer también se usa en Aprendizaje y Pendientes) y depende
 de que `.md-chart` sea `position:relative` para no escaparse del scroller del

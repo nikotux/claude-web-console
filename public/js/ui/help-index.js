@@ -129,6 +129,14 @@ export const HELP_INDEX = [
     load: () => import('./../modules/stats/help.js'),
   },
   {
+    id: 'news',
+    get title() { return t('core.help.topic.news.title', 'Novedades'); },
+    icon: 'sparkle',
+    group: 'sistema',
+    get blurb() { return t('core.help.topic.news.blurb', 'Descubrí qué cambió en Mi Consola y seguí pasos concretos para probarlo.'); },
+    load: () => import('./../modules/system/help/news.js'),
+  },
+  {
     id: 'sys-mcps',
     get title() { return t('core.help.topic.sys-mcps.title', 'Conexiones (MCP)'); },
     icon: 'gear',

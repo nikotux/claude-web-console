@@ -66,6 +66,10 @@ function catalogActions(sk) {
     <button class="btn-ghost btn--sm btn--danger" data-catalog-action="uninstall" title="${t('system.skills.catalog.removeTitle', 'Quita esta copia de tu espacio personal')}">
       ${icon('trash', { size: 13 })}<span>${t('system.skills.catalog.remove', 'Quitar')}</span>
     </button>`;
+  const reinstall = `
+    <button class="btn-ghost btn--sm" data-catalog-action="reinstall" title="${t('system.skills.catalog.reinstallTitle', 'Vuelve a copiar la versión del catálogo sobre tu copia local')}">
+      ${icon('refresh', { size: 13 })}<span>${t('system.skills.catalog.reinstall', 'Reinstalar')}</span>
+    </button>`;
   if (!sk.installed) {
     return `
       <button class="btn btn--sm" data-catalog-action="install" title="${t('system.skills.catalog.installTitle', 'Copia esta skill a tu espacio personal')}">
@@ -79,7 +83,8 @@ function catalogActions(sk) {
       </button>
       ${remove}`;
   }
-  return remove;
+  return `${reinstall}
+      ${remove}`;
 }
 
 function catalogCard(sk) {
@@ -164,20 +169,31 @@ export function mountSkillsPanel(el) {
       });
       if (!confirmed || !alive) return;
     }
+    if (action === 'reinstall') {
+      const confirmed = await confirmDialog({
+        title: t('system.skills.catalog.reinstallConfirmTitle', 'Reinstalar skill'),
+        message: t('system.skills.catalog.reinstallConfirmMessage', '¿Volver a copiar “{name}” desde el catálogo? Reemplaza tu copia local: si la editaste a mano, ese cambio se pierde.', { name: sk.name }),
+        confirmLabel: t('system.skills.catalog.reinstall', 'Reinstalar'),
+      });
+      if (!confirmed || !alive) return;
+    }
 
     const buttons = [...card.querySelectorAll('[data-catalog-action]')];
     buttons.forEach((button) => { button.disabled = true; });
     const actions = card.querySelector('.hr-f-actions');
     const busyText = action === 'uninstall'
       ? t('system.skills.catalog.removing', 'Quitando…')
-      : (sk.outdated
-          ? t('system.skills.catalog.updating', 'Actualizando…')
-          : t('system.skills.catalog.installing', 'Instalando…'));
+      : (action === 'reinstall'
+          ? t('system.skills.catalog.reinstalling', 'Reinstalando…')
+          : (sk.outdated
+              ? t('system.skills.catalog.updating', 'Actualizando…')
+              : t('system.skills.catalog.installing', 'Instalando…')));
     actions?.insertAdjacentHTML('afterbegin', `<span class="hr-f-fixing">${pacman({ size: 'sm' })}<span>${busyText}</span></span>`);
 
     let error = null;
+    const endpoint = action === 'reinstall' ? 'install' : action;
     try {
-      await requestCatalog(action, sk.dirName);
+      await requestCatalog(endpoint, sk.dirName);
     } catch (err) {
       error = err;
     }
@@ -198,11 +214,13 @@ export function mountSkillsPanel(el) {
       return;
     }
 
-    if (action === 'install') {
+    if (action === 'install' || action === 'reinstall') {
       await alertDialog({
-        title: sk.outdated
-          ? t('system.skills.catalog.updatedTitle', 'Skill actualizada')
-          : t('system.skills.catalog.installedTitle', 'Skill instalada'),
+        title: action === 'reinstall'
+          ? t('system.skills.catalog.reinstalledTitle', 'Skill reinstalada')
+          : (sk.outdated
+              ? t('system.skills.catalog.updatedTitle', 'Skill actualizada')
+              : t('system.skills.catalog.installedTitle', 'Skill instalada')),
         message: t('system.skills.catalog.restartNotice', 'La skill ya está en tu espacio. Una sesión de chat que ya estaba abierta no la carga hasta reiniciarse, porque cada runner toma sus skills al nacer.'),
       });
     }

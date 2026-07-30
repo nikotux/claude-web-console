@@ -6,6 +6,11 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  hostUser,
+  readInfisicalAccountEmail,
+  userInfisicalConfigPath,
+} from '../../core/user-space.js';
 import { commandEnvFor, worldCwd } from './login-shared.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -178,6 +183,21 @@ function infisicalLoginTokenFileFor(scope, id) {
   return path.join(infisicalLoginJobsDirFor(scope), `${id}.token`);
 }
 
+// Evita que un login hecho con la identidad del anfitrión quede aceptado dentro
+// del HOME de un inquilino. Si coincide, elimina el config ajeno antes de fallar.
+export function assertOwnInfisicalAccount(scope) {
+  if (scope.isHost) return;
+  const email = readInfisicalAccountEmail(scope.user);
+  const hostEmail = readInfisicalAccountEmail(hostUser());
+  if (!email || !hostEmail || email !== hostEmail) return;
+  try {
+    fs.rmSync(userInfisicalConfigPath(scope.user), { force: true });
+  } catch {
+    throw new Error('Esa es la cuenta del anfitrión y no pude quitarla: cada usuario debe entrar con la suya.');
+  }
+  throw new Error('Esa es la cuenta del anfitrión: cada usuario debe entrar con la suya.');
+}
+
 function badRequest(message) {
   const e = new Error(message);
   e.badRequest = true;
@@ -194,7 +214,25 @@ function normalizeInfisicalDomain(value) {
 
 export function readInfisicalLoginJob(scope, id) {
   if (!loginIdOk(id)) return null;
-  try { return JSON.parse(fs.readFileSync(infisicalLoginJobFileFor(scope, id), 'utf8')); } catch { return null; }
+  try {
+    const file = infisicalLoginJobFileFor(scope, id);
+    const job = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!LOGIN_TERMINAL.has(job.status)) return job;
+    try {
+      assertOwnInfisicalAccount(scope);
+      return job;
+    } catch (e) {
+      const failed = {
+        ...job,
+        status: 'error',
+        done: false,
+        error: String(e?.message || e),
+        ts: Date.now(),
+      };
+      fs.writeFileSync(file, JSON.stringify(failed), { mode: 0o600 });
+      return failed;
+    }
+  } catch { return null; }
 }
 
 export function writeInfisicalLoginToken(scope, id, value) {

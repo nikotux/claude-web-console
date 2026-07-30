@@ -36,6 +36,14 @@ const PREFIX = 'cwc-'; // prefijo de nombres de sesión tmux de este proyecto
 // terminales normales, pero al vivir en tmux SOBREVIVEN un crash del server.
 const BARE_PREFIX = 'cwct-';
 
+// El server tmux es compartido y de vida larga: un pane hereda SU entorno, no el
+// del cliente que lo crea. Por eso toda variable que una sesión necesite se pasa
+// explícita con `-e`, tanto al host como a un inquilino (console:BUG-2350).
+const TMUX_ENV_KEYS = [
+  'HOME', 'CWC_DATA_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'PATH', 'TERM',
+  'LANG', 'TZ', 'NODE_EXTRA_CA_CERTS', 'TOLKIEN_MCP_TOKEN',
+];
+
 // Lookup compartido con el módulo tmux: reconoce únicamente sesiones creadas
 // por la consola en su socket propio. Devuelve null ante cualquier destino
 // externo o sesión que ya no tenga una envoltura viva en sessionManager.
@@ -142,9 +150,8 @@ class Session {
     }
     delete env.TMUX;
     delete env.TMUX_PANE;
-    let tmuxEnvArgs = [];
+    const tmuxEnv = new Map();
     if (isTenant) {
-      const tmuxEnv = new Map();
       try {
         const globalEnv = execFileSync('tmux', tmuxArgs('show-environment', '-g'), {
           encoding: 'utf8',
@@ -165,19 +172,23 @@ class Session {
       // El server tmux es compartido: su entorno global se filtra a cada pane.
       // `-e CLAVE=` en este mismo new-session es la única forma de neutralizarlo
       // al crear el primer pane; la allowlist owner-scoped se aplica después.
-      for (const key of ['HOME', 'CWC_DATA_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'PATH', 'TERM', 'LANG', 'TZ', 'NODE_EXTRA_CA_CERTS']) {
-        if (env[key] !== undefined) tmuxEnv.set(key, env[key]);
-      }
-      tmuxEnvArgs = [...tmuxEnv].flatMap(([key, value]) => ['-e', `${key}=${value}`]);
     }
+    for (const key of [
+      ...TMUX_ENV_KEYS,
+      ...Object.keys(env).filter((key) => /^(CWC_|TOLKIEN_)/.test(key)),
+    ]) {
+      if (env[key] !== undefined) tmuxEnv.set(key, env[key]);
+    }
+    const tmuxEnvArgs = [...tmuxEnv].flatMap(([key, value]) => ['-e', `${key}=${value}`]);
 
+    // IMPORTANTE: `new-session -A` ignora los `-e` si la sesión ya existe.
+    // Una sesión creada con el entorno viejo debe matarse y recrearse; este
+    // aislamiento no puede aplicarse en caliente durante la rehidratación.
     if (this.bare) {
       // tmux oculta corriendo el comando DIRECTO (sin shell debajo): cuando
       // `claude` sale, la sesión tmux muere y el pty también (waitForExit).
       // new-session -A: si la tmux sobrevivió a un reinicio del server, se
       // re-adjunta (el comando se ignora) en vez de lanzar otro claude.
-      // También ignora los -e si ya existe: hay que matar y recrear una sesión
-      // creada con el entorno viejo para que tome el aislamiento nuevo.
       const args = tmuxArgs(
         'new-session', '-A',
         ...tmuxEnvArgs,
@@ -204,8 +215,6 @@ class Session {
         args = ['-S', this.attachSpec.socket, 'attach-session', '-d', '-t', this.attachSpec.session];
       } else {
         // new-session -A: adjunta si existe, crea si no (idempotente = rehidratación).
-        // Si ya existe, tmux ignora los -e: para actualizar el entorno viejo
-        // hay que matar y recrear esa sesión.
         args = tmuxArgs(
           'new-session', '-A',
           ...tmuxEnvArgs,

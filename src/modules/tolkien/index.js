@@ -41,6 +41,9 @@ import {
   stackStatus,
 } from './stack.js';
 
+// Este módulo opera SIEMPRE sobre el repo del host: por eso toda su superficie
+// nace admin-gated salvo el stack N2, que sí está owner-scoped. Todo endpoint
+// nuevo debe ser admin-only salvo que se demuestre lo contrario (console:PLAN-2337).
 const CWD = config.projectDir;
 const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
 const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
@@ -310,10 +313,12 @@ export default {
 
     // Estado del último/actual refresh (para el polling del frontend) — solo lee disco.
     r.get('/refresh-data/status', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
       res.json(refreshStatus(readRefreshJob()));
     });
 
     r.get('/envs', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
       const envs = listEnvs()
         .slice()
         .sort((a, b) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0))
@@ -335,6 +340,7 @@ export default {
     });
 
     r.get('/envs/:id', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
       const id = String(req.params.id || '');
       if (!isSafeEnvId(id)) return res.status(400).json({ error: 'Id de entorno inválido.' });
       const rec = getEnv(id);
@@ -390,11 +396,13 @@ export default {
     });
 
     r.get('/status', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
       try { res.json(await status()); }
       catch { res.status(500).json({ error: 'No se pudo leer el estado del repo.' }); }
     });
 
     r.post('/fetch', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede traer cambios del remoto.' });
       // Comparte el flag `busy` con /update: un fetch y un pull simultáneos
       // sobre el mismo .git contienden por locks de git y fallan espurio.
       if (busy) return res.status(409).json({ error: 'Ya hay una operación git en curso.' });
@@ -411,6 +419,7 @@ export default {
     });
 
     r.post('/update', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede actualizar el repo local.' });
       if (busy) return res.status(409).json({ error: 'Ya hay una actualización en curso.' });
       busy = true;
       const log = [];
@@ -553,6 +562,7 @@ export default {
     // si gh no está / no autenticado / falla, devuelve lista vacía + error, y el
     // panel simplemente no muestra el indicador (no rompe nada). SOLO LECTURA.
     r.get('/branches', async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
       try {
         const gh = await runCmd('gh', [
           'pr', 'list', '--author', '@me', '--state', 'open', '--limit', '30',

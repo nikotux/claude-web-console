@@ -1,6 +1,6 @@
 // core/zoho-desk-client.js — cliente directo a Zoho Desk con identidad de USUARIO.
 //
-// Este módulo es la vía de escritura gobernada para sesiones Limbo: resuelve el
+// Este módulo es la vía directa gobernada para sesiones Limbo: resuelve el
 // token OAuth por username en cada operación (modelo multiusuario) y manda orgId
 // siempre, porque Desk lo exige incluso en endpoints que parecen globales.
 import fs from 'node:fs';
@@ -81,6 +81,11 @@ export async function resolveTicketId(username, ticketNumberOrId) {
 export async function getTicket(username, ticket) {
   const id = await resolveTicketId(username, ticket);
   return zohoFetch(username, `/tickets/${encodeURIComponent(id)}`);
+}
+
+export async function listDepartments(username) {
+  const r = await zohoFetch(username, '/departments');
+  return Array.isArray(r?.data) ? r.data : (Array.isArray(r) ? r : []);
 }
 
 export async function assignTicket(username, ticket, agentId) {

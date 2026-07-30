@@ -21,6 +21,19 @@ en MODAL — `public/js/modules/tickets/{ticket-detail,pr-detail}.js` (clases `.
 | Sólo admin | Guardar, editar o borrar contexto adicional | Escribe en el Pad `console`. |
 | Sólo admin | Forzar el refresco | Golpea Zoho/GitHub; los no-admin sólo leen el snapshot compartido. El arranque en frío sí puede generar el primer snapshot para cualquier autenticado. |
 
+LECTURAS DE ZOHO POR USUARIO (console:BUG-2340, decisión de Niko 2026-07-30):
+las dos únicas lecturas en vivo que llegan directamente a una request —el
+fallback de `GET /ticket/:id` cuando el ticket no está en el snapshot ni en
+resueltos, y `GET /departments`— usan la cuenta OAuth de Zoho del solicitante.
+El host conserva el cliente MCP por retrocompatibilidad; un inquilino usa
+`core/zoho-desk-client.js` con su username. Si no conectó Zoho, la request falla
+con el mensaje accionable de Conexiones: está prohibido caer como respaldo al
+MCP del host, porque eso leería con una identidad ajena.
+
+El snapshot compartido de 60 s (`sources.js` + `refresher.js`) y su consumo
+desde `seguimientos/desk-source.js` siguen siendo trabajo server-side del host:
+se calculan una vez con sus credenciales y no se duplican por usuario.
+
 Gotcha de `claim`: al tomar un ticket, `assignInZohoBestEffort(id,
 externalUserOf(req))` intenta asignarlo en Zoho con la cuenta OAuth del usuario que
 lo toma, nunca con la del host para un usuario autenticado. Si no conectó Zoho en
@@ -190,6 +203,17 @@ dónde aterriza, ARRIBA de los contextos editables; y un check rápido de Salud
 (`checkTolkienContextSync` en `health/index.js`, id `tolkien-context`) entra en el
 semáforo global. La inyección del tablero se CONSERVA como redundancia inofensiva
 (cinturón + tirantes).
+
+FAN-OUT A INQUILINOS (console:BUG-2343, 2026-07-29): después de completar el
+espejo del host, `syncToTolkien()` replica el MISMO `CLAUDE.local.md` a cada clon
+de Tolkien provisionado, enumerado con `listUsers()` y resuelto exclusivamente
+con `userWorkspace(id)`. Así una sesión de un inquilino abierta por launcher,
+TUI o reanudación recibe el mismo gate de push y la misma house style aunque no
+provenga del botón del tablero. El host siempre se escribe primero. El fan-out es
+best-effort POR USUARIO y atómico (`writeFileAtomic`): exige que existan tanto
+`<workspace>/tolkien` como su `.git`, saltea en silencio los clones ausentes y
+registra/devuelve cuántos alcanzó y qué usuarios fallaron; ningún fallo de un
+inquilino puede romper el espejo del host ni la request de `saveContext()`.
 
 ## Gotchas de esta carpeta
 

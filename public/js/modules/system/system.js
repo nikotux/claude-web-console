@@ -2,10 +2,10 @@
 // organizado en GRUPOS con submenú (master-detail), no una fila plana de tabs.
 //
 // Botón ⚙ en el pie → modal con:
-//   ⚙️ Configuración   → Conexiones (MCP) · Skills · Idioma · Variables de entorno · Proyectos
+//   ⚙️ Configuración   → Novedades · Conexiones (MCP) · Skills · Idioma · Variables de entorno · Proyectos
 //   🩺 Diagnóstico     → Salud · Dashboard · Actualizaciones · UniFi · Interfono
 //   🛠️ Administración  → Backup · Usuarios          (solo admins)
-// No-admin: Conexiones · Skills · Idioma · Proyectos · Interfono.
+// No-admin: Novedades · Conexiones · Skills · Idioma · Proyectos · Interfono.
 //
 // Desktop (≥720px): rail de grupos+items a la izquierda + panel a la derecha
 // (master-detail). Móvil (<720px): drill-down — se ve el índice, tocás un ítem
@@ -24,6 +24,7 @@ import { mountMcpsPanel } from './mcps-panel.js';
 import { mountUpdatesPanel } from './updates-panel.js';
 import { mountLanguagePanel } from './language-panel.js';
 import { mountMyConfigPanel } from './my-config-panel.js';
+import { mountNewsPanel } from './news-panel.js';
 import { t } from '../../ui/i18n.js';
 
 export default {
@@ -31,12 +32,67 @@ export default {
 
   mount(el, ctx) {
     const { icon, dialog, whoami } = ctx;
-    el.innerHTML = `<button class="btn-ghost btn--sm btn--icon" title="${t('system.menu.title', 'Sistema')}">${icon('gear', { size: 15 })}</button>`;
+    el.innerHTML = `
+      <button class="btn-ghost btn--sm btn--icon news-launcher" title="${t('system.menu.title', 'Sistema')}">
+        ${icon('gear', { size: 15 })}
+        <span class="news-badge-dot" aria-hidden="true" hidden></span>
+      </button>`;
 
-    el.querySelector('button').addEventListener('click', async () => {
+    const launcher = el.querySelector('button');
+    const dot = el.querySelector('.news-badge-dot');
+    const railCounters = new Set();
+    let newsUnread = 0;
+    let badgeVersion = 0;
+
+    function paintNewsBadge() {
+      dot.hidden = newsUnread <= 0;
+      for (const counter of railCounters) {
+        if (!counter.isConnected) {
+          railCounters.delete(counter);
+          continue;
+        }
+        counter.hidden = newsUnread <= 0;
+        counter.textContent = String(newsUnread);
+      }
+    }
+
+    function setNewsUnread(value) {
+      newsUnread = Math.max(0, Number(value) || 0);
+      paintNewsBadge();
+    }
+
+    function clearNewsBadge() {
+      badgeVersion += 1;
+      setNewsUnread(0);
+    }
+
+    // El badge es best-effort: una falla nunca demora ni rompe el pie.
+    async function loadNewsBadge() {
+      const version = badgeVersion;
+      try {
+        const res = await fetch('/api/news');
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && version === badgeVersion) setNewsUnread(data.unread);
+      } catch {
+        // Sin conexión, el botón Sistema funciona igual y queda sin marca.
+      }
+    }
+
+    ctx.bus?.addEventListener?.('cwc:news-seen', clearNewsBadge);
+    window.addEventListener('cwc:news-seen', clearNewsBadge);
+    loadNewsBadge();
+
+    launcher.addEventListener('click', async () => {
       const me = await whoami;
       const isAdmin = !!me?.admin;
-      const m = dialog.openModal({ title: t('system.menu.title', 'Sistema'), width: 880 });
+      let railCounter = null;
+      const m = dialog.openModal({
+        title: t('system.menu.title', 'Sistema'),
+        width: 880,
+        onClose: () => {
+          if (railCounter) railCounters.delete(railCounter);
+        },
+      });
 
       // Grupos → items. Diagnóstico del server + config de instancia y
       // Administración son admin-only; lo per-usuario queda visible para todos.
@@ -44,6 +100,7 @@ export default {
         {
           label: `⚙️ ${t('system.menu.groupConfig', 'Configuración')}`,
           items: [
+            { emoji: '🆕', label: t('system.menu.news', 'Novedades'), news: true, mount: (c) => mountNewsPanel(c, { ...ctx, isAdmin }) },
             ...(me?.type === 'user'
               ? [{ emoji: '✅', label: t('system.menu.myConfig', 'Mi configuración'), mount: (c) => mountMyConfigPanel(c, { ...ctx, me }) }]
               : []),
@@ -90,7 +147,10 @@ export default {
           <div class="sys-group-h">${g.label}</div>
           ${g.items.map((it) => {
             const i = flat.findIndex((f) => f.gi === gi && f.label === it.label);
-            return `<button class="sys-item" data-i="${i}"><span class="sys-item-ic">${it.emoji}</span><span class="sys-item-lb">${it.label}</span></button>`;
+            const count = it.news
+              ? `<span class="news-count" data-ref="news-count"${newsUnread > 0 ? '' : ' hidden'}>${newsUnread}</span>`
+              : '';
+            return `<button class="sys-item" data-i="${i}"><span class="sys-item-ic">${it.emoji}</span><span class="sys-item-lb">${it.label}</span>${count}</button>`;
           }).join('')}
         </div>`).join('');
 
@@ -111,6 +171,11 @@ export default {
       const body = m.body.querySelector('[data-ref="body"]');
       const items = Array.from(m.body.querySelectorAll('.sys-item'));
       const isMobile = () => window.matchMedia('(max-width: 719px)').matches;
+      railCounter = m.body.querySelector('[data-ref="news-count"]');
+      if (railCounter) {
+        railCounters.add(railCounter);
+        paintNewsBadge();
+      }
 
       function select(i) {
         items.forEach((b) => b.classList.toggle('active', Number(b.dataset.i) === i));

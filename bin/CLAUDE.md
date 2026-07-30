@@ -465,12 +465,19 @@ después de `_env-boot.js` + redacción de secretos. Sin credencial propia el
 server NO lo spawnea (fail-closed, nunca consume la cuenta Claude del host).
 Lógica compartida en src/modules/projects/analyze-shared.js
 ### bin/cwc-commitmsg-runner.js generación IA del mensaje de commit del botón "Commit (sin push)"
-del panel Backup, DESACOPLADA del server (haiku, 1 turno, CERO
+del panel Backup, DESACOPLADA del server (sonnet, 1 turno, CERO
 herramientas — doble capa regla 6 deniega TODO; el diff viaja en
 el prompt, capturado por el server EN NODE). Interfaz por
 archivos: ~/.cwc-data/commitmsg/<id>.json (job con files/diff que
 escribe el POST; el runner persiste el mensaje en el MISMO
 archivo). Lógica compartida en src/modules/backup/commitmsg-shared.js
+### bin/cwc-news-runner.js     redacción y publicación DESACOPLADA de 🆕 Novedades
+tras un push exitoso o el botón admin "✍️ Redactar ahora" (sonnet, hasta 30
+turnos). Corrida read-only blindada en DOS capas con la allowlist exacta
+Read/Grep/Glob/ToolSearch; sin Bash/Edit/Write/WebFetch, MCP ni settingSources.
+Publica en `~/.cwc-data/news.json`, persiste el job en
+`~/.cwc-data/news/<jobId>.json` y registra la corrida en
+`~/.cwc-data/news.log`. Lógica compartida en src/modules/news/news-shared.js
 ### bin/cwc-audio-runner.js     análisis IA de UNA transcripción de audio (módulo `audio`),
 DESACOPLADO del server (regla de oro; sonnet, 1 turno, CERO
 herramientas — doble capa regla 6 deniega TODO; el texto viaja

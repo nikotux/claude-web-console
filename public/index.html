@@ -33,10 +33,142 @@
       window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
         const css = getComputedStyle(document.documentElement);
         const v = (name) => css.getPropertyValue(name).trim();
+        // Mermaid pasa cada color por khroma (lighten/darken/invert): NO acepta
+        // color-mix() ni var(). Resolvemos los tokens a HEX en JS. Esto NO viola
+        // "cero hex fuera de tokens.css": los hex se DERIVAN de los tokens en runtime.
+        const hex = (name, fb) => {
+          const c = v(name);
+          return /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(c) ? c : (fb || '#888888');
+        };
+        const toRgb = (h) => {
+          let s = h.replace('#', '');
+          if (s.length === 3) s = s.split('').map((c) => c + c).join('');
+          return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+        };
+        const toHex = (rgb) => '#' + rgb.map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('');
+        // mix(a, b, t): t de `a` sobre `b` (t=0.2 => 20% de a).
+        const mix = (a, b, t) => {
+          const A = toRgb(a), B = toRgb(b);
+          return toHex([0, 1, 2].map((i) => A[i] * t + B[i] * (1 - t)));
+        };
+
+        const SURF = hex('--cwc-bg-panel');        // superficie de la lámina del diagrama
+        const CHIP = hex('--cwc-bg-chip');
+        const TXT  = hex('--cwc-text');
+        const TXT2 = hex('--cwc-text-secondary');
+        const DIM  = hex('--cwc-text-dim');
+        const BORD = hex('--cwc-border');
+        const BORS = hex('--cwc-border-strong');
+
+        // Rol semántico -> color de acento. El relleno es ese color al 18% sobre la
+        // superficie: tiñe sin gritar y mantiene el texto legible en tema oscuro.
+        const ROLE_HUES = {
+          key:   hex('--cwc-accent'),
+          ok:    hex('--cwc-ok'),
+          warn:  hex('--cwc-warn'),
+          bad:   hex('--cwc-danger'),
+          info:  hex('--cwc-info'),
+          cool:  hex('--cwc-accent-cool'),
+          deep:  hex('--cwc-model-opus'),
+          muted: hex('--cwc-text-dimmer'),
+        };
+        const ROLES = {};
+        for (const [k, hue] of Object.entries(ROLE_HUES)) {
+          ROLES[k] = {
+            fill: mix(hue, SURF, k === 'muted' ? 0.10 : 0.18),
+            stroke: k === 'muted' ? BORS : hue,
+            color: k === 'muted' ? DIM : TXT,
+          };
+        }
+        // La comparte ui/markdown.js para inyectar los classDef del preludio:
+        // Mermaid necesita colores sólidos, pero el source visible queda intacto.
+        window.__cwcMermaidPalette = { roles: ROLES, surface: SURF, text: TXT, line: mix(DIM, SURF, 0.85) };
+
+        const SCALE_HUES = [
+          ROLE_HUES.key, ROLE_HUES.cool, ROLE_HUES.warn, ROLE_HUES.ok,
+          ROLE_HUES.deep, ROLE_HUES.info, ROLE_HUES.bad, hex('--cwc-cat-archive'),
+          hex('--cwc-cat-image'), hex('--cwc-model-codex'), hex('--cwc-cat-code'), hex('--cwc-cat-video'),
+        ];
+        const scaleVars = {};
+        SCALE_HUES.forEach((hue, i) => {
+          scaleVars['cScale' + i] = mix(hue, SURF, 0.20);
+          scaleVars['cScalePeer' + i] = hue;
+          scaleVars['cScaleLabel' + i] = TXT;
+          scaleVars['pie' + (i + 1)] = mix(hue, SURF, 0.55);
+        });
+
+        const roleCss = Object.entries(ROLES).map(([k, r]) => `
+          .${k} > rect, .${k} > polygon, .${k} > circle, .${k} > ellipse, .${k} > path,
+          .${k} .basic.label-container, .${k} .node-bkg {
+            fill: ${r.fill} !important; stroke: ${r.stroke} !important; stroke-width: 1.5px !important;
+          }
+          .${k} .nodeLabel, .${k} .label text, .${k} text.text, .${k} span.nodeLabel {
+            fill: ${r.color} !important; color: ${r.color} !important;
+          }`).join('\n');
+
+        // Mindmap: `look:'neo'` no aplica las cScale*, pero SÍ marca cada rama con su
+        // clase `section-N` (medido en el DOM). Cada rama toma su color de la escala:
+        // el autor no escribe nada — y `:::` NO existe en mindmap, así que esta es la
+        // única vía de color.
+        const mindCss = SCALE_HUES.map((_, i) => {
+          // Rotado en 1: `SCALE_HUES[0]` es el acento y la RAÍZ ya lo usa — sin esta
+          // rotación la primera rama sale del mismo color que el centro. El `pie` sigue
+          // usando la escala sin rotar, para no desalinearse de los gráficos ```chart```.
+          const hue = SCALE_HUES[(i + 1) % SCALE_HUES.length];
+          return `
+          .mindmap-node.section-${i} > path, .mindmap-node.section-${i} > rect {
+            fill: ${mix(hue, SURF, 0.20)} !important; stroke: ${mix(hue, SURF, 0.75)} !important;
+          }
+          .mindmap-node.section-${i} > line { stroke: ${mix(hue, SURF, 0.75)} !important; }`;
+        }).join('\n');
+
+        const themeCSS = `
+          ${roleCss}
+          ${mindCss}
+          /* Profundidad: los nodos se despegan de la lámina sin marcarse de más. */
+          .node rect, .node polygon, .node circle, .node ellipse, .node path,
+          .mindmap-node > rect, .mindmap-node > circle, .mindmap-node > polygon {
+            filter: drop-shadow(0 2px 3px ${hex('--cwc-bg')}cc);
+          }
+          .node rect, .node polygon { rx: 8px; ry: 8px; }
+          /* Los subgraph se leen como SECCIONES: caja tenue y título en versalita. */
+          .cluster rect { rx: 12px; ry: 12px; stroke-dasharray: none; }
+          .cluster .cluster-label text, .cluster-label .nodeLabel, .cluster span.nodeLabel {
+            fill: ${TXT2} !important; color: ${TXT2} !important;
+            font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: .82em;
+          }
+          /* Etiquetas de arista como PÍLDORA. La píldora va en el <p> NO VACÍO: los
+             contenedores existen igual para las aristas SIN etiqueta y quedaban
+             dibujados como una pastilla suelta en la esquina del diagrama. */
+          .edgeLabel .label span, .edgeLabel foreignObject div {
+            background: transparent !important; border: 0 !important; padding: 0 !important;
+          }
+          .edgeLabel p:not(:empty) {
+            background: ${mix(CHIP, SURF, 0.7)} !important; color: ${TXT2} !important;
+            border: 1px solid ${mix(BORD, SURF, 0.9)}; border-radius: 999px;
+            padding: 1px 7px; font-size: .84em; line-height: 1.5;
+          }
+          .flowchart-link, .edgePath .path { stroke-width: 1.4px; }
+          .marker { fill: ${mix(DIM, SURF, 0.85)}; stroke: ${mix(DIM, SURF, 0.85)}; }
+          /* Mindmap: la raíz manda visualmente. */
+          .mindmap-node.section-root > circle, .mindmap-node.section-root > rect,
+          .mindmap-node.section-root > path {
+            fill: ${mix(ROLE_HUES.key, SURF, 0.20)} !important;
+            stroke: ${ROLE_HUES.key} !important; stroke-width: 2px !important;
+          }
+        `;
+
         const cfg = {
+          // suppressErrorRendering: sin esto, al fallar el parseo Mermaid dibuja su
+          // "bomba" de error en el div temporal que cuelga de <body> y tira la excepción
+          // ANTES de limpiarlo -> queda huérfana al final de la página (una por cada
+          // diagrama fallido). Con el flag en true, Mermaid limpia y solo tira el error;
+          // el aviso al usuario lo pone markdown.js (.md-mermaid-error).
+          suppressErrorRendering: true,
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'base',
+          themeCSS,
           fontFamily: v('--cwc-font-ui'),
           fontSize: 15,
           maxTextSize: 90000,
@@ -44,9 +176,9 @@
             useMaxWidth: false,
             htmlLabels: true,
             curve: 'basis',
-            padding: 12,
-            nodeSpacing: 46,
-            rankSpacing: 52,
+            padding: 14,
+            nodeSpacing: 52,
+            rankSpacing: 60,
             diagramPadding: 10,
           },
           mindmap: { useMaxWidth: false, padding: 14 },
@@ -58,42 +190,49 @@
           journey: { useMaxWidth: false },
           pie: { useMaxWidth: false },
           themeVariables: {
-            background: v('--cwc-bg-elevated'),
-            primaryColor: v('--cwc-accent-bg'),
-            primaryTextColor: v('--cwc-text'),
-            primaryBorderColor: v('--cwc-accent'),
-            lineColor: v('--cwc-text-dim'),
-            secondaryColor: v('--cwc-bg-chip'),
-            tertiaryColor: v('--cwc-bg-hover'),
-            textColor: v('--cwc-text'),
+            background: SURF,
+            // Con `look:'neo'`, primaryBorderColor llega vía gradiente a TODOS los
+            // bordes. El acento se reserva para `:::key`; sin clase, el nodo es neutro.
+            primaryColor: mix(CHIP, SURF, 0.85),
+            primaryBorderColor: BORS,
+            primaryTextColor: TXT,
+            secondaryColor: mix(ROLE_HUES.cool, SURF, 0.16),
+            secondaryBorderColor: mix(ROLE_HUES.cool, SURF, 0.55),
+            secondaryTextColor: TXT,
+            tertiaryColor: mix(ROLE_HUES.deep, SURF, 0.14),
+            tertiaryBorderColor: mix(ROLE_HUES.deep, SURF, 0.5),
+            tertiaryTextColor: TXT,
+            mainBkg: mix(CHIP, SURF, 0.85),
+            nodeBorder: BORS,
+            nodeTextColor: TXT,
+            textColor: TXT,
+            titleColor: TXT,
+            lineColor: mix(DIM, SURF, 0.85),
+            defaultLinkColor: mix(DIM, SURF, 0.85),
+            clusterBkg: mix(CHIP, SURF, 0.35),
+            clusterBorder: mix(BORD, SURF, 0.9),
+            edgeLabelBackground: mix(CHIP, SURF, 0.7),
+            labelBoxBkgColor: mix(CHIP, SURF, 0.7),
+            labelBoxBorderColor: BORS,
+            labelTextColor: TXT,
+            activationBkgColor: mix(ROLE_HUES.key, SURF, 0.22),
+            activationBorderColor: ROLE_HUES.key,
+            noteBkgColor: mix(ROLE_HUES.warn, SURF, 0.12),
+            noteBorderColor: mix(ROLE_HUES.warn, SURF, 0.5),
+            noteTextColor: TXT,
+            actorBkg: mix(ROLE_HUES.cool, SURF, 0.16),
+            actorBorder: mix(ROLE_HUES.cool, SURF, 0.6),
+            actorTextColor: TXT,
+            actorLineColor: mix(DIM, SURF, 0.7),
+            signalColor: mix(DIM, SURF, 0.9),
+            signalTextColor: TXT2,
+            sequenceNumberColor: hex('--cwc-accent-ink'),
+            altBackground: mix(CHIP, SURF, 0.4),
+            errorBkgColor: mix(ROLE_HUES.bad, SURF, 0.25),
+            errorTextColor: TXT,
             fontFamily: v('--cwc-font-ui'),
-            nodeBorder: v('--cwc-border-strong'),
-            clusterBkg: v('--cwc-bg-panel'),
-            clusterBorder: v('--cwc-border'),
-            edgeLabelBackground: v('--cwc-bg-elevated'),
-            errorBkgColor: v('--cwc-danger'),
-            errorTextColor: v('--cwc-text'),
             fontSize: '15px',
-            nodeTextColor: v('--cwc-text'),
-            mainBkg: v('--cwc-bg-chip'),
-            titleColor: v('--cwc-text'),
-            defaultLinkColor: v('--cwc-text-dim'),
-            noteBkgColor: v('--cwc-bg-panel'),
-            noteTextColor: v('--cwc-text'),
-            noteBorderColor: v('--cwc-border'),
-            actorBkg: v('--cwc-bg-chip'),
-            actorBorder: v('--cwc-border-strong'),
-            actorTextColor: v('--cwc-text'),
-            signalColor: v('--cwc-text-dim'),
-            signalTextColor: v('--cwc-text-secondary'),
-            pie1: v('--cwc-accent'),
-            pie2: v('--cwc-accent-cool'),
-            pie3: v('--cwc-warn'),
-            pie4: v('--cwc-ok'),
-            pie5: v('--cwc-cat-video'),
-            pie6: v('--cwc-info'),
-            pie7: v('--cwc-danger'),
-            pie8: v('--cwc-cat-archive'),
+            ...scaleVars,
           },
         };
         try {

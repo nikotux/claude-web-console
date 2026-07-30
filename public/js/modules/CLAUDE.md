@@ -83,7 +83,7 @@ en `l.targets`/`l.targetReasons`, y el menú "▾" muestra un chip con cuántos
 destinos NO aplican y por qué) ·
 stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
 master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
-.sys-tabs que ya no escalaba): ⚙️ Configuración (Conexiones · Skills ·
+.sys-tabs que ya no escalaba): ⚙️ Configuración (🆕 Novedades · Conexiones · Skills ·
 Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Dashboard ·
 Actualizaciones · UniFi · Interfono — Dashboard = pestaña propia desde PLAN-752, antes
 sub-modal del Escaneo de Salud; Actualizaciones = censo de versiones de terceros,
@@ -95,10 +95,14 @@ MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
 para volver. isMobile()=matchMedia(max-width:719px) decide auto-select
 desktop vs índice móvil. CSS .sys-* en style.css (reemplazó .sys-tabs/
 .sys-tab/.sys-body).
-Acceso: un no-admin ve Conexiones · Skills · Idioma · Proyectos · Interfono.
+Acceso: un no-admin ve 🆕 Novedades · Conexiones · Skills · Idioma · Proyectos · Interfono.
 Salud · Dashboard · Actualizaciones · UniFi · Variables de entorno son admin-only.
 Criterio: diagnóstico del SERVER y config de INSTANCIA requieren admin; las
 preferencias y conexiones del usuario quedan disponibles para todos.
+La pestaña 🆕 Novedades es la PRIMERA de ⚙️ Configuración y es visible para
+TODOS; editar, ocultar, borrar y "✍️ Redactar ahora" son acciones admin-only.
+El badge de no leídas vive en el botón ⚙ del pie y se apaga con el evento
+`cwc:news-seen`.
 La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba). La pestaña
 Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
 traducción de contenido en Fase 2 vía Orquestador Interno) es la primera pieza
@@ -152,9 +156,13 @@ todo determinístico). El catálogo nace colapsado con resumen
 disponibles/instaladas/desactualizadas; cada tarjeta también nace plegada y
 usa los tres semáforos existentes: ✅ instalada al día (verde) ·
 ⬆️ actualización disponible (ámbar) · ⬜ no instalada (neutro), más
-⭐ para las `cwc-default`. Instalar/Actualizar copia la versión compartible
-del repo al espacio global del principal; Quitar exige `confirmDialog` y
-borra solo copias marcadas como propias del catálogo. Durante el POST los
+⭐ para las `cwc-default`. Instalar/Actualizar/Reinstalar copian la versión
+compartible del repo al espacio global del principal y las tres pegan contra
+el MISMO endpoint `install` (el backend reemplaza si la copia es del catálogo);
+Reinstalar aparece cuando la skill está instalada y AL DÍA — única forma de
+forzar la copia cuando no hay nada que actualizar — y pide `confirmDialog`
+porque pisa ediciones locales; Quitar exige `confirmDialog` y borra solo copias
+marcadas como propias del catálogo. Durante el POST los
 controles quedan deshabilitados con Pac-Man, y éxito o error siempre dispara
 un GET fresco. `user_owned` tiene mensaje propio: una skill personal con el
 mismo nombre nunca se pisa ni se borra. Tras instalar/actualizar, el panel
@@ -217,7 +225,20 @@ consola, puerto del `pad-local.service` self-hosted, ver el gotcha
 para no confundir los tres). Es solo un ATAJO de UI para abrir la SPA
 de Pad en pestaña nueva — NO cruza datos ni viola la regla dura 12
 (los dos mundos siguen sin enlazarse en vivo; este botón no lee ni
-escribe nada, solo navega)) ·
+escribe nada, solo navega).
+El panel es ADMIN-ONLY y se OCULTA para el resto (2026-07-30): todos
+los endpoints de /api/tolkien devuelven 403 a un no-admin, así que
+montarlo era puro ruido — el auto-fetch le tiraba el modal "Solo un
+administrador puede traer cambios del remoto" en CADA
+visibilitychange. `ctx.whoami` se resuelve una vez (`adminReady`) y,
+si no es admin, `el.hidden = true` y NINGÚN poll arranca. Además
+`checkRemote({ interactive })`: el modal de error es EXCLUSIVO del
+click en 🔄; los chequeos de fondo (mount, interval de 5 min,
+visibilitychange) fallan en SILENCIO, y el 409 "ya hay una operación
+git en curso" (flag `busy` global del backend, compartido con /update
+y entre pestañas) se trata como benigno y nunca se avisa. El
+visibilitychange lleva throttle de 60 s (`lastFetchTs`) porque
+alternar ventanas disparaba ráfagas que chocaban entre sí.) ·
 bugs (sección "Bugs & Features", modules/bugs/bugs.js, ANTES
 `tickets`: ÚNICO acceso al ciclo del bug. INFO RÁPIDA barata (sin
 tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y

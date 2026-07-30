@@ -26,6 +26,8 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    PR → runner desacoplado (`bin/cwc-investigate-runner.js`); investigación de CONTEXTO de un
    ticket SIN PR (lee el código de Tolkien read-only para explicar por qué NO se
    resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`);
+   redacción de las Novedades tras un push → runner desacoplado
+   (`bin/cwc-news-runner.js`);
    optimización IA de los motores (censo + análisis con propuestas) → runner
    desacoplado (`bin/cwc-optimize-runner.js`); INTERFONO entre sesiones
    (mensajería + claims anti-conflicto: `bin/cwc-bus.js` invocado por los hooks
@@ -120,6 +122,15 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    solo lee disco (0 tokens). Veredicto {porQueNoResuelto, causaRaiz, archivos,
    complejidad, pasos, riesgo, confianza, titular, necesitaMasInfo}; sus `pasos` se
    inyectan en "Trabajar en esto"/"Trabajar en Chat (plan)".
+   EXCEPCIÓN NOMINAL — REDACTOR DE NOVEDADES: `bin/cwc-news-runner.js` corre
+   con las DOS capas (`PreToolUse` deny-by-default + `canUseTool` con la misma
+   allowlist exacta) y permite ÚNICAMENTE `Read`, `Grep`, `Glob` y
+   `ToolSearch`; no carga `settingSources` y no tiene Bash/Edit/Write/WebFetch
+   ni MCP. A diferencia del redactor del mensaje de commit, que no usa ninguna
+   herramienta, necesita leer el código para averiguar en qué menú o botón
+   quedó la función y escribir los pasos de "🧪 Probalo así": un runner ciego
+   inventaría rutas. Consume tokens y se dispara solo tras un push exitoso o
+   bajo el botón "✍️ Redactar ahora" (admin).
    EXCEPCIÓN de ESCRITURA sobre CÓDIGO (pedido del usuario 2026-07-03):
    `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
    revisión — edita el código de la consola sin supervisión. Es la única

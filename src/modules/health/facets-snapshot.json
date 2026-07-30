@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-29T15:02:17.576Z",
+  "generatedAt": "2026-07-30T15:34:25.191Z",
   "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
   "counts": {
-    "pad": 207,
+    "pad": 208,
     "manual": 2
   },
   "entries": {
@@ -1273,6 +1273,14 @@
     },
     "mod:mcps": {
       "ref": "ARQUI-1298",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:news": {
+      "ref": "ARQUI-2365",
       "plano": "usuario",
       "audiencia": "todos",
       "perfil": "general",
