@@ -1479,6 +1479,49 @@ y `_setStatus('waiting')` lo despacha ante el evento REAL de fin de turno, sin
 corte disparó exactamente un turno, por lo que el turno k del transcript va
 después del corte k; cualquier sobrante va al final en vez de romper el render.
 
+ADJUNTOS POR EL CANAL `say` (`console:BUG-2366`, 2026-07-30, reporte de Niko:
+«no me reconoce ni a mí ni a Richi las imágenes, es como si no dejara copiar o
+adjuntar»). La causa raíz era UNA y por eso fallaba igual para el HOST y para el
+INQUILINO, no era un bug multi-tenant: la SUBIDA siempre funcionó porque
+`POST /api/chat/attachment` usa el guard `participantChat`, de modo que el
+invitado puede subir y el archivo aterriza en la carpeta del chat; faltaba el
+TRANSPORTE. En una sala el composer manda `say`, no `user`, y `say` no sabía de
+adjuntos: el archivo quedaba en disco y su referencia se descartaba en silencio,
+el peor modo de falla posible, porque la miniatura aparecía en la bandeja del
+composer y después no ocurría nada ni había error. Ahora `say` lleva los
+adjuntos de punta a punta con la MISMA representación que `user`
+(`[{name,type,mime}]`: referencias, nunca base64 por el WS).
+`Chat.say(text, by, attachments)` los valida contra disco mediante
+`existingAttachments()`, la misma función que ya usaba `sendUser`, de modo que
+la frontera de seguridad no se duplicó ni se relajó; además, un mensaje de SOLO
+adjunto es legítimo: la guarda pasó de `if (!t) return null` a
+`if (!t && !atts.length) return null`. `appendSay` los persiste en `sala.jsonl`
+y `_rebuildSalaHistory()` los repone al reconstruir el hilo; sin eso, los
+adjuntos del buzón pendiente se evaporaban en el siguiente reinicio del server
+mientras el texto sobrevivía, exactamente la asimetría que la Regla dura 2
+existe para evitar. `aduana.js` normaliza de forma ESTRUCTURAL —solo
+`{name,type,mime}` recortados, con tope `MAX_SAY_ATTACHMENTS = 8`— y a propósito
+NO importa `attachments.js`: el llamador ya validó contra disco y el log debe
+seguir siendo un módulo chico sin dependencias. `_dispatchCut()` junta en orden
+los adjuntos de TODOS los `say` del buzón y los manda con el turno; el tope
+`MAX_ATTACHMENTS` (8) se aplica ACÁ, y no alcanza con el de `say()`, porque entre
+dos cortes pueden acumularse aportes válidos de varias personas. Lo que no entra
+NO se descarta en silencio: `buildSalaPrompt(items, chat,
+{ droppedAttachments })` agrega al prompt una nota explícita que dice cuántos
+quedaron afuera e invita a pedirlos en el próximo corte. Cada línea del prompt
+nombra los adjuntos que trajo esa persona (`<richi>: mirá esto [adjunta:
+captura.png]`): es la Ley 4 de Aduana aplicada al adjunto, porque sin ese
+pasaporte, cuando varias personas adjuntan en un mismo corte, el modelo recibe
+un montón de imágenes sin saber cuál trajo quién. El runner NO se tocó:
+`bin/cwc-chat-runner.js` ya leía `msg.attachments` y llamaba a
+`buildUserContent`, que arma los bloques `image`/`document`/`text` del SDK.
+VERIFICADO E2E en caliente sobre una sala real: un `say` de solo imagen se acepta
+(antes daba 400), el bloque `image` llega al SDK con 57 KB de base64 y el modelo
+describe correctamente el contenido; el pasaporte aparece en la línea de su
+autor; con 10 adjuntos en el buzón viajan 8 y la nota avisa de los 2 restantes;
+tras reiniciar el server, los 7 `say` se reconstruyen desde `sala.jsonl` con sus
+adjuntos; y Playwright confirma las miniaturas en la burbuja con 0 errores JS.
+
 LAS CUATRO COMPUERTAS conservan la frontera por dueño. `ownedChat` quedó
 INTACTO para las acciones de dueño y se sumó `participantChat` para las
 acciones de participar; cambiaron el guard del WS, `list(principal)` y el
@@ -1493,8 +1536,73 @@ una lista cableada, de modo que un usuario nuevo entra sin tocar código. Los
 rótulos de hora se formatean siempre en la zona de QUIEN MIRA, nunca en la del
 server.
 
+PASAR UNA SESIÓN EXISTENTE A LA ADUANA (`console:PLAN-2367`, 2026-07-30,
+pedido de Niko). Una sala NO es otro tipo de chat: es un chat cuyo `cwd` cae
+bajo `ADUANA_ROOT`, clasificación que nace de `worldLabelFor` y termina en
+`isSala()`. Convertir una conversación, por lo tanto, no justifica inventar
+otro mecanismo de transporte: `ChatManager.toAduana(id, {by})` crea una sala
+vacía y se apoya en `handoff()` para MUDAR allí el mismo hilo. Es un MOVE, no
+una copia: conserva `sessionId`, id del chat, tarjeta y carpeta de adjuntos.
+
+El modo se fuerza a `default` ANTES del handoff para que el runner nuevo NAZCA
+ya con los permisos del suelo. Esto importa porque un chat abierto desde el
+launcher llega en `bypassPermissions` y, si el cambio ocurriera después,
+entraría privilegiado a la sala en contra de la Ley 5 de la Regla dura 16. La
+defensa permanente vive en `Chat.setMode()`, que devuelve `false` ante cualquier
+pedido de `bypassPermissions` dentro de una sala; el call-site WS de `set_mode`
+repite la comprobación solamente para poder explicar el rechazo al usuario. No
+confundirlo con `POST /mode`: ese endpoint conmuta Chat↔TUI y NO modifica
+permisos, por lo que el guard que se había puesto allí era código muerto y se
+quitó.
+
+El record `origin` de `sala.jsonl`, escrito por `appendOrigin`, cumple DOS
+funciones inseparables. Primero, declara ante la Aduana el contexto que entra,
+como exigen las Leyes 2 y 4. Segundo, corrige un defecto concreto del replay:
+`_rebuildSalaHistory()` parte de que cada `cut` disparó exactamente un turno y
+ubica el turno k después del corte k, pero una conversación convertida trae N
+turnos producidos ANTES de que la sala y sus cortes existieran. Sin un ancla,
+esos turnos previos quedaban reordenados detrás de cortes futuros; `priorTurns`
+los consume como preámbulo y recién después continúa intercalando los `say`,
+los `cut` y sus respuestas.
+
+COROLARIO IMPORTANTE: un aviso del sistema NUNCA se representa con
+`_push({type:'user'})` en un chat que pueda convertirse en sala. Los eventos
+`user` son la unidad de turno que ancla el replay y un aviso disfrazado de
+aporte humano desplaza ese offset. Los avisos se empujan como
+`{type:'error', message}`. Esta desviación se encontró y corrigió durante la
+revisión, antes de llegar a producción.
+
+La salida de Aduana también cierra la frontera de acceso: cuando `handoff`
+abandona una sala vacía `chat.participants`, emite el estado actualizado por
+`participants` y agrega un aviso visible al hilo. Sin esa limpieza, un antiguo
+invitado conservaría acceso mediante `participantChat`, guard que no vuelve a
+consultar `isSala()`.
+
+El LÍMITE VIGENTE es deliberado: solo el HOST puede convertir y la operación
+falla limpiamente, con mensaje, si el dueño del chat no es el host.
+`ADUANA_ROOT` vive bajo el HOME del host a propósito (`console:PLAN-2274`),
+mientras `safeCwd` clampa cada destino a `userFileRoot(owner)`; fingir que un
+inquilino puede cruzar esa frontera sería romper el aislamiento. También queda
+FUERA DE ALCANCE mudar hacia una sala YA poblada —mezclaría dos hilos y
+`_rebuildSalaHistory()` no sabe reconstruir esa unión— y esconder a los
+invitados el tramo anterior. Ocultarlo sería mentir: el modelo conserva ese
+contexto en la misma `sessionId`; por eso el confirm del frontend advierte de
+forma explícita que los participantes verán TODO el hilo y sus adjuntos.
+
+VERIFICADO EN CALIENTE: un chat de Mi Consola con 2 turnos y
+`bypassPermissions` fue convertido; terminó con `cwd` bajo la sala,
+`isSala:true` y `mode:'default'`, y `sala.jsonl` registró
+`{"t":"origin","priorTurns":2,"fromWorld":"Mi Consola"}`. El transcript se
+movió al `projectKey` de la sala y el replay quedó en orden
+`user|assistant|user|assistant|ORIGIN`; el WS rechazó
+`set_mode bypassPermissions`, y al mover después la sesión de vuelta a Mi
+Consola quedó revocado el invitado.
+
 ## Gotchas de esta carpeta
 
+- Replay de Aduana: nunca uses `_push({type:'user'})` para un aviso del sistema;
+  ese tipo representa un turno humano y descalibra `priorTurns`/`cut`. Usá
+  `{type:'error', message}`.
 - Arranque multi-tenant: el runner de un INQUILINO nace con el env limpio de
   `userRunnerEnv` y con `cwd` en su workspace. Si `bin/_env-boot.js` no es el
   PRIMER import de `bin/cwc-chat-runner.js`, `dotenv/config` busca `.env` en ese

@@ -912,6 +912,7 @@ export default {
         ${arch ? '' : `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>`}
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>`}
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>`}
+        ${!arch && !isTui && !c.isSala && (isChatOwner(c) || iAmAdmin) ? `<button class="cwc-popup-item" data-act="to-aduana">${icon('relay', { size: 15 })}<span>${t('sessions.menu.toAduana', '🛃 Pasar a la Aduana')}</span></button>` : ''}
         ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>`}
         ${c.isSala && (isChatOwner(c) || iAmAdmin) ? `<button class="cwc-popup-item" data-act="collab">${icon('relay', { size: 15 })}<span>${t('sessions.menu.inviteSala', '🤝 Invitar a la sala')}</span></button>` : ''}
         ${c.isSala && !isChatOwner(c) && isChatParticipant(c) ? `<button class="cwc-popup-item" data-act="leave-sala">${icon('close', { size: 15 })}<span>${t('sessions.menu.leaveSala', 'Salir de la sala')}</span></button>` : ''}
@@ -928,6 +929,7 @@ export default {
       menu.querySelector('[data-act="model"]')?.addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
       menu.querySelector('[data-act="world"]')?.addEventListener('click', () => act(() => moveChatWorld(c)));
+      menu.querySelector('[data-act="to-aduana"]')?.addEventListener('click', () => act(() => toAduana(c)));
       menu.querySelector('[data-act="archive"]')?.addEventListener('click', () => act(() => archiveChat(c)));
       menu.querySelector('[data-act="collab"]')?.addEventListener('click', () => act(() => openCollabModal(c)));
       menu.querySelector('[data-act="leave-sala"]')?.addEventListener('click', () => act(() => leaveSala(c)));
@@ -1222,6 +1224,36 @@ export default {
           refresh();
         }
       }));
+    }
+
+    async function toAduana(c) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.aduana.title', '🛃 Pasar a la Aduana'),
+        message: t('sessions.aduana.message', 'Esta mudanza tiene consecuencias reales:\n\n1. La conversación se muda a una sala neutral y deja de tener acceso al mundo donde estaba.\n2. Quien invites va a ver TODO el hilo anterior y los archivos adjuntos de este chat.\n3. El modo de permisos baja a “Preguntar”: una sala nunca corre en “Todo”.\n4. Los turnos los seguís pagando vos, porque el motor corre con tu credencial.'),
+        confirmLabel: t('sessions.aduana.confirm', '🛃 Pasar a la Aduana'),
+      });
+      if (!ok) return;
+
+      let converted = null;
+      try {
+        const res = await fetch('/api/chat/to-aduana', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t('sessions.aduana.error', 'No se pudo pasar la conversación a la Aduana.'));
+        if (data.chat) {
+          Object.assign(c, data.chat);
+          syncConversation(data.chat);
+        }
+        converted = c;
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.aduana.title', '🛃 Pasar a la Aduana'), message: e.message });
+      } finally {
+        refresh();
+      }
+      if (converted) openCollabModal(converted);
     }
 
     // Modelo de una CONVERSACIÓN: en vivo (q.setModel() del SDK, sin perder

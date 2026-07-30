@@ -810,6 +810,7 @@ export class ChatTab {
         break;
       case 'say': this._say(m); break;
       case 'cut': this._cut(m); break;
+      case 'origin': this._origin(m); break;
       case 'cut-pending':
         this._cutPending = true;
         this._renderCutButton();
@@ -949,6 +950,21 @@ export class ChatTab {
     this._salaSayCount = 0;
     this._cutPending = false;
     this._renderCutButton();
+    this._scroll();
+  }
+
+  _origin(m) {
+    const world = String(m.fromWorld || '').trim() || t('chat.sala.originUnknownWorld', 'su mundo anterior');
+    const by = String(m.by || '').trim() || t('chat.sala.originUnknownPerson', 'alguien');
+    const time = this._localTime(m.ts) || t('chat.sala.originUnknownTime', 'hora desconocida');
+    const el = document.createElement('div');
+    el.className = 'chat-origin';
+    el.textContent = t('chat.sala.originLine', '🛃 Esta conversación entró a la sala desde {world} · la trajo {name} · {time}', {
+      world,
+      name: by,
+      time,
+    });
+    this.msgsEl.appendChild(el);
     this._scroll();
   }
 

@@ -75,6 +75,11 @@ function salaSections() {
               name: t('chat.help.sala.legend.cut.name', 'Corte'),
               desc: t('chat.help.sala.legend.cut.desc', 'marca exactamente qué bloque de la conversación recibió la IA'),
             },
+            {
+              emoji: t('chat.help.sala.legend.origin.emoji', '🛃'),
+              name: t('chat.help.sala.legend.origin.name', 'Entrada a la sala'),
+              desc: t('chat.help.sala.legend.origin.desc', 'la barra del hilo marca desde qué mundo llegó la conversación y quién la trajo'),
+            },
           ],
         },
         {

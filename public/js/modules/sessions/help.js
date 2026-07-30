@@ -116,6 +116,10 @@ export default function sessionsHelp() {
                 v: t('sessions.help.buttons.menu.v', 'Permite renombrar, cambiar modo o modelo, mover, archivar, abrir la carpeta o cerrar.'),
               },
               {
+                k: t('sessions.help.buttons.toAduana.k', '🛃 Pasar a la Aduana'),
+                v: t('sessions.help.buttons.toAduana.v', 'Muda el chat a una sala neutral para invitar participantes. La mudanza es de disco y NO consume tokens.'),
+              },
+              {
                 k: t('sessions.help.buttons.help.k', '?'),
                 v: t('sessions.help.buttons.help.v', 'Abre esta ayuda sin refrescar ni modificar las sesiones.'),
               },

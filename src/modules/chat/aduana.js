@@ -84,6 +84,23 @@ export function appendCut(id, { by, ts, count }) {
   return rec;
 }
 
+export function appendOrigin(id, { by, ts, priorTurns, fromWorld }) {
+  ensureSala(id);
+  const rec = {
+    t: 'origin',
+    by: String(by),
+    ts: ts || Date.now(),
+    priorTurns: Math.max(0, Number(priorTurns) || 0),
+    fromWorld: String(fromWorld || '').slice(0, 80),
+  };
+  // Es la declaración de Aduana del contexto que ENTRA a la sala: cumple la
+  // Ley 2 («nada entra sin declararlo») y la Ley 4 («todo aporte lleva
+  // pasaporte») de la Regla dura 16, y ancla los turnos previos a la conversión.
+  // Por eso también es append-only: O_APPEND conserva el orden durable del log.
+  fs.appendFileSync(salaLogPath(id), JSON.stringify(rec) + '\n');
+  return rec;
+}
+
 export function readSala(id, { limit = 500 } = {}) {
   let raw;
   try {

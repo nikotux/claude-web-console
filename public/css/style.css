@@ -1758,13 +1758,21 @@ html, body {
   font-weight: 700; line-height: 1.2; white-space: normal;
 }
 .chat-say-text { white-space: pre-wrap; }
-.chat-cut {
+.chat-cut, .chat-origin {
   align-self: stretch; display: flex; align-items: center; gap: .55rem;
   color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
   text-align: center; white-space: nowrap;
 }
-.chat-cut::before, .chat-cut::after {
+.chat-cut::before, .chat-cut::after,
+.chat-origin::before, .chat-origin::after {
   content: ''; flex: 1; border-top: 1px solid var(--cwc-divider);
+}
+.chat-origin {
+  color: var(--cwc-text-secondary); font-weight: 600;
+  white-space: normal;
+}
+.chat-origin::before, .chat-origin::after {
+  border-top-color: color-mix(in srgb, var(--cwc-accent) 38%, var(--cwc-divider));
 }
 /* El asistente no lleva caja: texto sobre el fondo con barra fría al margen
    (identidad propia, distinta del acento terracota del usuario). */
