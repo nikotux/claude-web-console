@@ -51,6 +51,12 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-31 16:54 — main
+- Sumar mudanza de chat a sala de Aduana y aviso de origen en el hilo
+- Aduana: identidad visual v2 (avatares, agrupación por autor, panel raw) y PAD del arquitecto
+- Reemplazar PTY por spawn en login de GitHub y agregar respuesta con cita en sala
+- Sumar skills impacto y probar, e integrar intención al flujo de anclaje/orquestación
+
 ### 2026-07-30 17:47 — main
 - Sumar módulo Novedades y modernizar diagramas Mermaid con paleta
 
@@ -419,13 +425,7 @@ since the previous push. Newest entry first.
 ### 2026-07-03 01:09 — main
 - Modified `CLAUDE.md`
 
-### 2026-07-03 01:09 — main
-- Modified `CLAUDE.md`
-- Modified `package-lock.json`
-- Modified `package.json`
-- Modified `public/css/ui.css`
-- Modified `public/js/modules/system/backup-panel.js`
-- Modified `src/modules/backup/index.js`
+_(older entries trimmed — see `git log` for the full history)_
 
 <!-- cwc:changelog:end -->
 
