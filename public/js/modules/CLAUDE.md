@@ -103,8 +103,33 @@ La pestaña 🆕 Novedades es la PRIMERA de ⚙️ Configuración y es visible p
 TODOS; editar, ocultar, borrar y "✍️ Redactar ahora" son acciones admin-only.
 El badge de no leídas vive en el botón ⚙ del pie y se apaga con el evento
 `cwc:news-seen`.
-La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba). La pestaña
-Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
+La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba).
+`system/mcps-panel.js` despacha `data-kact="reconnect-keyring"` según
+`item.action.kind`: `infisical-login` abre `openInfisicalLogin`,
+`claude-login` abre `openClaudeLogin(item)`, `codex-login` y `github-login`
+comparten UNA sola `openDeviceLogin(item,cfg)`, `pad-login` abre
+`openPadLogin(item)`, `service-restart` abre `openServiceRestart(item)` y sólo
+los kinds restantes caen en `openGuidedReconnect`.
+`openClaudeLogin` es el wizard propio del OAuth de Claude: «Iniciar login» hace
+POST a `/api/connections/claude/login/start` y consulta `/status` cada 1500 ms;
+en `waiting-code` muestra la URL como enlace y espera que el usuario PEGUE el
+código DE VUELTA en la consola (botón o Enter), luego representa `verifying` y
+`ok`. Un DEVICE FLOW funciona al revés: `openDeviceLogin` muestra URL + código
+y el usuario ESCRIBE ese código en el navegador; no hay input ni POST de código
+de vuelta. Codex y GitHub sólo parametrizan el mismo flujo por `base`; GitHub
+agrega la fase intermedia `setup-git`. Un job con `stale:true` se muestra como
+error recuperable con «Reintentar», no como espera eterna.
+`openPadLogin` es hermana de `openClaudeLogin`, pero sólo muestra la URL del
+flujo browser-based y espera la verificación automática: tampoco tiene input
+de código. `openServiceRestart` NO es un login: no muestra URL ni código,
+conserva el comando sólo como información copiable y ofrece «Reiniciar y
+verificar». Si el backend responde `self:true`, avisa «la consola se está
+reiniciando» y hace un poll tolerante; los `catch` de red son ESPERADOS porque
+el server está caído durante ese intervalo. Al quedar un login en `ok`, el
+panel refresca el llavero; Claude además avisa que chats/runners vivos conservan
+la credencial anterior y recomienda «♻ Reciclar runners». Los wizards usan un
+`MutationObserver` para cortar sus intervalos al desaparecer el modal.
+La pestaña Idioma (2026-07-19, PLAN i18n — arquitectura Fase 1,
 traducción de contenido en Fase 2 vía Orquestador Interno) es la primera pieza
 de INTERNACIONALIZACIÓN de la consola: `language-panel.js` (self-service, NO
 admin-gated — es preferencia PERSONAL de cuenta, no config del sistema) deja

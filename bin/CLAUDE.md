@@ -271,19 +271,26 @@ conserva Postgres) SOLO después de reconciliar otra vez los claims bajo lock.
 Un claim vivo o `unknown` cancela el down; no existe TTL/reaper. Estado y log
 son host-owned, atómicos/0600; el comando de un inquilino usa
 `userRunnerEnv`, HOME/workspace propios y nunca el entorno completo del host.
-### bin/cwc-claude-login-runner.js  LOGIN COMPLETO de Claude por INQUILINO para
-⚙ Sistema → Conexiones: runner PTY de `claude auth login --claudeai` con
-HOME/workspace aislados mediante `userRunnerEnv`. Antes del spawn borra
+### bin/cwc-claude-login-runner.js  LOGIN COMPLETO de Claude por usuario —también
+el HOST— para ⚙ Sistema → Conexiones (`console:PLAN-2446`): runner PTY de
+`claude auth login --claudeai` con HOME aislado mediante `userRunnerEnv` y
+cwd=`userFileRoot(user)`. NO usar `userWorkspace(user)` acá: para un inquilino
+da el mismo path, pero para el host apunta a `~/workspace`, que no existe, y el
+`pty.spawn` fallaría con ENOENT. Antes del spawn borra
 explícitamente `CLAUDE_CODE_OAUTH_TOKEN`: si el CLI ve el setup-token se
 considera ya autenticado y no ofrece el login de cuenta. Publica
 estado/URL en `~/.cwc-data/claude-login-jobs/<user>.json`, recibe el código
 por `<user>.code` mode 600 sin loguearlo y deja el volcado redactado en
 `<user>.log`. El CLI escribe por sí mismo
-`<userSpace>/.claude/.credentials.json`; el runner declara `ok` solo si ese
+`userClaudeDir(user)/.credentials.json`; el runner declara `ok` solo si ese
 JSON contiene `claudeAiOauth.accessToken` y luego ejecuta best-effort
-`claude auth status --json` con salida redactada. FAIL-CLOSED: rechaza al
-usuario HOST antes de crear el job, porque su credencial real solo se
-administra con su propio CLI. Timeout duro: 10 min.
+`claude auth status --json` con salida redactada. Red de seguridad de
+`console:BUG-2438`: justo antes del spawn copia la credencial previa a
+`<user>.credentials.bak` mode 600 y, ante fallo de spawn, credencial nueva
+inválida, cancelación/SIGTERM, excepción procesando el PTY o timeout, la
+restaura y borra el backup; tras éxito también lo borra. Así un login
+interrumpido no puede dejar `.credentials.json` vacía: el peor caso es quedar
+como antes. Timeout duro: 10 min.
 ### bin/cwc-claude-token-refresh.js  CLI de diagnóstico/renovación del OAuth de Claude por
 usuario. Usa `core/claude-oauth.js`; sin argumento opera sobre el host y con
 `<userId>` sobre ese inquilino. Imprime únicamente owner/estado/refreshed/
@@ -318,6 +325,22 @@ El log `<user>.log` también es mode 600 y TODA salida pasa por redacción de
 mismo HOME y después corre obligatoriamente `gh auth setup-git` para dejar
 operativo el push HTTPS. `GH_BROWSER=true` evita intentar abrir un navegador en
 el server: el usuario aprueba desde el wizard. Timeout duro: 15 min.
+### bin/cwc-pad-login-runner.js  LOGIN GUIADO del Pad LOCAL por usuario para ⚙
+Sistema → Conexiones (`console:PLAN-2446`), modelado sobre
+`cwc-claude-login-runner.js`: abre un PTY con `~/.local/bin/pad auth login`,
+HOME aislado mediante `userRunnerEnv` y cwd=`userFileRoot(user)`, y publica
+solo estado + la primera URL capturada con una regex HTTP(S) genérica en
+`~/.cwc-data/pad-login-jobs/<user>.json`. Antes del spawn resguarda la
+credencial actual: `~/.pad/credentials.json` para el host o
+`userPadDir(user)/credentials.json` para un inquilino; ante fallo, cancelación,
+señal o timeout restaura ese backup (o el estado previo sin credencial) y al
+terminar siempre elimina la copia temporal. El flujo browser-based tiene una
+degradación HONESTA: no está verificado que el CLI imprima la URL si el server
+no tiene navegador; si en 90 s no apareció ninguna, mata el PTY y publica un
+error explícito que explica que puede requerir un navegador local, en vez de
+dejar el panel colgado. El éxito se decide exclusivamente por exit 0 de
+`pad auth whoami`; su salida se ignora y nunca se loguea. Timeout global: 10
+min.
 ### bin/_env-boot.js           bootstrap explícito del `.env` del REPO para runners cuyo
 `cwd` está fuera del repo. Resuelve el fallo de `core/config.js` en procesos de
 INQUILINO spawneados con `userRunnerEnv`: `dotenv/config` buscaría el `.env`

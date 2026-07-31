@@ -437,6 +437,23 @@ function withMermaidPrelude(src) {
   return defs.length ? `${src}\n${defs.join('\n')}\n` : src;
 }
 
+// `:::clase` NO existe en mindmap ni sequenceDiagram: Mermaid no falla, pero
+// dibuja el texto literal dentro del nodo (`Permisos:::warn` visible en pantalla).
+// Se limpia SIEMPRE, antes del primer intento de render.
+function normalizeMermaid(src) {
+  const head = src.split('\n').find((l) => l.trim() && !l.trim().startsWith('%%')) || '';
+  if (!/^\s*(mindmap|sequenceDiagram)\b/.test(head)) return src;
+  return src.replace(/:::[A-Za-z_][\w-]*/g, '');
+}
+
+// Reparación de TECLEO, aplicada SOLO tras un fallo de parseo (nunca en el
+// primer intento): un `::: ok` con espacio rompe el diagrama entero, y es el
+// error real medido en producción. Como solo corre cuando Mermaid ya rechazó
+// el source, tocar un `:::` que fuera texto legítimo no puede empeorar nada.
+function repairMermaid(src) {
+  return src.replace(/:::[ \t]+([A-Za-z_][\w-]*)/g, ':::$1');
+}
+
 // `width:100%` deformaba el encuadre al escalar siempre por ancho; con viewBox
 // hay que encajar por el eje que MÁS sobresale, como `object-fit: contain`.
 function fitMermaidSvg(canvasEl) {
@@ -542,12 +559,24 @@ function enhanceMermaidBlocks(root) {
     // Dispara la carga LAZY de Mermaid recién ahora que hay un bloque real
     // (PEND-621). Fallback al comportamiento viejo si el loader no existe.
     const ready = window.__loadMermaid ? window.__loadMermaid() : (window.mermaidReady || Promise.resolve(window.mermaid || null));
-    let renderId = null;
+    const renderIds = [];
+    const attempt = (mermaid, source) => {
+      mermaidSeq += 1;
+      const id = `md-mermaid-${Date.now()}-${mermaidSeq}`;
+      renderIds.push(id);
+      return mermaid.render(id, withMermaidPrelude(source));
+    };
+    let failMsg = '';
     ready.then((mermaid) => {
       if (!mermaid) throw new Error('mermaid no disponible');
-      mermaidSeq += 1;
-      renderId = `md-mermaid-${Date.now()}-${mermaidSeq}`;
-      return mermaid.render(renderId, withMermaidPrelude(src));
+      const base = normalizeMermaid(src);
+      return attempt(mermaid, base).catch((err) => {
+        failMsg = String(err && err.message || err);
+        const repaired = repairMermaid(base);
+        // Sin cambio real que reintentar, el error es del diagrama, no del tecleo.
+        if (repaired === base) throw err;
+        return attempt(mermaid, repaired);
+      });
     }).then(({ svg }) => {
       // El SVG vive inline con encaje proporcional para leerse como parte del
       // mensaje; "Ampliar" queda como ayuda extra. El badge va fuera del canvas
@@ -584,20 +613,32 @@ function enhanceMermaidBlocks(root) {
       holder.insertBefore(zoomBtn, canvas);
       holder.addEventListener('click', () => openMermaidZoom(holder));
       holder.dispatchEvent(new CustomEvent('cwc:mermaid-rendered', { bubbles: true }));
-    }).catch(() => {
+    }).catch((err) => {
       // Cinturón + tirantes sobre `suppressErrorRendering` (index.html): si una
       // versión futura de Mermaid vuelve a dejar su div temporal colgado de
       // <body> al fallar, lo barremos acá. `d<id>` es el div de render y
       // `i<id>` el iframe del modo sandbox.
-      if (renderId) {
-        document.getElementById(`d${renderId}`)?.remove();
-        document.getElementById(`i${renderId}`)?.remove();
+      for (const id of renderIds) {
+        document.getElementById(`d${id}`)?.remove();
+        document.getElementById(`i${id}`)?.remove();
       }
       holder.remove();
-      details.open = false;
+      details.open = true;
       const note = document.createElement('div');
       note.className = 'md-mermaid-error';
-      note.textContent = t('core.markdown.mermaidError', '⚠ No se pudo interpretar este diagrama Mermaid — código fuente abajo.');
+      const head = document.createElement('span');
+      head.textContent = t('core.markdown.mermaidError', '⚠ No se pudo interpretar este diagrama Mermaid — código fuente abajo.');
+      note.appendChild(head);
+      const raw = failMsg || String(err && err.message || err || '');
+      // Primera línea del error de Mermaid: trae el "Parse error on line N" que dice
+      // DÓNDE está el problema. El resto es el diagrama ASCII del parser, ruido acá.
+      const why = raw.split('\n')[0].trim().slice(0, 180);
+      if (why) {
+        const reason = document.createElement('code');
+        reason.className = 'md-mermaid-why';
+        reason.textContent = why;
+        note.appendChild(reason);
+      }
       details.before(note);
     });
   }

@@ -2382,6 +2382,14 @@ html, body {
 .md-mermaid-error, .md-chart-error {
   color: var(--cwc-warn); font-size: var(--cwc-fs-sm); margin: .3rem 0;
 }
+.md-mermaid-why {
+  display: block;
+  font-family: var(--cwc-font-mono);
+  font-size: var(--cwc-fs-xs);
+  color: var(--cwc-text-dim);
+  margin-top: .2rem;
+  word-break: break-word;
+}
 
 /* Los gráficos de datos comparten el flujo del texto: sin marco ni superficie
    propia, solo reservan el alto que Chart.js necesita para dibujar. */

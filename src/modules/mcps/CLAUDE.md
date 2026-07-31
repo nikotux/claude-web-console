@@ -52,7 +52,26 @@ pide root). Un inquilino recibe solo sus seis sondas de credenciales; WhatsApp,
 systemd y ZeroTier son estado de la instalación y no entran en su llavero.
 Cada item lleva `dependents` (qué se rompe si cae; los de
 Infisical se DERIVAN de los MCP cuyo `command === 'infisical'`, no
-hardcodeados) y `action` (`infisical-login` o comando copiable).
+hardcodeados) y `action`. En particular, `reconnectActionFor()` entrega para
+`claude-oauth` `kind:'claude-login'` y `command:null`: ese kind significa que
+la consola debe abrir el login OAuth guiado y lo consume el dispatcher
+`reconnect-keyring` de `public/js/modules/system/mcps-panel.js`. La misma capa
+declara `codex-cli` como `kind:'codex-login'`, `github-cli` como
+`kind:'github-login'` y `pad-local` como `kind:'pad-login'`, todos con
+`command:null`: sus acciones reales viven en los runners/endpoints guiados, no
+en un comando para copiar. WhatsApp y cada rama `service-*` usan
+`kind:'service-restart'` + `serviceId`; conservan `command` únicamente como
+texto copiable/informativo, jamás como fuente de ejecución. Los demás caminos
+incluyen `infisical-login` y comandos copiables. NO reemplazar Claude por
+`claude setup-token`: ese comando emite un token de larga duración pero no
+repara `~/.claude/.credentials.json`; la credencial de cuenta la reconstruye
+`claude auth login --claudeai`, que es lo que ejecuta el runner guiado.
+HONESTIDAD DE ACCIONES (`console:PLAN-2446` F6): `pad-cloud` sigue siendo
+`kind:'manual'` y sin comando porque no tiene CLI propio; su OAuth lo refresca
+Claude Code cuando usa el MCP y la consola no tiene un botón real que ofrecer.
+ZeroTier conserva `action:null`: deliberadamente no se inventó un wizard para
+una operación que el producto no puede completar. Verificación en vivo de la
+entrega: el llavero devolvió los 10 `kind` guiados esperados.
 SEGURIDAD: allowlist explícita de campos, jamás un spread:
 `<scope.home>/.infisical/infisical-config.json` contiene
 `vaultBackendPassphrase` y
@@ -71,6 +90,23 @@ refrescarse, la señal REAL). Codex e Infisical NO son auto-renovables:
 ahí el aviso preventivo de 2 días (`EXPIRY_WARN_MS`) es el valor. Regla
 general: antes de poner un umbral de vencimiento, preguntar si esa
 credencial se renueva sola.
+REINICIO GUIADO DE SERVICIOS (`console:PLAN-2446` F5): endpoints admin-only
+`POST /api/mcps/service/restart {id}` y
+`GET /api/mcps/service/:id/status`. La frontera de seguridad es una allowlist
+CERRADA `RESTARTABLE_UNITS`: `whatsapp`→`whatsapp-bridge`,
+`service-pad-local`→`pad-local`, `service-tolkien-console`→`tolkien-console` y
+`service-claude-web-console`→`claude-web-console`. El nombre de la unidad JAMÁS
+sale del request: se exige `Object.hasOwn(RESTARTABLE_UNITS,id)`, se resuelve
+contra el mapa y `execFile` recibe los argumentos como array. NO “flexibilizar”
+esto interpolando input del cliente, ni siquiera detrás de una regex: sería
+ejecución arbitraria de comandos. El caso `service-claude-web-console` es
+especial porque reinicia al proceso que atiende el request: responde PRIMERO
+`{ok:true,unit,self:true}` y recién 500 ms después dispara `execFile`, igual
+que `updates/index.js`; `self:true` permite que el front trate la caída de red
+como reinicio esperado. Evidencia en vivo: los ids hostiles
+`../../etc/passwd` y `sshd` devolvieron `{error:"servicio inválido"}`; un
+reinicio real de `tolkien-console` cambió MainPID 1583782→1888835 y su status
+devolvió `{active:true,raw:"active"}`.
 LOGIN GUIADO DE INFISICAL (`bin/cwc-infisical-login-runner.js`):
 `infisical login` sin `--domain` arranca con menú de FLECHAS (imposible
 de guiar desde la web); con `--domain <base>` (sacado de la config del

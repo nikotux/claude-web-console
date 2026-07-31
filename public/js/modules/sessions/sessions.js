@@ -1263,7 +1263,7 @@ export default {
     async function toAduana(c) {
       const ok = await dialog.confirmDialog({
         title: t('sessions.aduana.title', '🛃 Pasar a la Aduana'),
-        message: t('sessions.aduana.message', 'Esta mudanza tiene consecuencias reales:\n\n1. La conversación se muda a una sala neutral y deja de tener acceso al mundo donde estaba.\n2. Quien invites va a ver TODO el hilo anterior y los archivos adjuntos de este chat.\n3. El modo de permisos baja a “Preguntar”: una sala nunca corre en “Todo”.\n4. Los turnos los seguís pagando vos, porque el motor corre con tu credencial.'),
+        message: t('sessions.aduana.message', 'Esta mudanza tiene consecuencias reales:\n\n1. La conversación se muda a una sala neutral y deja de tener acceso al mundo donde estaba.\n2. Quien invites va a ver TODO el hilo anterior y los archivos adjuntos de este chat.\n3. El modo de permisos arranca en “Preguntar”; si lo necesitás, podés subirlo después desde el selector del chat.\n4. Los turnos los seguís pagando vos, porque el motor corre con tu credencial.'),
         confirmLabel: t('sessions.aduana.confirm', '🛃 Pasar a la Aduana'),
       });
       if (!ok) return;

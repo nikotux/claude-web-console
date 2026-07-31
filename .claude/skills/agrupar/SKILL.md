@@ -1,6 +1,6 @@
 ---
 name: agrupar
-description: "🧭 Paso ARQUITECTO del Orquestador Interno (PLAN-642 / CONVE-654): agrupa las tareas de un plan en BLOQUES por COLISIÓN de archivos + arma el DAG de dependencias, y lo materializa en Pad como PLANes-bloque + links. Úsalo tras atomizar un plan (ítems + ruteo CONVE-558) y ANTES de orquestar: es lo que deja el Pad listo para la skill `orquestar`. Corre en el mundo interno del usuario."
+description: "🧭 Paso ARQUITECTO del Orquestador Interno (PLAN-642 / CONVE-654): agrupa las tareas de un plan en BLOQUES por COLISIÓN de archivos, corre el mapa de IMPACTO (skill `impacto`) para sumar el trabajo que nadie previó, y arma el DAG de dependencias, materializándolo en Pad como PLANes-bloque + links. Úsalo tras atomizar un plan (ítems + ruteo CONVE-558) y ANTES de orquestar: es lo que deja el Pad listo para la skill `orquestar`. Corre en el mundo interno del usuario."
 argument-hint: "[PLAN-umbrella a agrupar en bloques]"
 cwc-share: catalog
 cwc-default: false
@@ -21,11 +21,18 @@ Convertís un plan atomizado (tareas con ruteo) en **bloques ejecutables en para
 
 ## Algoritmo
 1. **Predecí los archivos por tarea** (`files`). Fuente: la descripción de la tarea + el **inventario** del proyecto (`~/.cwc-data/inventory.md`, generado por `core/inventory.js`). Guardá la predicción en la tarea (campo/nota `files`).
-2. **Grafo de colisión** → componentes conexos → **bloques candidatos**.
-3. **Partí cada componente por EJECUTOR.** Si un componente conexo mezcla tareas ruteadas a Claude puro y a Tándem, partilo en un bloque por ejecutor — salvo que compartan archivo, en cuyo caso el bloque entero va a Tándem (dentro de Tándem, Claude no puede escribir: el hook `PreToolUse` deniega Edit/Write y las escrituras por Bash salvo `/tmp`, así que hasta el cableado trivial lo hace Codex).
-4. **HUB-files** (archivos que TODOS tocan: `registry.js`, `server.js`, `tokens.css`, `CLAUDE.md`, `health/invariants.js`): NO colapses todo en un bloque gigante. Agrupá por el archivo **primario** de cada tarea y creá un **BLOQUE DE INTEGRACIÓN** que corre ÚLTIMO y hace solo el cableado del hub → preserva el paralelismo.
-5. **Archivos desconocidos** (no predecibles): la tarea va en su **propio bloque** + **flag** (los claims runtime son la red).
-6. **DAG lógico**: agregá las aristas `blocked-by` entre bloques según las fases (B usa A → B blocked-by A). El bloque de integración/E2E queda `blocked-by` todos los de código.
+2. **Mapa de IMPACTO (obligatorio) — corré la skill `impacto`.** La predicción del paso 1 sirve
+   para no COLISIONAR; no dice qué más se ROMPE. Por cada archivo, símbolo o ruta que el plan
+   toca, corré `impacto` y traé su tabla. **Las filas `🆕` se materializan como TAREAS NUEVAS
+   del plan antes del GATE** — ahí es exactamente donde aparece el trabajo que después «se
+   escapa»: el consumidor que nadie tocó, la ficha que quedó mintiendo, el caso del usuario que
+   nadie probó. Esas tareas nuevas vuelven al paso 1 (predicción de archivos) y siguen el flujo
+   normal: se rutean (CONVE-558) y se agrupan como cualquier otra.
+3. **Grafo de colisión** → componentes conexos → **bloques candidatos**.
+4. **Partí cada componente por EJECUTOR.** Si un componente conexo mezcla tareas ruteadas a Claude puro y a Tándem, partilo en un bloque por ejecutor — salvo que compartan archivo, en cuyo caso el bloque entero va a Tándem (dentro de Tándem, Claude no puede escribir: el hook `PreToolUse` deniega Edit/Write y las escrituras por Bash salvo `/tmp`, así que hasta el cableado trivial lo hace Codex).
+5. **HUB-files** (archivos que TODOS tocan: `registry.js`, `server.js`, `tokens.css`, `CLAUDE.md`, `health/invariants.js`): NO colapses todo en un bloque gigante. Agrupá por el archivo **primario** de cada tarea y creá un **BLOQUE DE INTEGRACIÓN** que corre ÚLTIMO y hace solo el cableado del hub → preserva el paralelismo.
+6. **Archivos desconocidos** (no predecibles): la tarea va en su **propio bloque** + **flag** (los claims runtime son la red).
+7. **DAG lógico**: agregá las aristas `blocked-by` entre bloques según las fases (B usa A → B blocked-by A). El bloque de integración/E2E queda `blocked-by` todos los de código.
 
 ## GATE (obligatorio) — proponé, NO crees a ciegas
 Presentá al usuario: la tabla de **bloques** (id · tareas que contiene · superficie de archivos · ruteo · ready/needs-atomize) + el **DAG** (aristas). Esperá su **OK o ajuste** (fusionar/partir bloques, cambiar una dependencia). **Recién con el OK** materializás.
@@ -36,13 +43,24 @@ señales que se leen de un vistazo: un **criterio sin ningún bloque** = el plan
 pedido; un **bloque sin ningún criterio** = trabajo que nadie pidió. Las dos se arreglan
 acá gratis.
 
+**🕸️ Impacto declarado.** En la misma tabla, marcá con 🕸️ las tareas que nacieron del mapa de
+impacto, para que se vea de dónde salió cada una. Si un bloque toca algo transversal —
+autenticación, credenciales, rutas de datos, un endpoint compartido, un archivo hub — y no
+tiene NINGUNA fila de impacto, decilo explícito: o el barrido dio vacío, o no se hizo. Las dos
+cosas se ven idénticas en una tabla, y solo una es aceptable.
+
 ## Materializar en Pad (modelo de datos)
 - **Bloque = PLAN hijo** del umbrella. Reusá sub-planes existentes como bloques cuando mapeen limpio (menos duplicación); creá PLANes nuevos solo para bloques que cruzan varios sub-planes (típico: el de integración/E2E).
 - **Tareas = PEND/TASK** hijas del PLAN-bloque (re-parentá las existentes; para un bloque sin tareas aún, agregá una 1ª tarea `atomizar` ruteada a Claude opus/high = sub-sesión arquitecto).
 - **DAG = links** `pad_item action=link ref=<bloque> target=<bloqueador> link_type=blocked-by`.
 - **Ancla de control**: dejá un **comentario en el PLAN umbrella** con el mapa completo (bloques→PLAN-ref, DAG, ready-state, caveats de deploy) — es lo que lee la skill `orquestar` al arrancar.
 - Marcá los bloques ya en curso (si hay una sesión viva) para que el orquestador no los re-spawnee.
-- **Ancla heredada**: cada PLAN-bloque referencia el ítem-raíz anclado del umbrella (por `parent` o `implements`), para que la sesión-bloque pueda leer el pedido original sin reconstruirlo.
+- **Ancla heredada**: cada PLAN-bloque referencia el ítem-raíz anclado del umbrella (por
+  `parent` o `implements`), para que la sesión-bloque pueda leer el pedido original y su
+  intención sin reconstruirlos. **El link no alcanza por sí solo**: quien efectivamente hace
+  bajar el objetivo es la skill `orquestar`, que inyecta el verbatim y la intención en el
+  prompt de cada sesión-bloque. Si vas a ejecutar el plan sin orquestador, esa inyección la
+  tenés que hacer vos a mano.
 
 ## Cierre
 Avisá al usuario que su workspace de Pad quedó listo y que el próximo paso es abrir la skill `orquestar` en una sesión nueva apuntada al umbrella. Cerrá con `🎾 Pelota: …`.

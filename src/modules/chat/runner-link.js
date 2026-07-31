@@ -62,6 +62,24 @@ export function releaseSpawnLock(id, pid) {
   } catch { /* best-effort total */ }
 }
 
+// ¿La credencial OAuth del host sirve para arrancar un runner? Sirve si tiene
+// accessToken O refreshToken (con refreshToken el SDK renueva solo). Ante
+// cualquier duda de lectura devuelve true: esta validación es una AYUDA de
+// diagnóstico, no un gate de seguridad, y jamás debe impedir arrancar un chat
+// por un problema propio. Nunca lee ni expone el valor de los tokens.
+function hostCredUsable() {
+  try {
+    const oauth = JSON.parse(
+      fs.readFileSync(path.join(userClaudeDir(hostUser()), '.credentials.json'), 'utf8'),
+    )?.claudeAiOauth;
+    if (!oauth) return false;
+    return !!(oauth.accessToken || oauth.refreshToken);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return false;
+    return true; // JSON raro o permiso: no bloqueamos por nuestra propia duda
+  }
+}
+
 // Lanza el runner de una conversación como proceso INDEPENDIENTE: detached
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
@@ -111,6 +129,13 @@ export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandl
   let env;
   if (ownerId === hostUser()) {
     env = { ...process.env }; // host: retrocompat total
+    // Fail-closed simétrico al del inquilino (console:BUG-2438): si la credencial
+    // del host está vaciada, el SDK falla después con un mensaje genérico que no
+    // distingue "token vencido" de "archivo vacío". Preferimos frenar acá con una
+    // instrucción concreta. Sólo se valida el ARCHIVO: si hay token por env, ese manda.
+    if (!env.CLAUDE_CODE_OAUTH_TOKEN && !hostCredUsable()) {
+      throw new Error('La credencial de Claude del host está vacía o ilegible (~/.claude/.credentials.json). Corré `claude /login` en una terminal y reintentá.');
+    }
   } else {
     // Token del inquilino: el pasado explícito, o el que dejó su onboarding.
     const token = oauthToken || readUserOauthToken(ownerId);

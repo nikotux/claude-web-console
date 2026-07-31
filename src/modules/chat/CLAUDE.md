@@ -1627,7 +1627,7 @@ en la colección `acuerdos`, cuyo prefijo real es `ACUER`. NO hay un workspace
 por sala porque las salas son efímeras y eso acumularía decenas de mundos
 imposibles de cruzar. También se descartó hacerla una colección de `console`
 por SEGURIDAD: `console` es el mundo interno de Niko y permitir que un invitado
-escriba ahí es exactamente lo que Aduana impide (Regla 16 · Ley 5). El MCP se
+escriba ahí es exactamente lo que Aduana impide (Regla 16 · Ley 1). El MCP se
 inyecta al SPAWNEAR el runner con `aduanaPadMcpServer()` en
 `core/tool-policy.js`, enganchado donde `bin/cwc-chat-runner.js` arma
 `mcpServers`, y NO en `~/.claude.json`: los MCP se declaran por carpeta de
@@ -1757,15 +1757,18 @@ vacía y se apoya en `handoff()` para MUDAR allí el mismo hilo. Es un MOVE, no
 una copia: conserva `sessionId`, id del chat, tarjeta y carpeta de adjuntos.
 
 El modo se fuerza a `default` ANTES del handoff para que el runner nuevo NAZCA
-ya con los permisos del suelo. Esto importa porque un chat abierto desde el
-launcher llega en `bypassPermissions` y, si el cambio ocurriera después,
-entraría privilegiado a la sala en contra de la Ley 5 de la Regla dura 16. La
-defensa permanente vive en `Chat.setMode()`, que devuelve `false` ante cualquier
-pedido de `bypassPermissions` dentro de una sala; el call-site WS de `set_mode`
-repite la comprobación solamente para poder explicar el rechazo al usuario. No
-confundirlo con `POST /mode`: ese endpoint conmuta Chat↔TUI y NO modifica
-permisos, por lo que el guard que se había puesto allí era código muerto y se
-quitó.
+en el modo más conservador: un chat abierto desde el launcher llega en
+`bypassPermissions` y aterrizar en la sala ya privilegiado sería una sorpresa,
+no una decisión. Desde el 2026-07-30 esto es un DEFAULT SANO, no una prohibición:
+la Ley 5 de la Regla dura 16 fue enmendada y una sala SÍ puede correr en «Todo».
+Los dos guards que lo impedían —el `return false` de `Chat.setMode()` y su
+repetición en el call-site WS de `set_mode`— fueron DEROGADOS y no se deben
+reponer; lo que SÍ se conserva es que `set_mode` solo lo acepta el dueño (`admin
+|| owner`), así que un invitado nunca puede cambiar el modo. Quien quiera «Todo»
+en una sala lo sube a mano desde el selector del header, con el confirm rojo de
+siempre. No confundirlo con `POST /mode`: ese endpoint conmuta Chat↔TUI y NO
+modifica permisos, por lo que el guard que se había puesto allí era código
+muerto y se quitó.
 
 El record `origin` de `sala.jsonl`, escrito por `appendOrigin`, cumple DOS
 funciones inseparables. Primero, declara ante la Aduana el contexto que entra,
@@ -1810,6 +1813,59 @@ movió al `projectKey` de la sala y el replay quedó en orden
 `set_mode bypassPermissions`, y al mover después la sesión de vuelta a Mi
 Consola quedó revocado el invitado.
 
+UNA SALA DE UN INQUILINO NO ERA UNA SALA (`console:BUG-2432`, 2026-07-30, reporte
+de Niko: «juli acaba de crear una sala pero no le aparece la opción invitar a la
+sala»). El lanzador creaba la carpeta de la sala DESDE EL FRONT con una ruta
+RELATIVA (`.cwc-aduana/salas/<salaId>`) vía `POST /api/files/mkdir` y después
+abría el chat con ese mismo `rel`. Los dos caminos resuelven contra
+`userFileRoot(owner)`, así que para el HOST daban `~/.cwc-aduana/salas/<id>`
+—correcto por casualidad, porque el HOME del host ES la raíz de Aduana— y para un
+INQUILINO daban `~/.cwc-users/<user>/workspace/.cwc-aduana/salas/<id>`, fuera de
+`ADUANA_ROOT`. Como `isSala()` deriva del `cwd` vía `worldLabelFor`, la sala nacía
+siendo un chat común con nombre de sala: sin invitar, sin canal `say`, sin botón
+de corte, sin reacciones, sin menciones, sin acta y sin Pad `aduana`. El bug
+estaba oculto detrás de una coincidencia: el único usuario que probaba salas era
+el host, para quien la ruta relativa acertaba.
+
+EL AGUJERO QUE APARECIÓ AL ARREGLARLO ERA PEOR QUE EL BUG. La corrección obvia
+—hacer que `safeCwd` resolviera una ruta de sala contra `ADUANA_ROOT` para
+cualquiera— habría dejado que el CLIENTE NOMBRARA LA SALA. Un usuario podía
+entonces pedir un chat con el `cwd` de una sala AJENA ya existente: `isSala()`
+daría true, `_rebuildSalaHistory()` leería el `sala.jsonl` de esa sala y podría
+escribir en ella con `say`, sin figurar jamás en `participants`. Por eso la
+creación pasó a ser un FLAG y el `salaId` lo genera SIEMPRE el servidor con
+`newSalaId()`, el mismo molde que ya usaba `toAduana()`: `POST /api/chat/create`
+acepta `{sala:true}` y `createChatForRequest` llama a `ensureSala(newSalaId())`,
+mientras que un `cwd` del cliente que caiga dentro de Aduana —relativo o
+absoluto— se RECHAZA con 400. `isSalaPath()` (aduana.js) prueba la contención con
+`path.relative`, nunca con `startsWith` de strings.
+
+`safeCwd` sigue siendo consciente de Aduana, pero solo para PRESERVAR un `cwd` ya
+contenido en `ADUANA_ROOT`. Eso no es cosmético: `rehydrate()` re-clampa el `cwd`
+de cada chat al root de su dueño, así que sin esa rama una sala de un inquilino
+volvería a salirse de Aduana en el próximo reinicio del server aunque se hubiera
+creado bien. El mismo camino cubre el `handoff()` hacia una sala.
+
+Con el `cwd` ya resuelto por igual para todos, el candado host-only de
+`toAduana()` perdió su razón de ser y se quitó: existía únicamente porque
+`safeCwd` sacaba de Aduana el destino de un inquilino. Cualquiera puede ahora
+convertir SU chat en sala; la sala es suelo neutral (Regla dura 16) y los turnos
+los paga quien la crea. NO se agregó ningún guard de permisos en la creación: la
+Ley 5 fue enmendada por Niko el mismo día y una sala SÍ puede correr en «Todo»,
+así que el modo se resuelve como en cualquier otro chat. Queda dicho para que
+nadie lo "arregle" de vuelta: el aislamiento de una sala lo sostiene el `cwd`
+(Ley 1) y la confianza entre participantes, no el modo de permisos.
+
+CONSECUENCIA PARA EL LANZADOR: `ensureSalaFolder()` desapareció junto con sus tres
+`POST /api/files/mkdir`, que además dejaban un `.cwc-aduana/` inútil en el
+workspace de cada inquilino que probara una sala. `freshSalaDest()` ya no fabrica
+un id ni un `rel` —devuelve `rel: null`— porque el destino real lo decide el
+servidor; el render usa `dest.label`, así que ningún otro tipo de sesión se ve
+afectado. LECCIÓN GENERAL: una ruta que el FRONT arma como relativa se resuelve
+contra el root del USUARIO, así que nunca puede alcanzar un recurso compartido
+entre personas; ese cálculo pertenece al servidor, que es el único que conoce la
+diferencia entre «tu espacio» y «el suelo de todos».
+
 ## Gotchas de esta carpeta
 
 - Replay de Aduana: nunca uses `_push({type:'user'})` para un aviso del sistema;
@@ -1823,6 +1879,14 @@ Consola quedó revocado el invitado.
   revela el bug porque hereda el env completo del server. Ante “El motor de chat
   no arrancó”, mirar el `.log` del chat en el data dir del usuario:
   `~/.cwc-users/<usuario>/.cwc-data/chats/<id>.log` para un inquilino.
+- Credencial del host al arrancar: en la rama HOST de `spawnRunner`, si el env
+  no trae `CLAUDE_CODE_OAUTH_TOKEN`, `hostCredUsable()` exige que
+  `~/.claude/.credentials.json` tenga accessToken o refreshToken; si no, frena
+  con un mensaje que indica correr `claude /login`. GOTCHA DELIBERADO: esto NO
+  es un gate de seguridad sino una ayuda de diagnóstico. `ENOENT` devuelve
+  `false` y bloquea, pero cualquier otro error de lectura o parseo devuelve
+  `true` y deja pasar; nunca “endurecerlo”, porque una duda propia no debe
+  impedir que arranque un chat.
 - Traspaso Chat↔TUI: regla dura "nunca ambos a la vez"; el cierre del lado
   saliente se ESPERA verificado antes de abrir el otro. El header del chat
   YA NO tiene botón TUI ni contador de costo (se quitaron a pedido): pasar
@@ -1831,3 +1895,7 @@ Consola quedó revocado el invitado.
   (icono `help` de icons.js) junto al selector de modos que abre el modal
   "Modos de permisos" (_modeHelp: explica Preguntar / Aceptar ediciones /
   Solo plan). El costo por turno dentro del hilo (chat-turn-cost) queda.
+- Ruta de sala: el `salaId` lo genera SIEMPRE el servidor (`newSalaId`). Nunca
+  aceptes un `cwd` del cliente que caiga dentro de `ADUANA_ROOT` — permitiría
+  entrar a la sala de otra persona sin figurar en `participants`
+  (`console:BUG-2432`). La contención se prueba con `isSalaPath`/`path.relative`.

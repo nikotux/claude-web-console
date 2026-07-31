@@ -385,12 +385,12 @@ function focusSession(id) {
 }
 
 // ===== Chat (Agent SDK) =====
-async function openChat({ cwd, model, mode, resume, prompt, title, ticket, learningId } = {}) {
+async function openChat({ cwd, model, mode, resume, prompt, title, ticket, learningId, sala } = {}) {
   try {
     const res = await fetch('/api/chat/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, model, permissionMode: mode, resume, title, ticket, learningId }),
+      body: JSON.stringify({ cwd, model, permissionMode: mode, resume, title, ticket, learningId, sala }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'No se pudo crear el chat');
     const { chat } = await res.json();

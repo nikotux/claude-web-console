@@ -106,27 +106,32 @@ function dependentsWhat(dependents, fallback) {
 function reconnectActionFor(it) {
   const deps = Array.isArray(it?.dependents) ? it.dependents : [];
   if (it?.id === 'claude-oauth') return {
-    kind: 'command',
-    command: 'claude setup-token',
+    // console:PLAN-2446 — dejó de ser "copiá este comando": el login corre en un
+    // runner desacoplado y la consola guía el flujo. `setup-token` (lo que decía
+    // antes) emite un token de larga duración y NO es lo que repara
+    // ~/.claude/.credentials.json; eso lo hace `claude auth login --claudeai`,
+    // que es lo que corre el runner.
+    kind: 'claude-login',
+    command: null,
     title: 'Reconectar Claude OAuth',
     what: 'Qué se rompe si no lo hacés: no funciona ningún chat ni motor.',
     steps: [
-      'Abrí una terminal interactiva en el servidor donde corre la consola.',
-      'Corré claude setup-token.',
-      'Seguí el flujo del navegador hasta completar la autorización.',
-      'Volvé a esta pantalla y verificá la conexión.',
+      'Tocá «Iniciar login» acá abajo.',
+      'Abrí el link de autorización que aparece y autorizá con tu cuenta de Claude.',
+      'Pegá acá el código que te muestra la pantalla de confirmación.',
+      'Esperá la verificación automática.',
     ],
   };
   if (it?.id === 'codex-cli') return {
-    kind: 'command',
-    command: 'codex login',
+    kind: 'codex-login',
+    command: null,
     title: 'Reconectar Codex CLI',
     what: 'Qué se rompe si no lo hacés: el modelo Tándem no puede delegar la ejecución.',
     steps: [
-      'Abrí una terminal interactiva en el servidor donde corre la consola.',
-      'Corré codex login.',
-      'Seguí el flujo del navegador hasta completar la autorización.',
-      'Volvé a esta pantalla y verificá la conexión.',
+      'Tocá «Iniciar login» acá abajo.',
+      'Abrí el enlace que aparece.',
+      'Escribí en el navegador el código que muestra la consola.',
+      'Esperá la verificación automática.',
     ],
   };
   if (it?.id === 'pad-cloud') return {
@@ -134,10 +139,11 @@ function reconnectActionFor(it) {
     kind: 'manual',
     command: null,
     title: 'Reconectar Pad Cloud OAuth',
-    what: dependentsWhat(deps, 'dashboard de PRs de Tolkien'),
+    what: `El Pad cloud no tiene CLI propio: Claude Code refresca su OAuth al usar el MCP remoto, así que no hay ningún botón de reconexión que la consola pueda ofrecer. ${dependentsWhat(deps, 'dashboard de PRs de Tolkien')}`,
     steps: [
-      'Abrí Claude Code en el servidor.',
-      'Usá una acción que consulte el MCP de Pad remoto para que Claude Code refresque el OAuth.',
+      'No hay ningún asistente guiado ni botón de reconexión para esta conexión.',
+      'Abrí Claude Code en el servidor y usá una acción que consulte ese MCP.',
+      'Claude Code va a refrescar el OAuth al usar el MCP remoto.',
       'Volvé a esta pantalla y verificá la conexión.',
     ],
   };
@@ -153,53 +159,54 @@ function reconnectActionFor(it) {
     ],
   };
   if (it?.id === 'github-cli') return {
-    kind: 'command',
-    command: 'gh auth login',
+    kind: 'github-login',
+    command: null,
     title: 'Reconectar GitHub CLI',
     what: dependentsWhat(deps, 'PRs, comunicaciones y censo de actualizaciones'),
     steps: [
-      'Abrí una terminal interactiva en el servidor.',
-      'Corré gh auth login.',
-      'Elegí GitHub.com y después HTTPS.',
-      'Autenticá por navegador con el código que muestra la CLI.',
+      'Tocá «Iniciar login» acá abajo.',
+      'Abrí el enlace que aparece.',
+      'Escribí en el navegador el código que muestra la consola.',
+      'Esperá la verificación automática.',
     ],
   };
   if (it?.id === 'pad-local') return {
-    kind: 'command',
-    command: 'pad auth login',
+    kind: 'pad-login',
+    command: null,
     title: 'Reconectar Pad local',
     what: 'Qué se rompe si no lo hacés: Pendientes, Aprendizaje y Mejora Continua degradan en silencio.',
     steps: [
-      'Abrí una terminal interactiva en el servidor.',
-      'Corré pad auth login.',
-      'Completá la autorización que se abre en el navegador.',
-      'Volvé a esta pantalla y verificá la conexión.',
+      'Tocá «Iniciar login» acá abajo.',
+      'Abrí el enlace que aparece.',
+      'Autorizá en el navegador.',
+      'Esperá la verificación automática.',
     ],
   };
   if (it?.id === 'whatsapp') return {
-    kind: 'command',
+    kind: 'service-restart',
+    serviceId: it.id,
     command: 'systemctl --user restart whatsapp-bridge',
     title: 'Reconectar WhatsApp bridge',
     what: dependentsWhat(deps, 'traer hilos y audios de WhatsApp'),
     steps: [
-      'Abrí una terminal interactiva en el servidor.',
-      'Corré systemctl --user restart whatsapp-bridge como primer intento.',
-      'Si la sesión de Baileys se perdió del todo, re-emparejá WhatsApp con el QR.',
-      'Volvé a esta pantalla y verificá la conexión.',
+      'Tocá «Reiniciar y verificar» acá abajo.',
+      'Esperá a que systemd levante el servicio.',
+      'La consola confirma sola si quedó activo.',
+      'Si la sesión de Baileys se perdió del todo, va a hacer falta re-emparejar WhatsApp con el QR: el reinicio solo no alcanza en ese caso.',
     ],
   };
   if (String(it?.id || '').startsWith('service-')) {
     const name = String(it.id).replace(/^service-/, '') || String(it.label || '');
     return {
-      kind: 'command',
+      kind: 'service-restart',
+      serviceId: it.id,
       command: `systemctl --user restart ${name}`,
       title: `Reconectar ${it.label || name}`,
       what: dependentsWhat(deps, `servicio ${it.label || name}`),
       steps: [
-        'Abrí una terminal interactiva en el servidor.',
-        `Corré systemctl --user restart ${name}.`,
-        'Esperá unos segundos a que systemd levante el servicio.',
-        'Volvé a esta pantalla y verificá la conexión.',
+        'Tocá «Reiniciar y verificar» acá abajo.',
+        'Esperá a que systemd levante el servicio.',
+        'La consola confirma sola si quedó activo.',
       ],
     };
   }

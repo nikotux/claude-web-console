@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { isAdmin } from '../../core/auth.js';
 import { runAdaptivePool } from '../../core/pool.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import {
@@ -135,6 +136,16 @@ const CHECK_TIMEOUT_MS = 15000;
 // una conexión no cambia minuto a minuto, y para urgencias existe Re-verificar.
 const AUTO_RECHECK_MS = 12 * 60 * 60 * 1000;
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
+// Allowlist CERRADA de unidades systemd reiniciables desde el panel. El nombre
+// de la unidad NUNCA sale del request: se resuelve contra este mapa por una
+// clave conocida. Interpolar `req.body.name` en el execFile sería ejecución
+// arbitraria de comandos, aunque "parezca" validado por una regex.
+const RESTARTABLE_UNITS = {
+  whatsapp: 'whatsapp-bridge',
+  'service-pad-local': 'pad-local',
+  'service-tolkien-console': 'tolkien-console',
+  'service-claude-web-console': 'claude-web-console',
+};
 // Todo estado en memoria queda particionado por usuario. Nunca una promesa,
 // snapshot o Set de chequeos de un principal puede satisfacer a otro.
 const runtimeByUser = new Map();
@@ -388,6 +399,41 @@ export default {
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
+    });
+
+    // Reiniciar servicios de la instalación es una acción exclusiva del admin.
+    // La unidad siempre proviene de la allowlist cerrada, nunca del request.
+    router.post('/mcps/service/restart', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const id = req.body?.id;
+      if (typeof id !== 'string' || !Object.hasOwn(RESTARTABLE_UNITS, id)) {
+        return res.status(400).json({ error: 'servicio inválido' });
+      }
+      const unit = RESTARTABLE_UNITS[id];
+      if (id === 'service-claude-web-console') {
+        // El propio proceso debe alcanzar a responder antes de que systemd lo mate.
+        res.json({ ok: true, unit, self: true });
+        setTimeout(() => {
+          execFile('systemctl', ['--user', 'restart', unit], { timeout: 30_000 }, () => {});
+        }, 500);
+        return;
+      }
+      execFile('systemctl', ['--user', 'restart', unit], { timeout: 30_000 }, () => {});
+      res.json({ ok: true, unit });
+    });
+
+    // Estado puntual para confirmar que una unidad permitida volvió a levantar.
+    router.get('/mcps/service/:id/status', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const { id } = req.params;
+      if (!Object.hasOwn(RESTARTABLE_UNITS, id)) {
+        return res.status(400).json({ error: 'servicio inválido' });
+      }
+      const unit = RESTARTABLE_UNITS[id];
+      execFile('systemctl', ['--user', 'is-active', unit], { timeout: 30_000 }, (err, stdout, stderr) => {
+        const raw = String(stdout || stderr || err?.message || '').trim();
+        res.json({ active: raw === 'active', raw });
+      });
     });
 
     // Login guiado de Infisical: desbloquea el MCP `tolkien-mordor` cuando la

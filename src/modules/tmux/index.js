@@ -107,6 +107,30 @@ function listSessionsForSocket(sock, opts) {
   return sessions;
 }
 
+// El poll de sesiones corre cada ~3 s. Un socket muerto que nunca se recupera
+// (p.ej. "default", que no existe en esta máquina) emitía su línea de fallo en
+// CADA pasada: llegó a ser el 81% del journal del servicio y volvió inútil el
+// log como herramienta forense (console:BUG-2438). Logueamos el PRIMER fallo de
+// cada socket y después, como máximo, uno cada 30 min mientras siga fallando;
+// al primer éxito se olvida, así una recuperación seguida de una recaída vuelve
+// a avisar. Sólo cambia el LOG: la lógica de no podar títulos queda intacta.
+const LIST_FAIL_LOG_MS = 30 * 60 * 1000;
+const listFailLoggedAt = new Map();
+
+function logListFailThrottled(scope, socketName, message) {
+  const key = `${scope}:${socketName}`;
+  const now = Date.now();
+  const prev = listFailLoggedAt.get(key);
+  if (prev && now - prev < LIST_FAIL_LOG_MS) return;
+  listFailLoggedAt.set(key, now);
+  const repeat = prev ? ' (se repite; próximo aviso en ≥30 min)' : '';
+  console.error(`${message}${repeat}`);
+}
+
+function noteListOk(scope, socketName) {
+  listFailLoggedAt.delete(`${scope}:${socketName}`);
+}
+
 // Proveedor de nombres para el uniquificador (core/session-names.js): los
 // display names de TODAS las sesiones tmux, igual que los calcula la tarjeta
 // del frontend (customTitle || basename(cwd) || nombre tmux).
@@ -121,8 +145,9 @@ registerNameProvider(() => {
     let sessions;
     try {
       sessions = listSessionsForSocket(sock, { throwOnError: true });
+      noteListOk('names', sock.name);
     } catch {
-      console.error(`[tmux] list-sessions falló en el socket "${sock.name}" al calcular nombres únicos; se omite esta pasada.`);
+      logListFailThrottled('names', sock.name, `[tmux] list-sessions falló en el socket "${sock.name}" al calcular nombres únicos; se omite esta pasada.`);
       continue;
     }
     for (const s of sessions) {
@@ -161,9 +186,10 @@ export default {
         for (const sock of sockets) {
           try {
             all.push(...listSessionsForSocket(sock, { throwOnError: true }));
+            noteListOk('sessions', sock.name);
           } catch {
             unverifiedSockets.add(sock.name);
-            console.error(`[tmux] list-sessions falló en el socket "${sock.name}"; se omite la poda de sus títulos esta vez.`);
+            logListFailThrottled('sessions', sock.name, `[tmux] list-sessions falló en el socket "${sock.name}"; se omite la poda de sus títulos esta vez.`);
           }
         }
         all.sort((a, b) =>

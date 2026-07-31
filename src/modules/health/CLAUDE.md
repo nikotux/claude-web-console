@@ -67,6 +67,9 @@
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
+  **`claude-cred`** (`console:BUG-2438`, 0 tokens): vigila que la credencial
+  OAuth del host conserve un accessToken o refreshToken utilizable; existe porque
+  el 2026-07-31 apareció vaciada y ningún check lo detectaba hasta que ningún chat abría.
   **`tmux-owner`** (`console:BUG-2350`, 0 tokens): para cada pane del socket
   `cwc`, compara el `HOME` efectivo leído de `/proc/<pane_pid>/environ` con
   `userSpace(owner)`, resolviendo el dueño durable mediante

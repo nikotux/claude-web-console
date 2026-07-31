@@ -6,6 +6,7 @@
 // del server.
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 
 export const ADUANA_ROOT = path.join(config.home, '.cwc-aduana', 'salas');
@@ -81,6 +82,22 @@ export function ensureSala(id) {
   const root = salaRoot(id);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   return root;
+}
+
+// ¿Este cwd apunta al suelo neutral de Aduana? Contención probada con
+// path.relative, NUNCA con startsWith de strings (lección de
+// console:BUG-2142): compartir prefijo no demuestra contención real.
+export function isSalaPath(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return false;
+  const rel = path.relative(ADUANA_ROOT, path.resolve(cwd));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// El salaId lo genera SIEMPRE el servidor. Si lo eligiera el cliente podría
+// apuntar a una sala AJENA ya existente y entrar a su conversación
+// (console:BUG-2432). Mismo molde que ChatManager.toAduana().
+export function newSalaId() {
+  return safeSalaId(`sala-${Date.now().toString(36)}-${randomUUID().replaceAll('-', '').slice(0, 10)}`);
 }
 
 export function salaLogPath(id) {

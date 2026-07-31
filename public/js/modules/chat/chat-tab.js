@@ -297,6 +297,7 @@ export class ChatTab {
     this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
     this.isSala = null;           // null hasta que llegue el primer history
     this.participants = [];
+    this.salaOwner = null;   // 🛃 dueño de la sala: no viene en participants
     this.me = null;
     this._avatarKeys = new Map();
     this._unreadAtOpen = 0;
@@ -1025,6 +1026,7 @@ export class ChatTab {
       case 'history':
         this.isSala = !!m.isSala;
         this.participants = Array.isArray(m.participants) ? m.participants : [];
+        this.salaOwner = m.salaOwner || null;
         if (this.isSala) this._rebuildAvatarKeys();
         this._renderActa(m.acta);
         this._unreadAtOpen = this.isSala ? (m.salaUnread || 0) : 0;
@@ -1118,6 +1120,7 @@ export class ChatTab {
       case 'typing': this._typing(m); break;
       case 'participants':
         this.participants = Array.isArray(m.participants) ? m.participants : [];
+        this.salaOwner = m.salaOwner || null;
         if (this.isSala) this._rebuildAvatarKeys();
         this._refreshSalaIdentity();
         if (this._slashPop && this._slashKind === 'mention') this._slashUpdate();
@@ -1241,6 +1244,10 @@ export class ChatTab {
 
   _salaUsers() {
     const users = this.participants.map((participant) => String(participant?.user || '')).filter(Boolean);
+    // El dueño NO viaja en participants (contrato de chat/index.js l.846). Sin
+    // agregarlo acá, ningún invitado puede mencionar al anfitrión — y, peor, cada
+    // navegador armaba los avatares con un set distinto y se cruzaban.
+    if (this.salaOwner) users.push(String(this.salaOwner));
     if (this.me) users.push(String(this.me));
     return [...new Set(users)];
   }

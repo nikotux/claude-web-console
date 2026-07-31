@@ -127,10 +127,13 @@ como JSON o texto crudo. Es el ÚNICO camino por el que una sesión de Tolkien
 se entera de las capacidades de render de la consola: la skill `graficar` no
 viaja con ella. Por eso resume ahí la paleta semántica de Mermaid para
 `flowchart`/`graph` (`:::key`, `:::ok`, `:::warn`, `:::bad`, `:::info`,
-`:::cool`, `:::deep`, `:::muted`) y advierte que `:::` no existe en `mindmap`
-ni en `sequenceDiagram`. La guía larga, con paleta y ejemplos copiables, vive
-en la skill `graficar` (`cwc-share: catalog`, `cwc-default: true`), instalada
-a todo usuario nuevo por `installDefaults()` de
+`:::cool`, `:::deep`, `:::muted`). También exige escribir la clase PEGADA
+(`:::ok`, nunca `::: ok`) porque un espacio rompe el parseo del diagrama entero;
+la regla es reactiva, surgida de un caso real del 2026-07-30 en el chat de un
+inquilino. Advierte además que `:::` no existe en `mindmap` ni en
+`sequenceDiagram`. La guía larga, con paleta y ejemplos copiables, vive en la
+skill `graficar` (`cwc-share: catalog`, `cwc-default: true`), instalada a todo
+usuario nuevo por `installDefaults()` de
 `src/modules/skills/catalog.js`. Como siempre, un runner YA VIVO no incorpora
 esta instrucción hasta "Reabrir para cambios" o una conversación nueva.
 AUTONOMÍA EJECUTABLE (2026-07-25): `AUTONOMY_INSTRUCTION` se agrega al

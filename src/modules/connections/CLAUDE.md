@@ -25,16 +25,28 @@ POST /codex/cancel; lanzan `bin/cwc-codex-login-runner.js`, que corre
 `codex login --device-auth`. Device-auth es obligatorio en el server
 remoto porque el login normal abre un callback en localhost:1455, que el
 navegador remoto no puede devolverle al server.
+GitHub replica ese contrato por-usuario con POST /github/start · GET
+/github/status · POST /github/cancel y lanza desacoplado
+`bin/cwc-gh-login-runner.js`. `ghJobPath`/`readGhJob`/
+`ghLoginRunnerAlive` DUPLICAN A PROPÓSITO los helpers cortos de
+`onboard/index.js`: Conexiones y onboarding deben seguir desacoplados para que
+un refactor de uno no cambie el otro; solamente `hasGithubAuth` se comparte
+desde `onboard/capabilities.js`. Pad local suma POST /pad/login/start · GET
+/pad/login/status · POST /pad/login/cancel y lanza
+`bin/cwc-pad-login-runner.js`; no recibe un código de vuelta porque su login
+browser-based sólo expone URL y verificación automática.
 Claude suma endpoints AUTENTICADOS y estrictamente por-usuario:
 POST /claude/login/start · GET /claude/login/status ·
 POST /claude/login/code · POST /claude/login/cancel · GET /claude/status.
 Lanzan desacoplado `bin/cwc-claude-login-runner.js`, cuyo estado vive en
 `~/.cwc-data/claude-login-jobs/<user>.json`; status solo expone
 status/url/error y `/claude/status` solo informa si la fuente es
-`credentials`, `setup-token` o null, nunca el token. El login completo es
-FAIL-CLOSED para el HOST: `/claude/login/start` devuelve 400 y el runner
-también aborta antes de tocar su HOME. Ninguna ruta acepta un usuario por
-query/body/header ni permite que un admin opere el job ajeno.
+`credentials`, `setup-token` o null, nunca el token.
+`POST /claude/login/start` también acepta al HOST (`console:PLAN-2446`): es
+seguro porque el runner resguarda su `.credentials.json` antes de lanzar el
+login y la restaura ante cualquier salida fallida o cancelada. Ninguna ruta
+acepta un usuario por query/body/header ni permite que un admin opere el job
+ajeno.
 GOTCHAS DUROS (todos verificados en vivo, cuestan caro re-descubrirlos):
 (1) ZOHO NO usa el scope `offline_access` — el refresh token se obtiene
 pasando `access_type=offline` en el intercambio; sin eso Zoho devuelve
@@ -49,8 +61,9 @@ consentimiento de usuario hace falta aprobación del admin (una vez).
 (5) BUG-929 / regla dura 2: el device flow persiste `deviceCode`+`interval`
 en el job y `GET /:provider/status` lo REANUDA perezosamente tras reinicios
 cuando el registro en memoria `activePolls` no tiene un poller vivo.
-(6) ORDEN DE RUTAS CODEX: `/codex/start|status|cancel` DEBEN registrarse
-ANTES de `'/:provider/...'`; si no, `/codex/status` matchea
+(6) ORDEN DE RUTAS ESPECÍFICAS: `/codex/*`, `/github/*` y `/pad/login/*`
+DEBEN registrarse ANTES de `'/:provider/...'`; si no, por ejemplo
+`/codex/status` matchea
 `'/:provider/status'` con `provider='codex'` y devuelve 400
 `"Proveedor desconocido"`.
 (7) ORDEN DE RUTAS CLAUDE: `/claude/login/*` y `/claude/status` también

@@ -285,6 +285,18 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   `.catch()` además borra `d<id>`/`i<id>` como red de seguridad por si una
   versión futura cambia el comportamiento del flag.
 
+- Mermaid: `:::clase` debe ir PEGADA; un `::: ok` con espacio rompe el diagrama
+  entero con `Expecting 'AMP', 'COLON'`. Por eso `enhanceMermaidBlocks()`
+  reintenta UNA vez con `repairMermaid()` tras un fallo de parseo, y ese
+  reintento es deliberadamente el ÚNICO lugar donde se toca el source: en el
+  primer intento solo corre `normalizeMermaid()`, que limpia el `:::`
+  inútil de mindmap/sequenceDiagram. Si falla definitivamente, el `<details>`
+  se abre y el aviso muestra la primera línea del error de Mermaid; antes decía
+  "código fuente abajo" con el código plegado y sin motivo, y diagnosticar un
+  caso real exigió reparsear los transcripts a mano. Caso medido en un chat de
+  otro usuario: 66 diagramas históricos parseados, 64 OK, 1 falló por este
+  espacio y 1 estaba truncado.
+
 - Pac-Man — MOTOR de estados (pedido del usuario 2026-07-05, reemplaza el
   loader binario working/dormido de antes): catálogo ÚNICO en
   `ui/pacman.js` (`PAC_STATES`) + CSS puro en `ui.css` (sección "Pac-Man —

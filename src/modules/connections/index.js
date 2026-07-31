@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 import {
   hasCodexCreds,
@@ -50,12 +51,17 @@ import {
   getOrg,
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
+import { hasGithubAuth } from '../onboard/capabilities.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
 const CODEX_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
+const GH_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-gh-login-runner.js');
+const GH_JOBS_DIR = path.join(config.home, '.cwc-data', 'gh-login-jobs');
 const CLAUDE_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-claude-login-runner.js');
 const CLAUDE_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'claude-login-jobs');
+const PAD_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-pad-login-runner.js');
+const PAD_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'pad-login-jobs');
 function codexLoginJobPath(user) { return path.join(CODEX_LOGIN_JOBS_DIR, `${user}.json`); }
 function readCodexLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(codexLoginJobPath(user), 'utf8')); } catch { return null; }
@@ -67,6 +73,22 @@ function writeCodexLoginJob(user, job) {
     JSON.stringify({ ...job, user, ts: Date.now() }),
     { mode: 0o600 },
   );
+}
+// Estos helpers duplican deliberadamente el contrato corto de onboarding:
+// mantener ambos módulos desacoplados evita que un refactor cambie los dos flujos.
+function ghJobPath(user) { return path.join(GH_JOBS_DIR, `${user}.json`); }
+function readGhJob(user) {
+  try { return JSON.parse(fs.readFileSync(ghJobPath(user), 'utf8')); } catch { return null; }
+}
+function ghLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-gh-login-runner.js');
+  } catch {
+    return false;
+  }
 }
 function claudeLoginJobPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.json`); }
 function claudeLoginCodePath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.code`); }
@@ -101,6 +123,29 @@ function cleanClaudeLoginJob(user) {
     try { fs.unlinkSync(file); } catch (e) {
       if (e?.code !== 'ENOENT') throw e;
     }
+  }
+}
+function padLoginJobPath(user) { return path.join(PAD_LOGIN_JOBS_DIR, `${user}.json`); }
+function readPadLoginJob(user) {
+  try { return JSON.parse(fs.readFileSync(padLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+function writePadLoginJob(user, job) {
+  fs.mkdirSync(PAD_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(PAD_LOGIN_JOBS_DIR, 0o700);
+  writeJsonAtomic(padLoginJobPath(user), {
+    ...job,
+    user,
+    ts: Date.now(),
+  }, { mode: 0o600 });
+}
+function padLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-pad-login-runner.js');
+  } catch {
+    return false;
   }
 }
 function claudeCredentialSource(user) {
@@ -400,16 +445,157 @@ export default {
       res.json({ ok: true });
     });
 
+    r.post('/github/start', (req, res) => {
+      const user = userOf(req);
+      if (hasGithubAuth(user)) {
+        return res.json({ ok: true, already: true, connected: true });
+      }
+
+      const job = readGhJob(user);
+      const reserved = job?.status === 'starting'
+        && !!job.ts
+        && (Date.now() - job.ts) < 30_000;
+      const alive = ghLoginRunnerAlive(job);
+      if (reserved || (
+        ['awaiting-auth', 'setup-git'].includes(job?.status)
+        && alive
+      ) || (
+        job?.status === 'starting'
+        && alive
+        && (Date.now() - (job.ts || 0)) <= 60_000
+      )) {
+        return res.json({ ok: true, already: true, status: job.status || 'starting' });
+      }
+      if (job?.status === 'starting' && alive) {
+        try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+      }
+
+      try {
+        // Reserva síncrona antes del spawn para que dos POST simultáneos no
+        // puedan lanzar dos runners para el mismo usuario.
+        writeJsonAtomic(ghJobPath(user), {
+          status: 'starting',
+          user,
+          ts: Date.now(),
+        }, { mode: 0o600 });
+        spawn(process.execPath, [GH_LOGIN_RUNNER, '--user', user], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude lanzar el login de GitHub: ' + e.message });
+      }
+      res.json({ ok: true, status: 'starting' });
+    });
+
+    r.get('/github/status', (req, res) => {
+      const user = userOf(req);
+      const job = readGhJob(user) || { status: 'idle' };
+      const stale = job.status === 'starting'
+        && !!job.ts
+        && (Date.now() - job.ts) > 30_000;
+      res.json({
+        status: job.status,
+        url: job.url || null,
+        code: job.code || null,
+        done: !!job.done,
+        error: job.error || null,
+        stale: !!stale,
+        connected: hasGithubAuth(user),
+      });
+    });
+
+    r.post('/github/cancel', (req, res) => {
+      const user = userOf(req);
+      const job = readGhJob(user);
+      try {
+        if (ghLoginRunnerAlive(job)) {
+          try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+        }
+        if (job) {
+          writeJsonAtomic(ghJobPath(user), {
+            ...job,
+            status: 'cancelled',
+            user,
+            ts: Date.now(),
+          }, { mode: 0o600 });
+        }
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude cancelar el login de GitHub: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
+    r.post('/pad/login/start', (req, res) => {
+      const user = userOf(req);
+      const job = readPadLoginJob(user);
+      const reserved = job?.status === 'starting'
+        && !!job.ts
+        && (Date.now() - job.ts) < 30_000;
+      const alive = padLoginRunnerAlive(job);
+      if (reserved || (
+        ['starting', 'awaiting-auth', 'verifying'].includes(job?.status)
+        && alive
+      )) {
+        return res.json({ ok: true, already: true, status: job.status || 'starting' });
+      }
+
+      try {
+        // Reserva síncrona antes del spawn: dos requests del mismo usuario no
+        // pueden lanzar dos PTY antes de que el hijo publique su pid.
+        writePadLoginJob(user, { status: 'starting', done: false });
+        spawn(process.execPath, [PAD_LOGIN_RUNNER, '--user', user], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      } catch (e) {
+        try {
+          writePadLoginJob(user, {
+            status: 'error',
+            error: 'No pude lanzar el login de Pad.',
+            done: true,
+          });
+        } catch { /* noop */ }
+        return res.status(500).json({ error: 'No pude lanzar el login de Pad: ' + e.message });
+      }
+      res.json({ ok: true, status: 'starting' });
+    });
+
+    r.get('/pad/login/status', (req, res) => {
+      const job = readPadLoginJob(userOf(req)) || { status: 'idle' };
+      res.json({
+        status: job.status || 'error',
+        url: job.url || null,
+        error: job.error || null,
+        done: !!job.done,
+      });
+    });
+
+    r.post('/pad/login/cancel', (req, res) => {
+      const user = userOf(req);
+      const job = readPadLoginJob(user);
+      try {
+        if (padLoginRunnerAlive(job)) {
+          try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+        }
+        if (job) {
+          writePadLoginJob(user, {
+            ...job,
+            status: 'cancelled',
+            done: true,
+          });
+        }
+      } catch (e) {
+        return res.status(500).json({ error: 'No pude cancelar el login de Pad: ' + e.message });
+      }
+      res.json({ ok: true });
+    });
+
     // Igual que Codex, estas rutas deben quedar antes de '/:provider/...'.
-    // El login completo de Claude es solo para inquilinos: el HOME real del
-    // host queda fail-closed y se administra exclusivamente desde su CLI.
     r.post('/claude/login/start', (req, res) => {
       const user = userOf(req);
-      if (user === hostUser()) {
-        return res.status(400).json({
-          error: 'El usuario host debe administrar su credencial con el CLI de Claude.',
-        });
-      }
+      // console:PLAN-2446: el host puede usar el login guiado porque el runner
+      // resguarda su credencial y la restaura si el flujo no termina bien.
 
       const job = readClaudeLoginJob(user);
       const reserved = job?.status === 'starting'

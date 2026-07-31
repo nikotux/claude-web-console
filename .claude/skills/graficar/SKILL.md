@@ -30,9 +30,11 @@ para una unidad de hasta 8 caracteres y `stacked: true` solo en `bar` o `hbar`.
 
 La consola inyecta una **paleta semántica** en cada diagrama: no hace falta escribir `style`
 ni ningún color a mano. Se aplica con `:::clase` al final del nodo, **solo en `flowchart` y
-`graph`** — en `mindmap` la sintaxis `:::` no existe y se dibujaría como texto literal
-dentro del nodo (`Permisos:::warn`). El mindmap no la necesita: **cada rama toma un color
-distinto sola**, y la raíz va siempre en el acento de la casa.
+`graph`**. Va **SIN espacio**: `A[texto]:::ok` es válido y `A[texto]::: ok` rompe el
+diagrama entero con `Parse error ... Expecting 'AMP', 'COLON'` (caso real medido en
+producción el 2026-07-30). En `mindmap` la sintaxis `:::` no existe y se dibujaría como
+texto literal dentro del nodo (`Permisos:::warn`). El mindmap no la necesita: **cada rama
+toma un color distinto sola**, y la raíz va siempre en el acento de la casa.
 
 | Clase | Cuándo usarla | Se ve |
 |---|---|---|
@@ -240,6 +242,8 @@ verificación vuelve a él antes de llegar a Niko.
 - Las clases `:::rol` solo pintan en la consola y solo en `flowchart`/`graph`: fuera de ella
   el diagrama sigue siendo válido, pero se ve con los colores por defecto de Mermaid.
 - Si una clase no existe, Mermaid ignora el `:::` sin romper el diagrama.
+- Una clase que NO EXISTE se ignora sin consecuencias; un ESPACIO después de `:::`, en
+  cambio, es error de SINTAXIS y no se dibuja nada.
 
 ## Dónde funciona
 

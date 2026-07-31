@@ -5,8 +5,7 @@
 // <user>.code y lo inyecta al stdin del PTY. El CLI guarda por sí mismo
 // <userSpace>/.claude/.credentials.json; el runner jamás lee ni publica su
 // contenido salvo para verificar que exista claudeAiOauth.accessToken.
-// Estado en ~/.cwc-data/claude-login-jobs/<user>.json. El usuario HOST queda
-// excluido fail-closed: sus credenciales se administran con su propio CLI.
+// Estado en ~/.cwc-data/claude-login-jobs/<user>.json.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -14,10 +13,9 @@ import { spawnSync } from 'node:child_process';
 import pty from 'node-pty';
 import {
   ensureUserSpace,
-  hostUser,
   userClaudeDir,
+  userFileRoot,
   userRunnerEnv,
-  userWorkspace,
 } from '../src/core/user-space.js';
 
 const args = {};
@@ -27,15 +25,12 @@ for (let i = 2; i < process.argv.length - 1; i += 2) {
 }
 const USER = args.user;
 if (!USER) { console.error('[claude-login-runner] falta --user'); process.exit(2); }
-if (USER === hostUser()) {
-  console.error('[claude-login-runner] el usuario host no puede usar este runner; administrá su credencial con el CLI de Claude.');
-  process.exit(2);
-}
 
 const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'claude-login-jobs');
 const jobFile = path.join(JOBS_DIR, `${USER}.json`);
 const codeFile = path.join(JOBS_DIR, `${USER}.code`);
 const logFile = path.join(JOBS_DIR, `${USER}.log`);
+const credBackupFile = path.join(JOBS_DIR, `${USER}.credentials.bak`);
 try {
   fs.mkdirSync(JOBS_DIR, { recursive: true, mode: 0o700 });
   try { fs.unlinkSync(codeFile); } catch { /* no había un código pendiente */ }
@@ -55,6 +50,47 @@ function redactSecrets(s) {
 function logLine(s) {
   try { fs.appendFileSync(logFile, redactSecrets(s) + '\n', { mode: 0o600 }); }
   catch { /* el log nunca puede tumbar el runner */ }
+}
+
+// Red de seguridad de console:BUG-2438: un `claude auth login` interrumpido deja
+// la credencial VACIADA (accessToken y refreshToken en ""), que es justo el
+// estado que tumbó todos los chats el 2026-07-31. Guardamos una copia antes de
+// tocar nada y la restauramos si el login no termina con credencial válida: el
+// peor caso pasa a ser "quedaste como estabas". El backup vive con mode 600 en
+// el dir de jobs y se borra apenas el login sale bien.
+function backupCredentials() {
+  try {
+    fs.copyFileSync(credentialsFile, credBackupFile);
+    fs.chmodSync(credBackupFile, 0o600);
+    logLine('[backup] credencial previa resguardada');
+  } catch (e) {
+    if (e?.code !== 'ENOENT') logLine('[backup] no pude resguardar la credencial: ' + e.code);
+  }
+}
+
+function restoreCredentials() {
+  try {
+    fs.copyFileSync(credBackupFile, credentialsFile);
+    fs.chmodSync(credentialsFile, 0o600);
+    logLine('[restore] credencial previa restaurada tras un login fallido');
+    return true;
+  } catch (e) {
+    if (e?.code !== 'ENOENT') logLine('[restore] no pude restaurar la credencial: ' + e.code);
+    return false;
+  }
+}
+
+function dropCredentialBackup() {
+  try { fs.unlinkSync(credBackupFile); } catch { /* no había backup */ }
+}
+
+function failAndRestore(error) {
+  const restored = restoreCredentials();
+  dropCredentialBackup();
+  writeState({
+    status: 'error',
+    error: error + (restored ? ' La credencial anterior quedó restaurada.' : ''),
+  });
 }
 
 function writeState(s) {
@@ -81,7 +117,7 @@ let credentialsFile;
 let env;
 try {
   ensureUserSpace(USER);
-  workspace = userWorkspace(USER);
+  workspace = userFileRoot(USER);
   credentialsFile = path.join(userClaudeDir(USER), '.credentials.json');
   env = userRunnerEnv(USER);
   // Imprescindible: con el setup-token inyectado el CLI se considera ya
@@ -96,6 +132,7 @@ logLine(`[inicio] usuario=${USER} cwd=${workspace} hora=${new Date().toISOString
 writeState({ status: 'starting' });
 
 let proc;
+backupCredentials();
 try {
   proc = pty.spawn('claude', ['auth', 'login', '--claudeai'], {
     name: 'xterm-color',
@@ -106,7 +143,7 @@ try {
   });
   writeState({ status: 'waiting-url' });
 } catch (e) {
-  writeState({ status: 'error', error: 'No pude lanzar claude auth login: ' + e.message });
+  failAndRestore('No pude lanzar claude auth login: ' + e.message);
   process.exit(1);
 }
 
@@ -162,12 +199,10 @@ function finishVerification(exitCode) {
   logAuthStatus(); // best-effort; toda salida pasa por redactSecrets()
   done = true;
   if (valid) {
+    dropCredentialBackup();
     writeState({ status: 'ok' });
   } else {
-    writeState({
-      status: 'error',
-      error: `Claude terminó (code ${exitCode}) pero no creó una credencial de cuenta válida.`,
-    });
+    failAndRestore(`Claude terminó (code ${exitCode}) pero no creó una credencial de cuenta válida.`);
   }
   process.exit(0);
 }
@@ -205,6 +240,8 @@ function cancel() {
   cancelled = true;
   clearTimers();
   try { proc.kill(); } catch { /* noop */ }
+  restoreCredentials();
+  dropCredentialBackup();
   process.exit(0);
 }
 process.once('SIGTERM', cancel);
@@ -235,7 +272,7 @@ proc.onData((data) => {
   } catch (e) {
     terminal = true;
     clearTimers();
-    writeState({ status: 'error', error: 'Fallo inesperado procesando la salida de claude auth login: ' + (e?.message || e) });
+    failAndRestore('Fallo inesperado procesando la salida de claude auth login: ' + (e?.message || e));
     try { proc.kill(); } catch { /* noop */ }
     process.exit(1);
   }
@@ -252,6 +289,6 @@ timeoutTimer = setTimeout(() => {
   terminal = true;
   clearTimers();
   try { proc.kill(); } catch { /* noop */ }
-  writeState({ status: 'error', error: 'El login expiró, volvé a intentarlo.' });
+  failAndRestore('El login expiró, volvé a intentarlo.');
   process.exit(0);
 }, 10 * 60 * 1000);

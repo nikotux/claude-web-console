@@ -17,7 +17,7 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { hostUser, readInfisicalAccountEmail, userSpace } from '../../core/user-space.js';
+import { hostUser, readInfisicalAccountEmail, userClaudeDir, userSpace } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
 import { ownerForSession } from '../../core/session-names.js';
 import {
@@ -288,6 +288,53 @@ function checkObserver() {
   } catch {
     return { id: 'observer', label: 'Observador de Claude Code', status: 'warn', detail: 'no pude leer ~/.claude/settings.json' };
   }
+}
+
+// Vigila la credencial OAuth del HOST (~/.claude/.credentials.json). Sin esto,
+// un archivo con los tokens vaciados sólo se descubre cuando ningún chat abre
+// (console:BUG-2438). NUNCA loguea ni devuelve material de credencial: sólo
+// longitudes, booleanos y fechas.
+function checkClaudeCred() {
+  const id = 'claude-cred';
+  const label = 'Credencial de Claude (host)';
+  const file = path.join(userClaudeDir(hostUser()), '.credentials.json');
+  let oauth;
+  try {
+    oauth = JSON.parse(fss.readFileSync(file, 'utf8'))?.claudeAiOauth;
+  } catch (e) {
+    if (e?.code === 'ENOENT') {
+      return { id, label, status: 'fail', detail: 'no existe ~/.claude/.credentials.json — corré `claude /login`' };
+    }
+    return { id, label, status: 'fail', detail: 'no pude leer ~/.claude/.credentials.json (¿JSON corrupto?) — corré `claude /login`' };
+  }
+  if (!oauth) {
+    return { id, label, status: 'fail', detail: 'el archivo no tiene claudeAiOauth — corré `claude /login`' };
+  }
+  const hasAccess = typeof oauth.accessToken === 'string' && oauth.accessToken.length > 0;
+  const hasRefresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken.length > 0;
+  if (!hasAccess && !hasRefresh) {
+    return { id, label, status: 'fail', detail: 'accessToken y refreshToken VACÍOS — ningún chat nuevo puede arrancar; corré `claude /login`' };
+  }
+  const expiresAt = Number(oauth.expiresAt) || 0;
+  const left = expiresAt - Date.now();
+  const hs = (ms) => Math.round(ms / 3600000);
+  if (!hasAccess) {
+    return { id, label, status: 'warn', detail: 'accessToken vacío pero hay refreshToken — se renovará solo en la próxima llamada' };
+  }
+  if (expiresAt && left <= 0) {
+    return hasRefresh
+      ? { id, label, status: 'warn', detail: `accessToken vencido hace ${hs(-left)}h — hay refreshToken, se renueva solo` }
+      : { id, label, status: 'fail', detail: `accessToken vencido hace ${hs(-left)}h y SIN refreshToken — corré \`claude /login\`` };
+  }
+  if (expiresAt && left < 24 * 3600 * 1000 && !hasRefresh) {
+    return { id, label, status: 'warn', detail: `vence en ${hs(left)}h y no hay refreshToken — vas a tener que correr \`claude /login\`` };
+  }
+  const rte = Number(oauth.refreshTokenExpiresAt) || 0;
+  if (rte && rte - Date.now() < 7 * 24 * 3600 * 1000) {
+    return { id, label, status: 'warn', detail: `el refreshToken vence en ${Math.round((rte - Date.now()) / 86400000)} día(s)` };
+  }
+  const venc = expiresAt ? `vence en ${hs(left)}h` : 'sin vencimiento declarado';
+  return { id, label, status: 'ok', detail: `${oauth.subscriptionType || 'cuenta'} · ${venc}${hasRefresh ? ' · refresh disponible' : ''}` };
 }
 
 function checkCert() {
@@ -1090,6 +1137,7 @@ async function runChecks() {
     checkTmuxOwner(),
     Promise.resolve(checkRunners()),
     Promise.resolve(checkObserver()),
+    Promise.resolve(checkClaudeCred()),
     Promise.resolve(checkCert()),
     checkGit(),
     checkSyntax(),

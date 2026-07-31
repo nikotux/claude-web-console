@@ -99,7 +99,7 @@ import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAl
 import {
   appendSay, appendReact, appendCut, appendOrquestado, appendOrigin,
   readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
-  salaLogPath, readsPath, pruneSalas,
+  salaLogPath, readsPath, pruneSalas, isSalaPath, newSalaId,
   ADUANA_WORKSPACE, ADUANA_SALAS_COLLECTION,
   MAX_SAY_LEN, MAX_SAY_ATTACHMENTS, MAX_MENTIONS,
   MAX_REPLY_TO_LEN, MAX_REPLY_TO_BY_LEN, MAX_REPLY_TO_TEXT_LEN,
@@ -436,7 +436,16 @@ const SWITCH_KILL_MS = 5000;  // T3: esperar tras kill() forzado
 // Clampea el cwd de un chat al root de archivos de SU dueño (host → home
 // completo; inquilino → su workspace). Sin owner ⇒ host (retrocompat: las
 // llamadas viejas de 1 argumento siguen clampeando al home).
-const safeCwd = (cwd, owner) => clampToRoot(userFileRoot(owner || hostUser()), cwd);
+// Una sala de 🛃 Aduana NO pertenece a ningún usuario: vive en el suelo neutral
+// global (ADUANA_ROOT, bajo el HOME del host — console:PLAN-2274, Regla dura 16
+// · Ley 1). Clamparla al root de su dueño la sacaría de Aduana y apagaría el
+// módulo entero para un inquilino (console:BUG-2432); por eso un cwd YA
+// contenido en ADUANA_ROOT se preserva tal cual. OJO: esto NO habilita que el
+// cliente pida una sala por cwd — createChatForRequest lo rechaza y genera el
+// salaId del lado del servidor.
+const safeCwd = (cwd, owner) => (
+  isSalaPath(cwd) ? path.resolve(cwd) : clampToRoot(userFileRoot(owner || hostUser()), cwd)
+);
 
 // ===== Comandos slash (Fase 8) =====
 // El system/init del SDK llega recién con el PRIMER mensaje de cada
@@ -2249,9 +2258,6 @@ class Chat {
 
   setMode(mode) {
     if (!PERMISSION_MODES.has(mode)) return;
-    // Ley 5 de la Regla dura 16: una sala jamás puede correr con el bypass
-    // total de permisos, ni siquiera si heredó ese modo de su mundo de origen.
-    if (this.isSala() && mode === 'bypassPermissions') return false;
     if (this.link) {
       // El cambio real lo confirma el runner con su evento 'mode'.
       this.link.send({ t: 'set_mode', mode });
@@ -2705,6 +2711,7 @@ class Chat {
       sessionId: this.sessionId,
       cwd: this.cwd, world: worldLabelFor(this.cwd), // insignia de MUNDO en el header (anti-confusión)
       participants: this.participants.map((p) => ({ user: p.user, role: p.role })),
+      salaOwner: this.owner || hostUser(), // 🛃 el dueño NO está en participants (ver l.846): sin esto el `@` no lo ofrece
       isSala: this.isSala(),
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
       salaPadRef: this.salaPadRef,
@@ -2746,6 +2753,7 @@ class Chat {
       limbo: this.limbo, // 🌗 sesión-Limbo → grupo "Limbo" (alto riesgo) en Sesiones
       owner: this.owner || null, // multi-tenant (N6)
       participants: this.participants.map((p) => ({ user: p.user, role: p.role })),
+      salaOwner: this.owner || hostUser(),
       isSala: this.isSala(),
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       tolkienEnv: this.tolkienEnv || null,
@@ -2930,7 +2938,7 @@ class ChatManager {
     // ningún participante conserva acceso al mundo real de destino.
     if (worldLabelFor(fromCwd) === 'Aduana' && worldLabelFor(dest) !== 'Aduana') {
       chat.participants = [];
-      chat._broadcast({ type: 'participants', participants: [] });
+      chat._broadcast({ type: 'participants', participants: [], salaOwner: chat.owner || hostUser() });
       // Un aviso del sistema nunca es `user`: esos eventos anclan los turnos del replay de sala.
       chat._push({ type: 'error', message: 'Salió de la Aduana: se revocó el acceso de los invitados.' });
     }
@@ -2965,13 +2973,10 @@ class ChatManager {
       return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
     }
     if (chat.isSala()) return { ok: false, code: 409, error: 'Esta conversación ya es una sala de Aduana.' };
-    if ((chat.owner || hostUser()) !== hostUser()) {
-      return {
-        ok: false,
-        code: 409,
-        error: 'Por ahora solo el host puede crear salas de Aduana (las salas viven en su espacio, console:PLAN-2274).',
-      };
-    }
+    // Cualquier usuario puede convertir SU chat en sala: la sala es suelo
+    // neutral (Regla dura 16), no el espacio de nadie, y los turnos los paga
+    // quien la crea. El candado host-only existía solo porque safeCwd sacaba
+    // de Aduana el cwd de un inquilino (console:BUG-2432, ya resuelto).
 
     const fromCwd = chat.cwd;
     const salaId = safeSalaId(`sala-${Date.now().toString(36)}-${randomUUID().replaceAll('-', '').slice(0, 10)}`);
@@ -3475,7 +3480,7 @@ function participantChat(req, id) {
 // Las opciones extra son internas: ningún body público puede evitar el arranque
 // normal del motor ni inyectar un pendingPrompt por su cuenta.
 function createChatForRequest(req, res, body = {}, { pendingPrompt = null, startEngine = true } = {}) {
-  const { cwd, model, permissionMode, resume, title, ticket, learningId } = body || {};
+  const { cwd, model, permissionMode, resume, title, ticket, learningId, sala } = body || {};
   // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
   // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
   // reconoce Claude Code). 'tandem' es otro sentinel propio (PLAN-507).
@@ -3493,15 +3498,33 @@ function createChatForRequest(req, res, body = {}, { pendingPrompt = null, start
   }
   const principal = principalOf(req);
   const owner = principal.username;
-  const cwdAbs = safeCwd(cwd, owner);
-  try {
-    if (!fss.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
-  } catch {
-    console.warn('[chat] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
-    const requested = typeof cwd === 'string' ? cwd.trim() : '';
-    const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
-    res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
-    return null;
+  // 🛃 Sala de Aduana: el salaId lo genera el SERVIDOR y la carpeta se crea acá,
+  // en el suelo neutral global. Aceptar un cwd de sala del cliente permitiría
+  // entrar a la sala de otra persona (console:BUG-2432), así que se rechaza.
+  let cwdAbs;
+  if (sala === true) {
+    try {
+      cwdAbs = ensureSala(newSalaId());
+    } catch (err) {
+      console.warn('[chat] no se pudo crear la sala de Aduana:', err?.message);
+      res.status(500).json({ error: 'No se pudo preparar la carpeta de la sala.' });
+      return null;
+    }
+  } else {
+    cwdAbs = safeCwd(cwd, owner);
+    if (isSalaPath(cwdAbs)) {
+      res.status(400).json({ error: 'Para abrir una sala de 🛃 Aduana usá la opción "Sala" del lanzador.' });
+      return null;
+    }
+    try {
+      if (!fss.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
+    } catch {
+      console.warn('[chat] cwd inexistente — owner:', String(owner).slice(0, 200), '· pedido:', String(cwd).slice(0, 200), '· resuelto:', cwdAbs);
+      const requested = typeof cwd === 'string' ? cwd.trim() : '';
+      const named = requested && requested.length <= 80 ? ` "${requested}"` : '';
+      res.status(400).json({ error: `El destino${named} no existe en tu espacio de trabajo. Elegí otro destino.` });
+      return null;
+    }
   }
   // SP9-5 (TASK-671): tope de sesiones vivas por-usuario (admin exento).
   if (!principal.admin) {
@@ -3521,6 +3544,10 @@ function createChatForRequest(req, res, body = {}, { pendingPrompt = null, start
     console.warn(`[BUG-1875] Usuario ${owner || hostUser()} sin credencial Codex; el chat nuevo degrada de Tándem a AutoTux.`);
     modelChoice = 'auto';
   }
+  // La Ley 5 de la Regla dura 16 fue ENMENDADA por Niko el 2026-07-30: una sala
+  // SÍ puede correr en «Todo», y su regla dice explícitamente que no se reponga
+  // el guard que lo impedía. Por eso una sala resuelve su modo como cualquier
+  // otro chat y el body manda; el lanzador igual la abre en 'default'.
   const modeChoice = (permissionMode != null) ? permissionMode : (prefs.defaultPermissionMode || 'default');
   const chat = manager.create({
     cwd: cwdAbs,
@@ -3664,7 +3691,7 @@ export default {
       }
       chat.addParticipant(user);
       manager.persist();
-      chat._broadcast({ type: 'participants', participants: chat.participants });
+      chat._broadcast({ type: 'participants', participants: chat.participants, salaOwner: chat.owner || hostUser() });
       res.json({ ok: true, participants: chat.participants });
     });
 
@@ -3680,7 +3707,7 @@ export default {
         try { ws.close(); } catch { /* best-effort */ }
       }
       manager.persist();
-      chat._broadcast({ type: 'participants', participants: chat.participants });
+      chat._broadcast({ type: 'participants', participants: chat.participants, salaOwner: chat.owner || hostUser() });
       res.json({ ok: true, participants: chat.participants });
     });
 
@@ -3694,7 +3721,7 @@ export default {
       }
       chat.removeParticipant(me);
       manager.persist();
-      chat._broadcast({ type: 'participants', participants: chat.participants });
+      chat._broadcast({ type: 'participants', participants: chat.participants, salaOwner: chat.owner || hostUser() });
       res.json({ ok: true, participants: chat.participants });
     });
 
@@ -3941,7 +3968,9 @@ export default {
       const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const target = req.body?.mode;
-      // El modo de permisos viaja por WS `set_mode`; el guard de la Ley 5 vive en Chat.setMode().
+      // Ojo con el nombre: este `mode` es Chat↔TUI. El modo de PERMISOS viaja
+      // aparte, por WS `set_mode`, y desde 2026-07-30 una sala también acepta
+      // "Todo" (Regla 16 · Ley 5 enmendada) — acá no se valida nada de eso.
       if (target !== 'chat' && target !== 'tui') {
         return res.status(400).json({ error: 'Modo inválido (chat|tui).' });
       }
@@ -4277,14 +4306,10 @@ export default {
           chat.interrupt();
         } else if (msg.type === 'set_mode') {
           if (p.admin || (chat.owner || hostUser()) === (p.username || hostUser())) {
-            // Ley 5 de la Regla dura 16: una sala jamás corre con el bypass total.
-            // El guard REAL vive en Chat.setMode(); acá se repite para poder
-            // explicarle el rechazo a quien lo pidió.
-            if (chat.isSala() && msg.mode === 'bypassPermissions') {
-              ws.send(JSON.stringify({ type: 'error', message: 'Una sala de Aduana no puede correr en modo "Todo" (Ley 5 de la Regla dura 16).' }));
-            } else {
-              chat.setMode(msg.mode);
-            }
+            // El modo de permisos lo fija SOLO el dueño (esta guarda). Desde
+            // 2026-07-30 una sala SÍ puede correr en "Todo" (Regla 16 · Ley 5
+            // enmendada): el guard que lo prohibía se derogó a pedido de Niko.
+            chat.setMode(msg.mode);
           }
         } else if (msg.type === 'set_model') {
           if (p.admin || (chat.owner || hostUser()) === (p.username || hostUser())) {

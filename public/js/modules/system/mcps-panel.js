@@ -395,6 +395,11 @@ export function mountMcpsPanel(el, ctx = {}) {
       if (b.dataset.kact === 'reconnect-keyring') {
         const item = (lastKeyring?.items || []).find((x) => x.id === b.dataset.kid);
         if (item?.action?.kind === 'infisical-login') openInfisicalLogin();
+        else if (item?.action?.kind === 'claude-login') openClaudeLogin(item);
+        else if (item?.action?.kind === 'codex-login') openDeviceLogin(item, { base: '/api/connections/codex' });
+        else if (item?.action?.kind === 'github-login') openDeviceLogin(item, { base: '/api/connections/github' });
+        else if (item?.action?.kind === 'pad-login') openPadLogin(item);
+        else if (item?.action?.kind === 'service-restart') openServiceRestart(item);
         else if (item) openGuidedReconnect(item);
       } else if (b.dataset.kact === 'copy-command') {
         copyCommandText(b.dataset.command || '');
@@ -1212,8 +1217,575 @@ export function mountMcpsPanel(el, ctx = {}) {
     })();
   }
 
+  function openClaudeLogin(item) {
+    const action = item.action || {};
+    const title = action.title || t('system.mcps.claudeLoginTitle', 'Reconectar Claude OAuth');
+    const m = dialog.openModal({ title: esc(title), width: 560 });
+    let timer = null;
+    let phase = '';
+    let closed = false;
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { closed = true; if (timer) clearInterval(timer); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+    const cancelButton = () => `<button class="btn-ghost btn--sm" data-ref="cancel">${t('system.mcps.cancel', 'Cancelar')}</button>`;
+    const wireCancel = () => {
+      m.body.querySelector('[data-ref="cancel"]')?.addEventListener('click', () => {
+        closed = true;
+        stop();
+        fetch('/api/connections/claude/login/cancel', { method: 'POST' }).catch(() => {});
+        m.close?.();
+      });
+    };
+
+    async function refreshKeyring() {
+      try {
+        const res = await fetch('/api/mcps/keyring?fresh=1');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        lastKeyring = d;
+        renderKeyring();
+      } catch { /* el login ya terminó; el panel se refrescará en su próximo ciclo */ }
+    }
+
+    function render(job) {
+      if ((job.status === 'starting' || job.status === 'waiting-url') && phase !== 'starting') {
+        phase = 'starting';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.claudeLoginStarting', 'Arrancando el login…')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      } else if (job.status === 'waiting-code' && phase !== 'waiting-code') {
+        phase = 'waiting-code';
+        const url = job.url || '';
+        setBody(`
+          <p class="mcp-oauth-wait"><b>${t('system.mcps.yourTurn', 'Tu turno:')}</b></p>
+          <ol class="mcp-oauth-steps">
+            <li>${t('system.mcps.claudeLoginOpenStep', 'Abrí el enlace y autorizá el acceso con tu cuenta de Claude.')}<br>
+              <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="mcp-oauth-link">${icon('externalLink', { size: 13 })} ${esc(url)}</a>
+              <button class="btn-ghost btn--sm" data-ref="copyurl">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.claudeLoginCopyLink', 'Copiar enlace')}</span></button></li>
+            <li>${t('system.mcps.claudeLoginPasteStep', 'Pegá el código que muestra la pantalla de confirmación.')}<br>
+              <input type="text" class="dlg-input" data-ref="code" autocomplete="off" placeholder="${esc(t('system.mcps.claudeLoginCodePlaceholder', 'Código de autorización'))}" />
+              <button class="btn btn--sm" data-ref="send">${icon('check', { size: 12 })}<span>${t('system.mcps.claudeLoginSendCode', 'Enviar código')}</span></button></li>
+          </ol>
+          <p class="hr-f-file" data-ref="msg"></p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        const copy = m.body.querySelector('[data-ref="copyurl"]');
+        const send = m.body.querySelector('[data-ref="send"]');
+        const input = m.body.querySelector('[data-ref="code"]');
+        const msg = m.body.querySelector('[data-ref="msg"]');
+        copy?.addEventListener('click', () => copyCommandText(url));
+        const submitCode = async () => {
+          if (!send || send.disabled) return;
+          let code = input?.value.trim() || '';
+          if (!code) return;
+          if (input) input.value = '';
+          send.disabled = true;
+          if (msg) msg.textContent = t('system.mcps.claudeLoginSendingCode', 'Enviando código…');
+          try {
+            const request = fetch('/api/connections/claude/login/code', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
+            code = '';
+            const r = await request;
+            const d = await r.json();
+            if (!r.ok) throw new Error(d?.error || r.status);
+            if (msg) msg.textContent = t('system.mcps.claudeLoginCodeSent', 'Código enviado. Esperando verificación…');
+            await pollOnce();
+          } catch (e) {
+            if (msg) msg.textContent = t('system.mcps.inlineError', 'Error: {error}', { error: e.message || e });
+            send.disabled = false;
+          }
+        };
+        send?.addEventListener('click', submitCode);
+        input?.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            submitCode();
+          }
+        });
+        wireCancel();
+      } else if (job.status === 'verifying' && phase !== 'verifying') {
+        phase = 'verifying';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.claudeLoginVerifying', 'Verificando la credencial…')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      } else if (job.status === 'ok' && phase !== 'ok') {
+        phase = 'ok';
+        stop();
+        setBody(`
+          <p class="hr-f-detail">🟢 <b>${t('system.mcps.claudeLoginRestored', 'Claude OAuth quedó reconectado')}</b></p>
+          <p class="hr-f-file">${t('system.mcps.claudeLoginRecycleHint', 'Los chats y runners ya abiertos siguen usando la credencial vieja. Conviene tocar «♻ Reciclar runners» arriba para que tomen la nueva.')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+        refreshKeyring();
+      } else if ((job.status === 'error' || job.status === 'idle') && phase !== job.status) {
+        phase = job.status;
+        stop();
+        const error = job.status === 'idle'
+          ? t('system.mcps.claudeLoginIdle', 'No hay un login activo.')
+          : (job.error || t('system.mcps.unknownError', 'error desconocido'));
+        setBody(`
+          <p class="hr-f-crit">🔴 ${t('system.mcps.claudeLoginError', 'No se pudo reconectar Claude OAuth: {error}', { error: esc(error) })}</p>
+          <div class="mcp-acts">
+            <button class="btn btn--sm" data-ref="retry">${t('system.mcps.retry', 'Reintentar')}</button>
+            ${cancelButton()}
+          </div>`);
+        m.body.querySelector('[data-ref="retry"]')?.addEventListener('click', startLogin);
+        wireCancel();
+      }
+    }
+
+    async function pollOnce() {
+      if (closed) return;
+      try {
+        const r = await fetch('/api/connections/claude/login/status');
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        render(d);
+      } catch { /* red intermitente, sigue */ }
+    }
+
+    async function startLogin() {
+      stop();
+      phase = '';
+      render({ status: 'starting' });
+      try {
+        const r = await fetch('/api/connections/claude/login/start', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        timer = setInterval(pollOnce, 1500);
+        render(d);
+        await pollOnce();
+      } catch (e) {
+        render({ status: 'error', error: e.message || e });
+      }
+    }
+
+    const what = action.what ? `<p class="hr-f-file">${esc(action.what)}</p>` : '';
+    const steps = Array.isArray(action.steps) && action.steps.length
+      ? `<ol class="mcp-oauth-steps">${action.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`
+      : '';
+    setBody(`
+      ${what}
+      ${steps}
+      <div class="mcp-acts">
+        <button class="btn btn--sm" data-ref="start">${t('system.mcps.claudeLoginStart', 'Iniciar login')}</button>
+        ${cancelButton()}
+      </div>`);
+    m.body.querySelector('[data-ref="start"]')?.addEventListener('click', startLogin);
+    wireCancel();
+  }
+
   function keyringConnected(item) {
     return item?.light === 'ok';
+  }
+
+  function openPadLogin(item) {
+    const action = item.action || {};
+    const title = action.title || t('system.mcps.padLoginTitle', 'Reconectar Pad local');
+    const m = dialog.openModal({ title: esc(title), width: 560 });
+    let timer = null;
+    let phase = '';
+    let closed = false;
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { closed = true; if (timer) clearInterval(timer); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+    const cancelButton = () => `<button class="btn-ghost btn--sm" data-ref="cancel">${t('system.mcps.cancel', 'Cancelar')}</button>`;
+    const wireCancel = () => {
+      m.body.querySelector('[data-ref="cancel"]')?.addEventListener('click', () => {
+        closed = true;
+        stop();
+        fetch('/api/connections/pad/login/cancel', { method: 'POST' }).catch(() => {});
+        m.close?.();
+      });
+    };
+
+    async function refreshKeyring() {
+      try {
+        const res = await fetch('/api/mcps/keyring?fresh=1');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        lastKeyring = d;
+        renderKeyring();
+      } catch { /* el login ya terminó; el panel se refrescará en su próximo ciclo */ }
+    }
+
+    function render(job) {
+      if ((job.status === 'starting' || job.status === 'idle') && phase !== 'starting') {
+        phase = 'starting';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.padLoginStarting', 'Arrancando el login…')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      } else if (job.status === 'awaiting-auth') {
+        const url = job.url || '';
+        const nextPhase = `awaiting-auth:${url}`;
+        if (phase === nextPhase) return;
+        phase = nextPhase;
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${t('system.mcps.yourTurn', 'Tu turno:')}</b></p>
+          <ol class="mcp-oauth-steps">
+            <li>${t('system.mcps.padLoginOpenStep', 'Abrí este enlace y autorizá el acceso en tu navegador:')}<br>
+              <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="mcp-oauth-link">${icon('externalLink', { size: 13 })} ${esc(url)}</a>
+              <button class="btn-ghost btn--sm" data-ref="copyurl">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.padLoginCopyLink', 'Copiar enlace')}</span></button></li>
+            <li>${t('system.mcps.padLoginWaitStep', 'Esperá mientras la consola verifica la conexión automáticamente.')}</li>
+          </ol>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        m.body.querySelector('[data-ref="copyurl"]')?.addEventListener('click', () => copyCommandText(url));
+        wireCancel();
+      } else if (job.status === 'verifying' && phase !== 'verifying') {
+        phase = 'verifying';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.padLoginVerifying', 'Verificando la conexión con Pad…')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      } else if (job.status === 'ok' && phase !== 'ok') {
+        phase = 'ok';
+        stop();
+        setBody(`
+          <p class="hr-f-detail">🟢 <b>${t('system.mcps.padLoginRestored', 'Pad local quedó reconectado')}</b></p>
+          <p class="hr-f-file">${t('system.mcps.padLoginVerified', 'La conexión quedó verificada automáticamente.')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+        refreshKeyring();
+      } else if (job.status === 'error' && phase !== 'error') {
+        phase = 'error';
+        stop();
+        const error = job.error || t('system.mcps.unknownError', 'error desconocido');
+        setBody(`
+          <p class="hr-f-crit">🔴 ${t('system.mcps.padLoginError', 'No se pudo reconectar Pad local: {error}', { error: esc(error) })}</p>
+          <div class="mcp-acts">
+            <button class="btn btn--sm" data-ref="retry">${t('system.mcps.retry', 'Reintentar')}</button>
+            ${cancelButton()}
+          </div>`);
+        m.body.querySelector('[data-ref="retry"]')?.addEventListener('click', startLogin);
+        wireCancel();
+      }
+    }
+
+    async function pollOnce() {
+      if (closed) return;
+      try {
+        const r = await fetch('/api/connections/pad/login/status');
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        render(d);
+      } catch { /* red intermitente, sigue */ }
+    }
+
+    async function startLogin() {
+      stop();
+      phase = '';
+      render({ status: 'starting' });
+      try {
+        const r = await fetch('/api/connections/pad/login/start', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        timer = setInterval(pollOnce, 1500);
+        render(d);
+        await pollOnce();
+      } catch (e) {
+        render({ status: 'error', error: e.message || e });
+      }
+    }
+
+    const what = action.what ? `<p class="hr-f-file">${esc(action.what)}</p>` : '';
+    const steps = Array.isArray(action.steps) && action.steps.length
+      ? `<ol class="mcp-oauth-steps">${action.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`
+      : '';
+    setBody(`
+      ${what}
+      ${steps}
+      <div class="mcp-acts">
+        <button class="btn btn--sm" data-ref="start">${t('system.mcps.padLoginStart', 'Iniciar login')}</button>
+        ${cancelButton()}
+      </div>`);
+    m.body.querySelector('[data-ref="start"]')?.addEventListener('click', startLogin);
+    wireCancel();
+  }
+
+  function openServiceRestart(item) {
+    const action = item.action || {};
+    const title = action.title || t('system.mcps.serviceRestartTitle', 'Reiniciar servicio');
+    const serviceId = String(action.serviceId || '');
+    const m = dialog.openModal({ title: esc(title), width: 560 });
+    let timer = null;
+    let phase = '';
+    let closed = false;
+    let selfPollInFlight = false;
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { closed = true; if (timer) clearInterval(timer); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+
+    async function refreshKeyring() {
+      try {
+        const res = await fetch('/api/mcps/keyring?fresh=1');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        lastKeyring = d;
+        renderKeyring();
+      } catch { /* el panel se refrescará en su próximo ciclo */ }
+    }
+
+    function setResult(html) {
+      const result = m.body.querySelector('[data-ref="service-result"]');
+      if (result) result.innerHTML = html;
+    }
+
+    async function pollSelf() {
+      if (closed || phase !== 'self-restarting' || selfPollInFlight) return;
+      selfPollInFlight = true;
+      try {
+        const r = await fetch(`/api/mcps/service/${encodeURIComponent(serviceId)}/status`);
+        const d = await r.json();
+        if (!r.ok || d.active !== true || closed) return;
+        phase = 'active';
+        stop();
+        setResult(`<p class="hr-f-detail">🟢 <b>${t('system.mcps.serviceRestartActive', 'La consola volvió y el servicio está activo')}</b></p>`);
+        refreshKeyring();
+      } catch { /* la caída de red es esperable mientras la consola se reinicia */ }
+      finally { selfPollInFlight = false; }
+    }
+
+    async function restart() {
+      if (phase === 'restarting' || phase === 'self-restarting') return;
+      const button = m.body.querySelector('[data-ref="restart"]');
+      if (button) button.disabled = true;
+      phase = 'restarting';
+      setResult(`<p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.serviceRestarting', 'Reiniciando…')}</p>`);
+      try {
+        const r = await fetch('/api/mcps/service/restart', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: serviceId }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 403) {
+          phase = 'forbidden';
+          setResult(`<p class="hr-f-crit">🔴 ${t('system.mcps.serviceRestartAdminOnly', 'Esta acción está disponible sólo para administradores.')}</p>`);
+          if (button) button.disabled = false;
+          return;
+        }
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+
+        if (d.self === true) {
+          phase = 'self-restarting';
+          setResult(`
+            <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} <b>${t('system.mcps.serviceRestartSelfTitle', 'La consola se está reiniciando')}</b></p>
+            <p class="hr-f-file">${t('system.mcps.serviceRestartSelfNotice', 'Es esperable que la página pierda conexión durante unos segundos. No se rompió: va a reconectar sola apenas el servicio vuelva a estar activo.')}</p>`);
+          timer = setInterval(pollSelf, 2000);
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (closed) return;
+        const statusResponse = await fetch(`/api/mcps/service/${encodeURIComponent(serviceId)}/status`);
+        const status = await statusResponse.json().catch(() => ({}));
+        if (statusResponse.status === 403) {
+          phase = 'forbidden';
+          setResult(`<p class="hr-f-crit">🔴 ${t('system.mcps.serviceRestartAdminOnly', 'Esta acción está disponible sólo para administradores.')}</p>`);
+        } else if (!statusResponse.ok) {
+          throw new Error(status?.error || statusResponse.status);
+        } else if (status.active === true) {
+          phase = 'active';
+          setResult(`<p class="hr-f-detail">🟢 <b>${t('system.mcps.serviceRestartActiveGeneric', 'El servicio quedó activo')}</b></p>`);
+        } else {
+          phase = 'inactive';
+          const raw = status.raw || t('system.mcps.serviceRestartUnknownState', 'estado desconocido');
+          setResult(`<p class="hr-f-crit">🔴 ${t('system.mcps.serviceRestartInactive', 'El servicio no quedó activo: {status}', { status: esc(raw) })}</p>`);
+        }
+        refreshKeyring();
+        if (button) button.disabled = false;
+      } catch (e) {
+        phase = 'error';
+        setResult(`<p class="hr-f-crit">🔴 ${t('system.mcps.serviceRestartError', 'No se pudo reiniciar el servicio: {error}', { error: esc(e.message || e) })}</p>`);
+        if (button) button.disabled = false;
+      }
+    }
+
+    const what = action.what ? `<p class="hr-f-file">${esc(action.what)}</p>` : '';
+    const steps = Array.isArray(action.steps) && action.steps.length
+      ? `<ol class="mcp-oauth-steps">${action.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`
+      : '';
+    const command = action.command
+      ? `<p class="hr-f-file">${t('system.mcps.guidedCommand', 'Comando:')} <code>${esc(action.command)}</code></p>
+         <div class="mcp-acts"><button class="btn-ghost btn--sm" data-ref="copycmd">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.copy', 'Copiar')}</span></button></div>`
+      : '';
+    setBody(`
+      ${what}
+      ${steps}
+      ${command}
+      <div data-ref="service-result"></div>
+      <div class="mcp-acts">
+        <button class="btn btn--sm" data-ref="restart">${t('system.mcps.serviceRestartButton', 'Reiniciar y verificar')}</button>
+        <button class="btn-ghost btn--sm" data-ref="close">${t('system.mcps.close', 'Cerrar')}</button>
+      </div>`);
+    m.body.querySelector('[data-ref="copycmd"]')?.addEventListener('click', () => copyCommandText(action.command || ''));
+    m.body.querySelector('[data-ref="restart"]')?.addEventListener('click', restart);
+    m.body.querySelector('[data-ref="close"]')?.addEventListener('click', () => {
+      closed = true;
+      stop();
+      m.close?.();
+    });
+  }
+
+  function openDeviceLogin(item, cfg) {
+    const action = item.action || {};
+    const base = cfg?.base || '';
+    const isGithub = base === '/api/connections/github';
+    const connectedLabel = cfg?.connectedLabel || (isGithub
+      ? t('system.mcps.githubLoginRestored', 'GitHub CLI quedó reconectado')
+      : t('system.mcps.codexLoginRestored', 'Codex CLI quedó reconectado'));
+    const extraPhases = cfg?.extraPhases || (isGithub
+      ? { 'setup-git': t('system.mcps.githubLoginSetupGit', 'Configurando git…') }
+      : {});
+    const title = action.title || (isGithub
+      ? t('system.mcps.githubLoginTitle', 'Reconectar GitHub CLI')
+      : t('system.mcps.codexLoginTitle', 'Reconectar Codex CLI'));
+    const m = dialog.openModal({ title: esc(title), width: 560 });
+    let timer = null;
+    let phase = '';
+    let closed = false;
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { closed = true; if (timer) clearInterval(timer); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+    const cancelButton = () => `<button class="btn-ghost btn--sm" data-ref="cancel">${t('system.mcps.cancel', 'Cancelar')}</button>`;
+    const wireCancel = () => {
+      m.body.querySelector('[data-ref="cancel"]')?.addEventListener('click', () => {
+        closed = true;
+        stop();
+        fetch(`${base}/cancel`, { method: 'POST' }).catch(() => {});
+        m.close?.();
+      });
+    };
+
+    async function refreshKeyring() {
+      try {
+        const res = await fetch('/api/mcps/keyring?fresh=1');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        lastKeyring = d;
+        renderKeyring();
+      } catch { /* el login ya terminó; el panel se refrescará en su próximo ciclo */ }
+    }
+
+    function render(job) {
+      if (job.connected === true || job.done === true) {
+        if (phase === 'connected') return;
+        phase = 'connected';
+        stop();
+        setBody(`
+          <p class="hr-f-detail">🟢 <b>${esc(connectedLabel)}</b></p>
+          <p class="hr-f-file">${t('system.mcps.deviceLoginVerified', 'La credencial quedó verificada automáticamente.')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+        refreshKeyring();
+      } else if (job.error || job.status === 'error' || job.stale === true) {
+        const nextPhase = job.stale === true ? 'stale' : 'error';
+        if (phase === nextPhase) return;
+        phase = nextPhase;
+        stop();
+        const error = job.stale === true
+          ? t('system.mcps.deviceLoginStale', 'El inicio del login quedó trabado. Podés reintentarlo.')
+          : (job.error || t('system.mcps.unknownError', 'error desconocido'));
+        setBody(`
+          <p class="hr-f-crit">🔴 ${t('system.mcps.deviceLoginError', 'No se pudo completar el login: {error}', { error: esc(error) })}</p>
+          <div class="mcp-acts">
+            <button class="btn btn--sm" data-ref="retry">${t('system.mcps.retry', 'Reintentar')}</button>
+            ${cancelButton()}
+          </div>`);
+        m.body.querySelector('[data-ref="retry"]')?.addEventListener('click', startLogin);
+        wireCancel();
+      } else if (job.status === 'idle' || job.status === 'starting') {
+        if (phase === 'starting') return;
+        phase = 'starting';
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.mcps.deviceLoginStarting', 'Arrancando el login…')}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      } else if (job.status === 'awaiting-auth') {
+        const url = job.url || '';
+        const code = job.code || '';
+        const nextPhase = `awaiting-auth:${url}:${code}`;
+        if (phase === nextPhase) return;
+        phase = nextPhase;
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${t('system.mcps.yourTurn', 'Tu turno:')}</b></p>
+          <ol class="mcp-oauth-steps">
+            <li>${t('system.mcps.deviceLoginOpenStep', 'Abrí este enlace en tu navegador:')}<br>
+              <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="mcp-oauth-link">${icon('externalLink', { size: 13 })} ${esc(url)}</a>
+              <button class="btn-ghost btn--sm" data-ref="copyurl">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.deviceLoginCopyLink', 'Copiar enlace')}</span></button></li>
+            <li>${t('system.mcps.deviceLoginEnterCode', 'Escribí este código en el navegador:')}<br>
+              <strong class="mcp-oauth-link"><code>${esc(code)}</code></strong>
+              <button class="btn-ghost btn--sm" data-ref="copycode">${icon('clipboard', { size: 12 })}<span>${t('system.mcps.deviceLoginCopyCode', 'Copiar código')}</span></button></li>
+            <li>${t('system.mcps.deviceLoginWaitStep', 'Esperá mientras la consola verifica la conexión automáticamente.')}</li>
+          </ol>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        m.body.querySelector('[data-ref="copyurl"]')?.addEventListener('click', () => copyCommandText(url));
+        m.body.querySelector('[data-ref="copycode"]')?.addEventListener('click', () => copyCommandText(code));
+        wireCancel();
+      } else if (extraPhases[job.status] && phase !== job.status) {
+        phase = job.status;
+        setBody(`
+          <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${esc(extraPhases[job.status])}</p>
+          <div class="mcp-acts">${cancelButton()}</div>`);
+        wireCancel();
+      }
+    }
+
+    async function pollOnce() {
+      if (closed) return;
+      try {
+        const r = await fetch(`${base}/status`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        render(d);
+      } catch { /* red intermitente, sigue */ }
+    }
+
+    async function startLogin() {
+      stop();
+      phase = '';
+      render({ status: 'starting' });
+      try {
+        const r = await fetch(`${base}/start`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || r.status);
+        if (closed) return;
+        timer = setInterval(pollOnce, 1500);
+        render(d);
+        await pollOnce();
+      } catch (e) {
+        render({ status: 'error', error: e.message || e });
+      }
+    }
+
+    const what = action.what ? `<p class="hr-f-file">${esc(action.what)}</p>` : '';
+    const steps = Array.isArray(action.steps) && action.steps.length
+      ? `<ol class="mcp-oauth-steps">${action.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`
+      : '';
+    setBody(`
+      ${what}
+      ${steps}
+      <div class="mcp-acts">
+        <button class="btn btn--sm" data-ref="start">${t('system.mcps.deviceLoginStart', 'Iniciar login')}</button>
+        ${cancelButton()}
+      </div>`);
+    m.body.querySelector('[data-ref="start"]')?.addEventListener('click', startLogin);
+    wireCancel();
   }
 
   function openGuidedReconnect(item) {
