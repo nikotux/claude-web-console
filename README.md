@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-31 20:45 — main
+- Sumar integración de Tolkien a Conexiones y mejorar /btw con --kind
+
 ### 2026-07-31 19:15 — main
 - Aislar config de instancia por principal y endurecer reintentos/pool
 
@@ -400,22 +403,6 @@ since the previous push. Newest entry first.
 - Added `src/modules/projects/index.js`
 - Added `src/modules/projects/memory.js`
 - Modified `src/modules/tokens/index.js`
-
-### 2026-07-03 06:11 — main
-- Lanzador móvil: modal alcanzable (88dvh) y Retomar compacto con modal Ver más
-- Chat: re-anclar el scroll al final al volver a una pestaña oculta
-- Lanzador: 'Abrir en' compacto — 3 recientes + Ver más al lado de Elegir carpeta
-- Modified `CLAUDE.md`
-- Modified `bin/cwc-chat-runner.js`
-- Modified `public/js/modules/sessions/sessions.js`
-- Modified `public/js/modules/system/backup-panel.js`
-- Modified `public/js/modules/system/health-panel.js`
-- Modified `public/js/modules/tickets/tickets.js`
-- Modified `public/js/modules/tolkien/tolkien.js`
-- Modified `public/js/modules/usage/usage.js`
-- Modified `src/modules/backup/index.js`
-- Modified `src/modules/terminal/index.js`
-- Modified `src/modules/tmux/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
