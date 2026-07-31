@@ -57,6 +57,14 @@ function statusMeta(status) {
       label: t('system.myconfig.status.pending', 'Pendiente'),
     };
   }
+  if (status === 'na') {
+    return {
+      iconName: 'check',
+      rowClass: 'hr-finding--low',
+      badgeClass: 'hr-sev--low',
+      label: t('system.myconfig.status.notApplicable', 'No aplica'),
+    };
+  }
   return {
     iconName: 'clock',
     rowClass: 'hr-finding--low',
@@ -91,11 +99,11 @@ function capabilityRows(capabilities) {
   }).join('');
 }
 
-function provisionRows(provisioning) {
+function provisionRows(provisioning, hostExempt) {
   const steps = provisioning?.steps || {};
   return PROVISION_STEPS.map((step) => {
     const state = steps[step] || { status: 'idle' };
-    const meta = statusMeta(state.status);
+    const meta = statusMeta(hostExempt ? 'na' : state.status);
     return `
       <div class="hr-finding ${meta.rowClass}">
         <div class="hr-f-head">
@@ -105,7 +113,7 @@ function provisionRows(provisioning) {
           </span>
           <span class="hr-f-area">${esc(provisionLabel(step))}</span>
         </div>
-        ${state.error ? `<p class="hr-f-detail">${esc(state.error)}</p>` : ''}
+        ${!hostExempt && state.error ? `<p class="hr-f-detail">${esc(state.error)}</p>` : ''}
       </div>`;
   }).join('');
 }
@@ -138,8 +146,9 @@ export function mountMyConfigPanel(el, ctx) {
     if (!data) return;
     const capabilities = data.capabilities || [];
     const complete = capabilities.filter((capability) => capability.complete).length;
-    const provisionStatus = data.provisioning?.status || 'idle';
-    const needsAttention = (data.blocking || []).length > 0 || provisionStatus !== 'ok';
+    const hostExempt = !!data.hostExempt;
+    const provisionStatus = hostExempt ? 'na' : (data.provisioning?.status || 'idle');
+    const needsAttention = (data.blocking || []).length > 0 || (!hostExempt && provisionStatus !== 'ok');
     const overallMeta = statusMeta(needsAttention ? 'pending' : 'ok');
     const provisionMeta = statusMeta(provisionStatus);
 
@@ -166,17 +175,19 @@ export function mountMyConfigPanel(el, ctx) {
         </div>
       </details>
       <details class="hp-opt-group">
-        <summary>${icon('gear', { size: 13 })} ${t('system.myconfig.provisioningTitle', 'Provisioning')} · ${esc(statusMeta(provisionStatus).label)}</summary>
-        <p class="hr-f-detail">${t('system.myconfig.provisioningHint', 'Estos pasos preparan tu Pad, workspace, skills y Tolkien MCP. Reintentar es idempotente y no consume tokens.')}</p>
+        <summary>${icon('gear', { size: 13 })} ${t('system.myconfig.provisioningTitle', 'Provisioning')} · ${esc(provisionMeta.label)}</summary>
+        <p class="hr-f-detail">${hostExempt
+          ? t('system.myconfig.provisioningHostHint', 'Tu espacio ya existe: estos pasos preparan el alta de un usuario nuevo y no aplican a tu cuenta.')
+          : t('system.myconfig.provisioningHint', 'Estos pasos preparan tu Pad, workspace, skills y Tolkien MCP. Reintentar es idempotente y no consume tokens.')}</p>
         <div class="hr-findings">
-          ${provisionRows(data.provisioning)}
+          ${provisionRows(data.provisioning, hostExempt)}
         </div>
-        <div class="hr-f-actions">
+        ${hostExempt ? '' : `<div class="hr-f-actions">
           <button class="btn btn--sm" data-action="retry" ${busy ? 'disabled' : ''}>
             ${icon('refresh', { size: 13 })}
             <span>${busy ? t('system.myconfig.retrying', 'Reintentando…') : t('system.myconfig.retry', 'Reintentar')}</span>
           </button>
-        </div>
+        </div>`}
       </details>
       <p class="ev-msg" data-ref="message" hidden></p>`;
 

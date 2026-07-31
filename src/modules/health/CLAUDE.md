@@ -78,8 +78,13 @@
   Existe porque un HOME global de inquilino puede hacer que una sesión del
   host herede credenciales ajenas. Devuelve `fail` ante un pane con HOME
   incorrecto, `warn` ante HOME global incorrecto o mediciones irresolubles, y
-  `ok` solo cuando todo lo medible coincide (incluido el caso explícito sin
-  panes). Su status viaja al CSS como `hp-dot--${status}`: los únicos valores
+  `ok` solo cuando todo lo medible coincide. El socket ya se fija con `-L cwc`,
+  pero un server tmux persistente sin sesiones responde `no current target` a
+  `list-panes -a`: antes ese inventario vacío se confundía con una enumeración
+  fallida; ahora se interpreta como cero panes y devuelve `ok` explícito («sin
+  panes que auditar») si el HOME global está sano. Cualquier otro error de
+  enumeración conserva `warn`. Su status viaja al CSS como
+  `hp-dot--${status}`: los únicos valores
   permitidos son `ok|warn|fail`, o el indicador queda sin color en silencio.
   **`onboard-provisioning`** (console:BUG-2118: `ok` si no hay altas o todas
   están completas; `warn` si alguna quedó `failed` o lleva más de 10 minutos

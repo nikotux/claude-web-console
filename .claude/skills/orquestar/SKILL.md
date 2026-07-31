@@ -87,7 +87,7 @@ Luego inyectás el **primer mensaje** por WS (la URL WebSocket correspondiente a
 >
 > Al COMPLETAR cada tarea marcala en Pad con `node \"$CWC_ROOT/bin/cwc-block-progress.js\" task <ref> <status-terminal> --note \"...\"` (esto también es tu heartbeat; resolvé `CWC_ROOT` a la instalación de Mi Consola en runtime). Si descubrís una COLISIÓN en runtime (otra sesión reclama un archivo por interfono/claims) o una dependencia nueva → PARÁ y señalá `blocked`.
 >
-> Al terminar TODO (o si parás por capacidad/decisión), SEÑALÁ al orquestador por interfono: `node \"$CWC_ROOT/bin/cwc-bus.js\" send --to <PKG-ref-del-orquestador> --kind heads-up --text \"[OB] <PLAN-bloque> <resultado> [k=v]\"` donde resultado ∈ done|failed|blocked|needs-human|partial. Si el bloque toca código, NO reinicies el server (dejá el working tree; el usuario despliega al revisar)."*
+> Al terminar TODO (o si parás por capacidad/decisión), SEÑALÁ al orquestador por interfono: `node \"$CWC_ROOT/bin/cwc-bus.js\" send --kind heads-up <PKG-ref-del-orquestador> \"[OB] <PLAN-bloque> <resultado> [k=v]\"` donde resultado ∈ done|failed|blocked|needs-human|partial. Si el bloque toca código, NO reinicies el server (dejá el working tree; el usuario despliega al revisar)."*
 
 ## Paso 4 — Escuchar señales y reconciliar
 Las sesiones-bloque te avisan por **interfono** con `kind:'heads-up'` (level active) → te despierta. El texto es `[OB] <PLAN-bloque> <resultado> [k=v]`. **Los 5 resultados:**

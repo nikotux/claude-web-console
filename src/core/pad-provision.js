@@ -6,7 +6,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { MOLD, recordMoldVersion } from './pad-mold.js';
-import { userPadWorkspace, writeUserPadToken, readUserPadToken, userPadDir, ensureUserSpace, userSpace } from './user-space.js';
+import {
+  ensureUserSpace,
+  hostUser,
+  readUserPadToken,
+  sanitizeUserId,
+  userPadDir,
+  userPadWorkspace,
+  userSpace,
+  writeUserPadToken,
+} from './user-space.js';
 
 const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
 // Pozo COMÚN de Mejora Continua (console:PLAN-2222): workspace neutral donde
@@ -149,6 +158,9 @@ export async function inviteUserToSharedWorkspace(userId) {
 // Provisiona (idempotente) el Pad del inquilino. Devuelve {ok, workspace, error?, alreadyProvisioned?}.
 export async function provisionUserPad(userId, { name } = {}) {
   try {
+    // El HOST usa su propio Pad (`~/.pad` + workspace `console`): provisionarlo
+    // le crearía un `tenant-<host>` fantasma. Simétrico a provisionUserWorkspace.
+    if (sanitizeUserId(userId) === hostUser()) return { ok: true, skipped: 'host' };
     ensureUserSpace(userId);
     const admin = readAdminToken();
     if (!admin) return { ok: false, error: 'Sin token admin del Pad local (Niko)' };

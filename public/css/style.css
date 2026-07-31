@@ -1081,6 +1081,13 @@ html, body {
 .mcp-oauth-steps { margin: .2rem 0 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: .7rem; font-size: var(--cwc-fs-sm); }
 .mcp-oauth-link { display: inline-flex; align-items: center; gap: .3rem; color: var(--cwc-accent); }
 .mcp-oauth .dlg-input { width: 100%; margin: .3rem 0; }
+/* Asistente de conexión de Tolkien (mcps-panel.js) */
+.tk-cookie-row { display: flex; align-items: center; gap: .35rem; margin: .3rem 0; }
+.tk-cookie-row .dlg-input { flex: 1; min-width: 0; margin: 0; font-family: var(--cwc-font-mono); }
+.tk-hint { margin: .15rem 0 0; font-size: var(--cwc-fs-xs); color: var(--cwc-text-secondary); }
+/* Selector de caminos reservado para el navegador remoto (console:PLAN-2456). */
+.tk-paths { display: flex; flex-direction: column; gap: .4rem; margin: .3rem 0; }
+.tk-path { display: flex; flex-direction: column; gap: .15rem; padding: .45rem .55rem; text-align: left; }
 .conn-h { font-size: var(--cwc-fs-md); margin: 0 0 .2rem; color: var(--cwc-text); }
 .conn-code {
   font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xl); letter-spacing: .18em;

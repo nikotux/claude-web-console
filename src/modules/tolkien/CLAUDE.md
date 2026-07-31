@@ -164,6 +164,12 @@ tras Actualizar y al abrir la ventana.
 
 ## Gotchas de esta carpeta
 
+- Infraestructura del host (`POST /refresh-data`, `GET /refresh-data/status`,
+  `GET /envs`, `GET /envs/:id`, `POST /envs/provision`, `POST
+  /envs/:id/teardown`) exige `isAdmin && scope.isHost`: `admin` no implica ser
+  host, así que un inquilino con `admin:true` no puede ejecutar `refresh-data`
+  ni tocar entornos. Su vía futura para pedir estas operaciones es
+  `console:PLAN-2493` (petición con visado desde una sala), todavía sin construir.
 - Stack N2 ≠ entornos efímeros: el primero es UN Postgres+Redis persistente por
   USUARIO y vive por referencia contada de sesiones; los segundos son
   worktree+DB+dev-server por CHAT. No reutilizar el reaper idle de entornos para

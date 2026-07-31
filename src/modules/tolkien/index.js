@@ -23,6 +23,7 @@ import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import { hostUser } from '../../core/user-space.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
 import {
@@ -50,6 +51,16 @@ const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
 const stackOwner = (req) => principalOf(req)?.username || hostUser();
+
+// isAdmin no implica ser el host: estas 6 rutas tocan infraestructura compartida
+// (DB, plantilla, worktrees y unidades systemd) que ningún inquilino debe operar.
+function isHostAdmin(req) {
+  try {
+    return isAdmin(req) && systemScopeFor(req).isHost;
+  } catch {
+    return false;
+  }
+}
 
 // El refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de importers Zoho)
 // vive en refresh-shared.js + el runner desacoplado bin/cwc-tolkien-refresh-runner.js
@@ -289,7 +300,7 @@ export default {
     // Admin-only: escribe/trunca la DB LOCAL de Tolkien.
     r.post('/refresh-data', (req, res) => {
       try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede refrescar la data local.' });
+        if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
         let templateBuild = false;
         try {
           if (!isTemplateBuilding(readTemplateJob())) {
@@ -313,12 +324,12 @@ export default {
 
     // Estado del último/actual refresh (para el polling del frontend) — solo lee disco.
     r.get('/refresh-data/status', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
+      if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
       res.json(refreshStatus(readRefreshJob()));
     });
 
     r.get('/envs', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
+      if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
       const envs = listEnvs()
         .slice()
         .sort((a, b) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0))
@@ -340,7 +351,7 @@ export default {
     });
 
     r.get('/envs/:id', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
+      if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
       const id = String(req.params.id || '');
       if (!isSafeEnvId(id)) return res.status(400).json({ error: 'Id de entorno inválido.' });
       const rec = getEnv(id);
@@ -349,7 +360,7 @@ export default {
     });
 
     r.post('/envs/provision', (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede crear entornos.' });
+      if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
       const chatId = req.body?.chatId;
       const base = req.body?.base;
       if (!chatId) return res.status(400).json({ error: 'Falta chatId.' });
@@ -380,7 +391,7 @@ export default {
     });
 
     r.post('/envs/:id/teardown', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede cerrar entornos.' });
+      if (!isHostAdmin(req)) return res.status(403).json({ error: 'Esta operación es del anfitrión de la consola.' });
       const id = String(req.params.id || '');
       if (!isSafeEnvId(id)) return res.status(400).json({ error: 'Id de entorno inválido.' });
       const force = req.body?.force === true;

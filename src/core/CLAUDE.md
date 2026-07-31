@@ -460,6 +460,9 @@ matchean y los verifica sí o sí. Las 4 familias:
 | **B · Dato user-scoped nunca global** | `core/data-dir.js` · `modules/(chat\|tasks\|learning\|retro\|tickets)/` | todo estado de usuario resuelve su dir con `resolveDataDir()`; prohibido hardcodear `~/.cwc-data` del host |
 | **C · Pad per-usuario** | `core/pad-service-client.js` · `core/pad-context.js` · `core/user-space.js` | op de Pad de un inquilino usa `readUserPadToken`+`userPadWorkspace` (`tenant-<id>`); nunca la credencial del host ni `console`; fail-closed |
 
+`provisionUserPad` saltea al host con `{ok:true, skipped:'host'}`, simétrico a
+`provisionUserWorkspace`, para no crear un `tenant-<host>` fantasma.
+
 OJO: `terminal/sessions.js` aún NO es owner-scoped — su entrada en la familia A
 es un contrato FORWARD (cuando gane multi-tenant, el mismo filtro por dueño debe
 aplicar). Un archivo puede matchear varias familias (p.ej. `user-space.js` cae en

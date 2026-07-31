@@ -126,8 +126,9 @@ La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba).
 `claude-login` abre `openClaudeLogin(item)`, `codex-login` y `github-login`
 comparten UNA sola `openDeviceLogin(item,cfg)`, `pad-login` abre
 `openPadLogin(item)`, `mcp-login` reusa `openReconnect(world,name)`,
-`service-restart` abre `openServiceRestart(item)` y sólo los kinds restantes
-caen en `openGuidedReconnect`. `mcp-login` es genérico: recibe `world`/`name`
+`service-restart` abre `openServiceRestart(item)`, `tolkien-login` abre
+`openTolkienLogin(item)` y sólo los kinds restantes caen en
+`openGuidedReconnect`. `mcp-login` es genérico: recibe `world`/`name`
 desde el ítem, pasa por `POST /api/mcps/login` y termina ejecutando
 `claude mcp login <name>` mediante `bin/cwc-mcp-login-runner.js`, sin duplicar
 el wizard. `pad-cloud` lo usa como `console/pad-cloud-backup` porque ese server
@@ -135,6 +136,11 @@ del censo es HTTP (`https://mcp.getpad.dev`); `claude mcp login` cubre HTTP,
 SSE y conectores de claude.ai. `pad-local`, en cambio, es `stdio`: no califica
 para ese flujo y conserva su wizard/runner propio, que ejecuta `pad auth login`
 contra el CLI de Pad. La distinción correcta es el TRANSPORTE del server.
+`mcps-panel.js` suma la tarjeta `data-conn="tolkien"` a «Cuentas conectadas» y
+el wizard `openTolkienLogin`, despachado desde `reconnect-keyring` por el kind `tolkien-login`.
+Su semáforo lee `expired`/`expiringSoon`, NUNCA `connected` a secas (sigue `true` vencida), y `expiresAtSource:'estimated'` se rotula estimada.
+La cookie nace enmascarada, se vacía al enviarse y el wizard reengancha el job vía `/login/status`.
+`TOLKIEN_LOGIN_PATHS` es la costura por la que `console:PLAN-2456` sumará el navegador remoto sin reescribirlo.
 `openClaudeLogin` es el wizard propio del OAuth de Claude: «Iniciar login» hace
 POST a `/api/connections/claude/login/start` y consulta `/status` cada 1500 ms;
 en `waiting-code` muestra la URL como enlace y espera que el usuario PEGUE el

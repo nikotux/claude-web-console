@@ -5,12 +5,20 @@ import { spawnSync } from 'node:child_process';
 import {
   hasCodexCreds,
   hasInfisicalCreds,
+  hostUser,
   readUserOauthToken,
+  sanitizeUserId,
   userClaudeDir,
   userRunnerEnv,
   userSpace,
 } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
+
+// El HOST no pasa por el wizard: su credencial es la del login real del CLI
+// (`.credentials.json`), no el `oauth-token` que deja `claude setup-token`.
+export function isHostUser(user) {
+  try { return !!user && sanitizeUserId(user) === hostUser(); } catch { return false; }
+}
 
 // Detecta la credencial de cuenta completa que habilita el medidor de consumo.
 export function hasClaudeAccountCreds(user) {
@@ -46,12 +54,13 @@ export function hasGithubAuth(user) {
 // útil futuro puede ser el perfil de trabajo y no un enum fijo de roles.
 export const CAPABILITIES = [
   // Habilita ejecutar Claude con la credencial propia del usuario.
+  // En un inquilino, aceptar `.credentials.json` daría un falso positivo y rompería el blindaje anticonsumo.
   {
     id: 'claude',
     order: 1,
     required: true,
     labelEs: 'Credencial de Claude',
-    detect: (user) => !!readUserOauthToken(user),
+    detect: (user) => !!readUserOauthToken(user) || (isHostUser(user) && hasClaudeAccountCreds(user)),
     startPath: '/creds-start',
     statusPath: '/creds-status',
   },

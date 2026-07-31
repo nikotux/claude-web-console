@@ -80,22 +80,50 @@ function selfIdentity(input) {
 function done(code = 0) { try { bus.gc(); } catch { /* noop */ } process.exit(code); }
 
 // ================= SEND =================
+const SEND_KINDS = ['note', 'heads-up'];
+const SEND_USAGE = 'Uso: /btw [--force] [--kind <note|heads-up>] <sesión|all> <mensaje>.';
+
 function parseSendInvocation(rawArgs) {
   let args = Array.isArray(rawArgs) ? rawArgs.slice() : [];
   let force = false;
-  if (args[0] === '--force') {
-    force = true;
-    args = args.slice(1);
-  } else if (args.length === 1) {
-    // /btw entrega "$ARGUMENTS" como un único argv; reconocer el flag también
-    // en ese formato sin cambiar parseSendArgs(), que sigue siendo compartido.
-    const packed = String(args[0] || '').trim().match(/^--force\s+([\s\S]+)$/);
-    if (packed) {
-      force = true;
-      args = [packed[1]];
+  let kind;
+
+  // /btw entrega "$ARGUMENTS" como un único argv; extraer solamente los flags
+  // iniciales y dejar que parseSendArgs() conserve su parseo compartido.
+  if (args.length === 1) {
+    let packed = String(args[0] || '').trim();
+    while (/^--(?:force|kind)(?:\s|$)/.test(packed)) {
+      if (/^--force(?:\s|$)/.test(packed)) {
+        force = true;
+        packed = packed.replace(/^--force(?:\s+|$)/, '');
+        continue;
+      }
+      const match = packed.match(/^--kind(?:\s+(\S+))?(?:\s+([\s\S]+))?$/);
+      if (!match?.[1]) {
+        return { error: `Falta el valor de --kind. Kinds válidos: ${SEND_KINDS.join(', ')}.` };
+      }
+      kind = match[1];
+      packed = match[2] || '';
+    }
+    args = packed ? [packed] : [];
+  } else {
+    while (args[0] === '--force' || args[0] === '--kind') {
+      if (args[0] === '--force') {
+        force = true;
+        args = args.slice(1);
+        continue;
+      }
+      if (args.length < 2) {
+        return { error: `Falta el valor de --kind. Kinds válidos: ${SEND_KINDS.join(', ')}.` };
+      }
+      kind = args[1];
+      args = args.slice(2);
     }
   }
-  return { force, ...bus.parseSendArgs(args) };
+  if (kind !== undefined && !SEND_KINDS.includes(kind)) {
+    return { error: `Kind desconocido "${kind}". Kinds válidos: ${SEND_KINDS.join(', ')}.` };
+  }
+  return { force, kind, ...bus.parseSendArgs(args) };
 }
 
 function availableTargets(directory) {
@@ -114,10 +142,10 @@ function doSend() {
   const parsed = parseSendInvocation(process.argv.slice(3));
   if (parsed.error) {
     return failSend(
-      'Uso: /btw [--force] <sesión|all> <mensaje>.',
+      parsed.error === 'faltan argumentos' ? SEND_USAGE : parsed.error,
       bus.buildDirectory());
   }
-  const { force, targetArg, text } = parsed;
+  const { force, kind, targetArg, text } = parsed;
   const target = bus.resolveTarget(targetArg);
   const directory = bus.buildDirectory();
   if (target.error) return failSend(`${target.error} No se escribió ningún mensaje.`, directory);
@@ -142,7 +170,7 @@ function doSend() {
   const self = selfIdentity(parseHookInputSafe());
   const msg = bus.sendMessage({
     from: self.primary, fromName: self.name,
-    to: resolved.handle, toName: resolved.name, text,
+    to: resolved.handle, toName: resolved.name, text, kind,
   });
 
   // Nudge SEGURO: si el destino es UNA TUI con Claude idle (el observador dice

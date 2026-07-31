@@ -194,17 +194,24 @@ export async function checkTmuxOwner() {
         if (actualGlobalHome !== expectedHostHome) {
           globalIssue = `HOME global=${actualGlobalHome || '<vacío>'} (esperado ${expectedHostHome}) — fuga latente`;
         }
+      } else {
+        globalIssue = `HOME global ausente (esperado ${expectedHostHome}) — medición irresoluble`;
       }
     }
 
-    if (panesResult.err) {
-      const reason = panesResult.errOut || panesResult.err?.message || 'error desconocido';
+    const panesReason = panesResult.errOut || panesResult.err?.message || 'error desconocido';
+    // Un server tmux persistente pero sin sesiones responde `no current target`
+    // incluso con el socket correcto y `list-panes -a`: es un inventario vacío,
+    // no una medición fallida. Cualquier otro error sigue degradando el check.
+    const noPanes = panesResult.err && /^no current target$/i.test(String(panesReason).trim());
+    if (panesResult.err && !noPanes) {
+      const reason = panesReason;
       uncertainty.unshift(`no pude enumerar los panes de tmux: ${String(reason).replace(/\s+/g, ' ').slice(0, 180)}`);
       if (globalIssue) uncertainty.push(globalIssue);
       return { id, label, status: 'warn', detail: uncertainty.join(' · ') };
     }
 
-    const paneLines = panesResult.out.split('\n').filter(Boolean);
+    const paneLines = noPanes ? [] : panesResult.out.split('\n').filter(Boolean);
     const mismatches = [];
     for (const line of paneLines) {
       const separator = line.lastIndexOf('|');
@@ -262,7 +269,7 @@ export async function checkTmuxOwner() {
       return { id, label, status: 'warn', detail: [globalIssue, ...uncertainty].filter(Boolean).join(' · ') };
     }
     if (!paneLines.length) {
-      return { id, label, status: 'ok', detail: 'sin panes · HOME global sano' };
+      return { id, label, status: 'ok', detail: 'sin panes que auditar · HOME global sano' };
     }
     return { id, label, status: 'ok', detail: `${paneLines.length} pane(s) con HOME acorde a su dueño · HOME global sano` };
   } catch (err) {

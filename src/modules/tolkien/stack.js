@@ -11,6 +11,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { runAdaptivePool } from '../../core/pool.js';
 import { runTmux, tmuxDir, tmuxSessionExists } from '../../core/tmux.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -510,16 +511,21 @@ export async function reconcileClaimsState(
   } = {},
 ) {
   let next = { ...state, claims: Array.isArray(state?.claims) ? [...state.claims] : [] };
-  const checks = [];
-  for (const claim of next.claims) {
+  const checks = new Array(next.claims.length);
+  const indexed = next.claims.map((claim, index) => ({ claim, index }));
+  // Las inspecciones son LECTURAS independientes. El pool termina en barrera;
+  // la mutación de `next` queda serial debajo para conservar orden y seguridad.
+  await runAdaptivePool(indexed, async ({ claim, index }) => {
     let liveness;
     try {
       liveness = await inspect(claim.owner, claim.sessionId, { tmuxSocket });
     } catch {
       liveness = { status: 'unknown', source: 'liveness-error' };
     }
-    checks.push({ sessionId: claim.sessionId, ...liveness });
-    next = removeClaimIfDead(next, claim.sessionId, liveness?.status);
+    checks[index] = { sessionId: claim.sessionId, ...liveness };
+  });
+  for (const check of checks) {
+    next = removeClaimIfDead(next, check.sessionId, check.status);
   }
   return { state: next, checks };
 }

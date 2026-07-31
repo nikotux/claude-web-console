@@ -465,6 +465,15 @@ const CANONICAL_CONVENTIONS = [
     label: 'Nunca alert()/confirm()/prompt() nativos — siempre ui/dialog.js',
     scope: (f) => /^public\/js\/.*\.js$/.test(f) && f !== 'public/js/ui/dialog.js',
     violates: (t) => /\b(?:window\.)?(?:alert|confirm|prompt)\s*\(/.test(t),
+    // Falsos positivos VERIFICADOS a mano (2026-07-31, console:PLAN-2481):
+    // updates-panel.js define un helper LOCAL confirm() que delega en
+    // dialog.confirmDialog y todas sus llamadas usan await; alert() solo
+    // aparece en un comentario. seguimientos.js solo menciona prompt() en
+    // el comentario de su mini-modal askText; no invoca el diálogo nativo.
+    exclude: [
+      'public/js/modules/system/updates-panel.js',
+      'public/js/seguimientos/seguimientos.js',
+    ],
   },
   {
     key: 'iconos-centralizados',

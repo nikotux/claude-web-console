@@ -43,6 +43,12 @@ GitHub ocupa `order:5` y se detecta con `hasGithubAuth(user)`, que corre
 nuevo se modifica esa tabla; el frontend recibe orden, etiqueta y obligatoriedad
 ya resuelta desde `/validate`.
 
+El host no pasa por el wizard: para él solamente, `claude` también acepta la
+credencial real del CLI en `.credentials.json`. Un inquilino sigue necesitando
+su `oauth-token`, porque aceptar la cuenta completa rompería el blindaje
+anticonsumo con un falso positivo. `/my-config` expone `hostExempt` para reflejar
+que el alta no aplica y `POST /my-config/retry` responde 409 al host.
+
 ### ⚠️ Lo más importante — superficie PÚBLICA
 `publicRouter` en `src/modules/onboard/index.js` se monta desde
 `src/server.js` como `/api/onboard/public` ANTES del gate general de auth. ESTO

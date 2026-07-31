@@ -50,6 +50,10 @@ token+HTTP · Pad cloud `mcpOAuth.expiresAt`) · 🔌 Servicios (WhatsApp por
 heartbeat · systemd · ZeroTier por interfaz `zt*`, no `zerotier-cli` que
 pide root). Un inquilino recibe solo sus seis sondas de credenciales; WhatsApp,
 systemd y ZeroTier son estado de la instalación y no entran en su llavero.
+El llavero suma `tolkien-session` (familia 🔑 Llaves), común a host e inquilinos, leída de `tolkienStatus(scope.dataDir)` sin tocar jamás la cookie.
+Su `reconnectActionFor` entrega `kind:'tolkien-login'` con `command:null`, consumido por el dispatcher `reconnect-keyring` de
+`public/js/modules/system/mcps-panel.js` para abrir el asistente de conexión. Los ítems aceptan un `warnMs` propio porque Tolkien avisa a 3 días
+(`TOLKIEN_EXPIRY_WARN_DAYS`), no a los 2 genéricos de `EXPIRY_WARN_MS`, para no contradecir el semáforo de la tarjeta del panel.
 Cada item lleva `dependents` (qué se rompe si cae; los de
 Infisical se DERIVAN de los MCP cuyo `command === 'infisical'`, no
 hardcodeados) y `action`. En particular, `reconnectActionFor()` entrega para

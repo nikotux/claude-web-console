@@ -806,7 +806,9 @@ async function scrapeTicket(page, listed) {
   const overviewHtml = await page.content();
 
   await gotoReadOnly(page, `${detailUrl}?tab=estado`);
+  // Este input es hidden: nunca será visible, sólo necesitamos que esté adjunto al DOM.
   await page.waitForSelector('input[name="ticketWorkflowId"]', {
+    state: 'attached',
     timeout: NAVIGATION_TIMEOUT_MS,
   });
   const manage = await readManage(page);

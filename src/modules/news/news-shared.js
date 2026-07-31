@@ -8,18 +8,20 @@
 // pero no puede escribir ni ejecutar: Read/Grep/Glob/ToolSearch en dos capas.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { resolveDataDir } from '../../core/data-dir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+// Changelog, jobs y log son infraestructura global del host; el server admin y
+// su runner comparten el fallback histórico de resolveDataDir(). La marca de
+// lectura user-scoped NO usa esta constante: recibe su dataDir por operación.
+const DATA_DIR = resolveDataDir();
 const NEWS_FILE = path.join(DATA_DIR, 'news.json');
-const SEEN_FILE = path.join(DATA_DIR, 'news-seen.json');
 const JOBS_DIR = path.join(DATA_DIR, 'news');
 export const NEWS_LOG_FILE = path.join(DATA_DIR, 'news.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-news-runner.js');
@@ -153,15 +155,19 @@ export function deleteEntry(id) {
   return true;
 }
 
-export function readSeen() {
-  return readObject(SEEN_FILE, {});
+function seenFile(dataDir = resolveDataDir()) {
+  return path.join(dataDir, 'news-seen.json');
 }
 
-export function setSeen(key, ts) {
-  const seen = readSeen();
+export function readSeen(dataDir = resolveDataDir()) {
+  return readObject(seenFile(dataDir), {});
+}
+
+export function setSeen(key, ts, dataDir = resolveDataDir()) {
+  const seen = readSeen(dataDir);
   const value = Number.isFinite(Number(ts)) ? Number(ts) : Date.now();
   seen[String(key)] = value;
-  writeJsonAtomic(SEEN_FILE, seen);
+  writeJsonAtomic(seenFile(dataDir), seen);
   return value;
 }
 

@@ -95,6 +95,18 @@ const PROVIDER_META = {
   microsoft: { emoji: '📅', purposeKey: 'system.conn.purposeMicrosoft', purposeEs: 'Tu calendario: la consola lee tus eventos con TU cuenta, no con la de otro.' },
   zoho: { emoji: '🎫', purposeKey: 'system.conn.purposeZoho', purposeEs: 'Zoho Desk: que tus comentarios en los tickets salgan a TU nombre.' },
 };
+const TOLKIEN_APP_URL = 'https://app.tolkien.mordorstaffing.com';
+const TOLKIEN_COOKIE_NAME = '__Secure-tolkien.session';
+// Los CAMINOS de conexión viven en una lista para que el bloque del navegador
+// remoto (console:PLAN-2456) sume el suyo sin reescribir el asistente: agrega
+// una entrada acá con su render y listo. El selector aparece solo cuando hay
+// más de un camino disponible, así hoy no se muestra una pantalla de una
+// opción sola.
+const TOLKIEN_LOGIN_PATHS = [
+  { id: 'paste', available: true,
+    labelKey: 'system.conn.tkPathPaste', labelEs: 'Pegar el valor de la cookie',
+    descKey: 'system.conn.tkPathPasteDesc', descEs: 'Copiás un valor desde las herramientas de desarrollo de tu navegador y lo pegás acá. Funciona hoy, sin instalar nada.' },
+];
 const SETUP_META = {
   microsoft: {
     url: 'https://portal.azure.com',
@@ -337,6 +349,7 @@ export function mountMcpsPanel(el, ctx = {}) {
   let alive = true;
   let connAdmin = false;
   let lastCodex = { status: 'loading', connected: false };
+  let lastTolkien = { loading: true, connected: false };
   let lastData = null;
   let lastKeyring = null;
   let hasRendered = false;
@@ -344,6 +357,7 @@ export function mountMcpsPanel(el, ctx = {}) {
   let codexPollTimer = null;
   let codexRetryTimer = null;
   let codexPolling = false;
+  let tolkienPollTimer = null;
 
   function clearPoll() {
     if (pollTimer) clearTimeout(pollTimer);
@@ -360,12 +374,18 @@ export function mountMcpsPanel(el, ctx = {}) {
     codexRetryTimer = null;
   }
 
+  function clearTolkienPoll() {
+    if (tolkienPollTimer) clearInterval(tolkienPollTimer);
+    tolkienPollTimer = null;
+  }
+
   const obs = new MutationObserver(() => {
     if (!el.isConnected || !root.isConnected) {
       alive = false;
       clearPoll();
       clearCodexPoll();
       clearCodexRetry();
+      clearTolkienPoll();
       obs.disconnect();
     }
   });
@@ -401,6 +421,7 @@ export function mountMcpsPanel(el, ctx = {}) {
         else if (item?.action?.kind === 'pad-login') openPadLogin(item);
         else if (item?.action?.kind === 'mcp-login') openReconnect(item.action.world, item.action.name);
         else if (item?.action?.kind === 'service-restart') openServiceRestart(item);
+        else if (item?.action?.kind === 'tolkien-login') openTolkienLogin(item);
         else if (item) openGuidedReconnect(item);
       } else if (b.dataset.kact === 'copy-command') {
         copyCommandText(b.dataset.command || '');
@@ -582,6 +603,98 @@ export function mountMcpsPanel(el, ctx = {}) {
       </div>`;
   }
 
+  function tolkienUiState(d) {
+    if (d?.error) {
+      return {
+        key: 'error',
+        light: 'danger',
+        label: t('system.conn.tkStatusError', 'No se pudo consultar Tolkien: {error}', { error: d.error }),
+      };
+    }
+    if (!d?.connected) {
+      return {
+        key: 'unset',
+        light: 'neutral',
+        label: t('system.conn.tkStatusUnset', 'Sin conectar — conectá tu cuenta de Tolkien para censar y cerrar tus tickets.'),
+      };
+    }
+    const account = d.account || '—';
+    if (d.expired) {
+      return {
+        key: 'error',
+        light: 'danger',
+        label: t('system.conn.tkStatusExpired', 'La sesión de {account} venció — volvé a conectarla.', { account }),
+      };
+    }
+    if (d.expiringSoon) {
+      const expiry = d.daysLeft === 1
+        ? t('system.conn.tkExpiresOneDay', 'vence en {n} día', { n: d.daysLeft })
+        : t('system.conn.tkExpiresDays', 'vence en {n} días', { n: d.daysLeft });
+      return {
+        key: 'action',
+        light: 'warn',
+        label: t('system.conn.tkStatusExpiring', 'Conectado como {account} · {expiry}', { account, expiry }),
+      };
+    }
+    const expiry = d.daysLeft == null
+      ? ''
+      : t('system.conn.tkExpiresDays', 'vence en {n} días', { n: d.daysLeft });
+    return {
+      key: 'connected',
+      light: 'ok',
+      label: expiry
+        ? t('system.conn.tkStatusConnectedExpiry', 'Conectado como {account} · {expiry}', { account, expiry })
+        : t('system.conn.tkStatusConnected', 'Conectado como {account}', { account }),
+    };
+  }
+
+  function tolkienCard(d, collapsed = true) {
+    const st = tolkienUiState(d);
+    const dot = LIGHT_DOT[st.light] || '⚪';
+    const tag = t(CONN_STATE[st.key].tagKey, CONN_STATE[st.key].tagEs);
+    const expiresAt = Number(d?.expiresAt);
+    const expiryNote = d?.connected && d?.expiresAt != null && Number.isFinite(expiresAt)
+      ? `<div class="hr-f-file">⏳ ${t('system.conn.tkExpiresAt', 'Vence el {date}', { date: esc(new Date(expiresAt).toLocaleString()) })}${d.expiresAtSource === 'estimated' ? t('system.conn.tkExpiresEstimated', ' (fecha estimada: Tolkien no la confirmó)') : ''}</div>`
+      : '';
+    const connectedAt = Date.parse(d?.connectedAt || '');
+    const connectedNote = Number.isFinite(connectedAt)
+      ? `<div class="hr-f-file">🕑 ${t('system.conn.tkConnectedAt', 'Conectada el {date}', { date: esc(new Date(connectedAt).toLocaleString()) })}</div>`
+      : '';
+    const verifiedAt = Date.parse(d?.verifiedAt || '');
+    const verifiedNote = Number.isFinite(verifiedAt)
+      ? `<div class="hr-f-file">🔄 ${t('system.conn.tkVerifiedAgo', 'Verificada {ago}', { ago: agoText(verifiedAt) })}</div>`
+      : '';
+    const statusLine = d?.loading
+      ? `<p class="hr-f-detail"><b>${pacman({ size: 'sm' })} ${t('system.conn.tkLoading', 'Consultando tu sesión de Tolkien…')}</b></p>`
+      : `<p class="hr-f-detail"><b>${dot} ${esc(st.label)}</b></p>`;
+    const acts = [];
+    if (!d?.connected || d?.error) {
+      acts.push(`<button class="btn btn--sm" data-tk-act="connect">${icon('externalLink', { size: 12 })}<span>${t('system.conn.tkConnect', 'Conectar')}</span></button>`);
+    } else {
+      const reconnectClass = d.expired || d.expiringSoon ? 'btn btn--sm' : 'btn-ghost btn--sm';
+      acts.push(`<button class="${reconnectClass}" data-tk-act="connect">${icon('refresh', { size: 12 })}<span>${t('system.conn.tkReconnect', 'Reconectar')}</span></button>`);
+      acts.push(`<button class="btn-ghost btn--sm" data-tk-act="disconnect">${t('system.conn.tkDisconnect', 'Desconectar')}</button>`);
+    }
+
+    return `
+      <div class="hr-finding ${cardClass({ status: st })}${collapsed ? ' hr-collapsed' : ''}" data-conn="tolkien">
+        <div class="hr-f-head" data-toggle="1">
+          <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
+          <span class="mcp-dot" title="${esc(st.label)}">${dot}</span>
+          <span class="hr-f-area">🌳 ${t('system.conn.tkTitle', 'Tolkien')}</span>
+          <span class="hr-f-mod">${esc(tag)}</span>
+        </div>
+        <div class="hr-f-body">
+          ${statusLine}
+          <div class="hr-f-file">${t('system.conn.tkPurpose', 'Tu sesión de Tolkien: la consola censa y cierra TUS tickets con tu identidad, nunca con la de otra persona.')}</div>
+          ${expiryNote}
+          ${connectedNote}
+          ${verifiedNote}
+          <div class="mcp-acts">${acts.join('')}</div>
+        </div>
+      </div>`;
+  }
+
   function renderCodexCard() {
     const old = root.querySelector('[data-conn="codex"]');
     if (!old) return;
@@ -592,12 +705,21 @@ export function mountMcpsPanel(el, ctx = {}) {
     wireCodex();
   }
 
+  function renderTolkienCard() {
+    const old = root.querySelector('[data-conn="tolkien"]');
+    if (!old) return;
+    const collapsed = old.classList.contains('hr-collapsed');
+    const box = document.createElement('div');
+    box.innerHTML = tolkienCard(lastTolkien, collapsed);
+    old.replaceWith(box.firstElementChild);
+    wireTolkien();
+  }
+
   function renderConnections(d) {
     connAdmin = !!d.isAdmin;
     const providers = d.providers || [];
     const providerCards = providers.map((p, i) => connCard(p, i)).join('');
-    const codexCollapsed = true;
-    const cards = providerCards + codexCard(lastCodex, codexCollapsed);
+    const cards = providerCards + codexCard(lastCodex, true) + tolkienCard(lastTolkien, true);
     const host = root.querySelector('[data-ref="conn"]');
     if (!host) return;
     host.innerHTML = `
@@ -632,10 +754,12 @@ export function mountMcpsPanel(el, ctx = {}) {
       } catch (err) {
         lastCodex = { status: 'error', connected: false, error: t('system.conn.codexStatusError', 'No se pudo consultar Codex: {error}', { error: err.message || err }) };
       }
+      await loadTolkienStatus();
       if (!alive) return;
       renderConnections(d);
       wireConnections(d);
       wireCodex();
+      wireTolkien();
       syncCodexPoll();
     } catch { /* la sección de cuentas nunca debe romper el panel MCP */ }
   }
@@ -644,7 +768,7 @@ export function mountMcpsPanel(el, ctx = {}) {
     const host = root.querySelector('[data-ref="conn"]');
     if (!host) return;
     host.querySelectorAll('[data-toggle]').forEach((head) => {
-      if (head.closest('[data-conn="codex"]')) return;
+      if (head.closest('[data-conn="codex"], [data-conn="tolkien"]')) return;
       head.addEventListener('click', () => head.closest('.hr-finding')?.classList.toggle('hr-collapsed'));
     });
     host.querySelectorAll('[data-cact]').forEach((b) => b.addEventListener('click', async (e) => {
@@ -703,6 +827,52 @@ export function mountMcpsPanel(el, ctx = {}) {
         } catch {
           if (msg) msg.textContent = t('system.conn.copyCodeFallback', 'No se pudo copiar automáticamente. Código: {code}', { code: lastCodex.code || '' });
         }
+      }
+    }));
+  }
+
+  async function loadTolkienStatus() {
+    try {
+      const res = await fetch('/api/connections/tolkien/status');
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || res.status);
+      if (!alive) return;
+      lastTolkien = d;
+    } catch (err) {
+      if (!alive) return;
+      lastTolkien = { connected: false, error: err.message || String(err) };
+    }
+  }
+
+  function wireTolkien() {
+    const card = root.querySelector('[data-conn="tolkien"]');
+    if (!card) return;
+    card.querySelector('[data-toggle]')?.addEventListener('click', () => card.classList.toggle('hr-collapsed'));
+    card.querySelectorAll('[data-tk-act]').forEach((button) => button.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (button.dataset.tkAct === 'connect') {
+        openTolkienLogin();
+        return;
+      }
+      if (button.dataset.tkAct !== 'disconnect') return;
+      const ok = await (dialog.confirmSheet || dialog.confirmDialog)?.({
+        title: t('system.conn.tkDisconnectTitle', 'Desconectar Tolkien'),
+        message: t('system.conn.tkDisconnectMessage', '¿Borrar la sesión de Tolkien guardada en esta consola? No cierra tu sesión en Tolkien: solo deja de usarla desde acá, y vas a tener que volver a conectarla para censar o cerrar tickets.'),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/connections/tolkien/disconnect', { method: 'POST' });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        await loadTolkienStatus();
+        renderTolkienCard();
+        loadKeyring(true);
+      } catch (err) {
+        dialog.alertDialog?.({
+          title: t('system.conn.tkDisconnectErrorTitle', 'No se pudo desconectar Tolkien'),
+          message: t('system.conn.tkDisconnectErrorMessage', 'Tolkien informó este error: {error}', { error: String(err.message || err) }),
+        });
       }
     }));
   }
@@ -1510,6 +1680,244 @@ export function mountMcpsPanel(el, ctx = {}) {
       </div>`);
     m.body.querySelector('[data-ref="start"]')?.addEventListener('click', startLogin);
     wireCancel();
+  }
+
+  function openTolkienLogin(item) {
+    const m = dialog.openModal({ title: t('system.conn.tkWizardTitle', 'Conectar tu sesión de Tolkien'), width: 620 });
+    let phase = '';
+    let closed = false;
+    clearTolkienPoll();
+    const mo = new MutationObserver(() => { if (!m.body.isConnected) { closed = true; stop(); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    const setBody = (html) => { m.body.innerHTML = `<div class="mcp-oauth">${html}</div>`; };
+    const stop = () => { clearTolkienPoll(); };
+    const cancelButton = () => `<button class="btn-ghost btn--sm" data-ref="cancel">${t('system.conn.tkCancel', 'Cancelar')}</button>`;
+    const close = () => {
+      closed = true;
+      stop();
+      m.close?.();
+    };
+    const wireCancel = ({ cancelLogin = false } = {}) => {
+      m.body.querySelector('[data-ref="cancel"]')?.addEventListener('click', () => {
+        if (cancelLogin) fetch('/api/connections/tolkien/login/cancel', { method: 'POST' }).catch(() => {});
+        close();
+      });
+    };
+    const paths = TOLKIEN_LOGIN_PATHS.filter((path) => path.available);
+
+    async function refreshKeyring() {
+      try {
+        const res = await fetch('/api/mcps/keyring?fresh=1');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        lastKeyring = d;
+        renderKeyring();
+      } catch { /* Tolkien ya quedó conectado; el llavero se refrescará en su próximo ciclo */ }
+    }
+
+    function renderChooser() {
+      phase = 'intro';
+      stop();
+      setBody(`
+        <p class="hr-f-file">${t('system.conn.tkChoosePath', 'Elegí cómo querés conectar tu sesión de Tolkien:')}</p>
+        <div class="tk-paths">
+          ${paths.map((path) => `
+            <button class="btn-ghost btn--sm tk-path" data-tk-path="${esc(path.id)}">
+              <b>${t(path.labelKey, path.labelEs)}</b>
+              <span>${t(path.descKey, path.descEs)}</span>
+            </button>`).join('')}
+        </div>
+        <div class="mcp-acts">${cancelButton()}</div>`);
+      m.body.querySelectorAll('[data-tk-path]').forEach((button) => button.addEventListener('click', () => {
+        const path = paths.find((candidate) => candidate.id === button.dataset.tkPath);
+        if (path?.id === 'paste') renderPaste();
+        else if (typeof path?.render === 'function') path.render({ item, modal: m, setBody, stop, close });
+      }));
+      wireCancel();
+    }
+
+    function renderPaste(lastOutcome = null) {
+      phase = 'paste';
+      stop();
+      setBody(`
+        ${lastOutcome !== null ? `<p class="hr-f-file">${lastOutcome}</p>` : ''}
+        <ol class="mcp-oauth-steps">
+          <li>${t('system.conn.tkPasteStep1', 'Abrí Tolkien en otra pestaña y confirmá que estás con tu sesión iniciada:')}<br>
+            <a class="mcp-oauth-link" href="${TOLKIEN_APP_URL}" target="_blank" rel="noopener noreferrer">${icon('externalLink', { size: 13 })} ${t('system.conn.tkOpenApp', 'Abrir Tolkien')}</a></li>
+          <li>${t('system.conn.tkPasteStep2', 'Con esa pestaña adelante, apretá F12 (o Ctrl+Shift+I) para abrir las herramientas de desarrollo del navegador.')}</li>
+          <li>${t('system.conn.tkPasteStep3', 'Entrá a la pestaña <b>Application</b> (en Firefox se llama <b>Almacenamiento</b>) → <b>Storage</b> → <b>Cookies</b> → <code>https://app.tolkien.mordorstaffing.com</code>.')}</li>
+          <li>${t('system.conn.tkPasteStep4', 'Buscá la fila <code>{cookieName}</code> y copiá el contenido de la columna <b>Value</b> (clic derecho sobre el valor → Copy value).', { cookieName: TOLKIEN_COOKIE_NAME })}</li>
+          <li>${t('system.conn.tkPasteStep5', 'Pegalo acá abajo y tocá «Conectar». La consola lo verifica contra Tolkien antes de guardarlo.')}</li>
+        </ol>
+        <div class="tk-cookie-row">
+          <input type="password" class="dlg-input" data-ref="cookie" autocomplete="off" spellcheck="false" placeholder="${esc(t('system.conn.tkCookiePlaceholder', '…'))}">
+          <button class="btn-ghost btn--sm" data-ref="reveal" title="${esc(t('system.conn.tkReveal', 'Mostrar u ocultar el valor'))}">👁</button>
+        </div>
+        <p class="tk-hint" data-ref="cookie-hint"></p>
+        <p class="hr-f-crit" data-ref="error"></p>
+        <div class="mcp-acts">
+          <button class="btn btn--sm" data-ref="submit">${t('system.conn.tkConnect', 'Conectar')}</button>
+          ${cancelButton()}
+        </div>
+        <p class="hr-f-file">${t('system.conn.tkPrivacy', 'La consola guarda ese valor solo en tu espacio privado y nunca lo muestra ni lo escribe en sus registros.')}</p>`);
+      const input = m.body.querySelector('[data-ref="cookie"]');
+      const hint = m.body.querySelector('[data-ref="cookie-hint"]');
+      const inlineError = m.body.querySelector('[data-ref="error"]');
+      const submit = m.body.querySelector('[data-ref="submit"]');
+      const updateHint = () => {
+        if (hint) hint.textContent = input?.value
+          ? t('system.conn.tkCharsPasted', '{n} caracteres pegados', { n: input.value.length })
+          : '';
+      };
+      input?.addEventListener('input', () => {
+        if (inlineError) inlineError.textContent = '';
+        updateHint();
+      });
+      input?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitCookie();
+        }
+      });
+      m.body.querySelector('[data-ref="reveal"]')?.addEventListener('click', () => {
+        if (input) input.type = input.type === 'password' ? 'text' : 'password';
+      });
+      submit?.addEventListener('click', submitCookie);
+      wireCancel();
+
+      async function submitCookie() {
+        const cookie = input?.value || '';
+        if (!cookie) {
+          if (inlineError) inlineError.textContent = t('system.conn.tkCookieRequired', 'Pegá el valor de la cookie antes de continuar.');
+          return;
+        }
+        if (submit) submit.disabled = true;
+        try {
+          const request = fetch('/api/connections/tolkien/login/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cookie }),
+          });
+          if (input) input.value = '';
+          updateHint();
+          const res = await request;
+          const d = await res.json();
+          if (!res.ok) throw new Error(d?.error || res.status);
+          if (closed) return;
+          renderVerifying();
+          tolkienPollTimer = setInterval(pollOnce, 1500);
+          await pollOnce();
+        } catch (error) {
+          if (!closed) renderError(error.message || String(error));
+        }
+      }
+    }
+
+    function renderVerifying() {
+      phase = 'verifying';
+      setBody(`
+        <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.tkVerifying', 'Verificando la sesión contra Tolkien…')}</p>
+        <div class="mcp-acts">${cancelButton()}</div>`);
+      wireCancel({ cancelLogin: true });
+    }
+
+    async function renderOk(job) {
+      if (phase === 'ok') return;
+      phase = 'ok';
+      stop();
+      const account = job.account
+        ? `<p class="hr-f-file">${t('system.conn.tkConnectedAs', 'Conectada como {account}', { account: esc(job.account) })}</p>`
+        : '';
+      setBody(`
+        <p class="hr-f-detail">🟢 <b>${t('system.conn.tkConnectedTitle', 'Tu sesión de Tolkien quedó conectada')}</b></p>
+        ${account}
+        <p class="hr-f-file">${t('system.conn.tkReady', 'Ya podés censar y cerrar tus tickets desde la consola.')}</p>
+        <div class="mcp-acts"><button class="btn btn--sm" data-ref="done">${t('system.conn.tkDone', 'Listo')}</button></div>`);
+      m.body.querySelector('[data-ref="done"]')?.addEventListener('click', close);
+      await refreshKeyring();
+      await loadTolkienStatus();
+      renderTolkienCard();
+    }
+
+    function renderError(error) {
+      phase = 'error';
+      stop();
+      setBody(`
+        <p class="hr-f-crit">🔴 ${t('system.conn.tkErrorDetail', 'Tolkien informó este error: {error}', { error: esc(error) })}</p>
+        <p class="hr-f-file">${t('system.conn.tkErrorHint', 'Si dice que la sesión no es válida o que venció, volvé a copiar el valor: la cookie cambia cada vez que Tolkien te vuelve a iniciar sesión.')}</p>
+        <div class="mcp-acts">
+          <button class="btn btn--sm" data-ref="retry">${t('system.conn.tkPasteAgain', 'Volver a pegar')}</button>
+          ${cancelButton()}
+        </div>`);
+      m.body.querySelector('[data-ref="retry"]')?.addEventListener('click', () => renderPaste());
+      wireCancel();
+    }
+
+    async function renderStatus(job) {
+      if (job.status === 'starting' || job.status === 'verifying') {
+        if (phase !== 'verifying') renderVerifying();
+      } else if (job.status === 'ok') {
+        await renderOk(job);
+      } else if (job.status === 'error') {
+        renderError(job.error || t('system.conn.tkUnknownError', 'Tolkien rechazó la sesión.'));
+      } else if (job.status === 'cancelled') {
+        renderPaste();
+      } else if (job.status === 'idle') {
+        renderPaste();
+      }
+    }
+
+    async function pollOnce() {
+      if (closed) return;
+      try {
+        const res = await fetch('/api/connections/tolkien/login/status');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d?.error || res.status);
+        if (!closed) await renderStatus(d);
+      } catch { /* red intermitente: el próximo poll vuelve a intentar */ }
+    }
+
+    setBody(`
+      <p class="mcp-oauth-wait">${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.tkResuming', 'Revisando si ya hay una verificación de Tolkien en curso…')}</p>
+      <div class="mcp-acts">${cancelButton()}</div>`);
+    wireCancel();
+    (async () => {
+      let job = null;
+      try {
+        const res = await fetch('/api/connections/tolkien/login/status');
+        job = await res.json();
+        if (!res.ok) throw new Error(job?.error || res.status);
+        if (closed) return;
+        if (job.status === 'starting' || job.status === 'verifying') {
+          renderVerifying();
+          tolkienPollTimer = setInterval(pollOnce, 1500);
+          await pollOnce();
+          return;
+        }
+      } catch {
+        job = null; // si no hay estado persistido disponible, el flujo manual sigue utilizable
+      }
+      if (closed) return;
+      // El selector aparece solamente cuando haya más de un camino disponible;
+      // con el camino de pegado actual entramos directo, sin una pantalla de una sola opción.
+      if (paths.length > 1) renderChooser();
+      else {
+        let lastOutcome = null;
+        if (job?.status === 'ok') {
+          lastOutcome = job.account
+            ? t('system.conn.tkLastOk', '✅ Última verificación registrada: conectó como {account}. Si tu sesión sigue vigente no hace falta que la pegues de nuevo; mirá el semáforo de la tarjeta.', { account: esc(job.account) })
+            : t('system.conn.tkLastOkNoAccount', '✅ Última verificación registrada: conectó. Si tu sesión sigue vigente no hace falta que la pegues de nuevo; mirá el semáforo de la tarjeta.');
+          try {
+            await loadTolkienStatus();
+            renderTolkienCard();
+          } catch { /* la fase de pegado sigue disponible aunque falle el refresco de la tarjeta */ }
+        } else if (job?.status === 'error') {
+          lastOutcome = t('system.conn.tkLastError', '🔴 La última verificación falló: {error}', { error: esc(job.error || t('system.conn.tkUnknownError', 'Tolkien rechazó la sesión.')) });
+        }
+        renderPaste(lastOutcome);
+      }
+    })();
   }
 
   function openServiceRestart(item) {

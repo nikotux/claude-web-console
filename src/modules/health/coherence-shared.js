@@ -231,6 +231,8 @@ export function evaluateCoherence(census) {
     // este mismo archivo se auto-detectaría como caller (mismo FP que backup).
     ['src/modules/tickets/refresher.js', 'gh solo en comentarios; las lecturas reales van por comms/pr-read-shared.js'],
     ['src/modules/tickets/sources.js', 'gh solo en comentarios; usa listPrs/fetchPrRich de comms/pr-read-shared.js'],
+    ['src/modules/onboard/capabilities.js', 'auth status (gh) del usuario aislado; detector de onboarding, no lee PRs'],
+    ['bin/cwc-gh-login-runner.js', 'auth login/status/setup-git (gh) del usuario aislado; no lee PRs'],
   ]);
   const ghSuspects = (census.ghCallers || []).filter((g) => !GH_CANONICAL.has(g.file) && !GH_EXEMPT.has(g.file));
   if (ghSuspects.length > 0) {

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
+import { TOLKIEN_EXPIRY_WARN_DAYS, tolkienStatus } from '../../core/connections-tolkien.js';
 import {
   infisicalDependents,
   probeInfisicalProject,
@@ -34,13 +35,15 @@ const SHAPE = {
   autoRefresh: false,
   expiresAt: null,
   expiresInMs: null,
+  warnMs: null,
   checkedAt: null,
   dependents: [],
   action: null,
   error: null,
 };
 
-export function expiryLight(expiresAt, { autoRefresh = false } = {}) {
+// Cada credencial puede alinear su aviso con el umbral de su propio backend.
+export function expiryLight(expiresAt, { autoRefresh = false, warnMs = EXPIRY_WARN_MS } = {}) {
   if (expiresAt == null || expiresAt === '') return 'neutral';
   const t = Number(expiresAt);
   if (!Number.isFinite(t) || t <= 0) return 'neutral';
@@ -51,7 +54,7 @@ export function expiryLight(expiresAt, { autoRefresh = false } = {}) {
     return 'danger';
   }
   if (left <= 0) return 'danger';
-  if (left < EXPIRY_WARN_MS) return 'warn';
+  if (left < warnMs) return 'warn';
   return 'ok';
 }
 
@@ -188,6 +191,18 @@ function reconnectActionFor(it) {
       'Esperá la verificación automática.',
     ],
   };
+  if (it?.id === 'tolkien-session') return {
+    kind: 'tolkien-login',
+    command: null,
+    title: 'Conectar la sesión de Tolkien',
+    what: dependentsWhat(deps, 'el censo y el cierre en masa de tickets de Tolkien'),
+    steps: [
+      'Tocá «Reconectar» acá abajo: abre el asistente de conexión.',
+      'El asistente te muestra dónde copiar el valor de la cookie de sesión desde TU navegador.',
+      'Pegalo en el campo del asistente.',
+      'Esperá la verificación automática contra Tolkien.',
+    ],
+  };
   if (it?.id === 'whatsapp') return {
     kind: 'service-restart',
     serviceId: it.id,
@@ -233,7 +248,8 @@ export function refreshDerived(items) {
     if (expiresAt != null) {
       out.expiresAt = expiresAt;
       out.expiresInMs = expiresAt - Date.now();
-      out.light = expiryLight(expiresAt, { autoRefresh: !!out.autoRefresh });
+      const warnMs = Number.isFinite(out.warnMs) && out.warnMs > 0 ? out.warnMs : EXPIRY_WARN_MS;
+      out.light = expiryLight(expiresAt, { autoRefresh: !!out.autoRefresh, warnMs });
       out.statusLabel = statusFromLight(out.light, { autoRefresh: !!out.autoRefresh });
     }
     out.action = enrichAction(out);
@@ -511,6 +527,66 @@ export async function probePadLocal(scope) {
   }
 }
 
+export async function probeTolkienSession(scope) {
+  try {
+    const DEPENDENTS = ['censo y cierre en masa de tickets de Tolkien'];
+    const warnMs = TOLKIEN_EXPIRY_WARN_DAYS * DAY_MS;
+    const action = reconnectActionFor({ id: 'tolkien-session', dependents: DEPENDENTS });
+    const st = tolkienStatus(scope.dataDir);
+    if (!st.connected) {
+      return item({
+        id: 'tolkien-session',
+        family: 'keys',
+        label: 'Sesión de Tolkien',
+        role: 'sesión de app.tolkien.mordorstaffing.com',
+        light: 'danger',
+        statusLabel: 'Sin sesión',
+        detail: 'Todavía no conectaste tu cuenta de Tolkien en esta consola.',
+        expiresAt: null,
+        warnMs,
+        dependents: DEPENDENTS,
+        action,
+        error: 'no hay sesión de Tolkien guardada para este usuario',
+      });
+    }
+    const light = st.expired ? 'danger' : (st.expiresAt == null ? 'ok' : expiryLight(st.expiresAt, { warnMs }));
+    const cuenta = st.account || 'cuenta no detectada';
+    const vencimiento = st.expiresAt == null
+      ? 'sin vencimiento conocido'
+      : `${durationText(st.expiresAt - Date.now())}${st.expiresAtSource === 'estimated' ? ' (estimado, no confirmado por Tolkien)' : ''}`;
+    return item({
+      id: 'tolkien-session',
+      family: 'keys',
+      label: 'Sesión de Tolkien',
+      role: 'sesión de app.tolkien.mordorstaffing.com',
+      light,
+      statusLabel: st.expired ? 'Vencida' : statusFromLight(light),
+      detail: `${cuenta} · ${vencimiento}`,
+      expiresAt: st.expiresAt,
+      warnMs,
+      dependents: DEPENDENTS,
+      action,
+      error: st.expired ? 'la sesión de Tolkien venció; volvé a conectarla desde el panel' : null,
+    });
+  } catch (e) {
+    const DEPENDENTS = ['censo y cierre en masa de tickets de Tolkien'];
+    const warnMs = TOLKIEN_EXPIRY_WARN_DAYS * DAY_MS;
+    return item({
+      id: 'tolkien-session',
+      family: 'keys',
+      label: 'Sesión de Tolkien',
+      role: 'sesión de app.tolkien.mordorstaffing.com',
+      light: 'danger',
+      statusLabel: 'Error de sonda',
+      detail: 'No se pudo verificar la sesión de Tolkien.',
+      warnMs,
+      dependents: DEPENDENTS,
+      action: reconnectActionFor({ id: 'tolkien-session', dependents: DEPENDENTS }),
+      error: String(e?.message || e || '').slice(0, 300),
+    });
+  }
+}
+
 function parseHeartbeatTs(ts) {
   if (typeof ts === 'number' && Number.isFinite(ts)) return ts < 1e12 ? ts * 1000 : ts;
   const parsed = Date.parse(String(ts || ''));
@@ -614,6 +690,7 @@ export async function buildKeyring(scope) {
     ['infisical', () => probeInfisicalKey(scope)],
     ['github-cli', () => probeGithubCli(scope)],
     ['pad-local', () => probePadLocal(scope)],
+    ['tolkien-session', () => probeTolkienSession(scope)],
   ];
   // Servicios e interfaz de red pertenecen a la instalación del host, no al
   // llavero de un inquilino. El host conserva exactamente sus tarjetas previas.

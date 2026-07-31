@@ -139,6 +139,10 @@ export const MANUAL_FACETS = {
   // perfil existente que mejor lo describe, y evita inventar un cuarto
   // valor para un único módulo.
   'mod:unifi': { perfil: 'solo-consola' },
+
+  // `mikrotik` también es infraestructura de monitoreo de red; su store usa
+  // resolveDataDir, pero no representa una superficie ni estado de usuario.
+  'mod:mikrotik': { plano: 'central', perfil: 'solo-consola' },
 };
 
 function usage() {

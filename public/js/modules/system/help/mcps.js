@@ -21,6 +21,19 @@ export default function mcpsHelp() {
         }],
       },
       {
+        title: t('system.help.mcps.tolkien.title', 'Conectar tu sesión de Tolkien'),
+        blocks: [{
+          type: 'steps',
+          items: [
+            t('system.help.mcps.tolkien.step1', 'Buscá la tarjeta 🌳 Tolkien dentro de «Cuentas conectadas».'),
+            t('system.help.mcps.tolkien.step2', 'Tocá «Conectar»: el asistente te indica dónde copiar el valor de __Secure-tolkien.session desde las herramientas de desarrollo de tu propio navegador.'),
+            t('system.help.mcps.tolkien.step3', 'La conexión es por usuario: cada persona conecta su propia sesión y nunca se comparte ni se hereda la cuenta de otra.'),
+            t('system.help.mcps.tolkien.step4', 'Leé el semáforo de la tarjeta: 🟢 está al día, 🟡 vence en 3 días o menos y 🔴 está vencida o sin conectar.'),
+            t('system.help.mcps.tolkien.step5', '«Desconectar» solo borra la copia guardada en la consola; no cierra tu sesión en Tolkien.'),
+          ],
+        }],
+      },
+      {
         title: t('system.help.mcps.legend.title', 'Leyenda de estados'),
         wide: true,
         blocks: [{
@@ -50,17 +63,26 @@ export default function mcpsHelp() {
             { k: t('system.help.mcps.buttons.copy.k', 'Copiar comando'), v: t('system.help.mcps.buttons.copy.v', 'Copia la alternativa manual para correrla en una terminal interactiva.') },
             { k: t('system.help.mcps.buttons.keyring.k', 'Reconectar / Verificar del Llavero'), v: t('system.help.mcps.buttons.keyring.v', 'Guía la reparación disponible o vuelve a medir una llave o servicio concreto.') },
             { k: t('system.help.mcps.buttons.accounts.k', 'Conectar / Renovar cuenta'), v: t('system.help.mcps.buttons.accounts.v', 'Conecta tu cuenta personal de Microsoft, Zoho o Codex; los tokens son por usuario.') },
+            { k: t('system.help.mcps.buttons.tolkienConnect.k', 'Conectar / Reconectar (Tolkien)'), v: t('system.help.mcps.buttons.tolkienConnect.v', 'Abre el asistente para guardar y verificar tu sesión personal de Tolkien. No consume tokens de IA.') },
+            { k: t('system.help.mcps.buttons.tolkienDisconnect.k', 'Desconectar (Tolkien)'), v: t('system.help.mcps.buttons.tolkienDisconnect.v', 'Borra de la consola la copia de tu sesión, sin cerrar Tolkien en el navegador. No consume tokens de IA.') },
             { k: t('system.help.mcps.buttons.recycle.k', 'Reciclar runners'), v: t('system.help.mcps.buttons.recycle.v', 'Manda SIGTERM a los motores de chat vivos para que relean credenciales; conserva el historial y es admin-only.') },
           ],
         }],
       },
       {
         title: t('system.help.mcps.warning.title', 'Ojo con esto'),
-        blocks: [{
-          type: 'note',
-          tone: 'warn',
-          text: t('system.help.mcps.warning.text', 'Si el mismo MCP aparece en varios scopes con endpoints distintos, la consola muestra el conflicto y comandos para copiar, pero nunca decide cuál borrar. Una credencial renovada no llega a runners ya vivos hasta reciclarlos.'),
-        }],
+        blocks: [
+          {
+            type: 'note',
+            tone: 'warn',
+            text: t('system.help.mcps.warning.text', 'Si el mismo MCP aparece en varios scopes con endpoints distintos, la consola muestra el conflicto y comandos para copiar, pero nunca decide cuál borrar. Una credencial renovada no llega a runners ya vivos hasta reciclarlos.'),
+          },
+          {
+            type: 'note',
+            tone: 'warn',
+            text: t('system.help.mcps.tolkien.warning', 'La sesión de Tolkien vence sola (aproximadamente cada 30 días) y hay que reconectarla desde acá. Cuando la consola no pudo confirmar la fecha con Tolkien, la muestra como estimada y conviene reconectar antes de que moleste. La herramienta que censa y cierra tickets lee la sesión desde el directorio de datos del usuario: para el usuario anfitrión es la misma ruta donde este asistente la guarda y funciona sin más; un usuario invitado que ejecute esa herramienta desde una terminal suelta necesita tener CWC_DATA_DIR en su entorno, mientras que desde sus chats de la consola ya viene configurado.'),
+          },
+        ],
       },
     ],
   };

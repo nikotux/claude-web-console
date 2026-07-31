@@ -28,8 +28,11 @@ para el token maestro. Un no-admin nunca recibe entradas `hidden:true`.
 
 - `~/.cwc-data/news.json`: `{ entries: [...] }`, escritura atómica. Conserva
   como máximo las 200 entradas más recientes.
-- `~/.cwc-data/news-seen.json`: mapa `{ "<principal>": <timestamp ms> }`,
-  escritura atómica y sin poda; una clave por lector.
+- `<dataDir-del-principal>/news-seen.json`: mapa
+  `{ "<principal>": <timestamp ms> }`, escritura atómica y sin poda; una clave
+  por lector. El endpoint pasa `systemScopeFor(req).dataDir` por operación y el
+  shared solo cae a `resolveDataDir()` para usos standalone, de modo que la
+  marca de un inquilino nunca se escribe en el HOME del host.
 - `~/.cwc-data/news/<jobId>.json`: jobs `running|done|error`. Se podan
   oportunistamente al escribir cuando su `mtime` supera 24 horas.
 - `~/.cwc-data/news.log`: salida append-only del runner; no se poda acá.

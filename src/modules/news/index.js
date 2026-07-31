@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import {
   ROOT,
   NEWS_ID_RE,
@@ -115,7 +116,7 @@ export default {
       const key = principalKey(req);
       if (!key) return res.status(401).json({ error: 'No autorizado.' });
       const admin = isAdmin(req);
-      const lastSeen = Number(readSeen()[key] || 0);
+      const lastSeen = Number(readSeen(systemScopeFor(req).dataDir)[key] || 0);
       const entries = readNews().filter((entry) => admin || entry.hidden !== true);
       const unread = entries.filter((entry) => Number(entry.createdAt || 0) > lastSeen).length;
       let job = null;
@@ -135,7 +136,7 @@ export default {
     router.post('/news/seen', (req, res) => {
       const key = principalKey(req);
       if (!key) return res.status(401).json({ error: 'No autorizado.' });
-      const lastSeen = setSeen(key, Date.now());
+      const lastSeen = setSeen(key, Date.now(), systemScopeFor(req).dataDir);
       res.json({ ok: true, lastSeen });
     });
 

@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-30T15:34:25.191Z",
+  "generatedAt": "2026-07-31T17:52:04.192Z",
   "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
   "counts": {
-    "pad": 208,
+    "pad": 209,
     "manual": 2
   },
   "entries": {
@@ -1276,6 +1276,14 @@
       "plano": "usuario",
       "audiencia": "todos",
       "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:mikrotik": {
+      "ref": "ARQUI-2491",
+      "plano": "central",
+      "audiencia": "todos",
+      "perfil": "solo-consola",
       "familia": "backend",
       "fuente": "pad"
     },
