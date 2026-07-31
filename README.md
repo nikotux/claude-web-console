@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-31 19:15 — main
+- Aislar config de instancia por principal y endurecer reintentos/pool
+
 ### 2026-07-31 18:23 — main
 - Agregar cierre masivo de tickets Tolkien y modo pregunta a la IA en salas
 
@@ -413,17 +416,6 @@ since the previous push. Newest entry first.
 - Modified `src/modules/backup/index.js`
 - Modified `src/modules/terminal/index.js`
 - Modified `src/modules/tmux/index.js`
-
-### 2026-07-03 02:22 — main
-- Modified `CLAUDE.md`
-- Modified `public/css/style.css`
-- Modified `public/index.html`
-- Modified `public/js/main.js`
-- Modified `public/js/modules/system/system.js`
-- Modified `public/js/modules/tickets/tickets.js`
-- Modified `public/js/modules/tolkien/tolkien.js`
-- Modified `src/core/registry.js`
-- Modified `src/modules/tolkien/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
