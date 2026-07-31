@@ -20,7 +20,6 @@ const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString('es', { day: '2-di
 const engineName = (f) => String(f || '').split('/').pop().replace(/^cwc-|\.js$/g, '') || f;
 
 export function mountDashboardPanel(el, ctx) {
-  const isMobile = window.matchMedia('(max-width: 768px)').matches;
   const wrap = document.createElement('div');
   wrap.className = 'hp-opt';
   el.innerHTML = `
@@ -85,7 +84,7 @@ export function mountDashboardPanel(el, ctx) {
         <td>${mo.fileCount} ${t('system.inventory.filesCount', 'archivo(s)')}</td>
         <td class="hp-inv-eps">${(mo.endpoints || []).length ? esc(mo.endpoints.join(' · ')) : '—'}</td>
       </tr>`).join('');
-    return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+    return `<details class="hp-opt-group">
       <summary>🧩 ${t('system.inventory.backendModules', 'Módulos backend')} · ${count}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('system.inventory.moduleHeader', 'Módulo')}</th><th>${t('system.inventory.registryHeader', 'Registro')}</th><th>${t('system.inventory.filesHeader', 'Archivos')}</th><th>${t('system.inventory.endpointsHeader', 'Endpoints')}</th></tr></thead>
@@ -103,7 +102,7 @@ export function mountDashboardPanel(el, ctx) {
         <td>${f.mounted ? t('system.inventory.mountedDataModule', 'montado ([data-module])') : t('system.inventory.manualMount', 'mount manual (main.js)')}</td>
         <td>${f.fileCount} ${t('system.inventory.filesCount', 'archivo(s)')}</td>
       </tr>`).join('');
-    return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+    return `<details class="hp-opt-group">
       <summary>🖥 ${t('system.inventory.frontendModules', 'Módulos frontend')} · ${count}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('system.inventory.moduleHeader', 'Módulo')}</th><th>${t('system.inventory.directoryHeader', 'Directorio')}</th><th>${t('system.inventory.mountHeader', 'Montaje')}</th><th>${t('system.inventory.filesHeader', 'Archivos')}</th></tr></thead>
@@ -145,7 +144,7 @@ export function mountDashboardPanel(el, ctx) {
   function padHtml(pad) {
     if (!pad) return '';
     if (!pad.ok) {
-      return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+      return `<details class="hp-opt-group">
         <summary>🗂️ ${t('system.inventory.padBackboneTitle', 'Pad local · backbone')} <span class="hp-opt-snippet">${t('system.inventory.noResponseSnippet', '(no responde)')}</span></summary>
         <p class="hp-empty">${t('system.inventory.padNoResponseBeforeDetail', 'Pad local no responde')} (${esc(pad.error || t('system.inventory.noDetail', 'sin detalle'))}) — ${t('system.inventory.padNoResponseAfterDetail', 'tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?')}</p>
       </details>`;
@@ -153,7 +152,7 @@ export function mountDashboardPanel(el, ctx) {
     const cols = (pad.collections || []).filter((c) => c.total > 0);
     const rows = cols.map((c) => `
       <tr><td>${esc(c.icon || '')} <b>${esc(c.name)}</b></td><td>${c.active}</td><td>${c.total}</td></tr>`).join('');
-    return `<details class="hp-opt-group" ${isMobile ? '' : 'open'}>
+    return `<details class="hp-opt-group">
       <summary>🗂️ ${t('system.inventory.padBackboneWorkspaceTitle', 'Pad local · backbone (workspace console)')} · ${pad.totals?.active ?? 0} ${t('system.inventory.liveItems', 'ítems vivos')}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('system.inventory.collectionHeader', 'Colección')}</th><th>${t('system.inventory.liveHeader', 'Vivos')}</th><th>${t('system.inventory.totalHeader', 'Total')}</th></tr></thead>

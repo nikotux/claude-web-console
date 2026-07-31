@@ -59,7 +59,7 @@ export function mountInterfonoPanel(el, ctx) {
       <span class="if-sendmsg" data-ref="sendmsg"></span>
     </div>
 
-    <details class="if-group" open>
+    <details class="if-group">
       <summary><span class="if-gtitle">${isAdmin
         ? t('system.interfono.activeSessions', 'Sesiones activas')
         : t('system.interfono.activeSessionsOwn', 'Tus sesiones activas')}</span> <span class="if-count" data-ref="dir-n"></span></summary>

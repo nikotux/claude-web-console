@@ -35,6 +35,17 @@ desde `onboard/capabilities.js`. Pad local suma POST /pad/login/start · GET
 /pad/login/status · POST /pad/login/cancel y lanza
 `bin/cwc-pad-login-runner.js`; no recibe un código de vuelta porque su login
 browser-based sólo expone URL y verificación automática.
+Tolkien suma cinco endpoints por-usuario: POST /tolkien/login/start · GET
+/tolkien/login/status · POST /tolkien/login/cancel · GET /tolkien/status ·
+POST /tolkien/disconnect. NO entra en `PROVIDERS` ni en
+`core/connections-store.js` porque no es OAuth: usa la cookie httpOnly de
+sesión de next-auth v5 `__Secure-tolkien.session`. Como el token es un JWE
+cifrado y NO se puede decodificar, el email y el vencimiento salen de
+`GET https://app.tolkien.mordorstaffing.com/api/auth/session` de Auth.js. La
+cookie viaja al runner por stdin —nunca argv ni archivo intermedio— y sólo se
+persiste dentro del storageState privado
+`userDataDir(<user>)/tolkien/session.json`, el mismo que consume
+`bin/cwc-tolkien.js`; `connections/tolkien.json` guarda metadata sin secreto.
 Claude suma endpoints AUTENTICADOS y estrictamente por-usuario:
 POST /claude/login/start · GET /claude/login/status ·
 POST /claude/login/code · POST /claude/login/cancel · GET /claude/status.
@@ -61,7 +72,8 @@ consentimiento de usuario hace falta aprobación del admin (una vez).
 (5) BUG-929 / regla dura 2: el device flow persiste `deviceCode`+`interval`
 en el job y `GET /:provider/status` lo REANUDA perezosamente tras reinicios
 cuando el registro en memoria `activePolls` no tiene un poller vivo.
-(6) ORDEN DE RUTAS ESPECÍFICAS: `/codex/*`, `/github/*` y `/pad/login/*`
+(6) ORDEN DE RUTAS ESPECÍFICAS: `/codex/*`, `/github/*`, `/pad/login/*` y
+`/tolkien/*`
 DEBEN registrarse ANTES de `'/:provider/...'`; si no, por ejemplo
 `/codex/status` matchea
 `'/:provider/status'` con `provider='codex'` y devuelve 400

@@ -47,7 +47,7 @@ export function mountUnifiPanel(el, ctx) {
         <td>${esc(dash(h.valor))}</td>
         <td>${esc(dash(h.recomendacion))}</td>
       </tr>`).join('');
-    return `<details class="hp-opt-group" open>
+    return `<details class="hp-opt-group">
       <summary>🎯 ${t('unifi.findings', 'Hallazgos')} · ${(findings || []).length}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('unifi.severity', 'Sev')}</th><th>${t('unifi.area', 'Área')}</th><th>${t('unifi.finding', 'Hallazgo')}</th><th>${t('unifi.value', 'Valor')}</th><th>${t('unifi.recommendation', 'Recomendación')}</th></tr></thead>
@@ -71,7 +71,7 @@ export function mountUnifiPanel(el, ctx) {
         <td>${r.bandsteering ? '✓' : '✗'}</td>
       </tr>`;
     }).join('');
-    return `<details class="hp-opt-group" open>
+    return `<details class="hp-opt-group">
       <summary>📡 ${t('unifi.radios', 'Radios / APs')} · ${(radios || []).length}</summary>
       <table class="hp-opt-table">
         <thead><tr><th>${t('unifi.ap', 'AP')}</th><th>${t('unifi.band', 'Banda')}</th><th>${t('unifi.channel', 'Canal')}</th><th>${t('unifi.width', 'Ancho')}</th><th>${t('unifi.utilization', 'Utilización')}</th><th>${t('unifi.retries', 'Reintentos')}</th><th>${t('unifi.clients', 'Clientes')}</th><th>${t('unifi.power', 'Potencia')}</th><th>${t('unifi.bandSteering', 'BandSteering')}</th></tr></thead>
@@ -98,7 +98,7 @@ export function mountUnifiPanel(el, ctx) {
         <td>${w.availability == null ? '—' : `${Number(w.availability).toFixed(1)}%`}</td>
         <td>${w.latency == null ? '—' : `${esc(w.latency)}ms`}</td>
       </tr>`).join('');
-    return `<details class="hp-opt-group" open>
+    return `<details class="hp-opt-group">
       <summary>🌐 ${t('unifi.wan', 'WAN')} · ${wans.length}</summary>
       <p class="hp-empty">${t('unifi.latency', 'Latencia')} ${esc(dash(internet.latency))}ms · ↑${esc(dash(internet.xputUp))}/↓${esc(dash(internet.xputDown))} Mbps · ${t('unifi.speedtest', 'speedtest')} ${esc(dash(internet.speedtest))}</p>
       <table class="hp-opt-table">

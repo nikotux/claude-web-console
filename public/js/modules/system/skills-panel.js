@@ -23,7 +23,7 @@ function syncBadge(sk) {
 }
 
 function skillCard(sk, i) {
-  const collapsed = i > 0 ? ' hr-collapsed' : '';
+  const collapsed = ' hr-collapsed';
   const tools = sk.allowedTools?.length ? `<div class="hr-f-file">🔧 ${t('system.skills.toolsLabel', 'herramientas')}: ${sk.allowedTools.map(esc).join(', ')}</div>` : '';
   const hint = sk.argumentHint ? `<div class="hr-f-file">⌨ ${t('system.skills.argumentsLabel', 'argumentos')}: <code>${esc(sk.argumentHint)}</code></div>` : '';
   const padLine = sk.pad
@@ -245,8 +245,8 @@ export function mountSkillsPanel(el) {
       byWorld.get(world).skills.push(sk);
     }
 
-    const groups = [...byWorld.values()].map((group, i) => {
-      return `<details class="hr-collapsible"${i === 0 ? ' open' : ''}>
+    const groups = [...byWorld.values()].map((group) => {
+      return `<details class="hr-collapsible">
         <summary>${esc(group.label)} (${group.skills.length})</summary>
         <div class="hr-findings">${group.skills.map(skillCard).join('')}</div>
       </details>`;

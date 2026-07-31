@@ -376,7 +376,10 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   COLAPSADO: header compacto SIEMPRE visible (qué es + estado en una línea) y
   el cuerpo plegable a demanda (`<details>` nativo o el patrón `.hr-collapsible`
   de salud) — vista general primero, detalle a demanda; en móvil todo plegado,
-  en desktop puede nacer abierto lo esencial. Y si el contenido tiene
+  y en desktop el default también es nacer plegado — el menú ⚙ Sistema es el
+  precedente: TODOS sus paneles nacen cerrados (pedido de Niko 2026-07-31,
+  `console:PLAN-2461`); abrir algo por defecto tiene que justificarse caso por
+  caso. Y si el contenido tiene
   SUB-ELEMENTOS, se agrupan TIPO ÁRBOL: grupo padre colapsable → hijos
   anidados con indentación/guía vertical (ejemplos vivos: hallazgos de
   health-review-modal, fila-PR del tablero con TKT anidados, sub-ventana de

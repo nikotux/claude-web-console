@@ -298,6 +298,8 @@ export class ChatTab {
     this.isSala = null;           // null hasta que llegue el primer history
     this.participants = [];
     this.salaOwner = null;   // 🛃 dueño de la sala: no viene en participants
+    this.salaAiName = 'cucho';
+    this.salaAiLabel = 'Cucho';
     this.me = null;
     this._avatarKeys = new Map();
     this._unreadAtOpen = 0;
@@ -313,6 +315,7 @@ export class ChatTab {
     this._historySayIndex = 0;
     this._historySayTotal = 0;
     this._salaSayCount = 0;
+    this._salaAskCount = 0;
     this._cutPending = false;
     this._lastCutAuthors = [];
     this._replyTo = null;
@@ -684,9 +687,13 @@ export class ChatTab {
     if (!pop) return;
     const query = match.query;
     this._mentionRange = { start: match.start, end: match.end };
-    this._slashItems = this._salaUsers()
+    const aiName = String(this.salaAiName || 'cucho');
+    const aiNameLower = aiName.toLocaleLowerCase();
+    const humans = this._salaUsers()
+      .filter((username) => username.toLocaleLowerCase() !== aiNameLower)
       .sort((a, b) => a.localeCompare(b))
       .filter((username) => username.toLocaleLowerCase().startsWith(query));
+    this._slashItems = aiNameLower.startsWith(query) ? [aiName, ...humans] : humans;
     this._slashActive = 0;
     pop.replaceChildren();
     if (!this._slashItems.length) {
@@ -697,11 +704,26 @@ export class ChatTab {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'chat-slash-item' + (i === this._slashActive ? ' active' : '');
-      row.appendChild(this._avatarNodeFor(username, { size: 18 }));
+      const isAi = username.toLocaleLowerCase() === aiNameLower;
+      if (isAi) {
+        const avatar = document.createElement('span');
+        avatar.className = 'csi-ai-avatar';
+        avatar.textContent = '✦';
+        avatar.setAttribute('aria-hidden', 'true');
+        row.appendChild(avatar);
+      } else {
+        row.appendChild(this._avatarNodeFor(username, { size: 18 }));
+      }
       const name = document.createElement('span');
       name.className = 'csi-name';
       name.textContent = username;
       row.appendChild(name);
+      if (isAi) {
+        const desc = document.createElement('span');
+        desc.className = 'csi-desc';
+        desc.textContent = t('chat.sala.aiMentionDescription', 'la IA de la sala');
+        row.appendChild(desc);
+      }
       row.addEventListener('click', () => this._slashPick(username));
       pop.appendChild(row);
     });
@@ -1027,6 +1049,8 @@ export class ChatTab {
         this.isSala = !!m.isSala;
         this.participants = Array.isArray(m.participants) ? m.participants : [];
         this.salaOwner = m.salaOwner || null;
+        if (m.salaAiName) this.salaAiName = String(m.salaAiName);
+        if (m.salaAiLabel) this.salaAiLabel = String(m.salaAiLabel);
         if (this.isSala) this._rebuildAvatarKeys();
         this._renderActa(m.acta);
         this._unreadAtOpen = this.isSala ? (m.salaUnread || 0) : 0;
@@ -1038,6 +1062,7 @@ export class ChatTab {
         this._markReadTimer = null;
         this._markReadQueuedTs = null;
         this._salaSayCount = 0;
+        this._salaAskCount = 0;
         this._cutPending = false;
         this._lastCutAuthors = [];
         this._orchestratedChatIds.clear();
@@ -1297,11 +1322,14 @@ export class ChatTab {
     return fallback;
   }
 
-  _sayTextNodes(text, mentions) {
+  _sayTextNodes(text, mentions, askAi = false) {
     const fragment = document.createDocumentFragment();
     const raw = String(text ?? '');
     const names = [...new Set(
-      (Array.isArray(mentions) ? mentions : []).map((username) => String(username || '')).filter(Boolean),
+      [
+        ...(Array.isArray(mentions) ? mentions : []),
+        ...(askAi ? [this.salaAiName] : []),
+      ].map((username) => String(username || '')).filter(Boolean),
     )].sort((a, b) => b.length - a.length);
     if (!names.length) {
       fragment.appendChild(document.createTextNode(raw));
@@ -1309,18 +1337,23 @@ export class ChatTab {
     }
 
     const escaped = names.map((username) => username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const mentionRe = new RegExp(`(^|[^A-Za-z0-9._-])@(${escaped.join('|')})(?![A-Za-z0-9._-])`, 'g');
+    const mentionRe = new RegExp(`(^|[^A-Za-z0-9._-])@(${escaped.join('|')})(?![A-Za-z0-9._-])`, 'gi');
     let cursor = 0;
     let match;
     while ((match = mentionRe.exec(raw)) !== null) {
-      const username = match[2];
+      const username = names.find((name) => name.toLowerCase() === match[2].toLowerCase());
+      if (!username) continue;
       const mentionStart = match.index + match[1].length;
       if (mentionStart > cursor) fragment.appendChild(document.createTextNode(raw.slice(cursor, mentionStart)));
       const span = document.createElement('span');
-      span.className = `chat-mention ${this._avatarKeyFor(username).tone}`;
-      span.classList.toggle('chat-mention--me', !!this.me && username === this.me);
+      const isAi = askAi && username === this.salaAiName;
+      span.className = isAi
+        ? 'chat-mention chat-mention--ai'
+        : `chat-mention ${this._avatarKeyFor(username).tone}`;
+      span.classList.toggle('chat-mention--me', !isAi && !!this.me && username === this.me);
       span.dataset.username = username;
-      span.textContent = `@${username}`;
+      if (isAi) span.dataset.ai = 'true';
+      span.textContent = `@${match[2]}`;
       fragment.appendChild(span);
       cursor = mentionStart + username.length + 1;
     }
@@ -1367,7 +1400,12 @@ export class ChatTab {
     el.className = `chat-msg chat-say ${avatar.tone}`;
     el.dataset.by = by;
     el.dataset.msgId = String(m.id ?? '');
+    el.dataset.askAi = m.askAi ? 'true' : 'false';
     el.classList.toggle('chat-say--own', !!this.me && by === this.me);
+    el.classList.toggle('chat-say--ask-ai', !!m.askAi);
+    if (m.askAi) {
+      el.title = t('chat.sala.askMessageTitle', 'Pregunta para {name}', { name: this.salaAiLabel });
+    }
     if (group.children.length > 1) el.classList.add('chat-say--cont');
 
     if (m.replyTo) {
@@ -1402,17 +1440,14 @@ export class ChatTab {
 
     const body = document.createElement('span');
     body.className = 'chat-say-text';
-    if (Array.isArray(m.mentions) && m.mentions.length) {
-      body.appendChild(this._sayTextNodes(m.text || '', m.mentions));
-    } else {
-      body.textContent = m.text || '';
-    }
+    body.appendChild(this._sayTextNodes(m.text || '', m.mentions, !!m.askAi));
     if (typeof m.text === 'string' && m.text) el.appendChild(body);
     if (Array.isArray(m.attachments) && m.attachments.length) el.appendChild(this._attsEl(m.attachments));
     el.appendChild(this._reactionRow(el.dataset.msgId, m.reactions));
     group.appendChild(el);
     if (m.ts != null) this._lastSayTs = m.ts;
     this._salaSayCount++;
+    if (m.askAi) this._salaAskCount++;
     this._renderCutButton();
     this._scroll();
   }
@@ -1570,7 +1605,12 @@ export class ChatTab {
       time: this._localTime(m.ts),
     });
     this.msgsEl.appendChild(el);
-    this._salaSayCount = 0;
+    if (m.directed) {
+      this._salaSayCount = Math.max(0, this._salaSayCount - (Number(m.count) || 0));
+    } else {
+      this._salaSayCount = 0;
+    }
+    this._salaAskCount = 0;
     this._cutPending = false;
     this._renderCutButton();
     this._scroll();
@@ -1644,6 +1684,11 @@ export class ChatTab {
 
   _renderSalaState() {
     this.container.querySelector('.chat-view')?.classList.toggle('chat-view--sala', !!this.isSala);
+    if (this.inputEl) {
+      this.inputEl.placeholder = this.isSala
+        ? t('chat.sala.inputPlaceholder', 'Escribí a la sala… o @{name} para preguntarle', { name: this.salaAiName })
+        : t('chat.composer.inputPlaceholder', 'Escribí o dictá un mensaje…');
+    }
     this._renderPeers();
     this._renderCutButton();
     this._renderTyping();
@@ -1653,9 +1698,19 @@ export class ChatTab {
     if (!this.cutBtn) return;
     this.cutBtn.hidden = !this.isSala;
     this.cutBtn.disabled = !this.isSala || this._salaSayCount === 0 || this._cutPending;
-    this.cutBtn.textContent = this._cutPending
-      ? t('chat.sala.cutPending', 'IA ocupada · queda pendiente')
-      : t('chat.sala.cutButton', '✦ Enviar a la IA ({count})', { count: this._salaSayCount });
+    if (this._cutPending) {
+      this.cutBtn.textContent = t('chat.sala.cutPending', 'IA ocupada · queda pendiente');
+    } else if (this._salaAskCount > 0) {
+      this.cutBtn.textContent = t('chat.sala.askButton', '✦ Preguntarle a {name} ({count})', {
+        name: this.salaAiLabel,
+        count: this._salaAskCount,
+      });
+    } else {
+      this.cutBtn.textContent = t('chat.sala.cutButton', '✦ Enviar a la IA ({count})', { count: this._salaSayCount });
+    }
+    this.cutBtn.title = this._salaAskCount > 0
+      ? t('chat.sala.askButtonTitle', 'Solo viajan los mensajes tagueados para {name}; el resto queda esperando.', { name: this.salaAiLabel })
+      : '';
   }
 
   _renderPeers() {
@@ -1705,9 +1760,16 @@ export class ChatTab {
       for (let i = 1; i <= 6; i++) el.classList.remove(`peer-${i}`);
       el.classList.add(avatar.tone);
       el.classList.toggle('chat-say--own', !!this.me && el.dataset.by === this.me);
+      el.classList.toggle('chat-say--ask-ai', el.dataset.askAi === 'true');
       this._renderReactions(el.querySelector('.chat-reacts'));
     }
     for (const el of this.msgsEl?.querySelectorAll('.chat-mention[data-username]') || []) {
+      if (el.dataset.ai === 'true') {
+        for (let i = 1; i <= 6; i++) el.classList.remove(`peer-${i}`);
+        el.classList.add('chat-mention--ai');
+        el.classList.remove('chat-mention--me');
+        continue;
+      }
       const username = el.dataset.username;
       const avatar = this._avatarKeyFor(username);
       for (let i = 1; i <= 6; i++) el.classList.remove(`peer-${i}`);

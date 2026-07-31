@@ -167,6 +167,11 @@ export default {
           <button class="btn-ghost btn--sm btn--danger" data-ref="logout">${icon('logout', { size: 14 })}<span>${t('system.menu.logout', 'Salir')}</span></button>
         </div>`;
 
+      // El modal de Sistema es el ÚNICO que scrollea por columna: el body deja
+      // de ser el scroller y cada columna maneja el suyo (ver la regla
+      // correspondiente en style.css). Se marca por clase para no tocar el resto de modales.
+      m.body.classList.add('sys-modal-body');
+
       const shell = m.body.querySelector('.sys-shell');
       const body = m.body.querySelector('[data-ref="body"]');
       const items = Array.from(m.body.querySelectorAll('.sys-item'));

@@ -548,7 +548,9 @@ export default {
           const st = bare?.state?.status;
           if (st === 'working') return { state: 'working', label: t('sessions.dot.workingTui', 'trabajando (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
           if (st === 'stale') return { state: 'stale', label: t('sessions.dot.staleTui', 'sin señales (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) };
-          return { state: 'waiting', label: bare ? t('sessions.dot.waitingTui', 'esperando input (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) : t('sessions.dot.tuiMode', 'en modo TUI') };
+          // /api/tmux/sessions puede traer state:null para una sesión recién creada
+          // (p. ej. al pasar a TUI); chequear solo bare hacía explotar chatCard y abortaba toda la lista.
+          return { state: 'waiting', label: bare?.state ? t('sessions.dot.waitingTui', 'esperando input (TUI) · {ago}', { ago: fmtAgo(bare.state.ts) }) : t('sessions.dot.tuiMode', 'en modo TUI') };
         }
         // Delegando a un subagente (Task tool): más específico que "trabajando"
         // a secas, así que manda sobre c.status==='working' cuando aplica.
@@ -602,13 +604,15 @@ export default {
       // Cache-then-network: pinta la última lista conocida al instante (evita el
       // 'cargando…' en cada apertura/reconexión) y refresca por detrás.
       const cached = readCache('sessions');
-      if (cached) { try { render(cached.data); } catch { /* noop */ } }
+      // El silencio acá ocultó un TypeError real durante el render de la caché.
+      if (cached) { try { render(cached.data); } catch (e) { console.error('[sessions] falló el render de la caché:', e); } }
       else listEl.innerHTML = `<div class="cwc-loading"><span class="cwc-spinner"></span>${t('sessions.loading', 'cargando…')}</div>`;
       try {
         const data = await fetchAll();
         writeCache('sessions', data);
         render(data);
-      } catch {
+      } catch (e) {
+        console.error('[sessions] refresh falló:', e);
         if (!cached) listEl.innerHTML = `<div class="sess-msg sess-err">${t('sessions.listError', 'No se pudieron listar las sesiones.')}</div>`;
       }
     }

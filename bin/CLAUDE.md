@@ -259,6 +259,45 @@ install tiene timeout duro de 20 min, configurable con
 `CWC_TOLKIEN_INSTALL_TIMEOUT_MS`. SIGTERM/SIGINT matan el grupo de pnpm y dejan
 estado `error` persistido. Uso:
 `node bin/cwc-tolkien-setup-runner.js --user <username>`.
+### bin/cwc-tolkien.js  runner CLI DESACOPLADO que opera la app web de Tolkien con
+Chromium headless y la sesión real guardada en
+`<dataDir>/tolkien/session.json`, con `<dataDir>` resuelto por `resolveDataDir()`
+(honra `CWC_DATA_DIR`), de modo que un inquilino nunca lea la sesión del host —
+Familia B, `console:BUG-2472`. `login`, `whoami`, `census` y `reconcile`
+son SOLO LECTURA; `close` es el ÚNICO subcomando que escribe. `census` abre la
+vista `/tickets?view=active&focus=mine`, visita los detalles y genera
+`census.json` con los tickets asignados al usuario y todos sus campos de cierre,
+con parcial reanudable en `census.partial.jsonl`. `reconcile` cruza el censo
+contra Zoho Desk por el MCP hosted de Tolkien —token `TOLKIEN_MCP_TOKEN` del
+`.env`, JSON-RPC con handshake y `mcp-session-id`— y escribe `reconcile.json`
+con tres pilas, `closable`, `realOpen` y `unpaired`, que clasifica de forma
+CONSERVADORA: sin par exacto, con par ambiguo, cerrado sin fecha de cierre o
+cerrado como cancelado/duplicado cae en `unpaired` y queda para revisión humana,
+nunca en `closable`. `close` cierra en masa la pila `closable` completando los
+formularios reales de la pestaña `?tab=estado`: primero `setWorkContextAction`
+con `mode=working` si falta el resultado esperado y después `closeTicketAction`
+con `verificationKind=objective_check` y evidencia derivada del dato real del
+ticket de Zoho; saltea los que están en espera estructurada, lee el parámetro
+`?error=` de la URL resultante porque Tolkien rechaza redirigiendo en vez de
+lanzar excepción, y re-verifica releyendo el ticket porque la ausencia de error
+no prueba que el paso funcionó. `--dry-run` es el default y escribir exige
+`--apply`; hay un tope de 50 por lote salvo `--confirm-large`, re-verificación
+contra Zoho inmediatamente antes de cada escritura, reanudabilidad por
+observación del estado real de la página y log JSONL con el estado antes y
+después de cada escritura en `<dataDir>/tolkien/ops/`. El directorio queda
+0700 y los archivos 0600. No usa el SDK: consume 0 tokens y la regla 6 no
+aplica.
+### bin/cwc-tolkien-login-runner.js  VERIFICACIÓN DESACOPLADA de la conexión
+Tolkien por usuario para ⚙ Sistema → Conexiones: recibe la cookie de sesión
+exclusivamente por stdin —nunca argv ni archivo intermedio—, consulta el
+endpoint de sesión de Auth.js y sólo persiste después de confirmar una sesión
+válida. El job administrativo y su log quedan host-owned en
+`~/.cwc-data/tolkien-login-jobs/<user>.{json,log}`; el dato real va al
+`userDataDir(user)`: cookie únicamente dentro de `tolkien/session.json` y
+metadata sin secreto en `connections/tolkien.json`. Una verificación fallida
+deja intacta la conexión anterior; si falla la metadata tras escribir el nuevo
+storageState, restaura la sesión previa. Timeout duro: 120 s. No usa el SDK:
+consume 0 tokens y la regla 6 no aplica.
 ### bin/cwc-tolkien-stack-runner.js  EJECUTOR DESACOPLADO del stack N2
 Postgres+Redis propio de un usuario (console:PLAN-2264 B4). Recibe
 `--user <username> --action up|down`; lee exclusivamente la identidad ya

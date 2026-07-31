@@ -94,7 +94,24 @@ MÓVIL (<720px) DRILL-DOWN (.sys-shell[data-view=index|content]): se ve el
 índice, tocás un ítem → el panel ocupa todo con "‹ Sistema" (.sys-back)
 para volver. isMobile()=matchMedia(max-width:719px) decide auto-select
 desktop vs índice móvil. CSS .sys-* en style.css (reemplazó .sys-tabs/
-.sys-tab/.sys-body).
+.sys-tab/.sys-body). Desde 2026-07-31 (`console:PLAN-2461`), Sistema es el
+ÚNICO modal cuyo cuerpo NO es el scroller: system.js agrega la clase
+`.sys-modal-body` a `m.body` y un `@media (min-width:720px)` de style.css lo
+pasa a `flex column` con `overflow:hidden`, deja `.sys-shell` en
+`flex:1;min-height:0;align-items:stretch` y da `overflow-y:auto` propio a
+`.sys-rail` y `.sys-panel`; así scrollear el panel derecho ya no arrastra el
+rail izquierdo ni el pie con «Salir». GOTCHA: ese `overflow:hidden` sólo
+puede vivir dentro del media query de desktop; en móvil (<720px) el shell es
+drill-down con un scroll único y aplicarlo ahí cortaría el panel sin scroll
+posible. TODOS los paneles colapsables del menú nacen CERRADOS por pedido de
+Niko (2026-07-31): al entrar a una pestaña sólo se ven los títulos; esto
+incluye lo que antes se abría por ALERTA (`hasTrouble` en Conexiones y
+`hasHigh` en Actualizaciones), sin perder la alerta porque el 🔴/🟡 viaja en
+el `<summary>`. ÚNICA excepción medida: `candidateRow` de `skills-panel.js`
+(fila «🆕 Candidatos de Pad sin SKILL.md») es una `.hr-finding` SIN
+`data-toggle`, no es colapsable y se deja expandida a propósito: ponerle
+`hr-collapsed` la volvería imposible de abrir, y de todos modos vive dentro
+de un `<details>` que sí nace cerrado.
 Acceso: un no-admin ve 🆕 Novedades · Conexiones · Skills · Idioma · Proyectos · Interfono.
 Salud · Dashboard · Actualizaciones · UniFi · Variables de entorno son admin-only.
 Criterio: diagnóstico del SERVER y config de INSTANCIA requieren admin; las
@@ -108,8 +125,16 @@ La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba).
 `item.action.kind`: `infisical-login` abre `openInfisicalLogin`,
 `claude-login` abre `openClaudeLogin(item)`, `codex-login` y `github-login`
 comparten UNA sola `openDeviceLogin(item,cfg)`, `pad-login` abre
-`openPadLogin(item)`, `service-restart` abre `openServiceRestart(item)` y sólo
-los kinds restantes caen en `openGuidedReconnect`.
+`openPadLogin(item)`, `mcp-login` reusa `openReconnect(world,name)`,
+`service-restart` abre `openServiceRestart(item)` y sólo los kinds restantes
+caen en `openGuidedReconnect`. `mcp-login` es genérico: recibe `world`/`name`
+desde el ítem, pasa por `POST /api/mcps/login` y termina ejecutando
+`claude mcp login <name>` mediante `bin/cwc-mcp-login-runner.js`, sin duplicar
+el wizard. `pad-cloud` lo usa como `console/pad-cloud-backup` porque ese server
+del censo es HTTP (`https://mcp.getpad.dev`); `claude mcp login` cubre HTTP,
+SSE y conectores de claude.ai. `pad-local`, en cambio, es `stdio`: no califica
+para ese flujo y conserva su wizard/runner propio, que ejecuta `pad auth login`
+contra el CLI de Pad. La distinción correcta es el TRANSPORTE del server.
 `openClaudeLogin` es el wizard propio del OAuth de Claude: «Iniciar login» hace
 POST a `/api/connections/claude/login/start` y consulta `/status` cada 1500 ms;
 en `waiting-code` muestra la URL como enlace y espera que el usuario PEGUE el

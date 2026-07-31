@@ -181,7 +181,7 @@ function mcpActsHtml(world, s) {
 }
 
 function serverCard(d, world, s, i) {
-  const collapsed = i > 0 ? ' hr-collapsed' : '';
+  const collapsed = ' hr-collapsed';
   const uTag = mcpTag(s);
   const dot = mcpDot(s);
   const role = s.role ? `<div class="hr-f-file">🎯 ${esc(s.role)}</div>` : '';
@@ -244,7 +244,7 @@ function keyringCard(item, i, generatedAt) {
     : '';
   const err = item.error ? `<div class="hr-f-crit">🔴 ${esc(item.error)}</div>` : '';
   return `
-    <div class="hr-finding ${keyringCardClass(item.light)}${i > 0 ? ' hr-collapsed' : ''}" data-keyring="${esc(item.id || label)}">
+    <div class="hr-finding ${keyringCardClass(item.light)} hr-collapsed" data-keyring="${esc(item.id || label)}">
       <div class="hr-f-head" data-toggle="1">
         <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
         <span class="mcp-dot" title="${esc(statusLabel)}">${dot}</span>
@@ -268,7 +268,7 @@ function keyringSection(meta, d) {
   const body = items.length
     ? items.map((item, i) => keyringCard(item, i, d.generatedAt)).join('')
     : `<p class="hr-summary">${t('system.mcps.keyringEmptyFamily', 'Sin conexiones en esta sección.')}</p>`;
-  return `<details class="hr-collapsible" ${hasTrouble ? 'open' : ''}>
+  return `<details class="hr-collapsible">
     <summary>${t(meta.labelKey, meta.labelEs)}${troubleDot} <span class="hr-f-mod">(${items.length})</span></summary>
     <div class="hr-findings">${body}</div>
   </details>`;
@@ -303,7 +303,7 @@ function conflictsHtml(w) {
       </div>
     </div>`;
   }).join('');
-  return `<details class="hr-collapsible" open>
+  return `<details class="hr-collapsible">
     <summary>${t('system.mcps.conflictsSummary', 'Conflictos de config')} <span class="hr-f-mod">(${conflicts.length})</span></summary>
     <div class="hr-findings">${cards}</div>
   </details>`;
@@ -399,6 +399,7 @@ export function mountMcpsPanel(el, ctx = {}) {
         else if (item?.action?.kind === 'codex-login') openDeviceLogin(item, { base: '/api/connections/codex' });
         else if (item?.action?.kind === 'github-login') openDeviceLogin(item, { base: '/api/connections/github' });
         else if (item?.action?.kind === 'pad-login') openPadLogin(item);
+        else if (item?.action?.kind === 'mcp-login') openReconnect(item.action.world, item.action.name);
         else if (item?.action?.kind === 'service-restart') openServiceRestart(item);
         else if (item) openGuidedReconnect(item);
       } else if (b.dataset.kact === 'copy-command') {
@@ -478,7 +479,7 @@ export function mountMcpsPanel(el, ctx = {}) {
           ${p.lastAttempt?.at ? `<div class="hr-f-file">🕓 ${t('system.conn.startedAgo', 'Iniciada {ago}', { ago: agoText(p.lastAttempt.at) })}</div>` : ''}` : '';
 
     return `
-      <div class="hr-finding ${cardClass({ status: st })}${i > 0 ? ' hr-collapsed' : ''}" data-conn="${esc(p.id)}">
+      <div class="hr-finding ${cardClass({ status: st })} hr-collapsed" data-conn="${esc(p.id)}">
         <div class="hr-f-head" data-toggle="1">
           <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
           <span class="mcp-dot" title="${esc(st.label)}">${dot}</span>
@@ -526,7 +527,7 @@ export function mountMcpsPanel(el, ctx = {}) {
     return !d?.connected && !d?.stale && ['starting', 'awaiting-auth'].includes(d?.status);
   }
 
-  function codexCard(d, collapsed = false) {
+  function codexCard(d, collapsed = true) {
     const st = codexUiState(d);
     const dot = LIGHT_DOT[st.light] || '⚪';
     const tag = t(CONN_STATE[st.key].tagKey, CONN_STATE[st.key].tagEs);
@@ -595,7 +596,7 @@ export function mountMcpsPanel(el, ctx = {}) {
     connAdmin = !!d.isAdmin;
     const providers = d.providers || [];
     const providerCards = providers.map((p, i) => connCard(p, i)).join('');
-    const codexCollapsed = providers.length > 0 && !codexNeedsAttention(lastCodex);
+    const codexCollapsed = true;
     const cards = providerCards + codexCard(lastCodex, codexCollapsed);
     const host = root.querySelector('[data-ref="conn"]');
     if (!host) return;
@@ -1948,7 +1949,7 @@ export function mountMcpsPanel(el, ctx = {}) {
       // Las cuentas personales viven DENTRO de 🏠 Mi Consola: son conexiones de
       // la consola (no de Tolkien), así que se listan junto a sus MCP.
       const connHost = w.world === 'console' ? '<div class="conn-inline" data-ref="conn"></div>' : '';
-      return `<details class="hr-collapsible" open>
+      return `<details class="hr-collapsible">
         <summary>${esc(w.label)} <span class="hr-f-mod">${esc(w.cwd)}</span> (${w.servers.length})</summary>
         ${warn}
         <div class="hr-findings">${cards}</div>

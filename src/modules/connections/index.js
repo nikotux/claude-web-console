@@ -18,6 +18,7 @@ import {
   hasCodexCreds,
   hostUser,
   userClaudeDir,
+  userDataDir,
   userOauthTokenPath,
 } from '../../core/user-space.js';
 import {
@@ -51,6 +52,11 @@ import {
   getOrg,
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
+import {
+  deleteTolkienConnection,
+  isValidTolkienCookie,
+  tolkienStatus,
+} from '../../core/connections-tolkien.js';
 import { hasGithubAuth } from '../onboard/capabilities.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +68,8 @@ const CLAUDE_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-c
 const CLAUDE_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'claude-login-jobs');
 const PAD_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-pad-login-runner.js');
 const PAD_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'pad-login-jobs');
+const TOLKIEN_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-tolkien-login-runner.js');
+const TOLKIEN_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'tolkien-login-jobs');
 function codexLoginJobPath(user) { return path.join(CODEX_LOGIN_JOBS_DIR, `${user}.json`); }
 function readCodexLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(codexLoginJobPath(user), 'utf8')); } catch { return null; }
@@ -144,6 +152,29 @@ function padLoginRunnerAlive(job) {
   try { process.kill(pid, 0); } catch { return false; }
   try {
     return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-pad-login-runner.js');
+  } catch {
+    return false;
+  }
+}
+function tolkienLoginJobPath(user) { return path.join(TOLKIEN_LOGIN_JOBS_DIR, `${user}.json`); }
+function readTolkienLoginJob(user) {
+  try { return JSON.parse(fs.readFileSync(tolkienLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+function writeTolkienLoginJob(user, job) {
+  fs.mkdirSync(TOLKIEN_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(TOLKIEN_LOGIN_JOBS_DIR, 0o700);
+  writeJsonAtomic(tolkienLoginJobPath(user), {
+    ...job,
+    user,
+    ts: Date.now(),
+  }, { mode: 0o600 });
+}
+function tolkienLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-tolkien-login-runner.js');
   } catch {
     return false;
   }
@@ -589,6 +620,103 @@ export default {
         return res.status(500).json({ error: 'No pude cancelar el login de Pad: ' + e.message });
       }
       res.json({ ok: true });
+    });
+
+    // Tolkien también debe registrarse antes de '/:provider/...': si estas
+    // rutas quedaran después, '/tolkien/status' matchearía '/:provider/status'
+    // y respondería 400 porque Tolkien no forma parte del store OAuth.
+    r.post('/tolkien/login/start', (req, res) => {
+      const user = userOf(req);
+      const raw = req.body?.cookie;
+      if (typeof raw !== 'string') {
+        return res.status(400).json({ error: 'Pegá el valor de la cookie de sesión de Tolkien.' });
+      }
+      const cookie = raw.trim();
+      if (!isValidTolkienCookie(cookie)) {
+        return res.status(400).json({ error: 'El valor pegado no tiene la forma de la cookie de sesión de Tolkien.' });
+      }
+
+      const job = readTolkienLoginJob(user);
+      const reserved = ['starting', 'verifying'].includes(job?.status)
+        && !!job.ts
+        && (Date.now() - job.ts) < 30_000;
+      if (reserved || tolkienLoginRunnerAlive(job)) {
+        return res.json({ ok: true, already: true, status: job.status || 'starting' });
+      }
+
+      try {
+        // Reserva síncrona antes del spawn para que dos requests del mismo
+        // usuario no puedan lanzar dos verificaciones en paralelo.
+        writeTolkienLoginJob(user, { status: 'starting', done: false });
+        const child = spawn(process.execPath, [TOLKIEN_LOGIN_RUNNER, '--user', user], {
+          detached: true,
+          stdio: ['pipe', 'ignore', 'ignore'],
+        });
+        child.stdin.on('error', () => {});
+        child.on('error', () => {});
+        // STDIN evita exponer la cookie en /proc/<pid>/cmdline (argv es visible
+        // para cualquier proceso) y evita dejar el secreto en un archivo
+        // intermedio en disco más tiempo del necesario.
+        child.stdin.write(cookie);
+        child.stdin.end();
+        child.unref();
+      } catch {
+        try {
+          writeTolkienLoginJob(user, {
+            status: 'error',
+            error: 'No pude lanzar la verificación de la sesión de Tolkien.',
+            done: true,
+          });
+        } catch { /* noop */ }
+        return res.status(500).json({ error: 'No pude lanzar la verificación de la sesión de Tolkien.' });
+      }
+      res.json({ ok: true, status: 'starting' });
+    });
+
+    r.get('/tolkien/login/status', (req, res) => {
+      const job = readTolkienLoginJob(userOf(req)) || { status: 'idle' };
+      res.json({
+        status: job.status || 'error',
+        error: job.error || null,
+        done: !!job.done,
+        account: job.account || null,
+      });
+    });
+
+    r.post('/tolkien/login/cancel', (req, res) => {
+      const user = userOf(req);
+      const job = readTolkienLoginJob(user);
+      try {
+        if (tolkienLoginRunnerAlive(job)) {
+          try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+        }
+        if (job) {
+          writeTolkienLoginJob(user, {
+            ...job,
+            status: 'cancelled',
+            done: true,
+          });
+        }
+      } catch {
+        return res.status(500).json({ error: 'No pude cancelar la verificación de la sesión de Tolkien.' });
+      }
+      res.json({ ok: true });
+    });
+
+    r.get('/tolkien/status', (req, res) => {
+      // El dato se resuelve por OPERACIÓN desde el principal de la request;
+      // jamás desde os.homedir() ni desde una constante calculada al importar.
+      res.json(tolkienStatus(userDataDir(userOf(req))));
+    });
+
+    r.post('/tolkien/disconnect', (req, res) => {
+      // Borra la sesión local del usuario; no cierra su sesión remota en Tolkien.
+      try {
+        const removed = deleteTolkienConnection(userDataDir(userOf(req)));
+        res.json({ ok: true, ...removed });
+      } catch {
+        res.status(500).json({ error: 'No pude borrar la sesión guardada de Tolkien.' });
+      }
     });
 
     // Igual que Codex, estas rutas deben quedar antes de '/:provider/...'.

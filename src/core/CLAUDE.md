@@ -62,7 +62,10 @@ sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
 connections-store(app config de instancia + tokens per-usuario +
 getAccessToken con refresh) · connections-microsoft(device code
 flow) · connections-zoho(grant code Self Client + getOrg +
-identidad por listado de agentes) · zoho-desk-client(ESCRITURA a
+identidad por listado de agentes) · connections-tolkien(cookie de sesión
+Auth.js + storageState y metadata sin secreto; módulo puro compartido que
+recibe `dataDir` resuelto y NO importa user-space/config) ·
+zoho-desk-client(ESCRITURA a
 Desk con la identidad del USUARIO: getTicket/assignTicket/
 updateTicket/addComment/uploadAttachment/createTicket; resuelve el
 token por username y manda orgId siempre) ·

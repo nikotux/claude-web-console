@@ -66,12 +66,20 @@ incluyen `infisical-login` y comandos copiables. NO reemplazar Claude por
 `claude setup-token`: ese comando emite un token de larga duración pero no
 repara `~/.claude/.credentials.json`; la credencial de cuenta la reconstruye
 `claude auth login --claudeai`, que es lo que ejecuta el runner guiado.
-HONESTIDAD DE ACCIONES (`console:PLAN-2446` F6): `pad-cloud` sigue siendo
-`kind:'manual'` y sin comando porque no tiene CLI propio; su OAuth lo refresca
-Claude Code cuando usa el MCP y la consola no tiene un botón real que ofrecer.
-ZeroTier conserva `action:null`: deliberadamente no se inventó un wizard para
-una operación que el producto no puede completar. Verificación en vivo de la
-entrega: el llavero devolvió los 10 `kind` guiados esperados.
+HONESTIDAD DE ACCIONES (`console:PLAN-2446` F6, corregido): `pad-cloud` usa el
+`kind:'mcp-login'` GENÉRICO con `world:'console'` y
+`name:'pad-cloud-backup'`. El dispatcher reusa `openReconnect(world,name)`, que
+termina en `claude mcp login <name>` mediante `bin/cwc-mcp-login-runner.js` y
+`POST /api/mcps/login`; cualquier ítem del llavero que mapee a un MCP HTTP del
+censo puede usar el mismo kind sin modificar el panel. La regla es mirar el
+TRANSPORTE: `pad-cloud-backup` es HTTP (`https://mcp.getpad.dev`), por lo que
+`claude mcp login` aplica (cubre HTTP, SSE y conectores de claude.ai). En cambio
+`pad-local` es `stdio`: se autentica contra el CLI de Pad, no contra el OAuth
+del MCP, y por eso necesita su `kind:'pad-login'` y el runner propio
+`bin/cwc-pad-login-runner.js`, que ejecuta `pad auth login`. ZeroTier conserva
+`action:null`: deliberadamente no se inventó un wizard para una operación que
+el producto no puede completar. Verificación en vivo de la entrega: el llavero
+devolvió `pad-cloud` → `mcp-login` → `console/pad-cloud-backup`.
 SEGURIDAD: allowlist explícita de campos, jamás un spread:
 `<scope.home>/.infisical/infisical-config.json` contiene
 `vaultBackendPassphrase` y

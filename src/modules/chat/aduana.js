@@ -23,6 +23,11 @@ export const MAX_REPLY_TO_TEXT_LEN = 100;
 export const SALA_LOG_MAX_LINES = 5000;
 export const SALA_TTL_DAYS = 30;
 export const REACTIONS = ['👍', '❓', '🔴'];
+// El nombre propio de la IA de la sala (elegido por votación en la sala, 2026-07-31).
+// `@cucho` SIEMPRE es la IA: si algún día existe un usuario real llamado así, el
+// tag lo sigue ganando la IA dentro de una sala (decisión explícita de Niko).
+export const SALA_AI_NAME = 'cucho';
+export const SALA_AI_LABEL = 'Cucho';
 
 const SALA_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -193,7 +198,7 @@ export function writeRead(id, username, ts) {
 }
 
 export function appendSay(id, {
-  id: msgId, by, text, ts, attachments, mentions, replyTo, replyToBy, replyToText,
+  id: msgId, by, text, ts, attachments, mentions, askAi, replyTo, replyToBy, replyToText,
 }) {
   ensureSala(id);
   const recTs = ts || Date.now();
@@ -234,6 +239,7 @@ export function appendSay(id, {
     ts: recTs,
     ...(safeAttachments.length ? { attachments: safeAttachments } : {}),
     ...(safeMentions.length ? { mentions: safeMentions } : {}),
+    ...(askAi ? { askAi: true } : {}),
     // Denormalización deliberada: conservar autor y fragmento permite pintar
     // la cita y armar contexto aunque el mensaje original ya haya sido podado.
     ...(safeReplyTo ? {
@@ -303,7 +309,7 @@ export function reactionsFromRecords(records) {
   return result;
 }
 
-export function appendCut(id, { by, ts, count, authors }) {
+export function appendCut(id, { by, ts, count, authors, directed }) {
   ensureSala(id);
   const safeAuthors = [];
   for (const author of Array.isArray(authors) ? authors : []) {
@@ -318,6 +324,7 @@ export function appendCut(id, { by, ts, count, authors }) {
     ts: ts || Date.now(),
     count: Number(count) || 0,
     ...(safeAuthors.length ? { authors: safeAuthors } : {}),
+    ...(directed ? { directed: true } : {}),
   };
   fs.appendFileSync(salaLogPath(id), JSON.stringify(rec) + '\n');
   return rec;

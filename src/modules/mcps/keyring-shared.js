@@ -135,16 +135,22 @@ function reconnectActionFor(it) {
     ],
   };
   if (it?.id === 'pad-cloud') return {
-    // Pad cloud no tiene CLI local propio: Claude Code es quien refresca ese token OAuth.
-    kind: 'manual',
+    // console:PLAN-2446 — CORRECCIÓN: antes decía que este OAuth sólo lo podía
+    // refrescar Claude Code y que la consola no tenía forma de reconectarlo.
+    // Era falso: `claude mcp login pad-cloud-backup` reautoriza el MCP HTTP, y
+    // la consola ya lo corre por `bin/cwc-mcp-login-runner.js` con el mismo
+    // wizard que usan los demás MCP del panel.
+    kind: 'mcp-login',
+    world: 'console',
+    name: 'pad-cloud-backup',
     command: null,
     title: 'Reconectar Pad Cloud OAuth',
-    what: `El Pad cloud no tiene CLI propio: Claude Code refresca su OAuth al usar el MCP remoto, así que no hay ningún botón de reconexión que la consola pueda ofrecer. ${dependentsWhat(deps, 'dashboard de PRs de Tolkien')}`,
+    what: dependentsWhat(deps, 'dashboard de PRs de Tolkien'),
     steps: [
-      'No hay ningún asistente guiado ni botón de reconexión para esta conexión.',
-      'Abrí Claude Code en el servidor y usá una acción que consulte ese MCP.',
-      'Claude Code va a refrescar el OAuth al usar el MCP remoto.',
-      'Volvé a esta pantalla y verificá la conexión.',
+      'Tocá «Reconectar» acá abajo.',
+      'Abrí el enlace de autorización que aparece y aprobá el acceso.',
+      'Pegá de vuelta la URL a la que te redirige el navegador.',
+      'Esperá la verificación automática.',
     ],
   };
   if (it?.id === 'infisical') return {
@@ -377,8 +383,8 @@ export async function probePadCloud(scope) {
     const autoRefresh = true;
     const light = found ? expiryLight(expiresAt, { autoRefresh }) : 'danger';
     const detail = found && light === 'danger'
-      ? `${durationText(expiresInMs)} · se arregla usando Claude Code, que refresca este token; no la consola`
-      : `${durationText(expiresInMs)} · se renueva solo; lo refresca Claude Code, no la consola`;
+      ? `${durationText(expiresInMs)} · se renueva solo mientras se usa el MCP; si hace falta, reconectalo desde este panel`
+      : `${durationText(expiresInMs)} · se renueva solo mientras se usa el MCP`;
     return item({
       id: 'pad-cloud',
       family: 'keys',
@@ -386,7 +392,7 @@ export async function probePadCloud(scope) {
       role: 'credencial MCP del Pad remoto',
       light,
       statusLabel: found ? statusFromLight(light, { autoRefresh }) : 'Sin sesión',
-      detail: found ? detail : 'No hay OAuth de Pad registrado; lo refresca Claude Code, no la consola.',
+      detail: found ? detail : 'No hay OAuth de Pad registrado; reconectalo desde este panel.',
       autoRefresh,
       expiresAt,
       expiresInMs,

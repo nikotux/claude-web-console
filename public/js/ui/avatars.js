@@ -23,6 +23,13 @@ export const AVATAR_SHAPES = [
 
 export const AVATAR_TONES = ['peer-1', 'peer-2', 'peer-3', 'peer-4', 'peer-5', 'peer-6'];
 
+// Figuras FIJADAS a un usuario, fuera de la rotación por hash. Van acá y no en
+// AVATAR_SHAPES a propósito: sumar un elemento a ese array cambiaría el módulo
+// del hash y le reasignaría el avatar a todos los usuarios existentes.
+export const AVATAR_PINS = {
+  rarboleda: 'fantasma',
+};
+
 // Cada figura privilegia una silueta distinta sobre detalles que se perderían
 // al reducirla. Todos los nodos heredan currentColor de la clase peer-N.
 const SHAPE_NODES = {
@@ -38,6 +45,7 @@ const SHAPE_NODES = {
   hoja: { tag: 'path', attrs: { d: 'M21.5 2.5C12.3 2.8 5.3 6.1 3.2 12.2c-1 2.8.1 5.5 2.5 7.1L16 8.4 7.8 20.6c3.2.8 6.4-.4 8-3.1 2.7-4.5 3.1-9.3 5.7-15Z' } },
   ola: { tag: 'path', attrs: { d: 'M1.8 15.1c3.1-5.8 6.2-8.7 9.4-8.7 3.9 0 4.7 4.3 8.3 4.3 1 0 1.9-.3 2.7-.9-.9 5.1-3.6 7.8-7.2 7.8-3.7 0-5-3.2-8.1-3.2-1.7 0-3.4.8-5.1 2.4Z' } },
   anillo: { tag: 'path', attrs: { d: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z', 'fill-rule': 'evenodd' } },
+  fantasma: { tag: 'path', attrs: { d: 'M3 21 V11 a9 9 0 0 1 18 0 v10 l-3 -2.5 -3 2.5 -3 -2.5 -3 2.5 -3 -2.5 -3 2.5 Z M9 8.4 a2 2.6 0 1 0 0.01 0 Z M15 8.4 a2 2.6 0 1 0 0.01 0 Z', 'fill-rule': 'evenodd' } },
 };
 
 // FNV-1a de 32 bits mantiene la asignación idéntica entre recargas. Si el hash
@@ -54,6 +62,15 @@ function hash32(str) {
 export function avatarFor(username, { taken = [] } = {}) {
   const safeUsername = typeof username === 'string' ? username : '';
   const hash = hash32(safeUsername);
+
+  // Un pin manda sobre la rotación; el tono se sigue derivando del hash para
+  // que conserve el color que ya tenía.
+  const pinned = AVATAR_PINS[safeUsername];
+  if (pinned && SHAPE_NODES[pinned]) {
+    const tone = AVATAR_TONES[(hash >>> 8) % AVATAR_TONES.length];
+    return { shape: pinned, tone, key: `${pinned}:${tone}` };
+  }
+
   const originalShapeIndex = hash % AVATAR_SHAPES.length;
   const originalToneIndex = (hash >>> 8) % AVATAR_TONES.length;
   const occupied = new Set(Array.isArray(taken) ? taken : []);

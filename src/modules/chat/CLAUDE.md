@@ -1866,6 +1866,55 @@ contra el root del USUARIO, así que nunca puede alcanzar un recurso compartido
 entre personas; ese cálculo pertenece al servidor, que es el único que conoce la
 diferencia entre «tu espacio» y «el suelo de todos».
 
+CUCHO — PREGUNTAS DIRIGIDAS A LA IA (2026-07-31). La IA de la sala se llama
+**Cucho**; `SALA_AI_NAME`/`SALA_AI_LABEL` en `aduana.js` fijan ese nombre propio,
+elegido por votación en una sala real el 2026-07-31. `@cucho` SIEMPRE designa a
+la IA: `parseMentions` saltea ese handle de forma explícita. Un usuario real
+homónimo puede seguir existiendo, pero dentro de una sala no se lo menciona con
+ese arroba. Es una decisión explícita de Niko, no un descuido ni una colisión
+pendiente de resolver.
+
+EL TAG NO INVOCA, SELECCIONA. Escribir `@cucho` no dispara el corte: la
+invocación sigue siendo manual mediante el botón, como decidió Niko al descartar
+la ventana de fusión automática. El tag elige QUÉ se paga. En `_dispatchCut`, si
+el buzón contiene mensajes con `askAi`, viajan SOLO esos
+(`directed = targeted.length > 0`) y los no marcados vuelven al buzón mediante
+`unshift`. GOTCHA: ese reingreso es SÍNCRONO y ocurre antes de cualquier `await`.
+Si se hiciera después, un segundo corte simultáneo encontraría el buzón a medio
+llenar y se perderían mensajes; es la misma propiedad de idempotencia que ya
+protegía el `splice(0)`. `directed` no compara contra el total a propósito. La
+primera versión usaba
+`targeted.length > 0 && targeted.length < all.length` y perdía el modo dirigido
+en el caso más común: alguien escribe SOLO `@cucho ¿esto compila?` con el buzón
+vacío. Con `> 0` a secas, `held` simplemente queda vacío y no se retiene nada.
+
+PERSISTENCIA: `askAi` se guarda en `sala.jsonl` vía `appendSay` y `directed` vía
+`appendCut`; AMBOS se reponen en `_rebuildSalaHistory()`. Sin esa reposición, el
+flag se evaporaría en el siguiente reinicio del server y un buzón con preguntas
+marcadas dejaría de tenerlas en silencio, en contra de la Regla dura 2. Al
+reconstruir, un `cut` con `directed` NO vacía el buzón: filtra únicamente los
+mensajes con `askAi`, porque los no marcados siguieron esperando.
+
+EL PROMPT Y EL CONTRATO CON EL FRONT: `buildSalaPrompt` recibe
+`{directed, heldCount}` y siempre declara la identidad —«en esta sala te llamás
+Cucho»—. Cuando el corte es dirigido cambia los separadores a «preguntas
+dirigidas a vos», pide responder lo puntual sin retomar todo y, si
+`heldCount > 0`, avisa cuántos mensajes NO se compartieron para que la IA no
+responda creyendo que vio todo. `salaAiName`/`salaAiLabel` viajan en
+`_historyPayload()` e `info()`: el nombre lo manda el server para que cambiarlo
+no exija tocar dos archivos. El evento `cut` lleva `directed` y su `count` es lo
+que REALMENTE viajó. Por eso `chat-tab.js` RESTA en vez de resetear el contador
+en un corte dirigido: ponerlo en cero mentiría, porque el server todavía guarda
+la charla retenida y la UI anunciaría «buzón vacío» mientras hay mensajes
+esperando.
+
+RESALTADO: el front pinta `@cucho` con `.chat-mention--ai` —acento frío— SOLO
+cuando el server marcó el mensaje con `askAi`, nunca por detección propia; es la
+misma regla que ya regía para las menciones humanas. El regex pasó a `gi` y
+resuelve el nombre canónico en minúsculas, de modo que `@Cucho` al comenzar una
+frase también se resalta, mientras `textContent` conserva las mayúsculas que
+escribió la persona.
+
 ## Gotchas de esta carpeta
 
 - Replay de Aduana: nunca uses `_push({type:'user'})` para un aviso del sistema;

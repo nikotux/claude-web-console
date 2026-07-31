@@ -210,7 +210,7 @@ export function mountUpdatesPanel(el, ctx = {}) {
       <div class="hr-f-file">Motor del SDK — el reinicio para tomar el cambio va incluido en "Actualizar todo".</div>`;
     const side = `<div><span class="hr-sev ${m.cls}">${m.badge} ${esc(m.label)}</span></div>
       <div style="margin-top:.3rem">${lib.upToDate ? '✅ al día' : `${esc(lib.current || '—')} → ${esc(lib.latest || '—')}`}</div>`;
-    return collapsible(title, side, body, { border: 'hr-finding--medium', open: true });
+    return collapsible(title, side, body, { border: 'hr-finding--medium' });
   }
 
   function libItem(lib) {
@@ -404,7 +404,7 @@ export function mountUpdatesPanel(el, ctx = {}) {
           <button class="btn btn--sm btn-ghost" data-act="verify">🩺 Verificar salud</button>
         </div>` : '';
 
-    const section = (title, items, open) => `<details class="hr-collapsible"${open ? ' open' : ''}>
+    const section = (title, items) => `<details class="hr-collapsible">
       <summary>${title}</summary><div class="hr-findings">${items || '<p class="hr-summary">—</p>'}</div></details>`;
 
     const secHint = riskRunning ? '<p class="hr-f-file">🧠 Analizando el riesgo de cada salto mayor…</p>' : '';
@@ -416,21 +416,21 @@ export function mountUpdatesPanel(el, ctx = {}) {
       mcpsItem(d.mcps),
     ].join('');
     const codexModelsSection = codexModelsItems
-      ? section(t('system.updates.codexAndModels', '🤖 Codex y modelos'), codexModelsItems, false) : '';
+      ? section(t('system.updates.codexAndModels', '🤖 Codex y modelos'), codexModelsItems) : '';
 
     const when = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '';
     root.innerHTML = `
       <p class="pj-hint"><b>${headline}</b></p>
       <p class="hr-f-file" style="margin-top:-.3rem">Escaneado: ${esc(when)} · ${t('system.updates.updatePaths', '<b>🧑‍✈️ Actualizar con sesión</b> abre un chat que te explica el plan, lo ejecuta y arregla lo que se rompa · <b>🤖 Modo automático</b> es el flujo determinístico sin IA (0 tokens): aplica lo estable in-range + los majors que tildes, verifica, reinicia y reanuda. Betas nunca.')}</p>
       ${adminBar}
-      ${section('🧬 Motor (crítico)', core.map(coreItem).join('') + coreItem2(d.claudeCli), true)}
+      ${section('🧬 Motor (crítico)', core.map(coreItem).join('') + coreItem2(d.claudeCli))}
       ${codexModelsSection}
-      ${section(`🔐 Seguridad — ${totalVuln} vulnerabilidad(es) ${hasHigh ? '⚠️' : ''}`, vulnFixBtn + (vulns.length ? vulns.map(vulnItem).join('') : '<p class="hr-summary">✅ Sin vulnerabilidades conocidas.</p>'), hasHigh)}
-      ${majors.length ? section(`🟡 Saltos mayores (${majors.length}) — ${tildableMajors} para tu OK · ${blockedMajors.length} 🔒 bloqueado(s)`, secHint + majors.map((l) => majorItem(l, vFor(l))).join(''), false) : ''}
-      ${section(`📚 Librerías npm (${rest.length})`, rest.map(libItem).join(''), false)}
-      ${section(`🐧 Sistema operativo (${aptN})`, `<p class="hr-f-file">Incluido en "Actualizar todo". Manual: <code>sudo apt update &amp;&amp; sudo apt upgrade</code></p>` + (d.apt?.pkgs || []).map(aptItem).join(''), false)}
-      ${section('⚙️ Servicios y runtime (referencia)', (d.services || []).map(svcItem).join(''), false)}
-      ${section(`⚠️ Vigiladas — no actualizar a ciegas (${(d.watched || []).length})`, (d.watched || []).map(watchItem).join(''), false)}
+      ${section(`🔐 Seguridad — ${totalVuln} vulnerabilidad(es) ${hasHigh ? '⚠️' : ''}`, vulnFixBtn + (vulns.length ? vulns.map(vulnItem).join('') : '<p class="hr-summary">✅ Sin vulnerabilidades conocidas.</p>'))}
+      ${majors.length ? section(`🟡 Saltos mayores (${majors.length}) — ${tildableMajors} para tu OK · ${blockedMajors.length} 🔒 bloqueado(s)`, secHint + majors.map((l) => majorItem(l, vFor(l))).join('')) : ''}
+      ${section(`📚 Librerías npm (${rest.length})`, rest.map(libItem).join(''))}
+      ${section(`🐧 Sistema operativo (${aptN})`, `<p class="hr-f-file">Incluido en "Actualizar todo". Manual: <code>sudo apt update &amp;&amp; sudo apt upgrade</code></p>` + (d.apt?.pkgs || []).map(aptItem).join(''))}
+      ${section('⚙️ Servicios y runtime (referencia)', (d.services || []).map(svcItem).join(''))}
+      ${section(`⚠️ Vigiladas — no actualizar a ciegas (${(d.watched || []).length})`, (d.watched || []).map(watchItem).join(''))}
     `;
     wireToggles();
     wireActions();
@@ -447,7 +447,7 @@ export function mountUpdatesPanel(el, ctx = {}) {
     const side = unmanaged
       ? `<div>🔒 instalación de sistema</div><div style="margin-top:.3rem">${esc(cli.current || '—')} → ${esc(cli.latest || '—')}</div>`
       : (cli.upToDate ? '✅ al día' : `${esc(cli.current || '—')} → ${esc(cli.latest || '—')}`);
-    return collapsible('⌨️ <b>Claude Code CLI</b>', side, body, { border: 'hr-finding--medium', open: true });
+    return collapsible('⌨️ <b>Claude Code CLI</b>', side, body, { border: 'hr-finding--medium' });
   }
 
   function wireActions() {

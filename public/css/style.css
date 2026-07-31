@@ -1061,6 +1061,19 @@ html, body {
 .sys-panel-body { min-height: 120px; }
 .sys-back { display: none; }
 
+/* Scroll INDEPENDIENTE por columna (desktop). El scroller deja de ser
+   `.dlg-body` (que arrastraba el rail junto con el contenido) y pasa a ser
+   cada columna. `.dlg-card` ya es flex column con max-height:88dvh, así que el
+   body se acota solo y el shell hereda esa altura: con contenido corto no
+   aparece ningún scroll. En móvil (<720px) NO aplica: ahí el shell es
+   drill-down con un scroll único, y un overflow:hidden cortaría el panel. */
+@media (min-width: 720px) {
+  .sys-modal-body { display: flex; flex-direction: column; overflow: hidden; }
+  .sys-shell { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+  .sys-rail,
+  .sys-panel { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+}
+
 /* Panel "Conexiones (MCP)" */
 .mcp-topbar { display: flex; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 .7rem; }
 .mcp-acts { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
@@ -1746,6 +1759,9 @@ html, body {
   border-bottom-left-radius: var(--cwc-radius-sm);
   transition: background-color .6s ease;
 }
+.chat-say--ask-ai {
+  box-shadow: inset 3px 0 0 var(--cwc-accent-cool);
+}
 .chat-say--own {
   align-self: flex-end;
   background: color-mix(in srgb, var(--peer-tone) 14%, var(--peer-bg));
@@ -1896,6 +1912,10 @@ html, body {
   background: color-mix(in srgb, var(--peer-tone) 28%, transparent);
   border: 1px solid color-mix(in srgb, var(--cwc-accent) 48%, transparent);
   padding: 0 .16rem;
+}
+.chat-mention--ai {
+  color: var(--cwc-accent-cool);
+  background: color-mix(in srgb, var(--cwc-accent-cool) 12%, transparent);
 }
 .chat-newline-sep {
   align-self: stretch; display: flex; align-items: center; gap: .45rem;
@@ -2843,6 +2863,13 @@ table.md-chart-data {
 .chat-slash-item .csi-desc {
   color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.csi-ai-avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  color: var(--cwc-accent-cool);
+  background: color-mix(in srgb, var(--cwc-accent-cool) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cwc-accent-cool) 55%, var(--cwc-border));
 }
 .chat-slash-item:hover { background: var(--cwc-bg-hover); }
 .chat-slash-item.active { background: color-mix(in srgb, var(--cwc-accent) 22%, transparent); }

@@ -108,6 +108,10 @@ function salaSections() {
         },
         {
           type: 'p',
+          text: t('chat.help.sala.people.cucho', 'La IA de la sala se llama Cucho. Escribir @cucho marca ese mensaje como una pregunta para ella, pero no la despierta: todavía hace falta tocar el botón. Cuando hay preguntas marcadas, el botón envía solo esas y el resto de la charla queda esperando el próximo corte.'),
+        },
+        {
+          type: 'p',
           text: t('chat.help.sala.people.unread', 'El separador “mensajes nuevos” marca el punto donde arrancaste a leer esta vez. Queda en el hilo aunque el contador ya se haya marcado como leído.'),
         },
         {
