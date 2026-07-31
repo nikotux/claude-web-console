@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-31 18:23 — main
+- Agregar cierre masivo de tickets Tolkien y modo pregunta a la IA en salas
+
 ### 2026-07-31 16:54 — main
 - Sumar mudanza de chat a sala de Aduana y aviso de origen en el hilo
 - Aduana: identidad visual v2 (avatares, agrupación por autor, panel raw) y PAD del arquitecto
@@ -421,9 +424,6 @@ since the previous push. Newest entry first.
 - Modified `public/js/modules/tolkien/tolkien.js`
 - Modified `src/core/registry.js`
 - Modified `src/modules/tolkien/index.js`
-
-### 2026-07-03 01:09 — main
-- Modified `CLAUDE.md`
 
 _(older entries trimmed — see `git log` for the full history)_
 
