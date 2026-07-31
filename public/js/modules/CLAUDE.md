@@ -13,6 +13,38 @@ gana `⚡ N en segundo plano`; SOLO cuando no hay vivos y sí listos muestra
 Los chats cuyo cwd es `~/.cwc-data/tolkien-envs/<envId>/tree` se agrupan bajo
 Tolkien, pero en sub-bloques colapsables por entorno: rama, contador, guía de
 árbol e identidad azul fría distinguen el worktree efímero del Tolkien principal.
+
+Ese plegado ahora vale también para los grupos por MUNDO del sidebar —Mi Consola,
+Tolkien, 🛃 Aduana, 🌗 Limbo y Otros—, que antes NO eran colapsables: cuando hay
+más de un mundo, cada `<div class="sess-world-h">` suelto y sus tarjetas hermanas
+pasa a un `<details class="sess-world-grp">` con
+`<summary class="sess-world-h">`; con UN SOLO mundo se conserva el comportamiento
+previo, sin header ni `<details>`, porque plegarlo escondería la lista entera.
+Dentro de `for (const key of worldKeys)` todos los `appendChild` usan
+`const host = grpEl || listEl`. Los helpers de módulo
+`readGroupOpen(key, def = true)` y `bindGroupOpen(det, key, def = true)`, junto a
+`openKidCards`, mantienen el estado fuera del DOM: mundos usan
+`cwc.sessions.world.<key>.open` y entornos aislados de Tolkien
+`cwc.sessions.env.<envId>.open`, ambos ABIERTOS por default; esta última clave
+reemplaza el `det.open = true` fijo. “Otros usuarios” conserva la clave histórica
+`cwc.sessions.others.open` y el default CERRADO, aunque ahora usa el mismo helper.
+GOTCHA: el estado NO puede vivir en el DOM, porque `render()` reconstruye `listEl`
+entero en cada `refresh()` y un `<details>` sostenido sólo por su atributo `open`
+se reabriría en la próxima apertura de la consola; es la misma lección ya aplicada
+a `openKidCards`. GOTCHA: `bindGroupOpen` agrega su listener `toggle` DESPUÉS de
+asignar `det.open`, a propósito; en el orden inverso la asignación inicial
+dispararía el listener y escribiría en `localStorage` un valor que el usuario
+nunca eligió. CSS: `.sess-world-h` suma `cursor:pointer`, `list-style:none` y
+`::-webkit-details-marker{display:none}` —las DOS vías para matar el marcador
+nativo, como `.sess-env-h`—, más `.sess-world-grp` y
+`.sess-world-grp[open] > .sess-world-h`; el chevron triangular compartido con
+`currentColor` en `::before`, rotado 90° bajo `[open]`, señaliza los CUATRO tipos
+de grupo colapsable mediante `.sess-world-h`, `.sess-env-h` y
+`.sess-others > summary`. Verificado E2E a 1400×900 y 390×800: 0
+`div.sess-world-h`, tres mundos (Aduana 3 tarjetas, Mi Consola 8, Tolkien 1),
+Aduana plegada de 155px a 21px con `.side-count` visible, estado persistente tras
+recarga y el mismo chevron de 4px en los cuatro tipos.
+
 Para administradores, chats y sesiones tmux gestionadas de otros usuarios se
 agrupan por `owner` en `.sess-owners`, separado de "Otras sesiones tmux". El
 helper `isMine(owner)` resuelve la identidad contra `whoami.username` o, cuando
@@ -185,6 +217,14 @@ contenido actual, ~15 módulos/~16.700 líneas) NO está hecha — el mecanismo
 está listo y probado E2E, pero casi toda la UI sigue mostrando el fallback ES
 hasta que se ejecute. CONVENCIÓN para código nuevo: ver "## Convenciones" más
 abajo. Backup/Usuarios/
+
+PÁGINAS STANDALONE E I18N (2026-07-31): Archivos (`filemanager/fm.js`), Vista
+Raw (`rawview/raw.js`), Seguimientos (`seguimientos/seguimientos.js`), Onboard
+(`onboard/onboard.js`), Admin (`admin.js`) y Login (`login.js`) inicializan
+i18n por su cuenta, porque no pasan por el boot de `main.js`. `admin.js` y
+`login.js` todavía conservan sus strings visibles sin instrumentar: es un
+pendiente conocido, fuera del alcance de esta jornada.
+
 Proyectos/Interfono/Salud — la pestaña Interfono
 (interfono-panel.js) es la ventana + canal humano del INTERFONO
 entre sesiones (GET/POST /api/interfono): sesiones activas,

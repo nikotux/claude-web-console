@@ -131,6 +131,20 @@ export default function usageHelp() {
               },
             ],
           },
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('usage.help.buttons.note', 'Todas estas acciones sólo consultan, filtran o presentan datos: no ejecutan IA ni consumen tokens.'),
+          },
+        ],
+      },
+      {
+        title: t('usage.help.history.title', 'Histórico persistente'),
+        blocks: [
+          {
+            type: 'p',
+            text: t('usage.help.history.text', 'Día se arma con los transcripts disponibles. Semana y Mes se apoyan en usage-history.json: ese histórico sobrevive a la poda de transcripts del CLI y alimenta las gráficas de Tendencia.'),
+          },
         ],
       },
       {
@@ -139,7 +153,7 @@ export default function usageHelp() {
           {
             type: 'note',
             tone: 'warn',
-            text: t('usage.help.warning.text', 'El COSTO mostrado es equivalente a precios de API, NO gasto real de la suscripción. Todo está agrupado en hora local de Medellín. Un cache read pesa cerca de 10× menos que un token normal: NUNCA compares tokens crudos entre sí; la métrica honesta es el costo equivalente. Codex aparece si hay datos locales o límites disponibles, pero sin una tarifa pública verificada muestra “sin tarifa” y no suma al total en dólares.'),
+            text: t('usage.help.warning.text', 'El COSTO mostrado es equivalente a precios de API, NO gasto real de la suscripción. Todo está agrupado en hora local de Medellín. Cada cache read se pondera ×0.1 frente a un token normal: NUNCA compares tokens crudos entre sí; la métrica honesta es el costo equivalente. Codex aparece si hay datos locales o límites disponibles, pero sin una tarifa pública verificada muestra “sin tarifa” y no suma al total en dólares.'),
           },
         ],
       },

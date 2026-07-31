@@ -545,6 +545,44 @@ export function checkFacetas() {
   };
 }
 
+// La auditoría i18n es deliberadamente degradable: t() cae al español cuando
+// falta una traducción, así que los hallazgos y los errores del auditor son
+// siempre warn, nunca fail.
+export async function checkI18n(loadAudit = () => import('./i18n-shared.js')) {
+  const id = 'i18n';
+  const label = 'Traducciones y ayuda';
+  try {
+    const { auditI18n } = await loadAudit();
+    const result = auditI18n();
+    if (result.ok === true) {
+      const { used, translated, missing, orphaned } = result.i18n.totals;
+      return {
+        id,
+        label,
+        status: 'ok',
+        detail: `${used} claves usadas · ${translated} traducidas · ${missing} faltantes · ${orphaned} huérfanas`,
+      };
+    }
+
+    const messages = Array.isArray(result.problems)
+      ? result.problems.map((problem) => problem?.message).filter(Boolean)
+      : [];
+    const shown = messages.slice(0, 4);
+    const remainder = messages.length - shown.length;
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: shown.length
+        ? `${shown.join(' · ')}${remainder ? ` · …y ${remainder} más` : ''}`
+        : 'la auditoría i18n encontró problemas sin detalle',
+    };
+  } catch (err) {
+    const reason = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 200);
+    return { id, label, status: 'warn', detail: `no pude cargar la auditoría i18n (${reason})` };
+  }
+}
+
 // F7 (PLAN-373/PEND-466) — AUDIT de CRUCES ENTRE MUNDOS. GRANDFATHER de los
 // cruces LEGÍTIMOS conocidos (los que hoy tocan el mundo externo Tolkien —
 // mapeados en DOC-468) + DETECCIÓN de cualquier cruce NUEVO: un archivo que
@@ -1157,6 +1195,7 @@ async function runChecks() {
     Promise.resolve(checkTolkienContextSync()),
     Promise.resolve(checkFichasModulo()),
     Promise.resolve(checkFacetas()),
+    checkI18n(),
     Promise.resolve(checkCrossWorld()),
     Promise.resolve(checkTolkienEnvs()),
     Promise.resolve(checkOnboardProvisioning()),

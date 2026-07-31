@@ -17,6 +17,7 @@ import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
 import { avatarFor, avatarNodeFrom } from '../../ui/avatars.js';
+import { openPeticionDialog } from '../visado/peticion-dialog.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -296,6 +297,7 @@ export class ChatTab {
     this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
     this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
     this.isSala = null;           // null hasta que llegue el primer history
+    this.salaId = null;           // 🛃 id de la CARPETA de la sala; distinto del id de la conversación
     this.participants = [];
     this.salaOwner = null;   // 🛃 dueño de la sala: no viene en participants
     this.salaAiName = 'cucho';
@@ -342,6 +344,9 @@ export class ChatTab {
           <span class="chat-title">${this.title}</span>
           <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
           <span class="chat-peers" aria-label="${t('chat.sala.participants', 'Participantes')}" hidden></span>
+          <button type="button" class="btn-ghost btn--icon chat-visado-btn" hidden
+            title="${t('chat.sala.visadoTitle', 'Pedir una operación')}"
+            aria-label="${t('chat.sala.visadoTitle', 'Pedir una operación')}">${icon('check', { size: 14 })}</button>
           <span class="chat-flow" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: t('chat.pac.waitingTitle', 'Esperando tu mensaje') })}
           <span class="chat-model-pill" title="${t('chat.header.modelPillTitle', 'Router de modelo automático')}" hidden></span>
@@ -398,6 +403,11 @@ export class ChatTab {
 
     this.worldEl = container.querySelector('.chat-world');
     this.peersEl = container.querySelector('.chat-peers');
+    this.visadoBtn = container.querySelector('.chat-visado-btn');
+    this.visadoBtn.addEventListener('click', () => {
+      if (!this.salaId) return;
+      openPeticionDialog({ salaId: this.salaId, onDone: () => {} });
+    });
     this.actaEl = container.querySelector('.chat-acta');
     this.actaBodyEl = container.querySelector('.chat-acta-body');
     this.actaAtEl = container.querySelector('.chat-acta-at');
@@ -1047,6 +1057,7 @@ export class ChatTab {
     switch (m.type) {
       case 'history':
         this.isSala = !!m.isSala;
+        this.salaId = m.salaId || null;
         this.participants = Array.isArray(m.participants) ? m.participants : [];
         this.salaOwner = m.salaOwner || null;
         if (m.salaAiName) this.salaAiName = String(m.salaAiName);
@@ -1738,6 +1749,7 @@ export class ChatTab {
       this.peersEl.appendChild(chip);
     }
     this.peersEl.hidden = !this.isSala || !this.peersEl.children.length;
+    this.visadoBtn.hidden = !this.isSala || !this.salaId;
   }
 
   _refreshSalaIdentity() {

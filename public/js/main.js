@@ -23,10 +23,11 @@ import planLimits from './modules/stats/plan-limits.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
 import retro from './modules/retro/retro.js';
+import visado from './modules/visado/visado.js';
 
 // `audio` ya no es una sección de sidebar: vive DENTRO de `tasks` (Pendientes),
 // que importa openAudioPanel directamente. Por eso no está en MODULES.
-const MODULES = [launcher, sessions, tolkien, tickets, tasks, retro, planLimits, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, tickets, tasks, visado, retro, planLimits, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
@@ -635,11 +636,19 @@ document.getElementById('sidebar-handle').addEventListener('click', () => window
 initAuxBar({ getActiveTab });
 hydrateIcons();
 
-// Identidad en el pie.
+// Identidad en la CABECERA del panel izquierdo (se movió del pie el 2026-07-31).
+// El avatar muestra la inicial: es lo único que sobrevive al rail colapsado,
+// donde el nombre se oculta con .only-expanded.
 whoami.then((me) => {
   const acct = document.getElementById('acct-user');
-  if (me?.type === 'user') acct.textContent = me.username;
-  else if (me?.type === 'token') acct.textContent = '(token)';
+  const avatar = document.getElementById('acct-avatar');
+  const chip = document.getElementById('acct-chip');
+  let name = '';
+  if (me?.type === 'user') name = me.username || '';
+  else if (me?.type === 'token') name = '(token)';
+  if (acct) acct.textContent = name;
+  if (avatar) avatar.textContent = (name.replace(/[^A-Za-z0-9]/g, '')[0] || '?').toUpperCase();
+  if (chip && name) chip.title = name;
   // Ni Uso ni Raw requieren gate: el backend aplica scope por usuario (BUG-1874).
 });
 

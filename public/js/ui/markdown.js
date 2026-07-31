@@ -8,6 +8,7 @@
 import { icon } from './icons.js';
 import { openModal } from './dialog.js';
 import { t } from './i18n.js';
+import { openZoomViewer } from './zoom-viewer.js';
 
 const ALLOWED = new Set([
   'P', 'BR', 'HR', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'PRE',
@@ -410,11 +411,6 @@ const MERMAID_MAX_LINES = 400;
 // bajarlo de 2.2 a 1.5 NO cambia ningún diagrama real — solo deja de inflar a
 // los chicos (mindmaps de pocos nodos), que era el caso que se veía de cartel.
 const MERMAID_MAX_SCALE = 1.5;
-// El modal "Ampliar" conserva el tope viejo A PROPÓSITO: ahí el diagrama es el
-// contenido principal de una ventana dedicada, no una figura embebida en el
-// mensaje. Antes ambos casos compartían constante y bajar la inline habría
-// achicado también el zoom, que es exactamente lo contrario de lo que se pide.
-const MERMAID_ZOOM_MAX_SCALE = 2.2;
 // Por debajo de ~0.85 el texto de los nodos (15px) baja de ~13px y deja de
 // leerse cómodo en un teléfono; preferimos scroll horizontal antes que un
 // diagrama ilegible.
@@ -644,32 +640,24 @@ function enhanceMermaidBlocks(root) {
   }
 }
 
-// Abre una copia grande del diagrama en el modal genérico (ui/dialog.js).
+// Abre el diagrama en el visor con zoom/paneo (ui/zoom-viewer.js). El encuadre,
+// los controles y la navegación los pone el visor; acá solo se prepara el clon.
 function openMermaidZoom(holder) {
-  const svg = holder.querySelector('svg');
+  // El holder tiene DOS svg: el ícono del botón "Ampliar" y el diagrama. Sin
+  // acotar al canvas, querySelector devuelve el ícono (console:BUG-2502).
+  const svg = holder.querySelector('.md-mermaid-canvas svg');
   if (!svg) return;
-  const m = openModal({ title: t('core.markdown.diagram', 'Diagrama'), width: 'min(94vw, 1100px)' });
-  m.body.classList.add('md-mermaid-zoom-body');
   const clone = svg.cloneNode(true);
+  // Mermaid deja medidas y `max-width` inline pensados para el encaje del chat;
+  // el visor necesita el SVG "crudo" para medir su tamaño natural del viewBox.
   clone.removeAttribute('width');
   clone.removeAttribute('height');
   clone.style.maxWidth = '';
   clone.style.minWidth = '';
-  const vb = clone.viewBox?.baseVal;
-  if (Number.isFinite(vb?.width) && vb.width > 0 &&
-      Number.isFinite(vb?.height) && vb.height > 0) {
-    if (vb.width >= vb.height) {
-      clone.style.width = '100%';
-      clone.style.height = 'auto';
-    } else {
-      clone.style.height = `min(86vh, ${Math.round(vb.height * MERMAID_ZOOM_MAX_SCALE)}px)`;
-      clone.style.width = 'auto';
-    }
-  } else {
-    clone.style.width = 'auto';
-    clone.style.height = 'auto';
-  }
-  m.body.appendChild(clone);
+  clone.style.maxHeight = '';
+  clone.style.width = '';
+  clone.style.height = '';
+  openZoomViewer({ title: t('core.markdown.diagram', 'Diagrama'), node: clone });
 }
 
 // Tope duro de líneas de entrada: el markdown es la salida de texto libre

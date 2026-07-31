@@ -8,7 +8,7 @@ export default function launcherHelp() {
   return {
     title: t('launcher.help.title', 'Nueva sesión'),
     icon: 'plus',
-    intro: t('launcher.help.intro', 'Nueva sesión es la puerta para empezar trabajo en una carpeta concreta. Podés abrir un Chat, Claude en terminal o una terminal común, y la consola deja la nueva sesión lista para usar.'),
+    intro: t('launcher.help.intro', 'Nueva sesión es la puerta para empezar trabajo. Podés abrir un Chat, Claude en terminal, una terminal común o una Sala neutral de Aduana, y la consola deja la nueva sesión lista para usar.'),
     sections: [
       {
         title: t('launcher.help.first.title', 'Primeros pasos'),
@@ -17,9 +17,9 @@ export default function launcherHelp() {
             type: 'steps',
             items: [
               t('launcher.help.first.step1', 'Tocá “Nueva sesión”.'),
-              t('launcher.help.first.step2', 'Elegí Chat, Claude TUI o Terminal según cómo quieras trabajar.'),
-              t('launcher.help.first.step3', 'Elegí Tolkien, Mi Consola u Otra carpeta.'),
-              t('launcher.help.first.step4', 'Si corresponde, elegí el modelo que va a usar Claude.'),
+              t('launcher.help.first.step2', 'Elegí Chat, Claude TUI, Terminal o 🛃 Sala según cómo quieras trabajar.'),
+              t('launcher.help.first.step3', 'Para Chat, Claude TUI o Terminal, elegí Tolkien, Mi Consola (o Mi espacio) u Otra carpeta. Sala no pide destino.'),
+              t('launcher.help.first.step4', 'Si corresponde, elegí el modelo que va a usar Claude; una Terminal común no muestra este selector.'),
               t('launcher.help.first.step5', 'Tocá “Iniciar en…” para crear y abrir la sesión.'),
             ],
           },
@@ -53,6 +53,11 @@ export default function launcherHelp() {
                 desc: t('launcher.help.legend.terminal.desc', 'shell común, sin asistente iniciado'),
               },
               {
+                icon: 'relay',
+                name: t('launcher.help.legend.sala.name', '🛃 Sala'),
+                desc: t('launcher.help.legend.sala.desc', 'Chat neutral de Aduana, sin elegir una carpeta propia'),
+              },
+              {
                 icon: 'gitBranch',
                 name: t('launcher.help.legend.tolkien.name', 'Tolkien'),
                 desc: t('launcher.help.legend.tolkien.desc', 'abre en el proyecto Tolkien'),
@@ -60,7 +65,12 @@ export default function launcherHelp() {
               {
                 icon: 'console',
                 name: t('launcher.help.legend.console.name', 'Mi Consola'),
-                desc: t('launcher.help.legend.console.desc', 'abre en el proyecto de esta consola'),
+                desc: t('launcher.help.legend.console.desc', 'atajo canónico al proyecto de esta consola, con identidad e ícono propios'),
+              },
+              {
+                icon: 'home',
+                name: t('launcher.help.legend.mySpace.name', 'Mi espacio'),
+                desc: t('launcher.help.legend.mySpace.desc', 'destino aislado que reemplaza a Mi Consola para un inquilino no administrador'),
               },
               {
                 icon: 'folder',
@@ -125,12 +135,20 @@ export default function launcherHelp() {
                 v: t('launcher.help.actions.terminal.v', 'Abre un shell sin modelo ni runner de IA; los comandos corren directamente en el servidor.'),
               },
               {
+                k: t('launcher.help.actions.sala.k', '🛃 Sala'),
+                v: t('launcher.help.actions.sala.v', 'Crea un Chat neutral de Aduana sin elegir carpeta. Los mensajes que envíes y sus respuestas consumen tokens.'),
+              },
+              {
                 k: t('launcher.help.actions.tolkien.k', 'Tolkien'),
                 v: t('launcher.help.actions.tolkien.v', 'Selecciona la carpeta del proyecto Tolkien.'),
               },
               {
                 k: t('launcher.help.actions.console.k', 'Mi Consola'),
-                v: t('launcher.help.actions.console.v', 'Selecciona la carpeta del proyecto de la consola.'),
+                v: t('launcher.help.actions.console.v', 'Selecciona la carpeta canónica del proyecto de la consola para host y administradores.'),
+              },
+              {
+                k: t('launcher.help.actions.mySpace.k', 'Mi espacio'),
+                v: t('launcher.help.actions.mySpace.v', 'Selecciona el espacio aislado del usuario cuando quien entra es un inquilino no administrador.'),
               },
               {
                 k: t('launcher.help.actions.other.k', 'Otra carpeta'),
@@ -146,7 +164,7 @@ export default function launcherHelp() {
               },
               {
                 k: t('launcher.help.actions.model.k', 'Modelo'),
-                v: t('launcher.help.actions.model.v', 'Elige el modelo para Chat o Claude TUI; cada apertura empieza en Tándem. No aparece en una Terminal común.'),
+                v: t('launcher.help.actions.model.v', 'Elige el modelo para Chat, Claude TUI o Sala. Las opciones cambian según el tipo y el selector no aparece en una Terminal común.'),
               },
               {
                 k: t('launcher.help.actions.start.k', 'Iniciar en…'),
@@ -161,6 +179,16 @@ export default function launcherHelp() {
                 v: t('launcher.help.actions.close.v', 'Cierra el lanzador y descarta la selección actual.'),
               },
             ],
+          },
+        ],
+      },
+      {
+        title: t('launcher.help.destinations.title', 'Destinos y carpetas'),
+        blocks: [
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('launcher.help.destinations.text', 'La lista actual no muestra carpetas recientes: ofrece Tolkien, el lugar propio (Mi Consola o Mi espacio) y Otra carpeta. En el navegador, la carpeta que estás viendo queda seleccionada; podés iniciar ahí aunque no tenga subcarpetas.'),
           },
         ],
       },

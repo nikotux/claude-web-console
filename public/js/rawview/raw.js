@@ -19,6 +19,13 @@
 // global, HUD) + /api/chat/list (estado de sesión). Cierre con Esc/✕.
 
 import { bindHelp, helpBtn } from '../ui/help.js';
+import { initI18n, applyI18n } from '../ui/i18n.js';
+
+const meForLang = await (async () => {
+  try { return await (await fetch('/api/whoami')).json(); } catch { return null; }
+})();
+await initI18n(meForLang?.lang || 'es');
+applyI18n(document);
 
 const POLL_MS = 800;
 const FEED_MAX = 30;

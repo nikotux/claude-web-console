@@ -1,6 +1,6 @@
 {
   "seguimientos.help.title": "Follow-ups",
-  "seguimientos.help.intro": "Follow-ups organizes work that needs human action: decisions, replies, approvals, and next steps. The screen always reads a copy saved on disk; it never queries Zoho live while you view it.",
+  "seguimientos.help.intro": "Follow-ups organizes work that needs human action: decisions, replies, approvals, and next steps. It is the first resident of Limbo, the neutral space between worlds. The screen always reads a copy saved on disk; it never queries Zoho live while you view it.",
   "seguimientos.help.first.title": "First steps",
   "seguimientos.help.first.step1": "Read Today's summary to find overdue, blocked, and changed items since your last visit.",
   "seguimientos.help.first.step2": "Sort or filter Niko's Tickets and open a row to review its details.",
@@ -43,7 +43,7 @@
   "seguimientos.help.buttons.bulk.k": "Work on selected",
   "seguimientos.help.buttons.bulk.v": "Opens a session with the checked tickets and consumes tokens while it works.",
   "seguimientos.help.buttons.refresh.k": "↻ Refresh data",
-  "seguimientos.help.buttons.refresh.v": "Requests an update to the Desk copy and then reads the saved snapshot again.",
+  "seguimientos.help.buttons.refresh.v": "Updates the Desk copy through the read-only Aduana and then reads the saved snapshot again. It is deterministic and consumes no tokens.",
   "seguimientos.help.buttons.classify.k": "🧠 Reclassify",
   "seguimientos.help.buttons.classify.v": "Classifies the snapshot again with AI; it consumes tokens.",
   "seguimientos.help.buttons.project.k": "Project",
@@ -67,5 +67,6 @@
   "seguimientos.help.buttons.help.k": "? Help",
   "seguimientos.help.buttons.help.v": "Opens this guide without changing filters or selections.",
   "seguimientos.help.warning.title": "Watch out for this",
-  "seguimientos.help.warning.text": "The dashboard does not resolve or publish anything on its own. Sessions opened here can read several sources, but they may write only to the ticket and must always ask for your explicit approval first."
+  "seguimientos.help.warning.text": "The dashboard does not resolve or publish anything on its own. Sessions opened here can read several sources, but they may write only to the ticket and must always ask for your explicit approval first.",
+  "seguimientos.help.warning.limbo": "Limbo cross-references information in read-only mode without synchronizing worlds: any write is limited to the ticket and requires your explicit approval."
 }

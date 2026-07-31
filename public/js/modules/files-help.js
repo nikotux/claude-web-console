@@ -173,7 +173,7 @@ export default function filesHelp() {
           {
             type: 'note',
             tone: 'danger',
-            text: t('files.help.warning.text', 'La Papelera conserva cada ítem 30 días y después lo purga. “Eliminar” dentro de la Papelera es inmediato e irreversible; renombrar también cambia la ruta real que usan enlaces, scripts y sesiones.'),
+            text: t('files.help.warning.text', 'La Papelera es recuperable: guarda los ítems en ~/.cwc-trash/ durante 30 días y después los purga. “Eliminar” dentro de la Papelera es inmediato e irreversible; renombrar también cambia la ruta real que usan enlaces, scripts y sesiones.'),
           },
         ],
       },

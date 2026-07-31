@@ -8,8 +8,9 @@ montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
 DOS BARRAS LATERALES (2026-07-07, pedido del usuario "Sesiones
 ocupa mucho espacio"): #sidebar IZQUIERDA = control/módulos
 (Tickets & Features → Pendientes → Comunicaciones, en ese orden)
-+ pie de estado (plan-limits · usage · cuenta · explorador ·
-system). #sidebar-right DERECHA = Sesiones + "Nueva sesión"
++ CABECERA con el chip del usuario conectado (`#acct-chip`, desde
+2026-07-31) + pie de estado (plan-limits · usage · explorador · raw ·
+seguimientos · ayuda · system). #sidebar-right DERECHA = Sesiones + "Nueva sesión"
 (launcher) + #rail-tabs (pestañas abiertas) + pie
 (.sidebar-footer--right) con el pulso de TOLKIEN PERSISTENTE
 ARRIBA (data-module="tolkien" en .tk-persist — ya NO es una
@@ -115,6 +116,12 @@ borde y `--cwc-radius-lg` sobre `.md-mermaid-canvas`, decisión de Niko el
 empieza, mientras que el gráfico va al hilo del texto. Si se toca la lámina hay
 que mover con ella el degradado de `.md-mermaid--pan::after`, que se mezcla
 contra el fondo de la lámina y no contra `--cwc-bg`.
+El bloque `.zv-*` pertenece al visor de diagramas ampliados
+(`ui/zoom-viewer.js`); el viejo body específico del zoom de Mermaid YA NO
+EXISTE. `.zv-body` debe conservar `overflow:hidden`: `.dlg-body` trae
+`overflow:auto` de base y sus barras pelean con el arrastre durante el paneo.
+En móvil, los botones de `.zv-bar` suben a 36px como excepción táctil
+deliberada al diseño compacto global.
 La tabla accesible `.md-chart-data` es sr-only pero NO está escopada a
 `.chat-md` (el renderer también se usa en Aprendizaje y Pendientes) y depende
 de que `.md-chart` sea `position:relative` para no escaparse del scroller del
@@ -361,6 +368,23 @@ clon del workspace; si alguno falla, el título se degrada a
   derecha el launcher se oculta (only-expanded) y queda la columna ☰ + "+"
   (only-collapsed). El botón usa `.sb-new-btn` (34px, mismo alto que el ☰).
 
+- El chip del usuario conectado (`#acct-chip` = `.acct-avatar` con la inicial
+  + `.acct-name`) vive en `.sb-head` de `#sidebar`, NO en el pie: se movió el
+  2026-07-31 a pedido de Niko porque abajo quedaba espachurrado entre el botón
+  de tokens y la fila de íconos, mientras esa cabecera tenía toda la fila vacía
+  al lado del ☰. La clase `.acct-user` ya no existe; quedó solo el id
+  `acct-user`, que main.js sigue usando junto con `acct-avatar` y `acct-chip`
+  en el `whoami.then(...)`. Trampa concreta: el `flex:1` de la vieja
+  `.acct-user` era lo ÚNICO que empujaba los íconos del pie contra el borde
+  derecho; al sacarla hay que reponer ese empuje o el pie se colapsa a la
+  izquierda. Hoy lo hace
+  `.footer-acct > [data-module="usage"] { margin-right: auto }`. Esa misma
+  regla hay que NEUTRALIZARLA en el rail colapsado con
+  `#sidebar.collapsed .footer-acct > [data-module="usage"] { margin-right: 0 }`,
+  porque ahí el pie es `flex-direction: column` y un margen auto GANA sobre
+  `align-items: center`: medido con Playwright, descentraba el botón de tokens
+  4px a la izquierda.
+
 - `#rail-tabs` (chips de pestañas ABIERTAS) vive en la barra DERECHA
   (`#sidebar-right`, con Sesiones) desde 2026-07-07 y se oculta con
   `#sidebar-right:not(.collapsed) #rail-tabs { display: none; }` (antes el
@@ -413,3 +437,11 @@ clon del workspace; si alguno falla, el título se degrada a
   onboarding, un usuario nuevo. Regla: probar `/onboard` y `/login` SIEMPRE en
   un contexto limpio (ventana privada o contexto nuevo de Playwright), nunca
   en la pestaña donde ya estás logueado.
+
+- `src/server.js` lee `public/index.html` UNA SOLA VEZ al arrancar para
+  inyectarle el `BUILD_ID` (ver `src/server.js:89`): cualquier cambio de MARKUP
+  en index.html NO se ve hasta reiniciar el servicio con
+  `systemctl --user restart claude-web-console`, aunque el CSS y el JS sí se
+  sirven frescos del disco. Verificar un cambio de index.html sin reiniciar da
+  un falso negativo: el navegador recibe el HTML viejo aunque el archivo en
+  disco ya esté bien.

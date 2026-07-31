@@ -7,7 +7,7 @@ export default function seguimientosHelp() {
   return {
     title: t('seguimientos.help.title', 'Seguimientos'),
     icon: 'list',
-    intro: t('seguimientos.help.intro', 'Seguimientos ordena el trabajo que necesita una acción humana: decisiones, respuestas, aprobaciones y próximos pasos. La pantalla siempre lee una copia guardada en disco, nunca consulta Zoho en vivo mientras la mirás.'),
+    intro: t('seguimientos.help.intro', 'Seguimientos ordena el trabajo que necesita una acción humana: decisiones, respuestas, aprobaciones y próximos pasos. Es el primer habitante de Limbo, el espacio neutral entre mundos. La pantalla siempre lee una copia guardada en disco, nunca consulta Zoho en vivo mientras la mirás.'),
     sections: [
       {
         title: t('seguimientos.help.first.title', 'Primeros pasos'),
@@ -101,7 +101,7 @@ export default function seguimientosHelp() {
               },
               {
                 k: t('seguimientos.help.buttons.refresh.k', '↻ Refrescar datos'),
-                v: t('seguimientos.help.buttons.refresh.v', 'Pide actualizar la copia de Desk y después vuelve a leer el snapshot guardado.'),
+                v: t('seguimientos.help.buttons.refresh.v', 'Actualiza la copia de Desk por la Aduana read-only y después vuelve a leer el snapshot guardado. Es determinístico y no consume tokens.'),
               },
               {
                 k: t('seguimientos.help.buttons.classify.k', '🧠 Re-clasificar'),
@@ -158,6 +158,11 @@ export default function seguimientosHelp() {
             type: 'note',
             tone: 'warn',
             text: t('seguimientos.help.warning.text', 'El tablero no resuelve ni publica nada por su cuenta. Las sesiones abiertas desde acá pueden leer varias fuentes, pero solo pueden escribir en el ticket y siempre deben pedir tu aprobación explícita antes de hacerlo.'),
+          },
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('seguimientos.help.warning.limbo', 'Limbo cruza información en modo lectura sin sincronizar mundos: cualquier escritura queda acotada al ticket y requiere tu OK explícito.'),
           },
         ],
       },

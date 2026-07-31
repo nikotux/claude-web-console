@@ -59,6 +59,23 @@ const bareNameOf = (terminalId) => `cwct-${terminalId}`;
 // 8 s actualiza tarjetas en su lugar y puede reconstruir solo el contenido
 // derivado. La key coincide con dataset.key (`chat:<id>`).
 const openKidCards = new Set();
+
+// Estado plegado/desplegado de los grupos colapsables de la lista. Vive en
+// localStorage (no en el DOM) porque render() reconstruye la lista entera en
+// cada refresh; mismo patrón que `cwc.sessions.others.open`.
+function readGroupOpen(key, def = true) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? def : v === '1';
+  } catch { return def; } // localStorage puede estar bloqueado.
+}
+function bindGroupOpen(det, key, def = true) {
+  det.open = readGroupOpen(key, def);
+  det.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, det.open ? '1' : '0'); } catch { /* localStorage puede estar bloqueado. */ }
+  });
+}
+
 let liveTickTimer = null;
 let me = null;
 let hostName = null;
@@ -679,14 +696,20 @@ export default {
       const multiWorld = worldKeys.length > 1;
       for (const key of worldKeys) {
         const grp = byWorld.get(key);
+        let grpEl = null;
         if (multiWorld) {
-          const h = document.createElement('div');
-          h.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
-          h.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || t('sessions.world.other', 'Otros')}</span><span class="side-count">${grp.chats.length}</span>`;
-          listEl.appendChild(h);
+          grpEl = document.createElement('details');
+          grpEl.className = 'sess-world-grp';
+          const summary = document.createElement('summary');
+          summary.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
+          summary.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || t('sessions.world.other', 'Otros')}</span><span class="side-count">${grp.chats.length}</span>`;
+          grpEl.appendChild(summary);
+          bindGroupOpen(grpEl, 'cwc.sessions.world.' + key + '.open');
+          listEl.appendChild(grpEl);
         }
+        const host = grpEl || listEl;
         if (key !== 'tolkien') {
-          for (const item of grp.chats) listEl.appendChild(chatCard(item.chat, tmuxByName));
+          for (const item of grp.chats) host.appendChild(chatCard(item.chat, tmuxByName));
           continue;
         }
 
@@ -694,7 +717,7 @@ export default {
         // efímero vive debajo en su propio bloque de árbol, incluso cuando no hay
         // headers de mundo porque Tolkien es el único grupo presente.
         for (const item of grp.chats.filter((x) => !x.envId)) {
-          listEl.appendChild(chatCard(item.chat, tmuxByName));
+          host.appendChild(chatCard(item.chat, tmuxByName));
         }
         const envGroups = new Map();
         for (const item of grp.chats.filter((x) => x.envId)) {
@@ -709,7 +732,7 @@ export default {
         for (const env of sortedEnvs) {
           const det = document.createElement('details');
           det.className = 'sess-env-grp';
-          det.open = true;
+          bindGroupOpen(det, 'cwc.sessions.env.' + env.envId + '.open');
           const summary = document.createElement('summary');
           summary.className = 'sess-env-h';
           summary.title = t('sessions.env.summaryTitle', 'Entorno {env} · rama {branch} · worktree {worktree}', {
@@ -720,7 +743,7 @@ export default {
           summary.innerHTML = `${icon('isolated', { size: 12 })}<span class="sess-env-name">${escapeHtml(env.label)}</span><span class="side-count">${env.chats.length}</span>`;
           det.appendChild(summary);
           for (const c of env.chats) det.appendChild(chatCard(c, tmuxByName));
-          listEl.appendChild(det);
+          host.appendChild(det);
         }
       }
       for (const s of mySessions) listEl.appendChild(card(s));
@@ -755,9 +778,7 @@ export default {
 
         const det = document.createElement('details');
         det.className = 'sess-others sess-owners';
-        try {
-          det.open = localStorage.getItem('cwc.sessions.others.open') === '1';
-        } catch { /* localStorage puede estar bloqueado. */ }
+        bindGroupOpen(det, 'cwc.sessions.others.open', false);
         det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.otherUsers', 'Otros usuarios')} <span class="side-count">${otherUserCount}</span></summary>`;
         for (const [owner, items] of [...byOwner.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)))) {
           const head = document.createElement('div');
@@ -767,11 +788,6 @@ export default {
           for (const c of items.chats) det.appendChild(chatCard(c, tmuxByName));
           for (const s of items.sessions) det.appendChild(card(s));
         }
-        det.addEventListener('toggle', () => {
-          try {
-            localStorage.setItem('cwc.sessions.others.open', det.open ? '1' : '0');
-          } catch { /* localStorage puede estar bloqueado. */ }
-        });
         listEl.appendChild(det);
       }
 

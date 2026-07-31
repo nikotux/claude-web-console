@@ -41,7 +41,7 @@ function salaSections() {
       blocks: [
         {
           type: 'p',
-          text: t('chat.help.sala.what.text', 'Aduana es una sala colaborativa: varias personas comparten un único hilo, conversan entre ellas y deciden cuándo enviar todo lo hablado desde el último corte a la IA.'),
+          text: t('chat.help.sala.what.text', 'Aduana es una sala colaborativa: varias personas comparten un único hilo y conversan entre ellas. La IA arranca muda: los mensajes humanos no la llaman y solo habla después de que alguien toca el botón de corte.'),
         },
       ],
     },
@@ -51,10 +51,32 @@ function salaSections() {
         {
           type: 'steps',
           items: [
-            t('chat.help.sala.first.step1', 'Escribí un mensaje y tocá Enviar: aparece en el hilo compartido sin llamar a la IA.'),
+            t('chat.help.sala.first.step1', 'Escribí un mensaje y tocá Enviar: viaja por el canal say, aparece en el hilo compartido y cuesta 0 tokens; no llama a la IA.'),
             t('chat.help.sala.first.step2', 'Esperá o conversá hasta reunir el contexto que necesiten. El contador muestra cuántos mensajes hay desde el último corte.'),
             t('chat.help.sala.first.step3', 'Tocá ✦ Enviar a la IA cuando quieran iniciar un turno. Si está ocupada, el corte queda pendiente.'),
             t('chat.help.sala.first.step4', 'Seguí la respuesta en el mismo hilo; cualquier participante ve la conversación completa.'),
+          ],
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.controls.title', 'Controles de la sala'),
+      blocks: [
+        {
+          type: 'kv',
+          items: [
+            {
+              k: t('chat.help.sala.controls.compose.k', 'Adjuntar, Referenciar y Enviar'),
+              v: t('chat.help.sala.controls.compose.v', 'Podés sumar archivos o una referencia de otra sesión y después publicar el say. Preparar ese contenido cuesta 0 tokens; queda esperando el corte.'),
+            },
+            {
+              k: t('chat.help.sala.controls.stop.k', 'Detener'),
+              v: t('chat.help.sala.controls.stop.v', 'Durante un turno de IA, pide confirmación y corta lo que sigue sin deshacer acciones terminadas. Solo puede decidir quien hizo el corte o, como respaldo, el dueño.'),
+            },
+            {
+              k: t('chat.help.sala.controls.acta.k', 'Acta'),
+              v: t('chat.help.sala.controls.acta.v', 'Tocá su encabezado para desplegarla o plegarla; el aviso indica si puede estar desactualizada.'),
+            },
           ],
         },
       ],
@@ -68,7 +90,7 @@ function salaSections() {
             {
               emoji: '✦',
               name: t('chat.help.sala.legend.ai.name', 'Enviar a la IA'),
-              desc: t('chat.help.sala.legend.ai.desc', 'manda todos los mensajes acumulados desde el corte anterior'),
+              desc: t('chat.help.sala.legend.ai.desc', 'manda lo acumulado; si hay preguntas @cucho, manda solo esas y deja el resto esperando'),
             },
             {
               emoji: '✂',
@@ -120,7 +142,7 @@ function salaSections() {
         },
         {
           type: 'p',
-          text: t('chat.help.sala.people.quoteReply', 'El cuarto botón de esa fila permite responder citando un mensaje. La cita queda visible en tu respuesta y, al tocarla, te lleva al mensaje original. A diferencia de reaccionar, responder sí consume tokens porque es un mensaje que entra al próximo corte.'),
+          text: t('chat.help.sala.people.quoteReply', 'El cuarto botón de esa fila permite responder citando un mensaje. La cita queda visible y, al tocarla, te lleva al original. Publicar la respuesta cuesta 0 tokens, como cualquier say; queda esperando y recién entra al contexto pago cuando alguien hace el próximo corte.'),
         },
       ],
     },
@@ -130,6 +152,24 @@ function salaSections() {
         {
           type: 'p',
           text: t('chat.help.sala.minutes.text', 'Arriba del hilo está el acta con lo acordado, lo pendiente y lo que quedó abierto. La IA la actualiza en cada corte cuando hay algo nuevo que anotar; si pasa mucho tiempo sin actualizarse, la sala te avisa.'),
+        },
+      ],
+    },
+    {
+      title: t('chat.help.sala.permissions.title', 'Permisos y dueño'),
+      blocks: [
+        {
+          type: 'kv',
+          items: [
+            {
+              k: t('chat.help.sala.permissions.owner.k', 'Quién fija el modo'),
+              v: t('chat.help.sala.permissions.owner.v', 'Solo el dueño de la sala fija el modo de permisos. Un invitado nunca lo cambia, aunque vea el selector.'),
+            },
+            {
+              k: t('chat.help.sala.permissions.all.k', 'Modo Todo'),
+              v: t('chat.help.sala.permissions.all.v', 'La sala sí puede correr en Todo (bypassPermissions), pero únicamente por decisión explícita del dueño. Acepta comandos, ediciones y red sin preguntar y conserva el mismo riesgo alto del chat común.'),
+            },
+          ],
         },
       ],
     },
@@ -151,7 +191,7 @@ function salaSections() {
           items: [
             {
               k: t('chat.help.sala.tokens.people.k', 'Enviar en la sala (say)'),
-              v: t('chat.help.sala.tokens.people.v', 'No consume tokens: hablar entre personas son mensajes internos de la sala.'),
+              v: t('chat.help.sala.tokens.people.v', 'Cuesta 0 tokens: se difunde y se guarda como conversación interna. Solo pasa a ser contexto pago si después alguien hace un corte.'),
             },
             {
               k: t('chat.help.sala.tokens.reactions.k', 'Reaccionar con 👍, ❓ o 🔴'),
@@ -159,7 +199,7 @@ function salaSections() {
             },
             {
               k: t('chat.help.sala.tokens.quoteReply.k', 'Responder citando'),
-              v: t('chat.help.sala.tokens.quoteReply.v', 'Sí consume tokens: es un mensaje que entra al próximo corte; la cita visible enlaza al mensaje original.'),
+              v: t('chat.help.sala.tokens.quoteReply.v', 'Cuesta 0 tokens al publicarse; como es un say, queda para el próximo corte. La cita visible enlaza al mensaje original.'),
             },
             {
               k: t('chat.help.sala.tokens.ai.k', '✦ Enviar a la IA'),
@@ -179,7 +219,7 @@ function salaSections() {
         {
           type: 'note',
           tone: 'warn',
-          text: t('chat.help.sala.warning.text', 'Los turnos de IA los paga el anfitrión de la sala. Las personas invitadas ven todo el hilo compartido, incluidos los mensajes anteriores y las respuestas de la IA.'),
+          text: t('chat.help.sala.warning.text', 'Los turnos de IA los paga el anfitrión de la sala, sin importar quién apriete el corte. Las personas invitadas ven todo el hilo compartido, incluidos los mensajes anteriores y las respuestas de la IA.'),
         },
       ],
     },
@@ -320,7 +360,7 @@ export default function chatHelp() {
           },
           {
             type: 'p',
-            text: t('chat.help.viz.mermaid', 'Los diagramas Mermaid se leen a ancho completo; el botón “Ampliar” los abre en grande para recorrer estructuras y flujos complejos.'),
+            text: t('chat.help.viz.mermaid', 'Los diagramas Mermaid se leen a ancho completo; el botón “Ampliar” abre un visor con zoom y paneo: acercá con los botones, la rueda o pinch, arrastrá para recorrerlo y usá “Ajustar” para volver al encuadre.'),
           },
           {
             type: 'p',
@@ -338,18 +378,16 @@ export default function chatHelp() {
         blocks: [
           {
             type: 'p',
-            text: t('chat.help.pacIntro', 'El mismo Pac-Man aparece acá arriba y en las tarjetas de Sesiones: el color y el movimiento dicen qué está haciendo la conversación en cada momento.'),
+            text: t('chat.help.pacIntro', 'El Pac-Man del header muestra el turno; el de cada bloque resume sus herramientas. El color y el movimiento indican qué está pasando.'),
           },
           {
             type: 'html',
             html: [
               pacmanRow('working', t('chat.help.pacWorkingName', 'Trabajando'), t('chat.help.pacWorkingDesc', 'dorado, mordisco rápido: un turno corriendo ahora')),
               pacmanRow('delegating', t('chat.help.pacDelegatingName', 'Delegando'), t('chat.help.pacDelegatingDesc', 'violeta con el ícono del interfono: esperando que vuelva un subagente (Task) u otro proceso')),
-              pacmanRow('queued', t('chat.help.pacQueuedName', 'En cola'), t('chat.help.pacQueuedDesc', 'ámbar que respira: esperando su turno detrás de otro paso')),
               pacmanRow('waiting', t('chat.help.pacWaitingName', 'Tu turno'), t('chat.help.pacWaitingDesc', 'verde, parpadeo lento: esperando tu mensaje o tu decisión')),
-              pacmanRow('stale', t('chat.help.pacStaleName', 'Sin señales'), t('chat.help.pacStaleDesc', 'ámbar apagado y quieto: se perdió el rastro, no se sabe si sigue activo')),
-              pacmanRow('error', t('chat.help.pacErrorName', 'Falló'), t('chat.help.pacErrorDesc', 'rojo y quieto: se detuvo por un error')),
-              pacmanRow('dormant', t('chat.help.pacDormantName', 'Dormido'), t('chat.help.pacDormantDesc', 'gris y quieto: nada activo ni delegado — el único estado sin animación')),
+              pacmanRow('error', t('chat.help.pacErrorName', 'Falló'), t('chat.help.pacErrorDesc', 'rojo y quieto: alguna herramienta del bloque falló')),
+              pacmanRow('dormant', t('chat.help.pacDormantName', 'Terminado'), t('chat.help.pacDormantDesc', 'gris y quieto: todas las herramientas del bloque terminaron bien')),
             ].join(''),
           },
         ],
@@ -362,7 +400,7 @@ export default function chatHelp() {
             items: [
               {
                 k: t('chat.help.tandem.what.k', '🤝 Tándem'),
-                v: t('chat.help.tandem.what.v', 'Opus con esfuerzo alto razona y verifica; Codex GPT-5.6 Sol con esfuerzo alto ejecuta el código.'),
+                v: t('chat.help.tandem.what.v', 'Claude (Opus con esfuerzo alto) razona, planea y verifica; Codex GPT-5.6 Sol con esfuerzo alto ejecuta los cambios de código.'),
               },
               {
                 k: t('chat.help.tandem.badge.k', 'Insignia del modelo'),
@@ -371,6 +409,32 @@ export default function chatHelp() {
               {
                 k: t('chat.help.tandem.inactive.k', 'Tándem · inactivo'),
                 v: t('chat.help.tandem.inactive.v', 'La elección cambió pero el motor actual arrancó antes. Usá “Reabrir para cambios” en el menú de Sesiones.'),
+              },
+              {
+                k: t('chat.help.tandem.parallel.k', 'Delegaciones en paralelo'),
+                v: t('chat.help.tandem.parallel.v', 'Claude puede lanzar varias delegaciones de Codex al mismo tiempo si tocan archivos disjuntos. Dos delegaciones sobre el mismo archivo no deben correr en paralelo porque pueden pisarse.'),
+              },
+              {
+                k: t('chat.help.tandem.restart.k', 'Sobreviven a la web'),
+                v: t('chat.help.tandem.restart.v', 'Cada delegación corre en un proceso propio y persiste en disco: sigue viva aunque se reinicie la interfaz web, y Claude puede recuperar después su estado y resultado.'),
+              },
+            ],
+          },
+        ],
+      },
+      {
+        title: t('chat.help.continuity.title', 'Continuidad y autonomía'),
+        blocks: [
+          {
+            type: 'kv',
+            items: [
+              {
+                k: t('chat.help.continuity.runner.k', 'Código nuevo y runner vivo'),
+                v: t('chat.help.continuity.runner.v', 'Un runner que ya está vivo conserva el código que cargó al arrancar. Para que tome cambios nuevos, usá “Reabrir para cambios” en el menú de Sesiones; el contexto se conserva.'),
+              },
+              {
+                k: t('chat.help.continuity.ball.k', '🎾 Pelota: MÍA'),
+                v: t('chat.help.continuity.ball.v', 'La línea final es un contrato, no decoración: si el asistente cierra con “🎾 Pelota: MÍA”, el sistema le devuelve el control y el chat sigue solo sin esperar otro mensaje tuyo.'),
               },
             ],
           },
@@ -390,18 +454,19 @@ export default function chatHelp() {
               { k: t('chat.help.buttons.pacman.k', 'Pac-Man'), v: t('chat.help.buttons.pacman.v', 'Resume si el chat está trabajando, delegando o esperando tu mensaje.') },
               { k: t('chat.help.buttons.model.k', 'Insignia de modelo'), v: t('chat.help.buttons.model.v', 'Muestra AutoTux, Tándem o el modelo forzado y el esfuerzo. No es un selector: cambialo desde Sesiones.') },
               { k: t('chat.help.buttons.mode.k', 'Modo de permisos'), v: t('chat.help.buttons.mode.v', 'Cambia cuánta autonomía tiene el asistente desde la próxima acción.') },
-              { k: t('chat.help.buttons.attach.k', 'Adjuntar'), v: t('chat.help.buttons.attach.v', 'Sube imágenes, PDF, texto u otros archivos para el próximo mensaje; admite hasta 8. También podés pegar o arrastrar archivos.') },
-              { k: t('chat.help.buttons.package.k', 'Referenciar paquete'), v: t('chat.help.buttons.package.v', 'Busca otra sesión e inserta una referencia con su contexto en el mensaje. Atajo: F5.') },
-              { k: t('chat.help.buttons.input.k', 'Mensaje'), v: t('chat.help.buttons.input.v', 'Escribí o dictá. Enter envía; Shift+Enter agrega una línea. Los comandos “/” tienen autocompletado.') },
+              { k: t('chat.help.buttons.attach.k', 'Adjuntar'), v: t('chat.help.buttons.attach.v', 'Sube hasta 8 imágenes, PDF, textos u otros archivos; también podés pegar o arrastrar. Adjuntar, quitar o abrir una vista previa no consume tokens: el consumo empieza al enviar el mensaje que los incluye.') },
+              { k: t('chat.help.buttons.package.k', 'Referenciar paquete'), v: t('chat.help.buttons.package.v', 'Abre un buscador de sesiones e inserta la referencia elegida en el mensaje. Atajo: F5. Buscar o insertar cuesta 0 tokens; enviar el mensaje sí consume.') },
+              { k: t('chat.help.buttons.input.k', 'Mensaje'), v: t('chat.help.buttons.input.v', 'Escribí o dictá. Enter envía; Shift+Enter agrega una línea. “/” abre comandos con flechas, Tab o Enter para elegir y Esc para cerrar.') },
               { k: t('chat.help.buttons.send.k', 'Enviar'), v: t('chat.help.buttons.send.v', 'Manda el mensaje y pone a trabajar al asistente; ese trabajo consume tokens.') },
-              { k: t('chat.help.buttons.stop.k', 'Detener'), v: t('chat.help.buttons.stop.v', 'Interrumpe la respuesta en curso después de confirmar.') },
-              { k: t('chat.help.buttons.permission.k', 'Permitir / Denegar'), v: t('chat.help.buttons.permission.v', 'Aprueba o rechaza una acción puntual cuando el modo exige permiso.') },
+              { k: t('chat.help.buttons.stop.k', 'Detener'), v: t('chat.help.buttons.stop.v', 'Interrumpe la respuesta en curso después de confirmar. No consume otro turno ni deshace acciones ya completadas.') },
+              { k: t('chat.help.buttons.permission.k', 'Permitir / Denegar'), v: t('chat.help.buttons.permission.v', 'Tocá el chip para desplegar la herramienta, el comando o el diff exacto; después aprobá o rechazá la acción puntual. Los comandos peligrosos ya aparecen abiertos.') },
               { k: t('chat.help.buttons.tool.k', 'Pac-Man del bloque'), v: t('chat.help.buttons.tool.v', 'Abre el panel lateral con el comando, archivo, resultado o error de cada herramienta de ese bloque. Volvé a tocarlo (o usá ✕ / Esc) para cerrarlo.') },
               {
                 k: t('chat.help.buttons.rawpanel.k', 'Panel de detalle'),
                 v: t('chat.help.buttons.rawpanel.v', 'Ocupa un tercio a la derecha; en el teléfono se abre casi a pantalla completa. Muestra solo las herramientas del bloque que tocaste.'),
               },
-              { k: t('chat.help.buttons.answer.k', 'Responder pregunta'), v: t('chat.help.buttons.answer.v', 'Elegí una opción o escribí otra respuesta; Enviar se habilita al completar todas. Cancelar rechaza la pregunta.') },
+              { k: t('chat.help.buttons.answer.k', 'Responder pregunta'), v: t('chat.help.buttons.answer.v', 'Elegí una opción o escribí otra respuesta; Enviar se habilita al completar todas. Cancelar rechaza la pregunta. Enviar permite que el turno continúe y esa continuación consume tokens.') },
+              { k: t('chat.help.buttons.pending.k', 'Texto orquestado / Descartar'), v: t('chat.help.buttons.pending.v', 'Una instrucción creada desde Aduana queda editable en el composer y no ejecuta nada sola. Enviar inicia un turno y consume tokens; Descartar la elimina sin consumo.') },
               { k: t('chat.help.buttons.retry.k', 'Reintentar / Ignorar'), v: t('chat.help.buttons.retry.v', 'Si aparece la sugerencia de un modelo más fuerte, vos decidís si rehacer el último turno; nunca cambia solo. Reintentar consume tokens.') },
             ],
           },

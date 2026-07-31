@@ -48,8 +48,8 @@ dirtyCount. Lógica compartida en backup/commitmsg-shared.js.
 Untracked: NUNCA viajan solos — el diálogo de Push los lista con
 checkbox por archivo (body {includeUntracked:[...]}) y el backend
 valida la selección en 3 capas: solo lo que git lista como
-untracked no-ignorado (un .env ignorado NI aparece), re-chequeo
-contra SECRET_PATHS/SECRET_DIRS (403 si un secreto se coló) y
+untracked no-ignorado (un .env ignorado NI aparece), re-chequeo con
+isSecretPath() (403 si un secreto se coló) y
 selección humana explícita archivo por archivo. Cada push exitoso
 ADEMÁS: (1) agrega
 una entrada EN INGLÉS a la sección "## Changelog" de README.md
@@ -83,3 +83,27 @@ Toda corrida de poda loguea cantidad, nombres y bytes liberados, incluso
 si no había excedente. `KEEP_PER_SET` es la constante exportada y la UI
 lista ambos conjuntos con tamaño y muestra la política vigente. La poda
 no se ejecuta al listar ni al arrancar: solo después de `POST /create`.
+
+CLASIFICACIÓN DE SECRETOS (2026-07-31, `console:BUG-2528`): la denylist
+anti-secretos NO es una sola lista — son TRES, con reglas de match distintas
+a propósito, y `isSecretPath()` las aplica en ese orden:
+- `SECRET_BASENAMES` (`.env`) → secreto POR NOMBRE: matchea por basename en
+  CUALQUIER nivel del árbol. Es el fix de BUG-15 y no se toca.
+- `SECRET_ROOT_FILES` (`users.json`, `sessions.json`, `recents.json`,
+  `titles.json`) → secreto POR LUGAR: es estado de runtime que el server
+  escribe en `PROJECT_DIR` y solo existe ahí. Matchea SOLO como ruta exacta
+  de raíz.
+- `SECRET_DIRS` (`certs`) → secreto POR DIRECTORIO: matchea como segmento en
+  cualquier nivel (`app/certs/key.pem`).
+- `SECRET_ROOT_NAMES` = la unión de los tres, para los DOS usos que necesitan
+  nombres de raíz: el loop de `check-ignore` de `repoSecretGuards()` y la
+  lista `excluded` que `GET /git-info` muestra en la UI.
+POR QUÉ importa: BUG-15 había ensanchado el match a basename para cazar
+secretos anidados (`sub/.env`), pero eso arrastró a los cuatro `.json` de
+estado, cuyos nombres son genéricos. El diccionario i18n legítimo
+`public/i18n/en/sessions.json` quedaba clasificado como fuga y el `403` de
+`selectUntracked()` sale ANTES del `git add -u`, así que un solo archivo mal
+clasificado abortaba el commit ENTERO (67 cambios), no solo ese archivo.
+NO ensanchar `SECRET_ROOT_FILES` a match por basename: es exactamente el bug.
+Tampoco renombrar el archivo i18n para esquivar el detector — eso es esconder
+el síntoma, prohibido por `console:CONVE-2336`.

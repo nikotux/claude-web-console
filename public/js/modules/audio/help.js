@@ -15,7 +15,7 @@ export default function audioHelp() {
           {
             type: 'steps',
             items: [
-              t('audio.help.first.step1', 'Abrí Pendientes, entrá en “📋 Tareas” o “🎙️ Informes” y tocá “Audio” o “Analizar audio”.'),
+              t('audio.help.first.step1', 'Como administrador, abrí Pendientes, entrá en “📋 Tareas” o “🎙️ Informes” y tocá “Audio” o “Analizar audio”.'),
               t('audio.help.first.step2', 'Pegá la transcripción ya convertida a texto en el campo grande.'),
               t('audio.help.first.step3', 'Tocá “Analizar” y confirmá la corrida con IA, que consume tokens.'),
               t('audio.help.first.step4', 'Recorré el árbol de resumen, segmentos, plan, hablantes, tareas propuestas y Raw.'),
@@ -138,7 +138,7 @@ export default function audioHelp() {
           {
             type: 'note',
             tone: 'warn',
-            text: t('audio.help.warning.text', '“Analizar” consume tokens reales. La interpretación es de solo lectura y ninguna tarea se crea automáticamente: cada propuesta necesita que toques “Crear tarea”, “Crear todas” o “Pasar a plan”.'),
+            text: t('audio.help.warning.text', '“Analizar” consume tokens reales. La interpretación es de solo lectura y ninguna tarea se crea automáticamente: aprobás una propuesta con “Crear tarea” o confirmás explícitamente el lote con “Crear todas” o “Pasar a plan”.'),
           },
         ],
       },

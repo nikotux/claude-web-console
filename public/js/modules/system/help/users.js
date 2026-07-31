@@ -40,7 +40,7 @@ export default function usersHelp() {
             { k: t('system.help.users.buttons.create.k', 'Crear'), v: t('system.help.users.buttons.create.v', 'Da de alta inmediatamente una cuenta con usuario y contraseña.') },
             { k: t('system.help.users.buttons.role.k', 'Hacer / quitar admin'), v: t('system.help.users.buttons.role.v', 'Cambia el rol de una cuenta existente.') },
             { k: t('system.help.users.buttons.password.k', 'Contraseña'), v: t('system.help.users.buttons.password.v', 'Reemplaza la contraseña de la cuenta elegida.') },
-            { k: t('system.help.users.buttons.delete.k', 'Eliminar usuario'), v: t('system.help.users.buttons.delete.v', 'Borra la cuenta y hace que sus sesiones de autenticación dejen de valer.') },
+            { k: t('system.help.users.buttons.delete.k', 'Eliminar usuario'), v: t('system.help.users.buttons.delete.v', 'Borra la cuenta, cierra sus sesiones, mueve su espacio privado a la papelera por 30 días y pide borrar su workspace de Pad. El usuario host no se puede eliminar desde esta pantalla.') },
             { k: t('system.help.users.buttons.invite.k', 'Generar invitación'), v: t('system.help.users.buttons.invite.v', 'Crea un token de un solo uso, válido por 24 horas, para /onboard.') },
             { k: t('system.help.users.buttons.copy.k', 'Copiar invitación'), v: t('system.help.users.buttons.copy.v', 'Copia la URL de onboarding y el token para compartirlos con la persona.') },
             { k: t('system.help.users.buttons.revoke.k', 'Revocar'), v: t('system.help.users.buttons.revoke.v', 'Invalida una invitación pendiente para que ya no se pueda usar.') },
@@ -52,7 +52,7 @@ export default function usersHelp() {
         blocks: [{
           type: 'note',
           tone: 'danger',
-          text: t('system.help.users.warning.text', 'Todo este panel es admin-only. Dar rol admin habilita backups, actualizaciones, reinicios y otras acciones sensibles. Eliminar una cuenta invalida sus sesiones; una invitación admin entrega esos mismos privilegios al completarse.'),
+          text: t('system.help.users.warning.text', 'Todo este panel es admin-only. Dar rol admin habilita backups, actualizaciones, reinicios y otras acciones sensibles. Al eliminar una cuenta, sus credenciales quedan dentro de la papelera recuperable durante 30 días y la limpieza de Pad puede quedar pendiente si falta su credencial. Una invitación admin entrega esos mismos privilegios al completarse.'),
         }],
       },
     ],

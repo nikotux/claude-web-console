@@ -22,6 +22,8 @@ export const HELP_INDEX = [
     load: () => import('./../modules/chat/help.js'),
   },
   {
+    // Excepción legítima: la Sala de Aduana no tiene un header propio; este
+    // tema se abre desde el índice general «Guía de la consola».
     id: 'sala',
     get title() { return t('chat.help.sala.indexTitle', 'Sala de Aduana'); },
     icon: 'sparkle',
@@ -31,6 +33,14 @@ export const HELP_INDEX = [
       const topic = await import('./../modules/chat/help.js');
       return { default: topic.salaHelp };
     },
+  },
+  {
+    id: 'visado',
+    get title() { return t('visado.help.indexTitle', 'Visados'); },
+    icon: 'check',
+    group: 'trabajo',
+    get blurb() { return t('visado.help.indexBlurb', 'Peticiones de operaciones, revisión exacta y aprobación del dueño.'); },
+    load: () => import('./../modules/visado/help.js'),
   },
   {
     id: 'sessions',
@@ -57,6 +67,8 @@ export const HELP_INDEX = [
     load: () => import('./../modules/terminal/help.js'),
   },
   {
+    // Excepción legítima: la barra móvil no tiene un header donde montar un
+    // helpBtn; su tema se abre desde el índice general «Guía de la consola».
     id: 'auxbar',
     get title() { return t('core.help.topic.auxbar.title', 'Barra móvil'); },
     icon: 'menu',
@@ -121,6 +133,8 @@ export const HELP_INDEX = [
     load: () => import('./../modules/usage/help.js'),
   },
   {
+    // Excepción legítima: Estado del server es una fila compacta de gauges en
+    // el footer, sin header propio; su tema se abre desde «Guía de la consola».
     id: 'stats',
     get title() { return t('core.help.topic.stats.title', 'Estado del server'); },
     icon: 'gear',

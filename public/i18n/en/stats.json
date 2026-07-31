@@ -31,7 +31,9 @@
   "stats.help.legend.high.desc": "high pressure; for disk, freeing space is especially urgent",
   "stats.help.buttons.title": "Buttons and actions",
   "stats.help.buttons.hover.k": "Hover",
-  "stats.help.buttons.hover.v": "Shows supplementary host data. The widget has no buttons and runs no actions.",
+  "stats.help.buttons.hover.v": "Shows supplementary host data. The widget refreshes automatically every 2.5 seconds, has no buttons, and consumes no tokens.",
+  "stats.help.cpuDelta.title": "How CPU is measured",
+  "stats.help.cpuDelta.text": "CPU is the change between two global server readings: the first reading after startup shows 0%. The widget (/api/stats) and the health check share the previous reading, so either one can move the comparison point for the next value.",
   "stats.help.warning.title": "Watch out for this",
   "stats.help.warning.text": "These rings measure machine resources, not token consumption: that lives in Usage and tokens. A brief CPU spike is usually normal; watch for sustained red, RAM that does not drop, or disk nearing its limit."
 }

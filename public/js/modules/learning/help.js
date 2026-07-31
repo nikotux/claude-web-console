@@ -7,7 +7,7 @@ export default function learningHelp() {
   return {
     title: t('learning.help.title', 'Aprendizaje'),
     icon: 'eye',
-    intro: t('learning.help.intro', 'Aprendizaje es tu pizarrón personal para ordenar temas que querés entender y reforzar. Agrupa el estudio en rutas y puede armar explicaciones guiadas leyendo el código real en modo solo lectura.'),
+    intro: t('learning.help.intro', 'Aprendizaje es tu pizarrón personal para ordenar temas que querés entender y reforzar. Temas y rutas viven en el Pad LOCAL (temas-de-aprendizaje y rutas-de-aprendizaje) y las guías leen el código real en modo solo lectura.'),
     sections: [
       {
         title: t('learning.help.first.title', 'Primeros pasos'),
@@ -19,7 +19,7 @@ export default function learningHelp() {
               t('learning.help.first.step2', 'Tocá “Nuevo tema” y escribí qué querés entender, el alcance y una pregunta puntual si la tenés.'),
               t('learning.help.first.step3', 'Elegí el estado y, si varios temas forman un recorrido, asignales una ruta.'),
               t('learning.help.first.step4', 'Abrí la tarjeta del tema y sumá notas o contexto antes de generar la guía.'),
-              t('learning.help.first.step5', 'Tocá “🎓 Explicame esto” o “Generar guía completa” para que la IA navegue el código en solo lectura y guarde una explicación guiada.'),
+              t('learning.help.first.step5', 'Tocá “🎓 Generar guía completa” —la acción “Explicame esto”— o “Regenerar” para que la IA navegue el código en solo lectura y guarde una explicación guiada.'),
             ],
           },
         ],
@@ -132,7 +132,7 @@ export default function learningHelp() {
               },
               {
                 k: t('learning.help.buttons.analyze.k', 'Analizar'),
-                v: t('learning.help.buttons.analyze.v', 'Organiza todo el aprendizaje con IA y propone duplicados, rutas y próximos temas. Consume tokens; nada se aplica sin tu aprobación.'),
+                v: t('learning.help.buttons.analyze.v', 'Disponible para administradores: organiza todo el aprendizaje con IA y propone duplicados, rutas y próximos temas. Consume tokens; nada se aplica sin tu aprobación.'),
               },
               {
                 k: t('learning.help.buttons.routes.k', '🗺️ Rutas de aprendizaje'),
@@ -171,8 +171,8 @@ export default function learningHelp() {
                 v: t('learning.help.buttons.interpret.v', 'Convierte una charla pegada en una entrada de contexto. Consume tokens.'),
               },
               {
-                k: t('learning.help.buttons.explain.k', '🎓 Explicame esto · Generar guía'),
-                v: t('learning.help.buttons.explain.v', 'Navega el código real con herramientas de solo lectura y guarda la explicación. Consume tokens sólo si hace falta generar o adaptar la guía.'),
+                k: t('learning.help.buttons.explain.k', '🎓 Generar guía completa · Regenerar'),
+                v: t('learning.help.buttons.explain.v', 'Disponible para administradores: navega el código real con herramientas de solo lectura y guarda la explicación. Consume tokens sólo si hace falta generarla o adaptarla.'),
               },
               {
                 k: t('learning.help.buttons.force.k', 'Forzar regeneración completa'),
@@ -180,7 +180,7 @@ export default function learningHelp() {
               },
               {
                 k: t('learning.help.buttons.chat.k', '💬 Profundizar en chat'),
-                v: t('learning.help.buttons.chat.v', 'Abre una sesión de trabajo aparte con todo el contexto del tema; al cerrarla, su resumen vuelve al pizarrón.'),
+                v: t('learning.help.buttons.chat.v', 'Abre una sesión de trabajo aparte con todo el contexto del tema; la sesión usa tokens al trabajar y, al cerrarla, su resumen vuelve al pizarrón.'),
               },
               {
                 k: t('learning.help.buttons.advance.k', 'Marcar reforzando · Marcar dominado'),
@@ -204,7 +204,7 @@ export default function learningHelp() {
           {
             type: 'note',
             tone: 'danger',
-            text: t('learning.help.warning.text', 'Esto es un pizarrón, no un taller: el código que aparece en la guía es demostrativo; no se ejecuta ni persiste cambios en archivos. “Explicame esto” consume tokens y navega el repo en modo solo lectura. Para ejecutar o cambiar código de verdad, abrí “Profundizar en chat” o una sesión de trabajo aparte. Eliminar un tema también elimina su guía y no se puede deshacer.'),
+            text: t('learning.help.warning.text', 'Esto es un pizarrón, no un taller: el código de la guía es demostrativo; no se ejecuta ni persiste cambios en archivos. Generar o adaptar una guía consume tokens y navega el repo en modo solo lectura. Para ejecutar o cambiar código de verdad, abrí “Profundizar en chat” o una sesión de trabajo aparte. Eliminar un tema también elimina su guía y no se puede deshacer.'),
           },
         ],
       },

@@ -15,7 +15,7 @@ export default function projectsHelp() {
             t('system.help.projects.first.step1', 'Elegí una tarjeta de proyecto, contexto de Tickets o personalización.'),
             t('system.help.projects.first.step2', 'En el detalle, abrí la sección de CLAUDE.md o la memoria que querés revisar.'),
             t('system.help.projects.first.step3', 'Tocá el lápiz para editar solo esa sección o nota.'),
-            t('system.help.projects.first.step4', 'Revisá el análisis de cambios y tocá Confirmar y guardar únicamente si el resultado es correcto.'),
+            t('system.help.projects.first.step4', 'Al editar una sección de CLAUDE.md, revisá el análisis con IA y tocá Confirmar y guardar solo si es correcto. Las memorias, contextos, hooks y preferencias tienen guardado directo.'),
             t('system.help.projects.first.step5', 'Usá ‹ Proyectos para volver a la lista y elegir otra entrada.'),
           ],
         }],

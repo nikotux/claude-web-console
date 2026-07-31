@@ -16,9 +16,13 @@
 // en vivo: es una preferencia que se toca rara vez, y evitarla ahorra tener
 // que instrumentar cada uno de los ~15 módulos con un listener de re-render.
 
+// Esta lista decide qué diccionarios se descargan. Agregar un JSON nuevo en
+// public/i18n/en/ sin sumar acá su namespace lo deja muerto; el auditor
+// `node bin/cwc-i18n-audit.js` detecta ese olvido en la sección `## carga`.
 const MODULES = [
   'core', 'launcher', 'sessions', 'chat', 'terminal', 'tickets', 'tasks',
   'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile', 'unifi',
+  'files', 'rawview', 'seguimientos', 'onboard', 'news', 'projects', 'visado',
 ];
 
 let LANG = 'es';
@@ -37,8 +41,7 @@ export function getLang() {
 
 // Carga el diccionario del idioma (no-op para 'es': el fallback ES cubre
 // todo). Tolerante a módulos sin diccionario todavía (404 → se saltea, no
-// rompe nada) — así Fase 2 puede sumar un JSON por módulo sin tocar esta
-// lista ni este archivo.
+// rompe nada).
 export function initI18n(lang) {
   LANG = lang === 'en' ? 'en' : 'es';
   DICT = {};

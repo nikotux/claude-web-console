@@ -111,6 +111,20 @@
   (un subdirectorio distinto de `core`/`modules`, o un `.js` suelto distinto
   de `server.js`). Una unidad sin clase no queda abierta: recibe el trato más
   restrictivo mientras se corrige la clasificación y se regenera la foto.
+  **`i18n`** (`console:BUG-2517` / `console:BUG-2518`, 0 tokens): audita claves
+  usadas sin traducción y huérfanas, la carga de diccionarios y la inicialización
+  de i18n en páginas standalone, archivos ignorados por git y la coherencia entre
+  el índice de ayuda, sus `load:` y las llamadas a `helpBtn()`. Nunca devuelve
+  `fail`: `t()` degrada intencionalmente al español, por lo que un hallazgo o una
+  excepción del auditor es `warn` y no debe tumbar la pestaña Salud. La lógica se
+  comparte con `bin/cwc-i18n-audit.js` mediante
+  `src/modules/health/i18n-shared.js`; no se duplica (`console:CONVE-2085`). Las
+  tres excepciones conocidas de ayuda (`sala`, `auxbar`, `stats`) están declaradas
+  a propósito en ese módulo compartido para que el check no nazca en amarillo
+  permanente. Nació de BUG-2517 —tres diccionarios (214 claves) fuera de los 16
+  namespaces hardcodeados y seis páginas sin `initI18n`— y BUG-2518 —
+  `public/i18n/en/sessions.json` ignorado durante unos 12 días por un patrón sin
+  anclar en `.gitignore`—, dos fallas invisibles por el fallback al español.
   Y **`pad-backbone`**
   (2026-07-12, Gap #3 / TASK-296): lee las Conventions del Pad LOCAL por HTTP
   (0 tokens, NO MCP → no toca la regla 6, vía `core/pad-service-client.js`) y

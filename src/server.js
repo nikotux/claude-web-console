@@ -167,16 +167,40 @@ async function main() {
   // usuario nuevo no tiene cuenta; el flujo se gatea por el token de invitación).
   app.get('/onboard', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'onboard.html')));
   app.get('/js/onboard/onboard.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'onboard', 'onboard.js')));
-  // `onboard.js` hace `await import('/js/ui/i18n.js')` en su PRIMERA línea: si
-  // ese módulo cae en el gate, el 401 rechaza la promesa del IIFE y el wizard
-  // no renderiza NADA (tarjeta vacía). El wizard no llama `initI18n`, así que
-  // se queda en 'es' y nunca pide los diccionarios `/i18n/en/*.json`.
+  // `login.js` y `onboard.js` SÍ inicializan i18n; `onboard.js` además hace
+  // `await import('/js/ui/i18n.js')` en su PRIMERA línea. Por eso tanto el
+  // módulo como los diccionarios `/i18n/en/` deben estar en esta allowlist.
+  // DECISIÓN DE SEGURIDAD: los diccionarios se exponen sin autenticación a
+  // propósito porque son textos de interfaz sin datos sensibles, el server
+  // bindea exclusivamente a la IP ZeroTier ("público" es dentro de la VPN) y,
+  // sin ellos, las páginas pre-login no pueden usar el idioma del usuario.
   app.get('/js/ui/i18n.js', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'js', 'ui', 'i18n.js')));
+  app.use('/i18n/en', (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+
+    let filename;
+    try { filename = decodeURIComponent(req.path.slice(1)); }
+    catch { return res.status(404).end(); }
+    if (!/^[a-z][a-z0-9-]*\.json$/.test(filename)) return res.status(404).end();
+
+    const i18nEnDir = path.join(PUBLIC_DIR, 'i18n', 'en');
+    const filePath = path.resolve(i18nEnDir, filename);
+    const relativePath = path.relative(i18nEnDir, filePath);
+    const [firstSegment] = relativePath.split(path.sep);
+    if (path.isAbsolute(relativePath) || firstSegment === '..') return res.status(404).end();
+
+    return res.sendFile(filePath, (err) => {
+      if (!err) return;
+      if (res.headersSent) return res.end();
+      return res.status(404).end();
+    });
+  });
   // TODO asset que use una página PÚBLICA (login/onboard) debe estar en esta
   // lista — CSS, JS y también los módulos que un script público cargue con
-  // `import()` dinámico. Si falta uno, el gate responde 401 JSON: un CSS
-  // ausente deja la página sin estilos, pero un módulo JS ausente RECHAZA el
-  // import y la página queda VACÍA (pasó con `/js/ui/i18n.js` y `/onboard`).
+  // `import()` dinámico y sus diccionarios. Si se agrega uno sin sumarlo, el
+  // gate responde 401 JSON: un CSS ausente deja la página sin estilos, pero un
+  // módulo JS ausente RECHAZA el import y la página queda VACÍA (pasó con
+  // `/js/ui/i18n.js` y `/onboard`).
   app.get('/css/style.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'style.css')));
   app.get('/css/tokens.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'tokens.css')));
   app.get('/css/ui.css', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'css', 'ui.css')));

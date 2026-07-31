@@ -5,7 +5,7 @@ export default function dashboardHelp() {
   return {
     title: t('system.help.dashboard.title', 'Dashboard'),
     icon: 'pulse',
-    intro: t('system.help.dashboard.intro', 'Es una foto gratuita del servidor, el código y el trabajo rastreado en Pad. Sirve para orientarte y detectar huecos de registro sin lanzar ningún análisis de IA.'),
+    intro: t('system.help.dashboard.intro', 'Es una foto gratuita del servidor, el código y el trabajo rastreado en Pad. Sirve para orientarte y detectar huecos de registro sin lanzar ningún análisis de IA; el panel completo es admin-only.'),
     sections: [
       {
         title: t('system.help.dashboard.first.title', 'Primeros pasos'),
@@ -43,7 +43,7 @@ export default function dashboardHelp() {
           type: 'kv',
           items: [
             { k: t('system.help.dashboard.buttons.groups.k', 'Secciones desplegables'), v: t('system.help.dashboard.buttons.groups.v', 'Muestran tablas de módulos, runners, motores y Pad sin cambiar nada.') },
-            { k: t('system.help.dashboard.buttons.rescan.k', 'Re-escanear ahora'), v: t('system.help.dashboard.buttons.rescan.v', 'Regenera el inventario y la foto de recursos. No consume tokens y no requiere admin.') },
+            { k: t('system.help.dashboard.buttons.rescan.k', 'Re-escanear ahora'), v: t('system.help.dashboard.buttons.rescan.v', 'Regenera el inventario y la foto de recursos. No consume tokens; el panel es admin-only.') },
           ],
         }],
       },

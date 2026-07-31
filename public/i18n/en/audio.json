@@ -63,7 +63,7 @@
   "audio.help.title": "Analyze audio",
   "audio.help.intro": "Analyze audio turns an already-written transcript into an organized summary of what was discussed. It lives inside Pending and proposes tasks, but you decide which ones to create.",
   "audio.help.first.title": "First steps",
-  "audio.help.first.step1": "Open Pending, go to “📋 Tasks” or “🎙️ Reports”, and tap “Audio” or “Analyze audio”.",
+  "audio.help.first.step1": "As an administrator, open Pending, go to “📋 Tasks” or “🎙️ Reports”, and tap “Audio” or “Analyze audio”.",
   "audio.help.first.step2": "Paste the transcript, already converted to text, into the large field.",
   "audio.help.first.step3": "Tap “Analyze” and confirm the AI run, which uses tokens.",
   "audio.help.first.step4": "Browse the tree of summary, segments, plan, speakers, proposed tasks and Raw.",
@@ -119,5 +119,5 @@
   "audio.help.buttons.raw.k": "🧾 Raw",
   "audio.help.buttons.raw.v": "Shows the original text and the complete technical result.",
   "audio.help.warning.title": "Watch out",
-  "audio.help.warning.text": "“Analyze” uses real tokens. Interpretation is read-only and no task is created automatically: every proposal requires tapping “Create task”, “Create all” or “Move to plan”."
+  "audio.help.warning.text": "“Analyze” uses real tokens. Interpretation is read-only and no task is created automatically: approve one proposal with “Create task” or explicitly confirm the batch with “Create all” or “Move to plan”."
 }

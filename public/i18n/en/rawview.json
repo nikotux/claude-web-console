@@ -67,5 +67,5 @@
   "rawview.help.buttons.escape.k": "Esc",
   "rawview.help.buttons.escape.v": "Performs the same action as ✕. If the browser cannot close the tab, close it manually.",
   "rawview.help.warning.title": "Watch out for this",
-  "rawview.help.warning.text": "This is an admin-only view because it shows real text from host sessions, although it cannot edit or run actions. The odometer estimates live flow; it is not billing data. Use the Usage panel for consumption figures."
+  "rawview.help.warning.text": "This is a personal, read-only view: it shows real text only from your sessions, terminals, and processes, but it cannot edit or run actions and does not start AI by itself. The odometer estimates live flow; it is not billing data. Use the Usage panel for consumption figures."
 }

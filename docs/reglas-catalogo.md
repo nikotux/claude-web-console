@@ -29,7 +29,12 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    redacción de las Novedades tras un push → runner desacoplado
    (`bin/cwc-news-runner.js`);
    optimización IA de los motores (censo + análisis con propuestas) → runner
-   desacoplado (`bin/cwc-optimize-runner.js`); INTERFONO entre sesiones
+   desacoplado (`bin/cwc-optimize-runner.js`); ejecución de una operación del
+   catálogo del visado ya aprobada → runner desacoplado
+   (`bin/cwc-visado-runner.js`, invocado con `--data-dir <ruta> --id
+   <peticionId>`; revalida contrato, opciones y huella antes de ejecutar; NO usa
+   el SDK (0 tokens: la regla 6 no aplica); log en
+   `<dataDir>/visado-runner.log`); INTERFONO entre sesiones
    (mensajería + claims anti-conflicto: `bin/cwc-bus.js` invocado por los hooks
    de Claude Code, estado 100% en archivos en `~/.cwc-data/session-bus/` —
    NADA en el proceso del server, sobrevive reinicios por construcción; el

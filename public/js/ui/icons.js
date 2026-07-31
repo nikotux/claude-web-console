@@ -16,6 +16,7 @@ const COMMON = `fill="none" stroke="currentColor" stroke-width="${SW}" stroke-li
 const PATHS = {
   menu: `<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>`,
   plus: `<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>`,
+  minus: `<line x1="5" y1="12" x2="19" y2="12"/>`,
   close: `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>`,
   chevronRight: `<polyline points="9,5 16,12 9,19"/>`,
   chevronDown: `<polyline points="5,9 12,16 19,9"/>`,

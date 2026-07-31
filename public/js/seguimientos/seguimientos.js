@@ -6,6 +6,13 @@
 // Todo 0 tokens salvo los botones que abren sesión (Actualizaciones/Standup/
 // Trabajar/Vista IA). Móvil: los cuadrantes se apilan y son colapsables.
 import { bindHelp, helpBtn } from '../ui/help.js';
+import { initI18n, applyI18n } from '../ui/i18n.js';
+
+const meForLang = await (async () => {
+  try { return await (await fetch('/api/whoami')).json(); } catch { return null; }
+})();
+await initI18n(meForLang?.lang || 'es');
+applyI18n(document);
 
 const app = document.getElementById('app');
 

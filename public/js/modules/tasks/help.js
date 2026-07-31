@@ -8,7 +8,7 @@ export default function tasksHelp() {
   return {
     title: t('tasks.help.title', 'Pendientes'),
     icon: 'list',
-    intro: t('tasks.help.intro', 'Pendientes es el lugar para ordenar lo que falta hacer y convertirlo en trabajo concreto. Podés llevar tareas sueltas o agruparlas en planes, sin que nada salga de este tablero privado.'),
+    intro: t('tasks.help.intro', 'Pendientes es el lugar para ordenar lo que falta hacer y convertirlo en trabajo concreto. Su fuente de verdad es el Pad LOCAL, en las colecciones pendientes y planes; no usa archivos como backend ni saca nada de este tablero privado.'),
     sections: [
       {
         title: t('tasks.help.first.title', 'Primeros pasos'),
@@ -18,7 +18,7 @@ export default function tasksHelp() {
             items: [
               t('tasks.help.first.step1', 'Tocá “Abrir tablero” en la tarjeta Banco de conocimiento.'),
               t('tasks.help.first.step2', 'Entrá en “📋 Tareas” y tocá “Nueva” para cargar qué hay que hacer.'),
-              t('tasks.help.first.step3', 'Elegí tipo, prioridad, estado y, si corresponde, un plan.'),
+              t('tasks.help.first.step3', 'Elegí tipo, prioridad, estado, fecha comprometida (ETA) y, si corresponde, un plan.'),
               t('tasks.help.first.step4', 'Abrí la tarjeta de la tarea para avanzar su estado, editarla, relacionarla o dejar comentarios.'),
               t('tasks.help.first.step5', 'Volvé a “📊 Panel” para ver qué está en curso, qué necesita atención y por dónde conviene seguir.'),
             ],
@@ -26,7 +26,7 @@ export default function tasksHelp() {
         ],
       },
       {
-        title: t('tasks.help.tabs.title', 'Las cuatro pestañas'),
+        title: t('tasks.help.tabs.title', 'Las cinco pestañas'),
         blocks: [
           {
             type: 'kv',
@@ -42,6 +42,10 @@ export default function tasksHelp() {
               {
                 k: t('tasks.help.tabs.plans.k', '🗺️ Planes'),
                 v: t('tasks.help.tabs.plans.v', 'Agrupa tareas bajo registros PLAN y calcula su progreso según cuántas tareas hijas están hechas.'),
+              },
+              {
+                k: t('tasks.help.tabs.learning.k', '🎓 Aprendizaje'),
+                v: t('tasks.help.tabs.learning.v', 'Muestra el pizarrón de temas y rutas de estudio; sus datos viven en sus propias colecciones de Pad LOCAL.'),
               },
               {
                 k: t('tasks.help.tabs.reports.k', '🎙️ Informes'),
@@ -143,6 +147,16 @@ export default function tasksHelp() {
                 name: t('tasks.help.legend.audio.name', 'Desde audio'),
                 desc: t('tasks.help.legend.audio.desc', 'tarea nacida de una propuesta de un informe'),
               },
+              {
+                emoji: t('tasks.help.legend.overdue.emoji', '🔴'),
+                name: t('tasks.help.legend.overdue.name', 'Vencida'),
+                desc: t('tasks.help.legend.overdue.desc', 'la fecha comprometida ya pasó; el tablero también muestra el total vencido'),
+              },
+              {
+                emoji: t('tasks.help.legend.today.emoji', '🟡'),
+                name: t('tasks.help.legend.today.name', 'Vence hoy'),
+                desc: t('tasks.help.legend.today.desc', 'la fecha comprometida es hoy'),
+              },
             ],
           },
         ],
@@ -200,15 +214,15 @@ export default function tasksHelp() {
               },
               {
                 k: t('tasks.help.buttons.audio.k', 'Audio'),
-                v: t('tasks.help.buttons.audio.v', 'Abre el análisis de una transcripción. Consume tokens al tocar “Analizar”.'),
+                v: t('tasks.help.buttons.audio.v', 'Disponible para administradores: abre el análisis de una transcripción. Consume tokens al tocar “Analizar”.'),
               },
               {
                 k: t('tasks.help.buttons.analysis.k', 'Análisis general'),
-                v: t('tasks.help.buttons.analysis.v', 'Busca duplicados y datos incompletos con IA. Consume tokens; cada propuesta se aprueba o descarta por separado.'),
+                v: t('tasks.help.buttons.analysis.v', 'Disponible para administradores: busca duplicados y datos incompletos con IA. Consume tokens; cada propuesta se aprueba o descarta por separado.'),
               },
               {
                 k: t('tasks.help.buttons.reorganize.k', 'Reorganizar todo con IA'),
-                v: t('tasks.help.buttons.reorganize.v', 'Analiza tareas, planes e informes juntos. Consume tokens y no aplica propuestas sin aprobación.'),
+                v: t('tasks.help.buttons.reorganize.v', 'Disponible para administradores: analiza tareas, planes e informes juntos. Consume tokens y no aplica propuestas sin aprobación.'),
               },
               {
                 k: t('tasks.help.buttons.delete.k', 'Eliminar'),
@@ -224,7 +238,7 @@ export default function tasksHelp() {
           {
             type: 'note',
             tone: 'danger',
-            text: t('tasks.help.warning.text', 'Eliminar una tarea no se puede deshacer. Eliminar un plan no borra sus tareas: las deja sin plan. Los análisis con IA consumen tokens, pero sus propuestas nunca se aplican solas.'),
+            text: t('tasks.help.warning.text', 'Las tareas y planes viven en Pad LOCAL, no en archivos. Eliminar una tarea no se puede deshacer; eliminar un plan deja sus tareas sin plan. Los análisis con IA consumen tokens, pero sus propuestas nunca se aplican solas.'),
           },
         ],
       },

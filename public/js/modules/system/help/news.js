@@ -46,6 +46,7 @@ export default function newsHelp() {
             { k: t('system.help.news.buttons.edit.k', '✏️ Editar'), v: t('system.help.news.buttons.edit.v', 'Cambia emoji, categoría, título, resumen, viñetas y pasos. No consume tokens y es admin-only.') },
             { k: t('system.help.news.buttons.hide.k', '🙈 Ocultar / 👁 Mostrar'), v: t('system.help.news.buttons.hide.v', 'Retira o publica una entrada para el resto de los usuarios. No consume tokens y es admin-only.') },
             { k: t('system.help.news.buttons.delete.k', '🗑️ Borrar'), v: t('system.help.news.buttons.delete.v', 'Pide confirmación y elimina la entrada. No consume tokens y es admin-only.') },
+            { k: t('system.help.news.buttons.retry.k', 'Reintentar'), v: t('system.help.news.buttons.retry.v', 'Si falla la carga, vuelve a pedir las novedades. No consume tokens.') },
           ],
         }],
       },

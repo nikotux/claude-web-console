@@ -285,8 +285,66 @@ no prueba que el paso funcionó. `--dry-run` es el default y escribir exige
 contra Zoho inmediatamente antes de cada escritura, reanudabilidad por
 observación del estado real de la página y log JSONL con el estado antes y
 después de cada escritura en `<dataDir>/tolkien/ops/`. El directorio queda
-0700 y los archivos 0600. No usa el SDK: consume 0 tokens y la regla 6 no
+0700 y los archivos 0600. Desde `console:PLAN-2521` el estado de trabajo vive además en una base local SQLite `<dataDir>/tolkien/state.db`, con `dbFile` resuelto por invocación dentro de `tolkienPaths()` como el resto de las rutas. El motor es `node:sqlite` nativo (Node 24), sin dependencias nuevas. Los JSON NO se reemplazan ni se borran: siguen escribiéndose igual y son el artefacto de salida de cada corrida —`close --reconcile <ruta>` los sigue consumiendo—, mientras que la base acumula lo que el JSON no puede, que es el HISTORIAL entre corridas y la escritura concurrente. El espejo a la base es BEST-EFFORT por diseño: `withStore()` atrapa cualquier fallo, lo avisa por stderr y devuelve null, de modo que una base rota jamás tumba una corrida cuyo JSON ya se escribió. El subcomando nuevo `db` consulta y migra: `--stats` (default), `--migrate` (importa census.json, reconcile.json y ops/*.jsonl una sola vez, idempotente por la clave `meta.json_import_done`, y NUNCA borra ni mueve los JSON), `--force`, `--runs <n>` y `--bucket <closable|realOpen|unpaired>`. No usa el SDK: consume 0 tokens y la regla 6 no
 aplica.
+### bin/cwc-tolkien-store.js  MÓDULO (no CLI, sin shebang ni main) del store local
+SQLite del runner de Tolkien, `console:PLAN-2521`. Motor `node:sqlite` nativo: cero
+dependencias, decisión tomada tras verificar Node v24.18.0 en la máquina. Siete tablas —
+`meta`, `runs`, `tickets` (último estado por `ticketWorkflowId`, con `raw_json` sin pérdida
+para que un campo nuevo de Tolkien sobreviva aunque no tenga columna), `ticket_observations`
+(una fila por ticket×corrida, el historial que el JSON no guarda), `reconcile` (pila y motivo
+por ticket y corrida), `ops` (log de cada escritura con antes/después/quién/cuándo/resultado) y
+`schema_snapshot` (para que el canario de `console:PLAN-2523` compare estructura entre corridas;
+`recordSchemaSnapshot` devuelve `changed` comparando el fingerprint contra el snapshot anterior
+del mismo `source`). CONCURRENCIA, que es su razón de ser porque el escaneo paralelo escribe
+desde varios workers: `journal_mode=WAL` (N lectores + 1 escritor sin bloqueo mutuo),
+`busy_timeout=15000`, transacciones `BEGIN IMMEDIATE` cortas —toma el lock al abrir, así el
+conflicto aparece antes de hacer trabajo y no a mitad— y `withWrite()`, que reintenta ante
+SQLITE_BUSY/LOCKED con backoff exponencial más jitter, esperando con `Atomics.wait` en vez de
+quemar CPU. Un error que NO es de lock se relanza sin reintentar. Cada lote va en UNA
+transacción, no una por fila. `migrateFromJson()` es idempotente y TOLERANTE: un archivo
+ilegible o una línea corrupta se cuenta en `errors[]` y no aborta el resto. La ruta de la base
+la recibe SIEMPRE por parámetro; el módulo no resuelve rutas por su cuenta ni tiene constantes
+de ruta a nivel de módulo (`console:BUG-2185`, `console:BUG-2472`). Directorio 0700, archivo y
+sidecars `-wal`/`-shm` 0600. Verificado con 8 procesos hijo REALES escribiendo en paralelo:
+400 ops, 200 tickets, 400 ids únicos, `integrity_check=ok`. Su test es
+`bin/cwc-test-tolkien-store.js`.
+### bin/cwc-test-tolkien-store.js  test funcional determinista y AISLADO de
+`cwc-tolkien-store.js` (patrón `cwc-test-chat-trash.js`). No usa el SDK, 0 tokens, y trabaja
+siempre sobre un `mkdtemp` que borra en `finally`: JAMÁS toca `~/.cwc-data`. Siete grupos
+T1..T7 — esquema y WAL · upsert sin duplicar con `first_seen_run` preservado · pilas del
+reconcile · ops con round-trip de JSON · fingerprint de snapshots · migración idempotente que
+deja los JSON en disco · y T7, CONCURRENCIA REAL con 8 procesos hijo de verdad (no simulada),
+que es el grupo que habilita el escaneo paralelo. Uso:
+`node bin/cwc-test-tolkien-store.js`; termina con `N pass / M fail` + exit code.
+### bin/cwc-tolkien-schema.js  observador CLI VERSIONADO y estrictamente
+SOLO LECTURA de la superficie real de formularios de Tolkien
+(`console:PLAN-2520`). `scan --auto` toma las tres muestras obligatorias de
+`<dataDir>/tolkien/reconcile.json`, sondea por GET primero las colas activas
+`focus=overdue` y `focus=unowned`, después las ocho `view=active&actor=*`
+reales (excepto `all`), `view=attention` y su foco `in_progress`, y por último
+resolved/waiting/in_progress/all, tomando hasta 100 filas por cola, con tope de
+250 candidatos únicos y corte al cubrir las cuatro ramas del gate de cierre; recorre
+por default `overview,estado,chat,work,dev,reporte`. También
+acepta `--tickets <uuid|WORK-n|URL,...>`, `--tabs`, `--session` y `--out`.
+Extrae del DOM los server actions, constraints, labels y opciones, fusiona
+formularios por firma y une variantes por ticket; después colapsa como global
+(`tab: "*"`) un mismo actionId + conjunto de campos visto en varias pestañas,
+normaliza `observedOn` al workKey conocido y detecta vocabularios de opciones
+distintos para un mismo nombre de campo en `notes`. El esquema registra
+`probeSources: [{filter, found, newUnique}]`; `show [--out]` imprime ese aporte
+por cola, las estadísticas, el gate observado por ticket, los huecos y esas
+notas. Si `available` no aparece, su gap separa una `unverifiedHint` tomada del
+código local y marcada explícitamente como no observada en el DOM. Escribe atómicamente
+`<dataDir>/tolkien/schema.json` y, durante cada corrida limpia, reinicia y
+agrega una línea por ticket×tab a
+`<dataDir>/tolkien/schema-partial.jsonl`. Nunca hace submit ni click, y sólo
+navega a URLs GET: no puede mutar tickets. La lógica de sesión/navegación está
+copiada de `cwc-tolkien.js` porque B7 lo editaba en paralelo; queda la deuda de
+unificar ambos en un helper compartido (`console:PLAN-2520`). El gate
+`available` se pudo observar mediante una escritura MANUAL, puntual y
+autorizada sobre WORK-307, ejecutada FUERA del runner
+(`console:PLAN-2520`); el runner sigue siendo sólo lectura.
 ### bin/cwc-tolkien-login-runner.js  VERIFICACIÓN DESACOPLADA de la conexión
 Tolkien por usuario para ⚙ Sistema → Conexiones: recibe la cookie de sesión
 exclusivamente por stdin —nunca argv ni archivo intermedio—, consulta el
@@ -979,6 +1037,14 @@ contacto sin depender del server. Subcomandos: log/query/list/
 contacts/contact-add/scan. Estado file-based en ~/.cwc-data/comms/
 ### bin/cwc-observe.js + (un)install-observer.js  observador de estado de Claude Code
 ### bin/cwc-inventory.js        regenera el INVENTARIO del proyecto (core/inventory.js) a mano (--force)
+### bin/cwc-i18n-audit.js       wrapper delgado, determinístico y read-only de la
+auditoría de i18n + ayuda (0 tokens). La lógica vive en
+`src/modules/health/i18n-shared.js`, compartida con el chequeo rápido `i18n` de
+Salud: cruza `t('clave', ...)` y `data-i18n*` con los JSON ingleses, contrasta
+diccionarios y `MODULES` (incluido `git check-ignore`), detecta páginas sin
+`initI18n`, y cruza `HELP_INDEX` con `helpBtn()` y sus loaders. Sin flags emite
+tablas con estados; `--json` imprime el objeto compartido y `--soft` conserva
+exit 0. Sale 1 ante cualquier problema. Nunca escribe.
 ### bin/cwc-unifi-scan.js       CLI del escaneo ESTRUCTURAL del UDM Pro a Pad (colección
 `infraestructura-de-red`, PLAN-774). Wrapper delgado de `scanToPad()` de
 `src/modules/unifi/inventory-shared.js`. NO usa el SDK (0 tokens, la

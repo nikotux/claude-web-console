@@ -78,6 +78,31 @@ export const SEED_INVARIANTS = [
     text: 'SIMETRÍA de estado en chat/index.js: todo `case` del switch de eventos que muta estado persistente de la conversación (mode, model, etc.) debe llamar a onUpdate()/persist() IGUAL que sus gemelos. Ej histórico: `case "mode"` debía llamar onUpdate() como `case "model"` — si un camino guarda y su gemelo no, es un bug.',
   },
   {
+    // Familia Visado · autoridad prestada sin elevación (CONVE-2085).
+    match: /src\/modules\/visado\/catalog\.js$/,
+    text: 'VISADO — GATE IMPORTADO (console:CONVE-2085): el `gate` de CADA entrada del catálogo es una referencia IMPORTADA, NUNCA una condición de autorización reescrita dentro de catalog.js. Copiar en el catálogo la lógica del endpoint permitiría que ambas versiones diverjan cuando el endpoint se endurezca y que el visado siga aprobando con el criterio viejo; la referencia compartida garantiza que el visado usa SIEMPRE la autoridad vigente.',
+  },
+  {
+    // Familia Visado · autoridad prestada sin elevación (CONVE-2085).
+    match: /src\/modules\/visado\/catalog\.js$|bin\/cwc-visado-runner\.js$/,
+    text: 'VISADO — EJECUCIÓN CERRADA (console:CONVE-2085): ningún `run` del catálogo ni el runner arma comandos de shell o vuelve a entrar por HTTP; cada operación llama una función `op*` IMPORTADA de `tolkien/index.js`. Reintroducir una línea de shell o un salto HTTP abriría por detrás el mismo vector que el enum cerrado existe para bloquear. El runner re-valida la operación y NUNCA ejecuta fuera de ese catálogo cerrado.',
+  },
+  {
+    // Familia Visado · autoridad prestada sin elevación (CONVE-2085).
+    match: /src\/modules\/visado\/(catalog|index)\.js$/,
+    text: 'VISADO — PARÁMETROS ENUMERADOS (console:CONVE-2085): NINGÚN parámetro se acepta sin pasar por `options()`. El valor que se persiste es SIEMPRE el de la lista construida por el servidor (`match.value`), NUNCA el valor crudo enviado por el cliente: el invitado elige entre opciones autorizadas, no escribe el dato que luego ejecutará el visado.',
+  },
+  {
+    // Familia Visado · autoridad prestada sin elevación (CONVE-2085).
+    match: /src\/modules\/visado\/store\.js$/,
+    text: 'VISADO — EXPEDIENTE FUERA DE LA SALA (console:CONVE-2085): el store NUNCA resuelve su ruta bajo `~/.cwc-aduana/salas/`; un proceso de la sala no puede editar su propio expediente y aprobarse solo. store.js tampoco importa `core/user-space.js` ni `core/config.js`: esas dependencias romperían el runner con env limpio. La ubicación del expediente permanece fuera del alcance de la sala y resoluble sin el entorno del server.',
+  },
+  {
+    // Familia Visado · autoridad prestada sin elevación (CONVE-2085).
+    match: /src\/modules\/visado\/index\.js$|bin\/cwc-visado-runner\.js$/,
+    text: 'VISADO — APROBACIÓN SIN ELEVACIÓN (console:CONVE-2085): aprobar exige SIEMPRE `aprobador !== solicitante` y que el aprobador cumpla el `gate` de la operación. El visado PRESTA autoridad, NUNCA la eleva: quien aprueba tiene que poder ejecutar esa operación por sí mismo. El runner re-valida estas garantías y NUNCA ejecuta una solicitud sin aprobación válida.',
+  },
+  {
     match: /src\/core\/paths\.js$|src\/modules\/(files|projects|backup)\//,
     text: 'VALIDACIÓN DE RUTAS: toda ruta que venga del cliente pasa por resolveWithinHome/clampToHome (core/paths.js) ANTES de tocar disco. NUNCA validar con startsWith crudo ni concatenar rutas sin clamping (riesgo de path traversal).',
   },

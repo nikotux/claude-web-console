@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-31T17:52:04.192Z",
+  "generatedAt": "2026-07-31T20:40:54.350Z",
   "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
   "counts": {
-    "pad": 209,
+    "pad": 210,
     "manual": 2
   },
   "entries": {
@@ -553,7 +553,7 @@
     },
     "file:src/modules/env-vars/index.js": {
       "ref": "ARQUI-1621",
-      "plano": "central",
+      "plano": "usuario",
       "audiencia": "todos",
       "perfil": "solo-consola",
       "familia": "backend",
@@ -1233,7 +1233,7 @@
     },
     "mod:env-vars": {
       "ref": "ARQUI-1301",
-      "plano": "central",
+      "plano": "usuario",
       "audiencia": "todos",
       "perfil": "solo-consola",
       "familia": "backend",
@@ -1404,6 +1404,14 @@
       "plano": "usuario",
       "audiencia": "todos",
       "perfil": "solo-consola",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:visado": {
+      "ref": "ARQUI-2531",
+      "plano": "mixto",
+      "audiencia": "todos",
+      "perfil": "solo-tolkien",
       "familia": "backend",
       "fuente": "pad"
     },

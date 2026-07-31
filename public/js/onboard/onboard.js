@@ -1,7 +1,16 @@
 (async function () {
   'use strict';
 
-  const { t } = await import('/js/ui/i18n.js');
+  const { applyI18n, initI18n, t } = await import('/js/ui/i18n.js');
+  // Antes del login no hay una preferencia de usuario disponible: manda
+  // ?lang= de la URL; después, un navegador en inglés; y español por defecto.
+  const langParam = new URLSearchParams(window.location.search).get('lang');
+  const initialLang = langParam
+    ? (langParam.toLowerCase().startsWith('en') ? 'en' : 'es')
+    : ((navigator.language || '').toLowerCase().startsWith('en') ? 'en' : 'es');
+  await initI18n(initialLang);
+  document.documentElement.lang = initialLang;
+  applyI18n(document);
   const API = '/api/onboard/public';
   const root = document.getElementById('onboard-root');
   const state = {
@@ -9,7 +18,7 @@
     token: '',
     username: '',
     admin: false,
-    lang: 'es',
+    lang: initialLang,
     account: '',
     codex: '',
     infisical: '',
@@ -158,7 +167,7 @@
   }
 
   function setError(message) {
-    state.error = message || 'Ocurrió un error.';
+    state.error = message || t('onboard.error.generic', 'Ocurrió un error.');
     loading = '';
     render();
   }
@@ -258,7 +267,7 @@
     }
 
     if (!res.ok) {
-      const msg = data.error || data.reason || 'Error de servidor.';
+      const msg = data.error || data.reason || t('onboard.error.server', 'Error de servidor.');
       throw new Error(msg);
     }
 
@@ -269,7 +278,7 @@
     const tokenInput = document.getElementById('ob-token');
     const token = tokenInput ? tokenInput.value.trim() : '';
     if (!token) {
-      setError('Ingresá el token de invitación.');
+      setError(t('onboard.token.required', 'Ingresá el token de invitación.'));
       return;
     }
 
@@ -298,7 +307,9 @@
       if (data.valid === true) {
         setStep('register');
       } else {
-        setError('Invitación ' + (data.reason || 'inválida'));
+        setError(t('onboard.token.invalid', 'Invitación {reason}', {
+          reason: data.reason || t('onboard.token.invalidReason', 'inválida'),
+        }));
       }
     } catch (err) {
       setError(err.message);
@@ -316,15 +327,15 @@
     const lang = langEl && langEl.value === 'en' ? 'en' : 'es';
 
     if (!username) {
-      setError('Ingresá un nombre de usuario.');
+      setError(t('onboard.register.usernameRequired', 'Ingresá un nombre de usuario.'));
       return;
     }
     if (password.length < 8) {
-      setError('La contraseña debe tener al menos 8 caracteres.');
+      setError(t('onboard.register.passwordLength', 'La contraseña debe tener al menos 8 caracteres.'));
       return;
     }
     if (password !== repeat) {
-      setError('Las contraseñas no coinciden.');
+      setError(t('onboard.register.passwordMismatch', 'Las contraseñas no coinciden.'));
       return;
     }
 
@@ -338,7 +349,7 @@
         method: 'POST',
         body: { token: state.token, username, password, lang },
       });
-      if (!data.ok) throw new Error(data.error || 'No se pudo crear la cuenta.');
+      if (!data.ok) throw new Error(data.error || t('onboard.register.createError', 'No se pudo crear la cuenta.'));
       state.username = username;
       const validation = await apiJson('/validate', {
         method: 'POST',
@@ -387,7 +398,7 @@
     const codeEl = document.getElementById('ob-code');
     const code = codeEl ? codeEl.value.trim() : '';
     if (!code) {
-      state.error = 'Pegá el código de autorización.';
+      state.error = t('onboard.claude.codeRequired', 'Pegá el código de autorización.');
       renderCredsStatus({ status: 'awaiting-code', url: state.url });
       return;
     }
@@ -410,12 +421,17 @@
     const btn = document.getElementById('ob-code-btn');
     if (!btn) return;
     btn.disabled = exchanging;
-    btn.textContent = exchanging ? 'Confirmando…' : 'Confirmar código';
+    btn.textContent = exchanging
+      ? t('onboard.action.confirming', 'Confirmando…')
+      : t('onboard.action.confirmCode', 'Confirmar código');
   }
 
   function renderToken() {
     root.replaceChildren();
-    root.appendChild(header('Bienvenido/a', 'Usá tu invitación para configurar el acceso.'));
+    root.appendChild(header(
+      t('onboard.token.title', 'Bienvenido/a'),
+      t('onboard.token.hint', 'Usá tu invitación para configurar el acceso.')
+    ));
 
     const form = document.createElement('form');
     form.className = 'ob-form';
@@ -424,9 +440,10 @@
       validateToken();
     });
 
-    const token = input('ob-token', 'text', 'Token de invitación', 'one-time-code');
+    const tokenLabel = t('onboard.token.label', 'Token de invitación');
+    const token = input('ob-token', 'text', tokenLabel, 'one-time-code');
     token.autofocus = true;
-    form.appendChild(field('Token de invitación', token));
+    form.appendChild(field(tokenLabel, token));
 
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
@@ -434,7 +451,9 @@
     submit.type = 'submit';
     submit.className = 'btn';
     submit.disabled = loading === 'token';
-    submit.textContent = loading === 'token' ? 'Continuando…' : 'Continuar';
+    submit.textContent = loading === 'token'
+      ? t('onboard.action.continuing', 'Continuando…')
+      : t('onboard.action.continue', 'Continuar');
     actions.appendChild(submit);
     form.appendChild(actions);
 
@@ -550,7 +569,10 @@
 
   function renderRegister() {
     root.replaceChildren();
-    root.appendChild(header('Creá tu usuario', 'Elegí las credenciales para entrar a la consola.'));
+    root.appendChild(header(
+      t('onboard.register.title', 'Creá tu usuario'),
+      t('onboard.register.hint', 'Elegí las credenciales para entrar a la consola.')
+    ));
 
     const form = document.createElement('form');
     form.className = 'ob-form';
@@ -560,39 +582,48 @@
     });
 
     if (state.admin) {
-      form.appendChild(textEl('p', 'ob-note', 'Esta cuenta será administrador.'));
+      form.appendChild(textEl(
+        'p',
+        'ob-note',
+        t('onboard.register.adminNote', 'Esta cuenta será administrador.')
+      ));
     }
 
-    const username = input('ob-username', 'text', 'Usuario', 'username');
-    const password = input('ob-password', 'password', 'Contraseña', 'new-password');
-    const repeat = input('ob-password-repeat', 'password', 'Repetir contraseña', 'new-password');
+    const usernameLabel = t('onboard.register.username', 'Usuario');
+    const passwordLabel = t('onboard.register.password', 'Contraseña');
+    const repeatLabel = t('onboard.register.repeatPassword', 'Repetir contraseña');
+    const username = input('ob-username', 'text', usernameLabel, 'username');
+    const password = input('ob-password', 'password', passwordLabel, 'new-password');
+    const repeat = input('ob-password-repeat', 'password', repeatLabel, 'new-password');
     const lang = document.createElement('select');
     lang.id = 'ob-lang';
     lang.className = 'dlg-input';
     const spanish = document.createElement('option');
     spanish.value = 'es';
-    spanish.textContent = 'Español';
+    spanish.textContent = t('onboard.language.spanish', 'Español');
     const english = document.createElement('option');
     english.value = 'en';
-    english.textContent = 'English';
+    english.textContent = t('onboard.language.english', 'English');
     lang.appendChild(spanish);
     lang.appendChild(english);
     lang.value = state.lang;
-    form.appendChild(field('Usuario', username));
-    form.appendChild(field('Contraseña', password));
-    form.appendChild(field('Repetir contraseña', repeat));
-    form.appendChild(field('Idioma de la consola', lang));
+    form.appendChild(field(usernameLabel, username));
+    form.appendChild(field(passwordLabel, password));
+    form.appendChild(field(repeatLabel, repeat));
+    form.appendChild(field(t('onboard.register.language', 'Idioma de la consola'), lang));
 
     const actions = document.createElement('div');
     actions.className = 'ob-actions';
-    actions.appendChild(button('← volver', 'btn-ghost', function () {
+    actions.appendChild(button(t('onboard.action.back', '← volver'), 'btn-ghost', function () {
       setStep('token');
     }));
     const submit = document.createElement('button');
     submit.type = 'submit';
     submit.className = 'btn';
     submit.disabled = loading === 'register';
-    submit.textContent = loading === 'register' ? 'Creando…' : 'Crear cuenta';
+    submit.textContent = loading === 'register'
+      ? t('onboard.register.creating', 'Creando…')
+      : t('onboard.register.create', 'Crear cuenta');
     actions.appendChild(submit);
     form.appendChild(actions);
 
@@ -604,7 +635,10 @@
 
   function renderCredsBase() {
     root.replaceChildren();
-    root.appendChild(header('Conectá tu cuenta de Claude', 'Autorizá Claude para terminar la configuración.'));
+    root.appendChild(header(
+      t('onboard.claude.title', 'Conectá tu cuenta de Claude'),
+      t('onboard.claude.hint', 'Autorizá Claude para terminar la configuración.')
+    ));
   }
 
   function renderSpinner(text) {
@@ -623,7 +657,11 @@
     list.className = 'ob-list';
 
     const first = document.createElement('li');
-    first.appendChild(textEl('span', '', 'Abrí este enlace y autorizá con tu cuenta de Claude:'));
+    first.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.claude.open', 'Abrí este enlace y autorizá con tu cuenta de Claude:')
+    ));
     first.appendChild(document.createTextNode(' '));
     const link = document.createElement('a');
     link.className = 'ob-url';
@@ -632,29 +670,38 @@
     link.rel = 'noopener';
     link.textContent = state.url;
     first.appendChild(link);
-    const copy = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+    const copy = button(t('onboard.action.copyLink', 'Copiar enlace'), 'btn-ghost ob-copy', async function () {
       try {
         await navigator.clipboard.writeText(state.url);
-        copy.textContent = 'Copiado';
+        copy.textContent = t('onboard.action.copied', 'Copiado');
       } catch (err) {
-        copy.textContent = 'No se pudo copiar';
+        copy.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
       }
       window.setTimeout(function () {
-        copy.textContent = 'Copiar enlace';
+        copy.textContent = t('onboard.action.copyLink', 'Copiar enlace');
       }, 1800);
     });
     first.appendChild(copy);
     list.appendChild(first);
 
     const second = document.createElement('li');
-    second.appendChild(textEl('span', '', 'Copiá el código que te da y pegalo acá:'));
+    second.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.claude.pasteCode', 'Copiá el código que te da y pegalo acá:')
+    ));
     if (state.credsNote) {
       second.appendChild(textEl('p', 'ob-error', state.credsNote));
     }
     const row = document.createElement('div');
     row.className = 'ob-code-row';
-    const code = input('ob-code', 'text', 'Código de autorización', 'one-time-code');
-    const confirm = button('Confirmar código', 'btn', sendCode);
+    const code = input(
+      'ob-code',
+      'text',
+      t('onboard.claude.codePlaceholder', 'Código de autorización'),
+      'one-time-code'
+    );
+    const confirm = button(t('onboard.action.confirmCode', 'Confirmar código'), 'btn', sendCode);
     confirm.id = 'ob-code-btn';
     row.appendChild(code);
     row.appendChild(confirm);
@@ -690,12 +737,12 @@
     if (status === 'error') {
       clearPoll();
       currentJobKey = jobKey;
-      state.error = error || 'No se pudo conectar la cuenta de Claude.';
+      state.error = error || t('onboard.claude.connectError', 'No se pudo conectar la cuenta de Claude.');
       renderCredsBase();
       root.appendChild(textEl('p', 'ob-error', state.error));
       const actions = document.createElement('div');
       actions.className = 'ob-actions';
-      actions.appendChild(button('Reintentar', 'btn', startCreds));
+      actions.appendChild(button(t('onboard.action.retry', 'Reintentar'), 'btn', startCreds));
       root.appendChild(actions);
       return;
     }
@@ -704,10 +751,14 @@
       clearPoll();
       currentJobKey = jobKey;
       renderCredsBase();
-      root.appendChild(textEl('p', 'ob-error', 'Parece que se interrumpió.'));
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        t('onboard.error.interrupted', 'Parece que se interrumpió.')
+      ));
       const actions = document.createElement('div');
       actions.className = 'ob-actions';
-      actions.appendChild(button('Reintentar', 'btn', startCreds));
+      actions.appendChild(button(t('onboard.action.retry', 'Reintentar'), 'btn', startCreds));
       root.appendChild(actions);
       return;
     }
@@ -716,7 +767,7 @@
     currentJobKey = jobKey;
 
     if (status === 'exchanging') {
-      renderSpinner('Verificando el código…');
+      renderSpinner(t('onboard.claude.verifyingCode', 'Verificando el código…'));
       return;
     }
 
@@ -726,17 +777,25 @@
       return;
     }
 
-    renderSpinner('Preparando…');
+    renderSpinner(t('onboard.action.preparing', 'Preparando…'));
   }
 
   function renderAccountBase() {
     root.replaceChildren();
     root.appendChild(header(
-      'Claude · tu consumo (opcional)',
-      'Conectá tu cuenta para ver el uso real de tu plan.'
+      t('onboard.account.title', 'Claude · tu consumo (opcional)'),
+      t('onboard.account.hint', 'Conectá tu cuenta para ver el uso real de tu plan.')
     ));
-    root.appendChild(textEl('p', 'ob-note', 'Esto habilita los porcentajes reales de tu sesión de 5 horas y de tu semana.'));
-    root.appendChild(textEl('p', 'ob-note', 'Sin este paso, el panel Uso solo mostrará tus tokens consumidos. No es requisito para empezar a trabajar: podés conectarlo más tarde desde el bloque Claude · tu consumo.'));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.account.usageNote', 'Esto habilita los porcentajes reales de tu sesión de 5 horas y de tu semana.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.account.optionalNote', 'Sin este paso, el panel Uso solo mostrará tus tokens consumidos. No es requisito para empezar a trabajar: podés conectarlo más tarde desde el bloque Claude · tu consumo.')
+    ));
   }
 
   function appendAccountSkip() {
@@ -761,7 +820,7 @@
     state.accountUrl = '';
     state.error = '';
     currentJobKey = '';
-    renderAccountSpinner('Preparando…');
+    renderAccountSpinner(t('onboard.action.preparing', 'Preparando…'));
 
     try {
       const data = await apiJson('/claude-account-start', {
@@ -802,7 +861,7 @@
     const codeEl = document.getElementById('ob-account-code');
     const code = codeEl ? codeEl.value.trim() : '';
     if (!code) {
-      state.error = 'Pegá el código de autorización.';
+      state.error = t('onboard.claude.codeRequired', 'Pegá el código de autorización.');
       renderAccountStatus({ status: 'waiting-code', url: state.accountUrl });
       return;
     }
@@ -830,8 +889,10 @@
     const waiting = status === 'waiting-code';
     btn.disabled = exchanging || !waiting;
     btn.textContent = exchanging || status === 'verifying'
-      ? 'Verificando…'
-      : (waiting ? 'Confirmar código' : 'Esperando al servidor…');
+      ? t('onboard.action.verifying', 'Verificando…')
+      : (waiting
+        ? t('onboard.action.confirmCode', 'Confirmar código')
+        : t('onboard.action.waitingServer', 'Esperando al servidor…'));
   }
 
   function renderAccountAuthorization(status) {
@@ -841,7 +902,11 @@
     list.className = 'ob-list';
 
     const first = document.createElement('li');
-    first.appendChild(textEl('span', '', 'La página no se abre sola porque el CLI corre en un servidor sin entorno gráfico. Abrí este enlace y autorizá con tu cuenta de Claude:'));
+    first.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.account.open', 'La página no se abre sola porque el CLI corre en un servidor sin entorno gráfico. Abrí este enlace y autorizá con tu cuenta de Claude:')
+    ));
     first.appendChild(document.createTextNode(' '));
     const link = document.createElement('a');
     link.className = 'ob-url';
@@ -850,26 +915,35 @@
     link.rel = 'noopener';
     link.textContent = state.accountUrl;
     first.appendChild(link);
-    const copy = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+    const copy = button(t('onboard.action.copyLink', 'Copiar enlace'), 'btn-ghost ob-copy', async function () {
       try {
         await navigator.clipboard.writeText(state.accountUrl);
-        copy.textContent = 'Copiado';
+        copy.textContent = t('onboard.action.copied', 'Copiado');
       } catch (err) {
-        copy.textContent = 'No se pudo copiar';
+        copy.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
       }
       window.setTimeout(function () {
-        copy.textContent = 'Copiar enlace';
+        copy.textContent = t('onboard.action.copyLink', 'Copiar enlace');
       }, 1800);
     });
     first.appendChild(copy);
     list.appendChild(first);
 
     const second = document.createElement('li');
-    second.appendChild(textEl('span', '', 'Copiá el código que te da Claude y pegalo acá:'));
+    second.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.account.pasteCode', 'Copiá el código que te da Claude y pegalo acá:')
+    ));
     const row = document.createElement('div');
     row.className = 'ob-code-row';
-    const code = input('ob-account-code', 'text', 'Código de autorización', 'one-time-code');
-    const confirm = button('Confirmar código', 'btn', sendAccountCode);
+    const code = input(
+      'ob-account-code',
+      'text',
+      t('onboard.claude.codePlaceholder', 'Código de autorización'),
+      'one-time-code'
+    );
+    const confirm = button(t('onboard.action.confirmCode', 'Confirmar código'), 'btn', sendAccountCode);
     confirm.id = 'ob-account-code-btn';
     row.appendChild(code);
     row.appendChild(confirm);
@@ -902,10 +976,14 @@
       clearPoll();
       currentJobKey = jobKey;
       renderAccountBase();
-      root.appendChild(textEl('p', 'ob-error', error || 'No se pudo conectar la cuenta de Claude.'));
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        error || t('onboard.claude.connectError', 'No se pudo conectar la cuenta de Claude.')
+      ));
       const actions = document.createElement('div');
       actions.className = 'ob-actions';
-      actions.appendChild(button('Reintentar', 'btn', startAccount));
+      actions.appendChild(button(t('onboard.action.retry', 'Reintentar'), 'btn', startAccount));
       root.appendChild(actions);
       appendAccountSkip();
       return;
@@ -922,7 +1000,9 @@
     }
 
     exchanging = status === 'verifying';
-    renderAccountSpinner(status === 'verifying' ? 'Verificando el código…' : 'Preparando…');
+    renderAccountSpinner(status === 'verifying'
+      ? t('onboard.claude.verifyingCode', 'Verificando el código…')
+      : t('onboard.action.preparing', 'Preparando…'));
   }
 
   function renderCodexBase() {
@@ -961,7 +1041,7 @@
     state.codexCode = '';
     state.error = '';
     currentJobKey = '';
-    renderCodexSpinner('Preparando…');
+    renderCodexSpinner(t('onboard.action.preparing', 'Preparando…'));
 
     try {
       const data = await apiJson('/codex-start', { method: 'POST', body: { token: state.token } });
@@ -999,7 +1079,7 @@
     list.className = 'ob-list';
 
     const first = document.createElement('li');
-    first.appendChild(textEl('span', '', 'Abrí este enlace:'));
+    first.appendChild(textEl('span', '', t('onboard.codex.open', 'Abrí este enlace:')));
     first.appendChild(document.createTextNode(' '));
     const link = document.createElement('a');
     link.className = 'ob-url';
@@ -1008,39 +1088,51 @@
     link.rel = 'noopener';
     link.textContent = state.codexUrl;
     first.appendChild(link);
-    const copyLink = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+    const copyLink = button(t('onboard.action.copyLink', 'Copiar enlace'), 'btn-ghost ob-copy', async function () {
       try {
         await navigator.clipboard.writeText(state.codexUrl);
-        copyLink.textContent = 'Copiado';
+        copyLink.textContent = t('onboard.action.copied', 'Copiado');
       } catch (err) {
-        copyLink.textContent = 'No se pudo copiar';
+        copyLink.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
       }
       window.setTimeout(function () {
-        copyLink.textContent = 'Copiar enlace';
+        copyLink.textContent = t('onboard.action.copyLink', 'Copiar enlace');
       }, 1800);
     });
     first.appendChild(copyLink);
     list.appendChild(first);
 
     const second = document.createElement('li');
-    second.appendChild(textEl('span', '', 'Código de autorización:'));
+    second.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.codex.code', 'Código de autorización:')
+    ));
     second.appendChild(textEl('p', 'ob-title', state.codexCode));
-    const copyCode = button('Copiar código', 'btn-ghost ob-copy', async function () {
+    const copyCode = button(t('onboard.action.copyCode', 'Copiar código'), 'btn-ghost ob-copy', async function () {
       try {
         await navigator.clipboard.writeText(state.codexCode);
-        copyCode.textContent = 'Copiado';
+        copyCode.textContent = t('onboard.action.copied', 'Copiado');
       } catch (err) {
-        copyCode.textContent = 'No se pudo copiar';
+        copyCode.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
       }
       window.setTimeout(function () {
-        copyCode.textContent = 'Copiar código';
+        copyCode.textContent = t('onboard.action.copyCode', 'Copiar código');
       }, 1800);
     });
     second.appendChild(copyCode);
     list.appendChild(second);
     root.appendChild(list);
-    root.appendChild(textEl('p', 'ob-note', 'Abrí el enlace, pegá este código y autorizá con tu cuenta de ChatGPT. El código vence en 15 minutos.'));
-    root.appendChild(textEl('p', 'ob-note', 'Esta pantalla avanza sola cuando termines.'));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.codex.authorize', 'Abrí el enlace, pegá este código y autorizá con tu cuenta de ChatGPT. El código vence en 15 minutos.')
+    ));
+    root.appendChild(textEl(
+      'p',
+      'ob-note',
+      t('onboard.codex.autoAdvance', 'Esta pantalla avanza sola cuando termines.')
+    ));
     appendCodexSkip();
   }
 
@@ -1065,10 +1157,14 @@
       clearPoll();
       currentJobKey = jobKey;
       renderCodexBase();
-      root.appendChild(textEl('p', 'ob-error', error || 'Parece que se interrumpió.'));
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        error || t('onboard.error.interrupted', 'Parece que se interrumpió.')
+      ));
       const actions = document.createElement('div');
       actions.className = 'ob-actions';
-      actions.appendChild(button('Reintentar', 'btn', startCodex));
+      actions.appendChild(button(t('onboard.action.retry', 'Reintentar'), 'btn', startCodex));
       root.appendChild(actions);
       appendCodexSkip();
       return;
@@ -1084,7 +1180,7 @@
       return;
     }
 
-    renderCodexSpinner('Preparando…');
+    renderCodexSpinner(t('onboard.action.preparing', 'Preparando…'));
   }
 
   function renderInfisicalBase() {
@@ -1122,7 +1218,7 @@
     state.infisicalUrl = '';
     state.error = '';
     currentJobKey = '';
-    renderInfisicalSpinner('Preparando…');
+    renderInfisicalSpinner(t('onboard.action.preparing', 'Preparando…'));
 
     try {
       const data = await apiJson('/infisical-start', { method: 'POST', body: { token: state.token } });
@@ -1157,7 +1253,7 @@
     const tokenEl = document.getElementById('ob-infisical-token');
     const value = tokenEl ? tokenEl.value.trim() : '';
     if (!value) {
-      state.error = 'Pegá el token de Infisical.';
+      state.error = t('onboard.infisical.tokenRequired', 'Pegá el token de Infisical.');
       renderInfisicalStatus({ status: 'awaiting-token', url: state.infisicalUrl });
       return;
     }
@@ -1183,7 +1279,9 @@
     const btn = document.getElementById('ob-infisical-token-btn');
     if (!btn) return;
     btn.disabled = exchanging;
-    btn.textContent = exchanging ? 'Confirmando…' : 'Confirmar token';
+    btn.textContent = exchanging
+      ? t('onboard.action.confirming', 'Confirmando…')
+      : t('onboard.infisical.confirmToken', 'Confirmar token');
   }
 
   function renderInfisicalAwaitingToken() {
@@ -1193,7 +1291,11 @@
     list.className = 'ob-list';
 
     const first = document.createElement('li');
-    first.appendChild(textEl('span', '', 'Abrí este enlace e iniciá sesión en Infisical:'));
+    first.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.infisical.open', 'Abrí este enlace e iniciá sesión en Infisical:')
+    ));
     first.appendChild(document.createTextNode(' '));
     const link = document.createElement('a');
     link.className = 'ob-url';
@@ -1202,26 +1304,35 @@
     link.rel = 'noopener';
     link.textContent = state.infisicalUrl;
     first.appendChild(link);
-    const copy = button('Copiar enlace', 'btn-ghost ob-copy', async function () {
+    const copy = button(t('onboard.action.copyLink', 'Copiar enlace'), 'btn-ghost ob-copy', async function () {
       try {
         await navigator.clipboard.writeText(state.infisicalUrl);
-        copy.textContent = 'Copiado';
+        copy.textContent = t('onboard.action.copied', 'Copiado');
       } catch (err) {
-        copy.textContent = 'No se pudo copiar';
+        copy.textContent = t('onboard.action.copyFailed', 'No se pudo copiar');
       }
       window.setTimeout(function () {
-        copy.textContent = 'Copiar enlace';
+        copy.textContent = t('onboard.action.copyLink', 'Copiar enlace');
       }, 1800);
     });
     first.appendChild(copy);
     list.appendChild(first);
 
     const second = document.createElement('li');
-    second.appendChild(textEl('span', '', 'Copiá el token que te muestra Infisical y pegalo acá:'));
+    second.appendChild(textEl(
+      'span',
+      '',
+      t('onboard.infisical.pasteToken', 'Copiá el token que te muestra Infisical y pegalo acá:')
+    ));
     const row = document.createElement('div');
     row.className = 'ob-code-row';
-    const token = input('ob-infisical-token', 'text', 'Token de Infisical', 'one-time-code');
-    const confirm = button('Confirmar token', 'btn', sendInfisicalToken);
+    const token = input(
+      'ob-infisical-token',
+      'text',
+      t('onboard.infisical.tokenPlaceholder', 'Token de Infisical'),
+      'one-time-code'
+    );
+    const confirm = button(t('onboard.infisical.confirmToken', 'Confirmar token'), 'btn', sendInfisicalToken);
     confirm.id = 'ob-infisical-token-btn';
     row.appendChild(token);
     row.appendChild(confirm);
@@ -1255,10 +1366,14 @@
       clearPoll();
       currentJobKey = jobKey;
       renderInfisicalBase();
-      root.appendChild(textEl('p', 'ob-error', error || 'Parece que se interrumpió.'));
+      root.appendChild(textEl(
+        'p',
+        'ob-error',
+        error || t('onboard.error.interrupted', 'Parece que se interrumpió.')
+      ));
       const actions = document.createElement('div');
       actions.className = 'ob-actions';
-      actions.appendChild(button('Reintentar', 'btn', startInfisical));
+      actions.appendChild(button(t('onboard.action.retry', 'Reintentar'), 'btn', startInfisical));
       root.appendChild(actions);
       appendInfisicalSkip();
       return;
@@ -1268,7 +1383,7 @@
     currentJobKey = jobKey;
 
     if (status === 'exchanging') {
-      renderInfisicalSpinner('Verificando el token…');
+      renderInfisicalSpinner(t('onboard.infisical.verifyingToken', 'Verificando el token…'));
       return;
     }
 
@@ -1279,7 +1394,7 @@
       return;
     }
 
-    renderInfisicalSpinner('Preparando…');
+    renderInfisicalSpinner(t('onboard.action.preparing', 'Preparando…'));
   }
 
   function renderGithubBase() {
@@ -1667,10 +1782,10 @@
     if (state.step === 'token') renderToken();
     else if (state.step === 'pending') renderPending();
     else if (state.step === 'register') renderRegister();
-    else if (state.step === 'creds') renderSpinner('Preparando…');
-    else if (state.step === 'account') renderAccountSpinner('Preparando…');
-    else if (state.step === 'codex') renderCodexSpinner('Preparando…');
-    else if (state.step === 'infisical') renderInfisicalSpinner('Preparando…');
+    else if (state.step === 'creds') renderSpinner(t('onboard.action.preparing', 'Preparando…'));
+    else if (state.step === 'account') renderAccountSpinner(t('onboard.action.preparing', 'Preparando…'));
+    else if (state.step === 'codex') renderCodexSpinner(t('onboard.action.preparing', 'Preparando…'));
+    else if (state.step === 'infisical') renderInfisicalSpinner(t('onboard.action.preparing', 'Preparando…'));
     else if (state.step === 'github') renderGithubSpinner(t('onboard.github.preparing', 'Preparando…'));
     else if (state.step === 'smoke') renderSmoke();
     else renderDone();

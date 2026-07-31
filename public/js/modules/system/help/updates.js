@@ -12,9 +12,9 @@ export default function updatesHelp() {
         blocks: [{
           type: 'steps',
           items: [
-            t('system.help.updates.first.step1', 'Revisá el resumen y abrí Motor, Seguridad, Librerías, Sistema operativo, Servicios y Vigiladas.'),
+            t('system.help.updates.first.step1', 'Revisá el resumen y abrí Motor, Codex y modelos, Seguridad, Saltos mayores, Librerías, Sistema operativo, Servicios y Vigiladas.'),
             t('system.help.updates.first.step2', 'Si hay saltos mayores, tocá Analizar riesgo para que la IA lea changelogs y el uso real del código.'),
-            t('system.help.updates.first.step3', 'Incluí manualmente solo los majors con veredicto favorable y que aceptás probar.'),
+            t('system.help.updates.first.step3', 'Incluí manualmente solo los majors que no estén bloqueados y cuyo riesgo aceptás probar; aun un veredicto seguro exige tu tilde.'),
             t('system.help.updates.first.step4', 'Preferí Actualizar con sesión para que un chat explique el plan y espere tu OK concreto antes de ejecutar.'),
             t('system.help.updates.first.step5', 'Usá Modo automático solo si querés el runner determinístico; seguí sus fases hasta Listo y revisá el censo fresco.'),
           ],
@@ -67,7 +67,7 @@ export default function updatesHelp() {
         blocks: [{
           type: 'note',
           tone: 'danger',
-          text: t('system.help.updates.warning.text', 'Un major nunca entra sin un veredicto IA favorable y una selección humana; sin veredicto, si rompe, si es riesgoso con confianza baja o si es beta/RC queda bloqueado. Las piezas críticas exigen confirmación humana siempre: la sesión espera tu OK del plan y el modo automático pide confirmación fuerte. Node --check no detecta imports rotos: el orquestador también verifica la web y auto-revierte npm si confirma una falla.'),
+          text: t('system.help.updates.warning.text', 'Un major nunca entra sin selección humana. Queda bloqueado si no tiene veredicto, si la IA dice que rompe, si es riesgoso con confianza baja o si es beta/RC; los demás siguen siendo bajo tu riesgo. Las piezas críticas exigen confirmación humana siempre: la sesión espera tu OK del plan y el modo automático pide confirmación fuerte. Node --check no detecta imports rotos: el orquestador también verifica la web y auto-revierte npm si confirma una falla.'),
         }],
       },
     ],

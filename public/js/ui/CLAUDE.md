@@ -45,9 +45,10 @@ encaja el SVG proporcionalmente como `object-fit:contain` desde su `viewBox`
 `fitScale=min(anchoDisponible/w,altoMax/h,MERMAID_MAX_SCALE)`; el tope inline
 1.5 evita que un diagrama mínimo se vuelva un cartel (bajado desde 2.2 el
 2026-07-29 a pedido de Niko: los diagramas reales ya escalaban 1.23-1.50, así
-que solo cambia los chicos). El modal "Ampliar" usa su propia constante
-`MERMAID_ZOOM_MAX_SCALE` = 2.2 — no volver a unificarlas: compartir la constante
-hacía que bajar la inline achicara también el zoom. El piso de legibilidad
+que solo cambia los chicos). El tope fijo del modal desapareció con la llegada
+del visor `ui/zoom-viewer.js` (`console:PLAN-2519`): el zoom del modal lo
+gobierna el visor, hasta 8×, mientras `MERMAID_MAX_SCALE=1.5` sigue rigiendo
+SOLO el encaje inline del chat. El piso de legibilidad
 `MERMAID_MIN_SCALE=0.85` se aplica como
 `max(fitScale,min(MERMAID_MIN_SCALE,altoMax/h))`: ese `min` interno es
 DELIBERADO para que un diagrama muy alto pueda bajar de 0.85 y siempre entre.
@@ -58,6 +59,26 @@ canvas; `mermaidObservers`, como `liveCharts`, desconecta targets muertos al
 siguiente barrido. Si sobra ancho, el holder recibe `.md-mermaid--pan`, scroll
 horizontal y una pista para deslizar o usar "Ampliar") · diff.js · popup.js
 (dismissablePopup) ·
+zoom-viewer.js (visor modal GENÉRICO con zoom y paneo: recibe un NODO, no un
+SVG, para que el lightbox de imágenes del chat pueda reutilizarlo tal cual.
+El JS fija `transform-origin:'0 0'` sobre `.zv-stage` y es FUNCIONAL, no
+cosmético: toda la matemática del zoom hacia el puntero supone el origen en
+la esquina; con el origen central por defecto el punto focal deriva en cada
+paso. Por la misma razón el CSS NO debe declarar `transform` ni `transition`
+sobre `.zv-stage`: una transición pelea con el pinch y hace que el zoom se
+sienta con lag. `touch-action:none` en `.zv-viewport` tampoco es opcional:
+sin eso el navegador retiene el gesto y el visor no recibe nada en celular;
+el pinch NATIVO no sirve como alternativa porque la app bloquea adrede el
+scroll del documento con `body{position:fixed}` para corregir el hueco negro
+del teclado móvil, y el gesto nunca llega. `clampPan()` tiene DOS conductas
+por eje a propósito: centra el eje donde el contenido entra completo y limita
+el que desborda. Consecuencia medible al probar: el punto bajo el cursor queda
+clavado SOLO en el eje que DESBORDA; se mueve en el eje centrado y es correcto,
+no un bug (verificado: drift de 0.002 px con desborde en ambos ejes, ~19 px
+cuando el eje está centrado). El visor NUNCA intercepta `Escape`: el cierre
+pertenece a dialog.js y capturarlo dejaría el modal sin salida. Todos los
+listeners viven en nodos del propio modal — ninguno en `window`/`document` —,
+así mueren con él; en `onClose` solo se desconecta a mano el `ResizeObserver`) ·
 code.js (resaltado hljs COMPARTIDO para detalles de tool calls y
 diffs: SOLO con lenguaje confiable — extensión conocida o bash
 explícito, nada de autodetección sobre logs — y con topes de
@@ -76,6 +97,18 @@ detallado en help.js. El índice conserva metadatos y carga cada tema
 bajo demanda con `import()` dinámico. GOTCHA: toda superficie nueva
 debe sumar su entrada a help-index.js; un `helpBtn()` con un id ausente
 abre "Todavía no hay ayuda para esta sección") ·
+
+CIERRE I18N/AYUDA (2026-07-31): `i18n.js` carga únicamente los diccionarios
+enumerados en `MODULES`; agregar `public/i18n/en/<namespace>.json` sin sumar
+ese namespace a la lista deja el archivo muerto. `node bin/cwc-i18n-audit.js`
+audita esa correspondencia, la cobertura de traducciones y la costura entre
+el índice de ayuda, los `helpBtn` y sus loaders. Hay tres excepciones
+deliberadas sin `helpBtn`: `sala` se abre sólo desde la Guía de la consola
+porque la Sala de Aduana no tiene header propio; `auxbar` también se abre
+desde la Guía porque la barra móvil no tiene header donde montar el botón; y
+`stats` se abre desde la Guía porque es una fila compacta de gauges en el
+footer derecho, sin header propio.
+
 perm-center.js (CENTRO GLOBAL DE PERMISOS: pila de popups
 flotantes — .cwc-permcenter/.pc-card en ui.css, z-index 190
 bajo modales (200) — con los permisos PENDIENTES de todas las
@@ -224,12 +257,20 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   agujero: no cambiar ese orden sin revisar de nuevo todo el límite de
   confianza.
 
-- Mermaid: NUNCA usar `.md-mermaid svg` para dimensionar el diagrama; también
-  alcanza el `<svg>` del ícono dentro de `.md-mermaid-zoom-btn` y estira la
-  lupa a ~70px (bug real de la primera versión). El selector correcto es
-  `.md-mermaid-canvas > svg`; el blindaje
+- Mermaid: el `holder` `.md-mermaid` contiene DOS `<svg>` — el ícono del botón
+  `.md-mermaid-zoom-btn` (insertado ANTES del canvas con `insertBefore`) y el
+  diagrama, dentro de `.md-mermaid-canvas`. Por eso NUNCA se busca el diagrama
+  con un selector que arranque en el holder: `querySelector` devuelve el
+  PRIMERO en orden de documento, que es el ícono. Mordió DOS veces: en CSS
+  `.md-mermaid svg` estiraba la lupa a ~70px, y en JS `openMermaidZoom()` hacía
+  `holder.querySelector('svg')` y el modal "Ampliar" mostraba una lupa gigante
+  en vez del diagrama (`console:BUG-2502`, 2026-07-31). Selector correcto
+  SIEMPRE acotado al canvas: `.md-mermaid-canvas > svg` en CSS,
+  `.md-mermaid-canvas svg` en JS. El blindaje
   `.md-mermaid .cwc-icon { width:auto; height:auto; max-width:none; flex:none; }`
-  evita que una regla futura del canvas vuelva a deformar el badge.
+  evita además que una regla futura del canvas deforme el badge. Si algún día
+  se suma un tercer control con ícono al holder, la regla no cambia: el
+  diagrama se pide por su canvas, nunca por el holder.
 
 - Mermaid: NUNCA forzar `width:100%` sobre un SVG con `viewBox`: deforma el
   encuadre en vez de hacer un fit proporcional. Caso medido: un mindmap

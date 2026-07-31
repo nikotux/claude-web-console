@@ -148,7 +148,7 @@ export default function rawviewHelp() {
           {
             type: 'note',
             tone: 'warn',
-            text: t('rawview.help.warning.text', 'Es una vista admin-only porque muestra texto real de las sesiones del host, aunque no permite editar ni ejecutar acciones. El odómetro estima caudal en vivo: no representa facturación; para cifras de consumo usá el panel Uso.'),
+            text: t('rawview.help.warning.text', 'Es una vista personal y de solo lectura: muestra texto real únicamente de tus sesiones, terminales y procesos, pero no permite editar ni ejecutar acciones ni inicia IA por sí sola. El odómetro estima caudal en vivo: no representa facturación; para cifras de consumo usá el panel Uso.'),
           },
         ],
       },

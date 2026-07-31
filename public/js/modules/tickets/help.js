@@ -33,7 +33,7 @@ export default function ticketsHelp() {
             type: 'steps',
             items: [
               t('tickets.help.first.step1', 'Elegí Activos o Resueltos y filtrá por carril, dueño o Míos.'),
-              t('tickets.help.first.step2', 'Tocá una tarjeta de ticket o PR para abrir su detalle completo.'),
+              t('tickets.help.first.step2', 'Tocá una tarjeta de ticket o PR para abrir su detalle completo en un modal.'),
               t('tickets.help.first.step3', 'Tocá Tomar antes de trabajar para que el resto vea que está en uso.'),
               t('tickets.help.first.step4', 'Revisá descripción, estado, conversaciones, CI, contexto adicional e histórico según el tipo de ítem.'),
               t('tickets.help.first.step5', 'Tocá Continuar/Trabajar en chat para iniciar el trabajo con todo ese contexto, o abrí Zoho/GitHub para consultar la fuente.'),
@@ -133,6 +133,7 @@ export default function ticketsHelp() {
           {
             type: 'kv',
             items: [
+              { k: t('tickets.help.buttons.dashboard.k', 'Ver dashboard'), v: t('tickets.help.buttons.dashboard.v', 'Abre el tablero en un modal y lee el snapshot compartido de Zoho/GitHub, actualizado cada 60 s. Es determinístico: no usa IA ni consume tokens.') },
               { k: t('tickets.help.buttons.search.k', 'Buscar'), v: t('tickets.help.buttons.search.v', 'Abre un campo: escribí el número y presioná Enter para ir directo al ticket.') },
               { k: t('tickets.help.buttons.refresh.k', 'Actualizar'), v: t('tickets.help.buttons.refresh.v', 'Sólo para admin: fuerza una relectura de Zoho/GitHub. El resto del equipo ve el snapshot compartido, actualizado cada 60 s.') },
               { k: t('tickets.help.buttons.lane.k', 'Carriles'), v: t('tickets.help.buttons.lane.v', 'Filtran las tarjetas por categoría; tocá de nuevo el carril activo para quitar el filtro desde el resumen.') },
@@ -173,6 +174,11 @@ export default function ticketsHelp() {
             type: 'note',
             tone: 'warn',
             text: t('tickets.help.warning.sources', 'Zoho puede limitar la carga de resueltos a unas 100 filas por departamento y el tablero conserva datos viejos cuando una fuente falla: mirá ◷, ⚠️ y la hora del snapshot antes de decidir.'),
+          },
+          {
+            type: 'note',
+            tone: 'warn',
+            text: t('tickets.help.warning.meta', '“Contexto adicional” e “Histórico del trabajo” son metadata propia por ítem y viven en el Pad LOCAL; no son archivos ni modifican el ticket o PR original.'),
           },
           {
             type: 'note',

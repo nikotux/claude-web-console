@@ -1,9 +1,10 @@
 node_modules/
 .env
-users.json
-sessions.json
-recents.json
-titles.json
-session-owners.json
+# Estos archivos de estado van anclados a la raíz: sin `/`, gitignore los aplica en todos los directorios y ya excluyó un diccionario i18n (console:BUG-2518).
+/users.json
+/sessions.json
+/recents.json
+/titles.json
+/session-owners.json
 certs/
 *.log

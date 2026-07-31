@@ -17,11 +17,21 @@ export default function tolkienHelp() {
             type: 'steps',
             items: [
               t('tolkien.help.first.step1', 'Mirá el punto de color y el texto de main para saber si hay cambios nuevos por traer.'),
-              t('tolkien.help.first.step2', 'Tocá Traer para consultar GitHub sin modificar tu código local.'),
+              t('tolkien.help.first.step2', 'Tocá Buscar cambios para consultar GitHub sin modificar tu código local.'),
               t('tolkien.help.first.step3', 'Si aparece ↓N main, tocá Actualizar y confirmá para adelantar tu main local.'),
-              t('tolkien.help.first.step4', 'Desplegá Entornos de sesión para revisar el worktree, la DB clonada y el dev-server de cada trabajo aislado.'),
+              t('tolkien.help.first.step4', 'Desplegá Entornos de sesión: cada entorno efímero combina un worktree, una DB clonada y un dev-server systemd propio de esa sesión.'),
               t('tolkien.help.first.step5', 'Tocá entrar en el entorno que necesitás o usá Tolkien local para abrir la base compartida.'),
             ],
+          },
+        ],
+      },
+      {
+        title: t('tolkien.help.access.title', 'Acceso y chequeos automáticos'),
+        blocks: [
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('tolkien.help.access.text', 'El panel sólo aparece para administradores. Consulta GitHub al abrirse, cada 5 minutos y al volver a la pestaña; esos chequeos de fondo fallan en silencio. Sólo Buscar cambios muestra un error si la consulta manual falla.'),
           },
         ],
       },
@@ -58,21 +68,6 @@ export default function tolkienHelp() {
                 desc: t('tolkien.help.legend.behind.desc', 'cantidad de commits que le faltan a tu main local'),
               },
               {
-                icon: 'edit',
-                name: t('tolkien.help.legend.dirty.name', 'Sin commitear'),
-                desc: t('tolkien.help.legend.dirty.desc', 'cantidad de archivos modificados en el árbol de trabajo; es una nota y no cambia el semáforo'),
-              },
-              {
-                icon: 'clock',
-                name: t('tolkien.help.legend.fetch.name', 'Frescura'),
-                desc: t('tolkien.help.legend.fetch.desc', 'cuánto pasó desde la última consulta del remoto'),
-              },
-              {
-                icon: 'gitCommit',
-                name: t('tolkien.help.legend.commit.name', 'Último commit'),
-                desc: t('tolkien.help.legend.commit.desc', 'momento y autor del commit más reciente; el asunto completo aparece como ayuda emergente'),
-              },
-              {
                 emoji: t('tolkien.help.legend.prBehind.emoji', '⚠'),
                 name: t('tolkien.help.legend.prBehind.name', 'PR atrasado'),
                 desc: t('tolkien.help.legend.prBehind.desc', 'al menos una rama con PR abierto quedó detrás de main'),
@@ -103,7 +98,7 @@ export default function tolkienHelp() {
                 v: t('tolkien.help.buttons.version.v', 'Copia el SHA corto del commit actual al portapapeles.'),
               },
               {
-                k: t('tolkien.help.buttons.fetch.k', 'Traer / Buscar cambios'),
+                k: t('tolkien.help.buttons.fetch.k', 'Buscar cambios (fetch)'),
                 v: t('tolkien.help.buttons.fetch.v', 'Hace fetch y vuelve a medir el remoto; no adelanta main ni modifica tu árbol de trabajo.'),
               },
               {

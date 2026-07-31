@@ -5,7 +5,7 @@ export default function envVarsHelp() {
   return {
     title: t('system.help.env.title', 'Variables de entorno'),
     icon: 'gear',
-    intro: t('system.help.env.intro', 'Acá se define la identidad y los datos del cliente propios de esta instalación. Es configuración visible de la instancia: nunca guarda tokens, contraseñas ni otras credenciales.'),
+    intro: t('system.help.env.intro', 'Acá se definen la identidad y los datos del cliente del principal autenticado. Cada administrador opera sobre el instance.json de su propio espacio: una sesión de inquilino no puede leer ni modificar la configuración del host.'),
     sections: [
       {
         title: t('system.help.env.first.title', 'Primeros pasos'),
@@ -24,7 +24,7 @@ export default function envVarsHelp() {
         blocks: [{
           type: 'kv',
           items: [
-            { k: t('system.help.env.buttons.fields.k', 'Campos de identidad y cliente'), v: t('system.help.env.buttons.fields.v', 'Editan la configuración activa de esta instalación. Solo los puede cambiar un administrador.') },
+            { k: t('system.help.env.buttons.fields.k', 'Campos de identidad y cliente'), v: t('system.help.env.buttons.fields.v', 'Editan la configuración activa del principal de tu sesión. Solo los puede cambiar un administrador.') },
             { k: t('system.help.env.buttons.add.k', 'Agregar departamento'), v: t('system.help.env.buttons.add.v', 'Suma una fila clave → ID para Zoho Desk. Admin-only.') },
             { k: t('system.help.env.buttons.remove.k', 'Quitar'), v: t('system.help.env.buttons.remove.v', 'Elimina esa fila del formulario; el cambio se persiste recién al guardar. Admin-only.') },
             { k: t('system.help.env.buttons.save.k', 'Guardar'), v: t('system.help.env.buttons.save.v', 'Persiste la configuración permitida en la capa de instancia. Admin-only y 0 tokens.') },
@@ -36,7 +36,7 @@ export default function envVarsHelp() {
         blocks: [{
           type: 'note',
           tone: 'warn',
-          text: t('system.help.env.warning.text', 'Este panel NUNCA guarda secretos. CWC_TOKEN y otros secretos viven en .env; las credenciales viven bajo ~/.claude. Algunos motores leen la configuración al arrancar y necesitan reinicio del servidor para tomarla.'),
+          text: t('system.help.env.warning.text', 'Este panel NUNCA guarda secretos. Cada principal tiene su propio instance.json bajo su directorio de datos; CWC_TOKEN y otros secretos siguen en .env y las credenciales en su espacio privado. Algunos motores leen la configuración al arrancar y necesitan reinicio del servidor para tomarla.'),
         }],
       },
     ],

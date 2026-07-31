@@ -7,7 +7,7 @@ export default function retroHelp() {
   return {
     title: t('retro.help.title', 'Mejora Continua'),
     icon: 'sparkle',
-    intro: t('retro.help.intro', 'Mejora Continua junta lecciones sobre cómo trabajar mejor, destiladas al cerrar chats con sustancia. La consola propone; vos decidís si adoptar, guardar o descartar cada aprendizaje de proceso.'),
+    intro: t('retro.help.intro', 'Mejora Continua junta lecciones sobre cómo trabajar mejor, destiladas al cerrar chats con sustancia. El registro vive en el Pad LOCAL, colección mejora-continua: la consola propone y vos decidís si adoptar, guardar o descartar cada aprendizaje de proceso.'),
     sections: [
       {
         title: t('retro.help.first.title', 'Primeros pasos'),
@@ -115,7 +115,7 @@ export default function retroHelp() {
         blocks: [
           {
             type: 'note',
-            text: t('retro.pool.help.what', 'El pozo reúne lecciones de proceso que otras personas compartieron. Publicar es automático únicamente para lecciones de Tolkien, salvo que apagues el interruptor.'),
+            text: t('retro.pool.help.what', 'El pozo común vive en el workspace comunidad y reúne lecciones de proceso que otras personas compartieron. Publicar es automático únicamente para lecciones de Tolkien, salvo que apagues el interruptor.'),
           },
           {
             type: 'kv',
@@ -130,7 +130,7 @@ export default function retroHelp() {
               },
               {
                 k: t('retro.pool.help.recurrence.k', 'le pasó a N'),
-                v: t('retro.pool.help.recurrence.v', 'Indica cuántas personas o veces vivieron la misma lección; un número mayor ayuda a reconocer patrones compartidos.'),
+                v: t('retro.pool.help.recurrence.v', 'Cuenta entre cuántas personas apareció la misma lección; un número mayor ayuda a reconocer patrones compartidos.'),
               },
               {
                 k: t('retro.pool.help.unshare.k', 'Retirar del pozo'),
@@ -157,7 +157,7 @@ export default function retroHelp() {
               },
               {
                 k: t('retro.help.buttons.adopt.k', '👍 Adoptar → destino'),
-                v: t('retro.help.buttons.adopt.v', 'Promueve la lección al destino sugerido y la deja como adoptada.'),
+                v: t('retro.help.buttons.adopt.v', 'Disponible para administradores: promueve la lección al destino sugerido y la deja como adoptada.'),
               },
               {
                 k: t('retro.help.buttons.more.k', '▾'),
@@ -177,19 +177,27 @@ export default function retroHelp() {
               },
               {
                 k: t('retro.help.buttons.acceptAll.k', '👍 Aceptar todo'),
-                v: t('retro.help.buttons.acceptAll.v', 'Adopta en lote todas las pendientes, cada una en su destino sugerido; escribe en destinos reales.'),
+                v: t('retro.help.buttons.acceptAll.v', 'Disponible para administradores: adopta en lote todas las pendientes, cada una en su destino sugerido; escribe en destinos reales.'),
               },
               {
                 k: t('retro.help.buttons.curate.k', '🧹 Ordenar el registro'),
-                v: t('retro.help.buttons.curate.v', 'Busca duplicados, contradicciones, redundancias y huecos con IA. Consume tokens y cada cambio se decide aparte.'),
+                v: t('retro.help.buttons.curate.v', 'Disponible para administradores: busca duplicados, contradicciones, redundancias y huecos con IA. Consume tokens y cada cambio se decide aparte.'),
+              },
+              {
+                k: t('retro.help.buttons.hygiene.k', '🧽 Higiene del registro'),
+                v: t('retro.help.buttons.hygiene.v', 'Hace un barrido determinístico de Pad y no consume tokens. Si ofrece borrar copias redundantes, vuelve a verificarlas y pide confirmación.'),
+              },
+              {
+                k: t('retro.help.buttons.feedback.k', '💬 Feedback de Chris'),
+                v: t('retro.help.buttons.feedback.v', 'Reúne el historial completo por ticket o PR y permite filtrar el tablero desde sus chips.'),
               },
               {
                 k: t('retro.help.buttons.email.k', '📧 Traer feedback de correo'),
-                v: t('retro.help.buttons.email.v', 'Lee el correo de Chris, interpreta feedback y lo suma al registro. Consume tokens; nunca envía mensajes.'),
+                v: t('retro.help.buttons.email.v', 'Disponible para administradores: lee el correo de Chris, interpreta feedback y lo suma al registro. Consume tokens; nunca envía mensajes.'),
               },
               {
                 k: t('retro.help.buttons.teams.k', '📨 Traer feedback de Teams'),
-                v: t('retro.help.buttons.teams.v', 'Lee el chat de Teams con Chris, interpreta feedback y lo suma al mismo registro. Consume tokens; nunca envía mensajes.'),
+                v: t('retro.help.buttons.teams.v', 'Disponible para administradores: lee el chat de Teams con Chris, interpreta feedback y lo suma al mismo registro. Consume tokens; nunca envía mensajes.'),
               },
               {
                 k: t('retro.help.buttons.ref.k', 'Chip TKT/PR/FEAT'),
@@ -231,7 +239,7 @@ export default function retroHelp() {
           {
             type: 'note',
             tone: 'danger',
-            text: t('retro.help.warning.text', 'Nada se auto-aplica. “Adoptar” y “Aceptar todo” escriben en el destino real indicado; revisalo antes de confirmar. “Eliminar” borra definitivamente una lección descartada. Las búsquedas y la curaduría con IA consumen tokens.'),
+            text: t('retro.help.warning.text', 'Nada se promueve sin aprobación humana explícita. “Adoptar” y “Aceptar todo” escriben en el destino real indicado; traer una lección ajena sólo la suma como propuesta. “Eliminar” borra definitivamente una descartada. Las búsquedas y la curaduría con IA consumen tokens.'),
           },
         ],
       },

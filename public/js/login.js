@@ -1,4 +1,12 @@
 // login.js — login con usuario+contraseña, o con el token maestro (plegable).
+import { initI18n, applyI18n } from './ui/i18n.js';
+
+// Esta página no tiene sesión: inferimos inglés del navegador y para cualquier
+// otro idioma usamos español, que es el fallback seguro de la interfaz.
+const lang = navigator.language?.toLowerCase().startsWith('en') ? 'en' : 'es';
+await initI18n(lang);
+applyI18n(document);
+
 const form = document.getElementById('login-form');
 const errorEl = document.getElementById('error');
 

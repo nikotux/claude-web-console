@@ -109,6 +109,28 @@ html, body {
 .rail-btn .cwc-icon { width: 18px; height: 18px; }
 .sb-new { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 
+/* Usuario conectado: chip en la cabecera del panel izquierdo (movido del pie el
+   2026-07-31 a pedido de Niko). Llena el espacio que quedaba libre al lado del
+   ☰. En el rail colapsado sobrevive solo el avatar con la inicial: el nombre
+   lleva .only-expanded y la .sb-head pasa a columna, así que el chip queda
+   centrado debajo del ☰ sin regla extra. */
+.acct-chip {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .4rem;
+  overflow: hidden;
+}
+.acct-avatar {
+  width: 24px; height: 24px; flex: none; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--cwc-accent-bg); border: 1px solid var(--cwc-accent);
+  color: var(--cwc-accent); font-size: var(--cwc-fs-xs); font-weight: 700;
+  line-height: 1; text-transform: uppercase;
+}
+.acct-name {
+  min-width: 0; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#sidebar.collapsed .acct-chip { flex: none; justify-content: center; }
+
 /* ===== Pestañas abiertas (relocalizadas dentro del panel) ===== */
 /* Colapsado (rail de escritorio): columna de iconos — ES la única forma de
    cambiar de pestaña ahí (la lista "Sesiones" se oculta en ese modo). */
@@ -561,7 +583,11 @@ html, body {
   font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
   text-transform: uppercase; letter-spacing: .04em;
   padding: .35rem .35rem .15rem; user-select: none;
+  cursor: pointer; list-style: none;
 }
+.sess-world-h::-webkit-details-marker { display: none; }
+.sess-world-grp { margin-top: .1rem; }
+.sess-world-grp[open] > .sess-world-h { margin-bottom: .15rem; }
 .sess-world-h .side-count { margin-left: auto; }
 /* Entorno aislado de Tolkien: sub-bloque anidado con identidad fría y guía
    vertical para distinguirlo del árbol principal. */
@@ -589,6 +615,23 @@ html, body {
   border-radius: 3px;
   background: color-mix(in srgb, var(--cwc-danger) 9%, transparent);
 }
+/* Chevron compartido de los grupos colapsables de Sesiones (mundos,
+   entornos aislados, Archivados, Otras tmux, Otros usuarios): sin él, que un
+   grupo se pliegue era invisible. */
+.sess-world-h::before,
+.sess-env-h::before,
+.sess-others > summary::before {
+  content: ''; flex: none;
+  width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  opacity: .65;
+  transition: transform .15s ease;
+}
+.sess-world-grp[open] > .sess-world-h::before,
+.sess-env-grp[open] > .sess-env-h::before,
+.sess-others[open] > summary::before { transform: rotate(90deg); }
 /* F3 (PLAN-373): conversación ARCHIVADA (revivible) — atenuada. */
 .sess-chat--archived { opacity: .62; }
 .sess-chat--archived:hover { opacity: 1; }
@@ -785,10 +828,16 @@ html, body {
 
 .footer-acct { display: flex; align-items: center; gap: .4rem; }
 .footer-acct .btn-ghost { text-decoration: none; }
-.acct-user {
-  flex: 1; text-align: right; color: var(--cwc-text-dim); font-size: var(--cwc-fs-sm);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/* El chip de usuario se fue a la cabecera (.acct-chip). El `flex:1` que tenía
+   .acct-user era lo que empujaba los íconos contra el borde derecho: ese
+   trabajo lo hereda ahora el botón de tokens con margin-right auto, así el pie
+   se ve igual que antes (tokens a la izquierda, íconos a la derecha). */
+.footer-acct > [data-module="usage"] { margin-right: auto; min-width: 0; }
+
+/* En el rail colapsado el pie es una COLUMNA centrada: ahí el margin auto de
+   arriba ganaría sobre `align-items:center` y descentraría el botón de tokens
+   (medido: 4px a la izquierda). Se neutraliza. */
+#sidebar.collapsed .footer-acct > [data-module="usage"] { margin-right: 0; }
 
 /* ===== Modal Uso (tokens) ===== */
 /* Límites del PLAN (las ventanas de claude.ai: sesión 5 h / semanales):
@@ -2400,8 +2449,60 @@ html, body {
 .md-mermaid-zoom-btn:hover { color: var(--cwc-accent); border-color: var(--cwc-accent); }
 .md-mermaid-zoom-btn .cwc-icon { flex: none; }
 @media (max-width: 768px) { .md-mermaid-canvas { max-height: 62vh; } }
-.md-mermaid-zoom-body { text-align: center; }
-.md-mermaid-zoom-body svg { max-width: 100%; max-height: 86vh; width: auto; height: auto; }
+/* Visor interactivo de diagramas: reserva el lienzo para zoom y paneo sin
+   delegar el desplazamiento al cuerpo genérico del modal. */
+.zv-card {
+  width: 100%;
+  height: 88vh;
+  height: 88dvh;
+}
+.zv-body {
+  display: flex; flex: 1; flex-direction: column; gap: .4rem;
+  min-height: 0; overflow: hidden;
+}
+.zv-bar {
+  display: flex; align-items: center; justify-content: center; gap: .3rem;
+  flex: none;
+}
+.zv-pct {
+  min-width: 4.5rem;
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.zv-viewport {
+  position: relative; flex: 1; min-height: 0; overflow: hidden;
+  background: var(--cwc-bg); border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-lg); cursor: grab; touch-action: none;
+}
+.zv-viewport:focus-visible {
+  outline: 2px solid var(--cwc-accent); outline-offset: -2px;
+}
+.zv-viewport.zv-dragging { cursor: grabbing; }
+.zv-stage {
+  position: absolute; top: 0; left: 0;
+  will-change: transform;
+}
+.zv-stage svg {
+  display: block; max-width: none; max-height: none;
+}
+.zv-hint {
+  flex: none; color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
+  text-align: center;
+}
+@media (max-width: 768px) {
+  .dlg-overlay:has(.zv-card) { padding: 1vh .3rem; }
+  .zv-card {
+    height: 92vh; height: 92dvh;
+    max-height: 92vh; max-height: 92dvh;
+  }
+  /* Excepción táctil deliberada: estos controles se usan con un dedo mientras
+     la otra mano sostiene el teléfono, aunque el resto de la UI sea compacto. */
+  .zv-bar .btn-ghost { min-width: 36px; min-height: 36px; }
+  .zv-hint {
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    font-size: var(--cwc-fs-xs);
+  }
+}
 .md-mermaid-src, .md-chart-src { margin: .3rem 0; font-size: var(--cwc-fs-sm); }
 .md-mermaid-src summary, .md-chart-src summary { cursor: pointer; color: var(--cwc-text-dim); }
 .md-mermaid-src summary:hover, .md-chart-src summary:hover { color: var(--cwc-text-secondary); }

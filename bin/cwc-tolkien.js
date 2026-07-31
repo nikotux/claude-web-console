@@ -6,8 +6,10 @@
  * login, whoami, census y reconcile son subcomandos de SOLO LECTURA. `close`
  * es el único subcomando que ESCRIBE en Tolkien: por defecto usa --dry-run y
  * exige --apply explícito. Toda escritura queda registrada, con el estado antes
- * y después, en el directorio de operaciones correspondiente. El estado durable
- * vive en <directorio de datos del usuario>/tolkien, resuelto con
+ * y después, en el directorio de operaciones correspondiente. El estado de
+ * trabajo vive también en state.db (SQLite en modo WAL), junto a los JSON que
+ * se conservan como artefacto de salida de cada corrida. Todo vive en
+ * <directorio de datos del usuario>/tolkien, resuelto por invocación con
  * resolveDataDir(): ~/.cwc-data/tolkien para el host y el espacio propio del
  * inquilino cuando el server inyecta CWC_DATA_DIR. Ese aislamiento impide que
  * un inquilino opere Tolkien con la identidad del host.
@@ -19,6 +21,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { resolveDataDir } from '../src/core/data-dir.js';
+import * as store from './cwc-tolkien-store.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -68,7 +71,23 @@ function tolkienPaths() {
     reconcileFile: path.join(dataDir, 'reconcile.json'),
     reconcilePartialFile: path.join(dataDir, 'reconcile.partial.jsonl'),
     opsDir: path.join(dataDir, 'ops'),
+    dbFile: path.join(dataDir, 'state.db'),
   };
+}
+
+// El espejo a la base local NUNCA puede tumbar una corrida: si la DB falla, el
+// JSON ya se escribió y sigue siendo la salida real del subcomando.
+function withStore(paths, fn) {
+  let db = null;
+  try {
+    db = store.openStore(paths.dbFile);
+    return fn(db);
+  } catch (error) {
+    log(`Aviso: la base local no pudo registrar esta corrida: ${errorMessage(error)}`);
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* la base ya estaba cerrada */ }
+  }
 }
 
 class CliError extends Error {
@@ -107,6 +126,7 @@ function help() {
   node bin/cwc-tolkien.js census [--out <ruta>] [--limit <n>] [--fresh]
   node bin/cwc-tolkien.js reconcile [--census <ruta>] [--out <ruta>] [--limit <n>] [--fresh]
   node bin/cwc-tolkien.js close [--apply] [--reconcile <ruta>] [--limit <n>] [--confirm-large] [--only <workKey|ticketWorkflowId>]... [--next-actor <kind>]
+  node bin/cwc-tolkien.js db [--stats] [--migrate] [--runs <n>] [--bucket <pila>]
 
 Subcomandos:
   login    Guarda la cookie real en un storageState privado y ejecuta whoami.
@@ -114,6 +134,7 @@ Subcomandos:
   census   Censa los tickets activos asignados al usuario de la sesión.
   reconcile Cruza el censo con Zoho Desk sin abrir Chromium ni escribir en Tolkien.
   close    Revisa o aplica el cierre en masa; el default absoluto es --dry-run.
+  db       Consulta o migra el store de trabajo SQLite local.
 
 Opciones de census:
   --out <ruta>  Escribe el JSON final en otra ruta.
@@ -133,6 +154,13 @@ Opciones de close:
   --confirm-large       Autoriza lotes mayores al tope de 50.
   --only <id>           Filtra por workKey o ticketWorkflowId; es repetible.
   --next-actor <kind>   Actor siguiente (default: external_system).
+
+Opciones de db:
+  --stats               Muestra conteos y la corrida más reciente (default).
+  --migrate             Importa los JSON existentes sin borrarlos ni moverlos.
+  --force               Repite la migración aunque ya haya sido ejecutada.
+  --runs <n>            Lista las últimas n corridas (default: 20).
+  --bucket <pila>       Lista la última pila closable, realOpen o unpaired.
   --help        Muestra esta ayuda.
 `);
 }
@@ -686,6 +714,13 @@ function deskIdFromUrl(rawUrl) {
   if (!rawUrl) return null;
   try {
     const url = new URL(rawUrl);
+    // La llave real para cruzar con Zoho Desk vive en el href, dentro del hash:
+    // ...ShowHomePage.do#Cases/dv/813994000003886174.
+    if (url.hostname === 'support.mordorstaffing.co') {
+      const deskRoute = `${url.pathname}${url.search}${url.hash}`;
+      const deskMatch = deskRoute.match(/Cases\/dv\/(\d+)(?:\b|\/|$)/i);
+      if (deskMatch) return deskMatch[1];
+    }
     for (const key of ['ticketId', 'ticketid', 'id']) {
       const value = url.searchParams.get(key);
       if (value && /^\d+$/.test(value)) return value;
@@ -700,20 +735,33 @@ function deskIdFromUrl(rawUrl) {
 async function readOverview(page) {
   return page.evaluate(() => {
     const clean = (value) => value?.replace(/\s+/g, ' ').trim() || null;
-    const detailHeader = [...document.querySelectorAll('main header')]
-      .find((header) => header.querySelector('[aria-label="Back to the ticket workboard"]'));
+    const main = document.querySelector('main');
+    // WORK-n es el identificador visible más estable del header; no dependemos
+    // de la cadena completa de clases Tailwind ni del aria-label del botón volver.
+    const workSpan = [...(main?.querySelectorAll('span') ?? [])]
+      .find((span) => /^WORK-\d+$/.test(clean(span.textContent) ?? ''));
+    const detailHeader = workSpan?.closest('header') ?? main?.querySelector('header');
     const headerText = clean(detailHeader?.textContent) ?? '';
-    const workNumber = headerText.match(/\bWORK-\d+\b/)?.[0] ?? null;
-    const title = clean(detailHeader?.querySelector('h1')?.textContent);
+    const workNumber = clean(workSpan?.textContent)
+      ?? headerText.match(/\bWORK-\d+\b/)?.[0]
+      ?? null;
+    const title = clean(detailHeader?.querySelector('h1')?.textContent)
+      ?? clean(main?.querySelector('h1')?.textContent);
     const progressHeading = document.querySelector('#current-progress-heading');
     const progressEyebrow = clean(progressHeading?.previousElementSibling?.textContent);
-    const executionState = progressEyebrow === 'Cancelled'
-      ? 'cancelled'
-      : progressEyebrow === 'Completed'
-        ? 'completed'
-        : /\bActive\b/.test(headerText)
-          ? 'active'
-          : null;
+    // El primer badge que sigue a WORK-n es el estado. Los estados conocidos se
+    // normalizan; ante uno nuevo conservamos el texto original para no perderlo.
+    const spansAfterWork = workSpan && detailHeader
+      ? [...detailHeader.querySelectorAll('span')].slice(
+          [...detailHeader.querySelectorAll('span')].indexOf(workSpan) + 1,
+        )
+      : [];
+    const badgeTexts = spansAfterWork.map((span) => clean(span.textContent)).filter(Boolean);
+    const rawExecutionState = badgeTexts[0] ?? progressEyebrow;
+    const normalizedState = rawExecutionState?.toLowerCase() ?? null;
+    const executionState = ['active', 'completed', 'cancelled'].includes(normalizedState)
+      ? normalizedState
+      : rawExecutionState;
     const dlValue = (label) => {
       const dt = [...document.querySelectorAll('dt')]
         .find((candidate) => clean(candidate.textContent) === label);
@@ -730,8 +778,19 @@ async function readOverview(page) {
           .map((element) => clean(element.textContent))
           .find((text) => text && /\b\d{4}-\d{2}-\d{2}\b/.test(text) && text.includes('·')) ?? null
       : null;
+    // Desk no expone necesariamente su número corto: el dato confiable es el
+    // enlace support.mordorstaffing.co cuyo hash contiene Cases/dv/<id largo>.
     const deskLink = [...document.querySelectorAll('main a[href]')]
-      .find((anchor) => /Zoho Desk/i.test(clean(anchor.textContent) ?? ''));
+      .find((anchor) => {
+        try {
+          const url = new URL(anchor.href);
+          return url.hostname === 'support.mordorstaffing.co'
+            && /Cases\/dv\/\d+/i.test(`${url.pathname}${url.search}${url.hash}`);
+        } catch {
+          return false;
+        }
+      });
+    const mainText = clean(main?.innerText) ?? '';
     return {
       workNumber,
       title,
@@ -743,6 +802,7 @@ async function readOverview(page) {
       lastMovementAt: latestMeta?.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0] ?? null,
       lastMovement: latestMeta,
       deskUrl: deskLink?.href ?? null,
+      deskTicketNumber: mainText.match(/\b(?:Zoho\s+)?Desk\s*#\s*(\d+)\b/i)?.[1] ?? null,
     };
   });
 }
@@ -761,9 +821,13 @@ async function readManage(page) {
     };
     const ownership = document.querySelector('#ownership');
     const taken = clean(ownership?.textContent)?.match(/Taken by\s+(.+?)(?:\s+·|\s+\(assigned by|$)/)?.[1] ?? null;
-    const desired = valueOf('input[type="hidden"][name="desiredOutcome"]')
+    // En ?tab=estado el resultado esperado editable vive en un textarea; el
+    // hidden y el <dl> quedan como compatibilidad con otras variantes de vista.
+    const desired = valueOf('textarea[name="desiredOutcome"]')
+      ?? valueOf('input[type="hidden"][name="desiredOutcome"]')
       ?? dlValue('Desired outcome');
     const mode = valueOf('select[name="mode"]');
+    const mainText = clean(document.querySelector('main')?.innerText) ?? '';
     return {
       ticketWorkflowId: valueOf('input[type="hidden"][name="ticketWorkflowId"]'),
       desiredOutcome: desired === 'Not recorded' ? null : desired,
@@ -774,6 +838,7 @@ async function readManage(page) {
       targetAt: valueOf('input[name="targetOn"]') ?? dlValue('Target / effective date'),
       externalCommitmentAt:
         valueOf('input[name="externalCommitmentOn"]') ?? dlValue('External commitment'),
+      deskTicketNumber: mainText.match(/\b(?:Zoho\s+)?Desk\s*#\s*(\d+)\b/i)?.[1] ?? null,
     };
   });
 }
@@ -814,14 +879,23 @@ async function scrapeTicket(page, listed) {
   const manage = await readManage(page);
   const manageHtml = await page.content();
 
-  let deskTicketId = fieldFromSerializedHtml(overviewHtml, 'deskTicketId')
-    ?? fieldFromSerializedHtml(manageHtml, 'deskTicketId')
-    ?? deskIdFromUrl(overview.deskUrl);
-  let deskTicketNumber = fieldFromSerializedHtml(overviewHtml, 'deskTicketNumber')
-    ?? fieldFromSerializedHtml(manageHtml, 'deskTicketNumber');
+  const serializedDeskId = [
+    fieldFromSerializedHtml(overviewHtml, 'deskTicketId'),
+    fieldFromSerializedHtml(manageHtml, 'deskTicketId'),
+  ].find((value) => value && value !== 'null') ?? null;
+  const serializedDeskNumber = [
+    fieldFromSerializedHtml(overviewHtml, 'deskTicketNumber'),
+    fieldFromSerializedHtml(manageHtml, 'deskTicketNumber'),
+  ].find((value) => value && value !== 'null') ?? null;
+  let deskTicketId = deskIdFromUrl(overview.deskUrl) ?? serializedDeskId;
+  let deskTicketNumber = overview.deskTicketNumber
+    ?? manage.deskTicketNumber
+    ?? serializedDeskNumber;
   if (overview.deskUrl && !deskTicketNumber) {
     deskTicketNumber = await readDeskNumber(page, detailUrl);
   }
+  // Tolkien puede no mostrar el número corto humano (#693). En ese caso queda
+  // null: reconcile debe usar deskTicketId, la llave real tomada del href.
   if (deskTicketId === 'null') deskTicketId = null;
   if (deskTicketNumber === 'null') deskTicketNumber = null;
 
@@ -833,7 +907,7 @@ async function scrapeTicket(page, listed) {
     overview.workNumber ?? listed.listingText.match(/\bWORK-\d+\b/)?.[0] ?? null;
   return {
     ticketWorkflowId: manage.ticketWorkflowId ?? listed.ticketWorkflowId,
-    workNumber: workKey ? Number(workKey.slice('WORK-'.length)) : null,
+    workNumber: workKey,
     workKey,
     title: overview.title,
     executionState: overview.executionState,
@@ -918,6 +992,16 @@ async function census(args, paths) {
     };
     writeJson(options.out, result, paths.dataDir);
     printJson(result);
+    withStore(paths, (db) => {
+      const runUid = store.startRun(db, {
+        kind: 'census',
+        viewerEmail: identity.email,
+        scope: { limit: options.limit, fresh: options.fresh, out: options.out },
+      });
+      const written = store.upsertTickets(db, runUid, tickets, result.generatedAt);
+      store.finishRun(db, runUid, { counts: { ...written, total: tickets.length } });
+      log(`Base local: ${written.inserted} tickets registrados en la corrida ${runUid}.`);
+    });
 
     const successful = tickets.filter((ticket) => !ticket.error);
     const withoutOutcome = successful.filter((ticket) => !ticket.hasDesiredOutcome).length;
@@ -1145,6 +1229,16 @@ async function reconcile(args, paths) {
   };
   writeJson(options.out, result, paths.dataDir);
   printJson(result);
+  withStore(paths, (db) => {
+    const runUid = store.startRun(db, {
+      kind: 'reconcile',
+      viewerEmail: result.viewerEmail,
+      scope: { limit: options.limit, fresh: options.fresh, censusFile: options.censusFile },
+    });
+    const written = store.recordReconcile(db, runUid, result, generatedAt);
+    store.finishRun(db, runUid, { counts: written });
+    log(`Base local: ${JSON.stringify(written)} en la corrida ${runUid}.`);
+  });
   log(
     `Cruce listo: ${result.counts.total} total · ${result.counts.closable} cerrables · `
       + `${result.counts.realOpen} abiertos reales · ${result.counts.unpaired} sin par seguro · `
@@ -1313,8 +1407,19 @@ async function submitClose(page, evidenceSummary) {
   );
 }
 
-function appendOpsStep(logFile, ticket, phase, result, errorCode, before, after, payload, dataDir) {
-  appendPartial({
+function appendOpsStep(
+  logFile,
+  ticket,
+  phase,
+  result,
+  errorCode,
+  before,
+  after,
+  payload,
+  dataDir,
+  mirror = null,
+) {
+  const entry = {
     kind: 'step',
     at: new Date().toISOString(),
     ticketWorkflowId: ticket.ticketWorkflowId,
@@ -1326,13 +1431,35 @@ function appendOpsStep(logFile, ticket, phase, result, errorCode, before, after,
     before: stateSnapshot(before),
     after: stateSnapshot(after),
     payload: payload ?? null,
-  }, logFile, dataDir);
+  };
+  appendPartial(entry, logFile, dataDir);
+  if (mirror?.db && mirror.runUid) {
+    try {
+      store.recordOp(mirror.db, {
+        runUid: mirror.runUid,
+        ticketWorkflowId: entry.ticketWorkflowId,
+        workKey: entry.workKey,
+        phase: entry.phase,
+        outcome: entry.result,
+        reason: entry.errorCode,
+        before: entry.before,
+        after: entry.after,
+        payload: entry.payload,
+        actor: mirror.actor,
+      });
+    } catch (error) {
+      log(`Aviso: la base local no pudo registrar una operación: ${errorMessage(error)}`);
+    }
+  }
 }
 
 async function applyClose(source, batch, options, paths) {
   const { browser, context } = await launchContext(paths.sessionFile);
   const page = await context.newPage();
   let logFile = null;
+  let opsDb = null;
+  let opsRunUid = null;
+  const opsMirror = { db: null, runUid: null, actor: null };
   const counts = { closed: 0, skipped: 0, failed: 0, aborted: 0 };
   let fatalError = null;
   try {
@@ -1348,6 +1475,22 @@ async function applyClose(source, batch, options, paths) {
       reconcileFile: options.reconcileFile,
       viewer: identity.email ?? source.viewerEmail ?? null,
     }, logFile, paths.dataDir);
+    try {
+      opsDb = store.openStore(paths.dbFile);
+      opsRunUid = store.startRun(opsDb, {
+        kind: 'close',
+        viewerEmail: identity.email ?? source.viewerEmail ?? null,
+        scope: { batchSize: batch.length, nextActorKind: options.nextActorKind },
+      });
+      opsMirror.db = opsDb;
+      opsMirror.runUid = opsRunUid;
+      opsMirror.actor = identity.email ?? source.viewerEmail ?? null;
+    } catch (error) {
+      log(`Aviso: la base local no pudo registrar esta corrida: ${errorMessage(error)}`);
+      try { opsDb?.close(); } catch { /* la base ya estaba cerrada */ }
+      opsDb = null;
+      opsRunUid = null;
+    }
     const client = createZohoClient();
 
     for (let index = 0; index < batch.length; index += 1) {
@@ -1367,7 +1510,7 @@ async function applyClose(source, batch, options, paths) {
         ) {
           appendOpsStep(
             logFile, ticket, 'close', 'skipped', 'already_closed', current, current, null,
-            paths.dataDir,
+            paths.dataDir, opsMirror,
           );
           counts.skipped += 1;
           continue;
@@ -1379,7 +1522,7 @@ async function applyClose(source, batch, options, paths) {
         if (!ticket.zoho?.id) {
           appendOpsStep(
             logFile, ticket, 'close', 'aborted', 'missing_zoho_id', current, current, null,
-            paths.dataDir,
+            paths.dataDir, opsMirror,
           );
           counts.aborted += 1;
           continue;
@@ -1402,6 +1545,7 @@ async function applyClose(source, batch, options, paths) {
               observed: zohoSnapshot(freshZoho),
             },
             paths.dataDir,
+            opsMirror,
           );
           counts.aborted += 1;
           continue;
@@ -1409,7 +1553,7 @@ async function applyClose(source, batch, options, paths) {
         if (current.isWaiting || ticket.isWaiting) {
           appendOpsStep(
             logFile, ticket, 'close', 'skipped', 'waiting', current, current, null,
-            paths.dataDir,
+            paths.dataDir, opsMirror,
           );
           counts.skipped += 1;
           continue;
@@ -1441,7 +1585,7 @@ async function applyClose(source, batch, options, paths) {
           if (outcomeError) {
             appendOpsStep(
               logFile, ticket, 'set_outcome', 'failed', outcomeError,
-              beforeOutcome, afterOutcome, outcomePayload, paths.dataDir,
+              beforeOutcome, afterOutcome, outcomePayload, paths.dataDir, opsMirror,
             );
             counts.failed += 1;
             continue;
@@ -1451,14 +1595,14 @@ async function applyClose(source, batch, options, paths) {
           if (!sameText(afterOutcome.desiredOutcome, ticket.desiredOutcomeProposal)) {
             appendOpsStep(
               logFile, ticket, 'set_outcome', 'failed', 'set_outcome_unverified',
-              beforeOutcome, afterOutcome, outcomePayload, paths.dataDir,
+              beforeOutcome, afterOutcome, outcomePayload, paths.dataDir, opsMirror,
             );
             counts.failed += 1;
             continue;
           }
           appendOpsStep(
             logFile, ticket, 'set_outcome', 'ok', null,
-            beforeOutcome, afterOutcome, outcomePayload, paths.dataDir,
+            beforeOutcome, afterOutcome, outcomePayload, paths.dataDir, opsMirror,
           );
           current = afterOutcome;
         }
@@ -1484,7 +1628,7 @@ async function applyClose(source, batch, options, paths) {
         if (closeError) {
           appendOpsStep(
             logFile, ticket, 'close', 'failed', closeError,
-            beforeClose, afterClose, closePayload, paths.dataDir,
+            beforeClose, afterClose, closePayload, paths.dataDir, opsMirror,
           );
           counts.failed += 1;
           continue;
@@ -1493,14 +1637,14 @@ async function applyClose(source, batch, options, paths) {
         if (afterClose.executionState !== 'completed') {
           appendOpsStep(
             logFile, ticket, 'close', 'failed', 'close_unverified',
-            beforeClose, afterClose, closePayload, paths.dataDir,
+            beforeClose, afterClose, closePayload, paths.dataDir, opsMirror,
           );
           counts.failed += 1;
           continue;
         }
         appendOpsStep(
           logFile, ticket, 'close', 'ok', null,
-          beforeClose, afterClose, closePayload, paths.dataDir,
+          beforeClose, afterClose, closePayload, paths.dataDir, opsMirror,
         );
         counts.closed += 1;
       } catch (error) {
@@ -1523,6 +1667,7 @@ async function applyClose(source, batch, options, paths) {
           afterException,
           { ...exceptionPayload, exceptionMessage: errorMessage(error) },
           paths.dataDir,
+          opsMirror,
         );
         counts.failed += 1;
       }
@@ -1537,6 +1682,12 @@ async function applyClose(source, batch, options, paths) {
         counts,
       }, logFile, paths.dataDir);
     }
+    try {
+      if (opsDb && opsRunUid) store.finishRun(opsDb, opsRunUid, { counts });
+    } catch {
+      // El JSONL ya contiene el cierre de la corrida.
+    }
+    try { opsDb?.close(); } catch { /* la base ya estaba cerrada */ }
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   }
@@ -1566,6 +1717,65 @@ async function close(args, paths) {
   await applyClose(source, batch, options, paths);
 }
 
+async function dbCommand(args, paths) {
+  let action = null;
+  let force = false;
+  let runsLimit = 20;
+  let bucket = null;
+  const chooseAction = (next) => {
+    if (action && action !== next) {
+      throw new CliError('Elegí una sola acción de db por invocación.');
+    }
+    action = next;
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--stats') {
+      chooseAction('stats');
+    } else if (arg === '--migrate') {
+      chooseAction('migrate');
+    } else if (arg === '--force') {
+      force = true;
+    } else if (arg === '--runs') {
+      chooseAction('runs');
+      const candidate = args[index + 1];
+      if (candidate && !candidate.startsWith('--')) {
+        runsLimit = positiveInteger(candidate, '--runs');
+        index += 1;
+      }
+    } else if (arg === '--bucket') {
+      chooseAction('bucket');
+      bucket = valueAfter(args, index, arg);
+      index += 1;
+      if (!['closable', 'realOpen', 'unpaired'].includes(bucket)) {
+        throw new CliError('--bucket debe ser closable, realOpen o unpaired.');
+      }
+    } else {
+      throw new CliError(`Opción desconocida para db: ${arg}`);
+    }
+  }
+  action ??= 'stats';
+  if (force && action !== 'migrate') {
+    throw new CliError('--force sólo se puede usar junto con --migrate.');
+  }
+
+  let db = null;
+  try {
+    db = store.openStore(paths.dbFile);
+    if (action === 'migrate') {
+      printJson(store.migrateFromJson(db, paths, { force }));
+    } else if (action === 'runs') {
+      printJson(store.listRuns(db, runsLimit));
+    } else if (action === 'bucket') {
+      printJson(store.latestReconcileByBucket(db, bucket));
+    } else {
+      printJson(store.storeStats(db));
+    }
+  } finally {
+    try { db?.close(); } catch { /* la base ya estaba cerrada */ }
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args.shift();
@@ -1589,6 +1799,8 @@ async function main() {
     await reconcile(args, paths);
   } else if (command === 'close') {
     await close(args, paths);
+  } else if (command === 'db') {
+    await dbCommand(args, paths);
   } else {
     throw new CliError(`Subcomando desconocido: ${command}. Usá --help para ver las opciones.`);
   }

@@ -72,9 +72,19 @@ export default function statsHelp() {
             items: [
               {
                 k: t('stats.help.buttons.hover.k', 'Pasar el cursor'),
-                v: t('stats.help.buttons.hover.v', 'Muestra datos complementarios del host. El widget no tiene botones ni ejecuta acciones.'),
+                v: t('stats.help.buttons.hover.v', 'Muestra datos complementarios del host. El widget se refresca solo cada 2,5 segundos, no tiene botones y no consume tokens.'),
               },
             ],
+          },
+        ],
+      },
+      {
+        title: t('stats.help.cpuDelta.title', 'Cómo se mide la CPU'),
+        blocks: [
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('stats.help.cpuDelta.text', 'CPU es el cambio entre dos lecturas globales del servidor: la primera lectura después de arrancar da 0%. El widget (/api/stats) y el chequeo de salud comparten la lectura anterior, así que cualquiera de los dos puede mover el punto de comparación del siguiente valor.'),
           },
         ],
       },

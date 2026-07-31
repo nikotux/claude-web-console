@@ -2758,6 +2758,7 @@ class Chat {
       salaAiName: SALA_AI_NAME,
       salaAiLabel: SALA_AI_LABEL,
       isSala: this.isSala(),
+      salaId: this._salaId(),
       packageRef: this.packageRef, // F5: para excluirse a sí mismo del picker de referencias
       salaPadRef: this.salaPadRef,
       acta: this._actaPayload(),
@@ -2802,6 +2803,7 @@ class Chat {
       salaAiName: SALA_AI_NAME,
       salaAiLabel: SALA_AI_LABEL,
       isSala: this.isSala(),
+      salaId: this._salaId(),
       sessionId: this.sessionId, viewMode: this.viewMode, terminalId: this.terminalId,
       tolkienEnv: this.tolkienEnv || null,
       // Motor Pac-Man: ¿hay un subagente Task corriendo ahora mismo? (ver

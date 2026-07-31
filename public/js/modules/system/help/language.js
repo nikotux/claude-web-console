@@ -46,7 +46,7 @@ export default function languageHelp() {
         blocks: [{
           type: 'note',
           tone: 'warn',
-          text: t('system.help.language.warning.text', 'La traducción al inglés todavía está incompleta. Cuando falta una clave, ese texto cae solo al español y la pantalla sigue funcionando.'),
+          text: t('system.help.language.warning.text', 'La preferencia es solo de tu cuenta. Si alguna pantalla no tiene una traducción, ese texto cae automáticamente al español y la interfaz sigue funcionando.'),
         }],
       },
     ],

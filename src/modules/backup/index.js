@@ -86,18 +86,33 @@ export const KEEP_PER_SET = 10;
 // secreto nuevo jamás entra); se aborta si algún secreto quedó versionado.
 const REMOTE = 'personal';
 const FORBIDDEN_URL_RE = /mordor-staffing/i;
-const SECRET_PATHS = ['.env', 'users.json', 'sessions.json', 'recents.json', 'titles.json'];
+// Hay DOS clases de secreto y a propósito NO se matchean igual:
+//
+// - SECRET_BASENAMES: secreto POR NOMBRE. Un `.env` es peligroso viva donde
+//   viva, así que matchea por basename en CUALQUIER nivel (`sub/app/.env`).
+//   Esto es el fix de BUG-15 y no se toca.
+// - SECRET_ROOT_FILES: secreto POR LUGAR. Es el estado de runtime que el server
+//   escribe en PROJECT_DIR y solo existe ahí. Sus nombres son genéricos, así que
+//   matchear por basename produce falsos positivos sobre archivos legítimos
+//   anidados: el diccionario i18n `public/i18n/en/sessions.json` quedaba marcado
+//   como fuga y devolvía 403, tumbando el commit ENTERO. Por eso matchean SOLO
+//   como ruta exacta de raíz.
+// - SECRET_DIRS: secreto POR DIRECTORIO, en cualquier nivel (`app/certs/key.pem`).
+//
+// NO ensanchar SECRET_ROOT_FILES a match por basename: es exactamente el bug.
+const SECRET_BASENAMES = ['.env'];
+const SECRET_ROOT_FILES = ['users.json', 'sessions.json', 'recents.json', 'titles.json'];
 const SECRET_DIRS = ['certs'];
-// Un secreto puede estar en la RAÍZ o ANIDADO (p.ej. sub/.env, app/certs/key.pem):
-// matcheamos también por BASENAME y por SEGMENTO de ruta (BUG-15) — la denylist
-// vieja solo cazaba rutas exactas de raíz, así que un secreto anidado se colaba en
-// la capa 2 (lo salvaban la 1 —git no-ignorado— y la 3 —selección humana—, pero
-// esta capa es defensa en profundidad y no debía tener el hueco).
+// Nombres que viven en la RAÍZ del proyecto: es lo que se verifica contra el
+// filesystem y el .gitignore, y lo que la UI lista como "queda fuera".
+const SECRET_ROOT_NAMES = [...SECRET_BASENAMES, ...SECRET_ROOT_FILES, ...SECRET_DIRS];
+
 function isSecretPath(f) {
-  const base = path.basename(f);
-  const segs = String(f).split('/');
-  return SECRET_PATHS.includes(f) || SECRET_PATHS.includes(base)
-    || SECRET_DIRS.some((d) => f === d || f.startsWith(`${d}/`) || segs.includes(d));
+  const rel = String(f);
+  const segs = rel.split('/');
+  return SECRET_BASENAMES.includes(path.basename(rel))
+    || SECRET_ROOT_FILES.includes(rel)
+    || SECRET_DIRS.some((d) => rel === d || segs.includes(d));
 }
 
 let busy = false; // evita crear/restaurar en paralelo
@@ -146,7 +161,7 @@ async function repoSecretGuards(verb = 'Push') {
   if (leaked.length) return { ok: false, error: `Hay secretos versionados: ${leaked.join(', ')}. ${verb} BLOQUEADO.` };
 
   // Cada secreto que existe en disco DEBE seguir ignorado (atrapa regresión de .gitignore).
-  for (const p of [...SECRET_PATHS, ...SECRET_DIRS]) {
+  for (const p of SECRET_ROOT_NAMES) {
     if (!fs.existsSync(path.join(PROJECT_DIR, p))) continue;
     const ig = await git(['check-ignore', '-q', p]);
     if (ig.code !== 0) return { ok: false, error: `"${p}" existe pero NO está en .gitignore. ${verb} BLOQUEADO.` };
@@ -522,7 +537,7 @@ export default {
         if (inside.code !== 0 || inside.out !== 'true') return res.json({ isRepo: false });
         const url = await personalUrl();
         const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).out || 'HEAD';
-        const excluded = [...SECRET_PATHS, ...SECRET_DIRS].filter((p) => fs.existsSync(path.join(PROJECT_DIR, p)));
+        const excluded = SECRET_ROOT_NAMES.filter((p) => fs.existsSync(path.join(PROJECT_DIR, p)));
         const untracked = lines((await git(['ls-files', '--others', '--exclude-standard'])).out);
         // Contra HEAD (no solo el working tree): incluye también lo ya
         // stageado — es lo que un commit va a llevarse. Formato name-status

@@ -74,5 +74,5 @@
   "files.help.buttons.keys.k": "Enter / Delete / Esc",
   "files.help.buttons.keys.v": "Enter opens; Delete or Backspace sends the selection to Trash; Esc closes menus and previews.",
   "files.help.warning.title": "Watch out for this",
-  "files.help.warning.text": "Trash keeps each item for 30 days and purges it afterward. “Delete” inside Trash is immediate and irreversible; renaming also changes the real path used by links, scripts, and sessions."
+  "files.help.warning.text": "Trash is recoverable: it keeps items in ~/.cwc-trash/ for 30 days and then purges them. “Delete” inside Trash is immediate and irreversible; renaming also changes the real path used by links, scripts, and sessions."
 }

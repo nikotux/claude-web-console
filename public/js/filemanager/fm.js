@@ -3,6 +3,13 @@ import { icon, hydrateIcons } from '../ui/icons.js';
 import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
 import { dismissablePopup } from '../ui/popup.js';
 import { bindHelp, helpBtn } from '../ui/help.js';
+import { initI18n, applyI18n } from '../ui/i18n.js';
+
+const meForLang = await (async () => {
+  try { return await (await fetch('/api/whoami')).json(); } catch { return null; }
+})();
+await initI18n(meForLang?.lang || 'es');
+applyI18n(document);
 
 const API = '/api/files';
 

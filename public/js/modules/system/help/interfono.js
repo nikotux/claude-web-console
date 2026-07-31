@@ -5,14 +5,14 @@ export default function interfonoHelp() {
   return {
     title: t('system.help.interfono.title', 'Interfono'),
     icon: 'terminal',
-    intro: t('system.help.interfono.intro', 'El Interfono muestra cómo se coordinan las sesiones y te deja mandarles mensajes manuales. También expone reservas de archivos para saber cuándo editar, esperar o liberar un claim viejo.'),
+    intro: t('system.help.interfono.intro', 'El Interfono muestra cómo se coordinan las sesiones y te deja mandarles mensajes manuales. Un administrador ve todas y puede hacer broadcast o liberar claims; el resto ve y contacta únicamente sus propias sesiones.'),
     sections: [
       {
         title: t('system.help.interfono.first.title', 'Primeros pasos'),
         blocks: [{
           type: 'steps',
           items: [
-            t('system.help.interfono.first.step1', 'Elegí una sesión concreta o Todas en el selector.'),
+            t('system.help.interfono.first.step1', 'Elegí una sesión concreta en el selector. Si sos administrador, también podés elegir Todas para hacer broadcast.'),
             t('system.help.interfono.first.step2', 'Escribí el mensaje y, si corresponde, agregá un paquete PKG-N.'),
             t('system.help.interfono.first.step3', 'Tocá Enviar y comprobá el resultado junto al botón.'),
             t('system.help.interfono.first.step4', 'Abrí Reservas de archivo antes de tocar un archivo compartido.'),
@@ -47,13 +47,13 @@ export default function interfonoHelp() {
         blocks: [{
           type: 'kv',
           items: [
-            { k: t('system.help.interfono.buttons.target.k', 'Selector de sesión'), v: t('system.help.interfono.buttons.target.v', 'Elige una sesión o el broadcast a todas.') },
+            { k: t('system.help.interfono.buttons.target.k', 'Selector de sesión'), v: t('system.help.interfono.buttons.target.v', 'Elige una de tus sesiones; el broadcast a Todas aparece solo para administradores.') },
             { k: t('system.help.interfono.buttons.message.k', 'Mensaje'), v: t('system.help.interfono.buttons.message.v', 'Texto manual que se entrega por el bus persistido. No consume tokens por sí solo.') },
             { k: t('system.help.interfono.buttons.package.k', 'Paquete PKG-N'), v: t('system.help.interfono.buttons.package.v', 'Adjunta una referencia estable de paquete-sesión al mensaje.') },
             { k: t('system.help.interfono.buttons.send.k', 'Enviar'), v: t('system.help.interfono.buttons.send.v', 'Escribe el mensaje en el bus para la sesión elegida; no lanza IA desde este panel.') },
             { k: t('system.help.interfono.buttons.refresh.k', 'Refrescar'), v: t('system.help.interfono.buttons.refresh.v', 'Vuelve a leer directorio, mensajes, claims y bitácora. El panel también actualiza solo cada 5 segundos.') },
             { k: t('system.help.interfono.buttons.release.k', 'Liberar'), v: t('system.help.interfono.buttons.release.v', 'Libera manualmente una reserva zombi o vencida. Admin-only; verificá el semáforo antes.') },
-            { k: t('system.help.interfono.buttons.groups.k', 'Secciones desplegables'), v: t('system.help.interfono.buttons.groups.v', 'Abren sesiones activas, claims, mensajes y la bitácora sin cambiar el bus.') },
+            { k: t('system.help.interfono.buttons.groups.k', 'Secciones desplegables'), v: t('system.help.interfono.buttons.groups.v', 'Abren sesiones activas, claims, mensajes y la bitácora sin cambiar el bus. La bitácora distingue mensajes note de avisos heads-up enviados con /btw --kind.') },
           ],
         }],
       },

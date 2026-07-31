@@ -303,9 +303,17 @@
            Comunicaciones) + pie de estado (CPU/RAM/disco · cuenta · sistema).
            Las Sesiones y "Nueva sesión" viven ahora en la barra DERECHA. -->
       <aside id="sidebar" class="side-panel">
-        <!-- Cabecera del panel: solo ☰ (contraer/expandir a rail). -->
+        <!-- Cabecera del panel: ☰ (contraer/expandir a rail) + chip del usuario
+             conectado (se movió acá desde .footer-acct en 2026-07-31, pedido de
+             Niko: abajo quedaba espachurrado entre el botón de tokens y los
+             íconos, y esta fila estaba vacía). En el rail colapsado queda solo
+             el avatar (el nombre es .only-expanded). -->
         <div class="sb-head">
           <button id="toggle-sidebar" class="rail-btn" data-icon="menu" title="Contraer/expandir panel"></button>
+          <div id="acct-chip" class="acct-chip" title="Usuario conectado" data-i18n-title="core.acctUser">
+            <span id="acct-avatar" class="acct-avatar" aria-hidden="true"></span>
+            <span id="acct-user" class="acct-name only-expanded"></span>
+          </div>
         </div>
 
         <div class="sidebar-scroll only-expanded">
@@ -316,6 +324,7 @@
           <section class="side-sec" data-module="tickets"></section>
           <!-- Pendientes: tablero PRIVADO de tareas (manual + audio adentro) -->
           <section class="side-sec" data-module="tasks"></section>
+          <section class="side-sec" data-module="visado"></section>
           <!-- Mejora Continua (ROAD-256): lecciones de PROCESO destiladas al cerrar chats -->
           <section class="side-sec" data-module="retro"></section>
         </div>
@@ -326,7 +335,6 @@
           <div data-module="plan-limits" class="only-expanded"></div>
           <div class="footer-acct">
             <span data-module="usage"></span>
-            <span id="acct-user" class="acct-user only-expanded"></span>
             <a href="/archivos" class="btn-ghost btn--sm btn--icon" data-icon="folder" title="Explorador" data-i18n-title="core.explorer"></a>
             <a href="/raw" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="pulse" title="Vista Raw" data-i18n-title="core.rawView"></a>
             <a href="/seguimientos" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="list" title="Seguimientos" data-i18n-title="core.followUps"></a>
