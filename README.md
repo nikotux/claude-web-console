@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-07-31 22:58 — main
+- Agregar store SQLite local a Tolkien y módulo de visado de operaciones
+
 ### 2026-07-31 20:45 — main
 - Sumar integración de Tolkien a Conexiones y mejorar /btw con --kind
 
@@ -392,17 +395,6 @@ since the previous push. Newest entry first.
 - Added `docs/test-untracked.md`
 - Modified `public/js/modules/system/backup-panel.js`
 - Modified `src/modules/backup/index.js`
-
-### 2026-07-03 06:14 — main
-- Modified `CLAUDE.md`
-- Modified `public/css/style.css`
-- Added `public/js/modules/system/project-context-panel.js`
-- Modified `public/js/modules/usage/usage.js`
-- Added `public/js/ui/pacman.js`
-- Added `src/core/session-names.js`
-- Added `src/modules/projects/index.js`
-- Added `src/modules/projects/memory.js`
-- Modified `src/modules/tokens/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
