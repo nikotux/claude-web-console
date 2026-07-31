@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fss from 'node:fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { isRateLimit } from '../src/core/query-retry.js';
 import {
   ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, otherBatchAlive,
   fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
@@ -29,7 +30,6 @@ import { runAdaptivePool } from '../src/modules/health/pool.js';
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const isRateLimit = (err) => /429|rate.?limit|overloaded|too many requests|529|503/.test(String((err && err.message) || err).toLowerCase());
 const patchPath = (id) => path.join(WT_BASE, `${id}.patch`);
 const MOCK = process.env.CWC_HEALTHFIX_MOCK === '1'; // test: no llama al SDK
 

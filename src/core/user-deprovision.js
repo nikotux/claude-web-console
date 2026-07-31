@@ -269,6 +269,9 @@ export async function deprovisionUser(username) {
   try {
     const invites = listInvites().filter((invite) =>
       invite.lockedTo === id && invite.status !== 'consumed' && invite.status !== 'revoked');
+    // No usa runAdaptivePool: el orden de los pasos es contrato de la baja y
+    // estas revocaciones son secuenciales a propósito. Declarado en el exclude
+    // de parallel-pool (src/core/inventory.js) para que Coherencia no lo remarque.
     for (const invite of invites) {
       try {
         if (revokeInvite(invite.id)) revoked += 1;

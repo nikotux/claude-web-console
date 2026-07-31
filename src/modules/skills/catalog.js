@@ -169,9 +169,9 @@ export function installedSkills(claudeDir) {
   return installed;
 }
 
-export function catalogStateFor(claudeDir) {
+export function catalogStateFor(claudeDir, catalog = listCatalog()) {
   const installed = installedSkills(claudeDir);
-  return listCatalog().map((entry) => {
+  return catalog.map((entry) => {
     const marker = installed[entry.dirName];
     const isInstalled = marker?.source === MARKER_SOURCE;
     return {
@@ -308,7 +308,7 @@ export function uninstallSkill(claudeDir, dirName) {
   return { ok: true, dirName };
 }
 
-export function reconcileDefaults(claudeDir, dataDir) {
+export function reconcileDefaults(claudeDir, dataDir, catalog = listCatalog()) {
   const offeredPath = path.join(dataDir, DEFAULTS_OFFERED_NAME);
   let rawOffered = [];
   try {
@@ -324,7 +324,7 @@ export function reconcileDefaults(claudeDir, dataDir) {
   const installed = [];
   const skipped = [];
   const failed = [];
-  for (const entry of listCatalog().filter((item) => item.isDefault)) {
+  for (const entry of catalog.filter((item) => item.isDefault)) {
     if (offered.has(entry.dirName)) continue;
     try {
       const result = installSkill(claudeDir, entry.dirName);

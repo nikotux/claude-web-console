@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { writeJsonAtomic } from '../src/core/atomic-write.js';
+import { runAdaptivePool } from '../src/core/pool.js';
 
 const REPORT_FILE = path.join(os.homedir(), '.cwc-data', 'docker-hygiene', 'report.json');
 const DOCKER_TIMEOUT_MS = 15_000;
@@ -141,14 +142,25 @@ function printPlan(volumes, images, projects) {
 
 async function removeEach(kind, command, values) {
   let failed = 0;
-  for (const value of values) {
-    const result = await docker([...command, value]);
+  // Node serializa los incrementos de failed; las líneas de auditoría sí pueden intercalarse.
+  await runAdaptivePool(values, async (value) => {
+    let result;
+    try {
+      result = await docker([...command, value]);
+    } catch (err) {
+      result = { ok: false, error: err?.message || String(err) };
+    }
     if (result.ok) log(`borrado ${kind}: ${value}`);
     else {
       failed += 1;
       log(`no se pudo borrar ${kind} ${value}: ${result.error || 'sin detalle'}`);
     }
-  }
+  }, {
+    min: 2,
+    start: 3,
+    // Techo bajo para no saturar el daemon de Docker.
+    max: 3,
+  });
   return failed;
 }
 

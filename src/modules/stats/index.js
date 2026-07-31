@@ -120,10 +120,12 @@ async function rssKbForPid(pid) {
     return m ? parseInt(m[1], 10) : 0;
   } catch { return 0; }
 }
-// pid del runner de un chat, leído de su spawnlock (0/null si no hay).
-function pidForChat(id) {
+// pid del runner de un chat, leído de su spawnlock (0/null si no hay). Async
+// (fs.promises): se llama por cada chat dentro de un handler HTTP — bloquear
+// el event loop acá congelaría los WS de PTY/tmux de los demás usuarios.
+async function pidForChat(id) {
   try {
-    const { pid } = JSON.parse(fss.readFileSync(path.join(CHATS_DIR, `${id}.spawnlock`), 'utf8'));
+    const { pid } = JSON.parse(await fs.readFile(path.join(CHATS_DIR, `${id}.spawnlock`), 'utf8'));
     return pid && pid > 0 ? pid : null;
   } catch { return null; }
 }
@@ -171,7 +173,7 @@ export async function perUserSnapshot() {
     const e = ensure(c.owner || host);
     e.liveSessions += 1;
     if (c.viewMode !== 'tui') e.runners += 1; // un chat en modo chat tiene runner; una TUI no
-    const pid = pidForChat(c.id);
+    const pid = await pidForChat(c.id);
     if (pid) e._pids.push(pid);
   }
   // RSS agregado + disco del espacio (solo inquilinos)

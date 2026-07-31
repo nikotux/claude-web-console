@@ -23,6 +23,7 @@
 // archivo es delegar. `node --check` verifica el resultado igual que siempre,
 // sin importar quién escribió el diff.
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { withRateLimitRetry } from '../src/core/query-retry.js';
 import {
   ROOT, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
   writeFixLock, clearFixLock, readFixLock, isFixing, isRunning, fixPrompt,
@@ -92,32 +93,36 @@ async function main() {
 
   let out = '';
   try {
-    const q = query({
-      prompt,
-      options: {
-        cwd: ROOT,
-        model: 'sonnet',
-        maxTurns: FIX_MAX_TURNS,
-        permissionMode: 'default',
-        settingSources: [],
-        ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: ROOT }) } } : {}),
-        hooks: { PreToolUse: [{ hooks: [async (input) => (allowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
-        canUseTool: async (name, input) => (allowed(name, input)
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: denyReason }),
-      },
+    await withRateLimitRetry(async () => {
+      const q = query({
+        prompt,
+        options: {
+          cwd: ROOT,
+          model: 'sonnet',
+          maxTurns: FIX_MAX_TURNS,
+          permissionMode: 'default',
+          settingSources: [],
+          ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: ROOT }) } } : {}),
+          hooks: { PreToolUse: [{ hooks: [async (input) => (allowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
+          canUseTool: async (name, input) => (allowed(name, input)
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: denyReason }),
+        },
+      });
+      let timer = null;
+      const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), FIX_TIMEOUT_MS); });
+      const pump = (async () => {
+        for await (const m of q) {
+          if (m.type === 'assistant') {
+            for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`;
+          } else if (m.type === 'result') break;
+        }
+      })();
+      try { await Promise.race([pump, timeout]); }
+      finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
+    }, {
+      onRetry: ({ attempt }) => log(`429/overload en hallazgo ${targetId}: back-off, reintento ${attempt}.`),
     });
-    let timer = null;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), FIX_TIMEOUT_MS); });
-    const pump = (async () => {
-      for await (const m of q) {
-        if (m.type === 'assistant') {
-          for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`;
-        } else if (m.type === 'result') break;
-      }
-    })();
-    try { await Promise.race([pump, timeout]); }
-    finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   } catch (err) {
     out += `\nFIXFAIL ${String(err?.message || err).slice(0, 140)}`;
   }

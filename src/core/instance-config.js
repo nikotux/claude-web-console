@@ -19,8 +19,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 
-const DATA_DIR = path.join(os.homedir(), '.cwc-data');
-const FILE = path.join(DATA_DIR, 'instance.json');
+// Default EXCLUSIVO del HOST: core/config.js y bin/cwc-setup.js corren en el
+// proceso del server/CLI del host y mantienen su comportamiento histórico.
+// Todo caller que actúe en nombre de un principal DEBE pasar su dataDir resuelto.
+const HOST_DATA_DIR = path.join(os.homedir(), '.cwc-data');
+
+function fileFor(dataDir) {
+  return path.join(dataDir || HOST_DATA_DIR, 'instance.json');
+}
 
 // Defaults GENÉRICOS (placeholders vacíos). Cada instalación fija sus valores
 // reales en ~/.cwc-data/instance.json — desde el wizard (bin/cwc-setup.js) o
@@ -50,8 +56,8 @@ const DEFAULTS = {
   },
 };
 
-function readRaw() {
-  try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); }
+function readRaw(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch { return null; }
 }
 
@@ -72,27 +78,32 @@ function deepMerge(base, over) {
   return out;
 }
 
-let cache = null;
+// La caché va por archivo (ruta absoluta), nunca global: una caché única haría
+// que el instance.json de un inquilino pudiera contaminar el scope del host.
+const cacheByFile = new Map();
 
 // Lee instance.json mergeado sobre DEFAULTS. Se autogenera con los DEFAULTS
 // al primer arranque si no existe (migración): una instalación existente
 // queda byte-idéntica en comportamiento tras el deploy de este refactor.
-export function loadInstance({ force } = {}) {
-  if (cache && !force) return cache;
-  let raw = readRaw();
+export function loadInstance({ force, dataDir } = {}) {
+  const file = fileFor(dataDir);
+  if (cacheByFile.has(file) && !force) return cacheByFile.get(file);
+  let raw = readRaw(file);
   if (!raw) {
     raw = DEFAULTS;
-    try { writeJsonAtomic(FILE, raw, { space: 2 }); } catch { /* best-effort: si falla, sigue con DEFAULTS en memoria */ }
+    try { writeJsonAtomic(file, raw, { space: 2 }); } catch { /* best-effort: si falla, sigue con DEFAULTS en memoria */ }
   }
-  cache = deepMerge(DEFAULTS, raw);
-  return cache;
+  const instance = deepMerge(DEFAULTS, raw);
+  cacheByFile.set(file, instance);
+  return instance;
 }
 
 // Persiste un patch (deep-merge sobre lo existente) y refresca el caché en
 // memoria. Lo usa el panel admin "Variables de entorno" — NUNCA toca
 // secretos (esos viven en .env, capa aparte).
-export function saveInstance(patch) {
-  const current = deepMerge(DEFAULTS, readRaw() || {});
+export function saveInstance(patch, { dataDir } = {}) {
+  const file = fileFor(dataDir);
+  const current = deepMerge(DEFAULTS, readRaw(file) || {});
   const next = deepMerge(current, patch);
   // zohoDepartments lo controla el panel por COMPLETO (envía el set entero):
   // un deep-merge nunca borra una clave quitada, así que si el patch lo trae
@@ -100,10 +111,11 @@ export function saveInstance(patch) {
   if (isPlainObject(patch?.client?.zohoDepartments)) {
     next.client.zohoDepartments = { ...patch.client.zohoDepartments };
   }
-  writeJsonAtomic(FILE, next, { space: 2 });
-  cache = next;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeJsonAtomic(file, next, { space: 2 });
+  cacheByFile.set(file, next);
   return next;
 }
 
-export function instanceFilePath() { return FILE; }
+export function instanceFilePath(dataDir) { return fileFor(dataDir); }
 export function instanceDefaults() { return DEFAULTS; }

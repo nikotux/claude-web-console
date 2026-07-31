@@ -417,6 +417,9 @@ export async function recloneLiveEnvs() {
     return [{ id: null, ok: false, detail: String(err?.message || err).slice(0, 300) }];
   }
 
+  // No usa runAdaptivePool: allocatePort() comparte estado mutable y paralelizar
+  // este bucle podría dar el MISMO puerto a dos entornos (BUG-2076). Declarado en
+  // el exclude de parallel-pool (src/core/inventory.js) para que Coherencia no lo remarque.
   for (const rec of envs) {
     if (!isEnvAlive(rec) || !rec?.db || !rec?.worktree) continue;
     try {

@@ -19,6 +19,9 @@ import { aiEnginesCensus, coherenceCensus } from '../src/core/inventory.js';
 import { buildSummary } from '../src/modules/tokens/index.js';
 import { runAdaptivePool } from '../src/core/pool.js';
 import {
+  RETRY_BACKOFF_MS as BACKOFF_MS, MAX_RETRIES as MAX_429_RETRIES, withRateLimitRetry,
+} from '../src/core/query-retry.js';
+import {
   ROOT, discoverUnits, unitPrompt, synthesisPrompt, parseFindings, parseSynthesis,
   toolAllowed, writeReview, writeLock, clearLock,
   readAuditCache, writeAuditCache, unitFingerprint, auditModelFor,
@@ -38,10 +41,6 @@ import {
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 const FULL = process.argv.includes('--full');
-const BACKOFF_MS = 15000;
-const MAX_429_RETRIES = 3;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const isRateLimit = (err) => /429|rate.?limit|overloaded|too many requests|529|503/.test(String(err?.message || err).toLowerCase());
 
 // Reserva pid-aware (patrón BUG-48): el server escribió el lock con pid:0. Esa es
 // MI reserva → NO me suicido; solo salgo si hay un lock fresco con pid REAL ajeno.
@@ -92,17 +91,14 @@ async function readOnlyRun(prompt, { model, maxTurns, timeoutMs, allow }) {
 
 // Reintento con back-off ante 429/overload (avisa al pool para bajar concurrencia).
 async function withRetry(label, ctl, fn) {
-  let attempt = 0;
-  for (;;) {
-    try { return await fn(); }
-    catch (err) {
-      if (isRateLimit(err) && attempt < MAX_429_RETRIES) {
-        attempt += 1; ctl.backoff();
-        log(`  429/overload en ${label}: back-off, reintento ${attempt}.`); await sleep(BACKOFF_MS); continue;
-      }
-      throw err;
-    }
-  }
+  return withRateLimitRetry(fn, {
+    attempts: MAX_429_RETRIES,
+    backoffMs: BACKOFF_MS,
+    onRetry: ({ attempt }) => {
+      ctl.backoff();
+      log(`  429/overload en ${label}: back-off, reintento ${attempt}.`);
+    },
+  });
 }
 
 async function main() {

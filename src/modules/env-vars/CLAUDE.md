@@ -9,8 +9,8 @@ propio de CADA instalación (quién sos: email/GitHub/firma · qué
 cliente: nombre del MCP, IDs de departamento Zoho, reviewer de
 referencia) para que otra persona pueda correr su PROPIA instancia
 sin heredar la identidad de Nico. El almacén es
-`core/instance-config.js` (~/.cwc-data/instance.json, atómico,
-AUTOGENERADO al primer arranque). Los DEFAULTS son placeholders
+`core/instance-config.js` (`instance.json` dentro del `scope.dataDir` de cada
+principal, atómico, AUTOGENERADO al primer arranque). Los DEFAULTS son placeholders
 GENÉRICOS VACÍOS (scrub 2026-07-14 al derivar el repo limpio
 `la-consola`): la identidad real de Nico vive en SU instance.json
 (ya generado antes del scrub), así que su instancia sigue
@@ -34,11 +34,18 @@ tolkien/index.js (email del login local) · tickets/context-store.js
 `contactId` del reviewer ('chris') es CLAVE INTERNA de lógica de
 negocio (derive.js/dashboard.js "de quién es la pelota") —
 deliberadamente NO parametrizado (cambiarlo exige tocar lógica, no
-solo config). Backend admin-gated patrón projects/: GET
-/api/env-vars (abierto, valores activos) · POST /api/env-vars
+solo config). Toda la superficie backend es admin-only y resuelve
+`systemScopeFor(req)`: cada principal opera exclusivamente sobre el
+`instance.json` de SU `scope.dataDir`, por lo que un admin inquilino no puede
+leer ni sobrescribir el archivo del host. GET
+/api/env-vars (admin, valores activos) · POST /api/env-vars
 {patch} (admin, deep-merge con allowlist explícita, NUNCA acepta
 campos de secretos, avisa needsRestart — los valores se leen al
 importar los módulos, un cambio se aplica del todo al reiniciar) ·
-GET /file (admin, ruta del instance.json). Front:
+GET /file (admin, ruta de SU instance.json). LÍMITE HONESTO: para un inquilino
+el archivo queda escrito pero NINGÚN otro módulo lo lee, porque
+`config.instance` se compone UNA vez al importar con el archivo del HOST; el
+valor real de este cambio es de AISLAMIENTO (cerrar la fuga), no funcionalidad
+nueva para el inquilino. Front:
 public/js/modules/system/env-vars-panel.js (secciones 🪪 Identidad
 y 🏢 Cliente, editable inline, deps Zoho como filas clave→ID).

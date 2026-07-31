@@ -3,9 +3,11 @@
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### src/core/                   config(.env + config.instance) · instance-config(capa de config
-de INSTANCIA: identidad+cliente en ~/.cwc-data/instance.json,
-autogenerado; DEFAULTS genéricos vacíos (los valores reales viven en
-instance.json), deepMerge por union de claves — ver módulo env-vars) ·
+de INSTANCIA: identidad+cliente en el `instance.json` del `dataDir` recibido,
+con ~/.cwc-data/instance.json como default retrocompatible del host;
+autogenerado; caché POR ARCHIVO para no cruzar principales; DEFAULTS genéricos
+vacíos (los valores reales viven en instance.json), deepMerge por union de
+claves — ver módulo env-vars) ·
 auth · users · wss · registry · tls ·
 zerotier · tmux(validación) · trash · recents ·
 pool(runAdaptivePool — pool de concurrencia ADAPTATIVA transversal;

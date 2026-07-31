@@ -21,6 +21,11 @@ fail-closed como `cwc-share: host-only` + `cwc-default: false`: nunca se
 comparte. El hash corto SHA-256 cubre todos los archivos de la skill, incluidos
 `references/` y `scripts/`, para señalar copias desactualizadas.
 
+GET `/api/skills` calcula el catálogo y sus hashes una sola vez por request y
+lo comparte entre la reconciliación de defaults y el estado del catálogo. El
+estado INSTALADO se lee siempre fresco después de reconciliar, porque ese paso
+puede haber instalado skills nuevas.
+
 Cada GET `/api/skills` reconcilia los defaults nuevos antes del censo. El ledger
 per-usuario `<scope.dataDir>/skills-defaults-offered.json` recuerda cuáles ya se
 ofrecieron: una skill desinstalada deliberadamente NO se reinstala. Una colisión
@@ -35,7 +40,9 @@ whitelist estricta y confinan la ruta a `scope.claudeDir/skills`. La instalació
 deja `.cwc-catalog.json` (mode 600, escritura atómica) con origen
 `console-catalog`, nombre, hash y fecha. Un directorio sin ese marcador, con
 marcador inválido o con otro origen es una skill propia del usuario: el catálogo
-NUNCA la pisa ni la borra. La copia tampoco sigue symlinks.
+NUNCA la pisa ni la borra. La copia tampoco sigue symlinks. La validación real
+del pedido responde 400; un fallo inesperado de instalación o desinstalación
+responde 500 porque indica infraestructura rota.
 
 El cruce con `playbooks` usa `reqPadContext(req)` y, por tanto, el token y
 workspace de Pad del principal (`console` para el host, `tenant-<id>` para un

@@ -8,7 +8,9 @@
 // esa sigue siendo exclusivamente archivo local (.env / ~/.claude), fuera del
 // alcance de este panel a propósito.
 //
-// Config de instancia: toda la superficie HTTP es admin-only.
+// Config de instancia: toda la superficie HTTP es admin-only y se resuelve POR
+// PRINCIPAL. Cada sesión opera sobre el instance.json de su propio dataDir; el
+// archivo del host no es alcanzable desde la sesión de un inquilino.
 //
 // HTTP:
 //   GET  /api/env-vars          -> { identity, client } (admin)
@@ -16,6 +18,7 @@
 import express from 'express';
 import { isAdmin } from '../../core/auth.js';
 import { loadInstance, saveInstance, instanceFilePath } from '../../core/instance-config.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 
 // Campos EDITABLES desde el panel — allowlist explícita: aunque instance.json
 // solo contiene identidad/cliente (nunca secretos), esta allowlist es la
@@ -68,7 +71,8 @@ export default {
     r.get('/', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        const inst = loadInstance();
+        const scope = systemScopeFor(req);
+        const inst = loadInstance({ dataDir: scope.dataDir });
         res.json({ identity: inst.identity, client: inst.client, needsRestart: false });
       } catch {
         res.status(500).json({ error: 'No se pudo leer la config de instancia.' });
@@ -78,8 +82,9 @@ export default {
     r.post('/', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
+        const scope = systemScopeFor(req);
         const patch = pickAllowed(req.body || {});
-        const next = saveInstance(patch);
+        const next = saveInstance(patch, { dataDir: scope.dataDir });
         // La mayoría de estos valores se leen al importar los módulos (arriba
         // del archivo, como config.instance.client.mcpServerId en
         // desk-mcp-client.js) — un cambio recién se aplica del todo tras
@@ -94,7 +99,8 @@ export default {
     r.get('/file', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try {
-        res.json({ path: instanceFilePath() });
+        const scope = systemScopeFor(req);
+        res.json({ path: instanceFilePath(scope.dataDir) });
       } catch (e) {
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }

@@ -7,6 +7,7 @@
 // denegado). Se registra en outbox y se persiste el resultado en el MISMO job.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
+import { withRateLimitRetry } from '../src/core/query-retry.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
 import { appendOutbox, appendManual, readContacts, readSelf } from '../src/modules/comms/shared.js';
 import {
@@ -94,6 +95,15 @@ function teamsDmPrompt(payload, contact, self) {
 
 async function runSend(job) {
   const allowed = job.channel === 'desk' ? deskWriteAllowed : teamsWriteAllowed;
+  const isReadOnlyTool = (name) => {
+    const tool = String(name);
+    // TodoWrite es el scratchpad interno; ambas allowlists lo permiten porque no escribe en el canal.
+    if (tool === 'ToolSearch' || tool === 'TodoWrite') return true;
+    const op = tool.match(/^mcp__[a-z0-9_-]+__(?:desk|graph|teams)_([a-z0-9_]+)$/i)?.[1] || '';
+    const read = /(get|list|search|view|read|find|members)/i;
+    const write = /(add|update|create|delete|remove|reply|send|post|set|move|assign|close|merge|patch|put|write|share|save)/i;
+    return read.test(op) && !write.test(op);
+  };
   const self = readSelf();
   const contact = readContacts().find((c) => c.id === job.contactId) || null;
   let prompt;
@@ -102,30 +112,47 @@ async function runSend(job) {
   else prompt = deskReplyPrompt(job.payload);
   const denyMsg = `Envío ${job.channel}: solo las tools autorizadas del canal.`;
   const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg } };
-  const q = query({
-    prompt,
-    options: {
-      cwd: config.projectDir,
-      model: 'sonnet',
-      maxTurns: 12,
-      permissionMode: 'default',
-      settingSources: settingSourcesFor('headless'),
-      hooks: { PreToolUse: [{ hooks: [async (input) => (allowed(input.tool_name) ? {} : denyHook)] }] },
-      canUseTool: async (name, input) => (allowed(name) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: denyMsg }),
-    },
-  });
   let out = '';
-  let timer = null;
-  const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), TIMEOUT_MS); });
-  const pump = (async () => {
-    for await (const m of q) {
-      if (m.type === 'assistant') { for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text; }
-      else if (m.type === 'result') break;
-    }
-  })();
-  pump.catch(() => {});
-  try { await Promise.race([pump, timeout]); }
-  finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
+  let usedWriteTool = false;
+  await withRateLimitRetry(async () => {
+    usedWriteTool = false;
+    out = '';
+    // Marcamos la aprobación, no el resultado: si el proveedor falla después
+    // del write no podemos demostrar que no se ejecutó, así que no reintentamos.
+    const approve = (name) => {
+      const ok = allowed(name);
+      // Conservador ante futuras ampliaciones de la allowlist: toda tool
+      // aprobada que no sea inequívocamente de lectura cuenta como escritura.
+      if (ok && !isReadOnlyTool(name)) usedWriteTool = true;
+      return ok;
+    };
+    const q = query({
+      prompt,
+      options: {
+        cwd: config.projectDir,
+        model: 'sonnet',
+        maxTurns: 12,
+        permissionMode: 'default',
+        settingSources: settingSourcesFor('headless'),
+        hooks: { PreToolUse: [{ hooks: [async (input) => (approve(input.tool_name) ? {} : denyHook)] }] },
+        canUseTool: async (name, input) => (approve(name) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: denyMsg }),
+      },
+    });
+    let timer = null;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), TIMEOUT_MS); });
+    const pump = (async () => {
+      for await (const m of q) {
+        if (m.type === 'assistant') { for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text; }
+        else if (m.type === 'result') break;
+      }
+    })();
+    pump.catch(() => {});
+    try { await Promise.race([pump, timeout]); }
+    finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
+  }, {
+    shouldRetry: () => !usedWriteTool,
+    onRetry: ({ attempt }) => log(`429/overload en job ${job.id || id}: back-off, reintento ${attempt}.`),
+  });
   // Parseo del acuse
   let sent = false; let err = null;
   const fence = out.match(/```(?:json)?\s*([\s\S]*?)```/i);

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
+import { runAdaptivePool } from '../../core/pool.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { hostUser, readInfisicalAccountEmail, userClaudeDir, userSpace } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
@@ -374,13 +375,14 @@ async function checkSyntax() {
   };
   for (const d of ['src', 'bin', path.join('public', 'js')]) walk(path.join(ROOT, d));
   const bad = [];
-  const POOL = 8;
-  for (let i = 0; i < files.length; i += POOL) {
-    await Promise.all(files.slice(i, i + POOL).map(async (f) => {
-      const r = await run(process.execPath, ['--check', f]);
-      if (r.err) bad.push(path.relative(ROOT, f));
-    }));
-  }
+  await runAdaptivePool(files, async (f) => {
+    const r = await run(process.execPath, ['--check', f]);
+    // Seguro sin lock: los workers comparten el event loop de Node.
+    if (r.err) bad.push(path.relative(ROOT, f));
+  }, {
+    // Cada item spawnea node --check: la rampa adaptativa no debe superar 16 procesos.
+    min: 4, start: 8, max: 16,
+  });
   if (bad.length) return { id: 'syntax', label: 'Sintaxis del código', status: 'fail', detail: `errores en: ${bad.join(', ')}` };
   return { id: 'syntax', label: 'Sintaxis del código', status: 'ok', detail: `${files.length} archivos verificados` };
 }

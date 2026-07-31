@@ -406,6 +406,14 @@ const CANONICAL_PATTERNS = [
       //    el resto de sus for-of son síncronos (readFileSync/lookups). Su
       //    concurrencia real ya va por Promise.all (npm outdated+audit, versiones).
       'src/modules/updates/shared.js',
+      // Falsos positivos VERIFICADOS (2026-07-31, resolución de la propuesta de
+      // Coherencia): seriales POR DISEÑO — no adoptar runAdaptivePool.
+      //  · user-deprovision.js: el paso 1 (Pad) debe preceder al paso 4 (trash),
+      //    y las invitaciones se revocan EN SECUENCIA; paralelizar rompe la baja.
+      //  · env-shared.js: allocatePort() comparte estado mutable; en paralelo,
+      //    dos entornos podrían recibir el MISMO puerto (BUG-2076).
+      'src/core/user-deprovision.js',
+      'src/modules/tolkien/env-shared.js',
     ],
   },
   {

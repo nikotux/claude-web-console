@@ -21,6 +21,8 @@ import { loadOwners } from '../../core/session-names.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import { manager as chatManager } from '../chat/index.js';
 
+const BROADCAST_RE = /^(all|todos|todas|broadcast)$/i;
+
 // Handles del bus cuyo dueño es el usuario del request. No se cachean: tanto
 // chat.owner como session-owners.json pueden cambiar mientras el panel está
 // abierto y el endpoint se consulta cada 5 s.
@@ -53,7 +55,7 @@ function visibleToOwner(row, ownedHandles) {
 // propio: un error nunca enumera ni confirma sesiones ajenas.
 function resolveOwnedTarget(arg, directory) {
   const q = String(arg || '').trim();
-  if (!q || /^(all|todos|todas|broadcast)$/i.test(q)) return null;
+  if (!q || BROADCAST_RE.test(q)) return null;
   const byHandle = directory.find((entry) => entry.handle === q);
   if (byHandle) return { handle: byHandle.handle, name: byHandle.name, entry: byHandle };
   const upper = q.toUpperCase();
@@ -140,6 +142,9 @@ export default {
         }
         const scope = systemScopeFor(req);
         const privileged = scope.admin || scope.isHost;
+        if (!privileged && BROADCAST_RE.test(String(to).trim())) {
+          return res.status(403).json({ error: 'El broadcast está disponible solo para admin/host. Elegí una de tus sesiones.' });
+        }
         const ownedHandles = privileged ? null : ownedHandlesFor(scope);
         const target = privileged
           ? bus.resolveTarget(to)

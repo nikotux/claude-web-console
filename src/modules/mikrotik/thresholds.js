@@ -17,7 +17,7 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
 const STATES = ['optimo', 'atencion', 'degradado', 'critico'];
 const AXES = ['rttAvg', 'jitter', 'lossPercent'];
 
-let loadedThresholds;
+let thresholdsCache = { file: '', mtimeMs: null, thresholds: null };
 
 function copyDefaults() {
   return Object.fromEntries(
@@ -38,6 +38,15 @@ function validateThresholds(thresholds) {
   }
 }
 
+function configMtime(configPath) {
+  try {
+    return fs.statSync(configPath).mtimeMs;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export function loadThresholds() {
   const thresholds = copyDefaults();
   const configPath = path.join(resolveDataDir(), 'mikrotik', 'thresholds.json');
@@ -52,11 +61,44 @@ export function loadThresholds() {
   }
 
   validateThresholds(thresholds);
-  loadedThresholds = thresholds;
+  thresholdsCache = {
+    file: configPath,
+    mtimeMs: configMtime(configPath),
+    thresholds,
+  };
   return thresholds;
 }
 
+function currentThresholds() {
+  const configPath = path.join(resolveDataDir(), 'mikrotik', 'thresholds.json');
+  let mtimeMs;
+  try {
+    mtimeMs = configMtime(configPath);
+  } catch (error) {
+    // Falla abierto: un problema transitorio de acceso no invalida cortes ya probados.
+    if (thresholdsCache.thresholds) return thresholdsCache.thresholds;
+    throw error;
+  }
+
+  if (
+    thresholdsCache.thresholds
+    && thresholdsCache.file === configPath
+    && thresholdsCache.mtimeMs === mtimeMs
+  ) {
+    return thresholdsCache.thresholds;
+  }
+
+  try {
+    return loadThresholds();
+  } catch (error) {
+    // Falla abierto: un JSON ilegible o inválido no reemplaza los últimos umbrales válidos.
+    if (thresholdsCache.thresholds) return thresholdsCache.thresholds;
+    throw error;
+  }
+}
+
 function classifyAxis(value, axis, thresholds) {
+  if (value === null || value === undefined) return null;
   if (!Number.isFinite(value) || value < 0) {
     throw new TypeError(`Medición inválida para ${axis}`);
   }
@@ -69,12 +111,15 @@ function classifyAxis(value, axis, thresholds) {
 export function classify({ rttAvg, jitter, lossPercent, responding }) {
   if (!responding) return 'caido';
 
-  const thresholds = loadedThresholds ?? loadThresholds();
+  const thresholds = currentThresholds();
   const axisStates = [
     classifyAxis(rttAvg, 'rttAvg', thresholds),
     classifyAxis(jitter, 'jitter', thresholds),
     classifyAxis(lossPercent, 'lossPercent', thresholds),
-  ];
+  ].filter((state) => state !== null);
+
+  // Los datos parciales son válidos, pero sin ninguna medición el caller no puede afirmar "óptimo".
+  if (!axisStates.length) throw new TypeError('Sin mediciones para clasificar');
 
   return axisStates.reduce(
     (worst, state) => (STATES.indexOf(state) > STATES.indexOf(worst) ? state : worst),

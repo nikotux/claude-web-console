@@ -27,6 +27,7 @@ import {
   CATALOG_DIR,
   catalogStateFor,
   installSkill,
+  listCatalog,
   parseFrontmatter,
   reconcileDefaults,
   uninstallSkill,
@@ -94,9 +95,12 @@ export default {
     router.get('/skills', async (req, res) => {
       try {
         const scope = systemScopeFor(req);
+        // El hash del catálogo no cambia dentro de la request: se calcula una
+        // vez y se comparte. El estado instalado sí se lee fresco más abajo.
+        const catalog = listCatalog();
         let reconciled = null;
         try {
-          const result = reconcileDefaults(scope.claudeDir, scope.dataDir);
+          const result = reconcileDefaults(scope.claudeDir, scope.dataDir, catalog);
           if (result.installed.length > 0) reconciled = result;
         } catch {
           // Accesorio: una reconciliación fallida jamás rompe la carga del panel.
@@ -145,7 +149,7 @@ export default {
           skills,
           padOnly,
           padAvailable,
-          catalog: catalogStateFor(scope.claudeDir),
+          catalog: catalogStateFor(scope.claudeDir, catalog),
           ...(reconciled ? { reconciled } : {}),
         });
       } catch (e) {
@@ -162,7 +166,10 @@ export default {
         }
         return res.json(result);
       } catch (e) {
-        return res.status(400).json({
+        // La validación atribuible al cliente ya salió por `!result.ok`; acá
+        // llegan permisos, disco o catálogo rotos, y un 400 mandaría a depurar
+        // el lado equivocado.
+        return res.status(500).json({
           error: 'No se pudo instalar la skill.',
           code: e?.code || 'install_failed',
         });
@@ -178,7 +185,10 @@ export default {
         }
         return res.json(result);
       } catch (e) {
-        return res.status(400).json({
+        // La validación atribuible al cliente ya salió por `!result.ok`; acá
+        // llegan permisos, disco o catálogo rotos, y un 400 mandaría a depurar
+        // el lado equivocado.
+        return res.status(500).json({
           error: 'No se pudo desinstalar la skill.',
           code: e?.code || 'uninstall_failed',
         });

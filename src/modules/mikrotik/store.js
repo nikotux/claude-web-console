@@ -7,6 +7,7 @@ import { resolveDataDir } from '../../core/data-dir.js';
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_RAW_RETENTION_HOURS = 48;
+const ROLLUP_TABLES = new Set(['rollup_hourly', 'rollup_daily']);
 
 let database;
 
@@ -265,7 +266,7 @@ function average(values) {
 }
 
 function normalizedBucket(bucket, unit) {
-  const date = bucket instanceof Date ? new Date(bucket) : new Date(bucket);
+  const date = new Date(bucket);
   if (Number.isNaN(date.getTime())) throw new TypeError(`Bucket ${unit} inválido`);
 
   if (unit === 'hour') {
@@ -303,6 +304,9 @@ function aggregateSamples(rows) {
 }
 
 function rollup(bucket, unit, table) {
+  // La allowlist mantiene segura esta interpolación si futuros callers pasan la tabla.
+  if (!ROLLUP_TABLES.has(table)) throw new TypeError(`Tabla de rollup inválida: ${table}`);
+
   const db = openDb();
   const start = normalizedBucket(bucket, unit);
   const end = nextBucket(start, unit);
