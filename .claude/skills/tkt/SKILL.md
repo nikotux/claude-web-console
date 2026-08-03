@@ -1,6 +1,6 @@
 ---
 name: tkt
-description: "🎫 Opera los tickets de Tolkien en masa desde la consola: censa los propios, los cruza contra Zoho y cierra los que Zoho ya dio por resueltos, siempre con dry-run y confirmación humana antes de escribir. Usala cuando el pedido hable de cerrar/sincronizar/alinear tickets de Tolkien con Zoho, o de ver cuántos tickets propios están desalineados."
+description: "🎫 Opera los tickets de Tolkien en masa desde la consola: censa los propios, los cruza contra Zoho, cierra los resueltos y reasigna los que cambiaron de dueño, siempre con dry-run y confirmación humana antes de escribir. Usala cuando el pedido hable de cerrar/reasignar/sincronizar/alinear tickets de Tolkien con Zoho, o de ver cuántos tickets propios están desalineados."
 cwc-share: host-only
 cwc-default: false
 ---
@@ -14,7 +14,7 @@ El board de Tolkien es la fuente de verdad que Niko revisa cada mañana, pero pu
 > [!IMPORTANT]
 > **El objetivo NO es cerrar muchos tickets: es que el board diga la verdad.** Un ticket cuyo estado real no está verificado en Zoho **queda abierto** y se marca para revisión humana. Cerrar de más es peor que no cerrar.
 
-## Flujo de 3 pasos
+## Flujo operativo
 
 Antes de empezar, comprobá que la sesión de Tolkien esté conectada:
 
@@ -24,23 +24,28 @@ node bin/cwc-tolkien.js whoami
 
 Si no hay sesión, el censo falla. Conectala desde **⚙ Sistema → Conexiones** y recién entonces retomá el flujo.
 
-El tercer paso se muestra en dos filas para separar su dry-run obligatorio de la aplicación confirmada.
+Cada operación de escritura se muestra en dos filas para separar su dry-run obligatorio de la aplicación confirmada.
 
 | Paso | Comando | Qué hace | ¿Escribe? |
 |---|---|---|---|
 | 1 | `node bin/cwc-tolkien.js census` | Lista los tickets de Tolkien asignados al usuario y sus campos de cierre | No |
-| 2 | `node bin/cwc-tolkien.js reconcile` | Cruza cada ticket con su par en Zoho y produce 3 pilas | No |
+| 2 | `node bin/cwc-tolkien.js reconcile` | Cruza cada ticket con su par en Zoho y produce 4 pilas | No |
 | 3 | `node bin/cwc-tolkien.js close` | Dry-run: muestra qué se tocaría y con qué evidencia | No |
 | 4 | `node bin/cwc-tolkien.js close --apply` | Cierra de verdad, con la identidad de Niko | **SÍ** |
+| 5 | `node bin/cwc-tolkien.js reassign` | Dry-run: resuelve por email el dueño real de cada ticket de `reassigned` y agrupa el lote por destinatario | No |
+| 6 | `node bin/cwc-tolkien.js reassign --apply` | Reasigna en Tolkien únicamente la pila `reassigned` al dueño confirmado en Zoho | **SÍ** |
 
-Traducí el pedido de Niko al paso mínimo que lo resuelve: “censá/mirá mis tickets” → `census`; “compará/sincronizá/alineá con Zoho” o “¿cuántos están desalineados?” → `reconcile`; “mostrame qué cerrarías” → `close`; “cerralos” → primero `close`, presentar el dry-run y pedir confirmación explícita, y solo después `close --apply`.
+Traducí el pedido de Niko al paso mínimo que lo resuelve: “censá/mirá mis tickets” → `census`; “compará/sincronizá/alineá con Zoho” o “¿cuántos están desalineados?” → `reconcile`; “mostrame qué cerrarías” → `close`; “cerralos” → primero `close`, presentar el dry-run y pedir confirmación explícita, y solo después `close --apply`; “sacá de mi board los que ya tienen otro dueño” → primero `reassign`, mostrar el resumen agrupado por destinatario y pedir confirmación explícita, y solo después `reassign --apply`.
 
-## Las tres pilas de `reconcile`
+`reconcile` falla de forma cerrada si el censo no informa el email del usuario o si no puede resolver ese email a un `agentId` de Zoho. En ese caso, volvé a correr `census`: nunca continúes con la verificación de asignado desactivada.
+
+## Las cuatro pilas de `reconcile`
 
 | Pila | Significado | Acción |
 |---|---|---|
 | ✅ `closable` | Cerrado y resuelto en Zoho, pero abierto en Tolkien | Candidato a cierre; pasa por dry-run y confirmación humana |
-| ⚠️ `real-open` | Abierto en Tolkien y en Zoho | Trabajo real: no se toca |
+| ⚠️ `realOpen` | Abierto en Tolkien y en Zoho, todavía asignado al usuario | Trabajo real: no se toca |
+| ❗ `reassigned` | Abierto en Zoho pero YA NO asignado a vos; el trabajo existe pero es de otra persona | Candidato a `reassign`; nunca se mezcla con las otras pilas |
 | ❓ `unpaired` | Sin par, con par ambiguo o con estado no verificable | Queda abierto y va a revisión humana |
 
 `unpaired` puede explicar por qué no hay evidencia suficiente con estas razones:
@@ -66,6 +71,12 @@ Presentá el dry-run de forma resumida: indicá cuántos tickets se cerrarían, 
 
 > ¿Aplico el cierre de estos N tickets?
 
+Para `reassign`, mostrale siempre el resumen agrupado por destinatario (`Nombre: N tickets`) y el conteo de salteados por cada motivo. Ese resumen tiene que verse **antes** de pedir el OK:
+
+> ¿Reasigno estos N tickets a los destinatarios indicados?
+
+El canario con `--require` también es obligatorio inmediatamente antes de cualquier `reassign --apply`, igual que para `close --apply`. Si el canario no termina verde, no apliques el lote.
+
 Si el usuario pide cerrar “todo” y el lote supera 50 tickets, **no agregues `--confirm-large` por cuenta propia**. Explicá el tope y preguntá si prefiere procesarlos en tandas de 50 —recomendado— o forzar el lote entero.
 
 Ante cualquier duda sobre un ticket puntual, hacé primero una pasada de prueba de uno solo:
@@ -89,12 +100,52 @@ Solo después de revisar esa evidencia se considera el lote grande.
 
 `--next-actor scheduled_time` está **prohibido**: Tolkien rechaza esa combinación.
 
+## Opciones y guardas de `reassign`
+
+`reassign` consume **únicamente** `reconcile.reassigned`: nunca toca `closable`, `realOpen` ni `unpaired`. El destinatario se resuelve en dos saltos, `zoho.assigneeId` → agente Zoho → email exacto de una opción viva de Tolkien. Los nombres sólo se muestran; jamás se usan para elegir.
+
+| Opción | Uso |
+|---|---|
+| `--apply` | Ejecuta las escrituras; sin esta opción, `reassign` siempre es dry-run |
+| `--limit <n>` | Limita la cantidad de candidatos procesados |
+| `--confirm-large` | Autoriza explícitamente un lote mayor de 50; requiere confirmación humana específica |
+| `--only <workKey\|id>` | Procesa únicamente ese ticket de `reassigned`; es repetible |
+| `--reconcile <ruta>` | Usa un archivo de reconciliación concreto en lugar del predeterminado |
+
+La resolución falla cerrada y saltea el ticket con uno de estos motivos:
+
+| Motivo | Qué significa |
+|---|---|
+| `sin_asignado_en_zoho` | Zoho no informa un dueño |
+| `agente_zoho_desconocido` | El `assigneeId` no existe en el directorio cargado de Zoho; si aparece en TODOS los tickets, el CLI aborta porque significa que el directorio no cargó |
+| `agente_sin_email` | El agente existe, pero no tiene email utilizable |
+| `sin_usuario_en_tolkien` | Ninguna opción viva de Tolkien tiene ese email exacto |
+| `usuario_ambiguo_en_tolkien` | Más de una opción viva tiene el mismo email; no se elige ninguna |
+| `ya_es_del_usuario` | El destinatario resuelto es el propio usuario de la sesión |
+
+El email del select sigue siendo la llave para **elegir** al destinatario, pero
+no sirve para verificar el resultado: después del submit Tolkien vuelve a dejar
+seleccionado el placeholder `— reassign to —`, con UUID vacío. `reassign`
+verifica el nombre visible extraído de `Taken by <Nombre> ·`, normalizado sin
+acentos, mayúsculas ni diferencias de espaciado; si el UUID esperado llegara a
+permanecer visible, también vale como confirmación. Si ninguna señal coincide,
+registra `reassign_unverified`; si el dueño sigue siendo el anterior, el detalle
+lo dice explícitamente.
+
+Cada navegación al detalle permite 60 segundos y se reintenta una sola vez ante
+timeout, esperando 2 segundos. La aplicación también es idempotente: si antes
+del submit el ownership ya muestra al destinatario esperado, no vuelve a
+escribir, sino que registra `skipped` con motivo `ya_reasignado`. El resumen
+cuenta aparte cuántos «ya estaban reasignados», por lo que es seguro re-correr el
+mismo `reconcile.json` después de una ejecución parcial.
+
 ## Cuando algo falla
 
 Cada corrida con `--apply` deja un log JSONL con el estado anterior y posterior a cada escritura en:
 
 ```text
 ~/.cwc-data/tolkien/ops/close-<ts>-<pid>.jsonl
+~/.cwc-data/tolkien/ops/reassign-<ts>-<pid>.jsonl
 ```
 
 Los códigos de error de Tolkien que pueden aparecer son:

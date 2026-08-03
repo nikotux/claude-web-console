@@ -26,6 +26,15 @@ const JOBS_DIR = path.join(DATA_DIR, 'news');
 export const NEWS_LOG_FILE = path.join(DATA_DIR, 'news.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-news-runner.js');
 const MAX_ENTRIES = 200;
+// El prompt no puede listar cientos de archivos, y `git diff --name-only` los
+// devuelve en orden alfabético: en un push grande el corte se comía enteras las
+// rutas de la superficie que el usuario toca y dejaba solo `bin/`. Se ordena por
+// relevancia antes de cortar, con el alfabético como desempate estable. El orden
+// importa: `public/` es un prefijo genérico y ancho, así que va último; si queda
+// antes que `.claude/skills/`, sus rutas de CSS e i18n agotan el cupo y las skills,
+// superficie que el usuario invoca directo, no entran (push de 169 archivos: 0/8).
+const MAX_PROMPT_FILES = 120;
+const SURFACE_PREFIXES = ['public/js/modules/', 'src/modules/', '.claude/skills/', 'public/'];
 const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
 
 export const NEWS_TIMEOUT_MS = 8 * 60 * 1000;
@@ -34,6 +43,11 @@ export const NEWS_ID_RE = /^[a-f0-9]{6,32}$/;
 const TITLE_EMOJI_PREFIX_RE = /^(?:\p{Extended_Pictographic}\uFE0F?\u200D?)+\s+/u;
 
 const CATEGORIES = new Set(['nuevo', 'mejora', 'arreglo']);
+
+function surfaceRank(file) {
+  const index = SURFACE_PREFIXES.findIndex((prefix) => file.startsWith(prefix));
+  return index === -1 ? SURFACE_PREFIXES.length : index;
+}
 
 function readObject(file, fallback) {
   try {
@@ -319,7 +333,7 @@ export function parseNewsResponse(text) {
   return firstJsonArray(text);
 }
 
-export function buildNewsPrompt({ commits, files }) {
+export function buildNewsPrompt({ commits, files, published }) {
   const descriptive = (Array.isArray(commits) ? commits : [])
     .filter((commit) => !String(commit?.subject || '').startsWith('cwc backup '));
   const commitList = descriptive.length
@@ -329,16 +343,21 @@ export function buildNewsPrompt({ commits, files }) {
         return body ? `${head}\n${body}` : head;
       }).join('\n')
     : '(ninguno)';
-  const allFiles = Array.isArray(files) ? files.map(String).filter(Boolean) : [];
-  const shownFiles = allFiles.slice(0, 60);
+  const allFiles = (Array.isArray(files) ? files.map(String).filter(Boolean) : [])
+    .sort((a, b) => surfaceRank(a) - surfaceRank(b) || a.localeCompare(b));
+  const shownFiles = allFiles.slice(0, MAX_PROMPT_FILES);
   const fileList = [
     ...(shownFiles.length ? shownFiles : ['(ninguno)']),
-    ...(allFiles.length > 60 ? [`… y ${allFiles.length - 60} más`] : []),
+    ...(allFiles.length > MAX_PROMPT_FILES ? [`… y ${allFiles.length - MAX_PROMPT_FILES} más`] : []),
   ].join('\n');
+  const publishedTitles = published === undefined
+    ? readNews().slice(0, 30).map((entry) => entry.title).filter(Boolean)
+    : (Array.isArray(published) ? published : []);
+  const publishedList = publishedTitles.map(String).filter(Boolean).join('\n') || '(ninguna)';
 
   return `Sos el redactor de "Novedades" de Mi Consola: una consola web personal donde varias personas trabajan con Claude Code desde el navegador.
 
-Tu trabajo es convertir los cambios que se acaban de publicar en 1 a 3 novedades ALEGRES y ÚTILES para los OTROS usuarios de la consola — gente que la USA, no que escribió el código.
+Tu trabajo es convertir los cambios que se acaban de publicar en 1 a 6 novedades ALEGRES y ÚTILES para los OTROS usuarios de la consola — gente que la USA, no que escribió el código.
 
 CAMBIOS PUBLICADOS EN ESTE PUSH:
 ${commitList}
@@ -346,14 +365,18 @@ ${commitList}
 ARCHIVOS TOCADOS:
 ${fileList}
 
+NOVEDADES YA PUBLICADAS (no las repitas):
+${publishedList}
+
 Podés LEER el código del repo (Read, Grep, Glob) para entender qué hace cada cambio y, sobre todo, DÓNDE se prueba: en qué menú, botón, panel o comando quedó. No podés escribir, editar ni ejecutar nada.
 
 Reglas de redacción:
 - Español neutro, cercano y con energía. Nada de jerga de commit, nombres de archivo, refs de tickets ni SHAs en el texto visible.
 - Cada novedad es UNA cosa que el usuario puede notar o usar. Si el push trae tres cosas distintas, devolvé tres entradas; si trae un solo tema, devolvé una.
-- Si hay muchos commits, priorizá los 3 más recientes y descriptivos: no hace falta contar todo lo que pasó, sino lo que un usuario querría probar hoy.
-- Trabajá con pocas lecturas bien elegidas (una decena como mucho): mirá primero los \`CLAUDE.md\` de las carpetas tocadas y el archivo del panel o comando donde queda la función, que es lo que necesitás para escribir los pasos de prueba.
+- Cubrí TODO lo que un usuario pueda notar o usar, no solo los cambios más recientes: si el push trae seis cosas visibles, devolvé seis entradas. Lo que descartes, descartalo porque no es novedad para un usuario, nunca por falta de cupo.
+- Trabajá con pocas lecturas bien elegidas (unas veinte como mucho): mirá primero los \`CLAUDE.md\` de las carpetas tocadas y el archivo del panel o comando donde queda la función, que es lo que necesitás para escribir los pasos de prueba.
 - Los cambios puramente internos (refactors, backups automáticos, documentación, arreglos invisibles) NO son novedad. Si el push no trae NADA que un usuario pueda ver o probar, devolvé exactamente [].
+- NO repitas algo que ya se publicó. Estas novedades ya están en el tablero; si un cambio de este push ya está contado ahí, omitilo y contá lo que falta.
 - "tryIt" es lo más importante de todo: pasos concretos y clickeables para probarlo hoy mismo (por ejemplo "Abrí ⚙ Sistema → 🆕 Novedades" o "Escribí /graficar en el chat"). Verificá en el código dónde quedó de verdad; si no lográs determinar la ruta exacta, describilo en términos generales — NUNCA inventes un menú o un botón que no existe.
 - Usá emojis como anclas visuales: uno en el campo "emoji" (que se muestra aparte, así que NO lo repitas al principio del título) y, si ayuda, uno al inicio de cada viñeta. Sin exagerar.
 - "category" es "nuevo" si aparece algo que antes no existía, "mejora" si algo que ya existía quedó mejor, "arreglo" si se corrigió algo que molestaba.

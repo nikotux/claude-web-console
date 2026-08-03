@@ -302,6 +302,20 @@ export default {
       refs.groups.replaceChildren();
       const pending = requests.filter((request) => request.estado === 'pendiente').length;
       refs.count.textContent = String(pending);
+      el.classList.toggle('visado--pendientes', pending > 0);
+      refs.count.style.color = pending > 0 ? 'var(--cwc-warn)' : '';
+      if (pending > 0) {
+        const pendingAria = t(
+          'visado.sidebar.pendientesAria',
+          '{count} petición(es) esperando tu decisión',
+          { count: pending },
+        );
+        refs.header.title = pendingAria;
+        refs.header.setAttribute('aria-label', pendingAria);
+      } else {
+        refs.header.removeAttribute('title');
+        refs.header.removeAttribute('aria-label');
+      }
       refs.status.textContent = pending
         ? t('visado.sidebar.pendientes', '{n} pendiente(s)', { n: pending })
         : t('visado.sidebar.sinPendientes', 'sin pendientes');
@@ -408,11 +422,11 @@ export default {
       timer = null;
     }
 
-    function startPolling() {
+    function startPolling(everyMs) {
       stopPolling();
       timer = window.setInterval(() => {
         if (!document.hidden) load();
-      }, 15_000);
+      }, everyMs);
     }
 
     function setOpen(nextOpen) {
@@ -422,9 +436,12 @@ export default {
       refs.toggle.innerHTML = icon(open ? 'chevronDown' : 'chevronRight', { size: 13 });
       if (open) {
         load();
-        startPolling();
+        startPolling(15_000);
       } else {
-        stopPolling();
+        // El polling NO se apaga al plegar el panel: el contador del header ES el aviso.
+        // Si se detuviera, una petición que llega con el panel cerrado sería invisible
+        // hasta que alguien lo abriera a mano — y caducaría a las 24 h sin que nadie la viera.
+        startPolling(60_000);
       }
     }
 
@@ -436,8 +453,8 @@ export default {
       setOpen(!open);
     });
 
-    // Carga inicial única para que el contador del header sea útil aun cuando
-    // el cuerpo nace plegado. El polling solo vive mientras el panel está abierto.
+    // Carga inicial para que el contador del header sea útil aun cuando el cuerpo nace plegado.
     load();
+    startPolling(60_000);
   },
 };

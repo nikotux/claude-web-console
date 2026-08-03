@@ -60,7 +60,11 @@ recién stageados; si no hay nada nuevo, no toca el README) y
 consola+módulos) vía `gh repo edit` (best-effort: si falta gh/auth
 no rompe el push, ver campo `description` de la respuesta).
 (3) encola la redacción de 🆕 Novedades (`bin/cwc-news-runner.js`)
-fire-and-forget: un fallo ahí jamás convierte el push en error, y los commits
+con los commits locales aún no pusheados más el commit de backup recién creado,
+y el diff real de `beforeRef..HEAD` como lista de archivos. NO volver a pasar
+`staged` ahí: contiene solo los archivos del commit de backup y deja al redactor
+sin mapa; ese fue exactamente el bug que hacía que Novedades publicara de menos.
+Es fire-and-forget: un fallo ahí jamás convierte el push en error, y los commits
 `cwc backup …` viajan en el detalle técnico pero se omiten del prompt.
 PULL desde GitHub (POST /pull, admin): restauración del código —
 mismas guardas, fetch + stash→merge --ff-only→pop (patrón

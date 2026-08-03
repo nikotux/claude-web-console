@@ -40,7 +40,15 @@ function applyClipboardOpts() {
 
 // Anti traversal + confinamiento por dueño (BUG-680): el host (admin/token,
 // owner null) conserva su home completo; un inquilino queda clampeado a SU
-// workspace. Espejo EXACTO de safeCwd(cwd, owner) de chat/index.js.
+// workspace. Difiere A PROPÓSITO de chat/index.js (console:BUG-2562): chat
+// preserva rutas bajo ADUANA_ROOT, mientras terminal siempre clampea. La Ley 1
+// de Aduana (Regla dura 16) hace que la contención la sostenga el cwd, no un
+// sandbox: un shell en la sala daría acceso al filesystem con la identidad de
+// quien lo abrió; y la Ley 6 exige datos, no instrucciones, justo lo contrario
+// de una terminal compartida. La excepción de chat (console:BUG-2432) sólo evita
+// que rehydrate() saque la sala de un inquilino de Aduana al re-clampearla tras
+// reiniciar el server; es una necesidad del ciclo de vida del chat, no una
+// capacidad de terminal.
 const safeCwd = (cwd, owner) => clampToRoot(userFileRoot(owner || hostUser()), cwd);
 
 // Resuelve una sesión SOLO si el request es de su dueño (o admin). Ajena/

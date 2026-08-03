@@ -30,6 +30,7 @@ export const TANDEM_CODEX_PREAMBLE = [
   '- Si la tarea necesita escribir en `.git` (git add/commit/rebase/etc.), avisá que hace falta `full_access: true`; sin eso `.git` es read-only.',
   '- La generación PURA de documentos (redactar/traducir texto que no es código) es razonamiento y conviene que la resuelva Claude directo, no esta delegación.',
   '- En tu mensaje final resumí en pocas líneas QUÉ cambiaste y en qué archivo.',
+  '- Si la delegación declaró archivos, limitate a ellos: solo esos cambios se aplican de vuelta al proyecto real.',
   '',
   'PLAN CONCRETO:',
   '',
@@ -98,18 +99,160 @@ export function readUntracked(cwd, list) {
   return out.join('\n\n');
 }
 
-// Corre un `git` de LECTURA en cwd y devuelve su stdout (o '' si falla / no es
-// repo). Nunca lanza — best-effort.
-export function runGit(cwd, gitArgs) {
+// Corre `git` en cwd. El contrato histórico devuelve stdout (o '' si falla);
+// el modo `result` agrega estado/stderr y `input` permite enviar un parche por
+// stdin. Nunca lanza — best-effort.
+export function runGit(cwd, gitArgs, { input = null, result = false } = {}) {
   return new Promise((resolve) => {
     let out = '';
+    let err = '';
+    let settled = false;
+    const finish = (code, error = null) => {
+      if (settled) return;
+      settled = true;
+      if (result) {
+        resolve({ ok: !error && code === 0, code, stdout: out, stderr: err, error });
+      } else {
+        resolve(error ? '' : out);
+      }
+    };
     try {
-      const p = spawn('git', ['-C', cwd, ...gitArgs], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const p = spawn('git', ['-C', cwd, ...gitArgs], {
+        stdio: [input === null ? 'ignore' : 'pipe', 'pipe', result ? 'pipe' : 'ignore'],
+      });
       p.stdout.on('data', (d) => { out += d.toString(); });
-      p.on('close', () => resolve(out));
-      p.on('error', () => resolve(''));
-    } catch { resolve(''); }
+      if (result) p.stderr.on('data', (d) => { err += d.toString(); });
+      p.on('close', (code) => finish(code));
+      p.on('error', (error) => finish(null, error));
+      if (input !== null) {
+        p.stdin.on('error', () => {});
+        p.stdin.end(input);
+      }
+    } catch (error) { finish(null, error); }
   });
+}
+
+function gitFailure(action, gitResult) {
+  const detail = gitResult?.stderr?.trim() || gitResult?.error?.message || `código ${gitResult?.code ?? 'desconocido'}`;
+  return `${action}: ${detail}`;
+}
+
+export async function createDelegationWorktree(cwd, jobId) {
+  const root = path.join(path.dirname(codexJobsDir()), 'codex-worktrees', String(jobId));
+  fs.mkdirSync(root, { recursive: true });
+  const added = await runGit(cwd, ['worktree', 'add', '--detach', root, 'HEAD'], { result: true });
+  if (!added.ok) {
+    await removeDelegationWorktree(cwd, root);
+    throw new Error(gitFailure(`No se pudo crear el worktree aislado en ${root}`, added));
+  }
+  return { path: root };
+}
+
+export async function seedWorktree(worktreePath, cwd) {
+  const failure = (error) => ({
+    ok: false,
+    error: `${error}\nEl sembrado suele fallar cuando otro proceso está escribiendo el árbol en ese momento.`,
+  });
+  try {
+    const dirty = await runGit(cwd, ['diff', 'HEAD'], { result: true });
+    if (!dirty.ok) return failure(gitFailure('No se pudo leer el estado sucio del repositorio', dirty));
+    if (dirty.stdout) {
+      const applied = await runGit(worktreePath, ['apply', '--whitespace=nowarn'], {
+        input: dirty.stdout,
+        result: true,
+      });
+      if (!applied.ok) {
+        const threeWayCheck = await runGit(worktreePath, ['apply', '-3', '--check', '--whitespace=nowarn'], {
+          input: dirty.stdout,
+          result: true,
+        });
+        let threeWay = threeWayCheck;
+        if (threeWayCheck.ok) {
+          threeWay = await runGit(worktreePath, ['apply', '-3', '--whitespace=nowarn'], {
+            input: dirty.stdout,
+            result: true,
+          });
+        }
+        if (!threeWay.ok) {
+          return failure([
+            gitFailure('No se pudo sembrar el parche de archivos trackeados', applied),
+            gitFailure('El reintento con merge de tres vías también falló', threeWay),
+          ].join('\n'));
+        }
+      }
+    }
+
+    const untracked = await runGit(cwd, ['ls-files', '--others', '--exclude-standard'], { result: true });
+    if (!untracked.ok) return failure(gitFailure('No se pudieron listar los archivos untracked', untracked));
+    for (const rel of untracked.stdout.split('\n').map((item) => item.trim()).filter(Boolean)) {
+      const destination = path.join(worktreePath, rel);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(path.join(cwd, rel), destination);
+    }
+
+    const added = await runGit(worktreePath, ['add', '-A'], { result: true });
+    if (!added.ok) return failure(gitFailure('No se pudo preparar el estado sembrado', added));
+    const committed = await runGit(worktreePath, [
+      '-c', 'user.email=cwc@local',
+      '-c', 'user.name=cwc',
+      'commit', '-m', 'cwc: estado sembrado', '--no-verify', '--allow-empty',
+    ], { result: true });
+    if (!committed.ok) return failure(gitFailure('No se pudo fijar la base sembrada', committed));
+    return { ok: true };
+  } catch (error) {
+    return failure(String(error?.message || error));
+  }
+}
+
+export async function applyDeclaredBack(worktreePath, cwd, files) {
+  const added = await runGit(worktreePath, ['add', '-A'], { result: true });
+  if (!added.ok) {
+    return { ok: false, conflict: true, error: gitFailure('No se pudo preparar el diff aislado', added), patch: '' };
+  }
+  const diff = await runGit(worktreePath, ['diff', 'HEAD', '--binary', '--', ...files], { result: true });
+  if (!diff.ok) {
+    return { ok: false, conflict: true, error: gitFailure('No se pudo generar el parche declarado', diff), patch: diff.stdout };
+  }
+  const patch = diff.stdout;
+  if (!patch.trim()) return { applied: [], skipped: files, empty: true };
+
+  const applied = await runGit(cwd, ['apply', '--whitespace=nowarn'], { input: patch, result: true });
+  if (applied.ok) return { ok: true, applied: files };
+
+  // `--check` evita que un merge de tres vías con conflictos deje marcadores o
+  // entradas sin resolver en el árbol real. Si pasa, la aplicación inmediata
+  // usa exactamente el mismo parche y la misma base.
+  const threeWayCheck = await runGit(cwd, ['apply', '-3', '--check', '--whitespace=nowarn'], {
+    input: patch,
+    result: true,
+  });
+  if (!threeWayCheck.ok) {
+    return {
+      ok: false,
+      conflict: true,
+      error: threeWayCheck.stderr.trim() || applied.stderr.trim() || gitFailure('El parche declarado entró en conflicto', threeWayCheck),
+      patch,
+    };
+  }
+  const threeWay = await runGit(cwd, ['apply', '-3', '--whitespace=nowarn'], { input: patch, result: true });
+  if (!threeWay.ok) {
+    return {
+      ok: false,
+      conflict: true,
+      error: threeWay.stderr.trim() || applied.stderr.trim() || gitFailure('El parche declarado entró en conflicto', threeWay),
+      patch,
+    };
+  }
+  return { ok: true, applied: files };
+}
+
+export async function removeDelegationWorktree(cwd, worktreePath) {
+  try {
+    const removed = await runGit(cwd, ['worktree', 'remove', '--force', worktreePath], { result: true });
+    if (removed.ok) return;
+  } catch { /* continúa con la limpieza de fallback */ }
+  try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { await runGit(cwd, ['worktree', 'prune'], { result: true }); } catch { /* best-effort */ }
 }
 
 export async function snapshotTree(cwd, { withContents = false } = {}) {
@@ -298,7 +441,7 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
 // tenía la tool inline. `isError` conserva la semántica histórica: solo los
 // errores de ejecución marcan error de tool; un exit code distinto de cero se
 // informa dentro del reporte.
-export async function buildDelegationReport({ res, before, after, cwd, startedAt, changes }) {
+export async function buildDelegationReport({ res, before, after, cwd, startedAt, changes, attributed = false }) {
   const { touched, newFiles } = changes || diffSnapshots(before, after, cwd, startedAt);
   const parts = [];
   if (res.error) parts.push(`⚠️ Codex terminó con problema: ${res.error}`);
@@ -307,10 +450,14 @@ export async function buildDelegationReport({ res, before, after, cwd, startedAt
   if (touched.length || newFiles.length) {
     if (touched.length) {
       const scopedStat = await runGit(cwd, ['diff', '--stat', '--', ...touched]);
-      if (scopedStat.trim()) parts.push(`ARCHIVOS QUE TOCÓ CODEX:\n${scopedStat.trim()}`);
+      if (scopedStat.trim()) {
+        const title = attributed ? 'ARCHIVOS QUE TOCÓ CODEX' : 'ARCHIVOS QUE CAMBIARON DURANTE LA DELEGACIÓN';
+        parts.push(`${title}:\n${scopedStat.trim()}`);
+      }
     }
     if (newFiles.length) {
-      parts.push(`ARCHIVOS NUEVOS DE ESTA DELEGACIÓN:\n${newFiles.join('\n')}`);
+      const title = attributed ? 'ARCHIVOS NUEVOS DE ESTA DELEGACIÓN' : 'ARCHIVOS NUEVOS APARECIDOS DURANTE LA DELEGACIÓN';
+      parts.push(`${title}:\n${newFiles.join('\n')}`);
       const trulyNewFiles = newFiles.filter((rel) => !before.contents?.has(rel));
       const preexistingNewFiles = newFiles.filter((rel) => before.contents?.has(rel));
       const newContent = readUntracked(cwd, trulyNewFiles.join('\n'));
@@ -324,7 +471,8 @@ export async function buildDelegationReport({ res, before, after, cwd, startedAt
     if (scoped.length > MAX_SCOPED_DIFF) {
       scoped = `${scoped.slice(0, MAX_SCOPED_DIFF)}\n… (diff acotado truncado — leé el resto con Read sobre: ${touched.join(', ')})`;
     }
-    parts.push(scoped ? `DIFF (solo lo que tocó esta delegación):\n${scoped}` : 'DIFF: (Codex no modificó archivos ya trackeados — mirá ARCHIVOS NUEVOS)');
+    const diffTitle = attributed ? 'DIFF (solo lo que tocó esta delegación)' : 'DIFF (cambios ocurridos durante la delegación)';
+    parts.push(scoped ? `${diffTitle}:\n${scoped}` : 'DIFF: (Codex no modificó archivos ya trackeados — mirá ARCHIVOS NUEVOS)');
 
     const touchedSet = new Set(touched);
     const newFilesSet = new Set(newFiles);
@@ -336,6 +484,7 @@ export async function buildDelegationReport({ res, before, after, cwd, startedAt
       if (!newFilesSet.has(rel)) unrelated += 1;
     }
     if (unrelated > 0) parts.push(`(nota: el árbol tiene además ${unrelated} archivo(s) modificado(s) ajenos a esta delegación — ignoralos)`);
+    if (!attributed) parts.push('(aviso: esta corrida no corrió aislada, así que no se puede distinguir lo que escribió Codex de lo que escribió otra sesión en la misma ventana. Puede ser porque no se declararon `files`, o porque esta sesión arrancó antes de que el campo existiera y lo descartó en silencio — en ese caso hace falta «Reabrir para cambios». Con `files` activo la atribución es exacta y además hay aislamiento.)');
   } else {
     let diffText = (await runGit(cwd, ['diff'])).trim();
     if (diffText.length > MAX_DIFF) diffText = `${diffText.slice(0, MAX_DIFF)}\n… (diff truncado — revisá el resto con git diff)`;

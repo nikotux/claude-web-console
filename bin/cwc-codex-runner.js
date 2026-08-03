@@ -7,14 +7,18 @@
 // Este runner es config-free a propósito: resuelve el directorio multi-tenant
 // desde CWC_DATA_DIR/HOME y no importa core/config.js.
 import {
+  applyDeclaredBack,
   buildDelegationReport,
   CODEX_HEARTBEAT_MS,
   CODEX_JOB_TERMINAL_STATUSES,
   codexJobPath,
+  createDelegationWorktree,
   diffSnapshots,
   pruneCodexJobs,
   readCodexJob,
+  removeDelegationWorktree,
   runCodex,
+  seedWorktree,
   snapshotTree,
   writeCodexJob,
 } from '../src/modules/chat/codex-shared.js';
@@ -84,7 +88,120 @@ async function runJob(id) {
   heartbeat.unref();
 
   try {
+    const declared = Array.isArray(job.files) && job.files.length ? job.files : null;
     const before = await snapshotTree(job.cwd, { withContents: true });
+
+    if (declared && job.fullAccess !== true) {
+      let worktreePath = null;
+      let preserveWorktree = false;
+      let isolationFailure = null;
+      try {
+        try {
+          const worktree = await createDelegationWorktree(job.cwd, id);
+          worktreePath = worktree.path;
+          const seeded = await seedWorktree(worktreePath, job.cwd);
+          if (!seeded.ok) isolationFailure = seeded.error || 'falló el sembrado del estado actual';
+        } catch (err) {
+          isolationFailure = String(err?.message || err);
+        }
+
+        if (!isolationFailure) {
+          const res = await runCodex(
+            worktreePath,
+            job.task,
+            job.model,
+            job.effort,
+            false,
+            Array.isArray(job.writableRoots) ? job.writableRoots : [],
+          );
+          const applied = await applyDeclaredBack(worktreePath, job.cwd, declared);
+          if (applied.conflict === true) {
+            preserveWorktree = true;
+            const report = [
+              '⚠️ CONFLICTO AL APLICAR LA DELEGACIÓN AISLADA',
+              `Archivos declarados:\n${declared.join('\n')}`,
+              'Otro proceso modificó alguno de estos archivos durante la corrida y el parche de Codex entró en conflicto.',
+              `stderr de git apply:\n${applied.error || '(sin detalle en stderr)'}`,
+              'El cambio de Codex NO se aplicó al proyecto real.',
+              `El trabajo quedó preservado en el worktree: ${worktreePath}`,
+            ].join('\n\n');
+            writeCodexJob(id, {
+              status: 'done',
+              report,
+              isError: true,
+              threadId: res.threadId,
+              finishedAt: Date.now(),
+            });
+            activeJobId = null;
+            log(`Job ${id} terminado con conflicto; se conserva ${worktreePath}.`);
+            return;
+          }
+
+          let text;
+          let isError;
+          if (applied.empty === true) {
+            const parts = [];
+            if (res.error) parts.push(`⚠️ Codex terminó con problema: ${res.error}`);
+            else if (res.code !== 0) parts.push(`⚠️ Codex salió con código ${res.code}${res.stderr ? ` — ${res.stderr.slice(0, 300)}` : ''}`);
+            parts.push(`RESUMEN DE CODEX:\n${res.msgs.length ? res.msgs.join('\n\n') : '(Codex no devolvió mensaje final)'}`);
+            parts.push(`ARCHIVOS DECLARADOS SIN CAMBIOS:\n${declared.join('\n')}`);
+            parts.push('DIFF: (Codex no modificó ninguno de los archivos declarados; los cambios del resto del árbol son ajenos a esta delegación)');
+            if (res.threadId) parts.push(`(codex thread: ${res.threadId})`);
+            text = parts.join('\n\n');
+            isError = !!res.error;
+          } else {
+            const appliedFiles = Array.isArray(applied.applied) ? applied.applied : [];
+            const existedBefore = (rel) => before.tracked.has(rel) || before.contents?.has(rel);
+            const changes = {
+              touched: appliedFiles.filter(existedBefore),
+              newFiles: appliedFiles.filter((rel) => !existedBefore(rel)),
+            };
+            const after = await snapshotTree(job.cwd);
+            ({ text, isError } = await buildDelegationReport({
+              res,
+              before,
+              after,
+              cwd: job.cwd,
+              startedAt,
+              changes,
+              attributed: true,
+            }));
+          }
+          writeCodexJob(id, {
+            status: 'done',
+            report: text,
+            isError,
+            threadId: res.threadId,
+            finishedAt: Date.now(),
+          });
+          activeJobId = null;
+          log(`Job ${id} terminado${isError ? ' con problema informado por Codex' : ''}.`);
+          return;
+        }
+      } finally {
+        if (worktreePath && !preserveWorktree) {
+          await removeDelegationWorktree(job.cwd, worktreePath);
+        }
+      }
+
+      const report = [
+        '⛔ DELEGACIÓN NO EJECUTADA: no se pudo montar el aislamiento solicitado.',
+        `La delegación declaró ${declared.length} archivo${declared.length === 1 ? '' : 's'}:\n${declared.join('\n')}`,
+        `Motivo exacto:\n${isolationFailure}`,
+        'No se ejecutó Codex ni se aplicó ningún cambio, para no arriesgar el trabajo de otras sesiones.',
+        'Podés reintentar cuando el árbol esté más quieto, o repetir la delegación SIN `files` si aceptás ejecutarla sin aislamiento.',
+      ].join('\n\n');
+      writeCodexJob(id, {
+        status: 'done',
+        report,
+        isError: true,
+        finishedAt: Date.now(),
+      });
+      activeJobId = null;
+      log(`Job ${id} no ejecutado porque no se pudo montar el aislamiento.`);
+      return;
+    }
+
     const res = await runCodex(
       job.cwd,
       job.task,
@@ -103,9 +220,12 @@ async function runJob(id) {
       startedAt,
       changes,
     });
+    const isolationNote = declared && job.fullAccess === true
+      ? 'NOTA DE AISLAMIENTO: se declararon archivos, pero la delegación usó full_access y por diseño se ejecutó sobre el árbol real.'
+      : '';
     writeCodexJob(id, {
       status: 'done',
-      report: text,
+      report: isolationNote ? `${text}\n\n${isolationNote}` : text,
       isError,
       threadId: res.threadId,
       finishedAt: Date.now(),

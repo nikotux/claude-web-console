@@ -656,12 +656,15 @@ export default {
       const archivedChats = chats.filter((c) => c.archived);
       const mySessions = owned.filter((s) => isMine(s.owner));
       const otherSessions = owned.filter((s) => !isMine(s.owner));
-      const myChats = activeChats.filter((c) => isMine(c.owner));
-      const otherChats = activeChats.filter((c) => !isMine(c.owner));
-      const myArchivedChats = archivedChats.filter((c) => isMine(c.owner));
+      // Compartido ≠ ajeno: si figuro como participante explícito, la sala es
+      // MÍA para el listado aunque el dueño (quien paga los turnos) sea otro.
+      const isForMe = (c) => isMine(c.owner) || isChatParticipant(c);
+      const myChats = activeChats.filter((c) => isForMe(c));
+      const otherChats = activeChats.filter((c) => !isForMe(c));
+      const myArchivedChats = archivedChats.filter((c) => isForMe(c));
       const otherUserChats = [
         ...otherChats,
-        ...archivedChats.filter((c) => !isMine(c.owner)),
+        ...archivedChats.filter((c) => !isForMe(c)),
       ];
 
       listEl.innerHTML = '';
@@ -691,7 +694,8 @@ export default {
           worktree: c.tolkienEnv?.worktree || c.cwd,
         });
       }
-      const order = ['__limbo', ...PLACES.map((p) => p.rel), '__otros'];
+      // Aduana va primero a propósito: es suelo compartido y lo más urgente de ver.
+      const order = ['__aduana', '__limbo', ...PLACES.map((p) => p.rel), '__otros'];
       const worldKeys = [...byWorld.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
       const multiWorld = worldKeys.length > 1;
       for (const key of worldKeys) {
@@ -821,6 +825,13 @@ export default {
             <span class="sess-live"></span>
           </span>
         </span>`;
+      if (!isMine(c.owner) && isChatParticipant(c)) {
+        const guest = document.createElement('span');
+        guest.className = 'sess-mode sess-guest';
+        guest.textContent = t('sessions.collab.guestOf', 'de {owner}', { owner: c.owner });
+        guest.title = t('sessions.collab.guestOfTitle', 'Sos invitado: la sala es de {owner}', { owner: c.owner });
+        main.querySelector('.sess-row1')?.appendChild(guest);
+      }
       appendParticipantChip(main, c);
       syncSalaBadge(main, c);
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
@@ -953,33 +964,37 @@ export default {
 
     // Menú ⋯ de una CONVERSACIÓN: mismo popup descartable que las terminales.
     function openChatMenu(c, anchor) {
+      // Mismo criterio de propiedad que el listado (`isMine` trata un chat
+      // legacy sin `owner` como del host): si la tarjeta se listó como MÍA,
+      // su menú debe ofrecer las acciones de dueño.
+      const canOwn = isMine(c.owner) || iAmAdmin;
       const isTui = c.viewMode === 'tui';
       const arch = !!c.archived; // F3: una archivada muestra "Revivir" y esconde las acciones que exigen motor vivo
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
         <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? t('sessions.menu.reviveOpen', 'Revivir y abrir') : t('sessions.menu.open', 'Abrir')}</span></button>
-        ${arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.revive', 'Revivir')}</span></button>` : ''}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>${t('sessions.menu.toTui', 'Pasar a TUI')}</span></button>`}
-        ${!arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
-        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>
-        ${arch ? '' : `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>`}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>`}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>`}
-        ${!arch && !isTui && !c.isSala && (isChatOwner(c) || iAmAdmin) ? `<button class="cwc-popup-item" data-act="to-aduana">${icon('relay', { size: 15 })}<span>${t('sessions.menu.toAduana', '🛃 Pasar a la Aduana')}</span></button>` : ''}
-        ${arch || isTui ? '' : `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>`}
-        ${c.isSala && (isChatOwner(c) || iAmAdmin) ? `<button class="cwc-popup-item" data-act="collab">${icon('relay', { size: 15 })}<span>${t('sessions.menu.inviteSala', '🤝 Invitar a la sala')}</span></button>` : ''}
+        ${canOwn && arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.revive', 'Revivir')}</span></button>` : ''}
+        ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>${t('sessions.menu.toTui', 'Pasar a TUI')}</span></button>` : ''}
+        ${canOwn && !arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
+        ${canOwn ? `<button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>` : ''}
+        ${canOwn && !arch ? `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>` : ''}
+        ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>` : ''}
+        ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>` : ''}
+        ${canOwn && !arch && !isTui && !c.isSala ? `<button class="cwc-popup-item" data-act="to-aduana">${icon('relay', { size: 15 })}<span>${t('sessions.menu.toAduana', '🛃 Pasar a la Aduana')}</span></button>` : ''}
+        ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>` : ''}
+        ${c.isSala && canOwn ? `<button class="cwc-popup-item" data-act="collab">${icon('relay', { size: 15 })}<span>${t('sessions.menu.inviteSala', '🤝 Invitar a la sala')}</span></button>` : ''}
         ${c.isSala && !isChatOwner(c) && isChatParticipant(c) ? `<button class="cwc-popup-item" data-act="leave-sala">${icon('close', { size: 15 })}<span>${t('sessions.menu.leaveSala', 'Salir de la sala')}</span></button>` : ''}
         <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.folder', 'Abrir carpeta del chat')}</span></button>
-        <button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>${t('sessions.menu.close', 'Cerrar conversación')}</span></button>`;
+        ${canOwn ? `<button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>${t('sessions.menu.close', 'Cerrar conversación')}</span></button>` : ''}`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
       const act = (fn) => { dismiss(); fn(); };
-      menu.querySelector('[data-act="open"]').addEventListener('click', () => act(() => (arch ? reviveChat(c, { open: true }) : openChatView(c))));
+      menu.querySelector('[data-act="open"]')?.addEventListener('click', () => act(() => (arch ? reviveChat(c, { open: true }) : openChatView(c))));
       menu.querySelector('[data-act="revive"]')?.addEventListener('click', () => act(() => reviveChat(c)));
       menu.querySelector('[data-act="mode"]')?.addEventListener('click', () => act(() => switchChatMode(c)));
-      menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameChat(c)));
+      menu.querySelector('[data-act="rename"]')?.addEventListener('click', () => act(() => renameChat(c)));
       menu.querySelector('[data-act="model"]')?.addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
       menu.querySelector('[data-act="world"]')?.addEventListener('click', () => act(() => moveChatWorld(c)));
@@ -987,8 +1002,8 @@ export default {
       menu.querySelector('[data-act="archive"]')?.addEventListener('click', () => act(() => archiveChat(c)));
       menu.querySelector('[data-act="collab"]')?.addEventListener('click', () => act(() => openCollabModal(c)));
       menu.querySelector('[data-act="leave-sala"]')?.addEventListener('click', () => act(() => leaveSala(c)));
-      menu.querySelector('[data-act="folder"]').addEventListener('click', () => act(() => openChatFolder(c)));
-      menu.querySelector('[data-act="close"]').addEventListener('click', () => act(() => closeChat(c)));
+      menu.querySelector('[data-act="folder"]')?.addEventListener('click', () => act(() => openChatFolder(c)));
+      menu.querySelector('[data-act="close"]')?.addEventListener('click', () => act(() => closeChat(c)));
     }
 
     function collabIcon(name) {

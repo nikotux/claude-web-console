@@ -117,6 +117,7 @@
   "visado.sidebar.grupo": "{estado} · {n}",
   "visado.sidebar.operacionSinNombre": "Unnamed operation",
   "visado.sidebar.pendientes": "{n} pending",
+  "visado.sidebar.pendientesAria": "{count} request(s) waiting for your decision",
   "visado.sidebar.sinCargar": "not loaded",
   "visado.sidebar.sinPendientes": "none pending",
   "visado.sidebar.solicitud": "Requested by {persona} · {cuando}",

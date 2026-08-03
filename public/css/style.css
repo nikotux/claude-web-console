@@ -521,6 +521,7 @@ html, body {
   color: var(--cwc-accent); background: var(--cwc-accent-bg);
   border-radius: var(--cwc-radius-sm); padding: 0 .25rem;
 }
+.sess-mode.sess-guest { color: var(--cwc-text-dim); background: var(--cwc-bg-chip); }
 .sess-menu { align-self: center; }
 
 /* Badge PASIVO del Interfono (rediseño 2026-07-10, Fase 2): reemplaza al popup

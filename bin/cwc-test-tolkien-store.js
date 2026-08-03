@@ -156,11 +156,12 @@ async function parentMain() {
       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
       ORDER BY name
     `).all().map((row) => row.name);
-    eq('T1.c existen las 7 tablas', tables, [
+    eq('T1.c existen las 8 tablas', tables, [
       'meta',
       'ops',
       'reconcile',
       'runs',
+      'scan_queue',
       'schema_snapshot',
       'ticket_observations',
       'tickets',

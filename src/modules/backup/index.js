@@ -649,13 +649,25 @@ export default {
             ...priorCommits,
             ...(committedFull ? [{ sha: committedFull, subject: committedSubject, body: '' }] : []),
           ];
+          // El redactor necesita el mapa REAL de archivos del rango pusheado.
+          // `staged` son solo los del commit de backup y suele quedar en
+          // ["README.md"] cuando el trabajo ya venía commiteado, dejando al
+          // redactor sin dónde mirar (por eso publicaba de menos).
+          let newsFiles = staged;
+          if (beforeRef) {
+            const diffRange = await git(['diff', '--name-only', `${beforeRef}..HEAD`]);
+            if (diffRange.code === 0) {
+              const ranged = lines(diffRange.out);
+              if (ranged.length) newsFiles = ranged;
+            }
+          }
           if (commits.length) {
             const newsJobId = crypto.randomBytes(12).toString('hex');
             writeNewsJob(newsJobId, {
               status: 'running',
               startedAt: Date.now(),
               commits,
-              files: staged,
+              files: newsFiles,
               count: null,
               error: null,
             });

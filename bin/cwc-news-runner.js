@@ -129,7 +129,9 @@ async function main() {
     const entries = parsed
       .map((draft) => makePublishedNewsEntry(draft, tech))
       .filter(Boolean)
-      .slice(0, 3);
+      // Un push suele reunir medio día de trabajo con varias features visibles;
+      // un techo de tres recortaba novedades reales.
+      .slice(0, 6);
     if (entries.length) appendEntries(entries);
 
     writeNewsJob(id, {

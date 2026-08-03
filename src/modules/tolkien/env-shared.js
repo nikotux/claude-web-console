@@ -246,7 +246,10 @@ export function createWorktree(id, baseRef = 'main') {
 
 export function writeLaunchScript(id, wt, port, db) {
   assertSafeId(id);
-  const ztIp = findZeroTierIp()?.ip || '10.213.222.62';
+  const ztIp = findZeroTierIp()?.ip;
+  if (!ztIp) {
+    throw new Error('No se detectó la IP ZeroTier: el entorno efímero no puede levantar su dev-server sin ella (Regla dura 1)');
+  }
   const projectId = readInfisicalWorkspaceId();
   const consoleDir = path.join(wt, 'apps', 'console');
   const inner = [
@@ -264,7 +267,7 @@ export function writeLaunchScript(id, wt, port, db) {
     `cd ${shQuote(wt)}`,
     'pnpm --filter @tolkien/db exec prisma migrate deploy',
     `cd ${shQuote(consoleDir)}`,
-    `exec pnpm exec next dev -p ${shQuote(port)} -H 0.0.0.0`,
+    `exec pnpm exec next dev -p ${shQuote(port)} -H ${shQuote(ztIp)}`,
   ].join('\n');
   const script = [
     '#!/usr/bin/env bash',

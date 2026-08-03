@@ -23,11 +23,12 @@ import fsp from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import { hostUser } from '../../core/user-space.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
 import { isHostAdmin, HOST_ONLY_MSG } from './gates.js';
 import {
-  runCmd, spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
+  spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
 } from './refresh-shared.js';
 import {
   listEnvs, getEnv, getEnvByChat, saveEnv, envIdForChat, dbNameFor, allocatePort, atCap, isEnvAlive, MAX_ENVS, PORT_RANGE,
@@ -42,35 +43,45 @@ import {
   stackStatus,
 } from './stack.js';
 
-// Este módulo opera SIEMPRE sobre el repo del host: por eso toda su superficie
-// nace admin-gated salvo el stack N2, que sí está owner-scoped. Todo endpoint
-// nuevo debe ser admin-only salvo que se demuestre lo contrario (console:PLAN-2337).
-const CWD = config.projectDir;
-const REL = path.relative(config.home, CWD); // ruta relativa al home (para el árbol)
+// La infraestructura de refresh/envs sigue siendo exclusiva del host; las
+// operaciones git y local-enter resuelven el clon del principal por request.
 const AUTO_STASH_MSG = 'cwc: auto antes de actualizar';
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const LASTFETCH_FILE = path.join(DATA_DIR, 'tolkien-lastfetch.json');
 const stackOwner = (req) => principalOf(req)?.username || hostUser();
 
+// Función pura: no toca disco ni congela el workspace del host al importar.
+// Replica el patrón owner-scoped de tickets/context-store.js.
+export function tolkienRepoFor(req) {
+  const scope = systemScopeFor(req);
+  return scope.isHost ? config.projectDir : path.join(scope.workspace, 'tolkien');
+}
+
+const MISSING_REPO_MSG = 'Tu clon de Tolkien todavía no está preparado. Completá o reintentá la preparación de tu workspace y volvé a probar.';
+
+function tolkienRepoOr404(req, res, { html = false } = {}) {
+  const repoDir = tolkienRepoFor(req);
+  try {
+    if (fs.statSync(repoDir).isDirectory() && fs.existsSync(path.join(repoDir, '.git'))) return repoDir;
+  } catch { /* fail-closed: nunca usar el repo del host como respaldo */ }
+  if (html) res.status(404).type('html').send(localEnterErrPage('Clon de Tolkien no preparado', MISSING_REPO_MSG));
+  else res.status(404).json({ error: MISSING_REPO_MSG });
+  return null;
+}
+
 // El refresh de la DB LOCAL de Tolkien (TRUNCATE + reimport de importers Zoho)
 // vive en refresh-shared.js + el runner desacoplado bin/cwc-tolkien-refresh-runner.js
 // (regla de oro/regla 2: operación larga que debe sobrevivir a un reinicio de la
-// web). Acá solo se lo dispara y se lee su estado del disco. runCmd se importa de
-// ahí (lo reusa el gh de /branches).
+// web). Acá solo se lo dispara y se lee su estado del disco.
 
-function git(args, { timeout = 90000 } = {}) {
+function runCmdAt(cwd, cmd, args, { timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile('git', ['-C', CWD, ...args], { timeout, env: process.env, maxBuffer: 8 * 1024 * 1024 },
+    execFile(cmd, args, { cwd, timeout, env: process.env, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        // Un `err` con exit code NUMÉRICO es git devolviendo un error normal
-        // (ej. pull rechazado, push conflict): eso se resuelve como {code}.
-        // Timeout (kill), señales, o fallos de spawn (ENOENT/EACCES) son
-        // fallos de SISTEMA, no del comando git — ahí rechazamos en vez de
-        // ocultarlos detrás de un {code} inventado.
         if (err && (err.killed || err.signal || typeof err.code !== 'number')) {
           return reject(err);
         }
-        resolve({ code: err ? err.code : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
+        resolve({ code: err ? err.code : 0, stdout: stdout || '', stderr: stderr || '' });
       });
   });
 }
@@ -85,6 +96,10 @@ function gitAt(cwd, args, { timeout = 90000 } = {}) {
         resolve({ code: err ? err.code : 0, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
       });
   });
+}
+
+function gitFor(cwd) {
+  return (args, options) => gitAt(cwd, args, options);
 }
 
 function isSafeEnvId(id) {
@@ -143,7 +158,8 @@ async function saveLastFetchAt(ts) {
 
 let lastFetchAt = loadLastFetchAt();
 
-export async function status() {
+export async function status(cwd = config.projectDir) {
+  const git = gitFor(cwd);
   // Las 6 lecturas de git son INDEPENDIENTES entre sí (ninguna usa el
   // resultado de otra) y son SOLO LECTURA → se disparan en paralelo con
   // Promise.all (regla de oro del proyecto: "paralelo lo que LEE, serial lo
@@ -215,7 +231,7 @@ export async function status() {
     : 0;
 
   return {
-    name: config.projectName, rel: REL, branch, head,
+    name: config.projectName, rel: path.relative(config.home, cwd), branch, head,
     subject: subject || '', author: author || '', date: date || '',
     dirty: dirtyCount > 0, dirtyCount, behind, ahead, mainBehind,
     onMain: branch === 'main',
@@ -289,7 +305,8 @@ export async function opTeardownEnv(id, force) {
   return { status: 200, body: r2 };
 }
 
-export async function opFetch() {
+export async function opFetch(cwd = config.projectDir) {
+  const git = gitFor(cwd);
   // Comparte el flag `busy` con /update: un fetch y un pull simultáneos
   // sobre el mismo .git contienden por locks de git y fallan espurio.
   if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
@@ -297,7 +314,7 @@ export async function opFetch() {
   try {
     const f = await git(['fetch', '--prune', 'origin']);
     if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
-    return { status: 200, body: { ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status() } };
+    return { status: 200, body: { ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status(cwd) } };
   } catch {
     return { status: 500, body: { error: 'No se pudo leer el estado del repo.' } };
   } finally {
@@ -309,9 +326,10 @@ export async function opFetch() {
 // (gh) cuáles de MIS PRs siguen ABIERTOS con base main y calcula cuántos commits
 // de main le faltan a cada rama remota. Best-effort: si gh no está / no está
 // autenticado / falla, devuelve lista vacía + error. SOLO LECTURA.
-export async function opBranches() {
+export async function opBranches(cwd = config.projectDir) {
+  const git = gitFor(cwd);
   try {
-    const gh = await runCmd('gh', [
+    const gh = await runCmdAt(cwd, 'gh', [
       'pr', 'list', '--author', '@me', '--state', 'open', '--limit', '30',
       '--json', 'number,title,headRefName,baseRefName,url',
     ], { timeout: 20000 });
@@ -341,7 +359,8 @@ export async function opBranches() {
   }
 }
 
-export async function opUpdate() {
+export async function opUpdate(cwd = config.projectDir) {
+  const git = gitFor(cwd);
   if (busy) return { status: 409, body: { error: 'Ya hay una actualización en curso.' } };
   busy = true;
   const log = [];
@@ -369,9 +388,9 @@ export async function opUpdate() {
     if (branch !== 'main') {
       const ff = await git(['fetch', 'origin', 'main:main']);
       log.push({ step: 'ff-main', code: ff.code, out: ff.stdout || ff.stderr || '(ya al día)' });
-      const st = await status();
+      const st = await status(cwd);
       const mainUpdated = ff.code === 0;
-      const envs = await fanoutUpdateEnvs();
+      const envs = cwd === config.projectDir ? await fanoutUpdateEnvs() : [];
       return {
         status: 200,
         body: {
@@ -402,7 +421,7 @@ export async function opUpdate() {
         // El stash falló de verdad (lock tomado, permisos, disco lleno, etc.)
         // y NO es el caso benigno de "no había nada que stashear": abortamos
         // ANTES del pull para no arriesgar los cambios locales sin respaldo.
-        const st = await status();
+        const st = await status(cwd);
         return {
           status: 409,
           body: {
@@ -454,7 +473,7 @@ export async function opUpdate() {
         } else {
           log.push({ step: 'reset-rollback', code: 0, out: 'omitido: el pull no movió HEAD, no hay avance que revertir' });
         }
-        const st = await status();
+        const st = await status(cwd);
         return {
           status: 409,
           body: {
@@ -474,9 +493,9 @@ export async function opUpdate() {
       }
     }
 
-    const st = await status();
+    const st = await status(cwd);
     const ok = pull.code === 0 && !popConflict;
-    const envs = await fanoutUpdateEnvs();
+    const envs = cwd === config.projectDir ? await fanoutUpdateEnvs() : [];
     return { status: 200, body: { ok, onMain: true, popConflict, stashed, log, status: st, envs } };
   } catch {
     return { status: 500, body: { error: 'Falló la actualización.', log } };
@@ -492,7 +511,8 @@ export async function opUpdate() {
 //   • Conflicto ⇒ `git rebase --abort` ⇒ la rama queda EXACTAMENTE como estaba.
 //   • Cambios sin commitear ⇒ stash antes, pop después.
 // Tras un rebase exitoso el PR necesita force-push al re-enviarlo (se avisa).
-export async function opRebaseBranch(branch) {
+export async function opRebaseBranch(branch, cwd = config.projectDir) {
+  const git = gitFor(cwd);
   if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
   // Validación estricta del nombre de rama (nunca texto arbitrario a git).
   if (!branch || branch.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
@@ -517,7 +537,7 @@ export async function opRebaseBranch(branch) {
     const bh = await git(['rev-list', '--count', 'HEAD..origin/main']);
     const behindMain = bh.code === 0 && bh.stdout ? (parseInt(bh.stdout, 10) || 0) : 0;
     if (behindMain === 0) {
-      return { status: 200, body: { ok: true, noop: true, log, status: await status(), message: 'Tu rama ya está al día sobre main.' } };
+      return { status: 200, body: { ok: true, noop: true, log, status: await status(cwd), message: 'Tu rama ya está al día sobre main.' } };
     }
 
     // Working tree limpio para rebasar: si hay cambios sin commitear, stash.
@@ -532,7 +552,7 @@ export async function opRebaseBranch(branch) {
         return {
           status: 409,
           body: {
-            ok: false, stashFailed: true, log, status: await status(),
+            ok: false, stashFailed: true, log, status: await status(cwd),
             error: 'No se pudo guardar tus cambios sin commitear (git stash) antes de rebasar. Abortado sin tocar nada.',
           },
         };
@@ -567,7 +587,7 @@ export async function opRebaseBranch(branch) {
       return {
         status: 409,
         body: {
-          ok: false, conflict: true, abortFailed, popConflict, log, status: await status(), error,
+          ok: false, conflict: true, abortFailed, popConflict, log, status: await status(cwd), error,
         },
       };
     }
@@ -582,7 +602,7 @@ export async function opRebaseBranch(branch) {
     return {
       status: 200,
       body: {
-        ok: true, rebased: true, needsForcePush: true, popConflict, log, status: await status(),
+        ok: true, rebased: true, needsForcePush: true, popConflict, log, status: await status(cwd),
         message: popConflict
           ? 'Rama rebasada sobre main. OJO: tus cambios sin commitear tuvieron conflicto al reaplicarse y quedaron en el stash (git stash list). El PR necesitará force-push al re-enviarlo.'
           : 'Rama rebasada sobre main. El PR va a necesitar force-push cuando lo re-envíes.',
@@ -717,32 +737,42 @@ export default {
     });
 
     r.get('/status', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
-      try { res.json(await status()); }
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar su repo de Tolkien.' });
+      const cwd = tolkienRepoOr404(req, res);
+      if (!cwd) return;
+      try { res.json(await status(cwd)); }
       catch { res.status(500).json({ error: 'No se pudo leer el estado del repo.' }); }
     });
 
     r.post('/fetch', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede traer cambios del remoto.' });
-      const r2 = await opFetch();
+      const cwd = tolkienRepoOr404(req, res);
+      if (!cwd) return;
+      const r2 = await opFetch(cwd);
       res.status(r2.status).json(r2.body);
     });
 
     r.post('/update', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede actualizar el repo local.' });
-      const r2 = await opUpdate();
+      const cwd = tolkienRepoOr404(req, res);
+      if (!cwd) return;
+      const r2 = await opUpdate(cwd);
       res.status(r2.status).json(r2.body);
     });
 
     r.get('/branches', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar el repo de Tolkien del anfitrión.' });
-      const r2 = await opBranches();
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar su repo de Tolkien.' });
+      const cwd = tolkienRepoOr404(req, res);
+      if (!cwd) return;
+      const r2 = await opBranches(cwd);
       res.status(r2.status).json(r2.body);
     });
 
     r.post('/rebase-branch', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede rebasar ramas.' });
-      const r2 = await opRebaseBranch(String(req.body?.branch || '').trim());
+      const cwd = tolkienRepoOr404(req, res);
+      if (!cwd) return;
+      const r2 = await opRebaseBranch(String(req.body?.branch || '').trim(), cwd);
       res.status(r2.status).json(r2.body);
     });
 
@@ -773,6 +803,7 @@ export default {
         ));
         return;
       }
+      if (!tolkienRepoOr404(req, res, { html: true })) return;
       const ALLOWED_LOCAL_PORTS = ['3010', ...listEnvs().filter(isEnvAlive).map((e) => String(e.port)).filter(Boolean)];
       const defaultPort = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
       const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');

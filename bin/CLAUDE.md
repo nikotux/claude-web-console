@@ -264,14 +264,24 @@ Chromium headless y la sesión real guardada en
 `<dataDir>/tolkien/session.json`, con `<dataDir>` resuelto por `resolveDataDir()`
 (honra `CWC_DATA_DIR`), de modo que un inquilino nunca lea la sesión del host —
 Familia B, `console:BUG-2472`. `login`, `whoami`, `census` y `reconcile`
-son SOLO LECTURA; `close` es el ÚNICO subcomando que escribe. `census` abre la
+son SOLO LECTURA; `close` y `reassign` son los únicos subcomandos que escriben. `census` abre la
 vista `/tickets?view=active&focus=mine`, visita los detalles y genera
 `census.json` con los tickets asignados al usuario y todos sus campos de cierre,
 con parcial reanudable en `census.partial.jsonl`. `reconcile` cruza el censo
 contra Zoho Desk por el MCP hosted de Tolkien —token `TOLKIEN_MCP_TOKEN` del
 `.env`, JSON-RPC con handshake y `mcp-session-id`— y escribe `reconcile.json`
-con tres pilas, `closable`, `realOpen` y `unpaired`, que clasifica de forma
-CONSERVADORA: sin par exacto, con par ambiguo, cerrado sin fecha de cierre o
+con cuatro pilas, `closable`, `realOpen`, `reassigned` y `unpaired`. Antes de
+clasificar resuelve `viewerEmail` del censo contra el directorio de agentes de
+Zoho y compara `assigneeId`: un ticket abierto que ya no está asignado al usuario
+cae en `reassigned`; si falta el email, el directorio está vacío o no hay agente
+coincidente, falla cerrado y pide repetir `census`. El directorio vacío ahora es
+fatal: sin él no se puede verificar ni resolver ningún assignee. El cierre tiene precedencia:
+un ticket resuelto en Zoho sigue en `closable` aunque esté asignado a otra persona.
+`desk_list_agents` tiene un tope verificado de 100: pedir 500 devolvió vacío y
+causó un bug real. `deskListAgents()` usa páginas de 100, prueba `from`, `offset`
+y `page`, acumula hasta 20 páginas sin descartar las ya válidas ante un fallo y
+conserva el mismo `Map` cacheado por cliente.
+La clasificación es CONSERVADORA: sin par exacto, con par ambiguo, cerrado sin fecha de cierre o
 cerrado como cancelado/duplicado cae en `unpaired` y queda para revisión humana,
 nunca en `closable`. `close` cierra en masa la pila `closable` completando los
 formularios reales de la pestaña `?tab=estado`: primero `setWorkContextAction`
@@ -285,8 +295,35 @@ no prueba que el paso funcionó. `--dry-run` es el default y escribir exige
 contra Zoho inmediatamente antes de cada escritura, reanudabilidad por
 observación del estado real de la página y log JSONL con el estado antes y
 después de cada escritura en `<dataDir>/tolkien/ops/`. El directorio queda
-0700 y los archivos 0600. Desde `console:PLAN-2521` el estado de trabajo vive además en una base local SQLite `<dataDir>/tolkien/state.db`, con `dbFile` resuelto por invocación dentro de `tolkienPaths()` como el resto de las rutas. El motor es `node:sqlite` nativo (Node 24), sin dependencias nuevas. Los JSON NO se reemplazan ni se borran: siguen escribiéndose igual y son el artefacto de salida de cada corrida —`close --reconcile <ruta>` los sigue consumiendo—, mientras que la base acumula lo que el JSON no puede, que es el HISTORIAL entre corridas y la escritura concurrente. El espejo a la base es BEST-EFFORT por diseño: `withStore()` atrapa cualquier fallo, lo avisa por stderr y devuelve null, de modo que una base rota jamás tumba una corrida cuyo JSON ya se escribió. El subcomando nuevo `db` consulta y migra: `--stats` (default), `--migrate` (importa census.json, reconcile.json y ops/*.jsonl una sola vez, idempotente por la clave `meta.json_import_done`, y NUNCA borra ni mueve los JSON), `--force`, `--runs <n>` y `--bucket <closable|realOpen|unpaired>`. No usa el SDK: consume 0 tokens y la regla 6 no
+0700 y los archivos 0600. `reassign` consume EXCLUSIVAMENTE la pila
+`reassigned` y resuelve el dueño en dos saltos: `zoho.assigneeId` al agente del
+directorio y su email a una opción del `select[name="assignedToUserId"]` del DOM
+vivo. La comparación es email exacto con trim/case-fold; jamás por nombre. Salta
+cerrado con `sin_asignado_en_zoho`, `agente_zoho_desconocido`,
+`agente_sin_email`, `sin_usuario_en_tolkien`, `usuario_ambiguo_en_tolkien` o
+`ya_es_del_usuario`. Si el 100 % de los candidatos resulta
+`agente_zoho_desconocido`, el CLI aborta antes del resumen o de cualquier
+escritura: ese patrón señala un fallo de infraestructura al cargar el directorio,
+no datos reales de los tickets. Una proporción menor se informa con una
+advertencia de directorio posiblemente incompleto. Antes de cada submit relee el dueño actual de Zoho, localiza
+el formulario vivo por ese select y lee `?error=`. La re-verificación NO usa el
+valor del select: tras el submit Tolkien lo devuelve al placeholder vacío y eso
+produjo falsos negativos en la corrida real del 2026-08-02. En cambio extrae el
+nombre desde `Taken by <Nombre> ·` del bloque visible de ownership y lo compara
+normalizado —sin acentos, mayúsculas ni diferencias de espaciado— con el
+destinatario; un UUID esperado que sí permanezca visible también confirma la
+operación. La navegación de cada detalle usa 60 s y un único reintento ante
+timeout, con 2 s de espera. Antes de escribir, si el bloque ya muestra al
+destinatario, registra `skipped`/`ya_reasignado` sin submit y lo cuenta aparte
+como «N ya estaban reasignados»: así el mismo `reconcile.json` se puede re-correr
+de forma idempotente después de un lote parcial. Falta de error sin cambio
+confirmado cuenta como `reassign_unverified`, con detalle explícito si el dueño
+sigue siendo el anterior.
+También es dry-run por default, exige `--apply`, comparte el tope 50 y deja su
+propio `ops/reassign-<ts>-<pid>.jsonl` con antes/después y espejo SQLite
+best-effort. Desde `console:PLAN-2521` el estado de trabajo vive además en una base local SQLite `<dataDir>/tolkien/state.db`, con `dbFile` resuelto por invocación dentro de `tolkienPaths()` como el resto de las rutas. El motor es `node:sqlite` nativo (Node 24), sin dependencias nuevas. Los JSON NO se reemplazan ni se borran: siguen escribiéndose igual y son el artefacto de salida de cada corrida —`close --reconcile <ruta>` y `reassign --reconcile <ruta>` los siguen consumiendo—, mientras que la base acumula lo que el JSON no puede, que es el HISTORIAL entre corridas y la escritura concurrente. El espejo a la base es BEST-EFFORT por diseño: `withStore()` atrapa cualquier fallo, lo avisa por stderr y devuelve null, de modo que una base rota jamás tumba una corrida cuyo JSON ya se escribió. El subcomando nuevo `db` consulta y migra: `--stats` (default), `--migrate` (importa census.json, reconcile.json y ops/*.jsonl una sola vez, idempotente por la clave `meta.json_import_done`, y NUNCA borra ni mueve los JSON), `--force`, `--runs <n>` y `--bucket <closable|realOpen|reassigned|unpaired>`. No usa el SDK: consume 0 tokens y la regla 6 no
 aplica.
+Desde `console:PLAN-2532` el `census` corre en PARALELO por defecto: N workers (`bin/cwc-tolkien-worker.js`), cada uno con su Chromium, coordinados por la tabla `scan_queue` de la base. `--workers <n>` (1..12) fija la cantidad y `--workers 1` cae al camino secuencial de siempre, intacto; sin el flag se calcula con `max(1, min(6, cores/2, MemAvailable/1200 MB))` — la memoria se lee de `/proc/meminfo`, NO de `os.freemem()`, que en Linux devuelve MemFree e ignora el page cache reclamable (subestimaría por 10×). El tope duro de 6 no es técnico sino de CORTESÍA: del otro lado está la app de producción de Chris. El supervisor mantiene población —en cada tick, si hay trabajo RECLAMABLE (`pending + retryable`, nunca `running`, que ya tiene dueño vivo) y faltan workers, arranca los que falten, con presupuesto `max(8, workers × 3)`—; si no queda ningún worker vivo pero hay tickets en `running` de workers muertos, ESPERA el rescate por heartbeat en vez de rendirse: ese es exactamente el caso «murieron 3 de 8» y rendirse ahí perdía tickets (medido). En el camino paralelo la base deja de ser best-effort: es el transporte entre procesos, y si no abre, la corrida falla ofreciendo `--workers 1`. Un ticket que ningún worker llegó a leer NO desaparece: entra al `census.json` como registro de error con el motivo tomado de la cola, más una línea `ATENCIÓN: N tickets quedaron sin leer` — el `filter(Boolean)` ingenuo habría entregado 68 tickets con cara de 71. Medición real (71 tickets): 363 s secuencial → 260 s con 4 workers, apenas 1,40× — el cuello de botella es el servidor de Tolkien, no esta máquina (86 % de CPU local ociosa durante toda la corrida); no gastes otra iteración subiendo workers.
 ### bin/cwc-tolkien-store.js  MÓDULO (no CLI, sin shebang ni main) del store local
 SQLite del runner de Tolkien, `console:PLAN-2521`. Motor `node:sqlite` nativo: cero
 dependencias, decisión tomada tras verificar Node v24.18.0 en la máquina. Siete tablas —
@@ -309,6 +346,7 @@ de ruta a nivel de módulo (`console:BUG-2185`, `console:BUG-2472`). Directorio 
 sidecars `-wal`/`-shm` 0600. Verificado con 8 procesos hijo REALES escribiendo en paralelo:
 400 ops, 200 tickets, 400 ids únicos, `integrity_check=ok`. Su test es
 `bin/cwc-test-tolkien-store.js`.
+Octava tabla: `scan_queue` (una fila por ticket × corrida: `listed_json`, `status` pending/running/done/failed, `attempts`, worker, `heartbeat_at`, `error`), la cola del escaneo paralelo. Su primitiva central es `claimScanTarget()`, que hace el rescate de vencidos, la elección del candidato y su marcado como `running` dentro de la MISMA transacción `BEGIN IMMEDIATE`: leer afuera y escribir adentro es exactamente cómo dos workers se llevan el mismo ticket. Acompañan `enqueueScanTargets` (idempotente), `heartbeatScanTarget`, `finishScanTarget`, `reclaimStaleScanTargets`, `scanQueueCounts` (incluye `retryable` = fallidos con intentos por debajo del tope), `scanQueueRows` y `runTickets`. Sumados `latestRun`/`latestRunUid`/`getRun`: existen para que un consumidor tome «la corrida más reciente» sin escribir el SELECT a mano — toda consulta a `scan_queue`, `ticket_observations`, `reconcile` y `ops` filtra por `run_uid`, porque sin ese filtro los conteos se suman entre corridas (se llegó a leer `realOpen: 67` cuando eran 63). `busy_timeout` se fija ANTES de `journal_mode = WAL`: con varios procesos abriendo la base al mismo tiempo, el cambio de journal puede encontrar el lock tomado y sin timeout previo falla en el acto. `store_schema_version` sigue en `'1'` a propósito (la tabla nueva es aditiva y `cwc-test-tolkien-store.js` la verifica, ahora esperando 8 tablas).
 ### bin/cwc-test-tolkien-store.js  test funcional determinista y AISLADO de
 `cwc-tolkien-store.js` (patrón `cwc-test-chat-trash.js`). No usa el SDK, 0 tokens, y trabaja
 siempre sobre un `mkdtemp` que borra en `finally`: JAMÁS toca `~/.cwc-data`. Siete grupos
@@ -317,6 +355,24 @@ reconcile · ops con round-trip de JSON · fingerprint de snapshots · migració
 deja los JSON en disco · y T7, CONCURRENCIA REAL con 8 procesos hijo de verdad (no simulada),
 que es el grupo que habilita el escaneo paralelo. Uso:
 `node bin/cwc-test-tolkien-store.js`; termina con `N pass / M fail` + exit code.
+### bin/cwc-test-tolkien-reconcile.js  test funcional determinista y AISLADO de
+la clasificación del cruce Tolkien ↔ Zoho. Importa las funciones puras exportadas por
+`cwc-tolkien.js`, usa tickets falsos y un `getAgents` mockeado: no abre Chromium, no usa red,
+SDK ni `~/.cwc-data`, y consume 0 tokens. Cubre `realOpen`, `reassigned` conocido y sin
+asignado, la precedencia de `closable`, los dos descartes cerrados que siguen en `unpaired`,
+el snapshot aditivo con `assigneeId` y la comparación de ids por string. Uso:
+`node bin/cwc-test-tolkien-reconcile.js`; termina con `N pass / M fail` + exit code.
+### bin/cwc-test-tolkien-reassign.js  test funcional determinista y AISLADO de
+la resolución y verificación del destinatario de `reassign`. Importa las funciones puras
+`resolveReassignTarget()`, `extractReassignAssigneeName()`,
+`verifyReassignState()` y `reassignSubmissionDecision()` de `cwc-tolkien.js`, usa un `Map` de agentes y opciones
+de select sintéticas: sin SDK, red, Chromium ni `~/.cwc-data`, 0 tokens. Cubre
+email único, el caso Hincapié con dos nombres parecidos, email duplicado, usuario
+ausente, asignado nulo/desconocido/sin email, destinatario igual al viewer,
+normalización de mayúsculas/espacios y label sin paréntesis; además cubre la
+extracción del ownership real, verificación por nombre con select vacío, señal
+alternativa por UUID, dueño sin cambio, nombres sin acentos e idempotencia. Uso:
+`node bin/cwc-test-tolkien-reassign.js`; termina con `N pass / M fail` + exit code.
 ### bin/cwc-tolkien-schema.js  observador CLI VERSIONADO y estrictamente
 SOLO LECTURA de la superficie real de formularios de Tolkien
 (`console:PLAN-2520`). `scan --auto` toma las tres muestras obligatorias de
@@ -345,6 +401,14 @@ unificar ambos en un helper compartido (`console:PLAN-2520`). El gate
 `available` se pudo observar mediante una escritura MANUAL, puntual y
 autorizada sobre WORK-307, ejecutada FUERA del runner
 (`console:PLAN-2520`); el runner sigue siendo sólo lectura.
+### bin/cwc-tolkien-canary.js  CANARIO DE ESTRUCTURA que corre ANTES de cualquier
+escritura a Tolkien (`console:PLAN-2533`). No usa el SDK: 0 tokens, la regla 6 no aplica; y es SOLO LECTURA sobre Tolkien porque toda su observación la delega a `cwc-tolkien-schema.js scan`, invocado como CLI hijo —nunca importado— para no duplicar el observador. Existe porque la divergencia YA OCURRIÓ y está medida: el campo `nextActorKind` declara 10 opciones en el código clonado y la instancia viva sirve 11 (suma `scheduled_time`); confiar en el código habría mandado un vocabulario viejo y fallado sin decir por qué. Su núcleo es el contrato de dependencia, una constante del módulo extraída LEYENDO `cwc-tolkien.js` (no lo importa, para no acoplarse a un archivo que otra sesión edita): `submitDesiredOutcome()` localiza su formulario con `select[name="mode"]` y manda `textarea[name="desiredOutcome"]` + `mode='working'` + `nextActorKind`; `submitClose()` lo localiza con `select[name="verificationKind"]` y manda `verificationKind='objective_check'` + `textarea[name="evidenceSummary"]`; `inspectTicketState()` reconoce un ticket cerrado por la AUSENCIA de `verificationKind`. Esa lista es la que decide qué frena y qué solo avisa, y la pregunta que traza la línea es objetiva: ¿el motor toca ese elemento? BLOQUEA (exit 20) que desaparezca un formulario o un campo del contrato, que un campo cambie de tag/type, que se retire una opción que el motor manda literal, o que aparezca un campo REQUIRED nuevo que el motor no llena —el submit fallaría en silencio—. AVISA sin frenar (exit 10) una opción nueva, un campo nuevo no obligatorio o un formulario inédito fuera del contrato. Exit 0 si todo coincide, 1 ante fallo operativo (sesión vencida ⇒ `reason:'session-expired'`) y 2 por uso incorrecto; `show` hereda el código del veredicto guardado, así que la skill puede releer el último reporte sin re-escanear. El contrato de `work-context` es gate-aware: solo aplica con gate `missing_outcome`, porque el motor únicamente submitea ese formulario cuando el ticket no tiene `desiredOutcome` y el `textarea` solo se renderiza en ese estado —con gate `available` el mismo campo es `input hidden`, y como `schema.json` fusiona las variantes de todos los tickets muestreados, compararlo contra la unión daba un bloqueo FALSO—. La muestra por defecto son 3 tickets × la pestaña `estado`: los DOS primeros de `reconcile.closable` más el ticket cerrado del baseline; cuesta ~6 s de Chromium contra los minutos de un `scan --auto`. Un ticket que vuelve con CERO formularios NO es un cambio de estructura sino una observación fallida (`console:BUG-2555`, carrera de hidratación del observador): se reintenta la muestra completa una vez y si persiste el elemento queda `unverified`, nunca bloqueado; `--require work-context,close-form` es la palanca para escalar esa falta de cobertura a bloqueo justo antes de un cierre en masa, y el orquestador la dejó como OBLIGACIÓN para la skill `tkt` antes de todo `--apply` (`console:PLAN-2534`). AISLAMIENTO, que no es cosmético: el hijo se lanza con `CWC_DATA_DIR` apuntando a un scratch propio bajo `<dataDir>/tolkien/canary/scratch-<pid>` con COPIAS de `session.json`, `census.json` y `reconcile.json`, porque `scan` reinicia `<dataDir>/tolkien/schema-partial.jsonl` en cada corrida y esa ruta la resuelve `tolkienPaths()`, NO `--out` — sin el scratch el canario le borraría el rastro de reanudación a un escaneo completo en curso. El scratch va bajo `~/.cwc-data` y no en `/tmp` porque `writeFileAtomic` renombra desde un temporal vecino y cruzar sistemas de archivos daría EXDEV; se borra en un `finally` y, como ese `finally` no corre ante SIGKILL y adentro hay una copia de la cookie de sesión, al arrancar barre los `scratch-<pid>` cuyo proceso ya murió. Escribe únicamente en su propio subdirectorio `canary/`: `last-check.json` (atómico, 0600) e `history.jsonl`, y espeja el snapshot en `state.db` con `source:'canary'` de forma best-effort. Lo que se fingerprintea NO es el escaneo entero sino la proyección canónica del contrato, para que el `changed` de `recordSchemaSnapshot` signifique «cambió la estructura que nos importa» y no «corrió el canario de nuevo». Verificado contra Tolkien vivo en cuatro escenarios (ok/0, info/10 por opción nueva, block/20 por opción que el motor manda y no existe, block/20 por cobertura perdida con `--require`). Su test es `bin/cwc-test-tolkien-canary.js`.
+### bin/cwc-test-tolkien-canary.js  test funcional determinista y AISLADO de
+`cwc-tolkien-canary.js` (patrón `cwc-test-tolkien-store.js`). No usa el SDK, ni red, ni Chromium, ni `~/.cwc-data`: 17 casos T1..T17 sobre las funciones puras exportadas (`evaluateContract`, `pickSample`, `verdictExitCode`) con esquemas sintéticos que replican la forma real, más T17, que arma un `canaryDir` en un `mkdtemp` y comprueba que el barrido de scratch huérfanos borre el del PID muerto, conserve el del PID vivo y no toque una entrada que no matchea el patrón. Cubre los tres veredictos, los cinco tipos de hallazgo bloqueante, la escalada por `--require`, la observación fallida y la selección de muestra. Uso: `node bin/cwc-test-tolkien-canary.js`; termina con `N pass / M fail` + exit code.
+### bin/cwc-tolkien-worker.js  UN worker del censo PARALELO de Tolkien
+(`console:PLAN-2532`). Toma tickets de la tabla `scan_queue` de `state.db`, los lee con su PROPIO Chromium y persiste en la base; no escribe ningún JSON — el orquestador (`cwc-tolkien.js census`) es el único dueño de `census.json` y `census.partial.jsonl`, porque varios procesos apendando al mismo `.jsonl` es justo la carrera que la base ya resuelve bien. Argumentos: `--run <runUid>` (obligatorio), `--worker-id <id>`, `--max-attempts <n>` (default 3). Reclama de a un ticket con `claimScanTarget`, scrapea con `scrapeWithRetry` importado del CLI, hace `upsertTickets` y cierra la fila como `done` o `failed`. Latea cada 15 s sobre el ticket vigente: un scrape legítimo puede tardar más de un minuto y sin ese latido el orquestador lo daría por muerto. Códigos de salida con significado: 0 cola drenada o cierre por señal · 1 error fatal · 2 sesión de Tolkien inválida, que el orquestador trata como fatal y mata al resto (si la cookie venció, ningún worker va a poder) · 3 no se pudo abrir la base. Ante SIGTERM/SIGINT o error devuelve su ticket a `pending` antes de morir, así nada queda trabado esperando el vencimiento del heartbeat. No escribe en `ops`: esa tabla es el audit de las ESCRITURAS a Tolkien (el subcomando `close`) y meterle 71 filas de lectura por corrida ensuciaría el único registro que responde «¿qué tocamos y cuándo?».
+### bin/cwc-test-tolkien-workers.js  test funcional determinista y AISLADO de la cola
+paralela (patrón `cwc-test-tolkien-store.js`): `mkdtemp` borrado en `finally`, sin Chromium, sin SDK, 0 tokens, JAMÁS toca `~/.cwc-data`. Cinco grupos: T1 enqueue idempotente · T2 concurrencia real con 8 procesos hijo de verdad reclamando 200 targets (cada uno exactamente una vez, `integrity_check ok`) · T3 rescate de un claim vencido · T4 tope de reintentos (no gira para siempre) · T5 aislamiento por corrida, que es la regla heredada: dos `run_uid` en la misma base y los conteos de cada uno no suman los del otro. Uso: `node bin/cwc-test-tolkien-workers.js` → `21 pass / 0 fail` + exit code.
 ### bin/cwc-tolkien-login-runner.js  VERIFICACIÓN DESACOPLADA de la conexión
 Tolkien por usuario para ⚙ Sistema → Conexiones: recibe la cookie de sesión
 exclusivamente por stdin —nunca argv ni archivo intermedio—, consulta el
@@ -487,6 +551,25 @@ del host no son interceptables. El cierre real está en el reaper puro de
 `codex-shared.js`: cada lectura convierte atómicamente un `running` cuyo pid
 murió o cuyo heartbeat superó 3 intervalos (45 s) en `orphaned`, con motivo
 y `finishedAt`, nunca en un falso `done`.
+Cuando el job trae `files` declarados y NO es `fullAccess`, el runner ejecuta
+Codex dentro de un git worktree aislado, sembrado con el estado sucio del árbol
+real. Al terminar aplica de vuelta SOLO los archivos declarados mediante
+`git apply`, con reintento `-3` precedido siempre por `--check`. Un conflicto NO
+se pisa: el job termina `done` con `isError:true`, el reporte nombra el conflicto
+y el worktree se CONSERVA porque es la única copia del trabajo. Si el worktree
+no se pudo crear o sembrar, degrada al camino histórico y lo explicita en el
+reporte. Sin `files`, el comportamiento es idéntico al histórico.
+### bin/cwc-test-codex-worktree.js  test funcional determinista y AISLADO del
+mecanismo de worktree de las delegaciones Codex (patrón
+`cwc-test-tolkien-store.js`). Sin SDK, sin red y con 0 tokens, trabaja entero
+sobre un `mkdtemp` con un repo git de juguete que borra en `finally`: JAMÁS toca
+`~/.cwc-data` ni el repo real. Ocho grupos T1..T8: creación y limpieza del
+worktree · siembra de trackeados sucios · siembra de untracked · la base queda
+fijada por el commit de sembrado (`git diff HEAD` vacío) · SOLO vuelve lo
+declarado, el caso central del bug · archivo nuevo declarado · conflicto
+detectado y NO pisado, sin dejar marcadores · parche vacío. Además verifica
+empíricamente que el worktree nace SIN `node_modules`. Uso:
+`node bin/cwc-test-codex-worktree.js` → `24 pass / 0 fail` + exit code.
 ### bin/cwc-triage-runner.js    corrida del triage de bugs (proceso propio; interfaz por archivos).
 DOS FASES EN PARALELO (optimización IA 2026-07-05): (1) query
 barata que solo LISTA los [Tolkien Bug] abiertos; (2) triage de

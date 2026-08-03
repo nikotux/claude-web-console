@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-// Lógica de sesión/navegación COPIADA de bin/cwc-tolkien.js (bloque console:PLAN-2520; B7 lo editaba en paralelo). DEUDA: unificar en un helper compartido — console:PLAN-2520.
+// La lógica de sesión/navegación vive en bin/cwc-tolkien-nav.js, compartida con
+// cwc-tolkien.js; la deuda de console:PLAN-2520 quedó saldada en console:PLAN-2558.
 
 /**
  * Observador read-only y versionado de la superficie de formularios de Tolkien.
@@ -10,24 +11,17 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { resolveDataDir } from '../src/core/data-dir.js';
+import {
+  BASE_URL,
+  CliError,
+  gotoReadOnly,
+  launchContext,
+  readIdentity,
+  waitForMain,
+} from './cwc-tolkien-nav.js';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright-core');
-
-const BASE_URL = 'https://app.tolkien.mordorstaffing.com';
-const CHROMIUM_PATH = path.join(
-  os.homedir(),
-  '.cache',
-  'ms-playwright',
-  'chromium-1228',
-  'chrome-linux64',
-  'chrome',
-);
-const NAVIGATION_TIMEOUT_MS = 30_000;
 const ALL_TABS = ['overview', 'estado', 'chat', 'work', 'dev', 'reporte'];
 const CLOSE_STATES = ['closed', 'waiting', 'missing_outcome', 'available'];
 const NEXT_ACTOR_FILTERS = [
@@ -63,25 +57,6 @@ function tolkienPaths() {
     schemaPartialFile: path.join(dataDir, 'schema-partial.jsonl'),
     opsDir: path.join(dataDir, 'ops'),
   };
-}
-
-class CliError extends Error {
-  constructor(message, exitCode = 1) {
-    super(message);
-    this.name = 'CliError';
-    this.exitCode = exitCode;
-  }
-}
-
-class InvalidSessionError extends CliError {
-  constructor() {
-    super(
-      'La cookie venció o es inválida: volvé a copiarla del navegador con '
-        + '`node bin/cwc-tolkien.js login --cookie <valor>`.',
-      2,
-    );
-    this.name = 'InvalidSessionError';
-  }
 }
 
 function log(message) {
@@ -143,15 +118,6 @@ function writeFileAtomic(file, contents, dataDir) {
 
 function writeJson(file, value, dataDir) {
   writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, dataDir);
-}
-
-function requireSessionFile(sessionFile) {
-  if (!fs.existsSync(sessionFile)) {
-    throw new CliError(
-      'No hay una sesión guardada. Corré exactamente: '
-        + '`node bin/cwc-tolkien.js login --cookie <valor>`.',
-    );
-  }
 }
 
 function valueAfter(args, index, option) {
@@ -226,96 +192,11 @@ function parseShowArgs(args, paths) {
   return { out };
 }
 
-async function launchContext(sessionFile) {
-  requireSessionFile(sessionFile);
-  if (!fs.existsSync(CHROMIUM_PATH)) {
-    throw new CliError(`No se encontró Chromium en ${CHROMIUM_PATH}.`);
-  }
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: CHROMIUM_PATH,
-  });
-  try {
-    const context = await browser.newContext({ storageState: sessionFile });
-    context.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
-    context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-    return { browser, context };
-  } catch (error) {
-    await browser.close();
-    throw error;
-  }
-}
-
-async function gotoReadOnly(page, url) {
-  const response = await page.goto(url, {
-    waitUntil: 'domcontentloaded',
-    timeout: NAVIGATION_TIMEOUT_MS,
-  });
-  if (response && response.status() >= 500) {
-    throw new Error(`Tolkien respondió HTTP ${response.status()} en ${url}`);
-  }
-  await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-  await assertAuthenticated(page);
-  return response;
-}
-
-async function assertAuthenticated(page) {
-  const current = new URL(page.url());
-  const authPath =
-    current.pathname.startsWith('/api/auth/signin')
-    || current.pathname.startsWith('/auth/');
-  const homeHasLogin = current.pathname === '/'
-    ? await page.evaluate(() => {
-        const text = document.querySelector('main')?.textContent ?? '';
-        return /\bSign in\b/i.test(text)
-          && (/Microsoft/i.test(text) || Boolean(document.querySelector('input[type="email"]')));
-      })
-    : false;
-  if (authPath || homeHasLogin) throw new InvalidSessionError();
-}
-
-async function readIdentity(page) {
-  return page.evaluate(() => {
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const appHeader = [...document.querySelectorAll('body > div > header, header')]
-      .find((header) => header.querySelector('a[href="/"]'));
-    if (!appHeader) return { email: null, roles: [] };
-    const leaves = [...appHeader.querySelectorAll('*')]
-      .filter((element) => element.children.length === 0);
-    const emailNode = leaves.find((element) =>
-      emailPattern.test((element.textContent ?? '').trim()),
-    );
-    const email = (emailNode?.textContent ?? '').trim() || null;
-    const rolesText = emailNode?.nextElementSibling?.textContent?.trim() ?? '';
-    const roles = rolesText && rolesText !== 'no roles'
-      ? rolesText.split('·').map((role) => role.trim()).filter(Boolean)
-      : [];
-    return { email, roles };
-  });
-}
-
-async function waitForMain(page) {
-  await page.waitForSelector('main', { state: 'attached', timeout: NAVIGATION_TIMEOUT_MS });
-  await page.evaluate(async () => {
-    let previousLength = -1;
-    let stableReads = 0;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const length = document.querySelector('main')?.innerHTML.length ?? 0;
-      stableReads = length > 20 && length === previousLength ? stableReads + 1 : 0;
-      if (stableReads >= 2) return;
-      previousLength = length;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error('El DOM de main no se estabilizó después de la navegación.');
-  });
-}
-
 async function detectCloseGate(page) {
   return page.evaluate(() => {
     const normalize = (value) => (value ?? '').replace(/\s+/g, ' ').trim();
-    const main = document.querySelector('main');
-    if (!main) return { state: 'unknown', evidence: '' };
-    const forms = [...main.querySelectorAll('form')];
+    const mains = [...document.querySelectorAll('main')];
+    const forms = mains.flatMap((main) => [...main.querySelectorAll('form')]);
     for (const form of forms) {
       const submits = [...form.querySelectorAll('button[type="submit"], button:not([type])')];
       const label = submits.map((button) => normalize(button.textContent))
@@ -329,7 +210,7 @@ async function detectCloseGate(page) {
         .find((text) => /Verify .* close in Tolkien/i.test(text));
       if (label) return { state: 'available', evidence: label.slice(0, 200) };
     }
-    const text = normalize(main.textContent);
+    const text = normalize(mains.map((main) => main.textContent ?? '').join('\n'));
     const waiting = 'Resume this work with the actual trigger evidence before closing it.';
     if (text.includes(waiting)) return { state: 'waiting', evidence: waiting };
     const missing = 'Record the observable desired outcome';
@@ -340,7 +221,9 @@ async function detectCloseGate(page) {
 
 async function readPageWorkKey(page) {
   return page.evaluate(() => {
-    const text = document.querySelector('main')?.textContent ?? '';
+    const text = [...document.querySelectorAll('main')]
+      .map((main) => main.textContent ?? '')
+      .join('\n');
     return text.match(/\bWORK-\d+\b/)?.[0] ?? null;
   });
 }
@@ -365,9 +248,13 @@ async function extractForms(page) {
       const text = normalize(clone.textContent).slice(0, 160);
       return text || undefined;
     };
-    const main = document.querySelector('main');
-    if (!main) return [];
-    return [...main.querySelectorAll('form')].map((form) => {
+    // Durante la hidratación puede convivir el cascarón con el contenido real, y el
+    // primer <main> puede ser el vacío: recolectar de todos es inmune a cuál sea el
+    // real y a cuántos haya (console:BUG-2555, console:CONVE-2085).
+    const mains = [...document.querySelectorAll('main')];
+    if (mains.length === 0) return [];
+    const formularios = [...new Set(mains.flatMap((main) => [...main.querySelectorAll('form')]))];
+    return formularios.map((form) => {
       const actionInput = [...form.querySelectorAll('input[type="hidden"][name]')]
         .find((input) => input.name.startsWith('$ACTION_ID_'));
       const headingContainer = form.closest('section, div[id]');
@@ -1002,14 +889,18 @@ async function scan(options, paths) {
           await waitForMain(page);
           let forms = await extractForms(page);
           if (!ticket.workKey) ticket.workKey = await readPageWorkKey(page);
+          let observedGate = tab === 'estado' ? await detectCloseGate(page) : null;
+          // La hidratación se reintenta cuando faltan formularios o cuando el gate
+          // de estado todavía no se pudo observar (console:BUG-2555).
+          const needsHydrationRetry = forms.length === 0
+            || (tab === 'estado' && observedGate.state === 'unknown');
+          if (needsHydrationRetry) {
+            await gotoReadOnly(page, `${BASE_URL}/tickets/${ticket.ticketWorkflowId}?tab=${tab}`);
+            await waitForMain(page);
+            forms = await extractForms(page);
+            if (tab === 'estado') observedGate = await detectCloseGate(page);
+          }
           if (tab === 'estado') {
-            let observedGate = await detectCloseGate(page);
-            if (observedGate.state === 'unknown') {
-              await gotoReadOnly(page, `${BASE_URL}/tickets/${ticket.ticketWorkflowId}?tab=${tab}`);
-              await waitForMain(page);
-              forms = await extractForms(page);
-              observedGate = await detectCloseGate(page);
-            }
             if (observedGate.state !== 'unknown' || closeGate.state === 'unknown') {
               closeGate = observedGate;
             }

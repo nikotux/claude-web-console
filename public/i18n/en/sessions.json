@@ -5,6 +5,8 @@
   "sessions.refresh": "Refresh",
   "sessions.trash.title": "Conversation Trash (30 days)",
   "sessions.collab.participantNames": "Participants: {users}",
+  "sessions.collab.guestOf": "from {owner}",
+  "sessions.collab.guestOfTitle": "You are a guest: this room belongs to {owner}",
   "sessions.ago.now": "just now",
   "sessions.ago.min": "{n} min ago",
   "sessions.ago.hour": "{n} h ago",

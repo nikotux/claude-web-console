@@ -1915,6 +1915,50 @@ resuelve el nombre canónico en minúsculas, de modo que `@Cucho` al comenzar un
 frase también se resalta, mientras `textContent` conserva las mayúsculas que
 escribió la persona.
 
+AISLAMIENTO DE LA DELEGACIÓN POR WORKTREE (`console:BUG-2311`, mundo explícito
+según `CONVE-2056`). El problema no era hipotético: al cerrar, Codex volcaba el
+árbol entero y una delegación acotada por PROSA a dos archivos tocaba también el
+mtime de otros tres pertenecientes a bloques paralelos. En una sola sesión ese
+efecto es inocuo; con el Orquestador ejecutando bloques concurrentes, el vuelco
+del segundo bloque podía hacer desaparecer el trabajo del primero SIN conflicto,
+SIN error y SIN rastro. No alcanzaba con agregar una verificación al final: el
+alcance existía únicamente como texto libre dentro de `task`, por lo que
+«archivo ajeno» no era una condición que el sistema pudiera evaluar. Incorporar
+`files` al CONTRATO de la tool convierte esa intención humana en un dato
+aplicable por el runner.
+
+EL MECANISMO: para una delegación con `files` y sin `fullAccess`, el runner crea
+un worktree `--detach` sobre HEAD, lo siembra con el `git diff HEAD` del árbol
+real y copia también sus untracked. Luego crea un commit de sembrado que FIJA LA
+BASE: sin ese commit, el diff de salida incluiría lo que ya estaba sucio antes
+de empezar y el aislamiento no serviría de nada. Al finalizar genera un parche
+solo para los archivos declarados y lo aplica al árbol real. Se usa PARCHE y no
+copia de archivos porque copiar sería exactamente el mecanismo del bug, apenas
+reducido a menos archivos; `git apply` falla cuando cambió el contexto, y ese
+fallo ES la detección del conflicto, no una comprobación superpuesta que podría
+separarse de la escritura.
+
+EL REINTENTO DE TRES VÍAS TAMBIÉN DEBE SER TRANSACCIONAL: antes de
+`git apply -3` se ejecuta obligatoriamente `git apply -3 --check`. Sin ese ensayo,
+un merge de tres vías que encontrara un conflicto real podría dejar marcadores
+`<<<<<<<` dentro del archivo del árbol real, peor que no aplicar. Si hay
+conflicto, nada se pisa: el job termina `done` con `isError:true`, el reporte
+nombra el archivo y el worktree se CONSERVA, porque pasa a ser la única copia
+del trabajo. Si crear o sembrar el worktree falla, el runner degrada al camino
+histórico y lo declara en el reporte; un job sin `files` conserva exactamente
+el comportamiento histórico.
+
+LIMITACIÓN CONOCIDA, VERIFICADA POR TEST: el worktree nace SIN `node_modules`,
+porque está en `.gitignore`. `node --check` funciona dentro de él porque no
+resuelve dependencias, pero una delegación que necesite correr un test que
+importe paquetes fallará allí aunque el repo real tenga las dependencias
+instaladas. Este gotcha es parte del contrato operativo, no un fallo intermitente.
+`fullAccess` NO se aísla a propósito: esas delegaciones tocan `.git` del repo
+real por definición. Además, un runner de chat YA VIVO no conoce el campo
+`files` hasta usar «Reabrir para cambios», el mismo gotcha de siempre con los
+cambios de código y los runners vivos. La prueba de referencia es
+`bin/cwc-test-codex-worktree.js`.
+
 ## Gotchas de esta carpeta
 
 - Replay de Aduana: nunca uses `_push({type:'user'})` para un aviso del sistema;

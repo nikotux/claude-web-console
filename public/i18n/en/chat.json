@@ -194,6 +194,7 @@
   "chat.help.warning.text": "“All” can run commands, edit files, and use the network without asking again. Stop prevents further work but does not undo completed actions; review the side-panel details before approving anything sensitive.",
   "chat.sala.participants": "Participants",
   "chat.sala.participantTitle": "Participant: {name}",
+  "chat.sala.visadoTitle": "Request an operation",
   "chat.sala.sayLabel": "{name} · {time}",
   "chat.sala.cutLine": "✂ {name} sent to AI · {time}",
   "chat.sala.cutButton": "✦ Send to AI ({count})",

@@ -7,7 +7,7 @@
 ## Qué es
 
 `news/` es el backend de **🆕 Novedades**: un changelog compartido, alegre y
-orientado a quienes usan Mi Consola. Publica de una a tres entradas por push y
+orientado a quienes usan Mi Consola. Publica hasta seis entradas por push y
 permite a cada principal autenticado conservar su propia marca de lectura.
 
 ## Superficie HTTP
@@ -33,15 +33,18 @@ para el token maestro. Un no-admin nunca recibe entradas `hidden:true`.
   por lector. El endpoint pasa `systemScopeFor(req).dataDir` por operación y el
   shared solo cae a `resolveDataDir()` para usos standalone, de modo que la
   marca de un inquilino nunca se escribe en el HOME del host.
-- `~/.cwc-data/news/<jobId>.json`: jobs `running|done|error`. Se podan
-  oportunistamente al escribir cuando su `mtime` supera 24 horas.
+- `~/.cwc-data/news/<jobId>.json`: jobs `running|done|error`. Cada job guarda
+  `commits` y `files` tal como se los pasó su disparador: es la evidencia para
+  auditar qué vio realmente el redactor. Se podan oportunistamente al escribir
+  cuando su `mtime` supera 24 horas.
 - `~/.cwc-data/news.log`: salida append-only del runner; no se poda acá.
 
 ## Runner y seguridad
 
 `bin/cwc-news-runner.js` corre detached+unref y persiste el resultado, por lo
 que sobrevive a un reinicio de la web. Usa `sonnet`, hasta 30 turnos y timeout
-duro de 8 minutos, con `cwd` en la raíz de Mi Consola.
+duro de 8 minutos, publica como máximo 6 entradas por corrida y usa `cwd` en la
+raíz de Mi Consola.
 
 Es una excepción nominal de **solo lectura** a la regla 6, blindada por las dos
 capas obligatorias y la misma allowlist exacta en ambas:
@@ -69,3 +72,28 @@ por lo tanto no tiene Bash, Edit, Write, WebFetch ni MCP.
 - `pending` sale de `git rev-list --count` contra el último commit de la última
   entrada `auto`; ante cualquier error de git devuelve `0` a propósito — es un
   dato cosmético y nunca puede romper el listado.
+- El origen de `files` depende del disparador. `POST /api/news/generate` lo
+  calcula con `generationInput()` como diff desde el último commit de la última
+  entrada `auto`; el push automático lo arma en `backup/index.js`. Ese segundo
+  camino antes mandaba `staged`, es decir, solo los archivos del commit
+  `cwc backup …`: si el trabajo ya venía commiteado quedaba en
+  `["README.md"]`. Ahora manda el diff real de `beforeRef..HEAD`. Un `files`
+  corto junto a muchos commits indica que ese cableado se rompió de nuevo: el
+  redactor conserva los subjects, pero pierde el mapa de dónde mirar y publica
+  de menos sin que nada falle; el job igualmente termina `done`.
+- `buildNewsPrompt()` inyecta los títulos ya publicados para deduplicar. Por
+  default usa `readNews()` limitado a 30 títulos y el parámetro `published`
+  permite reemplazar esa lista. Esto permite repescar un rango viejo sin volver
+  a contar lo mismo.
+- El techo de entradas vive en dos lugares que deben moverse juntos: el
+  `.slice(0, 6)` del runner y el texto `1 a 6 novedades` del prompt. Si solo se
+  sube el límite del prompt, el runner recorta en silencio.
+- La lista de archivos del prompt se ordena por `SURFACE_PREFIXES` antes de
+  cortarse en `MAX_PROMPT_FILES`: el orden alfabético de git dejaba al redactor
+  viendo solo `bin/` en un push grande (0 de 42 rutas de frontend visibles;
+  ahora, 42 de 42). El orden de `SURFACE_PREFIXES` es significativo y
+  `public/` va último porque es un prefijo genérico y ancho: si queda antes de
+  `.claude/skills/`, sus rutas de CSS e i18n agotan el cupo y las skills —que el
+  usuario invoca directo con `/nombre`— quedan en 0 de 8. Este reordenamiento
+  afecta solo el prompt; `tech.files` de cada entrada publicada conserva el
+  orden original como evidencia de auditoría de qué trajo el push.

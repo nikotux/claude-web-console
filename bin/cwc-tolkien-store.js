@@ -58,6 +58,21 @@ function ensureSchema(db) {
       PRIMARY KEY (run_uid, ticket_workflow_id)
     );
 
+    CREATE TABLE IF NOT EXISTS scan_queue (
+      run_uid            TEXT NOT NULL,
+      ticket_workflow_id TEXT NOT NULL,
+      listed_json        TEXT NOT NULL,
+      status             TEXT NOT NULL,
+      attempts           INTEGER NOT NULL DEFAULT 0,
+      worker_id          TEXT,
+      worker_pid         INTEGER,
+      claimed_at         TEXT,
+      heartbeat_at       TEXT,
+      finished_at        TEXT,
+      error              TEXT,
+      PRIMARY KEY (run_uid, ticket_workflow_id)
+    );
+
     CREATE TABLE IF NOT EXISTS reconcile (
       run_uid                  TEXT NOT NULL,
       ticket_workflow_id       TEXT NOT NULL,
@@ -112,6 +127,8 @@ function ensureSchema(db) {
       ON ops(run_uid);
     CREATE INDEX IF NOT EXISTS idx_ticket_observations_ticket_workflow_id
       ON ticket_observations(ticket_workflow_id);
+    CREATE INDEX IF NOT EXISTS idx_scan_queue_run_status
+      ON scan_queue(run_uid, status);
     CREATE INDEX IF NOT EXISTS idx_schema_snapshot_fingerprint
       ON schema_snapshot(fingerprint);
     CREATE INDEX IF NOT EXISTS idx_runs_kind_started_at
@@ -131,10 +148,10 @@ export function openStore(dbFile) {
 
   // WAL permite N lectores concurrentes con un escritor. El busy_timeout hace
   // que otro escritor espere el lock en vez de fallar apenas lo encuentra.
+  db.exec('PRAGMA busy_timeout = 15000;');
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec('PRAGMA busy_timeout = 15000;');
 
   fs.chmodSync(dbFile, 0o600);
   for (const suffix of ['-wal', '-shm']) {
@@ -245,6 +262,200 @@ export function finishRun(
   `).run(new Date().toISOString(), status, jsonOrNull(counts), error, runUid));
 }
 
+export function latestRun(db, kinds = null) {
+  const filteredKinds = Array.isArray(kinds) ? kinds : [];
+  if (filteredKinds.length === 0) {
+    return db.prepare(`
+      SELECT * FROM runs
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `).get() ?? null;
+  }
+  const placeholders = filteredKinds.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT * FROM runs
+    WHERE kind IN (${placeholders})
+    ORDER BY started_at DESC, rowid DESC
+    LIMIT 1
+  `).get(...filteredKinds) ?? null;
+}
+
+export function latestRunUid(db, kinds = null) {
+  return latestRun(db, kinds)?.run_uid ?? null;
+}
+
+export function getRun(db, runUid) {
+  return db.prepare(`
+    SELECT * FROM runs WHERE run_uid = ?
+  `).get(runUid) ?? null;
+}
+
+export function enqueueScanTargets(db, runUid, listedItems) {
+  return withWrite(db, (writeDb) => {
+    const insert = writeDb.prepare(`
+      INSERT INTO scan_queue (
+        run_uid, ticket_workflow_id, listed_json, status, attempts
+      ) VALUES (?, ?, ?, 'pending', 0)
+      ON CONFLICT(run_uid, ticket_workflow_id) DO NOTHING
+    `);
+    const counts = { enqueued: 0, existing: 0, skipped: 0 };
+    for (const item of listedItems) {
+      if (typeof item?.ticketWorkflowId !== 'string') {
+        counts.skipped += 1;
+        continue;
+      }
+      const result = insert.run(runUid, item.ticketWorkflowId, JSON.stringify(item));
+      if (Number(result.changes) === 1) counts.enqueued += 1;
+      else counts.existing += 1;
+    }
+    return counts;
+  });
+}
+
+function staleHeartbeatAt(staleMs) {
+  const duration = Number.isFinite(Number(staleMs)) ? Math.max(0, Number(staleMs)) : 120_000;
+  return new Date(Date.now() - duration).toISOString();
+}
+
+function reclaimStaleInTransaction(db, runUid, staleMs) {
+  return db.prepare(`
+    UPDATE scan_queue
+    SET status = 'pending', worker_id = NULL, worker_pid = NULL,
+        claimed_at = NULL, heartbeat_at = NULL
+    WHERE run_uid = ?
+      AND status = 'running'
+      AND (heartbeat_at IS NULL OR heartbeat_at < ?)
+  `).run(runUid, staleHeartbeatAt(staleMs));
+}
+
+export function reclaimStaleScanTargets(db, runUid, { staleMs = 120_000 } = {}) {
+  return Number(withWrite(
+    db,
+    (writeDb) => reclaimStaleInTransaction(writeDb, runUid, staleMs),
+  ).changes);
+}
+
+export function claimScanTarget(
+  db,
+  runUid,
+  { workerId, maxAttempts = 3, staleMs = 120_000 } = {},
+) {
+  return withWrite(db, (writeDb) => {
+    // El rescate y el claim comparten el mismo lock: ningún worker puede leer
+    // el candidato antes de que el dueño anterior quede efectivamente apartado.
+    reclaimStaleInTransaction(writeDb, runUid, staleMs);
+    const row = writeDb.prepare(`
+      SELECT ticket_workflow_id, listed_json, attempts
+      FROM scan_queue
+      WHERE run_uid = ?
+        AND (status = 'pending' OR (status = 'failed' AND attempts < ?))
+      ORDER BY attempts ASC, rowid ASC
+      LIMIT 1
+    `).get(runUid, maxAttempts);
+    if (!row) return null;
+    const now = new Date().toISOString();
+    writeDb.prepare(`
+      UPDATE scan_queue
+      SET status = 'running', attempts = attempts + 1,
+          worker_id = ?, worker_pid = ?, claimed_at = ?, heartbeat_at = ?,
+          finished_at = NULL, error = NULL
+      WHERE run_uid = ? AND ticket_workflow_id = ?
+    `).run(workerId, process.pid, now, now, runUid, row.ticket_workflow_id);
+    return {
+      ticketWorkflowId: row.ticket_workflow_id,
+      listed: JSON.parse(row.listed_json),
+      attempts: Number(row.attempts) + 1,
+    };
+  });
+}
+
+export function heartbeatScanTarget(db, runUid, ticketWorkflowId, workerId) {
+  return Number(withWrite(db, (writeDb) => writeDb.prepare(`
+    UPDATE scan_queue
+    SET heartbeat_at = ?
+    WHERE run_uid = ? AND ticket_workflow_id = ?
+      AND worker_id = ? AND status = 'running'
+  `).run(new Date().toISOString(), runUid, ticketWorkflowId, workerId)).changes);
+}
+
+export function finishScanTarget(
+  db,
+  runUid,
+  ticketWorkflowId,
+  { status, error = null } = {},
+) {
+  if (!['pending', 'done', 'failed'].includes(status)) {
+    throw new Error(`Estado inválido para scan_queue: ${status}`);
+  }
+  const pending = status === 'pending';
+  const pendingFlag = pending ? 1 : 0;
+  const finishedAt = pending ? null : new Date().toISOString();
+  return Number(withWrite(db, (writeDb) => writeDb.prepare(`
+    UPDATE scan_queue
+    SET status = ?, finished_at = ?, error = ?,
+        worker_id = CASE WHEN ? THEN NULL ELSE worker_id END,
+        worker_pid = CASE WHEN ? THEN NULL ELSE worker_pid END,
+        claimed_at = CASE WHEN ? THEN NULL ELSE claimed_at END,
+        heartbeat_at = CASE WHEN ? THEN NULL ELSE heartbeat_at END
+    WHERE run_uid = ? AND ticket_workflow_id = ?
+  `).run(
+    status,
+    finishedAt,
+    error,
+    pendingFlag,
+    pendingFlag,
+    pendingFlag,
+    pendingFlag,
+    runUid,
+    ticketWorkflowId,
+  )).changes);
+}
+
+export function scanQueueCounts(db, runUid, maxAttempts = 3) {
+  const counts = { pending: 0, running: 0, done: 0, failed: 0, total: 0, retryable: 0 };
+  const rows = db.prepare(`
+    SELECT status, COUNT(*) AS count
+    FROM scan_queue
+    WHERE run_uid = ?
+    GROUP BY status
+  `).all(runUid);
+  for (const row of rows) {
+    if (Object.hasOwn(counts, row.status)) counts[row.status] = Number(row.count);
+  }
+  counts.total = counts.pending + counts.running + counts.done + counts.failed;
+  counts.retryable = Number(db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM scan_queue
+    WHERE run_uid = ? AND status = 'failed' AND attempts < ?
+  `).get(runUid, maxAttempts).count);
+  return counts;
+}
+
+export function scanQueueRows(db, runUid) {
+  return db.prepare(`
+    SELECT * FROM scan_queue
+    WHERE run_uid = ?
+    ORDER BY rowid
+  `).all(runUid);
+}
+
+export function runTickets(db, runUid) {
+  const rows = db.prepare(`
+    SELECT raw_json FROM ticket_observations
+    WHERE run_uid = ?
+    ORDER BY rowid
+  `).all(runUid);
+  const tickets = [];
+  for (const row of rows) {
+    try {
+      tickets.push(JSON.parse(row.raw_json));
+    } catch {
+      // Una observación dañada no debe ocultar las demás de la corrida.
+    }
+  }
+  return tickets;
+}
+
 export function upsertTickets(db, runUid, tickets, observedAt = new Date().toISOString()) {
   return withWrite(db, (writeDb) => {
     const upsert = writeDb.prepare(`
@@ -341,6 +552,7 @@ export function recordReconcile(db, runUid, result, observedAt) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const counts = { closable: 0, realOpen: 0, unpaired: 0 };
+    if (Array.isArray(result?.reassigned)) counts.reassigned = 0;
     for (const bucket of Object.keys(counts)) {
       const entries = Array.isArray(result?.[bucket]) ? result[bucket] : [];
       for (const entry of entries) {
@@ -539,6 +751,7 @@ export function migrateFromJson(db, paths, { force = false } = {}) {
       found: false,
       closable: 0,
       realOpen: 0,
+      reassigned: 0,
       unpaired: 0,
       runUid: null,
     },

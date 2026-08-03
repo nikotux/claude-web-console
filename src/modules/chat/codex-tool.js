@@ -104,7 +104,7 @@ export function createCodexToolServer({
   const codexModel = normalizeCodexModel(model);
   const codexEffort = normalizeCodexEffort(codexModel, effort);
 
-  async function launchJob({ task, fullAccess }) {
+  async function launchJob({ task, fullAccess, files }) {
     const id = newCodexJobId();
     const label = codexJobLabel(task);
     const writableRoots = fullAccess ? [] : (chatDir ? [chatDir] : []);
@@ -117,6 +117,7 @@ export function createCodexToolServer({
       model: codexModel,
       effort: codexEffort,
       fullAccess: !!fullAccess,
+      files: Array.isArray(files) ? files : null,
       writableRoots,
       status: 'pending',
       startedAt: Date.now(),
@@ -193,17 +194,19 @@ export function createCodexToolServer({
     + 'resumen de lo que hizo Codex y el diff ACOTADO a los archivos que tocó esta '
     + 'delegación (no el árbol entero) para que lo verifiques. '
     + 'Con background: true devuelve inmediatamente y permite lanzar varias delegaciones en paralelo; después recogelas con collect_codex. '
+    + 'Con files declarás las rutas que se aíslan en un worktree y son las únicas que vuelven al proyecto real. '
     + 'Si la tarea necesita escribir en `.git` (rebase, cherry-pick, reset, fetch), pasá full_access: true — sin eso Codex ve `.git` como solo-lectura y falla. '
     + 'Cuanto más preciso el plan, mejor la ejecución.',
     {
       task: z.string().describe('Plan de implementación concreto para Codex: archivos, cambios exactos y criterios de verificación.'),
+      files: z.array(z.string()).optional().describe('Rutas relativas al repo de los archivos que esta delegación va a crear o modificar. Declararlas hace que Codex corra AISLADO: solo estos archivos vuelven al proyecto real, y si otra sesión tocó uno durante la corrida el cierre falla con un conflicto explícito en vez de pisarlo. Sin este campo la delegación corre sobre el árbol real, sin aislamiento.'),
       full_access: z.boolean().optional().describe('Desactiva el sandbox de Codex (corre en danger-full-access). Úsalo ÚNICAMENTE cuando la tarea necesite escribir en `.git` (rebase, cherry-pick, reset, fetch): en el modo normal Codex monta `.git` como solo-lectura y esas operaciones fallan con "read-only file system". No lo actives para cambios de código comunes.'),
       background: z.boolean().optional().describe('Lanza la delegación y devuelve el control INMEDIATAMENTE, sin esperar a que Codex termine. Usalo cuando quieras trabajar en otra cosa mientras corre, o lanzar VARIAS delegaciones en paralelo sobre archivos que no se pisan. Después recogé el resultado con `collect_codex`. Por defecto (false) espera el resultado, como siempre.'),
     },
-    async ({ task, full_access, background }) => {
+    async ({ task, files, full_access, background }) => {
       let launched;
       try {
-        launched = await launchJob({ task, fullAccess: full_access === true });
+        launched = await launchJob({ task, fullAccess: full_access === true, files });
       } catch (err) {
         return {
           content: [{ type: 'text', text: String(err?.message || err) }],
