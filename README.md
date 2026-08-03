@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-03 17:29 — main
+- tkt: agregar reassign de tickets con dueño cambiado en Zoho y censo paralelo
+
 ### 2026-07-31 22:58 — main
 - Agregar store SQLite local a Tolkien y módulo de visado de operaciones
 
@@ -389,12 +392,6 @@ since the previous push. Newest entry first.
 
 ### 2026-07-03 06:19 — main
 - Deleted `docs/test-untracked.md`
-
-### 2026-07-03 06:18 — main
-- Sesiones: Pac-Man de estado en las tarjetas del sidebar
-- Added `docs/test-untracked.md`
-- Modified `public/js/modules/system/backup-panel.js`
-- Modified `src/modules/backup/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
