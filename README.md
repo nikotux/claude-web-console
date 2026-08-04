@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-04 14:53 — main
+- Agregar aliases de identidad y contexto operativo a Tolkien
+- Agregar modo documento al chat, marcado semántico y skill tkt compartida
+
 ### 2026-08-04 09:28 — main
 - Agregar módulo mcps y helper nativo de pageout (capa 5 de swap)
 
@@ -377,20 +381,6 @@ since the previous push. Newest entry first.
 
 ### 2026-07-03 06:49 — main
 - CLAUDE.md: Salud sin bugfixes (UI única en el modal Enviar PR de Tolkien)
-
-### 2026-07-03 06:44 — main
-- Uso de tokens: vista por MODELO con desplegable de últimos 3 proyectos
-- Uso: límites del plan (claude.ai) y Pac-Man por modelo consumiendo ahora
-- Splash de arranque con Pac-Man y textos de progreso reales
-- Splash: esperar el render REAL del historial del chat activo antes de destapar
-- Splash: barra de progreso 0→100 por hitos reales del arranque
-- Modified `CLAUDE.md`
-- Added `bin/cwc-triage-runner.js`
-- Modified `public/js/modules/system/health-panel.js`
-- Modified `public/js/modules/tickets/tickets.js`
-- Modified `public/js/modules/tolkien/tolkien.js`
-- Modified `src/modules/tickets/index.js`
-- Added `src/modules/tickets/shared.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
