@@ -1,0 +1,229 @@
+{
+  "$esquema": "https://ntux.local/contrato/esquema-1.json",
+  "contrato": "1.3",
+
+  "id": "mcps",
+  "nombre": "MCP",
+  "descripcion": "Censa los servidores MCP declarados y muestra su ultimo estado sin dejar que una sonda lenta bloquee a las demas.",
+  "version": "0.1.0",
+  "tipo": "servicio",
+  "estabilidad": "experimental",
+  "motor": { "runtime": "node", "rango": ">=22 <25" },
+  "licencia": "propietaria-interna",
+  "etiquetas": ["interfaz", "integracion"],
+  "consume_tokens": false,
+  "pad": { "workspace": "ntux", "coleccion": "modulos" },
+
+  "consume": {
+    "nucleo": ["log", "config", "datos", "http", "reloj", "proceso", "eventos", "modulos"],
+    "credenciales": [],
+    "entorno": [
+      {
+        "clave": "NTUX_MCPS_FUENTES",
+        "proposito": "Rutas de archivos de configuracion MCP separadas por coma. Vacia usa la configuracion de usuario y la del taller.",
+        "obligatoria": false,
+        "por_defecto": "",
+        "formato": "texto",
+        "ejemplo": "~/.claude.json,/srv/ntux/.mcp.json"
+      },
+      {
+        "clave": "NTUX_MCPS_TIMEOUT_MS",
+        "proposito": "Timeout propio de cada sonda MCP, independiente de las demas.",
+        "obligatoria": false,
+        "por_defecto": "8000",
+        "formato": "entero",
+        "ejemplo": "8000"
+      },
+      {
+        "clave": "NTUX_MCPS_CONCURRENCIA",
+        "proposito": "Maximo de sondas MCP que pueden estar en vuelo al mismo tiempo.",
+        "obligatoria": false,
+        "por_defecto": "4",
+        "formato": "entero",
+        "ejemplo": "4"
+      },
+      {
+        "clave": "NTUX_MCPS_SONDEO_MS",
+        "proposito": "Cada cuanto se vuelve a descubrir y sondear el censo completo.",
+        "obligatoria": false,
+        "por_defecto": "300000",
+        "formato": "entero",
+        "ejemplo": "300000"
+      },
+      {
+        "clave": "NTUX_MCPS_SONDEO_STDIO",
+        "proposito": "Controla si el censo puede lanzar temporalmente servidores MCP de transporte stdio para sondearlos.",
+        "obligatoria": false,
+        "por_defecto": "true",
+        "formato": "texto",
+        "ejemplo": "false"
+      },
+      {
+        "clave": "NTUX_MCPS_TOPE_ENTRADAS",
+        "proposito": "Maximo de servidores que devuelve una consulta del censo.",
+        "obligatoria": false,
+        "por_defecto": "200",
+        "formato": "entero",
+        "ejemplo": "200"
+      }
+    ],
+    "modulos": [
+      {
+        "id": "credenciales",
+        "rango": "^0.1",
+        "uso": "Leer la METADATA del inventario de credenciales para detectar que un MCP quedo cargado con una credencial vieja, sin ver jamas un valor.",
+        "opcional": true
+      }
+    ],
+    "sistema": {
+      "binarios": [],
+      "puertos": [],
+      "rutas_escritura": ["datos/"],
+      "red_saliente": [
+        {
+          "host": "servidores-mcp-declarados",
+          "proposito": "Sondear los destinos HTTP o SSE declarados en los archivos de configuracion MCP."
+        }
+      ]
+    }
+  },
+
+  "expone": {
+    "api": [
+      {
+        "nombre": "censo",
+        "firma": "({consulta}) => Promise<{generado, fuentes, resumen, entradas, tope, truncado}>",
+        "proposito": "Devuelve el ultimo censo conocido y dispara su actualizacion sin bloquear la lectura.",
+        "desde": "0.1.0"
+      },
+      {
+        "nombre": "detalle",
+        "firma": "({consulta}) => Promise<{servidor, sondeos, credenciales}>",
+        "proposito": "Explica un servidor, su historial reciente y la metadata de credenciales relacionada.",
+        "desde": "0.1.0"
+      },
+      {
+        "nombre": "alertas",
+        "firma": "() => Promise<{entradas, generado}>",
+        "proposito": "Lista los servidores con deriva o con un ultimo estado distinto de ok.",
+        "desde": "0.1.0"
+      },
+      {
+        "nombre": "sondear",
+        "firma": "({cuerpo}) => Promise<{sondeados, resultados}>",
+        "proposito": "Vuelve a sondear un servidor concreto o el censo completo.",
+        "desde": "0.1.0"
+      }
+    ],
+    "rutas": [
+      { "metodo": "GET", "ruta": "/", "maneja": "censo", "permiso": "lectura", "proposito": "Ultimo censo conocido de servidores MCP." },
+      { "metodo": "GET", "ruta": "/detalle", "maneja": "detalle", "permiso": "lectura", "proposito": "Detalle e historial de un servidor MCP." },
+      { "metodo": "GET", "ruta": "/alertas", "maneja": "alertas", "permiso": "lectura", "proposito": "Servidores MCP que requieren atencion." },
+      { "metodo": "POST", "ruta": "/sondear", "maneja": "sondear", "permiso": "escritura", "proposito": "Ejecuta un sondeo solicitado del censo MCP." }
+    ],
+    "ui": [
+      {
+        "ruta": "/mcps",
+        "titulo": "MCP",
+        "icono": "enchufe",
+        "montaje": "ui/panel.js",
+        "zona": "centro",
+        "menu": "principal",
+        "orden": 30,
+        "ayuda": {
+          "que_es": "Un censo de los servidores MCP declarados en el taller, su ultimo sondeo y las derivas que exigen recargarlos.",
+          "primeros_pasos": [
+            "Revise el resumen para distinguir servidores sanos, caidos y todavia no sondeados.",
+            "Abra un servidor para ver la fuente, el transporte y sus sondeos recientes.",
+            "Use las alertas para detectar configuraciones o credenciales rotadas desde la ultima carga.",
+            "Re-sondee un item despues de corregirlo, o el censo completo si cambio una fuente."
+          ],
+          "acciones": [
+            {
+              "nombre": "Re-sondear uno",
+              "que_hace": "Ejecuta una sonda nueva solamente para el servidor elegido.",
+              "consume": []
+            },
+            {
+              "nombre": "Re-sondear todo",
+              "que_hace": "Ejecuta el pool acotado de sondas para todos los servidores descubiertos.",
+              "consume": []
+            }
+          ],
+          "ojo_con_esto": [
+            "Un MCP caido se marca en su propio item y NO bloquea el sondeo ni la carga de los demas.",
+            "Una alerta de credencial rotada significa que quien cargo ese MCP sigue usando la credencial vieja; hay que reiniciarlo para que la relea.",
+            "El censo no muestra valores de secretos: conserva solamente claves, metadata y huellas irreversibles."
+          ],
+          "ver_tambien": ["/ayuda"]
+        }
+      }
+    ]
+  },
+
+  "eventos": {
+    "emite": [
+      {
+        "nombre": "mcps.servidor.sondeado",
+        "v": 1,
+        "cuando": "Despues de guardar el resultado individual de cada sonda MCP.",
+        "esquema": "esquemas/eventos/servidor-sondeado.json",
+        "retencion": "ninguna"
+      },
+      {
+        "nombre": "mcps.credencial.rotada",
+        "v": 1,
+        "cuando": "Cuando un servidor entra en deriva de configuracion o credencial respecto de su ultima carga observada.",
+        "esquema": "esquemas/eventos/credencial-rotada.json",
+        "retencion": "ultimo",
+        "auditable": true
+      }
+    ],
+    "escucha": []
+  },
+
+  "capacidades": {
+    "ofrece": [
+      {
+        "nombre": "mcps.censo.consultar",
+        "v": 1,
+        "maneja": "censo",
+        "proposito": "Entregar el censo de servidores MCP con su ultimo estado conocido, sin que el llamador conozca a este modulo.",
+        "tiempo_max_ms": 2000
+      }
+    ],
+    "usa": []
+  },
+
+  "ciclo": {
+    "punto_de_entrada": "src/index.js",
+    "instalacion": { "migraciones": "migraciones/", "idempotente": true, "requiere_detenido": true },
+    "arranque": { "tiempo_max_ms": 4000, "reintentos": 1, "espera_reintento_ms": 2000, "orden_extra": 0 },
+    "apagado": { "tiempo_max_ms": 3000, "drenaje": true },
+    "salud": { "intervalo_ms": 30000, "tiempo_max_ms": 1000, "coste": "cero", "permite_degradado": true }
+  },
+
+  "datos": {
+    "motor": "sqlite",
+    "ambito": "taller",
+    "version_esquema": 1,
+    "migraciones": "migraciones/",
+    "clases": { "durable": ["servidores"], "efimero": ["sondeos"], "blobs": false },
+    "retencion": [{ "tabla": "sondeos", "columna": "ts", "conservar": "30d" }],
+    "exporta": ["servidores"],
+    "al_desinstalar": "archivar"
+  },
+
+  "registros": {
+    "nivel_por_defecto": "info",
+    "retencion_dias": 30,
+    "campos_sensibles": ["valor", "token", "api_key", "authorization", "secret", "password", "headers", "env"],
+    "eventos_auditables": ["mcps.credencial.rotada"]
+  },
+
+  "pruebas": {
+    "ruta": "pruebas/",
+    "comando": "node --test pruebas/",
+    "cobertura_minima": 70
+  }
+}

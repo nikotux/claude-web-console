@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ntux.local/eventos/mcps.credencial.rotada/1.json",
+  "title": "mcps.credencial.rotada v1",
+  "description": "Transicion a una deriva respecto de la configuracion con la que se observo la ultima carga correcta.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["servidor", "nombre", "fuente", "deriva", "ts"],
+  "properties": {
+    "servidor": { "type": "string", "minLength": 1 },
+    "nombre": { "type": "string", "minLength": 1 },
+    "fuente": { "type": "string", "minLength": 1 },
+    "deriva": { "enum": ["config_rotada", "credencial_rotada"] },
+    "ts": { "type": "string", "minLength": 1, "description": "Instante UTC ISO-8601." }
+  }
+}

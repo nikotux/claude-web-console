@@ -8,3 +8,8 @@ node_modules/
 /session-owners.json
 certs/
 *.log
+
+# Binario compilado del helper de pageout (capa 5 de swap). Se regenera con
+# bin/cwc-pageout-build.sh y necesita `setcap cap_sys_nice+ep` en cada máquina:
+# la capability va sobre el inode del ejecutable, no viaja por git.
+bin/cwc-pageout

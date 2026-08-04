@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ntux.local/eventos/mcps.servidor.sondeado/1.json",
+  "title": "mcps.servidor.sondeado v1",
+  "description": "Resultado saneado de una sonda individual de un servidor MCP.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["servidor", "nombre", "fuente", "transporte", "estado", "ms", "motivo", "ts"],
+  "properties": {
+    "servidor": { "type": "string", "minLength": 1 },
+    "nombre": { "type": "string", "minLength": 1 },
+    "fuente": { "type": "string", "minLength": 1 },
+    "transporte": { "enum": ["http", "sse", "stdio"] },
+    "estado": { "enum": ["ok", "caido", "timeout", "requiere_auth", "no_sondeado", "desconocido"] },
+    "ms": { "type": ["integer", "null"], "minimum": 0 },
+    "motivo": { "type": ["string", "null"] },
+    "ts": { "type": "string", "minLength": 1, "description": "Instante UTC ISO-8601." }
+  }
+}

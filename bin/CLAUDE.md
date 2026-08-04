@@ -559,6 +559,26 @@ se pisa: el job termina `done` con `isError:true`, el reporte nombra el conflict
 y el worktree se CONSERVA porque es la única copia del trabajo. Si el worktree
 no se pudo crear o sembrar, degrada al camino histórico y lo explicita en el
 reporte. Sin `files`, el comportamiento es idéntico al histórico.
+### bin/cwc-pageout.c + bin/cwc-pageout-build.sh    helper nativo de la CAPA 5
+de swap. `cwc-pageout <pid> [--cold]` selecciona únicamente mapeos privados
+anónimos y `[heap]` del proceso, valida antes que el PID pertenezca al UID
+actual y aplica `process_madvise` en tandas de hasta 1024 rangos con
+`MADV_PAGEOUT` (o `MADV_COLD`). El build script lo compila con gcc y solo
+IMPRIME el `sudo setcap cap_sys_nice+ep` que debe ejecutarse una vez: sin
+`CAP_SYS_NICE`, el kernel responde `EPERM` al aconsejar otro proceso.
+### bin/cwc-pageout-runner.js    barrido DESACOPLADO, persistente y reanudable de
+sesiones dormidas. Enumera procesos del UID actual y considera únicamente
+`cwc-chat-runner.js`, binarios `claude-agent-sdk` y
+`cwc-codex-runner.js`; excluye siempre `src/server.js`. Compara los ticks de
+CPU entre barridos, exige el umbral de inactividad, RSS mínimo y cooldown, y
+recién entonces invoca `bin/cwc-pageout`. Arranca deliberadamente en DRY-RUN:
+solo actúa con `CWC_PAGEOUT_DRY_RUN=0`. Variables:
+`CWC_PAGEOUT_INTERVAL_MS` (60000), `CWC_PAGEOUT_IDLE_MS` (300000),
+`CWC_PAGEOUT_MIN_RSS_MB` (100) y `CWC_PAGEOUT_DRY_RUN` (distinto de `0` =
+dry-run). Estado incremental en `<dataDir>/pageout.json` y lock con heartbeat
+en `<dataDir>/pageout.lock`, donde `<dataDir>` sale de `resolveDataDir()`
+(por defecto `~/.cwc-data`). SIGTERM/SIGINT conservan el estado y liberan el
+lock; cada barrido emite una sola línea resumen a stdout.
 ### bin/cwc-test-codex-worktree.js  test funcional determinista y AISLADO del
 mecanismo de worktree de las delegaciones Codex (patrón
 `cwc-test-tolkien-store.js`). Sin SDK, sin red y con 0 tokens, trabaja entero
