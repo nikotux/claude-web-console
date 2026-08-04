@@ -1,0 +1,10 @@
+[Unit]
+Description=Mi Consola - entregar el Interfono entre máquinas cada minuto
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

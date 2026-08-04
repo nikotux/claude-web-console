@@ -8,6 +8,7 @@ import http from 'node:http';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { TOLKIEN_EXPIRY_WARN_DAYS, tolkienStatus } from '../../core/connections-tolkien.js';
+import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import {
   infisicalDependents,
   probeInfisicalProject,
@@ -507,7 +508,7 @@ export async function probePadLocal(scope) {
   try {
     const creds = readJson(path.join(scope.home, '.pad', 'credentials.json'));
     const hasToken = hasSessionToken(creds);
-    const url = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+    const url = PAD_DEFAULT_URL;
     const live = await httpAlive(url, 3000);
     const light = hasToken && live.alive ? 'ok' : 'danger';
     return item({

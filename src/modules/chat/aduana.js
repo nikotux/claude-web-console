@@ -21,6 +21,8 @@ export const MAX_REPLY_TO_LEN = 128;
 export const MAX_REPLY_TO_BY_LEN = 80;
 export const MAX_REPLY_TO_TEXT_LEN = 100;
 export const SALA_LOG_MAX_LINES = 5000;
+// [2026-08-03] Ya no se usa automáticamente desde init(); queda disponible
+// solo para una limpieza explícita futura.
 export const SALA_TTL_DAYS = 30;
 export const REACTIONS = ['👍', '❓', '🔴'];
 // El nombre propio de la IA de la sala (elegido por votación en la sala, 2026-07-31).
@@ -113,6 +115,8 @@ export function readsPath(id) {
   return path.join(salaRoot(id), 'reads.json');
 }
 
+// [2026-08-03] Ya no se invoca automáticamente desde init(); queda disponible
+// solo para una limpieza explícita futura.
 export function pruneSalas({ keepIds = [], maxAgeMs } = {}) {
   let removed = 0;
   try {

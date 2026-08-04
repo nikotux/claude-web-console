@@ -13,9 +13,10 @@
 import { readUserPadToken, userPadWorkspace, hostUser } from './user-space.js';
 import { principalOf } from './auth.js';
 import { provisionUserPad, SHARED_WORKSPACE, readHostPadToken } from './pad-provision.js';
+import { PAD_DEFAULT_URL } from './pad-url.js';
 
 // MISMA URL que usan pad-service-client.js y pad-provision.js.
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 
 // Dado un userId (o null), devuelve el PadContext del inquilino, o null si es
 // el host (o no hay usuario → host). Lo usan los RUNNERS desacoplados, que

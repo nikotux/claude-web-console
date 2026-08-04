@@ -19,9 +19,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PAD_DEFAULT_URL } from './pad-url.js';
 
 const CREDS = path.join(os.homedir(), '.pad', 'credentials.json');
-const DEFAULT_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const DEFAULT_URL = PAD_DEFAULT_URL;
 const DEFAULT_WORKSPACE = process.env.CWC_PAD_WORKSPACE || 'console';
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -53,9 +54,18 @@ const CACHE_TTL_MS = Number(process.env.CWC_PAD_CACHE_TTL_MS) || 30_000;
 function readSessionToken(serverUrl) {
   try {
     const raw = JSON.parse(fs.readFileSync(CREDS, 'utf8'));
-    const entry = raw?.credentials?.[serverUrl];
-    if (!entry?.token) return null;
-    return entry.token;
+    const creds = raw?.credentials || {};
+    const entry = creds[serverUrl];
+    if (entry?.token) return entry.token;
+    // FALLBACK (2026-08-03): credentials.json se indexa por la URL EXACTA del
+    // server. Si la IP ZeroTier cambia (pasó: .62 → .192), la clave vieja deja
+    // de matchear y la consola se queda sin token aunque el token siga siendo
+    // válido contra el server nuevo. Si hay UNA SOLA credencial guardada, no hay
+    // ambigüedad posible: se usa esa. Con dos o más NO se adivina — devolver null
+    // es preferible a mandarle a un server el token de otro.
+    const keys = Object.keys(creds);
+    if (keys.length === 1 && creds[keys[0]]?.token) return creds[keys[0]].token;
+    return null;
   } catch {
     return null;
   }

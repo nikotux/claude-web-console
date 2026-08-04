@@ -4,6 +4,13 @@
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### backup/                   tar.gz completo (server-side, con secretos) + push del CÓDIGO al
 remote `personal` (guardas: solo ese remote, URL sin Mordor-Staffing).
+En ESTE repo, `personal` apunta a la cuenta personal `nikotux` mediante el alias
+SSH `github-ntux`. El alias es deliberado: no hay que tocar el Host `github.com`
+de `~/.ssh/config`, porque Tolkien lo usa con la clave de trabajo. Por eso
+`ownerRepoFromUrl()` acepta hosts `github.com` y `github-*`. La identidad de los
+commits de ESTE repo se configura localmente con `user.name`/`user.email` en
+`.git/config`; el `user.email` global sigue siendo el de trabajo porque Tolkien
+lo usa.
 COMMIT SIN PUSH (2026-07-05, pedido del usuario): botón "Commit
 (sin push)" del panel — commit LOCAL descriptivo de los cambios
 pendientes sin tocar el remote (el push sigue commiteando con su

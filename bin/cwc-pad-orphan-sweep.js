@@ -5,8 +5,9 @@ import path from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { readHostPadToken } from '../src/core/pad-provision.js';
+import { PAD_DEFAULT_URL } from '../src/core/pad-url.js';
 
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 const PAD_DB_PATH = path.join(os.homedir(), '.pad', 'pad.db');
 const BACKUP_DIR = path.join(os.homedir(), '.cwc-backups');
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

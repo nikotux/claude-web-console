@@ -68,7 +68,8 @@ const projectsDir = (owner) => path.join(userClaudeDir(owner), 'projects');
 const chatsFile = (owner) => path.join(userDataDir(owner), 'chats.json');
 // Registro DURABLE append-only de sessionIds que ALGUNA VEZ fueron chat (lo
 // escribe el módulo chat, nunca se poda): chats.json solo tiene los VIVOS —
-// un chat cerrado/olvidado (FORGET_MS) salía de ahí y su transcript caía en
+// un chat CERRADO por su dueño sale de ahí (el olvido automático por
+// inactividad se eliminó el 2026-08-03) y su transcript caía en
 // "Motores headless" aunque fuera una conversación normal en fable/opus.
 const chatIdsFile = (owner) => path.join(userDataDir(owner), 'chat-session-ids.json');
 // Backfill retroactivo: cada registro de bugfixes.json ES un chat que trabajó

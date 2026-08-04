@@ -1,0 +1,13 @@
+[Unit]
+Description=Mi Consola - espejo de Rivendell a mordoria
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# El runner sale con 2 cuando otro ciclo ya tiene el lock y con 3 cuando el
+# destino está en uso. Ambos son resultados normales, no fallos del espejo.
+# Sin esto la unidad queda en `failed` de forma permanente y tapa los errores reales.
+SuccessExitStatus=2 3
+ExecStart=/usr/bin/node %h/claude-web-console/bin/cwc-mirror-runner.js
+WorkingDirectory=%h/claude-web-console

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MOLD, MOLD_VERSION, readMoldState, recordMoldVersion } from '../src/core/pad-mold.js';
+import { PAD_DEFAULT_URL } from '../src/core/pad-url.js';
 import {
   createCollection,
   listCollections,
@@ -11,7 +12,7 @@ import {
 } from '../src/core/pad-service-client.js';
 import { readUserPadToken } from '../src/core/user-space.js';
 
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 const PAD_DB_PATH = path.join(os.homedir(), '.pad', 'pad.db');
 const TENANT_WORKSPACE_RE = /^tenant-[a-zA-Z0-9_.-]{1,32}$/;
 const EXCLUDED_WORKSPACES = new Set(['console', 'tolkien', 'comunidad']);

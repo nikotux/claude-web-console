@@ -99,11 +99,11 @@ import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAl
 import {
   appendSay, appendReact, appendCut, appendOrquestado, appendOrigin,
   readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
-  salaLogPath, readsPath, pruneSalas, isSalaPath, newSalaId,
+  salaLogPath, readsPath, isSalaPath, newSalaId,
   ADUANA_WORKSPACE, ADUANA_SALAS_COLLECTION,
   MAX_SAY_LEN, MAX_SAY_ATTACHMENTS, MAX_MENTIONS,
   MAX_REPLY_TO_LEN, MAX_REPLY_TO_BY_LEN, MAX_REPLY_TO_TEXT_LEN,
-  SALA_TTL_DAYS, REACTIONS, SALA_AI_NAME, SALA_AI_LABEL,
+  REACTIONS, SALA_AI_NAME, SALA_AI_LABEL,
 } from './aduana.js';
 // [2026-07-07] recordBugfix (tracking de v1 "Bugs & Features") removido al
 // archivar v1: "Tickets & Features" lee de Zoho/GitHub directo, no registra
@@ -116,9 +116,8 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 // SP9-5 (TASK-671): tope de sesiones VIVAS concurrentes por usuario (equidad
 // multi-tenant). Los admin quedan exentos (ver el handler POST /create). Config
 // por env; un inquilino que llega al tope debe cerrar/archivar una para abrir otra.
-const MAX_SESSIONS_PER_USER = Number(process.env.CWC_MAX_SESSIONS_PER_USER) || 20;
-
-const FORGET_MS = 24 * 3600 * 1000; // dormida sin uso => recién ahí se descarta la tarjeta (sigue retomable desde el lanzador)
+// Sin olvido automático, el tope se alcanza antes.
+const MAX_SESSIONS_PER_USER = Number(process.env.CWC_MAX_SESSIONS_PER_USER) || 50;
 const MENTION_USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // El handle de la IA se detecta con los mismos bordes de palabra que una mención
@@ -2848,16 +2847,12 @@ class ChatManager {
         if (c.viewMode === 'chat' && c.alive && !(c._bgTasks?.length) && now - c.lastActivity > SLEEP_MS) c.sleep();
         // Cerradas explícitamente: se descartan a los 90 min.
         if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
-        // Dormidas sin uso 24 h: recién ahí se descarta la tarjeta (la
-        // conversación sigue retomable desde el lanzador vía transcript). Las
-        // ARCHIVADAS (F3) NO se podan: son revivibles a propósito (feedback días
-        // después), y una instrucción de Aduana pendiente tampoco: todavía no
-        // tiene transcript desde el cual recuperarse. Sobreviven hasta el visado.
-        if (!c.closed && !c.archived && !c.pendingPrompt && !c.alive && c.viewMode === 'chat' && now - c.lastActivity > FORGET_MS) {
-          c.close();
-          this.chats.delete(id);
-          dirty = true;
-        }
+        // [2026-08-03] NO hay olvido automático por inactividad. Criterio
+        // explícito de Niko y Ricardo: una conversación NUNCA se elimina,
+        // archiva ni va a papelera sola — vive hasta que su dueño lo decida.
+        // DORMIR el motor (arriba) es legítimo porque no destruye nada;
+        // depositar en papelera y cerrar el ítem de Pad sí lo es, y por eso
+        // la rama de olvido a las 24 h (FORGET_MS) se eliminó de acá.
       }
       if (dirty) this.persist();
     }, 60 * 1000).unref();
@@ -3456,43 +3451,6 @@ class ChatManager {
 
 const manager = new ChatManager();
 
-function salaKeepIdsForPrune(owners) {
-  const keepIds = new Set();
-  const addId = (id) => {
-    try { if (id) keepIds.add(safeSalaId(id)); } catch { /* una referencia inválida no protege carpetas */ }
-  };
-  const addCwd = (cwd) => {
-    if (typeof cwd === 'string' && worldLabelFor(cwd) === 'Aduana') addId(path.basename(cwd));
-  };
-
-  for (const chat of manager.chats.values()) {
-    if (chat.closed) continue;
-    addCwd(chat.cwd);
-    addId(chat.salaLogId);
-  }
-
-  // init() poda antes de que termine rehydrate(); chats.json contiene solo
-  // conversaciones abiertas y protege las mismas referencias durante esa ventana.
-  let saved = [];
-  try {
-    const parsed = JSON.parse(fss.readFileSync(CHATS_FILE, 'utf8'));
-    if (Array.isArray(parsed)) saved = parsed;
-  } catch { /* sin snapshot todavía */ }
-  for (const chat of saved) {
-    addCwd(chat?.cwd);
-    addId(chat?.salaLogId);
-  }
-
-  for (const owner of Array.isArray(owners) ? owners : []) {
-    try {
-      for (const item of listChatTrash(owner)) addCwd(item?.cwd);
-    } catch (err) {
-      console.error(`[chat] no pude leer la papelera de ${owner} para proteger salas:`, err?.message);
-    }
-  }
-  return [...keepIds];
-}
-
 // Multi-tenant: los adjuntos de un chat viven en el .cwc-data de SU DUEÑO. El
 // server es el único que sabe de quién es cada chat, así que se lo enseña al
 // subsistema de adjuntos (que es compartido con el runner y con bin/*).
@@ -3680,10 +3638,9 @@ export default {
         console.error('[chat] no pude listar usuarios para la purga inicial:', err?.message);
       }
       autoPurgeAllChatTrash(owners);
-      pruneSalas({
-        keepIds: salaKeepIdsForPrune(owners),
-        maxAgeMs: SALA_TTL_DAYS * 86400000,
-      });
+      // [2026-08-03] La poda de salas por edad se desactivó: borraba carpetas
+      // del disco a los 30 días sin que nadie lo decidiera. `pruneSalas` sigue
+      // exportada en aduana.js para una limpieza EXPLÍCITA futura.
     } catch (err) {
       console.error('[chat] purga inicial de papelera/salas falló:', err?.message);
     }

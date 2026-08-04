@@ -62,6 +62,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAdmin } from '../../core/auth.js';
+import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import {
   commitMsgJobId, readCommitMsgJob, writeCommitMsgJob, spawnCommitMsgRunner,
   isFreshRunning, jobResult,
@@ -226,9 +227,19 @@ function ghCmd(args, opts = {}) {
   });
 }
 
+// Deriva `owner/repo` de un remote de GitHub. Acepta las tres formas que usamos:
+//   https://github.com/owner/repo(.git)
+//   git@github.com:owner/repo(.git)
+//   git@github-ntux:owner/repo(.git)   ← alias de ~/.ssh/config
+// El alias existe porque el Host `github.com` de ~/.ssh/config usa la clave de
+// TRABAJO (la que necesita Tolkien) y este repo empuja con la clave PERSONAL de
+// nikotux; sin aceptar el alias, updateGithubDescription() fallaba en silencio
+// (2026-08-03). Sólo se admiten `github.com` y alias con prefijo `github-`:
+// cualquier otro host devuelve null, para no mandarle a `gh repo edit` el slug
+// de un remote que no es de GitHub.
 function ownerRepoFromUrl(url) {
-  const m = String(url || '').match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
-  return m ? `${m[1]}/${m[2]}` : null;
+  const m = String(url || '').match(/(?:^|@|\/\/)(github\.com|github-[\w.-]+)[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+  return m ? `${m[2]}/${m[3]}` : null;
 }
 
 // "M\tpath", "A\tpath", "D\tpath", "R100\told\tnew" (salida de --name-status).
@@ -414,7 +425,7 @@ function tar(args) {
 // local está caído o el binario no está, NO rompe el backup del proyecto:
 // solo se informa en la respuesta.
 const PAD_BIN = path.join(os.homedir(), '.local', 'bin', 'pad');
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 function padDbBackup() {
   const out = path.join(BACKUP_DIR, `pad-backup-${stamp()}.db`);
   const timeout = 30000;

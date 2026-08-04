@@ -598,6 +598,73 @@ Salud. `--prune` SIN `--yes` solo lista lo que haría. El barrido real exige
 NUNCA borra un volumen cuyo nombre contenga un proyecto Compose activo; no
 toca contenedores. Docker ausente/daemon inaccesible termina limpio y deja
 `status: unavailable`. No automatizar el modo confirmado: lo aprueba un humano.
+### bin/cwc-mirror-runner.js  ESPEJO DESACOPLADO y reanudable de Rivendell hacia
+el alias SSH `mordoria-mirror` (`console:PEND-2595`, `console:PLAN-2587`). Un
+ciclo one-shot recorre exactamente dos targets: `home` espeja el HOME completo,
+sin una sola exclusión, con rsync
+`-a -H -s --mkpath --delete --partial --compress --human-readable --stats`, y
+`pad-db` corre después para sobrescribir aditivamente `.pad/pad.db` con un
+snapshot consistente, sin `--delete`. Cada target
+usa `-H` porque `-a` no preserva enlaces duros: sin él, los worktrees de git y
+los stores de pnpm de `.cwc-users` se multiplican en destino; el primer espejo
+completo midió 10 GB de exceso. `-H` tiene el costo de memoria de construir un
+mapa de inodos para árboles grandes. Cada target
+usa siempre `--timeout=300`: si no fluyen datos durante cinco minutos, rsync
+falla y el timer puede reintentar, porque un espejo colgado se ve igual que uno
+que sigue trabajando. `--bwlimit=<N>` (KiB/s) es una palanca opcional para un
+enlace congestionado; sin el flag no hay límite. `--whole-file` también es
+opcional y sirve solo para una puesta al día inicial con muchos archivos chicos:
+dejarlo permanente rompería el ahorro del algoritmo delta en los ciclos
+incrementales. Cada target
+persiste `pending/running/ok/error`, métricas y progreso incremental en
+`~/.cwc-data/mirror-state.json`, con lock pid/host + heartbeat en
+`mirror.lock` y log rotado a 5 MB en `mirror.log`. La red de seguridad es
+OBLIGATORIA para ambos targets: usa `--backup` con attic remoto diario en
+`/srv/cwc-mirror-attic/<fecha>/<target>` y poda únicamente fechas de más de 14
+días, sin sudo. El attic vive fuera del HOME destino porque, si
+estuviera adentro, el `--delete` del target `home` lo trataría como sobrante y
+lo metería dentro de sí mismo. La ruta remota va sin comillas y protegida con
+`-s`: quotearla a mano la vuelve relativa al home y rompe el `mkdir`, algo que
+el dry-run no detecta porque `-n` no crea directorios. Usa `--mkpath` porque
+rsync no crea directorios padre intermedios en destino. `--dry-run` agrega `-n`,
+no toma lock, no persiste log/estado y no poda; su única escritura es preparar
+el staging local de `pad-db` bajo `/var/tmp/cwc-mirror-staging/pad/` para probar
+que el snapshot es viable. El staging vive fuera del HOME origen para que el
+espejo no lo copie dentro de sí mismo en cada ciclo. `--target=<name>` acota el ciclo,
+`--status` solo lee y `--help` documenta el CLI. Antes de ejecutar `home`, un
+guard consulta por SSH si `claude-web-console.service` está activo en el
+destino, exportando `XDG_RUNTIME_DIR=/run/user/$(id -u)` para que
+`systemctl --user` funcione en la sesión remota. Si responde `active`, registra
+el ciclo completo como `skipped`, no ejecuta ningún target y sale con exit 3;
+la unidad declara ese código como éxito. `--force` saltea deliberadamente el
+guard y permite sincronizar igual, con el riesgo correspondiente. Si la
+consulta falla por SSH, el runner continúa con la sincronización: se prefiere
+no bloquear el espejo por un fallo transitorio y, si el destino no es
+alcanzable, rsync ya registra su propio error. Este guard existe porque `home`
+usa `--delete`: aplicarlo sobre mordoria mientras es una máquina de trabajo
+borra o revierte en silencio el trabajo nuevo hecho allí cada 15 minutos. Es el
+modo de falla más caro posible porque produce pérdida de datos sin dejar un
+error que explique por qué el trabajo «se revirtió solo». Lo agenda la unidad de usuario
+`systemd/cwc-mirror.timer` cada 15 minutos; no depende del server web. El exit 2
+por lock tomado y el exit 3 por destino en uso están declarados
+`SuccessExitStatus=2 3` en la unidad porque ambos son comportamientos normales
+y dejarlos como fallo taparía los errores reales. El target `home` incluye deliberadamente TODO: `.ssh`,
+`.config`, `node_modules`, cachés y cualquier otro dato del usuario. En
+particular, `~/.ssh/authorized_keys` de Rivendell contiene la clave del espejo
+para que esa autorización sobreviva al `--delete` en el destino; sin ella, el
+espejo se rompería a sí mismo permanentemente. También incluye
+`~/.config/systemd/user/`, por lo que las unidades del destino quedan pisadas
+por las del origen y conservan la IP de Rivendell; la adaptación al host se
+hace durante el failover, no en disco. Agregar exclusiones exige aprobación
+explícita del dueño. El target `pad-db` NO confía en la copia plana de la base viva: prepara un
+snapshot online y WAL-aware con `backup()` de `node:sqlite` (o `VACUUM INTO`
+como fallback), y antes de rsync exige `PRAGMA integrity_check=ok` y más de cero
+ítems. Una copia plana de un SQLite en WAL puede mezclar instantes y producir un
+respaldo silenciosamente corrupto; por eso el runner falla a propósito y no
+sincroniza si el snapshot no supera ambas verificaciones. Como `pad-db` corre
+después de `home`, reemplaza la posible copia inconsistente de `pad.db` sin
+borrar `attachments/`, `credentials.json` ni ningún otro contenido que ya
+trajo el HOME completo.
 ### bin/cwc-health-runner.js    revisión exhaustiva de salud (barrido módulo x módulo; interfaz por archivos)
 ### bin/cwc-healthfix-runner.js resolución AUTÓNOMA de UN hallazgo de salud (ESCRIBE código:
 allowlist fixToolAllowed, node --check, sin reinicio — excepción
@@ -912,6 +979,23 @@ session_id del stdin (chat). Fail-open salvo hook-guard. Nudge SEGURO
 opcional por send-keys SOLO a TUI con claude idle (observador
 waiting+model+ts fresco); si trabaja o es shell, el mensaje espera en
 la bandeja
+### bin/cwc-bus-bridge.js       PUENTE DESACOPLADO del Interfono entre máquinas.
+El bus file-based de `src/core/bus.js` es deliberadamente por-máquina; este
+runner es lo único que lo cruza. `send <máquina>:<handle> <texto>` encola
+atómicamente en `~/.cwc-data/bus-outbox/`, y el ciclo one-shot (default o
+`--once`) entrega por SSH usando los peers de `bus-peers.json`; sin peers sale
+0 porque es una configuración válida. La CLI real de `cwc-bus.js` no acepta el
+texto por stdin ni permite conservar `fromName`/`hops`, por eso el transporte
+manda un sobre base64 a `--inject-stdin`: el destino resuelve el handle con
+`resolveTarget`/`buildDirectory` e invoca `sendMessage()` del MISMO bus, no uno
+paralelo. El anti-bucle por prefijo `[via <máquina>]` + `MAX_HOPS` NO es
+opcional: sin ambos guards, dos puentes enfrentados se reenviarían el mismo
+mensaje para siempre. Cada fallo queda pendiente con contador; al agotar cinco
+intentos se mueve a `bus-outbox/failed/` y se loguea como ERROR CRÍTICO a
+propósito, porque perder un mensaje sin que nadie lo sepa es peor que un error
+visible. Estado/lock con heartbeat/log rotado viven en `~/.cwc-data`; lo agenda
+`systemd/cwc-bus-bridge.timer` cada minuto y el exit 2 por lock tomado cuenta
+como éxito normal en la unidad.
 ### bin/install-interfono.js + bin/uninstall-interfono.js  instalan/quitan los hooks del interfono
 en ~/.claude/settings.json + el comando ~/.claude/commands/btw.md
 (aditivo/reversible, patrón install-observer: preservan entradas

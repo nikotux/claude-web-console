@@ -521,15 +521,21 @@ estilo o de criterio NO entra acá — forzarla degradaría el mecanismo.
   binario local (sin Docker) + impacto de recursos medido antes de aprobar. Hoy:
   - **`pad`** (nombre CANÓNICO, PRIMARIO) = Pad **LOCAL self-hosted** — transporte
     **stdio** (`claude mcp add --scope local pad -- ~/.local/bin/pad mcp serve
-    --url http://10.213.222.62:7777`), NO HTTP (el binario local NO expone HTTP
+    --url http://10.213.222.192:7777`), NO HTTP (el binario local NO expone HTTP
     MCP, solo el CLI habla JSON-RPC por stdio; el server web en el puerto 7777 es
     la SPA, no un endpoint MCP). Instalado en `~/.local/bin/pad` (v0.9.2, checksum
     verificado), servido por systemd de usuario `~/.config/systemd/user/pad-local.service`
-    (`ExecStart=%h/.local/bin/pad server start --host 10.213.222.62 --port 7777`,
+    (`ExecStart=%h/.local/bin/pad server start --host 10.213.222.192 --port 7777`,
     `CPUQuota=200%` = techo de 2 núcleos con holgura, `MemoryMax=4G`/`MemoryHigh=3G`
     = techo sobredimensionado para crecer — pedido explícito de Niko, uso real
     medido ~50MB RAM/0% CPU idle). Bind por la IP ZeroTier (no solo loopback) para
-    que sea accesible igual que la propia Consola. Auth del CLI vía flujo
+    que sea accesible igual que la propia Consola. El default de URL vive en
+    `src/core/pad-url.js` como fuente única: el 2026-08-03 la IP ZeroTier de esta
+    máquina cambió de `.62` a `.192`, y `.62` quedó asignada a otro nodo. La
+    resolución es dinámica: `CWC_PAD_URL` explícita → IP ZeroTier detectada con
+    `findZeroTierIp()` → fallback. Tanto `readSessionToken` (host) como
+    `readUserPadToken` (inquilinos) toleran un `credentials.json` indexado por una
+    URL vieja cuando hay una sola credencial guardada. Auth del CLI vía flujo
     browser-based (`pad auth login`, Niko aprueba él mismo en su navegador — nunca
     se tocó su password). Workspace `console` migrado 1-vía desde el cloud
     (104/104 items: Docs/Bugs/Tasks/Conventions/Playbooks/Roadmap Items/Roles,

@@ -1391,10 +1391,11 @@ PAPELERA DE CONVERSACIONES — 30 días, copia y no movimiento
 vaya a papelera de reciclaje … que dure 30 días y a los 30 días sí se borre
 definitivamente»). `Chat.close()` deposita mediante `chat/trash.js` una COPIA
 durante 30 días de la metadata, el transcript `.jsonl` y la carpeta de adjuntos
-del paquete-sesión, tanto para «⋯ → Cerrar conversación» como para el reaper que
-cierra las dormidas a las 24 h. Los ORIGINALES NO SE MUEVEN NI SE BORRAN: es una
-RED DE SEGURIDAD, no una jaula, y por eso retomar desde el lanzador una
-conversación ya cerrada sigue funcionando igual que antes. El layout se separa
+del paquete-sesión cuando su dueño elige «⋯ → Cerrar conversación». El olvido
+automático de dormidas a las 24 h se eliminó el 2026-08-03. Los ORIGINALES NO
+SE MUEVEN NI SE BORRAN: es una RED DE SEGURIDAD, no una jaula, y por eso retomar
+desde el lanzador una conversación ya cerrada sigue funcionando igual que antes.
+El layout se separa
 POR DUEÑO:
 `<userDataDir(owner)>/chat-trash/index.json` +
 `chat-trash/<trashId>/{meta.json,transcript/<sid>.jsonl,attachments/}`; cada
@@ -1709,11 +1710,9 @@ ORIGEN del log, incluso en un chat que ya no es sala. Por eso todos los métodos
 que escriben en el log —`say`, `react`, `cut` y `orquestado`— conservan su guard
 `isSala()` al inicio, y cualquier escritor nuevo tiene que llevarlo.
 `console:BUG-2425` agregó `pruneSalas({keepIds, maxAgeMs})`, que poda carpetas
-con el mismo TTL de 30 días de las papeleras, sin timers: corre en `init()` y
-donde ya corre `autoPurgeAllChatTrash`. `keepIds` protege las salas de chats
-vivos, las referenciadas por un `salaLogId` y las presentes en alguna papelera.
-EL ORDEN NO ERA NEGOCIABLE: sin resolver primero `console:BUG-2423`, la poda
-habría borrado conversaciones que nadie había respaldado.
+con el mismo TTL de 30 días de las papeleras. Su llamada automática desde
+`init()` se eliminó el 2026-08-03: nada se borra del disco solo. La función sigue
+exportada para una limpieza explícita futura.
 
 B · RESPONDER CITANDO (`console:PLAN-2426` · F4). Es el CUARTO botón de la fila
 de acciones del mensaje, junto a las tres reacciones, pero NO es una reacción:

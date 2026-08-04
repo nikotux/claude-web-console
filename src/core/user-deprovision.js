@@ -4,6 +4,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { listInvites, revokeInvite } from './onboard-tokens.js';
 import { readHostPadToken, SHARED_WORKSPACE } from './pad-provision.js';
+import { PAD_DEFAULT_URL } from './pad-url.js';
 import { loadOwners } from './session-names.js';
 import { moveToTrash } from './trash.js';
 import { tmuxHasSession } from './bus.js';
@@ -17,7 +18,7 @@ import {
 } from './user-space.js';
 import { deleteProvisionState, PROVISION_DIR } from '../modules/onboard/provision-state.js';
 
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 const JOB_DIRS = [
   'onboard-jobs',
   'claude-login-jobs',

@@ -106,7 +106,7 @@ const db = new DatabaseSync('/home/nmosquera/.pad/pad.db', { readOnly: true });
 // 2) raíces   → items de 'arquitectura' sin fila (source_id=?, link_type='parent')
 ```
 
-Escribir al grafo NO se hace por SQL: se usa el MCP `pad` o el CLI (`pad item update <ref> --parent <ref>`, `pad item implements <a> <b>`, `pad item supersedes <nuevo> <viejo>`, con `--url http://10.213.222.62:7777 --workspace console`). El CLI tiene rate limit: conviene espaciar las llamadas y reintentar.
+Escribir al grafo NO se hace por SQL: se usa el MCP `pad` o el CLI (`pad item update <ref> --parent <ref>`, `pad item implements <a> <b>`, `pad item supersedes <nuevo> <viejo>`, con `--url http://10.213.222.192:7777 --workspace console`). El CLI tiene rate limit: conviene espaciar las llamadas y reintentar.
 
 ## Estado al 2026-07-25 (post reparación)
 

@@ -532,7 +532,7 @@ tmux new -s cwc-server 'cd ~/claude-web-console && npm start'
 
 ### From desktop
 
-Open `https://<zerotier-ip>:8092` (e.g. `https://10.213.222.62:8092`). The
+Open `https://<zerotier-ip>:8092` (e.g. `https://10.213.222.192:8092`). The
 first time, the browser warns "not secure" (it's your self-signed cert):
 accept it once.
 

@@ -26,8 +26,9 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PAD_DEFAULT_URL } from '../src/core/pad-url.js';
 
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 const WORKSPACE = process.env.CWC_PAD_WORKSPACE || 'console'; // control-plane = SIEMPRE console
 
 function fail(msg, code = 2) { console.error('[block-progress] ' + msg); process.exit(code); }

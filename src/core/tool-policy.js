@@ -31,6 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settingSourcesFor } from './sdk-settings.js';
+import { PAD_DEFAULT_URL } from './pad-url.js';
 import { chatAttachDir } from '../modules/chat/attachments.js';
 import {
   evaluateForbiddenAction, consumeForbiddenOverride, forbiddenDenyMessage,
@@ -239,9 +240,8 @@ export function aduanaPadMcpServer() {
   try {
     const command = process.env.CWC_PAD_BIN || path.join(os.homedir(), '.local', 'bin', 'pad');
     if (!fs.existsSync(command)) return null;
-    // La fuente de verdad de este default es pad-service-client.js (DEFAULT_URL);
-    // si cambia allá, hay que cambiarlo también acá.
-    const url = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+    // La fuente única de este default es core/pad-url.js.
+    const url = PAD_DEFAULT_URL;
     return {
       type: 'stdio',
       command,

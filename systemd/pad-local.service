@@ -3,7 +3,7 @@ Description=Pad (getpad.dev) - instancia local self-hosted
 After=network.target
 
 [Service]
-ExecStart=%h/.local/bin/pad server start --host 10.213.222.62 --port 7777
+ExecStart=%h/.local/bin/pad server start --host 10.213.222.192 --port 7777
 Restart=on-failure
 RestartSec=5
 KillMode=process

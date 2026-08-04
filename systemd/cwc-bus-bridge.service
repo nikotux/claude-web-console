@@ -1,0 +1,12 @@
+[Unit]
+Description=Mi Consola - puente del Interfono entre máquinas
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# El runner sale con 2 cuando otro ciclo conserva el lock. Con un timer por
+# minuto, ese solapamiento es normal y no debe ocultar fallos reales.
+SuccessExitStatus=2
+ExecStart=/usr/bin/node %h/claude-web-console/bin/cwc-bus-bridge.js
+WorkingDirectory=%h/claude-web-console

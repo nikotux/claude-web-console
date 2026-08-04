@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pty from 'node-pty';
 import { config } from '../../core/config.js';
+import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import {
   readUserOauthToken,
   readUserPadToken,
@@ -20,7 +21,7 @@ import {
 } from '../../core/user-space.js';
 
 const COMMAND_MAX_BUFFER = 1024 * 1024;
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 const TOLKIEN_JOBS_DIR = path.join(config.home, '.cwc-data', 'tolkien-setup');
 
 function result(id, labelEs, status, detail, fixHint = null) {

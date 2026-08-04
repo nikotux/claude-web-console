@@ -255,7 +255,20 @@ export function userPadWorkspace(userId) {
 export function readUserPadToken(userId, serverUrl) {
   try {
     const raw = JSON.parse(fs.readFileSync(userPadCredsPath(userId), 'utf8'));
-    return raw?.credentials?.[serverUrl]?.token || null;
+    const creds = raw?.credentials || {};
+    const exact = creds[serverUrl]?.token;
+    if (exact) return exact;
+    // FALLBACK (2026-08-03): credentials.json se indexa por la URL EXACTA del
+    // server. Cuando la IP ZeroTier cambió (.62 → .192) las credenciales ya
+    // provisionadas de los inquilinos quedaron bajo la clave vieja y este lookup
+    // empezó a devolver null, dejándolos sin Pad aunque su token seguía siendo
+    // válido contra el server nuevo (verificado: 200 en /api/v1/auth/me). Si hay
+    // UNA SOLA credencial guardada no hay ambigüedad y se usa esa. Con dos o más
+    // NO se adivina: devolver null es preferible a mandarle a un server el token
+    // de otro. Mismo criterio que readSessionToken() de pad-service-client.js.
+    const keys = Object.keys(creds);
+    if (keys.length === 1 && creds[keys[0]]?.token) return creds[keys[0]].token;
+    return null;
   } catch { return null; }
 }
 

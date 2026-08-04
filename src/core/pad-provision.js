@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { MOLD, recordMoldVersion } from './pad-mold.js';
+import { PAD_DEFAULT_URL } from './pad-url.js';
 import {
   ensureUserSpace,
   hostUser,
@@ -17,7 +18,7 @@ import {
   writeUserPadToken,
 } from './user-space.js';
 
-const PAD_URL = process.env.CWC_PAD_URL || 'http://10.213.222.62:7777';
+const PAD_URL = PAD_DEFAULT_URL;
 // Pozo COMÚN de Mejora Continua (console:PLAN-2222): workspace neutral donde
 // las lecciones de `project: tolkien` de TODOS los usuarios se agregan y suman
 // recurrencia entre personas. No es de nadie: ni `console` ni un `tenant-*`.
