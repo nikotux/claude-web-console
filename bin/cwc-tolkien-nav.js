@@ -65,6 +65,92 @@ export class WorkboardNotReadyError extends CliError {
   }
 }
 
+export function identityAliasesPath() {
+  return path.join(os.homedir(), '.cwc-data', 'tolkien', 'identity.json');
+}
+
+function normalizedIdentityEmail(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+/**
+ * Carga la equivalencia de identidades Tolkien/Zoho. La inyección opcional de
+ * I/O sólo existe para que los tests ejerciten archivos ausentes y corruptos
+ * sin escribir fixtures fuera del repo.
+ */
+export function loadIdentityAliases({
+  identityPath = identityAliasesPath(),
+  existsSync = fs.existsSync,
+  readFileSync = fs.readFileSync,
+} = {}) {
+  if (!existsSync(identityPath)) return new Map();
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(identityPath, 'utf8'));
+  } catch (error) {
+    throw new CliError(
+      `El archivo de aliases de identidad ${identityPath} no contiene JSON válido: `
+        + `${errorMessage(error)}.`,
+    );
+  }
+  const aliases = parsed?.aliases;
+  if (
+    !parsed
+    || typeof parsed !== 'object'
+    || Array.isArray(parsed)
+    || !aliases
+    || typeof aliases !== 'object'
+    || Array.isArray(aliases)
+  ) {
+    throw new CliError(
+      `El archivo de aliases de identidad ${identityPath} debe tener el formato `
+        + '`{"aliases":{"email@canonico":["alias@email"]}}`.',
+    );
+  }
+  const aliasMap = new Map();
+  for (const [canonicalValue, aliasValues] of Object.entries(aliases)) {
+    const canonical = normalizedIdentityEmail(canonicalValue);
+    if (
+      !canonical
+      || !Array.isArray(aliasValues)
+      || aliasValues.some((alias) => typeof alias !== 'string' || !normalizedIdentityEmail(alias))
+    ) {
+      throw new CliError(
+        `El archivo de aliases de identidad ${identityPath} tiene una entrada inválida `
+          + `para "${canonicalValue}"; cada clave debe ser un email no vacío y su valor `
+          + 'un array de emails no vacíos.',
+      );
+    }
+    aliasMap.set(canonical, new Set(aliasValues.map(normalizedIdentityEmail)));
+  }
+  return aliasMap;
+}
+
+export function aliasSetFor(email, aliasMap) {
+  const initial = normalizedIdentityEmail(email);
+  const result = new Set(initial ? [initial] : []);
+  const pending = [...result];
+  const entries = aliasMap instanceof Map ? [...aliasMap.entries()] : [];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const [canonicalValue, aliasValues] of entries) {
+      const canonical = normalizedIdentityEmail(canonicalValue);
+      const aliases = new Set(
+        [...(aliasValues instanceof Set ? aliasValues : aliasValues ?? [])]
+          .map(normalizedIdentityEmail)
+          .filter(Boolean),
+      );
+      if (canonical !== current && !aliases.has(current)) continue;
+      for (const candidate of [canonical, ...aliases]) {
+        if (!candidate || result.has(candidate)) continue;
+        result.add(candidate);
+        pending.push(candidate);
+      }
+    }
+  }
+  return result;
+}
+
 export function errorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/\s+/g, ' ').trim().slice(0, 500);

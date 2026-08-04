@@ -4,14 +4,20 @@
 
 import { inspect } from 'node:util';
 import {
+  CliError,
+  aliasSetFor,
+  loadIdentityAliases,
+} from './cwc-tolkien-nav.js';
+import {
+  classifyReconciliationTicket,
   extractReassignAssigneeName,
   reassignSubmissionDecision,
   resolveReassignTarget,
+  resolveZohoViewerIdentity,
   shouldAbortForUnknownAgents,
   verifyReassignState,
 } from './cwc-tolkien.js';
 
-const VIEWER_USER_ID = '777607ee-eeda-475e-b2d1-9561fcf41a54';
 const TARGET_USER_ID = '981c1e7b-5f0e-41bf-bfcc-eb312bbeb09f';
 const OTHER_USER_ID = 'a587f496-b8be-47ed-a190-ef69ca809997';
 const TARGET_AGENT_ID = '813994000004295001';
@@ -50,7 +56,6 @@ function resolve(overrides = {}) {
       option('', '— reassign to —', { disabled: true }),
       option(TARGET_USER_ID, 'Juan Camilo Hincapié Gonzalez (accounting@mordorstaffing.com)'),
     ],
-    viewerAgentId: VIEWER_USER_ID,
     ...overrides,
   });
 }
@@ -140,7 +145,10 @@ console.log('\nT6 · AGENTE DESCONOCIDO');
 
 console.log('\nT7 · DESTINATARIO ES EL VIEWER');
 {
-  const result = resolve({ viewerAgentId: TARGET_USER_ID });
+  const result = resolve({
+    viewerEmail: 'accounting@mordorstaffing.com',
+    viewerEmails: new Set(['accounting@mordorstaffing.com']),
+  });
   ok(
     'T7 informa ya_es_del_usuario',
     result.ok === false
@@ -312,6 +320,179 @@ console.log('\nT19 · IDEMPOTENCIA');
   ok(
     'T19 saltea sin submit cuando el dueño ya es el destinatario',
     result.shouldSubmit === false && result.reason === 'ya_reasignado',
+    result,
+  );
+}
+
+console.log('\nT20 · RACE DE ALIAS DEL VIEWER');
+{
+  const viewerAliasAgentId = '813994000000139001';
+  const result = resolveReassignTarget({
+    zohoAssigneeId: viewerAliasAgentId,
+    agents: new Map([[
+      viewerAliasAgentId,
+      { name: 'Julián García', email: 'dev@mordorstaffing.com' },
+    ]]),
+    selectOptions: [
+      option(OTHER_USER_ID, 'Dev Zoho (dev@mordorstaffing.com)'),
+    ],
+    viewerEmail: 'jgarcia@mordorstaffing.com',
+    viewerEmails: new Set([
+      'jgarcia@mordorstaffing.com',
+      'dev@mordorstaffing.com',
+    ]),
+  });
+  ok(
+    'T20 nunca reasigna el ticket del viewer a otro usuario con su email alias',
+    result.ok === false && result.reason === 'ya_es_del_usuario',
+    result,
+  );
+}
+
+console.log('\nT21 · SIN IDENTITY.JSON');
+{
+  const aliasMap = loadIdentityAliases({
+    identityPath: '/identity-ausente/identity.json',
+    existsSync: () => false,
+    readFileSync: () => { throw new Error('no debería leer'); },
+  });
+  const viewerEmails = aliasSetFor(' JGARCIA@MORDORSTAFFING.COM ', aliasMap);
+  ok(
+    'T21 conserva el comportamiento exacto sin configuración',
+    aliasMap.size === 0
+      && viewerEmails.size === 1
+      && viewerEmails.has('jgarcia@mordorstaffing.com'),
+    { aliasMap, viewerEmails },
+  );
+}
+
+console.log('\nT22 · ALIAS SIMÉTRICO Y AGENTE ZOHO');
+{
+  const aliasMap = loadIdentityAliases({
+    identityPath: '/identity-valida/identity.json',
+    existsSync: () => true,
+    readFileSync: () => JSON.stringify({
+      aliases: { ' JGARCIA@MORDORSTAFFING.COM ': [' DEV@MORDORSTAFFING.COM '] },
+    }),
+  });
+  const fromCanonical = aliasSetFor('jgarcia@mordorstaffing.com', aliasMap);
+  const fromAlias = aliasSetFor('dev@mordorstaffing.com', aliasMap);
+  const identity = resolveZohoViewerIdentity(
+    'jgarcia@mordorstaffing.com',
+    new Map([[
+      '813994000000139001',
+      { name: 'Julián García', email: 'dev@mordorstaffing.com' },
+    ]]),
+    aliasMap,
+  );
+  ok(
+    'T22 normaliza, hace simétrica la relación y resuelve vía dev@',
+    fromCanonical.has('dev@mordorstaffing.com')
+      && fromAlias.has('jgarcia@mordorstaffing.com')
+      && identity.ok === true
+      && identity.viewerAgentIds.has('813994000000139001'),
+    { fromCanonical, fromAlias, identity },
+  );
+}
+
+console.log('\nT23 · CLASIFICACIÓN CON AGENTE ALIAS');
+{
+  const viewerAliasAgentId = '813994000000139001';
+  const zoho = {
+    id: 'zoho-ticket-alias',
+    ticketNumber: '1234',
+    status: 'Open',
+    statusType: 'Open',
+    assigneeId: viewerAliasAgentId,
+  };
+  const result = await classifyReconciliationTicket(
+    {
+      ticketWorkflowId: 'tolkien-ticket-alias',
+      executionState: 'active',
+      deskTicketId: zoho.id,
+      deskTicketNumber: zoho.ticketNumber,
+    },
+    { callTool: async () => zoho },
+    '2026-08-04T00:00:00.000Z',
+    async () => new Map(),
+    new Set([viewerAliasAgentId]),
+  );
+  ok(
+    'T23 el assigneeId del alias queda en realOpen',
+    result.bucket === 'realOpen' && result.entry.reason === 'open_in_both',
+    result,
+  );
+}
+
+console.log('\nT24 · ALIAS AMBIGUO');
+{
+  const viewerEmails = new Set([
+    'jgarcia@mordorstaffing.com',
+    'dev@mordorstaffing.com',
+  ]);
+  const ambiguousAgents = new Map([
+    ['zoho-jgarcia', { name: 'Julián Tolkien', email: 'jgarcia@mordorstaffing.com' }],
+    ['zoho-dev', { name: 'Julián Zoho', email: 'dev@mordorstaffing.com' }],
+  ]);
+  const result = resolveReassignTarget({
+    zohoAssigneeId: 'zoho-dev',
+    agents: ambiguousAgents,
+    selectOptions: [option(OTHER_USER_ID, 'Dev Zoho (dev@mordorstaffing.com)')],
+    viewerEmail: 'jgarcia@mordorstaffing.com',
+    viewerEmails,
+  });
+  ok(
+    'T24 falla cerrado con alias_ambiguo',
+    result.ok === false && result.reason === 'alias_ambiguo',
+    result,
+  );
+}
+
+console.log('\nT25 · IDENTITY.JSON CORRUPTO');
+{
+  let thrown = null;
+  try {
+    loadIdentityAliases({
+      identityPath: '/identity-corrupta/identity.json',
+      existsSync: () => true,
+      readFileSync: () => '{ aliases: roto',
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  ok(
+    'T25 lanza CliError y cita la ruta',
+    thrown instanceof CliError
+      && thrown.message.includes('/identity-corrupta/identity.json')
+      && thrown.message.includes('JSON válido'),
+    thrown,
+  );
+}
+
+console.log('\nT26 · TICKET ABIERTO SIN ASSIGNEEID');
+{
+  const zoho = {
+    id: 'zoho-ticket-sin-asignado',
+    ticketNumber: '1235',
+    status: 'Open',
+    statusType: 'Open',
+    assigneeId: '',
+  };
+  const result = await classifyReconciliationTicket(
+    {
+      ticketWorkflowId: 'tolkien-ticket-sin-asignado',
+      executionState: 'active',
+      deskTicketId: zoho.id,
+      deskTicketNumber: zoho.ticketNumber,
+    },
+    { callTool: async () => zoho },
+    '2026-08-04T00:00:00.000Z',
+    async () => new Map(),
+    new Set(['']),
+  );
+  ok(
+    'T26 un assigneeId vacío nunca cae en realOpen',
+    result.bucket === 'reassigned' && result.entry.reason === 'assigned_to_other',
     result,
   );
 }

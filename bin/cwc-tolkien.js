@@ -3,8 +3,8 @@
 /**
  * Runner durable para Tolkien.
  *
- * login, whoami, census y reconcile son subcomandos de SOLO LECTURA. `close` y
- * `reassign` ESCRIBEN en Tolkien: por defecto usan --dry-run y exigen --apply
+ * login, whoami, census y reconcile son subcomandos de SOLO LECTURA. `close`,
+ * `reassign` y `context` ESCRIBEN en Tolkien: por defecto usan --dry-run y exigen --apply
  * explícito. Toda escritura queda registrada, con el estado antes
  * y después, en el directorio de operaciones correspondiente. El estado de
  * trabajo vive también en state.db (SQLite en modo WAL), junto a los JSON que
@@ -30,10 +30,13 @@ import {
   NAVIGATION_TIMEOUT_MS,
   CliError,
   InvalidSessionError,
+  aliasSetFor,
   assertAuthenticated,
   errorMessage,
   gotoReadOnly,
+  identityAliasesPath,
   launchContext,
+  loadIdentityAliases,
   readIdentity,
   requireSessionFile,
 } from './cwc-tolkien-nav.js';
@@ -56,6 +59,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const TERMINAL_EXECUTION_STATES = new Set(['completed', 'cancelled', 'closed']);
 const CLOSED_OK_EXECUTION_STATES = new Set(['completed', 'closed']);
 const REASSIGN_SKIP_REASONS = [
+  'alias_ambiguo',
   'sin_asignado_en_zoho',
   'agente_zoho_desconocido',
   'agente_sin_email',
@@ -74,7 +78,29 @@ const NEXT_ACTOR_KINDS = new Set([
   'building_administration',
   'automated_agent',
   'external_system',
+  'scheduled_time',
 ]);
+const WAITING_REASON_KINDS = new Set([
+  'decision_approval',
+  'missing_document_information',
+  'inventory',
+  'delivery',
+  'physical_access',
+  'scheduled_date',
+  'external_system',
+  'other',
+]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const WORK_CONTEXT_FIELDS = [
+  'desiredOutcome',
+  'mode',
+  'nextActorKind',
+  'nextActorLabel',
+  'waitingReasonKind',
+  'followupOn',
+  'waitingReason',
+  'reactivationTrigger',
+];
 const SESSION_DAYS = 30;
 
 // PROHIBIDO volver a calcular estas rutas en una constante de módulo: eso
@@ -130,6 +156,7 @@ function help() {
   node bin/cwc-tolkien.js reconcile [--census <ruta>] [--out <ruta>] [--limit <n>] [--fresh]
   node bin/cwc-tolkien.js close [--apply] [--reconcile <ruta>] [--limit <n>] [--confirm-large] [--only <workKey|ticketWorkflowId>]... [--next-actor <kind>]
   node bin/cwc-tolkien.js reassign [--apply] [--reconcile <ruta>] [--limit <n>] [--confirm-large] [--only <workKey|ticketWorkflowId>]...
+  node bin/cwc-tolkien.js context --ticket <workKey|uuid|url> [--apply] [--outcome <txt>] [--mode working|waiting] [--next-actor <kind>] [--actor-label <txt>] [--waiting-reason-kind <kind>] [--followup <YYYY-MM-DD>] [--why <txt>] [--evidence <txt>]
   node bin/cwc-tolkien.js db [--stats] [--migrate] [--runs <n>] [--bucket <pila>]
 
 Subcomandos:
@@ -139,6 +166,7 @@ Subcomandos:
   reconcile Cruza el censo con Zoho Desk sin abrir Chromium ni escribir en Tolkien.
   close    Revisa o aplica el cierre en masa; el default absoluto es --dry-run.
   reassign Revisa o aplica la reasignación de la pila reassigned; default --dry-run.
+  context  Revisa o guarda Outcome & next action de un ticket; default --dry-run.
   db       Consulta o migra el store de trabajo SQLite local.
 
 Opciones de census:
@@ -167,6 +195,18 @@ Opciones de reassign:
   --limit <n>           Recorta la pila reassigned a procesar.
   --confirm-large       Autoriza lotes mayores al tope de 50.
   --only <id>           Filtra por workKey o ticketWorkflowId; es repetible.
+
+Opciones de context:
+  --ticket <ref>                 Ticket por WORK-n, UUID o URL (obligatorio).
+  --apply                        Guarda los cambios; sin este flag sólo informa.
+  --outcome <txt>                Resultado esperado.
+  --mode <working|waiting>       Modo de trabajo.
+  --next-actor <kind>            Tipo del actor siguiente (scheduled_time está prohibido).
+  --actor-label <txt>            Etiqueta del actor siguiente (2..120 caracteres).
+  --waiting-reason-kind <kind>   Tipo de espera.
+  --followup <YYYY-MM-DD>        Fecha de seguimiento en Bogotá (hoy..hoy + 366 días).
+  --why <txt>                    Motivo de espera (5..500 caracteres).
+  --evidence <txt>               Evidencia o disparador de reactivación.
 
 Opciones de db:
   --stats               Muestra conteos y la corrida más reciente (default).
@@ -407,6 +447,157 @@ function parseReassignArgs(args, paths) {
     }
   }
   return { apply, reconcileFile, limit, confirmLarge, only };
+}
+
+function bogotaDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type) => Number(parts.find((part) => part.type === type)?.value);
+  return { year: value('year'), month: value('month'), day: value('day') };
+}
+
+function isoDateFromDayNumber(dayNumber) {
+  return new Date(dayNumber * 86_400_000).toISOString().slice(0, 10);
+}
+
+function parseIsoDayNumber(value, option) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new CliError(`${option} debe tener formato YYYY-MM-DD.`);
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const normalized = new Date(timestamp).toISOString().slice(0, 10);
+  if (normalized !== value) throw new CliError(`${option} no es una fecha válida: ${value}.`);
+  return timestamp / 86_400_000;
+}
+
+export function bogotaFollowupBounds(now = new Date()) {
+  const { year, month, day } = bogotaDateParts(now);
+  const minimumDay = Date.UTC(year, month - 1, day) / 86_400_000;
+  return {
+    minimum: isoDateFromDayNumber(minimumDay),
+    maximum: isoDateFromDayNumber(minimumDay + 366),
+  };
+}
+
+export function validateWorkContextValues(values, { now = new Date() } = {}) {
+  if (values.nextActorKind === 'scheduled_time') {
+    throw new CliError(
+      'El valor scheduled_time está prohibido para --next-actor: Tolkien rechaza esa combinación.',
+    );
+  }
+  if (values.mode !== undefined && !['working', 'waiting'].includes(values.mode)) {
+    throw new CliError('--mode debe ser working o waiting.');
+  }
+  if (values.nextActorKind !== undefined && !NEXT_ACTOR_KINDS.has(values.nextActorKind)) {
+    throw new CliError(
+      `Valor inválido para --next-actor: ${values.nextActorKind}. Valores válidos: `
+        + `${[...NEXT_ACTOR_KINDS].join(', ')}.`,
+    );
+  }
+  if (
+    values.waitingReasonKind !== undefined
+    && !WAITING_REASON_KINDS.has(values.waitingReasonKind)
+  ) {
+    throw new CliError(
+      `Valor inválido para --waiting-reason-kind: ${values.waitingReasonKind}. Valores válidos: `
+        + `${[...WAITING_REASON_KINDS].join(', ')}.`,
+    );
+  }
+  if (
+    values.nextActorLabel !== undefined
+    && (values.nextActorLabel.length < 2 || values.nextActorLabel.length > 120)
+  ) {
+    throw new CliError('--actor-label debe tener entre 2 y 120 caracteres.');
+  }
+  if (
+    values.waitingReason !== undefined
+    && (values.waitingReason.length < 5 || values.waitingReason.length > 500)
+  ) {
+    throw new CliError('--why debe tener entre 5 y 500 caracteres.');
+  }
+  if (values.followupOn !== undefined) {
+    const followupDay = parseIsoDayNumber(values.followupOn, '--followup');
+    const bounds = bogotaFollowupBounds(now);
+    const minimumDay = parseIsoDayNumber(bounds.minimum, '--followup');
+    const maximumDay = parseIsoDayNumber(bounds.maximum, '--followup');
+    if (followupDay < minimumDay) {
+      throw new CliError(`--followup no puede ser anterior a hoy en Bogotá (${bounds.minimum}).`);
+    }
+    if (followupDay > maximumDay) {
+      throw new CliError(`--followup no puede ser posterior a ${bounds.maximum} (hoy + 366 días).`);
+    }
+  }
+  if (values.mode === 'waiting') {
+    const required = [
+      ['waitingReasonKind', '--waiting-reason-kind'],
+      ['followupOn', '--followup'],
+      ['waitingReason', '--why'],
+      ['reactivationTrigger', '--evidence'],
+    ];
+    for (const [field, option] of required) {
+      if (!Object.hasOwn(values, field) || String(values[field]).length === 0) {
+        throw new CliError(`--mode waiting exige ${option}.`);
+      }
+    }
+  } else {
+    const waitingOnly = [
+      ['waitingReasonKind', '--waiting-reason-kind'],
+      ['followupOn', '--followup'],
+      ['waitingReason', '--why'],
+      ['reactivationTrigger', '--evidence'],
+    ].find(([field]) => Object.hasOwn(values, field));
+    if (waitingOnly) {
+      throw new CliError(`${waitingOnly[1]} exige --mode waiting.`);
+    }
+  }
+  return true;
+}
+
+export function workContextDiff(actual, proposed) {
+  return WORK_CONTEXT_FIELDS.map((field) => {
+    const current = actual?.[field] ?? '';
+    const next = Object.hasOwn(proposed ?? {}, field) ? proposed[field] : current;
+    const changed = String(current ?? '') !== String(next ?? '');
+    return { field, actual: current, proposed: next, changed, status: changed ? 'CAMBIA' : 'sin cambio' };
+  });
+}
+
+export function parseContextArgs(args, { now = new Date() } = {}) {
+  let apply = false;
+  let ticket = null;
+  const values = {};
+  const valueOptions = new Map([
+    ['--outcome', 'desiredOutcome'],
+    ['--mode', 'mode'],
+    ['--next-actor', 'nextActorKind'],
+    ['--actor-label', 'nextActorLabel'],
+    ['--waiting-reason-kind', 'waitingReasonKind'],
+    ['--followup', 'followupOn'],
+    ['--why', 'waitingReason'],
+    ['--evidence', 'reactivationTrigger'],
+  ]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--apply') {
+      apply = true;
+    } else if (arg === '--ticket') {
+      ticket = valueAfter(args, index, arg);
+      index += 1;
+    } else if (valueOptions.has(arg)) {
+      values[valueOptions.get(arg)] = valueAfter(args, index, arg);
+      index += 1;
+    } else {
+      throw new CliError(`Opción desconocida para context: ${arg}`);
+    }
+  }
+  if (!ticket) throw new CliError('context exige --ticket <workKey|uuid|url>.');
+  validateWorkContextValues(values, { now });
+  return { apply, ticket, values };
 }
 
 async function whoami({ print = true, paths }) {
@@ -1427,7 +1618,7 @@ export async function classifyReconciliationTicket(
   client,
   generatedAt,
   getAgents,
-  viewerAgentId,
+  viewerAgentIds,
 ) {
   const unpaired = (reason, detail = null, zoho = null) => ({
     bucket: 'unpaired',
@@ -1476,8 +1667,11 @@ export async function classifyReconciliationTicket(
 
   const base = reconciliationBase(ticket, zoho);
   if (zoho?.statusType === 'Open') {
-    if (String(zoho.assigneeId ?? '') !== String(viewerAgentId)) {
-      const assigneeId = String(zoho.assigneeId ?? '');
+    const assigneeId = String(zoho.assigneeId ?? '');
+    const acceptedViewerAgentIds = viewerAgentIds instanceof Set
+      ? viewerAgentIds
+      : new Set([String(viewerAgentIds ?? '')].filter(Boolean));
+    if (!assigneeId || !acceptedViewerAgentIds.has(assigneeId)) {
       const agents = await getAgents();
       const assignee = assigneeId ? agents.get(assigneeId) : null;
       let detail = 'Sin asignado en Zoho.';
@@ -1563,6 +1757,23 @@ export async function classifyReconciliationTicket(
   };
 }
 
+export function resolveZohoViewerIdentity(viewerEmail, agents, aliasMap) {
+  const viewerEmails = aliasSetFor(viewerEmail, aliasMap);
+  const viewerAgents = agents instanceof Map
+    ? [...agents.entries()].filter(([, agent]) => (
+        viewerEmails.has(normalizedEmail(agent?.email))
+      ))
+    : [];
+  const viewerAgentIds = new Set(viewerAgents.map(([agentId]) => String(agentId)));
+  if (viewerAgentIds.size === 0) {
+    return { ok: false, reason: 'sin_agente_zoho', viewerEmails, viewerAgentIds, viewerAgents };
+  }
+  if (viewerAgentIds.size > 1) {
+    return { ok: false, reason: 'alias_ambiguo', viewerEmails, viewerAgentIds, viewerAgents };
+  }
+  return { ok: true, viewerEmails, viewerAgentIds, viewerAgents };
+}
+
 async function reconcile(args, paths) {
   const options = parseReconcileArgs(args, paths);
   if (!fs.existsSync(options.censusFile)) {
@@ -1607,19 +1818,36 @@ async function reconcile(args, paths) {
         + 'Volvé a correr `node bin/cwc-tolkien.js census` antes de reconciliar.',
     );
   }
-  const normalizedViewerEmail = viewerEmail.toLowerCase();
-  const viewerAgent = [...agents.entries()].find(([, agent]) => (
-    String(agent?.email ?? '').trim().toLowerCase() === normalizedViewerEmail
-  ));
-  if (!viewerAgent) {
+  const viewerIdentity = resolveZohoViewerIdentity(
+    viewerEmail,
+    agents,
+    loadIdentityAliases(),
+  );
+  const { viewerEmails, viewerAgentIds, viewerAgents } = viewerIdentity;
+  if (viewerIdentity.reason === 'sin_agente_zoho') {
     throw new CliError(
       `Ningún agente de Zoho coincide con viewerEmail "${viewerEmail}" del censo. `
+        + `Se probaron: ${[...viewerEmails].join(', ')}. Revisá ${identityAliasesPath()}. `
         + 'Volvé a correr `node bin/cwc-tolkien.js census` antes de reconciliar.',
     );
   }
+  if (viewerIdentity.reason === 'alias_ambiguo') {
+    const details = viewerAgents.map(([agentId, agent]) => (
+      `${agent?.name ?? 'sin nombre'} (${agentId}, ${normalizedEmail(agent?.email)})`
+    ));
+    throw new CliError(
+      `alias_ambiguo: los emails de identidad ${[...viewerEmails].join(', ')} resuelven a `
+        + `más de un agente vivo de Zoho: ${details.join('; ')}. Revisá ${identityAliasesPath()}.`,
+    );
+  }
+  const viewerAgent = viewerAgents[0];
   const viewerAgentId = String(viewerAgent[0]);
   const viewerAgentName = viewerAgent[1]?.name ?? viewerEmail;
-  log(`Identidad Zoho resuelta: ${viewerAgentName} (${viewerAgentId}).`);
+  const resolvedViewerEmail = normalizedEmail(viewerAgent[1]?.email);
+  const resolutionKind = resolvedViewerEmail === normalizedEmail(viewerEmail)
+    ? `email exacto ${resolvedViewerEmail}`
+    : `alias ${resolvedViewerEmail}`;
+  log(`Identidad Zoho resuelta: ${viewerAgentName} (${viewerAgentId}) vía ${resolutionKind}.`);
 
   for (let index = 0; index < tickets.length; index += 1) {
     const ticket = tickets[index];
@@ -1633,7 +1861,7 @@ async function reconcile(args, paths) {
       client,
       generatedAt,
       getAgents,
-      viewerAgentId,
+      viewerAgentIds,
     );
     const record = { ticketWorkflowId: ticket.ticketWorkflowId, ...classification };
     appendPartial(record, paths.reconcilePartialFile, paths.dataDir);
@@ -1856,8 +2084,8 @@ export function resolveReassignTarget({
   zohoAssigneeId,
   agents,
   selectOptions,
-  viewerAgentId = null,
   viewerEmail = null,
+  viewerEmails = null,
 }) {
   const assigneeId = String(zohoAssigneeId ?? '').trim();
   if (!assigneeId) return { ok: false, reason: 'sin_asignado_en_zoho' };
@@ -1865,6 +2093,21 @@ export function resolveReassignTarget({
   if (!agent) return { ok: false, reason: 'agente_zoho_desconocido' };
   const agentEmail = String(agent.email ?? '').trim();
   if (!agentEmail) return { ok: false, reason: 'agente_sin_email' };
+  const normalizedViewerEmails = new Set(
+    [viewerEmail, ...(viewerEmails ?? [])].map(normalizedEmail).filter(Boolean),
+  );
+  if (normalizedViewerEmails.size > 1) {
+    const matchingViewerAgents = [...agents.entries()].filter(([, candidate]) => (
+      normalizedViewerEmails.has(normalizedEmail(candidate?.email))
+    ));
+    if (matchingViewerAgents.length > 1) {
+      return {
+        ok: false,
+        reason: 'alias_ambiguo',
+        agentIds: matchingViewerAgents.map(([agentId]) => String(agentId)),
+      };
+    }
+  }
   const wantedEmail = normalizedEmail(agentEmail);
   const matches = (Array.isArray(selectOptions) ? selectOptions : [])
     .map(reassignOption)
@@ -1877,10 +2120,7 @@ export function resolveReassignTarget({
     name: target.name || agent.name || target.email,
     email: target.email,
   };
-  if (
-    (viewerAgentId !== null && String(viewerAgentId) === target.userId)
-    || (normalizedEmail(viewerEmail) && normalizedEmail(viewerEmail) === target.normalizedEmail)
-  ) {
+  if (normalizedViewerEmails.has(target.normalizedEmail)) {
     return { ok: false, reason: 'ya_es_del_usuario', ...targetResult };
   }
   return { ok: true, ...targetResult };
@@ -2020,6 +2260,185 @@ async function submitDesiredOutcome(page, proposal, nextActorKind) {
     page,
     async (currentPage) => (await currentPage.locator('textarea[name="desiredOutcome"]').count()) === 0,
   );
+}
+
+function ticketWorkflowIdFromReference(reference) {
+  if (UUID_PATTERN.test(reference)) return reference.toLowerCase();
+  if (!/^https?:\/\//i.test(reference)) return null;
+  let parsed;
+  try {
+    parsed = new URL(reference);
+  } catch {
+    throw new CliError(`URL de ticket inválida: ${reference}`);
+  }
+  const match = parsed.pathname.match(/^\/tickets\/([0-9a-f-]+)\/?$/i);
+  if (!match || !UUID_PATTERN.test(match[1])) {
+    throw new CliError(`La URL no contiene un ticketWorkflowId válido: ${reference}`);
+  }
+  return match[1].toLowerCase();
+}
+
+function resolveContextTicket(reference, paths) {
+  let ticketWorkflowId = ticketWorkflowIdFromReference(reference);
+  let known = null;
+  if (fs.existsSync(paths.censusFile)) {
+    const census = readJsonFile(paths.censusFile, 'el censo de Tolkien');
+    known = (census.tickets ?? []).find((ticket) => (
+      String(ticket.ticketWorkflowId ?? '').toLowerCase() === ticketWorkflowId
+      || String(ticket.workKey ?? ticket.workNumber ?? '').toUpperCase() === reference.toUpperCase()
+    )) ?? null;
+  }
+  if (/^WORK-\d+$/i.test(reference)) {
+    if (!known?.ticketWorkflowId) {
+      throw new CliError(`No se encontró ${reference} en ${paths.censusFile}.`);
+    }
+    ticketWorkflowId = String(known.ticketWorkflowId).toLowerCase();
+  }
+  if (!ticketWorkflowId) throw new CliError(`Referencia de ticket inválida: ${reference}`);
+  return {
+    ticketWorkflowId,
+    workKey: known?.workKey ?? known?.workNumber ?? (/^WORK-\d+$/i.test(reference) ? reference.toUpperCase() : null),
+    url: `${BASE_URL}/tickets/${encodeURIComponent(ticketWorkflowId)}`,
+  };
+}
+
+async function readWorkContextForm(page, detailUrl = null) {
+  if (detailUrl) await gotoReadOnly(page, `${detailUrl}?tab=estado`);
+  const form = page.locator('select[name="mode"]').locator('xpath=ancestor::form[1]');
+  if (await form.count() === 0) {
+    throw new Error('No se encontró el formulario de contexto de trabajo.');
+  }
+  return form.evaluate((element) => {
+    const valueOf = (selector) => {
+      const control = element.querySelector(selector);
+      return control && 'value' in control ? String(control.value) : null;
+    };
+    const clean = (value) => value?.replace(/\s+/g, ' ').trim() || null;
+    const dlValue = (label) => {
+      const dt = [...document.querySelectorAll('dt')]
+        .find((candidate) => clean(candidate.textContent) === label);
+      return clean(dt?.nextElementSibling?.textContent);
+    };
+    return {
+      ticketWorkflowId: valueOf('input[type="hidden"][name="ticketWorkflowId"]'),
+      desiredOutcome: valueOf('textarea[name="desiredOutcome"]')
+        ?? valueOf('input[type="hidden"][name="desiredOutcome"]')
+        ?? dlValue('Desired outcome')
+        ?? '',
+      mode: valueOf('select[name="mode"]') ?? '',
+      nextActorKind: valueOf('select[name="nextActorKind"]') ?? '',
+      nextActorLabel: valueOf('input[name="nextActorLabel"]') ?? '',
+      waitingReasonKind: valueOf('select[name="waitingReasonKind"]') ?? '',
+      followupOn: valueOf('input[name="followupOn"]') ?? '',
+      waitingReason: valueOf('input[name="waitingReason"]') ?? '',
+      reactivationTrigger: valueOf('input[name="reactivationTrigger"]') ?? '',
+    };
+  });
+}
+
+function requestedWorkContextValues(values) {
+  const requested = {};
+  for (const field of ['desiredOutcome', 'mode', 'nextActorKind', 'nextActorLabel']) {
+    if (Object.hasOwn(values, field)) requested[field] = values[field];
+  }
+  if (values.mode === 'waiting') {
+    for (const field of [
+      'waitingReasonKind',
+      'followupOn',
+      'waitingReason',
+      'reactivationTrigger',
+    ]) {
+      if (Object.hasOwn(values, field)) requested[field] = values[field];
+    }
+  }
+  return requested;
+}
+
+function contextPersistenceMismatch(observed, requested) {
+  const textFields = new Set([
+    'desiredOutcome',
+    'nextActorLabel',
+    'waitingReason',
+    'reactivationTrigger',
+  ]);
+  for (const [field, wanted] of Object.entries(requested)) {
+    const actual = observed?.[field] ?? '';
+    const matches = textFields.has(field)
+      ? sameText(actual, wanted)
+      : String(actual) === String(wanted);
+    if (!matches) return { field, actual, wanted };
+  }
+  return null;
+}
+
+export async function submitWorkContext(page, values) {
+  const form = page.locator('select[name="mode"]').locator('xpath=ancestor::form[1]');
+  if (await form.count() === 0) {
+    throw new Error('No se encontró el formulario de contexto de trabajo.');
+  }
+  const fields = [
+    ['desiredOutcome', 'textarea[name="desiredOutcome"]', 'fill'],
+    ['mode', 'select[name="mode"]', 'select'],
+    ['nextActorKind', 'select[name="nextActorKind"]', 'select'],
+    ['nextActorLabel', 'input[name="nextActorLabel"]', 'fill'],
+  ];
+  if (values.mode === 'waiting') {
+    fields.push(
+      ['waitingReasonKind', 'select[name="waitingReasonKind"]', 'select'],
+      ['followupOn', 'input[name="followupOn"]', 'fill'],
+      ['waitingReason', 'input[name="waitingReason"]', 'fill'],
+      ['reactivationTrigger', 'input[name="reactivationTrigger"]', 'fill'],
+    );
+  }
+  for (const [field, selector, action] of fields) {
+    if (!Object.hasOwn(values, field)) continue;
+    const control = form.locator(selector);
+    if (await control.count() === 0) {
+      throw new Error(`No se encontró el campo ${field} del contexto de trabajo.`);
+    }
+    if (action === 'select') await control.selectOption(values[field]);
+    else await control.fill(values[field]);
+  }
+  const requested = requestedWorkContextValues(values);
+  await form.locator('button[type="submit"]').click();
+  await page.waitForTimeout(250);
+
+  const deadline = Date.now() + 12_000;
+  let after = null;
+  let mismatch = null;
+  let readError = null;
+  while (Date.now() < deadline) {
+    const errorCode = new URL(page.url()).searchParams.get('error');
+    if (errorCode) {
+      await assertAuthenticated(page);
+      return { error: `Tolkien devolvió el error ${errorCode} al guardar el contexto.`, after };
+    }
+    try {
+      after = await readWorkContextForm(page);
+      mismatch = contextPersistenceMismatch(after, requested);
+      if (!mismatch) {
+        await assertAuthenticated(page);
+        return { error: null, after };
+      }
+      readError = null;
+    } catch (error) {
+      readError = error;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await page.waitForTimeout(Math.min(250, remaining));
+  }
+  await assertAuthenticated(page);
+  if (mismatch) {
+    return {
+      error: `No se persistió el campo ${mismatch.field}: quedó ${JSON.stringify(mismatch.actual)}; `
+        + `se pidió ${JSON.stringify(mismatch.wanted)}.`,
+      after,
+    };
+  }
+  return {
+    error: `No se pudo releer el formulario después del submit: ${errorMessage(readError)}.`,
+    after,
+  };
 }
 
 async function submitClose(page, evidenceSummary) {
@@ -2555,6 +2974,7 @@ async function inspectReassignDryRun(source, batch, paths, client) {
     await gotoReadOnly(page, `${BASE_URL}/tickets`);
     const identity = await readIdentity(page);
     const viewerEmail = verifiedReassignViewerEmail(identity, source);
+    const viewerEmails = aliasSetFor(viewerEmail, loadIdentityAliases());
     const agents = await deskListAgents(client);
     const results = [];
     for (let index = 0; index < batch.length; index += 1) {
@@ -2566,6 +2986,7 @@ async function inspectReassignDryRun(source, batch, paths, client) {
         agents,
         selectOptions: current.selectOptions,
         viewerEmail,
+        viewerEmails,
       });
       results.push({ ticket, target });
     }
@@ -2596,6 +3017,7 @@ async function applyReassign(source, batch, options, paths, client) {
     await gotoReadOnly(page, `${BASE_URL}/tickets`);
     const identity = await readIdentity(page);
     const viewerEmail = verifiedReassignViewerEmail(identity, source);
+    const viewerEmails = aliasSetFor(viewerEmail, loadIdentityAliases());
     logFile = createOpsLog(paths, 'reassign');
     appendPartial({
       kind: 'run-start',
@@ -2679,6 +3101,7 @@ async function applyReassign(source, batch, options, paths, client) {
           agents,
           selectOptions: before.selectOptions,
           viewerEmail,
+          viewerEmails,
         });
         if (!target.ok) {
           appendReassignOpsStep(
@@ -2846,6 +3269,177 @@ async function reassign(args, paths) {
   await applyReassign(source, batch, options, paths, client);
 }
 
+function contextStateSnapshot(state) {
+  if (!state) return null;
+  return Object.fromEntries([
+    ['ticketWorkflowId', state.ticketWorkflowId ?? null],
+    ...WORK_CONTEXT_FIELDS.map((field) => [field, state[field] ?? '']),
+  ]);
+}
+
+function appendContextOpsStep(logFile, ticket, result, errorCode, before, after, payload, paths) {
+  appendPartial({
+    kind: 'step',
+    at: new Date().toISOString(),
+    ticketWorkflowId: ticket.ticketWorkflowId,
+    workKey: ticket.workKey,
+    url: ticket.url,
+    phase: 'context',
+    result,
+    errorCode: errorCode ?? null,
+    before: contextStateSnapshot(before),
+    after: contextStateSnapshot(after),
+    payload: payload ?? null,
+  }, logFile, paths.dataDir);
+}
+
+function printableContextValue(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function printContextDryRun(ticket, before, values, originalArgs) {
+  let report = `DRY-RUN context · ${ticket.workKey ?? ticket.ticketWorkflowId}\n`;
+  report += `${ticket.url}\n\n`;
+  report += 'campo · actual → propuesto · estado\n';
+  for (const row of workContextDiff(before, values)) {
+    report += `${row.field} · ${printableContextValue(row.actual)} → `
+      + `${printableContextValue(row.proposed)} · ${row.status}\n`;
+  }
+  const applyArgs = originalArgs.filter((arg) => arg !== '--apply');
+  const applyCommand = ['node', 'bin/cwc-tolkien.js', 'context', ...applyArgs, '--apply']
+    .map(shellArgument)
+    .join(' ');
+  report += '\nNo se escribió nada en Tolkien. Para aplicar exactamente estos cambios:\n';
+  report += `${applyCommand}\n`;
+  process.stdout.write(report);
+}
+
+async function readContextTicket(ticket, paths) {
+  requireSessionFile(paths.sessionFile);
+  const { browser, context: browserContext } = await launchContext(paths.sessionFile);
+  const page = await browserContext.newPage();
+  try {
+    const before = await readWorkContextForm(page, ticket.url);
+    if (
+      before.ticketWorkflowId
+      && String(before.ticketWorkflowId).toLowerCase() !== ticket.ticketWorkflowId
+    ) {
+      throw new CliError(
+        `El ticket navegado no coincide: se pidió ${ticket.ticketWorkflowId} y se leyó `
+          + `${before.ticketWorkflowId}.`,
+      );
+    }
+    return before;
+  } finally {
+    await browserContext.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
+async function applyContext(ticket, values, paths) {
+  requireSessionFile(paths.sessionFile);
+  const { browser, context: browserContext } = await launchContext(paths.sessionFile);
+  const page = await browserContext.newPage();
+  let logFile = null;
+  let before = null;
+  let after = null;
+  let stepWritten = false;
+  let fatalError = null;
+  try {
+    await gotoReadOnly(page, `${BASE_URL}/tickets`);
+    const identity = await readIdentity(page);
+    logFile = createOpsLog(paths, 'context');
+    appendPartial({
+      kind: 'run-start',
+      at: new Date().toISOString(),
+      apply: true,
+      batchSize: 1,
+      ticketWorkflowId: ticket.ticketWorkflowId,
+      workKey: ticket.workKey,
+      viewer: identity.email ?? null,
+    }, logFile, paths.dataDir);
+    before = await readWorkContextForm(page, ticket.url);
+    if (
+      before.ticketWorkflowId
+      && String(before.ticketWorkflowId).toLowerCase() !== ticket.ticketWorkflowId
+    ) {
+      appendContextOpsStep(
+        logFile,
+        ticket,
+        'aborted',
+        'ticket_workflow_mismatch',
+        before,
+        before,
+        values,
+        paths,
+      );
+      stepWritten = true;
+      throw new CliError(
+        `El ticket navegado no coincide: se pidió ${ticket.ticketWorkflowId} y se leyó `
+          + `${before.ticketWorkflowId}.`,
+      );
+    }
+    const submission = await submitWorkContext(page, values);
+    after = submission.after;
+    if (submission.error) {
+      appendContextOpsStep(
+        logFile, ticket, 'failed', 'context_unverified', before, after, values, paths,
+      );
+      stepWritten = true;
+      throw new CliError(submission.error);
+    }
+    appendContextOpsStep(logFile, ticket, 'ok', null, before, after, values, paths);
+    stepWritten = true;
+  } catch (error) {
+    fatalError = error;
+    if (logFile && !stepWritten) {
+      if (before) {
+        try {
+          after = await readWorkContextForm(page, ticket.url);
+        } catch (readError) {
+          if (readError instanceof InvalidSessionError) fatalError = readError;
+        }
+      }
+      appendContextOpsStep(
+        logFile,
+        ticket,
+        'failed',
+        'exception',
+        before,
+        after,
+        { ...values, exceptionMessage: errorMessage(error) },
+        paths,
+      );
+    }
+  } finally {
+    if (logFile) {
+      appendPartial({
+        kind: 'run-end',
+        at: new Date().toISOString(),
+        counts: { updated: fatalError ? 0 : 1, failed: fatalError ? 1 : 0 },
+      }, logFile, paths.dataDir);
+    }
+    await browserContext.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+  if (fatalError) throw fatalError;
+  log(`Contexto actualizado y verificado. Log: ${logFile}`);
+}
+
+async function contextCommand(args, paths) {
+  // El parseo y todas las validaciones de valores ocurren antes de resolver el
+  // ticket, leer la sesión o lanzar Chromium: cualquier combinación inválida
+  // falla cerrada sin navegar.
+  const options = parseContextArgs(args);
+  const ticket = resolveContextTicket(options.ticket, paths);
+  if (!options.apply) {
+    const before = await readContextTicket(ticket, paths);
+    printContextDryRun(ticket, before, options.values, args);
+    return;
+  }
+  await applyContext(ticket, options.values, paths);
+}
+
 async function dbCommand(args, paths) {
   let action = null;
   let force = false;
@@ -2930,6 +3524,8 @@ async function main() {
     await close(args, paths);
   } else if (command === 'reassign') {
     await reassign(args, paths);
+  } else if (command === 'context') {
+    await contextCommand(args, paths);
   } else if (command === 'db') {
     await dbCommand(args, paths);
   } else {
