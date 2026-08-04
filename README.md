@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-04 09:28 — main
+- Agregar módulo mcps y helper nativo de pageout (capa 5 de swap)
+
 ### 2026-08-03 22:39 — main
 - Deriva CWC_PAD_URL de la IP ZeroTier y desacopla bus/mirror por SSH
 
@@ -388,10 +391,6 @@ since the previous push. Newest entry first.
 - Modified `public/js/modules/tolkien/tolkien.js`
 - Modified `src/modules/tickets/index.js`
 - Added `src/modules/tickets/shared.js`
-
-### 2026-07-03 06:20 — main
-- Modified `CLAUDE.md`
-- Modified `src/modules/tokens/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
