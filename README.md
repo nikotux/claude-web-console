@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-03 22:39 — main
+- Deriva CWC_PAD_URL de la IP ZeroTier y desacopla bus/mirror por SSH
+
 ### 2026-08-03 17:29 — main
 - tkt: agregar reassign de tickets con dueño cambiado en Zoho y censo paralelo
 
@@ -389,9 +392,6 @@ since the previous push. Newest entry first.
 ### 2026-07-03 06:20 — main
 - Modified `CLAUDE.md`
 - Modified `src/modules/tokens/index.js`
-
-### 2026-07-03 06:19 — main
-- Deleted `docs/test-untracked.md`
 
 _(older entries trimmed — see `git log` for the full history)_
 
