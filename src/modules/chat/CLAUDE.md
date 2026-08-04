@@ -1865,6 +1865,62 @@ contra el root del USUARIO, así que nunca puede alcanzar un recurso compartido
 entre personas; ese cálculo pertenece al servidor, que es el único que conoce la
 diferencia entre «tu espacio» y «el suelo de todos».
 
+RESTAURAR UNA SALA DESDE LA PAPELERA (`console:BUG-2646`, 2026-08-04, pedido de
+Niko de recuperar una sala borrada). La papelera respalda `sala.jsonl` y
+`reads.json` desde `console:BUG-2423`, o sea que restaurar una sala es una
+operación PREVISTA; sin embargo era imposible. La restauración tiene dos patas
+—`POST /api/chat/trash/restore` repone los archivos y devuelve la metadata, y el
+frontend reabre el chat con `POST /api/chat/create` usando ese mismo `cwd`— y la
+segunda rebotaba con 400 contra el guard de `console:BUG-2432`, que rechaza a
+propósito todo `cwd` de Aduana llegado del cliente. El guard es correcto y no se
+tocó: sin él, cualquiera entraría a la sala de otra persona nombrando su carpeta.
+Lo que faltaba era distinguir «el cliente nombró una sala» de «el servidor acaba
+de autorizar esta reapertura puntual».
+
+La solución es un VALE de un solo uso que emite el propio servidor.
+`grantSalaRestore(sessionId, cwd, owner)` y
+`consumeSalaRestore(sessionId, cwdAbs, owner)` viven a nivel de módulo en
+`chat/index.js`, junto a `createChatForRequest`. El handler de `trash/restore`
+emite el vale sólo cuando lo restaurado era una sala, y lo hace DESPUÉS de que
+`restoreChatTrash` verificó que la entrada estaba en la papelera de ESE usuario;
+`createChatForRequest` lo consume en la misma condición que antes rechazaba,
+que pasó a ser `if (isSalaPath(cwdAbs) && !consumeSalaRestore(resume, cwdAbs, owner))`.
+El vale exige que coincidan los TRES datos —sesión, carpeta y dueño—, vence a los cinco
+minutos y se borra siempre que se lo encuentre, acierte o no, para que un intento
+fallido no deje uno reutilizable. El cliente no puede fabricarlo, de modo que la
+ruta sigue sin ser nombrable desde afuera y el frontend no necesitó ningún
+cambio.
+
+GOTCHA QUE COSTÓ UNA VUELTA ENTERA: la primera versión comparaba el `owner` en
+crudo y el vale NUNCA se emitía. El `username` del principal es legítimamente
+`null` cuando la petición se autentica por token (`/api/whoami` devuelve
+`{"type":"token","username":null,"admin":true,"host":"nmosquera"}`), y ese
+`null` SIGNIFICA el host, no «sin dueño». Es la misma normalización que ya
+aplican `safeCwd` y `trashChat`, y ahora se aplica en los DOS lados con
+`owner || hostUser()`: si quedara en uno solo, un vale emitido como `nmosquera`
+jamás matchearía un consumo con `null` y el bug seguiría vivo con otra cara.
+
+LIMITACIÓN ACEPTADA: los vales viven en memoria. Es un apretón de manos de la UI
+de unos dos segundos, no trabajo en curso, así que no cae bajo la Regla dura 2;
+pero si el server se reinicia justo en esa ventana, el vale se pierde y —como
+`restoreChatTrash` ya borró la entrada— la restauración hay que rehacerla a mano.
+Si eso llegara a doler, la salida es persistir el vale en el data dir del dueño,
+no alargar su TTL.
+
+LA PUERTA GEMELA (`console:BUG-2647`, misma jornada). Buscando una ruta
+alternativa apareció que `POST /api/chat/handoff` aceptaba un `cwd` arbitrario
+del cliente SIN el guard de `console:BUG-2432`, y `safeCwd` preserva a propósito
+una ruta ya contenida en `ADUANA_ROOT`: mudando un chat propio se llegaba al
+`cwd` de una sala ajena, exactamente lo que ese bug había cerrado en `create`.
+La misma puerta, la ventana de al lado. El rechazo se puso en el ENDPOINT HTTP y
+no dentro de `ManagerChat.handoff()`, porque las dos mudanzas internas legítimas
+hacia una sala o un worktree —`toAduana()` y la provisión de entornos de
+Tolkien— llaman al método directo con `{ internal: true }` y deben seguir
+funcionando; ponerlo en el endpoint las deja intactas sin tocar la firma.
+Verificado en negativo y en positivo: mudar un chat al `cwd` de una sala ajena
+da 400, mudarlo a Tolkien sigue dando 200, y convertir un chat en sala con
+`POST /api/chat/to-aduana` sigue produciendo una sala nueva.
+
 CUCHO — PREGUNTAS DIRIGIDAS A LA IA (2026-07-31). La IA de la sala se llama
 **Cucho**; `SALA_AI_NAME`/`SALA_AI_LABEL` en `aduana.js` fijan ese nombre propio,
 elegido por votación en una sala real el 2026-07-31. `@cucho` SIEMPRE designa a
@@ -1971,6 +2027,10 @@ cambios de código y los runners vivos. La prueba de referencia es
   revela el bug porque hereda el env completo del server. Ante “El motor de chat
   no arrancó”, mirar el `.log` del chat en el data dir del usuario:
   `~/.cwc-users/<usuario>/.cwc-data/chats/<id>.log` para un inquilino.
+- `spawnRunner` inyecta `CWC_CONSOLE_ROOT` tanto al host como al inquilino para
+  que las skills del catálogo resuelvan los CLIs de `bin/` desde cualquier cwd.
+  No afloja el blindaje anticonsumo: HOME y `CWC_DATA_DIR` siguen siendo los del
+  dueño, y el inquilino conserva el env limpio de `userRunnerEnv`.
 - Credencial del host al arrancar: en la rama HOST de `spawnRunner`, si el env
   no trae `CLAUDE_CODE_OAUTH_TOKEN`, `hostCredUsable()` exige que
   `~/.claude/.credentials.json` tenga accessToken o refreshToken; si no, frena

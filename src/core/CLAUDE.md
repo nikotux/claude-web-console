@@ -32,7 +32,11 @@ nunca loguea credenciales y ante cualquier fallo devuelve `null` en vez de
 lanzar. Exports: `refreshClaudeOauth(owner)`,
 `getValidClaudeAccessToken(owner)`) ·
 paths(resolveWithinHome/clampToHome — TODA validación de
-rutas del cliente pasa por acá; nunca startsWith crudo) ·
+rutas del cliente pasa por acá; nunca startsWith crudo · `CONSOLE_ROOT` es la
+raíz de INSTALACIÓN de la consola que reciben runners y PTY para que una skill
+del catálogo invoque CLIs de `bin/` desde el cwd aislado de un inquilino; NO es
+un dato user-scoped ni un secreto, y no reemplaza el aislamiento de HOME +
+`CWC_DATA_DIR`) ·
 arch-uid(fuente ÚNICA del mapeo entre el `uid` de un nodo de
 `arquitectura` y la ruta del repo que representa: `mod:<n>` →
 `src/modules/<n>`, `fe:<n>` → `public/js/modules/<n>`, `run:<n>` →

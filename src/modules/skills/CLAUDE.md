@@ -21,6 +21,11 @@ fail-closed como `cwc-share: host-only` + `cwc-default: false`: nunca se
 comparte. El hash corto SHA-256 cubre todos los archivos de la skill, incluidos
 `references/` y `scripts/`, para señalar copias desactualizadas.
 
+Una skill `catalog` que necesite invocar un CLI de `bin/` debe hacerlo con
+`$CWC_CONSOLE_ROOT`, nunca con una ruta relativa (el cwd de un inquilino no
+contiene el repo) ni con una ruta absoluta al HOME del host (rompe la convención
+de skill compartible). `tkt` es el caso vivo de esta regla.
+
 GET `/api/skills` calcula el catálogo y sus hashes una sola vez por request y
 lo comparte entre la reconciliación de defaults y el estado del catálogo. El
 estado INSTALADO se lee siempre fresco después de reconciliar, porque ese paso

@@ -5,6 +5,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { CONSOLE_ROOT } from '../../core/paths.js';
 import { userRunnerEnv, hostUser, userClaudeDir, readUserOauthToken } from '../../core/user-space.js';
 import { CHATS_DIR, sockPath, logPath } from './shared.js';
 
@@ -146,6 +147,11 @@ export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandl
       throw new Error(`El usuario ${ownerId} no tiene credenciales de Claude configuradas (completá el onboarding).`);
     }
   }
+  // Raíz de la consola para las skills compartidas (console: catálogo de skills).
+  // El cwd de un inquilino es su workspace aislado, que NO contiene el repo: sin
+  // esto, una skill del catálogo no puede invocar un CLI de bin/. No afloja el
+  // aislamiento: HOME y CWC_DATA_DIR siguen siendo los del dueño.
+  env.CWC_CONSOLE_ROOT = CONSOLE_ROOT;
   if (selfHandle) env.CWC_SELF_HANDLE = selfHandle;
   const child = spawn(process.execPath, args, {
     cwd, detached: true, stdio: ['ignore', log, log], env,

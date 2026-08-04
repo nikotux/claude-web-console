@@ -127,6 +127,12 @@ La tabla accesible `.md-chart-data` es sr-only pero NO está escopada a
 de que `.md-chart` sea `position:relative` para no escaparse del scroller del
 chat; `#body` lleva `overflow:clip` como guard para que ningún desborde vuelva
 a hacer scrollear el documento.
+El bloque «Modo documento» se activa con `body.doc-mode` y alcanza únicamente
+`.chat-assistant .chat-md`. La medida angosta se aplica a los elementos de
+TEXTO, no al contenedor, para que tablas, código y figuras conserven su ancho
+completo. La sangría de primera línea SIN margen entre párrafos es una decisión
+explícita del usuario: no mezclar ese ritmo de libro con separación adicional.
+
 ### public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 ### public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)
 ### public/raw.html + js/rawview/raw.js + css/raw.css   Vista Raw (PLAN-544, pedido

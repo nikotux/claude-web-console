@@ -3482,6 +3482,44 @@ function participantChat(req, id) {
   return chat.isParticipant(p.username) ? chat : null;
 }
 
+// 🛃 Vales de restauración de sala. `createChatForRequest` rechaza a propósito
+// todo `cwd` de Aduana que venga del cliente (console:BUG-2432): aceptarlo
+// dejaría entrar a la sala de otra persona nombrando su carpeta. Pero restaurar
+// una sala desde la papelera necesita exactamente ese `cwd`, y el frontend lo
+// reabre en una segunda llamada. La salida es que el VALE lo emita el servidor
+// —que ya verificó que la entrada estaba en la papelera de ESE usuario— y que
+// el create lo consuma: la ruta sigue sin ser nombrable por el cliente.
+// De un solo uso y con vencimiento corto: es un apretón de manos de la UI, no
+// estado de trabajo en curso. Si el server se reinicia en esa ventana de ~2 s,
+// el vale se pierde y la restauración hay que rehacerla.
+const SALA_RESTORE_TTL_MS = 5 * 60 * 1000;
+const salaRestoreGrants = new Map(); // sessionId -> { cwd, owner, exp }
+
+// `owner` puede venir null: es el principal autenticado por token, que ES el host. Se normaliza en los dos lados con `hostUser()`, igual que `safeCwd` y `trashChat` — comparar el null en crudo hacía que el vale no se emitiera nunca.
+function grantSalaRestore(sessionId, cwd, owner) {
+  if (!sessionId || !cwd) return;
+  salaRestoreGrants.set(String(sessionId), {
+    cwd: path.resolve(cwd),
+    owner: String(owner || hostUser()),
+    exp: Date.now() + SALA_RESTORE_TTL_MS,
+  });
+}
+
+// Consume el vale: sólo vale si coinciden LOS TRES datos (sesión, carpeta y
+// dueño) y no venció. Se borra siempre que se encuentre, acierte o no, para que
+// un intento fallido no deje un vale reutilizable.
+function consumeSalaRestore(sessionId, cwdAbs, owner) {
+  const now = Date.now();
+  for (const [sid, g] of salaRestoreGrants) {
+    if (g.exp <= now) salaRestoreGrants.delete(sid);
+  }
+  const key = String(sessionId || '');
+  const grant = salaRestoreGrants.get(key);
+  if (!grant) return false;
+  salaRestoreGrants.delete(key);
+  return grant.owner === String(owner || hostUser()) && grant.cwd === path.resolve(cwdAbs);
+}
+
 // Camino único de creación HTTP. `/create` y la salida visada de Aduana pasan
 // por las mismas validaciones, defaults por usuario, cupo y aislamiento de cwd.
 // Las opciones extra son internas: ningún body público puede evitar el arranque
@@ -3519,7 +3557,7 @@ function createChatForRequest(req, res, body = {}, { pendingPrompt = null, start
     }
   } else {
     cwdAbs = safeCwd(cwd, owner);
-    if (isSalaPath(cwdAbs)) {
+    if (isSalaPath(cwdAbs) && !consumeSalaRestore(resume, cwdAbs, owner)) {
       res.status(400).json({ error: 'Para abrir una sala de 🛃 Aduana usá la opción "Sala" del lanzador.' });
       return null;
     }
@@ -3908,6 +3946,12 @@ export default {
       }
       const restored = restoreChatTrash(id, principalOf(req).username);
       if (!restored) return res.status(404).json({ error: 'Esa entrada ya no está en la papelera.' });
+      // Si lo restaurado era una sala, el frontend la reabre en una segunda
+      // llamada a /create con este mismo `cwd`, que el guard de BUG-2432
+      // rechazaría. El vale autoriza esa reapertura puntual y nada más.
+      if (restored.cwd && restored.sessionId && isSalaPath(restored.cwd)) {
+        grantSalaRestore(restored.sessionId, restored.cwd, principalOf(req).username);
+      }
       res.json({ ok: true, restored });
     });
 
@@ -4092,6 +4136,13 @@ export default {
       const destCwd = req.body?.cwd;
       if (typeof destCwd !== 'string' || !destCwd.trim()) {
         return res.status(400).json({ error: 'Falta la carpeta/mundo destino.' });
+      }
+      // Misma puerta que cierra console:BUG-2432 en /create: `safeCwd` preserva
+      // a propósito una ruta ya contenida en Aduana, así que un `cwd` de sala
+      // llegado del cliente permitiría mudarse a la sala de otra persona. Las
+      // mudanzas internas hacia una sala (toAduana) no pasan por acá.
+      if (isSalaPath(safeCwd(destCwd, _pre.owner))) {
+        return res.status(400).json({ error: 'Para entrar a una sala de 🛃 Aduana usá la opción "Sala" del lanzador.' });
       }
       // F2(d): tarea/instrucción opcional para el mundo destino (va al manifiesto
       // + se inyecta en el 1er turno). Saneada: string, tope 2000.

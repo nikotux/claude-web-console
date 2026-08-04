@@ -22,6 +22,8 @@ import { openPeticionDialog } from '../visado/peticion-dialog.js';
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
 const CHAT_MODEL_LABEL = new Map(CHAT_MODEL_OPTIONS);
+const DOC_MODE_STORAGE_KEY = 'cwc.chat.docmode';
+const DOC_MODE_EVENT = 'cwc:docmode';
 
 // Un mensaje que empieza con /comando se pinta con chip destacado (Fase 8).
 const CMD_RE = /^(\/[a-zA-Z0-9_:-]+)([\s\S]*)$/;
@@ -353,6 +355,10 @@ export class ChatTab {
           <select class="chat-mode" data-risk="ok" title="${t('chat.header.modeTitle', 'Modo de permisos')}">
             ${MODES.map(([v, l, , k]) => `<option value="${v}">${t(k, l)}</option>`).join('')}
           </select>
+          <button type="button" class="btn-ghost btn--icon chat-doc-toggle"
+            title="${t('chat.doc.toggle', 'Modo documento — texto angosto, justificado y serif')}"
+            aria-label="${t('chat.doc.toggle', 'Modo documento — texto angosto, justificado y serif')}"
+            aria-pressed="false">${icon('docMode', { size: 15 })}</button>
           ${helpBtn('chat')}
         </header>
         <div class="chat-body">
@@ -437,6 +443,17 @@ export class ChatTab {
     this.stopBtn = container.querySelector('.chat-stop');
     this.typingEl = container.querySelector('.chat-typing');
     this.modeEl = container.querySelector('.chat-mode');
+    this.docModeBtn = container.querySelector('.chat-doc-toggle');
+    this._onDocMode = (event) => this._applyDocMode(Boolean(event.detail?.on));
+    window.addEventListener(DOC_MODE_EVENT, this._onDocMode);
+    let docModeOn = document.body.classList.contains('doc-mode');
+    try { docModeOn = localStorage.getItem(DOC_MODE_STORAGE_KEY) === '1'; } catch { /* sin persistencia */ }
+    this._applyDocMode(docModeOn);
+    this.docModeBtn.addEventListener('click', () => {
+      const on = !document.body.classList.contains('doc-mode');
+      try { localStorage.setItem(DOC_MODE_STORAGE_KEY, on ? '1' : '0'); } catch { /* sin persistencia */ }
+      window.dispatchEvent(new CustomEvent(DOC_MODE_EVENT, { detail: { on } }));
+    });
     this.aliveEl = container.querySelector('.chat-alive');
     this.modelPillEl = container.querySelector('.chat-model-pill');
     this.flowEl = container.querySelector('.chat-flow');
@@ -2623,6 +2640,12 @@ export class ChatTab {
     this._renderPacState();
   }
 
+  _applyDocMode(on) {
+    document.body.classList.toggle('doc-mode', on);
+    this.docModeBtn?.classList.toggle('is-on', on);
+    this.docModeBtn?.setAttribute('aria-pressed', String(on));
+  }
+
   // Motor Pac-Man del header (ver ui/pacman.js): 'working' (dorado) mientras
   // el turno corre, 'delegating' (violeta + badge del interfono) si hay un
   // subagente Task/Agent corriendo dentro del turno, 'waiting' (verde,
@@ -2730,6 +2753,7 @@ export class ChatTab {
 
   dispose() {
     this.closedByUser = true;
+    window.removeEventListener(DOC_MODE_EVENT, this._onDocMode);
     this._slashClose();
     this._clearTyping();
     clearTimeout(this._markReadTimer);

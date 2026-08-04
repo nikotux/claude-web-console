@@ -1783,6 +1783,7 @@ html, body {
    nativos de móvil ignoran estilos de <option> — el color del select
    colapsado marca el riesgo igual). */
 .chat-mode option { color: var(--cwc-text-secondary); background: var(--cwc-bg-panel); }
+.chat-doc-toggle.is-on { color: var(--cwc-accent); }
 .chat-mode option[value="plan"] { color: var(--cwc-text-dim); }
 .chat-mode option[value="default"] { color: var(--cwc-ok); }
 .chat-mode option[value="acceptEdits"] { color: var(--cwc-warn); }
@@ -2386,6 +2387,16 @@ html, body {
 .chat-md pre code { background: none; padding: 0; font-size: var(--cwc-fs-sm); }
 .chat-md table { border-collapse: collapse; margin: .4rem 0; font-size: var(--cwc-fs-sm); }
 .chat-md th, .chat-md td { border: 1px solid var(--cwc-border-soft); padding: .25rem .5rem; }
+/* Resaltado de palabra clave. Las 4 clases son las mismas del vocabulario
+   semántico de Mermaid, para no inventar roles nuevos. */
+.chat-md mark {
+  background: color-mix(in srgb, var(--cwc-warn) 20%, transparent);
+  color: inherit; padding: 0 .18em; border-radius: 3px;
+}
+.chat-md mark.key  { background: color-mix(in srgb, var(--cwc-accent) 22%, transparent); }
+.chat-md mark.ok   { background: color-mix(in srgb, var(--cwc-ok) 22%, transparent); }
+.chat-md mark.warn { background: color-mix(in srgb, var(--cwc-warn) 22%, transparent); }
+.chat-md mark.bad  { background: color-mix(in srgb, var(--cwc-danger) 22%, transparent); }
 .md-bar {
   display: inline-block; vertical-align: middle; width: 60px; height: 6px;
   border-radius: 3px; background: var(--cwc-bg-chip); overflow: hidden; margin-right: .35rem;
@@ -2543,6 +2554,117 @@ html, body {
 table.md-chart-data {
   position: absolute; top: 0; left: 0; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ── Modo documento ────────────────────────────────────────────────
+   El texto va a MEDIDA de hoja carta (~70 caracteres por línea, el rango
+   óptimo de lectura); las tablas, el código y las figuras se salen a ancho
+   completo, como las figuras a sangre de una revista. */
+body.doc-mode .chat-assistant .chat-md {
+  font-family: var(--cwc-font-serif);
+  font-size: .95rem;
+  line-height: 1.65;
+}
+
+/* Medida: solo el TEXTO se acota. min() para que la medida siga al zoom. */
+body.doc-mode .chat-assistant .chat-md > p,
+body.doc-mode .chat-assistant .chat-md > ul,
+body.doc-mode .chat-assistant .chat-md > ol,
+body.doc-mode .chat-assistant .chat-md > blockquote,
+body.doc-mode .chat-assistant .chat-md > h1,
+body.doc-mode .chat-assistant .chat-md > h2,
+body.doc-mode .chat-assistant .chat-md > h3,
+body.doc-mode .chat-assistant .chat-md > h4,
+body.doc-mode .chat-assistant .chat-md > h5,
+body.doc-mode .chat-assistant .chat-md > h6 {
+  max-width: min(624px, 70ch);
+}
+
+/* Párrafos: justificado con partición de palabras (el <html lang="es"> del
+   index habilita los guiones; sin ellos el justificado abre ríos de blanco).
+   Sangría de primera línea SIN margen entre párrafos: se eligió el ritmo de
+   libro, no el de pantalla. */
+body.doc-mode .chat-assistant .chat-md > p {
+  text-align: justify;
+  hyphens: auto;
+  text-indent: 1.6em;
+  margin: 0;
+}
+/* El primer párrafo de un bloque y el que sigue a un título NO llevan sangría
+   (regla tipográfica: la sangría marca continuidad, y ahí no hay nada previo). */
+body.doc-mode .chat-assistant .chat-md > p:first-child,
+body.doc-mode .chat-assistant .chat-md > h1 + p,
+body.doc-mode .chat-assistant .chat-md > h2 + p,
+body.doc-mode .chat-assistant .chat-md > h3 + p,
+body.doc-mode .chat-assistant .chat-md > h4 + p,
+body.doc-mode .chat-assistant .chat-md > h5 + p,
+body.doc-mode .chat-assistant .chat-md > h6 + p,
+body.doc-mode .chat-assistant .chat-md > blockquote + p,
+body.doc-mode .chat-assistant .chat-md > ul + p,
+body.doc-mode .chat-assistant .chat-md > ol + p,
+body.doc-mode .chat-assistant .chat-md > pre + p,
+body.doc-mode .chat-assistant .chat-md > table + p,
+body.doc-mode .chat-assistant .chat-md > hr + p {
+  text-indent: 0;
+}
+
+/* Títulos: sans para contrastar con la serif del cuerpo, y una línea en blanco
+   REAL debajo (hoy el margen es .7rem arriba / .3rem abajo — al revés de lo
+   que conviene, el título quedaba pegado a su texto). */
+body.doc-mode .chat-assistant .chat-md h1,
+body.doc-mode .chat-assistant .chat-md h2,
+body.doc-mode .chat-assistant .chat-md h3,
+body.doc-mode .chat-assistant .chat-md h4,
+body.doc-mode .chat-assistant .chat-md h5,
+body.doc-mode .chat-assistant .chat-md h6 {
+  font-family: var(--cwc-font-ui);
+  font-weight: 600;
+  margin: 1.5rem 0 .7rem;
+}
+body.doc-mode .chat-assistant .chat-md > :first-child { margin-top: 0; }
+
+/* Listas: NO se justifican (una lista justificada se ve rota). */
+body.doc-mode .chat-assistant .chat-md ul,
+body.doc-mode .chat-assistant .chat-md ol {
+  text-align: left;
+  margin: .8rem 0;
+}
+body.doc-mode .chat-assistant .chat-md li { margin: .3rem 0; }
+
+/* Tablas: tipografía de documento (decisión del usuario), con más aire, pero
+   SIN el tope de medida — una tabla angosta se lee peor, no mejor. Se acotan a
+   860px para que no se despeguen del texto en un monitor muy ancho. */
+body.doc-mode .chat-assistant .chat-md table {
+  font-family: var(--cwc-font-serif);
+  font-size: .9rem;
+  max-width: min(100%, 860px);
+  margin: 1.1rem 0;
+}
+body.doc-mode .chat-assistant .chat-md th,
+body.doc-mode .chat-assistant .chat-md td {
+  padding: .45rem .7rem;
+  line-height: 1.5;
+  text-align: left;
+}
+/* El código dentro de una celda conserva la monoespaciada. */
+body.doc-mode .chat-assistant .chat-md code { font-family: var(--cwc-font-mono); }
+
+/* Código y figuras: ancho de figura, no de texto. */
+body.doc-mode .chat-assistant .chat-md pre {
+  max-width: min(100%, 860px);
+  margin: 1.1rem 0;
+}
+
+/* Los controles y rótulos de visualizaciones conservan la tipografía de UI;
+   el texto del documento y las tablas siguen usando la serif. */
+body.doc-mode .chat-assistant .chat-md .md-chart-title,
+body.doc-mode .chat-assistant .chat-md .md-chart-src,
+body.doc-mode .chat-assistant .chat-md .md-mermaid-canvas,
+body.doc-mode .chat-assistant .chat-md .md-mermaid-zoom-btn,
+body.doc-mode .chat-assistant .chat-md .md-mermaid-src,
+body.doc-mode .chat-assistant .chat-md .md-mermaid-error,
+body.doc-mode .chat-assistant .chat-md .md-bar-num {
+  font-family: var(--cwc-font-ui);
 }
 @media (max-width: 768px) {
   .md-chart-box, .md-chart--round .md-chart-box { height: 200px; }

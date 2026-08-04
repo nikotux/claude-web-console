@@ -5,13 +5,14 @@
 // de los internals de marked ni de librerías extra). Los bloques de código se
 // resaltan con window.hljs y ganan botón de copiar. Los bloques ```chart``` y
 // ```mermaid``` se enriquecen después sin confiar en HTML/config del modelo.
+// MARK acepta únicamente las clases semánticas cerradas key|ok|warn|bad.
 import { icon } from './icons.js';
 import { openModal } from './dialog.js';
 import { t } from './i18n.js';
 import { openZoomViewer } from './zoom-viewer.js';
 
 const ALLOWED = new Set([
-  'P', 'BR', 'HR', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'PRE',
+  'P', 'BR', 'HR', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'PRE', 'MARK',
   'UL', 'OL', 'LI', 'BLOCKQUOTE', 'A',
   'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD',
@@ -25,12 +26,13 @@ function sanitize(node) {
       child.replaceWith(document.createTextNode(child.textContent || ''));
       continue;
     }
-    // Atributos: solo href seguro en <a> y class de lenguaje en <code>.
+    // Atributos: href seguro en <a> y clases cerradas en <code>/<mark>.
     for (const attr of [...child.attributes]) {
       const name = attr.name.toLowerCase();
       const keep =
         (child.tagName === 'A' && name === 'href' && /^https?:\/\//i.test(attr.value)) ||
-        (child.tagName === 'CODE' && name === 'class' && /^language-[\w-]+$/.test(attr.value));
+        (child.tagName === 'CODE' && name === 'class' && /^language-[\w-]+$/.test(attr.value)) ||
+        (child.tagName === 'MARK' && name === 'class' && /^(key|ok|warn|bad)$/.test(attr.value));
       if (!keep) child.removeAttribute(attr.name);
     }
     if (child.tagName === 'A') {

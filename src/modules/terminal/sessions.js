@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { resolveModelArg } from '../../core/claude-model.js';
+import { CONSOLE_ROOT } from '../../core/paths.js';
 import {
   ensureCliOnboarded,
   ensureUserSpace,
@@ -148,6 +149,9 @@ class Session {
     } else {
       env = { ...process.env, TERM: 'xterm-256color' };  // host: retrocompat TOTAL
     }
+    // Misma raíz de consola que reciben los runners de chat: una skill del
+    // catálogo invocada desde una TUI necesita poder resolver los CLIs de bin/.
+    env.CWC_CONSOLE_ROOT = CONSOLE_ROOT;
     delete env.TMUX;
     delete env.TMUX_PANE;
     const tmuxEnv = new Map();

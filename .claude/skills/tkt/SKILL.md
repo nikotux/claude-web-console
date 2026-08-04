@@ -1,15 +1,15 @@
 ---
 name: tkt
 description: "🎫 Opera los tickets de Tolkien en masa desde la consola: censa los propios, los cruza contra Zoho, cierra los resueltos y reasigna los que cambiaron de dueño, siempre con dry-run y confirmación humana antes de escribir. Usala cuando el pedido hable de cerrar/reasignar/sincronizar/alinear tickets de Tolkien con Zoho, o de ver cuántos tickets propios están desalineados."
-cwc-share: host-only
-cwc-default: false
+cwc-share: catalog
+cwc-default: true
 ---
 
 # 🎫 Alinear tickets de Tolkien con Zoho
 
 ## Qué resuelve y por qué existe
 
-El board de Tolkien es la fuente de verdad que Niko revisa cada mañana, pero puede mostrar como abiertos tickets a su nombre que Zoho ya marcó como resueltos. Esta skill alinea ambos sistemas desde la consola, sin abrir PRs ni tocar el código de Tolkien.
+El board de Tolkien es la fuente de verdad del trabajo asignado, pero puede mostrar como abiertos tickets a tu nombre que Zoho ya marcó como resueltos. Esta skill alinea ambos sistemas desde la consola, sin abrir PRs ni tocar el código de Tolkien.
 
 > [!IMPORTANT]
 > **El objetivo NO es cerrar muchos tickets: es que el board diga la verdad.** Un ticket cuyo estado real no está verificado en Zoho **queda abierto** y se marca para revisión humana. Cerrar de más es peor que no cerrar.
@@ -18,8 +18,10 @@ El board de Tolkien es la fuente de verdad que Niko revisa cada mañana, pero pu
 
 Antes de empezar, comprobá que la sesión de Tolkien esté conectada:
 
+Los comandos usan `$CWC_CONSOLE_ROOT`, la raíz de la instalación de la consola que el server inyecta en el entorno de cada sesión. Gracias a eso el CLI se resuelve desde cualquier directorio de trabajo. Si la variable no estuviera definida, la sesión no salió de la consola: pedile al usuario que abra el trabajo desde un chat o una terminal de la consola en vez de armar la ruta a mano.
+
 ```bash
-node bin/cwc-tolkien.js whoami
+node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" whoami
 ```
 
 Si no hay sesión, el censo falla. Conectala desde **⚙ Sistema → Conexiones** y recién entonces retomá el flujo.
@@ -28,14 +30,14 @@ Cada operación de escritura se muestra en dos filas para separar su dry-run obl
 
 | Paso | Comando | Qué hace | ¿Escribe? |
 |---|---|---|---|
-| 1 | `node bin/cwc-tolkien.js census` | Lista los tickets de Tolkien asignados al usuario y sus campos de cierre | No |
-| 2 | `node bin/cwc-tolkien.js reconcile` | Cruza cada ticket con su par en Zoho y produce 4 pilas | No |
-| 3 | `node bin/cwc-tolkien.js close` | Dry-run: muestra qué se tocaría y con qué evidencia | No |
-| 4 | `node bin/cwc-tolkien.js close --apply` | Cierra de verdad, con la identidad de Niko | **SÍ** |
-| 5 | `node bin/cwc-tolkien.js reassign` | Dry-run: resuelve por email el dueño real de cada ticket de `reassigned` y agrupa el lote por destinatario | No |
-| 6 | `node bin/cwc-tolkien.js reassign --apply` | Reasigna en Tolkien únicamente la pila `reassigned` al dueño confirmado en Zoho | **SÍ** |
+| 1 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" census` | Lista los tickets de Tolkien asignados al usuario y sus campos de cierre | No |
+| 2 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reconcile` | Cruza cada ticket con su par en Zoho y produce 4 pilas | No |
+| 3 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" close` | Dry-run: muestra qué se tocaría y con qué evidencia | No |
+| 4 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" close --apply` | Cierra de verdad, con tu identidad de Tolkien | **SÍ** |
+| 5 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reassign` | Dry-run: resuelve por email el dueño real de cada ticket de `reassigned` y agrupa el lote por destinatario | No |
+| 6 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reassign --apply` | Reasigna en Tolkien únicamente la pila `reassigned` al dueño confirmado en Zoho | **SÍ** |
 
-Traducí el pedido de Niko al paso mínimo que lo resuelve: “censá/mirá mis tickets” → `census`; “compará/sincronizá/alineá con Zoho” o “¿cuántos están desalineados?” → `reconcile`; “mostrame qué cerrarías” → `close`; “cerralos” → primero `close`, presentar el dry-run y pedir confirmación explícita, y solo después `close --apply`; “sacá de mi board los que ya tienen otro dueño” → primero `reassign`, mostrar el resumen agrupado por destinatario y pedir confirmación explícita, y solo después `reassign --apply`.
+Traducí el pedido del usuario al paso mínimo que lo resuelve: “censá/mirá mis tickets” → `census`; “compará/sincronizá/alineá con Zoho” o “¿cuántos están desalineados?” → `reconcile`; “mostrame qué cerrarías” → `close`; “cerralos” → primero `close`, presentar el dry-run y pedir confirmación explícita, y solo después `close --apply`; “sacá de mi board los que ya tienen otro dueño” → primero `reassign`, mostrar el resumen agrupado por destinatario y pedir confirmación explícita, y solo después `reassign --apply`.
 
 `reconcile` falla de forma cerrada si el censo no informa el email del usuario o si no puede resolver ese email a un `agentId` de Zoho. En ese caso, volvé a correr `census`: nunca continúes con la verificación de asignado desactivada.
 
@@ -82,7 +84,7 @@ Si el usuario pide cerrar “todo” y el lote supera 50 tickets, **no agregues 
 Ante cualquier duda sobre un ticket puntual, hacé primero una pasada de prueba de uno solo:
 
 ```bash
-node bin/cwc-tolkien.js close --only WORK-123
+node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" close --only WORK-123
 ```
 
 Solo después de revisar esa evidencia se considera el lote grande.
@@ -148,6 +150,8 @@ Cada corrida con `--apply` deja un log JSONL con el estado anterior y posterior 
 ~/.cwc-data/tolkien/ops/reassign-<ts>-<pid>.jsonl
 ```
 
+Esas rutas son relativas a TU espacio: cada usuario de la consola tiene su propio `~/.cwc-data` aislado, y una corrida nunca ve ni toca las operaciones de otra persona.
+
 Los códigos de error de Tolkien que pueden aparecer son:
 
 - `invalid_work_context`
@@ -162,9 +166,10 @@ La verificación manda: si un paso no se pudo **verificar releyendo el ticket**,
 - No toca el repo `~/tolkien`: solamente lo consulta en modo lectura.
 - No abre PRs.
 - No opera tickets de otras personas.
+- Opera con la sesión de Tolkien del usuario que la corre: cada persona cierra y reasigna únicamente sus propios tickets, con su propia identidad.
 - No fuerza tickets que estén en espera estructurada.
 - Nunca inventa evidencia: el texto de cierre se deriva del dato real del ticket de Zoho —número, estado, fecha de cierre, autor y resolución—.
 
 ## Primera corrida real
 
-Al momento de escribirse esta skill, **2026-07-31**, el motor de cierre no se pudo probar de punta a punta contra tickets reales porque no había una sesión de Tolkien conectada. La primera corrida real debe hacerse con `--only <un ticket>` y el resultado debe revisarse en la UI de Tolkien antes de lanzar un lote.
+La referencia inicial de esta skill es **2026-07-31**. Si es tu primera corrida real, empezá con `--only <un ticket>` y revisá el resultado en la UI de Tolkien antes de lanzar un lote, aunque el dry-run se vea correcto.

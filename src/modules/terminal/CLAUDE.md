@@ -48,6 +48,9 @@
   los secretos y `CWC_*` encontrados en el entorno global de tmux. Con `-A`,
   tmux ignora los `-e` si la sesión ya existe: una sesión creada con el entorno
   viejo debe matarse y recrearse; no se corrige en caliente al rehidratar.
+  El PTY inyecta además `CWC_CONSOLE_ROOT` para resolver CLIs de `bin/` desde
+  skills compartidas; llega al pane por el filtro existente de claves
+  `CWC_`/`TOLKIEN_`, sin agregarla a `TMUX_ENV_KEYS`.
 - IMPORTANTE: el HOME owner-scoped es una MITIGACIÓN, no aislamiento real. El
   inquilino sigue ejecutando como el mismo usuario de SO: desde su shell puede
   navegar a `/home/nmosquera` o adjuntarse con `tmux -S` a sesiones ajenas. El

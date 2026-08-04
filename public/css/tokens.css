@@ -126,6 +126,8 @@
   /* ===== Tipografías ===== */
   --cwc-font-ui: -apple-system, "SF Pro Text", BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
   --cwc-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Familia del cuerpo en modo documento: solo fuentes del sistema, sin descargas. */
+  --cwc-font-serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
 
   /* ===== Íconos (public/js/ui/icons.js) ===== */
   --cwc-icon-size: 18px;

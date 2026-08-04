@@ -4,6 +4,7 @@
 // se valida que, una vez resuelta, siga cayendo dentro de él. Así se bloquea
 // el path traversal (../../etc/passwd) y las rutas absolutas inyectadas.
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 
 // Versión general: resuelve `rel` (relativa) DENTRO de `root`, o null si
@@ -39,3 +40,15 @@ export function resolveWithinHome(rel = '') {
 export function clampToHome(requested) {
   return clampToRoot(config.home, requested);
 }
+
+// Raíz de la instalación de la consola (…/claude-web-console). El server la
+// inyecta como CWC_CONSOLE_ROOT en el env de los runners de chat y de los PTY
+// para que una skill COMPARTIDA pueda invocar los CLIs de bin/ desde cualquier
+// cwd. Un inquilino tiene su cwd clampado a su workspace aislado, que no
+// contiene el repo: sin esta variable, `node bin/<cli>.js` solo funciona para
+// el host. No es un secreto ni una ruta de datos de usuario — es el dato de
+// INSTALACIÓN de la consola, y el aislamiento por usuario lo siguen dando
+// HOME + CWC_DATA_DIR, que no se tocan acá.
+export const CONSOLE_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), '..', '..',
+);

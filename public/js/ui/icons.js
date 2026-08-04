@@ -54,6 +54,8 @@ const PATHS = {
   paperclip: `<path d="M20 11.5 12 19.5a4.5 4.5 0 0 1-6.4-6.4l8-8a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.2-2.2l7.3-7.3"/>`,
   // Archivo genérico (chip de adjunto no-imagen en la burbuja).
   fileGeneric: `<path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><polyline points="13,3 13,8 18,8"/>`,
+  // Modo documento del chat: hoja con líneas de texto.
+  docMode: `<path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><polyline points="13,3 13,8 18,8"/><line x1="8" y1="12" x2="15" y2="12"/><line x1="8" y1="15.5" x2="15" y2="15.5"/><line x1="8" y1="19" x2="13" y2="19"/>`,
   upload: `<line x1="12" y1="20" x2="12" y2="6"/><polyline points="6,11 12,5 18,11"/><line x1="5" y1="20" x2="19" y2="20"/>`,
   download: `<line x1="12" y1="4" x2="12" y2="14"/><polyline points="6,9 12,15 18,9"/><line x1="5" y1="20" x2="19" y2="20"/>`,
   grid: `<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>`,
@@ -123,4 +125,3 @@ export function hydrateIcons(root = document) {
     el.dataset.iconDone = '1';
   }
 }
-

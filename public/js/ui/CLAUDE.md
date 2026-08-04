@@ -257,6 +257,11 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
   agujero: no cambiar ese orden sin revisar de nuevo todo el límite de
   confianza.
 
+- `MARK` pertenece al ALLOWLIST de `markdown.js`, pero su atributo `class`
+  queda restringido por regex a `key|ok|warn|bad`, siguiendo el mismo patrón
+  cerrado de `code class="language-*"`. No admite ningún otro atributo ni
+  clase; el orden del pipeline de `renderMarkdown()` no cambió.
+
 - Mermaid: el `holder` `.md-mermaid` contiene DOS `<svg>` — el ícono del botón
   `.md-mermaid-zoom-btn` (insertado ANTES del canvas con `insertBefore`) y el
   diagrama, dentro de `.md-mermaid-canvas`. Por eso NUNCA se busca el diagrama
