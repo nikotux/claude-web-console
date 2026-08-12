@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-12 11:06 — main
+- Corrige credenciales de Codex login, refuerza captura de tickets en Tolkien y agrega carpetas de sesiones
+
 ### 2026-08-04 14:53 — main
 - Agregar aliases de identidad y contexto operativo a Tolkien
 - Agregar modo documento al chat, marcado semántico y skill tkt compartida
@@ -378,9 +381,6 @@ since the previous push. Newest entry first.
 - Modified `CLAUDE.md`
 - Modified `public/css/style.css`
 - Modified `public/js/modules/system/project-context-panel.js`
-
-### 2026-07-03 06:49 — main
-- CLAUDE.md: Salud sin bugfixes (UI única en el modal Enviar PR de Tolkien)
 
 _(older entries trimmed — see `git log` for the full history)_
 
