@@ -465,9 +465,12 @@ server remoto), con HOME aislado del dueño mediante `userRunnerEnv`.
 Publica URL/código/estado en
 `~/.cwc-data/codex-login-jobs/<user>.json`; ese job vive en el HOME del
 HOST — no en el HOME aislado — porque lo spawnea y consulta el server.
-Declara éxito por la aparición real de `.codex/auth.json` (`hasCodexCreds`),
-NUNCA por el texto del CLI; la cancelación se detecta leyendo el estado
-`cancelled` del job y corta el PTY. Timeout duro: 15 min.
+Declara éxito SOLO si la credencial CAMBIA respecto al baseline tomado antes
+del spawn (`codexCredState` de `core/user-space.js`, por `lastRefresh` o
+`mtimeMs`), NUNCA por la mera existencia de `.codex/auth.json`: una credencial
+vencida en disco hacía que el runner se auto-declarara `done` en su primer tick
+y matara el login antes de la autorización. La cancelación se detecta leyendo
+el estado `cancelled` del job y corta el PTY. Timeout duro: 15 min.
 ### bin/cwc-gh-login-runner.js  LOGIN GUIADO de GitHub por usuario durante
 onboarding: corre `gh auth login --hostname github.com --git-protocol https
 --web` SIN PTY, con stdin ignorado y stdout/stderr por pipe, usando

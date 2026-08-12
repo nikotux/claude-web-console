@@ -32,8 +32,9 @@ import connections from '../modules/connections/index.js';
 import unifi from '../modules/unifi/index.js';
 import news from '../modules/news/index.js';
 import visado from '../modules/visado/index.js';
+import folders from '../modules/folders/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

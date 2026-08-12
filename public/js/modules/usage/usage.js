@@ -275,7 +275,10 @@ function claudeCreditsHtml(credits) {
 // filas del rediseño. Devuelve '' si no hay dato (best-effort del backend).
 function codexBlockHtml(codex, compact = false) {
   if (!codex || !Array.isArray(codex.limits)) return '';
-  const staleHtml = codex.stale
+  const expiredHtml = codex.expired
+    ? `<div class="lim-stale lim-reached">${t('usage.codex.expired', '⛔ tu sesión de Codex venció — reconectala en ⚙ Sistema → Conexiones')}</div>`
+    : '';
+  const staleHtml = codex.stale && !codex.expired
     ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${codex.updatedAt ? ` · ${fmtAgo(codex.updatedAt)}` : ''}</div>`
     : '';
   const reachedHtml = codex.limitReached
@@ -285,7 +288,7 @@ function codexBlockHtml(codex, compact = false) {
       const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
       return limRowHtml(l.percent, [t('usage.remaining', 'queda {n}%', { n: 100 - pct }), fmtReset(l.resetsAt, compact)]);
     }).join('')
-    : `<div class="lim-err">${t('usage.codex.noWindows', 'OpenAI no reportó ventanas de límite.')}</div>`;
+    : (codex.expired ? '' : `<div class="lim-err">${t('usage.codex.noWindows', 'OpenAI no reportó ventanas de límite.')}</div>`);
   // Balance de créditos (overage) si el endpoint lo trae y no es cero.
   const bal = codex.credits && codex.credits.balance;
   const credLine = bal != null && bal > 0
@@ -293,7 +296,7 @@ function codexBlockHtml(codex, compact = false) {
   return `
     <div class="lim-codex">
       <div class="lim-head lim-head--codex"><span class="lim-head-t">${t('usage.codex.head', 'Codex')}</span>${flowBarHtml({ engine: 'codex', compact: true, dot: false })}</div>
-      ${staleHtml}${reachedHtml}
+      ${expiredHtml}${staleHtml}${reachedHtml}
       ${rows}
       ${credLine}
     </div>`;

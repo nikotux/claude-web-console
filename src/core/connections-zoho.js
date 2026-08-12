@@ -53,6 +53,20 @@ function zohoError(r) {
   return r.data?.error_description || r.data?.error || r.raw || ('HTTP ' + r.status);
 }
 
+// Zoho devuelve el MISMO `invalid_code` para tres situaciones muy distintas y el
+// usuario no tiene forma de saber cuál le tocó. Este texto es la diferencia entre
+// "no funciona" y "ah, tengo que generar el código en MI Self Client".
+export function explainZohoError(raw) {
+  const text = String(raw || '');
+  if (text.includes('invalid_code')) {
+    return 'Zoho rechazó el grant code (invalid_code). Suele ser por una de tres cosas: (1) el código se generó en una app DISTINTA a la que usa la consola — un Self Client sólo puede generar códigos para sí mismo, así que si en tu API Console no ves la app de la consola, cargá acá tu propio Client ID y Secret; (2) el código ya se usó (son de un solo uso); (3) se venció (duran entre 3 y 10 minutos). Generá uno nuevo y pegalo apenas lo tengas.';
+  }
+  if (text.includes('invalid_client')) {
+    return 'Zoho rechazó las credenciales de la app (invalid_client): el Client ID y el Client Secret no son del mismo Self Client, o están mal copiados.';
+  }
+  return text;
+}
+
 export function authUrl({ clientId, dc }) {
   return `https://api-console.zoho.${dcOf(dc)}`;
 }

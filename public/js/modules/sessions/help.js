@@ -65,6 +65,40 @@ export default function sessionsHelp() {
         ],
       },
       {
+        title: t('sessions.help.folder.title', '📁 Carpetas'),
+        blocks: [
+          {
+            type: 'p',
+            text: t('sessions.help.folder.intro', 'Son agrupaciones que creás dentro de un mundo para juntar las conversaciones y terminales de un mismo trabajo. Son tuyas y privadas: otro usuario no las ve.'),
+          },
+          {
+            type: 'legend',
+            items: [
+              {
+                icon: 'folder',
+                name: t('sessions.help.folder.create.name', 'Crear una carpeta'),
+                desc: t('sessions.help.folder.create.desc', 'usá el botón de carpeta del encabezado del panel o el ＋ de cada mundo'),
+              },
+              {
+                icon: 'more',
+                name: t('sessions.help.folder.move.name', 'Meter o sacar algo'),
+                desc: t('sessions.help.folder.move.desc', 'abrí el menú ⋯ de la tarjeta y elegí “Mover a carpeta…”; la opción “(ninguna)” la saca'),
+              },
+              {
+                icon: 'chevronRight',
+                name: t('sessions.help.folder.collapse.name', 'Plegar y desplegar'),
+                desc: t('sessions.help.folder.collapse.desc', 'las carpetas recuerdan si quedaron abiertas o cerradas, igual que los mundos'),
+              },
+            ],
+          },
+          {
+            type: 'note',
+            tone: 'warn',
+            text: t('sessions.help.folder.warning', 'Borrar una carpeta NO borra ninguna conversación: sus elementos solo salen de ella. Un chat archivado se muestra en “Archivados” aunque tenga carpeta, y si mudás un chat a otro mundo, sale de la carpeta.'),
+          },
+        ],
+      },
+      {
         title: t('sessions.help.states.title', 'Estados del Pac-Man'),
         wide: true,
         blocks: [

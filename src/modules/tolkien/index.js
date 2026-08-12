@@ -24,7 +24,7 @@ import { execFile } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { systemScopeFor } from '../../core/system-scope.js';
-import { hostUser } from '../../core/user-space.js';
+import { fileRootFor, hostUser } from '../../core/user-space.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
 import { isHostAdmin, HOST_ONLY_MSG } from './gates.js';
 import {
@@ -231,7 +231,9 @@ export async function status(cwd = config.projectDir) {
     : 0;
 
   return {
-    name: config.projectName, rel: path.relative(config.home, cwd), branch, head,
+    // No puede usar config.home: el frontend reenvía rel como cwd y safeCwd/clampToRoot
+    // lo ancla al file-root del inquilino, duplicando una ruta calculada desde el home.
+    name: config.projectName, rel: path.relative(fileRootFor(cwd), cwd), branch, head,
     subject: subject || '', author: author || '', date: date || '',
     dirty: dirtyCount > 0, dirtyCount, behind, ahead, mainBehind,
     onMain: branch === 'main',
@@ -736,8 +738,9 @@ export default {
       res.status(r2.status).json(r2.body);
     });
 
+    // Operaciones sobre el clon propio del usuario → cualquier usuario autenticado;
+    // identidad real de Tolkien e infra compartida → admin / host-admin.
     r.get('/status', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar su repo de Tolkien.' });
       const cwd = tolkienRepoOr404(req, res);
       if (!cwd) return;
       try { res.json(await status(cwd)); }
@@ -745,7 +748,6 @@ export default {
     });
 
     r.post('/fetch', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede traer cambios del remoto.' });
       const cwd = tolkienRepoOr404(req, res);
       if (!cwd) return;
       const r2 = await opFetch(cwd);
@@ -753,7 +755,6 @@ export default {
     });
 
     r.post('/update', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede actualizar el repo local.' });
       const cwd = tolkienRepoOr404(req, res);
       if (!cwd) return;
       const r2 = await opUpdate(cwd);
@@ -761,7 +762,6 @@ export default {
     });
 
     r.get('/branches', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede consultar su repo de Tolkien.' });
       const cwd = tolkienRepoOr404(req, res);
       if (!cwd) return;
       const r2 = await opBranches(cwd);
@@ -769,7 +769,6 @@ export default {
     });
 
     r.post('/rebase-branch', async (req, res) => {
-      if (!isAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede rebasar ramas.' });
       const cwd = tolkienRepoOr404(req, res);
       if (!cwd) return;
       const r2 = await opRebaseBranch(String(req.body?.branch || '').trim(), cwd);

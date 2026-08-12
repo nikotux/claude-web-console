@@ -295,6 +295,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | Módulo | Qué es | Lo que más duele |
 |---|---|---|
 | `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". Una sala 🛃 Aduana usa el canal `say` (0 tokens): la IA solo habla cuando alguien aprieta el botón de corte. |
+| `folders/` | carpetas manuales con las que cada usuario organiza su barra de Sesiones | Es estado privado por usuario: la ruta se resuelve por operación, nunca en una constante de módulo. Borrar una carpeta jamás borra un chat. |
 | `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). La rama `attach` es owner-scoped con candado estricto y comparte el guard con `tmux` desde `terminal/sessions.js`. |
 | `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
 | `tasks/` | Pendientes: tablero privado (PEND / PLAN) | Backend en **Pad LOCAL** (colecciones `pendientes`/`planes`), no file-based. Ojo con el rate limit al pedir links por ítem. |

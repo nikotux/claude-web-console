@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-31T20:40:54.350Z",
+  "generatedAt": "2026-08-12T16:01:52.118Z",
   "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
   "counts": {
-    "pad": 210,
+    "pad": 211,
     "manual": 2
   },
   "entries": {
@@ -1241,6 +1241,14 @@
     },
     "mod:files": {
       "ref": "ARQUI-1354",
+      "plano": "usuario",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "pad"
+    },
+    "mod:folders": {
+      "ref": "ARQUI-2715",
       "plano": "usuario",
       "audiencia": "todos",
       "perfil": "general",

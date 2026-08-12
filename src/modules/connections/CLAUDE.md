@@ -6,11 +6,12 @@
 cuentas de terceros y la consola actúa con SU identidad. Ruta
 /api/connections. Se ve en ⚙ Sistema → Conexiones, DENTRO del grupo
 🏠 Mi Consola (frontend en system/mcps-panel.js, junto a los MCP).
-DOS NIVELES de credencial (así funciona OAuth): (a) APP de instancia
-(client_id/secret) que carga UNA vez el admin → ~/.cwc-data/connections/
-_app.json; (b) TOKEN por-usuario → userDataDir(<user>)/connections/
-<provider>.json (perms 600, escritura atómica). NUNCA se comparte un
-token entre usuarios. Proveedores: microsoft (device code flow, scopes
+TRES NIVELES de credencial: (a) APP de instancia (client_id/secret) que carga
+UNA vez el admin → ~/.cwc-data/connections/_app.json; (b) APP POR USUARIO →
+userDataDir(<user>)/connections/_app.json, que pisa ENTERA la de instancia para
+ese proveedor cuando está completa; (c) TOKEN por-usuario →
+userDataDir(<user>)/connections/<provider>.json (perms 600, escritura atómica).
+NUNCA se comparte un token entre usuarios. Proveedores: microsoft (device code flow, scopes
 offline_access User.Read Calendars.ReadWrite) y zoho (grant code de
 Self Client). core/connections-store.js expone getAccessToken(username,
 provider) que refresca y re-persiste solo — es la puerta ÚNICA al token.
@@ -18,13 +19,17 @@ El scope Microsoft ahora cubre también SharePoint (Sites.ReadWrite.All,
 delegado ⇒ la consola solo ve lo que el usuario ve); agregar un scope
 nuevo SIEMPRE obliga a reconectar la cuenta.
 Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
-GET|POST /app (admin) · POST /:p/connect · /:p/code · /:p/cancel ·
+GET|POST /app (admin) · GET /app/mine · POST /app/mine ·
+POST /app/mine/reset (los tres autenticados, per-usuario y NO admin-only) ·
+POST /:p/connect · /:p/code · /:p/cancel ·
 /:p/disconnect · GET /:p/status. Codex suma endpoints AUTENTICADOS,
 por-usuario y NO admin-only: POST /codex/start · GET /codex/status ·
 POST /codex/cancel; lanzan `bin/cwc-codex-login-runner.js`, que corre
 `codex login --device-auth`. Device-auth es obligatorio en el server
 remoto porque el login normal abre un callback en localhost:1455, que el
-navegador remoto no puede devolverle al server.
+navegador remoto no puede devolverle al server. El estado de la credencial
+se decide con `codexCredState` de `core/user-space.js`: presencia + vencimiento
+a 10 días desde `last_refresh`, NO la mera existencia de `auth.json`.
 GitHub replica ese contrato por-usuario con POST /github/start · GET
 /github/status · POST /github/cancel y lanza desacoplado
 `bin/cwc-gh-login-runner.js`. `ghJobPath`/`readGhJob`/
@@ -80,3 +85,16 @@ DEBEN registrarse ANTES de `'/:provider/...'`; si no, por ejemplo
 `"Proveedor desconocido"`.
 (7) ORDEN DE RUTAS CLAUDE: `/claude/login/*` y `/claude/status` también
 DEBEN registrarse ANTES de `'/:provider/...'` por el mismo motivo.
+(8) CREDENCIAL VENCIDA ≠ AUSENTE: `hasCodexCreds` sólo mira si el archivo
+está. `/codex/start` y `/codex/status` usan `codexCredState`, porque con el
+access token vencido (10 días desde `last_refresh`) el archivo sigue ahí y el
+chequeo por presencia devolvía `already/connected:true` sin relanzar el login
+(bug real de un inquilino, ago-2026). El Llavero
+(`modules/mcps/keyring-shared.js`) ya usaba el criterio de vencimiento: ahora
+comparten la constante `CODEX_TOKEN_TTL_MS`.
+(9) ZOHO SELF CLIENT ES PERSONAL: el grant code sólo lo puede generar quien es
+dueño de la app en el API Console, así que la app de instancia NO sirve para un
+inquilino (Zoho responde `invalid_code`). Por eso existe el override por
+usuario, que es TODO O NADA por proveedor: mezclar el clientId de un usuario
+con el secret de instancia daría `invalid_client`. La conexión guarda
+`appClientId` porque el refresh token sólo vale para el client_id que lo emitió.

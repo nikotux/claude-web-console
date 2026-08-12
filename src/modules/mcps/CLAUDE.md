@@ -50,6 +50,9 @@ token+HTTP · Pad cloud `mcpOAuth.expiresAt`) · 🔌 Servicios (WhatsApp por
 heartbeat · systemd · ZeroTier por interfaz `zt*`, no `zerotier-cli` que
 pide root). Un inquilino recibe solo sus seis sondas de credenciales; WhatsApp,
 systemd y ZeroTier son estado de la instalación y no entran en su llavero.
+`probeCodexCli` ya no hardcodea esa ventana: importa `CODEX_TOKEN_TTL_MS` de
+`core/user-space.js`, la MISMA constante que usa `connections` para decidir si
+la credencial de Codex sigue viva.
 El llavero suma `tolkien-session` (familia 🔑 Llaves), común a host e inquilinos, leída de `tolkienStatus(scope.dataDir)` sin tocar jamás la cookie.
 Su `reconnectActionFor` entrega `kind:'tolkien-login'` con `command:null`, consumido por el dispatcher `reconnect-keyring` de
 `public/js/modules/system/mcps-panel.js` para abrir el asistente de conexión. Los ítems aceptan un `warnMs` propio porque Tolkien avisa a 3 días

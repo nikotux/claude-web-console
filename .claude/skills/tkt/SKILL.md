@@ -30,14 +30,17 @@ Cada operación de escritura se muestra en dos filas para separar su dry-run obl
 
 | Paso | Comando | Qué hace | ¿Escribe? |
 |---|---|---|---|
-| 1 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" census` | Lista los tickets de Tolkien asignados al usuario y sus campos de cierre | No |
-| 2 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reconcile` | Cruza cada ticket con su par en Zoho y produce 4 pilas | No |
+| 1 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" census [--fresh]` | Lista los tickets de Tolkien asignados al usuario y sus campos de cierre | No |
+| 2 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reconcile [--fresh]` | Cruza cada ticket con su par en Zoho y produce 4 pilas | No |
 | 3 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" close` | Dry-run: muestra qué se tocaría y con qué evidencia | No |
 | 4 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" close --apply` | Cierra de verdad, con tu identidad de Tolkien | **SÍ** |
 | 5 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reassign` | Dry-run: resuelve por email el dueño real de cada ticket de `reassigned` y agrupa el lote por destinatario | No |
 | 6 | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien.js" reassign --apply` | Reasigna en Tolkien únicamente la pila `reassigned` al dueño confirmado en Zoho | **SÍ** |
+| Guardia | `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien-canary.js" check --require <lista>` | Canario de solo lectura: navega únicamente URLs GET y vive en un script separado de `bin/cwc-tolkien.js`. Sus exit codes deciden el lote: `0` verde, seguir; `20` block, no aplicar; `10` info; `1` error operativo; `2` uso incorrecto | No |
 
 Traducí el pedido del usuario al paso mínimo que lo resuelve: “censá/mirá mis tickets” → `census`; “compará/sincronizá/alineá con Zoho” o “¿cuántos están desalineados?” → `reconcile`; “mostrame qué cerrarías” → `close`; “cerralos” → primero `close`, presentar el dry-run y pedir confirmación explícita, y solo después `close --apply`; “sacá de mi board los que ya tienen otro dueño” → primero `reassign`, mostrar el resumen agrupado por destinatario y pedir confirmación explícita, y solo después `reassign --apply`.
+
+Usá `census --fresh` y `reconcile --fresh` siempre que los datos de Zoho hayan podido cambiar desde la última corrida, por ejemplo después de cerrar o modificar un ticket. `--fresh` descarta el progreso parcial en caché y fuerza la relectura; sin él se puede reutilizar un parcial viejo y sacar conclusiones sobre datos desactualizados de Zoho, incluso leer como vacía una resolución recién guardada.
 
 `reconcile` falla de forma cerrada si el censo no informa el email del usuario o si no puede resolver ese email a un `agentId` de Zoho. En ese caso, volvé a correr `census`: nunca continúes con la verificación de asignado desactivada.
 
@@ -77,7 +80,7 @@ Para `reassign`, mostrale siempre el resumen agrupado por destinatario (`Nombre:
 
 > ¿Reasigno estos N tickets a los destinatarios indicados?
 
-El canario con `--require` también es obligatorio inmediatamente antes de cualquier `reassign --apply`, igual que para `close --apply`. Si el canario no termina verde, no apliques el lote.
+Inmediatamente antes de cualquier `close --apply` o `reassign --apply`, ejecutá el canario: `node "$CWC_CONSOLE_ROOT/bin/cwc-tolkien-canary.js" check --require <lista>`. Si no termina verde, no apliques el lote.
 
 Si el usuario pide cerrar “todo” y el lote supera 50 tickets, **no agregues `--confirm-large` por cuenta propia**. Explicá el tope y preguntá si prefiere procesarlos en tandas de 50 —recomendado— o forzar el lote entero.
 

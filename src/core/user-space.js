@@ -58,6 +58,44 @@ export function hasCodexCreds(userId) {
   }
 }
 
+// Los access token de Codex duran ~10 días desde `last_refresh` (verificado
+// contra el `exp` del JWT de auth.json). Constante compartida: el Llavero
+// (modules/mcps/keyring-shared.js) usa esta MISMA ventana, para que Conexiones
+// y Llavero no puedan contradecirse.
+export const CODEX_TOKEN_TTL_MS = 10 * 24 * 60 * 60 * 1000;
+
+// Estado REAL de la credencial de Codex de un usuario. `hasCodexCreds` sólo
+// dice si el archivo está; esto dice además si sirve. Best-effort: cualquier
+// error de FS o JSON equivale a "no hay credencial".
+export function codexCredState(userId) {
+  try {
+    const authPath = userCodexAuthPath(userId);
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    let mtimeMs = null;
+    try {
+      mtimeMs = fs.statSync(authPath).mtimeMs;
+    } catch {}
+    const parsedLastRefresh = Date.parse(auth?.last_refresh);
+    const lastRefresh = Number.isNaN(parsedLastRefresh) ? null : parsedLastRefresh;
+    const expiresAt = lastRefresh === null ? null : lastRefresh + CODEX_TOKEN_TTL_MS;
+    return {
+      present: true,
+      lastRefresh,
+      mtimeMs,
+      expiresAt,
+      expired: lastRefresh === null || Date.now() >= expiresAt,
+    };
+  } catch {
+    return { present: false, lastRefresh: null, mtimeMs: null, expiresAt: null, expired: false };
+  }
+}
+
+// Azúcar para el caso más común: "¿la credencial de Codex de este usuario está VIVA?"
+export function codexCredLive(userId) {
+  const s = codexCredState(userId);
+  return s.present && !s.expired;
+}
+
 // El CLI de Infisical guarda su sesión en
 // ~/.infisical/infisical-config.json dentro del espacio del usuario.
 export function userInfisicalDir(userId) {
@@ -108,6 +146,23 @@ export function userFileRoot(userId) {
   const id = sanitizeUserId(userId);
   if (id === HOST_USER) return config.home;  // host: home completo (retrocompat)
   return userWorkspace(id);                   // inquilino: solo su workspace
+}
+
+// Inversa de userFileRoot para calcular un rel que el frontend pueda reenviar
+// como cwd sin que clampToRoot duplique el workspace del inquilino.
+export function fileRootFor(absPath) {
+  if (!absPath || typeof absPath !== 'string') return config.home;
+  const abs = path.resolve(absPath);
+  const relFromUsers = path.relative(USERS_ROOT, abs);
+  if (relFromUsers.startsWith('..') || path.isAbsolute(relFromUsers)) return config.home;
+  const segs = relFromUsers.split(path.sep);
+  if (segs.length < 2 || segs[1] !== 'workspace') return config.home;
+  try {
+    if (sanitizeUserId(segs[0]) !== segs[0]) return config.home;
+    return userWorkspace(segs[0]);
+  } catch {
+    return config.home;
+  }
 }
 
 // HOME de Claude Code para ese usuario.

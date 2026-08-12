@@ -105,6 +105,7 @@ export default {
         <span class="sec-title">${t('sessions.title', 'Sesiones')}</span>
         <span class="side-count" data-ref="count"></span>
         <button class="btn-ghost btn--sm btn--icon sess-bgbtn--idle" data-ref="bg" title="${t('sessions.bg.title', 'Trabajos en segundo plano')}">${icon('relay', { size: 14 })}<span class="sess-bg-n">0</span></button>
+        <button class="btn-ghost btn--sm btn--icon" data-ref="newfolder" title="${t('sessions.folder.new', 'Nueva carpeta')}">${icon('folder', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="refresh" title="${t('sessions.refresh', 'Refrescar')}">${icon('refresh', { size: 14 })}</button>
         <button class="btn-ghost btn--sm btn--icon" data-ref="trash" title="${t('sessions.trash.title', 'Papelera de conversaciones (30 días)')}">${icon('trash', { size: 14 })}</button>
         ${helpBtn('sessions')}
@@ -116,7 +117,7 @@ export default {
     const dotEl = el.querySelector('[data-ref="dot"]');
     const bgBtn = el.querySelector('[data-ref="bg"]');
     const bgCountEl = bgBtn.querySelector('.sess-bg-n');
-    let lastData = { sessions: [], chats: [], runners: { processes: [], processCount: 0, dominantModel: null } };
+    let lastData = { sessions: [], chats: [], folders: { folders: [], items: {} }, runners: { processes: [], processCount: 0, dominantModel: null } };
     let hasRendered = false;
     let bgModal = null;
     let trashModal = null;
@@ -129,6 +130,7 @@ export default {
       iAmAdmin = !!user?.admin;
       if (hasRendered) render(lastData);
     }).catch(() => { /* El primer render conserva el comportamiento histórico. */ });
+    el.querySelector('[data-ref="newfolder"]').addEventListener('click', () => createFolder());
     el.querySelector('[data-ref="refresh"]').addEventListener('click', refresh);
     el.querySelector('[data-ref="trash"]').addEventListener('click', openTrashModal);
     bgBtn.addEventListener('click', openBgModal);
@@ -158,6 +160,48 @@ export default {
       }
       return `<span class="sess-place ${p.cls}" title="${p.label}">${icon(p.ico, { size: 11 })}</span>`;
     };
+
+    // El payload de carpetas viaja dentro de la misma caché que las sesiones.
+    // Normalizarlo en un único lugar evita que una caché anterior a PEND-2691
+    // rompa tanto el render inicial como el poll silencioso de 8 segundos.
+    function folderInfo(data = lastData) {
+      const raw = data?.folders || {};
+      return {
+        folders: Array.isArray(raw.folders) ? raw.folders : [],
+        items: raw.items && typeof raw.items === 'object' ? raw.items : {},
+      };
+    }
+
+    function chatWorld(c) {
+      const p = c.limbo ? LIMBO_PLACE : resolvePlace(c.cwd);
+      const key = c.limbo ? '__limbo' : (p?.rel || '__otros');
+      return {
+        key,
+        place: key === 'tolkien' ? PLACES.find((x) => x.rel === key) : p,
+        envId: c.tolkienEnv?.id || p?.envId || null,
+        branch: c.tolkienEnv?.branch || c.tolkienEnv?.id || p?.envId || null,
+        worktree: c.tolkienEnv?.worktree || c.cwd,
+      };
+    }
+
+    function worldPlace(key) {
+      if (key === '__limbo') return LIMBO_PLACE;
+      const known = PLACES.find((p) => p.rel === key);
+      if (known) return known;
+      if (key === '__aduana') return { rel: key, label: t('sessions.world.aduana', '🛃 Aduana'), ico: 'relay', cls: 'is-aduana' };
+      if (key === '__otros') return { rel: key, label: t('sessions.world.other', 'Otros'), ico: 'folder', cls: '' };
+      return { rel: key, label: key, ico: 'folder', cls: '' };
+    }
+
+    const worldOrder = ['__aduana', '__limbo', ...PLACES.map((p) => p.rel), '__otros'];
+    const compareWorlds = (a, b) => {
+      const ai = worldOrder.indexOf(a);
+      const bi = worldOrder.indexOf(b);
+      const ar = ai === -1 ? worldOrder.length : ai;
+      const br = bi === -1 ? worldOrder.length : bi;
+      return ar - br || String(worldPlace(a).label).localeCompare(String(worldPlace(b).label));
+    };
+    const compareFolders = (a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.name).localeCompare(String(b.name));
 
     const participantUsers = (c) => (Array.isArray(c.participants) ? c.participants : [])
       .map((p) => String(p?.user || '').trim())
@@ -603,10 +647,14 @@ export default {
       const runnersReq = fetch('/api/health/active-runners')
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null);
-      const [tmuxRes, chatRes, runnersRaw] = await Promise.all([
+      const foldersReq = fetch('/api/folders/list')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const [tmuxRes, chatRes, runnersRaw, foldersRaw] = await Promise.all([
         fetch('/api/tmux/sessions'),
         fetch('/api/chat/list'),
         runnersReq,
+        foldersReq,
       ]);
       if (!tmuxRes.ok) throw new Error();
       const sessions = (await tmuxRes.json()).sessions;
@@ -614,7 +662,8 @@ export default {
       const processes = Array.isArray(runnersRaw?.processes) ? runnersRaw.processes : [];
       const processCount = Number.isFinite(Number(runnersRaw?.processCount)) ? Number(runnersRaw.processCount) : processes.length;
       const runners = { processes, processCount, dominantModel: runnersRaw?.dominantModel || null };
-      return { sessions, chats, runners };
+      const folders = foldersRaw && typeof foldersRaw === 'object' ? foldersRaw : { folders: [], items: {} };
+      return { sessions, chats, runners, folders };
     }
 
     async function refresh() {
@@ -634,9 +683,187 @@ export default {
       }
     }
 
+    function folderWorldLabel(key) {
+      const place = worldPlace(key);
+      if (PLACES.some((p) => p.rel === key)) return t('sessions.folder.world.' + key, place.label);
+      if (key === '__limbo') return t('sessions.folder.world.limbo', '🌗 Limbo (alto riesgo)');
+      return place.label;
+    }
+
+    function availableFolderWorlds() {
+      const keys = new Set(folderInfo().folders.filter((f) => f?.parentId === null).map((f) => f.world));
+      for (const c of lastData.chats || []) {
+        if (c.archived || (!isMine(c.owner) && !isChatParticipant(c))) continue;
+        keys.add(chatWorld(c).key);
+      }
+      if (!keys.size) keys.add(PLACES[0].rel);
+      return [...keys].sort(compareWorlds).map((key) => ({ key, label: folderWorldLabel(key) }));
+    }
+
+    function folderCreateForm(worlds) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const modal = dialog.openModal({
+          title: t('sessions.folder.new', 'Nueva carpeta'),
+          width: 400,
+          onClose: () => { if (!settled) resolve(null); },
+        });
+        modal.body.innerHTML = `
+          <label class="sess-folder-field"><span>${t('sessions.folder.nameLabel', 'Nombre')}</span><input class="dlg-input" data-ref="name" type="text"></label>
+          <label class="sess-folder-field"><span>${t('sessions.folder.worldLabel', 'Mundo')}</span><select class="dlg-input" data-ref="world">${worlds.map((w) => `<option value="${escapeHtml(w.key)}">${escapeHtml(w.label)}</option>`).join('')}</select></label>
+          <div class="dlg-actions">
+            <button class="btn-ghost" data-act="cancel">${t('sessions.cancel', 'Cancelar')}</button>
+            <button class="btn" data-act="create">${t('sessions.folder.create', 'Crear')}</button>
+          </div>`;
+        const input = modal.body.querySelector('[data-ref="name"]');
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+          modal.close();
+        };
+        const submit = () => finish({ name: input.value.trim(), world: modal.body.querySelector('[data-ref="world"]').value });
+        modal.body.querySelector('[data-act="cancel"]').addEventListener('click', () => modal.close());
+        modal.body.querySelector('[data-act="create"]').addEventListener('click', submit);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+        input.focus();
+      });
+    }
+
+    async function folderRequest(path, payload, fallback) {
+      const res = await fetch('/api/folders/' + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || fallback);
+      return data;
+    }
+
+    async function createFolder(fixedWorld = null, { assignKey = null } = {}) {
+      const worlds = fixedWorld ? [{ key: fixedWorld, label: folderWorldLabel(fixedWorld) }] : availableFolderWorlds();
+      let choice;
+      if (worlds.length > 1 && !fixedWorld) {
+        choice = await folderCreateForm(worlds);
+      } else {
+        const name = await dialog.promptDialog({
+          title: t('sessions.folder.new', 'Nueva carpeta'),
+          message: t('sessions.folder.namePrompt', 'Nombre de la carpeta.'),
+          confirmLabel: t('sessions.folder.create', 'Crear'),
+        });
+        choice = name === null ? null : { name: name.trim(), world: worlds[0].key };
+      }
+      if (!choice) return null;
+
+      let created = null;
+      try {
+        const data = await folderRequest('create', { name: choice.name, world: choice.world }, t('sessions.folder.createError', 'No se pudo crear la carpeta.'));
+        created = data.folder || null;
+        if (assignKey && created?.id) {
+          await folderRequest('assign', { key: assignKey, folderId: created.id }, t('sessions.folder.moveError', 'No se pudo mover el elemento a la carpeta.'));
+        }
+        return created;
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.folder.new', 'Nueva carpeta'), message: e.message });
+        return null;
+      } finally {
+        if (created) refresh();
+      }
+    }
+
+    function openFolderMenu(folder, anchor) {
+      const menu = document.createElement('div');
+      menu.className = 'cwc-popup-menu';
+      menu.innerHTML = `
+        <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.folder.rename', 'Renombrar')}</span></button>
+        <button class="cwc-popup-item danger" data-act="delete">${icon('trash', { size: 15 })}<span>${t('sessions.folder.delete', 'Borrar')}</span></button>`;
+      document.body.appendChild(menu);
+      positionPopup(menu, anchor);
+      const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
+      const act = (fn) => { dismiss(); fn(); };
+      menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => renameFolder(folder)));
+      menu.querySelector('[data-act="delete"]').addEventListener('click', () => act(() => deleteFolder(folder)));
+    }
+
+    async function renameFolder(folder) {
+      const name = await dialog.promptDialog({
+        title: t('sessions.folder.renameTitle', 'Renombrar carpeta'),
+        message: t('sessions.folder.namePrompt', 'Nombre de la carpeta.'),
+        value: folder.name || '',
+        confirmLabel: t('sessions.folder.rename', 'Renombrar'),
+      });
+      if (name === null) return;
+      try {
+        await folderRequest('rename', { id: folder.id, name: name.trim() }, t('sessions.folder.renameError', 'No se pudo renombrar la carpeta.'));
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.folder.renameTitle', 'Renombrar carpeta'), message: e.message });
+      } finally {
+        refresh();
+      }
+    }
+
+    async function deleteFolder(folder) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.folder.deleteTitle', 'Borrar carpeta'),
+        message: t('sessions.folder.deleteMessage', 'Las conversaciones y terminales NO se borran; solo salen de la carpeta.'),
+        confirmLabel: t('sessions.folder.delete', 'Borrar'),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await folderRequest('delete', { id: folder.id }, t('sessions.folder.deleteError', 'No se pudo borrar la carpeta.'));
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.folder.deleteTitle', 'Borrar carpeta'), message: e.message });
+      } finally {
+        refresh();
+      }
+    }
+
+    async function assignFolderItem(key, folderId) {
+      try {
+        await folderRequest('assign', { key, folderId }, t('sessions.folder.moveError', 'No se pudo mover el elemento a la carpeta.'));
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.folder.moveTitle', 'Mover a carpeta'), message: e.message });
+      } finally {
+        refresh();
+      }
+    }
+
+    function moveToFolder(key, world = null) {
+      const state = folderInfo();
+      const folders = state.folders
+        .filter((f) => f?.parentId === null && (world === null || f.world === world))
+        .sort((a, b) => compareWorlds(a.world, b.world) || compareFolders(a, b));
+      const assigned = state.items[key] || null;
+      const current = folders.some((f) => f.id === assigned) ? assigned : null;
+      const modal = dialog.openModal({ title: t('sessions.folder.moveTitle', 'Mover a carpeta'), width: 380 });
+      const folderLabel = (f) => world === null
+        ? t('sessions.folder.nameWithWorld', '{name} · {world}', { name: f.name, world: folderWorldLabel(f.world) })
+        : f.name;
+      modal.body.innerHTML = `
+        <div class="sess-menu-list">
+          <button class="btn-ghost sess-menu-item${current === null ? ' sess-menu-item--active' : ''}" data-folder="">${icon('folder', { size: 14 })}<span>${t('sessions.folder.none', '(ninguna)')}</span>${current === null ? icon('check', { size: 12 }) : ''}</button>
+          ${folders.map((f) => `<button class="btn-ghost sess-menu-item${current === f.id ? ' sess-menu-item--active' : ''}" data-folder="${escapeHtml(f.id)}">${icon('folder', { size: 14 })}<span>${escapeHtml(folderLabel(f))}</span>${current === f.id ? icon('check', { size: 12 }) : ''}</button>`).join('')}
+        </div>
+        ${folders.length ? '' : `<p class="sess-plumbing">${t('sessions.folder.noFolders', 'Todavía no hay carpetas disponibles.')}</p><div class="sess-pick-actions"><button class="btn" data-act="create">${icon('plus', { size: 13 })} ${t('sessions.folder.createAndMove', 'Crear carpeta y mover')}</button></div>`}`;
+      modal.body.querySelectorAll('[data-folder]').forEach((btn) => btn.addEventListener('click', () => {
+        modal.close();
+        assignFolderItem(key, btn.dataset.folder || null);
+      }));
+      modal.body.querySelector('[data-act="create"]')?.addEventListener('click', () => {
+        modal.close();
+        createFolder(world, { assignKey: key });
+      });
+    }
+
     function render(data) {
-      const { sessions, chats } = data;
-      lastData = { sessions, chats, runners: runnerInfo(data) };
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      const chats = Array.isArray(data?.chats) ? data.chats : [];
+      const foldersState = folderInfo(data);
+      const rootFolders = foldersState.folders.filter((f) => f?.parentId === null).sort(compareFolders);
+      const rootFolderById = new Map(rootFolders.map((f) => [f.id, f]));
+      lastData = { sessions, chats, folders: foldersState, runners: runnerInfo(data) };
       hasRendered = true;
       syncBgButton(lastData);
       if (bgModal) renderBgModal(lastData);
@@ -645,13 +872,23 @@ export default {
       // interna del modo TUI de un chat, no una sesión propia del usuario.
       const tmuxByName = new Map(sessions.map((s) => [s.name, s]));
       const visible = sessions.filter((s) => !s.name.startsWith('cwct-'));
+      const folderMembers = new Map(rootFolders.map((f) => [f.id, { chats: [], sessions: [] }]));
+      const folderedSessionKeys = new Set();
+      for (const s of visible) {
+        const itemKey = `tmux:${s.socket}:${s.name}`;
+        const folder = rootFolderById.get(foldersState.items[itemKey]);
+        if (!folder) continue;
+        folderMembers.get(folder.id).sessions.push(s);
+        folderedSessionKeys.add(`${s.socket}\n${s.name}`);
+      }
+      const looseVisible = visible.filter((s) => !folderedSessionKeys.has(`${s.socket}\n${s.name}`));
       const total = visible.length + chats.length;
       countEl.textContent = total ? String(total) : '';
       // Semáforo (visible colapsado): verde si hay sesiones, tenue si no hay.
       dotEl.className = 'sec-dot ' + (total ? 'sec-dot--ok' : 'sec-dot--idle');
       dotEl.title = total ? t('sessions.count.active', '{n} sesión(es) activas', { n: total }) : t('sessions.count.none', 'Sin sesiones');
-      const owned = visible.filter((s) => s.owned);
-      const others = visible.filter((s) => !s.owned);
+      const owned = looseVisible.filter((s) => s.owned);
+      const others = looseVisible.filter((s) => !s.owned);
       const activeChats = chats.filter((c) => !c.archived);
       const archivedChats = chats.filter((c) => c.archived);
       const mySessions = owned.filter((s) => isMine(s.owner));
@@ -668,63 +905,104 @@ export default {
       ];
 
       listEl.innerHTML = '';
-      if (!total && !archivedChats.length) {
+      if (!total && !archivedChats.length && !rootFolders.length) {
         listEl.innerHTML = `<div class="sess-msg">${t('sessions.empty', 'Sin sesiones. Creá una con “Nueva sesión”.')}</div>`;
         return;
       }
 
       // F4 (PLAN-373/PEND-463): agrupar los chats por MUNDO (ui/places.js). Orden:
-      // lugares conocidos (Mi Consola, Tolkien) primero, "Otros" al final. El
-      // header de mundo aparece solo si hay chats en >1 mundo (con uno solo sería
-      // ruido). Cada grupo lleva ícono + label + conteo.
+      // lugares conocidos (Mi Consola, Tolkien) primero, "Otros" al final. Una
+      // carpeta fuerza el header aun con un solo mundo: sin ese padre visual, el
+      // subárbol quedaría flotando y su botón contextual perdería significado.
       const byWorld = new Map();
       for (const c of myChats) {
         // 🌗 sesión-Limbo (alto riesgo, herramientas de ambos mundos): grupo
         // PROPIO, sin importar el cwd — así se identifica de un vistazo.
-        const p = c.limbo ? LIMBO_PLACE : resolvePlace(c.cwd);
-        const key = c.limbo ? '__limbo' : (p?.rel || '__otros');
-        const worldPlace = key === 'tolkien' ? PLACES.find((x) => x.rel === key) : p;
-        if (!byWorld.has(key)) byWorld.set(key, { place: worldPlace, chats: [] });
-        const envId = c.tolkienEnv?.id || p?.envId || null;
-        const branch = c.tolkienEnv?.branch || envId;
+        const world = chatWorld(c);
+        const { key } = world;
+        if (!byWorld.has(key)) byWorld.set(key, { place: world.place || worldPlace(key), chats: [], folders: [] });
         byWorld.get(key).chats.push({
           chat: c,
-          envId,
-          branch,
-          worktree: c.tolkienEnv?.worktree || c.cwd,
+          envId: world.envId,
+          branch: world.branch,
+          worktree: world.worktree,
         });
       }
+      for (const f of rootFolders) {
+        if (!byWorld.has(f.world)) byWorld.set(f.world, { place: worldPlace(f.world), chats: [], folders: [] });
+        byWorld.get(f.world).folders.push(f);
+      }
+
+      // Una asignación cruzada queda intacta en el servidor, pero no puede
+      // sacar visualmente al chat de su mundo: sólo las carpetas hermanas son
+      // válidas y todo lo demás vuelve al flujo suelto de siempre.
+      const folderedChatIds = new Set();
+      for (const [key, grp] of byWorld) {
+        for (const item of grp.chats) {
+          const folder = rootFolderById.get(foldersState.items[`chat:${item.chat.id}`]);
+          if (!folder || folder.world !== key) continue;
+          folderMembers.get(folder.id).chats.push(item.chat);
+          folderedChatIds.add(item.chat.id);
+        }
+      }
+
       // Aduana va primero a propósito: es suelo compartido y lo más urgente de ver.
-      const order = ['__aduana', '__limbo', ...PLACES.map((p) => p.rel), '__otros'];
-      const worldKeys = [...byWorld.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const worldKeys = [...byWorld.keys()].sort(compareWorlds);
       const multiWorld = worldKeys.length > 1;
       for (const key of worldKeys) {
         const grp = byWorld.get(key);
+        const worldFolders = grp.folders.sort(compareFolders);
+        const folderTerminalCount = worldFolders.reduce((sum, f) => sum + folderMembers.get(f.id).sessions.length, 0);
         let grpEl = null;
-        if (multiWorld) {
+        if (multiWorld || worldFolders.length) {
           grpEl = document.createElement('details');
           grpEl.className = 'sess-world-grp';
           const summary = document.createElement('summary');
           summary.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
-          summary.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${grp.place?.label || t('sessions.world.other', 'Otros')}</span><span class="side-count">${grp.chats.length}</span>`;
+          summary.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${escapeHtml(folderWorldLabel(key))}</span><span class="side-count">${grp.chats.length + folderTerminalCount}</span><button class="btn-ghost btn--sm btn--icon sess-world-add" title="${t('sessions.folder.newHere', 'Nueva carpeta en este mundo')}">${icon('plus', { size: 12 })}</button>`;
+          summary.querySelector('.sess-world-add').addEventListener('click', (e) => {
+            // Los controles dentro de <summary> heredan su gesto de toggle; sin
+            // cortar ambos pasos, crear una carpeta también plegaría el mundo.
+            e.preventDefault();
+            e.stopPropagation();
+            createFolder(key);
+          });
           grpEl.appendChild(summary);
           bindGroupOpen(grpEl, 'cwc.sessions.world.' + key + '.open');
           listEl.appendChild(grpEl);
         }
         const host = grpEl || listEl;
+        for (const f of worldFolders) {
+          const members = folderMembers.get(f.id);
+          const det = document.createElement('details');
+          det.className = 'sess-folder-grp';
+          bindGroupOpen(det, 'cwc.sessions.folder.' + f.id + '.open');
+          const summary = document.createElement('summary');
+          summary.className = 'sess-folder-h';
+          summary.innerHTML = `${icon('folder', { size: 12 })}<span class="sess-folder-name">${escapeHtml(f.name)}</span><span class="side-count">${members.chats.length + members.sessions.length}</span><button class="btn-ghost btn--sm btn--icon sess-folder-menu" title="${t('sessions.folder.options', 'Opciones de carpeta')}">${icon('more', { size: 13 })}</button>`;
+          summary.querySelector('.sess-folder-menu').addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openFolderMenu(f, e.currentTarget);
+          });
+          det.appendChild(summary);
+          for (const c of members.chats) det.appendChild(chatCard(c, tmuxByName));
+          for (const s of members.sessions) det.appendChild(card(s));
+          host.appendChild(det);
+        }
         if (key !== 'tolkien') {
-          for (const item of grp.chats) host.appendChild(chatCard(item.chat, tmuxByName));
+          for (const item of grp.chats.filter((x) => !folderedChatIds.has(x.chat.id))) host.appendChild(chatCard(item.chat, tmuxByName));
           continue;
         }
 
         // Tolkien principal conserva sus tarjetas al mismo nivel. Cada worktree
         // efímero vive debajo en su propio bloque de árbol, incluso cuando no hay
         // headers de mundo porque Tolkien es el único grupo presente.
-        for (const item of grp.chats.filter((x) => !x.envId)) {
+        for (const item of grp.chats.filter((x) => !x.envId && !folderedChatIds.has(x.chat.id))) {
           host.appendChild(chatCard(item.chat, tmuxByName));
         }
         const envGroups = new Map();
-        for (const item of grp.chats.filter((x) => x.envId)) {
+        for (const item of grp.chats.filter((x) => x.envId && !folderedChatIds.has(x.chat.id))) {
           if (!envGroups.has(item.envId)) {
             const shortBranch = String(item.branch || '').replace(/^cwc-env\//, '');
             const label = t('sessions.env.header', 'Aislado · {branch}', { branch: shortBranch });
@@ -981,11 +1259,12 @@ export default {
         ${canOwn && !arch ? `<button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>` : ''}
         ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="reopen">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.reopen', 'Reabrir para cambios')}</span></button>` : ''}
         ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="world">${icon('gitBranch', { size: 15 })}<span>${t('sessions.menu.moveWorld', 'Mover a otro mundo')}</span></button>` : ''}
+        ${canOwn ? `<button class="cwc-popup-item" data-act="movefolder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.moveFolder', 'Mover a carpeta…')}</span></button>` : ''}
         ${canOwn && !arch && !isTui && !c.isSala ? `<button class="cwc-popup-item" data-act="to-aduana">${icon('relay', { size: 15 })}<span>${t('sessions.menu.toAduana', '🛃 Pasar a la Aduana')}</span></button>` : ''}
         ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="archive">${icon('folder', { size: 15 })}<span>${t('sessions.menu.archive', 'Archivar')}</span></button>` : ''}
         ${c.isSala && canOwn ? `<button class="cwc-popup-item" data-act="collab">${icon('relay', { size: 15 })}<span>${t('sessions.menu.inviteSala', '🤝 Invitar a la sala')}</span></button>` : ''}
         ${c.isSala && !isChatOwner(c) && isChatParticipant(c) ? `<button class="cwc-popup-item" data-act="leave-sala">${icon('close', { size: 15 })}<span>${t('sessions.menu.leaveSala', 'Salir de la sala')}</span></button>` : ''}
-        <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.folder', 'Abrir carpeta del chat')}</span></button>
+        <button class="cwc-popup-item" data-act="folder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.filesFolder', 'Abrir carpeta de archivos')}</span></button>
         ${canOwn ? `<button class="cwc-popup-item danger" data-act="close">${icon('trash', { size: 15 })}<span>${t('sessions.menu.close', 'Cerrar conversación')}</span></button>` : ''}`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -998,6 +1277,7 @@ export default {
       menu.querySelector('[data-act="model"]')?.addEventListener('click', () => act(() => pickModelForChat(c)));
       menu.querySelector('[data-act="reopen"]')?.addEventListener('click', () => act(() => reopenChat(c)));
       menu.querySelector('[data-act="world"]')?.addEventListener('click', () => act(() => moveChatWorld(c)));
+      menu.querySelector('[data-act="movefolder"]')?.addEventListener('click', () => act(() => moveToFolder(`chat:${c.id}`, chatWorld(c).key)));
       menu.querySelector('[data-act="to-aduana"]')?.addEventListener('click', () => act(() => toAduana(c)));
       menu.querySelector('[data-act="archive"]')?.addEventListener('click', () => act(() => archiveChat(c)));
       menu.querySelector('[data-act="collab"]')?.addEventListener('click', () => act(() => openCollabModal(c)));
@@ -1557,6 +1837,7 @@ export default {
         ${canAdopt ? `<button class="cwc-popup-item" data-act="adopt">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
         <button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>
         <button class="cwc-popup-item" data-act="model">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.model', 'Cambiar modelo')}</span></button>
+        <button class="cwc-popup-item" data-act="movefolder">${icon('folder', { size: 15 })}<span>${t('sessions.menu.moveFolder', 'Mover a carpeta…')}</span></button>
         <button class="cwc-popup-item danger" data-act="kill">${icon('trash', { size: 15 })}<span>${t('sessions.menu.kill', 'Matar sesión')}</span></button>`;
       document.body.appendChild(menu);
       positionPopup(menu, anchor);
@@ -1565,6 +1846,7 @@ export default {
       menu.querySelector('[data-act="adopt"]')?.addEventListener('click', () => act(() => adoptToChat(s)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => rename(s)));
       menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModel(s)));
+      menu.querySelector('[data-act="movefolder"]').addEventListener('click', () => act(() => moveToFolder(`tmux:${s.socket}:${s.name}`)));
       menu.querySelector('[data-act="kill"]').addEventListener('click', () => act(() => kill(s)));
     }
 
@@ -1685,7 +1967,7 @@ export default {
       try {
         const data = await fetchAll();
         const { sessions, chats } = data;
-        lastData = { sessions, chats, runners: runnerInfo(data) };
+        lastData = { sessions, chats, folders: folderInfo(data), runners: runnerInfo(data) };
         syncBgButton(lastData);
         if (bgModal) renderBgModal(lastData);
         const tmuxByName = new Map(sessions.map((s) => [s.name, s]));

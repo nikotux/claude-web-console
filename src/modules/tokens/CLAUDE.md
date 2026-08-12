@@ -102,10 +102,14 @@ ChatGPT-Account-Id) — MISMO patrón de blindaje que Claude: el server
 hace de PROXY (el token nunca sale al cliente), caché 120 s +
 persistencia propia en `~/.cwc-data/codex-limits.json`
 (writePersistedCodex, atómica tmp+rename) con fallback `stale` ante
-error. `getCodexBlock()` es BEST-EFFORT y NUNCA lanza: si falla
-(endpoint caído, sin sesión, sin red) devuelve el último snapshot
-`stale` o null — la sección de Codex simplemente no aparece y JAMÁS
-afecta el status ni los límites de Claude (se engancha con
+error. `getCodexBlock()` es BEST-EFFORT y NUNCA lanza: distingue una
+CREDENCIAL VENCIDA (401/403 de OpenAI ⇒ `expired:true` en el bloque y
+aviso explícito en el panel) de un fallo genérico de red (⇒ `stale` a
+secas). Si hay snapshot, devuelve ese último dato; con sesión vencida y
+sin snapshot devuelve igualmente el bloque con `limits: []` para que el
+front pueda mostrar el aviso. Cualquier otro fallo sin snapshot devuelve
+null — la sección de Codex simplemente no aparece y JAMÁS afecta el
+status ni los límites de Claude (se engancha con
 `{...result, codex: await codexP}` en las DOS ramas del handler,
 éxito y fallback; si Claude cae pero Codex vive, se sirve un shell con
 limits vacío + el bloque de Codex). Las ventanas: primary_window +

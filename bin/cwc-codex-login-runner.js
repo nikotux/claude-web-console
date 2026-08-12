@@ -9,8 +9,8 @@ import path from 'node:path';
 import os from 'node:os';
 import pty from 'node-pty';
 import {
+  codexCredState,
   ensureUserSpace,
-  hasCodexCreds,
   userRunnerEnv,
   userWorkspace,
 } from '../src/core/user-space.js';
@@ -63,6 +63,21 @@ try {
 } catch (e) {
   writeState({ status: 'error', error: 'No pude preparar el entorno de Codex: ' + (e?.message || e) });
   process.exit(1);
+}
+
+// Baseline ANTES de lanzar el login: el éxito es que la credencial CAMBIE, no
+// que exista. Antes se miraba sólo la existencia de auth.json y, con una sesión
+// vencida en disco, el runner se declaraba `done` en su primer tick y mataba el
+// `codex login` antes de que el usuario pudiera autorizar (bug real, ago-2026).
+const baseline = codexCredState(USER);
+
+function credRenewed() {
+  const now = codexCredState(USER);
+  if (!now.present) return false;
+  if (!baseline.present) return true; // no había nada: cualquier credencial es nueva
+  if (now.lastRefresh != null && (baseline.lastRefresh == null || now.lastRefresh > baseline.lastRefresh)) return true;
+  if (now.mtimeMs != null && baseline.mtimeMs != null && now.mtimeMs > baseline.mtimeMs) return true;
+  return false;
 }
 
 let proc;
@@ -137,7 +152,7 @@ watchTimer = setInterval(() => {
       process.exit(0);
     }
 
-    if (hasCodexCreds(USER)) {
+    if (credRenewed()) {
       done = true;
       clearTimers();
       writeState({ status: 'done', done: true });
@@ -156,12 +171,12 @@ proc.onExit(({ exitCode }) => {
     if (job?.status === 'cancelled') cancelled = true;
   } catch { /* noop */ }
   // El CLI puede escribir auth.json y salir entre dos ticks del intervalo.
-  if (!cancelled && !done && hasCodexCreds(USER)) {
+  if (!cancelled && !done && credRenewed()) {
     done = true;
     writeState({ status: 'done', done: true });
   }
   if (!done && !cancelled && !terminal) {
-    writeState({ status: 'error', error: `codex login terminó (code ${exitCode}) sin credencial` });
+    writeState({ status: 'error', error: 'El login de Codex terminó sin renovar la credencial. Volvé a intentarlo.' });
   }
   process.exit(0);
 });

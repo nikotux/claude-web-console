@@ -906,6 +906,16 @@ async function fetchCodexLimits(owner = hostUser()) {
   } finally {
     clearTimeout(t);
   }
+  // 401/403 = el token de Codex venció (dura ~10 días desde el último refresh):
+  // no es un fallo de OpenAI, es una credencial que hay que reconectar. Se marca
+  // aparte para que el panel lo diga con todas las letras en vez de mostrar
+  // números viejos bajo un "datos guardados" genérico.
+  if (res.status === 401 || res.status === 403) {
+    const e = new Error('La sesión de Codex venció. Reconectala en ⚙ Sistema → Conexiones.');
+    e.upstream = true;
+    e.expired = true;
+    throw e;
+  }
   if (!res.ok) {
     const e = new Error(`OpenAI respondió ${res.status}.`);
     e.upstream = true;
@@ -981,9 +991,16 @@ async function getCodexBlock(fresh = false, owner = hostUser()) {
     }
     return await slot.promise;
   } catch (err) {
+    const expired = !!err?.expired;
     const fallback = slot.data || await readPersistedCodex(owner);
-    if (fallback) return { ...fallback, stale: true, staleReason: err.message || null };
-    return null; // sin ningún dato: la sección de Codex no aparece
+    if (fallback) return { ...fallback, stale: true, staleReason: err.message || null, expired };
+    // Sin snapshot previo: si la sesión venció igual hay que DECIRLO (con
+    // `limits: []` el front pinta el bloque y su aviso). Cualquier otro fallo
+    // sigue devolviendo null y la sección no aparece.
+    if (expired) {
+      return { limits: [], credits: null, subscription: null, limitReached: false, stale: true, expired: true, staleReason: err.message || null, updatedAt: null };
+    }
+    return null;
   }
 }
 

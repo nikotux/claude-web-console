@@ -22,6 +22,7 @@
   "usage.credits.usedOf": "used {used} of {limit}",
   "usage.credits.payg": "{used} used · pay-as-you-go",
   "usage.codex.head": "Codex",
+  "usage.codex.expired": "⛔ your Codex session expired — reconnect it in ⚙ System → Connections",
   "usage.codex.reached": "⛔ limit reached",
   "usage.codex.noWindows": "OpenAI didn't report any limit windows.",
   "usage.codex.extraCredit": "💳 extra credit: {amount}",

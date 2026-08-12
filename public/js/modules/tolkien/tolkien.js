@@ -15,10 +15,11 @@
 // stash→pull→pop si estás en main) · 💽 data. La línea 🌿 abre la ventana de PRs
 // con "Poner al día" (rebase de la rama actual sobre main). El auto-fetch cada
 // 5 min mantiene fresco el "detrás" (la consulta gh de /branches NO va ahí).
-// El panel es ADMIN-ONLY (todos sus endpoints devuelven 403 al resto): si
-// ctx.whoami no es admin, se oculta y no arranca ningún poll. Y el auto-fetch
-// (mount/interval/visibilitychange) falla SIEMPRE EN SILENCIO — el modal de
-// error es exclusivo del click en 🔄 Buscar cambios.
+// Estado, fetch, update y ramas operan sobre el clon propio de cualquier usuario
+// autenticado. Vista fresca, entornos y Tolkien local siguen reservados al admin;
+// esos controles se quitan para el resto y sus endpoints no se polean. El
+// auto-fetch (mount/interval/visibilitychange) falla SIEMPRE EN SILENCIO — el
+// modal de error es exclusivo del click en 🔄 Buscar cambios.
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
@@ -33,18 +34,27 @@ export default {
     let busy = false;
     let dataBusy = false;
     let lastFetchTs = 0;
-    // El panel entero de Tolkien es admin-only: TODOS sus endpoints devuelven 403
-    // a un no-admin. Antes se montaba igual y el auto-fetch le tiraba un modal de
-    // "solo un administrador…" en CADA visibilitychange. Ahora: si no es admin, el
-    // panel se oculta y NINGÚN poll arranca.
+    // El repo propio está disponible para todo usuario autenticado. Al resolver
+    // whoami, un no-admin conserva estado/fetch/update/ramas y pierde del DOM solo
+    // los controles cuyos endpoints siguen siendo admin-only o host-only.
     let isAdminUser = null;                 // null = todavía no resuelto
     const adminReady = Promise.resolve(whoami)
       .then((me) => {
         isAdminUser = !!me?.admin;
-        if (!isAdminUser) { el.innerHTML = ''; el.hidden = true; }
+        if (!isAdminUser) {
+          el.querySelector('[data-ref="refreshData"]')?.remove();
+          el.querySelector('.tk-link--local')?.remove();
+          el.querySelector('details.tk-envs')?.remove();
+        }
         return isAdminUser;
       })
-      .catch(() => { isAdminUser = false; el.innerHTML = ''; el.hidden = true; return false; });
+      .catch(() => {
+        isAdminUser = false;
+        el.querySelector('[data-ref="refreshData"]')?.remove();
+        el.querySelector('.tk-link--local')?.remove();
+        el.querySelector('details.tk-envs')?.remove();
+        return false;
+      });
     // Mis PRs abiertos sin mergear (de gh). null = todavía no consultado.
     let branchesData = null;
     let branchesBusy = false;
@@ -487,7 +497,7 @@ export default {
         await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: t('tolkien.updateAction.netError', 'No se pudo actualizar (error de red o del servidor).') });
       } finally {
         busy = false; render();
-        await loadEnvs();
+        if (isAdminUser) await loadEnvs();
         // Chris pudo haber mergeado un PR mientras tanto: refrescamos la lista.
         loadBranches();
       }
@@ -547,7 +557,7 @@ export default {
         await dialog.alertDialog({ title: t('tolkien.common.tolkien', 'Tolkien'), message: err?.message || t('tolkien.refreshData.netError', 'No se pudo actualizar la data (error de red o del servidor).') });
       } finally {
         dataBusy = false; render();
-        await loadEnvs();
+        if (isAdminUser) await loadEnvs();
       }
     }
 
@@ -591,22 +601,22 @@ export default {
     refs.refreshData.addEventListener('click', doRefreshData); // Actualizar data local (importers)
 
     (async () => {
-      if (!(await adminReady)) return;   // no-admin: panel oculto, cero polls
+      await adminReady;
       await loadStatus();
-      loadEnvs();
+      if (isAdminUser) loadEnvs();
       checkRemote();
       loadBranches(); // consulta mis PRs abiertos (gh, red) — sin bloquear
     })();
 
     const CHECK_MS = 5 * 60 * 1000;
-    setInterval(() => { if (!document.hidden && isAdminUser) checkRemote(); }, CHECK_MS);
+    setInterval(() => { if (!document.hidden) checkRemote(); }, CHECK_MS);
     const ENVS_CHECK_MS = 6000;
     setInterval(() => { if (!document.hidden && isAdminUser && hasTransitionEnvs()) loadEnvs(); }, ENVS_CHECK_MS);
     // Alternar ventanas rápido disparaba una RÁFAGA de fetch que chocaba contra
     // el flag `busy` global del backend (409). Throttle: como mucho uno por minuto.
     const VIS_THROTTLE_MS = 60 * 1000;
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden || !isAdminUser) return;
+      if (document.hidden) return;
       if (Date.now() - lastFetchTs < VIS_THROTTLE_MS) return;
       checkRemote();
     });

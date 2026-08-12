@@ -9,6 +9,7 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { TOLKIEN_EXPIRY_WARN_DAYS, tolkienStatus } from '../../core/connections-tolkien.js';
 import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
+import { CODEX_TOKEN_TTL_MS } from '../../core/user-space.js';
 import {
   infisicalDependents,
   probeInfisicalProject,
@@ -365,7 +366,7 @@ export async function probeCodexCli(scope) {
   try {
     const auth = readJson(path.join(scope.home, '.codex', 'auth.json'));
     const lastRefresh = toMs(auth?.last_refresh);
-    const expiresAt = lastRefresh == null ? null : lastRefresh + 10 * DAY_MS;
+    const expiresAt = lastRefresh == null ? null : lastRefresh + CODEX_TOKEN_TTL_MS;
     const expiresInMs = expiresIn(expiresAt);
     const light = expiresAt == null ? 'danger' : expiryLight(expiresAt);
     const mode = auth?.auth_mode || 'sin modo detectado';

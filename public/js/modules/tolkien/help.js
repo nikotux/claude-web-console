@@ -31,7 +31,7 @@ export default function tolkienHelp() {
           {
             type: 'note',
             tone: 'info',
-            text: t('tolkien.help.access.text', 'El panel sólo aparece para administradores. Consulta GitHub al abrirse, cada 5 minutos y al volver a la pestaña; esos chequeos de fondo fallan en silencio. Sólo Buscar cambios muestra un error si la consulta manual falla.'),
+            text: t('tolkien.help.access.text', 'Cada usuario ve el estado, hace fetch, actualiza y gestiona ramas sobre su propio clon. Vista fresca, Entornos de sesión y Tolkien local son sólo para administradores. Los chequeos automáticos fallan en silencio; sólo Buscar cambios muestra un error si la consulta manual falla.'),
           },
         ],
       },

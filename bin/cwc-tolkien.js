@@ -100,6 +100,7 @@ const WORK_CONTEXT_FIELDS = [
   'followupOn',
   'waitingReason',
   'reactivationTrigger',
+  'resumeEvidence',
 ];
 const SESSION_DAYS = 30;
 
@@ -152,11 +153,11 @@ function help() {
   node bin/cwc-tolkien.js login --cookie-file <ruta>
   printf '%s' '<cookie>' | node bin/cwc-tolkien.js login
   node bin/cwc-tolkien.js whoami
-  node bin/cwc-tolkien.js census [--out <ruta>] [--limit <n>] [--fresh] [--workers <n>]
+  node bin/cwc-tolkien.js census [--out <ruta>] [--limit <n>] [--fresh] [--workers <n>] [--owner <nombre>]...
   node bin/cwc-tolkien.js reconcile [--census <ruta>] [--out <ruta>] [--limit <n>] [--fresh]
   node bin/cwc-tolkien.js close [--apply] [--reconcile <ruta>] [--limit <n>] [--confirm-large] [--only <workKey|ticketWorkflowId>]... [--next-actor <kind>]
   node bin/cwc-tolkien.js reassign [--apply] [--reconcile <ruta>] [--limit <n>] [--confirm-large] [--only <workKey|ticketWorkflowId>]...
-  node bin/cwc-tolkien.js context --ticket <workKey|uuid|url> [--apply] [--outcome <txt>] [--mode working|waiting] [--next-actor <kind>] [--actor-label <txt>] [--waiting-reason-kind <kind>] [--followup <YYYY-MM-DD>] [--why <txt>] [--evidence <txt>]
+  node bin/cwc-tolkien.js context --ticket <workKey|uuid|url> [--apply] [--outcome <txt>] [--mode working|waiting] [--next-actor <kind>] [--actor-label <txt>] [--waiting-reason-kind <kind>] [--followup <YYYY-MM-DD>] [--why <txt>] [--evidence <txt>] [--resume-evidence <txt>]
   node bin/cwc-tolkien.js db [--stats] [--migrate] [--runs <n>] [--bucket <pila>]
 
 Subcomandos:
@@ -174,6 +175,7 @@ Opciones de census:
   --limit <n>   Visita como máximo n tickets (útil para pruebas).
   --fresh       Descarta el progreso parcial anterior.
   --workers <n> Usa entre 1 y 12 navegadores; por defecto se calcula según memoria y núcleos.
+  --owner <n>   Censa los items cuyo Owner matchee ese texto (repetible). Sin este flag, censa los propios.
 
 Opciones de reconcile:
   --census <ruta>  Lee otro archivo de censo.
@@ -207,6 +209,7 @@ Opciones de context:
   --followup <YYYY-MM-DD>        Fecha de seguimiento en Bogotá (hoy..hoy + 366 días).
   --why <txt>                    Motivo de espera (5..500 caracteres).
   --evidence <txt>               Evidencia o disparador de reactivación.
+  --resume-evidence <txt>        Evidencia al sacar el ítem de espera (1..500 caracteres).
 
 Opciones de db:
   --stats               Muestra conteos y la corrida más reciente (default).
@@ -297,6 +300,7 @@ function parseCensusArgs(args, paths) {
   let limit = null;
   let fresh = false;
   let workers = null;
+  const owners = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--out') {
@@ -318,11 +322,21 @@ function parseCensusArgs(args, paths) {
       }
       workers = Number(raw);
       i += 1;
+    } else if (arg === '--owner') {
+      if (args[i + 1] === '') {
+        throw new CliError('--owner necesita un nombre no vacio.');
+      }
+      const owner = valueAfter(args, i, arg).trim();
+      if (!owner) {
+        throw new CliError('--owner necesita un nombre no vacio.');
+      }
+      owners.push(owner);
+      i += 1;
     } else {
       throw new CliError(`Opción desconocida para census: ${arg}`);
     }
   }
-  return { out, limit, fresh, workers };
+  return { out, limit, fresh, workers, owners };
 }
 
 function defaultWorkerCount() {
@@ -520,6 +534,15 @@ export function validateWorkContextValues(values, { now = new Date() } = {}) {
   ) {
     throw new CliError('--why debe tener entre 5 y 500 caracteres.');
   }
+  if (
+    values.resumeEvidence !== undefined
+    && (
+      values.resumeEvidence.trim().length === 0
+      || values.resumeEvidence.length > 500
+    )
+  ) {
+    throw new CliError('--resume-evidence debe tener entre 1 y 500 caracteres no vacíos.');
+  }
   if (values.followupOn !== undefined) {
     const followupDay = parseIsoDayNumber(values.followupOn, '--followup');
     const bounds = bogotaFollowupBounds(now);
@@ -580,6 +603,7 @@ export function parseContextArgs(args, { now = new Date() } = {}) {
     ['--followup', 'followupOn'],
     ['--why', 'waitingReason'],
     ['--evidence', 'reactivationTrigger'],
+    ['--resume-evidence', 'resumeEvidence'],
   ]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -928,10 +952,12 @@ async function deskListAgents(client) {
   return byId;
 }
 
-async function listAssignedTickets(page) {
+async function listAssignedTickets(page, owners = []) {
   // Tolkien resuelve estos filtros en la URL y `focus=mine` compara el
   // assignedToUserId del workflow con el viewerUserId de la sesión.
-  const url = `${BASE_URL}/tickets?view=active&focus=mine#queue`;
+  const url = owners.length === 0
+    ? `${BASE_URL}/tickets?view=active&focus=mine#queue`
+    : `${BASE_URL}/tickets?view=active#queue`;
   await gotoReadOnly(page, url);
   await page.waitForSelector('#queue', { timeout: NAVIGATION_TIMEOUT_MS });
   return page.evaluate((baseUrl) => {
@@ -945,14 +971,39 @@ async function listAssignedTickets(page) {
       const absolute = new URL(href, baseUrl);
       const match = absolute.pathname.match(/^\/tickets\/([^/]+)$/);
       if (!match) continue;
+      const ownerSpan = [...anchor.querySelectorAll('span')]
+        .find((span) => (span.textContent ?? '').trim().startsWith('Owner:'));
+      const owner = ownerSpan
+        ? (ownerSpan.textContent ?? '').trim().slice('Owner:'.length).trim()
+        : null;
       found.set(match[1], {
         ticketWorkflowId: match[1],
         url: absolute.href,
         listingText: (anchor.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        owner,
       });
     }
     return [...found.values()];
   }, BASE_URL);
+}
+
+function filterListedByOwners(listed, owners) {
+  const normalizedOwners = owners.map((owner) => normalizedAssigneeName(owner));
+  const histogramByLabel = new Map();
+  for (const item of listed) {
+    const label = item.owner === null ? '(sin owner)' : item.owner;
+    histogramByLabel.set(label, (histogramByLabel.get(label) ?? 0) + 1);
+  }
+  const histogram = [...histogramByLabel.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((left, right) => right.count - left.count);
+  const matched = listed.filter(
+    (item) => item.owner !== null
+      && normalizedOwners.some(
+        (owner) => normalizedAssigneeName(item.owner).includes(owner),
+      ),
+  );
+  return { matched, histogram };
 }
 
 function fieldFromSerializedHtml(html, field) {
@@ -1166,14 +1217,21 @@ async function scrapeTicket(page, listed) {
     fieldFromSerializedHtml(manageHtml, 'deskTicketNumber'),
   ].find((value) => value && value !== 'null') ?? null;
   let deskTicketId = deskIdFromUrl(overview.deskUrl) ?? serializedDeskId;
-  let deskTicketNumber = overview.deskTicketNumber
-    ?? manage.deskTicketNumber
-    ?? serializedDeskNumber;
+  // Orden por CONFIABILIDAD, no por comodidad: primero el campo serializado,
+  // después el lector del tab dev ("legacy Desk #NNN"), y sólo al final el
+  // regex sobre el texto de la página — que agarra el primer "Desk #NNN" que
+  // encuentre, y el cuerpo del ticket suele citar OTRO ticket. Reordenar los
+  // scrapes no alcanzaba: con el campo serializado en null, el regex dejaba un
+  // valor y la guarda de abajo impedía que corriera el lector confiable.
+  let deskTicketNumber = serializedDeskNumber;
   // Cualquiera de las dos señales confirma que el ticket tiene par en Desk;
   // exigir sólo el enlace perdía el número cuando overview no lo leyó (console:BUG-2556).
   if (!deskTicketNumber && (overview.deskUrl || deskTicketId)) {
     deskTicketNumber = await readDeskNumber(page, detailUrl);
   }
+  deskTicketNumber = deskTicketNumber
+    ?? overview.deskTicketNumber
+    ?? manage.deskTicketNumber;
   // Tolkien puede no mostrar el número corto humano (#693). En ese caso queda
   // null: reconcile debe usar deskTicketId, la llave real tomada del href.
   if (deskTicketId === 'null') deskTicketId = null;
@@ -1234,13 +1292,35 @@ async function censusSequential(options, paths, identity) {
   const { browser, context } = await launchContext(paths.sessionFile);
   const page = await context.newPage();
   try {
-    const allListed = await listAssignedTickets(page);
+    const allListed = await listAssignedTickets(page, options.owners);
+    let baseListed = allListed;
+    let matched = null;
+    if (options.owners.length > 0) {
+      const filtered = filterListedByOwners(allListed, options.owners);
+      matched = filtered.matched;
+      const { histogram } = filtered;
+      log('Owners en el tablero: ' + histogram.map((h) => `${h.label} (${h.count})`).join(' · '));
+      if (matched.length === 0) {
+        const seen = histogram.map((h) => h.label).join(', ') || '(ninguno)';
+        throw new CliError(
+          `Ningún item del tablero matcheó los owners pedidos. Owners vistos: ${seen}.`,
+        );
+      }
+      baseListed = matched;
+    }
     const listed = options.limit === null
-      ? allListed
-      : allListed.slice(0, options.limit);
-    log(
-      `Vista "Mis tickets": ${allListed.length} asignados; ${listed.length} dentro de esta corrida.`,
-    );
+      ? baseListed
+      : baseListed.slice(0, options.limit);
+    if (matched === null) {
+      log(
+        `Vista "Mis tickets": ${allListed.length} asignados; ${listed.length} dentro de esta corrida.`,
+      );
+    } else {
+      log(
+        `Vista "Todo el tablero": ${allListed.length} activos · ${matched.length} de los owners `
+          + `pedidos · ${listed.length} dentro de esta corrida.`,
+      );
+    }
     for (let index = 0; index < listed.length; index += 1) {
       const item = listed[index];
       if (partial.has(item.ticketWorkflowId)) {
@@ -1469,18 +1549,40 @@ async function censusParallel(options, paths, identity, workers) {
     try {
       ({ browser, context } = await launchContext(paths.sessionFile));
       page = await context.newPage();
-      allListed = await listAssignedTickets(page);
+      allListed = await listAssignedTickets(page, options.owners);
     } finally {
       await page?.close().catch(() => {});
       await context?.close().catch(() => {});
       await browser?.close().catch(() => {});
     }
+    let baseListed = allListed;
+    let matched = null;
+    if (options.owners.length > 0) {
+      const filtered = filterListedByOwners(allListed, options.owners);
+      matched = filtered.matched;
+      const { histogram } = filtered;
+      log('Owners en el tablero: ' + histogram.map((h) => `${h.label} (${h.count})`).join(' · '));
+      if (matched.length === 0) {
+        const seen = histogram.map((h) => h.label).join(', ') || '(ninguno)';
+        throw new CliError(
+          `Ningún item del tablero matcheó los owners pedidos. Owners vistos: ${seen}.`,
+        );
+      }
+      baseListed = matched;
+    }
     const listed = options.limit === null
-      ? allListed
-      : allListed.slice(0, options.limit);
-    log(
-      `Vista "Mis tickets": ${allListed.length} asignados; ${listed.length} dentro de esta corrida.`,
-    );
+      ? baseListed
+      : baseListed.slice(0, options.limit);
+    if (matched === null) {
+      log(
+        `Vista "Mis tickets": ${allListed.length} asignados; ${listed.length} dentro de esta corrida.`,
+      );
+    } else {
+      log(
+        `Vista "Todo el tablero": ${allListed.length} activos · ${matched.length} de los owners `
+          + `pedidos · ${listed.length} dentro de esta corrida.`,
+      );
+    }
     const queued = store.enqueueScanTargets(db, runUid, listed);
     log(
       `Cola paralela: ${queued.enqueued} encolados · ${queued.existing} ya estaban`
@@ -2332,6 +2434,9 @@ async function readWorkContextForm(page, detailUrl = null) {
       followupOn: valueOf('input[name="followupOn"]') ?? '',
       waitingReason: valueOf('input[name="waitingReason"]') ?? '',
       reactivationTrigger: valueOf('input[name="reactivationTrigger"]') ?? '',
+      resumeEvidence: valueOf('textarea[name="resumeEvidence"]')
+        ?? valueOf('input[name="resumeEvidence"]')
+        ?? '',
     };
   });
 }
@@ -2399,21 +2504,39 @@ export async function submitWorkContext(page, values) {
     if (action === 'select') await control.selectOption(values[field]);
     else await control.fill(values[field]);
   }
+  let resumeEvidenceControl = form.locator('textarea[name="resumeEvidence"]');
+  if (await resumeEvidenceControl.count() === 0) {
+    resumeEvidenceControl = form.locator('input[name="resumeEvidence"]');
+  }
+  if (await resumeEvidenceControl.count() > 0) {
+    if (!Object.hasOwn(values, 'resumeEvidence')) {
+      throw new CliError(
+        'El formulario pide "resumeEvidence" (Tolkien exige registrar qué pasó antes de sacar '
+          + 'el ítem de espera). Pasá --resume-evidence "<texto>".',
+      );
+    }
+    await resumeEvidenceControl.fill(values.resumeEvidence);
+  } else if (Object.hasOwn(values, 'resumeEvidence')) {
+    log('El formulario no contiene el campo "resumeEvidence"; se ignoró --resume-evidence.');
+  }
   const requested = requestedWorkContextValues(values);
+  const detailUrl = page.url();
   await form.locator('button[type="submit"]').click();
   await page.waitForTimeout(250);
+
+  const errorCode = new URL(page.url()).searchParams.get('error');
+  if (errorCode) {
+    await assertAuthenticated(page);
+    return { error: `Tolkien devolvió el error ${errorCode} al guardar el contexto.`, after: null };
+  }
 
   const deadline = Date.now() + 12_000;
   let after = null;
   let mismatch = null;
   let readError = null;
   while (Date.now() < deadline) {
-    const errorCode = new URL(page.url()).searchParams.get('error');
-    if (errorCode) {
-      await assertAuthenticated(page);
-      return { error: `Tolkien devolvió el error ${errorCode} al guardar el contexto.`, after };
-    }
     try {
+      await gotoReadOnly(page, detailUrl);
       after = await readWorkContextForm(page);
       mismatch = contextPersistenceMismatch(after, requested);
       if (!mismatch) {

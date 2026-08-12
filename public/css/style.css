@@ -609,6 +609,29 @@ html, body {
 .sess-env-h .side-count { margin-left: auto; }
 .sess-env-grp .sess-card { margin-bottom: .25rem; }
 .sess-place.is-env { color: var(--cwc-accent-cool); }
+/* Carpetas personales: repiten la profundidad y la guía de los entornos, pero
+   con identidad neutra porque organizan habitantes sin cambiarles el mundo. */
+.sess-folder-grp {
+  margin: .1rem 0 .25rem .55rem; padding-left: .45rem;
+  border-left: 2px solid var(--cwc-border-strong); border-radius: 3px;
+  background: color-mix(in srgb, var(--cwc-text-dim) 5%, transparent);
+}
+.sess-folder-h {
+  color: var(--cwc-text-secondary); cursor: pointer;
+  display: flex; align-items: center; gap: .4rem;
+  min-width: 0;
+  font-size: var(--cwc-fs-xs); text-transform: uppercase; letter-spacing: .04em;
+  padding: .25rem .35rem; list-style: none; user-select: none;
+}
+.sess-folder-h::-webkit-details-marker { display: none; }
+.sess-folder-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-folder-h .side-count { margin-left: auto; }
+.sess-folder-grp .sess-card { margin-bottom: .25rem; }
+.sess-folder-menu,
+.sess-world-add { flex: none; color: inherit; opacity: .65; }
+.sess-folder-menu:hover,
+.sess-world-add:hover { opacity: 1; }
+.sess-folder-field { display: grid; gap: .25rem; margin-bottom: .65rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); }
 /* 🌗 grupo SESIÓN-LIMBO (alto riesgo, herramientas de ambos mundos): resaltado. */
 .sess-world-h.sess-limbo-h {
   color: var(--cwc-danger);
@@ -621,6 +644,7 @@ html, body {
    grupo se pliegue era invisible. */
 .sess-world-h::before,
 .sess-env-h::before,
+.sess-folder-h::before,
 .sess-others > summary::before {
   content: ''; flex: none;
   width: 0; height: 0;
@@ -632,6 +656,7 @@ html, body {
 }
 .sess-world-grp[open] > .sess-world-h::before,
 .sess-env-grp[open] > .sess-env-h::before,
+.sess-folder-grp[open] > .sess-folder-h::before,
 .sess-others[open] > summary::before { transform: rotate(90deg); }
 /* F3 (PLAN-373): conversación ARCHIVADA (revivible) — atenuada. */
 .sess-chat--archived { opacity: .62; }

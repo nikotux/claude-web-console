@@ -27,6 +27,7 @@ const CONN_STATE = {
   connected: { light: 'ok', tagKey: 'system.conn.tagOk', tagEs: 'conectado' },
   inprogress: { light: 'info', tagKey: 'system.conn.tagRunning', tagEs: 'en curso' },
   action: { light: 'warn', tagKey: 'system.conn.tagAction', tagEs: 'requiere tu acción' },
+  expired: { light: 'warn', tagKey: 'system.conn.tagAction', tagEs: 'requiere tu acción' },
   unset: { light: 'neutral', tagKey: 'system.conn.tagUnset', tagEs: 'sin configurar' },
   error: { light: 'danger', tagKey: 'system.conn.tagError', tagEs: 'error' },
 };
@@ -476,6 +477,9 @@ export function mountMcpsPanel(el, ctx = {}) {
       return missingSet.has(String(s).toLowerCase()) ? `<b>${safe}</b>` : safe;
     }).join(' ');
     const scopes = p.scopes?.length ? `<div class="hr-f-file">🔑 <code>${scopeList}</code></div>` : '';
+    const appSource = p.appSource === 'user'
+      ? `<div class="hr-f-file">${esc(t('system.conn.appSourceUser', '🔑 Usando tu propia app de {label}', { label: p.label }))}</div>`
+      : '';
     const missingScopesNote = st.key === 'connected' && missingScopes.length
       ? `<div class="hr-f-file">⚠️ <b>${t('system.conn.missingScopesTitle', 'Permisos nuevos sin autorizar:')}</b> <code>${esc(missingScopes.join(' '))}</code> — ${t('system.conn.missingScopesHint', 'tocá "Renovar permisos" para que tu cuenta los tome.')}</div>`
       : '';
@@ -494,6 +498,9 @@ export function mountMcpsPanel(el, ctx = {}) {
     } else {
       acts.push(`<button class="btn btn--sm" data-cact="connect" data-prov="${esc(p.id)}">${icon('externalLink', { size: 12 })}<span>${t('system.conn.connectBtn', 'Conectar')}</span></button>`);
     }
+    if (p.appSource === 'user') {
+      acts.push(`<button class="btn-ghost btn--sm" data-cact="reset-app" data-prov="${esc(p.id)}">${t('system.conn.useConsoleApp', 'Volver a la app de la consola')}</button>`);
+    }
     const actions = `<div class="mcp-acts">${acts.join('')}</div>`;
     const attemptNote = stKey === 'inprogress' ? `
           <div class="hr-f-file">ℹ️ ${t('system.conn.runningHint', 'Ya iniciaste la conexión. Si te pidió aprobación de un administrador, se completa cuando te aprueben — puede tardar. No hay nada roto de tu lado.')}</div>
@@ -510,6 +517,7 @@ export function mountMcpsPanel(el, ctx = {}) {
         <div class="hr-f-body">
           <p class="hr-f-detail"><b>${dot} ${esc(st.label)}</b></p>
           <div class="hr-f-file">${t(meta.purposeKey, meta.purposeEs)}</div>
+          ${appSource}
           ${connectedAt}
           ${scopes}
           ${missingScopesNote}
@@ -524,6 +532,12 @@ export function mountMcpsPanel(el, ctx = {}) {
   }
 
   function codexUiState(d) {
+    // Un job viejo puede seguir diciendo done:true; el vencimiento manda salvo
+    // que haya un login EN CURSO, que es justamente lo que lo va a renovar.
+    const inFlight = d?.status === 'starting' || d?.status === 'awaiting-auth';
+    if (!inFlight && d?.expired) {
+      return { key: 'expired', light: 'warn', label: t('system.conn.codexExpired', 'Sesión vencida — reconectá') };
+    }
     if (d?.connected || d?.done || d?.status === 'connected' || d?.status === 'done') {
       return { key: 'connected', light: 'ok', label: t('system.conn.codexConnected', 'Conectado') };
     }
@@ -541,7 +555,7 @@ export function mountMcpsPanel(el, ctx = {}) {
 
   function codexNeedsAttention(d) {
     const key = codexUiState(d).key;
-    return key === 'action' || key === 'inprogress' || key === 'error';
+    return key === 'action' || key === 'inprogress' || key === 'error' || key === 'expired';
   }
 
   function codexActive(d) {
@@ -557,6 +571,15 @@ export function mountMcpsPanel(el, ctx = {}) {
 
     if (st.key === 'connected') {
       flow = `<p class="hr-f-detail"><b>🟢 ${t('system.conn.codexConnected', 'Conectado')}</b></p>`;
+    } else if (st.key === 'expired') {
+      const expiresAt = Number.isFinite(d?.expiresAt) && !Number.isNaN(new Date(d.expiresAt).getTime())
+        ? `<p class="hr-f-file">${t('system.conn.codexExpiredAt', 'Venció el {fecha}', { fecha: new Date(d.expiresAt).toLocaleString() })}</p>`
+        : '';
+      flow = `
+        <p class="hr-f-detail"><b>${dot} ${t('system.conn.codexExpired', 'Sesión vencida — reconectá')}</b></p>
+        <p class="hr-f-file">${t('system.conn.codexExpiredHint', 'Tu sesión de Codex venció (dura 10 días desde el último uso). Hasta que la reconectes, el modo Tándem no puede ejecutar código y el contador de límites de Codex queda con datos guardados.')}</p>
+        ${expiresAt}`;
+      actions = `<div class="mcp-acts"><button class="btn btn--sm" data-codex-act="start">${icon('refresh', { size: 12 })}<span>${t('system.conn.reconnectBtn', 'Reconectar')}</span></button></div>`;
     } else if (d?.status === 'awaiting-auth' && !d?.stale) {
       const link = d.url
         ? `<a class="mcp-oauth-link" href="${esc(d.url)}" target="_blank" rel="noopener">${icon('externalLink', { size: 13 })} ${t('system.conn.codexOpenLink', 'Abrir enlace de ChatGPT')}</a>`
@@ -805,6 +828,18 @@ export function mountMcpsPanel(el, ctx = {}) {
         } catch (err) {
           dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(err.message || err) });
         }
+      } else if (b.dataset.cact === 'reset-app') {
+        try {
+          const r = await fetch('/api/connections/app/mine/reset', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ provider: prov }),
+          });
+          if (!r.ok) throw new Error((await r.json()).error || r.status);
+          loadConnections();
+        } catch (err) {
+          dialog.alertDialog?.({ title: t('system.mcps.errorTitle', 'Error'), message: String(err.message || err) });
+        }
       }
     }));
   }
@@ -1048,7 +1083,10 @@ export function mountMcpsPanel(el, ctx = {}) {
             <input type="text" class="dlg-input" data-ref="code" placeholder="${esc(t('system.conn.grantPlaceholder', '1000.xxxxx…'))}">
             <button class="btn btn--sm" data-ref="send">${icon('check', { size: 12 })}<span>${t('system.conn.send', 'Enviar')}</span></button></li>
         </ol>
-        <p class="hr-f-file" data-ref="msg"></p>`);
+        <p class="hr-f-file" data-ref="msg"></p>
+        <div class="mcp-acts">
+          <button class="btn-ghost btn--sm" data-ref="ownapp">${t('system.conn.useOwnApp', '¿Zoho dice invalid_code? Usá tu propio Self Client')}</button>
+        </div>`);
       const send = m.body.querySelector('[data-ref="send"]');
       const input = m.body.querySelector('[data-ref="code"]');
       const msg = m.body.querySelector('[data-ref="msg"]');
@@ -1060,6 +1098,7 @@ export function mountMcpsPanel(el, ctx = {}) {
           if (msg) msg.textContent = t('system.conn.copyScopesFallback', 'No se pudo copiar automáticamente. Scopes: {scopes}', { scopes: j.scopes });
         }
       });
+      m.body.querySelector('[data-ref="ownapp"]')?.addEventListener('click', () => renderOwnApp());
       send?.addEventListener('click', async () => {
         const value = input.value.trim();
         if (!value) return;
@@ -1067,9 +1106,18 @@ export function mountMcpsPanel(el, ctx = {}) {
         if (msg) msg.textContent = t('system.conn.sending', 'Enviando…');
         try {
           const r = await fetch(`/api/connections/${encodeURIComponent(prov)}/code`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jobId, value }) });
-          if (!r.ok) throw new Error((await r.json()).error || r.status);
+          if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            const error = new Error(data.error || r.status);
+            error.code = data.code;
+            throw error;
+          }
           if (msg) msg.textContent = t('system.conn.sent', 'Código enviado. Esperando confirmación…');
         } catch (err) {
+          if (err.code === 'invalid_code') {
+            renderOwnApp(err.message || String(err));
+            return;
+          }
           if (msg) msg.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
           send.disabled = false;
         }
@@ -1077,6 +1125,8 @@ export function mountMcpsPanel(el, ctx = {}) {
     };
 
     const startConnect = async () => {
+      if (timer) clearInterval(timer);
+      timer = null;
       setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.starting', 'Iniciando conexión…')}`);
       try {
         const r = await fetch(`/api/connections/${encodeURIComponent(prov)}/connect`, { method: 'POST' });
@@ -1090,6 +1140,95 @@ export function mountMcpsPanel(el, ctx = {}) {
       } catch (err) {
         setBody(`<p class="hr-f-crit">${t('system.conn.startError', 'No se pudo iniciar: {error}', { error: esc(err.message || err) })}</p>`);
       }
+    };
+
+    // Cualquier usuario puede preferir su propia app OAuth. En Zoho esto no
+    // es sólo una alternativa: un Self Client sólo emite grant codes para la
+    // cuenta que lo creó, por eso el formulario también rescata invalid_code.
+    const renderOwnApp = async (initialError = '') => {
+      if (timer) clearInterval(timer);
+      timer = null;
+      phase = 'ownapp';
+      const meta = SETUP_META[prov];
+      if (!meta) { setBody(`<p class="hr-f-crit">${t('system.conn.noSetup', 'Este proveedor no tiene instructivo de configuración.')}</p>`); return; }
+      setBody(`${pacman({ state: 'delegating', size: 'sm' })} ${t('system.conn.loadingOwnApp', 'Cargando tu app…')}`);
+      let mine = {};
+      let loadError = '';
+      try {
+        const r = await fetch('/api/connections/app/mine');
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || r.status);
+        mine = data;
+      } catch (err) {
+        loadError = err.message || String(err);
+      }
+      const cur = mine.providers?.[prov] || {};
+      const fields = meta.fields.map((f) => `
+        <label class="conn-flabel">${t(f.labelKey, f.labelEs)}</label>
+        <input class="dlg-input" data-f="${esc(f.k)}"${f.type ? ` type="${esc(f.type)}"` : ''} placeholder="${esc(f.placeholder || '')}">`).join('');
+      const context = prov === 'zoho'
+        ? `<p class="hr-f-file">${t('system.conn.zohoSelfClientPersonal', 'Un Self Client de Zoho es personal: sólo su dueño puede generar los grant codes. Por eso, si no ves la app de la consola en tu API Console, necesitás la tuya.')}</p>`
+        : `<p class="hr-f-file">${t('system.conn.ownAppHint', 'Podés conectar con una app OAuth propia en vez de la app compartida de la consola.')}</p>`;
+      const reset = cur.configured
+        ? `<button class="btn-ghost btn--sm" data-ref="resetapp">${t('system.conn.useConsoleApp', 'Volver a la app de la consola')}</button>`
+        : '';
+      const message = initialError
+        ? t('system.conn.inlineError', 'Error: {error}', { error: initialError })
+        : (loadError ? t('system.conn.inlineError', 'Error: {error}', { error: loadError }) : '');
+      setBody(`
+        <p class="mcp-oauth-wait">${pacman({ state: 'waiting', size: 'sm' })} <b>${esc(t('system.conn.ownAppTitle', 'Tu propia app de {label}', { label }))}</b></p>
+        ${context}
+        <ol class="mcp-oauth-steps">${meta.steps.map(([k, es]) => `<li>${t(k, es)}</li>`).join('')}</ol>
+        <a class="mcp-oauth-link" href="${esc(meta.url)}" target="_blank" rel="noopener">${icon('externalLink', { size: 13 })} ${t(meta.linkKey, meta.linkEs)}</a>
+        <div class="conn-appform">${fields}</div>
+        <div class="mcp-acts">
+          <button class="btn btn--sm" data-ref="saveapp">${t('system.conn.saveAndContinue', 'Guardar y continuar')}</button>
+          ${reset}
+        </div>
+        <p class="hr-f-file" data-ref="msg">${esc(message)}</p>`);
+      meta.fields.forEach((f) => {
+        const input = m.body.querySelector(`[data-f="${f.k}"]`);
+        if (!input) return;
+        if (f.k === 'clientSecret') { if (cur.hasSecret) input.placeholder = t('system.conn.secretSavedPlaceholder', '•••• (guardado)'); return; }
+        if (cur[f.k]) input.value = cur[f.k];
+      });
+      const save = m.body.querySelector('[data-ref="saveapp"]');
+      const msg = m.body.querySelector('[data-ref="msg"]');
+      save?.addEventListener('click', async () => {
+        const body = { provider: prov };
+        m.body.querySelectorAll('[data-f]').forEach((input) => { const value = input.value.trim(); if (value) body[input.dataset.f] = value; });
+        save.disabled = true;
+        if (msg) msg.textContent = t('system.conn.saving', 'Guardando…');
+        try {
+          const r = await fetch('/api/connections/app/mine', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || r.status);
+          loadConnections();
+          startConnect();
+        } catch (err) {
+          if (msg) msg.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
+          save.disabled = false;
+        }
+      });
+      m.body.querySelector('[data-ref="resetapp"]')?.addEventListener('click', async (event) => {
+        const resetButton = event.currentTarget;
+        resetButton.disabled = true;
+        if (msg) msg.textContent = t('system.conn.switchingApp', 'Cambiando a la app de la consola…');
+        try {
+          const r = await fetch('/api/connections/app/mine/reset', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ provider: prov }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || r.status);
+          loadConnections();
+          startConnect();
+        } catch (err) {
+          if (msg) msg.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
+          resetButton.disabled = false;
+        }
+      });
     };
 
     // PASO 1 (solo admin, solo si la app no está configurada): instructivo +
@@ -1138,7 +1277,14 @@ export function mountMcpsPanel(el, ctx = {}) {
 
     if (p && p.configured) startConnect();
     else if (connAdmin) renderSetup();
-    else setBody(`<p class="hr-f-file">⚪ ${t('system.conn.needsAdminModal', 'Falta que un administrador cargue las credenciales de la app de este proveedor. Pedíselo y volvé a intentar.')}</p>`);
+    else if (prov === 'zoho') renderOwnApp();
+    else {
+      setBody(`
+        <p class="hr-f-file">⚪ ${t('system.conn.needsAdminModal', 'Falta que un administrador cargue las credenciales de la app de este proveedor. Pedíselo y volvé a intentar.')}</p>
+        <p class="hr-f-file">${t('system.conn.ownAppAlternative', 'Si tenés una app OAuth propia, también podés cargarla y continuar ahora.')}</p>
+        <div class="mcp-acts"><button class="btn btn--sm" data-ref="ownapp">${t('system.conn.configureOwnApp', 'Cargar mi propia app')}</button></div>`);
+      m.body.querySelector('[data-ref="ownapp"]')?.addEventListener('click', () => renderOwnApp());
+    }
   }
 
   function allMcpServers(d) {
@@ -2091,7 +2237,10 @@ export function mountMcpsPanel(el, ctx = {}) {
     }
 
     function render(job) {
-      if (job.connected === true || job.done === true) {
+      // `expired` gana sobre un done:true heredado de un job viejo: si la
+      // credencial venció, el login NO terminó (bug real: el modal felicitaba
+      // sin haber reconectado nada).
+      if ((job.connected === true || job.done === true) && job.expired !== true) {
         if (phase === 'connected') return;
         phase = 'connected';
         stop();

@@ -65,8 +65,16 @@ FORWARD) ·
 sdk-settings(settingSourcesFor: fuente ÚNICA de settingSources,
 'chat'=user+project+local / 'headless'=project+local sin user /
 'none'=[] para texto puro — ver text-only-query) ·
-connections-store(app config de instancia + tokens per-usuario +
-getAccessToken con refresh) · connections-microsoft(device code
+connections-store(app config de instancia + override de app per-usuario +
+tokens per-usuario + getAccessToken con refresh; exports
+readUserAppConfig/writeUserAppConfig/clearUserAppConfig/userAppComplete/
+effectiveAppConfig/appConfiguredFor. La selección es TODO-O-NADA por proveedor:
+un override completo pisa ENTERA la config de instancia y nunca mezcla el
+clientId del usuario con el secret de instancia; cada conexión guarda
+appClientId para refrescar con la misma app que emitió el token. Para el host,
+cuyo userDataDir coincide con HOME, el override usa `_app-user.json` para no
+colisionar con el `_app.json` de instancia) ·
+connections-microsoft(device code
 flow) · connections-zoho(grant code Self Client + getOrg +
 identidad por listado de agentes) · connections-tolkien(cookie de sesión
 Auth.js + storageState y metadata sin secreto; módulo puro compartido que
@@ -287,13 +295,20 @@ Nico" heredando `~/.claude` y rutas del host). Cada usuario tiene una RAÍZ
 propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
 `workspace/` — helpers en `src/core/user-space.js` (`userSpace`/`userDataDir`/
 `userClaudeDir`/`userFileRoot`/`userCodexDir`/`userCodexAuthPath`/`hasCodexCreds`/
-`userInfisicalDir`/`userInfisicalConfigPath`/`hasInfisicalCreds`/`userPadDir`/`readUserOauthToken`/
+`codexCredState`/`codexCredLive`/`CODEX_TOKEN_TTL_MS`/`userInfisicalDir`/
+`userInfisicalConfigPath`/`hasInfisicalCreds`/`userPadDir`/`readUserOauthToken`/
 `ensureCliOnboarded`/`userTolkienMcpTokenPath`/`readUserTolkienMcpToken`/`hasTolkienMcpToken`/
 `readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
 HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
 `config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.
 `ensureCliOnboarded` mergea `hasCompletedOnboarding: true` en el `.claude.json`
 del inquilino para que su CLI no muestre login si ya tiene OAuth; jamás toca al host.
+Para Codex, `hasCodexCreds` responde PRESENCIA (existe `auth.json`) y queda para
+"¿está instalada la credencial?" en onboarding; `codexCredState` responde
+VALIDEZ (presencia + vencimiento estimado en
+`last_refresh + CODEX_TOKEN_TTL_MS`, verificado contra el `exp` del JWT). Quien
+pregunta "¿puedo usar Codex?" usa `codexCredLive`. La constante es COMPARTIDA
+con el Llavero para que Conexiones y Llavero no puedan volver a contradecirse.
 No hay usuarios de SO ni sudo/setuid: el aislamiento se logra apuntando cada
 runner a un directorio de config por-usuario (decisión 🅰, `decision-1784076518`).
 `GET /api/whoami` devuelve `{type, username, admin, lang, host}`: `host` siempre

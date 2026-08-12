@@ -14,6 +14,10 @@ Los chats cuyo cwd es `~/.cwc-data/tolkien-envs/<envId>/tree` se agrupan bajo
 Tolkien, pero en sub-bloques colapsables por entorno: rama, contador, guía de
 árbol e identidad azul fría distinguen el worktree efímero del Tolkien principal.
 
+La lista dibuja carpetas manuales por mundo como `sess-folder-grp`; su colapso
+vive en `cwc.sessions.folder.<id>.open`. El dato de `/api/folders/list` viaja
+dentro de la misma caché de sesiones.
+
 Ese plegado ahora vale también para los grupos por MUNDO del sidebar —Mi Consola,
 Tolkien, 🛃 Aduana, 🌗 Limbo y Otros—, que antes NO eran colapsables: cuando hay
 más de un mundo, cada `<div class="sess-world-h">` suelto y sus tarjetas hermanas
@@ -156,6 +160,11 @@ TODOS; editar, ocultar, borrar y "✍️ Redactar ahora" son acciones admin-only
 El badge de no leídas vive en el botón ⚙ del pie y se apaga con el evento
 `cwc:news-seen`.
 La pestaña Conexiones = mountMcpsPanel (módulo `mcps`, ver arriba).
+En Conexiones, CUALQUIER usuario puede cargar su propia app OAuth mediante
+`/api/connections/app/mine`, con fallback a la app de instancia. Zoho la
+necesita cuando el Self Client es ajeno porque esos clientes son personales:
+sólo su dueño puede generar grant codes. La tarjeta muestra `appSource`
+cuando el usuario está usando su propia app.
 `system/mcps-panel.js` despacha `data-kact="reconnect-keyring"` según
 `item.action.kind`: `infisical-login` abre `openInfisicalLogin`,
 `claude-login` abre `openClaudeLogin(item)`, `codex-login` y `github-login`
@@ -185,6 +194,9 @@ y el usuario ESCRIBE ese código en el navegador; no hay input ni POST de códig
 de vuelta. Codex y GitHub sólo parametrizan el mismo flujo por `base`; GitHub
 agrega la fase intermedia `setup-git`. Un job con `stale:true` se muestra como
 error recuperable con «Reintentar», no como espera eterna.
+La tarjeta de Codex y su modal de reconexión distinguen VENCIDA de CONECTADA
+mediante `expired` de `/api/connections/codex/status`; un `done:true` viejo del
+job ya no puede pisar el vencimiento.
 `openPadLogin` es hermana de `openClaudeLogin`, pero sólo muestra la URL del
 flujo browser-based y espera la verificación automática: tampoco tiene input
 de código. `openServiceRestart` NO es un login: no muestra URL ni código,
@@ -472,6 +484,8 @@ selector con #terminals+3 clases que le gana al display:flex
 del media query móvil; la TUI es .conv-tui-host y no matchea,
 ahí la barra queda) ·
 usage (pie: tokens de HOY; su modal "Uso" REDISEÑADO 2026-07-10:
+el bloque de Codex muestra un aviso explícito de sesión vencida cuando OpenAI
+responde 401.
 arriba límites del plan — /api/tokens/limits, barras % con umbrales
 ok/warn/danger, "queda X% · resetea en …" y "· ≈ X tok" (token-count
 NUESTRO de la ventana: session=5 h · weekly=7 d · scoped=ese modelo,

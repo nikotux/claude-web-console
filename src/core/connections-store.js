@@ -1,9 +1,7 @@
 // core/connections-store.js — store mínimo para conexiones OAuth externas.
 //
-// La CONFIG DE LA APP OAuth es de nivel INSTANCIA: una app sirve a todos los
-// usuarios, que es el modelo normal de OAuth. Vive en
-// ~/.cwc-data/connections/_app.json. Los TOKENS son PER-USUARIO y viven en
-// userDataDir(username)/connections/<provider>.json. Todo se escribe 0600 y de
+// La CONFIG DE LA APP OAuth puede ser de INSTANCIA o tener un override completo
+// POR-USUARIO. Los TOKENS también son per-usuario. Todo se escribe 0600 y de
 // forma ATÓMICA para no dejar credenciales corruptas a mitad de escritura.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -92,6 +90,133 @@ export function appConfigured(provider) {
 
 function userConnDir(username) {
   return path.join(userDataDir(username), 'connections');
+}
+
+function userAppFile(username) {
+  return path.join(userConnDir(username), '_app.json');
+}
+
+function userAppStorageFile(username) {
+  const file = userAppFile(username);
+  // El host conserva userDataDir(host) === HOME por retrocompatibilidad, por lo
+  // que su _app.json colisionaría con APP_FILE. Su override va al archivo
+  // hermano para no leer ni sobrescribir la app de instancia como si fuera suyo.
+  return path.resolve(file) === path.resolve(APP_FILE)
+    ? path.join(userConnDir(username), '_app-user.json')
+    : file;
+}
+
+export function readUserAppConfig(username) {
+  const raw = readJson(userAppStorageFile(username)) || {};
+  const microsoft = raw.microsoft || {};
+  const zohoCfg = raw.zoho || {};
+
+  return {
+    microsoft: {
+      clientId: cleanString(microsoft.clientId),
+      tenantId: cleanString(microsoft.tenantId),
+    },
+    zoho: {
+      clientId: cleanString(zohoCfg.clientId),
+      clientSecret: cleanString(zohoCfg.clientSecret),
+      dc: cleanString(zohoCfg.dc),
+    },
+  };
+}
+
+export function writeUserAppConfig(username, patch) {
+  const cfg = readUserAppConfig(username);
+  const allowed = {
+    microsoft: ['clientId', 'tenantId'],
+    zoho: ['clientId', 'clientSecret', 'dc'],
+  };
+
+  for (const [provider, keys] of Object.entries(allowed)) {
+    if (!patch?.[provider] || typeof patch[provider] !== 'object') continue;
+    for (const key of keys) {
+      if (Object.hasOwn(patch[provider], key)) {
+        cfg[provider][key] = cleanString(patch[provider][key]);
+      }
+    }
+  }
+
+  // writeJsonAtomic crea el directorio privado si falta.
+  writeJsonAtomic(userAppStorageFile(username), cfg, { mode: 0o600 });
+  return cfg;
+}
+
+export function clearUserAppConfig(username, provider) {
+  const empty = provider === 'microsoft'
+    ? { clientId: '', tenantId: '' }
+    : provider === 'zoho'
+      ? { clientId: '', clientSecret: '', dc: '' }
+      : null;
+  if (!empty) return readUserAppConfig(username);
+
+  // Se deja el archivo vacío por proveedor: es más simple y mantiene intacto
+  // el override del otro proveedor.
+  return writeUserAppConfig(username, { [provider]: empty });
+}
+
+export function userAppComplete(username, provider) {
+  const cfg = readUserAppConfig(username)[provider];
+  if (!cfg) return false;
+  if (provider === 'zoho') return !!cfg.clientId && !!cfg.clientSecret;
+  return provider === 'microsoft' && !!cfg.clientId;
+}
+
+function withProviderDefaults(provider, cfg, source) {
+  if (provider === 'microsoft') {
+    return {
+      clientId: cleanString(cfg?.clientId),
+      tenantId: cleanString(cfg?.tenantId) || DEFAULT_APP_CONFIG.microsoft.tenantId,
+      source,
+    };
+  }
+  if (provider === 'zoho') {
+    return {
+      clientId: cleanString(cfg?.clientId),
+      clientSecret: cleanString(cfg?.clientSecret),
+      dc: cleanString(cfg?.dc) || DEFAULT_APP_CONFIG.zoho.dc,
+      source,
+    };
+  }
+  return null;
+}
+
+export function effectiveAppConfig(username, provider) {
+  const userCfg = readUserAppConfig(username);
+  const instanceCfg = readAppConfig();
+
+  // La elección es TODO O NADA por proveedor. Si el override del usuario está
+  // completo se usa ENTERO; si no, se usa ENTERA la config de instancia. NUNCA
+  // se mezcla el clientId de un usuario con el clientSecret de la instancia:
+  // esa mezcla es exactamente el error corregido y produciría invalid_client.
+  if (userAppComplete(username, provider)) {
+    return withProviderDefaults(provider, userCfg[provider], 'user');
+  }
+  return withProviderDefaults(provider, instanceCfg[provider], 'instance');
+}
+
+export function appConfiguredFor(username, provider) {
+  return userAppComplete(username, provider) || appConfigured(provider);
+}
+
+function appConfigForConnection(username, provider, connection) {
+  const appClientId = cleanString(connection?.appClientId);
+  if (!appClientId) return { [provider]: effectiveAppConfig(username, provider) };
+
+  const userCfg = readUserAppConfig(username);
+  if (userAppComplete(username, provider) && userCfg[provider]?.clientId === appClientId) {
+    return { [provider]: withProviderDefaults(provider, userCfg[provider], 'user') };
+  }
+
+  const instanceCfg = readAppConfig();
+  if (instanceCfg[provider]?.clientId === appClientId) {
+    return { [provider]: withProviderDefaults(provider, instanceCfg[provider], 'instance') };
+  }
+
+  return { [provider]: effectiveAppConfig(username, provider) };
 }
 
 function connFile(username, provider) {
@@ -189,7 +314,11 @@ export async function getAccessToken(username, provider) {
   if (!c) throw new Error(`Sin conexión de ${provider} para este usuario.`);
   if (c.accessToken && c.expiresAt > Date.now() + 60_000) return c.accessToken;
 
-  const cfg = readAppConfig();
+  // El refresh token de un Self Client sólo vale para el client_id que lo emitió.
+  // Por eso la conexión guarda `appClientId` y acá se elige la config que COINCIDE
+  // (la del usuario o la de instancia), y sólo si no hay match se cae a la
+  // efectiva. Refrescar con el client_id equivocado invalida la conexión entera.
+  const cfg = appConfigForConnection(username, provider, c);
   let t;
   if (provider === 'microsoft') {
     const { clientId, tenantId } = cfg.microsoft;

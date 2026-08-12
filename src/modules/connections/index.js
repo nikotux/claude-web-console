@@ -1,11 +1,12 @@
 // modules/connections/index.js — endpoints OAuth para conectores externos.
 //
 // Este módulo existe para exponer una capa HTTP chica sobre el store y los
-// proveedores ya implementados: la configuración OAuth de la app es global y
-// admin-only, mientras que los tokens quedan siempre por usuario. Por eso el
-// deviceCode de Microsoft se persiste en el job (mode 600, directorio privado
-// del usuario) para que el canje sobreviva a reinicios; ningún endpoint lo
-// devuelve ni loguea tokens, secrets o códigos internos.
+// proveedores ya implementados: la configuración OAuth puede venir de la app
+// global (admin-only) o de un override completo del usuario, mientras que los
+// tokens quedan siempre por usuario. Por eso el deviceCode de Microsoft se
+// persiste en el job (mode 600, directorio privado del usuario) para que el
+// canje sobreviva a reinicios; ningún endpoint devuelve ni loguea tokens,
+// secrets o códigos internos.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -15,7 +16,7 @@ import { principalOf, isAdmin } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 import {
-  hasCodexCreds,
+  codexCredState,
   hostUser,
   userClaudeDir,
   userDataDir,
@@ -27,6 +28,12 @@ import {
   readAppConfig,
   writeAppConfig,
   appConfigured,
+  readUserAppConfig,
+  writeUserAppConfig,
+  clearUserAppConfig,
+  userAppComplete,
+  effectiveAppConfig,
+  appConfiguredFor,
   readConnection,
   writeConnection,
   getAccessToken,
@@ -49,6 +56,7 @@ import {
   ZOHO_SCOPES,
   authUrl,
   exchangeCode,
+  explainZohoError,
   getOrg,
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
@@ -247,7 +255,14 @@ function patchJob(username, jobId, fields) {
   }
 }
 
-async function pollMicrosoft(username, jobId, { clientId, tenantId, deviceCode, interval, expiresIn }) {
+async function pollMicrosoft(username, jobId, {
+  clientId,
+  tenantId,
+  appSource,
+  deviceCode,
+  interval,
+  expiresIn,
+}) {
   activePolls.add(pollKey(username, jobId));
   try {
     let waitMs = Math.max(interval, 5) * 1000;
@@ -282,6 +297,8 @@ async function pollMicrosoft(username, jobId, { clientId, tenantId, deviceCode, 
           const account = await getMicrosoftMe(result.tokens.access_token);
           writeConnection(username, 'microsoft', {
             provider: 'microsoft',
+            appClientId: clientId,
+            appSource,
             account,
             accessToken: result.tokens.access_token,
             refreshToken: result.tokens.refresh_token || null,
@@ -342,7 +359,7 @@ async function healZohoIdentity(username) {
     if (!conn || !conn.refreshToken || conn.agentId) return;
     const token = await getAccessToken(username, 'zoho');
     if (!token) return;
-    const { dc } = readAppConfig().zoho;
+    const { dc } = effectiveAppConfig(username, 'zoho');
     const me = await getZohoMe(token, dc, conn.orgId, config.instance?.identity?.email);
     if (!me) return;
     writeConnection(username, 'zoho', {
@@ -374,7 +391,10 @@ export default {
             scopes: p.scopes,
             grantedScopes,
             missingScopes,
-            configured: appConfigured(p.id),
+            configured: appConfiguredFor(username, p.id),
+            appSource: userAppComplete(username, p.id)
+              ? 'user'
+              : (appConfigured(p.id) ? 'instance' : 'none'),
             ...connectionStatus(username, p.id),
             lastAttempt: lastAttempt(username, p.id),
           };
@@ -413,6 +433,80 @@ export default {
       res.json({ ok: true });
     }));
 
+    r.get('/app/mine', asyncHandler((req, res) => {
+      const username = userOf(req);
+      const mine = readUserAppConfig(username);
+      const instance = {
+        microsoft: appConfigured('microsoft'),
+        zoho: appConfigured('zoho'),
+      };
+      const configured = {
+        microsoft: userAppComplete(username, 'microsoft'),
+        zoho: userAppComplete(username, 'zoho'),
+      };
+
+      res.json({
+        providers: {
+          microsoft: {
+            clientId: mine.microsoft.clientId,
+            tenantId: mine.microsoft.tenantId,
+            hasSecret: false,
+            configured: configured.microsoft,
+          },
+          zoho: {
+            clientId: mine.zoho.clientId,
+            dc: mine.zoho.dc || 'com',
+            hasSecret: !!mine.zoho.clientSecret,
+            configured: configured.zoho,
+          },
+        },
+        instance,
+        effective: {
+          microsoft: configured.microsoft ? 'user' : (instance.microsoft ? 'instance' : 'none'),
+          zoho: configured.zoho ? 'user' : (instance.zoho ? 'instance' : 'none'),
+        },
+      });
+    }));
+
+    r.post('/app/mine', asyncHandler((req, res) => {
+      const username = userOf(req);
+      const body = req.body || {};
+      const { provider } = body;
+      if (!isProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
+
+      const clientId = String(body.clientId || '').trim();
+      if (!clientId) return res.status(400).json({ error: 'Falta el Client ID.' });
+
+      const patch = { clientId };
+      if (provider === 'microsoft') {
+        if (Object.hasOwn(body, 'tenantId')) patch.tenantId = body.tenantId;
+      } else {
+        const existing = readUserAppConfig(username).zoho;
+        const clientSecret = String(body.clientSecret || '').trim();
+        if (!clientSecret && !existing.clientSecret) {
+          return res.status(400).json({ error: 'Falta el Client Secret.' });
+        }
+        if (clientSecret) patch.clientSecret = clientSecret;
+        if (Object.hasOwn(body, 'dc')) patch.dc = body.dc;
+      }
+
+      writeUserAppConfig(username, { [provider]: patch });
+      res.json({
+        ok: true,
+        configured: userAppComplete(username, provider),
+        source: 'user',
+      });
+    }));
+
+    r.post('/app/mine/reset', asyncHandler((req, res) => {
+      const username = userOf(req);
+      const provider = req.body?.provider;
+      if (!isProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
+
+      clearUserAppConfig(username, provider);
+      res.json({ ok: true, source: appConfigured(provider) ? 'instance' : 'none' });
+    }));
+
     // Estas rutas deben registrarse ANTES de '/:provider/...': si no,
     // '/codex/status' matchea '/:provider/status' con provider='codex' y
     // reqProvider responde 400 "Proveedor desconocido".
@@ -426,7 +520,11 @@ export default {
       ) {
         return res.json({ ok: true, already: true });
       }
-      if (hasCodexCreds(user)) {
+      // Cortar acá sólo si la credencial está VIVA. Antes se miraba únicamente
+      // que auth.json existiera: con el token vencido el usuario tocaba
+      // "Reconectar", recibía already/connected y NUNCA se relanzaba el login.
+      const cred = codexCredState(user);
+      if (cred.present && !cred.expired) {
         return res.json({ ok: true, already: true, connected: true });
       }
 
@@ -447,9 +545,13 @@ export default {
 
     r.get('/codex/status', (req, res) => {
       const user = userOf(req);
-      const connected = hasCodexCreds(user);
+      const cred = codexCredState(user);
+      const connected = cred.present && !cred.expired;
+      const expired = cred.present && cred.expired;
       const job = readCodexLoginJob(user);
-      if (!job) return res.json({ status: 'idle', connected });
+      if (!job) {
+        return res.json({ status: 'idle', connected, expired, expiresAt: cred.expiresAt });
+      }
 
       const stale = job.status === 'starting'
         && !!job.ts
@@ -462,6 +564,8 @@ export default {
         error: job.error || null,
         stale: !!stale,
         connected,
+        expired,
+        expiresAt: cred.expiresAt,
       });
     });
 
@@ -809,19 +913,18 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      if (!appConfigured(provider)) {
+      const username = userOf(req);
+      if (!appConfiguredFor(username, provider)) {
         const needSecret = provider === 'zoho' ? ' y el Client Secret' : '';
         return res.status(409).json({
-          error: `La app OAuth de ${labelOf(provider)} todavía no está configurada. Un administrador debe cargar el Client ID${needSecret}.`,
+          error: `La app OAuth de ${labelOf(provider)} todavía no está configurada. Un administrador debe cargar el Client ID${needSecret}. También podés cargar tu propia app desde este mismo panel.`,
         });
       }
 
-      const username = userOf(req);
-      const cfg = readAppConfig();
       const jobId = newJobId();
 
       if (provider === 'microsoft') {
-        const { clientId, tenantId } = cfg.microsoft;
+        const { clientId, tenantId, source: appSource } = effectiveAppConfig(username, 'microsoft');
         let flow;
         try {
           flow = await startDeviceFlow({ clientId, tenantId });
@@ -837,11 +940,15 @@ export default {
           expiresAt: Date.now() + flow.expiresIn * 1000,
           deviceCode: flow.deviceCode,
           interval: flow.interval,
+          appClientId: clientId,
+          appSource,
+          tenantId,
           error: null,
         });
         pollMicrosoft(username, jobId, {
           clientId,
           tenantId,
+          appSource,
           deviceCode: flow.deviceCode,
           interval: flow.interval,
           expiresIn: flow.expiresIn,
@@ -856,7 +963,7 @@ export default {
         });
       }
 
-      const { clientId, dc } = cfg.zoho;
+      const { clientId, dc, source: appSource } = effectiveAppConfig(username, 'zoho');
       writeJob(username, jobId, {
         provider: 'zoho',
         status: 'pending',
@@ -869,6 +976,7 @@ export default {
         jobId,
         authUrl: authUrl({ clientId, dc }),
         scopes: ZOHO_SCOPES.join(','),
+        appSource,
       });
     }));
 
@@ -889,13 +997,23 @@ export default {
       const value = String(req.body?.value || '').trim();
       if (!value) return res.status(400).json({ error: 'Pegá el grant code de Zoho.' });
 
-      const { clientId, clientSecret, dc } = readAppConfig().zoho;
+      const {
+        clientId,
+        clientSecret,
+        dc,
+        source: appSource,
+      } = effectiveAppConfig(username, 'zoho');
       let tokens;
       try {
         tokens = await exchangeCode({ clientId, clientSecret, code: value, dc });
       } catch (e) {
-        patchJob(username, jobId, { status: 'error', error: e.message });
-        return res.status(502).json({ error: e.message });
+        const rawError = e?.message || String(e);
+        const error = explainZohoError(rawError);
+        patchJob(username, jobId, { status: 'error', error });
+        return res.status(502).json({
+          error,
+          ...(rawError.includes('invalid_code') ? { code: 'invalid_code' } : {}),
+        });
       }
 
       // getOrg/getZohoMe pueden fallar (timeout, rate limit) DESPUÉS de consumir
@@ -913,6 +1031,8 @@ export default {
       const account = me?.email || null;
       writeConnection(username, 'zoho', {
         provider: 'zoho',
+        appClientId: clientId,
+        appSource,
         account,
         orgId: org?.id || null,
         orgName: org?.name || null,
@@ -959,7 +1079,10 @@ export default {
         && job.expiresAt
         && Date.now() < job.expiresAt
       ) {
-        const { clientId, tenantId } = readAppConfig().microsoft;
+        const effectiveCfg = effectiveAppConfig(username, 'microsoft');
+        const clientId = job.appClientId || effectiveCfg.clientId;
+        const tenantId = job.tenantId || effectiveCfg.tenantId;
+        const appSource = job.appSource || effectiveCfg.source;
         if (!clientId) {
           const error = 'La app OAuth de Microsoft ya no está configurada; pedile a un administrador que la cargue y volvé a tocar Renovar permisos.';
           patchJob(username, jobId, { status: 'error', error });
@@ -969,6 +1092,7 @@ export default {
           pollMicrosoft(username, jobId, {
             clientId,
             tenantId,
+            appSource,
             deviceCode: job.deviceCode,
             interval: Number(job.interval) || 5,
             expiresIn: Math.max(1, Math.floor((job.expiresAt - Date.now()) / 1000)),
