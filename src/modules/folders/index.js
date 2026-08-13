@@ -5,11 +5,12 @@
 // solo persiste carpetas y referencias, nunca modifica los ítems agrupados.
 //
 // HTTP:
-//   GET  /api/folders/list                         -> { folders, items }
+//   GET  /api/folders/list                         -> { folders, items, order }
 //   POST /api/folders/create {name, world, parentId?} -> { folder }
 //   POST /api/folders/rename {id, name}             -> { folder }
 //   POST /api/folders/delete {id}                   -> { ok, freed }
 //   POST /api/folders/assign {key, folderId}         -> { ok }
+//   POST /api/folders/reorder {container, keys}      -> { ok }
 // Validación responde 400; una carpeta propia inexistente responde 404.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -22,11 +23,15 @@ import { hostUser, userDataDir } from '../../core/user-space.js';
 const FOLDER_ID_RE = /^f_[0-9a-f]{10}$/;
 const WORLD_RE = /^[a-z0-9_-]{1,40}$/i;
 const ITEM_KEY_RE = /^(chat:[A-Za-z0-9_-]{1,64}|tmux:[A-Za-z0-9_.-]{1,40}:[A-Za-z0-9_.-]{1,80})$/;
+const WORLD_CONTAINER_RE = /^world:[a-z0-9_-]{1,40}$/i;
+const FOLDER_CONTAINER_RE = /^folder:f_[0-9a-f]{10}$/;
 const MAX_FOLDERS = 50;
 const MAX_ITEMS = 2000;
+const MAX_ORDER_CONTAINERS = 100;
+const MAX_ORDER_KEYS = 300;
 
 function emptyStore() {
-  return { version: 1, folders: [], items: {} };
+  return { version: 1, folders: [], items: {}, order: {} };
 }
 
 // Invariante multi-tenant: se invoca con el dueño de CADA operación. Nunca
@@ -67,6 +72,11 @@ function validFolderShape(folder) {
     && folder.createdAt >= 0;
 }
 
+function validContainer(container) {
+  return typeof container === 'string'
+    && (WORLD_CONTAINER_RE.test(container) || FOLDER_CONTAINER_RE.test(container));
+}
+
 // El saneo es por ítem porque rechazar el documento entero convertiría un dato
 // dudoso en la pérdida total de la organización del usuario en la próxima escritura.
 function sanitizeStore(raw) {
@@ -104,7 +114,33 @@ function sanitizeStore(raw) {
     : [];
   const items = Object.fromEntries(itemEntries.slice(0, MAX_ITEMS));
 
-  return { version: 1, folders, items };
+  const rawOrderPrototype = raw.order && typeof raw.order === 'object'
+    ? Object.getPrototypeOf(raw.order)
+    : undefined;
+  const orderEntries = raw.order
+    && typeof raw.order === 'object'
+    && !Array.isArray(raw.order)
+    && (rawOrderPrototype === Object.prototype || rawOrderPrototype === null)
+    ? Object.entries(raw.order)
+    : [];
+  const order = {};
+  for (const [container, rawKeys] of orderEntries) {
+    if (Object.keys(order).length >= MAX_ORDER_CONTAINERS) break;
+    if (!validContainer(container) || !Array.isArray(rawKeys)) continue;
+    if (FOLDER_CONTAINER_RE.test(container) && !byId.has(container.slice('folder:'.length))) continue;
+
+    const seenKeys = new Set();
+    const keys = [];
+    for (const key of rawKeys) {
+      if (typeof key !== 'string' || !ITEM_KEY_RE.test(key) || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      keys.push(key);
+      if (keys.length >= MAX_ORDER_KEYS) break;
+    }
+    if (keys.length > 0) order[container] = keys;
+  }
+
+  return { version: 1, folders, items, order };
 }
 
 function readStore(owner) {
@@ -145,7 +181,7 @@ export default {
     r.get('/list', (req, res) => {
       const owner = ownerOf(req);
       const store = readStore(owner);
-      res.json({ folders: store.folders, items: store.items });
+      res.json({ folders: store.folders, items: store.items, order: store.order });
     });
 
     r.post('/create', (req, res) => {
@@ -230,6 +266,9 @@ export default {
         delete store.items[key];
         freed++;
       }
+      for (const folderId of deletedIds) {
+        delete store.order[`folder:${folderId}`];
+      }
       try {
         saveStore(owner, store);
         return res.json({ ok: true, freed });
@@ -256,6 +295,45 @@ export default {
           return invalid(res, 'límite de asignaciones alcanzado');
         }
         store.items[key] = folderId;
+      }
+      try {
+        saveStore(owner, store);
+        return res.json({ ok: true });
+      } catch {
+        return writeFailed(res);
+      }
+    });
+
+    r.post('/reorder', (req, res) => {
+      const container = req.body?.container;
+      const keys = req.body?.keys;
+      if (!validContainer(container)) return invalid(res, 'contenedor inválido');
+      if (!Array.isArray(keys)) return invalid(res, 'claves inválidas');
+      if (keys.length > MAX_ORDER_KEYS) return invalid(res, 'demasiadas claves');
+
+      const seenKeys = new Set();
+      for (const key of keys) {
+        if (typeof key !== 'string' || !ITEM_KEY_RE.test(key)) return invalid(res, 'clave inválida');
+        if (seenKeys.has(key)) return invalid(res, 'claves duplicadas');
+        seenKeys.add(key);
+      }
+
+      const owner = ownerOf(req);
+      const store = readStore(owner);
+      if (FOLDER_CONTAINER_RE.test(container)) {
+        const folderId = container.slice('folder:'.length);
+        if (!store.folders.some((folder) => folder.id === folderId)) return missing(res);
+      }
+      if (keys.length > 0
+        && !Object.prototype.hasOwnProperty.call(store.order, container)
+        && Object.keys(store.order).length >= MAX_ORDER_CONTAINERS) {
+        return invalid(res, 'demasiados contenedores');
+      }
+
+      if (keys.length === 0) {
+        delete store.order[container];
+      } else {
+        store.order[container] = keys;
       }
       try {
         saveStore(owner, store);

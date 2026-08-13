@@ -9,7 +9,7 @@ import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
 import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
-import { initI18n, applyI18n } from './ui/i18n.js';
+import { initI18n, applyI18n, t } from './ui/i18n.js';
 import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
@@ -32,6 +32,14 @@ const MODULES = [launcher, sessions, tolkien, tickets, tasks, visado, retro, pla
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
 const terminalsEl = document.getElementById('terminals');
+
+// ===== Modo SOLO: ventana desanclada de UNA conversación =====
+// `/?solo=<chatId>` monta esa conversación SOLA, sin sidebars ni rail: la
+// ventana existe para que el gestor de ventanas del SO la ponga en pantalla
+// dividida. Reusa el shell entero (misma ChatTab, mismos permisos/interfono)
+// en vez de una página aparte, para que no haya dos vistas que mantener.
+const SOLO_ID = new URLSearchParams(location.search).get('solo') || null;
+if (SOLO_ID) document.body.classList.add('cwc-solo');
 
 const tabs = new Map(); // id -> { tab, tabButton, pane, flag, session }
 let activeId = null;
@@ -169,6 +177,8 @@ function buildConversationInner(entry, info, initialPrompt = null) {
       container: entry.pane,
       onToggleMode: () => toggleConversation(entry.session.id),
       onViewMode: (m) => onServerViewMode(entry, m),
+      onPopout: () => popoutChat(entry.session.id, entry.session.title),
+      soloMode: !!SOLO_ID,
       initialPrompt, // solo en la primera construcción (no en toggles/recarga)
     });
   }
@@ -296,7 +306,9 @@ async function pollTabStatus() {
         : Promise.resolve([]),
       fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
     ]).finally(() => clearTimeout(killer));
-    permCenter?.syncFromList(chats);
+    // En modo solo el WS ya pertenece únicamente al chat abierto; filtramos
+    // también el catch-up del centro de permisos para evitar ruido ajeno.
+    permCenter?.syncFromList(SOLO_ID ? chats.filter((c) => tabs.has(c.id)) : chats);
     intercomCenter?.syncFromList(chats);
     const byName = new Map(tmux.map((s) => [s.name, s]));
     const byChat = new Map(chats.map((c) => [c.id, c]));
@@ -313,6 +325,7 @@ async function pollTabStatus() {
           entry.session.title = c.title;
           syncConversation(c);
           updateConvChipMode(entry);
+          if (SOLO_ID === id) document.title = `${c.title} — Mi Consola`;
           titleChanged = true;
         }
       } else {
@@ -410,6 +423,27 @@ function openChatView(chatInfo) {
   if (tabs.has(chatInfo.id)) { syncConversation(chatInfo); focusSession(chatInfo.id); return; }
   addTab(chatInfo, { type: 'chat' });
   hideSidebarOnMobile();
+}
+
+// Desancla una conversación en su propia ventana del navegador. El `name` de
+// la ventana es determinístico por chat: si esa ventana ya existe, el navegador
+// la REUSA y la enfoca en vez de abrir una segunda copia del mismo chat.
+function popoutChat(chatId, title) {
+  if (!chatId) return null;
+  const w = window.open(
+    `/?solo=${encodeURIComponent(chatId)}`,
+    `cwc-solo-${chatId}`,
+    'popup=yes,width=1100,height=920,menubar=no,toolbar=no,location=no,status=no',
+  );
+  if (!w) {
+    alertDialog({
+      title: t('chat.popout.blockedTitle', 'Ventana desanclada'),
+      message: t('chat.popout.blocked', 'El navegador bloqueó la ventana emergente. Permití las ventanas emergentes para esta consola y volvé a intentar.'),
+    });
+    return null;
+  }
+  try { w.focus(); } catch { /* algunos navegadores lo niegan; la ventana ya está abierta */ }
+  return w;
 }
 
 // Sincroniza una pestaña de conversación abierta con el estado del server
@@ -523,6 +557,7 @@ const ctx = {
   openSession,
   openChat,
   openChatView,
+  popoutChat,
   syncConversation,
   openExplorer,
   focusSession,
@@ -554,11 +589,14 @@ bindHelp(document);
 
 // ===== Montaje de módulos (espejo del registry backend) =====
 bootMsg('montando módulos…', 35);
-for (const mod of MODULES) {
-  const el = document.querySelector(`[data-module="${mod.name}"]`);
-  if (el) {
-    try { mod.mount(el, ctx); }
-    catch (err) { console.error(`[modules] Falló el montaje de "${mod.name}":`, err); }
+if (!SOLO_ID) {
+  // La ventana suelta no monta sidebars ni dispara sus fetches de módulos.
+  for (const mod of MODULES) {
+    const el = document.querySelector(`[data-module="${mod.name}"]`);
+    if (el) {
+      try { mod.mount(el, ctx); }
+      catch (err) { console.error(`[modules] Falló el montaje de "${mod.name}":`, err); }
+    }
   }
 }
 
@@ -681,6 +719,34 @@ if (isMobile()) {
 (async () => {
   bootMsg('restaurando sesiones…', 60);
   try {
+    if (SOLO_ID) {
+      bootMsg('abriendo la conversación…', 70);
+      const chats = await fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []);
+      const info = chats.find((c) => c.id === SOLO_ID);
+      if (!info) {
+        // conversación inexistente/ajena: aviso legible, no una pantalla en blanco
+        terminalsEl.innerHTML = '';
+        const box = document.createElement('div');
+        box.className = 'solo-missing';
+        const msg = document.createElement('p');
+        msg.textContent = 'Esta conversación ya no está disponible.';
+        const back = document.createElement('button');
+        back.className = 'btn';
+        back.textContent = 'Abrir la consola';
+        back.addEventListener('click', () => { location.href = '/'; });
+        box.append(msg, back);
+        terminalsEl.appendChild(box);
+        return; // el finally del try/finally igual destapa el splash
+      }
+      document.title = `${info.title || 'Conversación'} — Mi Consola`;
+      addTab(info, { type: 'chat' });
+      const act = tabs.get(activeId);
+      if (act?.tab?.ready) {
+        bootMsg('cargando la conversación…', 85);
+        await Promise.race([act.tab.ready, new Promise((r) => setTimeout(r, 8000))]);
+      }
+      return;
+    }
     const [existing, chats] = await Promise.all([
       apiListSessions(),
       fetch('/api/chat/list').then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
@@ -714,8 +780,8 @@ if (isMobile()) {
   } finally {
     // App lista (o el boot falló y el error ya está a la vista): fuera splash.
     window.__bootHide?.();
+    pollTabStatus();
   }
-  pollTabStatus();
 })();
 
 // Service Worker (Capa 1): cachea los estáticos de la app en el navegador

@@ -11,8 +11,8 @@ import { writeJsonAtomic } from '../src/core/atomic-write.js';
 import {
   ensureUserSpace,
   sanitizeUserId,
+  userFileRoot,
   userRunnerEnv,
-  userWorkspace,
 } from '../src/core/user-space.js';
 
 const args = {};
@@ -91,7 +91,13 @@ let cwd;
 try {
   ensureUserSpace(USER);
   env = { ...userRunnerEnv(USER), GH_BROWSER: 'true' };
-  cwd = userWorkspace(USER);
+  // cwd = userFileRoot(USER), NUNCA userWorkspace(USER): para el HOST esa ruta
+  // (`~/workspace`) no existe porque ensureUserSpace no crea nada para él, y
+  // tanto el spawn de `gh` como el spawnSync de `gh auth status` fallan en el
+  // chdir sin decir por qué. Es el mismo defecto que rompió el login de Codex
+  // (console:BUG-2747) y que ya estaba documentado en cwc-claude-login-runner.js.
+  cwd = userFileRoot(USER);
+  if (!fs.existsSync(cwd)) fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
 } catch (error) {
   writeState({
     status: 'error',

@@ -9,23 +9,24 @@ Persiste las carpetas manuales con las que cada usuario organiza la barra de Ses
 
 ## Archivos
 
-- `index.js`: valida, lee y escribe el estado por usuario; expone los cinco endpoints HTTP del módulo.
+- `index.js`: valida, lee y escribe el estado por usuario; expone los seis endpoints HTTP del módulo.
 
 ## Estado
 
 El host guarda `session-folders.json` en `~/.cwc-data/`. Cada inquilino usa el mismo nombre dentro de su `userDataDir(owner)`, es decir, su espacio privado bajo `~/.cwc-users/<usuario>/.cwc-data/`.
 
-La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folderId>" } }`. Las claves de ítem distinguen `chat:<chatId>` y `tmux:<socket>:<nombre>`. Todas las escrituras pasan por `writeJsonAtomic`; una lectura ausente o con JSON corrupto cae a un estado vacío, mientras que un documento parseable se sanea por ítem.
+La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folderId>" }, order: { "<container>": ["<key>", ...] } }`. Las claves de ítem distinguen `chat:<chatId>` y `tmux:<socket>:<nombre>`. Un contenedor es exactamente `world:<worldKey>`, con `worldKey` validado por `/^[a-z0-9_-]{1,40}$/i`, o `folder:<folderId>`, con `folderId` validado por `/^f_[0-9a-f]{10}$/` y existente para ese usuario. Todas las escrituras pasan por `writeJsonAtomic`; una lectura ausente o con JSON corrupto cae a un estado vacío, mientras que un documento parseable se sanea por ítem.
 
 ## Endpoints
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
-| GET | `/api/folders/list` | Devuelve `{ folders, items }` exclusivamente para el dueño de la request. |
+| GET | `/api/folders/list` | Devuelve `{ folders, items, order }` exclusivamente para el dueño de la request. |
 | POST | `/api/folders/create` | Crea una carpeta desde `{ name, world, parentId? }`; el servidor genera el id. |
 | POST | `/api/folders/rename` | Renombra la carpeta propia indicada por `{ id, name }`. |
 | POST | `/api/folders/delete` | Borra la carpeta y sus hijas directas, libera asignaciones y devuelve `{ ok, freed }`. |
 | POST | `/api/folders/assign` | Asigna `{ key, folderId }`; `folderId` nulo o vacío suelta la referencia. |
+| POST | `/api/folders/reorder` | Guarda el orden manual completo de `{ container, keys }`; `keys: []` elimina el orden del contenedor. |
 
 ## Reglas que lo gobiernan
 
@@ -40,3 +41,4 @@ La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folder
 - `session-folders.json` es estado estrictamente privado. Resolver la ruta al importar el módulo produciría una fuga multi-tenant aunque después los endpoints filtraran respuestas.
 - La lectura hace **saneo por ítem** con `sanitizeStore`, NO rechazo global: descarta individualmente las carpetas malformadas y las asignaciones huérfanas, y convierte en raíz una carpeta cuyo padre desapareció. Rechazar el documento entero convertiría un dato dudoso en la pérdida total de la organización del usuario en la siguiente escritura.
 - El borrado de una raíz debe incluir sus hijas y limpiar todas las asignaciones que apunten a cualquiera de ellas; `freed` cuenta referencias liberadas, no sesiones eliminadas.
+- El orden manual es **parcial por diseño**: las claves guardadas aparecen primero, en el orden indicado, y las que no figuran quedan al final con su orden natural. Así, un ítem nuevo nunca desaparece de la lista y no hace falta reescribir el array cada vez que un ítem aparece o se borra.

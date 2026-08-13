@@ -471,6 +471,16 @@ del spawn (`codexCredState` de `core/user-space.js`, por `lastRefresh` o
 vencida en disco hacía que el runner se auto-declarara `done` en su primer tick
 y matara el login antes de la autorización. La cancelación se detecta leyendo
 el estado `cancelled` del job y corta el PTY. Timeout duro: 15 min.
+El cwd se resuelve con `userFileRoot(USER)`, NUNCA con `userWorkspace(USER)`
+(mismo gotcha que `cwc-claude-login-runner.js`): para un inquilino dan el mismo
+path, pero para el HOST `userWorkspace` apunta a `~/workspace`, que
+`ensureUserSpace` no crea porque el host usa su HOME real. El PTY moría en el
+`chdir` con exitCode 1 antes de imprimir la URL, y el job quedaba con el
+mensaje genérico «terminó sin renovar la credencial», que ESCONDÍA la causa
+(`console:BUG-2747`). Por eso ahora, cuando el CLI muere sin haber emitido
+nunca la URL, el error incluye las últimas tres líneas reales de la salida del
+PTY y el código de salida; esa rama corre solo con `currentUrl === null`, o sea
+antes de que exista el código de un solo uso, así que no puede filtrarlo.
 ### bin/cwc-gh-login-runner.js  LOGIN GUIADO de GitHub por usuario durante
 onboarding: corre `gh auth login --hostname github.com --git-protocol https
 --web` SIN PTY, con stdin ignorado y stdout/stderr por pipe, usando
@@ -489,6 +499,10 @@ El log `<user>.log` también es mode 600 y TODA salida pasa por redacción de
 mismo HOME y después corre obligatoriamente `gh auth setup-git` para dejar
 operativo el push HTTPS. `GH_BROWSER=true` evita intentar abrir un navegador en
 el server: el usuario aprueba desde el wizard. Timeout duro: 15 min.
+Igual que los runners de login de Claude y Codex, el cwd sale de
+`userFileRoot(USER)` y NUNCA de `userWorkspace(USER)`: para el host esa ruta
+(`~/workspace`) no existe y tanto el spawn de `gh` como el `spawnSync` de
+`gh auth status` fallan en el `chdir` sin decir por qué (`console:BUG-2747`).
 ### bin/cwc-pad-login-runner.js  LOGIN GUIADO del Pad LOCAL por usuario para ⚙
 Sistema → Conexiones (`console:PLAN-2446`), modelado sobre
 `cwc-claude-login-runner.js`: abre un PTY con `~/.local/bin/pad auth login`,

@@ -731,6 +731,7 @@
   "system.conn.codexExpired": "Session expired — reconnect",
   "system.conn.codexExpiredHint": "Your Codex session expired (it lasts 10 days from the last use). Until you reconnect it, Tandem mode cannot execute code and the Codex limits counter will show saved data.",
   "system.conn.codexExpiredAt": "Expired on {fecha}",
+  "system.conn.codexLastError": "Last attempt failed: {error}",
   "system.conn.reconnectBtn": "Reconnect",
   "system.conn.codexError": "Couldn't connect",
   "system.conn.codexAwaiting": "Authorization required",

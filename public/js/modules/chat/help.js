@@ -446,6 +446,16 @@ export default function chatHelp() {
         wide: true,
         blocks: [
           {
+            type: 'legend',
+            items: [
+              {
+                icon: 'externalLink',
+                name: t('chat.help.buttons.popout.name', 'Desanclar'),
+                desc: t('chat.help.buttons.popout.desc', 'abre esta conversación en su propia ventana, sin paneles; sirve para pantalla dividida. La conversación es la misma: sigue abierta también acá, y lo que escribas en cualquiera de las dos va al mismo turno.'),
+              },
+            ],
+          },
+          {
             type: 'kv',
             items: [
               { k: t('chat.help.buttons.menu.k', 'Menú lateral'), v: t('chat.help.buttons.menu.v', 'En móvil, abre la navegación de sesiones y herramientas.') },

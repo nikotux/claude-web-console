@@ -566,6 +566,9 @@ export default {
         connected,
         expired,
         expiresAt: cred.expiresAt,
+        // El front necesita la edad del job para distinguir un fallo RECIÉN
+        // ocurrido (el click que acaba de hacer el usuario) de uno viejo.
+        ts: job.ts || null,
       });
     });
 

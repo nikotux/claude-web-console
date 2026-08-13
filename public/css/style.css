@@ -639,6 +639,41 @@ html, body {
   border-radius: 3px;
   background: color-mix(in srgb, var(--cwc-danger) 9%, transparent);
 }
+/* Destinos del arrastre: el inset sigue visible cuando la carpeta está
+   plegada y no altera el ancho del árbol al entrar/salir. */
+.sess-folder-grp.is-dragover {
+  border-left-color: var(--cwc-accent);
+  background: color-mix(in srgb, var(--cwc-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cwc-accent) 55%, transparent);
+}
+.sess-world-h.is-dragover {
+  border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cwc-accent) 55%, transparent);
+}
+/* Cruzar de mundo dispara una mudanza confirmada, no una simple organización:
+   el punteado de advertencia hace visible esa diferencia antes de soltar. */
+.sess-folder-grp.is-dragover--cross {
+  border-left-color: var(--cwc-warn); border-left-style: dotted;
+  background: color-mix(in srgb, var(--cwc-warn) 14%, transparent);
+  outline: 1px dotted var(--cwc-warn); outline-offset: -1px;
+}
+.sess-world-h.is-dragover--cross {
+  border: 1px dotted var(--cwc-warn); border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-warn) 14%, transparent);
+}
+.sess-folder-grp.is-dragover--blocked {
+  border-left-color: var(--cwc-text-dimmer);
+  background: color-mix(in srgb, var(--cwc-text-dimmer) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--cwc-border-strong);
+  cursor: not-allowed;
+}
+.sess-world-h.is-dragover--blocked {
+  border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-text-dimmer) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--cwc-border-strong);
+  cursor: not-allowed;
+}
 /* Chevron compartido de los grupos colapsables de Sesiones (mundos,
    entornos aislados, Archivados, Otras tmux, Otros usuarios): sin él, que un
    grupo se pliegue era invisible. */
@@ -661,6 +696,9 @@ html, body {
 /* F3 (PLAN-373): conversación ARCHIVADA (revivible) — atenuada. */
 .sess-chat--archived { opacity: .62; }
 .sess-chat--archived:hover { opacity: 1; }
+.sess-card--dragging { opacity: .5; }
+.sess-card.is-drop-before { box-shadow: inset 0 2px 0 0 var(--cwc-accent); }
+.sess-card.is-drop-after { box-shadow: inset 0 -2px 0 0 var(--cwc-accent); }
 
 /* Tarjeta de conversación (chat SDK): distinguible por ícono y borde */
 .sess-chat { border-left: 2px solid var(--cwc-accent); }
@@ -4392,3 +4430,18 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
 /* String de scopes OAuth copiable (flujo de conexión de Zoho): puede ser largo,
    se parte para que no desborde el modal. */
 .conn-scopes { display: block; word-break: break-all; font-size: var(--cwc-fs-xs); background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border); border-radius: 5px; padding: .3rem .4rem; margin: .25rem 0; }
+
+/* ===== Modo SOLO (ventana desanclada, /?solo=<chatId>) =====
+   La ventana muestra UNA conversación y nada más: sin paneles, sin rail, sin
+   asas móviles. Así el gestor de ventanas del SO la puede tilear sin que el
+   ancho se lo coman los sidebars. */
+body.cwc-solo #sidebar,
+body.cwc-solo #sidebar-right,
+body.cwc-solo #sidebar-scrim,
+body.cwc-solo #sidebar-right-scrim,
+body.cwc-solo #rail-tabs,
+body.cwc-solo #sidebar-handle,
+body.cwc-solo #sidebar-right-handle,
+body.cwc-solo .chat-menu { display: none !important; }
+body.cwc-solo #terminals { flex: 1 1 100%; min-width: 0; }
+.solo-missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; height: 100%; color: var(--cwc-text-secondary); }

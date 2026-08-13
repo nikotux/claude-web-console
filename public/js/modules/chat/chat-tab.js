@@ -259,7 +259,7 @@ export function stripAddressees(text, { final = false } = {}) {
 }
 
 export class ChatTab {
-  constructor({ id, title, container, onToggleMode, onViewMode, initialPrompt = null }) {
+  constructor({ id, title, container, onToggleMode, onViewMode, onPopout = null, soloMode = false, initialPrompt = null }) {
     this.id = id;
     this.title = title || 'chat';
     this.container = container;
@@ -268,6 +268,8 @@ export class ChatTab {
     // compatibilidad con el shell (main.js lo sigue pasando).
     this.onToggleMode = onToggleMode;
     this.onViewMode = onViewMode;     // el server anunció un cambio de modo
+    this.onPopout = onPopout;
+    this.soloMode = !!soloMode;
     this.initialPrompt = initialPrompt; // primer mensaje a enviar al conectar
     this._sentInitial = false;
     this.ws = null;
@@ -355,6 +357,13 @@ export class ChatTab {
           <select class="chat-mode" data-risk="ok" title="${t('chat.header.modeTitle', 'Modo de permisos')}">
             ${MODES.map(([v, l, , k]) => `<option value="${v}">${t(k, l)}</option>`).join('')}
           </select>
+          ${this.soloMode ? `
+          <button type="button" class="btn-ghost btn--icon chat-popout"
+            title="${t('chat.popout.toConsole', 'Abrir la consola completa')}"
+            aria-label="${t('chat.popout.toConsole', 'Abrir la consola completa')}">${icon('console', { size: 15 })}</button>` : `
+          <button type="button" class="btn-ghost btn--icon chat-popout"
+            title="${t('chat.popout.title', 'Desanclar: abrir esta conversación en su propia ventana')}"
+            aria-label="${t('chat.popout.title', 'Desanclar: abrir esta conversación en su propia ventana')}">${icon('externalLink', { size: 15 })}</button>`}
           <button type="button" class="btn-ghost btn--icon chat-doc-toggle"
             title="${t('chat.doc.toggle', 'Modo documento — texto angosto, justificado y serif')}"
             aria-label="${t('chat.doc.toggle', 'Modo documento — texto angosto, justificado y serif')}"
@@ -444,6 +453,15 @@ export class ChatTab {
     this.typingEl = container.querySelector('.chat-typing');
     this.modeEl = container.querySelector('.chat-mode');
     this.docModeBtn = container.querySelector('.chat-doc-toggle');
+    const popoutBtn = container.querySelector('.chat-popout');
+    if (popoutBtn) {
+      popoutBtn.addEventListener('click', () => {
+        // En una ventana ya desanclada el botón lleva a la consola completa;
+        // en el shell, desancla esta conversación.
+        if (this.soloMode) window.open('/', 'cwc-main')?.focus();
+        else this.onPopout?.();
+      });
+    }
     this._onDocMode = (event) => this._applyDocMode(Boolean(event.detail?.on));
     window.addEventListener(DOC_MODE_EVENT, this._onDocMode);
     let docModeOn = document.body.classList.contains('doc-mode');

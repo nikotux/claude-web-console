@@ -80,6 +80,8 @@ let liveTickTimer = null;
 let me = null;
 let hostName = null;
 let iAmAdmin = false;
+let draggedFolderItemKey = null;
+let draggedFolderItemContext = null;
 
 // Una sesión autenticada por TOKEN no trae username (whoami.username === null)
 // pero representa al HOST: sin esto, "mío" daba true para todo y la sección de
@@ -97,7 +99,7 @@ export default {
   name: 'sessions',
 
   mount(el, ctx) {
-    const { icon, dialog, bus, openSession, focusSession, openChatView, syncConversation, openExplorer } = ctx;
+    const { icon, dialog, bus, openSession, focusSession, openChatView, syncConversation, openExplorer, popoutChat } = ctx;
 
     el.innerHTML = `
       <header class="sec-head">
@@ -117,13 +119,15 @@ export default {
     const dotEl = el.querySelector('[data-ref="dot"]');
     const bgBtn = el.querySelector('[data-ref="bg"]');
     const bgCountEl = bgBtn.querySelector('.sess-bg-n');
-    let lastData = { sessions: [], chats: [], folders: { folders: [], items: {} }, runners: { processes: [], processCount: 0, dominantModel: null } };
+    let lastData = { sessions: [], chats: [], folders: { folders: [], items: {}, order: {} }, runners: { processes: [], processCount: 0, dominantModel: null } };
     let hasRendered = false;
     let bgModal = null;
     let trashModal = null;
     me = null;
     hostName = null;
     iAmAdmin = false;
+    draggedFolderItemKey = null;
+    draggedFolderItemContext = null;
     Promise.resolve(ctx.whoami).then((user) => {
       me = user?.username || null;
       hostName = user?.host || null;
@@ -169,7 +173,281 @@ export default {
       return {
         folders: Array.isArray(raw.folders) ? raw.folders : [],
         items: raw.items && typeof raw.items === 'object' ? raw.items : {},
+        order: raw.order && typeof raw.order === 'object' && !Array.isArray(raw.order) ? raw.order : {},
       };
+    }
+
+    // El orden guardado es PARCIAL a propósito: primero respeta lo acomodado y
+    // después conserva el orden relativo de todo lo nuevo. Así un chat recién
+    // creado aparece al final y nunca descoloca las tarjetas ya organizadas.
+    function applyOrder(containerId, arr, keyOf) {
+      const saved = folderInfo().order[containerId];
+      if (!Array.isArray(saved) || !saved.length) return [...arr];
+      const rank = new Map(saved.map((key, index) => [key, index]));
+      const placed = [];
+      const rest = [];
+      for (const item of arr) {
+        const itemRank = rank.get(keyOf(item));
+        if (itemRank === undefined) rest.push(item);
+        else placed.push({ item, rank: itemRank });
+      }
+      placed.sort((a, b) => a.rank - b.rank);
+      return [...placed.map(({ item }) => item), ...rest];
+    }
+
+    const chatItemKey = (c) => `chat:${c.id}`;
+    const tmuxItemKey = (s) => `tmux:${s.socket}:${s.name}`;
+    const sessionWorldKey = (s) => resolvePlace(s.cwd)?.rel || '__otros';
+
+    // El navegador puede emitir un click al terminar el gesto de arrastre. La
+    // marca vive hasta el siguiente tick sólo en la tarjeta arrastrada; sin esta
+    // guarda, soltarla también abriría la conversación o terminal.
+    function cardOpenBlockedByDrag(cardEl) {
+      return draggedFolderItemKey !== null || cardEl._cwcBlockOpenAfterDrag;
+    }
+
+    function clearFolderDragHighlights() {
+      for (const target of listEl.querySelectorAll('.is-dragover, .is-dragover--cross, .is-dragover--blocked, .is-drop-before, .is-drop-after')) {
+        target.classList.remove('is-dragover', 'is-dragover--cross', 'is-dragover--blocked', 'is-drop-before', 'is-drop-after');
+      }
+    }
+
+    function bindDraggableCard(cardEl, key, c = null) {
+      let dragStartedOnControl = false;
+      cardEl._cwcBlockOpenAfterDrag = false;
+      cardEl.draggable = true;
+      cardEl.addEventListener('mousedown', (e) => {
+        const button = e.target.closest?.('button');
+        dragStartedOnControl = !!button && !button.classList.contains('sess-main');
+      });
+      cardEl.addEventListener('dragstart', (e) => {
+        const button = e.target.closest?.('button');
+        // Los botones secundarios conservan su gesto propio; `.sess-main` es
+        // botón sólo en terminales y sí forma parte de la superficie arrastrable.
+        if (dragStartedOnControl || (button && !button.classList.contains('sess-main'))) {
+          e.preventDefault();
+          return;
+        }
+        draggedFolderItemKey = key;
+        draggedFolderItemContext = c
+          ? {
+              type: 'chat',
+              chat: c,
+              container: cardEl.dataset.container,
+              world: chatWorld(c).key,
+              cwdWorld: placeFor(c.cwd)?.rel || null,
+              archived: !!c.archived,
+              isTui: c.viewMode === 'tui',
+              isSala: !!c.isSala,
+              hasSession: !!c.sessionId,
+            }
+          : { type: 'tmux', container: cardEl.dataset.container };
+        cardEl._cwcBlockOpenAfterDrag = true;
+        e.dataTransfer.setData('text/plain', key);
+        e.dataTransfer.effectAllowed = 'move';
+        cardEl.classList.add('sess-card--dragging');
+      });
+      cardEl.addEventListener('dragend', () => {
+        dragStartedOnControl = false;
+        draggedFolderItemKey = null;
+        draggedFolderItemContext = null;
+        cardEl.classList.remove('sess-card--dragging');
+        clearFolderDragHighlights();
+        setTimeout(() => { cardEl._cwcBlockOpenAfterDrag = false; }, 0);
+      });
+      cardEl.addEventListener('mouseup', () => { dragStartedOnControl = false; });
+    }
+
+    function targetForContainer(containerId) {
+      if (typeof containerId !== 'string' || !containerId) return null;
+      if (containerId.startsWith('world:')) return { folderId: null, world: containerId.slice('world:'.length) };
+      if (!containerId.startsWith('folder:')) return null;
+      const folderId = containerId.slice('folder:'.length);
+      const folder = folderInfo().folders.find((f) => f?.id === folderId);
+      return folder ? { folderId, world: folder.world } : null;
+    }
+
+    function visibleContainerKeys(containerId) {
+      if (!containerId) return [];
+      return [...listEl.querySelectorAll('.sess-card')]
+        .filter((cardEl) => cardEl.dataset.container === containerId)
+        .map((cardEl) => cardEl.dataset.orderKey)
+        .filter(Boolean);
+    }
+
+    async function reorderOnCard(key, referenceCard, position) {
+      const container = referenceCard.dataset.container;
+      const referenceKey = referenceCard.dataset.orderKey;
+      if (!container || !referenceKey) return;
+      const target = targetForContainer(container);
+      const dragged = draggedFolderItemContext;
+      if (!dragged || !target || key === referenceKey) return;
+
+      const state = dropZoneState(target);
+      if (state === 'blocked') {
+        dialog.alertDialog({
+          title: t('sessions.drag.blockedTitle', 'No se puede mover ahí'),
+          message: blockedReason(dragged, target),
+        });
+        return;
+      }
+      if (state === 'cross') {
+        // Una mudanza entre mundos pide confirmación y puede cancelarse; mezclarla
+        // con un reposicionamiento en el mismo gesto vuelve el resultado difícil
+        // de predecir. Se conserva el flujo actual y la tarjeta cae al final.
+        await handleDrop(key, target);
+        return;
+      }
+
+      const sourceContainer = dragged.container;
+      const sourceKeys = sourceContainer ? visibleContainerKeys(sourceContainer).filter((itemKey) => itemKey !== key) : [];
+      const targetKeys = visibleContainerKeys(container).filter((itemKey) => itemKey !== key);
+      const referenceIndex = targetKeys.indexOf(referenceKey);
+      if (referenceIndex < 0) return;
+      targetKeys.splice(referenceIndex + (position === 'after' ? 1 : 0), 0, key);
+
+      if (sourceContainer !== container) {
+        const assigned = await assignFolderItem(key, target.folderId, { refreshAfter: false });
+        if (!assigned) {
+          refresh();
+          return;
+        }
+      }
+
+      // La respuesta visual precede a la red: además del orden hay que reflejar
+      // la carpeta nueva para que render() pinte la tarjeta en su destino.
+      const foldersState = folderInfo();
+      if (target.folderId) foldersState.items[key] = target.folderId;
+      else delete foldersState.items[key];
+      foldersState.order[container] = targetKeys;
+      if (sourceContainer && sourceContainer !== container) foldersState.order[sourceContainer] = sourceKeys;
+      lastData.folders = foldersState;
+      render(lastData);
+
+      try {
+        const requests = [folderRequest('reorder', { container, keys: targetKeys }, t('sessions.order.error', 'No se pudo guardar el orden de las sesiones.'))];
+        if (sourceContainer && sourceContainer !== container) {
+          requests.push(folderRequest('reorder', { container: sourceContainer, keys: sourceKeys }, t('sessions.order.error', 'No se pudo guardar el orden de las sesiones.')));
+        }
+        await Promise.all(requests);
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.order.title', 'Ordenar sesiones'), message: e.message });
+        refresh();
+      }
+    }
+
+    function bindCardDropZone(cardEl) {
+      cardEl.addEventListener('dragover', (e) => {
+        if (draggedFolderItemKey === null || !cardEl.dataset.container) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        clearFolderDragHighlights();
+        if (cardEl.dataset.orderKey === draggedFolderItemKey) return;
+        const rect = cardEl.getBoundingClientRect();
+        cardEl.classList.add(e.clientY < rect.top + rect.height / 2 ? 'is-drop-before' : 'is-drop-after');
+      });
+      cardEl.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && cardEl.contains(e.relatedTarget)) return;
+        clearFolderDragHighlights();
+      });
+      cardEl.addEventListener('drop', async (e) => {
+        // La tarjeta define una posición exacta; impedir que <details> reciba el
+        // mismo drop evita una segunda asignación a la carpeta contenedora.
+        e.preventDefault();
+        e.stopPropagation();
+        const key = draggedFolderItemKey || e.dataTransfer.getData('text/plain');
+        const position = cardEl.classList.contains('is-drop-after') ? 'after' : 'before';
+        clearFolderDragHighlights();
+        if (key) await reorderOnCard(key, cardEl, position);
+      });
+    }
+
+    function dropZoneState(target) {
+      const dragged = draggedFolderItemContext;
+      if (!dragged) return null;
+      if (dragged.type === 'tmux') return 'local';
+      if (target.world === '__aduana' && dragged.isSala) return 'blocked';
+      if (target.world === dragged.world || target.world === '__limbo' || target.world === '__otros') return 'local';
+      // El grupo visual (Limbo o un entorno aislado) puede no coincidir con la
+      // carpeta real; la decisión de mudar se toma sobre esa carpeta real.
+      if (target.world === dragged.cwdWorld) return 'local';
+      const crossesWorld = target.world === '__aduana' || PLACES.some((p) => p.rel === target.world);
+      if (crossesWorld && (dragged.archived || dragged.isTui || !dragged.hasSession)) return 'blocked';
+      return crossesWorld ? 'cross' : 'local';
+    }
+
+    function blockedReason(dragged, target) {
+      if (target.world === '__aduana' && dragged.isSala) {
+        return t('sessions.drag.blockedSala', 'Esta conversación ya es una sala de 🛃 Aduana.');
+      }
+      if (dragged.archived) return t('sessions.drag.blockedArchived', 'Reviví la conversación antes de mudarla a otro mundo.');
+      if (dragged.isTui) return t('sessions.drag.blockedTui', 'Solo se puede mudar en modo Chat: una TUI se reinicia desde la terminal.');
+      if (!dragged.hasSession) return t('sessions.drag.blockedNoSession', 'Enviá un primer mensaje en la conversación antes de mudarla a otro mundo.');
+      return '';
+    }
+
+    function paintDropZone(zone, state) {
+      zone.classList.remove('is-dragover', 'is-dragover--cross', 'is-dragover--blocked');
+      if (state === 'local') zone.classList.add('is-dragover');
+      if (state === 'cross') zone.classList.add('is-dragover--cross');
+      if (state === 'blocked') zone.classList.add('is-dragover--blocked');
+    }
+
+    async function handleDrop(key, target) {
+      const dragged = draggedFolderItemContext;
+      if (!dragged) return;
+      const state = dropZoneState(target);
+      if (state === 'blocked') {
+        dialog.alertDialog({
+          title: t('sessions.drag.blockedTitle', 'No se puede mover ahí'),
+          message: blockedReason(dragged, target),
+        });
+        return;
+      }
+      if (state === 'local') {
+        const currentFolderId = folderInfo().items[key] ?? null;
+        if (currentFolderId !== target.folderId) assignFolderItem(key, target.folderId);
+        return;
+      }
+
+      let moved = false;
+      if (target.world === '__aduana') moved = await toAduana(dragged.chat);
+      else if (PLACES.some((p) => p.rel === target.world)) moved = await moveChatWorld(dragged.chat, { presetRel: target.world });
+
+      // El handoff conserva el id del chat, por eso permite encadenar la misma
+      // key. La carpeta se asigna después y sólo con mudanza confirmada: cancelar
+      // o recibir un error del backend no debe alterar la organización anterior.
+      if (moved && target.folderId) await assignFolderItem(key, target.folderId);
+    }
+
+    function bindDropZone(zone, target) {
+      zone.addEventListener('dragenter', () => {
+        if (draggedFolderItemKey !== null) paintDropZone(zone, dropZoneState(target));
+      });
+      zone.addEventListener('dragleave', (e) => {
+        // Pasar del header a uno de sus hijos no es salir de la zona: mantener
+        // el resaltado evita el parpadeo en carpetas abiertas y en sus botones.
+        if (e.relatedTarget && zone.contains(e.relatedTarget)) return;
+        paintDropZone(zone, null);
+      });
+      zone.addEventListener('dragover', (e) => {
+        if (draggedFolderItemKey === null) return;
+        e.preventDefault();
+        const state = dropZoneState(target);
+        // No usamos `none`: el navegador no emite `drop` y el bloqueo queda mudo,
+        // sin que la persona sepa qué pasó. Aceptamos el gesto para explicar el motivo.
+        e.dataTransfer.dropEffect = 'move';
+        paintDropZone(zone, state);
+      });
+      zone.addEventListener('drop', async (e) => {
+        const key = draggedFolderItemKey || e.dataTransfer.getData('text/plain');
+        if (!key) return;
+        e.preventDefault();
+        e.stopPropagation();
+        paintDropZone(zone, null);
+        await handleDrop(key, target);
+      });
     }
 
     function chatWorld(c) {
@@ -328,6 +606,7 @@ export default {
       }
       if (!toggle && row2) {
         toggle = document.createElement('button');
+        toggle.draggable = false;
         toggle.type = 'button';
         toggle.className = 'sess-kids-toggle';
         toggle.addEventListener('click', (e) => {
@@ -820,13 +1099,15 @@ export default {
       }
     }
 
-    async function assignFolderItem(key, folderId) {
+    async function assignFolderItem(key, folderId, { refreshAfter = true } = {}) {
       try {
         await folderRequest('assign', { key, folderId }, t('sessions.folder.moveError', 'No se pudo mover el elemento a la carpeta.'));
+        return true;
       } catch (e) {
         dialog.alertDialog({ title: t('sessions.folder.moveTitle', 'Mover a carpeta'), message: e.message });
+        return false;
       } finally {
-        refresh();
+        if (refreshAfter) refresh();
       }
     }
 
@@ -875,7 +1156,7 @@ export default {
       const folderMembers = new Map(rootFolders.map((f) => [f.id, { chats: [], sessions: [] }]));
       const folderedSessionKeys = new Set();
       for (const s of visible) {
-        const itemKey = `tmux:${s.socket}:${s.name}`;
+        const itemKey = tmuxItemKey(s);
         const folder = rootFolderById.get(foldersState.items[itemKey]);
         if (!folder) continue;
         folderMembers.get(folder.id).sessions.push(s);
@@ -952,6 +1233,11 @@ export default {
       for (const key of worldKeys) {
         const grp = byWorld.get(key);
         const worldFolders = grp.folders.sort(compareFolders);
+        const looseWorldChats = applyOrder(
+          'world:' + key,
+          grp.chats.filter((item) => !folderedChatIds.has(item.chat.id)),
+          (item) => chatItemKey(item.chat),
+        );
         const folderTerminalCount = worldFolders.reduce((sum, f) => sum + folderMembers.get(f.id).sessions.length, 0);
         let grpEl = null;
         if (multiWorld || worldFolders.length) {
@@ -967,6 +1253,7 @@ export default {
             e.stopPropagation();
             createFolder(key);
           });
+          bindDropZone(summary, { folderId: null, world: key });
           grpEl.appendChild(summary);
           bindGroupOpen(grpEl, 'cwc.sessions.world.' + key + '.open');
           listEl.appendChild(grpEl);
@@ -985,24 +1272,31 @@ export default {
             e.stopPropagation();
             openFolderMenu(f, e.currentTarget);
           });
+          bindDropZone(det, { folderId: f.id, world: f.world });
           det.appendChild(summary);
-          for (const c of members.chats) det.appendChild(chatCard(c, tmuxByName));
-          for (const s of members.sessions) det.appendChild(card(s));
+          const container = 'folder:' + f.id;
+          const orderedMembers = applyOrder(container, [
+            ...members.chats.map((chat) => ({ chat })),
+            ...members.sessions.map((session) => ({ session })),
+          ], (item) => item.chat ? chatItemKey(item.chat) : tmuxItemKey(item.session));
+          for (const item of orderedMembers) {
+            det.appendChild(item.chat ? chatCard(item.chat, tmuxByName, container) : card(item.session, container));
+          }
           host.appendChild(det);
         }
         if (key !== 'tolkien') {
-          for (const item of grp.chats.filter((x) => !folderedChatIds.has(x.chat.id))) host.appendChild(chatCard(item.chat, tmuxByName));
+          for (const item of looseWorldChats) host.appendChild(chatCard(item.chat, tmuxByName, 'world:' + key));
           continue;
         }
 
         // Tolkien principal conserva sus tarjetas al mismo nivel. Cada worktree
         // efímero vive debajo en su propio bloque de árbol, incluso cuando no hay
         // headers de mundo porque Tolkien es el único grupo presente.
-        for (const item of grp.chats.filter((x) => !x.envId && !folderedChatIds.has(x.chat.id))) {
-          host.appendChild(chatCard(item.chat, tmuxByName));
+        for (const item of looseWorldChats.filter((x) => !x.envId)) {
+          host.appendChild(chatCard(item.chat, tmuxByName, 'world:' + key));
         }
         const envGroups = new Map();
-        for (const item of grp.chats.filter((x) => x.envId && !folderedChatIds.has(x.chat.id))) {
+        for (const item of looseWorldChats.filter((x) => x.envId)) {
           if (!envGroups.has(item.envId)) {
             const shortBranch = String(item.branch || '').replace(/^cwc-env\//, '');
             const label = t('sessions.env.header', 'Aislado · {branch}', { branch: shortBranch });
@@ -1024,11 +1318,13 @@ export default {
           });
           summary.innerHTML = `${icon('isolated', { size: 12 })}<span class="sess-env-name">${escapeHtml(env.label)}</span><span class="side-count">${env.chats.length}</span>`;
           det.appendChild(summary);
-          for (const c of env.chats) det.appendChild(chatCard(c, tmuxByName));
+          // Se dibujan en la sección del entorno aislado, no en la raíz del mundo;
+          // por eso no participan del orden manual del mundo.
+          for (const c of env.chats) det.appendChild(chatCard(c, tmuxByName, null));
           host.appendChild(det);
         }
       }
-      for (const s of mySessions) listEl.appendChild(card(s));
+      for (const s of mySessions) listEl.appendChild(card(s, 'world:' + sessionWorldKey(s)));
 
       // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
       // sección colapsada. Tocar una la revive y la abre (ver chatCard).
@@ -1036,7 +1332,9 @@ export default {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
         det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${myArchivedChats.length}</span></summary>`;
-        for (const c of myArchivedChats) det.appendChild(chatCard(c, tmuxByName));
+        // Se dibujan en la sección Archivados, no en la raíz del mundo;
+        // por eso no participan del orden manual del mundo.
+        for (const c of myArchivedChats) det.appendChild(chatCard(c, tmuxByName, null));
         listEl.appendChild(det);
       }
 
@@ -1044,7 +1342,7 @@ export default {
         const det = document.createElement('details');
         det.className = 'sess-others';
         det.innerHTML = `<summary>${t('sessions.otherTmux', 'Otras sesiones tmux')} <span class="side-count">${others.length}</span></summary>`;
-        for (const s of others) det.appendChild(card(s));
+        for (const s of others) det.appendChild(card(s, 'world:' + sessionWorldKey(s)));
         listEl.appendChild(det);
       }
 
@@ -1067,8 +1365,10 @@ export default {
           head.className = 'sess-owner-head';
           head.innerHTML = `<span>${escapeHtml(owner)}</span><span class="side-count">${items.chats.length + items.sessions.length}</span>`;
           det.appendChild(head);
-          for (const c of items.chats) det.appendChild(chatCard(c, tmuxByName));
-          for (const s of items.sessions) det.appendChild(card(s));
+          // Se dibujan en la sección Otros usuarios, no en la raíz del mundo;
+          // por eso no participan del orden manual del mundo.
+          for (const c of items.chats) det.appendChild(chatCard(c, tmuxByName, null));
+          for (const s of items.sessions) det.appendChild(card(s, 'world:' + sessionWorldKey(s)));
         }
         listEl.appendChild(det);
       }
@@ -1076,12 +1376,18 @@ export default {
     }
 
     // ===== Tarjeta de conversación (chat SDK) =====
-    function chatCard(c, tmuxByName) {
+    function chatCard(c, tmuxByName, container) {
       const elCard = document.createElement('div');
       const isEnv = resolvePlace(c.cwd)?.isolated;
       elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '') + (isEnv ? ' sess-chat--env' : '');
-      elCard.dataset.key = `chat:${c.id}`;
+      elCard.dataset.key = chatItemKey(c);
+      if (container) {
+        elCard.dataset.orderKey = chatItemKey(c);
+        elCard.dataset.container = container;
+      }
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
+      bindDraggableCard(elCard, chatItemKey(c), c);
+      if (container) bindCardDropZone(elCard);
 
       const dot = chatDotInfo(c, tmuxByName);
       const isTui = c.viewMode === 'tui';
@@ -1113,7 +1419,20 @@ export default {
       appendParticipantChip(main, c);
       syncSalaBadge(main, c);
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
-      main.addEventListener('click', () => (c.archived ? reviveChat(c, { open: true }) : openChatView(c)));
+      main.addEventListener('click', () => {
+        if (cardOpenBlockedByDrag(elCard)) return;
+        c.archived ? reviveChat(c, { open: true }) : openChatView(c);
+      });
+      // Doble-click = desanclar en ventana propia. El primer click ya abrió la
+      // pestaña en el shell (la conversación queda en las DOS), así que acá solo
+      // se suma la ventana suelta. `preventDefault` evita que el doble-click
+      // seleccione el texto del título.
+      main.addEventListener('dblclick', (e) => {
+        if (c.archived) return;   // una archivada hay que revivirla primero
+        e.preventDefault();
+        e.stopPropagation();
+        popoutChat(c.id, c.title);
+      });
       main.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         e.preventDefault();
@@ -1121,6 +1440,7 @@ export default {
       });
 
       const menuBtn = document.createElement('button');
+      menuBtn.draggable = false;
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
       menuBtn.title = t('sessions.options', 'Opciones');
@@ -1171,6 +1491,7 @@ export default {
       const preview = String(pend[0]?.text || '').slice(0, 80);
       if (!badge) {
         badge = document.createElement('button');
+        badge.draggable = false;
         badge.className = 'btn-ghost btn--sm btn--icon sess-interfono';
         // Insertar ANTES del menú ⋯ para que quede junto a él.
         const menu = cardEl.querySelector('.sess-menu');
@@ -1252,6 +1573,7 @@ export default {
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
         <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? t('sessions.menu.reviveOpen', 'Revivir y abrir') : t('sessions.menu.open', 'Abrir')}</span></button>
+        ${!arch ? `<button class="cwc-popup-item" data-act="popout">${icon('externalLink', { size: 15 })}<span>${t('sessions.menu.popout', 'Abrir en ventana')}</span></button>` : ''}
         ${canOwn && arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.revive', 'Revivir')}</span></button>` : ''}
         ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>${t('sessions.menu.toTui', 'Pasar a TUI')}</span></button>` : ''}
         ${canOwn && !arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
@@ -1271,6 +1593,7 @@ export default {
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
       const act = (fn) => { dismiss(); fn(); };
       menu.querySelector('[data-act="open"]')?.addEventListener('click', () => act(() => (arch ? reviveChat(c, { open: true }) : openChatView(c))));
+      menu.querySelector('[data-act="popout"]')?.addEventListener('click', () => act(() => popoutChat(c.id, c.title)));
       menu.querySelector('[data-act="revive"]')?.addEventListener('click', () => act(() => reviveChat(c)));
       menu.querySelector('[data-act="mode"]')?.addEventListener('click', () => act(() => switchChatMode(c)));
       menu.querySelector('[data-act="rename"]')?.addEventListener('click', () => act(() => renameChat(c)));
@@ -1529,50 +1852,73 @@ export default {
     // y ARCHIVA el origen. Elegís el mundo destino (lugares conocidos de
     // ui/places.js, menos el de origen). 0 tokens; el motor destino arranca al
     // abrir la conversación nueva. "Un mundo a la vez" (Regla dura 12).
-    async function moveChatWorld(c) {
+    async function moveChatWorld(c, { presetRel = null } = {}) {
       const originRel = placeFor(c.cwd)?.rel || null;
-      const dests = PLACES.filter((p) => p.rel !== originRel);
+      // El preset viene de `chatWorld`, que distingue Limbo de su cwd Tolkien;
+      // por eso manda sobre el filtro histórico basado sólo en la ruta.
+      const dests = PLACES.filter((p) => (presetRel ? p.rel === presetRel : p.rel !== originRel));
       if (!dests.length) {
         dialog.alertDialog({ title: t('sessions.world.title', 'Mover a otro mundo'), message: t('sessions.world.noDests', 'No hay otro mundo conocido para mudar esta conversación.') });
-        return;
+        return false;
       }
-      const m = dialog.openModal({ title: t('sessions.world.title', 'Mover a otro mundo'), width: 360 });
-      m.body.innerHTML = `
-        <p class="sess-plumbing">${t('sessions.world.info', 'La MISMA conversación se mueve con TODO su contexto al mundo elegido (no se copia ni queda en Archivados). Su tarjeta pasa al grupo de ese mundo y ahí usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).')}</p>
-        <label class="sess-plumbing" style="display:block;margin:.2rem 0 .3rem">${t('sessions.world.taskLabel', '🎯 Tarea para el mundo destino')} <span style="opacity:.7">${t('sessions.world.taskOpt', '(opcional; se le inyecta al llegar)')}</span></label>
-        <textarea class="dlg-input" data-task rows="2" placeholder="${t('sessions.world.taskPlaceholder', 'Ej: registrá estos pendientes de WhatsApp como tickets en Tolkien')}"></textarea>
-        <div class="sess-menu-list" style="margin-top:.5rem">${dests.map((p) =>
-          `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>${t('sessions.world.moveTo', 'Mover a {label}', { label: p.label })}</span></button>`).join('')}</div>
-        <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">${t('sessions.cancel', 'Cancelar')}</button></div>`;
-      m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
-      m.body.querySelectorAll('[data-rel]').forEach((btn) => btn.addEventListener('click', async () => {
-        const rel = btn.getAttribute('data-rel');
-        const task = (m.body.querySelector('[data-task]')?.value || '').trim();
-        const label = dests.find((p) => p.rel === rel)?.label || rel;
-        const ok = await dialog.confirmDialog({
+      return new Promise((resolve) => {
+        let settled = false;
+        let choosing = false;
+        let handoffStarted = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        const m = dialog.openModal({
           title: t('sessions.world.title', 'Mover a otro mundo'),
-          message: t('sessions.world.confirmMsg', 'Mover "{title}" a {label}: la conversación pasa a {label} con el mismo contexto. ¿Seguir?', { title: c.title, label }),
-          confirmLabel: t('sessions.world.moveTo', 'Mover a {label}', { label }),
+          width: 360,
+          onClose: () => { if (!handoffStarted) finish(false); },
         });
-        if (!ok) return;
-        m.close();
-        try {
-          const res = await fetch('/api/chat/handoff', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: c.id, cwd: rel, ...(task ? { task } : {}) }),
+        m.body.innerHTML = `
+          <p class="sess-plumbing">${t('sessions.world.info', 'La MISMA conversación se mueve con TODO su contexto al mundo elegido (no se copia ni queda en Archivados). Su tarjeta pasa al grupo de ese mundo y ahí usa las herramientas de ESE mundo (Regla 12: un mundo a la vez).')}</p>
+          <label class="sess-plumbing" style="display:block;margin:.2rem 0 .3rem">${t('sessions.world.taskLabel', '🎯 Tarea para el mundo destino')} <span style="opacity:.7">${t('sessions.world.taskOpt', '(opcional; se le inyecta al llegar)')}</span></label>
+          <textarea class="dlg-input" data-task rows="2" placeholder="${t('sessions.world.taskPlaceholder', 'Ej: registrá estos pendientes de WhatsApp como tickets en Tolkien')}"></textarea>
+          <div class="sess-menu-list" style="margin-top:.5rem">${dests.map((p) =>
+            `<button class="btn-ghost sess-menu-item" data-rel="${p.rel}"><span>${t('sessions.world.moveTo', 'Mover a {label}', { label: p.label })}</span></button>`).join('')}</div>
+          <div class="sess-pick-actions"><button class="btn-ghost" data-act="cancel">${t('sessions.cancel', 'Cancelar')}</button></div>`;
+        m.body.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
+        m.body.querySelectorAll('[data-rel]').forEach((btn) => btn.addEventListener('click', async () => {
+          if (choosing || settled) return;
+          choosing = true;
+          const rel = btn.getAttribute('data-rel');
+          const task = (m.body.querySelector('[data-task]')?.value || '').trim();
+          const label = dests.find((p) => p.rel === rel)?.label || rel;
+          const ok = await dialog.confirmDialog({
+            title: t('sessions.world.title', 'Mover a otro mundo'),
+            message: t('sessions.world.confirmMsg', 'Mover "{title}" a {label}: la conversación pasa a {label} con el mismo contexto. ¿Seguir?', { title: c.title, label }),
+            confirmLabel: t('sessions.world.moveTo', 'Mover a {label}', { label }),
           });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || t('sessions.world.error', 'No se pudo mover la conversación.'));
-          // MISMA tarjeta (mismo id): syncConversation la actualiza y refresh la
-          // re-agrupa en el mundo destino. Si estaba abierta, sigue enfocada.
-          if (data.chat) syncConversation(data.chat);
-        } catch (e) {
-          dialog.alertDialog({ title: t('sessions.world.title', 'Mover a otro mundo'), message: e.message });
-        } finally {
-          refresh();
-        }
-      }));
+          choosing = false;
+          if (!ok || settled) return;
+          handoffStarted = true;
+          m.close();
+          let moved = false;
+          try {
+            const res = await fetch('/api/chat/handoff', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: c.id, cwd: rel, ...(task ? { task } : {}) }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || t('sessions.world.error', 'No se pudo mover la conversación.'));
+            // El handoff mantiene el id: syncConversation actualiza la MISMA
+            // tarjeta y el DnD puede encadenar su carpeta sin cambiar de key.
+            if (data.chat) syncConversation(data.chat);
+            moved = true;
+          } catch (e) {
+            dialog.alertDialog({ title: t('sessions.world.title', 'Mover a otro mundo'), message: e.message });
+          } finally {
+            refresh();
+            finish(moved);
+          }
+        }));
+      });
     }
 
     async function toAduana(c) {
@@ -1581,7 +1927,7 @@ export default {
         message: t('sessions.aduana.message', 'Esta mudanza tiene consecuencias reales:\n\n1. La conversación se muda a una sala neutral y deja de tener acceso al mundo donde estaba.\n2. Quien invites va a ver TODO el hilo anterior y los archivos adjuntos de este chat.\n3. El modo de permisos arranca en “Preguntar”; si lo necesitás, podés subirlo después desde el selector del chat.\n4. Los turnos los seguís pagando vos, porque el motor corre con tu credencial.'),
         confirmLabel: t('sessions.aduana.confirm', '🛃 Pasar a la Aduana'),
       });
-      if (!ok) return;
+      if (!ok) return false;
 
       let converted = null;
       try {
@@ -1603,6 +1949,7 @@ export default {
         refresh();
       }
       if (converted) openCollabModal(converted);
+      return !!converted;
     }
 
     // Modelo de una CONVERSACIÓN: en vivo (q.setModel() del SDK, sin perder
@@ -1783,11 +2130,17 @@ export default {
       }
     }
 
-    function card(s) {
+    function card(s, container) {
       const elCard = document.createElement('div');
       elCard.className = 'sess-card';
       elCard.dataset.key = `${s.socket}\n${s.name}`;
+      if (container) {
+        elCard.dataset.orderKey = tmuxItemKey(s);
+        elCard.dataset.container = container;
+      }
       elCard.title = plumbing(s);
+      bindDraggableCard(elCard, tmuxItemKey(s));
+      if (container) bindCardDropZone(elCard);
 
       const dot = dotInfo(s);
       const main = document.createElement('button');
@@ -1803,9 +2156,13 @@ export default {
             <span class="sess-model" style="color:${s.model ? modelColor(s.model.key) : 'var(--cwc-text-dimmer)'}">${s.model ? `${modelIcon(s.model.key)} ${s.model.name}` : ''}</span>
           </span>
         </span>`;
-      main.addEventListener('click', () => openCard(s));
+      main.addEventListener('click', () => {
+        if (cardOpenBlockedByDrag(elCard)) return;
+        openCard(s);
+      });
 
       const menuBtn = document.createElement('button');
+      menuBtn.draggable = false;
       menuBtn.className = 'btn-ghost btn--sm btn--icon sess-menu';
       menuBtn.innerHTML = icon('more', { size: 15 });
       menuBtn.title = t('sessions.options', 'Opciones');

@@ -535,6 +535,17 @@ export function mountMcpsPanel(el, ctx = {}) {
     // Un job viejo puede seguir diciendo done:true; el vencimiento manda salvo
     // que haya un login EN CURSO, que es justamente lo que lo va a renovar.
     const inFlight = d?.status === 'starting' || d?.status === 'awaiting-auth';
+    // Un error RECIENTE le gana a `expired`: si no, el usuario toca
+    // "Reconectar", el intento falla en segundos y la tarjeta se repinta
+    // IDÉNTICA (sigue vencida), dando la sensación de que el botón no hace
+    // nada — el síntoma exacto de console:BUG-2747, con el motivo real
+    // guardado en el job y nunca mostrado en pantalla.
+    const freshError = (d?.status === 'error' || d?.stale)
+      && d?.ts
+      && (Date.now() - d.ts) < 10 * 60 * 1000;
+    if (freshError) {
+      return { key: 'error', light: 'danger', label: t('system.conn.codexError', 'No se pudo conectar') };
+    }
     if (!inFlight && d?.expired) {
       return { key: 'expired', light: 'warn', label: t('system.conn.codexExpired', 'Sesión vencida — reconectá') };
     }
@@ -575,10 +586,17 @@ export function mountMcpsPanel(el, ctx = {}) {
       const expiresAt = Number.isFinite(d?.expiresAt) && !Number.isNaN(new Date(d.expiresAt).getTime())
         ? `<p class="hr-f-file">${t('system.conn.codexExpiredAt', 'Venció el {fecha}', { fecha: new Date(d.expiresAt).toLocaleString() })}</p>`
         : '';
+      // Un error viejo ya no cambia el estado de la tarjeta, pero su motivo se
+      // muestra igual: sin esto, un intento fallido hace 20 minutos es
+      // indistinguible de no haber tocado nunca el botón.
+      const lastError = d?.error
+        ? `<p class="hr-f-file">${t('system.conn.codexLastError', 'Último intento falló: {error}', { error: esc(d.error) })}</p>`
+        : '';
       flow = `
         <p class="hr-f-detail"><b>${dot} ${t('system.conn.codexExpired', 'Sesión vencida — reconectá')}</b></p>
         <p class="hr-f-file">${t('system.conn.codexExpiredHint', 'Tu sesión de Codex venció (dura 10 días desde el último uso). Hasta que la reconectes, el modo Tándem no puede ejecutar código y el contador de límites de Codex queda con datos guardados.')}</p>
-        ${expiresAt}`;
+        ${expiresAt}
+        ${lastError}`;
       actions = `<div class="mcp-acts"><button class="btn btn--sm" data-codex-act="start">${icon('refresh', { size: 12 })}<span>${t('system.conn.reconnectBtn', 'Reconectar')}</span></button></div>`;
     } else if (d?.status === 'awaiting-auth' && !d?.stale) {
       const link = d.url

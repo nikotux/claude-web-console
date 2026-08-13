@@ -11,8 +11,8 @@ import pty from 'node-pty';
 import {
   codexCredState,
   ensureUserSpace,
+  userFileRoot,
   userRunnerEnv,
-  userWorkspace,
 } from '../src/core/user-space.js';
 
 const args = {};
@@ -59,7 +59,15 @@ let env;
 let cwd;
 try {
   env = userRunnerEnv(USER);
-  cwd = userWorkspace(USER);
+  // cwd = userFileRoot(USER), NUNCA userWorkspace(USER): para un inquilino dan
+  // el mismo path, pero para el HOST userWorkspace apunta a `~/workspace`, que
+  // ensureUserSpace no crea (el host usa su HOME real) y por lo tanto no
+  // existe. El PTY moría en el chdir con `chdir(2) failed` y exitCode 1 ANTES
+  // de que codex imprimiera nada, así que el usuario tocaba "Reconectar" y
+  // veía la tarjeta repintarse igual (console:BUG-2747). Mismo gotcha ya
+  // documentado en cwc-claude-login-runner.js.
+  cwd = userFileRoot(USER);
+  if (!fs.existsSync(cwd)) fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
 } catch (e) {
   writeState({ status: 'error', error: 'No pude preparar el entorno de Codex: ' + (e?.message || e) });
   process.exit(1);
@@ -176,7 +184,24 @@ proc.onExit(({ exitCode }) => {
     writeState({ status: 'done', done: true });
   }
   if (!done && !cancelled && !terminal) {
-    writeState({ status: 'error', error: 'El login de Codex terminó sin renovar la credencial. Volvé a intentarlo.' });
+    // Si el CLI murió sin llegar a mostrar la URL, el mensaje genérico ESCONDE
+    // la causa real (fue el caso de console:BUG-2747: `chdir(2) failed` invisible
+    // durante toda la vida del bug). Cuando no hubo URL, el error lleva las
+    // últimas líneas reales del PTY. NUNCA se incluye el código de un solo uso:
+    // esa rama solo corre cuando currentUrl es null, o sea antes de que exista.
+    const tail = stripAnsi(buf)
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(-3)
+      .join(' · ')
+      .slice(0, 300);
+    writeState({
+      status: 'error',
+      error: (!currentUrl && tail)
+        ? `El login de Codex terminó sin llegar a mostrar el código (salida: ${tail}). Código de salida: ${exitCode}.`
+        : 'El login de Codex terminó sin renovar la credencial. Volvé a intentarlo.',
+    });
   }
   process.exit(0);
 });

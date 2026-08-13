@@ -85,11 +85,36 @@ export default function sessionsHelp() {
                 desc: t('sessions.help.folder.move.desc', 'abrí el menú ⋯ de la tarjeta y elegí “Mover a carpeta…”; la opción “(ninguna)” la saca'),
               },
               {
+                icon: 'folder',
+                name: t('sessions.help.folder.drag.name', 'Arrastrar tarjetas'),
+                desc: t('sessions.help.folder.drag.desc', 'dentro del mismo mundo, soltá una tarjeta sobre una carpeta para guardarla ahí —aunque esté plegada— o sobre el nombre del mundo para sacarla, sin confirmación. Una terminal solo se organiza así; nunca muda de mundo. En pantallas táctiles usá ⋯ → “Mover a carpeta…”'),
+              },
+              {
+                icon: 'menu',
+                name: t('sessions.help.folder.reorder.name', 'Reordenar tarjetas'),
+                desc: t('sessions.help.folder.reorder.desc', 'arrastrá una tarjeta sobre otra: la línea indica dónde va a quedar. El orden es tuyo y se guarda; lo nuevo aparece al final sin desarmar lo que ya acomodaste'),
+              },
+              {
+                icon: 'gitBranch',
+                name: t('sessions.help.folder.dragWorld.name', 'Mudar una conversación'),
+                desc: t('sessions.help.folder.dragWorld.desc', 'soltarla sobre el nombre de otro mundo válido o sobre 🛃 Aduana la muda y siempre pide confirmación: la mudanza no se deshace arrastrándola de vuelta'),
+              },
+              {
+                icon: 'folder',
+                name: t('sessions.help.folder.dragCrossFolder.name', 'Mudar y guardar'),
+                desc: t('sessions.help.folder.dragCrossFolder.desc', 'soltar una conversación sobre una carpeta de otro mundo hace las dos cosas: después de confirmar y completar la mudanza, la guarda dentro de esa carpeta'),
+              },
+              {
                 icon: 'chevronRight',
                 name: t('sessions.help.folder.collapse.name', 'Plegar y desplegar'),
                 desc: t('sessions.help.folder.collapse.desc', 'las carpetas recuerdan si quedaron abiertas o cerradas, igual que los mundos'),
               },
             ],
+          },
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('sessions.help.folder.dragBlocked', 'Si una zona de destino se ve apagada, no es válida para esa tarjeta; al soltarla ahí, la consola te explica el motivo.'),
           },
           {
             type: 'note',
@@ -205,6 +230,11 @@ export default function sessionsHelp() {
                 icon: 'sparkle',
                 name: t('sessions.help.chatMenu.open.name', 'Abrir / Pasar a Chat'),
                 desc: t('sessions.help.chatMenu.open.desc', 'abre el Chat; desde TUI vuelve a la vista Chat sin perder la conversación'),
+              },
+              {
+                icon: 'externalLink',
+                name: t('sessions.help.chatMenu.popout.name', 'Abrir en ventana'),
+                desc: t('sessions.help.chatMenu.popout.desc', 'desancla la conversación en una ventana propia sin paneles, para pantalla dividida; también con doble-click en la tarjeta. La conversación es la MISMA: sigue abierta acá y lo que escribas en cualquiera de las dos va al mismo turno.'),
               },
               {
                 icon: 'terminal',
