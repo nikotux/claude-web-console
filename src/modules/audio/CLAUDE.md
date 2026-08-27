@@ -20,8 +20,8 @@ shared.js porque shared es compartido con el runner y NO puede importar
 user-space (arrastraría config/CWC_TOKEN al env limpio). El runner recibe
 la misma ruta por `--data-dir` y, si falta, cae a `resolveDataDir()`.
 shared.js: jobs en <dataDir-del-dueño>/audio/<id>.json (id DETERMINÍSTICO
-por contenido: reintento reusa el MISMO job, no gasta de nuevo; poda >30
-días) + prompt + parseo + spawn detached, patrón
+por contenido: reintento reusa el MISMO job; poda >30 días) + prompt + parseo
+y spawn detached, patrón
 projects/analyze-shared+commitmsg-shared. TÍTULO GENERADO POR IA
 (pedido del usuario 2026-07-06): el prompt pide un `title` corto
 (parseAudio lo extrae) y el runner lo aplica al job si titleAuto (el
@@ -33,6 +33,14 @@ input → Enter/blur guarda, Esc cancela; .au-titlebar). Ruta /api/audio:
 GET / (historial liviano) · GET /:id (transcript+result) · POST /analyze
 (ADMIN, arranca el runner, responde YA) · POST /:id/title (ADMIN, editar
 título) · POST /:id/delete (admin). El
+POST `/analyze` NO usa check-then-act como exclusión: `claimAudioJob(dataDir,
+id, data)` devuelve `{ claimed, existing }` y `fs.openSync(..., 'wx')` es el
+ÚNICO punto de exclusión mutua real entre procesos. Para reemplazar un job
+stale/error toma además `<id>.json.claim`, vencido por `CLAIM_STALE_MS` (2 min),
+y el runner SOLO se spawnea con `claimed === true`; `pruneOldJobs` también poda
+claims viejos. GOTCHA: el id determinístico por contenido NO alcanzaba para
+evitar doble gasto — dos POST simultáneos podían superar ambos el chequeo; la
+atomicidad la aporta el claim.
 front encuesta GET /:id (0 tokens). Frontend audio.js: NO es sección
 de sidebar propia (pedido del usuario) — exporta openAudioPanel(ctx) y
 lo abre el módulo `tasks` (Pendientes) con un botón admin. El panel

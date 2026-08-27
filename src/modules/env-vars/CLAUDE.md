@@ -21,7 +21,12 @@ el deepMerge original iteraba solo las claves de `base`, así que con
 defaults vacíos habría PERDIDO zohoDepartments propios del
 instance.json; el fix (union base∪over) lo conserva. saveInstance
 REEMPLAZA zohoDepartments wholesale cuando el patch lo trae (el panel
-envía el set entero; un merge nunca borraría una clave quitada). NUNCA incluye SECRETOS (capa aparte: CWC_TOKEN en .env,
+envía el set entero; un merge nunca borraría una clave quitada). INVARIANTE 5:
+`pickAllowed()` rechaza ANTES de tocar disco más de
+`MAX_ZOHO_DEPARTMENTS=50`, contando
+`Object.keys(patch.client.zohoDepartments)`; el error lleva
+`.badRequest=true` y `POST /api/env-vars` lo traduce a 400. `reviewer` no
+necesita un tope de colección porque admite una lista cerrada de campos. NUNCA incluye SECRETOS (capa aparte: CWC_TOKEN en .env,
 credenciales en ~/.claude) ni identidad de EQUIPO (users.json, capa
 3, multiusuario real = C3/PEND-382, fuera de alcance). Los
 call-sites parametrizados leen `config.instance.*`:

@@ -26,9 +26,10 @@ import { COMMS_DIR, ensureDir } from './shared.js';
 export const CHATBOT_LOCK = path.join(COMMS_DIR, 'chatbot.lock');
 export const CHATBOT_LOG = path.join(COMMS_DIR, 'chatbot.log');
 
-// Interpretación de VARIOS mensajes con sonnet: más generoso que el análisis de
-// UN hilo (60s) — el cold-start de query() (~4-8s) + razonar la atribución de
-// ~20 mensajes con salida JSON estructurada no entra en 60s (verificado: cortaba).
+// Interpretación de VARIOS mensajes con haiku: el margen se conserva a propósito.
+// El cold-start de query() (~4-8s) no depende del modelo y un timeout holgado no
+// cuesta nada; recortarlo por suponer que haiku es más rápido reintroduciría el
+// corte ya verificado en producción al atribuir ~20 mensajes con salida JSON.
 export const CHATBOT_INTERPRET_TIMEOUT_MS = 150 * 1000;
 export const CHATBOT_HEARTBEAT_MS = 3000;
 export const CHATBOT_LOCK_FRESH_MS = 20000;

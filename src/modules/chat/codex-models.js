@@ -5,8 +5,10 @@
 export const TANDEM_CODEX_MODEL = 'gpt-5.6-sol';
 export const TANDEM_CODEX_EFFORT = 'high';
 
-// Esfuerzos que acepta CADA modelo (catálogo real del CLI de Codex 0.145.0,
-// verificado en ~/.codex/models_cache.json): sol/terra suman `ultra`
+// Esfuerzos que acepta CADA modelo (catálogo real del CLI de Codex 0.146.0,
+// verificado en ~/.codex/models_cache.json). La whitelist incluye a propósito
+// SOLO modelos con `visibility: "list"`; los `hide` (`gpt-reserve` y
+// `codex-auto-review`) quedan deliberadamente afuera. sol/terra suman `ultra`
 // ("máximo razonamiento con delegación automática"), luna llega hasta `max`,
 // y los modelos legacy cortan en `xhigh`.
 export const CODEX_MODEL_EFFORTS = {
@@ -14,6 +16,8 @@ export const CODEX_MODEL_EFFORTS = {
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.5': ['low', 'medium', 'high', 'xhigh'],
+  'gpt-5.4': ['low', 'medium', 'high', 'xhigh'],
+  'gpt-5.4-mini': ['low', 'medium', 'high', 'xhigh'],
   'gpt-5.3-codex-spark': ['low', 'medium', 'high', 'xhigh'],
 };
 

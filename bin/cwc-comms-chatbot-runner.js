@@ -7,9 +7,10 @@
 //   Fase 1 (LEER): por cada contacto kind:'bot' con chatId, lee sus mensajes
 //     CRUDOS de Teams vía Graph (read-only, regla 6 doble capa = graphReadAllowed,
 //     reusa teamsBotPrompt/parseTeamsResponse). Fallback: teams.json ya escaneado.
-//   Fase 2 (INTERPRETAR): una corrida SDK (sonnet, 1 turno, CERO herramientas —
+//   Fase 2 (INTERPRETAR): una corrida SDK (haiku + effort low, 1 turno, CERO herramientas —
 //     doble capa deniega TODO, regla 6) DEDUCE la persona REAL detrás de cada
 //     mensaje del bot y la atribuye a un contacto conocido.
+//     La fase 1 SÍ sigue en sonnet porque usa Graph.
 //   Fase 3 (MERGE): agrupa por contacto real y FUSIONA con chatbot.json (append,
 //     no destructivo — preserva el seed histórico).
 //
@@ -90,10 +91,17 @@ async function fetchBotRaw(bot) {
 async function interpret(knownContacts, rawMessages) {
   const q = query({
     prompt: chatbotInterpretPrompt(knownContacts, rawMessages, self?.name),
+    // Optimización IA 2026-08-27: haiku + effort low. Esta fase es 1 turno, CERO
+    // herramientas y criterio 100% explícito en el prompt (lista cerrada de ids,
+    // JSON fijo) — el mismo perfil que extractTitle/classifyRelative/judgeAnswer de
+    // chat/index.js, ya validados en producción con haiku. Lo que el proyecto
+    // documenta que haiku NO puede es la AUDITORÍA PROFUNDA de código (health), no
+    // la atribución mecánica de texto corto.
     options: {
       cwd: process.cwd(),
       settingSources: [],
-      model: 'sonnet',
+      model: 'haiku',
+      effort: 'low',
       maxTurns: 1,
       permissionMode: 'default',
       hooks: { PreToolUse: [{ hooks: [async () => denyInterpretHook] }] },

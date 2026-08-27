@@ -20,7 +20,7 @@ import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { userDataDir, userRunnerEnv, hostUser } from '../../core/user-space.js';
 import {
-  audioJobId, readAudioJob, writeAudioJob, deleteAudioJob, listAudioJobs,
+  audioJobId, readAudioJob, writeAudioJob, claimAudioJob, deleteAudioJob, listAudioJobs,
   spawnAudioRunner, jobResult, isFreshRunning, MAX_TRANSCRIPT,
 } from './shared.js';
 
@@ -59,7 +59,8 @@ export default {
 
     // Lanza el análisis: persiste el job + spawnea el runner detached, responde
     // YA. Admin porque consume tokens. Id determinístico por contenido: un
-    // reintento reusa el MISMO job (no relanza ni gasta de nuevo).
+    // reintento reusa el MISMO job; el claim atómico evita de verdad que dos
+    // requests lo relancen y gasten tokens de nuevo.
     r.post('/analyze', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador (consume tokens).' });
       const transcript = String(req.body?.transcript ?? '');
@@ -86,10 +87,15 @@ export default {
         // título del job anterior (titleAuto:false), se preserva.
         const keepTitle = title || existing?.title || '';
         const keepAuto = title ? false : (existing ? existing.titleAuto : true);
-        writeAudioJob(dataDir, id, {
+        const claim = claimAudioJob(dataDir, id, {
           id, title: keepTitle, titleAuto: keepAuto, transcript, status: 'running',
           result: null, error: null, startedAt: Date.now(), updatedAt: Date.now(),
         });
+        if (!claim.claimed) {
+          const prev = claim.existing;
+          if (prev) return res.json({ id, title: prev.title || keepTitle, ...jobResult(prev) });
+          return res.json({ id, title: keepTitle, status: 'running', result: null, error: null });
+        }
         try {
           const runnerEnv = owner === hostUser() ? undefined : userRunnerEnv(owner);
           spawnAudioRunner(dataDir, id, runnerEnv);

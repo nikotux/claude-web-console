@@ -453,7 +453,7 @@ function syncConversation(chatInfo) {
   if (!entry || entry.type !== 'chat') return;
   applyConversationMode(entry, chatInfo); // idempotente; rebuilds si cambió el modo
   const ttl = entry.pane.querySelector('.chat-title');
-  if (ttl && chatInfo.title) ttl.textContent = chatInfo.title;
+  if (ttl && chatInfo.title) { ttl.textContent = chatInfo.title; ttl.title = chatInfo.title; }
 }
 
 // Enfoca la pestaña de una sesión ya existente; si no está abierta, la adjunta.

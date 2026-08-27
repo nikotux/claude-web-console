@@ -66,6 +66,15 @@ export default {
       if (admin !== undefined && typeof admin !== 'boolean') {
         return res.status(400).json({ error: 'admin debe ser boolean.' });
       }
+      // Guard crítico: userSpace()/userFileRoot() resuelven POR STRING
+      // (`if (id === HOST_USER) return config.home`), así que un usuario cuyo
+      // username coincida con el del host obtendría el HOME REAL de la máquina
+      // en vez de su ~/.cwc-users/<id>/workspace — bypass total del
+      // confinamiento multi-tenant, aunque su fila diga admin:false. Mismo
+      // guard que ya tiene DELETE /users/:username.
+      if (String(username || '').trim() === hostUser()) {
+        return res.status(409).json({ error: 'Ese nombre de usuario está reservado por el sistema.' });
+      }
       try {
         createUser(username, password, typeof admin === 'boolean' ? admin : false);
         try {
@@ -90,6 +99,11 @@ export default {
       // creer que la contraseña se actualizó cuando no fue así).
       if (password !== undefined && (typeof password !== 'string' || !password.length)) {
         return res.status(400).json({ error: 'password debe ser un string no vacío.' });
+      }
+      // Misma familia de guard que el POST y el DELETE: el usuario del sistema
+      // no se administra desde acá.
+      if (username === hostUser()) {
+        return res.status(409).json({ error: 'El usuario del sistema no se administra desde acá.' });
       }
       const principal = principalOf(req);
       if (principal && principal.username === username) {

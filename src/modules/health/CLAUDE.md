@@ -104,7 +104,13 @@
   si el reporte lleva más de 24 h; `ok` con nota si todavía no existe o Docker
   figura `unavailable`. El barrido NUNCA es automático: se simula con
   `node bin/cwc-docker-hygiene-runner.js --prune` y solo un humano agrega
-  `--yes`), espejo de contexto a Tolkien (`tolkien-context`) y
+  `--yes`), **`vendor-drift`** (`console:PLAN-2811` / `console:BUG-2816`, 0
+  tokens): detecta copias estáticas migrables en `public/vendor/` para paquetes
+  declarados y exige montarlas desde `node_modules`; acepta `hljs` como única
+  excepción porque highlight.js no publica bundle de navegador, pero compara
+  su versión vendorizada con la instalada y avisa si difieren o no puede
+  determinarla. Nunca devuelve `fail`. Espejo de contexto a Tolkien
+  (`tolkien-context`) y
   **`facetas`** (`checkFacetas`, `console:PEND-2283`, 0 tokens): avisa si falta
   la foto local de facetas, si alguna unidad de `discoverUnits()` no tiene
   clase declarada o si aparece código en `src/` fuera del radar estructural

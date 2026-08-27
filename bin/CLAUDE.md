@@ -595,7 +595,9 @@ solo actúa con `CWC_PAGEOUT_DRY_RUN=0`. Variables:
 dry-run). Estado incremental en `<dataDir>/pageout.json` y lock con heartbeat
 en `<dataDir>/pageout.lock`, donde `<dataDir>` sale de `resolveDataDir()`
 (por defecto `~/.cwc-data`). SIGTERM/SIGINT conservan el estado y liberan el
-lock; cada barrido emite una sola línea resumen a stdout.
+lock; cada barrido emite una sola línea resumen a stdout. Su disparador es un
+service systemd externo no versionado: `core/inventory.js` lo incluye en
+`KNOWN_EXTERNAL_TRIGGERS` para que el censo no lo marque huérfano.
 ### bin/cwc-test-codex-worktree.js  test funcional determinista y AISLADO del
 mecanismo de worktree de las delegaciones Codex (patrón
 `cwc-test-tolkien-store.js`). Sin SDK, sin red y con 0 tokens, trabaja entero
@@ -685,7 +687,10 @@ error que explique por qué el trabajo «se revirtió solo». Lo agenda la unida
 `systemd/cwc-mirror.timer` cada 15 minutos; no depende del server web. El exit 2
 por lock tomado y el exit 3 por destino en uso están declarados
 `SuccessExitStatus=2 3` en la unidad porque ambos son comportamientos normales
-y dejarlos como fallo taparía los errores reales. El target `home` incluye deliberadamente TODO: `.ssh`,
+y dejarlos como fallo taparía los errores reales. La unidad es un disparador
+externo al grafo JS y `core/inventory.js` registra el runner en
+`KNOWN_EXTERNAL_TRIGGERS`, para que el censo no lo marque huérfano. El target
+`home` incluye deliberadamente TODO: `.ssh`,
 `.config`, `node_modules`, cachés y cualquier otro dato del usuario. En
 particular, `~/.ssh/authorized_keys` de Rivendell contiene la clave del espejo
 para que esa autorización sobreviva al `--delete` en el destino; sin ella, el
@@ -848,8 +853,13 @@ lecciones generales (~168 KB).
 Teams (DM con 'chris') para Mejora Continua, DESACOPLADO (regla de oro;
 sonnet, READ-ONLY doble capa regla 6 con `graphReadAllowed` REUSADO tal
 cual de comms/teams-shared.js — el mismo allowlist ya probado del escaneo
-de Teams de Comunicaciones, no uno nuevo). Una sola query lee el DM 1:1 con
-el contacto Y destila el feedback en el mismo paso. Estado en
+de Teams de Comunicaciones, no uno nuevo). Antes de disparar Graph, consulta
+`readTeams()`: si el hilo de `chris` tiene menos de `FRESH_TEAMS_MS` (15 min),
+lo interpreta con `textOnlyQuery` (cero herramientas) y
+`teamsFeedbackFromMessagesPrompt`. Si no hay caché, falla la corrida o el
+parseo no produce ítems, cae a `fetchTeams` por Graph; la optimización nunca
+devuelve menos que el camino anterior. Es la generalización de
+`freshBotThread` de `chatbot-shared.js`. Estado en
 ~/.cwc-data/retro-teams-scan.json + retro-teams.lock (heartbeat pid-aware,
 mismo dedup que el runner de correo). Lógica en
 src/modules/retro/teams-feedback-shared.js. Comparte los blindajes
@@ -1058,12 +1068,17 @@ del tablero), DESACOPLADO (regla de oro). Deriva la sección Chatbot de
 lo que YA escaneamos del bot de Teams "Tolkien" (TheEye) en DOS fases:
 (1) LEE los mensajes CRUDOS del bot vía Graph (read-only regla 6 =
 graphReadAllowed, reusa teamsBotPrompt/parseTeamsResponse; fallback a
-teams.json); (2) INTERPRETA con IA (sonnet, 1 turno, CERO herramientas,
-doble capa deniega TODO) quién es la persona REAL detrás de cada mensaje
+teams.json); (2) INTERPRETA con IA (`haiku`, `effort:'low'`, 1 turno, CERO
+herramientas, doble capa deniega TODO) quién es la persona REAL detrás de cada mensaje
 relayado y lo atribuye a un contacto conocido; (3) MERGE no destructivo
 con chatbot.json (append+dedup, preserva el seed). CONSUME TOKENS ⇒ bajo
 botón. Interfaz por archivos: chatbot.lock (heartbeat con fase) +
-chatbot.json (resultado). Lógica en src/modules/comms/chatbot-shared.js
+chatbot.json (resultado). La fase 1 sigue en sonnet porque usa Graph; la fase 2
+tiene criterio cerrado y comparte el perfil de
+`extractTitle`/`classifyRelative`/`judgeAnswer` de `chat/index.js`. GOTCHA: el
+comentario de cabecera del propio runner todavía dice “sonnet” para la fase 2 y
+está desactualizado; esta pasada documental no toca `.js`. Lógica en
+src/modules/comms/chatbot-shared.js
 ### bin/cwc-comms-teams-runner.js escaneo de TEAMS (mensajes directos) del módulo comms:
 por cada contacto lee sus DMs con las tools graph_* de LECTURA
 del MCP tolkien-mordor (cwd=projectDir, settingSources headless,
@@ -1146,8 +1161,8 @@ regla de oro + regla 6). DOS FASES: (1) LEER — por cada contacto
 kind:'bot' con chatId lee sus mensajes CRUDOS de Teams vía Graph
 (read-only doble capa = graphReadAllowed, reusa teamsBotPrompt/
 parseTeamsResponse de teams-shared; fallback a teams.json ya escaneado
-si Graph falla); (2) INTERPRETAR — corrida SDK (sonnet, 1 turno, CERO
-herramientas, doble capa deniega TODO) que DEDUCE por el CONTENIDO
+si Graph falla); (2) INTERPRETAR — corrida SDK (`haiku`, effort `low`, 1 turno,
+CERO herramientas, doble capa deniega TODO) que DEDUCE por el CONTENIDO
 quién es la persona REAL detrás de cada mensaje del bot ("Chris
 reviewed…" → contacto chris) y lo atribuye a un contacto conocido
 (chatbotInterpretPrompt/parseChatbotInterpretation); realContactId

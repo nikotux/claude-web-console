@@ -109,8 +109,15 @@ function ghLoginRunnerAlive(job) {
 function claudeLoginJobPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.json`); }
 function claudeLoginCodePath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.code`); }
 function claudeLoginLogPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.log`); }
+const CLAUDE_LOGIN_TERMINAL_TTL_MS = 10 * 60 * 1000;
 function readClaudeLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(claudeLoginJobPath(user), 'utf8')); } catch { return null; }
+}
+// Un job terminal viejo hacía que el modal mostrara "ya estás conectado" y
+// nunca relanzara el login; pasado el TTL debe volver a comportarse como idle.
+function claudeLoginJobIsStale(job) {
+  return ['ok', 'error', 'cancelled'].includes(job?.status)
+    && Date.now() - (job.ts || 0) > CLAUDE_LOGIN_TERMINAL_TTL_MS;
 }
 function writeClaudeLoginJob(user, job) {
   fs.mkdirSync(CLAUDE_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
@@ -860,7 +867,7 @@ export default {
 
     r.get('/claude/login/status', (req, res) => {
       const job = readClaudeLoginJob(userOf(req));
-      if (!job) return res.json({ status: 'idle' });
+      if (!job || claudeLoginJobIsStale(job)) return res.json({ status: 'idle' });
       res.json({
         status: job.status || 'error',
         ...(job.url ? { url: job.url } : {}),

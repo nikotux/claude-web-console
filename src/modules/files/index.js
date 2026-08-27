@@ -19,7 +19,7 @@ import { ZipArchive } from 'archiver';
 import fs from 'node:fs/promises';
 import fss from 'node:fs';
 import path from 'node:path';
-import { principalOf } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import { config } from '../../core/config.js';
 import { resolveWithinRoot } from '../../core/paths.js';
 import {
@@ -73,9 +73,13 @@ function safeAttachmentName(name) {
 
 // Root de archivos del usuario que hace el request: host → home completo
 // (retrocompat); inquilino → su workspace (confinado, sin acceso al home ajeno).
-function reqFileRoot(req) {
+function reqOwner(req) {
   const username = (principalOf(req).username) || hostUser();
-  return userFileRoot(username);
+  return username;
+}
+
+function reqFileRoot(req) {
+  return userFileRoot(reqOwner(req));
 }
 
 // La resolución contra root valida la ruta SOLO como string (no resuelve
@@ -223,7 +227,9 @@ export default {
   name: 'files',
 
   init() {
-    const n = autoPurge();
+    // Al iniciar solo se hace higiene de la papelera del host; cada papelera
+    // de inquilino también se depura al listarse.
+    const n = autoPurge(config.home);
     if (n > 0) console.log(`[files] Papelera: purgados ${n} ítem(s) vencido(s).`);
   },
 
@@ -520,18 +526,23 @@ export default {
       let pst;
       try { pst = statSafeSync(path.dirname(abs), root); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
-      try { res.json({ ok: true, id: moveToTrash(abs, rel) }); }
+      try { res.json({ ok: true, id: moveToTrash(root, abs, rel, reqOwner(req)) }); }
       catch (e) { res.status(statusForError(e)).json({ error: 'No se pudo mover a la papelera.' }); }
     });
 
     r.get('/trash', (req, res) => {
-      try { res.json({ items: listTrash() }); }
+      try {
+        res.json({
+          items: listTrash(reqFileRoot(req), { owner: reqOwner(req), all: isAdmin(req) }),
+        });
+      }
       catch { res.status(500).json({ error: 'No se pudo leer la papelera.' }); }
     });
 
     r.post('/trash/restore', (req, res) => {
       try {
         const root = reqFileRoot(req);
+        const owner = reqOwner(req);
         // Defensa contra symlink de escape: a diferencia de mkdir/rename/trash
         // (que validan la carpeta contenedora REAL antes de mutar), restoreFromTrash
         // hacía mkdirSync+renameSync directo sobre un target derivado de
@@ -541,7 +552,7 @@ export default {
         // contenido fuera del root. Igual que statSafeSync: subimos hasta el
         // ancestro existente más cercano de la carpeta destino y confirmamos
         // que su ruta REAL sigue dentro del root real antes de crear/mover nada.
-        const finalRel = restoreFromTrash(req.body?.id, (containerDir) => {
+        const finalRel = restoreFromTrash(root, req.body?.id, (containerDir) => {
           let cur = containerDir;
           while (!fss.existsSync(cur)) {
             const parent = path.dirname(cur);
@@ -555,7 +566,7 @@ export default {
             err.badRequest = true;
             throw err;
           }
-        });
+        }, { owner, all: isAdmin(req) });
         if (finalRel == null) return res.status(404).json({ error: 'No está en la papelera.' });
         res.json({ ok: true, path: finalRel });
       } catch (e) {
@@ -573,14 +584,16 @@ export default {
         // la clave (purgar todo, intencional) de un id presente pero inválido
         // (error del caller → 400, nunca un purge total silencioso).
         const body = req.body || {};
+        const root = reqFileRoot(req);
+        const access = { owner: reqOwner(req), all: isAdmin(req) };
         if ('id' in body) {
           const id = body.id;
           if (typeof id !== 'string' || !id) {
             return res.status(400).json({ error: 'id inválido.' });
           }
-          purgeTrash(id);
+          purgeTrash(root, id, access);
         } else {
-          purgeTrash(null); // sin id: purga toda la papelera
+          purgeTrash(root, null, access); // sin id: purga todo lo autorizado
         }
         res.json({ ok: true });
       } catch {

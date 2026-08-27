@@ -26,6 +26,17 @@ claim propio o cualquier claim para host/admin. Handles viejos/nulos, chats ya
 ausentes del registro, tmux sin owner y otros formatos sin pista canónica se
 tratan como AJENOS para un no-admin (fail-closed). El panel mantiene ocultas
 las acciones globales y rotula explícitamente “tus sesiones”.
+INVARIANTE 7 en `POST /claim-release`: para un caller no privilegiado, “no
+existe” y “existe pero es ajeno” devuelven el MISMO 404
+(`No hay un claim propio para ese archivo.`), porque distinguir el texto
+filtraba actividad de sesiones ajenas. Host/admin conserva el diagnóstico
+informativo. `/send` y `/claim-release` montan el wrapper local `jsonBody()`
+para traducir fallos de parseo a JSON 400. GOTCHA: hoy esa defensa modular es
+INERTE en la práctica, porque `server.js` monta antes el
+`express.json({ limit: '256kb' })` global (línea 122), antes de montar `/api`
+(línea 228); ese parser falla primero y, sin error-handler global, Express
+responde HTML. El cierre real sigue PENDIENTE: agregar en `server.js` un
+manejador global de errores que preserve el contrato JSON.
 MENSAJES HUÉRFANOS (`console:BUG-2074`): allMessages() de core/bus.js
 agrega el campo DERIVADO `undeliverable:true` cuando el destino no figura
 en el directorio vivo; NO se persiste. La medición fue 25/36 mensajes para

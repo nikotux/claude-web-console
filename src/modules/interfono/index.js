@@ -72,6 +72,19 @@ function resolveOwnedTarget(arg, directory) {
   return { handle: entry.handle, name: entry.name, entry };
 }
 
+// express.json() falla ANTES del handler cuando el body no parsea y llama a
+// next(err); como el proyecto no tiene middleware de errores global, esa
+// request saldría con el HTML por defecto de Express en vez de JSON y rompería
+// el contrato de la API. Este wrapper captura el error del parser y responde
+// JSON, igual que el resto de las rutas del módulo.
+function jsonBody(options) {
+  const parse = express.json(options);
+  return (req, res, next) => parse(req, res, (err) => {
+    if (!err) return next();
+    return res.status(400).json({ error: 'El cuerpo del pedido no es JSON válido.' });
+  });
+}
+
 export default {
   name: 'interfono',
 
@@ -134,7 +147,7 @@ export default {
     });
 
     // Mensaje manual desde la consola web hacia una sesión (o "all").
-    r.post('/send', express.json(), (req, res) => {
+    r.post('/send', jsonBody(), (req, res) => {
       try {
         const { to, text, packageRef } = req.body || {};
         if (!to || !text || !String(text).trim()) {
@@ -172,15 +185,22 @@ export default {
     // Liberar un claim a mano (red de seguridad humana para zombis). El panel
     // solo muestra esta acción global al admin; el backend también admite que
     // un no-admin libere un claim propio, nunca uno ajeno.
-    r.post('/claim-release', express.json(), (req, res) => {
+    r.post('/claim-release', jsonBody(), (req, res) => {
       try {
         const scope = systemScopeFor(req);
         const privileged = scope.admin || scope.isHost;
+        const CLAIM_404 = 'No hay un claim propio para ese archivo.';
         const { file, handle } = req.body || {};
         const claim = file ? bus.getClaim(file) : null;
-        if (!claim) return res.status(404).json({ error: 'No hay un claim para ese archivo.' });
+        // Invariante 7: un no-admin no puede distinguir "no existe" de
+        // "existe pero es ajeno"; mensajes distintos filtrarían actividad de
+        // sesiones ajenas.
+        if (!claim) {
+          const error = privileged ? 'No hay un claim para ese archivo.' : CLAIM_404;
+          return res.status(404).json({ error });
+        }
         if (!privileged && !ownedHandlesFor(scope).has(claim.handle)) {
-          return res.status(404).json({ error: 'No hay un claim propio para ese archivo.' });
+          return res.status(404).json({ error: CLAIM_404 });
         }
         const target = privileged ? (handle || claim.handle) : claim.handle;
         const ok = bus.releaseFile(claim.file, [target]);

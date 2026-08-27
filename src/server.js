@@ -227,6 +227,25 @@ async function main() {
   const apiRouter = express.Router();
   app.use('/api', apiRouter);
 
+  // Un body que no parsea hace fallar a express.json() ANTES de cualquier
+  // handler, y sin este middleware Express respondería su página de error por
+  // DEFECTO (HTML) — rompiendo el contrato JSON de toda la API. Es el ÚNICO
+  // error-handler global del server: mantenelo mínimo y no le agregues lógica
+  // de negocio. Todo lo que no sea un error de parseo se delega tal cual.
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const isBodyParse = err instanceof SyntaxError
+      && err.status === 400
+      && 'body' in err;
+    if (isBodyParse) {
+      return res.status(400).json({ error: 'El cuerpo del pedido no es JSON válido.' });
+    }
+    if (err?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'El cuerpo del pedido excede el máximo permitido.' });
+    }
+    return next(err);
+  });
+
   // Identidad del principal actual (la app la usa para mostrar/ocultar admin).
   // `lang` (PLAN i18n, 2026-07-19): preferencia personal, solo tiene sentido
   // para type 'user' (tiene registro persistente); el token maestro no tiene
@@ -315,6 +334,12 @@ async function main() {
   app.use('/vendor/addon-fit', express.static(path.join(__dirname, '..', 'node_modules', '@xterm', 'addon-fit')));
   app.use('/vendor/addon-web-links', express.static(path.join(__dirname, '..', 'node_modules', '@xterm', 'addon-web-links')));
   app.use('/vendor/addon-clipboard', express.static(path.join(__dirname, '..', 'node_modules', '@xterm', 'addon-clipboard')));
+  // Se montan desde node_modules para que un `npm install` llegue de verdad al
+  // navegador (BUG-2816), sin copias estáticas que puedan quedar viejas.
+  // highlight.js sigue vendorizado: su paquete npm no publica bundle de navegador.
+  app.use('/vendor/marked', express.static(path.join(__dirname, '..', 'node_modules', 'marked', 'lib')));
+  app.use('/vendor/mermaid', express.static(path.join(__dirname, '..', 'node_modules', 'mermaid', 'dist')));
+  app.use('/vendor/chartjs', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
 
   // WebSocket router con auth en el handshake.
   const { wss, attach } = createWsRouter();

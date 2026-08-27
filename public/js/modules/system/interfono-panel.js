@@ -90,15 +90,25 @@ export function mountInterfonoPanel(el, ctx) {
   const refs = {};
   for (const r of el.querySelectorAll('[data-ref]')) refs[r.dataset.ref] = r;
   let alive = true;
+  let lastToHtml = null;
   const obs = new MutationObserver(() => { if (!el.isConnected) { alive = false; obs.disconnect(); clearInterval(timer); } });
   obs.observe(document.body, { childList: true, subtree: true });
 
   function renderDir(dir) {
     refs['dir-n'].textContent = dir.length ? `(${dir.length})` : '(0)';
-    refs.to.innerHTML = (isAdmin
+    const optsHtml = (isAdmin
       ? `<option value="all">📢 ${t('system.interfono.allBroadcast', 'Todas (broadcast)')}</option>`
       : '') +
       dir.map((e) => `<option value="${esc(e.handle)}">${KIND_ICON[e.kind] || '•'} ${esc(e.name)}${e.packageRef ? ` · ${esc(e.packageRef)}` : ''}${e.world ? ` · ${WORLD_ICON(e.world)}` : ''}${e.archived ? ' · 📦' : ''}</option>`).join('');
+    // El poll de 5s repintaba el <select> entero y lo devolvía al índice 0, pisando
+    // el destinatario elegido mientras el humano escribía. Repintamos solo si la
+    // lista cambió de verdad, y restauramos la selección si sigue existiendo.
+    if (optsHtml !== lastToHtml) {
+      const prev = refs.to.value;
+      refs.to.innerHTML = optsHtml;
+      lastToHtml = optsHtml;
+      if (prev && [...refs.to.options].some((o) => o.value === prev)) refs.to.value = prev;
+    }
     refs.dir.innerHTML = dir.length ? dir.map((e) => `
       <div class="if-item">
         <span class="if-kind">${KIND_ICON[e.kind] || '•'}</span>

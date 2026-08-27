@@ -12,10 +12,11 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { config } from '../src/core/config.js';
 import { settingSourcesFor } from '../src/core/sdk-settings.js';
-import { readContacts, readSelf } from '../src/modules/comms/shared.js';
+import { textOnlyQuery } from '../src/core/text-only-query.js';
+import { readContacts, readSelf, readTeams } from '../src/modules/comms/shared.js';
 import { graphReadAllowed } from '../src/modules/comms/teams-shared.js';
 import {
-  teamsFeedbackPrompt, parseTeamsFeedback,
+  teamsFeedbackPrompt, teamsFeedbackFromMessagesPrompt, parseTeamsFeedback,
   readTeamsFeedbackScan, writeTeamsFeedbackScan,
   writeTeamsFbLock, clearTeamsFbLock, readTeamsFbLock,
   TEAMS_FB_TIMEOUT_MS, TEAMS_FB_HEARTBEAT_MS,
@@ -26,6 +27,9 @@ import { padContextForUser, sharedPadContextForUser } from '../src/core/pad-cont
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[retro-teams]', ...a);
 const FEEDBACK_CONTACT_ID = 'chris';
 const FEEDBACK_DEDUP_LIMIT = 30;
+// Optimización IA 2026-08-27: misma ventana que CHATBOT_FRESH_TEAMS_MS de
+// chatbot-shared.js, precedente del reuso de teams.json sin re-escanear Graph.
+const FRESH_TEAMS_MS = 15 * 60 * 1000;
 
 // Dedup pid-aware (el server ya reservó el lock con MI pid al spawnearme).
 const _resv = readTeamsFbLock();
@@ -54,13 +58,23 @@ async function feedbackForDedup(ctx) {
   }
 }
 
-async function fetchTeams(contact, self, sinceIso, existing = []) {
-  let out = '';
-  const existingBlock = existing.length
+function freshFeedbackThread(contactId, teams, maxAgeMs = FRESH_TEAMS_MS) {
+  if (!contactId || !teams || !teams.scannedAt) return null;
+  if (Date.now() - teams.scannedAt > maxAgeMs) return null;
+  const thread = (teams.threads || []).find((item) => item.contactId === contactId);
+  return (thread && (thread.messages || []).length) ? thread : null;
+}
+
+function existingLessonsBlock(existing) {
+  return existing.length
     ? `\n\nLECCIONES YA REGISTRADAS. Si una lección que ibas a proponer YA figura acá (mismo concepto, aunque vos lo dirías distinto), NO la reformules: devolvela con el MISMO título y la MISMA categoría EXACTOS de esta lista, para que el sistema la reconozca como la misma y cuente su recurrencia en vez de duplicarla:\n${existing.map((l) => `- [${l.category}] ${l.title}`).join('\n')}`
     : '';
+}
+
+async function fetchTeams(contact, self, sinceIso, existing = []) {
+  let out = '';
   const q = query({
-    prompt: teamsFeedbackPrompt(contact, self, sinceIso) + existingBlock,
+    prompt: teamsFeedbackPrompt(contact, self, sinceIso) + existingLessonsBlock(existing),
     options: {
       cwd: config.projectDir,
       model: 'sonnet',
@@ -127,7 +141,36 @@ async function run() {
   const ctx = padContextForUser(null); // corrida bajo botón admin del host ⇒ Pad de 'console'
   const sharedCtx = sharedPadContextForUser(null); // mismo principal host, pero workspace común explícito
   const existing = await feedbackForDedup(ctx);
-  const out = await fetchTeams(contact, self, prev.lastProcessedAt || null, existing);
+  const sinceIso = prev.lastProcessedAt || null;
+  const teams = readTeams();
+  const cached = freshFeedbackThread(FEEDBACK_CONTACT_ID, teams, FRESH_TEAMS_MS);
+  let out;
+  if (cached) {
+    try {
+      log(`reuso teams.json fresco (${cached.messages.length} msg, sin Graph).`);
+      out = await textOnlyQuery(
+        teamsFeedbackFromMessagesPrompt(contact, self, sinceIso, cached.messages) + existingLessonsBlock(existing),
+        {
+          cwd: config.projectDir,
+          model: 'sonnet',
+          maxTurns: 1,
+          timeoutMs: TEAMS_FB_TIMEOUT_MS,
+          denyReason: 'Interpretación de feedback de Teams: cero herramientas.',
+          timeoutMessage: 'timeout',
+        },
+      );
+      const cachedParsed = parseTeamsFeedback(out);
+      if (!cachedParsed || (String(out || '').trim() && cachedParsed.items.length === 0)) {
+        log('el reuso de teams.json no produjo ítems parseables; caigo al escaneo Graph.');
+        out = await fetchTeams(contact, self, sinceIso, existing);
+      }
+    } catch (err) {
+      log('falló la interpretación de teams.json; caigo al escaneo Graph:', err?.message || err);
+      out = await fetchTeams(contact, self, sinceIso, existing);
+    }
+  } else {
+    out = await fetchTeams(contact, self, sinceIso, existing);
+  }
   const parsed = parseTeamsFeedback(out);
   if (!parsed) throw new Error('No se pudo interpretar el escaneo de Teams (respuesta inválida).');
   const summary = await persist(parsed.items, ctx, sharedCtx);

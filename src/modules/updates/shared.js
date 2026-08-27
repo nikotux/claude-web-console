@@ -354,7 +354,16 @@ async function censusModels() {
     const cache = JSON.parse(fs.readFileSync(codexFile, 'utf8'));
     if (!Array.isArray(cache.models)) throw new Error('la clave models no es un array');
     const known = Object.keys(CODEX_MODEL_EFFORTS);
+    // Un modelo `hide` no se puede sumar a la whitelist ni sacar del cache:
+    // reportarlo como `missing` crea un aviso imposible de cerrar (BUG-2817).
+    // Si `visibility` no viene, conservamos la entrada por compatibilidad futura.
     const available = [...new Set(cache.models
+      .filter((model) => (
+        !model
+        || typeof model !== 'object'
+        || model.visibility === undefined
+        || model.visibility === 'list'
+      ))
       .map((model) => {
         if (typeof model === 'string') return model;
         if (!model || typeof model !== 'object') return null;
@@ -362,10 +371,21 @@ async function censusModels() {
       })
       .filter(Boolean)
       .map(String))];
+    const hidden = [...new Set(cache.models
+      .filter((model) => (
+        model
+        && typeof model === 'object'
+        && model.visibility !== undefined
+        && model.visibility !== 'list'
+      ))
+      .map((model) => model.id || model.slug || model.name || null)
+      .filter(Boolean)
+      .map(String))];
     const knownSet = new Set(known);
     codex = {
       known,
       available,
+      hidden,
       missing: available.filter((model) => !knownSet.has(model)),
       fetchedAt: cache.fetched_at || null,
       clientVersion: cache.client_version || null,

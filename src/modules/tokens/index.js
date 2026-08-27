@@ -40,7 +40,11 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { principalOf } from '../../core/auth.js';
-import { getValidClaudeAccessToken, refreshClaudeOauth } from '../../core/claude-oauth.js';
+import {
+  getValidClaudeAccessToken,
+  readClaudeOauthMeta,
+  refreshClaudeOauth,
+} from '../../core/claude-oauth.js';
 import { keyOf } from '../../core/claude-model.js';
 import {
   hostUser,
@@ -703,6 +707,7 @@ async function fetchPlanLimits(owner = hostUser()) {
   // CLI del inquilino no actualizaba este archivo y el medidor real caía a
   // localUsage después de unas 24 horas.
   const valid = await getValidClaudeAccessToken(owner);
+  const oauthMeta = valid ? null : await readClaudeOauthMeta(owner);
   if (valid) {
     oauth = valid.oauth;
     accessToken = valid.token;
@@ -713,6 +718,9 @@ async function fetchPlanLimits(owner = hostUser()) {
     if (accessToken) tokenSource = 'setup-token';
   }
   if (!accessToken) {
+    if (oauthMeta?.hasCreds) {
+      return { unavailable: true, reason: 'credencial-vencida', authExpired: true };
+    }
     return { unavailable: true, reason: 'sin-credencial' };
   }
 
@@ -730,6 +738,9 @@ async function fetchPlanLimits(owner = hostUser()) {
   }
   if (!res.ok) {
     if (tokenSource === 'setup-token') {
+      if (oauthMeta?.hasCreds) {
+        return { unavailable: true, reason: 'setup-token', authExpired: true };
+      }
       return { unavailable: true, reason: 'setup-token' };
     }
     const e = new Error(`Anthropic respondió ${res.status}.`);
@@ -1010,6 +1021,7 @@ const limitsCaches = new Map();
 // consulta seguido (compartido con el propio CLI). Con el poll del pie cada 5 s,
 // esto hace que solo ~1 de cada 24 lecturas golpee de verdad a Anthropic.
 const LIMITS_TTL_MS = 120000;
+const LIMITS_AUTH_EXPIRED_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Promesa compartida por usuario: evita fetchPlanLimits() concurrentes (p.ej. dos
 // requests casi simultáneas que pasan el check de TTL antes de que la
 // primera actualice limitsAt).
@@ -1142,6 +1154,23 @@ export default {
             });
         }
         const result = await withLocalUsage(await slot.promise, owner);
+        if (result?.unavailable && result.authExpired) {
+          const snap = slot.data || await readPersistedLimits(owner);
+          const fresh24h = snap?.updatedAt
+            && Date.now() - new Date(snap.updatedAt).getTime() < LIMITS_AUTH_EXPIRED_SNAPSHOT_MAX_AGE_MS;
+          // La sesión venció: servimos el snapshot reciente marcado stale para
+          // conservar las barras y, a la vez, indicar que hay que reconectar.
+          if (snap && fresh24h) {
+            return res.json({
+              ...snap,
+              stale: true,
+              staleReason: 'auth-expired',
+              authExpired: true,
+              localUsage: result.localUsage || null,
+              codex: await codexP,
+            });
+          }
+        }
         res.json({ ...result, codex: await codexP });
       } catch (err) {
         // FALLBACK: antes un 429/corte de red devolvía el error y el dato

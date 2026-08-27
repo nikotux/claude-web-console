@@ -25,6 +25,15 @@ async function readCreds(owner) {
   }
 }
 
+export async function readClaudeOauthMeta(owner = hostUser()) {
+  const oauth = (await readCreds(owner))?.claudeAiOauth;
+  return {
+    hasCreds: !!oauth?.accessToken,
+    accessExpired: !!oauth?.expiresAt && oauth.expiresAt <= Date.now(),
+    refreshExpired: !!oauth?.refreshTokenExpiresAt && oauth.refreshTokenExpiresAt <= Date.now(),
+  };
+}
+
 function isUsable(oauth) {
   return !!oauth?.accessToken
     && (!oauth.expiresAt || oauth.expiresAt - SKEW_MS > Date.now());

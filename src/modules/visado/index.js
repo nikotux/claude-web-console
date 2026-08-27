@@ -13,7 +13,8 @@ import {
   CATALOG_CONTRACT_VERSION, getOp, listOpIds, resolveOptions, validateParams,
 } from './catalog.js';
 import {
-  ESTADOS, crearPeticion, leerPeticion, listarPeticiones, transicionar, caducarVencidas,
+  ESTADOS, crearPeticion, leerPeticion, listarPeticiones, transicionar,
+  caducarVencidas, caducarEjecutandoVencidas,
 } from './store.js';
 
 // Enriquece un expediente con lo que la UI necesita para MOSTRAR la operación
@@ -321,6 +322,7 @@ export default {
         }
         const dataDir = dataDirDeLaSala(chat);
         caducarVencidas(dataDir);
+        caducarEjecutandoVencidas(dataDir);
         return res.json(listarPeticiones(dataDir, { salaId }).map(conRender));
       }
 
@@ -337,6 +339,7 @@ export default {
       const peticiones = [];
       for (const [dataDir, salas] of salasPorDataDir) {
         caducarVencidas(dataDir);
+        caducarEjecutandoVencidas(dataDir);
         peticiones.push(...listarPeticiones(dataDir).filter((peticion) => salas.has(peticion.salaId)));
       }
       peticiones.sort((a, b) => (Number(b.creadoAt) || 0) - (Number(a.creadoAt) || 0));

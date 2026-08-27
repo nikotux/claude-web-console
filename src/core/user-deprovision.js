@@ -56,8 +56,8 @@ export async function deprovisionUser(username) {
     // movería su casa entera a la papelera. Nunca, por ningún camino.
     throw badRequest('No se puede dar de baja al usuario host.');
   }
-  const root = userSpace(id);
-  const rel = path.relative(USERS_ROOT, root); // G3: contención REAL.
+  const userRoot = userSpace(id);
+  const rel = path.relative(USERS_ROOT, userRoot); // G3: contención REAL.
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
     // `rel` vacío = el root ES ~/.cwc-users (la carpeta madre de TODOS).
     // Se compara con path.relative y no con startsWith de strings: un
@@ -207,7 +207,7 @@ export async function deprovisionUser(username) {
   // plazo las credenciales siguen legibles y el token Pad sigue vivo; el
   // workspace Pad del usuario, en cambio, ya desapareció en el paso 1.
   try {
-    const trashId = moveToTrash(root, path.join('.cwc-users', id));
+    const trashId = moveToTrash(config.home, userRoot, path.join('.cwc-users', id), hostUser());
     trash = { status: 'moved', id: trashId };
   } catch (error) {
     if (error?.code === 'ENOENT') {

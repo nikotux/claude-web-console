@@ -24,6 +24,11 @@ RestartSec=5
 KillMode=process
 TimeoutStopSec=10
 
+# ~/.npm-global/bin va PRIMERO: @openai/codex también está instalado por root en
+# /usr/lib, pero no se puede actualizar sin sudo (esta cuenta no está en sudoers);
+# así la consola y el Modo Tándem usan la versión del usuario, no la vieja de root.
+Environment=PATH=%h/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+
 # --- SSH para el módulo Tolkien (git pull por SSH) ---
 # systemd --user NO hereda tu SSH_AUTH_SOCK por defecto. Si querés que el botón
 # "Actualizar" de Tolkien funcione, exponé el agente. Opción simple (con la

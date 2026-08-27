@@ -9,7 +9,18 @@ autogenerado; caché POR ARCHIVO para no cruzar principales; DEFAULTS genéricos
 vacíos (los valores reales viven en instance.json), deepMerge por union de
 claves — ver módulo env-vars) ·
 auth · users · wss · registry · tls ·
-zerotier · tmux(validación) · trash · recents ·
+zerotier · tmux(validación) ·
+trash(papelera POR ROOT/DUEÑO, sin `config`: `moveToTrash(root, absPath,
+originalRel, owner)` · `listTrash(root, {owner, all})` ·
+`restoreFromTrash(root, id, assertContainerSafe, {owner, all})` ·
+`purgeTrash(root, id, {owner, all})` · `autoPurge(root)`. Cada entrada guarda
+`owner`; `entryOwner()` atribuye las legacy sin owner al `hostUser()` como
+migración implícita, sin mover nada en disco. `restoreFromTrash` devuelve
+`null` tanto si el id no existe como si pertenece a otro owner — invariante 7.
+El root del host sigue siendo `config.home`, por lo que su papelera permanece
+en `~/.cwc-trash` con retrocompat total. El cambio cierra un hallazgo CRÍTICO:
+el índice global anterior filtraba nombres/rutas borrados entre usuarios y un
+purge sin id vaciaba la papelera de todos) · recents ·
 pool(runAdaptivePool — pool de concurrencia ADAPTATIVA transversal;
 MOVIDO acá desde health/pool.js en la coherencia 2026-07-12 porque lo
 consumen salud/tokens/comms/tickets; health/pool.js queda re-exportando
@@ -241,7 +252,15 @@ VALID_MODELS, PERMISSION_MODES) + un FINGERPRINT de contenido por
 unidad. Salida: ~/.cwc-data/inventory.json + inventory.md.
 generateInventory({force}) es ON-DEMAND: solo re-parsea si cambió
 algún mtime/fingerprint. Lo dispara `bin/cwc-inventory.js`. Las
-fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
+referencias por basename incluyen una lectura única de las unidades
+`.service`/`.timer` versionadas bajo `systemd/`. Además,
+`KNOWN_EXTERNAL_TRIGGERS` reconoce `bin/cwc-mirror-runner.js` y
+`bin/cwc-pageout-runner.js`, disparados por systemd fuera del grafo JS, para que
+no aparezcan como huérfanos. En el patrón `parallel-pool` quedan excluidos
+`bin/cwc-pad-orphan-sweep.js` (DELETE serial por workspace: escritura) y
+`bin/cwc-tolkien.js` (ya paraleliza con hijos `cwc-tolkien-worker.js`
+coordinados por cola SQLite).
+Las fases siguientes lo CONSUMEN: F2 salud incremental (audita solo
 unidades cuyo fingerprint cambió), F3 contexto de chats nuevos,
 F4 invariantes, F5 loop que aprende. Para Coherencia, `CANON_SERVICES`
 incorpora los CUATRO transversales del aislamiento multi-tenant:

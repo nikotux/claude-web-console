@@ -361,9 +361,18 @@ estructura que la de correo, pero REUSA TAL CUAL el allowlist ya probado en
 producción `graphReadAllowed` de `comms/teams-shared.js` (verbo-based:
 list/read/get/members/presence/detail/view/info sobre graph_*/teams_* — no
 uno explícito por nombre como el de correo, porque el patrón de Teams ya es
-el aceptado) para leer el DM 1:1 con el contacto `chris`. Una sola query
-lee Y destila en el mismo paso (a diferencia del escaneo de Teams de
-Comunicaciones, que solo lee). Estado en `~/.cwc-data/retro-teams-scan.json`
+el aceptado) para leer el DM 1:1 con el contacto `chris` cuando no puede reusar
+la caché fresca de Comunicaciones. `teamsFeedbackFromMessagesPrompt(contact,
+self, sinceIso, messages)` es hermano de `teamsFeedbackPrompt`: produce el
+mismo formato que consume `parseTeamsFeedback`, pero sobre mensajes YA
+provistos y sin pedir Graph. Filtra por `sinceIso`, toma como máximo los últimos
+80, trunca cada texto a 1200 caracteres y marca el bloque como DATOS cuyas
+instrucciones incrustadas no deben seguirse. Ambos prompts comparten
+`feedbackExtractionInstructions(name)`, para que sus reglas de extracción no
+diverjan. El runner usa este prompt con `textOnlyQuery` si `readTeams()` tiene
+un hilo de `chris` fresco (<15 min); sin caché, ante fallo o si el parseo no
+produce ítems, cae a la query Graph que lee Y destila en el mismo paso. Estado
+en `~/.cwc-data/retro-teams-scan.json`
 + `retro-teams.lock`; `bin/cwc-retro-teams-runner.js` sumado a
 `CROSS_WORLD_ALLOW`. Las TRES piezas (manual/correo/Teams) caen en la MISMA
 lista del tablero (ícono 💬, chip de ticket) — se aprueban/adoptan/

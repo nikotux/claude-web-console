@@ -348,6 +348,15 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   `--cwc-white`; las categorías del Explorador son `--cwc-cat-*`/`--cwc-folder*`.
   En JS (p.ej. el theme de xterm) los tokens se leen con `getComputedStyle`,
   no se duplican los hex.
+- **Vendors frontend siempre desde `node_modules`:** las librerías de terceros
+  se sirven con `express.static` (patrón vivo: xterm, marked, mermaid y chartjs
+  en `src/server.js`), NUNCA copiándolas a `public/vendor/`. Una copia estática
+  convierte cada `npm install` en un no-op silencioso para el usuario y el censo
+  de Actualizaciones responde "0 pendientes" ocultándolo: en BUG-2816 cuatro
+  librerías quedaron drifteadas durante un mes y medio. La única excepción
+  admitida es que el paquete npm no publique un bundle de navegador —hoy solo
+  `highlight.js`—; debe explicarse en un `README.md` dentro de su carpeta de
+  `public/vendor/` y quedar vigilada por el check `vendor-drift` de Salud.
 - **Botones/diálogos/popups:** `.btn`/`.btn-ghost` + modificadores; modales con
   `ui/dialog.js` (`openModal/confirmDialog/promptDialog/alertDialog/`
   `textEditorDialog`); menús flotantes con `ui/popup.js`. Nunca
@@ -491,6 +500,11 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 4. Verificar en caliente: la API con `curl -sk -H "x-cwc-token: $(grep '^CWC_TOKEN=' .env | cut -d= -f2)" https://<ip-zt>:8092/api/...`;
    la UI con Chromium headless de Playwright (`~/.cache/ms-playwright`,
    `playwright-core` — login por fetch /login con token, ignoreHTTPSErrors).
+   `chromium.launch()` a secas puede fallar si el build pedido por
+   `playwright-core` no coincide con el descargado en el cache; en ese caso no
+   saltear la verificación: pasar `executablePath` apuntando al disponible (a
+   2026-08-27, `~/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`).
+   Ver `console:BUG-2818`.
    La IP ZeroTier sale de `journalctl` o `ip -o addr show | grep zt`.
 5. Chequear la salud: `GET /api/health/checks` debe quedar todo `ok` (la
    pestaña Salud del menú ⚙ Sistema muestra lo mismo).

@@ -1,62 +1,78 @@
 // core/trash.js — papelera con purga automática (red de seguridad al eliminar).
 //
-// Eliminar NO borra: mueve el ítem a ~/.cwc-trash/ y registra su origen y la
-// fecha. Se puede restaurar. Lo que lleve más de TTL_DAYS días se purga solo.
+// Eliminar NO borra: mueve el ítem a .cwc-trash/ dentro del root de archivos
+// de su dueño y registra su origen y fecha. Se puede restaurar. Lo que lleve
+// más de TTL_DAYS días se purga solo.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
-import { resolveWithinHome } from './paths.js';
+import { resolveWithinRoot } from './paths.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { hostUser } from './user-space.js';
 
 export const TRASH_DIRNAME = '.cwc-trash';
-const TRASH_DIR = path.join(config.home, TRASH_DIRNAME);
-const INDEX = path.join(TRASH_DIR, 'index.json');
 const TTL_DAYS = 30;
 const TTL_MS = TTL_DAYS * 86400000;
 
-function ensureDir() {
-  fs.mkdirSync(TRASH_DIR, { recursive: true });
+function trashDir(root) {
+  return path.join(root, TRASH_DIRNAME);
 }
 
-function loadIndex() {
-  try { return JSON.parse(fs.readFileSync(INDEX, 'utf8')).items || []; }
+function indexFile(root) {
+  return path.join(trashDir(root), 'index.json');
+}
+
+function ensureDir(root) {
+  fs.mkdirSync(trashDir(root), { recursive: true });
+}
+
+function loadIndex(root) {
+  try { return JSON.parse(fs.readFileSync(indexFile(root), 'utf8')).items || []; }
   catch { return []; }
 }
-function saveIndex(items) {
-  ensureDir();
-  writeJsonAtomic(INDEX, { items }, { space: 2 }); // atómico (fix B5): índice de papelera durable
+
+function saveIndex(root, items) {
+  ensureDir(root);
+  writeJsonAtomic(indexFile(root), { items }, { space: 2 }); // atómico (fix B5): índice de papelera durable
 }
 
-// Mueve un absoluto (ya validado dentro del home) a la papelera.
-export function moveToTrash(absPath, originalRel) {
+function entryOwner(it) {
+  // Migración implícita: las entradas anteriores, sin owner, pertenecen al host.
+  return it.owner || hostUser();
+}
+
+// Mueve un absoluto (ya validado dentro del root) a la papelera de ese root.
+export function moveToTrash(root, absPath, originalRel, owner) {
   // Defensa en profundidad: aunque restoreFromTrash revalida al restaurar,
-  // no persistimos una originalRel que escape del home (ej. '../../etc/passwd').
-  if (resolveWithinHome(originalRel) === null) {
-    throw new Error(`moveToTrash: originalRel fuera del home permitido: ${originalRel}`);
+  // no persistimos una originalRel que escape del root (ej. '../../etc/passwd').
+  if (resolveWithinRoot(root, originalRel) === null) {
+    throw new Error(`moveToTrash: originalRel fuera del root permitido: ${originalRel}`);
   }
-  ensureDir();
+  ensureDir(root);
   const st = fs.lstatSync(absPath);
   const id = crypto.randomBytes(8).toString('hex');
-  const dest = path.join(TRASH_DIR, id);
+  const dest = path.join(trashDir(root), id);
   fs.renameSync(absPath, dest); // mismo filesystem => instantáneo
-  const items = loadIndex();
+  const items = loadIndex(root);
   items.push({
     id,
     name: path.basename(absPath),
     originalRel,
+    owner,
     isDir: st.isDirectory(),
     deletedAt: Date.now(),
   });
-  saveIndex(items);
+  saveIndex(root, items);
   return id;
 }
 
-export function listTrash() {
-  autoPurge();
-  return loadIndex()
+export function listTrash(root, { owner, all = false }) {
+  autoPurge(root);
+  return loadIndex(root)
+    .filter((it) => all || entryOwner(it) === owner)
     .map((it) => ({
       ...it,
+      owner: entryOwner(it),
       expiresAt: it.deletedAt + TTL_MS,
       daysLeft: Math.max(0, Math.ceil((it.deletedAt + TTL_MS - Date.now()) / 86400000)),
     }))
@@ -68,62 +84,67 @@ export function listTrash() {
 //
 // `assertContainerSafe(containerDir)`, si se pasa, se invoca con la carpeta
 // contenedora final ANTES de crear/mover nada; debe tirar si esa carpeta (una
-// vez resueltos symlinks) escapa del home real. resolveWithinHome() de arriba
+// vez resueltos symlinks) escapa del root real. resolveWithinRoot() de arriba
 // solo valida el string (ver core/paths.js), así que sin este chequeo un
 // symlink que reemplazó a `originalRel` entre el trash y el restore movería
-// el contenido de la papelera fuera del home sin que nada lo detecte —
+// el contenido de la papelera fuera del root sin que nada lo detecte —
 // a diferencia de mkdir/rename/trash, que sí validan la carpeta contenedora
 // REAL antes de mutar (ver statSafeSync en modules/files/index.js).
-export function restoreFromTrash(id, assertContainerSafe) {
-  const items = loadIndex();
+export function restoreFromTrash(root, id, assertContainerSafe, { owner, all = false }) {
+  const items = loadIndex(root);
   const idx = items.findIndex((i) => i.id === id);
   if (idx < 0) return null;
   const it = items[idx];
-  const src = path.join(TRASH_DIR, id);
+  if (!all && entryOwner(it) !== owner) return null;
+  const src = path.join(trashDir(root), id);
   let targetRel = it.originalRel;
-  let target = resolveWithinHome(targetRel);
-  if (!target) target = path.join(config.home, it.name);
+  let target = resolveWithinRoot(root, targetRel);
+  if (!target) target = path.join(root, it.name);
   // Evita pisar: si existe, agrega " (restaurado)".
   if (fs.existsSync(target)) {
     const ext = it.isDir ? '' : path.extname(it.name);
     const base = it.isDir ? it.name : path.basename(it.name, ext);
     target = path.join(path.dirname(target), `${base} (restaurado)${ext}`);
-    targetRel = path.relative(config.home, target);
+    targetRel = path.relative(root, target);
   }
   if (typeof assertContainerSafe === 'function') assertContainerSafe(path.dirname(target));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.renameSync(src, target);
   items.splice(idx, 1);
-  saveIndex(items);
+  saveIndex(root, items);
   return targetRel;
 }
 
-// Purga definitiva de un id (o de todos los vencidos si id es null).
-export function purgeTrash(id = null) {
-  let items = loadIndex();
+// Purga definitiva de un id o de todos los ítems autorizados si id es null.
+export function purgeTrash(root, id = null, { owner, all = false }) {
+  let items = loadIndex(root);
   const kill = (entry) => {
-    try { fs.rmSync(path.join(TRASH_DIR, entry.id), { recursive: true, force: true }); } catch { /* noop */ }
+    try { fs.rmSync(path.join(trashDir(root), entry.id), { recursive: true, force: true }); } catch { /* noop */ }
   };
-  if (id) {
+  if (id !== null) {
     const entry = items.find((i) => i.id === id);
-    if (entry) { kill(entry); items = items.filter((i) => i.id !== id); }
+    if (entry && (all || entryOwner(entry) === owner)) {
+      kill(entry);
+      items = items.filter((i) => i.id !== id);
+    }
   } else {
-    for (const e of items) kill(e);
-    items = [];
+    const authorized = (entry) => all || entryOwner(entry) === owner;
+    for (const e of items.filter(authorized)) kill(e);
+    items = items.filter((e) => !authorized(e));
   }
-  saveIndex(items);
+  saveIndex(root, items);
 }
 
 // Elimina los ítems vencidos (> TTL_DAYS). Se llama al listar y al iniciar.
-export function autoPurge() {
+export function autoPurge(root) {
   const now = Date.now();
-  const items = loadIndex();
+  const items = loadIndex(root);
   const expired = items.filter((i) => now - i.deletedAt > TTL_MS);
   if (!expired.length) return 0;
   for (const e of expired) {
-    try { fs.rmSync(path.join(TRASH_DIR, e.id), { recursive: true, force: true }); } catch { /* noop */ }
+    try { fs.rmSync(path.join(trashDir(root), e.id), { recursive: true, force: true }); } catch { /* noop */ }
   }
-  saveIndex(items.filter((i) => now - i.deletedAt <= TTL_MS));
+  saveIndex(root, items.filter((i) => now - i.deletedAt <= TTL_MS));
   return expired.length;
 }
 

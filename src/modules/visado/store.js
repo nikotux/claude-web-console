@@ -180,3 +180,39 @@ export function caducarVencidas(dataDir, {
   }
   return caducadas;
 }
+
+// Gemela de caducarVencidas para el OTRO lado del ciclo: una petición que entró
+// en EJECUTANDO y nunca reportó fin. El candado de estado aprobada→ejecutando
+// funciona como lock, pero sin heartbeat ni PID persistido nada detecta que el
+// runner murió a mitad de op.run() (kill -9, restart del servicio, reboot). La
+// regla dura 2 exige que todo lo que corre en el tiempo sea recuperable: este es
+// el equivalente al lockIsStale de los runners con heartbeat.
+export function caducarEjecutandoVencidas(dataDir, {
+  maxMs = 20 * 60 * 1000,
+  now = Date.now(),
+} = {}) {
+  const fallidas = [];
+  const ejecutando = listarPeticiones(dataDir, { estado: ESTADOS.EJECUTANDO });
+  for (const peticion of ejecutando) {
+    // Los expedientes anteriores pueden no tener iniciadoAt: decididoAt y
+    // creadoAt permiten recuperarlos sin interpretar un timestamp inválido.
+    const inicio = [peticion.iniciadoAt, peticion.decididoAt, peticion.creadoAt]
+      .map(Number)
+      .find((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+    // Es preferible dejarla ejecutando antes que cerrar una operación vigente
+    // cuando el momento de inicio no se puede determinar con seguridad.
+    if (inicio === undefined || inicio + maxMs >= now) continue;
+    const resultado = transicionar(
+      dataDir,
+      peticion.id,
+      [ESTADOS.EJECUTANDO],
+      ESTADOS.FALLIDA,
+      {
+        error: 'El runner no reportó fin a tiempo (posible caída a mitad de la operación).',
+        decididoAt: now,
+      },
+    );
+    if (resultado.ok) fallidas.push(peticion.id);
+  }
+  return fallidas;
+}

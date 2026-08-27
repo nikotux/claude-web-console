@@ -71,6 +71,13 @@ verbo, argumento u orden ejecutable por fuera de ellos.
 - `transicionar(...)` hacia `aprobada` exige `aprobador.userId` Y
   `aprobador.nombre`, ambos strings no vacíos. El código
   `aprobador_requerido` no distingue cuál de los dos falta.
+- `caducarEjecutandoVencidas(dataDir, { maxMs = 20*60*1000, now })` recupera
+  runners muertos a mitad de `op.run()`: pasa `ejecutando` → `fallida` porque
+  no hay heartbeat ni PID persistido y el estado usado como lock no detectaba
+  abandono. Toma `iniciadoAt`, con fallback conservador a `decididoAt` y luego
+  `creadoAt`; sin timestamp usable NO caduca para no matar una operación viva.
+  La transición ya existía en `TRANSICIONES`. `GET /peticiones` la invoca junto
+  a `caducarVencidas()` tanto para una sala como para el listado agregado.
 - La IA de la sala NO tiene tool para emitir peticiones: las emite una persona
   desde el formulario. Darle esa tool permitiría que un aporte con instrucciones
   incrustadas generara peticiones pre-armadas.

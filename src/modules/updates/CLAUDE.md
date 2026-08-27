@@ -273,8 +273,11 @@ primero un revert QUIRÚRGICO, preferir ARREGLAR antes que revertir y borrar
 CENSO AMPLIADO en `shared.js`: `censusCodexCli()` compara la versión contra
 `npm view @openai/codex version`, resuelve el symlink y, si cae dentro de
 `$HOME`, devuelve `manageable:true` más `updateCmd`; `censusModels()` compara
-Codex desde `models_cache.json` contra `CODEX_MODEL_EFFORTS` y Claude contra
-`VALID_MODELS`. El CLI de Claude NO expone un catálogo en disco, por lo que
+Codex desde `models_cache.json` contra `CODEX_MODEL_EFFORTS`, pero solo toma
+como disponibles las entradas `visibility:'list'` (o sin ese campo, fail-open):
+las demás se informan aparte en `hidden` y no generan un `missing` imposible
+de cerrar (BUG-2817). Claude se compara contra `VALID_MODELS`. El CLI de Claude
+NO expone un catálogo en disco, por lo que
 devuelve honestamente `source:'hardcoded'` más una nota en vez de fabricar una
 detección falsa. `censusMcps()` reutiliza `runMcpList`/`parseList` de
 `mcps/login-shared.js` y es informativo. Los modelos faltantes NO se arreglan

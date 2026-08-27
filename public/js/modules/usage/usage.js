@@ -346,7 +346,10 @@ export function renderLimits(el, data, opts = {}) {
   const creditsHtml = !claudeAvailable || opts.credits === false ? '' : claudeCreditsHtml(data.credits);
 
   const staleHtml = claudeAvailable && data.stale
-    ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}</div>`
+    ? `<div class="lim-stale">${t('usage.stale', '⚠ datos guardados')}${data.updatedAt ? ` · ${fmtAgo(data.updatedAt)}` : ''}${data.authExpired ? ` · <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.reconnectShort', 'Reconectar')}</a>` : ''}</div>`
+    : '';
+  const expiredHtml = claudeAvailable && data.authExpired && !data.stale
+    ? `<div class="lim-stale">⚠ ${t('usage.expiredNotice', 'sesión vencida')} · <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.reconnectShort', 'Reconectar')}</a></div>`
     : '';
 
   // Codex: sus labels van DESPUÉS de los de Claude en el DOM.
@@ -356,18 +359,23 @@ export function renderLimits(el, data, opts = {}) {
   }
 
   const localNoteHtml = compact
-    ? `${t('usage.local.noteShort', 'Sin % del plan para esta cuenta.')} <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.connectShort', 'Conectar cuenta')}</a>`
-    : t('usage.local.note', 'Consumo medido localmente; el % del plan no está disponible para esta cuenta.');
+    ? data.authExpired
+      ? `${t('usage.local.expiredShort', 'Tu sesión de Claude venció.')} <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.reconnectShort', 'Reconectar')}</a>`
+      : `${t('usage.local.noteShort', 'Sin % del plan para esta cuenta.')} <a href="#" class="mcp-oauth-link" data-usage-connect>${t('usage.local.connectShort', 'Conectar cuenta')}</a>`
+    : data.authExpired
+      ? t('usage.local.expired', 'Tu sesión de Claude venció; reconectá la cuenta para volver a ver los porcentajes del plan.')
+      : t('usage.local.note', 'Consumo medido localmente; el % del plan no está disponible para esta cuenta.');
 
   const claudeHtml = claudeAvailable ? `
     <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.claude.head', 'Claude')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${staleHtml}
+    ${expiredHtml}
     ${rows || `<div class="lim-err">${t('usage.claude.noWindows', 'Anthropic no reportó ventanas de límite.')}</div>`}
     ${creditsHtml}` : localUsage ? `
     <div class="lim-head lim-head--claude"><span class="lim-head-t">${t('usage.local.head', 'Claude · tu consumo')}</span>${flowBarHtml({ engine: 'claude', compact: true, dot: false })}</div>
     ${localRows}
     <div class="lim-sub">${localNoteHtml}</div>
-    ${compact ? '' : `<div class="mcp-acts"><button type="button" class="btn-ghost btn--sm" data-usage-connect>${t('usage.local.connect', 'Conectar mi cuenta de Claude')}</button></div>`}` : '';
+    ${compact ? '' : `<div class="mcp-acts"><button type="button" class="btn-ghost btn--sm" data-usage-connect>${data.authExpired ? t('usage.local.reconnect', 'Reconectar mi cuenta de Claude') : t('usage.local.connect', 'Conectar mi cuenta de Claude')}</button></div>`}` : '';
 
   el.innerHTML = `
     ${claudeHtml}
@@ -375,10 +383,10 @@ export function renderLimits(el, data, opts = {}) {
   // Etiquetas (Claude + Codex) por textContent, en el mismo orden de render.
   const labels = el.querySelectorAll('.lim-row .lim-label');
   labelTexts.forEach((txt, i) => { if (labels[i]) labels[i].textContent = txt; });
-  el.querySelector('[data-usage-connect]')?.addEventListener('click', (event) => {
+  el.querySelectorAll('[data-usage-connect]').forEach((connectEl) => connectEl.addEventListener('click', (event) => {
     event.preventDefault();
     opts.onConnect?.();
-  });
+  }));
   ensureFlowDirector();
 }
 
@@ -614,7 +622,12 @@ export function openClaudeConnectModal(dialog, onConnected) {
     const refreshEl = m.body.querySelector('[data-ref="refresh"]');
     m.body.querySelector('[data-ref="close"]').addEventListener('click', m.close);
     try {
-      await onConnected();
+      const data = await onConnected();
+      if (data?.unavailable || data?.authExpired) {
+        connectedHandled = false;
+        renderError(t('usage.connect.stillUnavailable', 'La cuenta se conectó pero Uso sigue sin recibir los porcentajes del plan. Probá reconectar.'));
+        return;
+      }
       if (!closed) refreshEl.textContent = t('usage.connect.refreshed', 'Los datos de Uso se actualizaron.');
     } catch (err) {
       if (!closed) refreshEl.textContent = err.message || t('usage.connect.refreshError', 'La cuenta se conectó, pero no se pudieron actualizar los datos de Uso.');
@@ -993,8 +1006,10 @@ export default {
           renderLimits(limsEl, cache.limits, {
             windows: cache.summary?.windows,
             onConnect: () => openClaudeConnectModal(dialog, async () => {
-              cache.limits = await fetchLimits(true);
+              const data = await fetchLimits(true);
+              cache.limits = data;
               paint('update');
+              return data;
             }),
           });
         }

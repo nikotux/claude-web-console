@@ -48,22 +48,36 @@ function configMtime(configPath) {
 }
 
 export function loadThresholds() {
-  const thresholds = copyDefaults();
   const configPath = path.join(resolveDataDir(), 'mikrotik', 'thresholds.json');
+  let thresholds = copyDefaults();
+  let mtimeMs = null;
 
   if (fs.existsSync(configPath)) {
-    const overrides = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    for (const state of ['optimo', 'atencion', 'degradado']) {
-      if (overrides[state] && typeof overrides[state] === 'object') {
-        Object.assign(thresholds[state], overrides[state]);
+    // Evita la ventana TOCTOU: el mtime previo identifica el contenido leído;
+    // si cambia después, el cache queda deliberadamente viejo y fuerza otra lectura.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const mtimeBefore = configMtime(configPath);
+      const overrides = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const candidate = copyDefaults();
+      for (const state of ['optimo', 'atencion', 'degradado']) {
+        if (overrides[state] && typeof overrides[state] === 'object') {
+          Object.assign(candidate[state], overrides[state]);
+        }
       }
+      validateThresholds(candidate);
+
+      const mtimeAfter = configMtime(configPath);
+      thresholds = candidate;
+      mtimeMs = mtimeBefore;
+      if (mtimeAfter === mtimeBefore) break;
     }
+  } else {
+    validateThresholds(thresholds);
   }
 
-  validateThresholds(thresholds);
   thresholdsCache = {
     file: configPath,
-    mtimeMs: configMtime(configPath),
+    mtimeMs,
     thresholds,
   };
   return thresholds;

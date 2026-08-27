@@ -71,6 +71,13 @@ const DOCKER_HYGIENE_REPORT = path.join(DATA_DIR, 'docker-hygiene', 'report.json
 const DOCKER_HYGIENE_FRESH_MS = 24 * 60 * 60 * 1000;
 const DOCKER_HYGIENE_VOLUME_WARN = 20;
 const DOCKER_HYGIENE_BYTES_WARN = 5 * 1000 ** 3;
+const VENDOR_PACKAGE_BY_DIR = new Map([
+  ['marked', 'marked'],
+  ['mermaid', 'mermaid'],
+  ['chartjs', 'chart.js'],
+  ['hljs', 'highlight.js'],
+  ['xterm', '@xterm/xterm'],
+]);
 
 // collectActiveRunners() conserva la forma pública histórica y no expone el
 // owner ni el archivo que respalda cada fila. Para scopear sin tocar esa
@@ -420,6 +427,84 @@ function checkDeps() {
   } catch {
     return { id: 'deps', label: 'Dependencias', status: 'fail', detail: 'falta el Agent SDK — correr npm install' };
   }
+}
+
+function vendorPackageForDir(dirname) {
+  return VENDOR_PACKAGE_BY_DIR.get(dirname)
+    || (dirname.startsWith('addon-') ? `@xterm/${dirname}` : null);
+}
+
+function vendoredHljsVersion(source) {
+  const patterns = [
+    /highlight(?:\.js)?(?:\s+version)?\s+v?(\d+\.\d+\.\d+)/i,
+    /\bversionString\s*[:=]\s*["'](\d+\.\d+\.\d+)["']/,
+    /\b(?:var|let|const)\s+[$\w]+\s*=\s*["'](\d+\.\d+\.\d+)["'](?=\s*,\s*[$\w]+\s*=\s*class\s+extends\s+Error)/,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// highlight.js es la única excepción aceptada: npm no publica un bundle de
+// navegador. Las demás librerías declaradas deben montarse desde node_modules
+// para que una actualización por npm llegue al frontend y no genere drift.
+export function checkVendorDrift() {
+  const id = 'vendor-drift';
+  const label = 'Deriva de librerías frontend';
+  let manifest;
+  let vendorDirs;
+  try {
+    manifest = JSON.parse(fss.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    vendorDirs = fss.readdirSync(path.join(ROOT, 'public', 'vendor'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch (err) {
+    return { id, label, status: 'warn', detail: `no pude leer package.json o public/vendor (${String(err?.message || err).slice(0, 160)}) — verificá el árbol y montá las librerías migrables desde node_modules` };
+  }
+
+  const declared = {
+    ...(manifest.dependencies || {}),
+    ...(manifest.devDependencies || {}),
+    ...(manifest.optionalDependencies || {}),
+    ...(manifest.peerDependencies || {}),
+  };
+  const migratable = vendorDirs.filter((dirname) => {
+    const packageName = vendorPackageForDir(dirname);
+    return dirname !== 'hljs' && packageName && Object.hasOwn(declared, packageName);
+  });
+  const warnings = [];
+
+  if (migratable.length) {
+    warnings.push(`copias estáticas migrables: ${migratable.join(', ')} — borralas y montalas desde node_modules como marked/mermaid/chartjs/xterm`);
+  }
+
+  if (!vendorDirs.includes('hljs')) {
+    warnings.push('falta public/vendor/hljs — restaurá el bundle vendorizado; highlight.js no publica uno de navegador en npm');
+  } else if (!Object.hasOwn(declared, 'highlight.js')) {
+    warnings.push('highlight.js no está declarado en package.json — declaralo para poder controlar la versión del bundle vendorizado');
+  } else {
+    try {
+      const installed = JSON.parse(fss.readFileSync(path.join(ROOT, 'node_modules', 'highlight.js', 'package.json'), 'utf8')).version;
+      const source = fss.readFileSync(path.join(ROOT, 'public', 'vendor', 'hljs', 'hljs.min.js'), 'utf8');
+      const vendored = vendoredHljsVersion(source);
+      if (!vendored) {
+        warnings.push('no pude determinar la versión de public/vendor/hljs/hljs.min.js — regenerá el bundle dejando su versión declarada');
+      } else if (!installed) {
+        warnings.push('node_modules/highlight.js no declara versión — corregí la instalación y volvé a comparar el bundle vendorizado');
+      } else if (vendored !== installed) {
+        warnings.push(`hljs vendorizado ${vendored} != highlight.js instalado ${installed} — actualizá manualmente public/vendor/hljs (no se puede montar desde npm)`);
+      }
+    } catch (err) {
+      warnings.push(`no pude comparar la versión de hljs (${String(err?.message || err).slice(0, 160)}) — revisá node_modules y el bundle vendorizado`);
+    }
+  }
+
+  if (warnings.length) return { id, label, status: 'warn', detail: warnings.join(' · ') };
+  const installed = JSON.parse(fss.readFileSync(path.join(ROOT, 'node_modules', 'highlight.js', 'package.json'), 'utf8')).version;
+  return { id, label, status: 'ok', detail: `sin copias estáticas migrables · hljs ${installed} coincide con node_modules` };
 }
 
 function checkServer() {
@@ -1191,6 +1276,7 @@ async function runChecks() {
     checkDisk(),
     Promise.resolve(checkData()),
     Promise.resolve(checkDeps()),
+    Promise.resolve(checkVendorDrift()),
     checkUnifiBridge(),
     Promise.resolve(checkTolkienContextSync()),
     Promise.resolve(checkFichasModulo()),

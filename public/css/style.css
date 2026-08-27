@@ -1729,6 +1729,9 @@ html, body {
   background: var(--cwc-bg-panel);
 }
 .chat-title { flex: 0 1 auto; min-width: 0; font-size: var(--cwc-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Salto de línea flex del header (ver el bloque de móvil): en escritorio no
+   existe, así que el header sigue siendo UNA sola fila como siempre. */
+.chat-head-break { display: none; }
 /* Insignia de MUNDO del header (anti-confusión, PLAN-373): SIEMPRE visible en qué
    mundo está la conversación, con color de identidad. 🏠 Mi Consola = acento
    terracota · 🌳 Tolkien = verde · otro = neutro. */
@@ -3300,6 +3303,26 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   .mobile-menu-btn { display: inline-flex; }
   .chat-alive { display: inline-flex; }
   .chat-flow { display: none; }
+  /* Header del chat en DOS FILAS (bug reportado 2026-08-14 por Niko, Julián
+     y Richi). Todos los hermanos del título llevan flex:none, así que
+     .chat-title —el único encogible— colapsaba a 0px en un viewport de 390px
+     y era imposible saber en qué conversación estabas. El salto de línea flex
+     (.chat-head-break, basis 100%) empuja TODO lo que va después del título a
+     una segunda fila y le deja la primera entera. */
+  .chat-head { flex-wrap: wrap; gap: .3rem; padding: .4rem .6rem; }
+  .chat-head-break { display: block; flex: 1 0 100%; width: 100%; height: 0; margin: 0; }
+  /* `flex-basis: 0` y no `auto`: con `auto` el título reclama el ancho entero
+     de su texto, no entra junto al ☰ y se va a una tercera fila. Con 0 no
+     reclama nada, comparte fila con el ☰ y crece hasta llenarla. */
+  .chat-title { flex: 1 1 0; }
+  /* La insignia de mundo se queda con su ÍCONO y su color de identidad, pero
+     suelta el texto: son ~55px que en la fila de controles no sobran, y el
+     nombre completo del mundo sigue disponible en su atributo `title` (lo
+     arma _applyWorld en chat-tab.js). El color, que es el que de verdad
+     distingue 🏠 Mi Consola de 🌳 Tolkien, no se pierde. */
+  .chat-world > span { display: none; }
+  /* En la segunda fila: insignias a la izquierda, acciones a la derecha. */
+  .chat-popout { margin-left: auto; }
   /* CONTENCIÓN de los drawers (fix scroll fantasma reportado 2026-07-07): en
      móvil ambas barras son position:absolute. Sin un ancestro posicionado se
      ubicaban contra el VIEWPORT, y el drawer derecho cerrado (translateX(100%))

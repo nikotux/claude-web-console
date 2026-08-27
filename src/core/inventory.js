@@ -348,6 +348,17 @@ const USER_STATE_PERSISTENCE = {
 const userStatePersistenceExempts = (module, file = '') => USER_STATE_PERSISTENCE.exclude
   .some((entry) => (entry.includes('/') ? entry === file : entry === module));
 
+// Runners cuyo disparador NO es un import ni un spawn desde JS, sino una unidad
+// systemd EXTERNA al grafo del repo. Verificado 2026-08-27 (resolución de una
+// propuesta de Coherencia): no son huérfanos. Fuente de verdad de su
+// disparador: bin/CLAUDE.md.
+//  · cwc-mirror-runner.js: systemd/cwc-mirror.timer → cwc-mirror.service (en el repo).
+//  · cwc-pageout-runner.js: su propio .service, NO versionado en este repo.
+const KNOWN_EXTERNAL_TRIGGERS = [
+  'bin/cwc-mirror-runner.js',
+  'bin/cwc-pageout-runner.js',
+];
+
 // Patrones CANÓNICOS del proyecto (3ª dimensión de coherencia: propagación).
 // Cada patrón probado (paralelismo, caché incremental, runner desacoplado…)
 // DEBERÍA adoptarse donde aplique. El censo detecta: ¿existe el proveedor? ¿quién
@@ -414,6 +425,14 @@ const CANONICAL_PATTERNS = [
       //    dos entornos podrían recibir el MISMO puerto (BUG-2076).
       'src/core/user-deprovision.js',
       'src/modules/tolkien/env-shared.js',
+      // Falsos positivos VERIFICADOS (2026-08-27, resolución de una propuesta de
+      // Coherencia): seriales/ya resueltos POR DISEÑO — no adoptar runAdaptivePool.
+      //  · cwc-pad-orphan-sweep.js: hace DELETE REST por workspace EN ORDEN y
+      //    con retry/backoff; es escritura y debe permanecer serial.
+      //  · cwc-tolkien.js: el censo ya paraleliza con procesos hijo
+      //    cwc-tolkien-worker.js coordinados mediante una cola SQLite.
+      'bin/cwc-pad-orphan-sweep.js',
+      'bin/cwc-tolkien.js',
     ],
   },
   {
@@ -643,10 +662,17 @@ export function coherenceCensus() {
   // (arista) o menciona su basename (los runners se spawnean por string, no por
   // import — de ahí el chequeo por basename).
   const importedFiles = new Set(edges.map((e) => e.to));
+  const systemdDir = path.join(ROOT, 'systemd');
+  let systemdUnitTexts = [];
+  try {
+    systemdUnitTexts = fss.readdirSync(systemdDir)
+      .filter((f) => /\.(?:service|timer)$/.test(f))
+      .map((f) => readSafe(path.join(systemdDir, f)));
+  } catch { /* el directorio systemd es opcional */ }
   const basenameReferenced = (relFile) => {
     const bn = relFile.split('/').pop();
     for (const [f, t] of texts) { if (f !== relFile && t.includes(bn)) return true; }
-    return false;
+    return systemdUnitTexts.some((t) => t.includes(bn));
   };
   const backendMods = parseBackendModules();
   const frontendMods = parseFrontend();
@@ -671,7 +697,7 @@ export function coherenceCensus() {
     // (p.ej. `comms`) no cuenta (evita el falso positivo recurrente).
     unregistered: backendMods.filter((m) => m.hasIndex && !m.registered).map((m) => m.name),
     unmounted: frontendMods.filter((f) => !frontWired(f)).map((f) => f.name),
-    orphanRunners: runners.filter((r) => !basenameReferenced(r.file)).map((r) => r.file),
+    orphanRunners: runners.filter((r) => !KNOWN_EXTERNAL_TRIGGERS.includes(r.file) && !basenameReferenced(r.file)).map((r) => r.file),
     orphanEngines: engines.filter((e) => !importedFiles.has(e.file) && !basenameReferenced(e.file)).map((e) => e.file),
   };
 

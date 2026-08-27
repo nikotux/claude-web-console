@@ -2,6 +2,22 @@
 # public — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+### public/vendor/              solo la excepción hljs; NO es un depósito de copias
+Las librerías frontend se montan con `express.static` desde `node_modules` en
+`src/server.js`: `/vendor/xterm`, `/vendor/addon-fit`,
+`/vendor/addon-web-links`, `/vendor/addon-clipboard`, `/vendor/marked`,
+`/vendor/mermaid` y `/vendor/chartjs`. Lo único que queda físicamente bajo
+`public/vendor/` es `hljs/`, porque el paquete npm de `highlight.js` no publica
+un bundle de navegador; `public/vendor/hljs/README.md` documenta la excepción.
+`index.html` carga xterm desde `/vendor/xterm/css/xterm.css` y
+`/vendor/xterm/lib/xterm.js`; los addons desde `/vendor/addon-fit/lib/addon-fit.js`,
+`/vendor/addon-web-links/lib/addon-web-links.js` y
+`/vendor/addon-clipboard/lib/addon-clipboard.js`; highlight.js desde
+`/vendor/hljs/theme.css` y `/vendor/hljs/hljs.min.js`; marked desde
+`/vendor/marked/marked.umd.js`; Chart.js desde `/vendor/chartjs/chart.umd.js`;
+y Mermaid, de forma lazy, desde `/vendor/mermaid/mermaid.esm.min.mjs`. El check
+`vendor-drift` de Salud vigila que no reaparezcan copias estáticas y que la
+excepción documentada no quede desactualizada.
 ### public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
 montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
 (patrón completo en docs/frontend-modules.md).
@@ -132,6 +148,10 @@ El bloque «Modo documento» se activa con `body.doc-mode` y alcanza únicamente
 TEXTO, no al contenedor, para que tablas, código y figuras conserven su ancho
 completo. La sangría de primera línea SIN margen entre párrafos es una decisión
 explícita del usuario: no mezclar ese ritmo de libro con separación adicional.
+En `@media (max-width: 768px)`, `.chat-head` pasa a DOS FILAS: título arriba a ancho completo e insignias/controles abajo. `.chat-head-break` es un `<span>` vacío con `flex-basis:100%`, oculto en escritorio (`display:none`), que parte la línea flex en móvil; todo control NUEVO del header debe ir DESPUÉS de ese break en el markup de `chat-tab.js`.
+Motivo (BUG-2766, `console:BUG-2766`, reportado el 2026-08-14 por Niko, Julián y Richi; medido con Playwright): como todos los hermanos del título llevan `flex:none`, `.chat-title` era el único encogible y colapsaba a **0 px** en un viewport de 390 px.
+No romper estos detalles: `.chat-title` usa `flex:1 1 0`, NO `1 1 auto` —con `auto` reclama el ancho de su texto, no entra junto al ☰ y cae a una tercera fila—; el `gap` baja a `.3rem` y `.chat-world > span` se oculta, dejando el ícono de mundo con su color y el nombre completo en `title`.
+Sin esas dos compresiones, la fila de controles tampoco entra en una sola línea.
 
 ### public/css/fm.css           estilos del gestor de archivos (compactado 2026-07-07 junto al resto)
 ### public/archivos.html + js/filemanager/fm.js   Gestor de archivos (página aparte, iframe en el Explorador)

@@ -10,6 +10,7 @@ const DEFAULT_RAW_RETENTION_HOURS = 48;
 const ROLLUP_TABLES = new Set(['rollup_hourly', 'rollup_daily']);
 
 let database;
+const workerExistsStatements = new WeakMap();
 
 function moduleDataDir() {
   return path.join(resolveDataDir(), 'mikrotik');
@@ -58,7 +59,8 @@ function migrate(db) {
           sent_count INTEGER,
           response_count INTEGER,
           done_tests INTEGER,
-          source TEXT
+          source TEXT,
+          FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS samples_worker_ts
@@ -69,7 +71,8 @@ function migrate(db) {
           worker_id INTEGER NULL,
           started_at TEXT,
           ended_at TEXT,
-          reason TEXT
+          reason TEXT,
+          FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS rollup_hourly (
@@ -123,6 +126,8 @@ export function openDb() {
   database.pragma('journal_mode = WAL');
   database.pragma('synchronous = NORMAL');
   database.pragma('busy_timeout = 5000');
+  // SQLite desactiva el enforcement de claves foráneas por defecto en cada conexión.
+  database.pragma('foreign_keys = ON');
   migrate(database);
   return database;
 }
@@ -135,6 +140,7 @@ export function upsertWorker(worker) {
   const db = openDb();
   const now = new Date().toISOString();
   const publicKey = value(worker, 'wgPublicKey', 'wg_public_key');
+  const activeExplicit = worker.active !== undefined && worker.active !== null;
 
   if (!publicKey) throw new TypeError('wg_public_key es obligatorio');
 
@@ -144,14 +150,14 @@ export function upsertWorker(worker) {
       active, first_seen, last_seen
     ) VALUES (
       @wgPublicKey, @peerName, @displayName, @ip, @leaderId,
-      @active, @firstSeen, @lastSeen
+      COALESCE(@active, 1), @firstSeen, @lastSeen
     )
     ON CONFLICT(wg_public_key) DO UPDATE SET
       peer_name = excluded.peer_name,
       display_name = excluded.display_name,
       ip = excluded.ip,
       leader_id = excluded.leader_id,
-      active = excluded.active,
+      active = COALESCE(@active, workers.active),
       last_seen = excluded.last_seen
   `).run({
     wgPublicKey: publicKey,
@@ -159,7 +165,7 @@ export function upsertWorker(worker) {
     displayName: value(worker, 'displayName', 'display_name'),
     ip: value(worker, 'ip'),
     leaderId: value(worker, 'leaderId', 'leader_id'),
-    active: worker.active === undefined ? 1 : Number(Boolean(worker.active)),
+    active: activeExplicit ? Number(Boolean(worker.active)) : null,
     firstSeen: value(worker, 'firstSeen', 'first_seen') ?? now,
     lastSeen: value(worker, 'lastSeen', 'last_seen') ?? now,
   });
@@ -174,7 +180,24 @@ export function listWorkers() {
   ).all();
 }
 
+function assertWorkerExists(db, workerId, { nullable = false } = {}) {
+  if (nullable && (workerId === null || workerId === undefined)) return;
+
+  let statement = workerExistsStatements.get(db);
+  if (!statement) {
+    statement = db.prepare('SELECT 1 FROM workers WHERE id = ?');
+    workerExistsStatements.set(db, statement);
+  }
+  if (!statement.get(workerId)) {
+    throw new TypeError(`worker_id ${workerId} no existe en workers`);
+  }
+}
+
 function insertSampleWithDb(db, sample) {
+  const workerId = value(sample, 'workerId', 'worker_id');
+  // Las bases existentes no se recrean para sumar la FK; esta capa también las protege.
+  assertWorkerExists(db, workerId);
+
   const result = db.prepare(`
     INSERT INTO samples (
       worker_id, ts, status, rtt_avg, rtt_min, rtt_max, jitter, stdev,
@@ -184,7 +207,7 @@ function insertSampleWithDb(db, sample) {
       @lossPercent, @lossCount, @sentCount, @responseCount, @doneTests, @source
     )
   `).run({
-    workerId: value(sample, 'workerId', 'worker_id'),
+    workerId,
     ts: value(sample, 'ts') ?? new Date().toISOString(),
     status: value(sample, 'status'),
     rttAvg: value(sample, 'rttAvg', 'rtt_avg'),
@@ -217,11 +240,15 @@ export function insertSamples(samples) {
 }
 
 export function recordGap(gap) {
-  const result = openDb().prepare(`
+  const db = openDb();
+  const workerId = value(gap, 'workerId', 'worker_id');
+  assertWorkerExists(db, workerId, { nullable: true });
+
+  const result = db.prepare(`
     INSERT INTO gaps (worker_id, started_at, ended_at, reason)
     VALUES (@workerId, @startedAt, @endedAt, @reason)
   `).run({
-    workerId: value(gap, 'workerId', 'worker_id'),
+    workerId,
     startedAt: value(gap, 'startedAt', 'started_at'),
     endedAt: value(gap, 'endedAt', 'ended_at'),
     reason: value(gap, 'reason'),

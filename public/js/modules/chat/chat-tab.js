@@ -346,6 +346,7 @@ export class ChatTab {
         <header class="chat-head">
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="${t('chat.header.menuTitle', 'Abrir panel lateral')}">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
+          <span class="chat-head-break" aria-hidden="true"></span>
           <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
           <span class="chat-peers" aria-label="${t('chat.sala.participants', 'Participantes')}" hidden></span>
           <button type="button" class="btn-ghost btn--icon chat-visado-btn" hidden
@@ -416,6 +417,8 @@ export class ChatTab {
         </div>
       </div>`;
 
+    this.titleEl = container.querySelector('.chat-title');
+    this.titleEl.title = this.title;
     this.worldEl = container.querySelector('.chat-world');
     this.peersEl = container.querySelector('.chat-peers');
     this.visadoBtn = container.querySelector('.chat-visado-btn');

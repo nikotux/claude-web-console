@@ -28,6 +28,11 @@ const EDITABLE = {
   client: ['mcpServerId', 'infisicalProjectId'],
 };
 
+// Invariante 5: toda colección que llega del cliente se valida contra un
+// máximo EXPLÍCITO antes de tocar disco. El límite global de express.json()
+// es genérico de la app, no la validación por-endpoint que pide la regla.
+const MAX_ZOHO_DEPARTMENTS = 50;
+
 function pickAllowed(patch) {
   const out = {};
   for (const [section, fields] of Object.entries(EDITABLE)) {
@@ -43,6 +48,12 @@ function pickAllowed(patch) {
   // zohoDepartments y reviewer son objetos anidados con claves libres — se
   // aceptan aparte, saneando valores a string corto (nunca objetos/arrays).
   if (patch?.client?.zohoDepartments && typeof patch.client.zohoDepartments === 'object') {
+    const depKeys = Object.keys(patch.client.zohoDepartments);
+    if (depKeys.length > MAX_ZOHO_DEPARTMENTS) {
+      const err = new Error(`Demasiados departamentos de Zoho (máximo ${MAX_ZOHO_DEPARTMENTS}).`);
+      err.badRequest = true;
+      throw err;
+    }
     const deps = {};
     for (const [k, v] of Object.entries(patch.client.zohoDepartments)) {
       const key = String(k).slice(0, 40);
@@ -92,6 +103,7 @@ export default {
         // acciones riesgosas sin pedirlas).
         res.json({ ok: true, identity: next.identity, client: next.client, needsRestart: true });
       } catch (e) {
+        if (e && e.badRequest) return res.status(400).json({ error: e.message });
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }
     });

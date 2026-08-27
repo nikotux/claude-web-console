@@ -61,6 +61,7 @@ export default {
             writeCache('plan-limits', data);
             paint(data);
           }
+          return data;
         })
         .finally(() => {
           freshInFlight = false;
