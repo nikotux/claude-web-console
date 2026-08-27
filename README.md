@@ -51,6 +51,10 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-08-27 09:52 — main
+- Agregar modo ventana desanclada, drag&drop en Sesiones y fix de cwd en runners de login
+- Actualizar dependencias vendorizadas y mejoras varias en módulos internos
+
 ### 2026-08-12 11:06 — main
 - Corrige credenciales de Codex login, refuerza captura de tickets en Tolkien y agrega carpetas de sesiones
 
@@ -376,11 +380,6 @@ since the previous push. Newest entry first.
 - Modified `src/modules/chat/shared.js`
 - Modified `src/modules/projects/index.js`
 - Modified `src/modules/projects/memory.js`
-
-### 2026-07-03 06:55 — main
-- Modified `CLAUDE.md`
-- Modified `public/css/style.css`
-- Modified `public/js/modules/system/project-context-panel.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
