@@ -2050,6 +2050,26 @@ html, body {
   content: ''; flex: 1;
   border-top: 1px solid color-mix(in srgb, var(--cwc-accent) 45%, transparent);
 }
+/* Separador de día del hilo (estilo WhatsApp): "Hoy" / "Ayer" / la fecha.
+   Mismo esqueleto que .chat-newline-sep, pero en tono neutro: el de
+   "mensajes nuevos" usa el acento y debe seguir ganando la mirada. */
+.chat-day-sep {
+  align-self: stretch; display: flex; align-items: center; gap: .45rem;
+  margin: .35rem 0;
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); font-weight: 600;
+  text-align: center; white-space: nowrap;
+}
+.chat-day-sep::before, .chat-day-sep::after {
+  content: ''; flex: 1;
+  border-top: 1px solid color-mix(in srgb, var(--cwc-border) 70%, transparent);
+}
+/* Hora al pie del mensaje. */
+.chat-msg-time {
+  display: block; margin-top: .15rem;
+  color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs);
+  line-height: 1.2; text-align: right; opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
 .sess-badge--unread, .sess-badge--mention {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   min-width: 1.2em; padding: 0 .28rem; border-radius: var(--cwc-radius-sm);
