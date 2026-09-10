@@ -337,6 +337,11 @@
             <span data-module="usage"></span>
             <a href="/archivos" class="btn-ghost btn--sm btn--icon" data-icon="folder" title="Explorador" data-i18n-title="core.explorer"></a>
             <a href="/raw" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="pulse" title="Vista Raw" data-i18n-title="core.rawView"></a>
+            <!-- 🧠 Cerebro del Pad: vista contemplativa del banco de conocimientos
+                 (grafo del Pad local) que se ilumina con cada uso real. Nace
+                 `hidden` y solo lo destapa main.js si el usuario tiene `oversight`
+                 (recorte de experiencia; el gate real está en /api/cerebro/*). -->
+            <a href="/cerebro.html" target="_blank" rel="noopener" id="cerebro-link" hidden class="btn-ghost btn--sm btn--icon" data-icon="brain" title="Cerebro del Pad" data-i18n-title="core.cerebroView"></a>
             <a href="/seguimientos" target="_blank" rel="noopener" class="btn-ghost btn--sm btn--icon" data-icon="list" title="Seguimientos" data-i18n-title="core.followUps"></a>
             <button id="help-index-btn" class="btn-ghost btn--sm btn--icon" data-icon="help" title="Guía de la consola" data-i18n-title="core.help.indexTitle"></button>
             <span data-module="system"></span>

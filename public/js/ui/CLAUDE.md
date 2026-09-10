@@ -12,6 +12,36 @@ exportado `MYSPACE_PLACE`). `placeFor()` también recorta el prefijo absoluto
 recuperen la misma identidad de lugar que las rutas relativas y las del host.
 Contraparte BACKEND del mismo concepto: `src/core/worlds.js` (`worldLabelFor(cwd)`), que también reconoce esos worktrees como Tolkien. Son DOS capas deliberadas — frontend y backend no comparten módulos y `ui/places.js` es la fuente frontend por diseño —, no una copia olvidada de la otra: si cambia la ruta de los entornos hay que tocar las dos (`console:BUG-2074` nació justamente de dos copias desincronizadas del mismo helper).
 
+### profile.js
+`profile.js` es el primitivo compartido y la fuente ÚNICA del recorte de
+superficie por perfil. `GET /api/whoami` entrega `profile: 'sponsored' | 'full'`:
+vale `sponsored` si `sponsorshipState(username)` devuelve `sponsored` o
+`awaiting-sponsor`, y `full` en cualquier otro caso —incluidos los principals
+`token`—; ante un error también cae a `full`. El módulo exporta
+`isSponsored(me)`, `HIDDEN_FOR_SPONSORED` (módulos `tolkien`, `tickets`,
+`visado`, `retro`, `stats`), `HIDDEN_SYSTEM_PANELS_FOR_SPONSORED` (paneles
+`skills`, `interfono`) y `allowModule(me, name)`. Ningún consumidor mantiene
+listas propias.
+
+El FAIL-OPEN es deliberado: identidad ausente o perfil desconocido muestra
+TODO, para que un fallo de carga no deje a alguien sin consola. Es la asimetría
+intencional respecto de los gates del backend, que son fail-closed. La tabla
+interna es un `Map`, NO un objeto plano, a propósito: un perfil llamado
+`constructor` o `toString` resolvería una propiedad heredada del prototipo del
+objeto y rompería ese fail-open. Al agregar un perfil se suma una entrada a la
+tabla y sus sets en ESTE archivo; no se reescribe la lógica ni se dispersan
+listas entre consumidores.
+
+El recorte usa siempre el atributo `hidden`, respaldado por el guard global
+`[hidden]{display:none!important}` de `ui.css`; nunca `style.display`.
+`main.js` consulta `allowModule`, Sistema consume la lista compartida de
+paneles y el launcher patrocinado oculta entero «Tipo de sesión», fija el tipo
+en `chat` y oculta Tolkien: quedan «Mi espacio» y «Otra carpeta». Este recorte
+es de EXPERIENCIA y NO es seguridad: ocultar o no montar una superficie jamás
+autoriza ni desautoriza nada. La protección real sigue en el backend mediante
+`isAdmin` y ownership por usuario; todo endpoint nuevo que la necesite debe
+incorporar allí su gate.
+
 ### public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
 openModal/confirmDialog/promptDialog/alertDialog/textEditorDialog +
 confirmSheet — confirmación ADAPTATIVA 2026-07-07: en desktop delega en

@@ -4,13 +4,17 @@
 // HTTP (todo bajo requireAdmin):
 //   GET    /api/admin/users              -> lista de usuarios
 //   POST   /api/admin/users             -> crea { username, password, admin }
-//   PUT    /api/admin/users/:username    -> { password?, admin? }
+//   PUT    /api/admin/users/:username    -> { password?, admin?, oversight? }
+//   POST   /api/admin/users/:username/sponsor -> revoca { sponsor:null } o deja en espera { awaiting:true }
 //   DELETE /api/admin/users/:username    -> elimina
 //   POST   /api/admin/restart-runners    -> recicla los runners de chat (SIGTERM)
 import express from 'express';
 import { execFileSync } from 'node:child_process';
 import { isAdmin, principalOf, invalidateSessionsForUser } from '../../core/auth.js';
-import { listUsers, createUser, setPassword, setAdmin, deleteUser } from '../../core/users.js';
+import {
+  listUsers, createUser, setPassword, setAdmin, setOversight, setAwaitingSponsor,
+  setUserSponsor, deleteUser,
+} from '../../core/users.js';
 import { deprovisionUser } from '../../core/user-deprovision.js';
 import { hostUser } from '../../core/user-space.js';
 import { provisionNewUser } from '../onboard/provision-user.js';
@@ -90,9 +94,12 @@ export default {
 
     r.put('/users/:username', (req, res) => {
       const { username } = req.params;
-      const { password, admin } = req.body || {};
+      const { password, admin, oversight } = req.body || {};
       if (admin !== undefined && typeof admin !== 'boolean') {
         return res.status(400).json({ error: 'admin debe ser boolean.' });
+      }
+      if (oversight !== undefined && typeof oversight !== 'boolean') {
+        return res.status(400).json({ error: 'oversight debe ser boolean.' });
       }
       // Simétrico con `admin`: si vino `password` pero no es un string usable,
       // rechazar explícito en vez de ignorarlo en silencio (el cliente podría
@@ -125,8 +132,39 @@ export default {
           // operando como admin hasta vencer (re-login toma el flag nuevo).
           if (admin === false) invalidateSessionsForUser(username);
         }
-        if (!changed) return res.status(400).json({ error: 'Ningún parámetro válido enviado (password o admin).' });
+        if (typeof oversight === 'boolean') {
+          setOversight(username, oversight);
+          changed = true;
+          // Oversight se consulta en vivo en cada request: apagarlo no requiere
+          // revocar sesiones, a diferencia de una democión de admin.
+        }
+        if (!changed) return res.status(400).json({ error: 'Ningún parámetro válido enviado (password, admin u oversight).' });
         res.json({ ok: true, changed });
+      } catch (e) {
+        res.status(e.badRequest ? 400 : 500).json({ error: e.message });
+      }
+    });
+
+    r.post('/users/:username/sponsor', (req, res) => {
+      const { username } = req.params;
+      const { sponsor, awaiting } = req.body || {};
+      if (typeof sponsor === 'string') {
+        return res.status(400).json({
+          error: 'La adopción la decide cada sponsor desde su propia consola (POST /api/sponsorship/adopt). Un admin no puede poner a otro usuario a pagar por alguien.',
+        });
+      }
+      const revoke = sponsor === null && awaiting === undefined;
+      const waitForSponsor = awaiting === true && sponsor === undefined;
+      if (!revoke && !waitForSponsor) {
+        return res.status(400).json({
+          error: 'Envía { sponsor: null } para revocar o { awaiting: true } para dejar al usuario esperando sponsor.',
+        });
+      }
+      try {
+        if (revoke) setUserSponsor(username, null);
+        else setAwaitingSponsor(username);
+        const state = listUsers().find((u) => u.username === username);
+        res.json({ ok: true, ...state });
       } catch (e) {
         res.status(e.badRequest ? 400 : 500).json({ error: e.message });
       }

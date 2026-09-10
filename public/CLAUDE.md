@@ -6,7 +6,8 @@
 Las librerías frontend se montan con `express.static` desde `node_modules` en
 `src/server.js`: `/vendor/xterm`, `/vendor/addon-fit`,
 `/vendor/addon-web-links`, `/vendor/addon-clipboard`, `/vendor/marked`,
-`/vendor/mermaid` y `/vendor/chartjs`. Lo único que queda físicamente bajo
+`/vendor/mermaid`, `/vendor/chartjs` y `/vendor/3d-force-graph`. Lo único que
+queda físicamente bajo
 `public/vendor/` es `hljs/`, porque el paquete npm de `highlight.js` no publica
 un bundle de navegador; `public/vendor/hljs/README.md` documenta la excepción.
 `index.html` carga xterm desde `/vendor/xterm/css/xterm.css` y
@@ -262,12 +263,17 @@ AMPLIACIÓN v4 — "muestra TODO el background" (PLAN-544,
 pedido de Niko 2026-07-15): además de chats/Codex, la
 Vista Raw ahora cubre 3 fuentes más, cada naturaleza con su
 representación (diseño "Híbrido IV"): (B) SUBAGENTES —
-`stream.js` separa las líneas `isSidechain:true` del
-transcript en una sesión propia `<sid>~sub` (flag `sub:true`);
-el front les da BANDA propia más ANGOSTA (peso 0.6 en el
-reparto de `relayout`) con rótulo `↳`. Subagentes concurrentes
-del mismo padre se funden en UNA banda (no se pueden separar
-desde bytes apendeados). (C) TERMINALES bash — nuevo endpoint
+un hijo es una delegación Codex en background o un subagente Task del SDK.
+El front los descubre en `bgTasks` y `delegatingList` de
+`GET /api/chat/list`, mientras `stream.js` aporta sus fragmentos y la relación
+con el padre (`codex:<jobId>` o `<sid>~sub:<agentId>`). Cada hijo conserva una
+BANDA propia más ANGOSTA (peso 0.6), pegada inmediatamente a la derecha de su
+padre, con su matiz derivado pero el mundo/tono e ícono heredados del padre y
+rótulo `↳`. La banda vive mientras el hijo siga en la lista aunque todavía no
+emita texto; esa autoridad estable evita que parpadee entre polls del stream.
+El panel de log no usa un promedio: su ancho y `logCols` por sesión siguen el
+ancho REAL de esa banda. Un hijo huérfano conserva su propio mundo. (C)
+TERMINALES bash — nuevo endpoint
 `GET /api/tmux/raw-feed` (auth, 0 tokens) devuelve las sesiones
 tmux OWNED vivas + su `capture-pane` reciente; excluye las
 `cwct-` (TUI ocultas de chat, ya llueven por transcript) y las
@@ -303,7 +309,8 @@ CPU): el front lo pide SOLO si `/api/whoami` dice admin, diferido 10 s y
 cada 5 min. El panel de log ahora se mide en LÍNEAS (`logMaxLines`, alto ÷
 14,85 px), no en chars, y el texto se ENVUELVE en JS al ancho real
 (`logCols`, medido con `measureText` en un canvas propio para no pisar la
-fuente de la lluvia). Sin ese wrap, un párrafo de transcript de 540 chars
+fuente de la lluvia, y guardado por sesión porque cada banda puede medir
+distinto). Sin ese wrap, un párrafo de transcript de 540 chars
 ocupaba una sola línea, se cortaba al borde derecho y dejaba el panel casi
 vacío igual. `s.raw` conserva el texto lógico y `s.display` el texto ya
 envuelto y ajustado: son DOS cosas distintas a propósito, porque concatenar
@@ -345,6 +352,25 @@ problema — para el mismo usuario, los transcripts mostraban solo lo suyo
 mientras terminales y chats mostraban todo. Para ver lo ajeno siguen estando
 el panel de Sesiones, la pestaña tmux y el modal de trabajos en segundo plano,
 que sí son superficie de administración.
+
+### public/cerebro.html + js/cerebro/{cerebro,palette,pulses}.js + css/cerebro.css   Cerebro del Pad
+Vista 3D standalone, contemplativa y SOLO-LECTURA del grafo del Pad LOCAL
+(`console`), abierta en ventana propia por `/cerebro`; se ilumina en tiempo
+real con la actividad verdadera del Pad. Inicializa su propio i18n desde
+`public/i18n/en/cerebro.json` y carga `3d-force-graph` desde el mount de
+`src/server.js` `/vendor/3d-force-graph` →
+`node_modules/3d-force-graph/dist`, nunca desde una copia bajo
+`public/vendor/`. El botón `#cerebro-link` usa el ícono `brain` y se oculta por
+perfil sin `oversight`, pero ese recorte es solo experiencia: el gate real
+vive en el backend. GOTCHA 1 (medido con `3d-force-graph` 1.80.0):
+`controlType` NO es encadenable; va en la configuración del constructor
+`ForceGraph3D({controlType:'orbit'})`. Encadenarlo arroja `TypeError` y deja la
+página negra. GOTCHA 2: Chrome computa un token con `color-mix()` como
+`color(srgb ...)`, que THREE.js no parsea y deja el canvas vacío; por eso
+`palette.js` normaliza SIEMPRE a `rgb()`/`rgba()` antes de entregar colores y
+esa función no es redundante. El bundle además espera el `process` de un
+bundler: `cerebro.html` define un shim mínimo `window.process` ANTES de
+cargarlo.
 
 ### public/js/onboard/onboard.js — wizard público de alta
 

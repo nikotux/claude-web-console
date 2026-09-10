@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title data-i18n="cerebro.page.title">Cerebro del Pad — Claude Web Console</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/ui.css" />
+  <link rel="stylesheet" href="/css/cerebro.css" />
+</head>
+<body>
+  <div id="cer-graph" class="cer-graph"></div>
+
+  <!-- HUD superior: identidad + estado + leyenda. Nace COMPACTO; la leyenda es
+       un <details> cerrado (convención "UI con mucho texto = colapsable"). -->
+  <header id="cer-hud" class="cer-hud">
+    <span class="cer-title">🧠 <b data-i18n="cerebro.title">Cerebro del Pad</b></span>
+    <span id="cer-stats" class="cer-stats"></span>
+    <span id="cer-status" class="cer-status"></span>
+    <!-- El botón de ayuda se inyecta como ÚLTIMO control desde cerebro.js. -->
+  </header>
+
+  <div class="cer-panels">
+    <details id="cer-controls" class="cer-controls">
+      <summary id="cer-controls-summary"></summary>
+      <div id="cer-controls-body" class="cer-controls-body"></div>
+    </details>
+
+    <details id="cer-legend" class="cer-legend">
+      <summary data-i18n="cerebro.legend.summary">Leyenda</summary>
+      <div id="cer-legend-body" class="cer-legend-body"></div>
+    </details>
+  </div>
+
+  <div id="cer-feed" class="cer-feed"></div>
+
+  <div id="cer-msg" class="cer-msg" hidden></div>
+
+  <button id="cer-close" class="cer-close" title="Cerrar (Esc)" data-i18n-title="cerebro.close">✕</button>
+
+  <script>
+  // Instrumentación temporal para el blanco remoto que no se reproduce en el
+  // entorno de verificación. Debe ejecutarse antes que cualquier módulo/import map.
+  try {
+    (function () {
+      var errors = [];
+      window.__cerebroDiagErrors = errors;
+
+      function clipped(value) {
+        try { return String(value == null ? '' : value).slice(0, 500); }
+        catch (error) { return 'Error no serializable'; }
+      }
+
+      function remember(message, file, line) {
+        try {
+          errors.push({
+            message: clipped(message),
+            file: clipped(file),
+            line: typeof line === 'number' && isFinite(line) ? line : null
+          });
+          if (errors.length > 50) errors.length = 50;
+        } catch (error) {}
+      }
+
+      window.addEventListener('error', function (event) {
+        try {
+          var target = event.target;
+          var resource = target && target !== window
+            ? target.currentSrc || target.src || target.href || ''
+            : '';
+          remember(
+            event.message || (resource ? 'Error al cargar recurso' : 'Error de ventana'),
+            event.filename || resource,
+            event.lineno
+          );
+        } catch (error) {}
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (event) {
+        try {
+          var reason = event.reason;
+          remember(
+            reason && reason.message ? reason.message : reason,
+            reason && (reason.fileName || reason.filename),
+            reason && (reason.lineNumber || reason.lineno)
+          );
+        } catch (error) {}
+      });
+
+      function webglStatus() {
+        try {
+          var probe = document.createElement('canvas');
+          if (probe.getContext('webgl2')) return 'webgl2';
+          if (probe.getContext('webgl')) return 'webgl';
+          return 'no disponible';
+        } catch (error) {
+          return 'error: ' + clipped(error && error.message ? error.message : error);
+        }
+      }
+
+      function resolvedCssColor(token) {
+        var probe = document.createElement('div');
+        probe.setAttribute('aria-hidden', 'true');
+        probe.style.position = 'absolute';
+        probe.style.visibility = 'hidden';
+        probe.style.pointerEvents = 'none';
+        // Replica la sonda original: si el token no resuelve, hereda el color
+        // de TEXTO y puede reportar casi blanco sin lanzar ningún error.
+        probe.style.color = 'var(' + token + ')';
+        document.body.appendChild(probe);
+        var color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      }
+
+      window.setTimeout(function () {
+        try {
+          var canvas = document.querySelector('canvas');
+          var stats = document.getElementById('cer-stats');
+          var rootStyle = getComputedStyle(document.documentElement);
+          var report = {
+            ua: clipped(navigator.userAgent),
+            url: clipped(location.href),
+            dpr: typeof window.devicePixelRatio === 'number' ? window.devicePixelRatio : null,
+            viewport: window.innerWidth + 'x' + window.innerHeight,
+            webgl: clipped(webglStatus()),
+            importMapSupport: typeof HTMLScriptElement.supports === 'function'
+              && HTMLScriptElement.supports('importmap'),
+            moduleRan: window.__cerebroBooted === true,
+            cssVarCerBg: clipped(rootStyle.getPropertyValue('--cer-bg').trim()),
+            cssVarCwcBg: clipped(rootStyle.getPropertyValue('--cwc-bg').trim()),
+            resolvedBg: clipped(resolvedCssColor('--cer-bg')),
+            supportsColorMix: typeof CSS !== 'undefined'
+              && typeof CSS.supports === 'function'
+              && CSS.supports('color', 'color-mix(in srgb, red 50%, black)'),
+            bodyBg: clipped(getComputedStyle(document.body).backgroundColor),
+            canvas: canvas
+              ? { exists: true, width: canvas.width, height: canvas.height }
+              : { exists: false },
+            hudText: clipped(stats ? stats.textContent : ''),
+            errors: errors.slice(0, 10)
+          };
+          fetch('/api/cerebro/diag', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report),
+            keepalive: true
+          }).catch(function () {});
+        } catch (error) {}
+      }, 6000);
+    }());
+  } catch (error) {}
+  </script>
+  <!-- El bundle de 3d-force-graph asume un process de bundler; sin este shim falla en el navegador. -->
+  <script>window.process = window.process || { env: {} };</script>
+  <!-- Los módulos de examples/jsm importan el specifier three, que el navegador no resuelve solo. -->
+  <script type="importmap">
+  {"imports":{"three":"/vendor/three/build/three.module.min.js","three/addons/":"/vendor/three/examples/jsm/"}}
+  </script>
+  <script type="module" src="/js/cerebro/cerebro.js"></script>
+</body>
+</html>

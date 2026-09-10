@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostUser } from './user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USERS_FILE = path.join(__dirname, '..', '..', 'users.json');
@@ -18,7 +19,7 @@ const USERNAME_RE = /^[a-zA-Z0-9_.-]{1,32}$/;
 // NUEVAS (crear usuario / cambiar contraseña); las existentes siguen válidas.
 const MIN_PASSWORD = 10;
 
-let users = new Map(); // username -> { username, hash, admin }
+let users = new Map(); // username -> { username, hash, admin, oversight, lang?, tier?, sponsor? }
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -37,7 +38,7 @@ function verifyPassword(password, stored) {
 function load() {
   try {
     const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-    users = new Map((raw.users || []).map((u) => [u.username, u]));
+    users = new Map((raw.users || []).map((u) => [u.username, { ...u, oversight: !!u.oversight }]));
   } catch {
     users = new Map(); // sin archivo aún: arranca vacío
   }
@@ -57,9 +58,41 @@ export function userCount() {
   return users.size;
 }
 
+export function oversightFor(username) {
+  if (!username || username === hostUser()) return true;
+  const u = users.get(username);
+  return u ? !!u.oversight : false;
+}
+
+export function sponsorshipState(username) {
+  const u = users.get(username);
+  if (u?.tier !== 'sponsored') return 'none';
+  return typeof u.sponsor === 'string' && u.sponsor.trim()
+    ? 'sponsored'
+    : 'awaiting-sponsor';
+}
+
+export function getUserTier(username) {
+  // Este contrato representa el tier operativo: un perfil en espera todavía
+  // es `standard` acá porque solo un patrocinio completo habilita consumidores.
+  // sponsorshipState() conserva la distinción del perfil persistido.
+  return sponsorshipState(username) === 'sponsored' ? 'sponsored' : 'standard';
+}
+
+export function sponsorOf(username) {
+  return getUserTier(username) === 'sponsored' ? users.get(username).sponsor : null;
+}
+
 export function listUsers() {
   return [...users.values()]
-    .map((u) => ({ username: u.username, admin: !!u.admin }))
+    .map((u) => ({
+      username: u.username,
+      admin: !!u.admin,
+      oversight: oversightFor(u.username),
+      tier: getUserTier(u.username),
+      sponsor: sponsorOf(u.username),
+      sponsorshipState: sponsorshipState(u.username),
+    }))
     .sort((a, b) => a.username.localeCompare(b.username));
 }
 
@@ -94,6 +127,48 @@ export function setAdmin(username, admin) {
   const u = users.get(username);
   if (!u) throw badRequest('Usuario inexistente.');
   u.admin = !!admin;
+  persist();
+}
+
+export function setOversight(username, value) {
+  const u = users.get(username);
+  if (!u) throw badRequest('Usuario inexistente.');
+  u.oversight = !!value;
+  persist();
+}
+
+export function setAwaitingSponsor(username) {
+  const u = users.get(username);
+  if (!u) throw badRequest('Usuario inexistente.');
+  u.tier = 'sponsored';
+  delete u.sponsor;
+  persist();
+}
+
+export function setUserSponsor(username, sponsor) {
+  const u = users.get(username);
+  if (!u) throw badRequest('Usuario inexistente.');
+
+  if (sponsor === null || sponsor === '') {
+    delete u.tier;
+    delete u.sponsor;
+    persist();
+    return;
+  }
+  if (typeof sponsor !== 'string') throw badRequest('Sponsor inválido.');
+
+  const sponsorUser = users.get(sponsor);
+  if (!sponsorUser) throw badRequest('Sponsor inexistente.');
+  if (sponsor === username) throw badRequest('Un usuario no puede patrocinarse a sí mismo.');
+  // Un perfil patrocinado normalmente no tiene credencial propia que prestar,
+  // así que la cadena ya fallaría al resolver el token. La prohibimos igual
+  // como defensa en profundidad y para devolver un error claro desde el alta.
+  if (sponsorshipState(sponsor) !== 'none') {
+    throw badRequest('Un usuario patrocinado no puede patrocinar a otro usuario.');
+  }
+
+  u.tier = 'sponsored';
+  u.sponsor = sponsor;
   persist();
 }
 

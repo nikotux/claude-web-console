@@ -91,7 +91,11 @@ const whoAmI = () => me || hostName;
 const isMine = (owner) => {
   const yo = whoAmI();
   if (!yo) return true;      // todavía no sé quién soy: comportamiento histórico
-  if (!owner) return true;   // sin dueño registrado = del host, por retrocompat
+  // "Sin dueño registrado" significa DEL HOST, no "de quien mira". La versión
+  // anterior devolvía true a ciegas: como el backend le entrega todos los chats
+  // a un admin, los chats legacy (owner:null) del host se colaban en la sección
+  // "mis chats" de cualquier admin inquilino en vez de "Otros usuarios".
+  if (!owner) return !me || me === hostName;
   return owner === yo;
 };
 
@@ -1353,8 +1357,11 @@ export default {
           if (!byOwner.has(owner)) byOwner.set(owner, { chats: [], sessions: [] });
           return byOwner.get(owner);
         };
-        for (const c of otherUserChats) ownerGroup(c.owner).chats.push(c);
-        for (const s of otherSessions) ownerGroup(s.owner).sessions.push(s);
+        // Un chat/sesión legacy sin `owner` es DEL HOST: se agrupa bajo su
+        // nombre, no bajo la clave cruda (que renderizaría un literal "null").
+        const ownerKey = (owner) => owner || hostName || 'host';
+        for (const c of otherUserChats) ownerGroup(ownerKey(c.owner)).chats.push(c);
+        for (const s of otherSessions) ownerGroup(ownerKey(s.owner)).sessions.push(s);
 
         const det = document.createElement('details');
         det.className = 'sess-others sess-owners';
@@ -1412,8 +1419,8 @@ export default {
       if (!isMine(c.owner) && isChatParticipant(c)) {
         const guest = document.createElement('span');
         guest.className = 'sess-mode sess-guest';
-        guest.textContent = t('sessions.collab.guestOf', 'de {owner}', { owner: c.owner });
-        guest.title = t('sessions.collab.guestOfTitle', 'Sos invitado: la sala es de {owner}', { owner: c.owner });
+        guest.textContent = t('sessions.collab.guestOf', 'de {owner}', { owner: c.owner || hostName || 'host' });
+        guest.title = t('sessions.collab.guestOfTitle', 'Sos invitado: la sala es de {owner}', { owner: c.owner || hostName || 'host' });
         main.querySelector('.sess-row1')?.appendChild(guest);
       }
       appendParticipantChip(main, c);

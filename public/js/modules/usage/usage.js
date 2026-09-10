@@ -745,6 +745,61 @@ function rangeLabel(range) {
   }[range] || '';
 }
 
+function usdValue(raw) {
+  if (raw == null) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+// Patrocinio es información accesoria: el contenedor queda visualmente vacío
+// salvo que el endpoint devuelva al menos una persona. Reusa el patrón
+// colapsable y el estado `lim-reached` del panel para umbrales superados.
+function renderSponsored(container, sponsored) {
+  const people = Array.isArray(sponsored) ? sponsored : [];
+  if (!people.length) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+
+  const wasOpen = !!container.querySelector('details')?.open;
+  const noData = t('usage.sponsored.noData', 'sin datos');
+  const rows = people.map((person) => {
+    const todayUsd = usdValue(person?.todayUsd);
+    const thresholdUsd = usdValue(person?.thresholdUsd);
+    const exceeded = todayUsd != null && thresholdUsd != null && todayUsd > thresholdUsd;
+    const todayText = todayUsd == null ? noData : fmtCost(todayUsd);
+    const thresholdText = t('usage.sponsored.threshold', 'umbral de aviso: {amount}', {
+      amount: thresholdUsd == null ? noData : fmtCost(thresholdUsd),
+    });
+    const exceededText = exceeded
+      ? `<span class="lim-meta-l lim-reached">${t('usage.sponsored.exceeded', 'umbral superado')}</span>`
+      : '';
+    return `
+      <div class="lim-row">
+        <div class="lim-line">
+          <span class="lim-label">${esc(person?.username)}</span>
+          <span class="lim-meta">
+            <span class="lim-meta-l">${t('usage.sponsored.today', 'consumo de hoy')}</span>
+            <span class="lim-meta-l">${esc(thresholdText)}</span>
+            ${exceededText}
+          </span>
+          <span class="lim-pct${exceeded ? ' lim-reached' : ''}">${esc(todayText)}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  container.hidden = false;
+  container.innerHTML = `
+    <details class="lim-credits-det"${wasOpen ? ' open' : ''}>
+      <summary class="lim-credits-sum">
+        <span class="lim-label">${t('usage.sponsored.title', 'Patrocinados')}</span>
+        <span class="lim-pct">${esc(people.length)}</span>
+      </summary>
+      <div class="lim-credits-body">${rows}</div>
+    </details>`;
+}
+
 // ===== Columna izquierda: "General" del PERÍODO seleccionado =====
 // series.totals = { modelKey: {tokens, cost} }. Sigue al rango + a la métrica.
 function renderLeft(container, series, metric, liveKeys, range) {
@@ -950,6 +1005,7 @@ export default {
 
       m.body.innerHTML = `
         <div class="usage-lims"><div class="cwc-loading">${pacman()}${t('usage.modal.limsLoading', 'límites del plan…')}</div></div>
+        <div data-ref="sponsored" hidden></div>
         <div class="usage-controls">
           <div class="uh-seg uh-seg-range" role="tablist">
             <button class="uh-seg-btn is-active" data-range="day" type="button">${t('usage.seg.day', 'Día')}</button>
@@ -976,6 +1032,7 @@ export default {
           </div>
         </div>`;
       const limsEl = m.body.querySelector('.usage-lims');
+      const sponsoredEl = m.body.querySelector('[data-ref="sponsored"]');
       const leftEl = m.body.querySelector('.usage-col-left');
       const chartWrap = m.body.querySelector('.usage-chart-wrap');
       const tabs = [...m.body.querySelectorAll('[data-range]')];
@@ -997,6 +1054,17 @@ export default {
         return cache.series[`${range}:${project}`] || null;
       }
       const loaderHtml = `<div class="cwc-loading">${pacman()}${t('usage.modal.loading', 'cargando…')}</div>`;
+
+      async function refreshSponsored() {
+        try {
+          const res = await fetch('/api/sponsorship/mine');
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          renderSponsored(sponsoredEl, data.sponsored);
+        } catch {
+          renderSponsored(sponsoredEl, []);
+        }
+      }
 
       // Pinta TODO desde la caché (0 fetch). chartMode: 'draw' crea la gráfica,
       // 'update' la actualiza en el lugar (sin parpadeo, para el auto-refresh).
@@ -1033,6 +1101,7 @@ export default {
           const jobs = [
             fetchSummary(fresh).then((s) => { cache.summary = s; }).catch(() => {}),
             fetchLimits(fresh).then((l) => { cache.limits = l; }).catch(() => {}),
+            refreshSponsored(),
           ];
           if (range !== 'day') jobs.push(fetchHistory(range, project).then((h) => { cache.series[`${range}:${project}`] = h; }).catch(() => {}));
           await Promise.all(jobs);

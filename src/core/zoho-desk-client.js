@@ -123,6 +123,80 @@ export async function addComment(username, ticket, content, { isPublic = false }
   });
 }
 
+export async function sendReply(username, ticket, content, { to = null, cc = '', bcc = '', fromEmailAddress = null, contentType = 'plainText' } = {}) {
+  const text = String(content ?? '').trim();
+  if (!text) throw new Error('sendReply requiere el cuerpo del mensaje.');
+
+  const id = await resolveTicketId(username, ticket);
+  let ticketData = null;
+  const loadTicket = async () => {
+    if (!ticketData) ticketData = await zohoFetch(username, `/tickets/${encodeURIComponent(id)}`);
+    return ticketData;
+  };
+
+  // El destinatario no siempre se puede inferir: los tickets creados por el
+  // "Report a bug" de la consola nacen con channel Phone y email null, así que
+  // hay que caer al correo del contacto y, si tampoco está, exigirlo explícito.
+  let recipient = String(to ?? '').trim();
+  if (!recipient) {
+    const t = await loadTicket();
+    recipient = String(t?.email ?? '').trim();
+    if (!recipient && t?.contactId) {
+      const contact = await zohoFetch(username, `/contacts/${encodeURIComponent(String(t.contactId))}`);
+      recipient = String(contact?.email ?? '').trim();
+    }
+  }
+  if (!recipient) {
+    throw new Error(`El ticket #${ticket} no tiene correo asociado ni contacto con correo. Pasá --to=<direccion>.`);
+  }
+
+  // Zoho solo acepta como remitente una dirección de respuesta VERIFICADA y ACTIVA
+  // del departamento del ticket. El endpoint que las lista es `mailReplyAddress`;
+  // `/organizations/emailConfiguration/fromAddresses` y sus variantes dan 404.
+  // La dirección viene en el campo `address` — NO en `email`.
+  let sender = String(fromEmailAddress ?? '').trim();
+  if (!sender) {
+    const t = await loadTicket();
+    const deptId = t?.departmentId ? String(t.departmentId) : null;
+    if (!deptId) {
+      throw new Error(`El ticket #${ticket} no declara departamento; no se puede deducir el remitente. Pasá --from=<direccion verificada>.`);
+    }
+    const r = await zohoFetch(username, `/mailReplyAddress?departmentId=${encodeURIComponent(deptId)}`);
+    const usable = (Array.isArray(r?.data) ? r.data : [])
+      .filter((a) => a?.isVerified && a?.isActive && String(a?.address ?? '').trim());
+
+    if (!usable.length) {
+      throw new Error(`El departamento ${deptId} no tiene ninguna dirección de respuesta verificada y activa. Pasá --from=<direccion>.`);
+    }
+    if (usable.length === 1) {
+      // Con una sola candidata da igual que no esté marcada como default: es la única.
+      sender = String(usable[0].address).trim();
+    } else {
+      const preferred = usable.find((a) => a?.isDepartmentDefault);
+      if (!preferred) {
+        // Elegir a ciegas acá es elegir con qué identidad de empresa sale el correo.
+        const names = usable.map((a) => String(a.address).trim()).join(', ');
+        throw new Error(`El departamento ${deptId} tiene varias direcciones verificadas y ninguna marcada como default (${names}). Pasá --from=<una de esas> para no elegir por vos.`);
+      }
+      sender = String(preferred.address).trim();
+    }
+  }
+
+  return zohoFetch(username, `/tickets/${encodeURIComponent(id)}/sendReply`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      channel: 'EMAIL',
+      to: recipient,
+      cc: String(cc ?? ''),
+      bcc: String(bcc ?? ''),
+      contentType,
+      content: text,
+      fromEmailAddress: sender,
+    }),
+  });
+}
+
 export async function uploadAttachment(username, ticket, filePath, { isPublic = false, fileName = null } = {}) {
   const id = await resolveTicketId(username, ticket);
   const fd = new FormData();

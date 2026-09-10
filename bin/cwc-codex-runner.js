@@ -113,6 +113,7 @@ async function runJob(id) {
             job.effort,
             false,
             Array.isArray(job.writableRoots) ? job.writableRoots : [],
+            (threadId) => { try { writeCodexJob(id, { threadId }); } catch { /* noop */ } },
           );
           const applied = await applyDeclaredBack(worktreePath, job.cwd, declared);
           if (applied.conflict === true) {
@@ -209,6 +210,7 @@ async function runJob(id) {
       job.effort,
       job.fullAccess === true,
       Array.isArray(job.writableRoots) ? job.writableRoots : [],
+      (threadId) => { try { writeCodexJob(id, { threadId }); } catch { /* noop */ } },
     );
     const after = await snapshotTree(job.cwd);
     const changes = diffSnapshots(before, after, job.cwd, startedAt);

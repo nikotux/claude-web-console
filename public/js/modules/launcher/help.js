@@ -23,6 +23,11 @@ export default function launcherHelp() {
               t('launcher.help.first.step5', 'Tocá “Iniciar en…” para crear y abrir la sesión.'),
             ],
           },
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('launcher.help.first.profile', 'Los tipos de sesión y proyectos disponibles dependen del perfil de cada usuario.'),
+          },
         ],
       },
       {

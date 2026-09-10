@@ -86,27 +86,33 @@ Al crear un ítem nuevo, replicar el patrón que ya tienen sus hermanos en vez d
 
 ## Islas legítimas
 
-Un PLAN de trabajo humano no-código puede ser un **sol autónomo**, desconectado del árbol de arquitectura, y eso no es un defecto: forzarle un `implements` a un módulo sería un link falso. Al 2026-07-25 son 5: Homey del jefe, onboarding de Persona 1, rediseño de oficina, expediente Princeton y aprendizaje personal.
+Un PLAN de trabajo humano no-código puede ser un **sol autónomo**, desconectado del árbol de arquitectura, y eso no es un defecto: forzarle un `implements` a un módulo sería un link falso. Las 5 islas canónicas siguen siendo Homey (`PLAN-333`), rediseño de oficina (`PLAN-156`), onboarding de Persona 1 (`PLAN-158`), expediente Princeton (`PLAN-858`) y aprendizaje personal (`PLAN-161`). Al 2026-09-08 se suman spam/phishing de Mark (`PLAN-2312`) y el informe de costos de Carolina (`PLAN-2829`).
 
-La regla práctica: **si el PLAN toca código de la consola, cross-linkealo a su módulo; si es trabajo del mundo real, dejalo como sol.**
+Existe además la categoría **isla de código externo**: código real, pero de OTRO repo, que forma su propia constelación fuera de la arquitectura de esta consola. Hoy el caso es `PLAN-2603` (ntux/mordoria), con sus BUGs colgando de él como sol propio.
+
+La regla práctica: **si el PLAN toca código de la consola, cross-linkealo a su módulo; si es trabajo del mundo real o código de otro repo, declaralo como isla.** Toda isla legítima lleva el tag `isla` en el ítem. El tag ya fue aplicado a las 8 islas el 2026-09-08 y es la marca que usa el check `pad-grafo` de Salud para no denunciarlas.
 
 ## Verificación (0 tokens)
 
-Read-only sobre la DB del Pad LOCAL, sin gastar tokens ni pegarle al MCP. Dos invariantes:
+El invariante ya no depende sólo de una inspección manual: vive como check `pad-grafo` en Salud (`src/modules/health/index.js`). Es 0 tokens, read-only sobre la DB del Pad LOCAL y nunca le pega al MCP. Verifica tres invariantes:
 
-1. **Ítems con grado 0 debe ser 0** — contar ítems vivos del workspace sin ninguna arista en `item_links` ni en `item_wiki_links`.
-2. **`arquitectura` debe tener 1 raíz** — contar ítems de esa colección sin link `parent` saliente; el único legítimo es `ARQUI-1258`.
+1. **Ítems con grado 0 (sin islas) debe ser 0** — contar ítems vivos del workspace sin ninguna arista por `parent_id`, `item_links` ni `item_wiki_links`. Los ítems con tag `isla` quedan excluidos: una isla declarada sin hijos es legítimamente un nodo aislado, y el tag es la declaración explícita que la distingue de un olvido.
+2. **`arquitectura` debe tener 1 raíz** — contar ítems de esa colección sin `parent_id` ni link `parent` saliente; el único legítimo es `ARQUI-1258`.
+3. **Plan activo sin arista saliente `parent`/`implements` y sin tag `isla` debe ser 0** — una isla declarada es legítima; todo otro sol activo debe quedar anclado a arquitectura.
 
 ```js
 // node -e, contra /home/nmosquera/.pad/pad.db en modo readOnly
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync('/home/nmosquera/.pad/pad.db', { readOnly: true });
-// workspace console: 58ec0882-e1c6-4f86-aeda-2bb47e8a05c3
-// 1) grado 0  → items vivos que no aparecen ni como source ni como target
-// 2) raíces   → items de 'arquitectura' sin fila (source_id=?, link_type='parent')
+const workspace = db.prepare("SELECT id FROM workspaces WHERE slug='console'").get();
+// 1) grado 0; 2) raíz de arquitectura; 3) soles activos sin ancla ni tag isla.
 ```
 
 Escribir al grafo NO se hace por SQL: se usa el MCP `pad` o el CLI (`pad item update <ref> --parent <ref>`, `pad item implements <a> <b>`, `pad item supersedes <nuevo> <viejo>`, con `--url http://10.213.222.192:7777 --workspace console`). El CLI tiene rate limit: conviene espaciar las llamadas y reintentar.
+
+### Gotcha: `backlinks` miente
+
+`pad_item action=backlinks` devuelve vacío incluso para ítems con entrantes reales (`BUG-2858`). Hasta que se arregle, la idempotencia de la Ley 6 se verifica con `action=deps`. Además, `parent_ref` en las respuestas del MCP es DERIVADO y puede venir viejo: el estado real de las aristas se comprueba con `deps` o directamente en SQLite. Para re-parentar un ítem que YA tiene parent, primero hay que enviar `clear_parent: true`. Asignar el parent nuevo por REST con `PATCH { parent: ... }` responde 200 y NO hace nada: la jerarquía es una arista y se crea con `POST /items/{ref}/links` (`setParent` en el cliente).
 
 ## Estado al 2026-07-25 (post reparación)
 
@@ -118,3 +124,11 @@ Escribir al grafo NO se hace por SQL: se usa el MCP `pad` o el CLI (`pad item up
 | Continente mayor | 1360 (85,6%) | **1532 (96,4%)** |
 | Raíces de `arquitectura` | 36 | **1** |
 | Links | 1768 | 1861 |
+
+## Estado de la auditoría F3
+
+| Corte | Estado | Registro |
+|---|---|---|
+| 2026-09-08 (pre-reparación F1) | vivos 2464 · huérfanos 24 · componentes 44 · continente 92,1% | auditoría `PLAN-2851` |
+
+La reparación F1 de esa misma fecha se ejecutó a continuación; los números post-F1 quedaron registrados en Pad, en `PLAN-2851`.

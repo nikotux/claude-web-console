@@ -2,6 +2,22 @@
 # public/js/modules — ficha del proyecto
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
+
+### Contrato de montaje por perfil
+Los módulos frontend conservan el contrato `{name, mount}` y sus slots
+`[data-module]`, pero `main.js` ahora pasa cada nombre por
+`allowModule(me, mod.name)` de `ui/profile.js`: si el nombre figura entre los
+ocultos para ese perfil, no llama a `mount` y deja el slot con el atributo
+`hidden`. Un módulo nuevo se ve por defecto en TODOS los perfiles; ocultarlo
+para alguno es una decisión explícita que se registra únicamente en
+`ui/profile.js`, sin listas paralelas en el módulo ni en `main.js`.
+
+Este recorte es de EXPERIENCIA y NO es seguridad. No montar u ocultar un
+módulo no autoriza ni protege sus endpoints y jamás reemplaza los gates
+fail-closed del backend (`isAdmin` y ownership por usuario). Todo endpoint que
+requiera protección debe imponerla en el backend, aunque su módulo no sea
+visible para un perfil.
+
 ### public/js/modules/          launcher · sessions (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
 2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la
 fila 2 suma una LÍNEA VIVA (`.sess-live`, `liveText()`) con prioridad
@@ -71,6 +87,11 @@ navegador de archivos; el filtro por usuario vive únicamente en el launcher,
 no en `PLACES`. GOTCHA: todos esos destinos son RUTAS RELATIVAS. El clamp del
 backend las resuelve dentro del workspace propio del inquilino, de modo que
 ofrecerle un destino inexistente ahí termina en un 400 del backend.
+Para el perfil `sponsored`, el launcher muestra solo Chat: oculta entero el
+grupo “Tipo de sesión” y fija `st.type = 'chat'`, porque un selector de una
+opción no ofrece una decisión real. También oculta Tolkien; los destinos que
+quedan son “Mi espacio” y “Otra carpeta”. La identidad ausente conserva la
+experiencia completa por el fail-open definido en `ui/profile.js`.
 En tarjetas de chat (no tmux/TUI) el chevron `.sess-kids-toggle` está
 SIEMPRE presente y despliega `.sess-kids`: con 0 hijos se ATENÚA
 (`.sess-kids-toggle--idle`) y muestra contador `0`, pero NUNCA se
@@ -560,6 +581,9 @@ tiene 28 temas: 26 ids usan `helpBtn`, `auxbar` usa un botón estático
 `data-help="auxbar"` porque su chrome vive en index.html, y `stats` no tiene
 botón propio porque su widget son tres gauges sin header; se llega desde el
 hub "Guía de la consola".
+`cerebro-help.js` es el tema contextual de la página standalone Cerebro del
+Pad; `ui/help-index.js` lo carga de forma lazy bajo el id `cerebro`, igual que
+`rawview-help.js` para la Vista Raw.
 
 ### public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 `chat/help.js` documenta en “Gráficos y diagramas” los gráficos inline,

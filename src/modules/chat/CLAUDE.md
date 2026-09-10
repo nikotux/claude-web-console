@@ -465,21 +465,21 @@ chats lanzados desde otro dispositivo; no "optimizar" ese early
 return de vuelta.
 AISLAMIENTO POR DUEÑO (2026-07-27, reporte de Niko: "las
 preguntas que se le hacen a Richie me aparecen a mí también"):
-un ADMIN sigue viendo TODOS los chats en /api/chat/list
-(visibilidad de gestión, sin cambios), pero los pendientes
-INTERACTIVOS de un chat AJENO viajan VACÍOS: ChatManager.list()
+solo quien tiene `oversight` ve TODOS los chats en /api/chat/list;
+ser admin no alcanza. Los pendientes INTERACTIVOS de un chat AJENO
+viajan VACÍOS: ChatManager.list()
 vacía pendingPerms/pendingInterfono de todo chat cuyo dueño no
 sea el principal y expone en su lugar pendingPermsCount/
 pendingInterfonoCount. Así el centro global no popupea la
 pregunta de un inquilino en la pantalla del host (que además
 podía RESPONDERLA por él: POST /api/chat/permission deja operar
-al admin vía ownedChat). La comparación de dueño normaliza ambos
+a quien tiene `oversight` vía ownedChat). La comparación de dueño normaliza ambos
 lados con hostUser() porque los chats legacy tienen owner:null =
 el host; sin esa normalización el host se silenciaba sus PROPIOS
 chats viejos. La tarjeta de Sesiones conserva el badge "esperando
 tu permiso (n)" leyendo el conteo (sessions.js). El camino WS
 instantáneo (eventos cwc:perm-request de ChatTab) NO se tocó:
-solo dispara si el admin ABRE a propósito la pestaña de ese chat.
+solo dispara si quien tiene `oversight` ABRE a propósito la pestaña de ese chat.
 AUTO-TÍTULO con IA: en cada mensaje del usuario, sendUser dispara
 _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
 READ-ONLY doble capa regla 6 con TODA herramienta denegada) que
@@ -1047,6 +1047,10 @@ lógica compartida: snapshot git antes/después, atribución del diff,
 NO puede importar el Agent SDK ni zod, porque también lo consume el runner
 desacoplado/config-free; arrastrarlos volvería a acoplar la ejecución al
 stack del chat y le impediría arrancar como proceso mínimo independiente.
+`runCodex(..., onThread)` acepta un callback opcional y lo invoca una sola vez
+apenas el stream JSONL entrega `thread.started`; el runner lo usa para
+persistir el `threadId` durante la ejecución, de modo que el módulo de tokens
+pueda atribuir el rollout vivo al job y al chat padre sin esperar el cierre.
 El job persistido tiene esta forma:
 `{id, chatId, cwd, task, model, effort, fullAccess, writableRoots, pid,
 status, label, startedAt, heartbeatAt, finishedAt, report, isError, error,
@@ -1365,7 +1369,7 @@ previos al multi-tenant tienen el campo AUSENTE; los nuevos,
 picker «🔗 Referenciar paquete» — el MISMO modo de falla que ya documenta
 `ChatManager.list`. Medido tras el fix: host 282 · inquilino 0 · sin filtro 282.
 `GET /package/:ref` además responde 404 (sin revelar existencia) si el paquete
-es de otro dueño; un admin sí puede verlo.
+es de otro dueño; solo `oversight` permite verlo.
 (c) PRESIÓN DE VENTANA DE AUTOTUX: `readWindowPressure()` leía el
 `plan-limits.json` del HOST, o sea el AutoTux de un inquilino decidía
 «conservar» mirando el consumo de Niko (el módulo `tokens` ya resolvía ese
@@ -1733,14 +1737,25 @@ PLANOS en la raíz del mensaje mientras el backend los leía ANIDADOS bajo
 `replyFromPayload()` acepta ambas formas y lo usan los DOS caminos de entrada,
 WS y HTTP, para que no puedan volver a divergir.
 
-LAS CUATRO COMPUERTAS conservan la frontera por dueño. `ownedChat` quedó
-INTACTO para las acciones de dueño y se sumó `participantChat` para las
-acciones de participar; cambiaron el guard del WS, `list(principal)` y el
-vaciado de `pendingPerms`. **Compartido ≠ ajeno**: el aislamiento del
-2026-07-27 sigue intacto y se abre SOLO la sala en la que el usuario figura
-como participante. Interrumpir y responder permisos corresponde a quien hizo
-el corte (`_lastCutBy`) y al dueño; cambiar modelo/modo/effort, invitar y
-revocar corresponde solo al dueño, porque él paga los turnos.
+LAS CUATRO COMPUERTAS conservan la frontera por dueño y separan contenido de
+administración. `list(principal)` muestra lo propio, las salas donde hay
+participación real y, solo con `oversight`, lo ajeno; `ownedChat` admite dueño
+u `oversight`; `participantChat` admite `oversight` o participación real; y
+`GET /package/:ref` exige dueño u `oversight`. Se ELIMINÓ el pase por `admin`
+de `participantChat`, gate del WebSocket `/ws/chat`: además de abrir chats
+privados, dejaba entrar a cualquier admin en cualquier sala de Aduana ajena.
+Adjuntos y paquetes siguen la misma frontera. **Compartido ≠ ajeno**: se abre
+SOLO la sala en la que el usuario figura como participante. Interrumpir y
+responder permisos corresponde a quien hizo el corte (`_lastCutBy`) y al dueño;
+cambiar modelo/modo/effort, invitar y revocar corresponde solo al dueño, porque
+él paga los turnos.
+
+PASAPORTE DE AUTOR (`console:BUG-2831`): `sendUser(text, attachments, by)` recibe
+el username del emisor desde la rama `user` del WebSocket. Si no es el dueño,
+la burbuja lleva `by` y el texto entregado al modelo se prefija para decir quién
+lo escribió y que no debe atribuirlo al dueño. El default de `by` es el DUEÑO,
+nunca el host: ante un autor ausente no se inventa una identidad ajena. Es la
+Ley 4 de Aduana aplicada también fuera de las salas.
 
 IDENTIDAD VISUAL: `--cwc-peer-1…6` se asigna por HASH del username, nunca por
 una lista cableada, de modo que un usuario nuevo entra sin tocar código. Los

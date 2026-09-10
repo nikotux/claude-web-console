@@ -148,6 +148,15 @@ export default function usageHelp() {
         ],
       },
       {
+        title: t('usage.sponsored.help.title', 'Patrocinados'),
+        blocks: [
+          {
+            type: 'p',
+            text: t('usage.sponsored.help.text', 'Un patrocinado es una persona que trabaja con la credencial de Claude que le presta su sponsor, quien paga ese consumo. El umbral es sólo un aviso informativo: no hay ningún tope que corte el trabajo de esa persona.'),
+          },
+        ],
+      },
+      {
         title: t('usage.help.warning.title', 'Ojo con esto'),
         blocks: [
           {

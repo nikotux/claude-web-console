@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
+import { oversightFor } from './users.js';
 
 const COOKIE_NAME = 'cwc_token';      // token maestro
 const SESSION_COOKIE = 'cwc_session'; // sesión de usuario
@@ -101,19 +102,21 @@ export function sessionIdOf(req) {
 }
 
 // Resuelve el "principal" de la request: usuario, token o null.
-// { type: 'user'|'token', username: string|null, admin: boolean }
+// { type: 'user'|'token', username: string|null, admin: boolean, oversight: boolean }
 export function principalOf(req) {
   const sid = sessionIdOf(req);
   if (sid && sessions.has(sid)) {
     const s = sessions.get(sid);
     if (s.expires > Date.now()) {
-      return { type: 'user', username: s.username, admin: !!s.admin };
+      // `admin` viaja congelado en la sesión hasta que vence la cookie o hay
+      // re-login; `oversight` se resuelve en vivo para apagarlo al request siguiente.
+      return { type: 'user', username: s.username, admin: !!s.admin, oversight: oversightFor(s.username) };
     }
     sessions.delete(sid); // sesión vencida: la descartamos
     persistSessions();
   }
   if (tokenMatches(extractToken(req))) {
-    return { type: 'token', username: null, admin: true };
+    return { type: 'token', username: null, admin: true, oversight: true };
   }
   return null;
 }

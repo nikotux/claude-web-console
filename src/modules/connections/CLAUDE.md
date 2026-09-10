@@ -9,12 +9,16 @@ cuentas de terceros y la consola actúa con SU identidad. Ruta
 TRES NIVELES de credencial: (a) APP de instancia (client_id/secret) que carga
 UNA vez el admin → ~/.cwc-data/connections/_app.json; (b) APP POR USUARIO →
 userDataDir(<user>)/connections/_app.json, que pisa ENTERA la de instancia para
-ese proveedor cuando está completa; (c) TOKEN por-usuario →
+ese proveedor cuando está completa; (c) CREDENCIAL por-usuario →
 userDataDir(<user>)/connections/<provider>.json (perms 600, escritura atómica).
-NUNCA se comparte un token entre usuarios. Proveedores: microsoft (device code flow, scopes
-offline_access User.Read Calendars.ReadWrite) y zoho (grant code de
-Self Client). core/connections-store.js expone getAccessToken(username,
-provider) que refresca y re-persiste solo — es la puerta ÚNICA al token.
+NUNCA se comparte un token ni una API key entre usuarios. Proveedores:
+microsoft (`kind: 'oauth'`, device code flow, scopes offline_access User.Read
+Calendars.ReadWrite), zoho (`kind: 'oauth'`, grant code de Self Client) y
+freshservice (`kind: 'apikey'`, API key por agente con Basic auth `apiKey:X`).
+`core/connections-store.js` expone `getAccessToken(username, provider)`, que
+refresca y re-persiste solo y es la puerta ÚNICA al token OAuth, y
+`getApiCredential(username, provider)`, puerta ÚNICA a `{ domain, apiKey }`
+para credenciales estáticas. Los endpoints de estado nunca exponen la API key.
 El scope Microsoft ahora cubre también SharePoint (Sites.ReadWrite.All,
 delegado ⇒ la consola solo ve lo que el usuario ve); agregar un scope
 nuevo SIEMPRE obliga a reconectar la cuenta.
@@ -22,7 +26,10 @@ Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
 GET|POST /app (admin) · GET /app/mine · POST /app/mine ·
 POST /app/mine/reset (los tres autenticados, per-usuario y NO admin-only) ·
 POST /:p/connect · /:p/code · /:p/cancel ·
-/:p/disconnect · GET /:p/status. Codex suma endpoints AUTENTICADOS,
+/:p/disconnect · GET /:p/status (flujo OAuth) · Freshservice suma
+POST /freshservice/connect (verifica antes de persistir) ·
+POST /freshservice/disconnect · GET /freshservice/status; los tres son
+AUTENTICADOS, por-usuario y NO admin-only. Codex suma endpoints AUTENTICADOS,
 por-usuario y NO admin-only: POST /codex/start · GET /codex/status ·
 POST /codex/cancel; lanzan `bin/cwc-codex-login-runner.js`, que corre
 `codex login --device-auth`. Device-auth es obligatorio en el server
@@ -43,7 +50,8 @@ browser-based sólo expone URL y verificación automática.
 Tolkien suma cinco endpoints por-usuario: POST /tolkien/login/start · GET
 /tolkien/login/status · POST /tolkien/login/cancel · GET /tolkien/status ·
 POST /tolkien/disconnect. NO entra en `PROVIDERS` ni en
-`core/connections-store.js` porque no es OAuth: usa la cookie httpOnly de
+`core/connections-store.js` porque su cookie requiere un storage dedicado (a
+diferencia de la credencial estática soportada para Freshservice): usa la cookie httpOnly de
 sesión de next-auth v5 `__Secure-tolkien.session`. Como el token es un JWE
 cifrado y NO se puede decodificar, el email y el vencimiento salen de
 `GET https://app.tolkien.mordorstaffing.com/api/auth/session` de Auth.js. La

@@ -11,6 +11,7 @@ import stats from '../modules/stats/index.js';
 import tokens from '../modules/tokens/index.js';
 import tmux from '../modules/tmux/index.js';
 import admin from '../modules/admin/index.js';
+import sponsorship from '../modules/sponsorship/index.js';
 import tolkien from '../modules/tolkien/index.js';
 import backup from '../modules/backup/index.js';
 import chat from '../modules/chat/index.js';
@@ -33,8 +34,9 @@ import unifi from '../modules/unifi/index.js';
 import news from '../modules/news/index.js';
 import visado from '../modules/visado/index.js';
 import folders from '../modules/folders/index.js';
+import cerebro from '../modules/cerebro/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, sponsorship, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders, cerebro];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

@@ -372,7 +372,7 @@ export function diffSnapshots(before, after, cwd, startedAt) {
 // {code|error, msgs[], threadId, usage, stderr}. Kill por tope de seguridad.
 // PLAN-519 F2: modelo+esfuerzo configurables (default gama alta). `fullAccess`
 // desactiva el sandbox, necesario para escribir en `.git`.
-export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = []) {
+export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = [], onThread = null) {
   return new Promise((resolve) => {
     // Este código corre dentro del runner: os.homedir() ya resuelve al HOME aislado
     // del dueño, inyectado por userRunnerEnv; no corresponde importar user-space.
@@ -408,6 +408,7 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
     let stderr = '';
     const msgs = [];
     let threadId = null;
+    let threadNotified = false;
     let usage = null;
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* noop */ }
@@ -420,7 +421,13 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         if (!line.trim()) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'thread.started') threadId = ev.thread_id || threadId;
+        if (ev.type === 'thread.started') {
+          threadId = ev.thread_id || threadId;
+          if (!threadNotified && threadId && typeof onThread === 'function') {
+            threadNotified = true;
+            try { onThread(threadId); } catch { /* noop */ }
+          }
+        }
         else if (ev.type === 'item.completed' && ev.item?.type === 'agent_message' && ev.item.text) msgs.push(ev.item.text);
         else if (ev.type === 'turn.completed' && ev.usage) usage = ev.usage;
       }

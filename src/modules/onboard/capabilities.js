@@ -6,13 +6,13 @@ import {
   hasCodexCreds,
   hasInfisicalCreds,
   hostUser,
-  readUserOauthToken,
   sanitizeUserId,
   userClaudeDir,
   userRunnerEnv,
   userSpace,
 } from '../../core/user-space.js';
-import { listUsers } from '../../core/users.js';
+import { resolveClaudeCredential } from '../../core/sponsorship.js';
+import { sponsorshipState, listUsers } from '../../core/users.js';
 
 // El HOST no pasa por el wizard: su credencial es la del login real del CLI
 // (`.credentials.json`), no el `oauth-token` que deja `claude setup-token`.
@@ -50,17 +50,18 @@ export function hasGithubAuth(user) {
 }
 
 // `required` admite un boolean o un objeto segmentado. Las claves del objeto
-// quedan deliberadamente abiertas: hoy resolvemos el rol binario, pero el eje
-// útil futuro puede ser el perfil de trabajo y no un enum fijo de roles.
+// quedan deliberadamente abiertas: hoy resolvemos primero el tier patrocinado
+// y, para el resto, conservamos el rol binario admin/usuario.
 export const CAPABILITIES = [
-  // Habilita ejecutar Claude con la credencial propia del usuario.
-  // En un inquilino, aceptar `.credentials.json` daría un falso positivo y rompería el blindaje anticonsumo.
+  // Un patrocinado no genera credencial propia: usa la resolución central del
+  // sponsor. Si ese sponsor aún no tiene oauth-token, el paso sigue incompleto.
   {
     id: 'claude',
     order: 1,
-    required: true,
+    required: { admin: true, usuario: true, patrocinado: false },
     labelEs: 'Credencial de Claude',
-    detect: (user) => !!readUserOauthToken(user) || (isHostUser(user) && hasClaudeAccountCreds(user)),
+    detect: (user) => !!resolveClaudeCredential(user).token
+      || (isHostUser(user) && hasClaudeAccountCreds(user)),
     startPath: '/creds-start',
     statusPath: '/creds-status',
   },
@@ -74,21 +75,23 @@ export const CAPABILITIES = [
     startPath: '/claude-account-start',
     statusPath: '/claude-account-status',
   },
-  // Habilita usar Codex como proveedor del chat.
+  // Un patrocinado tampoco pasa por el login de Codex: por definición no se le
+  // exige una cuenta propia para completar el alta.
   {
     id: 'codex',
     order: 3,
-    required: true,
+    required: { admin: true, usuario: true, patrocinado: false },
     labelEs: 'Codex',
     detect: (user) => hasCodexCreds(user),
     startPath: '/codex-start',
     statusPath: '/codex-status',
   },
-  // Habilita acceder a secretos y servicios respaldados por Infisical.
+  // El perfil patrocinado no es desarrollador: Infisical y GitHub se detectan
+  // si existen, pero no bloquean su alta porque son herramientas de desarrollo.
   {
     id: 'infisical',
     order: 4,
-    required: true,
+    required: { admin: true, usuario: true, patrocinado: false },
     labelEs: 'Infisical',
     detect: (user) => hasInfisicalCreds(user),
     startPath: '/infisical-start',
@@ -98,7 +101,7 @@ export const CAPABILITIES = [
   {
     id: 'github',
     order: 5,
-    required: true,
+    required: { admin: true, usuario: true, patrocinado: false },
     labelEs: 'GitHub',
     detect: (user) => hasGithubAuth(user),
     startPath: '/github-start',
@@ -125,7 +128,9 @@ export function requiredFor(capability, user) {
     : null;
   if (!knownUser) return true;
 
-  const segment = knownUser.admin ? 'admin' : 'usuario';
+  const segment = sponsorshipState(knownUser.username) !== 'none'
+    ? 'patrocinado'
+    : (knownUser.admin ? 'admin' : 'usuario');
   // Ante un segmento ausente o inválido cerramos el gate: pedir un paso de más
   // es recuperable; dar el alta incompleta deja al usuario mal provisionado.
   return typeof segmented[segment] === 'boolean' ? segmented[segment] : true;

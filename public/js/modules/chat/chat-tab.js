@@ -311,6 +311,7 @@ export class ChatTab {
     this._unreadAtOpen = 0;
     this._newSepEl = null;
     this._lastSayTs = null;
+    this._lastDaySepKey = null; // día del último separador pintado (estilo WhatsApp)
     this._lastReadTs = null;
     this._markReadTimer = null;
     this._markReadQueuedTs = null;
@@ -1105,6 +1106,7 @@ export class ChatTab {
         this._unreadAtOpen = this.isSala ? (m.salaUnread || 0) : 0;
         this._newSepEl = null;
         this._lastSayTs = null;
+        this._lastDaySepKey = null;
         this._lastReadTs = null;
         this._readGeneration++;
         clearTimeout(this._markReadTimer);
@@ -1199,8 +1201,8 @@ export class ChatTab {
         this._refreshSalaIdentity();
         if (this._slashPop && this._slashKind === 'mention') this._slashUpdate();
         break;
-      case 'user': this._closeStream(); this._bubble('user', m.text, m.attachments); break;
-      case 'assistant': this._assistantFinal(m.text); break;
+      case 'user': this._closeStream(); this._bubble('user', m.text, m.attachments, m.by, m.ts); break;
+      case 'assistant': this._assistantFinal(m.text, m.ts); break;
       case 'delta': this._stream(m.text); break;
       case 'tool_use': this._closeStream(); this._toolCard(m); break;
       case 'tool_result': this._toolResult(m); break;
@@ -1292,6 +1294,50 @@ export class ChatTab {
   _localTime(ts) {
     const date = new Date(ts);
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // ===== Fecha y hora del mensaje (estilo WhatsApp) =====
+  // Dos piezas: un separador que corta el hilo cuando cambia el día, y la
+  // hora al pie de cada mensaje. Sin `ts` no se pinta nada: un evento viejo
+  // (anterior al matasellos del server) prefiere no decir nada a mentir.
+  _dayKey(ts) {
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return null;
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  }
+
+  _dayLabel(ts) {
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return '';
+    const key = this._dayKey(ts);
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    if (key === this._dayKey(now.getTime())) return t('chat.day.today', 'Hoy');
+    if (key === this._dayKey(yesterday.getTime())) return t('chat.day.yesterday', 'Ayer');
+    return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  // Inserta el separador de día si este mensaje cae en un día distinto al
+  // del último pintado. Cuelga de .chat-msgs (no de un grupo): así corta
+  // también el grupo de la IA y el de un autor de sala, que es lo correcto.
+  _maybeDaySep(ts) {
+    if (ts == null) return;
+    const key = this._dayKey(ts);
+    if (!key || key === this._lastDaySepKey) return;
+    const sep = document.createElement('div');
+    sep.className = 'chat-day-sep';
+    sep.textContent = this._dayLabel(ts);
+    this.msgsEl.appendChild(sep);
+    this._lastDaySepKey = key;
+  }
+
+  _timeTag(ts) {
+    const time = ts == null ? '' : this._localTime(ts);
+    if (!time) return null;
+    const el = document.createElement('span');
+    el.className = 'chat-msg-time';
+    el.textContent = time;
+    return el;
   }
 
   _renderActa(acta) {
@@ -1412,6 +1458,7 @@ export class ChatTab {
 
   _say(m) {
     if (!this.isSala) return;
+    this._maybeDaySep(m.ts);
     if (this._historyRendering) {
       const unread = Math.min(this._historySayTotal, Math.max(0, Number(this._unreadAtOpen) || 0));
       if (!this._newSepEl && unread > 0 && this._historySayIndex === this._historySayTotal - unread) {
@@ -1439,7 +1486,7 @@ export class ChatTab {
       const avatarNode = this._avatarNodeFor(by, { size: 22, title });
       const label = document.createElement('span');
       label.className = 'chat-say-label';
-      label.textContent = t('chat.sala.sayLabel', '{name} · {time}', { name: by, time: this._localTime(m.ts) });
+      label.textContent = t('chat.sala.sayLabel', '{name}', { name: by });
       head.append(avatarNode, label);
       group.appendChild(head);
       this.msgsEl.appendChild(group);
@@ -1492,6 +1539,8 @@ export class ChatTab {
     body.appendChild(this._sayTextNodes(m.text || '', m.mentions, !!m.askAi));
     if (typeof m.text === 'string' && m.text) el.appendChild(body);
     if (Array.isArray(m.attachments) && m.attachments.length) el.appendChild(this._attsEl(m.attachments));
+    const timeTag = this._timeTag(m.ts);
+    if (timeTag) el.appendChild(timeTag);
     el.appendChild(this._reactionRow(el.dataset.msgId, m.reactions));
     group.appendChild(el);
     if (m.ts != null) this._lastSayTs = m.ts;
@@ -1830,9 +1879,16 @@ export class ChatTab {
     this._renderTyping();
   }
 
-  _bubble(kind, text, attachments = null) {
+  _bubble(kind, text, attachments = null, by = null, ts = null) {
+    this._maybeDaySep(ts);
     const el = document.createElement('div');
     el.className = `chat-msg chat-${kind}`;
+    if (by) {
+      const author = document.createElement('div');
+      author.className = 'chat-pkg-meta';
+      author.textContent = t('chat.message.author', 'Mensaje de {name}', { name: by });
+      el.appendChild(author);
+    }
     // Mensaje que empieza con /comando: chip destacado + resto normal (solo
     // presentación; el texto viajó intacto al SDK). Aplica también al replay.
     const cmd = kind === 'user' ? String(text).match(CMD_RE) : null;
@@ -1847,6 +1903,8 @@ export class ChatTab {
     }
     // Adjuntos: miniaturas (imágenes) / chips (PDF, texto, binarios) bajo el texto.
     if (attachments && attachments.length) el.appendChild(this._attsEl(attachments));
+    const timeTag = this._timeTag(ts);
+    if (timeTag) el.appendChild(timeTag);
     const host = String(kind).includes('assistant') ? this._aiHost() : this.msgsEl;
     host.appendChild(el);
     this._scroll();
@@ -1854,7 +1912,10 @@ export class ChatTab {
   }
 
   _stream(text) {
-    if (!this.streamEl) this.streamEl = this._bubble('assistant streaming', '');
+    if (!this.streamEl) {
+      this._maybeDaySep(Date.now());
+      this.streamEl = this._bubble('assistant streaming', '');
+    }
     if (!this.isSala) {
       this.streamEl.textContent += text;
       this._scroll();
@@ -1874,7 +1935,8 @@ export class ChatTab {
 
   // Texto final del asistente: reemplaza la burbuja de streaming (texto plano)
   // por la versión renderizada en markdown.
-  _assistantFinal(text) {
+  _assistantFinal(text, ts = null) {
+    if (!this.streamEl) this._maybeDaySep(ts);
     const parsed = this.isSala ? stripAddressees(text, { final: true }) : { addressees: null, text, pending: false };
     const md = renderMarkdown(parsed.text);
     let addressees = [];
@@ -1924,6 +1986,8 @@ export class ChatTab {
       this._aiHost().appendChild(el);
       answerEl = el;
     }
+    const timeTag = this._timeTag(ts);
+    if (timeTag) answerEl.appendChild(timeTag);
     if (this.isSala) this._addOrchestrateButton(answerEl, parsed.text);
     this._streamRaw = '';
     this._streamAddresseesResolved = false;
@@ -2121,7 +2185,10 @@ export class ChatTab {
   // pegarse (un turno que arranca ejecutando, sin texto previo).
   _pacAnchor(prev) {
     if (!prev || !prev.classList.contains('chat-assistant')) return null;
-    const md = prev.lastElementChild;
+    // La hora al pie del mensaje (.chat-msg-time) es el último hijo desde que
+    // existe el sello estilo WhatsApp: el markdown es el hermano anterior.
+    let md = prev.lastElementChild;
+    if (md && md.classList.contains('chat-msg-time')) md = md.previousElementSibling;
     const lastBlock = md && md.children.length ? md.children[md.children.length - 1] : null;
     if (lastBlock && lastBlock.tagName === 'P') return lastBlock;
     return prev;

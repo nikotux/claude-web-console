@@ -90,6 +90,9 @@ const PATHS = {
   relay: `<circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/><path d="M8.6 8.6a5 5 0 0 0 0 6.8"/><path d="M15.4 8.6a5 5 0 0 0 0 6.8"/><path d="M5.6 5.6a10 10 0 0 0 0 12.8"/><path d="M18.4 5.6a10 10 0 0 0 0 12.8"/>`,
   // Pulso/actividad en vivo (botón "Vista Raw", PLAN-544): línea de latido tipo ECG.
   pulse: `<polyline points="2,13 7,13 9.5,6.5 13,19 15.5,13 22,13"/>`,
+  // Cerebro/red neuronal (botón "Cerebro del Pad"): dos lóbulos simétricos con
+  // un tallo central — el banco de conocimientos visto como órgano vivo.
+  brain: `<path d="M12 5.2v13.6"/><path d="M9.6 4.2a2.6 2.6 0 0 0-2.5 2.1 2.4 2.4 0 0 0-2 2.4 2.5 2.5 0 0 0 .6 1.6 2.5 2.5 0 0 0-.5 1.5 2.5 2.5 0 0 0 1.6 2.3 2.5 2.5 0 0 0 2.4 3.1 2.4 2.4 0 0 0 2.4-1.6"/><path d="M14.4 4.2a2.6 2.6 0 0 1 2.5 2.1 2.4 2.4 0 0 1 2 2.4 2.5 2.5 0 0 1-.6 1.6 2.5 2.5 0 0 1 .5 1.5 2.5 2.5 0 0 1-1.6 2.3 2.5 2.5 0 0 1-2.4 3.1 2.4 2.4 0 0 1-2.4-1.6"/>`,
 };
 
 // Devuelve markup <svg>…</svg> para el nombre dado. Si no existe, un círculo

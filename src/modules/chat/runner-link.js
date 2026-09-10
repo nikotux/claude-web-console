@@ -6,7 +6,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CONSOLE_ROOT } from '../../core/paths.js';
-import { userRunnerEnv, hostUser, userClaudeDir, readUserOauthToken } from '../../core/user-space.js';
+import { resolveClaudeCredential, sponsorTokenReady } from '../../core/sponsorship.js';
+import { userRunnerEnv, hostUser, userClaudeDir } from '../../core/user-space.js';
 import { CHATS_DIR, sockPath, logPath } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -138,12 +139,26 @@ export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandl
       throw new Error('La credencial de Claude del host está vacía o ilegible (~/.claude/.credentials.json). Corré `claude /login` en una terminal y reintentá.');
     }
   } else {
-    // Token del inquilino: el pasado explícito, o el que dejó su onboarding.
-    const token = oauthToken || readUserOauthToken(ownerId);
+    // Una credencial explícita del caller manda siempre. Si no vino, la fuente
+    // única resuelve primero la propia y sólo después el patrocinio nominal.
+    const credential = oauthToken
+      ? { token: oauthToken, source: 'own', sponsor: null }
+      : resolveClaudeCredential(ownerId);
+    const token = credential.token;
+    if (credential.source === 'sponsored') {
+      args.push('--sponsored-by', credential.sponsor);
+      // Riesgo aceptado explícitamente por Nico (2026-08-29): Bash permite al
+      // patrocinado leer /proc/self/environ y conservar el token del sponsor.
+      // Es una decisión de confianza, no un descuido; no se recortan Bash ni
+      // bypassPermissions para mitigarlo (igual que la Ley 5 de Aduana).
+    }
     env = userRunnerEnv(ownerId, { oauthToken: token }); // inquilino: env limpio aislado
     // fail-closed: sin token NI creds propias en su .claude, NO arrancar
     // (jamás caer a las creds del server → eso quemaría los tokens del admin).
     if (!token && !fs.existsSync(path.join(userClaudeDir(ownerId), '.credentials.json'))) {
+      if (credential.sponsor && !sponsorTokenReady(credential.sponsor)) {
+        throw new Error(`El usuario ${ownerId} está patrocinado por ${credential.sponsor}, pero ${credential.sponsor} no tiene un token de patrocinio. Generalo con \`claude setup-token\` y guardalo en su oauth-token.`);
+      }
       throw new Error(`El usuario ${ownerId} no tiene credenciales de Claude configuradas (completá el onboarding).`);
     }
   }

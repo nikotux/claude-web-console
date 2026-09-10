@@ -39,6 +39,7 @@ const PENDING_CAP = 6000;
 const LOG_CAP = 40000;          // el seed del backend ahora trae hasta 40.000 chars
 const LOG_TICK_MS = 90;         // cadencia de la máquina de escribir
 const LOG_LINE_PX = 14.85;      // font-size 11px × line-height 1.35 de .raw-log-code
+const DEFAULT_LOG_COLS = 60;
 const IDLE_COLLAPSE_MS = 60000;  // un minuto sin producir nada → sale de la grilla
 const DOZING_BAR_PX = 22;        // alto de la fila de chips (0 si no hay ninguna)
 // Ancho real de un carácter del panel de log. Se mide en un canvas PROPIO —
@@ -103,7 +104,6 @@ let layoutSig = '';
 let dozingBarH = 0;
 let lastTs = 0;
 let logMaxLines = 40;
-let logCols = 60;
 let termFullPending = true;
 let isAdminUser = false;
 let meUser = null;   // username propio; con token maestro cae al host
@@ -118,6 +118,7 @@ const state = {
   codexTps: 0,
   lastSeq: 0,
   sessions: new Map(),  // sessionId -> sesión (ver upsert)
+  chatSidById: new Map(), // chatId -> sessionId del padre (para hijos Codex)
   prevTotals: new Map(), // key -> último total visto (para deltas monotónicos)
   tok: { claude: restoreCounter('claude'), codex: restoreCounter('codex') }, // real acumulado (persistente)
   shown: { claude: 0, codex: 0 },  // valor mostrado (trepa suave hacia tok)
@@ -140,18 +141,40 @@ function worldFromCwd(cwd) {
   return 'otros';
 }
 
+function parentSidOf(s) {
+  if (!s) return null;
+  return s.parentSid || (s.parentChatId ? state.chatSidById.get(s.parentChatId) : null) || null;
+}
+function worldOf(s) {
+  const parent = state.sessions.get(parentSidOf(s));
+  return (parent && parent.world) || (s && s.world);
+}
+
 // hue del mundo + jitter/lightness estables por sesión.
 function sessionHSL(sid, world, kind) {
-  const wk = worldKey(world);
+  const s = state.sessions.get(sid);
+  const parentSid = parentSidOf(s);
+  const wk = worldKey(s ? worldOf(s) : world);
+  const cached = s && s._hsl && s._hsl[kind];
+  if (cached && cached.world === wk && cached.parentSid === parentSid) return cached.value;
+
+  const h = hashStr(parentSid || sid);
+  const childHueShift = parentSid ? (hashStr(sid) % 13) - 6 : 0;
   const base = WORLD[wk].hue;
-  const h = hashStr(sid);
-  const hue = base + ((h % 26) - 13);
+  const hue = base + ((h % 26) - 13) + childHueShift;
   const sat = wk === 'otros' ? 14 : 66;
   const light = 44 + (h % 20);
-  if (kind === 'head') return `hsl(${hue}, 80%, 90%)`;                 // cabeza incandescente
-  if (kind === 'real') return `hsl(${hue}, ${Math.min(100, sat + 26)}%, ${Math.min(84, light + 26)}%)`;
-  if (kind === 'idle') return `hsl(${hue}, ${sat}%, ${light}%)`;
-  return `hsl(${hue}, ${Math.min(90, sat + 18)}%, ${Math.min(86, light + 24)}%)`; // label
+  const childDim = parentSid ? 8 : 0;
+  let value;
+  if (kind === 'head') value = `hsl(${hue}, 80%, ${90 - childDim}%)`;                 // cabeza incandescente
+  else if (kind === 'real') value = `hsl(${hue}, ${Math.min(100, sat + 26)}%, ${Math.min(84, light + 26) - childDim}%)`;
+  else if (kind === 'idle') value = `hsl(${hue}, ${sat}%, ${light - childDim}%)`;
+  else value = `hsl(${hue}, ${Math.min(90, sat + 18)}%, ${Math.min(86, light + 24) - childDim}%)`; // label
+  if (s) {
+    if (!s._hsl) s._hsl = {};
+    s._hsl[kind] = { world: wk, parentSid, value };
+  }
+  return value;
 }
 function idleGlyph(source) {
   const set = source === 'term' ? SHELL_GLYPHS : IDLE_GLYPHS;
@@ -183,8 +206,30 @@ function isDormant(s, now) {
 
 // Bandas contiguas por sesión, intercaladas a lo ancho (incluye las que agonizan
 // para que la disolución se vea en su lugar).
-function relayout() {
+function orderedSids() {
   const all = [...state.sessions.keys()].sort();
+  const parents = all.filter((sid) => !state.sessions.get(sid)?.isSub);
+  const parentSet = new Set(parents);
+  const childrenByParent = new Map();
+  const orphans = [];
+  for (const sid of all) {
+    const s = state.sessions.get(sid);
+    if (!s?.isSub) continue;
+    const parentSid = parentSidOf(s);
+    if (!parentSid || !parentSet.has(parentSid)) {
+      orphans.push(sid);
+      continue;
+    }
+    if (!childrenByParent.has(parentSid)) childrenByParent.set(parentSid, []);
+    childrenByParent.get(parentSid).push(sid);
+  }
+  const ordered = [];
+  for (const sid of parents) ordered.push(sid, ...(childrenByParent.get(sid) || []));
+  return ordered.concat(orphans);
+}
+
+function relayout() {
+  const all = orderedSids();
   const now = Date.now();
   let dozing = all.filter((sid) => isDormant(state.sessions.get(sid), now));
   let awake = all.filter((sid) => !dozing.includes(sid));
@@ -229,17 +274,13 @@ function relayout() {
 // Un panel de log legible por banda, bajo su rótulo, hasta cerca del fondo.
 // Preserva el contenido tipeado entre relayouts (solo reposiciona).
 function syncLogPanels() {
-  const slotPx = bands.length ? canvas.width / bands.length : canvas.width;
-  const panelW = Math.max(60, slotPx - 16);
   const top = 22 + dozingBarH; // pegado bajo el rótulo (márgenes 0)
   const height = Math.max(120, window.innerHeight - top - 30); // llena casi todo el alto
-  const prevLines = logMaxLines;
-  const prevCols = logCols;
   logMaxLines = Math.max(6, Math.floor((height - 8) / LOG_LINE_PX)); // -8 = padding vertical del código
   const gutterPx = String(logMaxLines).length * LOG_CHAR_PX + 11; // dígitos + padding + borde
-  logCols = Math.max(20, Math.floor((panelW - gutterPx - 16) / LOG_CHAR_PX));
   const present = new Set();
   for (const b of bands) {
+    const panelW = Math.max(60, b.width * FONT_SIZE - 8);
     present.add(b.sid);
     let el = logPanels.get(b.sid);
     let born = false;
@@ -251,6 +292,15 @@ function syncLogPanels() {
       logsEl.appendChild(el); logPanels.set(b.sid, el); born = true;
     }
     const s = state.sessions.get(b.sid);
+    if (s) {
+      const nextLogCols = Math.max(20, Math.floor((panelW - gutterPx - 16) / LOG_CHAR_PX));
+      const colsChanged = s.logCols !== nextLogCols;
+      const linesChanged = s.logLines !== logMaxLines;
+      s.logCols = nextLogCols;
+      s.logLines = logMaxLines;
+      if (linesChanged || colsChanged) s.display = fitLines(s.raw, s.logCols);
+    }
+    el.classList.toggle('raw-log--kid', !!(s && s.isSub));
     const left = Math.min(b.start * FONT_SIZE, Math.max(0, canvas.width - panelW)); // clamp al borde
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
@@ -275,9 +325,6 @@ function syncLogPanels() {
     }
   }
   for (const b of bands) seedSession(b.sid); // poblar bandas ociosas con su texto reciente
-  if (prevLines !== logMaxLines || prevCols !== logCols) {
-    for (const s of state.sessions.values()) s.display = fitLines(s.raw);
-  }
 }
 
 // Trae UNA vez el texto reciente de una sesión para que su banda no arranque vacía.
@@ -296,7 +343,7 @@ async function seedSession(sid) {
     s.log = r.text.slice(-LOG_CAP);
     s.cursor = s.log.length;
     s.raw = s.log;
-    s.display = fitLines(s.raw);
+    s.display = fitLines(s.raw, s.logCols);
     seeded.add(sid); // ya tiene historial: listo
   }
 }
@@ -307,11 +354,12 @@ async function seedSession(sid) {
 // ocupaba UNA línea, se cortaba al borde derecho y el panel quedaba 87% vacío),
 // después recorta las viejas si sobran y rellena con vacías ARRIBA si faltan,
 // para que el texto quede anclado abajo como una terminal real.
-function fitLines(text) {
+function fitLines(text, cols = DEFAULT_LOG_COLS) {
+  const safeCols = Math.max(1, Number(cols) || DEFAULT_LOG_COLS);
   const out = [];
   for (const logical of String(text || '').split('\n')) {
     if (!logical.length) { out.push(''); continue; }
-    for (let i = 0; i < logical.length; i += logCols) out.push(logical.slice(i, i + logCols));
+    for (let i = 0; i < logical.length; i += safeCols) out.push(logical.slice(i, i + safeCols));
   }
   if (out.length > logMaxLines) return out.slice(-logMaxLines).join('\n');
   if (out.length < logMaxLines) return '\n'.repeat(logMaxLines - out.length) + out.join('\n');
@@ -340,9 +388,9 @@ function typewriterTick() {
       s.cursor++;
     }
     s.raw += add;
-    const rawCap = Math.max(4000, logMaxLines * logCols * 2);
+    const rawCap = Math.max(4000, logMaxLines * (s.logCols || DEFAULT_LOG_COLS) * 2);
     if (s.raw.length > rawCap) s.raw = s.raw.slice(s.raw.length - rawCap);
-    s.display = fitLines(s.raw);
+    s.display = fitLines(s.raw, s.logCols);
     if (el._txt === s.display) continue;
     el._txt = s.display;
     const code = el._code;
@@ -359,16 +407,16 @@ function statusGlyph(sess) {
   return '»';
 }
 function bandLabel(s, sid) {
-  const wk = worldKey(s.world);
+  const wk = worldKey(worldOf(s));
   if (s.source === 'term') {
     const nm = s.title || sid.replace(/^term:/, '').replace(/^cwc-/, '');
     return `▸ ${nm.slice(0, 22)}`;
   }
   if (s.source === 'proc') return `⚙ ${s.procLabel || 'proc'}`;
   if (s.isSub) {
-    const parent = state.sessions.get(sid.replace(/~sub$/, ''));
+    const parent = state.sessions.get(parentSidOf(s));
     const pname = (parent && parent.title) || sid.slice(0, 4);
-    return `↳ ${WORLD[wk].ico} ${pname.slice(0, 20)} · sub`;
+    return `↳ ${WORLD[wk].ico} ${pname.slice(0, 14)} · ${(s.kidLabel || 'sub').slice(0, 22)}`;
   }
   const name = s.title || `${WORLD[wk].label} · ${sid.slice(0, 4)}`;
   return `${statusGlyph(s)} ${WORLD[wk].ico} ${name.slice(0, 24)} · ${s.model || s.source}`;
@@ -398,7 +446,6 @@ function layoutLabels() {
     const s = state.sessions.get(b.sid);
     if (!s) continue;
     present.add(b.sid);
-    const wk = worldKey(s.world);
     let el = labelPanels.get(b.sid);
     let born = false;
     if (!el) { el = document.createElement('div'); el.className = 'raw-label'; labelsEl.appendChild(el); labelPanels.set(b.sid, el); born = true; }
@@ -544,8 +591,9 @@ function upsertSession(sid, patch) {
   if (!s) {
     s = {
       source: 'claude', world: null, model: null,
+      isSub: false, parentSid: null, parentChatId: null, kidLabel: null,
       buf: '', read: 0, energy: 0.92,
-      log: '', cursor: 0, raw: '', display: '',
+      log: '', cursor: 0, raw: '', display: '', logCols: DEFAULT_LOG_COLS, logLines: logMaxLines,
       status: 'text', chatAlive: false, delegating: false,
       phase: 'igniting', bornAt: performance.now(), bornAtMs: Date.now(), dyingAt: 0,
       lastTextTs: 0, lastFeedTs: 0,
@@ -570,9 +618,16 @@ function rippleBand(sid) {
 }
 
 function ingestFragment(f) {
-  const { s, born } = upsertSession(f.sessionId, {
+  const patch = {
     source: f.source, world: f.world, model: f.model || undefined, isSub: f.sub === true,
-  });
+    parentSid: f.parent || (f.parentChatId ? state.chatSidById.get(f.parentChatId) : undefined) || undefined,
+    parentChatId: f.parentChatId || undefined,
+    kidLabel: f.kidLabel || undefined,
+  };
+  for (const key of Object.keys(patch)) {
+    if (patch[key] === undefined) delete patch[key];
+  }
+  const { s, born } = upsertSession(f.sessionId, patch);
   s.lastTextTs = Date.now();
   s.buf += (s.buf ? '  ·  ' : '') + f.text;
   if (s.buf.length - s.read > PENDING_CAP) { s.buf = s.buf.slice(s.buf.length - PENDING_CAP); s.read = 0; }
@@ -701,9 +756,12 @@ async function pollOnce() {
   // haya escrito; las dormidas no crean banda (death las limpia si existían).
   if (chatList?.chats) {
     const aliveIds = new Set();
+    const childIds = new Set();
+    const chatSidById = new Map();
     for (const c of chatList.chats) {
       if (!isMine(c)) continue;
       if (!c.sessionId) continue;
+      if (c.id) chatSidById.set(c.id, c.sessionId);
       const existed = state.sessions.has(c.sessionId);
       if (c.alive) {
         aliveIds.add(c.sessionId);
@@ -714,14 +772,38 @@ async function pollOnce() {
           title: c.title || undefined,
         });
         if (born) structuralChange = true;
+        for (const bg of c.bgTasks || []) {
+          if (!bg?.id) continue;
+          const sid = `codex:${bg.id}`;
+          childIds.add(sid);
+          const child = upsertSession(sid, {
+            isSub: true, parentSid: c.sessionId, parentChatId: c.id,
+            kidLabel: (bg.label || '').slice(0, 120), source: 'codex', model: 'codex',
+            world: worldFromCwd(c.cwd), chatAlive: true, status: 'working',
+          });
+          if (child.born) structuralChange = true;
+        }
+        for (const d of c.delegatingList || []) {
+          if (!d?.id) continue;
+          const sid = `${c.sessionId}~sub:${d.id}`;
+          childIds.add(sid);
+          const child = upsertSession(sid, {
+            isSub: true, parentSid: c.sessionId, parentChatId: c.id,
+            kidLabel: (d.label || '').slice(0, 120), source: 'claude',
+            world: worldFromCwd(c.cwd), chatAlive: true, status: 'working',
+          });
+          if (child.born) structuralChange = true;
+        }
       } else if (existed) {
         const s = state.sessions.get(c.sessionId);
         s.chatAlive = false; s.status = c.status || 'waiting'; s.delegating = false;
       }
     }
+    state.chatSidById = chatSidById;
     // sesiones que teníamos como vivas por chat y ya no están → marcar no-vivas
     for (const [sid, s] of state.sessions) {
-      if (s.chatAlive && !aliveIds.has(sid)) s.chatAlive = false;
+      if (!s.isSub && s.chatAlive && !aliveIds.has(sid)) s.chatAlive = false;
+      if (s.isSub && (sid.startsWith('codex:') || sid.includes('~sub:')) && !childIds.has(sid)) s.chatAlive = false;
     }
   }
 
@@ -813,7 +895,7 @@ async function pollTerminals() {
       s.log = t.text.slice(-LOG_CAP);
       s.cursor = s.log.length;      // un pane es una pantalla completa: se muestra, no se retipea
       s.raw = s.log;
-      s.display = fitLines(s.raw);
+      s.display = fitLines(s.raw, s.logCols);
       s.buf = t.text.slice(-PENDING_CAP); s.read = 0;
       s.energy = Math.min(1.1, s.energy + 0.25);
     }

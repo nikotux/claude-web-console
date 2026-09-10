@@ -204,13 +204,15 @@ código.
 
 Detalle completo: `src/core/CLAUDE.md`. Modelo aprobado (`PLAN-500` master, `PLAN-593` invariantes): UN server, N usuarios **LÓGICOS** (no de SO), cada uno con una raíz propia `~/.cwc-users/<userId>/` — helpers en `src/core/user-space.js`. El HOST mapea a su HOME real (retrocompat TOTAL); solo los inquilinos quedan aislados. No hay usuarios de SO ni sudo/setuid.
 
-**Blindaje anticonsumo (FAIL-CLOSED).** El runner de un INQUILINO se spawnea con env LIMPIO por allowlist (`userRunnerEnv`, JAMÁS `...process.env`) + `HOME` propio + el `CLAUDE_CODE_OAUTH_TOKEN` de SU dueño. Sin credencial propia NO arranca — NUNCA cae a la cuenta del server. Self-check al arrancar: si es inquilino y su HOME/creds no están aislados, ABORTA antes de `query()`.
+**Blindaje anticonsumo (FAIL-CLOSED).** El runner de un INQUILINO se spawnea con env LIMPIO por allowlist (`userRunnerEnv`, JAMÁS `...process.env`) + `HOME` propio + el `CLAUDE_CODE_OAUTH_TOKEN` resuelto para SU dueño. Sin credencial propia NI patrocinio declarado y válido NO arranca — NUNCA cae a la cuenta del server. Self-check al arrancar: si es inquilino y su HOME/creds no están aislados, ABORTA antes de `query()`.
 
-**No-cruce por usuario × mundo.** La vieja "confianza plena entre autenticados" del WS queda DEROGADA para no-admins: cada usuario ve/adjunta SOLO lo suyo (`list(principal)`, `ownedChat`), y el cwd se clampa con `safeCwd(cwd, owner)` a `userFileRoot(owner)`, JAMÁS al home global. Todo estado user-scoped resuelve su dir con `resolveDataDir()` — PROHIBIDO hardcodear `~/.cwc-data` del host. Una operación de Pad de un inquilino usa SU token y SU workspace (`tenant-<id>`), nunca la credencial del host ni el workspace `console`.
+El tier **PATROCINADO** (`tier: 'sponsored'` + `sponsor` explícitos en `users.json`) es la ÚNICA excepción nominal: conserva TODO el aislamiento del inquilino y solo cambia la procedencia del token, prestado por un sponsor con credencial propia, no necesariamente admin. Sin sponsor queda `awaiting-sponsor`: existe, pero no consume tokens hasta ser adoptado. La credencial propia siempre gana y la resolución vive exclusivamente en `src/core/sponsorship.js`. Riesgo aceptado por Nico (2026-08-29): con Bash puede leer el token en `/proc/self/environ`; se confía en el patrocinado y no se recortan Bash ni `bypassPermissions`.
+
+**No-cruce por usuario × mundo.** La vieja "confianza plena entre autenticados" del WS queda DEROGADA para todos salvo quien tenga `oversight`, capacidad de ver contenido ajeno cuyo default es `true` solo para el host y el principal por token. `oversight` se resuelve en vivo por request, mientras `admin` viaja congelado en la sesión: cada principal sin esa capacidad ve/adjunta SOLO lo suyo (`list(principal)`, `ownedChat`), y el cwd se clampa con `safeCwd(cwd, owner)` a `userFileRoot(owner)`, JAMÁS al home global. Todo estado user-scoped resuelve su dir con `resolveDataDir()` — PROHIBIDO hardcodear `~/.cwc-data` del host. Una operación de Pad de un inquilino usa SU token y SU workspace (`tenant-<id>`), nunca la credencial del host ni el workspace `console`.
 
 Pad tiene un tercer destino: `comunidad`, pozo común de Mejora Continua (`console:PLAN-2222`), donde se agregan las lecciones de Tolkien de todos los usuarios y la recurrencia se cuenta ENTRE PERSONAS. Cada uno escribe con su token; nada ajeno se auto-aplica.
 
-Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. El PTY de `terminal/sessions.js` ya es owner-scoped y fail-closed (BUG-2104).
+Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo, incluida la excepción nominal de patrocinio · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. El PTY de `terminal/sessions.js` ya es owner-scoped y fail-closed (BUG-2104).
 
 ## NO MODIFICAR (generado o estado de runtime)
 
@@ -305,6 +307,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `tickets/` | módulo **VIVO** del ciclo ticket/feature/PR (Bugs v2) | Su detalle todavía vive en la sección "Módulo VIVO `tickets/`" de este archivo. Meta-store en Pad LOCAL (`contexto-de-tickets`). |
 | `seguimientos/` | dashboard del trabajo humano-accionable (primer habitante de **Limbo**) | Lee siempre del snapshot en disco, nunca de Zoho en vivo. Escribe SOLO al ticket y con aprobación. |
 | `interfono/` | panel + canal humano del bus entre sesiones | **Solo LEE** el bus; la mensajería automática la escriben los hooks vía `bin/cwc-bus.js`. |
+| `cerebro/` | observabilidad 3D read-only del grafo del Pad LOCAL (`console`) en tiempo real | Expone títulos y actividad del host: exige `oversight` resuelto en vivo, nunca `admin`; `getGraph()`/`getActivity()` no emiten telemetría: el observador no se observa a sí mismo. |
 | `news/` | 🆕 Novedades: changelog alegre para los usuarios, que se monta solo en cada push | El redactor es la ÚNICA corrida read-only que LEE código para escribir texto de usuario (Read/Grep/Glob). Publica sin revisión previa: lo que redacte lo ven todos los usuarios. |
 | `health/` | chequeos rápidos + revisión IA + auto-fix | Su detalle vive en la sección "Verificación de salud" de este archivo. El auto-fix es la ÚNICA corrida que escribe código sin supervisión. |
 | `tolkien/` | git del repo trackeado + entornos efímeros por sesión | "Actualizar" adelanta tu `main` LOCAL aunque estés en una rama feature. Los entornos son worktrees + DB clonada + dev-server systemd. |
@@ -314,7 +317,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `comms/` | **librerías compartidas** (NO es un módulo registrado) | El dashboard se eliminó en 2026-07-14. Quedan `pr-read-shared` (lector único de PRs), `gateway-shared` (envíos) y el puente de WhatsApp. |
 | `updates/` | censo de versiones de terceros + dos caminos de actualización | El botón principal abre una **sesión** con Bash total (no puede ser Tándem: su hook bloquea Bash de escritura); el runner determinístico queda como "Modo automático". Un major NO entra por veredicto IA favorable: solo si Niko lo tilda. `node --check` NO detecta imports rotos: exige prueba de runtime. |
 | `mcps/` | censo + estado en vivo de los MCP + el Llavero | Resiliencia POR ÍTEM: un MCP caído no puede bloquear el panel entero. |
-| `connections/` | cuentas OAuth por usuario (Microsoft, Zoho) | Zoho NO usa `offline_access`: el refresh token sale de `access_type=offline`, y el grant code se quema en un solo uso. |
+| `connections/` | cuentas OAuth por usuario (Microsoft, Zoho) | Zoho NO usa `offline_access`: el refresh token sale de `access_type=offline`, y el grant code se quema en un solo uso. Freshservice usa API key (no OAuth); `getApiCredential` es su puerta única. |
 | `onboard/` | alta self-service de usuarios por token de invitación (SP7 multi-tenant) | Su `publicRouter` se monta ANTES del gate de auth: lo único que lo protege es la validación del token + un rate-limit por IP en memoria. Todo endpoint que agregues ahí queda expuesto sin login. |
 | `env-vars/` | capa de config de instancia (identidad + cliente) | Nunca guarda secretos: esos viven en `.env` y `~/.claude`. |
 | `unifi/` | puente SOLO-LECTURA al UDM Pro | Jamás escribe al router. |
@@ -323,6 +326,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `stats/` | telemetría del host, servidor y usuarios | El porcentaje de CPU es un delta global compartido: la primera llamada da 0 y `/api/stats` y `health` consumen el mismo `prevCpu`. |
 | `tmux/` | observación y control de sesiones tmux existentes | El guard de no-admin es fail-closed: exige socket, prefijo, sesión viva y owner coincidente; lo ajeno o desconocido responde `404`. |
 | `admin/` | administración de cuentas y mantenimiento de runners | `r.use(requireAdmin)` debe quedar antes de registrar las rutas: moverlo o montar una ruta fuera de `r` abre la jerarquía de permisos. |
+| `sponsorship/` | adopción self-service de perfiles patrocinados | No es admin-gated: cada sponsor decide a quién presta su propia credencial; liberar vuelve a `awaiting-sponsor`, no a `none`. |
 | _archivados_ | `bugfixes/` y `bugs/` (el tablero v1 y el triage) | Su código vive en `_archived/src-modules/`; los reemplazó `tickets/`. Sus fichas históricas quedaron junto a ese código. |
 
 ## Convenciones (esto es lo que SE DEBE hacer)
@@ -385,6 +389,10 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 - **`[hidden]`:** existe un guard global `[hidden]{display:none!important}` en
   ui.css. Cualquier regla `display` de autor sobre un elemento ocultable debe
   respetarlo (esa fue la causa raíz del bug del menú contextual pegado).
+- **Superficie por perfil:** fuente ÚNICA `public/js/ui/profile.js`; ocultar con
+  `hidden`, nunca `style.display`. Es recorte de EXPERIENCIA y NO es seguridad:
+  ocultar/no montar no autoriza; el gate real sigue en el backend
+  (`isAdmin`/ownership).
 - **UI con mucho texto = COLAPSABLE + ÁRBOL (pedido del usuario 2026-07-04):**
   todo módulo/menú/panel NUEVO que muestre bloques largos de texto nace
   COLAPSADO: header compacto SIEMPRE visible (qué es + estado en una línea) y
@@ -483,10 +491,12 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   (desk-runner, p.ej.) empieza a fallar igual, revisar su allowlist.
 - Tras un reboot, repetir `systemctl --user import-environment SSH_AUTH_SOCK`
   para que el git de Tolkien funcione desde el server.
-- Modelo de confianza WS: entre usuarios AUTENTICADOS hay confianza plena
-  (cualquiera puede adjuntarse a la sesión/chat de otro; no hay ownership por
-  usuario). Supuesto ACEPTADO mientras todos los usuarios sean del dueño;
-  revisarlo antes de dar acceso a usuarios de menor confianza.
+- `admin` acumulaba dos poderes distintos: administrar la instancia y ver todo
+  su contenido. El pase por `admin` en `participantChat` era también el gate del
+  WebSocket, por lo que un admin podía escribir en el chat privado de otro; peor,
+  la rama `user` era la única del handler que no propagaba el emisor (mientras
+  `say`/`react`/`cut` sí) y el mensaje llegaba SIN autor, como si fuera del dueño.
+  Ahora el contenido ajeno se gatea con `oversight` (`console:BUG-2831`).
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
@@ -515,7 +525,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 Detalle completo: `src/modules/health/CLAUDE.md` (se carga solo al tocar el módulo).
 
-- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, tmux del socket `cwc`, runners de chat, observador, credencial OAuth del host (`claude-cred`), TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad, facetas (una unidad sin clase declarada o código de `src/` fuera del radar salta acá) y cruces entre mundos (`cross-world`).
+- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, tmux del socket `cwc`, runners de chat, observador, credencial OAuth del host (`claude-cred`), TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad, facetas (una unidad sin clase declarada o código de `src/` fuera del radar salta acá), cruces entre mundos (`cross-world`) y leyes del grafo de Pad (`pad-grafo`).
 - **Escaneo de Salud unificado** (UN botón, CONSUME TOKENS): corre Revisión + Optimización + Coherencia bajo un pool adaptativo compartido, en el orquestador desacoplado `bin/cwc-health-scan-runner.js`. Incremental por fingerprint de contenido; el modo `full` ignora las cachés. Cruza cada hallazgo contra los BUGs de Pad (🆕 nuevo · 🔗 rastreado · ⚠️ regresión).
 - **Auto-fix** (`bin/cwc-healthfix-runner.js`): la ÚNICA corrida que escribe código sin supervisión — excepción documentada de la regla 6. Allowlist `fixToolAllowed` (Read/Grep/Glob/Edit/Write + Bash SOLO `node --check`); NUNCA reinicia el servicio. Los hallazgos CRÍTICOS (server/bind, auth, config, TLS, registry, blindaje read-only headless, runners) NO se auto-resuelven: el gate los rechaza en el BACKEND, no solo en la UI.
 - Nada se auto-aplica: propuestas de Optimización/Coherencia e invariantes aprendidos requieren aprobación humana explícita.

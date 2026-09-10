@@ -335,8 +335,17 @@ TEXTO EN VIVO — GET /api/tokens/stream (2026-07-15, PLAN-544, para la
 Vista Raw): HERMANO de flow.js (src/modules/tokens/stream.js) — MISMO
 mecanismo cursor+baseline por bytes apendeados, pero en vez de CONTAR
 tokens EXTRAE el TEXTO REAL que las sesiones escriben (Claude: bloques
-text/thinking/tool_use de message.content; Codex: deltas de
-agent_message/agent_reasoning). CURSORES PROPIOS (Map aparte del de
+text/thinking/tool_use de message.content; Codex: el formato actual
+`event_msg/item_completed` con `AgentMessage`, `Reasoning` y
+`CommandExecution`, más `response_item` de tools/functions; conserva los
+deltas viejos `agent_message_delta`/`agent_reasoning_delta` por
+retrocompatibilidad). Los rollouts Codex se ligan a una delegación
+rollout→job→chat primero por el `threadId` UUID del nombre
+`rollout-...-<threadId>.jsonl`, con fallback por el `<jobId>` de la ruta
+`/codex-worktrees/<jobId>` del cwd; así emiten como hijo `codex:<jobId>` con
+`parentChatId`. En Claude también recorre recursivamente
+`<sessionId>/subagents/**` y conserva cada transcript como hijo separado del
+padre. CURSORES PROPIOS (Map aparte del de
 flow.js): NO comparte estado con el contador — aísla el riesgo (flow.js
 alimenta la manguera que Niko ya usa; no se toca). Cada fragmento se
 etiqueta {source,sessionId,world,model,text,seq}: el `world` (console/
@@ -353,6 +362,13 @@ una el panel de log de ~64 líneas de la Vista Raw. Lo consume
 public/js/rawview/raw.js (ver raw.html en el mapa).
 
 ## Gotchas de esta carpeta
+
+- DRIFT SILENCIOSO DE FORMATOS EXTERNOS — el parser de rollouts Codex ya quedó
+  completamente mudo tras un cambio del CLI de terceros: no lanzó excepción,
+  simplemente `codexText()` devolvía `null` para todos los eventos. Si una
+  fuente externa deja de producir fragmentos sin errores, sospechar primero
+  drift del formato observado antes que un bug propio; contrastar eventos
+  reales recientes con las variantes aceptadas por el parser.
 
 - SEPARADOR DE RUTA — las dos fuentes NO usan el mismo (BUG-1910, 2026-07-26).
   `projectOf(dir)` de index.js recibe el dir CODIFICADO de Claude

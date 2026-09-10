@@ -7,12 +7,17 @@
 (SP7 del multi-tenant; referencias de plan `PLAN-500`/`PLAN-593`). Este
 módulo es la puerta de alta de inquilinos: un admin ya autenticado emite una
 invitación, el usuario nuevo entra por `/onboard`, se auto-registra con ese
-token y después configura su propia credencial Claude con `claude setup-token`
-corriendo en SU HOME aislado. Después ofrece la cuenta Claude completa como
-paso opcional; Codex, Infisical y GitHub son obligatorios y el backend no deja
-consumir la invitación mientras falte alguno. Si vuelve con el mismo token
-consumido, puede completar los pasos pendientes sin volver a registrar. La
-implementación vive en
+token y completa un wizard segmentado por tier. Un usuario estándar configura
+su propia credencial Claude con `claude setup-token` corriendo en SU HOME
+aislado; un usuario `sponsored` entra sin sponsor en estado `awaiting-sponsor`,
+existe pero no puede consumir tokens hasta ser adoptado. Cuando eso ocurre,
+`core/sponsorship.js` prioriza un token propio si existe o resuelve el setup-token
+de su sponsor como única excepción.
+Después ofrece la cuenta Claude completa como paso opcional. Codex es obligatorio
+para admin/usuario y saltable para `sponsored`; Infisical y GitHub siguen el
+mismo objeto segmentado y tampoco bloquean al perfil patrocinado no desarrollador.
+Si vuelve con el mismo token consumido, puede completar
+los pasos pendientes sin volver a registrar. La implementación vive en
 `src/modules/onboard/index.js`; la persistencia/estado de invitaciones está en
 `src/core/onboard-tokens.js`; el paso PTY de credenciales está delegado a
 `bin/cwc-onboard-runner.js`.
@@ -23,11 +28,24 @@ los pasos del onboarding. La tabla `CAPABILITIES` reúne identidad, etiqueta,
 detector y rutas de inicio y estado de cada paso. `required` admite el boolean
 histórico o un objeto segmentado; sus claves quedan abiertas deliberadamente
 porque el eje útil puede ser un perfil de trabajo y no un enum fijo de roles.
-Con el modelo binario actual `requiredFor(capability, user)` resuelve `admin` o
-`usuario` y devuelve siempre un boolean. Si el usuario es desconocido, falta su
-segmento o el valor no es booleano, hace fail-closed (`true`): mostrar un paso de
-más es recuperable, mientras que dar por listo a un usuario incompleto lo deja
-mal provisionado.
+`requiredFor(capability, user)` consulta `sponsorshipState(user)`: tanto
+`awaiting-sponsor` como `sponsored` usan el segmento `patrocinado`; sólo `none`
+conserva el eje anterior (`admin` o `usuario`). No usa `getUserTier`, cuyo
+contrato binario sólo devuelve `sponsored` con una adopción completa. Siempre
+devuelve un boolean.
+Si el usuario es desconocido, falta su segmento o el valor no es booleano, hace
+fail-closed (`true`): mostrar un paso de más es recuperable, mientras que dar por
+listo a un usuario incompleto lo deja mal provisionado.
+
+Las capacidades `claude`, `codex`, `infisical` y `github` son requeridas para
+`admin` y `usuario`, pero no para `patrocinado`: es un perfil no desarrollador,
+orientado a consultar, resolver y crear documentos o correos, sin exigir cuentas
+de herramientas de desarrollo. Sus detectores no cambian y siguen informando
+las cuentas que la persona sí tenga. El detector de `claude` no duplica esa excepción:
+usa `resolveClaudeCredential(user).token`, por lo que queda cumplida si hay token
+propio o si el sponsor válido ya generó su `oauth-token`, y permanece pendiente
+si falta el setup-token prestable. Esto evita tanto el falso rojo del patrocinado
+listo como un falso verde para un estándar.
 
 La forma segmentada vive SOLO en `CAPABILITIES` y nunca debe emitirse cruda por
 HTTP. Tanto `/validate` como `/my-config` deben pasarla por `requiredFor`: los
@@ -44,10 +62,71 @@ nuevo se modifica esa tabla; el frontend recibe orden, etiqueta y obligatoriedad
 ya resuelta desde `/validate`.
 
 El host no pasa por el wizard: para él solamente, `claude` también acepta la
-credencial real del CLI en `.credentials.json`. Un inquilino sigue necesitando
-su `oauth-token`, porque aceptar la cuenta completa rompería el blindaje
-anticonsumo con un falso positivo. `/my-config` expone `hostExempt` para reflejar
-que el alta no aplica y `POST /my-config/retry` responde 409 al host.
+credencial real del CLI en `.credentials.json`. Un inquilino estándar sigue
+necesitando su `oauth-token`; para uno patrocinado, `resolveClaudeCredential`
+prioriza ese token propio y solo en su ausencia recibe el `oauth-token` del
+sponsor adoptante, que debe tener credencial propia pero no necesita ser admin.
+Mientras siga `awaiting-sponsor`, no hay token que resolver. Aceptar la cuenta
+completa o inventar otro fallback rompería el
+blindaje anticonsumo con un falso positivo.
+`/my-config` expone `hostExempt` para reflejar que el alta no aplica y
+`POST /my-config/retry` responde 409 al host.
+
+### Retrato conversacional por correo (post-auth)
+`mail-scan.js` exporta `mailScanRouter` y se monta en el `apiRouter` post-auth,
+al mismo nivel que `myConfigRouter`; JAMÁS se monta en `publicRouter`. Sus tres
+rutas salen bajo `/api/onboard`:
+
+- `GET /mail-scan/status` devuelve
+  `{connected,scopeAvailable,reason,message}` para que la conversación explique
+  si falta conectar Microsoft, reconectarlo para conceder `Mail.Read` o esperar
+  un rate-limit antes de ofrecer el barrido.
+- La conexión de Microsoft realizada en el paso anterior ES el consentimiento;
+  no se vuelve a pedir permiso en el chat. Con esa conexión disponible, el
+  barrido puede dispararse automáticamente. `POST /mail-scan` conserva el
+  aislamiento: el usuario sale exclusivamente de `principalOf(req)` con
+  principal de tipo `user`; no acepta `username`, ni por body ni por query, y
+  un admin tampoco puede escanear el correo de otra persona. Devuelve
+  `{portrait,count,range,sampling}`; `portrait` es el agregado de
+  `summarizeMailSample`, pasado por una allowlist y redacción adicional.
+- `GET /mail-scan/last` devuelve el último resultado guardado o `null`, sin
+  repetir la consulta a Microsoft.
+
+La estrategia es MIXTA y conserva intacto el muestreo estratificado: la primera
+pasada trae hasta 240 mensajes con metadatos, repartidos entre seis meses y
+recibidos/enviados, y alimenta el retrato agregado. De esos 240,
+`selectRepresentative` elige hasta 80 con cobertura pareja de mes y dirección,
+priorizando los interlocutores frecuentes; `fetchMailBodies` pide sus cuerpos
+completos en texto plano y trunca cada uno a 6000 caracteres. Traer los 240
+cuerpos rondaría 190k tokens: entra a presión en la ventana del modelo y deja
+poco espacio para la conversación, mientras que la segunda pasada acotada
+preserva contexto real y diversidad.
+
+**Los cuerpos van del servidor al modelo y NUNCA al navegador.** La frontera
+HTTP sigue devolviendo solo `{portrait,count,range,sampling}` y jamás expone
+`messages`, cuerpos, asuntos individuales crudos, `bodyPreview` ni direcciones
+completas. La allowlist `publicPortrait` gobierna esa frontera aunque el cliente
+de Graph agregue campos en el futuro. `topInterlocutors` conserva solo nombre
+redactado, dominio y contadores; si un nombre o asunto agregado contiene un
+email, reemplaza la parte local y deja visible únicamente el dominio. No existe
+ni debe agregarse un endpoint para leer el archivo de cuerpos.
+
+Hay dos estados separados, ambos resueltos por operación desde
+`userDataDir(user)` (nunca desde `os.homedir()`, `config.home` ni una constante
+de ruta al importar), escritos atómicamente con mode `0600` y reemplazados por
+cada barrido exitoso:
+
+- `onboard-mail-scan.json` guarda
+  `{version:1,savedAt,expiresAt,result:{portrait,count,range,sampling}}`. El
+  retrato vence a los 30 días, suficiente para retomar la conversación sin
+  conservar el perfil indefinidamente.
+- `onboard-mail-bodies.json` guarda
+  `{version:1,savedAt,expiresAt,messages:[...metadatos,body:{contentType,content,truncated}]}`.
+  Vence a los 3 días: el contenido completo solo hace falta durante el alta y
+  no justifica la retención mensual del retrato.
+
+La poda oportunista de `status` y `last` alcanza a ambos archivos y respeta sus
+TTL independientes.
 
 ### ⚠️ Lo más importante — superficie PÚBLICA
 `publicRouter` en `src/modules/onboard/index.js` se monta desde
@@ -72,7 +151,7 @@ entre procesos y se resetea al reiniciar el server.
 
 Endpoints públicos reales:
 `POST /api/onboard/public/validate` llama `validateInvite(req.body?.token)` y
-devuelve `{valid, admin, reason, status, lockedTo, hasToken,
+devuelve `{valid, admin, sponsored, reason, status, lockedTo, hasToken,
 hasClaudeAccount, hasCodex, hasInfisical, hasGithub, hasTolkienMcp, pending,
 capabilities, resume}`.
 `valid` conserva EXACTAMENTE la semántica
@@ -94,9 +173,14 @@ Primero valida el token con `validateInvite(token, { forUsername: username })`;
 si el token está locked a otro usuario, queda inválido para este intento. Luego
 valida el username con `isValidUsername` (letras, números, `.`, `_`, `-`, máx.
 32). Después reserva el token con `lockInvite(token, username)` ANTES de llamar
-`createUser(username, password, !!v.admin)`: ese lock evita que dos requests
+`createUser(username, password, !!v.admin && !v.sponsored)`: ese lock evita que dos requests
 concurrentes del mismo token puedan crear dos usuarios distintos. El bit admin
-del usuario sale SOLO del token. Si falta el valor o llega con otro nombre, el
+del usuario sale SOLO del token, y el guard explícito impide que una invitación
+patrocinada llegue a crear un admin incluso si un registro persistido viejo o
+corrupto tuviera ambos bits. Después de crear la cuenta, una invitación
+`sponsored` llama best-effort a `setAwaitingSponsor(username)`: si la marca
+fallara se loguea, pero el alta no se revierte porque la cuenta ya existe y el
+estado es recuperable desde la UI. Si falta el valor o llega con otro nombre, el
 400 nombra explícitamente el campo esperado `username`; el formato inválido
 también identifica ese campo. Tras crear el usuario, hace
 `ensureUserSpace(username)` best-effort, llama `startProvision(username)` y
@@ -253,10 +337,12 @@ responde `{ok:true,already:true}` para tolerar reintentos.
 La superficie admin vive en el `apiRouter` post-auth por
 `registerHttp(router)`, bajo `/api/onboard`, y además cada handler chequea
 `isAdmin(req)` explícitamente. `POST /api/onboard/admin/invite` genera una
-invitación con `generateInvite({ admin, createdBy, ttlMs })`; `admin` debe ser
-boolean si viene en el body, `ttlHours` positivo define TTL y si falta usa
-`DEFAULT_TTL_H = 24`. La respuesta incluye el token CRUDO una sola vez:
-`{id, token, admin, expiresAt}`.
+invitación con `generateInvite({ admin, sponsored, createdBy, ttlMs })`; tanto
+`admin` como `sponsored` deben ser boolean si vienen en el body y son
+mutuamente excluyentes: ambos en `true` responden 400, y el store también
+rechaza esa combinación como defensa en profundidad. `ttlHours` positivo define
+TTL y si falta usa `DEFAULT_TTL_H = 24`. La respuesta incluye el token CRUDO una
+sola vez: `{id, token, admin, sponsored, expiresAt}`.
 
 `GET /api/onboard/admin/invites` lista metadata con `listInvites()`: nunca
 expone token ni `tokenHash`. `POST /api/onboard/admin/invite/:id/revoke` llama
@@ -266,9 +352,22 @@ expone token ni `tokenHash`. `POST /api/onboard/admin/invite/:id/revoke` llama
 El admin autenticado y admin emite el token desde
 `index.js:registerHttp` -> `generateInvite`. El store persiste en
 `~/.cwc-data/onboard-tokens.json`, guarda solo `sha256(token)` y conserva el
-token crudo únicamente en la respuesta de creación. El usuario nuevo entra al
-wizard público y el front puede llamar `validateInvite` para saber si el token
-sirve y si creará admin.
+token crudo únicamente en la respuesta de creación. Desde ⚙ Sistema → Usuarios,
+el admin puede marcar la invitación como estándar, admin o patrocinada; la UI no
+permite marcar admin y patrocinada a la vez y envía ambos booleanos al endpoint.
+El usuario nuevo entra al wizard público y el front puede llamar
+`validateInvite` para saber si el token sirve y qué perfil creará.
+
+El flujo patrocinado completo es: el admin genera la invitación marcada → la
+persona la canjea y nace con `tier:'sponsored'`, sin sponsor, en estado
+`awaiting-sponsor` → el wizard saltea Claude, Codex, Infisical y GitHub porque
+ese perfil no desarrollador no requiere esas capacidades → alguien con
+credencial propia la adopta desde ⚙ Sistema → 🤝 Patrocinio → recién entonces
+`core/sponsorship.js` puede prestarle el token y la persona puede trabajar. Si
+nadie la adopta, puede entrar a la consola pero los runners fallan cerrado sin
+consumir credenciales ajenas. Quien invita y quien paga son deliberadamente
+personas distintas: el admin controla quién entra y cada sponsor decide a quién
+presta su propia credencial.
 
 En el registro, `validateInvite(..., { forUsername })` comprueba existencia,
 estado y expiración; `lockInvite(token, username)` ata la invitación a ese
@@ -276,7 +375,9 @@ username y la deja en `status:'locked'` SIN consumirla. El lock existe para
 cerrar la carrera del auto-registro: el token ya no puede ser usado por otro
 username mientras todavía falta el paso largo de credenciales. Con el token
 lockeado, `createUser` crea el usuario local con password y rol admin si el
-token lo marcaba. Después `ensureUserSpace` crea idempotentemente
+token lo marcaba, salvo que `sponsored` siempre fuerza admin falso; en ese caso
+`setAwaitingSponsor` persiste el estado previo a la adopción. Después
+`ensureUserSpace` crea idempotentemente
 `~/.cwc-users/<user>/`, `.cwc-data`, `workspace`, `workspace/mi-espacio`,
 `.claude` y `.pad` (el host mapea a su HOME real por retrocompat).
 
@@ -342,14 +443,18 @@ guarda en `userOauthTokenPath(USER)` mode 600
 `done`, sin consumir la invitación. El server solo usa `readUserOauthToken` en
 `creds-status` para publicar `hasToken`; el secreto no viaja al cliente.
 
-Después del setup-token, el wizard ofrece la cuenta Claude completa y exige
-Codex, Infisical y GitHub. Antes del cierre agrega el paso `smoke`: muestra las
+Después del setup-token —o de resolver la credencial prestada para un
+patrocinado ya adoptado—, el wizard ofrece la cuenta Claude completa. Claude,
+Codex, Infisical y GitHub son saltables para el perfil patrocinado no
+desarrollador; sus detectores siguen mostrando las cuentas existentes. Antes del cierre agrega el paso `smoke`: muestra las
 cinco sondas como pendientes, reemplaza cada una por ✅/❌/⏭ y solo presenta
 “Terminar” cuando las cinco están verdes. Un fallo muestra su `fixHint` y un
 reintento por prueba; también permite “Continuar igual” para no encerrar al
 usuario. La primera corre `claude auth login --claudeai`
 mediante el mismo runner/job compartido con `connections`; es la única
-capacidad saltable porque solo habilita los porcentajes del plan. `codex-start`
+capacidad opcional para admin/usuario porque solo habilita los porcentajes del
+plan; el segmento patrocinado suma las cuatro excepciones descriptas arriba.
+`codex-start`
 lanza `bin/cwc-codex-login-runner.js`, que usa device-auth y persiste el job en
 `~/.cwc-data/codex-login-jobs/<user>.json`. `infisical-start` lanza su runner
 con HOME/cwd aislados para que el CLI escriba
@@ -363,14 +468,17 @@ entrada ya existe no acuña otro token. Un runner vivo no toma el MCP nuevo hast
 reabrirse. Al entrar al checklist final, el front llama best-effort a
 `POST /public/finish`, que dispara otro intento de provisioning y consume la
 invitación solo si `blockingFor` queda vacío. Así queda `locked` durante
-registro, Claude, Codex, Infisical y GitHub,
+registro y las capacidades obligatorias resueltas para su tier,
 alineado con la decisión de `PLAN-500`.
 
-Contrato de alta: todo usuario nuevo nace con `setup-token` obligatorio para
-ejecutar Claude, más cuenta Claude completa opcional para los porcentajes de
-consumo, y Codex/Infisical/GitHub obligatorios. La secuencia visible y la barra
-de progreso se derivan del orden que devuelve el catálogo; el frontend no
-mantiene una segunda lista manual.
+Contrato de alta: un usuario estándar nace con `setup-token` propio obligatorio
+para ejecutar Claude, cuenta Claude completa opcional para los porcentajes de
+consumo, y Codex/Infisical/GitHub obligatorios. Un patrocinado nace sin sponsor
+en `awaiting-sponsor`; ninguna de esas cuatro capacidades bloquea su alta como
+perfil no desarrollador, pero tampoco puede ejecutar Claude hasta que un sponsor
+con credencial propia lo adopte. La secuencia visible y la barra de progreso se
+derivan del orden que devuelve el catálogo; el frontend no mantiene una segunda
+lista manual.
 
 ### Gotchas reales
 TTL default duplicado deliberadamente: `index.js` usa `DEFAULT_TTL_H = 24` para
@@ -419,7 +527,7 @@ de Pad/workspace son best-effort.
 puede relanzar desde la UI aunque todavía parezca fresco. El runner conserva el
 timeout duro de 10 min y solo guarda el OAuth token y marca `done`: no consume
 la invitación. El ciclo de vida es `locked` durante TODO el wizard (registro →
-Claude setup-token → cuenta Claude → Codex → Infisical → cierre) y pasa a
+capacidades aplicables al tier → cierre) y pasa a
 `consumed` recién en
 `POST /public/finish`; si el usuario abandona antes, queda locked a SU username
 hasta morir por TTL. Tras el consumo, los status siguen consultables por
@@ -431,18 +539,23 @@ adjuntar `strace` al proceso ya lanzado. Nunca saltees su redacción centralizad
 ni escribas salida del PTY por otro camino, porque podría contener el
 `sk-ant-*`.
 
-`readUserOauthToken` devuelve null ante ausencia o error y nunca lanza. Eso es
-parte del blindaje: el UI puede mostrar `hasToken:false`, pero los runners de
-chat son quienes deben fallar cerrado si un inquilino intenta arrancar sin
-credencial propia.
+`readUserOauthToken` devuelve null ante ausencia o error y nunca lanza. La
+decisión de qué token habilita Claude pertenece a `resolveClaudeCredential`:
+prioriza el propio y solo presta el del sponsor a un usuario declarado
+`sponsored` y adoptado. El estado `awaiting-sponsor` no es una excepción: el UI
+puede mostrar `hasToken:false`, pero los runners de chat son
+quienes deben fallar cerrado si no reciben la credencial válida para ese tier.
 
 ### Relación con reglas duras
 Este módulo es una pieza de la regla anti-consumo del multi-tenant: un
-inquilino NO debe consumir la credencial del host. Por eso el onboarding crea
-space privado, corre `claude setup-token` con HOME del usuario y guarda el OAuth
-en `userOauthTokenPath(user)`. Si no existe token propio, el resto del sistema
-debe negarse a arrancar el runner del inquilino en vez de heredar credenciales
-globales.
+inquilino NO debe consumir implícitamente la credencial del host. Por eso el
+onboarding crea space privado y, para un estándar, corre `claude setup-token`
+con HOME del usuario y guarda el OAuth en `userOauthTokenPath(user)`. La única
+excepción es el patrocinio nominal registrado: `core/sponsorship.js` puede
+prestar el setup-token propio de cualquier sponsor, admin o no, sin cambiar
+HOME, datos ni workspace. Sin
+token propio o patrocinio válido, el resto del sistema debe negarse a arrancar
+el runner en vez de heredar credenciales globales.
 
 También sostiene el no-cruce por usuario: username saneado, `ensureUserSpace`,
 `userWorkspace`, Pad `tenant-<user>`, job files por usuario y OAuth token por

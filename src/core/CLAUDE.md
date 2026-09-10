@@ -8,7 +8,26 @@ con ~/.cwc-data/instance.json como default retrocompatible del host;
 autogenerado; caché POR ARCHIVO para no cruzar principales; DEFAULTS genéricos
 vacíos (los valores reales viven en instance.json), deepMerge por union de
 claves — ver módulo env-vars) ·
-auth · users · wss · registry · tls ·
+auth · users(registro `{username,hash,admin,oversight,lang?,tier?,sponsor?}`;
+`oversightFor(username)` da acceso al contenido ajeno solo al host por default y
+lee el flag persistido para los demás; `setOversight` lo actualiza;
+`sponsorshipState(username)` distingue `none` · `awaiting-sponsor` · `sponsored`,
+mientras `getUserTier` conserva su contrato binario y sólo devuelve `sponsored`
+cuando el patrocinio está completo: no son intercambiables; `setUserSponsor`
+valida sponsor existente, con credencial propia, no propio y no patrocinado;
+`listUsers` expone tier+sponsor) ·
+sponsorship(PUNTO ÚNICO de la excepción nominal al blindaje anticonsumo:
+`resolveClaudeCredential` prioriza token propio y sólo presta el setup-token del
+sponsor declarado tras revalidar toda la cadena; `sponsorTokenReady` da el aviso
+best-effort. El sponsor no necesita ser admin: sólo presta lo propio. La
+prohibición de cadenas se conserva como defensa en profundidad y para dar un
+error claro, aunque un patrocinado no tenga credencial propia que prestar. Hoy
+`POST /api/admin/users/:username/sponsor` sigue admin-gated de forma transitoria;
+el diseño final mueve la adopción a la consola del sponsor, porque cada quien
+decide a quién presta su llave. Riesgo aceptado explícitamente por Nico el 2026-08-29: el
+patrocinado puede leer el token prestado desde `/proc/self/environ` usando Bash;
+se acepta por confianza, como la Ley 5 de Aduana, sin recortar Bash ni
+`bypassPermissions`) · wss · registry · tls ·
 zerotier · tmux(validación) ·
 trash(papelera POR ROOT/DUEÑO, sin `config`: `moveToTrash(root, absPath,
 originalRel, owner)` · `listTrash(root, {owner, all})` ·
@@ -64,6 +83,28 @@ de backend se inyecte en una unidad frontend) ·
 pad-world-refs(frontera compartida entre los mundos: detector de refs
 foráneos para Tolkien + reemplazo controlado; listas cerradas de
 prefijos, con `TASK-*` interno distinto de `TTASK-*` externo) ·
+pad-service-client(lecturas relacionales/nativas: `getDeps(ref)` devuelve
+aristas entrantes+salientes por la ruta REST real `/items/{ref}/links` (la
+acción MCP se llama `deps`); `getBacklinks(ref)` lee wiki-links entrantes pero
+`console:BUG-2858` puede devolver vacío aun con entrantes reales, por lo que
+para el grafo se usa `getDeps`; `searchItems(query, {collection,status,limit})`
+usa el FTS server-side; `getHistory(ref)` lee `/versions`;
+`getProjectStale()` deriva `attention` del dashboard igual que el CLI y
+`getProjectReport({window})` lee el reporte nativo. Todas pasan por `request()`
+y heredan gate+caché+telemetría. `updateItem(ref, fields,
+{expectedUpdatedAt})` manda `expected_updated_at`; es opt-in y, ante el 409
+estructurado, devuelve `{ok:false, code:'update_conflict', error, current}` con
+el ítem fresco para reintentar. Sin esa opción conserva el PATCH histórico.
+`setParent(ref, parentRef)` es el ÚNICO camino para asignar jerarquía: crea la
+arista `parent` con `POST /items/{ref}/links`. `updateItem` NO acepta `parent`;
+un `PATCH {parent: ...}` responde 200 pero no hace nada.
+`getGraph()` · `getActivity()` · `padTelemetry`: esos dos GET de observabilidad
+van DIRECTO por `doFetch`, fuera del `readCache` y SIN emitir telemetría. Es
+deliberado: el grafo de ~300 KB no contamina la caché compartida que el barrido
+refresca cada 20 s de por vida; `/activity`, poleteado cada ~2 s, no sufre los
+30 s de caché; y la vista no genera su propio latido falso — el observador no se
+observa a sí mismo. `padTelemetry` es un `EventEmitter` best-effort para los
+demás requests del cliente: un fallo al emitir nunca puede romper el request) ·
 closed-envelope(sobre cerrado + ledger de intentos de IA: el enum del
 prompt se genera con `catalogEnum()` desde el MISMO array que valida la
 respuesta; outcomes/errorClass son cerrados y guardan CLASE, nunca el
@@ -342,6 +383,16 @@ principal a `{user, isHost, admin, home, dataDir, claudeDir, workspace,
 padWorkspace}` sin derivar rutas del proceso. Para el host (y el token maestro)
 devuelve exactamente las rutas históricas y el workspace Pad `console`.
 
+**Capacidad `oversight` (contenido ajeno, no administración).** `users.js`
+persiste el campo booleano en `users.json`: `oversightFor(username)` devuelve
+`true` por default solo para `hostUser()` (y para el principal sin username que
+representa al token), mientras todos los demás —incluidos los admins— quedan en
+`false` salvo habilitación explícita; `setOversight(username, value)` escribe el
+cambio. `auth.js` expone el resultado en `principalOf()`. A diferencia de
+`admin`, congelado dentro de la sesión, `oversight` se consulta EN VIVO con
+`oversightFor()` en cada request: apagarlo corta el acceso desde el request
+siguiente sin revocar sesiones ni esperar que venza la cookie.
+
 **Blindaje anticonsumo (regla dura, FAIL-CLOSED, `decision-1784080554`).** Es el
 riesgo #1 de seguridad/costo y HOY el default estaba roto (el runner heredaba
 `process.env` → toda sesión usaba el `~/.claude` de Nico). El runner de un
@@ -349,17 +400,26 @@ INQUILINO se spawnea con un env LIMPIO por allowlist (`userRunnerEnv`, JAMÁS
 `...process.env`) + `HOME=~/.cwc-users/<owner>` + `CLAUDE_CODE_OAUTH_TOKEN` del
 dueño (de `claude setup-token`, NUNCA copiar `credentials.json` — está roto,
 `PEND-380`). Sin credencial propia del dueño NO arranca — NUNCA cae a la cuenta
-del server. Self-check al arrancar: si es inquilino (owner ≠ host) y su
-HOME/creds no están aislados, ABORTA (exit 3) antes de `query()`. Tope 20
-sesiones concurrentes por usuario (host acaparamiento: ~0.5-0.8 GB/sesión).
+del server— salvo la excepción NOMINAL `sponsored`, declarada explícitamente en
+`users.json` y materializada sólo por `sponsorship.js`: la propia siempre gana y,
+como último recurso, se inyecta el `oauth-token` dedicado de un sponsor con
+credencial propia, que no necesita ser admin. Un patrocinado sin sponsor queda
+`awaiting-sponsor` y falla cerrado sin arrancar ni consumir tokens ajenos.
+El patrocinado conserva su HOME, data dir, workspace, Pad y conexiones OAuth
+aislados. Self-check al arrancar: si es inquilino (owner ≠ host), su HOME no está
+aislado o el modo patrocinado no trae token prestado, ABORTA (exit 3) antes de
+`query()`. Tope 20 sesiones concurrentes por usuario (host acaparamiento:
+~0.5-0.8 GB/sesión).
 
 **Regla de NO-CRUCE por usuario×mundo (Regla 12 escalada a per-user,
 `decision-1784204001`).** La "confianza plena entre autenticados" del WS (viejo
-gotcha) queda DEROGADA para no-admins: cada usuario ve/adjunta SOLO lo suyo
-(chats/sesiones/datos/Pad/espacios), el admin ve todo. En `chat/index.js` esto
-lo aplican `list(principal)` (filtro de visibilidad: `owner === username` salvo
-admin) y `ownedChat(req, id)` (guard: ajeno o inexistente ⇒ null ⇒ 404, sin
-revelar que existe); el cwd se clampa con `safeCwd(cwd, owner)` =
+gotcha) queda DEROGADA para todo principal sin `oversight`: cada usuario
+ve/adjunta SOLO lo suyo (chats/sesiones/datos/Pad/espacios), incluso si es
+admin. En `chat/index.js` esto lo aplican `list(principal)` (dueño, participante
+real u `oversight`), `ownedChat(req, id)` (dueño u `oversight`) y
+`participantChat(req, id)` (`oversight` o participación real; nunca `admin`):
+ajeno o inexistente ⇒ null ⇒ 404, sin revelar que existe. El cwd se clampa
+con `safeCwd(cwd, owner)` =
 `clampToRoot(userFileRoot(owner || hostUser()), cwd)`, JAMÁS al home global.
 GOTCHA: `clampToRoot` solo garantiza confinamiento, no existencia. Un destino
 relativo ajeno se resuelve DENTRO del root del inquilino y puede producir una
@@ -489,22 +549,22 @@ como bootstrap del 1er súper-admin.
 SEED hand-authored — `PLAN-592`/B-A + `PLAN-593`/SP1).** Un refactor futuro NO
 puede reintroducir el fallback a la cuenta del server ni datos globales sin
 scope de usuario: el auditor de Salud inyecta estos textos a las unidades que
-matchean y los verifica sí o sí. Las 4 familias:
+matchean y los verifica sí o sí. Las 5 familias:
 
 | Familia | Match (archivos) | Qué blinda |
 |---|---|---|
-| **Blindaje anticonsumo** (B-A) | `chat/runner-link.js` · `core/user-space.js` · `bin/cwc-chat-runner.js` | env limpio (`userRunnerEnv`, jamás `...process.env`), HOME/OAuth del dueño, fail-closed, self-check owner==whoami, `resolveDataDir()` honra `CWC_DATA_DIR` |
-| **A · Ownership por usuario** | `chat/index.js` · `terminal/sessions.js` | list/attach/read filtran por `owner` (`list(principal)`/`ownedChat`); `safeCwd` clampa a `userFileRoot(owner)`; confianza-plena-WS derogada para no-admins |
+| **Blindaje anticonsumo** (B-A) | `chat/runner-link.js` · `core/user-space.js` · `core/sponsorship.js` · `bin/cwc-chat-runner.js` | env limpio (`userRunnerEnv`, jamás `...process.env`), HOME aislado, OAuth propio o excepción sponsored nominal, fail-closed, self-check owner==whoami, `resolveDataDir()` honra `CWC_DATA_DIR` |
+| **A · Ownership por usuario** | `chat/index.js` · `terminal/sessions.js` | list/attach/read filtran por `owner` y participación explícita; `safeCwd` clampa a `userFileRoot(owner)`; confianza-plena-WS derogada |
 | **B · Dato user-scoped nunca global** | `core/data-dir.js` · `modules/(chat\|tasks\|learning\|retro\|tickets)/` | todo estado de usuario resuelve su dir con `resolveDataDir()`; prohibido hardcodear `~/.cwc-data` del host |
 | **C · Pad per-usuario** | `core/pad-service-client.js` · `core/pad-context.js` · `core/user-space.js` | op de Pad de un inquilino usa `readUserPadToken`+`userPadWorkspace` (`tenant-<id>`); nunca la credencial del host ni `console`; fail-closed |
+| **D · Contenido ajeno por `oversight`** | `chat/index.js` · `terminal/index.js` · `terminal/sessions.js` · `core/auth.js` · `core/users.js` | listar/abrir/adjuntar contenido ajeno exige `oversight`, nunca `admin`; capacidad en vivo y autor propagado en cada mensaje |
 
 `provisionUserPad` saltea al host con `{ok:true, skipped:'host'}`, simétrico a
 `provisionUserWorkspace`, para no crear un `tenant-<host>` fantasma.
 
-OJO: `terminal/sessions.js` aún NO es owner-scoped — su entrada en la familia A
-es un contrato FORWARD (cuando gane multi-tenant, el mismo filtro por dueño debe
-aplicar). Un archivo puede matchear varias familias (p.ej. `user-space.js` cae en
-B-A y C) y recibe todos los textos — es correcto.
+`terminal/sessions.js` ya es owner-scoped y falla cerrado: sin owner conocido,
+solo `oversight` permite verlo. Un archivo puede matchear varias familias (p.ej.
+`user-space.js` cae en B-A y C) y recibe todos los textos — es correcto.
 
 ## 🔒 Acciones prohibidas por lección (M5 · gate DURO)
 

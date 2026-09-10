@@ -15,11 +15,11 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { resolveModelArg } from '../../core/claude-model.js';
 import { CONSOLE_ROOT } from '../../core/paths.js';
+import { resolveClaudeCredential } from '../../core/sponsorship.js';
 import {
   ensureCliOnboarded,
   ensureUserSpace,
   hostUser,
-  readUserOauthToken,
   userRunnerEnv,
 } from '../../core/user-space.js';
 // Títulos humanos custom (titles.json), compartidos con el módulo tmux: se
@@ -58,13 +58,13 @@ export function consoleSession(socketName, sessionName) {
 }
 
 // ¿Este principal puede adjuntarse/controlar la tmux <socketName>/<sessionName>?
-// Admin: todo (auditar y rescatar sesiones ajenas es parte de su rol).
-// No-admin (candado ESTRICTO, decisión de Niko 2026-07-27): SOLO sesiones de la
-// consola (socket propio + prefijo conocido) cuyo Session.owner sea él. Otro
-// socket, tmux externa u owner desconocido/null ⇒ false. Fail-closed: nunca se
-// adivina el dueño de una sesión.
+// Oversight: todo, porque adjuntarse expone y permite controlar contenido ajeno.
+// Sin oversight (candado ESTRICTO, decisión de Niko 2026-07-27): SOLO sesiones
+// de la consola (socket propio + prefijo conocido) cuyo Session.owner sea él.
+// Ser admin no alcanza. Otro socket, tmux externa u owner desconocido/null ⇒
+// false. Fail-closed: nunca se adivina el dueño de una sesión.
 export function canUseTmuxSession(principal, socketName, sessionName) {
-  if (principal.admin) return true;
+  if (principal.oversight) return true;
   const session = consoleSession(socketName, sessionName);
   return !!session && session.owner === principal.username;
 }
@@ -137,12 +137,16 @@ class Session {
       // Repara también inquilinos existentes al spawnear; es idempotente y la
       // segunda vez no escribe.
       ensureCliOnboarded(this.owner);
-      const oauthToken = readUserOauthToken(this.owner);
-      // FAIL-CLOSED: correr `claude` sin credencial propia caería a la cuenta del
-      // server (blindaje anticonsumo). Un shell pelado NO necesita token.
+      const credential = resolveClaudeCredential(this.owner);
+      const oauthToken = credential.token;
+      // FAIL-CLOSED: correr `claude` sin credencial propia o patrocinada caería
+      // a una cuenta no autorizada. Un shell pelado NO necesita token.
       const needsClaude = this.bare || runClaude;
       if (needsClaude && !oauthToken) {
         this.alive = false;
+        if (credential.sponsor) {
+          throw new Error(`El usuario ${this.owner} está patrocinado por ${credential.sponsor}, pero ${credential.sponsor} no tiene un token de patrocinio. Generalo con \`claude setup-token\` y guardalo en su oauth-token.`);
+        }
         throw new Error(`El usuario ${this.owner} no tiene credencial propia de Claude: completá el paso de credenciales del onboarding antes de abrir una sesión de Claude.`);
       }
       env = { ...userRunnerEnv(this.owner, { oauthToken }), TERM: 'xterm-256color' };
@@ -418,9 +422,10 @@ class SessionManager {
       const cwd = (cwdRaw && cwdRaw.trim()) || config.home;
       const title = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd) || 'terminal';
       // Dueño persistido (session-owners.json): sin esto la sesión rehidratada
-      // nace con owner=null y su dueño no-admin deja de verla tras un reinicio
+      // nace con owner=null y su dueño deja de verla tras un reinicio
       // del server (la tmux sigue viva). FAIL-CLOSED: si no hay entrada, sigue
-      // siendo null (solo el admin la ve) — nunca se adivina un dueño.
+      // siendo null (solo quien tiene oversight la ve) — nunca se adivina un
+      // dueño.
       const session = new Session({ id, cwd, title, owner: owners[id] || null });
       try {
         session.spawn({ runClaude: false });
@@ -477,14 +482,15 @@ class SessionManager {
 
   // Las sesiones "bare" (vistas TUI de conversaciones) NO se listan: se
   // reconstruyen desde /api/chat/list, no como pestañas PTY sueltas.
-  // multi-tenant (BUG-680): filtra por dueño salvo admin, espejo de
+  // multi-tenant (BUG-680): filtra por dueño salvo que haya oversight, porque
+  // listar sesiones ajenas revela contenido; ser admin no alcanza. Espejo de
   // Chat.list(principal). Las sesiones rehidratadas recuperan el owner desde
-  // session-owners.json; sin entrada quedan con owner=null y solo el admin las
-  // ve (fail-closed: nunca se adivina el dueño de una sesión).
+  // session-owners.json; sin entrada quedan con owner=null y solo quien tiene
+  // oversight las ve (fail-closed: nunca se adivina el dueño de una sesión).
   list(principal) {
     const visible = [...this.sessions.values()].filter((s) => {
       if (s.bare) return false;
-      if (principal && principal.admin) return true;
+      if (principal && principal.oversight) return true;
       return s.owner === (principal ? principal.username : null);
     });
     return visible.map((s) => s.info());

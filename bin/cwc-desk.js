@@ -5,6 +5,7 @@
 // la consola. Este comando carga el .env de la consola por ruta explícita ANTES
 // de importar módulos que arrastran core/config.js; así funciona invocado por
 // ruta absoluta desde cualquier proyecto y mantiene el modelo multiusuario.
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,7 @@ const {
   assignTicket,
   createTicket,
   getTicket,
+  sendReply,
   updateTicket,
   uploadAttachment,
 } = await import('../src/core/zoho-desk-client.js');
@@ -31,15 +33,19 @@ function usage() {
     '  node bin/cwc-desk.js [--user=<id>] get <nroTicket>',
     '  node bin/cwc-desk.js [--user=<id>] assign <nroTicket> [agentId]',
     '  node bin/cwc-desk.js [--user=<id>] comment <nroTicket> "<texto>" [--public]',
+    '  node bin/cwc-desk.js [--user=<id>] reply <nroTicket> "<texto>" | --file=<ruta> [--to=...] [--from=...] [--cc=...]',
     '  node bin/cwc-desk.js [--user=<id>] attach <nroTicket> <rutaArchivo> [--as="<nombre visible>"] [--public]',
     '  node bin/cwc-desk.js [--user=<id>] update <nroTicket> --status="..." --priority="..." --dueDate="..."',
     '  node bin/cwc-desk.js [--user=<id>] create --subject="..." --department=<id> --contact=<id> [--description="..."]',
     '  (en create/update: --cf.<campo>=<valor> setea un custom field, ej. --cf.cf_related_to="Facilities - New Office")',
     '',
+    '  (comment publica en el portal y NO envía correo; reply envía correo de verdad)',
+    '',
     'Ejemplos:',
     '  node bin/cwc-desk.js get 606',
     '  node bin/cwc-desk.js comment 606 "Actualizado en reunión"        # nota interna',
     '  node bin/cwc-desk.js comment 606 "Respuesta al cliente" --public',
+    '  node bin/cwc-desk.js --user=rarboleda reply 977 --file=/tmp/respuesta.txt   # ENVÍA CORREO (comment NO envía)',
     '  node bin/cwc-desk.js assign 606',
     '  node bin/cwc-desk.js attach 606 /tmp/evidencia.pdf',
     '  node bin/cwc-desk.js attach 693 /tmp/4A576075F4F73BBD8AFD.pdf --as="CUENTA_COBRO_096.pdf"',
@@ -67,7 +73,7 @@ function parseArgs(argv) {
 }
 
 function fieldFlags(flags) {
-  const skip = new Set(['help', 'public', 'user', 'as']);
+  const skip = new Set(['help', 'public', 'user', 'as', 'to', 'from', 'cc', 'file']);
   const fields = {};
   for (const [key, value] of Object.entries(flags)) {
     if (skip.has(key)) continue;
@@ -130,6 +136,29 @@ async function main() {
     if (!ticket || !text) throw new Error('Uso: cwc-desk.js comment <nroTicket> "<texto>" [--public]');
     await addComment(username, ticket, text, { isPublic: !!flags.public });
     console.log(`OK: comentario ${flags.public ? 'público' : 'interno'} agregado al ticket #${ticket}.`);
+    return;
+  }
+
+  if (cmd === 'reply') {
+    const ticket = rest[1];
+    // El cuerpo puede venir inline o desde un archivo: los textos largos con
+    // acentos y saltos de línea no sobreviven bien al escapado del shell.
+    const inline = rest.slice(2).join(' ').trim();
+    const text = flags.file ? fs.readFileSync(String(flags.file), 'utf8').trim() : inline;
+    if (!ticket || !text) throw new Error('Uso: cwc-desk.js reply <nroTicket> "<texto>" | --file=<ruta> [--to=...] [--from=...] [--cc=...]');
+    const r = await sendReply(username, ticket, text, {
+      to: flags.to || null,
+      cc: flags.cc || '',
+      fromEmailAddress: flags.from || null,
+    });
+    console.log(JSON.stringify({
+      ok: true,
+      threadId: r?.id ?? null,
+      status: r?.status ?? null,
+      author: r?.author?.name ?? null,
+      to: r?.to ?? null,
+      from: r?.fromEmailAddress ?? null,
+    }, null, 2));
     return;
   }
 

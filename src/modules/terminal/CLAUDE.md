@@ -17,12 +17,12 @@
   (`console:PLAN-2115`).
 - Un `attach` se valida en TRES pasos: forma (socket + nombre), ownership y
   EXISTENCIA con `tmuxSessionExists`. El guard aplica candado estricto: un
-  no-admin solo puede adjuntarse a una sesión `cwc-`/`cwct-` del socket propio
-  cuyo `Session.owner` coincida; socket externo, sesión ajena u owner
-  desconocido fallan cerrado con `404 "Sesión inexistente."` para no revelar
-  existencia. El admin conserva acceso total. Una tmux autorizada todavía puede
-  morir entre el listado y el click; el chequeo de existencia evita devolver
-  200 y abrir una pestaña fantasma.
+  principal sin `oversight` solo puede adjuntarse a una sesión `cwc-`/`cwct-`
+  del socket propio cuyo `Session.owner` coincida; socket externo, sesión ajena
+  u owner desconocido fallan cerrado con `404 "Sesión inexistente."` para no
+  revelar existencia. `admin` no concede acceso al contenido; `oversight` sí.
+  Una tmux autorizada todavía puede morir entre el listado y el click; el
+  chequeo de existencia evita devolver 200 y abrir una pestaña fantasma.
 - La rama `attach` resuelve su `cwd` con `safeCwd(cwd, owner)`, igual que la rama
   de creación normal: sin eso la `Session` nacía con `config.home`
   (`/home/nmosquera`, el HOME del HOST) aunque el dueño fuera un inquilino, y el
@@ -32,6 +32,10 @@
 - El guard `canUseTmuxSession` y su lookup por prefijo viven en
   `terminal/sessions.js` y son la fuente única compartida con `tmux/index.js`.
   No dupliques el criterio: dos copias pueden divergir y reabrir el aislamiento.
+- Todos los gates que revelan o controlan contenido usan esa misma capacidad:
+  `sessionManager.list(principal)` filtra el listado, `ownedSession` protege el
+  ownership HTTP y el handshake del WebSocket de terminal exige dueño u
+  `oversight`. Ser admin no saltea ninguno de esos controles.
 - En `Session` (terminal/sessions.js) la propiedad de adjuntado es
   `attachSpec`, NO `attach` (colisiona con el método `attach(ws)`).
 - BUG-2104 · BUG-2105: el PTY de un inquilino usa un env owner-scoped
@@ -61,4 +65,4 @@
   OK y `rehydrate()` lo restaura tras un reinicio de Node. Sin eso la tmux
   sobrevive pero su dueño no-admin deja de verla, porque `list(principal)`
   filtra por `owner`. FAIL-CLOSED: sin entrada en el mapa, `owner=null` ⇒ solo
-  el admin la ve; nunca se adivina un dueño.
+  quien tiene `oversight` la ve; nunca se adivina un dueño.

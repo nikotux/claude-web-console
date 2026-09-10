@@ -11,6 +11,7 @@ import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
 import { initI18n, applyI18n, t } from './ui/i18n.js';
 import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
+import { allowModule, allowOversightSurface } from './ui/profile.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -593,6 +594,10 @@ if (!SOLO_ID) {
   // La ventana suelta no monta sidebars ni dispara sus fetches de módulos.
   for (const mod of MODULES) {
     const el = document.querySelector(`[data-module="${mod.name}"]`);
+    if (!allowModule(meForLang, mod.name)) {
+      if (el) el.hidden = true;
+      continue;
+    }
     if (el) {
       try { mod.mount(el, ctx); }
       catch (err) { console.error(`[modules] Falló el montaje de "${mod.name}":`, err); }
@@ -687,6 +692,11 @@ whoami.then((me) => {
   if (acct) acct.textContent = name;
   if (avatar) avatar.textContent = (name.replace(/[^A-Za-z0-9]/g, '')[0] || '?').toUpperCase();
   if (chip && name) chip.title = name;
+  // 🧠 Cerebro del Pad: superficie de OBSERVACIÓN del banco de conocimientos del
+  // host, así que solo se ofrece a quien tenga `oversight`. Ocultar no autoriza:
+  // el gate real son los endpoints /api/cerebro/*.
+  const brainLink = document.getElementById('cerebro-link');
+  if (brainLink) brainLink.hidden = !allowOversightSurface(me);
   // Ni Uso ni Raw requieren gate: el backend aplica scope por usuario (BUG-1874).
 });
 

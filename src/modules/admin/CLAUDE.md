@@ -13,9 +13,9 @@ No mantiene un modelo propio: el CRUD delega en `core/users.js` y el reciclado b
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
-| GET | `/api/admin/users` | Lista cuentas como `{ username, admin }`; nunca devuelve hashes. |
+| GET | `/api/admin/users` | Lista cuentas como `{ username, admin, oversight, … }`; nunca devuelve hashes. |
 | POST | `/api/admin/users` | Crea una cuenta desde `{ username, password, admin? }`; `admin`, si viene, debe ser boolean, y el username del host está reservado (`409`). |
-| PUT | `/api/admin/users/:username` | Cambia `password` y/o `admin`; exige al menos un cambio válido y rechaza tanto la autoedición como el username del host (`409`). |
+| PUT | `/api/admin/users/:username` | Cambia `password`, `admin` y/o `oversight`; los flags deben ser booleanos, exige al menos un cambio válido y rechaza tanto la autoedición como el username del host (`409`). |
 | DELETE | `/api/admin/users/:username` | Elimina una cuenta, invalida sus sesiones web y ejecuta la baja recuperable de sus recursos; rechaza la autoeliminación. |
 | POST | `/api/admin/restart-runners` | Envía `SIGTERM` a cada `cwc-chat-runner.js` vivo y devuelve PIDs terminados y fallos individuales. |
 
@@ -79,12 +79,16 @@ Las validaciones y persistencia de cuentas viven en `core/users.js`; la identida
 Este módulo no mantiene un store propio. El CRUD y la baja escriben
 indirectamente mediante los helpers de core y onboard.
 
-El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core/users.js`. Su forma es `{ "users": [{ "username", "hash", "admin", "lang"? }] }`; los hashes son `scrypt$salt$derivedKey`, el archivo se fuerza a modo `0600` y no tiene poda automática. La baja también mueve el espacio del inquilino a `~/.cwc-trash/`, borra jobs administrativos bajo `~/.cwc-data/`, elimina su workspace Pad y revoca invitaciones asociadas. El endpoint de runners no persiste estado.
+El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core/users.js`. Su forma es `{ "users": [{ "username", "hash", "admin", "oversight", "lang"? }] }`; los hashes son `scrypt$salt$derivedKey`, el archivo se fuerza a modo `0600` y no tiene poda automática. La baja también mueve el espacio del inquilino a `~/.cwc-trash/`, borra jobs administrativos bajo `~/.cwc-data/`, elimina su workspace Pad y revoca invitaciones asociadas. El endpoint de runners no persiste estado.
 
 ## Lo que más duele
 
 - El `r.use(requireAdmin)` debe seguir antes de registrar las rutas: moverlo o montar una ruta fuera de `r` abriría la única jerarquía real de permisos del módulo.
 - Cambiar una contraseña revoca todas las sesiones vivas de esa cuenta. Una democión (`admin: false`) también las revoca para que una cookie anterior no conserve privilegios; eliminar la cuenta hace lo mismo.
+- Cambiar `oversight` NO revoca sesiones: `principalOf()` lo resuelve en vivo con
+  `oversightFor()` en cada request, así que apagarlo vale desde el request
+  siguiente. Es deliberadamente distinto de `admin`, que viaja congelado en la
+  sesión y exige revocarla ante una democión.
 - La autoedición y la autoeliminación devuelven `409`. No quitar esas guardas: evitan que el admin conectado se deje sin acceso desde este router.
 - POST y PUT tampoco permiten administrar una cuenta cuyo username coincida con
   `hostUser()`: `userSpace()`/`userFileRoot()` resuelven por string y esa cuenta

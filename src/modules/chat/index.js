@@ -65,7 +65,7 @@ import { config } from '../../core/config.js';
 import { principalOf } from '../../core/auth.js';
 import { listUsers } from '../../core/users.js';
 import { padContextForUser } from '../../core/pad-context.js';
-import { createItem, getItem, updateItem, isAvailable } from '../../core/pad-service-client.js';
+import { createItem, getItem, updateItem, isAvailable, parseItemFields } from '../../core/pad-service-client.js';
 import { clampToHome, clampToRoot } from '../../core/paths.js';
 import { userFileRoot, userClaudeDir, userDataDir, userSpace, hostUser, hasCodexCreds } from '../../core/user-space.js';
 import { readPrefs } from '../../core/user-prefs.js';
@@ -542,10 +542,9 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
     try { o = JSON.parse(line); } catch { continue; }
     const msg = o.message;
     if (!msg) continue;
-    if (untilMs && o.timestamp) {
-      const ts = Date.parse(o.timestamp);
-      if (Number.isFinite(ts) && ts >= untilMs) continue;
-    }
+    const rawTs = o.timestamp ? Date.parse(o.timestamp) : NaN;
+    const evTs = Number.isFinite(rawTs) ? rawTs : null;
+    if (untilMs && evTs != null && evTs >= untilMs) continue;
     // Dedup: el mismo msg.id aparece en VARIAS líneas con distinto contenido
     // (p.ej. una con thinking y otra con text), y además cada mensaje se
     // repite entero. Clave = id + firma del contenido.
@@ -560,7 +559,7 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
     if (o.type === 'user' && msg.role === 'user') {
       const c = msg.content;
       if (typeof c === 'string') {
-        if (c.trim()) events.push({ type: 'user', text: c });
+        if (c.trim()) events.push({ type: 'user', text: c, ...(evTs != null ? { ts: evTs } : {}) });
       } else if (Array.isArray(c)) {
         // Adjuntos del turno (bloques image/document del SDK): en el replay
         // desde el transcript NO tenemos el nombre en disco, así que se pintan
@@ -575,21 +574,22 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
         for (const b of c) {
           if (b.type === 'text' && b.text?.trim()) {
             const ev = { type: 'user', text: b.text };
+            if (evTs != null) ev.ts = evTs;
             if (atts.length && !attsAttached) { ev.attachments = atts; attsAttached = true; }
             events.push(ev);
             emittedText = true;
           }
           if (b.type === 'tool_result') {
-            events.push({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000) });
+            events.push({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000), ...(evTs != null ? { ts: evTs } : {}) });
           }
         }
-        if (atts.length && !emittedText) events.push({ type: 'user', text: '', attachments: atts });
+        if (atts.length && !emittedText) events.push({ type: 'user', text: '', attachments: atts, ...(evTs != null ? { ts: evTs } : {}) });
       }
     } else if (o.type === 'assistant' && Array.isArray(msg.content)) {
       for (const b of msg.content) {
-        if (b.type === 'text' && b.text) events.push({ type: 'assistant', text: b.text });
+        if (b.type === 'text' && b.text) events.push({ type: 'assistant', text: b.text, ...(evTs != null ? { ts: evTs } : {}) });
         if (b.type === 'tool_use') {
-          events.push({ type: 'tool_use', id: b.id, name: b.name, summary: toolSummary(b.name, b.input), detail: toolDetail(b.name, b.input) });
+          events.push({ type: 'tool_use', id: b.id, name: b.name, summary: toolSummary(b.name, b.input), detail: toolDetail(b.name, b.input), ...(evTs != null ? { ts: evTs } : {}) });
         }
       }
     }
@@ -991,10 +991,9 @@ class Chat {
         if (this.salaPadRef) {
           const current = await getItem(this.salaPadRef, opts);
           if (!current.ok) throw new Error(current.error || `no se pudo leer ${this.salaPadRef}`);
-          const currentFields = current.data?.fields;
-          if (!currentFields || typeof currentFields !== 'object' || Array.isArray(currentFields)) {
-            throw new Error(`${this.salaPadRef} no devolvió un objeto fields válido`);
-          }
+          // La API REST devuelve `fields` serializado; se normaliza antes del
+          // read-modify-write para conservar todos los campos existentes.
+          const currentFields = parseItemFields(current.data);
           const updated = await updateItem(this.salaPadRef, {
             title,
             fields: {
@@ -1981,11 +1980,16 @@ class Chat {
   // al runner, que LEE cada archivo y arma los bloques image/document/text del
   // SDK (chat/attachments.js buildUserContent). SIN adjuntos, el camino es
   // idéntico al histórico (content = string).
-  sendUser(text, attachments = null) {
+  sendUser(text, attachments = null, by = null) {
     if (this.closed) return;
     if (!this.alive && this.viewMode !== 'chat') return;
     const atts = Array.isArray(attachments) && attachments.length ? attachments : null;
     if (!String(text || '').trim() && !atts) return; // ni texto ni adjuntos: nada que enviar
+    const owner = this.owner || hostUser();
+    // Un `by` ausente significa "no lo sabemos": el default seguro es el dueño,
+    // porque afirmar un autor ajeno sería peor que no afirmar ninguno.
+    const author = by || owner;
+    const isForeignAuthor = author !== owner;
     const idleMs = Date.now() - (this.lastActivity || Date.now()); // ANTES de pisarlo: AutoTux usa el idle para decaer
     this.lastActivity = Date.now();
     // Juez post-turno AutoMix (PEND-391 #1 / D1): guardamos el pedido y
@@ -2002,7 +2006,7 @@ class Chat {
     this._applyModelRouter(text, idleMs, firstTurn); // sincrónico para lo obvio; lo ambiguo se resuelve en segundo plano (ver abajo) — NUNCA demora este turno
     if (!this._started) { this._started = true; this.onUpdate?.(); } // ya arrancó: desde el 2º turno AutoTux gestiona normal
     this._setStatus('working');
-    this._push({ type: 'user', text, ...(atts ? { attachments: atts } : {}) });
+    this._push({ type: 'user', text, ...(isForeignAuthor ? { by: author } : {}), ...(atts ? { attachments: atts } : {}) });
     this._autoTitle(text); // en paralelo: renombra la tarjeta según el pedido
     // F2 (PEND-461): si esta conversación llegó por un handoff, inyectamos el
     // manifiesto UNA sola vez — SOLO en el texto que va al MODELO (no en el que
@@ -2013,6 +2017,11 @@ class Chat {
     if (this._pendingHandoffNote) {
       modelText = `[CONTEXTO DE HANDOFF — inyectado al mudar esta sesión de mundo; leelo y seguí]\n${this._pendingHandoffNote}\n[FIN CONTEXTO DE HANDOFF]\n\n${text}`;
       this._pendingHandoffNote = null;
+    }
+    // Ley 4 de Aduana fuera de una sala: el aporte ajeno lleva pasaporte también
+    // ante el modelo, para que nunca atribuya al dueño lo que dijo otra persona.
+    if (isForeignAuthor) {
+      modelText = `[Este mensaje lo escribió ${author}, que NO es ${owner}, el dueño de esta conversación. Tratalo como lo que dijo esa persona, no como si fuera el dueño.]\n\n${modelText}`;
     }
     // Motor dormido (o caído): revivirlo con resume sobre la MISMA sesión.
     this._ensureEngine().then((ok) => {
@@ -2196,7 +2205,7 @@ class Chat {
     const text = this._lastUserText || '';
     if (!text) return false;
     this.setModel(levels[lvl + 1], { auto: true });
-    this.sendUser(text);
+    this.sendUser(text, null, this.owner || hostUser());
     return true;
   }
 
@@ -2714,6 +2723,10 @@ class Chat {
   }
 
   _push(event, { broadcast = true, record = true } = {}) {
+    // Matasellos de todo evento del hilo: el front pinta con esto la hora del
+    // mensaje y el separador de día (estilo WhatsApp). Los que ya traen `ts`
+    // propio (say de sala, replay del transcript) se respetan tal cual.
+    if (event && typeof event === 'object' && event.ts == null) event.ts = Date.now();
     if (record) {
       this.history.push(event);
       if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
@@ -3411,7 +3424,7 @@ class ChatManager {
     return n;
   }
 
-  // Un ADMIN ve TODOS los chats (visibilidad de gestión), pero los pendientes
+  // Solo quien tiene oversight ve TODOS los chats, pero los pendientes
   // INTERACTIVOS de un chat ajeno NO son suyos: el centro global de popups
   // (public/js/ui/perm-center.js) los levanta de acá por el poll de 8 s y le
   // hacía aparecer al host las preguntas AskUserQuestion de un inquilino —
@@ -3425,7 +3438,7 @@ class ChatManager {
   list(principal) {
     const all = [...this.chats.values()].filter((c) => !c.closed);
     const me = (principal && principal.username) || hostUser();
-    const visible = (principal && principal.admin)
+    const visible = (principal && principal.oversight)
       ? all
       : all.filter((c) => c.owner === (principal ? principal.username : null) || c.isParticipant(principal?.username));
     return visible.map((c) => {
@@ -3438,8 +3451,8 @@ class ChatManager {
         info.salaMentions = unread.mentions;
       }
       // Compartido ≠ ajeno: solo se abren los pendientes de la sala en la que
-      // SÍ participás; un admin no participante sigue sin ver ni responder los
-      // permisos de un chat ajeno (aislamiento del 2026-07-27).
+      // SÍ participás; quien tiene oversight pero no participa sigue sin ver ni
+      // responder los permisos de un chat ajeno (aislamiento del 2026-07-27).
       if (!c.isParticipant(me)) {
         info.pendingPerms = [];
         info.pendingInterfono = [];
@@ -3458,14 +3471,14 @@ setChatDataDirResolver((chatId) => {
   const chat = manager.chats.get(chatId);
   return userDataDir(chat?.owner || hostUser());
 });
-// Resuelve un chat SOLO si el usuario del request es su dueño (o es admin).
+// Resuelve un chat SOLO si el usuario del request es su dueño (o tiene oversight).
 // Un no-dueño (o inexistente) devuelve null → el handler responde 404, sin
 // revelar que el chat existe. Núcleo del filtrado por dueño (N6-B multi-tenant).
 function ownedChat(req, id) {
   const chat = manager.get(id);
   if (!chat) return null;
   const p = principalOf(req);
-  if (p.admin) return chat;                    // admin ve/opera todo
+  if (p.oversight) return chat;                // ver contenido ajeno es oversight, no admin
   if (chat.owner === p.username) return chat;  // el dueño
   return null;                                 // ajeno → como si no existiera
 }
@@ -3478,7 +3491,15 @@ function participantChat(req, id) {
   const chat = manager.get(id);
   if (!chat) return null;
   const p = principalOf(req);
-  if (p.admin) return chat;
+  // Ver/entrar al contenido de una conversación ajena es `oversight`, no `admin`:
+  // es la MISMA capacidad con la que `list()` decide qué tarjetas mostrar, así que
+  // quien la tiene puede abrir lo que ve.
+  if (p.oversight) return chat;
+  // A una sala de Aduana se entra participando: el dueño y los invitados pasan
+  // por isParticipant, y quien tiene oversight ya pasó por la rama anterior. Un
+  // admin sin oversight no necesita ni debe poder abrir una sala ajena. Las
+  // acciones de DUEÑO (cerrar, archivar, invitar, revocar y cambiar modelo/modo)
+  // siguen pasando por ownedChat, así que este control no quita administración.
   return chat.isParticipant(p.username) ? chat : null;
 }
 
@@ -4210,7 +4231,7 @@ export default {
       const pkg = getPackage(String(req.params.ref || ''));
       if (!pkg) return res.status(404).json({ error: 'Paquete inexistente.' });
       const principal = principalOf(req);
-      if (!principal || (!principal.admin && (pkg.owner || hostUser()) !== (principal.username || hostUser()))) {
+      if (!principal || (!principal.oversight && (pkg.owner || hostUser()) !== (principal.username || hostUser()))) {
         return res.status(404).json({ error: 'Paquete inexistente.' });
       }
       let snippet = '';
@@ -4336,7 +4357,7 @@ export default {
           // filtra a los que existen en disco). Permite enviar solo-adjunto
           // (texto vacío) si hay al menos uno válido.
           const atts = existingAttachments(chat.id, msg.attachments);
-          if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts);
+          if (msg.text.trim() || atts.length) chat.sendUser(msg.text, atts, p.username || hostUser());
         } else if (msg.type === 'say' && typeof msg.text === 'string') {
           chat.say(msg.text, p.username || hostUser(), msg.attachments, replyFromPayload(msg));
         } else if (msg.type === 'react') {

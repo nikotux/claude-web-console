@@ -81,6 +81,38 @@ alinearse con el parser de Pad, que no interpreta wiki-links dentro de código,
 y evitar corromper ejemplos pedagógicos que enseñan la sintaxis. El
 workspace está fijado por código a `console`: nunca opera sobre `tolkien` ni
 `tenant-*`.
+### bin/cwc-pad-prosa-links.js    materializador one-shot e idempotente de refs
+escritas en la prosa de los items de Pad: convierte `PLAN-1` en
+`[[PLAN-1]]` y `console:PLAN-1` en el alias
+`[[PLAN-1|console:PLAN-1]]`, conservando la calificación visible de
+`CONVE-2056`. A diferencia de `cwc-pad-wikilinks-fix.js`, no repara markup ya
+existente: descubre por REST todos los items vivos y los prefijos reales de las
+colecciones del workspace. Solo materializa targets vivos del mismo mundo;
+salta auto-referencias, refs inexistentes y refs calificadas de otro mundo, y
+no toca wiki-links previos, bloques cercados, código inline, URLs ni enlaces
+Markdown. Sin flags hace dry-run; solo escribe con `--apply`, acepta
+`--workspace` (default `console`) y `--limit N` limita la cantidad de items con
+cambios. Antes de cada PATCH relee el item, parsea el `fields` serializado y lo
+reenvía completo junto con el contenido nuevo; opera en serie, pausa entre
+escrituras y reintenta el rate-limit.
+### bin/cwc-pad-fix-decisions.js    reparación idempotente del `decision_log` de
+Pad cuando el bug del server `console:BUG-3042` concatena el rationale dentro
+de `decision` con markup crudo de la tool-call. Recorre las colecciones por la
+API REST, separa ambos textos sin alterar las demás claves de cada entrada y
+envía el objeto `fields` completo para preservar todos los campos. Es dry-run
+por default; solo escribe con `--apply` y acepta `--workspace <slug>` (default
+`console`). Existe mientras `console:BUG-3042` siga vivo; no intenta corregir
+decisiones guardadas en el ítem equivocado, que requieren resolución manual.
+### bin/cwc-pad-mc-regroup.js    migración one-shot, serial e idempotente de
+`console:PLAN-3052` (C4): lee del journal del workflow el mapeo de 547 lecciones
+de `mejora-continua` a 15 grupos temáticos ya existentes en `arquitectura` y
+resuelve cada grupo por título exacto entre los ítems vivos con `kind=grupo`.
+Nunca crea grupos y aborta si falta uno o el título es ambiguo. Sin flags hace
+dry-run; solo escribe con `--apply`, acepta `--journal` y `--limit`, y opera
+siempre en `console`. Para reparentar ejecuta los dos PATCH requeridos
+(`clear_parent: true` y luego `parent`), en serie, con pausa y backoff ante 429;
+relee las aristas después de cada lección y aborta inmediatamente si la segunda
+fase deja una lección huérfana o si no puede verificar el parent final.
 ### bin/cwc-pad-mc-parent.js    migración one-shot, serial e idempotente de la
 jerarquía de `mejora-continua` en el Pad LOCAL. Deriva el bucket `MC · *`
 exclusivamente desde `fields.category` usando el mapa exportado
@@ -568,6 +600,10 @@ del host no son interceptables. El cierre real está en el reaper puro de
 `codex-shared.js`: cada lectura convierte atómicamente un `running` cuyo pid
 murió o cuyo heartbeat superó 3 intervalos (45 s) en `orphaned`, con motivo
 y `finishedAt`, nunca en un falso `done`.
+Al recibir `thread.started` de Codex, el runner persiste inmediatamente el
+`threadId` en el job mediante el callback `onThread` de `runCodex()`; antes
+quedaba guardado recién al terminar. Es imprescindible para que un rollout
+VIVO se pueda ligar a su delegación mientras todavía está corriendo.
 Cuando el job trae `files` declarados y NO es `fullAccess`, el runner ejecuta
 Codex dentro de un git worktree aislado, sembrado con el estado sucio del árbol
 real. Al terminar aplica de vuelta SOLO los archivos declarados mediante

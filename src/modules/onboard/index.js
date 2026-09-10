@@ -11,7 +11,7 @@ import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
-import { createUser, isValidUsername, listUsers, setUserLang } from '../../core/users.js';
+import { createUser, isValidUsername, listUsers, setAwaitingSponsor, setUserLang } from '../../core/users.js';
 import {
   ensureUserSpace,
   hasCodexCreds,
@@ -32,6 +32,7 @@ import { tolkienMcpStatus } from './tolkien-mcp-shared.js';
 import { readProvisionState } from './provision-state.js';
 import { provisionNewUser, provisionTolkienBestEffort } from './provision-user.js';
 import { myConfigRouter } from './my-config.js';
+import { mailScanRouter } from './mail-scan.js';
 import { runSmokeChecks } from './smoke.js';
 
 const DEFAULT_TTL_H = 24;
@@ -138,6 +139,7 @@ publicRouter.post('/validate', (req, res) => {
     res.json({
       valid: v.valid,
       admin: meta.admin || false,
+      sponsored: meta.sponsored || false,
       reason: v.reason || null,
       status,
       lockedTo,
@@ -180,9 +182,17 @@ publicRouter.post('/register', (req, res) => {
   }
   if (!locked) return res.status(409).json({ error: 'Invitación ya en uso por otro registro.' });
   try {
-    createUser(username, password, !!v.admin); // admin SOLO si el token lo marca
+    createUser(username, password, !!v.admin && !v.sponsored); // patrocinado NUNCA nace admin
   } catch (e) {
     return res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo crear el usuario.' });
+  }
+  if (v.sponsored) {
+    try {
+      setAwaitingSponsor(username);
+    } catch (e) {
+      // La cuenta ya existe: esta marca es recuperable y no debe romper el alta.
+      console.error('[onboard] No se pudo marcar el usuario como awaiting-sponsor:', e.message || e);
+    }
   }
   if (lang === 'es' || lang === 'en') {
     try { setUserLang(username, lang); } catch { /* best-effort: el default sigue siendo 'es' */ }
@@ -680,15 +690,22 @@ export default {
   registerHttp(router) {
     const r = express.Router();
     r.use(myConfigRouter);
+    r.use(mailScanRouter);
     r.post('/admin/invite', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Solo admin.' });
       if (req.body?.admin !== undefined && typeof req.body.admin !== 'boolean') {
         return res.status(400).json({ error: 'admin debe ser boolean.' });
       }
+      if (req.body?.sponsored !== undefined && typeof req.body.sponsored !== 'boolean') {
+        return res.status(400).json({ error: 'sponsored debe ser boolean.' });
+      }
+      if (req.body?.admin === true && req.body?.sponsored === true) {
+        return res.status(400).json({ error: 'admin y sponsored son mutuamente excluyentes.' });
+      }
       try {
         const ttlH = Number(req.body?.ttlHours) > 0 ? Number(req.body.ttlHours) : DEFAULT_TTL_H;
-        const invite = generateInvite({ admin: !!req.body?.admin, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
-        res.json({ invite }); // { id, token (crudo, una vez), admin, expiresAt }
+        const invite = generateInvite({ admin: !!req.body?.admin, sponsored: !!req.body?.sponsored, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
+        res.json({ invite }); // { id, token (crudo, una vez), admin, sponsored, expiresAt }
       } catch (e) {
         res.status(500).json({ error: e.message || 'No se pudo generar la invitación.' });
       }

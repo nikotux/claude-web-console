@@ -51,13 +51,14 @@ function applyClipboardOpts() {
 // capacidad de terminal.
 const safeCwd = (cwd, owner) => clampToRoot(userFileRoot(owner || hostUser()), cwd);
 
-// Resuelve una sesión SOLO si el request es de su dueño (o admin). Ajena/
-// inexistente → null → 404, sin revelar existencia. Espejo de ownedChat.
+// Resuelve una sesión SOLO si el request es de su dueño o tiene supervisión.
+// Ser admin no habilita a ver contenido ajeno. Ajena/inexistente → null → 404,
+// sin revelar existencia. Espejo de ownedChat.
 function ownedSession(req, id) {
   const session = sessionManager.get(id);
   if (!session) return null;
   const p = principalOf(req);
-  if (p.admin) return session;
+  if (p.oversight) return session;
   if (session.owner === p.username) return session;
   return null;
 }
@@ -242,10 +243,12 @@ export default {
       }
 
       // multi-tenant (BUG-680): guard de ownership, espejo del WS de chat.
-      // No revela existencia (mismo mensaje que "inexistente"). El handshake ya
-      // pasó por isAuthenticated (core/wss.js), así que principalOf no es null.
+      // Solo oversight permite ver/controlar una terminal ajena; admin por sí
+      // solo no alcanza. No revela existencia (mismo mensaje que "inexistente").
+      // El handshake ya pasó por isAuthenticated (core/wss.js), así que
+      // principalOf no es null.
       const p = principalOf(req);
-      if (!p.admin && session.owner !== p.username) {
+      if (!p.oversight && session.owner !== p.username) {
         ws.send(JSON.stringify({ type: 'error', message: 'Sesión inexistente o terminada.' }));
         ws.close();
         return;

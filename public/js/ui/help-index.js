@@ -167,6 +167,17 @@ export const HELP_INDEX = [
     load: () => import('./../modules/system/help.js'),
   },
   {
+    id: 'sys-sponsorship',
+    get title() { return t('system.sponsorship.help.indexTitle', 'Patrocinio'); },
+    icon: 'checklist',
+    group: 'sistema',
+    get blurb() { return t('system.sponsorship.help.indexBlurb', 'Elegí a quién le prestás tu llave de Claude y controlá su consumo diario.'); },
+    load: async () => {
+      const topic = await import('./../modules/system/help.js');
+      return { default: topic.sponsorshipHelp };
+    },
+  },
+  {
     id: 'sys-skills',
     get title() { return t('core.help.topic.sys-skills.title', 'Skills'); },
     icon: 'sparkle',
@@ -277,5 +288,13 @@ export const HELP_INDEX = [
     group: 'herram',
     get blurb() { return t('core.help.topic.rawview.blurb', 'Monitor read-only que vuelve visual el estado y ritmo del trabajo vivo.'); },
     load: () => import('./../modules/rawview-help.js'),
+  },
+  {
+    id: 'cerebro',
+    get title() { return t('core.help.topic.cerebro.title', 'Cerebro del Pad'); },
+    icon: 'brain',
+    group: 'herram',
+    get blurb() { return t('core.help.topic.cerebro.blurb', 'Vista 3D read-only del banco de conocimientos que se ilumina con cada uso real del Pad.'); },
+    load: () => import('./../modules/cerebro-help.js'),
   },
 ];

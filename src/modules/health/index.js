@@ -56,6 +56,7 @@ import {
   spawnScanRunner, createBugFromFinding,
 } from './scan-shared.js';
 import { createTaskFromProposal } from './pad-writeback-shared.js';
+import { checkSponsoredUsage } from './sponsored-usage.js';
 import { getSites } from '../unifi/client.js';
 import {
   collect as collectPadIndex,
@@ -979,6 +980,133 @@ async function checkPadBackbone() {
   return { id, label, status: 'ok', detail: `Pad local OK · ${musts.length} convención(es) must · espejo Regla #12 presente` };
 }
 
+// Materializa las leyes de conectividad de docs/pad-grafo.md directamente
+// sobre SQLite. Es deliberadamente read-only, 0 tokens y NUNCA usa MCP; como
+// todo check advisory del Pad, cualquier incompatibilidad degrada a warn.
+async function checkPadGrafo() {
+  const id = 'pad-grafo';
+  const label = 'Grafo de Pad (leyes de conectividad)';
+  const dbPath = path.join(os.homedir(), '.pad', 'pad.db');
+  if (!fss.existsSync(dbPath)) {
+    return { id, label, status: 'warn', detail: 'pad.db no encontrado; no se pudieron verificar las leyes del grafo' };
+  }
+
+  let db;
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const workspace = db.prepare("SELECT id FROM workspaces WHERE slug = 'console' AND deleted_at IS NULL").get();
+    if (!workspace?.id) {
+      return { id, label, status: 'warn', detail: 'workspace console no encontrado en pad.db' };
+    }
+
+    const vivosCte = `
+      WITH vivos AS (
+        SELECT i.id, i.parent_id, i.item_number, i.fields, i.tags,
+               c.slug AS collection_slug, c.prefix
+        FROM items i
+        JOIN collections c ON c.id = i.collection_id
+        WHERE i.workspace_id = ?
+          AND i.deleted_at IS NULL
+          AND c.deleted_at IS NULL
+      )`;
+    const candidatosHuerfanos = db.prepare(`${vivosCte},
+      conectados AS (
+        SELECT hijo.id
+        FROM vivos hijo JOIN vivos padre ON padre.id = hijo.parent_id
+        UNION
+        SELECT padre.id
+        FROM vivos hijo JOIN vivos padre ON padre.id = hijo.parent_id
+        UNION
+        SELECT l.source_id
+        FROM item_links l
+        JOIN vivos origen ON origen.id = l.source_id
+        JOIN vivos destino ON destino.id = l.target_id
+        UNION
+        SELECT l.target_id
+        FROM item_links l
+        JOIN vivos origen ON origen.id = l.source_id
+        JOIN vivos destino ON destino.id = l.target_id
+        UNION
+        SELECT w.source_item_id
+        FROM item_wiki_links w
+        JOIN vivos origen ON origen.id = w.source_item_id
+        JOIN vivos destino ON destino.id = w.target_item_id
+        UNION
+        SELECT w.target_item_id
+        FROM item_wiki_links w
+        JOIN vivos origen ON origen.id = w.source_item_id
+        JOIN vivos destino ON destino.id = w.target_item_id
+      )
+      SELECT v.id, v.item_number, v.prefix, v.tags
+      FROM vivos v
+      LEFT JOIN conectados a ON a.id = v.id
+      WHERE a.id IS NULL
+      ORDER BY v.item_number`).all(workspace.id);
+    const tieneTagIsla = (item) => {
+      try {
+        const tags = JSON.parse(item.tags || '[]');
+        return Array.isArray(tags) && tags.includes('isla');
+      } catch {
+        return false;
+      }
+    };
+    // Una isla declarada es legítimamente grado 0; el tag es la declaración explícita.
+    const huerfanos = candidatosHuerfanos.filter((item) => !tieneTagIsla(item));
+    const raicesArquitectura = db.prepare(`${vivosCte}
+      SELECT v.id, v.item_number, v.prefix
+      FROM vivos v
+      WHERE v.collection_slug = 'arquitectura'
+        AND NOT EXISTS (SELECT 1 FROM vivos padre WHERE padre.id = v.parent_id)
+        AND NOT EXISTS (
+          SELECT 1 FROM item_links l
+          JOIN vivos destino ON destino.id = l.target_id
+          WHERE l.source_id = v.id AND l.link_type = 'parent'
+        )
+      ORDER BY v.item_number`).all(workspace.id);
+    const candidatosSol = db.prepare(`${vivosCte}
+      SELECT v.id, v.item_number, v.prefix, v.tags
+      FROM vivos v
+      WHERE v.collection_slug = 'planes'
+        AND json_extract(v.fields, '$.status') = 'active'
+        AND v.parent_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM item_links l
+          JOIN vivos destino ON destino.id = l.target_id
+          WHERE l.source_id = v.id AND l.link_type IN ('parent', 'implements')
+        )
+      ORDER BY v.item_number`).all(workspace.id);
+    const solesSinAncla = candidatosSol.filter((item) => !tieneTagIsla(item));
+    const refDe = (item) => `${item.prefix}-${item.item_number}`;
+    const raizEsperada = raicesArquitectura.length === 1 && refDe(raicesArquitectura[0]) === 'ARQUI-1258';
+    const detail = `grado-0 (sin islas): ${huerfanos.length} · raíces arquitectura: ${raicesArquitectura.length} · soles activos sin ancla: ${solesSinAncla.length}`;
+    if (huerfanos.length === 0 && raizEsperada && solesSinAncla.length === 0) {
+      return { id, label, status: 'ok', detail };
+    }
+    const ejemplos = [
+      ...(huerfanos.length ? huerfanos : []),
+      ...(!raizEsperada ? raicesArquitectura : []),
+      ...(solesSinAncla.length ? solesSinAncla : []),
+    ]
+      .map(refDe)
+      .filter((ref, index, refs) => refs.indexOf(ref) === index)
+      .slice(0, 5);
+    const raizDetail = raicesArquitectura.length === 1 && !raizEsperada
+      ? ` · raíz esperada ARQUI-1258, encontrada ${refDe(raicesArquitectura[0])}`
+      : '';
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: `${detail}${raizDetail}${ejemplos.length ? ` · ejemplos: ${ejemplos.join(', ')}` : ''}`,
+    };
+  } catch (err) {
+    return { id, label, status: 'warn', detail: `no se pudo verificar pad.db (${String(err?.message || err).slice(0, 180)})` };
+  } finally {
+    try { db?.close(); } catch { /* best-effort: Salud nunca tira por Pad */ }
+  }
+}
+
 // Verifica que el índice enrutador respete su techo y que todos sus destinos
 // bloqueantes existan y tengan cuerpo. Read-only, HTTP plano y 0 tokens.
 async function checkPadIndex() {
@@ -1288,9 +1416,11 @@ async function runChecks() {
     checkOnboarding(),
     Promise.resolve(checkDockerHygiene()),
     checkPadBackbone(),
+    checkPadGrafo(),
     checkPadIndex(),
     checkPadBootstrap(),
     checkAncla(),
+    checkSponsoredUsage(),
   ]);
   const count = (s) => checks.filter((c) => c.status === s).length;
   return {

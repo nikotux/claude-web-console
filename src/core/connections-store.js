@@ -1,8 +1,9 @@
-// core/connections-store.js — store mínimo para conexiones OAuth externas.
+// core/connections-store.js — store mínimo para conexiones externas.
 //
 // La CONFIG DE LA APP OAuth puede ser de INSTANCIA o tener un override completo
-// POR-USUARIO. Los TOKENS también son per-usuario. Todo se escribe 0600 y de
-// forma ATÓMICA para no dejar credenciales corruptas a mitad de escritura.
+// POR-USUARIO. Los TOKENS OAuth y credenciales API también son per-usuario.
+// Todo se escribe 0600 y de forma ATÓMICA para no dejar credenciales corruptas
+// a mitad de escritura.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,8 +14,9 @@ import * as ms from './connections-microsoft.js';
 import * as zoho from './connections-zoho.js';
 
 export const PROVIDERS = [
-  { id: 'microsoft', label: 'Microsoft (Calendario y SharePoint)', scopes: ms.MS_SCOPES },
-  { id: 'zoho', label: 'Zoho (Desk)', scopes: zoho.ZOHO_SCOPES },
+  { id: 'microsoft', label: 'Microsoft (Calendario, Correo y SharePoint)', kind: 'oauth', scopes: ms.MS_SCOPES },
+  { id: 'zoho', label: 'Zoho (Desk)', kind: 'oauth', scopes: zoho.ZOHO_SCOPES },
+  { id: 'freshservice', label: 'Freshservice', kind: 'apikey', scopes: [] },
 ];
 
 const APP_FILE = path.join(os.homedir(), '.cwc-data', 'connections', '_app.json');
@@ -24,10 +26,6 @@ const DEFAULT_APP_CONFIG = {
 };
 
 export const JOB_ID_RE = /^[A-Za-z0-9_-]+$/;
-
-export function isProvider(id) {
-  return PROVIDERS.some((p) => p.id === id);
-}
 
 function readJson(file) {
   try {
@@ -264,6 +262,19 @@ export function cancelAttempts(username, provider) {
 
 export function connectionStatus(username, provider) {
   const c = readConnection(username, provider);
+  const meta = PROVIDERS.find((p) => p.id === provider);
+  if (meta?.kind === 'apikey') {
+    const credential = apiCredentialFromConnection(provider, c);
+    return {
+      connected: !!credential,
+      account: credential ? c?.email ?? null : null,
+      connectedAt: credential ? c?.connectedAt ?? null : null,
+      error: null,
+      domain: credential?.domain ?? null,
+      email: credential ? c?.email ?? null : null,
+      name: credential ? c?.name ?? null : null,
+    };
+  }
   return {
     connected: !!c,
     account: c?.account ?? null,
@@ -310,6 +321,10 @@ export function writeJob(username, jobId, data) {
 }
 
 export async function getAccessToken(username, provider) {
+  const meta = PROVIDERS.find((p) => p.id === provider);
+  if (meta?.kind === 'apikey') {
+    throw new Error(`${provider} no usa OAuth: usá getApiCredential()`);
+  }
   const c = readConnection(username, provider);
   if (!c) throw new Error(`Sin conexión de ${provider} para este usuario.`);
   if (c.accessToken && c.expiresAt > Date.now() + 60_000) return c.accessToken;
@@ -339,4 +354,19 @@ export async function getAccessToken(username, provider) {
   };
   writeConnection(username, provider, next);
   return next.accessToken;
+}
+
+function apiCredentialFromConnection(provider, connection) {
+  if (provider !== 'freshservice') return null;
+  const domain = cleanString(connection?.domain);
+  const apiKey = cleanString(connection?.apiKey);
+  return domain && apiKey ? { domain, apiKey } : null;
+}
+
+// Puerta ÚNICA a credenciales estáticas. Los endpoints de estado usan
+// connectionStatus(), que construye una vista segura sin incluir apiKey.
+export function getApiCredential(username, provider) {
+  const meta = PROVIDERS.find((p) => p.id === provider);
+  if (meta?.kind !== 'apikey') return null;
+  return apiCredentialFromConnection(provider, readConnection(username, provider));
 }

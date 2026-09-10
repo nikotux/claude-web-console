@@ -2,10 +2,11 @@
 // organizado en GRUPOS con submenú (master-detail), no una fila plana de tabs.
 //
 // Botón ⚙ en el pie → modal con:
-//   ⚙️ Configuración   → Novedades · Conexiones (MCP) · Skills · Idioma · Variables de entorno · Proyectos
+//   ⚙️ Configuración   → Novedades · Mi configuración · Patrocinio · Conexiones (MCP) · Skills · Idioma · Variables de entorno · Proyectos
 //   🩺 Diagnóstico     → Salud · Dashboard · Actualizaciones · UniFi · Interfono
 //   🛠️ Administración  → Backup · Usuarios          (solo admins)
-// No-admin: Novedades · Conexiones · Skills · Idioma · Proyectos · Interfono.
+// No-admin usuario: Novedades · Mi configuración · Patrocinio · Conexiones ·
+// Skills · Idioma · Proyectos · Interfono.
 //
 // Desktop (≥720px): rail de grupos+items a la izquierda + panel a la derecha
 // (master-detail). Móvil (<720px): drill-down — se ve el índice, tocás un ítem
@@ -24,8 +25,10 @@ import { mountMcpsPanel } from './mcps-panel.js';
 import { mountUpdatesPanel } from './updates-panel.js';
 import { mountLanguagePanel } from './language-panel.js';
 import { mountMyConfigPanel } from './my-config-panel.js';
+import { mountSponsorshipPanel } from './sponsorship-panel.js';
 import { mountNewsPanel } from './news-panel.js';
 import { t } from '../../ui/i18n.js';
+import { isSponsored, HIDDEN_SYSTEM_PANELS_FOR_SPONSORED } from '../../ui/profile.js';
 
 export default {
   name: 'system',
@@ -85,6 +88,7 @@ export default {
     launcher.addEventListener('click', async () => {
       const me = await whoami;
       const isAdmin = !!me?.admin;
+      const sponsoredProfile = isSponsored(me);
       let railCounter = null;
       const m = dialog.openModal({
         title: t('system.menu.title', 'Sistema'),
@@ -102,10 +106,13 @@ export default {
           items: [
             { emoji: '🆕', label: t('system.menu.news', 'Novedades'), news: true, mount: (c) => mountNewsPanel(c, { ...ctx, isAdmin }) },
             ...(me?.type === 'user'
-              ? [{ emoji: '✅', label: t('system.menu.myConfig', 'Mi configuración'), mount: (c) => mountMyConfigPanel(c, { ...ctx, me }) }]
+              ? [
+                  { emoji: '✅', label: t('system.menu.myConfig', 'Mi configuración'), mount: (c) => mountMyConfigPanel(c, { ...ctx, me }) },
+                  { emoji: '🤝', label: t('system.menu.sponsorship', 'Patrocinio'), mount: (c) => mountSponsorshipPanel(c, { ...ctx, me }) },
+                ]
               : []),
             { emoji: '🔌', label: t('system.menu.connections', 'Conexiones'), mount: (c) => mountMcpsPanel(c, { ...ctx, isAdmin }) },
-            { emoji: '🧩', label: t('system.menu.skills', 'Skills'), mount: (c) => mountSkillsPanel(c, { ...ctx, isAdmin }) },
+            { id: 'skills', emoji: '🧩', label: t('system.menu.skills', 'Skills'), mount: (c) => mountSkillsPanel(c, { ...ctx, isAdmin }) },
             { emoji: '🌐', label: t('system.menu.language', 'Idioma'), mount: (c) => mountLanguagePanel(c, ctx) },
             ...(isAdmin
               ? [{ emoji: '🪪', label: t('system.menu.envVars', 'Variables de entorno'), mount: (c) => mountEnvVarsPanel(c, { ...ctx, isAdmin }) }]
@@ -124,7 +131,7 @@ export default {
                   { emoji: '🛰️', label: t('system.menu.unifi', 'UniFi'), mount: (c) => mountUnifiPanel(c, { ...ctx, isAdmin }) },
                 ]
               : []),
-            { emoji: '📡', label: t('system.menu.interfono', 'Interfono'), mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
+            { id: 'interfono', emoji: '📡', label: t('system.menu.interfono', 'Interfono'), mount: (c) => mountInterfonoPanel(c, { ...ctx, isAdmin }) },
           ],
         },
         ...(isAdmin
@@ -136,7 +143,14 @@ export default {
               ],
             }]
           : []),
-      ].filter((g) => g.items.length);
+      ]
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => (
+            !sponsoredProfile || !HIDDEN_SYSTEM_PANELS_FOR_SPONSORED.has(item.id)
+          )),
+        }))
+        .filter((group) => group.items.length);
 
       // Aplanamos a una lista con índice global para el ruteo.
       const flat = [];

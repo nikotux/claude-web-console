@@ -1,6 +1,7 @@
 {
   "chat.common.cancel": "Cancel",
   "chat.common.send": "Send",
+  "chat.message.author": "Message from {name}",
   "chat.askq.otherPlaceholder": "Other answer…",
   "chat.askq.assistantQuestion": "Assistant question",
   "chat.mode.ask": "Ask",
@@ -201,7 +202,9 @@
   "chat.sala.participants": "Participants",
   "chat.sala.participantTitle": "Participant: {name}",
   "chat.sala.visadoTitle": "Request an operation",
-  "chat.sala.sayLabel": "{name} · {time}",
+  "chat.sala.sayLabel": "{name}",
+  "chat.day.today": "Today",
+  "chat.day.yesterday": "Yesterday",
   "chat.sala.cutLine": "✂ {name} sent to AI · {time}",
   "chat.sala.cutButton": "✦ Send to AI ({count})",
   "chat.sala.cutPending": "AI busy · queued",

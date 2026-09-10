@@ -53,6 +53,12 @@ html, body {
 }
 .raw-log--in { opacity: 0.72; }   /* protagonista ahora: texto legible sobre la lluvia tenue */
 .raw-log--out { opacity: 0; }
+.raw-log--kid {
+  border-left: 1px dotted color-mix(in srgb, currentColor 24%, transparent);
+  padding-left: 3px;
+  opacity: 0.92;
+}
+.raw-log--kid.raw-log--out { opacity: 0; }
 
 .raw-log-gut {
   flex: 0 0 auto;

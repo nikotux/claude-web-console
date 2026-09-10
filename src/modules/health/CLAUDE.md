@@ -70,6 +70,12 @@
   **`claude-cred`** (`console:BUG-2438`, 0 tokens): vigila que la credencial
   OAuth del host conserve un accessToken o refreshToken utilizable; existe porque
   el 2026-07-31 apareció vaciada y ningún check lo detectaba hasta que ningún chat abría.
+  **`sponsored-usage`** (informativo, 0 tokens): para cada usuario patrocinado
+  mide el costo del día en hora de Bogotá reusando `buildSummary()` del módulo
+  tokens. Avisa desde USD 10 por defecto, configurable con
+  `CWC_SPONSORED_USAGE_WARN_USD`; NUNCA bloquea un runner ni impone un tope. Es
+  resiliente por ítem: un usuario ilegible se reporta como indeterminado sin
+  tumbar el chequeo ni impedir que se midan los demás.
   **`tmux-owner`** (`console:BUG-2350`, 0 tokens): para cada pane del socket
   `cwc`, compara el `HOME` efectivo leído de `/proc/<pane_pid>/environ` con
   `userSpace(owner)`, resolviendo el dueño durable mediante
@@ -139,6 +145,11 @@
   dura #12 en las Conventions (señal concreta de divergencia CLAUDE.md↔Pad).
   OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto como
   el MCP) — hay que `JSON.parse` antes de leer priority/status.
+  Y **`pad-grafo`** (2026-09-08, F3 de PLAN-2851): verifica en la SQLite local
+  las leyes de conectividad del workspace `console` —grado 0, raíz única
+  `ARQUI-1258` y planes activos sin parent/implements ni tag `isla`—. Abre
+  `~/.pad/pad.db` read-only, consume 0 tokens, NUNCA usa MCP y ante cualquier
+  incompatibilidad o ausencia de la DB degrada best-effort a `warn`, nunca tira.
   Y **`cross-world`** (2026-07-14, F7 de PLAN-373/PEND-466): AUDIT determinístico
   (0 tokens, read-only) de los CRUCES ENTRE MUNDOS. `checkCrossWorld` en
   `health/index.js` escanea `src/`+`bin/` buscando referencias al mundo externo
@@ -490,7 +501,25 @@
   `{match, text, exclude?, origen?}` (seeds + aprendidos de los gotchas
   conocidos: simetría mode/model en chat, validación de rutas, settingSources
   headless sin user, bind ZeroTier, guard [hidden], integridad de secciones en
-  projects…). `match` admite VARIOS globs separados por coma: `compileMatch`
+  projects…). El primer seed, **Blindaje anticonsumo**, contempla la excepción
+  nominal del patrocinio sin convertirla en fallback: `core/sponsorship.js` es
+  el punto único que valida `tier:'sponsored'`, sponsor admin no patrocinado y
+  sin auto-patrocinio, prioriza siempre el token propio y solo lee el
+  `oauth-token` dedicado del sponsor, nunca `.credentials.json`. El mismo seed
+  sigue exigiendo env por allowlist, HOME/CWC_DATA_DIR aislados y el self-check
+  exit 3 incluso con `--sponsored-by`; además matchea `sponsorship.js` para que
+  el auditor vigile la excepción donde se define. Queda documentado allí el
+  riesgo aceptado por Nico el 2026-08-29 de que Bash lea `/proc/self/environ`:
+  no corresponde reponer restricciones a Bash ni `bypassPermissions`.
+  La familia nueva **CONTENIDO AJENO SE GATEA POR OVERSIGHT, NUNCA POR ADMIN**
+  matchea chat, terminal, `core/auth.js` y `core/users.js`. Exige que listar,
+  abrir, adjuntarse o leer chats, adjuntos, paquetes y sesiones tmux de otro
+  usuario pase por `oversight`; reserva `admin` para administración, obliga a
+  resolver la capacidad en vivo con `oversightFor()` y verifica que todo mensaje
+  propague el username de su emisor. Un pase de admin en un gate de contenido,
+  cachear `oversight` en la sesión o descartar el autor son regresiones de la
+  misma familia (`console:BUG-2831`).
+  `match` admite VARIOS globs separados por coma: `compileMatch`
   compila cada uno y los une con `|`; también tolera un comentario entre
   paréntesis y lo descarta. `exclude` enumera rutas relativas EXACTAS donde la
   regla no aplica por diseño, en paridad con el campo homónimo de

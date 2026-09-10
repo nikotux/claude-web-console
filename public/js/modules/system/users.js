@@ -37,6 +37,7 @@ export function mountUsersPanel(el) {
       <p style="margin:0 0 .5rem;font-size:var(--cwc-fs-xs);color:var(--cwc-text-dim)">${t('system.users.accessInvitesHintBeforePath', 'Generá un token de un solo uso. La persona lo usa en')} <code>/onboard</code> ${t('system.users.accessInvitesHintAfterPath', 'para crear su cuenta y conectar su propia cuenta de Claude. Vence en 24 h.')}</p>
       <form class="users-new" data-ref="invform">
         <label class="users-chk"><input data-ref="invadmin" type="checkbox" /> ${t('system.users.adminLabel', 'admin')}</label>
+        <label class="users-chk"><input data-ref="invsponsored" type="checkbox" /> ${t('system.users.sponsoredLabel', 'patrocinado')}</label>
         <button type="submit" class="btn btn--sm">${t('system.users.generateInvite', 'Generar invitación')}</button>
       </form>
       <div data-ref="invtoken" hidden style="margin:.5rem 0;padding:.5rem .6rem;border:1px solid var(--cwc-accent);border-radius:6px;background:var(--cwc-bg-elevated)"></div>
@@ -99,6 +100,17 @@ export function mountUsersPanel(el) {
       adm.textContent = u.admin ? t('system.users.removeAdmin', 'quitar admin') : t('system.users.makeAdmin', 'hacer admin');
       adm.addEventListener('click', () => update(u.username, { admin: !u.admin }));
 
+      const oversight = document.createElement('button');
+      oversight.className = 'btn-ghost btn--sm';
+      oversight.textContent = u.oversight
+        ? t('system.users.removeOversight', 'dejar de ver contenido ajeno')
+        : t('system.users.grantOversight', 'ver chats y terminales ajenos');
+      oversight.title = t(
+        'system.users.oversightHelp',
+        'Permite ver los chats y terminales de otros usuarios; al adjuntarse a una terminal, también puede controlarla.',
+      );
+      oversight.addEventListener('click', () => update(u.username, { oversight: !u.oversight }));
+
       const pw = document.createElement('button');
       pw.className = 'btn-ghost btn--sm';
       pw.textContent = t('system.users.passwordAction', 'contraseña');
@@ -107,7 +119,7 @@ export function mountUsersPanel(el) {
         if (p) update(u.username, { password: p });
       });
 
-      actions.append(adm, pw);
+      actions.append(adm, oversight, pw);
 
       // El usuario host no se da de baja desde esta UI.
       if (!host || u.username !== host) {
@@ -146,10 +158,20 @@ export function mountUsersPanel(el) {
     const url = location.origin + '/onboard';
     const p1 = document.createElement('p');
     p1.style.cssText = 'margin:0 0 .35rem;font-size:var(--cwc-fs-xs);color:var(--cwc-text-dim)';
-    p1.textContent = invite.admin ? t('system.users.adminInviteShare', 'Invitación de ADMIN — pasale a la persona:') : t('system.users.inviteShare', 'Pasale a la persona:');
+    p1.textContent = invite.sponsored
+      ? t('system.users.sponsoredInviteShare', 'Invitación de PATROCINADO — pasale a la persona:')
+      : invite.admin
+        ? t('system.users.adminInviteShare', 'Invitación de ADMIN — pasale a la persona:')
+        : t('system.users.inviteShare', 'Pasale a la persona:');
     const pre = document.createElement('div');
     pre.style.cssText = 'font-family:var(--cwc-font-mono,monospace);font-size:var(--cwc-fs-xs);word-break:break-all;color:var(--cwc-text);white-space:pre-wrap';
-    const message = t('system.users.inviteMessage', 'Entrá a {url} y usá este token de invitación:\n{token}', { url, token: invite.token });
+    const message = invite.sponsored
+      ? t(
+        'system.users.sponsoredInviteMessage',
+        'Entrá a {url} y usá este token de invitación:\n{token}\n\nAlguien va a tener que adoptarte para que puedas trabajar. Si nadie te adopta, vas a poder entrar, pero no vas a poder hacer nada.',
+        { url, token: invite.token },
+      )
+      : t('system.users.inviteMessage', 'Entrá a {url} y usá este token de invitación:\n{token}', { url, token: invite.token });
     pre.textContent = message;
     const copy = document.createElement('button');
     copy.type = 'button';
@@ -196,12 +218,18 @@ export function mountUsersPanel(el) {
       const name = document.createElement('span');
       name.className = 'users-name';
       const label = document.createElement('span');
-      label.textContent = (inv.status === 'locked' ? t('system.users.inviteInUse', 'en uso · {lockedTo}', { lockedTo: inv.lockedTo || '' }) : t('system.users.invitePending', 'pendiente')) + (inv.admin ? '  ' : '');
+      label.textContent = (inv.status === 'locked' ? t('system.users.inviteInUse', 'en uso · {lockedTo}', { lockedTo: inv.lockedTo || '' }) : t('system.users.invitePending', 'pendiente')) + (inv.admin || inv.sponsored ? '  ' : '');
       name.appendChild(label);
       if (inv.admin) {
         const b = document.createElement('span');
         b.className = 'users-badge';
         b.textContent = t('system.users.adminLabel', 'admin');
+        name.appendChild(b);
+      }
+      if (inv.sponsored) {
+        const b = document.createElement('span');
+        b.className = 'users-badge';
+        b.textContent = t('system.users.sponsoredLabel', 'patrocinado');
         name.appendChild(b);
       }
       const meta = document.createElement('span');
@@ -348,14 +376,22 @@ export function mountUsersPanel(el) {
       const { invite } = await onboardApi('/admin/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ admin: refs.invadmin.checked }),
+        body: JSON.stringify({ admin: refs.invadmin.checked, sponsored: refs.invsponsored.checked }),
       });
       showInviteToken(invite);
       refs.invadmin.checked = false;
+      refs.invsponsored.checked = false;
       loadInvites();
     } catch (err) {
       msg(err.message);
     }
+  });
+
+  refs.invadmin.addEventListener('change', () => {
+    if (refs.invadmin.checked) refs.invsponsored.checked = false;
+  });
+  refs.invsponsored.addEventListener('change', () => {
+    if (refs.invsponsored.checked) refs.invadmin.checked = false;
   });
 
   load();

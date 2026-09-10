@@ -68,10 +68,11 @@ que lo hecho sea lo pedido.
 |---|---|---|
 ```
 
-7. **GATE — mostrale el ancla a quien pidió** antes de arrancar: la intención, la tabla de criterios y el fuera de alcance.
+7. **El sol nace ENLAZADO (Ley 1).** El ítem-raíz no queda flotando: crearle en el MISMO momento su arista `implements` hacia el nodo de `arquitectura` del subsistema/módulo que le concierne (en `console`; en otro workspace, hacia su raíz equivalente). Si es trabajo de mundo real sin módulo (un proyecto personal, un encargo externo), NO forzar un implements falso: etiquetarlo con el tag `isla` — el check `pad-grafo` de Salud excluye esas islas declaradas y denuncia todo lo demás. OJO: verificar idempotencia con `action=deps`, no con `backlinks` (BUG-2858: backlinks devuelve vacío con entrantes reales).
+8. **GATE — mostrale el ancla a quien pidió** antes de arrancar: la intención, la tabla de criterios y el fuera de alcance.
    Es su última oportunidad barata de decir "no, lo que quiero es esto
    otro". Un criterio mal destilado contamina todos los contrastes posteriores.
-8. **Enganchá lo que sigue:** el plan de ejecución cuelga de este ítem, y `rutear`/`agrupar`
+9. **Enganchá lo que sigue:** el plan de ejecución cuelga de este ítem, y `rutear`/`agrupar`
    leen los criterios para verificar cobertura. Cerrá con el checkpoint **CP-0** corriendo
    la skill `contrastar` apenas el plan esté armado, antes del GO.
 
@@ -83,6 +84,7 @@ que lo hecho sea lo pedido.
 | 🔴 | Adaptarse es legítimo, pero se registra como **ENMIENDA aprobada** en la tabla, con fecha y quién aprobó. Nunca como una edición silenciosa del pedido. |
 | 🟠 | Un cambio de alcance lo aprueba **quien pidió**, no quien ejecuta. |
 | 🔴 | La intención es el **criterio de desempate**. Ante una bifurcación durante la ejecución —dos formas razonables de hacer algo, un detalle que el pedido no cubre— se resuelve por la intención, NUNCA por conveniencia local de quien ejecuta. Si la intención tampoco lo resuelve, se pregunta; no se decide solo. |
+| 🔴 | Un ancla sin arista es medio ancla: el ítem-raíz sale del paso 0 con su implements a ARQUI o con el tag `isla`. La auditoría 2026-09-08 (PLAN-2851) encontró 28 planes flotantes exactamente por saltarse esto. |
 
 ## Umbral
 

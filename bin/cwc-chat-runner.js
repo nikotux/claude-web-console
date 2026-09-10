@@ -93,12 +93,13 @@ if (!ID || !CWD || !SOCK) {
   process.exit(2);
 }
 // ── Blindaje anticonsumo multi-tenant (PLAN-592/TASK-612): un runner de INQUILINO
-// NUNCA debe correr con las creds del server (quemaría los tokens del admin). El
-// server ya nos spawnea con env LIMPIO + HOME per-user (runner-link.userRunnerEnv);
-// esto es la CAPA fail-closed de defensa en profundidad: si por un bug el
-// aislamiento no llegó, ABORTAMOS antes de tocar query() en vez de caer a la cuenta
-// del server.
+// NUNCA debe caer por accidente en las creds del server (quemaría los tokens del
+// admin). La única excepción es NOMINAL: --sponsored-by declara que el token del
+// env fue prestado deliberadamente por ese sponsor. El HOME aislado sigue siendo
+// obligatorio en ambos modos. Esta es la CAPA fail-closed de defensa en profundidad:
+// si el aislamiento o la credencial esperada no llegaron, ABORTAMOS antes de query().
 const OWNER = args.owner || null;
+const SPONSORED_BY = args['sponsored-by'] || null;
 const IS_TENANT = !!OWNER && OWNER !== hostUser();
 if (IS_TENANT) {
   // El helper de env ya permitió que config.js capture la configuración del
@@ -109,12 +110,18 @@ if (IS_TENANT) {
   // El HOME del inquilino debe ser su root aislado: ~/.cwc-users/<owner>.
   const expected = path.sep + path.join('.cwc-users', OWNER);
   const isolatedHome = !!home && home.endsWith(expected);
-  // Debe existir una fuente de creds PROPIA del inquilino (token en env o su
-  // .credentials.json en su HOME). Sin ella el SDK caería vía getpwuid al server.
+  // En modo estándar debe existir una fuente PROPIA, exactamente como antes. En
+  // modo patrocinado el token del env es prestado y obligatorio; no se acepta un
+  // --sponsored-by vacío de credencial como atajo al archivo del server.
   const hasOwnCreds = !!process.env.CLAUDE_CODE_OAUTH_TOKEN
     || fs.existsSync(path.join(home, '.claude', '.credentials.json'));
-  if (!isolatedHome || !hasOwnCreds) {
-    console.error(`[runner] FAIL-CLOSED anticonsumo: inquilino ${OWNER} sin aislamiento válido (HOME=${home}, credsPropias=${hasOwnCreds}). No arranco para no usar la cuenta del server.`);
+  const hasSponsoredCreds = !!SPONSORED_BY && !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const credentialsValid = SPONSORED_BY ? hasSponsoredCreds : hasOwnCreds;
+  if (!isolatedHome || !credentialsValid) {
+    const credentialMode = SPONSORED_BY
+      ? `patrocinado por ${SPONSORED_BY}, tokenPatrocinado=${hasSponsoredCreds}`
+      : `estándar, credsPropias=${hasOwnCreds}`;
+    console.error(`[runner] FAIL-CLOSED anticonsumo: inquilino ${OWNER} sin aislamiento válido (HOME=${home}, modo=${credentialMode}). No arranco para no usar una cuenta no autorizada.`);
     process.exit(3);
   }
 }

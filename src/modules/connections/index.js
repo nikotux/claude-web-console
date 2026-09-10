@@ -1,12 +1,12 @@
-// modules/connections/index.js — endpoints OAuth para conectores externos.
+// modules/connections/index.js — endpoints de credenciales para conectores externos.
 //
 // Este módulo existe para exponer una capa HTTP chica sobre el store y los
 // proveedores ya implementados: la configuración OAuth puede venir de la app
 // global (admin-only) o de un override completo del usuario, mientras que los
-// tokens quedan siempre por usuario. Por eso el deviceCode de Microsoft se
-// persiste en el job (mode 600, directorio privado del usuario) para que el
-// canje sobreviva a reinicios; ningún endpoint devuelve ni loguea tokens,
-// secrets o códigos internos.
+// tokens y API keys quedan siempre por usuario. Por eso el deviceCode de
+// Microsoft se persiste en el job (mode 600, directorio privado del usuario)
+// para que el canje sobreviva a reinicios; ningún endpoint devuelve ni loguea
+// tokens, API keys, secrets o códigos internos.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -24,7 +24,6 @@ import {
 } from '../../core/user-space.js';
 import {
   PROVIDERS,
-  isProvider,
   readAppConfig,
   writeAppConfig,
   appConfigured,
@@ -37,6 +36,7 @@ import {
   readConnection,
   writeConnection,
   getAccessToken,
+  getApiCredential,
   deleteConnection,
   cancelAttempts,
   connectionStatus,
@@ -60,6 +60,10 @@ import {
   getOrg,
   getMe as getZohoMe,
 } from '../../core/connections-zoho.js';
+import {
+  freshserviceBaseUrl,
+  verifyFreshservice,
+} from '../../core/connections-freshservice.js';
 import {
   deleteTolkienConnection,
   isValidTolkienCookie,
@@ -228,11 +232,15 @@ function userOf(req) {
 
 function reqProvider(req, res) {
   const provider = req.params.provider;
-  if (!isProvider(provider)) {
+  if (!isOAuthProvider(provider)) {
     res.status(400).json({ error: 'Proveedor desconocido.' });
     return null;
   }
   return provider;
+}
+
+function isOAuthProvider(provider) {
+  return PROVIDERS.some((p) => p.id === provider && p.kind === 'oauth');
 }
 
 function labelOf(provider) {
@@ -391,19 +399,21 @@ export default {
       await healZohoIdentity(username);
       res.json({
         providers: PROVIDERS.map((p) => {
+          const isOauth = p.kind === 'oauth';
           const { grantedScopes, missingScopes } = scopesForResponse(username, p.id, p.scopes);
           return {
             id: p.id,
             label: p.label,
+            kind: p.kind,
             scopes: p.scopes,
             grantedScopes,
             missingScopes,
-            configured: appConfiguredFor(username, p.id),
-            appSource: userAppComplete(username, p.id)
+            configured: !isOauth || appConfiguredFor(username, p.id),
+            appSource: isOauth && userAppComplete(username, p.id)
               ? 'user'
-              : (appConfigured(p.id) ? 'instance' : 'none'),
+              : (isOauth && appConfigured(p.id) ? 'instance' : 'none'),
             ...connectionStatus(username, p.id),
-            lastAttempt: lastAttempt(username, p.id),
+            lastAttempt: isOauth ? lastAttempt(username, p.id) : null,
           };
         }),
         isAdmin: isAdmin(req),
@@ -424,7 +434,7 @@ export default {
 
       const body = req.body || {};
       const { provider } = body;
-      if (!isProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
+      if (!isOAuthProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
 
       const keys = provider === 'microsoft' ? ['clientId', 'tenantId'] : ['clientId', 'clientSecret', 'dc'];
       const patch = {};
@@ -479,7 +489,7 @@ export default {
       const username = userOf(req);
       const body = req.body || {};
       const { provider } = body;
-      if (!isProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
+      if (!isOAuthProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
 
       const clientId = String(body.clientId || '').trim();
       if (!clientId) return res.status(400).json({ error: 'Falta el Client ID.' });
@@ -508,7 +518,7 @@ export default {
     r.post('/app/mine/reset', asyncHandler((req, res) => {
       const username = userOf(req);
       const provider = req.body?.provider;
-      if (!isProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
+      if (!isOAuthProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
 
       clearUserAppConfig(username, provider);
       res.json({ ok: true, source: appConfigured(provider) ? 'instance' : 'none' });
@@ -918,6 +928,53 @@ export default {
       const source = claudeCredentialSource(userOf(req));
       res.json({ connected: source !== null, source });
     });
+
+    // Freshservice usa una credencial estática por agente, no OAuth. Estas
+    // rutas específicas deben quedar antes de '/:provider/...'.
+    r.post('/freshservice/connect', asyncHandler(async (req, res) => {
+      const username = userOf(req);
+      let domain;
+      try {
+        domain = freshserviceBaseUrl(req.body?.domain);
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+      const apiKey = String(req.body?.apiKey || '').trim();
+      if (!apiKey) return res.status(400).json({ error: 'Falta la API key de Freshservice.' });
+
+      const verified = await verifyFreshservice({ domain, apiKey });
+      if (!verified.ok) return res.status(400).json({ error: verified.error });
+
+      writeConnection(username, 'freshservice', {
+        provider: 'freshservice',
+        domain,
+        apiKey,
+        email: verified.email,
+        name: verified.name,
+        id: verified.id,
+        connectedAt: new Date().toISOString(),
+        error: null,
+      });
+      res.json({ ok: true });
+    }));
+
+    r.post('/freshservice/disconnect', asyncHandler((req, res) => {
+      deleteConnection(userOf(req), 'freshservice');
+      res.json({ ok: true });
+    }));
+
+    r.get('/freshservice/status', asyncHandler((req, res) => {
+      const username = userOf(req);
+      const credential = getApiCredential(username, 'freshservice');
+      const connection = credential ? readConnection(username, 'freshservice') : null;
+      res.json({
+        connected: !!credential,
+        domain: credential?.domain ?? null,
+        email: connection?.email ?? null,
+        name: connection?.name ?? null,
+        connectedAt: connection?.connectedAt ?? null,
+      });
+    }));
 
     r.post('/:provider/connect', asyncHandler(async (req, res) => {
       const provider = reqProvider(req, res);

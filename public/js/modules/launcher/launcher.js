@@ -11,6 +11,7 @@ import { CHAT_MODEL_OPTIONS, TUI_MODEL_OPTIONS, CHAT_ONLY_MODELS } from '../../u
 import { pacman } from '../../ui/pacman.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
+import { isSponsored } from '../../ui/profile.js';
 
 // "Mi Consola" (este proyecto): atajo fijo con identidad propia (pedido del
 // usuario 2026-07-05, para ubicarla de un vistazo y no confundirla con Tolkien).
@@ -27,6 +28,7 @@ export default {
   mount(el, ctx) {
     const { icon, dialog, bus, openSession } = ctx;
     let homePlace = CONSOLE_PLACE;
+    let sponsoredExperience = false;
 
     // Botón compacto: misma altura/diseño que el ☰ de colapsar (rail-btn),
     // con tipografía acorde. Va al lado del toggle en la cabecera derecha.
@@ -52,13 +54,18 @@ export default {
       if (modal) return;
       const user = await Promise.resolve(ctx.whoami).catch(() => null);
       if (modal) return;
+      // Recorte de EXPERIENCIA, no de seguridad: ocultar controles no impide
+      // llamar endpoints; la barrera real y autoritativa sigue en el backend.
+      // Sin identidad resoluble degradamos a la experiencia completa (fail-open).
+      sponsoredExperience = !!user && isSponsored(user);
       const showConsoleShortcut = !user
         || user.type === 'token'
         || !!user.admin
         || (!!user.username && user.username === user.host);
-      // Sin identidad conservamos el destino histórico. Host/admin ve el repo
-      // real; únicamente un inquilino no-admin usa su mi-espacio aislado.
-      homePlace = showConsoleShortcut ? CONSOLE_PLACE : MYSPACE_PLACE;
+      // Sin identidad conservamos el destino histórico. Un patrocinado siempre
+      // usa Mi espacio; fuera de ese perfil, host/admin ve el repo real y un
+      // inquilino no-admin usa su espacio aislado.
+      homePlace = sponsoredExperience || !showConsoleShortcut ? MYSPACE_PLACE : CONSOLE_PLACE;
       // Ancho angosto (360): con solo 3 tarjetas por fila + dropdown + CTA, 440
       // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido
       // del usuario 2026-07-10).
@@ -66,6 +73,7 @@ export default {
       modal.card.querySelector('.dlg-head')?.insertAdjacentHTML('beforeend', helpBtn('launcher'));
       st.view = 'list';
       st.dest = null;
+      if (sponsoredExperience) st.type = 'chat';
       if (st.type === 'sala') st.dest = freshSalaDest();
       if (st.type === 'sala' && !MODELS.some(([value]) => value === st.model)) st.model = 'tandem';
       render();
@@ -105,8 +113,8 @@ export default {
       const typeCard = (type, ic, label) =>
         `<button class="btn-ghost ln-type ln-card ${st.type === type ? 'active' : ''}" data-type="${type}">${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span></button>`;
       body.innerHTML = `
-        <div class="ln-sec-title">${t('launcher.sessionType', 'Tipo de sesión')}</div>
-        <div class="ln-types">
+        <div class="ln-sec-title" ${sponsoredExperience ? 'hidden' : ''}>${t('launcher.sessionType', 'Tipo de sesión')}</div>
+        <div class="ln-types" ${sponsoredExperience ? 'hidden' : ''}>
           ${typeCard('chat', 'sparkle', t('launcher.type.chat', 'Chat'))}
           ${typeCard('claude', 'keyboard', t('launcher.type.claudeTui', 'Claude TUI'))}
           ${typeCard('terminal', 'terminal', t('launcher.type.terminal', 'Terminal'))}
@@ -169,8 +177,8 @@ export default {
     }
 
     function listHTML() {
-      const card = (rel, label, ic, cls = '') => `
-        <button class="btn-ghost ln-dest ln-card ${cls} ${st.dest?.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}">
+      const card = (rel, label, ic, cls = '', hidden = false) => `
+        <button class="btn-ghost ln-dest ln-card ${cls} ${st.dest?.rel === rel ? 'active' : ''}" data-rel="${rel}" data-label="${label}" ${hidden ? 'hidden' : ''}>
           ${icon(ic, { size: 16 })}<span class="ln-card-label">${label}</span>
         </button>`;
       // Grid: Tolkien · lugar propio · Otra carpeta. Host/admin ve el repo de la
@@ -184,7 +192,7 @@ export default {
         : t('launcher.place.console', homePlace.label);
       return `
         <div class="ln-dests">
-          ${card(st.project.rel, st.project.name, 'gitBranch')}
+          ${card(st.project.rel, st.project.name, 'gitBranch', '', sponsoredExperience)}
           ${card(homePlace.rel, homeLabel, homePlace.ico, 'ln-dest--console')}
           <button class="btn-ghost ln-card ln-browse-open ${other ? 'active' : ''}">${icon('folder', { size: 22 })}<span class="ln-card-label">${t('launcher.otherFolder', 'Otra carpeta')}</span></button>
         </div>`;

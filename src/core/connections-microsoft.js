@@ -5,7 +5,16 @@
 // ZeroTier o redes privadas. Los tokens son secretos del caller; este módulo no
 // los persiste ni los loguea.
 
-export const MS_SCOPES = ['offline_access', 'User.Read', 'Calendars.ReadWrite', 'Sites.ReadWrite.All'];
+// Mail.Read alcanza para el buzón propio (/me); Mail.Read.Shared es lo que
+// habilita leer un buzón compartido como accounting@ desde la cuenta conectada.
+export const MS_SCOPES = [
+  'offline_access',
+  'User.Read',
+  'Calendars.ReadWrite',
+  'Mail.Read',
+  'Mail.Read.Shared',
+  'Sites.ReadWrite.All',
+];
 
 function authority(tenantId) {
   return `https://login.microsoftonline.com/${encodeURIComponent(tenantId || 'common')}/oauth2/v2.0`;

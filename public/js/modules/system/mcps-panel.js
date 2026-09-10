@@ -9,11 +9,11 @@
 // reciclar runners sigue siendo una acción global/admin).
 //
 // Segunda sección "🔗 Cuentas conectadas" (PLAN-781): conexiones por-USUARIO
-// para que Microsoft use el calendario de esa persona y Zoho Desk publique
-// comentarios a su nombre. A diferencia de los MCP, que son configuración de
-// la máquina, esta sección reusa el mismo look .hr-* y el mismo patrón
-// modal+poll de openReconnect. Es tolerante a fallos: si /api/connections aún
-// no existe (404), muestra un estado neutro y no rompe el resto del panel.
+// para que Microsoft use el calendario de esa persona, Zoho Desk publique
+// comentarios a su nombre y Freshservice opere con su API key. A diferencia de
+// los MCP, que son configuración de la máquina, esta sección reusa el mismo
+// look .hr-*. Es tolerante a fallos: si /api/connections aún no existe (404),
+// muestra un estado neutro y no rompe el resto del panel.
 import { icon } from '../../ui/icons.js';
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
@@ -95,6 +95,7 @@ function verifiedHtml(ts) {
 const PROVIDER_META = {
   microsoft: { emoji: '📅', purposeKey: 'system.conn.purposeMicrosoft', purposeEs: 'Tu calendario: la consola lee tus eventos con TU cuenta, no con la de otro.' },
   zoho: { emoji: '🎫', purposeKey: 'system.conn.purposeZoho', purposeEs: 'Zoho Desk: que tus comentarios en los tickets salgan a TU nombre.' },
+  freshservice: { emoji: '🧰', purposeKey: 'system.conn.purposeFreshservice', purposeEs: 'Freshservice: la consola opera con TU agente y tu API key privada.' },
 };
 const TOLKIEN_APP_URL = 'https://app.tolkien.mordorstaffing.com';
 const TOLKIEN_COOKIE_NAME = '__Secure-tolkien.session';
@@ -116,7 +117,7 @@ const SETUP_META = {
       ['system.conn.msStep1', 'Entrá a Azure Portal → Microsoft Entra ID → App registrations → New registration.'],
       ['system.conn.msStep2', 'Ponele un nombre (ej. "Mi Consola") y registrala.'],
       ['system.conn.msStep3', '⚠️ En Authentication activá "Allow public client flows" = Yes. Sin esto el código de dispositivo NO funciona.'],
-      ['system.conn.msStep4', 'En API permissions → Microsoft Graph → Delegated agregá: Calendars.ReadWrite, User.Read y offline_access.'],
+      ['system.conn.msStep4', 'En API permissions → Microsoft Graph → Delegated agregá: Calendars.ReadWrite, Mail.Read, Mail.Read.Shared, User.Read y offline_access.'],
       ['system.conn.msStep5', 'Copiá el Application (client) ID y el Directory (tenant) ID y pegalos acá abajo.'],
     ],
     fields: [
@@ -465,7 +466,52 @@ export function mountMcpsPanel(el, ctx = {}) {
     return t(CONN_STATE[k].tagKey, CONN_STATE[k].tagEs);
   }
 
+  function freshserviceCard(p) {
+    const st = connStatus(p);
+    const dot = LIGHT_DOT[st.light] || '⚪';
+    const connectedAt = p.connectedAt
+      ? `<div class="hr-f-file">🕑 ${esc(new Date(p.connectedAt).toLocaleString())}</div>`
+      : '';
+    const identity = p.connected
+      ? `${p.name ? `<div class="hr-f-file">👤 ${esc(p.name)}</div>` : ''}
+         ${p.email ? `<div class="hr-f-file">📧 ${esc(p.email)}</div>` : ''}
+         ${p.domain ? `<div class="hr-f-file">🌐 <code>${esc(p.domain)}</code></div>` : ''}`
+      : '';
+    const controls = p.connected
+      ? `<div class="mcp-acts">
+          <button class="btn-ghost btn--sm" data-cact="disconnect" data-prov="freshservice">${t('system.conn.fsDisconnect', 'Desconectar')}</button>
+        </div>`
+      : `<div class="conn-appform">
+          <label class="conn-flabel">${t('system.conn.fsDomainLabel', 'Dominio de Freshservice')}</label>
+          <input type="text" class="dlg-input" data-ref="freshservice-domain" autocomplete="url" spellcheck="false" placeholder="${esc(t('system.conn.fsDomainPlaceholder', 'miempresa o miempresa.freshservice.com'))}">
+          <label class="conn-flabel">${t('system.conn.fsApiKeyLabel', 'API key')}</label>
+          <input type="password" class="dlg-input" data-ref="freshservice-api-key" autocomplete="off" spellcheck="false" placeholder="${esc(t('system.conn.fsApiKeyPlaceholder', 'Tu API key de agente'))}">
+        </div>
+        <p class="hr-f-file" data-ref="freshservice-message"></p>
+        <div class="mcp-acts">
+          <button class="btn btn--sm" data-cact="freshservice-connect" data-prov="freshservice">${icon('check', { size: 12 })}<span>${t('system.conn.fsConnect', 'Verificar y conectar')}</span></button>
+        </div>`;
+
+    return `
+      <div class="hr-finding ${cardClass({ status: st })} hr-collapsed" data-conn="freshservice">
+        <div class="hr-f-head" data-toggle="1">
+          <span class="hr-chev">${icon('chevronDown', { size: 13 })}</span>
+          <span class="mcp-dot" title="${esc(st.label)}">${dot}</span>
+          <span class="hr-f-area">🧰 ${t('system.conn.fsTitle', 'Freshservice')}</span>
+          <span class="hr-f-mod">${esc(connTag(p))}</span>
+        </div>
+        <div class="hr-f-body">
+          <p class="hr-f-detail"><b>${dot} ${esc(st.label)}</b></p>
+          <div class="hr-f-file">${t('system.conn.purposeFreshservice', 'Freshservice: la consola opera con TU agente y tu API key privada.')}</div>
+          ${identity}
+          ${connectedAt}
+          ${controls}
+        </div>
+      </div>`;
+  }
+
   function connCard(p, i) {
+    if (p.id === 'freshservice') return freshserviceCard(p);
     const st = connStatus(p);
     const dot = LIGHT_DOT[st.light] || '⚪';
     const meta = PROVIDER_META[p.id] || { emoji: '🔗', purposeKey: 'system.conn.purposeGeneric', purposeEs: 'Cuenta personal conectada a la consola.' };
@@ -819,10 +865,43 @@ export function mountMcpsPanel(el, ctx = {}) {
       const label = provider?.label || prov;
       if (b.dataset.cact === 'connect') {
         openConnect(prov, label, provider);
+      } else if (b.dataset.cact === 'freshservice-connect') {
+        const card = b.closest('[data-conn="freshservice"]');
+        const domainInput = card?.querySelector('[data-ref="freshservice-domain"]');
+        const apiKeyInput = card?.querySelector('[data-ref="freshservice-api-key"]');
+        const message = card?.querySelector('[data-ref="freshservice-message"]');
+        const domain = domainInput?.value.trim() || '';
+        let apiKey = apiKeyInput?.value.trim() || '';
+        if (!domain || !apiKey) {
+          if (message) message.textContent = t('system.conn.fsRequired', 'Completá el dominio y la API key.');
+          return;
+        }
+        b.disabled = true;
+        if (message) message.textContent = t('system.conn.fsVerifying', 'Verificando las credenciales…');
+        try {
+          const request = fetch('/api/connections/freshservice/connect', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ domain, apiKey }),
+          });
+          if (apiKeyInput) apiKeyInput.value = '';
+          apiKey = '';
+          const r = await request;
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || r.status);
+          loadConnections();
+        } catch (err) {
+          if (message) message.textContent = t('system.conn.inlineError', 'Error: {error}', { error: err.message || err });
+          b.disabled = false;
+        }
       } else if (b.dataset.cact === 'disconnect') {
         const ok = await (dialog.confirmSheet || dialog.confirmDialog)?.({
-          title: t('system.conn.disconnectTitle', 'Desconectar cuenta'),
-          message: t('system.conn.disconnectMsg', '¿Desconectar tu cuenta de {label}? Vas a tener que volver a autorizarla.', { label }),
+          title: prov === 'freshservice'
+            ? t('system.conn.fsDisconnectTitle', 'Desconectar Freshservice')
+            : t('system.conn.disconnectTitle', 'Desconectar cuenta'),
+          message: prov === 'freshservice'
+            ? t('system.conn.fsDisconnectMsg', '¿Borrar tu credencial de Freshservice de esta consola? Vas a tener que volver a ingresar la API key para conectarlo.')
+            : t('system.conn.disconnectMsg', '¿Desconectar tu cuenta de {label}? Vas a tener que volver a autorizarla.', { label }),
           danger: true,
         });
         if (!ok) return;

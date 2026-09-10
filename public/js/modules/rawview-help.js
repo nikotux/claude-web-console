@@ -16,6 +16,7 @@ export default function rawviewHelp() {
             type: 'steps',
             items: [
               t('rawview.help.first.step1', 'Ubicá cada sesión por el rótulo tenue que aparece arriba de su banda.'),
+              t('rawview.help.first.step6', 'Las bandas angostas con ↳ muestran el trabajo que cuelga de una sesión —delegaciones a Codex y subagentes— con el mismo color que su padre.'),
               t('rawview.help.first.step2', 'Leé tono, matiz, textura y brillo para reconocer mundo, sesión, proveedor y ritmo.'),
               t('rawview.help.first.step3', 'Usá los paneles de texto de cada banda y el feed inferior para leer fragmentos reales.'),
               t('rawview.help.first.step4', 'Mirá el odómetro abajo a la derecha y los latidos de servicios arriba a la derecha.'),
@@ -88,8 +89,8 @@ export default function rawviewHelp() {
               },
               {
                 emoji: t('rawview.help.legend.subagent.emoji', '↳'),
-                name: t('rawview.help.legend.subagent.name', 'Subagente'),
-                desc: t('rawview.help.legend.subagent.desc', 'banda angosta separada del trabajo delegado de una sesión'),
+                name: t('rawview.help.legend.subagent.name', 'Trabajo hijo'),
+                desc: t('rawview.help.legend.subagent.desc', 'delegación a Codex o subagente en una banda angosta con el mismo color que su padre'),
               },
               {
                 emoji: t('rawview.help.legend.terminal.emoji', '▸'),

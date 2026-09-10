@@ -19,7 +19,7 @@ import {
   isAuthenticated, isAdmin, principalOf, tokenMatches, COOKIE_NAME,
   createSession, destroySession, sessionIdOf, SESSION_COOKIE,
 } from './core/auth.js';
-import { verifyUser, getUserLang, setUserLang } from './core/users.js';
+import { verifyUser, getUserLang, setUserLang, sponsorshipState } from './core/users.js';
 import { hostUser } from './core/user-space.js';
 import { createWsRouter } from './core/wss.js';
 import { registerModules } from './core/registry.js';
@@ -252,7 +252,20 @@ async function main() {
   // perfil propio, así que queda fijo en 'es'.
   app.get('/api/whoami', (req, res) => {
     const p = principalOf(req);
-    if (p) p.lang = p.type === 'user' ? getUserLang(p.username) : 'es';
+    if (p) {
+      p.lang = p.type === 'user' ? getUserLang(p.username) : 'es';
+      p.profile = 'full';
+      if (p.type === 'user') {
+        try {
+          const state = sponsorshipState(p.username);
+          if (state === 'sponsored' || state === 'awaiting-sponsor') p.profile = 'sponsored';
+        } catch {
+          p.profile = 'full';
+        }
+      }
+    }
+    // `profile` recorta la EXPERIENCIA, no autoriza nada: la seguridad real
+    // sigue en los gates del backend (isAdmin y ownership por usuario).
     res.json({ ...p, host: hostUser() });
   });
 
@@ -299,6 +312,14 @@ async function main() {
   // trabajo humano-accionable de Niko. Cualquier usuario autenticado.
   app.get('/seguimientos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'seguimientos.html')));
 
+  // Vista Cerebro (subpágina, console:PLAN-2843): el grafo del Pad local
+  // renderizado como red neuronal 3D que se ilumina con el uso real. Esta ruta
+  // sirve un HTML estático SIN datos: el aislamiento lo hacen los endpoints que
+  // la vista consume (/api/cerebro/graph y /api/cerebro/stream), ambos gateados
+  // por `oversight` — ver src/modules/cerebro/. Si mañana consume un endpoint
+  // nuevo, ESE endpoint trae su propio gate: acá no hay red de contención.
+  app.get('/cerebro', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'cerebro.html')));
+
   // App shell (index.html) con el BUILD_ID inyectado. Cache-Control: no-cache
   // porque es una navegación que el Service Worker deja pasar a la red siempre
   // (ver public/sw.js) — así el BUILD_ID que ve el cliente es siempre el actual.
@@ -340,6 +361,10 @@ async function main() {
   app.use('/vendor/marked', express.static(path.join(__dirname, '..', 'node_modules', 'marked', 'lib')));
   app.use('/vendor/mermaid', express.static(path.join(__dirname, '..', 'node_modules', 'mermaid', 'dist')));
   app.use('/vendor/chartjs', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
+  app.use('/vendor/3d-force-graph', express.static(path.join(__dirname, '..', 'node_modules', '3d-force-graph', 'dist')));
+  // Se sirve la raíz porque el bloom necesita build/three.module.min.js y
+  // examples/jsm/postprocessing/*.
+  app.use('/vendor/three', express.static(path.join(__dirname, '..', 'node_modules', 'three')));
 
   // WebSocket router con auth en el handshake.
   const { wss, attach } = createWsRouter();
