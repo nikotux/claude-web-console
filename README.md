@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-09-14 15:30 — main
+- Sumar Cabina (modo simplificado) y rediseñar gestión de usuarios/patrocinio
+
 ### 2026-09-10 09:41 — main
 - feat(chat): day separator and per-message timestamp styles
 - Agregar patrocinio de tokens, ver 3D del grafo (Cerebro) y responder por correo desde Desk
@@ -365,15 +368,6 @@ since the previous push. Newest entry first.
 
 ### 2026-07-03 13:27 — main
 - Modified `CLAUDE.md`
-
-### 2026-07-03 07:26 — main
-- Chat: modo 'Todo' (bypassPermissions) + selector de modos compacto por riesgo
-- Auto-título con IA: la sesión se renombra sola (≤20 chars) según lo que hace
-- Móvil: la barra auxiliar (botón ⌨ incluido) se oculta en la vista Chat
-- Chat: chips de ejecución solo con íconos + leyenda en el modal de ayuda
-- Modified `CLAUDE.md`
-- Modified `public/js/modules/system/project-context-panel.js`
-- Modified `src/modules/projects/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
