@@ -1,7 +1,9 @@
 // modules/files/index.js — módulo de archivos (árbol, visor Y gestor completo).
 //
 // Interfaz estándar de módulo. Rutas HTTP (todas validan contra el root del request):
-//   GET  /api/files/list?path=&hidden=      -> entradas (con mtime)
+//   GET  /api/files/list?path=&hidden=      -> entradas (con mtime); carpetas:
+//                                               childCount: 0..200|null,
+//                                               childCountCapped: boolean|null
 //   GET  /api/files/read?path=              -> contenido de texto (visor)
 //   GET  /api/files/download?path=          -> descarga un archivo
 //   GET  /api/files/download-zip?path=      -> descarga una carpeta como .zip
@@ -31,6 +33,7 @@ const ALWAYS_HIDDEN = new Set(['node_modules', '.git', 'dist', TRASH_DIRNAME]);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
 const MAX_ZIP_ITEMS = 1000;
+const MAX_DIR_CHILD_COUNT = 200;
 
 // Deriva el status HTTP de una excepción NO anticipada dentro de un catch
 // genérico (invariante 34): solo cae a 4xx si el error trae una marca
@@ -147,6 +150,28 @@ function uniqueZipName(usedNames, name) {
   return cand;
 }
 
+// Cuenta hijos directos sin materializar el directorio completo. Se lee una
+// entrada adicional para distinguir "exactamente 200" de "más de 200".
+// Un error queda confinado a esa carpeta; null significa conteo desconocido.
+function countDirChildren(abs) {
+  let dir;
+  try {
+    dir = fss.opendirSync(abs);
+    let childCount = 0;
+    while (dir.readSync()) {
+      if (childCount === MAX_DIR_CHILD_COUNT) {
+        return { childCount, childCountCapped: true };
+      }
+      childCount += 1;
+    }
+    return { childCount, childCountCapped: false };
+  } catch {
+    return { childCount: null, childCountCapped: null };
+  } finally {
+    try { dir?.closeSync(); } catch { /* noop */ }
+  }
+}
+
 async function listDir(abs, showHidden) {
   const dirents = await fs.readdir(abs, { withFileTypes: true });
   const entries = [];
@@ -182,7 +207,13 @@ async function listDir(abs, showHidden) {
         if (type === 'file') size = st.size;
       } catch { /* noop */ }
     }
-    entries.push({ name, type, size, mtimeMs, symlink });
+    const entry = { name, type, size, mtimeMs, symlink };
+    if (type === 'dir') {
+      Object.assign(entry, symlink
+        ? { childCount: null, childCountCapped: null }
+        : countDirChildren(path.join(abs, name)));
+    }
+    entries.push(entry);
   }
   entries.sort((a, b) =>
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1,

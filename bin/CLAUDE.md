@@ -276,6 +276,22 @@ después, porque Ink trata un `\r` pegado a texto largo como parte del pegado y
 nunca envía; verificado en el log del PTY (35 chars se enviaban, 92 no). Era la
 causa raíz de los canjes que morían en `exchanging`.
 SIGTERM/SIGINT dejan `error:cancelado` y matan el PTY; timeout duro: 10 min.
+### bin/cwc-sponsor-token-runner.js  CANJE GUIADO del token PROPIO de patrocinio:
+runner PTY desacoplado de `claude setup-token`, con estado en
+`~/.cwc-data/sponsor-token-jobs/<user>.json` + `<user>.code` + `<user>.log`,
+todos mode 600; el log sin ANSI pasa siempre por redacción obligatoria de
+`sk-ant-*` y el secreto se escribe SOLO en `userOauthTokenPath(user)`, nunca en
+estado/log. Corre con HOME DESCARTABLE
+`~/.cwc-data/sponsor-token-jobs/<user>.home` mode 0700 y lo borra al terminar,
+fallar, cancelar o vencer el timeout: para el HOST el HOME real es `~` y
+`claude setup-token` podría tocar `~/.claude/.credentials.json`, la credencial
+VIVA de toda la consola; el scratch impide rozarla sin alterar el token, que
+depende de la cuenta autorizada en el navegador y no del HOME. Publica
+`starting` → `awaiting-code` (`url` y `note` a los 20 s) → `exchanging` →
+`done|error`; timeout duro de 10 min y limpieza en SIGTERM/SIGINT. El parseo
+del PTY (`cols:1000`, Enter diferido 300 ms, `stripAnsi`, `outputNote()`) está
+DUPLICADO a propósito con `cwc-onboard-runner.js`: cualquier cambio debe
+actualizar ambos.
 ### bin/cwc-tolkien-setup-runner.js  PREPARACIÓN DESACOPLADA del clon Tolkien de
 un inquilino: configura en SU `.npmrc` el store compartido
 `/home/nmosquera/.cwc-shared/pnpm-store` sin pisar otras claves, corre
@@ -583,6 +599,22 @@ es el del DUEÑO, no el del server. El runner es la autoridad de esa decisión p
 con el HOME correcto. Por eso `RESUME`/`SESSION_ID` son `let`. Además `pump()` es ahora un bucle que
 reintenta UNA vez con el modo opuesto si el CLI rechaza el id al arrancar (`already in use` /
 `No conversation found`) y `sawInit` sigue en false, reponiendo el mensaje del usuario si hiciera falta: un chat no puede volver a quedar muerto para siempre por esta clase de error.
+### bin/cwc-indice-runner.js    destilador IA DESACOPLADO del Índice navegable de
+una conversación. Corre una sola query de TEXTO PURO: la transcripción ya
+condensada viaja en el prompt y `textOnlyQuery` aplica la doble capa read-only
+de la Regla 6 (`settingSources: []` + hook `PreToolUse` que deniega +
+`canUseTool` que deniega), por lo que dispone de CERO herramientas. Es
+INCREMENTAL: el estado en `<userDataDir>/chat-indices/<chatId>.json` conserva
+`upToEvent` y la corrida siguiente destila únicamente el tramo contiguo nuevo,
+fusionando sus momentos con los anteriores. El lock vive separado, reserva con
+`O_EXCL`, valida que el PID siga vivo y exige heartbeat fresco; un token de
+propiedad evita que dos servers solapados refresquen o liberen el lock ajeno.
+El server lo encola desde `case 'result'` de `chat/index.js`, después de unas
+10 respuestas del agente, y nunca espera la query dentro de la latencia del
+turno. Snapshot, estado, lock, prompt, parseo y spawn compartidos viven en
+`src/modules/chat/indice-shared.js`. En multi-tenant resuelve el data-dir del
+DUEÑO y falla cerrado si el inquilino no tiene credencial Claude propia: jamás
+cae a la credencial del server.
 ### bin/cwc-test-chat-trash.js  test funcional determinista y AISLADO de
 `src/modules/chat/trash.js`. No usa SDK ni consume tokens; apunta
 `CWC_HOME`/`HOME`/`CWC_DATA_DIR` a un `mkdtemp` que borra en `finally`, por lo

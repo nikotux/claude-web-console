@@ -97,6 +97,26 @@ asegura la carpeta y devuelve la ruta relativa al home; abre el
 Explorador existente (deep-link ?path=) en esa carpeta — reuso total,
 cero UI nueva (idea de Niko: ya tenemos explorador, no un menú de
 artefactos aparte).
+INVENTARIO REAL DE ADJUNTOS PARA CABINA: `GET
+/api/chat/attachments?id=<chatId>` lista `{attachments}` leyendo la carpeta
+real `chat-attachments/<chatId>/`, ordena por `mtimeMs` descendente y omite
+archivos que empiezan con `_` —plomería interna como `_handoff.md`— además de
+entradas que no sean archivos. Existe porque el replay del SDK reconstruye los
+adjuntos desde bloques `{type:'image'|'document'}` SIN nombre: inferir el
+inventario desde `history` perdería justamente la identidad que Cabina necesita.
+Usa `participantChat`, el mismo guard que `/attachment`: dueño, participante
+explícito de Aduana u oversight; lo ajeno responde 404.
+ÍNDICE NAVEGABLE PARA CABINA: `GET /api/chat/indice?id=<chatId>` devuelve el
+estado destilado (`status`, `moments`, `upToEvent`, fechas/error cuando
+corresponde) y `POST /api/chat/indice/refresh {id}` fuerza una corrida
+desacoplada y responde `{status:'running'}` sin esperar al modelo. Ambos pasan
+por `participantChat`. El automático se encola desde `case 'result'`, cuando la
+respuesta ya quedó completa, aproximadamente cada 10 respuestas del agente; es
+incremental sobre `upToEvent`, no vuelve a destilar toda la conversación.
+ACTIVIDAD DE SALA: `info()` expone `lastActivity` y la persistencia de chats lo
+conserva al rehidratar. Cabina usa ese timestamp para fechar y ordenar salas;
+no lo reconstruyas desde el último evento, porque también se actualiza con
+actividad de ciclo de vida y al abrir la vista.
 IMÁGENES QUE DEVUELVE EL ASISTENTE (2026-07-11, pedido de Niko: "que las
 imágenes que vos leés/generás se vean en el chat, con el mismo flujo de
 los adjuntos"): la dirección INVERSA de los adjuntos (asistente→humano).
@@ -1750,6 +1770,49 @@ responder permisos corresponde a quien hizo el corte (`_lastCutBy`) y al dueño;
 cambiar modelo/modo/effort, invitar y revocar corresponde solo al dueño, porque
 él paga los turnos.
 
+INVITADOR SIN PADRÓN GLOBAL: `circuloDePatrocinio(principal, allUsers)` es la
+ÚNICA fuente de esta política y la usan tanto `GET /api/chat/collab/candidates`
+como `POST /api/chat/collab/invite`; si la frontera cambia, tiene que cambiar en
+un solo lugar. `admin` u `oversight` reciben el padrón completo. OJO con la
+segunda capacidad: en este repo `oversight` significa «ver contenido ajeno» y
+acá habilita un padrón de cuentas, que NO es contenido. Restringirla mañana
+pensando solo en chats también cambiaría esta superficie sin hacerlo evidente.
+
+Para el resto, la función modela cada vínculo usuario↔sponsor como una arista NO
+DIRIGIDA y devuelve, sin incluir a quien consulta, su componente conexa: su
+sponsor, sus pares y sus patrocinados. Recorrer ambas direcciones es esencial:
+un sponsor no tiene sponsor, de modo que mirar solo `principal.sponsor` lo
+dejaba mudo en el invitador de su propia sala aunque patrocinara gente. Con los
+invariantes válidos el grafo no encadena —un sponsor no puede estar a su vez
+patrocinado—, así que la componente es una estrella (sponsor y su gente), no una
+red que crece de forma imprevisible. Si el principal no tiene ninguna relación,
+la componente queda vacía, deliberadamente fail-closed: es preferible impedir
+una invitación a revelar el padrón completo. Esto incluye a un patrocinado en
+`awaiting-sponsor`, todavía sin sponsor asignado: el panel queda vacío y quien
+lo administra puede sumar participantes desde la consola normal. Modo Cabina
+lo explica en `public/js/cabina/salas.js` con «No hay personas disponibles…»,
+para que la ausencia de candidatos no se lea como un error.
+
+La restricción es de VISTA Y DE ACCIÓN. El `GET` parte de ese círculo y después
+excluye al dueño y a quienes ya están invitados; el `POST` vuelve a consultar el
+mismo círculo antes de `addParticipant()`. Un destino fuera de él recibe 403
+con «No podés invitar a esa persona a tu sala.», exista o no la cuenta: filtrar
+solo el listado sería cosmético, porque un `POST` con un username escrito a
+mano permitiría invitar o enumerar cuentas. «El dueño ya participa» conserva
+un 400 separado DESPUÉS de ese guard; por ese orden, un dueño no privilegiado
+que se mande a sí mismo queda absorbido por el 403, mientras que el 400 es
+alcanzable cuando el círculo privilegiado contiene al dueño.
+
+El filtro se resuelve con datos que ya entrega `listUsers()` desde
+`src/core/users.js`: `{username, admin, oversight, tier, sponsor,
+sponsorshipState}`. No hizo falta ampliar `users.js` ni `sponsorship.js`; si
+mañana aparece otro endpoint que liste o acepte usuarios, tiene el mismo riesgo
+y la misma información disponible para cerrarlo. En particular, el gate
+`ownedChat` NO alcanza: garantiza que solo el dueño de la sala (u oversight)
+llegue a los handlers, pero un inquilino cualquiera puede ser dueño de SU sala.
+Propiedad de una sala no equivale a administración de la instancia; el bug
+anterior confundía esas dos capacidades y exponía todas las cuentas.
+
 PASAPORTE DE AUTOR (`console:BUG-2831`): `sendUser(text, attachments, by)` recibe
 el username del emisor desde la rama `user` del WebSocket. Si no es el dueño,
 la burbuja lleva `by` y el texto entregado al modelo se prefija para decir quién
@@ -2066,3 +2129,6 @@ cambios de código y los runners vivos. La prueba de referencia es
   aceptes un `cwd` del cliente que caiga dentro de `ADUANA_ROOT` — permitiría
   entrar a la sala de otra persona sin figurar en `participants`
   (`console:BUG-2432`). La contención se prueba con `isSalaPath`/`path.relative`.
+- Invitador de sala: ser dueño de TU sala ≠ ser administrador de la instancia.
+  `ownedChat` protege el chat, no el padrón; tanto el listado como la invitación
+  deben aplicar además la misma política fail-closed de vista Y de acción.

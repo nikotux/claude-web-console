@@ -84,11 +84,11 @@ El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core
 ## Lo que más duele
 
 - El `r.use(requireAdmin)` debe seguir antes de registrar las rutas: moverlo o montar una ruta fuera de `r` abriría la única jerarquía real de permisos del módulo.
-- Cambiar una contraseña revoca todas las sesiones vivas de esa cuenta. Una democión (`admin: false`) también las revoca para que una cookie anterior no conserve privilegios; eliminar la cuenta hace lo mismo.
-- Cambiar `oversight` NO revoca sesiones: `principalOf()` lo resuelve en vivo con
-  `oversightFor()` en cada request, así que apagarlo vale desde el request
-  siguiente. Es deliberadamente distinto de `admin`, que viaja congelado en la
-  sesión y exige revocarla ante una democión.
+- Cambiar una contraseña revoca todas las sesiones vivas de esa cuenta. Una democión (`admin: false`) también las revoca como defensa en profundidad, aunque ya es efectiva desde el request siguiente por el lookup vivo; eliminar la cuenta hace lo mismo.
+- `principalOf()` resuelve tanto `oversight` como `admin` en vivo con
+  `oversightFor()` / `adminFor()` en cada request: apagar el primero o degradar
+  el segundo vale desde el request siguiente. La revocación conservada al
+  degradar no es el mecanismo que hace efectiva la democión.
 - La autoedición y la autoeliminación devuelven `409`. No quitar esas guardas: evitan que el admin conectado se deje sin acceso desde este router.
 - POST y PUT tampoco permiten administrar una cuenta cuyo username coincida con
   `hostUser()`: `userSpace()`/`userFileRoot()` resuelven por string y esa cuenta

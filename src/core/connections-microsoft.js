@@ -7,13 +7,27 @@
 
 // Mail.Read alcanza para el buzón propio (/me); Mail.Read.Shared es lo que
 // habilita leer un buzón compartido como accounting@ desde la cuenta conectada.
+// Los scopes de Teams, Contacts y Files.ReadWrite.All exigen consentimiento de
+// administrador del tenant M365; jgarcia lo otorgará por separado.
 export const MS_SCOPES = [
   'offline_access',
   'User.Read',
-  'Calendars.ReadWrite',
   'Mail.Read',
+  'Mail.ReadWrite',
+  'Mail.Send',
   'Mail.Read.Shared',
+  'Files.Read.All',
+  'Files.ReadWrite.All',
+  'Sites.Read.All',
   'Sites.ReadWrite.All',
+  'Calendars.ReadWrite',
+  'Contacts.Read',
+  'Tasks.ReadWrite',
+  'Team.ReadBasic.All',
+  'Channel.ReadBasic.All',
+  'ChannelMessage.Read.All',
+  'Chat.Read',
+  'People.Read',
 ];
 
 function authority(tenantId) {
@@ -84,14 +98,16 @@ export async function pollDeviceToken({ clientId, tenantId, deviceCode }) {
   throw new Error(msError(r));
 }
 
-export async function refreshAccessToken({ clientId, tenantId, refreshToken }) {
+export async function refreshAccessToken({ clientId, tenantId, refreshToken, scopes }) {
   if (!refreshToken) throw new Error('No hay refresh token de Microsoft.');
+
+  const refreshScopes = Array.isArray(scopes) && scopes.length > 0 ? scopes : MS_SCOPES;
 
   const r = await postForm(`${authority(tenantId)}/token`, {
     grant_type: 'refresh_token',
     client_id: clientId,
     refresh_token: refreshToken,
-    scope: MS_SCOPES.join(' '),
+    scope: refreshScopes.join(' '),
   });
   if (!r.ok || !r.data?.access_token) throw new Error(msError(r));
 

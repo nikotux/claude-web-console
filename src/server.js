@@ -101,6 +101,11 @@ async function main() {
   const { ip, iface } = await waitForZeroTier(config.ztIface);
   console.log(`[server] Interfaz ZeroTier lista: ${iface} -> ${ip}`);
 
+  const cabinaPortIsValid = Number.isInteger(config.cabinaPort)
+    && config.cabinaPort >= 1
+    && config.cabinaPort <= 65535
+    && config.cabinaPort !== config.port;
+
   const app = express();
   app.disable('x-powered-by');
 
@@ -295,6 +300,9 @@ async function main() {
   // Gestor de archivos (subpágina): cualquier usuario autenticado.
   app.get('/archivos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'archivos.html')));
 
+  // Modo Cabina (subpágina, console:PEND-3159): cualquier usuario autenticado.
+  app.get('/cabina', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'cabina.html')));
+
   // Vista Raw (subpágina, PLAN-544): cualquier usuario autenticado, y cada uno
   // ve SOLO lo suyo. El aislamiento NO lo hace esta ruta (sirve un HTML estático
   // sin datos): lo garantiza cada endpoint que la vista consume, todos ya
@@ -324,6 +332,19 @@ async function main() {
   // porque es una navegación que el Service Worker deja pasar a la red siempre
   // (ver public/sw.js) — así el BUILD_ID que ve el cliente es siempre el actual.
   app.get(['/', '/index.html'], (req, res, next) => {
+    if (req.path === '/' && cabinaPortIsValid && req.socket.localPort === config.cabinaPort) {
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.sendFile(path.join(PUBLIC_DIR, 'cabina.html'));
+    }
+
+    const principal = principalOf(req);
+    // Escape hatch de soporte: ?full=1 conserva el acceso a la consola completa.
+    if (req.query.full !== '1' && principal?.type === 'user' && !principal.admin) {
+      const state = sponsorshipState(principal.username);
+      if (state === 'sponsored' || state === 'awaiting-sponsor') {
+        return res.redirect('/cabina');
+      }
+    }
     if (!INDEX_HTML) return next(); // fallback a express.static si falló la lectura
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
@@ -376,16 +397,75 @@ async function main() {
   // HTTPS con cert self-signed atado a la IP ZeroTier (contexto seguro para el
   // portapapeles del navegador). El WebSocket viaja por wss sobre el mismo server.
   const { key, cert } = ensureCert(ip);
-  const server = https.createServer({ key, cert }, app);
+  const tlsOptions = { key, cert };
+  const server = https.createServer(tlsOptions, app);
+  const cabinaServer = https.createServer(tlsOptions, app);
   // TCP_NODELAY: manda cada tecla al instante (sin esperar a Nagle). Es la
   // mejora más grande para la latencia percibida de la terminal.
-  server.on('connection', (socket) => socket.setNoDelay(true));
-  attach(server);
+  for (const listener of [server, cabinaServer]) {
+    listener.on('connection', (socket) => socket.setNoDelay(true));
+    attach(listener);
+  }
+
+  // El listener de Cabina es best-effort: un puerto inválido u ocupado nunca
+  // puede tirar abajo la consola principal.
+  cabinaServer.on('error', (err) => {
+    console.error(
+      `[server] Modo Cabina no pudo escuchar en https://${ip}:${config.cabinaPort} `
+      + `(${err.code || err.message}); la consola principal sigue activa.`,
+    );
+  });
+
+  let shuttingDown = false;
+  function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[server] ${signal}: cerrando listeners HTTPS...`);
+
+    // Los motores sobreviven fuera del proceso; cerramos sus conexiones web
+    // para que ambos servidores HTTPS puedan terminar sin quedar esperando.
+    for (const ws of wss.clients) ws.terminate();
+    wss.close();
+
+    const activeListeners = [
+      ['consola', server],
+      ['Modo Cabina', cabinaServer],
+    ].filter(([, listener]) => listener.listening);
+
+    if (activeListeners.length === 0) return process.exit(0);
+
+    let pending = activeListeners.length;
+    let exitCode = 0;
+    for (const [name, listener] of activeListeners) {
+      listener.close((err) => {
+        if (err) {
+          exitCode = 1;
+          console.error(`[server] Error al cerrar ${name}:`, err);
+        }
+        pending -= 1;
+        if (pending === 0) process.exit(exitCode);
+      });
+    }
+  }
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 
   server.listen(config.port, ip, () => {
-    console.log(`[server] Escuchando en https://${ip}:${config.port} (solo ZeroTier)`);
+    console.log(`[server] Consola completa: https://${ip}:${config.port} (solo ZeroTier)`);
     console.log('[server] Acceso: abrí esa URL desde un dispositivo de la red ZeroTier');
     console.log('[server] (la primera vez, aceptá el aviso de certificado self-signed).');
+
+    if (cabinaPortIsValid) {
+      cabinaServer.listen(config.cabinaPort, ip, () => {
+        console.log(`[server] Modo Cabina: https://${ip}:${config.cabinaPort} (solo ZeroTier; / sirve Cabina)`);
+      });
+    } else {
+      console.warn(
+        `[server] Modo Cabina deshabilitado: CWC_CABINA_PORT=${String(config.cabinaPort)} `
+        + 'debe ser un puerto válido y distinto de CWC_PORT.',
+      );
+    }
 
     // Caché de Pad local: precarga las colecciones calientes y arranca el barrido
     // de refresco. Best-effort — si Pad local está caído, no afecta el boot.

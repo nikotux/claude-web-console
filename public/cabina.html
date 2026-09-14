@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Modo Cabina · Mi Consola</title>
+  <link rel="stylesheet" href="/vendor/hljs/theme.css" />
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/ui.css">
+  <link rel="stylesheet" href="/css/cabina.css">
+  <link rel="stylesheet" href="/css/cabina-explorador.css">
+  <link rel="stylesheet" href="/css/cabina-sala.css">
+  <link rel="stylesheet" href="/css/cabina-nueva.css">
+  <link rel="stylesheet" href="/css/cabina-cuenta.css">
+  <link rel="stylesheet" href="/css/cabina-ayuda.css">
+  <!-- highlight.js (bundle IIFE local -> window.hljs) -->
+  <script src="/vendor/hljs/hljs.min.js"></script>
+  <!-- marked (UMD directo desde node_modules -> window.marked) para el markdown del chat -->
+  <script src="/vendor/marked/marked.umd.js"></script>
+  <!-- Chart.js (UMD local -> window.Chart) para los gráficos dentro del chat -->
+  <script src="/vendor/chartjs/chart.umd.js"></script>
+  <script type="module">
+    // Mermaid se carga solo si el historial contiene un diagrama real.
+    window.__loadMermaid = () => {
+      if (window.mermaidReady) return window.mermaidReady;
+      window.mermaidReady = import('/vendor/mermaid/mermaid.esm.min.mjs').then(({ default: mermaid }) => {
+        const css = getComputedStyle(document.documentElement);
+        const token = (name) => css.getPropertyValue(name).trim();
+        const surface = token('--cwc-bg-panel');
+        const text = token('--cwc-text');
+        const line = token('--cwc-border-strong');
+        const roleTokens = {
+          key: '--cwc-accent',
+          ok: '--cwc-ok',
+          warn: '--cwc-warn',
+          bad: '--cwc-danger',
+          info: '--cwc-info',
+          cool: '--cwc-accent-cool',
+          deep: '--cwc-model-opus',
+          muted: '--cwc-text-dim',
+        };
+        const roles = Object.fromEntries(Object.entries(roleTokens).map(([name, cssToken]) => [name, {
+          fill: surface,
+          stroke: token(cssToken),
+          color: text,
+        }]));
+        window.__cwcMermaidPalette = { roles, surface, text, line };
+        mermaid.initialize({
+          suppressErrorRendering: true,
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          fontFamily: token('--cwc-font-ui'),
+          flowchart: { useMaxWidth: false, htmlLabels: true },
+          mindmap: { useMaxWidth: false },
+          sequence: { useMaxWidth: false },
+          themeVariables: {
+            background: surface,
+            primaryColor: token('--cwc-bg-chip'),
+            primaryBorderColor: line,
+            primaryTextColor: text,
+            lineColor: line,
+            textColor: text,
+            fontFamily: token('--cwc-font-ui'),
+          },
+        });
+        window.mermaid = mermaid;
+        return mermaid;
+      }).catch(() => null);
+      return window.mermaidReady;
+    };
+  </script>
+</head>
+<body>
+  <div class="cab-shell">
+    <aside class="cab-rail" aria-label="Navegación de Modo Cabina">
+      <header class="cab-rail-head">
+        <div class="cab-brand" aria-label="Mordor Staffing">
+          <span>MORDOR</span><span class="cab-brand-accent">STAFFING</span>
+        </div>
+        <button class="cab-btn cab-btn--hot cab-new" type="button" data-cabina-new>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 2v12M2 8h12"></path></svg>
+          Nueva conversación
+        </button>
+      </header>
+
+      <nav class="cab-nav" aria-label="Trabajar">
+        <button class="cab-nav-item" type="button" aria-current="page" data-cabina-view="conversaciones">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M2 3h14v9H8l-4 3v-3H2z"></path></svg>
+          <span>Conversaciones</span>
+          <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="conversaciones" hidden></span>
+        </button>
+        <button class="cab-nav-item" type="button" data-cabina-view="salas">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M1 3h11v7H5L2 12V10H1z"></path><path d="M6 12h11V5h-3"></path></svg>
+          <span>Salas</span>
+          <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="salas" hidden></span>
+        </button>
+        <button class="cab-nav-item" type="button" data-cabina-view="archivos">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M2 4h5l2 2h7v8H2z"></path></svg>
+          <span>La Forja · tus archivos</span>
+        </button>
+      </nav>
+
+      <div class="cab-rail-lower">
+        <div class="cab-vein" aria-hidden="true"></div>
+        <section class="cab-rail-bench" aria-labelledby="cab-adjust-title">
+          <div class="cab-intent-label" id="cab-adjust-title">Ajustar · de vez en cuando</div>
+          <nav class="cab-adjust-nav" aria-label="Ajustar">
+            <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="conexiones">
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M7 11L3 15M11 7l4-4"></path><path d="M5 9L9 5l4 4-4 4z"></path></svg>
+              <span>Conexiones · tus cuentas</span>
+              <span class="cab-warning-mark" aria-label="Requiere atención"></span>
+            </button>
+            <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="como-trabajo">
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M9 2l2.2 4.6L16 8l-4.8 1.4L9 14 6.8 9.4 2 8l4.8-1.4z"></path></svg>
+              <span>Cómo trabajo · tus preferencias</span>
+            </button>
+            <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="lecciones">
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M3 2h9l3 3v11H3z"></path><path d="M6 7h6M6 10h6"></path></svg>
+              <span>Lecciones · lo que aprendió</span>
+              <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="lecciones" hidden></span>
+            </button>
+          </nav>
+          <div class="cab-account">
+            <div class="cab-account-mark" aria-hidden="true" data-cabina-account-mark>?</div>
+            <div class="cab-account-copy">
+              <div class="cab-account-name" data-cabina-account-name>Mi cuenta</div>
+              <div class="cab-account-role" data-cabina-account-role>Modo Cabina</div>
+            </div>
+            <div class="cab-cuenta-acciones">
+              <button class="cab-cuenta-btn cab-cuenta-btn--sos" type="button" data-cabina-sos title="Pedir ayuda: abre una sala con quien te puede ayudar" aria-label="Pedir ayuda: abre una sala con quien te puede ayudar" data-cabina-account-icon="lifebuoy"></button>
+              <button class="cab-cuenta-btn" type="button" data-cabina-help title="Abrir ayuda" aria-label="Abrir ayuda" data-cabina-account-icon="help"></button>
+              <button class="cab-cuenta-btn cab-cuenta-btn--salir" type="button" data-cabina-logout title="Cerrar sesión" aria-label="Cerrar sesión" data-cabina-account-icon="logout"></button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+    <main class="cab-main" data-cabina-view aria-live="polite"></main>
+  </div>
+  <div class="cab-toast-region" data-cabina-toasts aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/js/cabina/main.js"></script>
+</body>
+</html>

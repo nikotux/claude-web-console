@@ -1,0 +1,905 @@
+/*
+ * Explorador compartido de Modo Cabina.
+ * Las clases cab-fs-* son COMPARTIDAS: la vista "La Forja · tus archivos"
+ * puede reutilizarlas para conservar el mismo comportamiento visual.
+ */
+
+.cab-fs-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cab-fs-page-actions .cab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.cab-fs-page-actions .cab-search {
+  width: min(280px, 34vw);
+}
+
+.cab-fs-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cab-fs-world {
+  overflow: hidden;
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-lg);
+}
+
+.cab-fs-world-head {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  background: var(--cwc-bg-elevated);
+  border-bottom: 1px solid var(--cwc-border);
+  color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-sm);
+  font-weight: 650;
+}
+
+.cab-fs-world-add {
+  min-height: 30px;
+  padding: 3px 8px;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-dim);
+  font: inherit;
+}
+
+.cab-fs-world-add:hover,
+.cab-fs-world-add:focus-visible {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-border-strong);
+  color: var(--cwc-text);
+}
+
+.cab-fs-folder {
+  display: block;
+  margin: 8px;
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-fs-folder-head {
+  display: grid;
+  min-height: 42px;
+  align-items: center;
+  grid-template-columns: 14px 20px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--cwc-text-secondary);
+  cursor: pointer;
+  font-size: var(--cwc-fs-md);
+  list-style: none;
+  user-select: none;
+}
+
+.cab-fs-folder-head::-webkit-details-marker {
+  display: none;
+}
+
+.cab-fs-folder-head:hover {
+  background: var(--cwc-bg-hover);
+  color: var(--cwc-text);
+}
+
+.cab-fs-chevron::before {
+  display: block;
+  content: "›";
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-lg);
+  line-height: 1;
+  transform-origin: center;
+  transition: transform 120ms ease;
+}
+
+.cab-fs-folder[open] > .cab-fs-folder-head .cab-fs-chevron::before,
+.cab-fs-archive[open] > .cab-fs-folder-head .cab-fs-chevron::before {
+  transform: rotate(90deg);
+}
+
+.cab-fs-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--cwc-folder-light);
+}
+
+.cab-fs-item .cab-fs-icon {
+  color: var(--cwc-text-dim);
+}
+
+.cab-fs-folder-name,
+.cab-fs-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-fs-count {
+  min-width: 23px;
+  padding: 2px 7px;
+  background: var(--cwc-bg-chip);
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.cab-fs-folder-body {
+  padding: 0 6px 6px 25px;
+  border-top: 1px solid var(--cwc-divider);
+}
+
+/* Modificador exclusivo de Conversaciones: La Forja conserva el layout base. */
+.cab-fs-conversation-grid {
+  --cab-conversation-card-min: clamp(260px, 21vw, 290px);
+  --cab-conversation-grid-gap: clamp(6px, .7vw, 10px);
+
+  display: grid;
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--cab-conversation-card-min)), 1fr));
+  gap: var(--cab-conversation-grid-gap);
+}
+
+.cab-fs-conversation-grid > .cab-fs-root-label,
+.cab-fs-conversation-grid > .cab-fs-empty {
+  grid-column: 1 / -1;
+}
+
+.cab-fs-item {
+  position: relative;
+  display: grid;
+  min-height: 58px;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  margin-top: 5px;
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border);
+  border-left: 3px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md);
+  color: var(--cwc-text);
+}
+
+.cab-fs-conversation-grid > .cab-fs-item {
+  min-height: clamp(84px, 7vw, 96px);
+  align-self: stretch;
+  margin-top: 0;
+}
+
+.cab-fs-conversation-grid > .cab-fs-item .cab-fs-item-main {
+  grid-template-areas:
+    "icon copy"
+    ". status";
+  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  row-gap: clamp(4px, .45vw, 7px);
+}
+
+.cab-fs-conversation-grid > .cab-fs-item .cab-fs-icon {
+  grid-area: icon;
+}
+
+.cab-fs-conversation-grid > .cab-fs-item .cab-fs-item-copy {
+  grid-area: copy;
+}
+
+.cab-fs-conversation-grid > .cab-fs-item .cab-status-chip {
+  display: inline-flex;
+  min-width: 0;
+  grid-area: status;
+  justify-self: start;
+}
+
+.cab-fs-conversation-grid > .cab-fs-item .cab-fs-item-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.cab-fs-item:hover,
+.cab-fs-item:focus-within {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-border-strong);
+}
+
+.cab-fs-item--active {
+  background: color-mix(in srgb, var(--cwc-accent-bg) 72%, var(--cwc-bg-panel));
+  border-color: var(--cwc-accent);
+  box-shadow: var(--cwc-shadow-sm);
+}
+
+.cab-fs-item--waiting {
+  border-left-color: var(--cwc-warn);
+}
+
+.cab-fs-item--working {
+  border-left-color: var(--cwc-accent);
+}
+
+.cab-fs-item--dragging {
+  opacity: .48;
+}
+
+.cab-fs-item-main {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cab-fs-item-main:focus-visible {
+  outline: 2px solid var(--cwc-accent);
+  outline-offset: -2px;
+}
+
+.cab-fs-item-copy {
+  display: block;
+  min-width: 0;
+}
+
+.cab-fs-item-name,
+.cab-fs-item-meta {
+  display: block;
+}
+
+.cab-fs-item-name {
+  color: var(--cwc-text);
+  font-size: var(--cwc-fs-md);
+}
+
+.cab-fs-item-meta {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-fs-more {
+  width: 32px;
+  height: 32px;
+  align-self: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-lg);
+  line-height: 1;
+}
+
+.cab-fs-more:hover,
+.cab-fs-more:focus-visible {
+  background: var(--cwc-bg-chip);
+  border-color: var(--cwc-border-strong);
+  color: var(--cwc-text);
+}
+
+.cab-fs-root-drop {
+  min-height: 52px;
+  padding: 6px 8px 10px;
+  border-top: 1px solid var(--cwc-divider);
+}
+
+.cab-fs-root-label {
+  padding: 4px 3px 2px;
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+}
+
+.cab-fs-empty {
+  padding: 12px;
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-sm);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.cab-fs-empty--main {
+  background: var(--cwc-bg-panel);
+  border: 1px dashed var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-lg);
+}
+
+.cab-fs-drop-before::before,
+.cab-fs-drop-after::after {
+  position: absolute;
+  right: 5px;
+  left: 5px;
+  z-index: 2;
+  height: 2px;
+  background: var(--cwc-accent);
+  border-radius: var(--cwc-radius-sm);
+  content: "";
+  pointer-events: none;
+}
+
+.cab-fs-drop-before::before {
+  top: -4px;
+}
+
+.cab-fs-drop-after::after {
+  bottom: -4px;
+}
+
+.cab-fs-conversation-grid > .cab-fs-drop-before::before,
+.cab-fs-conversation-grid > .cab-fs-drop-after::after {
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  height: auto;
+}
+
+.cab-fs-conversation-grid > .cab-fs-drop-before::before {
+  right: auto;
+  left: -4px;
+}
+
+.cab-fs-conversation-grid > .cab-fs-drop-after::after {
+  right: -4px;
+  left: auto;
+}
+
+.cab-fs-dragover.cab-fs-folder > .cab-fs-folder-head,
+.cab-fs-root-drop.cab-fs-dragover,
+.cab-fs-item.cab-fs-dragover {
+  background: color-mix(in srgb, var(--cwc-accent) 14%, var(--cwc-bg-panel));
+  outline: 2px solid var(--cwc-accent);
+  outline-offset: -2px;
+}
+
+.cab-fs-dragover--blocked.cab-fs-folder > .cab-fs-folder-head,
+.cab-fs-root-drop.cab-fs-dragover--blocked,
+.cab-fs-item.cab-fs-dragover--blocked {
+  background: color-mix(in srgb, var(--cwc-danger) 12%, var(--cwc-bg-panel));
+  outline-color: var(--cwc-danger);
+  cursor: not-allowed;
+}
+
+.cab-fs-menu {
+  position: fixed;
+  z-index: 3000;
+  display: flex;
+  width: max-content;
+  min-width: 210px;
+  max-width: min(330px, calc(100vw - 16px));
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md);
+  box-shadow: var(--cwc-shadow-md);
+}
+
+.cab-fs-menu-item {
+  min-height: 36px;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-secondary);
+  font-family: var(--cwc-font-ui);
+  font-size: var(--cwc-fs-md);
+  text-align: left;
+}
+
+.cab-fs-menu-item:hover,
+.cab-fs-menu-item:focus-visible {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-border);
+  color: var(--cwc-text);
+}
+
+.cab-fs-menu-item--danger {
+  color: var(--cwc-danger);
+}
+
+.cab-fs-menu-item:disabled {
+  color: var(--cwc-text-dimmer);
+  cursor: not-allowed;
+}
+
+.cab-fs-archive {
+  margin: 0;
+}
+
+.cab-chat-image-button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-lg);
+  cursor: zoom-in;
+}
+
+.cab-chat-image-button:hover,
+.cab-chat-image-button:focus-visible {
+  border-color: var(--cwc-accent);
+  box-shadow: var(--cwc-shadow-sm);
+}
+
+.cab-chat-image-thumb {
+  width: auto;
+  max-width: min(100%, 520px);
+  max-height: 280px;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+.cab-chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--cwc-bg-chip);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-sm);
+}
+
+.cab-chat-zoom-image {
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+}
+
+@media (max-width: 760px) {
+  .cab-fs-page-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .cab-fs-page-actions .cab-search {
+    width: 100%;
+  }
+
+  .cab-fs-item-main {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .cab-fs-item-main .cab-status-chip {
+    display: none;
+  }
+
+  .cab-fs-folder-body {
+    padding-left: 10px;
+  }
+}
+
+/* Modificador exclusivo de La Forja: no altera las reglas base compartidas. */
+.cab-fs-files .cab-fs-files-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: clamp(5px, .7vw, 9px);
+  margin-bottom: clamp(8px, 1vw, 14px);
+  padding: clamp(6px, .8vw, 10px);
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-fs-files .cab-fs-files-sort-label {
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-sm);
+  white-space: nowrap;
+}
+
+.cab-fs-files .cab-fs-files-sort {
+  min-height: clamp(30px, 3vw, 36px);
+  padding: 0 clamp(6px, .8vw, 10px);
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text);
+  font: inherit;
+}
+
+.cab-fs-files .cab-fs-files-direction {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(4px, .5vw, 7px);
+}
+
+.cab-fs-files .cab-fs-files-direction .cwc-icon {
+  transform: rotate(180deg);
+  transition: transform 120ms ease;
+}
+
+.cab-fs-files .cab-fs-files-direction--desc .cwc-icon {
+  transform: rotate(0);
+}
+
+.cab-fs-files .cab-fs-files-toolbar-spacer {
+  flex: 1;
+}
+
+.cab-fs-files .cab-fs-files-view-toggle {
+  display: flex;
+  flex: none;
+  gap: clamp(2px, .3vw, 4px);
+  padding: clamp(2px, .3vw, 4px);
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-sm);
+}
+
+.cab-fs-files .cab-fs-files-view-toggle .cab-btn {
+  min-width: clamp(30px, 3vw, 36px);
+  padding: clamp(4px, .5vw, 7px);
+}
+
+.cab-fs-files .cab-fs-files-view-active {
+  background: var(--cwc-accent-bg);
+  border-color: var(--cwc-accent);
+  color: var(--cwc-accent);
+}
+
+.cab-fs-files .cab-fs-files-workspace {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(390px, 48vw, 720px)), 1fr));
+  gap: clamp(10px, 1.4vw, 18px);
+}
+
+.cab-fs-files .cab-fs-root-drop {
+  min-width: 0;
+  padding: clamp(5px, .7vw, 9px);
+  overflow: hidden;
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-lg);
+}
+
+.cab-fs-files .cab-fs-files-list {
+  display: flex;
+  gap: clamp(3px, .4vw, 6px);
+}
+
+.cab-fs-files .cab-fs-files-list-head {
+  display: grid;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, clamp(70px, 9vw, 110px)) minmax(0, clamp(90px, 12vw, 150px)) clamp(30px, 3vw, 38px);
+  gap: clamp(5px, .7vw, 10px);
+  padding: clamp(4px, .5vw, 7px) clamp(5px, .7vw, 10px);
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+}
+
+.cab-fs-files .cab-fs-files-list > .cab-fs-item {
+  min-height: clamp(48px, 4.5vw, 58px);
+  margin-top: 0;
+  border-left-color: var(--cwc-border-strong);
+}
+
+.cab-fs-files .cab-fs-files-list > .cab-fs-item .cab-fs-item-main {
+  grid-template-columns: clamp(28px, 3vw, 38px) minmax(0, 1fr) minmax(0, clamp(70px, 9vw, 110px)) minmax(0, clamp(90px, 12vw, 150px));
+  gap: clamp(5px, .7vw, 10px);
+  padding: clamp(5px, .7vw, 9px) clamp(5px, .7vw, 10px);
+}
+
+.cab-fs-files .cab-fs-files-icon {
+  display: inline-flex;
+  width: clamp(28px, 3vw, 38px);
+  height: clamp(28px, 3vw, 38px);
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: var(--cwc-radius-sm);
+}
+
+.cab-fs-files .cab-fs-files-icon .cwc-icon {
+  width: clamp(19px, 2vw, 25px);
+  height: clamp(19px, 2vw, 25px);
+}
+
+.cab-fs-files .cab-fs-files-icon--folder {
+  color: var(--cwc-folder);
+}
+
+.cab-fs-files .cab-fs-files-icon--empty {
+  opacity: .48;
+}
+
+.cab-fs-files .cab-fs-files-link {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(2px, .3vw, 4px);
+  margin-left: clamp(4px, .5vw, 7px);
+  color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-xs);
+  vertical-align: middle;
+}
+
+.cab-fs-files .cab-fs-files-link .cwc-icon {
+  width: clamp(11px, 1.2vw, 14px);
+  height: clamp(11px, 1.2vw, 14px);
+}
+
+.cab-fs-files .cab-fs-files-property {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-fs-files .cab-fs-files-grid {
+  display: grid;
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, clamp(145px, 14vw, 190px)), 1fr));
+  gap: clamp(6px, .8vw, 11px);
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item {
+  min-height: clamp(138px, 14vw, 174px);
+  margin-top: 0;
+  grid-template-columns: minmax(0, 1fr);
+  border-left-width: 1px;
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-more {
+  position: absolute;
+  top: clamp(4px, .5vw, 7px);
+  right: clamp(4px, .5vw, 7px);
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-item-main {
+  align-content: center;
+  justify-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto;
+  gap: clamp(4px, .6vw, 8px);
+  padding: clamp(10px, 1.3vw, 17px) clamp(5px, .7vw, 10px);
+  text-align: center;
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-item-copy {
+  width: 100%;
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-item-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-files-icon {
+  width: clamp(46px, 5vw, 62px);
+  height: clamp(46px, 5vw, 62px);
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-files-icon .cwc-icon {
+  width: clamp(31px, 3.6vw, 44px);
+  height: clamp(31px, 3.6vw, 44px);
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-item .cab-fs-files-property {
+  width: 100%;
+  text-align: center;
+}
+
+.cab-fs-files .cab-fs-files-grid > .cab-fs-empty {
+  grid-column: 1 / -1;
+}
+
+.cab-fs-files .cab-fs-files-preview {
+  min-width: 0;
+  min-height: clamp(180px, 23vw, 300px);
+  overflow: hidden;
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-lg);
+}
+
+.cab-fs-files .cab-fs-files-preview-placeholder {
+  display: flex;
+  min-height: clamp(180px, 23vw, 300px);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: clamp(8px, 1vw, 13px);
+  padding: clamp(16px, 2.5vw, 30px);
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-sm);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.cab-fs-files .cab-fs-files-preview-placeholder .cwc-icon {
+  width: clamp(30px, 4vw, 48px);
+  height: clamp(30px, 4vw, 48px);
+  color: var(--cwc-text-dimmer);
+}
+
+.cab-fs-files .cab-fs-files-preview-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.cab-fs-files .cab-fs-files-preview-head {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: clamp(7px, 1vw, 12px);
+  padding: clamp(9px, 1.2vw, 15px);
+  border-bottom: 1px solid var(--cwc-divider);
+}
+
+.cab-fs-files .cab-fs-files-preview-heading {
+  min-width: 0;
+}
+
+.cab-fs-files .cab-fs-files-preview-heading > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-fs-files .cab-fs-files-preview-close {
+  min-width: clamp(30px, 3vw, 36px);
+  padding: clamp(4px, .5vw, 7px);
+}
+
+.cab-fs-files .cab-fs-files-details {
+  display: grid;
+  gap: clamp(5px, .7vw, 8px);
+  margin: 0;
+  padding: clamp(9px, 1.2vw, 15px);
+  border-bottom: 1px solid var(--cwc-divider);
+}
+
+.cab-fs-files .cab-fs-files-details > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(80px, .7fr) minmax(0, 1.3fr);
+  gap: clamp(7px, 1vw, 12px);
+}
+
+.cab-fs-files .cab-fs-files-details dt {
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+}
+
+.cab-fs-files .cab-fs-files-details dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(3px, .4vw, 5px);
+  justify-content: flex-end;
+  margin: 0;
+  overflow: hidden;
+  color: var(--cwc-text-secondary);
+  font-size: var(--cwc-fs-xs);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-fs-files .cab-fs-files-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(5px, .7vw, 9px);
+  padding: clamp(9px, 1.2vw, 15px);
+  border-bottom: 1px solid var(--cwc-divider);
+}
+
+.cab-fs-files .cab-fs-files-preview-actions .cab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(4px, .5vw, 7px);
+}
+
+.cab-fs-files .cab-fs-menu-item {
+  display: flex;
+  align-items: center;
+  gap: clamp(5px, .7vw, 9px);
+}
+
+.cab-fs-files .cab-fs-files-preview-body {
+  min-width: 0;
+  min-height: clamp(110px, 18vw, 240px);
+  padding: clamp(8px, 1vw, 13px);
+  overflow: auto;
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-sm);
+  line-height: 1.45;
+}
+
+.cab-fs-files .cab-fs-files-image-button {
+  display: flex;
+  width: 100%;
+  min-height: clamp(150px, 26vw, 340px);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  overflow: hidden;
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+  cursor: zoom-in;
+}
+
+.cab-fs-files .cab-fs-files-image-button:hover,
+.cab-fs-files .cab-fs-files-image-button:focus-visible {
+  border-color: var(--cwc-accent);
+  box-shadow: var(--cwc-shadow-sm);
+}
+
+.cab-fs-files .cab-fs-files-preview-image {
+  display: block;
+  width: 100%;
+  max-height: clamp(220px, 34vw, 440px);
+  object-fit: contain;
+}
+
+.cab-fs-files .cab-fs-files-preview-frame {
+  width: 100%;
+  height: clamp(300px, 45vw, 620px);
+  background: var(--cwc-bg);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-fs-files .cab-fs-files-preview-text {
+  max-height: clamp(250px, 38vw, 520px);
+  margin: 0;
+  overflow: auto;
+  color: var(--cwc-text-secondary);
+  font-family: var(--cwc-font-mono);
+  font-size: var(--cwc-fs-xs);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cab-fs-files .cab-fs-dragover {
+  background: color-mix(in srgb, var(--cwc-accent) 14%, var(--cwc-bg-panel));
+  outline: 2px solid var(--cwc-accent);
+  outline-offset: -2px;
+}

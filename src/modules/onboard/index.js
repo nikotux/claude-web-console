@@ -11,7 +11,8 @@ import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
-import { createUser, isValidUsername, listUsers, setAwaitingSponsor, setUserLang } from '../../core/users.js';
+import { createUser, isValidUsername, listUsers, setAwaitingSponsor, setUserLang, setUserSponsor, sponsorshipState } from '../../core/users.js';
+import { sponsorTokenReady } from '../../core/sponsorship.js';
 import {
   ensureUserSpace,
   hasCodexCreds,
@@ -140,6 +141,7 @@ publicRouter.post('/validate', (req, res) => {
       valid: v.valid,
       admin: meta.admin || false,
       sponsored: meta.sponsored || false,
+      sponsor: meta.sponsor || null,
       reason: v.reason || null,
       status,
       lockedTo,
@@ -187,11 +189,16 @@ publicRouter.post('/register', (req, res) => {
     return res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo crear el usuario.' });
   }
   if (v.sponsored) {
+    const planned = typeof v.sponsor === 'string' && v.sponsor ? v.sponsor : null;
+    // El sponsor previsto se RE-VALIDA acá: entre la invitación y el alta pudo
+    // perder su token propio o pasar a ser patrocinado él mismo.
+    const usable = planned && sponsorshipState(planned) === 'none' && sponsorTokenReady(planned);
     try {
-      setAwaitingSponsor(username);
+      if (usable) setUserSponsor(username, planned);
+      else setAwaitingSponsor(username);
     } catch (e) {
-      // La cuenta ya existe: esta marca es recuperable y no debe romper el alta.
-      console.error('[onboard] No se pudo marcar el usuario como awaiting-sponsor:', e.message || e);
+      console.error('[onboard] No se pudo fijar el patrocinio del alta:', e.message || e);
+      try { setAwaitingSponsor(username); } catch { /* la marca es recuperable desde el panel de Usuarios */ }
     }
   }
   if (lang === 'es' || lang === 'en') {
@@ -702,10 +709,27 @@ export default {
       if (req.body?.admin === true && req.body?.sponsored === true) {
         return res.status(400).json({ error: 'admin y sponsored son mutuamente excluyentes.' });
       }
+      if (req.body?.sponsor !== undefined && req.body?.sponsor !== null
+        && (typeof req.body.sponsor !== 'string' || !req.body.sponsor.trim())) {
+        return res.status(400).json({ error: 'sponsor debe ser un string no vacío.' });
+      }
+      const sponsor = typeof req.body?.sponsor === 'string' ? req.body.sponsor.trim() : null;
+      if (sponsor && req.body?.sponsored !== true) {
+        return res.status(400).json({ error: 'Solo una invitación patrocinada puede llevar sponsor.' });
+      }
+      if (sponsor && !listUsers().some((u) => u.username === sponsor)) {
+        return res.status(400).json({ error: 'El sponsor indicado no existe.' });
+      }
+      if (sponsor && sponsorshipState(sponsor) !== 'none') {
+        return res.status(400).json({ error: 'Un usuario patrocinado no puede patrocinar a otro usuario.' });
+      }
+      if (sponsor && !sponsorTokenReady(sponsor)) {
+        return res.status(400).json({ error: `El sponsor ${sponsor} no tiene listo su token propio de patrocinio.` });
+      }
       try {
         const ttlH = Number(req.body?.ttlHours) > 0 ? Number(req.body.ttlHours) : DEFAULT_TTL_H;
-        const invite = generateInvite({ admin: !!req.body?.admin, sponsored: !!req.body?.sponsored, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
-        res.json({ invite }); // { id, token (crudo, una vez), admin, sponsored, expiresAt }
+        const invite = generateInvite({ admin: !!req.body?.admin, sponsored: !!req.body?.sponsored, sponsor, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
+        res.json({ invite }); // { id, token (crudo, una vez), admin, sponsored, sponsor, expiresAt }
       } catch (e) {
         res.status(500).json({ error: e.message || 'No se pudo generar la invitación.' });
       }

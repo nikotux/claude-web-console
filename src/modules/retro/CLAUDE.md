@@ -261,15 +261,18 @@ es ambiguo: la ingesta debe resolver su fuente antes de persistirlo. El trato de
 defensiva con datos históricos: verifica existencia y autor, nunca confía en el
 prefijo, y mantiene los fallos en `external.unresolved`.
 Ruta /api/retro (auth; PROMOVER/CURAR requieren admin, tocan memorias/
-CLAUDE.md/tokens): GET / {lessons,counts} · GET /activity · GET /targets
-{destinos} · POST /curate (admin, spawn curaduría) · GET /curation
+CLAUDE.md/tokens): GET / {lessons,counts} · GET /activity · GET /counts devuelve
+solo { counts } (existe porque la portada de Cabina descartaba 1,1 MB para leer
+5 números; es literal, debe quedar antes de /:id y no dispara el auto-cebado
+del verify runner) · GET /targets {destinos} · POST /curate
+(admin, spawn curaduría) · GET /curation
 (poll) · POST /curate/apply
 {action:merge|dismiss|consolidate|redestinar} (admin) · GET /hygiene ·
 POST /hygiene/apply {action:delete-copies,refs[]} (admin) ·
 GET /:id · POST /:id/approve · POST /:id/dismiss · POST /:id/promote
 {target?,kind?} (admin; target ∈
 memoria|claude-md|contexto|convencion|contrato|invariante) · POST
-/:id/delete. OJO ORDEN: /activity, /targets, /curate, /curation,
+/:id/delete. OJO ORDEN: /activity, /counts, /targets, /curate, /curation,
 /curate/apply, /hygiene y /hygiene/apply literales ANTES de la
 paramétrica /:id. Estado
 file-based del job en ~/.cwc-data/retro/<id>.json (id sha1 del

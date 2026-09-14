@@ -18,6 +18,7 @@
     token: '',
     username: '',
     admin: false,
+    sponsored: false,
     lang: initialLang,
     account: '',
     codex: '',
@@ -103,8 +104,21 @@
   }
 
   function applyValidation(data) {
-    state.pending = Array.isArray(data.pending) ? data.pending.slice() : [];
-    state.capabilities = Array.isArray(data.capabilities) ? data.capabilities.slice() : [];
+    state.sponsored = data.sponsored === true;
+    const pending = Array.isArray(data.pending) ? data.pending.slice() : [];
+    const capabilities = Array.isArray(data.capabilities) ? data.capabilities.slice() : [];
+
+    // Nico quiere que el patrocinado no vea preguntas técnicas: un paso opcional
+    // visible sigue siendo una pregunta, así que para ese segmento solo quedan requeridos.
+    state.capabilities = state.sponsored
+      ? capabilities.filter(function (item) { return item.required === true; })
+      : capabilities;
+    if (state.sponsored) {
+      const visible = new Set(state.capabilities.map(function (item) { return item.id; }));
+      state.pending = pending.filter(function (item) { return visible.has(item); });
+    } else {
+      state.pending = pending;
+    }
     state.checklist = Object.fromEntries(state.capabilities.map(function (item) {
       return [item.id, item.complete === true];
     }));
@@ -136,6 +150,10 @@
   }
 
   function startNextPending() {
+    if (state.sponsored && state.pending.length === 0) {
+      setStep('done');
+      return;
+    }
     startNamedStep(state.pending[0]);
   }
 
@@ -297,6 +315,8 @@
         if (state.pending.length) {
           setStep('pending');
           pollProvision(0);
+        } else if (state.sponsored) {
+          setStep('done');
         } else {
           setStep('smoke');
           runSmokeChecks();

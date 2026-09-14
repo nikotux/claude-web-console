@@ -15,6 +15,7 @@ import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
+import { listUsers } from '../../core/users.js';
 import {
   codexCredState,
   hostUser,
@@ -230,6 +231,39 @@ function userOf(req) {
   return p?.username || hostUser();
 }
 
+function targetUserOf(req) {
+  const actor = userOf(req);
+  const rawTarget = req.method === 'GET' ? req.query?.user : req.body?.user;
+  if (rawTarget === undefined || rawTarget === null || rawTarget === '') return actor;
+  if (typeof rawTarget !== 'string' || !rawTarget.trim()) {
+    throw Object.assign(new Error('El usuario destino no es válido.'), { statusCode: 400 });
+  }
+
+  const target = rawTarget.trim();
+  if (target !== actor && !isAdmin(req)) {
+    throw Object.assign(
+      new Error('Solo un administrador puede operar conexiones de otro usuario.'),
+      { statusCode: 403 },
+    );
+  }
+  if (!listUsers().some((user) => user.username === target)) {
+    throw Object.assign(new Error('El usuario destino no existe.'), { statusCode: 404 });
+  }
+  return target;
+}
+
+function auditExternalOperation(req, target, provider, action) {
+  const actor = userOf(req);
+  if (actor !== target) {
+    console.info('[connections] operación en nombre de otro usuario', {
+      actor,
+      target,
+      provider,
+      action,
+    });
+  }
+}
+
 function reqProvider(req, res) {
   const provider = req.params.provider;
   if (!isOAuthProvider(provider)) {
@@ -344,7 +378,7 @@ function asyncHandler(fn) {
     try {
       await fn(req, res);
     } catch (e) {
-      res.status(500).json({ error: e.message });
+      res.status(e.statusCode || 500).json({ error: e.message });
     }
   };
 }
@@ -395,7 +429,8 @@ export default {
     const r = express.Router();
 
     r.get('/', asyncHandler(async (req, res) => {
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, 'all', 'status');
       await healZohoIdentity(username);
       res.json({
         providers: PROVIDERS.map((p) => {
@@ -932,7 +967,8 @@ export default {
     // Freshservice usa una credencial estática por agente, no OAuth. Estas
     // rutas específicas deben quedar antes de '/:provider/...'.
     r.post('/freshservice/connect', asyncHandler(async (req, res) => {
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, 'freshservice', 'connect');
       let domain;
       try {
         domain = freshserviceBaseUrl(req.body?.domain);
@@ -959,12 +995,15 @@ export default {
     }));
 
     r.post('/freshservice/disconnect', asyncHandler((req, res) => {
-      deleteConnection(userOf(req), 'freshservice');
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, 'freshservice', 'disconnect');
+      deleteConnection(username, 'freshservice');
       res.json({ ok: true });
     }));
 
     r.get('/freshservice/status', asyncHandler((req, res) => {
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, 'freshservice', 'status');
       const credential = getApiCredential(username, 'freshservice');
       const connection = credential ? readConnection(username, 'freshservice') : null;
       res.json({
@@ -980,7 +1019,8 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, provider, 'connect');
       if (!appConfiguredFor(username, provider)) {
         const needSecret = provider === 'zoho' ? ' y el Client Secret' : '';
         return res.status(409).json({
@@ -1051,7 +1091,8 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, provider, 'connect');
       const jobId = req.body?.jobId;
       if (!JOB_ID_RE.test(jobId || '')) return res.status(400).json({ error: 'jobId inválido.' });
 
@@ -1120,7 +1161,8 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      const username = userOf(req);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, provider, 'status');
       const jobId = req.query.jobId;
       const job = readJob(username, jobId);
       if (!job) {
@@ -1179,7 +1221,9 @@ export default {
 
       // Esto solo borra el token local del usuario; la revocación remota se
       // gestiona desde el panel del proveedor.
-      deleteConnection(userOf(req), provider);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, provider, 'disconnect');
+      deleteConnection(username, provider);
       res.json({ ok: true });
     }));
 
@@ -1187,7 +1231,9 @@ export default {
       const provider = reqProvider(req, res);
       if (!provider) return;
 
-      const removed = cancelAttempts(userOf(req), provider);
+      const username = targetUserOf(req);
+      auditExternalOperation(req, username, provider, 'cancel');
+      const removed = cancelAttempts(username, provider);
       res.json({ ok: true, removed });
     }));
 

@@ -9,6 +9,9 @@
 // HTTP:
 //   POST /api/chat/create {cwd?, model?, permissionMode?} -> { chat }
 //   GET  /api/chat/list                                   -> { chats }
+//   GET  /api/chat/attachments?id=<chatId>                -> { attachments }
+//   GET  /api/chat/indice?id=<chatId>                     -> estado del Índice
+//   POST /api/chat/indice/refresh {id}                    -> {status:'running'}
 //   POST /api/chat/close {id}
 //   GET  /api/chat/trash                                  -> { items }
 //   POST /api/chat/trash/restore {id}
@@ -67,7 +70,7 @@ import { listUsers } from '../../core/users.js';
 import { padContextForUser } from '../../core/pad-context.js';
 import { createItem, getItem, updateItem, isAvailable, parseItemFields } from '../../core/pad-service-client.js';
 import { clampToHome, clampToRoot } from '../../core/paths.js';
-import { userFileRoot, userClaudeDir, userDataDir, userSpace, hostUser, hasCodexCreds } from '../../core/user-space.js';
+import { userFileRoot, userClaudeDir, userGlobalClaudePath, userDataDir, userSpace, hostUser, hasCodexCreds, readUserOauthToken, userRunnerEnv } from '../../core/user-space.js';
 import { readPrefs } from '../../core/user-prefs.js';
 import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
@@ -91,9 +94,12 @@ import {
 import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from './runner-link.js';
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
 import {
-  attachUpload, existingAttachments, attachPath, MAX_ATTACHMENTS,
+  attachUpload, existingAttachments, attachPath, listChatAttachments, MAX_ATTACHMENTS,
   attachRelForExplorer, chatAttachDir, classifyAttachment, setChatDataDirResolver,
 } from './attachments.js';
+import {
+  queueIndiceDistill, readIndiceState, reconcileIndiceState, setIndiceDataDirResolver,
+} from './indice-shared.js';
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
 import {
@@ -1412,6 +1418,12 @@ class Chat {
         this._maybeJudge();       // juez AutoMix (D1): ANTES de _setStatus (usa _turnTool* / _turnAnswerText)
         this._setStatus('waiting');
         this._push(e);
+        // El resultado es el único punto donde sabemos que la respuesta del
+        // agente ya quedó completa y registrada. El handoff es síncrono y
+        // mínimo (snapshot + spawn detached); la query vive en otro proceso y
+        // jamás se espera ni forma parte de la latencia del turno del chat.
+        try { queueIndiceForChat(this); }
+        catch (err) { console.warn(`[chat] no pude encolar el Índice de ${this.id}:`, err?.message || err); }
         return;
       }
       case 'closed':
@@ -2826,6 +2838,7 @@ class Chat {
       // en Segundo Plano: tarjeta de Sesiones / modal de trabajos en segundo plano).
       delegatingCount: this._delegatingIds.size,
       delegatingSince: this._delegatingSince,
+      lastActivity: this.lastActivity, // la lista de la Cabina ordena y fecha las salas con esto
       // Subagentes en vuelo CON nombre (radar de la tarjeta de Sesiones, PLAN-892).
       delegatingList: [...this._delegatingIds.entries()].map(([id, v]) => ({ id, label: v.label, since: v.since })),
       // Trabajo en SEGUNDO PLANO vivo (Workflow/Task en background) reportado por
@@ -3471,6 +3484,46 @@ setChatDataDirResolver((chatId) => {
   const chat = manager.chats.get(chatId);
   return userDataDir(chat?.owner || hostUser());
 });
+// El Índice usa el mismo patrón que adjuntos: el módulo compartido cae en
+// resolveDataDir() dentro del runner, pero el server le resuelve el espacio del
+// DUEÑO del chat en cada operación (nunca congela el HOME global al importar).
+setIndiceDataDirResolver((chatId) => {
+  const chat = manager.chats.get(chatId);
+  return userDataDir(chat?.owner || hostUser());
+});
+
+// Mismo blindaje anticonsumo que retro/shared.js: el host conserva su entorno;
+// un inquilino recibe env limpio + HOME/CWC_DATA_DIR propios y SOLO su token.
+// Sin credencial propia falla cerrado; jamás hereda la credencial del server.
+function indiceRunnerEnvFor(owner) {
+  const effectiveOwner = owner || hostUser();
+  if (effectiveOwner === hostUser()) return process.env;
+  const oauthToken = readUserOauthToken(effectiveOwner);
+  if (!oauthToken) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para destilar el Índice.');
+    error.conflict = true;
+    throw error;
+  }
+  return userRunnerEnv(effectiveOwner, { oauthToken });
+}
+
+function queueIndiceForChat(chat, { force = false } = {}) {
+  // El automático sólo nace del fin de un turno realmente activo. Un chat
+  // archivado, cerrado, dormido o todavía trabajando nunca dispara consumo.
+  if (!force && (
+    !chat || chat.closed || chat.archived || !chat.alive
+    || chat.status !== 'waiting' || Date.now() - chat.lastActivity > 60_000
+  )) return { started: false, state: readIndiceState(chat?.id) };
+  const owner = chat.owner || hostUser();
+  return queueIndiceDistill({
+    chatId: chat.id,
+    title: chat.title,
+    events: chat.history,
+    force,
+    // Lazy: no exige/lee credencial hasta que el umbral realmente va a lanzar.
+    env: () => indiceRunnerEnvFor(owner),
+  });
+}
 // Resuelve un chat SOLO si el usuario del request es su dueño (o tiene oversight).
 // Un no-dueño (o inexistente) devuelve null → el handler responde 404, sin
 // revelar que el chat existe. Núcleo del filtrado por dueño (N6-B multi-tenant).
@@ -3732,6 +3785,34 @@ export default {
       res.json(chat.clearPendingPrompt());
     });
 
+    function circuloDePatrocinio(principal, allUsers) {
+      const usernames = new Set(allUsers.map((user) => user.username).filter(Boolean));
+      // En este repo `oversight` significa «ver contenido ajeno». Acá habilita
+      // el padrón de cuentas, que no es contenido: si mañana se restringe
+      // `oversight` pensando solo en chats, esta superficie también cambiaría.
+      if (principal.admin || principal.oversight) return usernames;
+
+      const relaciones = new Map([...usernames].map((username) => [username, new Set()]));
+      // Un sponsor no tiene sponsor; por eso el vínculo se recorre en las dos
+      // direcciones. El filtro anterior dejaba afuera exactamente a ese sponsor.
+      for (const user of allUsers) {
+        if (!user.username || !user.sponsor || !usernames.has(user.sponsor)) continue;
+        relaciones.get(user.username)?.add(user.sponsor);
+        relaciones.get(user.sponsor)?.add(user.username);
+      }
+
+      const circulo = new Set();
+      const pendientes = [principal.username];
+      while (pendientes.length) {
+        const username = pendientes.pop();
+        if (!username || circulo.has(username)) continue;
+        circulo.add(username);
+        for (const relacionado of relaciones.get(username) || []) pendientes.push(relacionado);
+      }
+      circulo.delete(principal.username);
+      return circulo;
+    }
+
     // Colaboración de Aduana: solo el dueño administra la lista de invitados.
     r.get('/collab/candidates', (req, res) => {
       const chat = ownedChat(req, req.query?.id);
@@ -3739,10 +3820,65 @@ export default {
       if (!chat.isSala()) return res.status(400).json({ error: 'La conversación no es una sala de Aduana.' });
       const owner = chat.owner || hostUser();
       const invited = new Set(chat.participants.map((p) => p.user));
-      const users = listUsers()
+      const principal = principalOf(req);
+      const allUsers = listUsers();
+      const circulo = circuloDePatrocinio(principal, allUsers);
+      // El invitador de una sala no es una superficie de administración: un
+      // patrocinado no tiene por qué conocer el padrón de cuentas de la consola.
+      const users = allUsers
+        .filter((u) => circulo.has(u.username))
         .filter((u) => u.username !== owner && !invited.has(u.username))
         .map((u) => ({ username: u.username }));
       res.json({ users });
+    });
+
+    r.post('/salvavidas', (req, res) => {
+      const principal = principalOf(req);
+      const me = principal.username || hostUser();
+      const allUsers = listUsers();
+      const account = allUsers.find((user) => user.username === me);
+      // La elección vive en el backend para no exponer al navegador ni el
+      // padrón de usuarios ni las relaciones privadas de patrocinio.
+      const recipient = account?.sponsor
+        || allUsers.find((user) => user.admin && user.username !== me)?.username;
+      if (!recipient) {
+        return res.status(409).json({
+          error: 'No hay nadie a quien pedirle ayuda en este momento.',
+        });
+      }
+
+      const chat = createChatForRequest(req, res, {
+        sala: true,
+        title: `🛟 Ayuda para ${me}`,
+      });
+      if (!chat) return;
+
+      chat.addParticipant(recipient);
+      manager.persist();
+      chat._broadcast({ type: 'participants', participants: chat.participants, salaOwner: chat.owner || hostUser() });
+      res.json({ chat: chat.info() });
+    });
+
+    r.post('/preferencias', (req, res) => {
+      const principal = principalOf(req);
+      const userId = principal.username || hostUser();
+      const preferencesPath = userGlobalClaudePath(userId);
+      const chat = createChatForRequest(req, res, {
+        title: 'Ajustar cómo trabajo',
+      });
+      if (!chat) return;
+
+      const firstMessage = `Quiero que me entrevistes para entender mejor cómo me gusta trabajar y que, con lo que vayamos descubriendo, actualices mis preferencias para futuras conversaciones.
+
+Preguntame una sola cosa por vez y esperá mi respuesta antes de seguir. No me des un cuestionario entero.
+
+Podés explorar, de a poco, si prefiero respuestas breves o detalladas, si quiero que me expliques el porqué o sólo el resultado, en qué trabajo habitualmente y qué me molesta de cómo me responden hoy. Empezá por la pregunta que te parezca más útil.
+
+El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando creas que conviene actualizarlo, mostrame primero exactamente qué querés escribir o cambiar y esperá que te dé el OK antes de guardar. No borres nada de lo que ya está sin preguntarme. Escribí en lenguaje sencillo, porque yo leo ese archivo desde la pantalla «Cómo trabajo».`;
+      // El backend manda esta primera instrucción para que la persona no tenga
+      // que entenderla ni redactarla: entra al chat y la entrevista ya empieza.
+      chat.sendUser(firstMessage, null, userId);
+      res.json({ chat: chat.info() });
     });
 
     r.post('/collab/invite', (req, res) => {
@@ -3751,8 +3887,13 @@ export default {
       if (!chat.isSala()) return res.status(400).json({ error: 'La conversación no es una sala de Aduana.' });
       const user = String(req.body?.user || '');
       const owner = chat.owner || hostUser();
-      if (user === owner || !listUsers().some((u) => u.username === user)) {
-        return res.status(400).json({ error: 'Usuario inexistente o dueño de la sala.' });
+      const principal = principalOf(req);
+      const allUsers = listUsers();
+      if (!circuloDePatrocinio(principal, allUsers).has(user)) {
+        return res.status(403).json({ error: 'No podés invitar a esa persona a tu sala.' });
+      }
+      if (user === owner) {
+        return res.status(400).json({ error: 'El dueño ya participa en la sala.' });
       }
       chat.addParticipant(user);
       manager.persist();
@@ -4267,7 +4408,49 @@ export default {
       res.json({ ok: true, chat: chat.info() });
     });
 
+    // ===== ÍNDICE semántico del chat (PLAN-3075) =====
+    // Mismo guard que adjuntos: dueño, participante explícito de Aduana u
+    // oversight. Un chat ajeno sigue respondiendo 404 sin revelar existencia.
+    r.get('/indice', (req, res) => {
+      const chat = participantChat(req, req.query?.id);
+      if (!chat) return res.status(404).end();
+      try {
+        const state = reconcileIndiceState(chat.id, chat.history.length - 1);
+        res.json(state || { status: 'stale', moments: [] });
+      } catch {
+        res.status(500).json({ error: 'No se pudo leer el Índice.' });
+      }
+    });
+
+    // Encola y responde sin esperar al modelo. Si ya hay una corrida viva, el
+    // lock la conserva y esta llamada es idempotente para el mismo chat.
+    r.post('/indice/refresh', (req, res) => {
+      const chat = participantChat(req, req.body?.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      try {
+        queueIndiceForChat(chat, { force: true });
+        res.json({ status: 'running' });
+      } catch (err) {
+        const code = err?.conflict ? 409 : 500;
+        res.status(code).json({ error: String(err?.message || err).slice(0, 300) });
+      }
+    });
+
     // ===== ADJUNTOS del chat (imágenes, PDF, texto, binarios) =====
+    // Lista los archivos reales del escritorio del chat, ordenados del más
+    // reciente al más antiguo. Los archivos internos con prefijo `_` se omiten.
+    r.get('/attachments', (req, res) => {
+      const chat = participantChat(req, req.query?.id);
+      if (!chat) return res.status(404).end();
+      try {
+        const attachments = listChatAttachments(chat.id);
+        if (!attachments) return res.status(400).json({ error: 'Id inválido.' });
+        res.json({ attachments });
+      } catch {
+        res.status(500).json({ error: 'No se pudieron listar los adjuntos.' });
+      }
+    });
+
     // Subida de UN adjunto a la carpeta del chat (~/.cwc-data/chat-attachments/
     // <id>). multer escribe a disco con límite de tamaño DURANTE el streaming
     // (nunca buffea entero a memoria). El content del SDK lo arma el runner al

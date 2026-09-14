@@ -147,7 +147,7 @@ en `l.targets`/`l.targetReasons`, y el menú "▾" muestra un chip con cuántos
 destinos NO aplican y por qué) ·
 stats · usage · system(⚙: menú REORGANIZADO en 3 GRUPOS con submenú
 master-detail (2026-07-19, PLAN-695 — antes era una fila plana de tabs
-.sys-tabs que ya no escalaba): ⚙️ Configuración (🆕 Novedades · Conexiones · Skills ·
+.sys-tabs que ya no escalaba): ⚙️ Configuración (🆕 Novedades · Patrocinio · Conexiones · Skills ·
 Idioma · Variables de entorno · Proyectos) · 🩺 Diagnóstico (Salud · Dashboard ·
 Actualizaciones · UniFi · Interfono — Dashboard = pestaña propia desde PLAN-752, antes
 sub-modal del Escaneo de Salud; Actualizaciones = censo de versiones de terceros,
@@ -176,10 +176,15 @@ el `<summary>`. ÚNICA excepción medida: `candidateRow` de `skills-panel.js`
 `data-toggle`, no es colapsable y se deja expandida a propósito: ponerle
 `hr-collapsed` la volvería imposible de abrir, y de todos modos vive dentro
 de un `<details>` que sí nace cerrado.
-Acceso: un no-admin ve 🆕 Novedades · Conexiones · Skills · Idioma · Proyectos · Interfono.
+Acceso: un no-admin ve 🆕 Novedades · Conexiones · Skills · Idioma · Proyectos · Patrocinio · Interfono.
 Salud · Dashboard · Actualizaciones · UniFi · Variables de entorno son admin-only.
 Criterio: diagnóstico del SERVER y config de INSTANCIA requieren admin; las
 preferencias y conexiones del usuario quedan disponibles para todos.
+En Patrocinio, si falta el token propio, «Generar mi token de patrocinio» abre un wizard tipo
+`openClaudeLogin`: URL + input para pegar el código, reintento, cancelación al cerrar y polling cada 1500 ms;
+cuando existe muestra «🔑 Tu token de patrocinio está listo.». GOTCHA: `/token/status` puede devolver `idle`
+durante los ~1–2 s antes de que el runner desacoplado escriba estado; no es terminal: `idleTicks < 10` le da
+≈15 s como `starting` y se resetea ante estados reales; sin eso, `stop()` lo clava en «No hay un flujo de autorización activo» aunque el job ya tenga URL.
 La pestaña 🆕 Novedades es la PRIMERA de ⚙️ Configuración y es visible para
 TODOS; editar, ocultar, borrar y "✍️ Redactar ahora" son acciones admin-only.
 El badge de no leídas vive en el botón ⚙ del pie y se apaga con el evento
@@ -257,6 +262,18 @@ contenido actual, ~15 módulos/~16.700 líneas) NO está hecha — el mecanismo
 está listo y probado E2E, pero casi toda la UI sigue mostrando el fallback ES
 hasta que se ejecute. CONVENCIÓN para código nuevo: ver "## Convenciones" más
 abajo. Backup/Usuarios/
+
+Usuarios (`system/users.js`) se ordena en tres `<details class="users-sec">`.
+🛠️ Administradores nace cerrado, muestra contador y deja filas limpias con admin/supervisión/contraseña/eliminar, sin conexiones ni patrocinio.
+🎫 Accesos y patrocinios nace abierto y con acento: Generar invitación muestra el sponsor previsto sólo al tildar patrocinado, seguido de Invitaciones pendientes y 🤝 Patrocinados.
+Cada patrocinado tiene tarjeta con estado, semáforo y ⚙ Gestionar; 👥 Otros usuarios nace cerrado y se oculta vacío.
+El modal Gestionar abre el árbol 🤝 Patrocinio / 🔌 Conexiones / 🔑 Cuenta; `renderConnectionsInto(container, username)` es reutilizable y también lo envuelve `openUserConnections`.
+GOTCHA: los semáforos cargan en paralelo DESPUÉS del render y best-effort; un fallo deja las luces en ⚪ y nunca tumba el panel.
+En 🔌 Conexiones de ⚙ Gestionar, `CONNECTION_PROVIDERS` quedó DELIBERADAMENTE en `microsoft` y `zoho`: Freshservice ya no aparece en esta vista de sponsor.
+Freshservice sigue vivo en el backend (`src/modules/connections/`) y en el panel personal `system/mcps-panel.js`; no reponerlo «por simetría», sólo se quitó de la vista que provisiona a OTRA persona.
+La misma barra suma «📖 Cómo conectar», que abre `openConnectionGuide(username)` para provisionar por adelantado: modal con dos `<details>` en acordeón (Microsoft 365 abierto, Zoho plegado), enlaces reales a `https://microsoft.com/devicelogin` y `https://api-console.zoho.com`, permisos concedidos y bloque «si algo falla» por proveedor.
+El instructivo es NORMATIVO y sale del código real: lista literal de los 12 scopes de Zoho + «Copiar scopes» desde `ZOHO_SCOPES` de `src/core/connections-zoho.js`, y sus tres causas de `invalid_code` son app ajena · código ya usado · vencido entre 3 y 10 minutos.
+En Microsoft, iniciar sesión CON LA CUENTA DE LA PERSONA y que «Renovar permisos» es lo único que incorpora un scope nuevo vienen de los gotchas 4 y 10 de `src/modules/connections/CLAUDE.md`; si esas constantes o reglas cambian en backend, actualizar el instructivo o esta documentación de usuario acoplada al código queda mintiendo.
 
 PÁGINAS STANDALONE E I18N (2026-07-31): Archivos (`filemanager/fm.js`), Vista
 Raw (`rawview/raw.js`), Seguimientos (`seguimientos/seguimientos.js`), Onboard

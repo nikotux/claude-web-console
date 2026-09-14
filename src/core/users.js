@@ -64,6 +64,16 @@ export function oversightFor(username) {
   return u ? !!u.oversight : false;
 }
 
+// `admin` se resuelve EN VIVO (igual que oversightFor) para que promover o
+// degradar a alguien surta efecto en el request siguiente, sin re-login.
+// Fail-closed: un username desconocido (cuenta borrada, sesión huérfana) NO
+// es admin. El token maestro NO pasa por acá: su admin lo fija auth.js.
+export function adminFor(username) {
+  if (!username) return false;
+  const u = users.get(username);
+  return u ? !!u.admin : false;
+}
+
 export function sponsorshipState(username) {
   const u = users.get(username);
   if (u?.tier !== 'sponsored') return 'none';

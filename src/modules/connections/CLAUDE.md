@@ -20,8 +20,10 @@ refresca y re-persiste solo y es la puerta ÚNICA al token OAuth, y
 `getApiCredential(username, provider)`, puerta ÚNICA a `{ domain, apiKey }`
 para credenciales estáticas. Los endpoints de estado nunca exponen la API key.
 El scope Microsoft ahora cubre también SharePoint (Sites.ReadWrite.All,
-delegado ⇒ la consola solo ve lo que el usuario ve); agregar un scope
-nuevo SIEMPRE obliga a reconectar la cuenta.
+delegado ⇒ la consola solo ve lo que el usuario ve). Para que una conexión
+existente ADQUIERA un scope nuevo sigue haciendo falta reconectarla; su refresh
+normal, en cambio, conserva los scopes con los que fue autorizada y no pide la
+lista ampliada.
 Endpoints: GET / (estado; hace auto-reparación de identidad si falta) ·
 GET|POST /app (admin) · GET /app/mine · POST /app/mine ·
 POST /app/mine/reset (los tres autenticados, per-usuario y NO admin-only) ·
@@ -69,8 +71,17 @@ status/url/error y `/claude/status` solo informa si la fuente es
 `POST /claude/login/start` también acepta al HOST (`console:PLAN-2446`): es
 seguro porque el runner resguarda su `.credentials.json` antes de lanzar el
 login y la restaura ante cualquier salida fallida o cancelada. Ninguna ruta
-acepta un usuario por query/body/header ni permite que un admin opere el job
-ajeno.
+de credenciales de desarrollo —Claude, Codex, GitHub, Infisical, Pad o
+Tolkien— acepta un usuario por query/body/header ni permite que un admin opere
+el job ajeno.
+OPERACIÓN ADMINISTRATIVA SOBRE PROVEEDORES EXTERNOS: `targetUserOf(req)` hace
+que el estado general, las rutas OAuth de Microsoft/Zoho y las rutas de
+Freshservice acepten `user` (`query` en GET, `body` en POST). Sin el parámetro
+operan sobre el principal igual que antes. Apuntar a OTRO usuario exige
+`isAdmin(req)` y un destino presente en `listUsers()`; un destino inexistente
+responde 404. Esta capacidad queda deliberadamente fuera de las credenciales
+de desarrollo enumeradas arriba: ser admin no habilita tomar control de sus
+jobs ni sesiones personales.
 GOTCHAS DUROS (todos verificados en vivo, cuestan caro re-descubrirlos):
 (1) ZOHO NO usa el scope `offline_access` — el refresh token se obtiene
 pasando `access_type=offline` en el intercambio; sin eso Zoho devuelve
@@ -106,3 +117,12 @@ inquilino (Zoho responde `invalid_code`). Por eso existe el override por
 usuario, que es TODO O NADA por proveedor: mezclar el clientId de un usuario
 con el secret de instancia daría `invalid_client`. La conexión guarda
 `appClientId` porque el refresh token sólo vale para el client_id que lo emitió.
+(10) MICROSOFT REFRESCA CON EL CONSENTIMIENTO GUARDADO: al conectar se persiste
+`scopes` en la conexión y `getAccessToken()` pasa ESA lista a
+`refreshAccessToken`; una conexión vieja con scopes viejos refresca con los
+suyos y una nueva nace con el `MS_SCOPES` ampliado. Esto evita que ampliar la
+constante rompa todas las conexiones existentes con `AADSTS65001`; reconectar
+sigue siendo necesario para OBTENER el permiso nuevo, no para conservar los ya
+concedidos. Salvedad legacy: si el registro no tiene `scopes` o la lista está
+vacía, `connections-microsoft.js` todavía cae a `MS_SCOPES`; no describas ese
+fallback como si los scopes persistidos fueran obligatorios en datos antiguos.

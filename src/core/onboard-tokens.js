@@ -43,8 +43,10 @@ function save(data) {
 }
 
 // Genera una invitación. Devuelve el token CRUDO una única vez (no se re-muestra).
-export function generateInvite({ admin = false, sponsored = false, createdBy = null, ttlMs = DEFAULT_TTL_MS } = {}) {
+export function generateInvite({ admin = false, sponsored = false, sponsor = null, createdBy = null, ttlMs = DEFAULT_TTL_MS } = {}) {
   if (admin && sponsored) throw new Error('Una invitación no puede ser admin y patrocinada a la vez.');
+  const sponsorName = typeof sponsor === 'string' && sponsor.trim() ? sponsor.trim() : null;
+  if (sponsorName && !sponsored) throw new Error('Solo una invitación patrocinada puede llevar sponsor.');
   const token = crypto.randomBytes(24).toString('base64url'); // ~32 chars, inadivinable
   const data = gc(load());
   const rec = {
@@ -52,6 +54,7 @@ export function generateInvite({ admin = false, sponsored = false, createdBy = n
     tokenHash: hashToken(token),
     admin: !!admin,
     sponsored: !!sponsored,
+    sponsor: sponsorName, // Sponsor PREVISTO: se re-valida al consumir la invitación por si dejó de ser apto.
     createdBy: createdBy || null,
     createdAt: Date.now(),
     expiresAt: Date.now() + (Number(ttlMs) > 0 ? Number(ttlMs) : DEFAULT_TTL_MS),
@@ -61,7 +64,7 @@ export function generateInvite({ admin = false, sponsored = false, createdBy = n
   };
   data.invites.push(rec);
   save(data);
-  return { id: rec.id, token, admin: rec.admin, sponsored: rec.sponsored, expiresAt: rec.expiresAt };
+  return { id: rec.id, token, admin: rec.admin, sponsored: rec.sponsored, sponsor: rec.sponsor, expiresAt: rec.expiresAt };
 }
 
 function findRec(data, token) {
@@ -81,7 +84,7 @@ export function validateInvite(token, { forUsername = null } = {}) {
   if (rec.status === 'locked' && forUsername && rec.lockedTo !== forUsername) {
     return { valid: false, reason: 'en uso por otro registro' };
   }
-  return { valid: true, admin: !!rec.admin, sponsored: !!rec.sponsored, status: rec.status, lockedTo: rec.lockedTo, id: rec.id };
+  return { valid: true, admin: !!rec.admin, sponsored: !!rec.sponsored, sponsor: rec.sponsor || null, status: rec.status, lockedTo: rec.lockedTo, id: rec.id };
 }
 
 // Lectura LENIENTE por token (para el endpoint de status del onboarding): devuelve
@@ -90,7 +93,7 @@ export function peekInvite(token) {
   if (!token) return { found: false };
   const rec = findRec(load(), token);
   if (!rec) return { found: false };
-  return { found: true, status: rec.status, lockedTo: rec.lockedTo, admin: !!rec.admin, sponsored: !!rec.sponsored, id: rec.id };
+  return { found: true, status: rec.status, lockedTo: rec.lockedTo, admin: !!rec.admin, sponsored: !!rec.sponsored, sponsor: rec.sponsor || null, id: rec.id };
 }
 
 // LOCK: al auto-registrarse, se ata el token al username (aún NO consumido, para
@@ -131,6 +134,6 @@ export function revokeInvite(id) {
 // Lista para el admin — NUNCA expone el tokenHash ni el token (solo metadata).
 export function listInvites() {
   return gc(load()).invites
-    .map((i) => ({ id: i.id, admin: !!i.admin, sponsored: !!i.sponsored, createdBy: i.createdBy, createdAt: i.createdAt, expiresAt: i.expiresAt, status: i.status, lockedTo: i.lockedTo, consumedAt: i.consumedAt }))
+    .map((i) => ({ id: i.id, admin: !!i.admin, sponsored: !!i.sponsored, sponsor: i.sponsor || null, createdBy: i.createdBy, createdAt: i.createdAt, expiresAt: i.expiresAt, status: i.status, lockedTo: i.lockedTo, consumedAt: i.consumedAt }))
     .sort((a, b) => b.createdAt - a.createdAt);
 }

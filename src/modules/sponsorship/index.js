@@ -1,12 +1,24 @@
 // modules/sponsorship/index.js — adopción self-service de perfiles patrocinados.
 //
-// HTTP (autenticado, nunca admin-only):
+// HTTP (autenticado):
 //   GET  /api/sponsorship/candidates -> perfiles que esperan sponsor
 //   GET  /api/sponsorship/mine       -> capacidad, token y patrocinados propios
 //   POST /api/sponsorship/adopt      -> adopta { username }
 //   POST /api/sponsorship/release    -> suelta { username }
+//   POST /api/sponsorship/token/start  -> inicia setup-token propio
+//   GET  /api/sponsorship/token/status -> consulta el estado sin exponer secretos
+//   POST /api/sponsorship/token/code   -> entrega { code } al runner propio
+//   POST /api/sponsorship/token/cancel -> cancela el setup-token propio
+//   POST /api/sponsorship/admin/assign   -> admin asigna { username, sponsor? }
+//   POST /api/sponsorship/admin/release  -> admin suelta { username }
+//   GET  /api/sponsorship/admin/overview -> admin lista estado y sponsors aptos
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { principalOf } from '../../core/auth.js';
+import { isAdmin, principalOf } from '../../core/auth.js';
 import { sponsorTokenReady } from '../../core/sponsorship.js';
 import {
   listUsers,
@@ -17,6 +29,30 @@ import {
 import { withLocalUsage } from '../tokens/index.js';
 
 const DEFAULT_WARN_USD = 10;
+const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'sponsor-token-jobs');
+const jobFile = (u) => path.join(JOBS_DIR, `${u}.json`);
+const codeFile = (u) => path.join(JOBS_DIR, `${u}.code`);
+const RUNNER = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..', '..', '..', 'bin', 'cwc-sponsor-token-runner.js',
+);
+
+function readJob(username) {
+  try { return JSON.parse(fs.readFileSync(jobFile(username), 'utf8')); }
+  catch { return { status: 'idle' }; }
+}
+
+function jobAlive(job) {
+  if (['done', 'error'].includes(job?.status)) return false;
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function warnThresholdUsd() {
   const raw = process.env.CWC_SPONSORED_USAGE_WARN_USD;
@@ -62,6 +98,84 @@ export default {
 
   registerHttp(router, ctx) { // eslint-disable-line no-unused-vars -- interfaz estándar
     const r = express.Router();
+
+    r.post('/token/start', (req, res) => {
+      try {
+        const username = principalUsername(req, res);
+        if (!username) return;
+        const job = readJob(username);
+        if (jobAlive(job)) return res.json({ ...job, alreadyRunning: true });
+
+        try { fs.unlinkSync(codeFile(username)); } catch (err) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+        try { fs.unlinkSync(jobFile(username)); } catch (err) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+        const child = spawn(process.execPath, [RUNNER, '--user', username], {
+          detached: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        res.json({ status: 'starting' });
+      } catch (err) {
+        res.status(500).json({ error: err.message || 'No se pudo iniciar la generación del token.' });
+      }
+    });
+
+    r.get('/token/status', (req, res) => {
+      try {
+        const username = principalUsername(req, res);
+        if (!username) return;
+        const job = readJob(username);
+        res.json({
+          status: job.status,
+          url: job.url || null,
+          note: job.note || null,
+          error: job.error || null,
+          ready: sponsorTokenReady(username),
+        });
+      } catch (err) {
+        res.status(500).json({ error: err.message || 'No se pudo consultar la generación del token.' });
+      }
+    });
+
+    r.post('/token/code', (req, res) => {
+      try {
+        const username = principalUsername(req, res);
+        if (!username) return;
+        const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+        if (!code) return res.status(400).json({ error: 'code debe ser un string no vacío.' });
+        fs.mkdirSync(JOBS_DIR, { recursive: true });
+        fs.writeFileSync(codeFile(username), code, { mode: 0o600 });
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message || 'No se pudo guardar el código.' });
+      }
+    });
+
+    r.post('/token/cancel', (req, res) => {
+      try {
+        const username = principalUsername(req, res);
+        if (!username) return;
+        const job = readJob(username);
+        if (jobAlive(job)) {
+          try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+        }
+        try { fs.unlinkSync(codeFile(username)); } catch (err) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+        fs.mkdirSync(JOBS_DIR, { recursive: true });
+        fs.writeFileSync(
+          jobFile(username),
+          JSON.stringify({ status: 'error', error: 'cancelado', user: username, ts: Date.now() }),
+          { mode: 0o600 },
+        );
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message || 'No se pudo cancelar la generación del token.' });
+      }
+    });
 
     r.get('/candidates', (req, res) => {
       if (!principalUsername(req, res)) return;
@@ -135,6 +249,92 @@ export default {
         res.json({ ok: true, username: target, sponsorshipState: 'awaiting-sponsor' });
       } catch (err) {
         res.status(err.badRequest ? 400 : 500).json({ error: err.message });
+      }
+    });
+
+    r.post('/admin/assign', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+
+      const target = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+      if (!target) return res.status(400).json({ error: 'username debe ser un string no vacío.' });
+
+      const requestedSponsor = req.body?.sponsor;
+      let sponsor;
+      if (requestedSponsor === undefined) {
+        const principal = principalOf(req);
+        sponsor = typeof principal?.username === 'string' ? principal.username.trim() : '';
+        if (!sponsor) {
+          return res.status(400).json({
+            error: 'El token maestro no identifica un usuario; indicá sponsor explícitamente.',
+          });
+        }
+      } else {
+        sponsor = typeof requestedSponsor === 'string' ? requestedSponsor.trim() : '';
+        if (!sponsor) return res.status(400).json({ error: 'sponsor debe ser un string no vacío.' });
+      }
+
+      // La autoridad es del admin que ejecuta la acción; el sponsor designado
+      // no necesita ser admin, pero sí tener listo su setup-token propio.
+      if (!sponsorTokenReady(sponsor)) {
+        return res.status(400).json({
+          error: `El sponsor ${sponsor} no tiene listo su token propio de patrocinio.`,
+        });
+      }
+
+      try {
+        setUserSponsor(target, sponsor);
+        const user = listUsers().find((item) => item.username === target);
+        res.json({
+          ok: true,
+          username: user.username,
+          tier: user.tier,
+          sponsorshipState: user.sponsorshipState,
+          sponsor: user.sponsor,
+        });
+      } catch (err) {
+        res.status(err.badRequest ? 400 : 500).json({ error: err.message });
+      }
+    });
+
+    r.post('/admin/release', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+
+      const target = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+      if (!target) return res.status(400).json({ error: 'username debe ser un string no vacío.' });
+
+      try {
+        // Un usuario sponsored sin sponsor queda awaiting-sponsor y NO arranca:
+        // ese fail-closed es el comportamiento correcto, no un estado roto.
+        setAwaitingSponsor(target);
+        const user = listUsers().find((item) => item.username === target);
+        res.json({
+          ok: true,
+          username: user.username,
+          tier: user.tier,
+          sponsorshipState: user.sponsorshipState,
+          sponsor: user.sponsor,
+        });
+      } catch (err) {
+        res.status(err.badRequest ? 400 : 500).json({ error: err.message });
+      }
+    });
+
+    r.get('/admin/overview', (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+
+      try {
+        // El panel recibe la aptitud ya resuelta para no ofrecer sponsors que
+        // fallarían después por falta de token propio o por estar patrocinados.
+        const users = listUsers().map((user) => ({
+          username: user.username,
+          tier: user.tier,
+          sponsorshipState: user.sponsorshipState,
+          sponsor: user.sponsor,
+          canSponsor: user.sponsorshipState === 'none' && sponsorTokenReady(user.username),
+        }));
+        res.json({ users });
+      } catch (err) {
+        res.status(500).json({ error: err.message || 'No se pudo consultar el estado de patrocinio.' });
       }
     });
 

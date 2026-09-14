@@ -135,9 +135,11 @@ zoho-desk-client(ESCRITURA a
 Desk con la identidad del USUARIO: getTicket/assignTicket/
 updateTicket/addComment/uploadAttachment/createTicket; resuelve el
 token por username y manda orgId siempre) ·
-connections-store GOTCHA: MS_SCOPES incluye Sites.ReadWrite.All; un
-cambio de scopes obliga a reconectar porque el refresh token viejo no
-cubre el consentimiento nuevo → AADSTS65001 ·
+connections-store GOTCHA: ampliar MS_SCOPES ya NO rompe conexiones existentes:
+cada una refresca con los scopes consentidos guardados en su registro. Legacy:
+si `scopes` falta, no es un array o está vacío, cae a MS_SCOPES. Para GANAR
+permisos nuevos hay que reconectar; Teams, Contacts y Files.ReadWrite.All
+exigen consentimiento de administrador del tenant M365 ·
 microsoft-sharepoint-client(cliente Graph de SharePoint con identidad
 del USUARIO, hermano de microsoft-calendar-client: resuelve el token por
 username con getAccessToken. parseSharePointUrl acepta la URL LARGA
@@ -388,10 +390,15 @@ persiste el campo booleano en `users.json`: `oversightFor(username)` devuelve
 `true` por default solo para `hostUser()` (y para el principal sin username que
 representa al token), mientras todos los demás —incluidos los admins— quedan en
 `false` salvo habilitación explícita; `setOversight(username, value)` escribe el
-cambio. `auth.js` expone el resultado en `principalOf()`. A diferencia de
-`admin`, congelado dentro de la sesión, `oversight` se consulta EN VIVO con
-`oversightFor()` en cada request: apagarlo corta el acceso desde el request
-siguiente sin revocar sesiones ni esperar que venza la cookie.
+cambio. `auth.js` expone ambos resultados en `principalOf()`: `oversight` y
+`admin` se consultan EN VIVO con `oversightFor()` / `adminFor()` en cada request,
+y `adminFor()` es FAIL-CLOSED ante un username desconocido. Apagar `oversight` o
+promover/degradar `admin` vale desde el request siguiente, sin necesitar revocar
+sesiones ni esperar que venza la cookie; el `admin` persistido dentro de la sesión queda
+como rastro histórico y no autoriza. El principal por token maestro conserva
+`admin:true` fijo. Esto corrige la causa raíz vista con jgarcia y rarboleda: se
+los había promovido después del login y sus cookies antiguas seguían reflejando
+`admin:false`, por lo que no veían Administración ni accedían a `/api/admin/*`.
 
 **Blindaje anticonsumo (regla dura, FAIL-CLOSED, `decision-1784080554`).** Es el
 riesgo #1 de seguridad/costo y HOY el default estaba roto (el runner heredaba

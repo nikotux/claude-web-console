@@ -4,7 +4,20 @@
 // API de su data center y lo pega en la consola, igual que otros flujos de
 // "pegar código". Este módulo solo hace HTTP; no persiste ni loguea secretos.
 
-export const ZOHO_SCOPES = ['Desk.tickets.ALL', 'Desk.contacts.READ', 'Desk.contacts.CREATE', 'Desk.basic.READ', 'Desk.settings.READ', 'Desk.search.READ'];
+export const ZOHO_SCOPES = [
+  'Desk.tickets.ALL',
+  'Desk.contacts.READ',
+  'Desk.contacts.CREATE',
+  'Desk.basic.READ',
+  'Desk.settings.READ',
+  'Desk.search.READ',
+  'ZohoCRM.modules.ALL',
+  'ZohoCRM.settings.READ',
+  'ZohoCRM.users.READ',
+  'ZohoProjects.projects.READ',
+  'ZohoProjects.tasks.READ',
+  'ZohoProjects.portals.READ',
+];
 
 const ZOHO_DCS = ['com', 'eu', 'in', 'com.au', 'jp', 'ca'];
 

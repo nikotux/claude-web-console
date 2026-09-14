@@ -14,9 +14,12 @@ import * as ms from './connections-microsoft.js';
 import * as zoho from './connections-zoho.js';
 
 export const PROVIDERS = [
-  { id: 'microsoft', label: 'Microsoft (Calendario, Correo y SharePoint)', kind: 'oauth', scopes: ms.MS_SCOPES },
-  { id: 'zoho', label: 'Zoho (Desk)', kind: 'oauth', scopes: zoho.ZOHO_SCOPES },
-  { id: 'freshservice', label: 'Freshservice', kind: 'apikey', scopes: [] },
+  { id: 'microsoft', label: 'Microsoft 365 (Correo, Calendario, Archivos, SharePoint, Teams, Contactos y Tareas)', kind: 'oauth', scopes: ms.MS_SCOPES },
+  { id: 'zoho', label: 'Zoho (Desk, CRM y Projects)', kind: 'oauth', scopes: zoho.ZOHO_SCOPES },
+  // Freshservice se retiró de la interfaz por pedido de Niko (2026-09-14) al no ser relevante:
+  // nadie la tenía conectada ni había credenciales guardadas. El módulo
+  // `connections-freshservice.js` y sus endpoints /freshservice/connect, /disconnect y /status
+  // siguen en el código, inertes; para reponerla alcanza con volver a agregar la entrada a este array.
 ];
 
 const APP_FILE = path.join(os.homedir(), '.cwc-data', 'connections', '_app.json');
@@ -337,7 +340,8 @@ export async function getAccessToken(username, provider) {
   let t;
   if (provider === 'microsoft') {
     const { clientId, tenantId } = cfg.microsoft;
-    t = await ms.refreshAccessToken({ clientId, tenantId, refreshToken: c.refreshToken });
+    const scopes = Array.isArray(c.scopes) && c.scopes.length > 0 ? c.scopes : undefined;
+    t = await ms.refreshAccessToken({ clientId, tenantId, refreshToken: c.refreshToken, scopes });
   } else if (provider === 'zoho') {
     const { clientId, clientSecret, dc } = cfg.zoho;
     t = await zoho.refreshAccessToken({ clientId, clientSecret, refreshToken: c.refreshToken, dc });

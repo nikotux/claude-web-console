@@ -193,6 +193,20 @@ export default {
       catch (e) { sendErr(res, e); }
     });
 
+    // Contadores solos. La portada de Cabina solo necesita los 5 números del
+    // resumen y pedir '/' le costaba 1,1 MB de lecciones que descartaba
+    // (medido: 1106 KB pedidos para usar 0,2 KB). Ruta LITERAL: tiene que
+    // quedar ANTES de '/:id' o el wildcard se la come. A propósito NO replica
+    // el auto-cebado del verify runner que hace '/': eso es del tablero admin,
+    // no de un lector de contadores.
+    r.get('/counts', async (req, res) => {
+      try {
+        const { counts } = await listLessons(reqPadContext(req));
+        res.json({ counts });
+      }
+      catch (e) { sendErr(res, e); }
+    });
+
     r.get('/targets', (req, res) => {
       try { res.json({ targets: PROMOTE_TARGETS }); }
       catch (e) { sendErr(res, e); }

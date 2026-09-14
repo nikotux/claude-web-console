@@ -372,6 +372,142 @@ esa función no es redundante. El bundle además espera el `process` de un
 bundler: `cerebro.html` define un shim mínimo `window.process` ANTES de
 cargarlo.
 
+### public/cabina.html + js/cabina/{main,salas,nueva}.js + css/{cabina,cabina-sala,cabina-nueva}.css   Modo Cabina · Salas compartidas
+`/cabina` es la piel de Mi Consola para usuarios patrocinados no técnicos
+(`PLAN-3075`). `src/server.js` sirve `cabina.html` con `sendFile`, de modo que
+un cambio de markup se ve sin reiniciar el servicio; es el gotcha INVERSO de
+`index.html`, que se lee una sola vez al arrancar para inyectarle el `BUILD_ID`.
+`js/cabina/main.js` monta las vistas desde `VIEW_MODULES`: cada módulo exporta
+por default `{ name, mount(el, ctx), unmount() }`, con
+`ctx={go,api,toast,fmtDate,icon}`, y `main.js` comprueba que `module.name`
+coincida con la clave. Renombrarlo sin actualizar el mapa no arroja una falla
+accionable: cae al placeholder «Esta sección todavía no está conectada».
+`conversaciones` y `salas` son las DOS únicas vistas con ruta anidada
+`#/vista/<id>`; `readRoute()` y `go()` las enumeran por nombre, así que toda
+vista nueva con detalle propio debe sumarse a AMBAS condiciones.
+
+`nueva.js` + `cabina-nueva.css` implementan el menú del botón «Nueva
+conversación», pero NO son una vista de `VIEW_MODULES`: el módulo exporta
+`abrirMenuNuevaConversacion(ctx)` y monta el diálogo sobre la vista que ya esté
+abierta. El único punto de entrada sigue siendo `createConversation()` de
+`main.js`, que hace el `import('./nueva.js')` dinámico; ya hay UN solo listener
+delegado para `[data-cabina-new]`, y agregar otro sobre ese atributo dispararía
+dos acciones con un clic.
+
+Los destinos del menú se DERIVAN de la unión de `world` en las carpetas raíz y
+del mundo resuelto desde `cwd` en los chats propios; `PLACES` sólo traduce
+`rel` a etiqueta y fija el orden, nunca inventa opciones. El porqué es el
+aislamiento por dueño: `safeCwd(cwd, owner)` clampa al espacio de archivos del
+DUEÑO, y un inquilino sólo tiene su workspace, no los `tolkien` ni
+`claude-web-console` del host. Ofrecer esos lugares desde la constante termina
+en el 400 de `createChatForRequest`: «El destino no existe en tu espacio de
+trabajo». Invariante de experiencia: el menú no debe ofrecer un lugar que no
+pueda garantizar como destino existente. También excluye `__aduana` y
+`__limbo`: Aduana no es un cwd nombrable por el cliente y el backend lo rechaza
+a propósito; Limbo es un estado, no un destino de creación.
+
+Si no hay ningún lugar derivable —caso del patrocinado recién creado— no se
+cae a `PLACES[0]`: quedan «Sin carpeta» y «+ Nueva carpeta…», y al crear el chat
+se omite `cwd` para que nazca en la raíz del usuario, que siempre existe. La
+opción «A fondo» (`opus`) tampoco se muestra a un perfil `sponsored`, porque en
+Cabina los turnos los paga el sponsor; el gate usa el `profile` (`'sponsored' |
+'full'`) ya entregado por `GET /api/whoami` y, si esa consulta falla, cae a
+`sponsored`. Es recorte de experiencia, NO seguridad: `POST /api/chat/create`
+sigue aceptando `model: 'opus'` si alguien lo invoca a mano.
+
+El JS y la hoja satélite comparten exactamente el namespace `cab-nueva-*`: no
+hay clases huérfanas a ninguno de los dos lados. Es el mismo contrato que el
+resto de Cabina y debe verificarse cruzando ambos archivos cuando cambie el
+menú.
+
+`salas.js` + `cabina-sala.css` son la superficie de 🛃 Aduana para la persona
+no técnica; no reimplementan el backend, sino que consumen sus endpoints de
+chat y `/ws/chat`. Dos detalles del protocolo fallan en silencio si se tratan
+como un chat común: dentro de una sala el WS descarta a propósito
+`{type:'user'}` —las personas publican con `say` y la IA solo recibe el buzón
+cuando alguien manda `cut`—, y una cita usa `replyTo` / `replyToBy` /
+`replyToText`, no `replyBy` / `replyText`. `chat/chat-tab.js` ya exporta
+`peerToneFor()` y `stripAddressees()`, pero importarlo arrastraría sus 2851
+líneas del frontend de desarrollador a Cabina; por eso ambas funciones están
+replicadas deliberadamente en `salas.js`. Si cambia el algoritmo de color o
+el encabezado `@para:` del chat, hay que mantener las dos copias sincronizadas.
+
+La lista de salas ya no tiene un sistema paralelo de tarjetas: reutiliza de
+`cabina-explorador.css` las bases `.cab-fs-item`, `.cab-fs-item-main`,
+`.cab-fs-icon`, `.cab-fs-item-copy`, `.cab-fs-item-name`, `.cab-fs-item-meta` y
+`.cab-fs-empty`. Todo ajuste de Salas queda escopado bajo su modificador
+`.cab-fs-salas-grid`, igual que Conversaciones se aísla bajo
+`.cab-fs-conversation-grid` y La Forja bajo `.cab-fs-files`; `cabina-sala.css`
+aplica esas bases pero no las redefine fuera de ese scope. Ése es el patrón
+para una eventual cuarta vista de tarjetas. Desaparecieron `.cab-sala-card`,
+`.cab-sala-card-meta` y `.cab-sala-empty`, y ya no hay clases propias para el
+control de apertura ni el título; en la lista sólo sobreviven
+`.cab-sala-card-status`, `.cab-sala-card-unread`,
+`.cab-sala-card-unread--mention`, `.cab-sala-peers` y `.cab-peer-dot`.
+
+La grilla tampoco necesita breakpoints de columnas: usa
+`repeat(auto-fill, minmax(min(100%, clamp(260px,21vw,290px)), 1fr))`, que da 4
+columnas a 1600 px, 3 a 1400, 2 entre 1100 y 700 y 1 a 390. No hay que agregar
+media queries para gobernar ese número. El separador ` · ` entre personas y
+última actividad forma parte del TEXTO de `.cab-fs-item-meta`, no de un `gap`
+de CSS: si ese contenedor termina siendo flex sin gap, de otro modo aparecen
+cadenas pegadas como «3 personas + CuchoÚltima actividad: …».
+
+GOTCHA — el `icon()` LOCAL de `js/cabina/main.js` no es el catálogo común: sólo
+tiene cinco entradas (`back`, `search`, `send`, `warning`, `rest`) y cierra
+con `paths[name] || '<circle cx="8" cy="8" r="5"></circle>'`. Cualquier otro
+nombre produce un círculo gris sin error ni log. Así nació `console:BUG-3164`: Conexiones
+mostraba todos sus íconos como circulitos, y un grep no lo encontró porque las
+llamadas eran dinámicas (`ctx.icon(name)` desde un helper), no literales. Toda
+vista de Cabina que necesite otro ícono debe importar `icon` de
+`public/js/ui/icons.js`, el catálogo real; buscar sólo usos literales NO cubre
+las llamadas dinámicas, que son precisamente las más propensas a equivocarse
+de nombre. Por eso el ícono `room` de Salas viene de ese catálogo y `salas.js`
+lo consume como `icon('room', { className: 'cab-fs-icon' })`.
+
+El cruce de `cab-sala-*` entre `salas.js` y `cabina-sala.css` sigue siendo una
+verificación útil, pero cubre ÚNICAMENTE las clases propias; las compartidas
+`cab-fs-*` viven en `cabina-explorador.css` y no entran en ese cruce. Al
+comparar el CSS hay que limitar el grep a `.cab-sala-*`, porque el barrido
+crudo también captura `cab-sala-pulse`, que es un `@keyframes`, no una clase.
+GOTCHA: la versión anterior se escribió en dos delegaciones paralelas con un
+contrato que fijaba nombres, pero no el ROL de cada clase. El JS hizo del
+control acordado para «abrir» el envoltorio de TODO el contenido; el CSS lo
+trató como un botón chico en `grid-column: 2`. Ambos cumplieron el contrato y
+el cruce dio 55/55 exacto, pero a 1044 px la tarjeta dejó 429 px vacíos a la
+izquierda y pegó los textos sin separación. Un contrato entre piezas
+paralelas debe declarar si cada clase es contenedor, área de grilla o control,
+y la verificación debe medir el LAYOUT —posiciones y tamaños reales—, no sólo
+la presencia de clases y texto. Justamente por eso aquel cruce dio verde con
+la tarjeta rota.
+
+La hoja satélite sigue el precedente de `cabina-explorador.css`:
+`cabina.html` la enlaza DESPUÉS de `cabina.css`, y por eso no debe redefinir
+bases como `.cab-btn`, `.cab-panel` o `.cab-view-state`; al cargar después las
+pisaría en TODAS las vistas.
+
+La lista obtiene fecha y orden de `GET /api/chat/list`. Para habilitarlo se
+agregó `lastActivity` al `info()` de `src/modules/chat/index.js`; representa la
+actividad general del Chat y su marca se persiste y recupera al rehidratar tras
+un reinicio, no la fecha del último mensaje humano.
+
+GOTCHA — el Service Worker del puerto 8092 se registra al final de
+`public/js/main.js`, NO desde el HTML: buscar `serviceWorker` sólo en
+`index.html` o `cabina.html` da cero y lleva a una conclusión falsa.
+`index.html` carga `/js/main.js` y por eso lo registra; `cabina.html` carga
+`/js/cabina/main.js` y no lo hace. Sin embargo, un Service Worker controla el
+ORIGEN entero: si antes se abrió la consola completa en 8092, ese worker
+también intercepta `/cabina` y sus CSS en ese mismo puerto.
+
+La invalidación depende del `BUILD_ID` que el servidor obtiene con
+`git rev-parse --short HEAD`. Los cambios sin commitear no alteran ese id, por
+lo que el worker no purga su caché y puede seguir sirviendo archivos viejos
+aunque el disco esté correcto. Para verificar Cabina en un navegador real hay
+que usar su puerto propio (`CWC_CABINA_PORT`, hoy 8093): allí `/` sirve
+`cabina.html`, que no registra el worker. Playwright no hereda el problema
+cuando abre un contexto nuevo, porque ese contexto empieza sin el Service
+Worker previamente registrado en 8092.
+
 ### public/js/onboard/onboard.js — wizard público de alta
 
 Secuencia de siete posiciones:

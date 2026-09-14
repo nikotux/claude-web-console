@@ -1,0 +1,342 @@
+.cab-ayuda-overlay {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  overflow: hidden;
+  padding: clamp(16px, 3vw, 40px);
+  background: var(--cwc-scrim);
+  place-items: center;
+}
+
+.cab-ayuda-panel {
+  display: flex;
+  width: min(var(--lite-content-max), 100%);
+  max-height: calc(100dvh - 32px);
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--cwc-bg-panel);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-lg);
+  box-shadow: var(--cwc-shadow-lg);
+}
+
+.cab-ayuda-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px clamp(18px, 3vw, 30px);
+  background: var(--cwc-bg-elevated);
+  border-bottom: 1px solid var(--cwc-divider);
+}
+
+.cab-ayuda-title {
+  margin: 0;
+  color: var(--lite-ink-bright);
+  font-size: var(--cwc-fs-xl);
+  line-height: 1.25;
+}
+
+.cab-ayuda-close {
+  min-width: var(--lite-touch);
+  min-height: var(--lite-touch);
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.cab-ayuda-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(18px, 3vw, 32px);
+  color: var(--cwc-text);
+  line-height: 1.6;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.cab-ayuda-body > p {
+  max-width: 68ch;
+  margin: 0 0 22px;
+  color: var(--cwc-text-secondary);
+}
+
+.cab-ayuda-section {
+  width: 100%;
+  padding: 24px 0;
+  border-top: 1px solid var(--cwc-divider);
+}
+
+.cab-ayuda-back + .cab-ayuda-section {
+  margin-top: 20px;
+}
+
+.cab-ayuda-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  color: var(--lite-ink-soft);
+  font-size: var(--cwc-fs-lg);
+  line-height: 1.35;
+}
+
+/* ROL: elemento decorativo — el ícono que permite reconocer cada sección. */
+.cab-ayuda-section-icon {
+  display: inline-grid;
+  min-width: 28px;
+  color: var(--cwc-accent);
+  place-items: center;
+}
+
+.cab-ayuda-section > p {
+  max-width: 68ch;
+  margin: 0 0 10px;
+}
+
+.cab-ayuda-section > p:last-child {
+  margin-bottom: 0;
+}
+
+/* ROL: contenedor en grilla de las tarjetas de pasos. */
+.cab-ayuda-steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+/* ROL: tarjeta de un paso. */
+.cab-ayuda-step {
+  position: relative;
+  display: grid;
+  min-height: 154px;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  padding: 18px;
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-ayuda-step p {
+  max-width: none;
+  margin: 0;
+}
+
+/* ROL: elemento decorativo — el número del paso. */
+.cab-ayuda-step-num {
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 14px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  background: var(--cwc-accent-bg);
+  border: 1px solid var(--cwc-accent);
+  border-radius: var(--cwc-radius-lg);
+  color: var(--lite-heat-ink);
+  font-weight: 700;
+  line-height: 1;
+  place-items: center;
+}
+
+/* ROL: elemento decorativo — el ícono del paso. */
+.cab-ayuda-step-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: var(--cwc-accent);
+  place-items: center;
+}
+
+/* ROL: contenedor en grilla de leyenda y acciones. */
+.cab-ayuda-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.cab-ayuda-legend,
+.cab-ayuda-actions {
+  margin: 0;
+}
+
+.cab-ayuda-grid > li {
+  display: grid;
+  align-content: start;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-ayuda-grid > li > span:last-child {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+}
+
+.cab-ayuda-grid strong {
+  color: var(--lite-ink-bright);
+}
+
+.cab-ayuda-legend-icon {
+  display: grid;
+  min-width: 24px;
+  color: var(--cwc-accent);
+  place-items: start center;
+}
+
+.cab-ayuda-cost {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin-top: 7px;
+  padding: 5px 10px;
+  background: var(--cwc-accent-bg);
+  border: 1px solid var(--cwc-accent);
+  border-radius: var(--cwc-radius-md);
+  color: var(--lite-heat-ink);
+  font-size: var(--cwc-fs-sm);
+  font-weight: 700;
+}
+
+/* ROL: contenedor — un bloque nativo de ejemplo que empieza cerrado. */
+.cab-ayuda-example {
+  max-width: 68ch;
+  margin-top: 10px;
+  overflow: hidden;
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+}
+
+.cab-ayuda-example:first-of-type {
+  margin-top: 0;
+}
+
+/* ROL: control — abre y cierra un ejemplo. */
+.cab-ayuda-example-head {
+  min-height: var(--lite-touch);
+  padding: 11px 14px;
+  color: var(--lite-ink-bright);
+  cursor: pointer;
+  font-weight: 700;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.cab-ayuda-example-head::marker {
+  color: var(--cwc-accent);
+}
+
+.cab-ayuda-example-head:hover {
+  background: var(--cwc-bg-hover);
+}
+
+.cab-ayuda-example[open] .cab-ayuda-example-head {
+  border-bottom: 1px solid var(--cwc-divider);
+}
+
+.cab-ayuda-example > p {
+  max-width: 68ch;
+  margin: 0;
+  padding: 14px 16px 16px;
+  color: var(--cwc-text-secondary);
+}
+
+.cab-ayuda-warn {
+  max-width: 68ch;
+  padding: 14px 16px;
+  background: var(--lite-warn-bg);
+  border-left: 3px solid var(--cwc-warn);
+  border-radius: var(--cwc-radius-md);
+  color: var(--lite-warn-ink);
+}
+
+.cab-ayuda-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.cab-ayuda-index-item {
+  min-height: var(--lite-touch);
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  text-align: left;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.cab-ayuda-index-icon {
+  display: inline-grid;
+  min-width: 26px;
+  color: var(--cwc-accent);
+  place-items: center;
+}
+
+.cab-ayuda-back {
+  min-height: var(--lite-touch);
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+/* ROL: control — botón discreto de ayuda en el encabezado de cada vista. */
+.cab-help-btn {
+  display: inline-grid;
+  width: var(--lite-touch);
+  min-width: var(--lite-touch);
+  height: var(--lite-touch);
+  min-height: var(--lite-touch);
+  flex: 0 0 auto;
+  padding: 0;
+  background: var(--cwc-bg-chip);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md);
+  color: var(--lite-ink-soft);
+  cursor: pointer;
+  place-items: center;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.cab-help-btn:hover {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-accent);
+  color: var(--lite-ink-bright);
+}
+
+@media (max-width: 640px) {
+  .cab-ayuda-overlay {
+    padding: 8px;
+  }
+
+  .cab-ayuda-panel {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .cab-ayuda-head {
+    padding: 14px;
+  }
+
+  .cab-ayuda-body {
+    padding: 16px 14px 24px;
+  }
+
+  .cab-ayuda-index-item {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cab-ayuda-index-item,
+  .cab-ayuda-back,
+  .cab-ayuda-example-head,
+  .cab-help-btn {
+    transition: none;
+  }
+}

@@ -18,6 +18,7 @@ const home = process.env.CWC_HOME?.trim() || os.homedir();
 export const config = {
   token: required('CWC_TOKEN'),
   port: parseInt(process.env.CWC_PORT || '8092', 10),
+  cabinaPort: parseInt(process.env.CWC_CABINA_PORT || '8093', 10),
   // Interfaz ZeroTier objetivo. Vacío => autodetección de zt*.
   ztIface: process.env.CWC_ZT_IFACE?.trim() || null,
   home: path.resolve(home),

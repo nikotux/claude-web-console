@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { oversightFor } from './users.js';
+import { adminFor, oversightFor } from './users.js';
 
 const COOKIE_NAME = 'cwc_token';      // token maestro
 const SESSION_COOKIE = 'cwc_session'; // sesión de usuario
@@ -108,9 +108,11 @@ export function principalOf(req) {
   if (sid && sessions.has(sid)) {
     const s = sessions.get(sid);
     if (s.expires > Date.now()) {
-      // `admin` viaja congelado en la sesión hasta que vence la cookie o hay
-      // re-login; `oversight` se resuelve en vivo para apagarlo al request siguiente.
-      return { type: 'user', username: s.username, admin: !!s.admin, oversight: oversightFor(s.username) };
+      // `admin` y `oversight` se resuelven EN VIVO contra el registro de
+      // usuarios: promover o degradar surte efecto en el request siguiente,
+      // sin re-login ni revocar la cookie. El `admin` guardado en la sesión
+      // queda solo como rastro histórico y ya no autoriza nada.
+      return { type: 'user', username: s.username, admin: adminFor(s.username), oversight: oversightFor(s.username) };
     }
     sessions.delete(sid); // sesión vencida: la descartamos
     persistSessions();

@@ -126,6 +126,36 @@ export function attachPath(chatId, name) {
   return abs;
 }
 
+// Lista los archivos reales del escritorio del chat. Los basenames con `_`
+// son plomería interna del paquete-sesión (por ejemplo `_handoff.md`) y no son
+// artefactos del usuario. Una carpeta todavía inexistente equivale a lista vacía.
+export function listChatAttachments(chatId) {
+  const dir = chatAttachDir(chatId);
+  if (!dir) return null;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch (e) {
+    if (e?.code === 'ENOENT') return [];
+    throw e;
+  }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name.startsWith('_')) continue;
+    const abs = attachPath(chatId, entry.name);
+    if (!abs) continue;
+    try {
+      const stat = fs.statSync(abs);
+      files.push({
+        name: entry.name,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        type: classifyAttachment('', entry.name),
+      });
+    } catch { /* un archivo que desaparece durante el listado se omite */ }
+  }
+  return files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
 // Nombre único dentro de la carpeta (agrega " (n)" antes de la extensión).
 function uniqueName(dir, name) {
   if (!fs.existsSync(path.join(dir, name))) return name;

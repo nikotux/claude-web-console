@@ -29,6 +29,8 @@ const PATHS = {
   console: `<rect x="2.5" y="4" width="19" height="13" rx="2"/><polyline points="6.5,7.8 9.5,10.5 6.5,13.2"/><line x1="11.5" y1="13.2" x2="15" y2="13.2"/><line x1="12" y1="17" x2="12" y2="20.5"/><line x1="8.5" y1="20.5" x2="15.5" y2="20.5"/>`,
   sparkle: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>`,
   help: `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.6 2.6 0 1 1 3.8 2.3c-.8.4-1.2 1-1.2 1.9"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>`,
+  // Salvavidas: ayuda y asistencia.
+  lifebuoy: `<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="5.6" y1="5.6" x2="9.2" y2="9.2"/><line x1="18.4" y1="5.6" x2="14.8" y2="9.2"/><line x1="5.6" y1="18.4" x2="9.2" y2="14.8"/><line x1="18.4" y1="18.4" x2="14.8" y2="14.8"/>`,
   search: `<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/>`,
   clock: `<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/>`,
   gitCommit: `<circle cx="12" cy="12" r="3.2"/><line x1="3" y1="12" x2="8.8" y2="12"/><line x1="15.2" y1="12" x2="21" y2="12"/>`,
@@ -90,6 +92,8 @@ const PATHS = {
   relay: `<circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/><path d="M8.6 8.6a5 5 0 0 0 0 6.8"/><path d="M15.4 8.6a5 5 0 0 0 0 6.8"/><path d="M5.6 5.6a10 10 0 0 0 0 12.8"/><path d="M18.4 5.6a10 10 0 0 0 0 12.8"/>`,
   // Pulso/actividad en vivo (botón "Vista Raw", PLAN-544): línea de latido tipo ECG.
   pulse: `<polyline points="2,13 7,13 9.5,6.5 13,19 15.5,13 22,13"/>`,
+  // Sala compartida: dos conversaciones superpuestas.
+  room: `<path d="M3 5h13v9H8l-4 3v-3H3z"/><path d="M9 17h12V8h-3"/>`,
   // Cerebro/red neuronal (botón "Cerebro del Pad"): dos lóbulos simétricos con
   // un tallo central — el banco de conocimientos visto como órgano vivo.
   brain: `<path d="M12 5.2v13.6"/><path d="M9.6 4.2a2.6 2.6 0 0 0-2.5 2.1 2.4 2.4 0 0 0-2 2.4 2.5 2.5 0 0 0 .6 1.6 2.5 2.5 0 0 0-.5 1.5 2.5 2.5 0 0 0 1.6 2.3 2.5 2.5 0 0 0 2.4 3.1 2.4 2.4 0 0 0 2.4-1.6"/><path d="M14.4 4.2a2.6 2.6 0 0 1 2.5 2.1 2.4 2.4 0 0 1 2 2.4 2.5 2.5 0 0 1-.6 1.6 2.5 2.5 0 0 1 .5 1.5 2.5 2.5 0 0 1-1.6 2.3 2.5 2.5 0 0 1-2.4 3.1 2.4 2.4 0 0 1-2.4-1.6"/>`,

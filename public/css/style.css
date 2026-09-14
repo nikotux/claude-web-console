@@ -54,7 +54,41 @@ html, body {
 .users-row:last-child { border-bottom: 0; }
 .users-name { font-size: var(--cwc-fs-md); }
 .users-badge { background: var(--cwc-accent-bg); color: var(--cwc-accent); border-radius: var(--cwc-radius-sm); padding: 0 .35rem; font-size: var(--cwc-fs-xs); }
-.users-actions { display: flex; gap: .3rem; flex-wrap: wrap; }
+.users-actions { display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.users-sec { margin: .45rem 0; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-panel); overflow: hidden; }
+.users-sec > summary { display: flex; align-items: center; gap: .5rem; padding: .5rem .65rem; cursor: pointer; color: var(--cwc-text); font-size: var(--cwc-fs-sm); font-weight: 650; }
+.users-sec > summary::marker { color: var(--cwc-text-dim); }
+.users-sec > summary + * { border-top: 1px solid var(--cwc-divider); }
+.users-sec-count { margin-left: auto; min-width: 1.5rem; padding: 0 .35rem; border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-chip); color: var(--cwc-text-secondary); text-align: center; font-size: var(--cwc-fs-xs); }
+.users-sec--accent { border-color: var(--cwc-accent); background: var(--cwc-accent-bg-soft); }
+.users-sec--accent > summary { color: var(--cwc-accent); background: var(--cwc-accent-bg); }
+.users-sub { margin: .55rem .65rem; padding-left: .65rem; border-left: 1px solid var(--cwc-divider); }
+.users-sub + .users-sub { padding-top: .55rem; border-top: 1px solid var(--cwc-divider); }
+.users-sub-h { margin: 0 0 .35rem; color: var(--cwc-text); font-size: var(--cwc-fs-sm); }
+.users-cards { display: grid; gap: .4rem; }
+.users-card { padding: .5rem .6rem; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-elevated); }
+.users-card-h { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+.users-card-name { margin-right: auto; color: var(--cwc-text); font-size: var(--cwc-fs-md); }
+.users-conn { padding: .1rem .35rem; border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-chip); color: var(--cwc-text-secondary); font-size: var(--cwc-fs-xs); white-space: nowrap; cursor: help; }
+.users-badge--ok { color: var(--cwc-ok); border: 1px solid var(--cwc-ok); background: var(--cwc-bg-elevated); }
+.users-badge--warn { color: var(--cwc-warn); border: 1px solid var(--cwc-warn); background: var(--cwc-bg-elevated); }
+.users-invite-hint, .users-invite-label, .users-meta, .users-empty--compact { font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim); }
+.users-invite-hint { margin: 0 0 .5rem; }
+.users-invite-token { margin: .5rem 0; padding: .5rem .6rem; border: 1px solid var(--cwc-accent); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-elevated); }
+.users-invite-label { margin: 0 0 .35rem; }
+.users-invite-message { font-family: var(--cwc-font-mono); font-size: var(--cwc-fs-xs); word-break: break-all; color: var(--cwc-text); white-space: pre-wrap; }
+.users-invite-copy { margin-top: .4rem; }
+.users-invite-sponsor { flex: 1 1 100%; }
+.users-meta { margin-left: .4rem; }
+.users-select { width: auto; min-width: 9rem; }
+.users-inline-empty { margin: .2rem 0; font-size: var(--cwc-fs-xs); }
+.users-manage-tree { display: grid; gap: .4rem; }
+.users-manage-sec { border-left: 1px solid var(--cwc-divider); padding-left: .65rem; }
+.users-manage-sec > summary { padding: .35rem 0; cursor: pointer; color: var(--cwc-text); font-size: var(--cwc-fs-sm); font-weight: 650; }
+.users-manage-sec > :not(summary) { margin: .15rem 0 .5rem .35rem; }
+.users-manage-status { margin: .2rem 0 .45rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); }
+.users-manage-actions { padding-top: .2rem; }
+.users-connections-body { display: block; }
 
 /* ===== Splash de arranque (#boot-splash, index.html) =====
    Overlay a pantalla completa con el Pac-Man compartido (clases .cwc-pacman

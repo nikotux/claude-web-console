@@ -9,8 +9,10 @@ módulo es la puerta de alta de inquilinos: un admin ya autenticado emite una
 invitación, el usuario nuevo entra por `/onboard`, se auto-registra con ese
 token y completa un wizard segmentado por tier. Un usuario estándar configura
 su propia credencial Claude con `claude setup-token` corriendo en SU HOME
-aislado; un usuario `sponsored` entra sin sponsor en estado `awaiting-sponsor`,
-existe pero no puede consumir tokens hasta ser adoptado. Cuando eso ocurre,
+aislado; un usuario `sponsored` entra en `awaiting-sponsor` salvo que la
+invitación traiga un sponsor previsto que siga apto al momento del alta, en cuyo
+caso queda patrocinado de una. Sin sponsor válido existe pero no puede consumir
+tokens hasta ser adoptado. Cuando eso ocurre,
 `core/sponsorship.js` prioriza un token propio si existe o resuelve el setup-token
 de su sponsor como única excepción.
 Después ofrece la cuenta Claude completa como paso opcional. Codex es obligatorio
@@ -151,7 +153,7 @@ entre procesos y se resetea al reiniciar el server.
 
 Endpoints públicos reales:
 `POST /api/onboard/public/validate` llama `validateInvite(req.body?.token)` y
-devuelve `{valid, admin, sponsored, reason, status, lockedTo, hasToken,
+devuelve `{valid, admin, sponsored, sponsor, reason, status, lockedTo, hasToken,
 hasClaudeAccount, hasCodex, hasInfisical, hasGithub, hasTolkienMcp, pending,
 capabilities, resume}`.
 `valid` conserva EXACTAMENTE la semántica
@@ -178,9 +180,12 @@ concurrentes del mismo token puedan crear dos usuarios distintos. El bit admin
 del usuario sale SOLO del token, y el guard explícito impide que una invitación
 patrocinada llegue a crear un admin incluso si un registro persistido viejo o
 corrupto tuviera ambos bits. Después de crear la cuenta, una invitación
-`sponsored` llama best-effort a `setAwaitingSponsor(username)`: si la marca
-fallara se loguea, pero el alta no se revierte porque la cuenta ya existe y el
-estado es recuperable desde la UI. Si falta el valor o llega con otro nombre, el
+`sponsored` revalida en ese instante su sponsor previsto: exige
+`sponsorshipState(planned) === 'none'` y `sponsorTokenReady(planned)`. Si sigue
+apto llama best-effort a `setUserSponsor(username, planned)`; si no lo es, no
+venía definido o la asignación falla, cae a `setAwaitingSponsor(username)`. Un
+fallo final se loguea, pero nunca revierte el alta porque la cuenta ya existe y
+el estado es recuperable desde la UI. Si falta el valor o llega con otro nombre, el
 400 nombra explícitamente el campo esperado `username`; el formato inválido
 también identifica ese campo. Tras crear el usuario, hace
 `ensureUserSpace(username)` best-effort, llama `startProvision(username)` y
@@ -337,15 +342,22 @@ responde `{ok:true,already:true}` para tolerar reintentos.
 La superficie admin vive en el `apiRouter` post-auth por
 `registerHttp(router)`, bajo `/api/onboard`, y además cada handler chequea
 `isAdmin(req)` explícitamente. `POST /api/onboard/admin/invite` genera una
-invitación con `generateInvite({ admin, sponsored, createdBy, ttlMs })`; tanto
-`admin` como `sponsored` deben ser boolean si vienen en el body y son
+invitación con `generateInvite({ admin, sponsored, sponsor, createdBy, ttlMs })`;
+tanto `admin` como `sponsored` deben ser boolean si vienen en el body y son
 mutuamente excluyentes: ambos en `true` responden 400, y el store también
-rechaza esa combinación como defensa en profundidad. `ttlHours` positivo define
-TTL y si falta usa `DEFAULT_TTL_H = 24`. La respuesta incluye el token CRUDO una
-sola vez: `{id, token, admin, sponsored, expiresAt}`.
+rechaza esa combinación como defensa en profundidad. `sponsor` es opcional, pero
+si viene debe ser un string no vacío, sólo puede acompañar una invitación
+patrocinada, debe nombrar un usuario existente con
+`sponsorshipState(sponsor) === 'none'` y exige `sponsorTokenReady(sponsor)`;
+cada incumplimiento responde 400 con un mensaje explícito. El store sólo guarda
+`sponsor` cuando `sponsored` es true y rechaza recibirlo en cualquier otro caso.
+`ttlHours` positivo define TTL y si falta usa `DEFAULT_TTL_H = 24`. La respuesta
+incluye el token CRUDO una sola vez:
+`{id, token, admin, sponsored, sponsor, expiresAt}`.
 
-`GET /api/onboard/admin/invites` lista metadata con `listInvites()`: nunca
-expone token ni `tokenHash`. `POST /api/onboard/admin/invite/:id/revoke` llama
+`GET /api/onboard/admin/invites` lista metadata con `listInvites()`, incluido
+`sponsor`: nunca expone token ni `tokenHash`.
+`POST /api/onboard/admin/invite/:id/revoke` llama
 `revokeInvite(id)` y devuelve `{ok}`; no revoca invitaciones ya consumidas.
 
 ### Flujo completo

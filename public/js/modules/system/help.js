@@ -61,13 +61,13 @@ export function sponsorshipHelp() {
   return {
     title: t('system.sponsorship.help.title', 'Patrocinio'),
     icon: 'checklist',
-    intro: t('system.sponsorship.help.intro', 'Este panel te permite decidir a quién le prestás tu llave de Claude. Cada patrocinio usa tu credencial, pero conserva el espacio y los datos separados de cada persona.'),
+    intro: t('system.sponsorship.help.intro', 'Este panel te permite generar una credencial dedicada y revocable, y decidir a quién se la prestás. Nunca comparte tu .credentials.json y conserva separados el espacio y los datos de cada persona.'),
     sections: [
       {
         title: t('system.sponsorship.help.what.title', 'Qué es'),
         blocks: [{
           type: 'p',
-          text: t('system.sponsorship.help.what.text', 'Las personas que esperan adopción todavía no pueden consumir Claude. Cuando adoptás a alguien, su trabajo se paga con tu llave hasta que decidas soltarlo.'),
+          text: t('system.sponsorship.help.what.text', 'El token de patrocinio es un claude setup-token dedicado: la consola se lo presta a quienes adoptes. Sin ese token, la persona existe pero no puede trabajar. Cuando la adoptás, su consumo se carga a tu suscripción hasta que decidas soltarla.'),
         }],
       },
       {
@@ -75,8 +75,8 @@ export function sponsorshipHelp() {
         blocks: [{
           type: 'steps',
           items: [
-            t('system.sponsorship.help.first.step1', 'Desplegá Patrocinio para ver el estado de tu llave y las listas disponibles.'),
-            t('system.sponsorship.help.first.step2', 'Si el token figura pendiente, ejecutá claude setup-token antes de adoptar a alguien.'),
+            t('system.sponsorship.help.first.step1', 'Desplegá Patrocinio y comprobá si tu token figura listo o pendiente.'),
+            t('system.sponsorship.help.first.step2', 'Si está pendiente, tocá Generar mi token de patrocinio y completá el login antes de adoptar a alguien. Generarlo no consume tokens de IA.'),
             t('system.sponsorship.help.first.step3', 'Abrí Esperando que alguien los adopte y revisá el nombre de la persona.'),
             t('system.sponsorship.help.first.step4', 'Tocá Adoptar y confirmá que aceptás pagar su consumo con tu llave.'),
           ],
@@ -89,6 +89,8 @@ export function sponsorshipHelp() {
           type: 'legend',
           items: [
             { icon: 'checklist', name: t('system.sponsorship.help.legend.panel.name', 'Patrocinio'), desc: t('system.sponsorship.help.legend.panel.desc', 'resume tu estado y cuántas personas patrocinás o esperan') },
+            { icon: 'check', name: t('system.sponsorship.help.legend.tokenReady.name', '🔑 Token listo'), desc: t('system.sponsorship.help.legend.tokenReady.desc', 'la credencial dedicada ya puede usarse para las personas que patrocines') },
+            { icon: 'clock', name: t('system.sponsorship.help.legend.tokenPending.name', '⚠️ Token pendiente'), desc: t('system.sponsorship.help.legend.tokenPending.desc', 'generalo y completá el login antes de adoptar a alguien') },
             { icon: 'check', name: t('system.sponsorship.help.legend.sponsored.name', 'Patrocinado'), desc: t('system.sponsorship.help.legend.sponsored.desc', 'esa persona ya trabaja usando tu llave') },
             { icon: 'clock', name: t('system.sponsorship.help.legend.waiting.name', 'Esperando'), desc: t('system.sponsorship.help.legend.waiting.desc', 'todavía necesita que alguien la adopte') },
             { icon: 'plus', name: t('system.sponsorship.help.legend.adopt.name', 'Adoptar'), desc: t('system.sponsorship.help.legend.adopt.desc', 'vincula a la persona con tu llave') },
@@ -102,6 +104,10 @@ export function sponsorshipHelp() {
           type: 'kv',
           items: [
             { k: t('system.sponsorship.help.buttons.panel.k', 'Patrocinio'), v: t('system.sponsorship.help.buttons.panel.v', 'Expande o contrae el panel. Consultar estas listas no consume tokens.') },
+            { k: t('system.sponsorship.help.buttons.generate.k', 'Generar mi token de patrocinio'), v: t('system.sponsorship.help.buttons.generate.v', 'Abre el login para crear la credencial dedicada. Generarla no consume tokens de IA.') },
+            { k: t('system.sponsorship.help.buttons.sendCode.k', 'Enviar código'), v: t('system.sponsorship.help.buttons.sendCode.v', 'Envía el código que copiaste de la autorización para terminar el login. No consume tokens de IA.') },
+            { k: t('system.sponsorship.help.buttons.retry.k', 'Reintentar'), v: t('system.sponsorship.help.buttons.retry.v', 'Vuelve a iniciar el login si falló. No consume tokens de IA.') },
+            { k: t('system.sponsorship.help.buttons.cancel.k', 'Cancelar'), v: t('system.sponsorship.help.buttons.cancel.v', 'Detiene el login en curso y cierra el asistente. No consume tokens de IA.') },
             { k: t('system.sponsorship.help.buttons.adopt.k', 'Adoptar'), v: t('system.sponsorship.help.buttons.adopt.v', 'Después de confirmar, esa persona empieza a usar tu llave. La acción no consume tokens por sí misma; el trabajo posterior de esa persona sí.') },
             { k: t('system.sponsorship.help.buttons.release.k', 'Soltar'), v: t('system.sponsorship.help.buttons.release.v', 'Después de confirmar, corta el acceso de esa persona hasta que otro sponsor la adopte. No consume tokens.') },
             { k: t('system.sponsorship.help.buttons.help.k', 'Ayuda'), v: t('system.sponsorship.help.buttons.help.v', 'Abre esta guía contextual. No consume tokens.') },
@@ -113,7 +119,7 @@ export function sponsorshipHelp() {
         blocks: [{
           type: 'note',
           tone: 'warn',
-          text: t('system.sponsorship.help.warning.text', 'Adoptar es una decisión económica: todo consumo de esa persona se carga a tu llave. Si la soltás, deja de poder trabajar inmediatamente. Una cuenta patrocinada no puede patrocinar a otra.'),
+          text: t('system.sponsorship.help.warning.text', 'El token sale de TU suscripción de Claude: quien patrocinás consume con tu cuenta y vos pagás sus turnos. Generar el token es solamente un login y no consume tokens de IA. Si soltás a la persona, deja de poder trabajar inmediatamente. Una cuenta patrocinada no puede patrocinar a otra.'),
         }],
       },
     ],

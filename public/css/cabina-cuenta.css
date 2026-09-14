@@ -1,0 +1,108 @@
+.cab-account:has(.cab-cuenta-acciones) {
+  position: relative;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cab-account:has(.cab-cuenta-acciones) .cab-account-copy {
+  overflow: hidden;
+  flex: 1 1 64px;
+}
+
+.cab-account:has(.cab-cuenta-acciones) .cab-account-name,
+.cab-account:has(.cab-cuenta-acciones) .cab-account-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cab-cuenta-acciones {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.cab-cuenta-btn {
+  display: grid;
+  min-width: 32px;
+  min-height: var(--lite-touch);
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cwc-radius-sm);
+  color: var(--cwc-text-dim);
+  place-items: center;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.cab-cuenta-btn:hover {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-border-strong);
+  color: var(--cwc-text);
+}
+
+.cab-cuenta-btn--sos {
+  background: var(--cwc-accent-bg);
+  border-color: var(--cwc-accent);
+  color: var(--lite-heat-ink);
+  box-shadow: var(--cwc-shadow-sm);
+}
+
+.cab-cuenta-btn--sos:hover {
+  border-color: var(--lite-hot);
+  color: var(--lite-ink-bright);
+}
+
+.cab-cuenta-btn--salir:hover {
+  border-color: var(--cwc-danger);
+  color: var(--cwc-danger);
+}
+
+.cab-cuenta-btn:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+.cab-cuenta-confirm {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  width: min(240px, 100%);
+  gap: 12px;
+  padding: 14px;
+  background: var(--cwc-bg-elevated);
+  border: 1px solid var(--cwc-border-strong);
+  border-radius: var(--cwc-radius-md);
+  box-shadow: var(--cwc-shadow-md);
+}
+
+.cab-cuenta-confirm p {
+  margin: 0;
+  color: var(--cwc-text);
+}
+
+.cab-cuenta-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cab-cuenta-confirm button {
+  min-height: var(--lite-touch);
+}
+
+.cab-cuenta-confirm button:last-child:hover {
+  border-color: var(--cwc-danger);
+  color: var(--cwc-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cab-cuenta-btn {
+    transition: none;
+  }
+}
