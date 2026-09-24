@@ -30,6 +30,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDataDir } from './data-dir.js';
+import { loadInstance } from './instance-config.js';
 import { settingSourcesFor } from './sdk-settings.js';
 import { PAD_DEFAULT_URL } from './pad-url.js';
 import { chatAttachDir } from '../modules/chat/attachments.js';
@@ -56,12 +58,60 @@ export function isConsoleCwd(cwd) {
 // (eso alcanzaría a las sesiones de Tolkien = otro mundo/workspace, regla 12).
 export const CONSOLE_PAD_BOOTSTRAP = [
   'CONTEXTO DE MI CONSOLA — Pad LOCAL (workspace `console`).',
+  'Si necesitás el estado de una sesión anterior de este chat, buscalo con `pad_search` en el workspace `tolkien`, filtrando por `chat_id`.',
   'Antes de trabajo NO trivial en este repo, cargá el estado del proyecto en Pad: `pad_set_workspace console` (o `pad_meta action=bootstrap workspace=console`) y revisá `pad_project action=dashboard`/`next` para no duplicar trabajo en curso.',
   'Registrá lo que hagas en Pad: bug real → item BUG; trabajo de entidad (feature/migración/fase) → TASK/PLAN; decisión de arquitectura → `pad_item action=decide` con rationale. Los playbooks `module-scan`/`codex-verify` son procedimientos invocables cuando calcen.',
   'El server MCP `pad` es el LOCAL (workspace `console`); `pad-cloud-backup` es solo respaldo, nunca operativo. La fuente de verdad de las reglas duras es el CLAUDE.md del repo.',
   'Regla dura #12 (anti-colisión entre mundos): los dos mundos NUNCA se enlazan EN VIVO — 🏠 interno = Mi Consola + Pad `console` · 🌳 externo = Tolkien + Pad `tolkien`. Todo se resuelve PRIMERO y por completo acá; el ÚLTIMO paso es crear un PLAN NUEVO (plan-puente) para inyectar en Tolkien. Nunca al revés, nunca un sync/MCP vivo cruzando los dos Pad.',
   'Al crear ítems en Pad, enlazalos a su "sol" (root real: un PLAN es sol de sus tareas, una RED de sus miembros) con parent/link y cross-linkeá entre sistemas; nunca dejes ítems flotando ni crees hubs sintéticos en colecciones de módulos vivos (pendientes/planes, temas/rutas, mejora-continua, contexto-de-tickets).',
 ].join('\n');
+
+// IDENTIDAD DEL USUARIO para TODO chat (cualquier mundo). Se AGREGA (append) al
+// system prompt antes que cualquier otro bloque para fijar con quién habla el
+// modelo y evitar que atribuya al usuario nombres vistos en skills, rutas o
+// documentos. No recibe owner: chatQueryOptions tiene UN SOLO caller,
+// bin/cwc-chat-runner.js, y ese runner corre con el HOME del DUEÑO del chat; por
+// eso resolveDataDir() ya resuelve el espacio de esa persona (en el host,
+// ~/.cwc-data), verificado empíricamente. Si la lectura falla, devuelve siempre
+// la regla inequívoca de identidad desconocida y nunca impide arrancar el motor.
+// Se usa force: true porque la caché de loadInstance es por archivo y el runner
+// es un proceso de vida larga: sin force, una identidad recién cargada por el
+// sponsor no llegaría al motor hasta reiniciarlo; el costo es releer un JSON
+// chico una vez por arranque de query().
+function identityRule() {
+  let identity = {};
+  try {
+    identity = loadInstance({ dataDir: resolveDataDir(), force: true })?.identity || {};
+  } catch {
+    // Una identidad ilegible no debe tumbar el arranque del motor.
+  }
+
+  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+  const name = clean(identity.name);
+  if (!name) {
+    return [
+      'CON QUIÉN HABLÁS — IDENTIDAD DEL USUARIO NO CONFIGURADA.',
+      'No se sabe quién es el usuario de esta conversación.',
+      'NO lo llames por ningún nombre ni le atribuyas preferencias, rol o historial.',
+      'Un nombre propio que aparezca en skills, rutas, ejemplos o documentos NO es el usuario.',
+      'Si necesitás saber con quién hablás, preguntáselo o sugerile cargar su identidad en «Cómo trabajo» de la Cabina.',
+    ].join('\n');
+  }
+
+  const lines = [
+    'CON QUIÉN HABLÁS — IDENTIDAD DEL USUARIO.',
+    `Estás hablando con ${name}.`,
+  ];
+  const email = clean(identity.email);
+  const github = clean(identity.github);
+  const signature = clean(identity.signature);
+  if (email) lines.push(`Email: ${email}`);
+  if (github) lines.push(`GitHub: ${github}`);
+  if (signature) lines.push(`Firma: ${signature}`);
+  lines.push('Dirigite a esa persona y firmá como esa persona cuando corresponda.');
+  lines.push('REGLA DURA: NO asumas ni menciones a ninguna OTRA persona como si fuera el usuario, aunque el nombre de otra persona aparezca en skills, documentos, rutas o ejemplos del contexto.');
+  return lines.join('\n');
+}
 
 // REGLA DE CARPETA DE TRABAJO DEL PAQUETE-SESIÓN (PLAN-447 · pedido de Niko
 // 2026-07-14). Se AGREGA (append) al system prompt de TODO chat (cualquier mundo,
@@ -422,13 +472,15 @@ export function autoApprovesAll(mode) { return mode === 'bypassPermissions'; }
 // setPermissionMode) pueda activarse; es inerte en default/acceptEdits/plan.
 export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, canUseTool, chatId, tandem, mcpServers, hooks }) {
   // Append al system prompt (preset claude_code = PRESERVA el prompt nativo,
-  // nunca lo reemplaza): (1) la regla de carpeta de trabajo del paquete-sesión
-  // para TODO chat, (2) el bootstrap de Pad SOLO para chats del mundo interno
-  // (repo de la consola) — Tolkien no lo recibe (regla 12), (3) la instrucción
-  // de TÁNDEM si la conversación corre ese modelo (delegar ejecución a Codex),
-  // (4) la instrucción global de visualizaciones inline y (5) el contrato
-  // global de autonomía de la línea final `🎾 Pelota: …`.
+  // nunca lo reemplaza): (1) la identidad del usuario para TODO chat, (2) la
+  // regla de carpeta de trabajo del paquete-sesión para TODO chat, (3) el
+  // bootstrap de Pad SOLO para chats del mundo interno (repo de la consola) —
+  // Tolkien no lo recibe (regla 12), (4) la instrucción de TÁNDEM si la
+  // conversación corre ese modelo (delegar ejecución a Codex), (5) la
+  // instrucción global de visualizaciones inline y (6) el contrato global de
+  // autonomía de la línea final `🎾 Pelota: …`.
   const appends = [];
+  appends.push(identityRule());
   const folderRule = sessionFolderRule(chatId);
   if (folderRule) appends.push(folderRule);
   if (isConsoleCwd(cwd)) appends.push(CONSOLE_PAD_BOOTSTRAP);
@@ -453,13 +505,16 @@ export function chatQueryOptions({ cwd, model, resume, sessionId, mode, effort, 
     permissionMode: normalizeMode(mode),
     // Habilita que el modo "Todo" realmente saltee permisos. Requisito del SDK.
     allowDangerouslySkipPermissions: true,
-    // Append compuesto (regla de carpeta de sesión + bootstrap de Pad si aplica).
-    // preset claude_code PRESERVA el prompt nativo — un string pelado lo
-    // REEMPLAZARÍA. Sin nada que agregar, no se toca el system prompt.
+    // Append compuesto (identidad + regla de carpeta de sesión + bootstrap de
+    // Pad si aplica). preset claude_code PRESERVA el prompt nativo — un string
+    // pelado lo REEMPLAZARÍA. Sin nada que agregar, no se toca el system prompt.
     ...(appendText
       ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: appendText } }
       : {}),
     includePartialMessages: true,
+    // Red de seguridad: 2000 está muy por encima del máximo observado (~950);
+    // NO es una palanca de ahorro.
+    maxTurns: 2000,
     // Fase 8: skills + comandos slash + CLAUDE.md del usuario y del proyecto del
     // cwd (fuente única en core/sdk-settings.js) + invocación autónoma de skills.
     settingSources: settingSourcesFor('chat'),

@@ -32,6 +32,7 @@ const PATHS = {
   // Salvavidas: ayuda y asistencia.
   lifebuoy: `<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="5.6" y1="5.6" x2="9.2" y2="9.2"/><line x1="18.4" y1="5.6" x2="14.8" y2="9.2"/><line x1="5.6" y1="18.4" x2="9.2" y2="14.8"/><line x1="18.4" y1="18.4" x2="14.8" y2="14.8"/>`,
   search: `<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.5" y1="15.5" x2="21" y2="21"/>`,
+  language: `<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M4.4 8h15.2M4.4 16h15.2"/>`,
   clock: `<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/>`,
   gitCommit: `<circle cx="12" cy="12" r="3.2"/><line x1="3" y1="12" x2="8.8" y2="12"/><line x1="15.2" y1="12" x2="21" y2="12"/>`,
   bug: `<path d="M9 8a3 3 0 0 1 6 0"/><rect x="7.5" y="8" width="9" height="10" rx="4.5"/><line x1="12" y1="12" x2="12" y2="18"/><path d="M7.5 11H4M7.5 15H4.5M7.5 18l-2.5 2M16.5 11H20M16.5 15H19.5M16.5 18l2.5 2M9.5 8 8 6M14.5 8 16 6"/>`,

@@ -94,6 +94,8 @@ const learningIdsFile = (owner) => path.join(userDataDir(owner), 'learning-sessi
 // Usage & Cost API exige organización + admin key, no aplica acá).
 function pin(m) {
   if (/fable|mythos/.test(m)) return 10.0;
+  // Opus 5.5 bajó de precio; va antes del /opus/ genérico de Opus 5/4.8/4.7.
+  if (/opus-5-5/.test(m)) return 4.0;
   if (/opus/.test(m)) return 5.0;
   if (/sonnet/.test(m)) return 3.0;
   if (/haiku/.test(m)) return 1.0;
@@ -101,6 +103,7 @@ function pin(m) {
 }
 function pout(m) {
   if (/fable|mythos/.test(m)) return 50.0;
+  if (/opus-5-5/.test(m)) return 20.0;
   if (/opus/.test(m)) return 25.0;
   if (/sonnet/.test(m)) return 15.0;
   if (/haiku/.test(m)) return 5.0;

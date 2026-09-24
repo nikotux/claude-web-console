@@ -46,8 +46,11 @@ import {
 } from '../src/modules/chat/codex-shared.js';
 import { createUnifiToolServer } from '../src/modules/unifi/unifi-tool.js';
 import { encodeCwd, resolveModelArg } from '../src/core/claude-model.js';
+import { connectionStatus } from '../src/core/connections-store.js';
+import { createMicrosoftToolServer } from '../src/core/microsoft-tool.js';
 import { hostUser } from '../src/core/user-space.js';
 import { worldLabelFor } from '../src/core/worlds.js';
+import { compactMemoryHook } from '../src/core/compact-memory.js';
 
 // ---- argv ----
 const args = {};
@@ -419,6 +422,22 @@ function startEngine() {
   } catch (e) {
     console.error('[runner] no se pudo cargar la tool unifi:', e?.message);
   }
+  try {
+    // Una sala de Aduana es compartida con invitados de distinta confianza,
+    // pero el motor corre con la credencial del ANFITRIÓN. Exponer Microsoft
+    // permitiría leer correo, agenda o archivos privados —o enviar en su nombre—:
+    // rompería la Ley 3 bis (salidas sin visado) y la Ley 2 (entrada sin declarar).
+    // El correo del anfitrión no es contexto declarado de la sala.
+    if (!isAduana) {
+      const microsoftUsername = OWNER || hostUser();
+      if (connectionStatus(microsoftUsername, 'microsoft').connected) {
+        const microsoftServer = createMicrosoftToolServer(microsoftUsername);
+        if (microsoftServer) mcpServers.microsoft = microsoftServer;
+      }
+    }
+  } catch (e) {
+    console.error('[runner] no se pudo cargar la tool microsoft:', e?.message);
+  }
   if (isAduana) {
     const padServer = aduanaPadMcpServer();
     if (padServer) mcpServers.pad = padServer;
@@ -445,6 +464,11 @@ function startEngine() {
       emit({ type: 'autonomy', turn: autonomyTurns }, { record: false });
       log(`continuación autónoma #${autonomyTurns}`);
     },
+  }));
+  hookSets.push(compactMemoryHook({
+    chatId: ID,
+    cwd: CWD,
+    onWrite: ({ file, record }) => log(`memoria de compactación #${record.compaction_number} guardada en ${file}`),
   }));
   const mergedHooks = mergeHookSets(...hookSets);
   q = query({

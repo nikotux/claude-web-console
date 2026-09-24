@@ -17,9 +17,16 @@ dotenv.config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 // (su Bash podría leer /proc/self/environ). Se llama DESPUÉS de que config.js
 // ya las capturó en memoria; el host queda intacto por retrocompatibilidad.
 const SENSIBLE_RE = /(TOKEN|KEY|SECRET|PASSWORD|PASS|CREDENTIAL)/i;
+// Son configuración, no secretos; sus nombres coinciden con /TOKEN/i por casualidad.
+const CLAUDE_CONFIG_ENV = new Set([
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
+  'MAX_THINKING_TOKENS',
+  'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+]);
 export function scrubEnvSecrets() {
   for (const key of Object.keys(process.env)) {
     if (key === 'CLAUDE_CODE_OAUTH_TOKEN') continue; // credencial PROPIA del inquilino
+    if (CLAUDE_CONFIG_ENV.has(key)) continue;
     if (SENSIBLE_RE.test(key)) delete process.env[key];
   }
 }

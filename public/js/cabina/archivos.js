@@ -1,5 +1,6 @@
 import { openZoomViewer } from '../ui/zoom-viewer.js';
 import { icon } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
 
 const FILES_API = '/api/files';
 const VIEW_STORAGE_KEY = 'cabina:files:view';
@@ -64,7 +65,7 @@ function categoryOf(name) {
 }
 
 function formatSize(bytes) {
-  if (!Number.isFinite(bytes)) return 'Tamaño desconocido';
+  if (!Number.isFinite(bytes)) return t('cabina.archivos.unknownSize', 'Tamaño desconocido');
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes;
@@ -77,7 +78,7 @@ function formatSize(bytes) {
 }
 
 function formatDate(timestamp) {
-  if (!timestamp) return 'Sin fecha';
+  if (!timestamp) return t('cabina.archivos.noDate', 'Sin fecha');
   try {
     return context.fmtDate(timestamp);
   } catch {
@@ -109,23 +110,25 @@ function directoryCount(entry) {
 function directoryCountLabel(entry) {
   const count = directoryCount(entry);
   if (count === null) return '';
-  if (entry.childCountCapped) return `${count} o más elementos`;
-  return `${count} elemento${count === 1 ? '' : 's'}`;
+  if (entry.childCountCapped) return t('cabina.archivos.childCountCapped', '{count} o más elementos', { count });
+  return count === 1
+    ? t('cabina.archivos.childCountOne', '{count} elemento', { count })
+    : t('cabina.archivos.childCountMany', '{count} elementos', { count });
 }
 
 function typeLabel(entry) {
-  if (entry.type === 'dir') return 'Carpeta';
-  if (entry.type !== 'file') return 'Elemento no disponible';
+  if (entry.type === 'dir') return t('cabina.archivos.folderType', 'Carpeta');
+  if (entry.type !== 'file') return t('cabina.archivos.unavailableType', 'Elemento no disponible');
   const category = categoryOf(entry.name);
   return {
-    image: 'Imagen',
-    video: 'Video',
-    audio: 'Audio',
-    archive: 'Archivo comprimido',
-    code: 'Código',
-    pdf: 'PDF',
-    doc: 'Documento',
-    file: 'Archivo',
+    image: t('cabina.archivos.imageType', 'Imagen'),
+    video: t('cabina.archivos.videoType', 'Video'),
+    audio: t('cabina.archivos.audioType', 'Audio'),
+    archive: t('cabina.archivos.archiveType', 'Archivo comprimido'),
+    code: t('cabina.archivos.codeType', 'Código'),
+    pdf: t('cabina.archivos.pdfType', 'PDF'),
+    doc: t('cabina.archivos.documentType', 'Documento'),
+    file: t('cabina.archivos.fileType', 'Archivo'),
   }[category];
 }
 
@@ -135,19 +138,19 @@ function propertyParts(entry) {
   if (count) parts.push(count);
   if (entry.type === 'file') parts.push(formatSize(entry.size));
   parts.push(formatDate(entry.mtimeMs));
-  if (entry.symlink === true) parts.push('Enlace');
+  if (entry.symlink === true) parts.push(t('cabina.archivos.linkType', 'Enlace'));
   return parts;
 }
 
 function breadcrumbs() {
   const parts = currentPath ? currentPath.split('/') : [];
-  const crumbs = [{ label: 'Inicio', path: '' }];
+  const crumbs = [{ label: t('cabina.archivos.home', 'Inicio'), path: '' }];
   let accumulated = '';
   for (const part of parts) {
     accumulated = joinPath(accumulated, part);
     crumbs.push({ label: part, path: accumulated });
   }
-  const back = `<button class="cab-btn cab-btn--cold" type="button" data-action="back"${currentPath ? '' : ' disabled'}>${icon('chevronLeft')} Volver</button>`;
+  const back = `<button class="cab-btn cab-btn--cold" type="button" data-action="back"${currentPath ? '' : ' disabled'}>${icon('chevronLeft')} ${t('cabina.archivos.back', 'Volver')}</button>`;
   return back + crumbs.map((crumb, index) => {
     const separator = index ? `<span aria-hidden="true">${icon('chevronRight')}</span>` : '';
     const current = index === crumbs.length - 1 ? ' aria-current="location"' : '';
@@ -160,51 +163,51 @@ function renderFrame() {
     <section class="cab-fs-files" aria-labelledby="cab-files-title">
       <header class="cab-page-header">
         <div>
-          <h1 class="cab-title" id="cab-files-title">La Forja · tus archivos</h1>
-          <p class="cab-subtitle">Organizá carpetas, revisá documentos y subí archivos sin salir de la cabina.</p>
+          <h1 class="cab-title" id="cab-files-title">${t('cabina.archivos.title', 'La Forja · tus archivos')}</h1>
+          <p class="cab-subtitle">${t('cabina.archivos.subtitle', 'Organizá carpetas, revisá documentos y subí archivos sin salir de la cabina.')}</p>
         </div>
         <div class="cab-composer-actions cab-fs-page-actions">
-          <button class="cab-btn cab-btn--cold" type="button" data-action="mkdir">${icon('plus')} Nueva carpeta</button>
-          <button class="cab-btn cab-btn--hot" type="button" data-action="choose-upload">${icon('upload')} Subir archivos</button>
+          <button class="cab-btn cab-btn--cold" type="button" data-action="mkdir">${icon('plus')} ${t('cabina.archivos.newFolder', 'Nueva carpeta')}</button>
+          <button class="cab-btn cab-btn--hot" type="button" data-action="choose-upload">${icon('upload')} ${t('cabina.archivos.uploadFiles', 'Subir archivos')}</button>
           <input type="file" data-upload-input multiple hidden>
         </div>
-        <button class="cab-help-btn" type="button" data-cabina-help title="Cómo se usa esta pantalla" aria-label="Cómo se usa esta pantalla">${icon('help', { size: 16 })}</button>
+        <button class="cab-help-btn" type="button" data-cabina-help title="${t('cabina.archivos.screenHelp', 'Cómo se usa esta pantalla')}" aria-label="${t('cabina.archivos.screenHelp', 'Cómo se usa esta pantalla')}">${icon('help', { size: 16 })}</button>
       </header>
-      <nav class="cab-composer-actions" data-breadcrumbs aria-label="Carpeta actual"></nav>
+      <nav class="cab-composer-actions" data-breadcrumbs aria-label="${t('cabina.archivos.currentFolder', 'Carpeta actual')}"></nav>
       <div class="cab-section-divider">
-        <span data-location>Contenido</span>
+        <span data-location>${t('cabina.archivos.content', 'Contenido')}</span>
         <span class="cab-section-divider-line"></span>
-        <span class="cab-status-chip" data-count>0 elementos</span>
+        <span class="cab-status-chip" data-count>${t('cabina.archivos.initialCount', '0 elementos')}</span>
       </div>
-      <div class="cab-fs-files-toolbar" aria-label="Opciones del explorador">
-        <label class="cab-fs-files-sort-label" for="cab-files-sort">Ordenar por</label>
+      <div class="cab-fs-files-toolbar" aria-label="${t('cabina.archivos.explorerOptions', 'Opciones del explorador')}">
+        <label class="cab-fs-files-sort-label" for="cab-files-sort">${t('cabina.archivos.sortBy', 'Ordenar por')}</label>
         <select class="cab-fs-files-sort" id="cab-files-sort" data-sort-field>
-          <option value="name">Nombre</option>
-          <option value="size">Tamaño</option>
-          <option value="date">Fecha</option>
+          <option value="name">${t('cabina.archivos.nameSort', 'Nombre')}</option>
+          <option value="size">${t('cabina.archivos.sizeSort', 'Tamaño')}</option>
+          <option value="date">${t('cabina.archivos.dateSort', 'Fecha')}</option>
         </select>
         <button class="cab-btn cab-btn--cold cab-fs-files-direction" type="button" data-action="toggle-sort-direction"></button>
         <span class="cab-fs-files-toolbar-spacer"></span>
-        <div class="cab-fs-files-view-toggle" role="group" aria-label="Vista">
-          <button class="cab-btn cab-btn--cold" type="button" data-action="set-view" data-view="list" title="Vista de lista" aria-label="Vista de lista">${icon('list')}</button>
-          <button class="cab-btn cab-btn--cold" type="button" data-action="set-view" data-view="grid" title="Vista de cuadrícula" aria-label="Vista de cuadrícula">${icon('grid')}</button>
+        <div class="cab-fs-files-view-toggle" role="group" aria-label="${t('cabina.archivos.view', 'Vista')}">
+          <button class="cab-btn cab-btn--cold" type="button" data-action="set-view" data-view="list" title="${t('cabina.archivos.listView', 'Vista de lista')}" aria-label="${t('cabina.archivos.listView', 'Vista de lista')}">${icon('list')}</button>
+          <button class="cab-btn cab-btn--cold" type="button" data-action="set-view" data-view="grid" title="${t('cabina.archivos.gridView', 'Vista de cuadrícula')}" aria-label="${t('cabina.archivos.gridView', 'Vista de cuadrícula')}">${icon('grid')}</button>
         </div>
       </div>
       <div class="cab-composer-actions cab-fs-page-actions" data-selection-actions aria-live="polite" hidden style="display:none;"></div>
       <div class="cab-fs-empty" data-drop-message role="status" hidden
         style="margin-bottom:var(--lite-space-y);border:1px dashed var(--cwc-accent);color:var(--cwc-text);">
-        Soltá los archivos para subirlos a esta carpeta.
+        ${t('cabina.archivos.dropInFolder', 'Soltá los archivos para subirlos a esta carpeta.')}
       </div>
       <div class="cab-fs-files-workspace">
         <div class="cab-fs-tree cab-fs-root-drop" data-file-list aria-live="polite"></div>
         <aside class="cab-fs-files-preview" data-preview aria-live="polite">
           <div class="cab-fs-files-preview-placeholder">
             ${icon('eye')}
-            <span>Seleccioná un elemento para ver sus propiedades y su vista previa.</span>
+            <span>${t('cabina.archivos.selectForPreview', 'Seleccioná un elemento para ver sus propiedades y su vista previa.')}</span>
           </div>
         </aside>
       </div>
-      <div class="cab-fs-menu" data-file-menu role="menu" aria-label="Acciones del archivo" hidden style="display:none;"></div>
+      <div class="cab-fs-menu" data-file-menu role="menu" aria-label="${t('cabina.archivos.fileActions', 'Acciones del archivo')}" hidden style="display:none;"></div>
     </section>`;
   renderLocation();
   renderToolbar();
@@ -215,7 +218,7 @@ function renderLocation() {
   const breadcrumbHost = host?.querySelector('[data-breadcrumbs]');
   const location = host?.querySelector('[data-location]');
   if (breadcrumbHost) breadcrumbHost.innerHTML = breadcrumbs();
-  if (location) location.textContent = currentPath || 'Inicio';
+  if (location) location.textContent = currentPath || t('cabina.archivos.home', 'Inicio');
 }
 
 function entryMeta(entry) {
@@ -229,9 +232,13 @@ function renderToolbar() {
   const direction = host.querySelector('[data-action="toggle-sort-direction"]');
   if (direction) {
     const ascending = sortDirection === 'asc';
-    direction.innerHTML = `${icon('chevronDown')} ${ascending ? 'Ascendente' : 'Descendente'}`;
+    direction.innerHTML = `${icon('chevronDown')} ${ascending
+      ? t('cabina.archivos.ascending', 'Ascendente')
+      : t('cabina.archivos.descending', 'Descendente')}`;
     direction.classList.toggle('cab-fs-files-direction--desc', !ascending);
-    direction.title = ascending ? 'Cambiar a descendente' : 'Cambiar a ascendente';
+    direction.title = ascending
+      ? t('cabina.archivos.switchDescending', 'Cambiar a descendente')
+      : t('cabina.archivos.switchAscending', 'Cambiar a ascendente');
     direction.setAttribute('aria-label', direction.title);
   }
   for (const button of host.querySelectorAll('[data-action="set-view"]')) {
@@ -256,15 +263,17 @@ function renderSelectionActions() {
     actions.innerHTML = '';
     return;
   }
-  const downloadLabel = entry.type === 'dir' ? 'Descargar .zip' : 'Descargar';
+  const downloadLabel = entry.type === 'dir'
+    ? t('cabina.archivos.downloadZip', 'Descargar .zip')
+    : t('cabina.archivos.download', 'Descargar');
   actions.hidden = false;
   actions.style.removeProperty('display');
   actions.innerHTML = `
-    <span class="cab-status-chip">Seleccionado: ${escapeHtml(entry.name)}</span>
-    <button class="cab-btn cab-btn--cold" type="button" data-action="open-entry">${icon(entry.type === 'dir' ? 'folder' : 'eye')} Abrir</button>
+    <span class="cab-status-chip">${escapeHtml(t('cabina.archivos.selected', 'Seleccionado: {name}', { name: entry.name }))}</span>
+    <button class="cab-btn cab-btn--cold" type="button" data-action="open-entry">${icon(entry.type === 'dir' ? 'folder' : 'eye')} ${t('cabina.archivos.open', 'Abrir')}</button>
     <button class="cab-btn cab-btn--cold" type="button" data-action="download-entry">${icon('download')} ${downloadLabel}</button>
-    <button class="cab-btn cab-btn--cold" type="button" data-action="rename-entry">${icon('edit')} Cambiar el nombre</button>
-    <button class="cab-btn cab-btn--cold" type="button" data-action="trash-entry" style="color:var(--cwc-danger);">${icon('trash')} Mover a la papelera</button>`;
+    <button class="cab-btn cab-btn--cold" type="button" data-action="rename-entry">${icon('edit')} ${t('cabina.archivos.rename', 'Cambiar el nombre')}</button>
+    <button class="cab-btn cab-btn--cold" type="button" data-action="trash-entry" style="color:var(--cwc-danger);">${icon('trash')} ${t('cabina.archivos.moveToTrash', 'Mover a la papelera')}</button>`;
 }
 
 function entryIcon(entry) {
@@ -285,13 +294,13 @@ function rowHtml(entry, index) {
   const kind = typeLabel(entry);
   const size = entry.type === 'file' ? formatSize(entry.size) : (count || '');
   const link = entry.symlink === true
-    ? `<span class="cab-fs-files-link" title="Este elemento es un enlace">${icon('externalLink')} Enlace</span>`
+    ? `<span class="cab-fs-files-link" title="${t('cabina.archivos.linkDescription', 'Este elemento es un enlace')}">${icon('externalLink')} ${t('cabina.archivos.linkType', 'Enlace')}</span>`
     : '';
   return `
     <div class="cab-fs-item${active}" data-entry-row data-index="${index}"
       aria-selected="${entry.name === selectedName}" tabindex="-1" title="${escapeHtml(entryMeta(entry))}">
       <button class="cab-fs-item-main" type="button" data-select-entry
-        aria-label="Seleccionar ${escapeHtml(entry.name)}. ${escapeHtml(entryMeta(entry))}">
+        aria-label="${escapeHtml(t('cabina.archivos.selectEntry', 'Seleccionar {name}. {meta}', { name: entry.name, meta: entryMeta(entry) }))}">
         ${entryIcon(entry)}
         <span class="cab-fs-item-copy">
           <span class="cab-fs-item-name">${escapeHtml(entry.name)}</span>
@@ -301,14 +310,16 @@ function rowHtml(entry, index) {
         <span class="cab-fs-files-property cab-fs-files-property--date">${escapeHtml(formatDate(entry.mtimeMs))}</span>
       </button>
       <button class="cab-fs-more" type="button" data-action="show-menu" data-index="${index}"
-        aria-label="Más acciones para ${escapeHtml(entry.name)}" aria-haspopup="menu" aria-expanded="false" title="Más acciones">${icon('more')}</button>
+        aria-label="${escapeHtml(t('cabina.archivos.moreActionsFor', 'Más acciones para {name}', { name: entry.name }))}" aria-haspopup="menu" aria-expanded="false" title="${t('cabina.archivos.moreActions', 'Más acciones')}">${icon('more')}</button>
     </div>`;
 }
 
 function renderList() {
   const list = host.querySelector('[data-file-list]');
   const count = host.querySelector('[data-count]');
-  count.textContent = `${entries.length} elemento${entries.length === 1 ? '' : 's'}`;
+  count.textContent = entries.length === 1
+    ? t('cabina.archivos.itemCountOne', '{count} elemento', { count: entries.length })
+    : t('cabina.archivos.itemCountMany', '{count} elementos', { count: entries.length });
   renderLocation();
   renderToolbar();
   renderSelectionActions();
@@ -318,15 +329,15 @@ function renderList() {
   if (!entries.length) {
     list.innerHTML = `
       <div class="cab-fs-empty">
-        <span class="cab-summary-title">Esta carpeta está vacía</span>
-        <span class="cab-summary-meta">Podés arrastrar archivos acá, subirlos con el botón o crear una carpeta.</span>
+        <span class="cab-summary-title">${t('cabina.archivos.emptyFolder', 'Esta carpeta está vacía')}</span>
+        <span class="cab-summary-meta">${t('cabina.archivos.emptyFolderHint', 'Podés arrastrar archivos acá, subirlos con el botón o crear una carpeta.')}</span>
       </div>`;
     return;
   }
 
   const header = viewMode === 'list' ? `
     <div class="cab-fs-files-list-head" aria-hidden="true">
-      <span>Nombre</span><span>Tamaño o contenido</span><span>Modificación</span><span></span>
+      <span>${t('cabina.archivos.nameColumn', 'Nombre')}</span><span>${t('cabina.archivos.sizeOrContentColumn', 'Tamaño o contenido')}</span><span>${t('cabina.archivos.modifiedColumn', 'Modificación')}</span><span></span>
     </div>` : '';
   list.innerHTML = header + entries.map(rowHtml).join('');
 }
@@ -334,18 +345,18 @@ function renderList() {
 function renderLoading() {
   host.querySelector('[data-file-list]').innerHTML = `
     <div class="cab-fs-empty" role="status">
-      <span class="cab-summary-title">Cargando archivos…</span>
-      <span class="cab-summary-meta">Un momento.</span>
+      <span class="cab-summary-title">${t('cabina.archivos.loadingFiles', 'Cargando archivos…')}</span>
+      <span class="cab-summary-meta">${t('cabina.archivos.waitMoment', 'Un momento.')}</span>
     </div>`;
 }
 
 function renderError(message) {
   host.querySelector('[data-file-list]').innerHTML = `
     <div class="cab-fs-empty" role="alert">
-      <span class="cab-summary-title">No pudimos abrir esta carpeta</span>
+      <span class="cab-summary-title">${t('cabina.archivos.openFolderError', 'No pudimos abrir esta carpeta')}</span>
       <span class="cab-summary-meta">${escapeHtml(message)}</span>
       <div class="cab-composer-actions">
-        <button class="cab-btn cab-btn--cold" type="button" data-action="refresh">${icon('refresh')} Intentar de nuevo</button>
+        <button class="cab-btn cab-btn--cold" type="button" data-action="refresh">${icon('refresh')} ${t('cabina.archivos.tryAgain', 'Intentar de nuevo')}</button>
       </div>
     </div>`;
 }
@@ -390,14 +401,18 @@ async function load(path = currentPath) {
   } catch (error) {
     if (!host || sequence !== loadSequence) return;
     entries = [];
-    renderError(error.message || 'Ocurrió un error inesperado.');
+    renderError(error.message || t('cabina.archivos.unexpectedError', 'Ocurrió un error inesperado.'));
   }
 }
 
 function previewShell(entry, message) {
   const preview = host.querySelector('[data-preview]');
-  const downloadLabel = entry.type === 'dir' ? 'Descargar .zip' : 'Descargar';
-  const openLabel = entry.type === 'dir' ? 'Abrir carpeta' : 'Abrir';
+  const downloadLabel = entry.type === 'dir'
+    ? t('cabina.archivos.downloadZip', 'Descargar .zip')
+    : t('cabina.archivos.download', 'Descargar');
+  const openLabel = entry.type === 'dir'
+    ? t('cabina.archivos.openFolder', 'Abrir carpeta')
+    : t('cabina.archivos.open', 'Abrir');
   preview.innerHTML = `
     <section class="cab-fs-files-preview-card" aria-labelledby="cab-preview-title">
       <header class="cab-fs-files-preview-head">
@@ -406,13 +421,13 @@ function previewShell(entry, message) {
           <span class="cab-summary-title" id="cab-preview-title">${escapeHtml(entry.name)}</span>
           <span class="cab-summary-meta">${escapeHtml(typeLabel(entry))}</span>
         </div>
-        <button class="cab-btn cab-btn--cold cab-fs-files-preview-close" type="button" data-action="close-preview" aria-label="Cerrar panel" title="Cerrar">${icon('close')}</button>
+        <button class="cab-btn cab-btn--cold cab-fs-files-preview-close" type="button" data-action="close-preview" aria-label="${t('cabina.archivos.closePanel', 'Cerrar panel')}" title="${t('cabina.archivos.close', 'Cerrar')}">${icon('close')}</button>
       </header>
       <dl class="cab-fs-files-details">
-        ${entry.type === 'file' ? `<div><dt>Tamaño</dt><dd>${escapeHtml(formatSize(entry.size))}</dd></div>` : ''}
-        ${entry.type === 'dir' && directoryCountLabel(entry) ? `<div><dt>Contenido</dt><dd>${escapeHtml(directoryCountLabel(entry))}</dd></div>` : ''}
-        <div><dt>Modificación</dt><dd>${escapeHtml(formatDate(entry.mtimeMs))}</dd></div>
-        ${entry.symlink === true ? `<div><dt>Tipo</dt><dd>${icon('externalLink')} Enlace</dd></div>` : ''}
+        ${entry.type === 'file' ? `<div><dt>${t('cabina.archivos.size', 'Tamaño')}</dt><dd>${escapeHtml(formatSize(entry.size))}</dd></div>` : ''}
+        ${entry.type === 'dir' && directoryCountLabel(entry) ? `<div><dt>${t('cabina.archivos.content', 'Contenido')}</dt><dd>${escapeHtml(directoryCountLabel(entry))}</dd></div>` : ''}
+        <div><dt>${t('cabina.archivos.modified', 'Modificación')}</dt><dd>${escapeHtml(formatDate(entry.mtimeMs))}</dd></div>
+        ${entry.symlink === true ? `<div><dt>${t('cabina.archivos.type', 'Tipo')}</dt><dd>${icon('externalLink')} ${t('cabina.archivos.linkType', 'Enlace')}</dd></div>` : ''}
       </dl>
       <div class="cab-fs-files-preview-actions">
         <button class="cab-btn cab-btn--cold" type="button" data-action="open-preview">${icon(entry.type === 'dir' ? 'folder' : 'externalLink')} ${openLabel}</button>
@@ -428,7 +443,7 @@ function closePreview() {
     preview.innerHTML = `
       <div class="cab-fs-files-preview-placeholder">
         ${icon('eye')}
-        <span>Seleccioná un elemento para ver sus propiedades y su vista previa.</span>
+        <span>${t('cabina.archivos.selectForPreview', 'Seleccioná un elemento para ver sus propiedades y su vista previa.')}</span>
       </div>`;
   }
   previewedEntry = null;
@@ -439,7 +454,9 @@ async function previewEntry(entry) {
   const path = joinPath(currentPath, entry.name);
   previewedEntry = entry;
   const isDirectory = entry.type === 'dir';
-  previewShell(entry, isDirectory ? 'Abrí la carpeta para ver su contenido.' : 'Preparando vista previa…');
+  previewShell(entry, isDirectory
+    ? t('cabina.archivos.openFolderForContent', 'Abrí la carpeta para ver su contenido.')
+    : t('cabina.archivos.preparingPreview', 'Preparando vista previa…'));
   const body = host.querySelector('[data-preview-body]');
 
   if (isDirectory || entry.type !== 'file') return;
@@ -450,15 +467,15 @@ async function previewEntry(entry) {
     button.className = 'cab-fs-files-image-button';
     button.type = 'button';
     button.dataset.action = 'zoom-preview';
-    button.title = 'Ampliar imagen';
-    button.setAttribute('aria-label', `Ampliar ${entry.name}`);
+    button.title = t('cabina.archivos.enlargeImage', 'Ampliar imagen');
+    button.setAttribute('aria-label', t('cabina.archivos.enlargeNamed', 'Ampliar {name}', { name: entry.name }));
     const image = document.createElement('img');
     image.className = 'cab-fs-files-preview-image';
     image.src = `${FILES_API}/raw?path=${encodeURIComponent(path)}`;
-    image.alt = `Vista previa de ${entry.name}`;
+    image.alt = t('cabina.archivos.previewOf', 'Vista previa de {name}', { name: entry.name });
     image.loading = 'lazy';
     image.addEventListener('error', () => {
-      if (button.isConnected) body.textContent = 'No se pudo mostrar la imagen. Podés descargarla.';
+      if (button.isConnected) body.textContent = t('cabina.archivos.imagePreviewError', 'No se pudo mostrar la imagen. Podés descargarla.');
     }, { once: true });
     button.appendChild(image);
     body.replaceChildren(button);
@@ -468,7 +485,7 @@ async function previewEntry(entry) {
   if (extension === 'pdf') {
     const frame = document.createElement('iframe');
     frame.src = `${FILES_API}/raw?path=${encodeURIComponent(path)}`;
-    frame.title = `Vista previa de ${entry.name}`;
+    frame.title = t('cabina.archivos.previewOf', 'Vista previa de {name}', { name: entry.name });
     frame.className = 'cab-fs-files-preview-frame';
     frame.loading = 'lazy';
     body.replaceChildren(frame);
@@ -480,21 +497,22 @@ async function previewEntry(entry) {
     if (!host || sequence !== previewSequence) return;
     body.replaceChildren();
     if (data.binary) {
-      body.textContent = 'Este archivo no se puede mostrar acá. Podés descargarlo.';
+      body.textContent = t('cabina.archivos.binaryPreviewUnavailable', 'Este archivo no se puede mostrar acá. Podés descargarlo.');
       return;
     }
     if (data.tooLarge) {
-      body.textContent = 'Este archivo es demasiado grande para mostrarlo acá. Podés descargarlo.';
+      body.textContent = t('cabina.archivos.fileTooLarge', 'Este archivo es demasiado grande para mostrarlo acá. Podés descargarlo.');
       return;
     }
     const text = document.createElement('pre');
     text.className = 'cab-fs-files-preview-text';
-    text.setAttribute('aria-label', `Contenido de ${entry.name}`);
+    text.setAttribute('aria-label', t('cabina.archivos.contentOf', 'Contenido de {name}', { name: entry.name }));
     text.textContent = typeof data.content === 'string' ? data.content : '';
     body.appendChild(text);
   } catch (error) {
     if (!host || sequence !== previewSequence) return;
-    body.textContent = `${error.message || 'No se pudo mostrar el archivo.'} Podés descargarlo.`;
+    const message = error.message || t('cabina.archivos.filePreviewError', 'No se pudo mostrar el archivo.');
+    body.textContent = t('cabina.archivos.downloadSuggestion', '{message} Podés descargarlo.', { message });
   }
 }
 
@@ -543,19 +561,19 @@ function downloadEntry(entry) {
 async function createFolder() {
   const mountedContext = context;
   const destination = currentPath;
-  const requested = window.prompt('Nombre de la nueva carpeta:');
+  const requested = window.prompt(t('cabina.archivos.newFolderPrompt', 'Nombre de la nueva carpeta:'));
   if (requested === null) return;
   const name = requested.trim();
   if (!name) {
-    mountedContext.toast('Escribí un nombre para la carpeta.');
+    mountedContext.toast(t('cabina.archivos.folderNameRequired', 'Escribí un nombre para la carpeta.'));
     return;
   }
   try {
     await mountedContext.api.post(`${FILES_API}/mkdir`, { path: destination, name });
-    mountedContext.toast(`Carpeta “${name}” creada.`);
+    mountedContext.toast(t('cabina.archivos.folderCreated', 'Carpeta “{name}” creada.', { name }));
     if (context === mountedContext && currentPath === destination) await load();
   } catch (error) {
-    mountedContext.toast(error.message || 'No se pudo crear la carpeta.');
+    mountedContext.toast(error.message || t('cabina.archivos.createFolderError', 'No se pudo crear la carpeta.'));
   }
 }
 
@@ -563,11 +581,11 @@ async function renameEntry(entry) {
   if (!entry) return;
   const mountedContext = context;
   const sourceFolder = currentPath;
-  const requested = window.prompt(`Nuevo nombre para “${entry.name}”:`, entry.name);
+  const requested = window.prompt(t('cabina.archivos.renamePrompt', 'Nuevo nombre para “{name}”:', { name: entry.name }), entry.name);
   if (requested === null) return;
   const newName = requested.trim();
   if (!newName) {
-    mountedContext.toast('Escribí un nombre.');
+    mountedContext.toast(t('cabina.archivos.nameRequired', 'Escribí un nombre.'));
     return;
   }
   if (newName === entry.name) return;
@@ -576,25 +594,25 @@ async function renameEntry(entry) {
       path: joinPath(sourceFolder, entry.name),
       newName,
     });
-    mountedContext.toast(`“${entry.name}” ahora se llama “${newName}”.`);
+    mountedContext.toast(t('cabina.archivos.renamed', '“{oldName}” ahora se llama “{newName}”.', { oldName: entry.name, newName }));
     if (context === mountedContext && currentPath === sourceFolder) await load();
   } catch (error) {
-    mountedContext.toast(error.message || 'No se pudo cambiar el nombre.');
+    mountedContext.toast(error.message || t('cabina.archivos.renameError', 'No se pudo cambiar el nombre.'));
   }
 }
 
 async function trashEntry(entry) {
   if (!entry) return;
-  const confirmed = window.confirm(`¿Mandar “${entry.name}” a la papelera?`);
+  const confirmed = window.confirm(t('cabina.archivos.trashConfirm', '¿Mandar “{name}” a la papelera?', { name: entry.name }));
   if (!confirmed) return;
   const mountedContext = context;
   const sourceFolder = currentPath;
   try {
     await mountedContext.api.post(`${FILES_API}/trash`, { path: joinPath(sourceFolder, entry.name) });
-    mountedContext.toast(`“${entry.name}” está en la papelera.`);
+    mountedContext.toast(t('cabina.archivos.trashed', '“{name}” está en la papelera.', { name: entry.name }));
     if (context === mountedContext && currentPath === sourceFolder) await load();
   } catch (error) {
-    mountedContext.toast(error.message || 'No se pudo mandar a la papelera.');
+    mountedContext.toast(error.message || t('cabina.archivos.trashError', 'No se pudo mandar a la papelera.'));
   }
 }
 
@@ -617,13 +635,17 @@ async function uploadFiles(fileList, destination = currentPath, destinationLabel
     } catch {
       // El error HTTP de respaldo se muestra debajo.
     }
-    if (!response.ok) throw new Error(data.error || `No se pudieron subir los archivos (HTTP ${response.status}).`);
+    if (!response.ok) throw new Error(data.error || t('cabina.archivos.uploadHttpError', 'No se pudieron subir los archivos (HTTP {status}).', { status: response.status }));
     const count = Number(data.count) || files.length;
-    const where = destinationLabel ? ` a “${destinationLabel}”` : '';
-    mountedContext.toast(`${count} archivo${count === 1 ? '' : 's'} subido${count === 1 ? '' : 's'}${where}.`);
+    const where = destinationLabel
+      ? t('cabina.archivos.uploadDestination', ' a “{destination}”', { destination: destinationLabel })
+      : '';
+    mountedContext.toast(count === 1
+      ? t('cabina.archivos.uploadedOne', '{count} archivo subido{where}.', { count, where })
+      : t('cabina.archivos.uploadedMany', '{count} archivos subidos{where}.', { count, where }));
     if (context === mountedContext && currentPath === viewedPath) await load();
   } catch (error) {
-    mountedContext.toast(error.message || 'No se pudieron subir los archivos.');
+    mountedContext.toast(error.message || t('cabina.archivos.uploadError', 'No se pudieron subir los archivos.'));
   }
 }
 
@@ -674,12 +696,14 @@ function closeMenu(restoreFocus = false) {
 }
 
 function menuItems(entry) {
-  const downloadLabel = entry.type === 'dir' ? 'Descargar como .zip' : 'Descargar';
+  const downloadLabel = entry.type === 'dir'
+    ? t('cabina.archivos.downloadAsZip', 'Descargar como .zip')
+    : t('cabina.archivos.download', 'Descargar');
   return `
-    <button class="cab-fs-menu-item" type="button" role="menuitem" data-action="open-entry">${icon(entry.type === 'dir' ? 'folder' : 'eye')} Abrir</button>
+    <button class="cab-fs-menu-item" type="button" role="menuitem" data-action="open-entry">${icon(entry.type === 'dir' ? 'folder' : 'eye')} ${t('cabina.archivos.open', 'Abrir')}</button>
     <button class="cab-fs-menu-item" type="button" role="menuitem" data-action="download-entry">${icon('download')} ${downloadLabel}</button>
-    <button class="cab-fs-menu-item" type="button" role="menuitem" data-action="rename-entry">${icon('edit')} Cambiar el nombre</button>
-    <button class="cab-fs-menu-item cab-fs-menu-item--danger" type="button" role="menuitem" data-action="trash-entry">${icon('trash')} Mover a la papelera</button>`;
+    <button class="cab-fs-menu-item" type="button" role="menuitem" data-action="rename-entry">${icon('edit')} ${t('cabina.archivos.rename', 'Cambiar el nombre')}</button>
+    <button class="cab-fs-menu-item cab-fs-menu-item--danger" type="button" role="menuitem" data-action="trash-entry">${icon('trash')} ${t('cabina.archivos.moveToTrash', 'Mover a la papelera')}</button>`;
 }
 
 function showMenu(entry, point, returnFocus = null) {
@@ -850,8 +874,8 @@ function markDropTarget(folderTarget) {
   if (message) {
     message.hidden = false;
     message.textContent = folderTarget
-      ? `Soltá los archivos para subirlos a “${folderTarget.entry.name}”.`
-      : 'Soltá los archivos para subirlos a esta carpeta.';
+      ? t('cabina.archivos.dropInNamedFolder', 'Soltá los archivos para subirlos a “{name}”.', { name: folderTarget.entry.name })
+      : t('cabina.archivos.dropInFolder', 'Soltá los archivos para subirlos a esta carpeta.');
   }
 }
 

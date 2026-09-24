@@ -19,11 +19,13 @@
 // Esta lista decide qué diccionarios se descargan. Agregar un JSON nuevo en
 // public/i18n/en/ sin sumar acá su namespace lo deja muerto; el auditor
 // `node bin/cwc-i18n-audit.js` detecta ese olvido en la sección `## carga`.
+// El auditor trata cada namespace como UN archivo: partir un diccionario en
+// varios JSON hace que Salud reporte faltantes y huérfanas falsas.
 const MODULES = [
   'core', 'launcher', 'sessions', 'chat', 'terminal', 'tickets', 'tasks',
   'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile', 'unifi',
   'files', 'rawview', 'seguimientos', 'onboard', 'news', 'projects', 'visado',
-  'cerebro',
+  'cerebro', 'cabina',
 ];
 
 let LANG = 'es';

@@ -6,9 +6,9 @@
 // a mitad de escritura.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
+import { config } from './config.js';
 import { userDataDir } from './user-space.js';
 import * as ms from './connections-microsoft.js';
 import * as zoho from './connections-zoho.js';
@@ -22,7 +22,13 @@ export const PROVIDERS = [
   // siguen en el código, inertes; para reponerla alcanza con volver a agregar la entrada a este array.
 ];
 
-const APP_FILE = path.join(os.homedir(), '.cwc-data', 'connections', '_app.json');
+// El archivo de la app OAuth de INSTANCIA se ancla a `config.home`, NUNCA a
+// `os.homedir`: en POSIX `os.homedir` sigue a $HOME, y el runner de chat de un
+// inquilino corre con HOME=~/.cwc-users/<id>. Con `os.homedir` la app de instancia
+// se volvía INVISIBLE dentro de ese runner y el refresh del token salía con clientId
+// vacío — síntoma: el chat contestaba "Microsoft no está conectado" mientras el panel
+// de Conexiones mostraba la cuenta sana. `config.home` sale de CWC_HOME y no lo afecta.
+const APP_FILE = path.join(config.home, '.cwc-data', 'connections', '_app.json');
 const DEFAULT_APP_CONFIG = {
   microsoft: { clientId: '', tenantId: 'common' },
   zoho: { clientId: '', clientSecret: '', dc: 'com' },

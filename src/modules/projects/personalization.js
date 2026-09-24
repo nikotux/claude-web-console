@@ -3,7 +3,8 @@
 // deriva de principalOf(req) (nunca de input del cliente) → cero traversal.
 // Se monta sobre el router de `projects` (ver index.js). Contrato: DOC-677.
 import { principalOf } from '../../core/auth.js';
-import { loadInstance } from '../../core/instance-config.js';
+import { loadInstance, saveInstance } from '../../core/instance-config.js';
+import { systemScopeFor } from '../../core/system-scope.js';
 import { hostUser, userGlobalClaudePath } from '../../core/user-space.js';
 import { readHooksState, setHookEnabled } from '../../core/user-hooks.js';
 import { readPrefs, writePrefs } from '../../core/user-prefs.js';
@@ -34,6 +35,18 @@ export function uidOf(req) {
 
 const statusFor = (e, fallback) => e.statusCode || fallback;
 const messageFor = (e, fallback) => (e.statusCode ? 'No autorizado.' : fallback);
+
+export function pickIdentity(body) {
+  const nested = body?.identity;
+  const source = nested && typeof nested === 'object' && !Array.isArray(nested) ? nested : body;
+  const clean = {};
+  for (const field of ['name', 'email', 'github', 'signature']) {
+    if (source && Object.prototype.hasOwnProperty.call(source, field)) {
+      clean[field] = String(source[field] ?? '').trim().slice(0, 200);
+    }
+  }
+  return clean;
+}
 
 export function mountPersonalization(r) {
   // ── CLAUDE.md GLOBAL per-user, editable por secciones (SP8-3, el corazón) ──
@@ -142,19 +155,28 @@ export function mountPersonalization(r) {
     }
   });
 
-  // ── Identidad per-user (frontera SP2: SP8 la EXPONE; SP2 habilita el write) ──
+  // ── Identidad per-user ──
+  // El dataDir sale SIEMPRE del principal; para el host resuelve a ~/.cwc-data
+  // (retrocompat total). La allowlist de cuatro campos es defensa en profundidad.
   r.get('/me/identity', (req, res) => {
     try {
-      // SP2 aún no migró la identidad per-user → se muestra la del HOST en
-      // modo LECTURA con flag. Cuando SP2 provea el store per-user, editable→true.
-      const identity = loadInstance()?.identity || { name: '', email: '', github: '', signature: '' };
-      res.json({ identity, source: 'host-fallback', editable: false, perUserIdentityAvailable: false });
-    } catch { res.status(500).json({ error: 'No se pudo leer la identidad.' }); }
+      const scope = systemScopeFor(req);
+      const identity = loadInstance({ dataDir: scope.dataDir })?.identity
+        || { name: '', email: '', github: '', signature: '' };
+      res.json({ identity, source: 'user', editable: true, perUserIdentityAvailable: true });
+    } catch (e) {
+      res.status(statusFor(e, 500)).json({ error: messageFor(e, 'No se pudo leer la identidad.') });
+    }
   });
 
   r.post('/me/identity', (req, res) => {
-    // La escritura de identidad per-user es trabajo de SP2 (instance.json →
-    // per-user). Hasta que SP2 migre, este endpoint no persiste.
-    res.status(501).json({ error: 'La edición de identidad per-user aún no está disponible (la habilita SP2).' });
+    try {
+      const scope = systemScopeFor(req);
+      const clean = pickIdentity(req.body);
+      const next = saveInstance({ identity: clean }, { dataDir: scope.dataDir });
+      res.json({ ok: true, identity: next.identity });
+    } catch (e) {
+      res.status(statusFor(e, 500)).json({ error: messageFor(e, 'No se pudo guardar la identidad.') });
+    }
   });
 }

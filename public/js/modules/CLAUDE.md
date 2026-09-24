@@ -267,7 +267,7 @@ Usuarios (`system/users.js`) se ordena en tres `<details class="users-sec">`.
 🛠️ Administradores nace cerrado, muestra contador y deja filas limpias con admin/supervisión/contraseña/eliminar, sin conexiones ni patrocinio.
 🎫 Accesos y patrocinios nace abierto y con acento: Generar invitación muestra el sponsor previsto sólo al tildar patrocinado, seguido de Invitaciones pendientes y 🤝 Patrocinados.
 Cada patrocinado tiene tarjeta con estado, semáforo y ⚙ Gestionar; 👥 Otros usuarios nace cerrado y se oculta vacío.
-El modal Gestionar abre el árbol 🤝 Patrocinio / 🔌 Conexiones / 🔑 Cuenta; `renderConnectionsInto(container, username)` es reutilizable y también lo envuelve `openUserConnections`.
+El modal Gestionar abre el árbol 🤝 Patrocinio / 🪪 Identidad / 🔌 Conexiones / 🔑 Cuenta. Identidad queda entre Patrocinio y Conexiones, nace cerrada y recién carga al abrirse; sus fallos de lectura o guardado quedan contenidos en esa sección y no tumban el modal. El formulario usa las clases `users-identity-*` de `public/css/style.css`. `renderConnectionsInto(container, username)` es reutilizable y también lo envuelve `openUserConnections`.
 GOTCHA: los semáforos cargan en paralelo DESPUÉS del render y best-effort; un fallo deja las luces en ⚪ y nunca tumba el panel.
 En 🔌 Conexiones de ⚙ Gestionar, `CONNECTION_PROVIDERS` quedó DELIBERADAMENTE en `microsoft` y `zoho`: Freshservice ya no aparece en esta vista de sponsor.
 Freshservice sigue vivo en el backend (`src/modules/connections/`) y en el panel personal `system/mcps-panel.js`; no reponerlo «por simetría», sólo se quitó de la vista que provisiona a OTRA persona.

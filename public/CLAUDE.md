@@ -465,6 +465,26 @@ las llamadas dinámicas, que son precisamente las más propensas a equivocarse
 de nombre. Por eso el ícono `room` de Salas viene de ese catálogo y `salas.js`
 lo consume como `icon('room', { className: 'cab-fs-icon' })`.
 
+GOTCHA — `POST /api/chat/close` NO borra: deposita en la papelera. El método
+`Chat.close()` llama a `trashChat()` (`src/modules/chat/index.js:2530`) y la
+entrada sobrevive 30 días (`CHAT_TRASH_TTL_DAYS`, `src/modules/chat/trash.js`),
+recuperable con `/api/chat/trash/restore`. Pero Modo Cabina NO tiene pantalla
+de papelera: la consola de desarrollador la expone en `sessions.js`, Cabina no.
+Desde Cabina, entonces, ese borrado SE VE definitivo sin serlo, y por eso la
+confirmación de `deleteChat()` dice que se recupera «pidiéndosela a quien te dio
+el acceso» en vez de mandar a un botón que en esta piel no existe. Si algún día
+se suma una vista de papelera a Cabina, ese texto queda mintiendo al revés y hay
+que corregirlo.
+
+El menú `⋯` de una conversación (`openChatMenu()` en `conversaciones.js`) arma
+sus opciones con un ternario sobre `chat.archived`, y la rama «archivado» es
+fácil de dejar vacía sin que nada falle: «Mover a una carpeta…» ya se
+deshabilita sola con `disabled: chat.archived` y «Archivar conversación» se
+oculta, así que una archivada se queda con renombrar y nada más. Eso fue
+`console:BUG-3179` — archivar era un viaje de ida. Al tocar ese menú, revisá
+SIEMPRE las dos ramas: la de activa se prueba sola al usar la consola, la de
+archivada hay que ir a buscarla dentro del `<details>` de «Archivadas».
+
 El cruce de `cab-sala-*` entre `salas.js` y `cabina-sala.css` sigue siendo una
 verificación útil, pero cubre ÚNICAMENTE las clases propias; las compartidas
 `cab-fs-*` viven en `cabina-explorador.css` y no entran en ese cruce. Al

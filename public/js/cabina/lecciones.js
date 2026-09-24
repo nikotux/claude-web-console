@@ -2,23 +2,24 @@
 // persona decida si conservarlos, sin exponer herramientas de administración.
 
 import { icon } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
 
 const API_BASE = '/api/retro';
 
 const CATEGORY = {
-  regla: { icon: '⛔', label: 'Regla' },
-  convencion: { icon: '📏', label: 'Convención' },
-  metodologia: { icon: '🧭', label: 'Metodología' },
-  procedimiento: { icon: '📋', label: 'Procedimiento' },
-  herramienta: { icon: '🔧', label: 'Herramienta' },
-  nota: { icon: '📝', label: 'Nota' },
+  regla: { icon: '⛔', label: t('cabina.lecciones.ruleCategory', 'Regla') },
+  convencion: { icon: '📏', label: t('cabina.lecciones.conventionCategory', 'Convención') },
+  metodologia: { icon: '🧭', label: t('cabina.lecciones.methodologyCategory', 'Metodología') },
+  procedimiento: { icon: '📋', label: t('cabina.lecciones.procedureCategory', 'Procedimiento') },
+  herramienta: { icon: '🔧', label: t('cabina.lecciones.toolCategory', 'Herramienta') },
+  nota: { icon: '📝', label: t('cabina.lecciones.noteCategory', 'Nota') },
 };
 
 const STATUS = {
-  propuesta: { label: 'Por decidir', chip: 'cab-status-chip--waiting' },
-  aprobada: { label: 'Aprobada', chip: 'cab-status-chip--working' },
-  promovida: { label: 'Ya incorporada', chip: 'cab-status-chip--working' },
-  descartada: { label: 'Descartada', chip: 'cab-status-chip--resting' },
+  propuesta: { label: t('cabina.lecciones.pendingStatus', 'Por decidir'), chip: 'cab-status-chip--waiting' },
+  aprobada: { label: t('cabina.lecciones.approvedStatus', 'Aprobada'), chip: 'cab-status-chip--working' },
+  promovida: { label: t('cabina.lecciones.incorporatedStatus', 'Ya incorporada'), chip: 'cab-status-chip--working' },
+  descartada: { label: t('cabina.lecciones.dismissedStatus', 'Descartada'), chip: 'cab-status-chip--resting' },
 };
 
 const esc = (value) => String(value ?? '').replace(/[&<>"]/g, (char) => ({
@@ -44,14 +45,14 @@ function recurrenceTone(value) {
   if (count >= 5) return {
     row: 'cab-conversation-row--working',
     chip: 'cab-status-chip--working',
-    label: `Se repitió ${count} veces`,
+    label: t('cabina.lecciones.repeated', 'Se repitió {count} veces', { count }),
   };
   if (count > 1) return {
     row: 'cab-conversation-row--waiting',
     chip: 'cab-status-chip--waiting',
-    label: `Se repitió ${count} veces`,
+    label: t('cabina.lecciones.repeated', 'Se repitió {count} veces', { count }),
   };
-  return { row: 'cab-conversation-row--resting', chip: 'cab-status-chip--resting', label: 'Apareció una vez' };
+  return { row: 'cab-conversation-row--resting', chip: 'cab-status-chip--resting', label: t('cabina.lecciones.appearedOnce', 'Apareció una vez') };
 }
 
 let current = null;
@@ -72,22 +73,25 @@ function pageHeader(state) {
   return `
     <header class="cab-page-header">
       <div>
-        <h1 class="cab-title">Lecciones</h1>
-        <p class="cab-subtitle">Mirá lo que aprendí de vos esta semana. Vos decidís qué vale la pena conservar.</p>
+        <h1 class="cab-title">${t('cabina.lecciones.title', 'Lecciones')}</h1>
+        <p class="cab-subtitle">${t('cabina.lecciones.subtitle', 'Mirá lo que aprendí de vos esta semana. Vos decidís qué vale la pena conservar.')}</p>
       </div>
-      <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">Actualizar</button>
-      <button class="cab-help-btn" type="button" data-cabina-help title="Cómo se usa esta pantalla" aria-label="Cómo se usa esta pantalla">${icon('help', { size: 16 })}</button>
+      <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">${t('cabina.lecciones.refresh', 'Actualizar')}</button>
+      <button class="cab-help-btn" type="button" data-cabina-help title="${t('cabina.lecciones.screenHelp', 'Cómo se usa esta pantalla')}" aria-label="${t('cabina.lecciones.screenHelp', 'Cómo se usa esta pantalla')}">${icon('help', { size: 16 })}</button>
     </header>
     <div class="cab-summary-grid" style="margin-top:0;margin-bottom:var(--lite-space-y-lg)">
       <div class="cab-summary-card">
-        <span class="cab-summary-eyebrow">Esperan tu decisión</span>
+        <span class="cab-summary-eyebrow">${t('cabina.lecciones.awaitingDecision', 'Esperan tu decisión')}</span>
         <span class="cab-summary-title">${counts.propuesta}</span>
-        <span class="cab-summary-meta">Patrones nuevos para revisar</span>
+        <span class="cab-summary-meta">${t('cabina.lecciones.newPatterns', 'Patrones nuevos para revisar')}</span>
       </div>
       <div class="cab-summary-card">
-        <span class="cab-summary-eyebrow">Ya revisadas</span>
+        <span class="cab-summary-eyebrow">${t('cabina.lecciones.reviewed', 'Ya revisadas')}</span>
         <span class="cab-summary-title">${counts.aprobada + counts.promovida + counts.descartada}</span>
-        <span class="cab-summary-meta">${counts.aprobada + counts.promovida} aprobadas · ${counts.descartada} descartadas</span>
+        <span class="cab-summary-meta">${t('cabina.lecciones.reviewedCounts', '{approved} aprobadas · {dismissed} descartadas', {
+          approved: counts.aprobada + counts.promovida,
+          dismissed: counts.descartada,
+        })}</span>
       </div>
     </div>`;
 }
@@ -101,7 +105,9 @@ function lessonRow(lesson) {
       <span class="cab-conversation-copy">
         <span class="cab-summary-eyebrow">${category.icon} ${esc(category.label)} · ${esc(status.label)}</span>
         <span class="cab-conversation-title" style="${Number(lesson.recurrence) >= 5 ? 'font-weight:700' : ''}">${esc(lesson.title)}</span>
-        <span class="cab-conversation-meta">Confianza ${esc(lesson.confidence || 'media')}</span>
+        <span class="cab-conversation-meta">${esc(t('cabina.lecciones.confidence', 'Confianza {confidence}', {
+          confidence: lesson.confidence || t('cabina.lecciones.mediumConfidence', 'media'),
+        }))}</span>
       </span>
       <span class="cab-status-chip ${recurrence.chip}">${esc(recurrence.label)}</span>
     </button>`;
@@ -128,7 +134,7 @@ function renderList(state) {
         ${pageHeader(state)}
         <div class="cab-panel" style="padding:var(--lite-space-y-lg);text-align:center">
           <p class="cab-subtitle" style="margin-inline:auto">${esc(state.error)}</p>
-          <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">Reintentar</button>
+          <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">${t('cabina.lecciones.retry', 'Reintentar')}</button>
         </div>
       </div>`;
     return;
@@ -137,7 +143,7 @@ function renderList(state) {
     state.el.innerHTML = `
       <div class="cab-main-inner">
         ${pageHeader(state)}
-        <div class="cab-panel" style="padding:var(--lite-space-y-lg);text-align:center">Cargando lecciones…</div>
+        <div class="cab-panel" style="padding:var(--lite-space-y-lg);text-align:center">${t('cabina.lecciones.loading', 'Cargando lecciones…')}</div>
       </div>`;
     return;
   }
@@ -146,12 +152,12 @@ function renderList(state) {
     <div class="cab-main-inner">
       ${pageHeader(state)}
       ${lessons.length ? `
-        ${group(state, 'Por decidir', ['propuesta'])}
-        ${group(state, 'Aprobadas', ['aprobada', 'promovida'])}
-        ${group(state, 'Descartadas', ['descartada'])}` : `
+        ${group(state, t('cabina.lecciones.pendingGroup', 'Por decidir'), ['propuesta'])}
+        ${group(state, t('cabina.lecciones.approvedGroup', 'Aprobadas'), ['aprobada', 'promovida'])}
+        ${group(state, t('cabina.lecciones.dismissedGroup', 'Descartadas'), ['descartada'])}` : `
         <div class="cab-panel" style="padding:var(--lite-space-y-lg);text-align:center">
-          <h2 class="cab-summary-title">Todavía no hay lecciones</h2>
-          <p class="cab-subtitle" style="margin-inline:auto">Cuando un patrón aparezca en tus conversaciones, lo vas a poder revisar acá.</p>
+          <h2 class="cab-summary-title">${t('cabina.lecciones.empty', 'Todavía no hay lecciones')}</h2>
+          <p class="cab-subtitle" style="margin-inline:auto">${t('cabina.lecciones.emptyHint', 'Cuando un patrón aparezca en tus conversaciones, lo vas a poder revisar acá.')}</p>
         </div>`}
     </div>`;
 }
@@ -173,31 +179,33 @@ function renderDetail(state) {
   const date = lessonDate(state, lesson);
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="back" type="button">Volver a Lecciones</button>
+      <button class="cab-btn cab-btn--cold" data-action="back" type="button">${t('cabina.lecciones.back', 'Volver a Lecciones')}</button>
       <header style="margin:var(--lite-space-y-lg) 0">
         <p class="cab-summary-eyebrow">${category.icon} ${esc(category.label)}</p>
         <h1 class="cab-title">${esc(lesson.title)}</h1>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <span class="cab-status-chip ${status.chip}">${esc(status.label)}</span>
           <span class="cab-status-chip ${recurrence.chip}">${esc(recurrence.label)}</span>
-          <span class="cab-status-chip cab-status-chip--resting">Confianza ${esc(lesson.confidence || 'media')}</span>
+          <span class="cab-status-chip cab-status-chip--resting">${esc(t('cabina.lecciones.confidence', 'Confianza {confidence}', {
+            confidence: lesson.confidence || t('cabina.lecciones.mediumConfidence', 'media'),
+          }))}</span>
         </div>
       </header>
       <div style="display:grid;gap:14px">
         <section class="cab-summary-card">
-          <span class="cab-summary-eyebrow">Lo que observé</span>
-          <div class="cab-message-bubble" style="padding:0;white-space:pre-wrap">${esc(parts.observation || 'No quedó registrada una observación concreta.')}</div>
+          <span class="cab-summary-eyebrow">${t('cabina.lecciones.observation', 'Lo que observé')}</span>
+          <div class="cab-message-bubble" style="padding:0;white-space:pre-wrap">${esc(parts.observation || t('cabina.lecciones.noObservation', 'No quedó registrada una observación concreta.'))}</div>
         </section>
         <section class="cab-panel" style="padding:22px;border-left:3px solid var(--cwc-accent)">
-          <span class="cab-summary-eyebrow">La lección general</span>
-          <div class="cab-message-bubble" style="padding:0;white-space:pre-wrap;font-weight:600">${esc(parts.lesson || 'No quedó registrada una regla general.')}</div>
+          <span class="cab-summary-eyebrow">${t('cabina.lecciones.generalLesson', 'La lección general')}</span>
+          <div class="cab-message-bubble" style="padding:0;white-space:pre-wrap;font-weight:600">${esc(parts.lesson || t('cabina.lecciones.noGeneralRule', 'No quedó registrada una regla general.'))}</div>
         </section>
       </div>
-      <p class="cab-conversation-meta" style="margin:14px 0 0">${date ? `Actualizada ${esc(date)} · ` : ''}${esc(lesson.id || '')}</p>
+      <p class="cab-conversation-meta" style="margin:14px 0 0">${date ? esc(t('cabina.lecciones.updatedAt', 'Actualizada {date} · ', { date })) : ''}${esc(lesson.id || '')}</p>
       ${lesson.status === 'propuesta' ? `
         <div class="cab-composer-actions" style="margin-top:var(--lite-space-y-lg)" data-ref="decision-actions">
-          <button class="cab-btn cab-btn--cold" data-action="ask-dismiss" type="button">No, descartarla</button>
-          <button class="cab-btn cab-btn--hot cab-composer-send" data-action="approve" type="button">Sí, conservar esta lección</button>
+          <button class="cab-btn cab-btn--cold" data-action="ask-dismiss" type="button">${t('cabina.lecciones.declineLesson', 'No, descartarla')}</button>
+          <button class="cab-btn cab-btn--hot cab-composer-send" data-action="approve" type="button">${t('cabina.lecciones.keepLesson', 'Sí, conservar esta lección')}</button>
         </div>` : ''}
     </div>`;
 }
@@ -206,9 +214,9 @@ function renderDismissQuestion(state) {
   const actions = state.el.querySelector('[data-ref="decision-actions"]');
   if (!actions) return;
   actions.innerHTML = `
-    <span class="cab-conversation-meta">¿Seguro? Quedará en Descartadas.</span>
-    <button class="cab-btn cab-btn--cold" data-action="cancel-dismiss" type="button">Cancelar</button>
-    <button class="cab-btn cab-btn--hot" data-action="dismiss" type="button">Sí, descartarla</button>`;
+    <span class="cab-conversation-meta">${t('cabina.lecciones.dismissConfirm', '¿Seguro? Quedará en Descartadas.')}</span>
+    <button class="cab-btn cab-btn--cold" data-action="cancel-dismiss" type="button">${t('cabina.lecciones.cancel', 'Cancelar')}</button>
+    <button class="cab-btn cab-btn--hot" data-action="dismiss" type="button">${t('cabina.lecciones.confirmDismiss', 'Sí, descartarla')}</button>`;
 }
 
 async function loadLessons(state) {
@@ -216,7 +224,7 @@ async function loadLessons(state) {
     state.data = await state.ctx.api.get(API_BASE);
     state.error = '';
   } catch (error) {
-    state.error = error.message || 'No pude leer las lecciones.';
+    state.error = error.message || t('cabina.lecciones.loadError', 'No pude leer las lecciones.');
   }
 }
 
@@ -224,8 +232,8 @@ async function openLesson(state, id) {
   state.screen = 'detail-loading';
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="back" type="button">Volver a Lecciones</button>
-      <div class="cab-panel" style="margin-top:var(--lite-space-y-lg);padding:var(--lite-space-y-lg);text-align:center">Abriendo la lección…</div>
+      <button class="cab-btn cab-btn--cold" data-action="back" type="button">${t('cabina.lecciones.back', 'Volver a Lecciones')}</button>
+      <div class="cab-panel" style="margin-top:var(--lite-space-y-lg);padding:var(--lite-space-y-lg);text-align:center">${t('cabina.lecciones.opening', 'Abriendo la lección…')}</div>
     </div>`;
   try {
     const data = await state.ctx.api.get(`${API_BASE}/${encodeURIComponent(id)}`);
@@ -234,7 +242,7 @@ async function openLesson(state, id) {
     renderDetail(state);
   } catch (error) {
     if (!isCurrent(state)) return;
-    state.ctx.toast(error.message || 'No pude abrir la lección.');
+    state.ctx.toast(error.message || t('cabina.lecciones.openError', 'No pude abrir la lección.'));
     renderList(state);
   }
 }
@@ -243,7 +251,9 @@ async function decide(state, action, button) {
   if (!state.lesson || state.lesson.status !== 'propuesta') return;
   button.disabled = true;
   const original = button.textContent;
-  button.textContent = action === 'approve' ? 'Conservando…' : 'Descartando…';
+  button.textContent = action === 'approve'
+    ? t('cabina.lecciones.savingApproval', 'Conservando…')
+    : t('cabina.lecciones.savingDismissal', 'Descartando…');
   try {
     const result = await state.ctx.api.post(
       `${API_BASE}/${encodeURIComponent(state.lesson.id)}/${action}`,
@@ -253,11 +263,13 @@ async function decide(state, action, button) {
     state.lesson = result.lesson;
     const index = state.data?.lessons?.findIndex((lesson) => lesson.id === result.lesson.id) ?? -1;
     if (index >= 0) state.data.lessons[index] = result.lesson;
-    state.ctx.toast(action === 'approve' ? 'Lección aprobada.' : 'Lección descartada.');
+    state.ctx.toast(action === 'approve'
+      ? t('cabina.lecciones.approvedToast', 'Lección aprobada.')
+      : t('cabina.lecciones.dismissedToast', 'Lección descartada.'));
     renderDetail(state);
   } catch (error) {
     if (!isCurrent(state)) return;
-    state.ctx.toast(error.message || 'No pude guardar tu decisión.');
+    state.ctx.toast(error.message || t('cabina.lecciones.saveDecisionError', 'No pude guardar tu decisión.'));
     button.disabled = false;
     button.textContent = original;
   }

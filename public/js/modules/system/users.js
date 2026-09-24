@@ -336,6 +336,81 @@ export function mountUsersPanel(el) {
     return t('system.users.ownCredentialStatus', 'Cuenta con credencial propia');
   }
 
+  async function renderIdentityInto(container, username) {
+    container.innerHTML = `
+      <p class="users-identity-help">${t('system.users.identityHelp', 'Esta es la identidad con la que la IA va a dirigirse a esta persona y firmar en su espacio. También puede editarla desde su propia Cabina.')}</p>
+      <div data-ref="manage-identity-content">
+        <p class="hr-summary">${t('system.users.loadingIdentity', 'Cargando identidad…')}</p>
+      </div>`;
+    const content = container.querySelector('[data-ref="manage-identity-content"]');
+    try {
+      const { identity = {} } = await api(`/users/${encodeURIComponent(username)}/identity`);
+      if (!content.isConnected) return;
+      content.innerHTML = `
+        <form class="users-identity-form" data-ref="manage-identity-form">
+          <label class="users-identity-field">
+            <span>${t('system.users.identityNameLabel', 'Nombre')}</span>
+            <input class="dlg-input" name="name" type="text" autocomplete="name">
+          </label>
+          <label class="users-identity-field">
+            <span>${t('system.users.identityEmailLabel', 'Email')}</span>
+            <input class="dlg-input" name="email" type="email" autocomplete="email">
+          </label>
+          <label class="users-identity-field">
+            <span>${t('system.users.identityGithubLabel', 'GitHub')}</span>
+            <input class="dlg-input" name="github" type="text" autocomplete="off">
+          </label>
+          <label class="users-identity-field">
+            <span>${t('system.users.identitySignatureLabel', 'Firma')}</span>
+            <input class="dlg-input" name="signature" type="text" autocomplete="off">
+          </label>
+          <div class="users-identity-actions">
+            <button class="btn btn--sm" type="submit" data-ref="manage-identity-save">${t('system.users.saveIdentity', 'Guardar')}</button>
+            <p class="bk-msg" data-ref="manage-identity-message" hidden></p>
+          </div>
+        </form>`;
+      const form = content.querySelector('[data-ref="manage-identity-form"]');
+      const save = content.querySelector('[data-ref="manage-identity-save"]');
+      const feedback = content.querySelector('[data-ref="manage-identity-message"]');
+      for (const field of ['name', 'email', 'github', 'signature']) {
+        form.elements.namedItem(field).value = identity[field] ?? '';
+      }
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const nextIdentity = Object.fromEntries(
+          ['name', 'email', 'github', 'signature'].map((field) => [field, form.elements.namedItem(field).value]),
+        );
+        save.disabled = true;
+        save.textContent = t('system.users.savingIdentity', 'Guardando…');
+        feedback.hidden = false;
+        feedback.className = 'bk-msg';
+        feedback.textContent = t('system.users.savingIdentity', 'Guardando…');
+        try {
+          await api(`/users/${encodeURIComponent(username)}/identity`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identity: nextIdentity }),
+          });
+          if (!form.isConnected) return;
+          feedback.className = 'bk-msg ok';
+          feedback.textContent = t('system.users.identitySaved', 'Identidad guardada.');
+        } catch (error) {
+          if (!form.isConnected) return;
+          feedback.className = 'bk-msg err';
+          feedback.textContent = t('system.users.identitySaveError', 'No se pudo guardar la identidad: {error}', { error: error.message });
+        } finally {
+          if (form.isConnected) {
+            save.disabled = false;
+            save.textContent = t('system.users.saveIdentity', 'Guardar');
+          }
+        }
+      });
+    } catch (error) {
+      if (!content.isConnected) return;
+      content.innerHTML = `<p class="bk-msg err">${esc(t('system.users.identityLoadError', 'No se pudo cargar la identidad: {error}', { error: error.message }))}</p>`;
+    }
+  }
+
   function openManageUser(username) {
     const modal = openModal({ title: '⚙ ' + username, width: 680 });
 
@@ -352,6 +427,10 @@ export function mountUsersPanel(el) {
           <details class="users-manage-sec" data-manage-section="sponsorship" open>
             <summary>🤝 ${t('system.users.sponsorshipSection', 'Patrocinio')}</summary>
             <div data-ref="manage-sponsorship"></div>
+          </details>
+          <details class="users-manage-sec" data-manage-section="identity">
+            <summary>🪪 ${t('system.users.identitySection', 'Identidad')}</summary>
+            <div data-ref="manage-identity"></div>
           </details>
           <details class="users-manage-sec" data-manage-section="connections">
             <summary>🔌 ${t('system.users.connectionsSection', 'Conexiones')}</summary>
@@ -414,6 +493,17 @@ export function mountUsersPanel(el) {
         });
         sponsorshipBox.append(release);
       }
+
+      const identityDetails = modal.body.querySelector('[data-manage-section="identity"]');
+      const identityBox = modal.body.querySelector('[data-ref="manage-identity"]');
+      let identityLoaded = false;
+      const loadIdentity = () => {
+        if (identityLoaded) return;
+        identityLoaded = true;
+        renderIdentityInto(identityBox, username);
+      };
+      identityDetails.addEventListener('toggle', () => { if (identityDetails.open) loadIdentity(); });
+      if (identityDetails.open) loadIdentity();
 
       const connectionsDetails = modal.body.querySelector('[data-manage-section="connections"]');
       const connectionsBox = modal.body.querySelector('[data-ref="manage-connections"]');

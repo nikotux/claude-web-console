@@ -46,14 +46,18 @@ const MODEL_KEYS = ['opus', 'sonnet', 'haiku', 'fable'];
 // Valores aceptados por `claude --model` / `/model` que expone la UI
 // (dropdown de sesiones y lanzador). Fuente única para validación.
 export const VALID_MODELS = new Set(['opusplan', 'fable', 'opus', 'sonnet', 'haiku', 'default']);
-// Repunte de tier → ID de modelo concreto para el CLI/SDK (2026-07-24, repoint
-// aprobado por Niko): el alias 'opus' de la consola pasa a resolver a Claude
-// Opus 5. Mantiene el alias INTERNO intacto (key/costeo/color/router siguen
-// derivando de keyOf, que bucketea 'claude-opus-5' en 'opus'); esto SOLO cambia
-// el STRING que se le entrega a `claude --model` / q.setModel(). La "Opus" de la
-// consola ES Opus 5 (AutoTux tope, Tándem razonador y elección manual). Opus 4.8
-// costea igual ($5/$25) si algún día vuelve a aparecer.
-const MODEL_ARG_OVERRIDES = { opus: 'claude-opus-5' };
+// Repoint de tier → ID de modelo concreto para el CLI/SDK: el primero
+// (2026-07-24) llevó 'opus' a Opus 5; el segundo (2026-09-24, aprobado por
+// Niko) lo lleva a `claude-opus-5-5`, el latest_per_family.opus del CLI 2.1.280.
+// El mecanismo no cambia: el alias INTERNO sigue siendo 'opus' y keyOf bucketea
+// 'claude-opus-5-5' en 'opus', así color/router/costeo siguen derivando del
+// alias; esto SOLO cambia el STRING entregado a `claude --model` / q.setModel().
+// OJO: el effort por defecto de Opus 5.5 es medium (en Opus 5 era high), por lo
+// que depender del default baja la profundidad en silencio. La consola manda
+// effort explícito desde chat/index.js y el runner; NO quitarlo. Opus 5.5 cuesta
+// $4/$20 por millón (Opus 5 costaba $5/$25); el costeo vive en
+// src/modules/tokens/index.js.
+const MODEL_ARG_OVERRIDES = { opus: 'claude-opus-5-5' };
 export function resolveModelArg(model) {
   return (model && MODEL_ARG_OVERRIDES[model]) || model;
 }

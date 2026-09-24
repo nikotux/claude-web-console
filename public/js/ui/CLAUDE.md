@@ -42,7 +42,7 @@ autoriza ni desautoriza nada. La protección real sigue en el backend mediante
 `isAdmin` y ownership por usuario; todo endpoint nuevo que la necesite debe
 incorporar allí su gate.
 
-### public/js/ui/               icons.js (único set de íconos) · dialog.js (CERO diálogos nativos:
+### public/js/ui/               icons.js (único set de íconos; incluye `language`, usado por el interruptor ES/EN de Cabina) · dialog.js (CERO diálogos nativos:
 openModal/confirmDialog/promptDialog/alertDialog/textEditorDialog +
 confirmSheet — confirmación ADAPTATIVA 2026-07-07: en desktop delega en
 confirmDialog (ventana centrada), en móvil (matchMedia max-width:768px)
@@ -138,6 +138,13 @@ porque la Sala de Aduana no tiene header propio; `auxbar` también se abre
 desde la Guía porque la barra móvil no tiene header donde montar el botón; y
 `stats` se abre desde la Guía porque es una fila compacta de gauges en el
 footer derecho, sin header propio.
+
+INVARIANTE DE NAMESPACE: cada namespace de i18n debe vivir en UN solo archivo
+JSON. Aunque en runtime `initI18n` combina los archivos con `Object.assign`,
+`bin/cwc-i18n-audit.js` asume un archivo por namespace. Partir uno genera falsos
+positivos simultáneos de claves faltantes y huérfanas y ensucia el check `i18n`
+de Salud; Cabina llegó a reportar 549 de cada tipo cuando estuvo dividida entre
+`cabina.json`, `cabina-ayuda.json` y `cabina-vistas.json`.
 
 perm-center.js (CENTRO GLOBAL DE PERMISOS: pila de popups
 flotantes — .cwc-permcenter/.pc-card en ui.css, z-index 190

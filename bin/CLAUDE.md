@@ -580,6 +580,9 @@ GOTCHA multi-tenant: `_env-boot.js` debe ser su PRIMER import. Sin él, el chat
 de un inquilino muere al arrancar con
 `[config] Falta la variable obligatoria CWC_TOKEN en el .env`; el host no lo
 detecta porque su runner hereda el env completo del server.
+MCPs in-process: `codex` se carga en modo Tándem, `unifi` en la consola, `pad`
+en Aduana y `microsoft` sólo si el dueño tiene Microsoft conectado y el chat NO
+es una sala de Aduana.
 RADAR TÁNDEM (BUG-1959): `bgWork` distingue trabajo VIVO de resultado Codex
 LISTO para recoger. `sweepCodexBg()` cruza cada entrada `kind==='Codex'` con
 `readCodexJob(id)` del store `~/.cwc-data/codex-jobs/`; si el job está

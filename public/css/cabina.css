@@ -124,6 +124,41 @@ a:hover {
   letter-spacing: .18em;
 }
 
+.cab-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lite-panel-gap);
+}
+
+.cab-lang {
+  display: inline-flex;
+  min-width: var(--lite-touch);
+  min-height: var(--lite-touch);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--lite-panel-gap);
+  padding: 0 var(--lite-panel-gap);
+  background: var(--lite-stone-flat);
+  border: 1px solid var(--cwc-border);
+  border-radius: var(--cwc-radius-md);
+  color: var(--cwc-text-dim);
+  font-size: var(--cwc-fs-xs);
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+.cab-lang:hover {
+  background: var(--cwc-bg-hover);
+  border-color: var(--cwc-border-strong);
+  color: var(--cwc-text);
+}
+
+.cab-lang:focus-visible {
+  border-color: var(--lite-hot);
+}
+
 .cab-brand-accent {
   color: var(--cwc-brand-red);
 }

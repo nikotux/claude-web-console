@@ -1,4 +1,5 @@
 import { PLACES, resolvePlace } from '../ui/places.js';
+import { t } from '../ui/i18n.js';
 
 const ROOT_WORLD = '__otros';
 const NON_NEW_CHAT_WORLDS = new Set(['__aduana', '__limbo']);
@@ -23,9 +24,9 @@ function belongsToIdentity(chat, identity) {
 }
 
 function worldLabel(world) {
-  if (world === '__aduana') return 'Aduana';
-  if (world === '__limbo') return 'Limbo';
-  if (world === '__otros') return 'Otros lugares';
+  if (world === '__aduana') return t('cabina.nueva.world.customs', 'Aduana');
+  if (world === '__limbo') return t('cabina.nueva.world.limbo', 'Limbo');
+  if (world === '__otros') return t('cabina.nueva.world.otherPlaces', 'Otros lugares');
   return PLACES.find((place) => place.rel === world)?.label || world;
 }
 
@@ -76,21 +77,21 @@ export async function abrirMenuNuevaConversacion(ctx) {
   const availableWorlds = [...worlds].sort(compareWorlds);
   const overlay = makeElement('div', 'cab-nueva-overlay');
   const panel = makeElement('div', 'cab-nueva-panel');
-  const title = makeElement('h1', 'cab-nueva-title', 'Nueva conversación');
+  const title = makeElement('h1', 'cab-nueva-title', t('cabina.nueva.title', 'Nueva conversación'));
   const folderGroup = makeElement('section', 'cab-nueva-group');
-  const folderLabel = makeElement('p', 'cab-nueva-group-label', 'Guardarla en');
+  const folderLabel = makeElement('p', 'cab-nueva-group-label', t('cabina.nueva.saveIn', 'Guardarla en'));
   const thinkingGroup = makeElement('section', 'cab-nueva-group');
-  const thinkingLabel = makeElement('p', 'cab-nueva-group-label', 'Cuánto tiene que pensarlo');
+  const thinkingLabel = makeElement('p', 'cab-nueva-group-label', t('cabina.nueva.thinkingLevel', 'Cuánto tiene que pensarlo'));
   const error = makeElement('p', 'cab-nueva-error');
   const actions = makeElement('footer', 'cab-nueva-actions');
-  const cancelButton = makeElement('button', 'cab-btn', 'Cancelar');
-  const createButton = makeElement('button', 'cab-btn cab-btn--hot', 'Crear');
+  const cancelButton = makeElement('button', 'cab-btn', t('cabina.nueva.cancel', 'Cancelar'));
+  const createButton = makeElement('button', 'cab-btn cab-btn--hot', t('cabina.nueva.create', 'Crear'));
   const folderOptions = [];
   const placeGroups = new Map();
   const modelOptions = [];
   let selectedFolder = null;
   let selectedWorld = null;
-  let selectedModel = 'tandem';
+  let selectedModel = 'opus';
   let busy = false;
   let finished = false;
 
@@ -162,7 +163,7 @@ export async function abrirMenuNuevaConversacion(ctx) {
     if (!group) return null;
     const option = selectableOption({
       name: folder.name,
-      hint: 'La conversación aparecerá dentro de esta carpeta.',
+      hint: t('cabina.nueva.folder.existingHint', 'La conversación aparecerá dentro de esta carpeta.'),
       selected: selectedFolder === folder.id,
       onSelect: () => chooseFolder(folder.id, folder.world, option),
     });
@@ -173,8 +174,8 @@ export async function abrirMenuNuevaConversacion(ctx) {
   }
 
   const noFolderOption = selectableOption({
-    name: 'Sin carpeta',
-    hint: 'Queda suelta en la lista de conversaciones.',
+    name: t('cabina.nueva.folder.none', 'Sin carpeta'),
+    hint: t('cabina.nueva.folder.noneHint', 'Queda suelta en la lista de conversaciones.'),
     selected: true,
     onSelect: () => chooseFolder(null, null, noFolderOption),
   });
@@ -188,13 +189,21 @@ export async function abrirMenuNuevaConversacion(ctx) {
     let newFolderOption;
     newFolderInput.type = 'text';
     newFolderInput.maxLength = 40;
-    newFolderInput.placeholder = 'Nombre de la carpeta';
-    newFolderInput.setAttribute('aria-label', `Nombre de la carpeta nueva en ${description}`);
+    newFolderInput.placeholder = t('cabina.nueva.folder.namePlaceholder', 'Nombre de la carpeta');
+    newFolderInput.setAttribute('aria-label', t(
+      'cabina.nueva.folder.nameAria',
+      'Nombre de la carpeta nueva en {place}',
+      { place: description },
+    ));
     newFolderRow.hidden = true;
     newFolderRow.appendChild(newFolderInput);
     newFolderOption = selectableOption({
-      name: '+ Nueva carpeta…',
-      hint: `Creá una carpeta en ${description} y guardá ahí esta conversación.`,
+      name: t('cabina.nueva.folder.new', '+ Nueva carpeta…'),
+      hint: t(
+        'cabina.nueva.folder.newHint',
+        'Creá una carpeta en {place} y guardá ahí esta conversación.',
+        { place: description },
+      ),
       selected: false,
       onSelect: () => chooseFolder('new', world, newFolderOption),
     });
@@ -227,21 +236,32 @@ export async function abrirMenuNuevaConversacion(ctx) {
     addNewFolderTarget(ROOT_WORLD, {
       grouped: false,
       cwd: null,
-      description: 'tu espacio',
+      description: t('cabina.nueva.world.yourSpace', 'tu espacio'),
     });
   }
 
   const allModels = [
-    { name: 'Rápido', model: 'haiku', hint: 'Responde enseguida; va bien para cosas simples.' },
-    { name: 'Equilibrado', model: 'tandem', hint: 'Es el ritmo normal y sirve para casi todo.' },
-    { name: 'A fondo', model: 'opus', hint: 'Se toma más tiempo; conviene para temas difíciles.' },
+    {
+      name: t('cabina.nueva.model.fast.name', 'Rápido'),
+      model: 'haiku',
+      hint: t('cabina.nueva.model.fast.hint', 'Responde enseguida; va bien para cosas simples.'),
+    },
+    {
+      name: t('cabina.nueva.model.balanced.name', 'Equilibrado'),
+      model: 'tandem',
+      hint: t('cabina.nueva.model.balanced.hint', 'Es el ritmo normal y sirve para casi todo.'),
+    },
+    {
+      name: t('cabina.nueva.model.deep.name', 'A fondo'),
+      model: 'opus',
+      hint: t('cabina.nueva.model.deep.hint', 'Se toma más tiempo; conviene para temas difíciles.'),
+    },
   ];
-  const profile = identity?.profile || 'sponsored';
-  // En Cabina los turnos los paga el sponsor, no quien los pide; por eso el nivel más caro
-  // no se ofrece a quien no lo paga. Esto es recorte de experiencia, no seguridad: ocultar
-  // una opción no autoriza ni bloquea; el gate real vive en el backend. Hoy, deliberadamente,
-  // POST /api/chat/create todavía acepta model: 'opus' si alguien lo llama a mano.
-  const models = profile === 'sponsored' ? allModels.slice(0, 2) : allModels;
+  // Niko pidió Opus 5 como default de Cabina (2026-09-15), así que el nivel más caro está
+  // disponible para todos los perfiles y su costo lo sigue pagando el sponsor. Esto es recorte
+  // de experiencia, no seguridad: mostrar una opción no autoriza ni bloquea; el gate real vive
+  // en el backend.
+  const models = allModels;
   thinkingGroup.appendChild(thinkingLabel);
   for (const model of models) {
     const option = selectableOption({
@@ -323,10 +343,16 @@ export async function abrirMenuNuevaConversacion(ctx) {
   folders.sort((a, b) => compareWorlds(a.world, b.world) || compareFolders(a, b));
   for (const folder of folders) addFolderOption(folder);
   if (foldersResult.status === 'rejected') {
-    showError(errorMessage(foldersResult.reason, 'No se pudieron cargar tus carpetas.'));
+    showError(errorMessage(
+      foldersResult.reason,
+      t('cabina.nueva.loadFoldersError', 'No se pudieron cargar tus carpetas.'),
+    ));
   }
   if (chatsResult.status === 'rejected') {
-    showError(errorMessage(chatsResult.reason, 'No se pudieron cargar tus conversaciones.'));
+    showError(errorMessage(
+      chatsResult.reason,
+      t('cabina.nueva.loadConversationsError', 'No se pudieron cargar tus conversaciones.'),
+    ));
   }
 
   createButton.addEventListener('click', async () => {
@@ -334,7 +360,7 @@ export async function abrirMenuNuevaConversacion(ctx) {
     clearError();
     const selectedPlaceGroup = selectedWorld ? placeGroups.get(selectedWorld) : null;
     if (selectedFolder === 'new' && !selectedPlaceGroup?.newFolderInput.value.trim()) {
-      showError('Escribí un nombre para la carpeta.');
+      showError(t('cabina.nueva.folder.nameRequired', 'Escribí un nombre para la carpeta.'));
       selectedPlaceGroup?.newFolderInput.focus();
       return;
     }
@@ -347,7 +373,9 @@ export async function abrirMenuNuevaConversacion(ctx) {
           name: selectedPlaceGroup.newFolderInput.value.trim(),
           world: selectedWorld,
         });
-        if (!folderData?.folder?.id) throw new Error('El servidor no devolvió la carpeta creada.');
+        if (!folderData?.folder?.id) {
+          throw new Error(t('cabina.nueva.folder.missingCreated', 'El servidor no devolvió la carpeta creada.'));
+        }
         folderId = folderData.folder.id;
         const createdOption = addFolderOption(folderData.folder);
         selectedFolder = folderId;
@@ -357,7 +385,7 @@ export async function abrirMenuNuevaConversacion(ctx) {
 
       const model = models.some((option) => option.model === selectedModel)
         ? selectedModel
-        : 'tandem';
+        : 'opus';
       const chatRequest = {
         model,
         permissionMode: 'bypassPermissions',
@@ -365,19 +393,28 @@ export async function abrirMenuNuevaConversacion(ctx) {
       if (folderId && selectedPlaceGroup?.cwd) chatRequest.cwd = selectedPlaceGroup.cwd;
       const chatData = await ctx.api.post('/api/chat/create', chatRequest);
       const chat = chatData?.chat;
-      if (!chat?.id) throw new Error('El servidor no devolvió la conversación creada.');
+      if (!chat?.id) {
+        throw new Error(t('cabina.nueva.missingCreatedConversation', 'El servidor no devolvió la conversación creada.'));
+      }
 
       if (folderId) {
         try {
           await ctx.api.post('/api/folders/assign', { key: `chat:${chat.id}`, folderId });
         } catch (assignError) {
-          const detail = errorMessage(assignError, 'Error desconocido.');
-          ctx.toast(`La conversación se creó, pero no se pudo guardar en la carpeta: ${detail}`);
+          const detail = errorMessage(assignError, t('cabina.nueva.unknownError', 'Error desconocido.'));
+          ctx.toast(t(
+            'cabina.nueva.folder.assignError',
+            'La conversación se creó, pero no se pudo guardar en la carpeta: {detail}',
+            { detail },
+          ));
         }
       }
       finish(chat);
     } catch (createError) {
-      showError(errorMessage(createError, 'No se pudo crear la conversación.'));
+      showError(errorMessage(
+        createError,
+        t('cabina.nueva.createError', 'No se pudo crear la conversación.'),
+      ));
       setBusy(false);
     }
   });

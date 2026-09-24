@@ -400,8 +400,9 @@ public/js/rawview/raw.js (ver raw.html en el mapa).
   Anthropic exige organización + admin key (verificado: "unavailable for
   individual accounts"), así que NO hay endpoint de gasto consultable con
   estas credenciales. Precios en pin()/pout() de src/modules/tokens/index.js
-  (fable 10/50 · opus 5/25 · sonnet 3/15 · haiku 1/5; cache w5m ×1.25,
-  w1h ×2, read ×0.1 — verificados 2026-07). GET /api/tokens/summary?fresh=1
+  (fable 10/50 · opus-5-5 4/20 · opus genérico 5/25 para Opus 5/4.8/4.7 ·
+  sonnet 3/15 · haiku 1/5; cache w5m ×1.25,
+  w1h ×2, read ×0.1 — verificados 2026-09). GET /api/tokens/summary?fresh=1
   saltea el TTL de 4s (botón ↻ del modal Uso); el caché por archivo
   (mtime+size) nunca se saltea porque es exacto por construcción. El modal
   Uso agrupa POR MODELO (lista acotada; agrupar por proyecto crecía sin

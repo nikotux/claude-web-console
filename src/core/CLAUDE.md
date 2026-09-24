@@ -125,12 +125,26 @@ un override completo pisa ENTERA la config de instancia y nunca mezcla el
 clientId del usuario con el secret de instancia; cada conexión guarda
 appClientId para refrescar con la misma app que emitió el token. Para el host,
 cuyo userDataDir coincide con HOME, el override usa `_app-user.json` para no
-colisionar con el `_app.json` de instancia) ·
+colisionar con el `_app.json` de instancia. GOTCHA: `os.homedir()` sigue a
+`$HOME`, y los runners de inquilino corren con `HOME=~/.cwc-users/<id>`. Todo
+dato de INSTANCIA (no per-usuario) se ancla a `config.home`, nunca a
+`os.homedir()`, o el runner del inquilino lee un path fantasma. Fue la causa de
+que el chat de una usuaria patrocinada dijera "Microsoft no está conectado"
+con la conexión sana (2026-09-16)) ·
 connections-microsoft(device code
 flow) · connections-zoho(grant code Self Client + getOrg +
 identidad por listado de agentes) · connections-tolkien(cookie de sesión
 Auth.js + storageState y metadata sin secreto; módulo puro compartido que
 recibe `dataDir` resuelto y NO importa user-space/config) ·
+microsoft-tool(puente que le da al chat las 9 tools de Microsoft 365 del DUEÑO
+del chat. INVARIANTE multi-tenant: `username` queda fijado en el closure al
+crear el servidor y NINGUNA tool lo acepta como parámetro; agregar alguna vez
+un parámetro de usuario/cuenta/buzón permitiría que el modelo pidiera el buzón
+de otra persona. Es la misma familia de invariantes que el aislamiento de Pad
+por usuario. Las operaciones que ESCRIBEN hacia afuera son
+`ms_correo_enviar`, `ms_correo_responder` y `ms_calendario_crear`; por eso el
+servidor NO se carga en salas de Aduana. Sólo se carga cuando esa persona tiene
+Microsoft conectado) ·
 zoho-desk-client(ESCRITURA a
 Desk con la identidad del USUARIO: getTicket/assignTicket/
 updateTicket/addComment/uploadAttachment/createTicket; resuelve el
@@ -170,7 +184,20 @@ modo REAL en éxito Y fallo + approveAllPending) y en la UI (chat-tab
 reconcilia el select con el modo real y avisa si no tomó). Las
 allow-rules del settings.json del usuario también shadowean canUseTool:
 en 'default' algunas acciones no piden permiso — es la allowlist del
-usuario, no un bug. BOOTSTRAP DE PAD (2026-07-12, Gap #1 / TASK-295 de
+usuario, no un bug. IDENTIDAD DEL USUARIO: `identityRule()` se agrega
+SIEMPRE como PRIMER bloque del append de chatQueryOptions. Inyecta el nombre
+y, sólo cuando no están vacíos, email/GitHub/firma de
+`loadInstance({dataDir: resolveDataDir()}).identity`; si no hay nombre o la
+lectura falla, declara inequívocamente que la identidad no está configurada y
+prohíbe inferirla de skills, rutas, ejemplos o documentos. No hace falta pasar
+el owner como parámetro porque chatQueryOptions tiene un único caller,
+`bin/cwc-chat-runner.js`, y el runner corre con el HOME del dueño del chat:
+resolveDataDir() resuelve así el espacio de esa persona (y, para el host,
+`~/.cwc-data`), verificado empíricamente. ADVERTENCIA: si algún día
+chatQueryOptions se llama desde el proceso del SERVER, esta suposición se rompe
+y filtraría la identidad del host a todos los usuarios; en ese caso hay que
+pasar el owner explícitamente y resolver su dataDir antes de leer la instancia.
+BOOTSTRAP DE PAD (2026-07-12, Gap #1 / TASK-295 de
 ROAD-63): chatQueryOptions inyecta CONSOLE_PAD_BOOTSTRAP como
 systemPrompt {type:'preset', preset:'claude_code', append} SOLO si el
 cwd está dentro del repo de la consola (isConsoleCwd, calculado desde
@@ -264,7 +291,7 @@ minutos, UN SOLO USO, queda registrado; lo emite la CLI
 bin/cwc-forbidden-override.js. Paths por resolveDataDir() = multi-tenant
 correcto. LÍMITE HONESTO: sólo entran lecciones traducibles a "no ejecutes
 X"; "escribí PRs más chicos" NO es de este registro y no se fuerza) ·
-claude-model(VALID_MODELS/encodeCwd/resolveModelArg — REPOINT DE TIER 2026-07-24: el alias interno 'opus' resuelve a `claude-opus-5` SOLO al entregarse a `claude --model`/`q.setModel()`; el alias NO cambia, así keyOf/pin-pout/color/router siguen intactos. Call-sites: bin/cwc-chat-runner.js (spawn + set_model; `currentModel` guarda el ALIAS sin resolver porque alimenta el eco `model` que adopta el server) y terminal/sessions.js (TUI). Un modelo nuevo del mismo tier = una entrada más en MODEL_ARG_OVERRIDES) · claude-state(observador —
+claude-model(VALID_MODELS/encodeCwd/resolveModelArg — SEGUNDO REPOINT DE TIER 2026-09-24 (tras el de 2026-07-24 a Opus 5): el alias interno 'opus' resuelve a `claude-opus-5-5` SOLO al entregarse a `claude --model`/`q.setModel()`; el alias NO cambia, así keyOf/pin-pout/color/router siguen intactos. OJO: el effort default de Opus 5.5 es `medium` (en Opus 5 era `high`), por eso chat/index.js y el runner lo mandan explícito y NO se debe quitar. Call-sites: bin/cwc-chat-runner.js (spawn + set_model; `currentModel` guarda el ALIAS sin resolver porque alimenta el eco `model` que adopta el server) y terminal/sessions.js (TUI). Un modelo nuevo del mismo tier = una entrada más en MODEL_ARG_OVERRIDES) · claude-state(observador —
 estado por PANE de tmux primero: cwc-observe.js captura
 $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
 reactivarse una sesión por interfono: el mapeo era SOLO por cwd

@@ -2,6 +2,7 @@
 // sin exponer el CLAUDE.md completo ni los defaults técnicos de una sesión.
 
 import { icon } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
 
 const API_BASE = '/api/projects/me';
 
@@ -62,12 +63,12 @@ function pageHeader() {
   return `
     <header class="cab-page-header">
       <div>
-        <h1 class="cab-title">Cómo trabajo</h1>
-        <p class="cab-subtitle">Enseñame cómo te gusta trabajar. Estas indicaciones guían a la IA en tus conversaciones.</p>
+        <h1 class="cab-title">${esc(t('cabina.comoTrabajo.title', 'Cómo trabajo'))}</h1>
+        <p class="cab-subtitle">${esc(t('cabina.comoTrabajo.description', 'Enseñame cómo te gusta trabajar. Estas indicaciones guían a la IA en tus conversaciones.'))}</p>
       </div>
-      <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">Actualizar</button>
-      <button class="cab-btn" data-action="preferences-chat" type="button">${icon('sparkle', { size: 16 })}<span>Conversar para ajustarlo</span></button>
-      <button class="cab-help-btn" type="button" data-cabina-help title="Cómo se usa esta pantalla" aria-label="Cómo se usa esta pantalla">${icon('help', { size: 16 })}</button>
+      <button class="cab-btn cab-btn--cold" data-action="refresh" type="button">${esc(t('cabina.comoTrabajo.refresh', 'Actualizar'))}</button>
+      <button class="cab-btn" data-action="preferences-chat" type="button">${icon('sparkle', { size: 16 })}<span>${esc(t('cabina.comoTrabajo.adjustInConversation', 'Conversar para ajustarlo'))}</span></button>
+      <button class="cab-help-btn" type="button" data-cabina-help title="${esc(t('cabina.comoTrabajo.helpTitle', 'Cómo se usa esta pantalla'))}" aria-label="${esc(t('cabina.comoTrabajo.helpTitle', 'Cómo se usa esta pantalla'))}">${icon('help', { size: 16 })}</button>
     </header>`;
 }
 
@@ -75,31 +76,66 @@ function renderIdentity(state) {
   if (state.identityError) {
     return `
       <div class="cab-summary-card">
-        <span class="cab-summary-title">Tu identidad</span>
+        <span class="cab-summary-title">${esc(t('cabina.comoTrabajo.yourIdentity', 'Tu identidad'))}</span>
         <span class="cab-summary-meta">${esc(state.identityError)}</span>
       </div>`;
   }
   const data = state.identityData;
-  if (!data) return '<div class="cab-summary-card"><span class="cab-summary-meta">Cargando tu identidad…</span></div>';
+  if (!data) return `<div class="cab-summary-card"><span class="cab-summary-meta">${esc(t('cabina.comoTrabajo.loadingIdentity', 'Cargando tu identidad…'))}</span></div>`;
   const identity = data.identity || {};
+  const editable = data.editable === true;
+  if (state.identityEditing && editable) {
+    return `
+      <div class="cab-summary-card">
+        <span class="cab-summary-eyebrow">${esc(t('cabina.comoTrabajo.yourIdentity', 'Tu identidad'))}</span>
+        <span class="cab-summary-title">${esc(t('cabina.comoTrabajo.editIdentityTitle', 'Editá tu identidad'))}</span>
+        <form class="cab-composer" data-ref="identity-form" style="display:grid;gap:12px;margin-top:12px">
+          <div>
+            <label class="cab-summary-eyebrow" for="cab-identity-name">${esc(t('cabina.comoTrabajo.nameLabel', 'Nombre'))}</label>
+            <input class="cab-composer-field" id="cab-identity-name" name="name" type="text" autocomplete="name" value="${esc(identity.name)}">
+          </div>
+          <div>
+            <label class="cab-summary-eyebrow" for="cab-identity-email">${esc(t('cabina.comoTrabajo.emailLabel', 'Email'))}</label>
+            <input class="cab-composer-field" id="cab-identity-email" name="email" type="email" autocomplete="email" value="${esc(identity.email)}">
+          </div>
+          <div>
+            <label class="cab-summary-eyebrow" for="cab-identity-github">${esc(t('cabina.comoTrabajo.githubLabel', 'GitHub'))}</label>
+            <input class="cab-composer-field" id="cab-identity-github" name="github" type="text" autocomplete="username" value="${esc(identity.github)}">
+          </div>
+          <div>
+            <label class="cab-summary-eyebrow" for="cab-identity-signature">${esc(t('cabina.comoTrabajo.signatureLabel', 'Firma'))}</label>
+            <textarea class="cab-composer-field" id="cab-identity-signature" name="signature" rows="3">${esc(identity.signature)}</textarea>
+          </div>
+          <p class="cab-subtitle" data-ref="identity-error" role="alert" hidden style="margin:0"></p>
+          <div class="cab-composer-actions" style="margin-top:0">
+            <button class="cab-btn cab-btn--cold" data-action="cancel-identity" type="button">${esc(t('cabina.comoTrabajo.cancelIdentityEdit', 'Cancelar'))}</button>
+            <button class="cab-btn cab-btn--hot cab-composer-send" data-action="save-identity" type="button">${icon('check', { size: 16 })}<span>${esc(t('cabina.comoTrabajo.saveIdentity', 'Guardar'))}</span></button>
+          </div>
+        </form>
+      </div>`;
+  }
   const fields = [
-    ['Nombre', identity.name],
-    ['Firma', identity.signature],
-    ['Email', identity.email],
-    ['GitHub', identity.github],
+    [t('cabina.comoTrabajo.nameLabel', 'Nombre'), identity.name],
+    [t('cabina.comoTrabajo.signatureLabel', 'Firma'), identity.signature],
+    [t('cabina.comoTrabajo.emailLabel', 'Email'), identity.email],
+    [t('cabina.comoTrabajo.githubLabel', 'GitHub'), identity.github],
   ].filter(([, value]) => value);
+  const hasIdentity = ['name', 'email', 'github', 'signature']
+    .some((field) => String(identity[field] ?? '').trim());
   return `
     <div class="cab-summary-card">
-      <span class="cab-summary-eyebrow">Tu identidad</span>
-      <span class="cab-summary-title">${esc(identity.name || 'Todavía sin nombre configurado')}</span>
+      <span class="cab-summary-eyebrow">${esc(t('cabina.comoTrabajo.yourIdentity', 'Tu identidad'))}</span>
+      <span class="cab-summary-title">${esc(identity.name || t('cabina.comoTrabajo.noNameConfigured', 'Todavía sin nombre configurado'))}</span>
       <div style="display:grid;gap:8px;margin-top:12px">
         ${fields.map(([label, value]) => `<span class="cab-summary-meta"><b>${esc(label)}:</b> ${esc(value)}</span>`).join('')}
       </div>
+      ${hasIdentity ? '' : `<p class="cab-conversation-meta" style="margin:14px 0 0">${esc(t('cabina.comoTrabajo.emptyIdentityHint', 'Completá tu identidad para que la IA firme como vos.'))}</p>`}
       <p class="cab-conversation-meta" style="margin:14px 0 0">
-        ${data.editable
-    ? 'Esta identidad puede editarse desde tu perfil.'
-    : 'Por ahora se muestra la identidad disponible en modo lectura. Cómo querés que te hablen se define en Comportamiento.'}
+        ${editable
+    ? esc(t('cabina.comoTrabajo.identityEditHint', 'Podés actualizar estos datos desde acá.'))
+    : esc(t('cabina.comoTrabajo.identityReadOnly', 'Por ahora se muestra la identidad disponible en modo lectura. Cómo querés que te hablen se define en Comportamiento.'))}
       </p>
+      ${editable ? `<div class="cab-composer-actions"><button class="cab-btn cab-btn--cold" data-action="edit-identity" type="button">${icon('edit', { size: 16 })}<span>${esc(t('cabina.comoTrabajo.editIdentity', 'Editar'))}</span></button></div>` : ''}
     </div>`;
 }
 
@@ -109,19 +145,25 @@ function renderHome(state) {
   const data = state.sectionsData;
   let sections = '';
   if (state.sectionsError) {
-    sections = emptyMessage(state.sectionsError, '<button class="cab-btn cab-btn--cold" data-action="refresh" type="button">Reintentar</button>');
+    sections = emptyMessage(state.sectionsError, `<button class="cab-btn cab-btn--cold" data-action="refresh" type="button">${esc(t('cabina.comoTrabajo.retry', 'Reintentar'))}</button>`);
   } else if (!data) {
-    sections = emptyMessage('Cargando tus indicaciones…');
+    sections = emptyMessage(t('cabina.comoTrabajo.loadingInstructions', 'Cargando tus indicaciones…'));
   } else if (!asList(data.sections).length) {
-    sections = emptyMessage('Todavía no hay indicaciones de comportamiento.');
+    sections = emptyMessage(t('cabina.comoTrabajo.noBehaviorInstructions', 'Todavía no hay indicaciones de comportamiento.'));
   } else {
     sections = `<div class="cab-conversation-list">${data.sections.map((section) => `
       <button class="cab-conversation-row ${section.managed ? 'cab-conversation-row--resting' : ''}" data-action="open-section" data-index="${section.i}" type="button">
         <span class="cab-conversation-copy">
           <span class="cab-conversation-title">${esc(section.title)}</span>
-          <span class="cab-conversation-meta">${section.lines} líneas · ${formatSize(section.size)}${section.managed ? ' · Se mantiene automáticamente' : ''}</span>
+          <span class="cab-conversation-meta">${esc(t('cabina.comoTrabajo.sectionMeta', '{lines} líneas · {size}{managed}', {
+    lines: section.lines,
+    size: formatSize(section.size),
+    managed: section.managed ? t('cabina.comoTrabajo.managedSuffix', ' · Se mantiene automáticamente') : '',
+  }))}</span>
         </span>
-        <span class="cab-status-chip ${section.managed ? 'cab-status-chip--resting' : ''}">${section.managed ? 'Ver' : 'Abrir y ajustar'}</span>
+        <span class="cab-status-chip ${section.managed ? 'cab-status-chip--resting' : ''}">${esc(section.managed
+    ? t('cabina.comoTrabajo.view', 'Ver')
+    : t('cabina.comoTrabajo.openAndAdjust', 'Abrir y ajustar'))}</span>
       </button>`).join('')}</div>`;
   }
 
@@ -130,15 +172,15 @@ function renderHome(state) {
     <div class="cab-main-inner">
       <section aria-labelledby="behavior-title">
         <div class="cab-section-divider">
-          <span id="behavior-title">Comportamiento</span>
+          <span id="behavior-title">${esc(t('cabina.comoTrabajo.behavior', 'Comportamiento'))}</span>
           <span class="cab-section-divider-line"></span>
-          ${data ? `<span class="cab-conversation-meta">${data.totalLines || 0} líneas · ${formatSize(data.totalSize)}</span>` : ''}
+          ${data ? `<span class="cab-conversation-meta">${esc(t('cabina.comoTrabajo.totalMeta', '{lines} líneas · {size}', { lines: data.totalLines || 0, size: formatSize(data.totalSize) }))}</span>` : ''}
         </div>
-        <p class="cab-subtitle" style="margin:0 0 var(--lite-space-y)">Cada bloque contiene una parte de lo que la IA sabe sobre tu forma de trabajar. Ajustás uno por vez.</p>
+        <p class="cab-subtitle" style="margin:0 0 var(--lite-space-y)">${esc(t('cabina.comoTrabajo.behaviorHelp', 'Cada bloque contiene una parte de lo que la IA sabe sobre tu forma de trabajar. Ajustás uno por vez.'))}</p>
         ${sections}
       </section>
       <section aria-labelledby="identity-title" style="margin-top:var(--lite-space-y-lg)">
-        <div class="cab-section-divider"><span id="identity-title">Quién sos</span><span class="cab-section-divider-line"></span></div>
+        <div class="cab-section-divider"><span id="identity-title">${esc(t('cabina.comoTrabajo.whoYouAre', 'Quién sos'))}</span><span class="cab-section-divider-line"></span></div>
         ${renderIdentity(state)}
       </section>
     </div>`;
@@ -147,8 +189,8 @@ function renderHome(state) {
 function renderLoadingSection(state) {
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="home" type="button">Volver</button>
-      <div style="margin-top:var(--lite-space-y-lg)">${emptyMessage('Abriendo esta indicación…')}</div>
+      <button class="cab-btn cab-btn--cold" data-action="home" type="button">${esc(t('cabina.comoTrabajo.back', 'Volver'))}</button>
+      <div style="margin-top:var(--lite-space-y-lg)">${emptyMessage(t('cabina.comoTrabajo.openingInstruction', 'Abriendo esta indicación…'))}</div>
     </div>`;
 }
 
@@ -158,19 +200,19 @@ function renderEditor(state) {
   if (!section || !isCurrent(state)) return;
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="home" type="button">Volver a Comportamiento</button>
+      <button class="cab-btn cab-btn--cold" data-action="home" type="button">${esc(t('cabina.comoTrabajo.backToBehavior', 'Volver a Comportamiento'))}</button>
       <header style="margin:var(--lite-space-y-lg) 0">
-        <p class="cab-summary-eyebrow">Una indicación de trabajo</p>
+        <p class="cab-summary-eyebrow">${esc(t('cabina.comoTrabajo.workInstruction', 'Una indicación de trabajo'))}</p>
         <h1 class="cab-title">${esc(section.title)}</h1>
         <p class="cab-subtitle">${state.sectionMeta?.managed
-    ? 'Este bloque se mantiene automáticamente. Podés leerlo, pero no cambiarlo desde acá.'
-    : 'Editá sólo este bloque. Antes de aplicar nada, vas a ver una explicación clara de lo que cambiaría.'}</p>
+    ? esc(t('cabina.comoTrabajo.managedBlockHelp', 'Este bloque se mantiene automáticamente. Podés leerlo, pero no cambiarlo desde acá.'))
+    : esc(t('cabina.comoTrabajo.editBlockHelp', 'Editá sólo este bloque. Antes de aplicar nada, vas a ver una explicación clara de lo que cambiaría.'))}</p>
       </header>
       <div class="cab-composer">
         <textarea class="cab-composer-field" data-ref="editor" rows="18" spellcheck="true" ${state.sectionMeta?.managed ? 'readonly aria-readonly="true"' : ''}></textarea>
         <div class="cab-composer-actions">
-          <span class="cab-conversation-meta">El resto de tus indicaciones no se toca.</span>
-          ${state.sectionMeta?.managed ? '' : '<button class="cab-btn cab-btn--hot cab-composer-send" data-action="review" type="button">Revisar antes de guardar</button>'}
+          <span class="cab-conversation-meta">${esc(t('cabina.comoTrabajo.otherInstructionsUntouched', 'El resto de tus indicaciones no se toca.'))}</span>
+          ${state.sectionMeta?.managed ? '' : `<button class="cab-btn cab-btn--hot cab-composer-send" data-action="review" type="button">${esc(t('cabina.comoTrabajo.reviewBeforeSaving', 'Revisar antes de guardar'))}</button>`}
         </div>
       </div>
     </div>`;
@@ -210,33 +252,37 @@ function renderReview(state, { analysis = null, error = '' } = {}) {
   const added = analysis ? asList(analysis.added) : [];
   const modified = analysis ? asList(analysis.modified) : [];
   const hasAiChanges = removed.length || added.length || modified.length;
-  const riskLabels = { ok: 'No se ven pérdidas importantes', atencion: 'Conviene mirar con atención', critico: 'Este cambio puede borrar algo importante' };
+  const riskLabels = {
+    ok: t('cabina.comoTrabajo.riskOk', 'No se ven pérdidas importantes'),
+    atencion: t('cabina.comoTrabajo.riskAttention', 'Conviene mirar con atención'),
+    critico: t('cabina.comoTrabajo.riskCritical', 'Este cambio puede borrar algo importante'),
+  };
   const explanation = analysis?.summary || analysis?.riskWhy || (error
-    ? 'La explicación automática no estuvo disponible. Igual podés revisar abajo el texto que dejaría de estar y el que quedaría en su lugar.'
-    : 'Comparando tu indicación anterior con la nueva…');
+    ? t('cabina.comoTrabajo.explanationUnavailable', 'La explicación automática no estuvo disponible. Igual podés revisar abajo el texto que dejaría de estar y el que quedaría en su lugar.')
+    : t('cabina.comoTrabajo.comparingInstructions', 'Comparando tu indicación anterior con la nueva…'));
 
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">Seguir editando</button>
+      <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">${esc(t('cabina.comoTrabajo.keepEditing', 'Seguir editando'))}</button>
       <header style="margin:var(--lite-space-y-lg) 0">
-        <p class="cab-summary-eyebrow">Antes de aplicar el cambio</p>
-        <h1 class="cab-title">Esto es lo que va a cambiar</h1>
+        <p class="cab-summary-eyebrow">${esc(t('cabina.comoTrabajo.beforeApplyingChange', 'Antes de aplicar el cambio'))}</p>
+        <h1 class="cab-title">${esc(t('cabina.comoTrabajo.changesTitle', 'Esto es lo que va a cambiar'))}</h1>
         <p class="cab-subtitle">${esc(explanation)}</p>
       </header>
       ${analysis?.risk ? `<div class="cab-status-chip ${analysis.risk === 'ok' ? 'cab-status-chip--resting' : 'cab-status-chip--waiting'}" style="margin-bottom:var(--lite-space-y)">${esc(riskLabels[analysis.risk] || analysis.risk)}</div>` : ''}
       ${analysis?.summary && analysis?.riskWhy ? `<p class="cab-subtitle" style="margin:0 0 var(--lite-space-y)">${esc(analysis.riskWhy)}</p>` : ''}
       <div style="display:grid;gap:14px">
         ${analysis
-    ? `${changeGroup('Lo que dejará de decir', removed, 'removed')}
-           ${changeGroup('Lo que empezará a decir', added, 'added')}
-           ${changeGroup('Lo que cambia de sentido', modified, 'added')}
-           ${!hasAiChanges ? emptyMessage('No se detectaron cambios de contenido.') : ''}`
-    : `${literalChangeGroup('Texto que dejará de estar', local.removed, 'removed')}
-           ${literalChangeGroup('Texto que quedará en su lugar', local.added, 'added')}`}
+    ? `${changeGroup(t('cabina.comoTrabajo.removedMeaning', 'Lo que dejará de decir'), removed, 'removed')}
+           ${changeGroup(t('cabina.comoTrabajo.addedMeaning', 'Lo que empezará a decir'), added, 'added')}
+           ${changeGroup(t('cabina.comoTrabajo.modifiedMeaning', 'Lo que cambia de sentido'), modified, 'added')}
+           ${!hasAiChanges ? emptyMessage(t('cabina.comoTrabajo.noContentChanges', 'No se detectaron cambios de contenido.')) : ''}`
+    : `${literalChangeGroup(t('cabina.comoTrabajo.removedText', 'Texto que dejará de estar'), local.removed, 'removed')}
+           ${literalChangeGroup(t('cabina.comoTrabajo.addedText', 'Texto que quedará en su lugar'), local.added, 'added')}`}
       </div>
       <div class="cab-composer-actions" style="margin-top:var(--lite-space-y-lg)">
-        <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">Quiero corregir algo</button>
-        <button class="cab-btn cab-btn--hot cab-composer-send" data-action="confirm-save" type="button">Sí, aplicar este cambio</button>
+        <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">${esc(t('cabina.comoTrabajo.correctSomething', 'Quiero corregir algo'))}</button>
+        <button class="cab-btn cab-btn--hot cab-composer-send" data-action="confirm-save" type="button">${esc(t('cabina.comoTrabajo.applyChange', 'Sí, aplicar este cambio'))}</button>
       </div>
     </div>`;
 }
@@ -245,9 +291,9 @@ function renderReviewLoading(state) {
   state.screen = 'review-loading';
   state.el.innerHTML = `
     <div class="cab-main-inner">
-      <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">Seguir editando</button>
+      <button class="cab-btn cab-btn--cold" data-action="back-to-editor" type="button">${esc(t('cabina.comoTrabajo.keepEditing', 'Seguir editando'))}</button>
       <div style="margin-top:var(--lite-space-y-lg)">
-        ${emptyMessage('La IA está leyendo el antes y el después para explicarte el cambio…')}
+        ${emptyMessage(t('cabina.comoTrabajo.reviewingChanges', 'La IA está leyendo el antes y el después para explicarte el cambio…'))}
       </div>
     </div>`;
 }
@@ -262,13 +308,13 @@ async function loadOverview(state) {
     state.sectionsData = sectionsResult.value;
     state.sectionsError = '';
   } else {
-    state.sectionsError = sectionsResult.reason?.message || 'No pude leer tus indicaciones.';
+    state.sectionsError = sectionsResult.reason?.message || t('cabina.comoTrabajo.loadInstructionsFailed', 'No pude leer tus indicaciones.');
   }
   if (identityResult.status === 'fulfilled') {
     state.identityData = identityResult.value;
     state.identityError = '';
   } else {
-    state.identityError = identityResult.reason?.message || 'No pude leer tu identidad.';
+    state.identityError = identityResult.reason?.message || t('cabina.comoTrabajo.loadIdentityFailed', 'No pude leer tu identidad.');
   }
 }
 
@@ -286,7 +332,7 @@ async function openSection(state, index) {
     renderEditor(state);
   } catch (error) {
     if (!isCurrent(state)) return;
-    state.ctx.toast(error.message || 'No pude abrir esta indicación.');
+    state.ctx.toast(error.message || t('cabina.comoTrabajo.openInstructionFailed', 'No pude abrir esta indicación.'));
     renderHome(state);
   }
 }
@@ -296,7 +342,7 @@ async function beginReview(state) {
   if (!editor || !state.section) return;
   state.draft = editor.value;
   if (state.draft === state.section.text) {
-    state.ctx.toast('No hay cambios para revisar.');
+    state.ctx.toast(t('cabina.comoTrabajo.noChangesToReview', 'No hay cambios para revisar.'));
     return;
   }
   renderReviewLoading(state);
@@ -320,27 +366,27 @@ async function beginReview(state) {
       }
     }
     if (!isCurrent(state) || state.screen !== 'review-loading') return;
-    if (job.status !== 'done' || !job.analysis) throw new Error(job.error || 'La revisión automática no terminó.');
+    if (job.status !== 'done' || !job.analysis) throw new Error(job.error || t('cabina.comoTrabajo.reviewDidNotFinish', 'La revisión automática no terminó.'));
     state.reviewAnalysis = job.analysis;
     renderReview(state, { analysis: job.analysis });
   } catch (error) {
     if (!isCurrent(state) || state.screen !== 'review-loading') return;
     state.reviewAnalysis = null;
-    renderReview(state, { error: error.message || 'No se pudo generar la explicación.' });
+    renderReview(state, { error: error.message || t('cabina.comoTrabajo.explanationFailed', 'No se pudo generar la explicación.') });
   }
 }
 
 async function confirmSave(state, button) {
   if (!state.section) return;
   button.disabled = true;
-  button.textContent = 'Aplicando…';
+  button.textContent = t('cabina.comoTrabajo.applying', 'Aplicando…');
   try {
     await state.ctx.api.post(
       `${API_BASE}/global/section/${encodeURIComponent(state.section.i)}`,
       { content: state.draft, hash: state.section.hash },
     );
     if (!isCurrent(state)) return;
-    state.ctx.toast('Listo. La IA va a usar esta indicación en las próximas conversaciones.');
+    state.ctx.toast(t('cabina.comoTrabajo.saved', 'Listo. La IA va a usar esta indicación en las próximas conversaciones.'));
     state.section = null;
     state.sectionMeta = null;
     state.draft = '';
@@ -351,9 +397,45 @@ async function confirmSave(state, button) {
     if (isCurrent(state) && state.screen === 'home') renderHome(state);
   } catch (error) {
     if (!isCurrent(state)) return;
-    state.ctx.toast(error.message || 'No pude aplicar el cambio. Nada fue guardado.');
+    state.ctx.toast(error.message || t('cabina.comoTrabajo.saveFailed', 'No pude aplicar el cambio. Nada fue guardado.'));
     button.disabled = false;
-    button.textContent = 'Sí, aplicar este cambio';
+    button.textContent = t('cabina.comoTrabajo.applyChange', 'Sí, aplicar este cambio');
+  }
+}
+
+async function saveIdentity(state, button) {
+  const form = button.closest('[data-ref="identity-form"]');
+  const errorMessage = form?.querySelector('[data-ref="identity-error"]');
+  if (!form || !errorMessage) return;
+  const values = new FormData(form);
+  const identity = {
+    name: String(values.get('name') || ''),
+    email: String(values.get('email') || ''),
+    github: String(values.get('github') || ''),
+    signature: String(values.get('signature') || ''),
+  };
+  button.disabled = true;
+  form.setAttribute('aria-busy', 'true');
+  button.querySelector('span').textContent = t('cabina.comoTrabajo.savingIdentity', 'Guardando…');
+  errorMessage.hidden = true;
+  errorMessage.textContent = '';
+  try {
+    const data = await state.ctx.api.post(`${API_BASE}/identity`, { identity });
+    if (!data?.ok || !data.identity) {
+      throw new Error(data?.error || t('cabina.comoTrabajo.invalidIdentityResponse', 'El servidor no devolvió la identidad guardada.'));
+    }
+    if (!isCurrent(state)) return;
+    state.identityData = { ...state.identityData, identity: data.identity };
+    state.identityError = '';
+    state.identityEditing = false;
+    renderHome(state);
+  } catch (error) {
+    if (!isCurrent(state)) return;
+    errorMessage.textContent = error?.message || t('cabina.comoTrabajo.saveIdentityFailed', 'No pude guardar tu identidad. Probá de nuevo.');
+    errorMessage.hidden = false;
+    button.disabled = false;
+    form.removeAttribute('aria-busy');
+    button.querySelector('span').textContent = t('cabina.comoTrabajo.saveIdentity', 'Guardar');
   }
 }
 
@@ -363,10 +445,10 @@ async function openPreferencesChat(state, button) {
   try {
     const data = await state.ctx.api.post('/api/chat/preferencias');
     const chat = data?.chat;
-    if (!chat?.id) throw new Error('El servidor no devolvió la conversación creada.');
+    if (!chat?.id) throw new Error(t('cabina.comoTrabajo.chatNotReturned', 'El servidor no devolvió la conversación creada.'));
     location.hash = '#/conversaciones/' + encodeURIComponent(chat.id);
   } catch (error) {
-    state.ctx.toast(error?.message || 'No pude abrir la conversación.');
+    state.ctx.toast(error?.message || t('cabina.comoTrabajo.openChatFailed', 'No pude abrir la conversación.'));
     button.disabled = false;
     button.removeAttribute('aria-busy');
   }
@@ -384,6 +466,15 @@ async function handleClick(state, event) {
     await openPreferencesChat(state, button);
   } else if (action === 'home') {
     renderHome(state);
+  } else if (action === 'edit-identity') {
+    state.identityEditing = true;
+    renderHome(state);
+    state.el.querySelector('#cab-identity-name')?.focus();
+  } else if (action === 'cancel-identity') {
+    state.identityEditing = false;
+    renderHome(state);
+  } else if (action === 'save-identity') {
+    await saveIdentity(state, button);
   } else if (action === 'open-section') {
     await openSection(state, button.dataset.index);
   } else if (action === 'review') {
@@ -409,6 +500,7 @@ export default {
       identityData: null,
       sectionsError: '',
       identityError: '',
+      identityEditing: false,
       section: null,
       sectionMeta: null,
       draft: '',

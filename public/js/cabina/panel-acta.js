@@ -1,15 +1,17 @@
 // Índice navegable de Modo Cabina, destilado por IA en segundo plano.
 // El contrato conserva `name: 'acta'` y `data-cabina-panel="acta"` para no romper el montaje.
 
+import { t } from '../ui/i18n.js';
+
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 20;
 
 const KIND_APPEARANCE = {
-  decision: { icon: '◆', color: 'var(--cwc-accent)', label: 'Decisión' },
-  tema: { icon: '●', color: 'var(--cwc-info)', label: 'Tema' },
-  hallazgo: { icon: '✦', color: 'var(--cwc-warn)', label: 'Hallazgo' },
-  entrega: { icon: '✓', color: 'var(--cwc-ok)', label: 'Entrega' },
-  bloqueo: { icon: '!', color: 'var(--cwc-text-dim)', label: 'Bloqueo' },
+  decision: { icon: '◆', color: 'var(--cwc-accent)', label: t('cabina.indice.decisionKind', 'Decisión') },
+  tema: { icon: '●', color: 'var(--cwc-info)', label: t('cabina.indice.topicKind', 'Tema') },
+  hallazgo: { icon: '✦', color: 'var(--cwc-warn)', label: t('cabina.indice.findingKind', 'Hallazgo') },
+  entrega: { icon: '✓', color: 'var(--cwc-ok)', label: t('cabina.indice.deliveryKind', 'Entrega') },
+  bloqueo: { icon: '!', color: 'var(--cwc-text-dim)', label: t('cabina.indice.blockerKind', 'Bloqueo') },
 };
 
 let current = null;
@@ -100,7 +102,12 @@ function momentButton(moment, position, active) {
   button.type = 'button';
   button.dataset.eventIndex = String(moment.eventIndex);
   button.title = moment.detail ? `${moment.title} — ${moment.detail}` : moment.title;
-  button.setAttribute('aria-label', `${appearance.label}: ${moment.title}${moment.detail ? `. ${moment.detail}` : ''}`);
+  const detail = moment.detail ? t('cabina.indice.momentDetailSuffix', '. {detail}', { detail: moment.detail }) : '';
+  button.setAttribute('aria-label', t('cabina.indice.momentLabel', '{kind}: {title}{detail}', {
+    kind: appearance.label,
+    title: moment.title,
+    detail,
+  }));
   if (active) button.setAttribute('aria-current', 'location');
 
   const meta = document.createElement('span');
@@ -145,12 +152,12 @@ function elapsedSince(timestamp) {
   const time = Number(timestamp);
   if (!Number.isFinite(time)) return '';
   const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
-  if (seconds < 60) return 'un momento';
+  if (seconds < 60) return t('cabina.indice.justNow', 'un momento');
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return t('cabina.indice.minutesElapsed', '{minutes} min', { minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
-  return `${Math.floor(hours / 24)} d`;
+  if (hours < 24) return t('cabina.indice.hoursElapsed', '{hours} h', { hours });
+  return t('cabina.indice.daysElapsed', '{days} d', { days: Math.floor(hours / 24) });
 }
 
 function appendStatus(block, state) {
@@ -160,8 +167,8 @@ function appendStatus(block, state) {
     status.style.marginTop = '10px';
     status.style.color = 'var(--cwc-info)';
     status.textContent = state.polling
-      ? 'Actualizando el índice…'
-      : 'La actualización sigue en segundo plano.';
+      ? t('cabina.indice.updating', 'Actualizando el índice…')
+      : t('cabina.indice.updatingInBackground', 'La actualización sigue en segundo plano.');
     block.appendChild(status);
   }
 
@@ -170,12 +177,14 @@ function appendStatus(block, state) {
     status.className = 'cab-side-meta';
     status.style.marginTop = '10px';
     const elapsed = elapsedSince(state.generatedAt);
-    status.textContent = elapsed ? `Actualizado hace ${elapsed}` : 'Índice actualizado';
+    status.textContent = elapsed
+      ? t('cabina.indice.updatedAgo', 'Actualizado hace {elapsed}', { elapsed })
+      : t('cabina.indice.updated', 'Índice actualizado');
     try {
       const formatted = state.generatedAt ? state.ctx.fmtDate(state.generatedAt) : '';
       if (formatted) {
-        status.textContent += ` · ${formatted}`;
-        status.title = `Actualizado ${formatted}`;
+        status.textContent += t('cabina.indice.updatedDateSuffix', ' · {formatted}', { formatted });
+        status.title = t('cabina.indice.updatedDate', 'Actualizado {formatted}', { formatted });
       }
     } catch { /* la fecha relativa sigue siendo suficiente */ }
     block.appendChild(status);
@@ -186,7 +195,7 @@ function appendStatus(block, state) {
     stale.className = 'cab-side-meta';
     stale.style.marginTop = '6px';
     stale.style.color = 'var(--cwc-warn)';
-    stale.textContent = 'Hay mensajes nuevos sin indexar.';
+    stale.textContent = t('cabina.indice.newMessages', 'Hay mensajes nuevos sin indexar.');
     block.appendChild(stale);
   }
 }
@@ -212,7 +221,7 @@ function render(state) {
 
   const side = document.createElement('nav');
   side.className = 'cab-side';
-  side.setAttribute('aria-label', 'Índice de la conversación');
+  side.setAttribute('aria-label', t('cabina.indice.conversationIndex', 'Índice de la conversación'));
 
   const block = document.createElement('div');
   block.className = 'cab-side-block';
@@ -225,12 +234,12 @@ function render(state) {
   heading.style.gap = '8px';
 
   const headingText = document.createElement('span');
-  headingText.textContent = 'Índice';
+  headingText.textContent = t('cabina.indice.title', 'Índice');
   const refresh = document.createElement('button');
   refresh.className = 'cab-btn cab-btn--cold';
   refresh.type = 'button';
   refresh.dataset.action = 'refresh-index';
-  refresh.textContent = 'Actualizar';
+  refresh.textContent = t('cabina.indice.refresh', 'Actualizar');
   refresh.disabled = state.status === 'loading' || (state.status === 'running' && state.polling);
   refresh.style.padding = '4px 8px';
   refresh.style.fontSize = 'var(--cwc-fs-xs)';
@@ -246,17 +255,19 @@ function render(state) {
   } else {
     state.activeIndex = null;
     if (state.status === 'loading') {
-      appendMessage(block, 'Buscando el índice…');
+      appendMessage(block, t('cabina.indice.loading', 'Buscando el índice…'));
     } else if (state.status === 'running') {
-      appendMessage(block, 'El índice se está preparando.');
+      appendMessage(block, t('cabina.indice.preparing', 'El índice se está preparando.'));
     } else if (state.status === 'error') {
-      appendMessage(block, 'No se pudo preparar el índice. Podés intentarlo de nuevo.', { action: 'Reintentar' });
+      appendMessage(block, t('cabina.indice.prepareError', 'No se pudo preparar el índice. Podés intentarlo de nuevo.'), {
+        action: t('cabina.indice.retry', 'Reintentar'),
+      });
     } else if (state.status === 'ready') {
-      appendMessage(block, 'Todavía no hay temas relevantes para mostrar.');
+      appendMessage(block, t('cabina.indice.noTopics', 'Todavía no hay temas relevantes para mostrar.'));
     } else if (state.endpointMissing) {
-      appendMessage(block, 'El índice todavía no está disponible.');
+      appendMessage(block, t('cabina.indice.unavailable', 'El índice todavía no está disponible.'));
     } else {
-      appendMessage(block, 'Este índice todavía no fue generado. Elegí Actualizar para prepararlo.');
+      appendMessage(block, t('cabina.indice.notGenerated', 'Este índice todavía no fue generado. Elegí Actualizar para prepararlo.'));
     }
   }
 

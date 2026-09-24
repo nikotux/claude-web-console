@@ -154,8 +154,15 @@ export function renderManagedBlock(lessons, allLessons = lessons) {
       return [lesson.id, safeTitle];
     }),
   );
-  const body = lessons.length
-    ? lessons.map((l) => `### ${sanitizeLessonForTolkien(l.title, lessonTitles)}\n_${l.category} · confianza ${l.confidence} · recurrencia x${l.recurrence}_\n\n${sanitizeLessonForTolkien(l.body, lessonTitles)}`).join('\n\n')
+  const orderedLessons = [...lessons].sort((a, b) => {
+    const aNumber = Number(String(a.id).match(/^MC-(\d+)$/)?.[1]);
+    const bNumber = Number(String(b.id).match(/^MC-(\d+)$/)?.[1]);
+    return (aNumber - bNumber) || String(a.id).localeCompare(String(b.id));
+  });
+  // Confianza, recurrencia y fechas siguen en Pad, la fuente canónica. No se
+  // reflejan aquí porque mutan solas e invalidan el caché del preámbulo.
+  const body = orderedLessons.length
+    ? orderedLessons.map((l) => `### ${sanitizeLessonForTolkien(l.title, lessonTitles)}\n_${l.category}_\n\n${sanitizeLessonForTolkien(l.body, lessonTitles)}`).join('\n\n')
     : '_(sin lecciones promovidas todavía)_';
   return `${MARK_START}\n## Mejora Continua (auto)\n<!-- Gestionado por el módulo Mejora Continua de Mi Consola. NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->\n\n${body}\n${MARK_END}`;
 }
@@ -271,7 +278,9 @@ function contextEntryFor(lesson, lessonTitles) {
   const safe = sanitizeContextEntry(lesson.title, lesson.body);
   const title = sanitizeLessonForTolkien(safe.title, lessonTitles);
   const body = sanitizeLessonForTolkien(safe.body, lessonTitles);
-  return `${CONTEXT_ENTRY_PREFIX} — ${title} ${contextMarkerFor(lesson.id)}\n_${lesson.category} · confianza ${lesson.confidence}_\n\n${body}`;
+  // Confianza sigue en Pad, la fuente canónica. Se retira del espejo porque
+  // muta sola e invalida el caché del preámbulo.
+  return `${CONTEXT_ENTRY_PREFIX} — ${title} ${contextMarkerFor(lesson.id)}\n_${lesson.category}_\n\n${body}`;
 }
 
 function contextEntryRanges(text) {

@@ -2,6 +2,7 @@ import { renderMarkdown } from '../ui/markdown.js';
 import { openZoomViewer } from '../ui/zoom-viewer.js';
 import { PLACES, resolvePlace } from '../ui/places.js';
 import { icon } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
 
 let dispose = () => {};
 let mountGeneration = 0;
@@ -42,13 +43,17 @@ function belongsToIdentity(chat, identity) {
 }
 
 function stateLabel(chat, state) {
-  if (chat.archived) return 'Archivada';
-  if (state === 'working') return chat.delegating ? 'Delegando' : 'Trabajando';
+  if (chat.archived) return t('cabina.conversaciones.archived', 'Archivada');
+  if (state === 'working') return chat.delegating
+    ? t('cabina.conversaciones.delegating', 'Delegando')
+    : t('cabina.conversaciones.working', 'Trabajando');
   if (state === 'waiting') {
     const permissions = Number(chat.pendingPermsCount) || (chat.pendingPerms || []).length;
-    return permissions ? `Espera permiso (${permissions})` : 'Te espera';
+    return permissions
+      ? t('cabina.conversaciones.waitingPermission', 'Espera permiso ({permissions})', { permissions })
+      : t('cabina.conversaciones.waitingForYou', 'Te espera');
   }
-  return 'En reposo';
+  return t('cabina.conversaciones.resting', 'En reposo');
 }
 
 function stateIcon(ctx, state) {
@@ -58,13 +63,28 @@ function stateIcon(ctx, state) {
 
 function conversationMeta(chat, state) {
   const model = chat.modelChoice === 'auto'
-    ? `AutoTux · ${chat.model || 'modelo automático'}`
-    : (chat.modelChoice === 'tandem' ? 'Tándem' : (chat.model || 'Sin modelo'));
-  const place = String(chat.cwd || '').split('/').filter(Boolean).pop() || 'Mi Consola';
-  if (state === 'working' && chat.bgTasks?.length) return `${chat.bgTasks.length} trabajo(s) en segundo plano · ${place}`;
-  if (state === 'working' && chat.delegatingCount) return `${chat.delegatingCount} subagente(s) · ${place}`;
-  if (chat.viewMode === 'tui') return `En modo Terminal · ${place}`;
-  return `${model} · ${place}`;
+    ? t('cabina.conversaciones.autoModel', 'AutoTux · {model}', {
+      model: chat.model || t('cabina.conversaciones.automaticModel', 'modelo automático'),
+    })
+    : (chat.modelChoice === 'tandem'
+      ? t('cabina.conversaciones.tandem', 'Tándem')
+      : (chat.model || t('cabina.conversaciones.noModel', 'Sin modelo')));
+  const place = String(chat.cwd || '').split('/').filter(Boolean).pop()
+    || t('cabina.conversaciones.myConsole', 'Mi Consola');
+  if (state === 'working' && chat.bgTasks?.length) {
+    return t('cabina.conversaciones.backgroundJobs', '{count} trabajo(s) en segundo plano · {place}', {
+      count: chat.bgTasks.length,
+      place,
+    });
+  }
+  if (state === 'working' && chat.delegatingCount) {
+    return t('cabina.conversaciones.subagents', '{count} subagente(s) · {place}', {
+      count: chat.delegatingCount,
+      place,
+    });
+  }
+  if (chat.viewMode === 'tui') return t('cabina.conversaciones.terminalMode', 'En modo Terminal · {place}', { place });
+  return t('cabina.conversaciones.modelAndPlace', '{model} · {place}', { model, place });
 }
 
 const WORLD_ORDER = ['__aduana', '__limbo', ...PLACES.map((place) => place.rel), '__otros'];
@@ -75,9 +95,9 @@ function chatWorld(chat) {
 }
 
 function worldLabel(world) {
-  if (world === '__aduana') return 'Aduana';
-  if (world === '__limbo') return 'Limbo';
-  if (world === '__otros') return 'Otros lugares';
+  if (world === '__aduana') return t('cabina.conversaciones.customs', 'Aduana');
+  if (world === '__limbo') return t('cabina.conversaciones.limbo', 'Limbo');
+  if (world === '__otros') return t('cabina.conversaciones.otherPlaces', 'Otros lugares');
   return PLACES.find((place) => place.rel === world)?.label || world;
 }
 
@@ -142,7 +162,7 @@ function rowHtml(chat, ctx, container, { draggable = true } = {}) {
       <div class="cab-fs-item-main" role="button" tabindex="0" data-open-chat>
         ${conversationIcon()}
         <span class="cab-fs-item-copy">
-          <span class="cab-fs-item-name">${escapeHtml(chat.title || 'Conversación sin título')}</span>
+          <span class="cab-fs-item-name">${escapeHtml(chat.title || t('cabina.conversaciones.untitledConversation', 'Conversación sin título'))}</span>
           <span class="cab-fs-item-meta">${escapeHtml(conversationMeta(chat, state))}</span>
         </span>
         <span class="cab-status-chip cab-status-chip--${state}">
@@ -150,23 +170,38 @@ function rowHtml(chat, ctx, container, { draggable = true } = {}) {
           ${escapeHtml(stateLabel(chat, state))}
         </span>
       </div>
-      <button class="cab-fs-more" type="button" data-chat-menu aria-label="Opciones de ${escapeHtml(chat.title || 'la conversación')}" title="Opciones">⋯</button>
+      <button class="cab-fs-more" type="button" data-chat-menu aria-label="${escapeHtml(t('cabina.conversaciones.conversationOptions', 'Opciones de {title}', { title: chat.title || t('cabina.conversaciones.theConversation', 'la conversación') }))}" title="${t('cabina.conversaciones.options', 'Opciones')}">⋯</button>
     </div>`;
 }
 
 function greeting() {
   const now = new Date();
-  const weekday = new Intl.DateTimeFormat('es', { weekday: 'long' }).format(now);
+  const weekdayEs = new Intl.DateTimeFormat('es', { weekday: 'long' }).format(now);
+  const weekday = {
+    domingo: t('cabina.conversaciones.sunday', 'domingo'),
+    lunes: t('cabina.conversaciones.monday', 'lunes'),
+    martes: t('cabina.conversaciones.tuesday', 'martes'),
+    miércoles: t('cabina.conversaciones.wednesday', 'miércoles'),
+    jueves: t('cabina.conversaciones.thursday', 'jueves'),
+    viernes: t('cabina.conversaciones.friday', 'viernes'),
+    sábado: t('cabina.conversaciones.saturday', 'sábado'),
+  }[weekdayEs] || weekdayEs;
   const day = weekday.charAt(0).toUpperCase() + weekday.slice(1);
   const hour = now.getHours();
-  const period = hour < 6 ? 'de madrugada' : (hour < 12 ? 'a la mañana' : (hour < 20 ? 'a la tarde' : 'a la noche'));
-  return `${day} ${period}`;
+  const period = hour < 6
+    ? t('cabina.conversaciones.earlyMorning', 'de madrugada')
+    : (hour < 12
+      ? t('cabina.conversaciones.morning', 'a la mañana')
+      : (hour < 20
+        ? t('cabina.conversaciones.afternoon', 'a la tarde')
+        : t('cabina.conversaciones.night', 'a la noche')));
+  return t('cabina.conversaciones.greeting', '{day} {period}', { day, period });
 }
 
 function joinSummary(parts) {
   if (parts.length < 2) return parts[0] || '';
-  if (parts.length === 2) return `${parts[0]} y ${parts[1]}`;
-  return `${parts.slice(0, -1).join(', ')} y ${parts.at(-1)}`;
+  if (parts.length === 2) return t('cabina.conversaciones.joinTwo', '{first} y {last}', { first: parts[0], last: parts[1] });
+  return t('cabina.conversaciones.joinMany', '{items} y {last}', { items: parts.slice(0, -1).join(', '), last: parts.at(-1) });
 }
 
 function unreadRoomCount(rooms) {
@@ -177,12 +212,24 @@ function unreadRoomCount(rooms) {
 
 function workSummary(working, waiting, rooms) {
   const parts = [];
-  if (working) parts.push(`${working} ${working === 1 ? 'conversación' : 'conversaciones'} trabajando`);
-  if (waiting) parts.push(`${waiting} ${waiting === 1 ? 'te espera' : 'te esperan'}`);
+  if (working) parts.push(working === 1
+    ? t('cabina.conversaciones.workingOne', '{working} conversación trabajando', { working })
+    : t('cabina.conversaciones.workingMany', '{working} conversaciones trabajando', { working }));
+  if (waiting) parts.push(waiting === 1
+    ? t('cabina.conversaciones.waitingOne', '{waiting} te espera', { waiting })
+    : t('cabina.conversaciones.waitingMany', '{waiting} te esperan', { waiting }));
   const unread = unreadRoomCount(rooms);
-  if (unread) parts.push(`hay ${unread} mensaje${unread === 1 ? '' : 's'} nuevo${unread === 1 ? '' : 's'} en ${rooms.length === 1 ? 'la sala compartida' : 'las salas compartidas'}`);
+  if (unread) parts.push(t('cabina.conversaciones.newRoomMessages', 'hay {unread} mensaje{s} nuevo{s} en {rooms}', {
+    unread,
+    s: unread === 1 ? '' : 's',
+    rooms: rooms.length === 1
+      ? t('cabina.conversaciones.theSharedRoom', 'la sala compartida')
+      : t('cabina.conversaciones.theSharedRooms', 'las salas compartidas'),
+  }));
   const text = joinSummary(parts);
-  return text ? `${text}.` : 'No hay conversaciones activas ahora.';
+  return text
+    ? t('cabina.conversaciones.summarySentence', '{text}.', { text })
+    : t('cabina.conversaciones.noActiveConversations', 'No hay conversaciones activas ahora.');
 }
 
 function summaryCardsHtml(rooms, retroCounts) {
@@ -193,18 +240,20 @@ function summaryCardsHtml(rooms, retroCounts) {
     : null;
   const roomMeta = unread == null
     ? ''
-    : `<span class="cab-summary-meta"><i class="cab-peer-mark" aria-hidden="true"></i>${unread ? `${unread} mensaje${unread === 1 ? '' : 's'} nuevo${unread === 1 ? '' : 's'}` : 'Sin mensajes nuevos'}</span>`;
+    : `<span class="cab-summary-meta"><i class="cab-peer-mark" aria-hidden="true"></i>${unread
+      ? t('cabina.conversaciones.newMessages', '{unread} mensaje{s} nuevo{s}', { unread, s: unread === 1 ? '' : 's' })
+      : t('cabina.conversaciones.noNewMessages', 'Sin mensajes nuevos')}</span>`;
   const roomCard = `
     <button class="cab-summary-card" type="button" data-cabina-view="salas">
-      <span class="cab-summary-eyebrow">Sala compartida</span>
-      <span class="cab-summary-title">${rooms.length} sala${rooms.length === 1 ? '' : 's'} compartida${rooms.length === 1 ? '' : 's'}</span>
+      <span class="cab-summary-eyebrow">${t('cabina.conversaciones.sharedRoom', 'Sala compartida')}</span>
+      <span class="cab-summary-title">${t('cabina.conversaciones.sharedRoomsCount', '{count} sala{s} compartida{s}', { count: rooms.length, s: rooms.length === 1 ? '' : 's' })}</span>
       ${roomMeta}
     </button>`;
   const lessonCard = proposals == null ? '' : `
     <button class="cab-summary-card" type="button" data-cabina-view="lecciones">
-      <span class="cab-summary-eyebrow">Lecciones</span>
-      <span class="cab-summary-title">${proposals} esperando tu visto bueno</span>
-      <span class="cab-summary-meta">Lo que aprendió de cómo trabajás</span>
+      <span class="cab-summary-eyebrow">${t('cabina.conversaciones.lessons', 'Lecciones')}</span>
+      <span class="cab-summary-title">${t('cabina.conversaciones.lessonsWaiting', '{proposals} esperando tu visto bueno', { proposals })}</span>
+      <span class="cab-summary-meta">${t('cabina.conversaciones.learnedHowYouWork', 'Lo que aprendió de cómo trabajás')}</span>
     </button>`;
   return `<div class="cab-summary-grid">${roomCard}${lessonCard}</div>`;
 }
@@ -213,7 +262,7 @@ function archivedHtml(chats, ctx, expanded) {
   if (!chats.length) return '';
   return `
     <details class="cab-fs-folder cab-fs-archive" ${expanded ? 'open' : ''}>
-      <summary class="cab-fs-folder-head"><span class="cab-fs-chevron" aria-hidden="true"></span>${folderIcon()}<span>Archivadas</span><span class="cab-fs-count">${chats.length}</span></summary>
+      <summary class="cab-fs-folder-head"><span class="cab-fs-chevron" aria-hidden="true"></span>${folderIcon()}<span>${t('cabina.conversaciones.archivedConversations', 'Archivadas')}</span><span class="cab-fs-count">${chats.length}</span></summary>
       <div class="cab-fs-folder-body cab-fs-conversation-grid">
         ${chats.map((chat) => rowHtml(chat, ctx, '', { draggable: false })).join('')}
       </div>
@@ -226,19 +275,19 @@ async function mountList(el, ctx, isCurrent) {
       <header class="cab-page-header">
         <div>
           <h1 class="cab-title">${escapeHtml(greeting())}</h1>
-          <p class="cab-subtitle" data-conversation-summary>Consultando tu trabajo…</p>
+          <p class="cab-subtitle" data-conversation-summary>${t('cabina.conversaciones.checkingWork', 'Consultando tu trabajo…')}</p>
         </div>
         <div class="cab-fs-page-actions">
-          <button class="cab-btn cab-btn--cold" type="button" data-create-folder>${folderIcon()} Nueva carpeta</button>
+          <button class="cab-btn cab-btn--cold" type="button" data-create-folder>${folderIcon()} ${t('cabina.conversaciones.newFolder', 'Nueva carpeta')}</button>
           <label class="cab-search">
-            <input type="search" placeholder="Buscar" aria-label="Buscar conversaciones" data-conversation-search>
+            <input type="search" placeholder="${t('cabina.conversaciones.searchPlaceholder', 'Buscar')}" aria-label="${t('cabina.conversaciones.searchConversations', 'Buscar conversaciones')}" data-conversation-search>
             ${ctx.icon('search')}
           </label>
         </div>
-        <button class="cab-help-btn" type="button" data-cabina-help title="Cómo se usa esta pantalla" aria-label="Cómo se usa esta pantalla">${icon('help', { size: 16 })}</button>
+        <button class="cab-help-btn" type="button" data-cabina-help title="${t('cabina.conversaciones.screenHelp', 'Cómo se usa esta pantalla')}" aria-label="${t('cabina.conversaciones.screenHelp', 'Cómo se usa esta pantalla')}">${icon('help', { size: 16 })}</button>
       </header>
       <div class="cab-conversation-list" data-conversation-list>
-        <div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>Cargando conversaciones…</span></div>
+        <div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>${t('cabina.conversaciones.loadingConversations', 'Cargando conversaciones…')}</span></div>
       </div>
     </section>`;
 
@@ -297,7 +346,12 @@ async function mountList(el, ctx, isCurrent) {
     if (event.key === 'Escape') closeMenu();
   }
 
-  const openMenu = (items, { anchor = null, x = null, y = null, label = 'Opciones' } = {}) => {
+  const openMenu = (items, {
+    anchor = null,
+    x = null,
+    y = null,
+    label = t('cabina.conversaciones.options', 'Opciones'),
+  } = {}) => {
     closeMenu();
     const menu = document.createElement('div');
     menu.className = 'cab-fs-menu';
@@ -336,11 +390,11 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const createFolder = async (world) => {
-    const proposed = window.prompt(`Nombre de la nueva carpeta en ${worldLabel(world)}:`);
+    const proposed = window.prompt(t('cabina.conversaciones.newFolderName', 'Nombre de la nueva carpeta en {world}:', { world: worldLabel(world) }));
     if (proposed === null) return;
     const name = proposed.trim();
     if (!name) {
-      ctx.toast('Escribí un nombre para la carpeta.');
+      ctx.toast(t('cabina.conversaciones.folderNameRequired', 'Escribí un nombre para la carpeta.'));
       return;
     }
     try {
@@ -348,16 +402,16 @@ async function mountList(el, ctx, isCurrent) {
       if (data?.folder) foldersState.folders.push(data.folder);
       paint();
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo crear la carpeta.');
+      ctx.toast(error.message || t('cabina.conversaciones.createFolderError', 'No se pudo crear la carpeta.'));
     }
   };
 
   const renameFolder = async (folder) => {
-    const proposed = window.prompt('Nuevo nombre de la carpeta:', folder.name || '');
+    const proposed = window.prompt(t('cabina.conversaciones.renameFolderPrompt', 'Nuevo nombre de la carpeta:'), folder.name || '');
     if (proposed === null) return;
     const name = proposed.trim();
     if (!name) {
-      ctx.toast('El nombre de la carpeta no puede quedar vacío.');
+      ctx.toast(t('cabina.conversaciones.emptyFolderName', 'El nombre de la carpeta no puede quedar vacío.'));
       return;
     }
     try {
@@ -365,12 +419,16 @@ async function mountList(el, ctx, isCurrent) {
       foldersState.folders = foldersState.folders.map((item) => item.id === folder.id ? (data.folder || { ...item, name }) : item);
       paint();
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo cambiar el nombre de la carpeta.');
+      ctx.toast(error.message || t('cabina.conversaciones.renameFolderError', 'No se pudo cambiar el nombre de la carpeta.'));
     }
   };
 
   const deleteFolder = async (folder) => {
-    const confirmed = window.confirm(`¿Eliminar la carpeta “${folder.name}”?\n\nLas conversaciones y terminales no se borrarán: quedarán fuera de la carpeta.`);
+    const confirmed = window.confirm(t(
+      'cabina.conversaciones.deleteFolderConfirm',
+      '¿Eliminar la carpeta “{name}”?\n\nLas conversaciones y terminales no se borrarán: quedarán fuera de la carpeta.',
+      { name: folder.name },
+    ));
     if (!confirmed) return;
     try {
       await ctx.api.post('/api/folders/delete', { id: folder.id });
@@ -384,18 +442,18 @@ async function mountList(el, ctx, isCurrent) {
       deletedIds.forEach((folderId) => { delete foldersState.order[`folder:${folderId}`]; });
       paint();
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo eliminar la carpeta.');
+      ctx.toast(error.message || t('cabina.conversaciones.deleteFolderError', 'No se pudo eliminar la carpeta.'));
     }
   };
 
   const renameChat = async (chat) => {
-    const proposed = window.prompt('Nuevo nombre de la conversación:', chat.title || '');
+    const proposed = window.prompt(t('cabina.conversaciones.renameConversationPrompt', 'Nuevo nombre de la conversación:'), chat.title || '');
     if (proposed === null) return;
     try {
       const data = await ctx.api.post('/api/chat/title', { id: chat.id, title: proposed.trim() });
       updateChat(data?.chat || { ...chat, title: proposed.trim() });
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo cambiar el nombre de la conversación.');
+      ctx.toast(error.message || t('cabina.conversaciones.renameConversationError', 'No se pudo cambiar el nombre de la conversación.'));
     }
   };
 
@@ -407,18 +465,53 @@ async function mountList(el, ctx, isCurrent) {
       else delete foldersState.items[key];
       paint();
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo mover la conversación.');
+      ctx.toast(error.message || t('cabina.conversaciones.moveConversationError', 'No se pudo mover la conversación.'));
     }
   };
 
   const archiveChat = async (chat) => {
-    const confirmed = window.confirm(`¿Archivar “${chat.title || 'esta conversación'}”?\n\nPodrás recuperarla más adelante desde la consola.`);
+    const confirmed = window.confirm(t(
+      'cabina.conversaciones.archiveConfirm',
+      '¿Archivar “{title}”?\n\nPodrás recuperarla más adelante desde la consola.',
+      { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
+    ));
     if (!confirmed) return;
     try {
       const data = await ctx.api.post('/api/chat/archive', { id: chat.id });
       updateChat(data?.chat || { ...chat, archived: true, alive: false });
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo archivar la conversación.');
+      ctx.toast(error.message || t('cabina.conversaciones.archiveError', 'No se pudo archivar la conversación.'));
+    }
+  };
+
+  // F3 en la consola grande: des-archivar es "revivir" (lazy — el próximo uso
+  // reanuda la sesión). Sin esto, archivar en Cabina era un viaje de ida.
+  const reviveChat = async (chat) => {
+    try {
+      const data = await ctx.api.post('/api/chat/revive', { id: chat.id });
+      updateChat(data?.chat || { ...chat, archived: false });
+    } catch (error) {
+      ctx.toast(error.message || t('cabina.conversaciones.reviveError', 'No se pudo sacar del archivo la conversación.'));
+    }
+  };
+
+  // Borrar = /api/chat/close, que deposita en la papelera (30 días de
+  // retención). Cabina NO tiene pantalla de papelera: por eso el texto no
+  // promete un botón que acá no existe y remite a quien dio el acceso.
+  const deleteChat = async (chat) => {
+    const confirmed = window.confirm(t(
+      'cabina.conversaciones.deleteChatConfirm',
+      '¿Borrar “{title}”?\n\nSe va a la papelera y se puede recuperar durante 30 días. Para recuperarla, pedísela a quien te dio el acceso.',
+      { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
+    ));
+    if (!confirmed) return;
+    try {
+      await ctx.api.post('/api/chat/close', { id: chat.id });
+      chats = chats.filter((item) => item.id !== chat.id);
+      paint();
+      ctx.toast(t('cabina.conversaciones.deleteChatDone', 'Conversación borrada. Queda 30 días en la papelera.'));
+    } catch (error) {
+      ctx.toast(error.message || t('cabina.conversaciones.deleteChatError', 'No se pudo borrar la conversación.'));
     }
   };
 
@@ -431,28 +524,53 @@ async function mountList(el, ctx, isCurrent) {
     const current = folderForChat(chat)?.id || null;
     const folders = rootFolders().filter((folder) => folder.world === chatWorld(chat));
     openMenu([
-      { label: `${current === null ? '✓ ' : ''}Fuera de carpetas`, action: () => assignChat(chat, null) },
+      {
+        label: t('cabina.conversaciones.outsideFolders', '{check}Fuera de carpetas', { check: current === null ? '✓ ' : '' }),
+        action: () => assignChat(chat, null),
+      },
       ...folders.map((folder) => ({
         label: `${current === folder.id ? '✓ ' : ''}${folder.name}`,
         action: () => assignChat(chat, folder.id),
       })),
-    ], { ...position, label: 'Mover conversación' });
+    ], { ...position, label: t('cabina.conversaciones.moveConversation', 'Mover conversación') });
   };
 
   const openChatMenu = (chat, position) => {
     const ownerActions = canManageChat(chat);
     openMenu([
-      { label: 'Cambiar el nombre', disabled: !ownerActions, action: () => renameChat(chat) },
-      { label: 'Mover a una carpeta…', disabled: chat.archived, action: () => openMoveMenu(chat, position) },
-      ...(!chat.archived ? [{ label: 'Archivar conversación', danger: true, disabled: !ownerActions, action: () => archiveChat(chat) }] : []),
-    ], { ...position, label: `Opciones de ${chat.title || 'la conversación'}` });
+      { label: t('cabina.conversaciones.changeName', 'Cambiar el nombre'), disabled: !ownerActions, action: () => renameChat(chat) },
+      { label: t('cabina.conversaciones.moveToFolder', 'Mover a una carpeta…'), disabled: chat.archived, action: () => openMoveMenu(chat, position) },
+      ...(!chat.archived ? [{
+        label: t('cabina.conversaciones.archiveConversation', 'Archivar conversación'),
+        danger: true,
+        disabled: !ownerActions,
+        action: () => archiveChat(chat),
+      }] : [
+        {
+          label: t('cabina.conversaciones.unarchiveConversation', 'Sacar del archivo'),
+          disabled: !ownerActions,
+          action: () => reviveChat(chat),
+        },
+        {
+          label: t('cabina.conversaciones.deleteConversation', 'Borrar la conversación'),
+          danger: true,
+          disabled: !ownerActions,
+          action: () => deleteChat(chat),
+        },
+      ]),
+    ], {
+      ...position,
+      label: t('cabina.conversaciones.conversationOptions', 'Opciones de {title}', {
+        title: chat.title || t('cabina.conversaciones.theConversation', 'la conversación'),
+      }),
+    });
   };
 
   const openFolderMenu = (folder, position) => {
     openMenu([
-      { label: 'Cambiar el nombre', action: () => renameFolder(folder) },
-      { label: 'Eliminar carpeta', danger: true, action: () => deleteFolder(folder) },
-    ], { ...position, label: `Opciones de ${folder.name}` });
+      { label: t('cabina.conversaciones.changeName', 'Cambiar el nombre'), action: () => renameFolder(folder) },
+      { label: t('cabina.conversaciones.deleteFolder', 'Eliminar carpeta'), danger: true, action: () => deleteFolder(folder) },
+    ], { ...position, label: t('cabina.conversaciones.folderOptions', 'Opciones de {name}', { name: folder.name }) });
   };
 
   const clearDragHighlights = () => {
@@ -490,7 +608,7 @@ async function mountList(el, ctx, isCurrent) {
     if (!dragged || dragged.world !== (container.startsWith('world:')
       ? container.slice('world:'.length)
       : rootFolders().find((folder) => folder.id === targetFolderId(container))?.world)) {
-      ctx.toast('Esa carpeta pertenece a otro lugar. Mové la conversación dentro de su lugar actual.');
+      ctx.toast(t('cabina.conversaciones.wrongPlaceFolder', 'Esa carpeta pertenece a otro lugar. Mové la conversación dentro de su lugar actual.'));
       return;
     }
     const { key, container: sourceContainer } = dragged;
@@ -516,7 +634,7 @@ async function mountList(el, ctx, isCurrent) {
       if (sourceKeys) foldersState.order[sourceContainer] = sourceKeys;
       paint();
     } catch (error) {
-      ctx.toast(error.message || 'No se pudo guardar el nuevo orden.');
+      ctx.toast(error.message || t('cabina.conversaciones.saveOrderError', 'No se pudo guardar el nuevo orden.'));
       void refresh();
     }
   };
@@ -556,10 +674,12 @@ async function mountList(el, ctx, isCurrent) {
             <span class="cab-fs-chevron" aria-hidden="true"></span>${folderIcon()}
             <span class="cab-fs-folder-name">${escapeHtml(folder.name)}</span>
             <span class="cab-fs-count">${visibleItems}</span>
-            <button class="cab-fs-more" type="button" data-folder-menu="${escapeHtml(folder.id)}" aria-label="Opciones de ${escapeHtml(folder.name)}" title="Opciones">⋯</button>
+            <button class="cab-fs-more" type="button" data-folder-menu="${escapeHtml(folder.id)}" aria-label="${escapeHtml(t('cabina.conversaciones.folderOptions', 'Opciones de {name}', { name: folder.name }))}" title="${t('cabina.conversaciones.options', 'Opciones')}">⋯</button>
           </summary>
           <div class="cab-fs-folder-body cab-fs-conversation-grid">
-            ${ordered.length ? ordered.map((chat) => rowHtml(chat, ctx, container, { draggable: !needle })).join('') : '<div class="cab-fs-empty">Carpeta vacía · arrastrá una conversación acá</div>'}
+            ${ordered.length
+              ? ordered.map((chat) => rowHtml(chat, ctx, container, { draggable: !needle })).join('')
+              : `<div class="cab-fs-empty">${t('cabina.conversaciones.emptyFolder', 'Carpeta vacía · arrastrá una conversación acá')}</div>`}
           </div>
         </details>`;
       }).join('');
@@ -568,17 +688,21 @@ async function mountList(el, ctx, isCurrent) {
       sections.push(`<section class="cab-fs-world" data-world="${escapeHtml(world)}">
         <div class="cab-fs-world-head">
           <span>${escapeHtml(worldLabel(world))}</span><span class="cab-fs-count">${worldChats.length}</span>
-          <button class="cab-fs-world-add" type="button" data-world-add="${escapeHtml(world)}">+ Nueva carpeta</button>
+          <button class="cab-fs-world-add" type="button" data-world-add="${escapeHtml(world)}">+ ${t('cabina.conversaciones.newFolder', 'Nueva carpeta')}</button>
         </div>
         ${folderRows}
         <div class="cab-fs-root-drop cab-fs-conversation-grid" data-drop-container="${escapeHtml(rootContainer)}" data-drop-world="${escapeHtml(world)}">
-          <div class="cab-fs-root-label">Conversaciones fuera de carpetas</div>
-          ${orderedLoose.length ? orderedLoose.map((chat) => rowHtml(chat, ctx, rootContainer, { draggable: !needle })).join('') : '<div class="cab-fs-empty">Soltá acá una conversación para sacarla de una carpeta</div>'}
+          <div class="cab-fs-root-label">${t('cabina.conversaciones.conversationsOutsideFolders', 'Conversaciones fuera de carpetas')}</div>
+          ${orderedLoose.length
+            ? orderedLoose.map((chat) => rowHtml(chat, ctx, rootContainer, { draggable: !needle })).join('')
+            : `<div class="cab-fs-empty">${t('cabina.conversaciones.dropOutsideFolder', 'Soltá acá una conversación para sacarla de una carpeta')}</div>`}
         </div>
       </section>`);
     }
-    return `<div class="cab-fs-tree" aria-label="Explorador de conversaciones">
-      ${sections.join('') || `<div class="cab-fs-empty cab-fs-empty--main">${needle ? 'No hay conversaciones que coincidan con la búsqueda.' : 'Todavía no hay conversaciones. Podés empezar creando una carpeta.'}</div>`}
+    return `<div class="cab-fs-tree" aria-label="${t('cabina.conversaciones.conversationExplorer', 'Explorador de conversaciones')}">
+      ${sections.join('') || `<div class="cab-fs-empty cab-fs-empty--main">${needle
+        ? t('cabina.conversaciones.noSearchResults', 'No hay conversaciones que coincidan con la búsqueda.')
+        : t('cabina.conversaciones.noConversationsYet', 'Todavía no hay conversaciones. Podés empezar creando una carpeta.')}</div>`}
     </div>`;
   };
 
@@ -642,10 +766,10 @@ async function mountList(el, ctx, isCurrent) {
       paint();
     } catch (error) {
       if (!chats.length && active) {
-        list.innerHTML = `<div class="cab-view-state cab-view-state--error"><strong>No se pudieron cargar las conversaciones.</strong><span>${escapeHtml(error.message)}</span></div>`;
-        summary.textContent = 'La lista no está disponible.';
+        list.innerHTML = `<div class="cab-view-state cab-view-state--error"><strong>${t('cabina.conversaciones.loadConversationsError', 'No se pudieron cargar las conversaciones.')}</strong><span>${escapeHtml(error.message)}</span></div>`;
+        summary.textContent = t('cabina.conversaciones.listUnavailable', 'La lista no está disponible.');
       } else {
-        ctx.toast(`No se pudo actualizar la lista: ${error.message}`);
+        ctx.toast(t('cabina.conversaciones.updateListError', 'No se pudo actualizar la lista: {message}', { message: error.message }));
       }
     } finally {
       loading = false;
@@ -721,9 +845,12 @@ async function mountList(el, ctx, isCurrent) {
       void createFolder(worlds[0]);
       return;
     }
-    openMenu(worlds.map((world) => ({ label: `Crear en ${worldLabel(world)}`, action: () => createFolder(world) })), {
+    openMenu(worlds.map((world) => ({
+      label: t('cabina.conversaciones.createInWorld', 'Crear en {world}', { world: worldLabel(world) }),
+      action: () => createFolder(world),
+    })), {
       anchor: createButton,
-      label: 'Elegir dónde crear la carpeta',
+      label: t('cabina.conversaciones.chooseFolderLocation', 'Elegir dónde crear la carpeta'),
     });
   };
 
@@ -834,21 +961,22 @@ function messageText(event) {
 // Ninguna de estas claves llega a la pantalla: el mapa traduce herramientas
 // técnicas a una sola frase humana mientras la acción sigue pendiente.
 const TOOL_ACTIVITY_LABELS = [
-  { test: /^(Read|Glob|Grep)$/i, label: 'Revisando tus archivos…' },
-  { test: /^(Write|Edit|MultiEdit|NotebookEdit)$/i, label: 'Escribiendo un documento…' },
-  { test: /^(WebSearch|WebFetch)$/i, label: 'Buscando información…' },
-  { test: /^(Task|Agent)$/i, label: 'Coordinando el trabajo…' },
-  { test: /^(TodoRead|TodoWrite)$/i, label: 'Organizando los próximos pasos…' },
-  { test: /^AskUserQuestion$/i, label: 'Preparando una pregunta…' },
-  { test: /^Bash$/i, label: 'Realizando una tarea…' },
-  { test: /^mcp__gmail__/i, label: 'Buscando en tu correo…' },
-  { test: /^mcp__google_drive__/i, label: 'Revisando tus documentos…' },
-  { test: /^mcp__google_calendar__/i, label: 'Revisando tu agenda…' },
-  { test: /^mcp__github__/i, label: 'Revisando el proyecto…' },
+  { test: /^(Read|Glob|Grep)$/i, label: t('cabina.conversaciones.reviewingFiles', 'Revisando tus archivos…') },
+  { test: /^(Write|Edit|MultiEdit|NotebookEdit)$/i, label: t('cabina.conversaciones.writingDocument', 'Escribiendo un documento…') },
+  { test: /^(WebSearch|WebFetch)$/i, label: t('cabina.conversaciones.searchingInformation', 'Buscando información…') },
+  { test: /^(Task|Agent)$/i, label: t('cabina.conversaciones.coordinatingWork', 'Coordinando el trabajo…') },
+  { test: /^(TodoRead|TodoWrite)$/i, label: t('cabina.conversaciones.organizingNextSteps', 'Organizando los próximos pasos…') },
+  { test: /^AskUserQuestion$/i, label: t('cabina.conversaciones.preparingQuestion', 'Preparando una pregunta…') },
+  { test: /^Bash$/i, label: t('cabina.conversaciones.performingTask', 'Realizando una tarea…') },
+  { test: /^mcp__gmail__/i, label: t('cabina.conversaciones.searchingEmail', 'Buscando en tu correo…') },
+  { test: /^mcp__google_drive__/i, label: t('cabina.conversaciones.reviewingDocuments', 'Revisando tus documentos…') },
+  { test: /^mcp__google_calendar__/i, label: t('cabina.conversaciones.reviewingSchedule', 'Revisando tu agenda…') },
+  { test: /^mcp__github__/i, label: t('cabina.conversaciones.reviewingProject', 'Revisando el proyecto…') },
 ];
 
 function toolActivityLabel(name) {
-  return TOOL_ACTIVITY_LABELS.find(({ test }) => test.test(String(name || '')))?.label || 'Trabajando…';
+  return TOOL_ACTIVITY_LABELS.find(({ test }) => test.test(String(name || '')))?.label
+    || t('cabina.conversaciones.workingActivity', 'Trabajando…');
 }
 
 function eventToolId(event) {
@@ -860,16 +988,16 @@ const IMAGE_ATTACHMENT_RE = /\.(?:jpe?g|png|gif|webp)$/i;
 function attachmentChip(label) {
   const chip = document.createElement('span');
   chip.className = 'cab-chat-attachment-chip';
-  chip.textContent = label || 'Adjunto';
+  chip.textContent = label || t('cabina.conversaciones.attachment', 'Adjunto');
   return chip;
 }
 
 function openChatImage(src, title) {
   const image = document.createElement('img');
   image.className = 'cab-chat-zoom-image';
-  image.alt = title || 'Imagen ampliada';
+  image.alt = title || t('cabina.conversaciones.enlargedImage', 'Imagen ampliada');
   image.src = src;
-  const open = () => openZoomViewer({ title: title || 'Imagen', node: image });
+  const open = () => openZoomViewer({ title: title || t('cabina.conversaciones.image', 'Imagen'), node: image });
   if (image.complete && image.naturalWidth > 0) open();
   else image.addEventListener('load', open, { once: true });
 }
@@ -878,8 +1006,8 @@ function zoomableImage(src, name, fallbackLabel) {
   const button = document.createElement('button');
   button.className = 'cab-chat-image-button';
   button.type = 'button';
-  button.title = `Ampliar ${name}`;
-  button.setAttribute('aria-label', `Ampliar ${name}`);
+  button.title = t('cabina.conversaciones.enlargeImage', 'Ampliar {name}', { name });
+  button.setAttribute('aria-label', t('cabina.conversaciones.enlargeImage', 'Ampliar {name}', { name }));
   const image = document.createElement('img');
   image.className = 'cab-message-image cab-chat-image-thumb';
   image.src = src;
@@ -901,7 +1029,7 @@ function appendAttachments(parent, event, chatId) {
       const src = `/api/chat/attachment?id=${encodeURIComponent(chatId)}&name=${encodeURIComponent(name)}`;
       attachments.appendChild(zoomableImage(src, name, name));
     } else {
-      attachments.appendChild(attachmentChip(name || attachment?.type || 'Adjunto'));
+      attachments.appendChild(attachmentChip(name || attachment?.type || t('cabina.conversaciones.attachment', 'Adjunto')));
     }
   }
   parent.appendChild(attachments);
@@ -928,7 +1056,7 @@ function eventNode(event, ctx, index, chatId) {
     const note = document.createElement('div');
     note.className = 'cab-thread-note cab-thread-note--error';
     note.dataset.eventIndex = String(index);
-    note.textContent = 'No pude completar una parte del trabajo. Podés volver a intentar.';
+    note.textContent = t('cabina.conversaciones.partialWorkError', 'No pude completar una parte del trabajo. Podés volver a intentar.');
     return note;
   }
   if (event.type === 'image') {
@@ -939,15 +1067,17 @@ function eventNode(event, ctx, index, chatId) {
     article.dataset.eventIndex = String(index);
     const meta = document.createElement('div');
     meta.className = 'cab-message-meta';
-    meta.innerHTML = '<span class="cab-agent-mark" aria-hidden="true">✦</span><span>Asistente</span>';
-    const name = event.alt || event.name || 'Imagen compartida por el asistente';
-    article.append(meta, zoomableImage(src, name, 'Imagen no disponible'));
+    meta.innerHTML = `<span class="cab-agent-mark" aria-hidden="true">✦</span><span>${t('cabina.conversaciones.assistant', 'Asistente')}</span>`;
+    const name = event.alt || event.name || t('cabina.conversaciones.assistantSharedImage', 'Imagen compartida por el asistente');
+    article.append(meta, zoomableImage(src, name, t('cabina.conversaciones.imageUnavailable', 'Imagen no disponible')));
     return article;
   }
   const isPerson = event.type === 'user' || event.type === 'say';
   const isAgent = event.type === 'assistant';
   if (!isPerson && !isAgent) return null;
-  const who = isPerson ? (event.by || 'Vos') : 'Asistente';
+  const who = isPerson
+    ? (event.by || t('cabina.conversaciones.you', 'Vos'))
+    : t('cabina.conversaciones.assistant', 'Asistente');
   const time = event.ts ? ctx.fmtDate(event.ts) : '';
   const article = document.createElement('article');
   article.className = `cab-message cab-message--${isPerson ? 'person' : 'agent'}`;
@@ -988,51 +1118,55 @@ async function mountDetail(el, ctx, id, isCurrent) {
   if (!active || !isCurrent()) return;
   const chat = (Array.isArray(data?.chats) ? data.chats : [])
     .find((item) => item.id === id && !item.isSala && belongsToIdentity(item, identity));
-  if (!chat) throw new Error('La conversación no existe o no está disponible para esta cuenta.');
+  if (!chat) throw new Error(t('cabina.conversaciones.conversationUnavailable', 'La conversación no existe o no está disponible para esta cuenta.'));
   const composerDisabled = chat.archived || chat.viewMode === 'tui';
   el.innerHTML = `
     <section class="cab-main-inner cab-conversation-detail">
       <header class="cab-page-header cab-page-header--detail">
-        <button class="cab-btn cab-btn--cold" type="button" data-conversation-back>${ctx.icon('back')} Conversaciones</button>
+        <button class="cab-btn cab-btn--cold" type="button" data-conversation-back>${ctx.icon('back')} ${t('cabina.conversaciones.conversations', 'Conversaciones')}</button>
         <div class="cab-detail-heading">
-          <h1 class="cab-title">${escapeHtml(chat.title || 'Conversación sin título')}</h1>
+          <h1 class="cab-title">${escapeHtml(chat.title || t('cabina.conversaciones.untitledConversation', 'Conversación sin título'))}</h1>
           <p class="cab-subtitle">${escapeHtml(conversationMeta(chat, stateOf(chat)))}</p>
         </div>
       </header>
       <div class="cab-detail-layout">
         <div class="cab-thread-column">
           <div class="cab-thread" data-conversation-thread>
-            <div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>Cargando historial…</span></div>
+            <div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>${t('cabina.conversaciones.loadingHistory', 'Cargando historial…')}</span></div>
           </div>
           <form class="cab-composer" data-conversation-composer>
-            <textarea class="cab-composer-field" rows="2" placeholder="Escribí un mensaje" aria-label="Mensaje" data-conversation-input ${composerDisabled ? 'disabled' : ''}></textarea>
+            <textarea class="cab-composer-field" rows="2" placeholder="${t('cabina.conversaciones.messagePlaceholder', 'Escribí un mensaje')}" aria-label="${t('cabina.conversaciones.message', 'Mensaje')}" data-conversation-input ${composerDisabled ? 'disabled' : ''}></textarea>
             <div class="cab-composer-actions">
-              <span class="cab-composer-status" data-conversation-status>${composerDisabled ? (chat.archived ? 'Reviví la conversación desde la consola actual para continuar.' : 'Esta conversación está en modo Terminal.') : 'Conectando…'}</span>
-              <button class="cab-btn cab-btn--hot cab-composer-send" type="submit" data-conversation-send disabled>${ctx.icon('send')} Enviar</button>
+              <span class="cab-composer-status" data-conversation-status>${composerDisabled
+                ? (chat.archived
+                  ? t('cabina.conversaciones.reviveToContinue', 'Reviví la conversación desde la consola actual para continuar.')
+                  : t('cabina.conversaciones.conversationInTerminal', 'Esta conversación está en modo Terminal.'))
+                : t('cabina.conversaciones.connecting', 'Conectando…')}</span>
+              <button class="cab-btn cab-btn--hot cab-composer-send" type="submit" data-conversation-send disabled>${ctx.icon('send')} ${t('cabina.conversaciones.send', 'Enviar')}</button>
             </div>
           </form>
         </div>
-        <aside class="cab-panel-dock" aria-label="Paneles de la conversación" data-panel-dock>
-          <section class="cab-floating-panel cab-floating-panel--acta" id="cab-floating-acta" data-floating-panel="acta" role="dialog" aria-label="Índice de la conversación" aria-hidden="true" tabindex="-1" inert>
-            <button class="cab-floating-panel-close" type="button" data-panel-close="acta" aria-label="Cerrar Índice" title="Cerrar Índice">×</button>
+        <aside class="cab-panel-dock" aria-label="${t('cabina.conversaciones.conversationPanels', 'Paneles de la conversación')}" data-panel-dock>
+          <section class="cab-floating-panel cab-floating-panel--acta" id="cab-floating-acta" data-floating-panel="acta" role="dialog" aria-label="${t('cabina.conversaciones.conversationIndex', 'Índice de la conversación')}" aria-hidden="true" tabindex="-1" inert>
+            <button class="cab-floating-panel-close" type="button" data-panel-close="acta" aria-label="${t('cabina.conversaciones.closeIndex', 'Cerrar Índice')}" title="${t('cabina.conversaciones.closeIndex', 'Cerrar Índice')}">×</button>
             <div class="cab-floating-panel-content"><section data-cabina-panel="acta"></section></div>
           </section>
-          <section class="cab-floating-panel cab-floating-panel--artefactos" id="cab-floating-artefactos" data-floating-panel="artefactos" role="dialog" aria-label="Artefactos de la conversación" aria-hidden="true" tabindex="-1" inert>
-            <button class="cab-floating-panel-close" type="button" data-panel-close="artefactos" aria-label="Cerrar Artefactos" title="Cerrar Artefactos">×</button>
+          <section class="cab-floating-panel cab-floating-panel--artefactos" id="cab-floating-artefactos" data-floating-panel="artefactos" role="dialog" aria-label="${t('cabina.conversaciones.conversationArtifacts', 'Artefactos de la conversación')}" aria-hidden="true" tabindex="-1" inert>
+            <button class="cab-floating-panel-close" type="button" data-panel-close="artefactos" aria-label="${t('cabina.conversaciones.closeArtifacts', 'Cerrar Artefactos')}" title="${t('cabina.conversaciones.closeArtifacts', 'Cerrar Artefactos')}">×</button>
             <div class="cab-floating-panel-content"><section data-cabina-panel="artefactos"></section></div>
           </section>
           <div class="cab-panel-launchers">
-            <button class="cab-panel-launcher" type="button" data-panel-toggle="acta" aria-controls="cab-floating-acta" aria-expanded="false" aria-label="Abrir Índice" title="Índice">
+            <button class="cab-panel-launcher" type="button" data-panel-toggle="acta" aria-controls="cab-floating-acta" aria-expanded="false" aria-label="${t('cabina.conversaciones.openIndex', 'Abrir Índice')}" title="${t('cabina.conversaciones.index', 'Índice')}">
               ${floatingPanelIcon('acta')}<span class="cab-panel-count" data-panel-count="acta" hidden></span>
             </button>
-            <button class="cab-panel-launcher" type="button" data-panel-toggle="artefactos" aria-controls="cab-floating-artefactos" aria-expanded="false" aria-label="Abrir Artefactos" title="Artefactos">
+            <button class="cab-panel-launcher" type="button" data-panel-toggle="artefactos" aria-controls="cab-floating-artefactos" aria-expanded="false" aria-label="${t('cabina.conversaciones.openArtifacts', 'Abrir Artefactos')}" title="${t('cabina.conversaciones.artifacts', 'Artefactos')}">
               ${floatingPanelIcon('artefactos')}<span class="cab-panel-count" data-panel-count="artefactos" hidden></span>
             </button>
           </div>
         </aside>
-        <button class="cab-jump-latest" type="button" data-jump-latest aria-label="Ir al último mensaje" aria-hidden="true" tabindex="-1">
+        <button class="cab-jump-latest" type="button" data-jump-latest aria-label="${t('cabina.conversaciones.goToLatestMessage', 'Ir al último mensaje')}" aria-hidden="true" tabindex="-1">
           <span aria-hidden="true">↓</span>
-          <span>Ir al último</span>
+          <span>${t('cabina.conversaciones.goToLatest', 'Ir al último')}</span>
           <span class="cab-jump-latest-count" data-jump-latest-count hidden></span>
         </button>
       </div>
@@ -1090,7 +1224,14 @@ async function mountDetail(el, ctx, id, isCurrent) {
       panel.setAttribute('aria-hidden', String(!isOpen));
       panel.toggleAttribute('inert', !isOpen);
       button.setAttribute('aria-expanded', String(isOpen));
-      button.setAttribute('aria-label', `${isOpen ? 'Cerrar' : 'Abrir'} ${panelName === 'acta' ? 'Índice' : 'Artefactos'}`);
+      button.setAttribute('aria-label', t('cabina.conversaciones.togglePanel', '{action} {panel}', {
+        action: isOpen
+          ? t('cabina.conversaciones.close', 'Cerrar')
+          : t('cabina.conversaciones.open', 'Abrir'),
+        panel: panelName === 'acta'
+          ? t('cabina.conversaciones.index', 'Índice')
+          : t('cabina.conversaciones.artifacts', 'Artefactos'),
+      }));
     }
     if (persist) saveOpenPanel();
     if (openPanelName) panelElement(openPanelName).focus({ preventScroll: true });
@@ -1162,8 +1303,10 @@ async function mountDetail(el, ctx, id, isCurrent) {
     jumpLatest.setAttribute(
       'aria-label',
       nuevosMensajes
-        ? `Ir al último mensaje, ${nuevosMensajes} ${nuevosMensajes === 1 ? 'mensaje nuevo' : 'mensajes nuevos'}`
-        : 'Ir al último mensaje',
+        ? (nuevosMensajes === 1
+          ? t('cabina.conversaciones.goToLatestOneNew', 'Ir al último mensaje, {count} mensaje nuevo', { count: nuevosMensajes })
+          : t('cabina.conversaciones.goToLatestManyNew', 'Ir al último mensaje, {count} mensajes nuevos', { count: nuevosMensajes }))
+        : t('cabina.conversaciones.goToLatestMessage', 'Ir al último mensaje'),
     );
   };
   const setPegadoAlFondo = (value) => {
@@ -1326,7 +1469,7 @@ async function mountDetail(el, ctx, id, isCurrent) {
 
   const ensureEmptyState = () => {
     if (thread.querySelector('[data-event-index], [data-streaming-message]')) return;
-    thread.innerHTML = '<div class="cab-view-state"><p>Esta conversación todavía no tiene mensajes.</p></div>';
+    thread.innerHTML = `<div class="cab-view-state"><p>${t('cabina.conversaciones.noMessagesYet', 'Esta conversación todavía no tiene mensajes.')}</p></div>`;
   };
 
   const paintHistory = (events) => {
@@ -1366,7 +1509,9 @@ async function mountDetail(el, ctx, id, isCurrent) {
     if (composerDisabled) return;
     input.disabled = !connected;
     send.disabled = !connected;
-    status.textContent = connected ? 'Conectada' : 'Reconectando…';
+    status.textContent = connected
+      ? t('cabina.conversaciones.connected', 'Conectada')
+      : t('cabina.conversaciones.reconnecting', 'Reconectando…');
   };
   const onMessage = (message) => {
     if (message.type === 'history') {
@@ -1383,7 +1528,7 @@ async function mountDetail(el, ctx, id, isCurrent) {
         live.className = 'cab-message cab-message--agent cab-message--active';
         live.dataset.streamingMessage = '';
         live.dataset.eventIndex = String(historyEvents.length);
-        live.innerHTML = '<div class="cab-message-meta"><span class="cab-agent-mark" aria-hidden="true">✦</span><span>Asistente</span></div><div class="cab-message-bubble"></div>';
+        live.innerHTML = `<div class="cab-message-meta"><span class="cab-agent-mark" aria-hidden="true">✦</span><span>${t('cabina.conversaciones.assistant', 'Asistente')}</span></div><div class="cab-message-bubble"></div>`;
         const activity = thread.querySelector('[data-tool-activity]');
         if (activity) activity.before(live);
         else thread.appendChild(live);
@@ -1408,14 +1553,20 @@ async function mountDetail(el, ctx, id, isCurrent) {
       streamText = '';
       streamingContadoComoNuevo = false;
     }
-    if (message.type === 'status') status.textContent = message.state === 'working' ? 'El asistente está trabajando…' : 'Conectada';
+    if (message.type === 'status') {
+      status.textContent = message.state === 'working'
+        ? t('cabina.conversaciones.assistantWorking', 'El asistente está trabajando…')
+        : t('cabina.conversaciones.connected', 'Conectada');
+    }
     appendEvent(message, { countAsNew });
   };
   const connect = () => {
     if (!active) return;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socket = new WebSocket(`${protocol}//${location.host}/ws/chat?id=${encodeURIComponent(id)}`);
-    socket.addEventListener('open', () => { if (active) status.textContent = 'Cargando historial…'; });
+    socket.addEventListener('open', () => {
+      if (active) status.textContent = t('cabina.conversaciones.loadingHistory', 'Cargando historial…');
+    });
     socket.addEventListener('message', (event) => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
@@ -1435,7 +1586,7 @@ async function mountDetail(el, ctx, id, isCurrent) {
     if (!text || socket?.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'user', text }));
     input.value = '';
-    status.textContent = 'Enviando…';
+    status.textContent = t('cabina.conversaciones.sending', 'Enviando…');
   };
   const onKeydown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {

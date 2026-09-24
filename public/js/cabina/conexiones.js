@@ -1,20 +1,21 @@
 import { icon } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
 
 const PROVIDER_COPY = {
   microsoft: {
     name: 'Microsoft 365',
-    can: 'El agente puede leer y enviar correo, organizar tu calendario y tus tareas, consultar contactos, trabajar con archivos y sitios, y leer las conversaciones de Teams necesarias para ayudarte.',
-    cannot: 'No recibe tu contraseña ni puede cambiar la seguridad de tu cuenta, administrar usuarios o entrar a productos fuera de Microsoft 365.',
+    can: t('cabina.conexiones.microsoftCan', 'El agente puede leer y enviar correo, organizar tu calendario y tus tareas, consultar contactos, trabajar con archivos y sitios, y leer las conversaciones de Teams necesarias para ayudarte.'),
+    cannot: t('cabina.conexiones.microsoftCannot', 'No recibe tu contraseña ni puede cambiar la seguridad de tu cuenta, administrar usuarios o entrar a productos fuera de Microsoft 365.'),
   },
   zoho: {
     name: 'Zoho',
-    can: 'El agente puede trabajar con tickets y contactos de Desk, consultar y actualizar la información de CRM, y revisar proyectos y tareas.',
-    cannot: 'No recibe tu contraseña ni puede administrar usuarios, pagos o la configuración general de tu organización.',
+    can: t('cabina.conexiones.zohoCan', 'El agente puede trabajar con tickets y contactos de Desk, consultar y actualizar la información de CRM, y revisar proyectos y tareas.'),
+    cannot: t('cabina.conexiones.zohoCannot', 'No recibe tu contraseña ni puede administrar usuarios, pagos o la configuración general de tu organización.'),
   },
   freshservice: {
     name: 'Freshservice',
-    can: 'El agente puede ayudarte con tickets y con la información de soporte que tu cuenta de Freshservice ya puede ver y gestionar.',
-    cannot: 'No recibe tu contraseña ni obtiene más permisos que los que ya tiene tu usuario de Freshservice.',
+    can: t('cabina.conexiones.freshserviceCan', 'El agente puede ayudarte con tickets y con la información de soporte que tu cuenta de Freshservice ya puede ver y gestionar.'),
+    cannot: t('cabina.conexiones.freshserviceCannot', 'No recibe tu contraseña ni obtiene más permisos que los que ya tiene tu usuario de Freshservice.'),
   },
 };
 
@@ -46,9 +47,9 @@ function accountLabel(provider) {
     if (identity && provider.email && identity !== provider.email) {
       return `${identity} · ${provider.email}`;
     }
-    return identity || provider.domain || 'Cuenta verificada';
+    return identity || provider.domain || t('cabina.conexiones.verifiedAccount', 'Cuenta verificada');
   }
-  return provider.account || 'Cuenta verificada';
+  return provider.account || t('cabina.conexiones.verifiedAccount', 'Cuenta verificada');
 }
 
 function initialPhase(provider) {
@@ -70,13 +71,13 @@ function formatRemaining(milliseconds) {
 
 function statusView(provider, phase) {
   if (provider.connected || phase.name === 'connected') {
-    return { label: 'Conectada', modifier: 'working' };
+    return { label: t('cabina.conexiones.statusConnected', 'Conectada'), modifier: 'working' };
   }
-  if (phase.name === 'error') return { label: 'Con error', modifier: 'waiting' };
-  if (phase.name === 'starting') return { label: 'Conectando · iniciando', modifier: 'working' };
-  if (phase.name === 'awaiting-code') return { label: 'Conectando · falta tu autorización', modifier: 'working' };
-  if (phase.name === 'exchanging') return { label: 'Conectando · verificando', modifier: 'working' };
-  return { label: 'Sin conectar', modifier: 'resting' };
+  if (phase.name === 'error') return { label: t('cabina.conexiones.statusError', 'Con error'), modifier: 'waiting' };
+  if (phase.name === 'starting') return { label: t('cabina.conexiones.statusStarting', 'Conectando · iniciando'), modifier: 'working' };
+  if (phase.name === 'awaiting-code') return { label: t('cabina.conexiones.statusAwaitingAuthorization', 'Conectando · falta tu autorización'), modifier: 'working' };
+  if (phase.name === 'exchanging') return { label: t('cabina.conexiones.statusVerifying', 'Conectando · verificando'), modifier: 'working' };
+  return { label: t('cabina.conexiones.statusNotConnected', 'Sin conectar'), modifier: 'resting' };
 }
 
 function button(ctx, { action, provider, label, hot = false, disabled = false, icon: iconName = '' }) {
@@ -86,7 +87,7 @@ function button(ctx, { action, provider, label, hot = false, disabled = false, i
 
 function connectedDetail(provider, ctx) {
   const date = provider.connectedAt
-    ? `<span> · desde ${esc(ctx.fmtDate(provider.connectedAt))}</span>`
+    ? `<span>${esc(t('cabina.conexiones.connectedSince', ' · desde {date}', { date: ctx.fmtDate(provider.connectedAt) }))}</span>`
     : '';
   return `
     <p class="cab-summary-meta">
@@ -98,69 +99,69 @@ function connectedDetail(provider, ctx) {
 function microsoftFlow(provider, phase, ctx) {
   if (phase.name === 'starting') {
     return `
-      <p class="cab-subtitle" role="status">Estamos preparando una autorización segura con Microsoft…</p>
+      <p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.preparingMicrosoftAuthorization', 'Estamos preparando una autorización segura con Microsoft…'))}</p>
       <div class="cab-composer-actions">
-        ${button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar' })}
+        ${button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancel', 'Cancelar') })}
       </div>`;
   }
 
   if (!['awaiting-code', 'exchanging'].includes(phase.name)) return '';
   const url = safeExternalUrl(phase.verificationUri);
   const countdown = phase.deadline
-    ? `<span class="cab-status-chip cab-status-chip--waiting" data-countdown="microsoft">Vence en ${formatRemaining(phase.deadline - Date.now())}</span>`
+    ? `<span class="cab-status-chip cab-status-chip--waiting" data-countdown="microsoft">${esc(t('cabina.conexiones.expiresIn', 'Vence en {time}', { time: formatRemaining(phase.deadline - Date.now()) }))}</span>`
     : '';
   const checking = phase.name === 'exchanging'
-    ? '<p class="cab-subtitle" role="status">Estamos comprobando la autorización. Podés dejar esta pantalla abierta.</p>'
-    : '<p class="cab-subtitle" role="status">Microsoft te pedirá este código. Cuando autorices, la conexión se confirmará sola.</p>';
+    ? `<p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.checkingMicrosoftAuthorization', 'Estamos comprobando la autorización. Podés dejar esta pantalla abierta.'))}</p>`
+    : `<p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.microsoftCodeInstructions', 'Microsoft te pedirá este código. Cuando autorices, la conexión se confirmará sola.'))}</p>`;
 
   return `
     ${checking}
     <div class="cab-composer">
-      <p class="cab-summary-eyebrow">Tu código de un solo uso</p>
-      <output class="cab-title" aria-label="Código de Microsoft">${esc(phase.userCode)}</output>
+      <p class="cab-summary-eyebrow">${esc(t('cabina.conexiones.oneTimeCode', 'Tu código de un solo uso'))}</p>
+      <output class="cab-title" aria-label="${esc(t('cabina.conexiones.microsoftCodeAriaLabel', 'Código de Microsoft'))}">${esc(phase.userCode)}</output>
       <div class="cab-composer-actions">
-        ${button(ctx, { action: 'copy-code', provider: provider.id, label: 'Copiar código', icon: 'clipboard' })}
-        ${url ? `<a class="cab-btn cab-btn--hot" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-action="open-microsoft" data-provider="microsoft">${icon('externalLink')}<span>Abrir Microsoft</span></a>` : ''}
+        ${button(ctx, { action: 'copy-code', provider: provider.id, label: t('cabina.conexiones.copyCode', 'Copiar código'), icon: 'clipboard' })}
+        ${url ? `<a class="cab-btn cab-btn--hot" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-action="open-microsoft" data-provider="microsoft">${icon('externalLink')}<span>${esc(t('cabina.conexiones.openMicrosoft', 'Abrir Microsoft'))}</span></a>` : ''}
         ${countdown}
       </div>
     </div>
     <ol class="cab-subtitle">
-      <li>Abrí Microsoft con el botón.</li>
-      <li>Escribí el código grande y aceptá.</li>
-      <li>Volvé acá; la consola terminará automáticamente.</li>
+      <li>${esc(t('cabina.conexiones.microsoftStepOpen', 'Abrí Microsoft con el botón.'))}</li>
+      <li>${esc(t('cabina.conexiones.microsoftStepEnterCode', 'Escribí el código grande y aceptá.'))}</li>
+      <li>${esc(t('cabina.conexiones.microsoftStepReturn', 'Volvé acá; la consola terminará automáticamente.'))}</li>
     </ol>
     <div class="cab-composer-actions">
-      ${button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar' })}
+      ${button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancel', 'Cancelar') })}
     </div>`;
 }
 
 function zohoFlow(provider, phase, ctx) {
   if (phase.name === 'starting') {
     return `
-      <p class="cab-subtitle" role="status">Estamos preparando la autorización con Zoho…</p>
-      <div class="cab-composer-actions">${button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar' })}</div>`;
+      <p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.preparingZohoAuthorization', 'Estamos preparando la autorización con Zoho…'))}</p>
+      <div class="cab-composer-actions">${button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancel', 'Cancelar') })}</div>`;
   }
   if (phase.name === 'exchanging') {
     return `
-      <p class="cab-subtitle" role="status">Zoho está verificando el código y terminando la conexión…</p>
-      <div class="cab-composer-actions">${button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar' })}</div>`;
+      <p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.zohoVerifyingCode', 'Zoho está verificando el código y terminando la conexión…'))}</p>
+      <div class="cab-composer-actions">${button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancel', 'Cancelar') })}</div>`;
   }
   if (phase.name !== 'awaiting-code') return '';
 
   const url = safeExternalUrl(phase.authUrl);
   return `
-    <p class="cab-subtitle" role="status">Autorizá la cuenta en Zoho y pegá acá el código de un solo uso que te entregue.</p>
+    <p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.zohoAuthorizationInstructions', 'Autorizá la cuenta en Zoho y pegá acá el código de un solo uso que te entregue.'))}</p>
     <ol class="cab-subtitle">
-      <li>${url ? `<a class="cab-btn cab-btn--hot" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('externalLink')}<span>Abrir Zoho</span></a>` : 'Abrí la consola de Zoho.'}</li>
-      <li>Al crear la autorización, usá los permisos preparados para esta conexión. ${button(ctx, { action: 'copy-permissions', provider: provider.id, label: 'Copiar permisos necesarios', icon: 'clipboard' })}</li>
-      <li>Copiá el código que te muestre Zoho y pegalo abajo enseguida: dura pocos minutos y se usa una sola vez.</li>
+      <li>${url ? `<a class="cab-btn cab-btn--hot" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('externalLink')}<span>${esc(t('cabina.conexiones.openZoho', 'Abrir Zoho'))}</span></a>` : esc(t('cabina.conexiones.openZohoConsole', 'Abrí la consola de Zoho.'))}</li>
+      <li>${esc(t('cabina.conexiones.zohoPermissionsInstructions', 'Al crear la autorización, usá los permisos preparados para esta conexión.'))} ${button(ctx, { action: 'copy-permissions', provider: provider.id, label: t('cabina.conexiones.copyRequiredPermissions', 'Copiar permisos necesarios'), icon: 'clipboard' })}</li>
+      <li>${esc(t('cabina.conexiones.zohoPasteCodeInstructions', 'Copiá el código que te muestre Zoho y pegalo abajo enseguida: dura pocos minutos y se usa una sola vez.'))}</li>
     </ol>
     <form class="cab-composer" data-form="zoho" data-provider="zoho">
-      <label class="cab-summary-eyebrow" for="cab-zoho-code">Código entregado por Zoho</label>
-      <input class="cab-composer-field" id="cab-zoho-code" name="code" type="password" autocomplete="off" required placeholder="Pegalo acá">
+      <label class="cab-summary-eyebrow" for="cab-zoho-code">${esc(t('cabina.conexiones.zohoCodeLabel', 'Código entregado por Zoho'))}</label>
+      <input class="cab-composer-field" id="cab-zoho-code" name="code" type="password" autocomplete="off" required placeholder="${esc(t('cabina.conexiones.pasteHere', 'Pegalo acá'))}">
       <div class="cab-composer-actions">
-        ${button(ctx, { action: 'submit-zoho', provider: provider.id, label: 'Terminar conexión', hot: true, icon: 'check' })}
-        ${button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar' })}
+        ${button(ctx, { action: 'submit-zoho', provider: provider.id, label: t('cabina.conexiones.finishConnection', 'Terminar conexión'), hot: true, icon: 'check' })}
+        ${button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancel', 'Cancelar') })}
       </div>
     </form>`;
 }
@@ -168,13 +169,13 @@ function zohoFlow(provider, phase, ctx) {
 function freshserviceForm(provider, ctx) {
   return `
     <form class="cab-composer" data-form="freshservice" data-provider="freshservice">
-      <label class="cab-summary-eyebrow" for="cab-fresh-domain">Dirección de tu cuenta</label>
-      <input class="cab-composer-field" id="cab-fresh-domain" name="domain" type="text" inputmode="url" autocomplete="url" required placeholder="tuempresa.freshservice.com">
-      <label class="cab-summary-eyebrow" for="cab-fresh-key">Clave de API</label>
-      <input class="cab-composer-field" id="cab-fresh-key" name="apiKey" type="password" autocomplete="new-password" required placeholder="Pegala acá">
-      <p class="cab-summary-meta">La clave se envía directamente para verificar la cuenta. Nunca se vuelve a mostrar en esta pantalla.</p>
+      <label class="cab-summary-eyebrow" for="cab-fresh-domain">${esc(t('cabina.conexiones.accountAddress', 'Dirección de tu cuenta'))}</label>
+      <input class="cab-composer-field" id="cab-fresh-domain" name="domain" type="text" inputmode="url" autocomplete="url" required placeholder="${esc(t('cabina.conexiones.freshserviceDomainPlaceholder', 'tuempresa.freshservice.com'))}">
+      <label class="cab-summary-eyebrow" for="cab-fresh-key">${esc(t('cabina.conexiones.apiKey', 'Clave de API'))}</label>
+      <input class="cab-composer-field" id="cab-fresh-key" name="apiKey" type="password" autocomplete="new-password" required placeholder="${esc(t('cabina.conexiones.pasteHereFeminine', 'Pegala acá'))}">
+      <p class="cab-summary-meta">${esc(t('cabina.conexiones.apiKeyPrivacy', 'La clave se envía directamente para verificar la cuenta. Nunca se vuelve a mostrar en esta pantalla.'))}</p>
       <div class="cab-composer-actions">
-        ${button(ctx, { action: 'submit-freshservice', provider: provider.id, label: 'Verificar y conectar', hot: true, icon: 'check' })}
+        ${button(ctx, { action: 'submit-freshservice', provider: provider.id, label: t('cabina.conexiones.verifyAndConnect', 'Verificar y conectar'), hot: true, icon: 'check' })}
       </div>
     </form>`;
 }
@@ -182,18 +183,18 @@ function freshserviceForm(provider, ctx) {
 function actionArea(provider, phase, ctx, allConnected) {
   if (allConnected) return '';
   if (provider.connected || phase.name === 'connected') {
-    return `<div class="cab-composer-actions">${button(ctx, { action: 'disconnect', provider: provider.id, label: 'Desconectar' })}</div>`;
+    return `<div class="cab-composer-actions">${button(ctx, { action: 'disconnect', provider: provider.id, label: t('cabina.conexiones.disconnect', 'Desconectar') })}</div>`;
   }
   if (phase.name === 'error') {
     return `
-      <p class="cab-subtitle" role="alert">${esc(phase.error || 'No se pudo completar la conexión.')}</p>
+      <p class="cab-subtitle" role="alert">${esc(phase.error || t('cabina.conexiones.connectionFailed', 'No se pudo completar la conexión.'))}</p>
       <div class="cab-composer-actions">
-        ${button(ctx, { action: 'retry', provider: provider.id, label: 'Intentar de nuevo', hot: true, icon: 'refresh', disabled: provider.configured === false })}
-        ${phase.jobId ? button(ctx, { action: 'cancel', provider: provider.id, label: 'Cancelar intento' }) : ''}
+        ${button(ctx, { action: 'retry', provider: provider.id, label: t('cabina.conexiones.tryAgain', 'Intentar de nuevo'), hot: true, icon: 'refresh', disabled: provider.configured === false })}
+        ${phase.jobId ? button(ctx, { action: 'cancel', provider: provider.id, label: t('cabina.conexiones.cancelAttempt', 'Cancelar intento') }) : ''}
       </div>`;
   }
   if (provider.configured === false) {
-    return '<p class="cab-subtitle" role="status">Un administrador todavía tiene que habilitar esta conexión. No necesitás cargar ninguna configuración técnica.</p>';
+    return `<p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.adminMustEnable', 'Un administrador todavía tiene que habilitar esta conexión. No necesitás cargar ninguna configuración técnica.'))}</p>`;
   }
   if (provider.id === 'microsoft') {
     const flow = microsoftFlow(provider, phase, ctx);
@@ -205,35 +206,35 @@ function actionArea(provider, phase, ctx, allConnected) {
   }
   if (provider.id === 'freshservice') {
     if (phase.name === 'exchanging') {
-      return '<p class="cab-subtitle" role="status">Estamos verificando la cuenta con Freshservice…</p>';
+      return `<p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.verifyingFreshserviceAccount', 'Estamos verificando la cuenta con Freshservice…'))}</p>`;
     }
     return freshserviceForm(provider, ctx);
   }
   return `
-    ${phase.interrupted ? '<p class="cab-subtitle">Había una conexión anterior sin terminar. Al empezar de nuevo recibirás una autorización nueva.</p>' : ''}
+    ${phase.interrupted ? `<p class="cab-subtitle">${esc(t('cabina.conexiones.interruptedConnection', 'Había una conexión anterior sin terminar. Al empezar de nuevo recibirás una autorización nueva.'))}</p>` : ''}
     <div class="cab-composer-actions">
-      ${button(ctx, { action: 'connect', provider: provider.id, label: 'Conectar cuenta', hot: true })}
+      ${button(ctx, { action: 'connect', provider: provider.id, label: t('cabina.conexiones.connectAccount', 'Conectar cuenta'), hot: true })}
     </div>`;
 }
 
 function providerCard(provider, phase, ctx, allConnected) {
   const copy = PROVIDER_COPY[provider.id] || {
     name: provider.label || provider.id,
-    can: 'El agente puede usar esta cuenta para ayudarte cuando se lo pidas.',
-    cannot: 'No recibe tu contraseña.',
+    can: t('cabina.conexiones.genericCan', 'El agente puede usar esta cuenta para ayudarte cuando se lo pidas.'),
+    cannot: t('cabina.conexiones.genericCannot', 'No recibe tu contraseña.'),
   };
   const status = statusView(provider, phase);
   return `
     <article class="cab-summary-card" data-provider-card="${esc(provider.id)}">
       <div class="cab-page-header">
         <div>
-          <p class="cab-summary-eyebrow">Conexión</p>
+          <p class="cab-summary-eyebrow">${esc(t('cabina.conexiones.connectionEyebrow', 'Conexión'))}</p>
           <h2 class="cab-summary-title">${esc(copy.name)}</h2>
         </div>
         <span class="cab-status-chip cab-status-chip--${status.modifier}">${esc(status.label)}</span>
       </div>
-      <p class="cab-subtitle"><strong>Qué podrá hacer:</strong> ${esc(copy.can)}</p>
-      <p class="cab-subtitle"><strong>Qué no:</strong> ${esc(copy.cannot)}</p>
+      <p class="cab-subtitle"><strong>${esc(t('cabina.conexiones.whatCanDo', 'Qué podrá hacer:'))}</strong> ${esc(copy.can)}</p>
+      <p class="cab-subtitle"><strong>${esc(t('cabina.conexiones.whatCannotDo', 'Qué no:'))}</strong> ${esc(copy.cannot)}</p>
       ${(provider.connected || phase.name === 'connected') ? connectedDetail(provider, ctx) : ''}
       ${actionArea(provider, phase, ctx, allConnected)}
     </article>`;
@@ -243,8 +244,8 @@ function loadingMarkup() {
   return `
     <header class="cab-page-header">
       <div>
-        <h1 class="cab-title">Conexiones</h1>
-        <p class="cab-subtitle" role="status">Estamos revisando qué cuentas ya están listas…</p>
+        <h1 class="cab-title">${esc(t('cabina.conexiones.title', 'Conexiones'))}</h1>
+        <p class="cab-subtitle" role="status">${esc(t('cabina.conexiones.loading', 'Estamos revisando qué cuentas ya están listas…'))}</p>
       </div>
     </header>`;
 }
@@ -254,36 +255,36 @@ function pageMarkup(providers, phases, ctx, loadError = '') {
     return `
       <header class="cab-page-header">
         <div>
-          <h1 class="cab-title">Conexiones</h1>
-          <p class="cab-subtitle">Acá conectás las cuentas con las que el agente puede ayudarte.</p>
+          <h1 class="cab-title">${esc(t('cabina.conexiones.title', 'Conexiones'))}</h1>
+          <p class="cab-subtitle">${esc(t('cabina.conexiones.intro', 'Acá conectás las cuentas con las que el agente puede ayudarte.'))}</p>
         </div>
       </header>
       <section class="cab-summary-card" role="alert">
-        <h2 class="cab-summary-title">No pudimos revisar tus conexiones</h2>
+        <h2 class="cab-summary-title">${esc(t('cabina.conexiones.loadFailedTitle', 'No pudimos revisar tus conexiones'))}</h2>
         <p class="cab-subtitle">${esc(loadError)}</p>
-        <div class="cab-composer-actions">${button(ctx, { action: 'reload', provider: '', label: 'Volver a intentar', hot: true, icon: 'refresh' })}</div>
+        <div class="cab-composer-actions">${button(ctx, { action: 'reload', provider: '', label: t('cabina.conexiones.retryLoad', 'Volver a intentar'), hot: true, icon: 'refresh' })}</div>
       </section>`;
   }
 
   const allConnected = providers.length > 0 && providers.every((provider) => provider.connected);
   const ready = allConnected
     ? `<section class="cab-summary-card" role="status">
-        <p class="cab-summary-eyebrow">Todo listo</p>
-        <h2 class="cab-summary-title">Todas tus cuentas ya están conectadas</h2>
-        <p class="cab-subtitle">No tenés que hacer nada. Las conexiones ya estaban preparadas cuando entraste.</p>
+        <p class="cab-summary-eyebrow">${esc(t('cabina.conexiones.allReady', 'Todo listo'))}</p>
+        <h2 class="cab-summary-title">${esc(t('cabina.conexiones.allConnectedTitle', 'Todas tus cuentas ya están conectadas'))}</h2>
+        <p class="cab-subtitle">${esc(t('cabina.conexiones.allConnectedDescription', 'No tenés que hacer nada. Las conexiones ya estaban preparadas cuando entraste.'))}</p>
       </section>`
     : '';
   return `
     <header class="cab-page-header">
       <div>
-        <h1 class="cab-title">Conexiones</h1>
-        <p class="cab-subtitle">Elegí qué cuentas puede usar el agente para ayudarte. Siempre vas a ver qué acceso obtiene antes de conectar.</p>
+        <h1 class="cab-title">${esc(t('cabina.conexiones.title', 'Conexiones'))}</h1>
+        <p class="cab-subtitle">${esc(t('cabina.conexiones.description', 'Elegí qué cuentas puede usar el agente para ayudarte. Siempre vas a ver qué acceso obtiene antes de conectar.'))}</p>
       </div>
-      <button class="cab-help-btn" type="button" data-cabina-help title="Cómo se usa esta pantalla" aria-label="Cómo se usa esta pantalla">${icon('help', { size: 16 })}</button>
+      <button class="cab-help-btn" type="button" data-cabina-help title="${esc(t('cabina.conexiones.helpTitle', 'Cómo se usa esta pantalla'))}" aria-label="${esc(t('cabina.conexiones.helpTitle', 'Cómo se usa esta pantalla'))}">${icon('help', { size: 16 })}</button>
     </header>
     ${ready}
-    <div class="cab-section-divider"><span>Tus cuentas</span><span class="cab-section-divider-line"></span></div>
-    <section class="cab-conversation-list" aria-label="Cuentas disponibles">
+    <div class="cab-section-divider"><span>${esc(t('cabina.conexiones.yourAccounts', 'Tus cuentas'))}</span><span class="cab-section-divider-line"></span></div>
+    <section class="cab-conversation-list" aria-label="${esc(t('cabina.conexiones.availableAccountsAriaLabel', 'Cuentas disponibles'))}">
       ${providers.map((provider) => providerCard(provider, phases.get(provider.id) || initialPhase(provider), ctx, allConnected)).join('')}
     </section>`;
 }
@@ -293,7 +294,7 @@ async function copyText(value, ctx, successMessage) {
     await navigator.clipboard.writeText(String(value || ''));
     ctx.toast(successMessage);
   } catch {
-    ctx.toast('No pudimos copiarlo automáticamente. Seleccionalo y copialo a mano.');
+    ctx.toast(t('cabina.conexiones.copyFailed', 'No pudimos copiarlo automáticamente. Seleccionalo y copialo a mano.'));
   }
 }
 
@@ -332,12 +333,12 @@ export default {
       if (!phase?.deadline || !['awaiting-code', 'exchanging'].includes(phase.name)) return;
       const remaining = phase.deadline - Date.now();
       const output = el.querySelector('[data-countdown="microsoft"]');
-      if (output) output.textContent = `Vence en ${formatRemaining(remaining)}`;
+      if (output) output.textContent = t('cabina.conexiones.expiresIn', 'Vence en {time}', { time: formatRemaining(remaining) });
       if (remaining > 0) return;
       stopPoll('microsoft');
       phases.set('microsoft', {
         name: 'error',
-        error: 'El código venció antes de completar la autorización. Iniciá de nuevo para recibir otro.',
+        error: t('cabina.conexiones.codeExpired', 'El código venció antes de completar la autorización. Iniciá de nuevo para recibir otro.'),
       });
       ctx.api.post('/api/connections/microsoft/cancel', {}).catch(() => {});
       render();
@@ -347,7 +348,7 @@ export default {
       try {
         const data = await ctx.api.get('/api/connections');
         if (!alive) return;
-        if (!Array.isArray(data?.providers)) throw new Error('La respuesta no contiene la lista de conexiones.');
+        if (!Array.isArray(data?.providers)) throw new Error(t('cabina.conexiones.invalidConnectionsResponse', 'La respuesta no contiene la lista de conexiones.'));
         providers = data.providers.filter((provider) => PROVIDER_COPY[provider.id]);
         for (const provider of providers) {
           const active = phases.get(provider.id);
@@ -376,13 +377,13 @@ export default {
             provider.account = result.account || provider.account;
             provider.connectedAt = provider.connectedAt || new Date().toISOString();
           }
-          ctx.toast(`${PROVIDER_COPY[providerId]?.name || providerId} quedó conectado.`);
+          ctx.toast(t('cabina.conexiones.providerConnected', '{provider} quedó conectado.', { provider: PROVIDER_COPY[providerId]?.name || providerId }));
           await load();
           return;
         }
         if (result.status === 'error') {
           stopPoll(providerId);
-          phases.set(providerId, { name: 'error', error: result.error || 'No se pudo completar la conexión.', jobId: phase.jobId });
+          phases.set(providerId, { name: 'error', error: result.error || t('cabina.conexiones.connectionFailed', 'No se pudo completar la conexión.'), jobId: phase.jobId });
           render();
           return;
         }
@@ -409,7 +410,7 @@ export default {
       try {
         const result = await ctx.api.post(`/api/connections/${encodeURIComponent(providerId)}/connect`, {});
         if (!alive) return;
-        if (!result?.jobId) throw new Error('No recibimos una autorización válida.');
+        if (!result?.jobId) throw new Error(t('cabina.conexiones.invalidAuthorization', 'No recibimos una autorización válida.'));
         if (providerId === 'microsoft' && result.mode === 'device') {
           phases.set(providerId, {
             name: 'awaiting-code',
@@ -426,7 +427,7 @@ export default {
             scopes: result.scopes || '',
           });
         } else {
-          throw new Error('El proveedor devolvió un modo de conexión desconocido.');
+          throw new Error(t('cabina.conexiones.unknownConnectionMode', 'El proveedor devolvió un modo de conexión desconocido.'));
         }
         render();
         pollTimers.set(providerId, setTimeout(() => poll(providerId), POLL_MS));
@@ -444,7 +445,7 @@ export default {
         if (!alive) return;
         phases.set(providerId, { name: 'idle' });
         render();
-        ctx.toast('Se canceló el intento de conexión.');
+        ctx.toast(t('cabina.conexiones.attemptCancelled', 'Se canceló el intento de conexión.'));
       } catch (error) {
         if (!alive) return;
         phases.set(providerId, { name: 'error', error: error.message || String(error) });
@@ -454,14 +455,14 @@ export default {
 
     const disconnect = async (providerId) => {
       const name = PROVIDER_COPY[providerId]?.name || providerId;
-      if (!window.confirm(`¿Querés desconectar ${name}? El agente dejará de poder usar esa cuenta.`)) return;
+      if (!window.confirm(t('cabina.conexiones.disconnectConfirm', '¿Querés desconectar {name}? El agente dejará de poder usar esa cuenta.', { name }))) return;
       try {
         await ctx.api.post(`/api/connections/${encodeURIComponent(providerId)}/disconnect`, {});
         if (!alive) return;
         const provider = providers.find((item) => item.id === providerId);
         if (provider) provider.connected = false;
         phases.set(providerId, { name: 'idle' });
-        ctx.toast(`${name} quedó desconectado.`);
+        ctx.toast(t('cabina.conexiones.providerDisconnected', '{name} quedó desconectado.', { name }));
         await load();
       } catch (error) {
         if (!alive) return;
@@ -481,7 +482,7 @@ export default {
         if (!alive) return;
         stopPoll('zoho');
         phases.set('zoho', { name: 'connected' });
-        ctx.toast('Zoho quedó conectado.');
+        ctx.toast(t('cabina.conexiones.zohoConnected', 'Zoho quedó conectado.'));
         await load();
       } catch (error) {
         if (!alive) return;
@@ -502,7 +503,7 @@ export default {
         await ctx.api.post('/api/connections/freshservice/connect', { domain, apiKey });
         if (!alive) return;
         phases.set('freshservice', { name: 'connected' });
-        ctx.toast('Freshservice quedó conectado.');
+        ctx.toast(t('cabina.conexiones.freshserviceConnected', 'Freshservice quedó conectado.'));
         await load();
       } catch (error) {
         if (!alive) return;
@@ -545,10 +546,10 @@ export default {
       if (action === 'cancel') return cancel(providerId);
       if (action === 'disconnect') return disconnect(providerId);
       if (action === 'copy-code') {
-        return copyText(phases.get(providerId)?.userCode, ctx, 'Código copiado.');
+        return copyText(phases.get(providerId)?.userCode, ctx, t('cabina.conexiones.codeCopied', 'Código copiado.'));
       }
       if (action === 'copy-permissions') {
-        return copyText(phases.get(providerId)?.scopes, ctx, 'Permisos necesarios copiados.');
+        return copyText(phases.get(providerId)?.scopes, ctx, t('cabina.conexiones.permissionsCopied', 'Permisos necesarios copiados.'));
       }
       if (action === 'submit-zoho') return submitZoho(control.closest('form'));
       if (action === 'submit-freshservice') return submitFreshservice(control.closest('form'));

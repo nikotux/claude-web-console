@@ -4,6 +4,8 @@
 // HTTP (todo bajo requireAdmin):
 //   GET    /api/admin/users              -> lista de usuarios
 //   POST   /api/admin/users             -> crea { username, password, admin }
+//   GET    /api/admin/users/:username/identity -> lee identidad per-user
+//   POST   /api/admin/users/:username/identity -> guarda identidad per-user
 //   PUT    /api/admin/users/:username    -> { password?, admin?, oversight? }
 //   POST   /api/admin/users/:username/sponsor -> revoca { sponsor:null } o deja en espera { awaiting:true }
 //   DELETE /api/admin/users/:username    -> elimina
@@ -15,9 +17,11 @@ import {
   listUsers, createUser, setPassword, setAdmin, setOversight, setAwaitingSponsor,
   setUserSponsor, deleteUser,
 } from '../../core/users.js';
+import { loadInstance, saveInstance } from '../../core/instance-config.js';
 import { deprovisionUser } from '../../core/user-deprovision.js';
-import { hostUser } from '../../core/user-space.js';
+import { hostUser, sanitizeUserId, userDataDir } from '../../core/user-space.js';
 import { provisionNewUser } from '../onboard/provision-user.js';
+import { pickIdentity } from '../projects/personalization.js';
 
 function requireAdmin(req, res, next) {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
@@ -60,6 +64,36 @@ export default {
     r.get('/users', (req, res) => {
       try {
         res.json({ users: listUsers() });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    r.get('/users/:username/identity', (req, res) => {
+      let id;
+      try { id = sanitizeUserId(req.params.username); } catch { /* responde 404 abajo */ }
+      if (!id || !listUsers().some((user) => user.username === id)) {
+        return res.status(404).json({ error: 'Usuario no encontrado.' });
+      }
+      try {
+        const identity = loadInstance({ dataDir: userDataDir(id) }).identity;
+        res.json({ identity });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    r.post('/users/:username/identity', (req, res) => {
+      let id;
+      try { id = sanitizeUserId(req.params.username); } catch { /* responde 404 abajo */ }
+      if (!id || !listUsers().some((user) => user.username === id)) {
+        return res.status(404).json({ error: 'Usuario no encontrado.' });
+      }
+      try {
+        const dataDir = userDataDir(id);
+        const clean = pickIdentity(req.body);
+        const next = saveInstance({ identity: clean }, { dataDir });
+        res.json({ ok: true, identity: next.identity });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }

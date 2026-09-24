@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Modo Cabina · Mi Consola</title>
+  <title data-i18n="cabina.shell.documentTitle">Modo Cabina · Mi Consola</title>
   <link rel="stylesheet" href="/vendor/hljs/theme.css" />
   <link rel="stylesheet" href="/css/tokens.css">
   <link rel="stylesheet" href="/css/ui.css">
@@ -75,62 +75,65 @@
   <div class="cab-shell">
     <aside class="cab-rail" aria-label="Navegación de Modo Cabina">
       <header class="cab-rail-head">
-        <div class="cab-brand" aria-label="Mordor Staffing">
-          <span>MORDOR</span><span class="cab-brand-accent">STAFFING</span>
+        <div class="cab-brand-row">
+          <div class="cab-brand" aria-label="Mordor Staffing">
+            <span>MORDOR</span><span class="cab-brand-accent">STAFFING</span>
+          </div>
+          <button class="cab-lang" type="button" data-cabina-lang title="Cambiar idioma" aria-label="Cambiar idioma" data-i18n-title="cabina.shell.language.change"></button>
         </div>
         <button class="cab-btn cab-btn--hot cab-new" type="button" data-cabina-new>
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 2v12M2 8h12"></path></svg>
-          Nueva conversación
+          <span data-i18n="cabina.shell.newConversation">Nueva conversación</span>
         </button>
       </header>
 
       <nav class="cab-nav" aria-label="Trabajar">
         <button class="cab-nav-item" type="button" aria-current="page" data-cabina-view="conversaciones">
           <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M2 3h14v9H8l-4 3v-3H2z"></path></svg>
-          <span>Conversaciones</span>
+          <span data-i18n="cabina.shell.nav.conversations">Conversaciones</span>
           <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="conversaciones" hidden></span>
         </button>
         <button class="cab-nav-item" type="button" data-cabina-view="salas">
           <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M1 3h11v7H5L2 12V10H1z"></path><path d="M6 12h11V5h-3"></path></svg>
-          <span>Salas</span>
+          <span data-i18n="cabina.shell.nav.rooms">Salas</span>
           <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="salas" hidden></span>
         </button>
         <button class="cab-nav-item" type="button" data-cabina-view="archivos">
           <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M2 4h5l2 2h7v8H2z"></path></svg>
-          <span>La Forja · tus archivos</span>
+          <span data-i18n="cabina.shell.nav.files">La Forja · tus archivos</span>
         </button>
       </nav>
 
       <div class="cab-rail-lower">
         <div class="cab-vein" aria-hidden="true"></div>
         <section class="cab-rail-bench" aria-labelledby="cab-adjust-title">
-          <div class="cab-intent-label" id="cab-adjust-title">Ajustar · de vez en cuando</div>
+          <div class="cab-intent-label" id="cab-adjust-title" data-i18n="cabina.shell.adjust.label">Ajustar · de vez en cuando</div>
           <nav class="cab-adjust-nav" aria-label="Ajustar">
             <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="conexiones">
               <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M7 11L3 15M11 7l4-4"></path><path d="M5 9L9 5l4 4-4 4z"></path></svg>
-              <span>Conexiones · tus cuentas</span>
+              <span data-i18n="cabina.shell.nav.connections">Conexiones · tus cuentas</span>
               <span class="cab-warning-mark" aria-label="Requiere atención"></span>
             </button>
             <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="como-trabajo">
               <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M9 2l2.2 4.6L16 8l-4.8 1.4L9 14 6.8 9.4 2 8l4.8-1.4z"></path></svg>
-              <span>Cómo trabajo · tus preferencias</span>
+              <span data-i18n="cabina.shell.nav.howIWork">Cómo trabajo · tus preferencias</span>
             </button>
             <button class="cab-nav-item cab-nav-item--adjust" type="button" data-cabina-view="lecciones">
               <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" aria-hidden="true"><path d="M3 2h9l3 3v11H3z"></path><path d="M6 7h6M6 10h6"></path></svg>
-              <span>Lecciones · lo que aprendió</span>
+              <span data-i18n="cabina.shell.nav.lessons">Lecciones · lo que aprendió</span>
               <span class="cab-nav-badge cab-nav-badge--hot" data-cabina-badge="lecciones" hidden></span>
             </button>
           </nav>
           <div class="cab-account">
             <div class="cab-account-mark" aria-hidden="true" data-cabina-account-mark>?</div>
             <div class="cab-account-copy">
-              <div class="cab-account-name" data-cabina-account-name>Mi cuenta</div>
-              <div class="cab-account-role" data-cabina-account-role>Modo Cabina</div>
+              <div class="cab-account-name" data-cabina-account-name data-i18n="cabina.shell.account.name">Mi cuenta</div>
+              <div class="cab-account-role" data-cabina-account-role data-i18n="cabina.shell.account.mode">Modo Cabina</div>
             </div>
             <div class="cab-cuenta-acciones">
-              <button class="cab-cuenta-btn cab-cuenta-btn--sos" type="button" data-cabina-sos title="Pedir ayuda: abre una sala con quien te puede ayudar" aria-label="Pedir ayuda: abre una sala con quien te puede ayudar" data-cabina-account-icon="lifebuoy"></button>
-              <button class="cab-cuenta-btn" type="button" data-cabina-help title="Abrir ayuda" aria-label="Abrir ayuda" data-cabina-account-icon="help"></button>
-              <button class="cab-cuenta-btn cab-cuenta-btn--salir" type="button" data-cabina-logout title="Cerrar sesión" aria-label="Cerrar sesión" data-cabina-account-icon="logout"></button>
+              <button class="cab-cuenta-btn cab-cuenta-btn--sos" type="button" data-cabina-sos title="Pedir ayuda: abre una sala con quien te puede ayudar" aria-label="Pedir ayuda: abre una sala con quien te puede ayudar" data-i18n-title="cabina.shell.account.lifeline" data-cabina-account-icon="lifebuoy"></button>
+              <button class="cab-cuenta-btn" type="button" data-cabina-help title="Abrir ayuda" aria-label="Abrir ayuda" data-i18n-title="cabina.shell.account.help" data-cabina-account-icon="help"></button>
+              <button class="cab-cuenta-btn cab-cuenta-btn--salir" type="button" data-cabina-logout title="Cerrar sesión" aria-label="Cerrar sesión" data-i18n-title="cabina.shell.account.logout" data-cabina-account-icon="logout"></button>
             </div>
           </div>
         </section>

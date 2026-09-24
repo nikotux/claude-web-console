@@ -1,4 +1,5 @@
 import { openZoomViewer } from '../ui/zoom-viewer.js';
+import { t } from '../ui/i18n.js';
 
 const TEXT_PREVIEW_MAX = 512 * 1024;
 // En la conversación c1897792-15, los adjuntos reales se agrupan bajo los 6 minutos
@@ -58,30 +59,30 @@ function categoryOf(attachment) {
   const type = String(attachment?.type || '').toLowerCase();
 
   if (type === 'pdf' || mime === 'application/pdf' || extension === 'pdf') {
-    return { id: 'pdf', label: 'PDF', color: 'var(--cwc-cat-pdf)' };
+    return { id: 'pdf', label: t('cabina.artefactos.pdfType', 'PDF'), color: 'var(--cwc-cat-pdf)' };
   }
   if (type === 'image' || mime.startsWith('image/') || IMAGE_EXTENSIONS.has(extension)) {
-    return { id: 'image', label: 'Imagen', color: 'var(--cwc-cat-image)' };
+    return { id: 'image', label: t('cabina.artefactos.imageType', 'Imagen'), color: 'var(--cwc-cat-image)' };
   }
   if (mime.startsWith('video/') || VIDEO_EXTENSIONS.has(extension)) {
-    return { id: 'video', label: 'Video', color: 'var(--cwc-cat-video)' };
+    return { id: 'video', label: t('cabina.artefactos.videoType', 'Video'), color: 'var(--cwc-cat-video)' };
   }
   if (mime.startsWith('audio/') || AUDIO_EXTENSIONS.has(extension)) {
-    return { id: 'audio', label: 'Audio', color: 'var(--cwc-cat-audio)' };
+    return { id: 'audio', label: t('cabina.artefactos.audioType', 'Audio'), color: 'var(--cwc-cat-audio)' };
   }
   if (ARCHIVE_EXTENSIONS.has(extension)) {
-    return { id: 'archive', label: 'Archivo comprimido', color: 'var(--cwc-cat-archive)' };
+    return { id: 'archive', label: t('cabina.artefactos.archiveType', 'Archivo comprimido'), color: 'var(--cwc-cat-archive)' };
   }
   if (CODE_EXTENSIONS.has(extension)) {
-    return { id: 'code', label: 'Código', color: 'var(--cwc-cat-code)' };
+    return { id: 'code', label: t('cabina.artefactos.codeType', 'Código'), color: 'var(--cwc-cat-code)' };
   }
   if (type === 'text' || mime.startsWith('text/') || TEXT_EXTENSIONS.has(extension)) {
-    return { id: 'doc', label: 'Texto', color: 'var(--cwc-cat-doc)' };
+    return { id: 'doc', label: t('cabina.artefactos.textType', 'Texto'), color: 'var(--cwc-cat-doc)' };
   }
   if (DOCUMENT_EXTENSIONS.has(extension)) {
-    return { id: 'doc', label: 'Documento', color: 'var(--cwc-cat-doc)' };
+    return { id: 'doc', label: t('cabina.artefactos.documentType', 'Documento'), color: 'var(--cwc-cat-doc)' };
   }
-  return { id: 'file', label: 'Archivo', color: 'var(--cwc-cat-file)' };
+  return { id: 'file', label: t('cabina.artefactos.fileType', 'Archivo'), color: 'var(--cwc-cat-file)' };
 }
 
 function previewKind(artifact) {
@@ -193,7 +194,7 @@ async function refreshArtifacts() {
     renderList();
   } catch {
     if (host !== mountedHost || context?.chatId !== chatId || generation !== listRequestGeneration) return;
-    context?.toast?.('No se pudieron cargar los artefactos de esta conversación.');
+    context?.toast?.(t('cabina.artefactos.loadError', 'No se pudieron cargar los artefactos de esta conversación.'));
     renderList();
   }
 }
@@ -210,7 +211,7 @@ function artifactMeta(artifact) {
       // La fecha es opcional; nombre y tipo siguen disponibles.
     }
   }
-  if (!artifact.name) parts.push('Sin nombre disponible');
+  if (!artifact.name) parts.push(t('cabina.artefactos.noName', 'Sin nombre disponible'));
   return parts.join(' · ');
 }
 
@@ -220,7 +221,7 @@ function renderList() {
   host.querySelector(':scope > .cab-side')?.classList.toggle('cab-side--empty', !artifacts.length);
 
   if (!artifacts.length) {
-    list.innerHTML = '<div class="cab-side-empty">Los archivos de este chat aparecerán acá.</div>';
+    list.innerHTML = `<div class="cab-side-empty">${t('cabina.artefactos.empty', 'Los archivos de este chat aparecerán acá.')}</div>`;
     closePreview();
     return;
   }
@@ -231,14 +232,14 @@ function renderList() {
     const displayName = artifact.name;
     const active = artifact.key === selectedKey ? ' cab-side-item--active' : '';
     const previewButton = canPreview
-      ? `<button type="button" data-action="preview" data-index="${index}" title="Previsualizar ${escapeHtml(displayName)}" style="min-width:0;flex:1;padding:0;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer">`
+      ? `<button type="button" data-action="preview" data-index="${index}" title="${escapeHtml(t('cabina.artefactos.previewNamed', 'Previsualizar {name}', { name: displayName }))}" style="min-width:0;flex:1;padding:0;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer">`
       : '<span style="min-width:0;flex:1">';
     const previewClose = canPreview ? '</button>' : '</span>';
     const locateButton = Number.isInteger(artifact.eventIndex)
-      ? `<button type="button" data-action="locate" data-index="${index}" title="Ir al mensaje donde apareció" style="padding:0;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;font-size:var(--cwc-fs-xs);cursor:pointer">Ir al mensaje</button>`
+      ? `<button type="button" data-action="locate" data-index="${index}" title="${t('cabina.artefactos.goToSourceMessage', 'Ir al mensaje donde apareció')}" style="padding:0;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;font-size:var(--cwc-fs-xs);cursor:pointer">${t('cabina.artefactos.goToMessage', 'Ir al mensaje')}</button>`
       : '';
     const actions = `<span style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:7px;padding-left:18px">
-          <a href="${escapeHtml(attachmentUrl(artifact))}" download="${escapeHtml(artifact.name)}" title="Descargar ${escapeHtml(displayName)}" style="color:var(--cwc-text-secondary);font-size:var(--cwc-fs-xs);text-decoration:none">Descargar</a>
+          <a href="${escapeHtml(attachmentUrl(artifact))}" download="${escapeHtml(artifact.name)}" title="${escapeHtml(t('cabina.artefactos.downloadNamed', 'Descargar {name}', { name: displayName }))}" style="color:var(--cwc-text-secondary);font-size:var(--cwc-fs-xs);text-decoration:none">${t('cabina.artefactos.download', 'Descargar')}</a>
           ${locateButton}
         </span>`;
     return `
@@ -271,7 +272,7 @@ function closePreview() {
 function previewShell(artifact, message) {
   const preview = host.querySelector('[data-artifact-preview]');
   const locateButton = Number.isInteger(artifact.eventIndex)
-    ? `<button type="button" data-action="locate" data-artifact-key="${escapeHtml(artifact.key)}" title="Ir al mensaje donde apareció" style="padding:0;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;font-size:var(--cwc-fs-sm);text-decoration:none;cursor:pointer">Ir al mensaje</button>`
+    ? `<button type="button" data-action="locate" data-artifact-key="${escapeHtml(artifact.key)}" title="${t('cabina.artefactos.goToSourceMessage', 'Ir al mensaje donde apareció')}" style="padding:0;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;font-size:var(--cwc-fs-sm);text-decoration:none;cursor:pointer">${t('cabina.artefactos.goToMessage', 'Ir al mensaje')}</button>`
     : '';
   preview.hidden = false;
   host.closest('.cab-floating-panel')?.classList.add('cab-floating-panel--wide');
@@ -281,11 +282,11 @@ function previewShell(artifact, message) {
         <h3 class="cab-side-title" style="overflow-wrap:anywhere">${escapeHtml(artifact.name)}</h3>
         <div class="cab-side-meta">${escapeHtml(artifactMeta(artifact))}</div>
       </div>
-      <button type="button" data-action="close-preview" aria-label="Cerrar vista previa" title="Cerrar" style="flex:0 0 auto;padding:2px 5px;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;cursor:pointer">×</button>
+      <button type="button" data-action="close-preview" aria-label="${t('cabina.artefactos.closePreview', 'Cerrar vista previa')}" title="${t('cabina.artefactos.close', 'Cerrar')}" style="flex:0 0 auto;padding:2px 5px;border:0;background:transparent;color:var(--cwc-text-secondary);font:inherit;cursor:pointer">×</button>
     </div>
     <div data-artifact-preview-body role="status" style="margin-top:12px;overflow:auto">${escapeHtml(message)}</div>
     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:12px">
-      <a href="${escapeHtml(attachmentUrl(artifact))}" download="${escapeHtml(artifact.name)}" style="color:var(--cwc-text-secondary);font-size:var(--cwc-fs-sm);text-decoration:none">Descargar archivo</a>
+      <a href="${escapeHtml(attachmentUrl(artifact))}" download="${escapeHtml(artifact.name)}" style="color:var(--cwc-text-secondary);font-size:var(--cwc-fs-sm);text-decoration:none">${t('cabina.artefactos.downloadFile', 'Descargar archivo')}</a>
       ${locateButton}
     </div>`;
   return preview.querySelector('[data-artifact-preview-body]');
@@ -302,7 +303,7 @@ async function showPreview(artifact) {
   previewController = null;
   selectedKey = artifact.key;
   setActiveItem(selectedKey);
-  const body = previewShell(artifact, 'Preparando vista previa…');
+  const body = previewShell(artifact, t('cabina.artefactos.preparingPreview', 'Preparando vista previa…'));
   const kind = previewKind(artifact);
   const url = attachmentUrl(artifact);
 
@@ -314,8 +315,8 @@ async function showPreview(artifact) {
     image.style.cssText = 'display:block;max-width:100%;max-height:420px;border:1px solid var(--cwc-border);background:var(--cwc-bg-panel);object-fit:contain;cursor:zoom-in';
     const zoomButton = document.createElement('button');
     zoomButton.type = 'button';
-    zoomButton.title = `Ampliar imagen ${artifact.name}`;
-    zoomButton.setAttribute('aria-label', `Ampliar imagen ${artifact.name}`);
+    zoomButton.title = t('cabina.artefactos.enlargeImage', 'Ampliar imagen {name}', { name: artifact.name });
+    zoomButton.setAttribute('aria-label', t('cabina.artefactos.enlargeImage', 'Ampliar imagen {name}', { name: artifact.name }));
     zoomButton.style.cssText = 'display:block;max-width:100%;margin:auto;padding:0;border:0;background:transparent;cursor:zoom-in';
     zoomButton.appendChild(image);
     zoomButton.addEventListener('click', () => {
@@ -329,7 +330,7 @@ async function showPreview(artifact) {
       openZoomViewer({ title: artifact.name, node: zoomImage });
     });
     image.addEventListener('error', () => {
-      body.textContent = 'No se pudo mostrar la imagen. Podés descargarla.';
+      body.textContent = t('cabina.artefactos.imagePreviewError', 'No se pudo mostrar la imagen. Podés descargarla.');
     }, { once: true });
     body.replaceChildren(zoomButton);
     body.removeAttribute('role');
@@ -339,7 +340,7 @@ async function showPreview(artifact) {
   if (kind === 'pdf') {
     const frame = document.createElement('iframe');
     frame.src = url;
-    frame.title = `Vista previa de ${artifact.name}`;
+    frame.title = t('cabina.artefactos.previewOf', 'Vista previa de {name}', { name: artifact.name });
     frame.loading = 'lazy';
     frame.style.cssText = 'display:block;width:100%;height:420px;border:1px solid var(--cwc-border);background:var(--cwc-bg-panel)';
     body.replaceChildren(frame);
@@ -347,13 +348,13 @@ async function showPreview(artifact) {
   }
 
   if (kind !== 'text') {
-    body.textContent = 'Este tipo de archivo no tiene vista previa. Podés descargarlo.';
+    body.textContent = t('cabina.artefactos.noPreview', 'Este tipo de archivo no tiene vista previa. Podés descargarlo.');
     return;
   }
 
   const knownSize = Number(artifact.size);
   if (Number.isFinite(knownSize) && knownSize > TEXT_PREVIEW_MAX) {
-    body.textContent = 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.';
+    body.textContent = t('cabina.artefactos.textTooLarge', 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.');
     return;
   }
 
@@ -364,13 +365,13 @@ async function showPreview(artifact) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(contentLength) && contentLength > TEXT_PREVIEW_MAX) {
-      body.textContent = 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.';
+      body.textContent = t('cabina.artefactos.textTooLarge', 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.');
       return;
     }
     const text = await response.text();
     if (controller.signal.aborted || selectedKey !== artifact.key) return;
     if (new Blob([text]).size > TEXT_PREVIEW_MAX) {
-      body.textContent = 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.';
+      body.textContent = t('cabina.artefactos.textTooLarge', 'El texto es demasiado grande para mostrarlo acá. Podés descargarlo.');
       return;
     }
     const pre = document.createElement('pre');
@@ -380,8 +381,8 @@ async function showPreview(artifact) {
     body.removeAttribute('role');
   } catch (error) {
     if (error.name === 'AbortError' || selectedKey !== artifact.key) return;
-    body.textContent = 'No se pudo mostrar el texto. Podés descargarlo.';
-    context?.toast?.(`No se pudo previsualizar “${artifact.name}”.`);
+    body.textContent = t('cabina.artefactos.textPreviewError', 'No se pudo mostrar el texto. Podés descargarlo.');
+    context?.toast?.(t('cabina.artefactos.previewError', 'No se pudo previsualizar “{name}”.', { name: artifact.name }));
   } finally {
     if (previewController === controller) previewController = null;
   }
@@ -416,8 +417,8 @@ const panel = {
     host.innerHTML = `
       <section class="cab-side cab-side--artifacts" aria-labelledby="cab-artifacts-title">
         <div class="cab-side-block cab-artifacts-list-column">
-          <h2 class="cab-side-title" id="cab-artifacts-title">Artefactos</h2>
-          <div class="cab-side-meta" style="margin-bottom:10px">Adjuntos y archivos generados en esta conversación.</div>
+          <h2 class="cab-side-title" id="cab-artifacts-title">${t('cabina.artefactos.title', 'Artefactos')}</h2>
+          <div class="cab-side-meta" style="margin-bottom:10px">${t('cabina.artefactos.subtitle', 'Adjuntos y archivos generados en esta conversación.')}</div>
           <div data-artifact-list aria-live="polite"></div>
         </div>
         <div class="cab-side-block cab-artifacts-preview-column" data-artifact-preview hidden></div>

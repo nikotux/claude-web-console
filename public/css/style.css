@@ -88,6 +88,17 @@ html, body {
 .users-manage-sec > :not(summary) { margin: .15rem 0 .5rem .35rem; }
 .users-manage-status { margin: .2rem 0 .45rem; color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); }
 .users-manage-actions { padding-top: .2rem; }
+/* Formulario de identidad del usuario administrado. */
+.users-identity-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cwc-fs-sm); min-width: 0; }
+.users-identity-field { display: flex; flex-direction: column; min-width: 0; color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); }
+.users-identity-field .dlg-input { min-width: 0; }
+.users-identity-actions { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--cwc-fs-sm); min-width: 0; }
+.users-identity-actions .bk-msg { flex: 1 1 auto; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.users-identity-help { margin: 0 0 var(--cwc-fs-2xs); color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs); line-height: 1.45; }
+@media (max-width: 560px) {
+  .users-identity-form { grid-template-columns: minmax(0, 1fr); }
+  .users-identity-actions { grid-column: auto; }
+}
 .users-connections-body { display: block; }
 
 /* ===== Splash de arranque (#boot-splash, index.html) =====

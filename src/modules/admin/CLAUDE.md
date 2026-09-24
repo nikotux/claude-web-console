@@ -14,10 +14,17 @@ No mantiene un modelo propio: el CRUD delega en `core/users.js` y el reciclado b
 | Método | Ruta | Contrato actual |
 |---|---|---|
 | GET | `/api/admin/users` | Lista cuentas como `{ username, admin, oversight, … }`; nunca devuelve hashes. |
+| GET | `/api/admin/users/:username/identity` | Lee la identidad persistida en el `userDataDir` de esa cuenta. |
+| POST | `/api/admin/users/:username/identity` | Sanea y persiste `name`/`email`/`github`/`signature` en el `userDataDir` de esa cuenta. |
 | POST | `/api/admin/users` | Crea una cuenta desde `{ username, password, admin? }`; `admin`, si viene, debe ser boolean, y el username del host está reservado (`409`). |
 | PUT | `/api/admin/users/:username` | Cambia `password`, `admin` y/o `oversight`; los flags deben ser booleanos, exige al menos un cambio válido y rechaza tanto la autoedición como el username del host (`409`). |
 | DELETE | `/api/admin/users/:username` | Elimina una cuenta, invalida sus sesiones web y ejecuta la baja recuperable de sus recursos; rechaza la autoeliminación. |
 | POST | `/api/admin/restart-runners` | Envía `SIGTERM` a cada `cwc-chat-runner.js` vivo y devuelve PIDs terminados y fallos individuales. |
+
+Las dos rutas de identidad sanean `:username` con `sanitizeUserId` y además
+exigen una coincidencia exacta en `listUsers()`; un id inválido o una cuenta
+inexistente devuelve `404`. Para el body comparten `pickIdentity` con
+`projects/personalization.js`, en vez de mantener otra allowlist.
 
 El alta por `POST /api/admin/users` llama `provisionNewUser(username)` después
 de crear la cuenta. Comparte así la misma preparación de espacio, Pad,
@@ -69,7 +76,7 @@ devuelve `cleanup: { ok: false, error }`.
 
 ## Archivos
 
-- `index.js`: define el gate administrativo, los cinco handlers HTTP, conecta la baja profunda y detecta runners vivos con `pgrep`.
+- `index.js`: define el gate administrativo y los handlers HTTP, conecta la baja profunda, importa `pickIdentity` de `../projects/personalization.js` y detecta runners vivos con `pgrep`.
 - `../../core/user-deprovision.js`: orquesta la baja best-effort, sus guards y el reporte estructurado.
 
 Las validaciones y persistencia de cuentas viven en `core/users.js`; la identidad, `isAdmin` y la revocación de sesiones viven en `core/auth.js`.
@@ -83,7 +90,7 @@ El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core
 
 ## Lo que más duele
 
-- El `r.use(requireAdmin)` debe seguir antes de registrar las rutas: moverlo o montar una ruta fuera de `r` abriría la única jerarquía real de permisos del módulo.
+- Las dos rutas de identidad DEBEN quedar después de `r.use(requireAdmin)`, igual que el resto: mover el gate o montar una ruta fuera de `r` abriría la única jerarquía real de permisos del módulo.
 - Cambiar una contraseña revoca todas las sesiones vivas de esa cuenta. Una democión (`admin: false`) también las revoca como defensa en profundidad, aunque ya es efectiva desde el request siguiente por el lookup vivo; eliminar la cuenta hace lo mismo.
 - `principalOf()` resuelve tanto `oversight` como `admin` en vivo con
   `oversightFor()` / `adminFor()` en cada request: apagar el primero o degradar

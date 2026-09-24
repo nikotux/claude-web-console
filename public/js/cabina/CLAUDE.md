@@ -35,6 +35,62 @@ son las únicas rutas con detalle `#/vista/<id>` y están enumeradas por nombre
 tanto en `readRoute()` como en `go()`: una tercera vista con detalle debe
 agregarse en ambos lugares.
 
+En «Cómo trabajo», la tarjeta de identidad respeta estrictamente
+`identityData.editable`: sólo con `true` muestra Editar y habilita el formulario
+inline de nombre, email, GitHub y firma; con `false` degrada a solo lectura sin
+botón. `identityEditing` conserva el modo de edición entre renders hasta Guardar
+o Cancelar. Un fallo al guardar se muestra dentro del formulario con
+`role="alert"` y no reemplaza el DOM, por lo que no pierde lo tipeado; si los
+cuatro campos están vacíos, la vista muestra una pista para completarlos.
+
+## Idioma ES/EN
+
+Modo Cabina es bilingüe. Los textos visibles de sus 11 archivos JS usan
+`t('cabina.<vista>.<slug>', 'español inline')`: el español queda en el segundo
+argumento, según la convención del repo, y las 866 traducciones inglesas viven
+en un único archivo, `public/i18n/en/cabina.json`. El namespace `cabina` está
+registrado en `MODULES` de `public/js/ui/i18n.js`. Los prefijos son:
+
+- `cabina.shell.` en `main.js`;
+- `cabina.nueva.`, `cabina.conversaciones.`, `cabina.salas.`,
+  `cabina.archivos.`, `cabina.conexiones.`, `cabina.comoTrabajo.` y
+  `cabina.lecciones.` en las vistas correspondientes;
+- `cabina.indice.` en `panel-acta.js`, `cabina.artefactos.` en
+  `panel-artefactos.js` y `cabina.ayuda.` en `ayuda.js`.
+
+`public/cabina.html` también forma parte de la cobertura: sus textos estáticos
+usan `data-i18n` o `data-i18n-title`, con prefijo `cabina.shell.`. El botón
+`.cab-lang[data-cabina-lang]` está en el header de la barra lateral, a la
+derecha del logo, y usa el ícono compartido `language`. Es un interruptor de
+dos idiomas, no un menú: muestra `getLang()` y su `title` indica el idioma al
+que cambiará. El clic llama `setLang()`, que persiste la elección en el perfil
+mediante `POST /api/account/lang` y recarga la página.
+
+### Tres invariantes que no hay que romper
+
+1. **El orden del arranque no es negociable.** En `main.js`,
+   `await initI18n(...)` debe completarse ANTES del primer `import()` dinámico
+   de una vista (`mountRoute` → `VIEW_MODULES`). Varias vistas definen textos
+   en constantes de nivel de módulo: si se importan antes de cargar el
+   diccionario, quedan congelados en español aunque la interfaz esté en inglés.
+   `ayuda.js` fue el caso extremo: sus 138 textos estaban dentro del objeto
+   `TEMAS` de nivel de módulo, que se reemplazó por la función exportada
+   `temas()` para evaluarlos en cada uso. Toda vista nueva con un `const` de
+   textos hereda esta trampa.
+
+2. **Un namespace de i18n equivale a un archivo JSON.** Durante la traducción,
+   `cabina.json`, `cabina-ayuda.json` y `cabina-vistas.json` podían convivir en
+   runtime porque `initI18n` hace `Object.assign` de todos sobre el mismo
+   diccionario. Sin embargo, `bin/cwc-i18n-audit.js` asume un archivo por
+   namespace y reportaba simultáneamente 549 claves faltantes y 549 huérfanas,
+   todas falsas; eso ensuciaba el check `i18n` de Salud. Por eso se consolidó
+   todo en `cabina.json`: NO volver a dividirlo.
+
+3. **El HTML también aporta claves.** El primer barrido extrajo solo las de
+   los `.js` y dejó 14 textos sin traducir: eran los del menú lateral, la zona
+   más visible. Toda verificación de cobertura de Cabina debe cruzar tanto los
+   `.js` como los atributos `data-i18n` y `data-i18n-title` de `cabina.html`.
+
 ## Contrato distinto de los paneles del hilo
 
 `panel-acta.js` y `panel-artefactos.js` NO son vistas y no van en
@@ -130,13 +186,14 @@ ni al ciclo de vida del server.
 
 | Archivo | Responsabilidad |
 |---|---|
-| `main.js` | Shell, router por hash, imports de vistas, API/toasts, identidad, badges y alta de conversación. |
+| `main.js` | Shell, arranque de i18n, interruptor de idioma, router por hash, imports de vistas, API/toasts, identidad, badges y alta de conversación. |
 | `conversaciones.js` | Lista y carpetas de chats; consume `/api/retro/counts`, liviano, para los 5 contadores del resumen; detalle del hilo por WebSocket; streaming, auto-scroll y dock de paneles. |
 | `archivos.js` | La Forja: navegación, orden, preview, upload, drag/drop y operaciones de `/api/files`. |
 | `conexiones.js` | Estado y flujos de conexión/desconexión de Microsoft 365, Zoho y Freshservice. |
 | `como-trabajo.js` | Lectura y edición guiada de preferencias/identidad vía `/api/projects/me`, con revisión antes de guardar. |
 | `lecciones.js` | Mejora Continua simplificada: usa `/api/retro` entero a propósito porque pinta las tres agrupaciones (~702 filas), filtra y permite decidir propuestas. |
 | `salas.js` | Lista y detalle de Salas de Aduana: mensajes entre personas, invitaciones, citas y corte explícito hacia la IA. |
+| `ayuda.js` | Ayuda de Cabina; exporta `temas()` para evaluar sus textos traducibles en cada uso, después de inicializar i18n. |
 | `panel-acta.js` | Índice semántico navegable; lee estado, refresca, hace polling y sincroniza el momento visible. |
 | `panel-artefactos.js` | Lista y preview de adjuntos reales; descarga y anclaje aproximado al mensaje de origen. |
 | `public/css/cabina.css` | Piel, shell, componentes generales, hilo, paneles flotantes y responsive estructural. |

@@ -62,3 +62,19 @@ cambia comportamiento real (excepción deliberada a la regla 4, ver
 ahí). Ojo recursivo: editar el proyecto `console` significa editar
 el CLAUDE.md/memorias que gobiernan las sesiones de Claude Code en
 ESTE MISMO repo.
+
+Identidad per-user: GET/POST `/api/projects/me/identity` resuelven SIEMPRE
+`systemScopeFor(req).dataDir`; para el host ese scope sigue apuntando a
+`~/.cwc-data`, por retrocompatibilidad. El GET devuelve la identidad con
+`source:'user'`, `editable:true` y `perUserIdentityAvailable:true`; el POST
+persiste sólo `identity`. `pickIdentity(body)`, exportado desde
+`personalization.js`, es la fuente única de saneo para esta superficie y la de
+admin: allowlist estricta de `name`/`email`/`github`/`signature`, convertidos a
+string, con trim y máximo de 200 caracteres. La sección `client` de
+`instance.json` NO es escribible por esta vía. Además de Cabina, el consumidor
+`public/js/modules/system/project-context-panel.js` lee el mismo GET.
+
+GOTCHA: el TODO «SP2 aún no migró la identidad per-user» sobrevivió a su propio
+bloqueante: `systemScopeFor`/`userDataDir` ya existían y `env-vars` ya resolvía
+el scope correctamente. Al tocar un comentario que difiere trabajo a otra fase,
+verificar primero si esa fase ya llegó.

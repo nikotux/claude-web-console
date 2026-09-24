@@ -1,4 +1,5 @@
 import { icon as uiIcon } from '../ui/icons.js';
+import { t, getLang, setLang, initI18n, applyI18n } from '../ui/i18n.js';
 
 const VIEW_MODULES = {
   conversaciones: './conversaciones.js',
@@ -31,7 +32,11 @@ async function request(path, options = {}) {
     ? await response.json().catch(() => null)
     : await response.text().catch(() => '');
   if (!response.ok) {
-    throw new Error(backendMessage(payload, `Error ${response.status} al consultar el servidor.`));
+    throw new Error(backendMessage(payload, t(
+      'cabina.shell.serverError',
+      'Error {status} al consultar el servidor.',
+      { status: response.status },
+    )));
   }
   return payload;
 }
@@ -60,7 +65,7 @@ function toast(message) {
 function fmtDate(timestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('es', {
+  return new Intl.DateTimeFormat(getLang(), {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
@@ -116,11 +121,11 @@ function setActiveNav(viewName) {
 }
 
 function loading() {
-  slot.innerHTML = '<div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>Cargando…</span></div>';
+  slot.innerHTML = `<div class="cab-view-state cab-view-state--loading"><span class="cab-spinner" aria-hidden="true"></span><span>${t('cabina.shell.loading', 'Cargando…')}</span></div>`;
 }
 
 function placeholder() {
-  slot.innerHTML = '<section class="cab-main-inner"><div class="cab-view-state"><p>Esta sección todavía no está conectada</p></div></section>';
+  slot.innerHTML = `<section class="cab-main-inner"><div class="cab-view-state"><p>${t('cabina.shell.sectionNotConnected', 'Esta sección todavía no está conectada')}</p></div></section>`;
 }
 
 function showError(error) {
@@ -128,9 +133,9 @@ function showError(error) {
   const state = document.createElement('div');
   state.className = 'cab-view-state cab-view-state--error';
   const title = document.createElement('strong');
-  title.textContent = 'No se pudo abrir esta sección.';
+  title.textContent = t('cabina.shell.openSectionError', 'No se pudo abrir esta sección.');
   const detail = document.createElement('span');
-  detail.textContent = error?.message || 'Error desconocido.';
+  detail.textContent = error?.message || t('cabina.shell.unknownError', 'Error desconocido.');
   state.append(title, detail);
   slot.appendChild(state);
 }
@@ -189,7 +194,7 @@ async function createConversation(button) {
     go('conversaciones', { id: chat.id });
     void refreshBadges();
   } catch (error) {
-    toast(error?.message || 'No se pudo crear la conversación.');
+    toast(error?.message || t('cabina.shell.createConversationError', 'No se pudo crear la conversación.'));
   } finally {
     creatingConversation = false;
     button.disabled = false;
@@ -205,11 +210,11 @@ async function requestLifeline(button) {
   try {
     const data = await api.post('/api/chat/salvavidas');
     const chat = data?.chat;
-    if (!chat?.id) throw new Error('El servidor no devolvió la sala de ayuda creada.');
+    if (!chat?.id) throw new Error(t('cabina.shell.lifelineMissingRoom', 'El servidor no devolvió la sala de ayuda creada.'));
     location.hash = '#/salas/' + encodeURIComponent(chat.id);
     void refreshBadges();
   } catch (error) {
-    toast(error?.message || 'No se pudo abrir una sala de ayuda.');
+    toast(error?.message || t('cabina.shell.lifelineError', 'No se pudo abrir una sala de ayuda.'));
   } finally {
     requestingLifeline = false;
     button.disabled = false;
@@ -240,15 +245,15 @@ function openLogoutConfirmation() {
   confirmBox.setAttribute('aria-modal', 'true');
   confirmBox.setAttribute('aria-labelledby', questionId);
   question.id = questionId;
-  question.textContent = '¿Querés cerrar tu sesión?';
+  question.textContent = t('cabina.shell.logout.question', '¿Querés cerrar tu sesión?');
   cancelButton.type = 'button';
   cancelButton.className = 'cab-btn cab-btn--cold';
   cancelButton.dataset.cabinaLogoutCancel = '';
-  cancelButton.textContent = 'Cancelar';
+  cancelButton.textContent = t('cabina.shell.logout.cancel', 'Cancelar');
   acceptButton.type = 'button';
   acceptButton.className = 'cab-btn cab-btn--cold';
   acceptButton.dataset.cabinaLogoutAccept = '';
-  acceptButton.textContent = 'Cerrar sesión';
+  acceptButton.textContent = t('cabina.shell.logout.accept', 'Cerrar sesión');
   actions.append(cancelButton, acceptButton);
   confirmBox.append(question, actions);
   account.appendChild(confirmBox);
@@ -263,7 +268,7 @@ async function logout(confirmBox, button) {
     await api.post('/logout');
     location.assign('/login');
   } catch (error) {
-    toast(error?.message || 'No se pudo cerrar la sesión.');
+    toast(error?.message || t('cabina.shell.logout.error', 'No se pudo cerrar la sesión.'));
     controls.forEach((control) => { control.disabled = false; });
     button.removeAttribute('aria-busy');
   }
@@ -272,7 +277,20 @@ async function logout(confirmBox, button) {
 function hydrateAccountIcons() {
   document.querySelectorAll('[data-cabina-account-icon]').forEach((button) => {
     button.innerHTML = uiIcon(button.dataset.cabinaAccountIcon, { size: 18 });
+    button.setAttribute('aria-label', button.title);
   });
+  const langButton = document.querySelector('[data-cabina-lang]');
+  if (!langButton) return;
+  const currentLang = getLang();
+  const nextTitle = currentLang === 'en'
+    ? t('cabina.shell.language.switchToSpanish', 'Cambiar a español')
+    : t('cabina.shell.language.switchToEnglish', 'Cambiar a inglés');
+  langButton.innerHTML = uiIcon('language', { size: 16 });
+  const code = document.createElement('span');
+  code.textContent = currentLang.toUpperCase();
+  langButton.appendChild(code);
+  langButton.title = nextTitle;
+  langButton.setAttribute('aria-label', nextTitle);
 }
 
 function setBadge(name, text, hot = false) {
@@ -305,14 +323,19 @@ function updateBadges(chats) {
   const unread = open.filter((chat) => chat.isSala)
     .reduce((sum, chat) => sum + Math.max(0, Number(chat.salaUnread) || 0), 0);
   setBadge('conversaciones', working || waiting ? `${working || waiting}` : '', Boolean(working));
-  setBadge('salas', unread ? `${unread} nuevo${unread === 1 ? '' : 's'}` : '', false);
+  const unreadLabel = unread === 1
+    ? t('cabina.shell.badges.oneNew', '{count} nuevo', { count: unread })
+    : t('cabina.shell.badges.manyNew', '{count} nuevos', { count: unread });
+  setBadge('salas', unread ? unreadLabel : '', false);
 }
 
-async function refreshBadges() {
+async function refreshBadges(identityOverride) {
   try {
     const [data, identity] = await Promise.all([
       api.get('/api/chat/list'),
-      currentIdentity ? Promise.resolve(currentIdentity) : api.get('/api/whoami'),
+      identityOverride !== undefined
+        ? Promise.resolve(identityOverride)
+        : (currentIdentity ? Promise.resolve(currentIdentity) : api.get('/api/whoami')),
     ]);
     currentIdentity = identity;
     updateBadges(data?.chats);
@@ -321,25 +344,42 @@ async function refreshBadges() {
   }
 }
 
-async function hydrateAccount() {
-  try {
-    const me = await api.get('/api/whoami');
-    currentIdentity = me;
-    const name = me?.type === 'user' ? me.username : (me?.type === 'token' ? me.host || 'Host' : 'Mi cuenta');
-    const role = me?.type === 'user' ? 'Cuenta personal' : 'Acceso del host';
-    const mark = String(name || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
-    const nameEl = document.querySelector('[data-cabina-account-name]');
-    const roleEl = document.querySelector('[data-cabina-account-role]');
-    const markEl = document.querySelector('[data-cabina-account-mark]');
-    if (nameEl) nameEl.textContent = name;
-    if (roleEl) roleEl.textContent = role;
-    if (markEl) markEl.textContent = mark;
-  } catch {
-    // La identidad visual no bloquea la navegación.
-  }
+function hydrateAccount(me) {
+  if (!me) return;
+  currentIdentity = me;
+  const name = me?.type === 'user'
+    ? me.username
+    : (me?.type === 'token'
+      ? me.host || t('cabina.shell.account.host', 'Host')
+      : t('cabina.shell.account.name', 'Mi cuenta'));
+  const role = me?.type === 'user'
+    ? t('cabina.shell.account.personal', 'Cuenta personal')
+    : t('cabina.shell.account.hostAccess', 'Acceso del host');
+  const mark = String(name || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
+  const nameEl = document.querySelector('[data-cabina-account-name]');
+  const roleEl = document.querySelector('[data-cabina-account-role]');
+  const markEl = document.querySelector('[data-cabina-account-mark]');
+  if (nameEl) nameEl.textContent = name;
+  if (roleEl) roleEl.textContent = role;
+  if (markEl) markEl.textContent = mark;
 }
 
-document.addEventListener('click', (event) => {
+document.addEventListener('click', async (event) => {
+  const langButton = event.target.closest('[data-cabina-lang]');
+  if (langButton) {
+    event.preventDefault();
+    if (langButton.disabled) return;
+    langButton.disabled = true;
+    langButton.setAttribute('aria-busy', 'true');
+    try {
+      await setLang(getLang() === 'en' ? 'es' : 'en');
+    } catch (error) {
+      toast(error?.message || t('cabina.shell.language.error', 'No se pudo cambiar el idioma.'));
+      langButton.disabled = false;
+      langButton.removeAttribute('aria-busy');
+    }
+    return;
+  }
   const newButton = event.target.closest('[data-cabina-new]');
   if (newButton) {
     event.preventDefault();
@@ -357,7 +397,7 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     void import('./ayuda.js')
       .then(({ abrirAyuda }) => abrirAyuda({ go, api, toast, fmtDate, icon }, readRoute().viewName))
-      .catch((error) => toast(error?.message || 'No se pudo abrir la ayuda.'));
+      .catch((error) => toast(error?.message || t('cabina.shell.helpError', 'No se pudo abrir la ayuda.')));
     return;
   }
   const logoutButton = event.target.closest('[data-cabina-logout]');
@@ -390,8 +430,12 @@ window.addEventListener('hashchange', mountRoute);
 window.addEventListener('cabina:chats', (event) => updateBadges(event.detail?.chats));
 
 if (!location.hash) history.replaceState(null, '', `${location.pathname}${location.search}#/conversaciones`);
+const meForLang = await request('/api/whoami').catch(() => null);
+await initI18n(meForLang?.lang || 'es');
+document.documentElement.lang = getLang();
+applyI18n(document);
 hydrateAccountIcons();
-void hydrateAccount();
-void refreshBadges();
+hydrateAccount(meForLang);
+void refreshBadges(meForLang);
 window.setInterval(refreshBadges, 15000);
 void mountRoute();
