@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-09-24 10:14 — main
+- Agregar integración con Microsoft y memoria de compactación del runner
+
 ### 2026-09-14 15:30 — main
 - Sumar Cabina (modo simplificado) y rediseñar gestión de usuarios/patrocinio
 
@@ -365,9 +368,6 @@ since the previous push. Newest entry first.
 - Modified `public/js/modules/tolkien/tolkien.js`
 - Modified `src/modules/bugfixes/index.js`
 - Modified `src/modules/bugfixes/store.js`
-
-### 2026-07-03 13:27 — main
-- Modified `CLAUDE.md`
 
 _(older entries trimmed — see `git log` for the full history)_
 
