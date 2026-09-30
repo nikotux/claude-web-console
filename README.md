@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-09-30 09:53 — main
+- Agregar módulo Laboratorio (omp/Orca) y repointear label de Opus a 5.5
+
 ### 2026-09-24 10:14 — main
 - Agregar integración con Microsoft y memoria de compactación del runner
 
@@ -357,14 +360,6 @@ since the previous push. Newest entry first.
 - Chat: sintaxis de editor en los detalles expandidos de tool calls
 - Chat: vista de editor en el código expandido — indentación real, sin wrap
 - Modified `CLAUDE.md`
-- Modified `public/js/modules/tolkien/tolkien.js`
-- Modified `src/modules/bugfixes/index.js`
-- Modified `src/modules/bugfixes/store.js`
-
-### 2026-07-03 15:52 — main
-- Chat: solicitud de permiso compacta (chip + botones), sin desborde en móvil
-- Modified `CLAUDE.md`
-- Modified `public/js/modules/chat/chat-tab.js`
 - Modified `public/js/modules/tolkien/tolkien.js`
 - Modified `src/modules/bugfixes/index.js`
 - Modified `src/modules/bugfixes/store.js`
