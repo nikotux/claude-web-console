@@ -109,6 +109,14 @@ export const HELP_INDEX = [
     load: () => import('./../modules/retro/help.js'),
   },
   {
+    id: 'lab',
+    get title() { return t('lab.help.indexTitle', 'Laboratorio'); },
+    icon: 'terminal',
+    group: 'paneles',
+    get blurb() { return t('lab.help.indexBlurb', 'Accesos administrados a omp y al escritorio visual Orca.'); },
+    load: () => import('./../modules/lab/help.js'),
+  },
+  {
     id: 'learning',
     get title() { return t('core.help.topic.learning.title', 'Aprendizaje'); },
     icon: 'eye',

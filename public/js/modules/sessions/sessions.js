@@ -1977,7 +1977,7 @@ export default {
     // y en móvil — convención colapsable del proyecto; funcionalmente idéntico.)
     function pickModelForChat(c) {
       const m = dialog.openModal({ title: t('sessions.model.title', 'Modelo y protocolo'), width: 460 });
-      const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus 5'], ['fable', 'Fable']];
+      const CLOUD = [['haiku', 'Haiku'], ['sonnet', 'Sonnet'], ['opus', 'Opus 5.5'], ['fable', 'Fable']];
       const CODEX = [['', t('sessions.model.codexNone', 'Ninguno (Manual)')], ...CODEX_MODEL_OPTIONS];
       const EFFS = [['low', t('sessions.eff.low', 'Bajo')], ['medium', t('sessions.eff.medium', 'Medio')], ['high', t('sessions.eff.high', 'Alto')], ['xhigh', t('sessions.eff.xhigh', 'Muy alto')], ['max', t('sessions.eff.max', 'Máximo')], ['ultra', t('sessions.eff.ultra', 'Ultra')]];
       const CLOUD_EFFS = ['low', 'medium', 'high', 'xhigh', 'max'];

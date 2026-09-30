@@ -258,7 +258,8 @@ export async function abrirMenuNuevaConversacion(ctx) {
     },
   ];
   // Niko pidió Opus 5 como default de Cabina (2026-09-15), así que el nivel más caro está
-  // disponible para todos los perfiles y su costo lo sigue pagando el sponsor. Esto es recorte
+  // disponible para todos los perfiles y su costo lo sigue pagando el sponsor. Desde 2026-09-24,
+  // el alias 'opus' resuelve a Opus 5.5. Esto es recorte
   // de experiencia, no seguridad: mostrar una opción no autoriza ni bloquea; el gate real vive
   // en el backend.
   const models = allModels;

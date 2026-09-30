@@ -15,12 +15,12 @@ export function modelName(key, fallbackId = '') {
 }
 
 // Etiqueta de TIER para estado EN VIVO (badge del chat, notita de AutoTux):
-// el alias interno sigue siendo 'opus', pero la consola corre Claude Opus 5
-// (ver resolveModelArg en core/claude-model.js), así que lo VISIBLE dice
-// "Opus 5". DELIBERADAMENTE separada de modelName(): esa la usa el modal Uso
-// para el consumo HISTÓRICO por modelo, donde renombrar el tier relabelaría
-// como "Opus 5" gasto viejo de Opus 4.8 (que costea igual pero no fue Opus 5).
-const MODEL_TIER_LABEL = { opus: 'Opus 5' };
+// el alias interno sigue siendo 'opus', pero la consola corre Claude Opus 5.5
+// desde el repoint de 2026-09-24 (ver resolveModelArg en core/claude-model.js),
+// así que lo VISIBLE dice "Opus 5.5". DELIBERADAMENTE separada de modelName():
+// esa la usa el modal Uso para el consumo HISTÓRICO por modelo, donde renombrar
+// el tier relabelaría como "Opus 5.5" gasto viejo de Opus 5 / 4.8.
+const MODEL_TIER_LABEL = { opus: 'Opus 5.5' };
 export function tierName(key, fallbackId = '') {
   return MODEL_TIER_LABEL[key] || modelName(key, fallbackId);
 }
@@ -59,10 +59,10 @@ export function modelIcon(key) {
 // plan / Sonnet)").
 export const CHAT_MODEL_OPTIONS = [
   ['auto', 'AutoTux'],
-  ['tandem', 'Tándem (Opus + Codex)'],
+  ['tandem', 'Tándem (Opus 5.5 + Codex)'],
   ['opusplan', 'Opus plan'],
   ['fable', 'Fable'],
-  ['opus', 'Opus 5'],
+  ['opus', 'Opus 5.5'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],
   ['default', 'Default de la cuenta'],

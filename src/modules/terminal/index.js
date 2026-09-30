@@ -5,7 +5,7 @@
 //
 // HTTP:
 //   GET  /api/terminal/sessions        -> lista de sesiones vivas
-//   POST /api/terminal/sessions        -> crea una sesión { cwd?, runClaude? }
+//   POST /api/terminal/sessions        -> crea una sesión { cwd?, runClaude?, agent? }
 // WS:
 //   /ws/terminal?id=<id>               -> se adjunta a una sesión existente
 //   (mensajes cliente->servidor en JSON: {type:'input'|'resize'|'ping'})
@@ -100,15 +100,21 @@ export default {
     });
 
     r.post('/sessions', (req, res) => {
-      const { cwd, runClaude, title, attach, model } = req.body || {};
+      const { cwd, runClaude, title, attach, model, agent } = req.body || {};
       // multi-tenant (BUG-680): dueño del request (null = host/admin/token).
-      const owner = principalOf(req).username;
+      const principal = principalOf(req);
+      const owner = principal?.username || null;
       // Si sessionManager.create() llega a completar, guardamos el id acá
       // para poder limpiarla si algo posterior (persistencia de título,
       // recientes) falla — evita sesión huérfana viva pero invisible al cliente.
       let createdId = null;
 
       try {
+        if (attach && agent != null) {
+          console.warn('[terminal] Agente rechazado para adjuntado — owner:', String(owner).slice(0, 200), '· agente:', String(agent).slice(0, 200));
+          return res.status(400).json({ error: 'Agente inválido.' });
+        }
+
         // Adjuntado a una sesión tmux existente: validamos socket + nombre para
         // no ejecutar tmux con argumentos arbitrarios; luego aplicamos ownership.
         if (attach) {
@@ -170,6 +176,21 @@ export default {
           return res.status(400).json({ error: 'runClaude debe ser booleano.' });
         }
 
+        if (agent != null && agent !== 'omp') {
+          console.warn('[terminal] Agente rechazado — owner:', String(owner).slice(0, 200), '· agente:', String(agent).slice(0, 200));
+          return res.status(400).json({ error: 'Agente inválido.' });
+        }
+
+        if (agent === 'omp' && runClaude) {
+          console.warn('[terminal] omp rechazado con Claude — owner:', String(owner).slice(0, 200));
+          return res.status(400).json({ error: 'Una sesión omp no puede lanzar Claude a la vez.' });
+        }
+
+        if (agent === 'omp' && principal?.admin !== true) {
+          console.warn('[terminal] omp DENEGADO por rol — owner:', String(owner).slice(0, 200));
+          return res.status(403).json({ error: 'omp solo está disponible para administradores.' });
+        }
+
         const cwdAbs = safeCwd(cwd, owner);
         try {
           if (!fs.statSync(cwdAbs).isDirectory()) throw new Error('not-directory');
@@ -190,6 +211,7 @@ export default {
           cwd: cwdAbs,
           runClaude: !!runClaude,
           model: model || null,
+          agent: agent || null,
           title,
           owner,
         });

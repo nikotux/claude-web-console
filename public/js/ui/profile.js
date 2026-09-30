@@ -13,6 +13,7 @@ export const HIDDEN_FOR_SPONSORED = new Set([
   'tickets', // ciclo de desarrollo del repo de la empresa
   'visado', // flujo de salas de Aduana
   'retro', // Mejora Continua del propio desarrollo
+  'lab', // herramientas experimentales del host
   'stats', // telemetría del host, ajena a este perfil
 ]);
 

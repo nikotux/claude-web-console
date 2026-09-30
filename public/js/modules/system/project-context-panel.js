@@ -279,10 +279,10 @@ export function mountProjectContextPanel(el, ctx) {
     const chatModelOptions = CHAT_MODEL_OPTIONS.map(([v, label]) => {
       const labels = {
         auto: t('system.projectContext.chatModelAutoTux', 'AutoTux'),
-        tandem: t('system.projectContext.chatModelTandem', 'Tándem (Opus + Codex)'),
+        tandem: t('system.projectContext.chatModelTandem', 'Tándem (Opus 5.5 + Codex)'),
         opusplan: t('system.projectContext.chatModelOpusPlan', 'Opus plan'),
         fable: t('system.projectContext.chatModelFable', 'Fable'),
-        opus: t('system.projectContext.chatModelOpus', 'Opus 5'),
+        opus: t('system.projectContext.chatModelOpus', 'Opus 5.5'),
         sonnet: t('system.projectContext.chatModelSonnet', 'Sonnet'),
         haiku: t('system.projectContext.chatModelHaiku', 'Haiku'),
         default: t('system.projectContext.chatModelAccountDefault', 'Default de la cuenta'),

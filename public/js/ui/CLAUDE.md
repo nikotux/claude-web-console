@@ -474,10 +474,10 @@ también (coherente con el resto de la app que cuenta cache read ×0.1).)
 
 - Etiqueta de modelo: hay DOS funciones y no son intercambiables. `tierName(key)`
   (public/js/ui/models.js) es para estado EN VIVO (badge del chat, notita de
-  AutoTux) y mapea `opus` → "Opus 5"; `modelName(key)` es la genérica y la usa
+  AutoTux) y mapea `opus` → "Opus 5.5"; `modelName(key)` es la genérica y la usa
   el modal **Uso** para el consumo HISTÓRICO por modelo. Cambiar `modelName`
-  para que diga "Opus 5" relabelaría gasto viejo de Opus 4.8 como si hubiera
-  sido Opus 5 (costean igual, $5/$25, pero no es el mismo modelo). Regla: si
+  para que diga "Opus 5.5" relabelaría gasto viejo de Opus 5 / 4.8 como si
+  hubiera sido Opus 5.5 (aunque costeen igual, no es el mismo modelo). Regla: si
   el texto describe qué está corriendo AHORA → `tierName`; si describe consumo
   YA registrado → `modelName`.
 
