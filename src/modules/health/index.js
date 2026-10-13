@@ -18,8 +18,9 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { runAdaptivePool } from '../../core/pool.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { hostUser, readInfisicalAccountEmail, userClaudeDir, userSpace } from '../../core/user-space.js';
+import { hostUser, readInfisicalAccountEmail, readUserPadToken, userClaudeDir, userSpace } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
+import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import { ownerForSession } from '../../core/session-names.js';
 import {
   readReview, writeReview, isRunning, isFixing, writeFixLock, findingId, findingSig, readSolved,
@@ -694,6 +695,8 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/learning/explain-shared.js', // scope=tolkien lee código de Tolkien
   'src/modules/tolkien/index.js',
   'src/modules/tolkien/refresh-shared.js',
+  'src/modules/tolkien/build-shared.js',    // build serializado de packages/* del repo propio de Tolkien (pnpm install + turbo build con cwd config.projectDir, lock en ~/.cwc-data) antes de refresh/plantilla y tras un pull (console:BUG-3373); no enlaza los Pad
+  'src/modules/tolkien/sources-shared.js',  // refresh completo de fuentes de la DB LOCAL de Tolkien (console:PLAN-3236 D): corre los importers del repo propio con cwd config.projectDir contra localhost:5435; el Pad cloud de Tolkien se LEE (pad-sync) y nunca se escribe; no enlaza los Pad
   'src/modules/skills/index.js',           // censo READ-ONLY de .claude/skills/ de Tolkien (pestaña Skills), no cruza datos
   'src/modules/mcps/login-shared.js',      // censo/estado READ-ONLY de MCP de Tolkien (pestaña Conexiones) + login OAuth guiado (claude mcp, vía CLI); no enlaza los Pad ni cruza datos
   'src/modules/mcps/infisical-shared.js',  // sonda de Infisical: corre el CLI con el cwd del proyecto externo y lee su .infisical.json (solo lectura, no cruza datos)
@@ -966,18 +969,47 @@ async function checkPadBackbone() {
   const label = 'Pad local (backbone console)';
   const r = await padLocal.listItems('conventions', { workspace: 'console' });
   if (!r.ok) {
+    if (r.status === 401 || /invalid or expired session/i.test(r.error || '')) {
+      return { id, label, status: 'warn', detail: `Credencial del Pad local vencida o inválida (401) — no es el servicio: corré \`pad auth login --url ${PAD_DEFAULT_URL}\` y aprobá el link en el navegador; las sesiones abiertas recuperan su MCP de Pad con ⚙ Sistema → Backup → 🔄 Reiniciar sesiones.` };
+    }
     return { id, label, status: 'warn', detail: `Pad local no responde (${r.error || 'sin detalle'}) — tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?` };
   }
+
+  // El host ya respondió: validar también las sesiones tenant, una por una y
+  // best-effort. Un error de red no convierte este check en una falsa alarma.
+  const invalidTenantTokens = [];
+  for (const user of listUsers()) {
+    const userId = user?.username;
+    if (!userId || userId === hostUser()) continue;
+    const token = readUserPadToken(userId, PAD_DEFAULT_URL);
+    if (!token) continue;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3_000);
+    try {
+      const probe = await fetch(`${PAD_DEFAULT_URL}/api/v1/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+      if (probe.status === 401) invalidTenantTokens.push(userId);
+    } catch { /* sondeo best-effort: ignorar timeout y errores de red */ }
+    finally { clearTimeout(timer); }
+  }
+
   const items = Array.isArray(r.data) ? r.data : [];
   const musts = items.filter((c) => padField(c, 'priority') === 'must' && padField(c, 'status') !== 'disabled');
   const hasAnticollision = items.some((c) => {
     const t = `${c?.title || ''} ${c?.content || ''}`.toLowerCase();
     return /anti-?colisi[oó]n|plan-puente|regla dura #12|regla #12/.test(t);
   });
-  if (!hasAnticollision) {
-    return { id, label, status: 'warn', detail: 'Pad local OK pero FALTA en las Conventions el espejo de la Regla dura #12 (anti-colisión entre mundos) — CLAUDE.md y Pad divergieron; recrear la convención' };
+  let status = hasAnticollision ? 'ok' : 'warn';
+  let detail = hasAnticollision
+    ? `Pad local OK · ${musts.length} convención(es) must · espejo Regla #12 presente`
+    : 'Pad local OK pero FALTA en las Conventions el espejo de la Regla dura #12 (anti-colisión entre mundos) — CLAUDE.md y Pad divergieron; recrear la convención';
+  if (invalidTenantTokens.length) {
+    status = 'warn';
+    detail += ` · ⚠️ token de Pad inválido: ${invalidTenantTokens.join(', ')} (se re-loguea solo en su próximo uso)`;
   }
-  return { id, label, status: 'ok', detail: `Pad local OK · ${musts.length} convención(es) must · espejo Regla #12 presente` };
+  return { id, label, status, detail };
 }
 
 // Materializa las leyes de conectividad de docs/pad-grafo.md directamente

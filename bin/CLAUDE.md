@@ -576,6 +576,9 @@ secretos del host después de que config los capturó. REGLA: debe ser el PRIMER
 import de cualquier runner que use `userRunnerEnv` y cuya cadena de imports
 arrastre `core/config.js`.
 ### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix).
+En salas de Aduana registra además el MCP in-process `sala` (PLAN-3368): sus
+cuatro tools coordinan madre e hijas y delegan toda autoridad al server mediante
+eventos `sala-op`; el server responde al runner con `sala-op-result` por reqId.
 GOTCHA multi-tenant: `_env-boot.js` debe ser su PRIMER import. Sin él, el chat
 de un inquilino muere al arrancar con
 `[config] Falta la variable obligatoria CWC_TOKEN en el .env`; el host no lo
@@ -1352,7 +1355,21 @@ DEBE sobrevivir a un reinicio de la web). NO usa el SDK (0 tokens:
 comandos locales psql/infisical/pnpm — regla 6 no aplica). Interfaz por
 archivos: ~/.cwc-data/tolkien-refresh.json (job que reserva el POST
 /refresh-data; el runner persiste el resultado) + tolkien-refresh.log.
-Lógica en src/modules/tolkien/refresh-shared.js
+Lógica en src/modules/tolkien/refresh-shared.js. Si termina bien, encadena el
+runner de fuentes completo sin duplicarlo si ya estaba activo.
+### bin/cwc-tolkien-postpull-runner.js  mantenimiento DESACOPLADO del Tolkien local
+después de que Actualizar mueve el SHA de main: serializa con refresh/plantilla
+mediante `~/.cwc-data/tolkien-build.lock`, instala con lockfile y recompila
+`packages/*`; solo si el build queda sano ejecuta `systemctl --user restart
+tolkien-console`. NO usa el SDK (0 tokens). Estado atómico en
+`~/.cwc-data/tolkien-postpull.json`, log append en `tolkien-postpull.log`; el
+server solo reserva/spawnea y `GET /postpull-status` solo lee el archivo.
+### bin/cwc-tolkien-sources-runner.js + bin/cwc-tolkien-glue.mts  refresh COMPLETO de
+fuentes del workboard (identity/Desk/equipo dev/Pad/GitHub), desacoplado y con
+estado en `~/.cwc-data/tolkien-sources.json` + log vecino. El `.mts` es el
+puente ejecutado con el `tsx` de Tolkien: guarda DB local estricta antes de
+importar Prisma/runners, exige Redis y URLs DB de producción unset, asegura el
+equipo y corre Desk catálogo→fuentes en un solo proceso/cliente Zoho.
 ### bin/cwc-tolkien-template-build.js  build DESACOPLADO de la DB plantilla dormida tolkien_template
 (migrate deploy + importers Zoho, luego la sella IS_TEMPLATE/no-conexiones;
 al terminar re-clona los entornos vivos). Lógica en
@@ -1397,3 +1414,21 @@ TTL en minutos (default 10, máx 60) en <dataDir>/forbidden-overrides.json, que 
 `lessonsPreToolUseHook` CONSUME al dejar pasar la tool call. Exige un motivo de ≥20
 caracteres: el registro de POR QUÉ se salteó la lección es el punto del mecanismo.
 Exit 0 ok · 1 error de uso · 2 regla desconocida.
+### bin/cwc-retro-context-rehydrate.js  migración one-shot por usuario que restaura
+en los masters `work`/`pr` el texto completo de las lecciones de Mejora Continua
+que el mecanismo anterior dejó como referencias `> ↩` en la sección §6. Lee cada
+lección exclusivamente desde el Pad propio de su dueño y nunca escribe en Pad;
+un usuario sin token se reporta y no frena a los demás. Es dry-run por defecto y
+solo escribe con `--apply`; antes de cada master modificado crea junto a él un
+backup 0600 `.bak-rehydrate-<YYYYMMDD-HHMMSS>`, y `saveContext` vuelve a
+sincronizar el espejo de Tolkien de ese mismo scope. Nació de `console:BUG-3234`
+y `console:PLAN-3235`; es una herramienta de migración, no un runner permanente.
+### bin/cwc-tenant-mirror-reset.js  migración one-shot de `console:BUG-3241` que
+limpia los `CLAUDE.local.md` de inquilinos heredados por el fan-out viejo. Es
+dry-run por defecto y acepta `--apply` y `--user <id>`; compara byte a byte la
+parte ajena al bloque `cwc:tickets-context` contra la del host y preserva sin
+tocar cualquier archivo con contenido propio. Antes de limpiar crea al lado un
+backup 0644 `.bak-mirror-reset-<YYYYMMDD-HHMMSS>` con el mismo dueño, deja la
+cabecera personal del inquilino y regenera su bloque gestionado y playbook desde
+el master de ese usuario (o la semilla del host). Nunca modifica el archivo del
+host ni escribe en Pad; es una herramienta de migración, no un runner permanente.

@@ -1500,9 +1500,12 @@ fusionar nada.
 CORTE PENDIENTE Y REPLAY: si la IA está ocupada, el corte queda en `_cutPending`
 y `_setStatus('waiting')` lo despacha ante el evento REAL de fin de turno, sin
 `setTimeout`; el pendiente se limpia ANTES de despachar para no recursar.
-`_rebuildSalaHistory()` reconstruye el hilo usando los `cut` como anclas: cada
-corte disparó exactamente un turno, por lo que el turno k del transcript va
-después del corte k; cualquier sobrante va al final en vez de romper el render.
+`_rebuildSalaHistory()` segmenta el transcript SOLO cuando un evento `user`
+empieza con `SALA_PROMPT_HEAD`: ese prompt crudo es metadato y se descarta, y el
+resto de los eventos —también otros `user`— permanece dentro del segmento en
+curso. Los segmentos se alinean con los `cut` DESDE EL FINAL porque tanto
+`slice(-400)` como la poda de `sala.jsonl` pueden quitar historia de un extremo;
+cualquier sobrante se conserva sin duplicarlo.
 
 ADJUNTOS POR EL CANAL `say` (`console:BUG-2366`, 2026-07-30, reporte de Niko:
 «no me reconoce ni a mí ni a Richi las imágenes, es como si no dejara copiar o
@@ -1850,19 +1853,16 @@ muerto y se quitó.
 El record `origin` de `sala.jsonl`, escrito por `appendOrigin`, cumple DOS
 funciones inseparables. Primero, declara ante la Aduana el contexto que entra,
 como exigen las Leyes 2 y 4. Segundo, corrige un defecto concreto del replay:
-`_rebuildSalaHistory()` parte de que cada `cut` disparó exactamente un turno y
-ubica el turno k después del corte k, pero una conversación convertida trae N
-turnos producidos ANTES de que la sala y sus cortes existieran. Sin un ancla,
-esos turnos previos quedaban reordenados detrás de cortes futuros; `priorTurns`
-los consume como preámbulo y recién después continúa intercalando los `say`,
-los `cut` y sus respuestas.
+`_rebuildSalaHistory()` conserva el marcador en la posición que ocupa dentro del
+log. Los turnos producidos ANTES de que la sala y sus cortes existieran ya viven
+en el preámbulo del transcript, antes del primer `SALA_PROMPT_HEAD`; por eso
+`priorTurns` se conserva como dato del marcador pero NO consume segmentos ni
+avanza la alineación con los `cut`.
 
-COROLARIO IMPORTANTE: un aviso del sistema NUNCA se representa con
-`_push({type:'user'})` en un chat que pueda convertirse en sala. Los eventos
-`user` son la unidad de turno que ancla el replay y un aviso disfrazado de
-aporte humano desplaza ese offset. Los avisos se empujan como
-`{type:'error', message}`. Esta desviación se encontró y corrigió durante la
-revisión, antes de llegar a producción.
+COROLARIO IMPORTANTE: un aviso del sistema sigue representándose como
+`{type:'error', message}`, no como `_push({type:'user'})`, porque no es un aporte
+humano. Desde `console:BUG-3367`, sin embargo, un `user` auxiliar ya NO desplaza
+el replay: solo el encabezado reservado `SALA_PROMPT_HEAD` abre un segmento.
 
 La salida de Aduana también cierra la frontera de acceso: cuando `handoff`
 abandona una sala vacía `chat.participants`, emite el estado actualizado por
@@ -2092,11 +2092,61 @@ real por definición. Además, un runner de chat YA VIVO no conoce el campo
 cambios de código y los runners vivos. La prueba de referencia es
 `bin/cwc-test-codex-worktree.js`.
 
+## Sala con entorno de preview (PLAN-3236 E2/E3)
+Una sala resuelve su entorno efímero por `salaId`, porque el registro usa ese valor como `chatId`.
+`Chat._salaEnv()` exige registro vivo y worktree existente, separado siempre de `chat.tolkienEnv`.
+La sala conserva su cwd neutral: nunca hace handoff ni mueve el transcript al worktree.
+El runner recibe el worktree por `--extra-dir`, lo confina con realpath/path.relative y usa `additionalDirectories`.
+Tándem acepta `workdir:'entorno'`; Codex resuelve el worktree vivo al invocarse y `files` queda relativo a él.
+La actividad refresca su heartbeat y el reaper protege el `salaId` mientras el chat siga vivo.
+Si el entorno se provisiona después del spawn, hay que usar «Reabrir para cambios» para cargar acceso y contexto.
+
+## Sub-salas (PLAN-3368)
+
+Una sub-sala es otro `Chat` de Aduana, no una sesión personal: tiene cwd neutral
+propio, hereda dueño, participantes, permisos y configuración de modelo/Tándem,
+y persiste `parentSala` con el chat id de la madre. Esto conserva el blindaje
+anticonsumo de Aduana y la Ley 3 (nadie trabaja en el mundo privado de otra
+persona); no reemplazarlo por chats comunes ni por cwd aportados por el modelo.
+Cada madre admite como máximo 12 hijas no archivadas.
+
+El runner pide operaciones por el canal privado
+`{type:'sala-op', reqId, op, args}`. El server nunca lo pushea a la UI y siempre
+responde al runner con
+`{t:'sala-op-result', reqId, ok, result?, error?}`. Las operaciones son
+`abrir_subsala`, `listar_subsalas`, `avisar_subsala` y
+`avisar_sala_madre`; todos sus tipos, largos y relaciones madre↔hija se vuelven
+a validar en el server para no revelar chats ajenos. Abrir crea sin HTTP ni
+motor inicial, publica el encargo como Cucho y corta enseguida para que la hija
+arranque sola. El encargo tiene un tope de 3500 caracteres porque viaja por
+`say`, cuyo `MAX_SAY_LEN` es 4000 e incluye además el encabezado agregado por el
+server; si aun así el texto formateado excede ese límite, la apertura falla en
+vez de truncarlo. Si se pide preview, el host provisiona por el `salaId` de la
+hija y cualquier falla queda informada en el resultado sin deshacer la sala.
+
+`sala.jsonl` suma dos records append-only. `subsala` vive en la madre y es una
+marca informativa que no toca buzón ni cortes. `eco` vive en el destino, entra
+al history y también a `_sinceCut` con autor legible (`sub-sala «…»` o
+`sala madre «…»`). Cada eco intenta despertar mediante `cut('interfono')`, con
+un presupuesto durable de 20 despertares por hora y por sala guardado en
+`wakes.json` dentro de su carpeta. Si se agota, el record conserva `wake:false`
+y queda para el siguiente corte manual. La reserva se escribe antes del eco y
+el eco antes del corte: al rehidratar, un último eco `wake:true` posterior al
+último cut se despacha una vez sin volver a gastar presupuesto. El replay
+mantiene la alineación desde el final de BUG-3367: solo los `cut` anclan los
+segmentos; `subsala` no altera nada y `eco` se reconstruye como un say pendiente.
+
+Los cambios de invitados hechos en una sala madre se clonan a todas sus hijas
+no archivadas, se emite en cada una el mismo broadcast `participants` y se
+expulsa cualquier socket que haya perdido acceso. `parentSala` viaja por
+`chats.json`, `info()` y el payload de history para que `/api/chat/list` y la UI
+puedan anidar las tarjetas sin inferir parentesco por títulos.
+
 ## Gotchas de esta carpeta
 
-- Replay de Aduana: nunca uses `_push({type:'user'})` para un aviso del sistema;
-  ese tipo representa un turno humano y descalibra `priorTurns`/`cut`. Usá
-  `{type:'error', message}`.
+- Replay de Aduana (`console:BUG-3367`): un turno de corte empieza SOLO con un
+  `user` cuyo texto lleva `SALA_PROMPT_HEAD`; el prompt se descarta y la
+  alineación con `cut` se hace desde el final. Un `user` auxiliar no abre turno.
 - Arranque multi-tenant: el runner de un INQUILINO nace con el env limpio de
   `userRunnerEnv` y con `cwd` en su workspace. Si `bin/_env-boot.js` no es el
   PRIMER import de `bin/cwc-chat-runner.js`, `dotenv/config` busca `.env` en ese

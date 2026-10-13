@@ -51,6 +51,27 @@ async function padFetch(method, urlPath, { token, body } = {}) {
   return { status: res.status, data };
 }
 
+// Renueva únicamente la sesión de un inquilino con el password guardado al
+// provisionarlo. La credencial del host requiere aprobación humana en browser.
+export async function reloginUserPad(userId) {
+  try {
+    if (sanitizeUserId(userId) === hostUser()) return { ok: false, error: 'host: requiere pad auth login manual' };
+    let password = '';
+    try { password = fs.readFileSync(path.join(userPadDir(userId), 'password'), 'utf8').trim(); } catch { /* noop */ }
+    if (!password) return { ok: false, error: 'sin password guardado' };
+
+    const email = userId + '@console.local';
+    const login = await padFetch('POST', '/api/v1/auth/login', { body: { email, password } });
+    if (login.status === 200 && login.data?.token) {
+      writeUserPadToken(userId, PAD_URL, login.data.token);
+      return { ok: true };
+    }
+    return { ok: false, error: `login falló: ${login.status}` };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
 // Genera un password aleatorio (se guarda en el espacio del inquilino por si el
 // token vence y hay que re-loguear).
 function randomPassword() {

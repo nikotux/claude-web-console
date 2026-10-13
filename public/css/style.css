@@ -569,6 +569,32 @@ html, body {
 .sess-mode.sess-guest { color: var(--cwc-text-dim); background: var(--cwc-bg-chip); }
 .sess-menu { align-self: center; }
 
+/* Sub-salas de Aduana: árbol propio bajo la tarjeta madre. La hija no entra
+   al orden/drag del contenedor; la guía deja visible que hereda su ubicación. */
+.sess-children {
+  flex: 1 1 100%; min-width: 0;
+  display: flex; flex-direction: column; gap: .18rem;
+  margin: .05rem 0 .2rem .75rem; padding-left: .55rem;
+  border-left: 1px solid color-mix(in srgb, var(--cwc-accent-cool) 48%, var(--cwc-border));
+}
+.sess-card--child {
+  border-left-color: color-mix(in srgb, var(--cwc-accent-cool) 62%, var(--cwc-border));
+  background: color-mix(in srgb, var(--cwc-accent-cool) 4%, var(--cwc-bg-elevated));
+}
+.sess-card--child[draggable="false"] { cursor: default; }
+.sess-subsalas-toggle {
+  flex: none; display: inline-flex; align-items: center; gap: .18rem;
+  min-height: 18px; padding: 0 .28rem;
+  border: 1px solid color-mix(in srgb, var(--cwc-accent-cool) 35%, var(--cwc-border));
+  border-radius: 999px; cursor: pointer;
+  color: var(--cwc-accent-cool); background: color-mix(in srgb, var(--cwc-accent-cool) 8%, var(--cwc-bg-chip));
+  font-size: var(--cwc-fs-xs); line-height: 1;
+}
+.sess-subsalas-toggle:hover { background: color-mix(in srgb, var(--cwc-accent-cool) 14%, var(--cwc-bg-hover)); }
+.sess-subsalas-arrow { display: inline-flex; transition: transform .15s ease; }
+.sess-subsalas-toggle.is-open .sess-subsalas-arrow { transform: rotate(90deg); }
+.sess-subsalas-count { font-weight: 700; font-variant-numeric: tabular-nums; }
+
 /* Badge PASIVO del Interfono (rediseño 2026-07-10, Fase 2): reemplaza al popup
    modal "Retomar/Descartar". Discreto, acento frío (mismo criterio que el
    centro de interfono), sin animación agresiva. */
@@ -2133,15 +2159,25 @@ html, body {
 .chat-msg.assistant--addressed {
   border-left: 3px solid var(--peer-tone, var(--cwc-border));
 }
-.chat-cut, .chat-origin, .chat-orquestado {
+.chat-cut, .chat-origin, .chat-orquestado, .chat-subsala {
   align-self: stretch; display: flex; align-items: center; gap: .55rem;
   color: var(--cwc-text-dim); font-size: var(--cwc-fs-xs);
   text-align: center; white-space: nowrap;
 }
 .chat-cut::before, .chat-cut::after,
 .chat-origin::before, .chat-origin::after,
-.chat-orquestado::before, .chat-orquestado::after {
+.chat-orquestado::before, .chat-orquestado::after,
+.chat-subsala::before, .chat-subsala::after {
   content: ''; flex: 1; border-top: 1px solid var(--cwc-divider);
+}
+.chat-subsala {
+  width: 100%; padding: 0; border: 0; background: none;
+  font-family: inherit; cursor: pointer;
+}
+.chat-subsala:hover, .chat-subsala:focus-visible { color: var(--cwc-accent-cool); }
+.chat-subsala:disabled { cursor: default; color: var(--cwc-text-dimmer); }
+.chat-subsala::before, .chat-subsala::after {
+  border-top-color: color-mix(in srgb, var(--cwc-accent-cool) 38%, var(--cwc-divider));
 }
 .chat-origin {
   color: var(--cwc-text-secondary); font-weight: 600;
@@ -2150,6 +2186,24 @@ html, body {
 .chat-origin::before, .chat-origin::after {
   border-top-color: color-mix(in srgb, var(--cwc-accent) 38%, var(--cwc-divider));
 }
+.chat-eco {
+  align-self: stretch; display: flex; flex-direction: column; gap: .28rem;
+  padding: .42rem .58rem;
+  border-left: 3px solid color-mix(in srgb, var(--cwc-accent-cool) 58%, var(--cwc-border));
+  border-radius: var(--cwc-radius-sm);
+  background: color-mix(in srgb, var(--cwc-accent-cool) 6%, var(--cwc-bg-panel));
+}
+.chat-eco-head {
+  align-self: flex-start; padding: 0; border: 0; background: none;
+  color: var(--cwc-accent-cool); font: inherit; font-size: var(--cwc-fs-xs);
+  font-weight: 700; text-align: left; cursor: pointer;
+}
+.chat-eco-head:hover, .chat-eco-head:focus-visible { color: var(--cwc-text); }
+.chat-eco-head:disabled { cursor: default; color: var(--cwc-text-dim); }
+.chat-eco-body { color: var(--cwc-text-secondary); font-size: var(--cwc-fs-sm); line-height: 1.4; }
+.chat-eco-body > :first-child { margin-top: 0; }
+.chat-eco-body > :last-child { margin-bottom: 0; }
+.chat-eco-note { color: var(--cwc-text-dimmer); font-size: var(--cwc-fs-xs); font-style: italic; }
 .chat-orq-btn {
   position: absolute; top: 0; right: 0;
   display: inline-flex; align-items: center; gap: .2rem;

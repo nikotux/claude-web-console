@@ -2,7 +2,7 @@
 //
 // Modal lanzador completo: tipo (Chat/Claude TUI/Terminal), modelo cuando
 // corresponde y destino con atajos fijos (Tolkien/lugar propio — Mi Consola
-// para host/admin, Mi espacio para inquilinos no-admin; su identidad sale de
+// para el host, Mi espacio para todo inquilino, admin o no; su identidad sale de
 // ui/places.js) más un navegador de carpetas con breadcrumb
 // (GET /api/files/list, solo directorios).
 // [Iniciar] crea y enfoca la sesión.
@@ -58,13 +58,17 @@ export default {
       // llamar endpoints; la barrera real y autoritativa sigue en el backend.
       // Sin identidad resoluble degradamos a la experiencia completa (fail-open).
       sponsoredExperience = !!user && isSponsored(user);
+      // Solo el HOST (o el token, que ES el host) tiene el repo real de la
+      // consola en su raíz de archivos. Un admin inquilino tiene su propio
+      // workspace aislado (~/.cwc-users/<user>/workspace) donde
+      // `claude-web-console` no existe: ofrecerle ese atajo hacía que /create
+      // rechazara el chat con "El destino ... no existe en tu espacio de trabajo".
       const showConsoleShortcut = !user
         || user.type === 'token'
-        || !!user.admin
         || (!!user.username && user.username === user.host);
       // Sin identidad conservamos el destino histórico. Un patrocinado siempre
-      // usa Mi espacio; fuera de ese perfil, host/admin ve el repo real y un
-      // inquilino no-admin usa su espacio aislado.
+      // usa Mi espacio; fuera de ese perfil, el host ve el repo real y todo
+      // inquilino (admin o no) usa su espacio aislado.
       homePlace = sponsoredExperience || !showConsoleShortcut ? MYSPACE_PLACE : CONSOLE_PLACE;
       // Ancho angosto (360): con solo 3 tarjetas por fila + dropdown + CTA, 440
       // dejaba las tarjetas anchas y vacías. Acorde al diseño compacto (pedido

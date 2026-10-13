@@ -55,4 +55,5 @@ export const cancelarPeticion = (id) => request(peticionPath(id, 'cancelar'), {
 export const fetchEstado = (salaId) => request(`/lecturas/estado${salaQuery(salaId)}`);
 export const fetchRefresh = (salaId) => request(`/lecturas/refresh${salaQuery(salaId)}`);
 export const fetchEntornos = (salaId) => request(`/lecturas/entornos${salaQuery(salaId)}`);
+export const fetchPreview = (salaId) => request(`/lecturas/preview${salaQuery(salaId)}`);
 export const fetchRamas = (salaId) => request(`/lecturas/ramas${salaQuery(salaId)}`);

@@ -39,6 +39,7 @@ import {
   buildUserContent, chatAttachDir, safeAttachName, IMAGE_MIME,
 } from '../src/modules/chat/attachments.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
+import { createSalaToolServer } from '../src/modules/chat/sala-tool.js';
 import {
   CODEX_JOB_TERMINAL_STATUSES,
   listCodexJobs,
@@ -51,6 +52,7 @@ import { createMicrosoftToolServer } from '../src/core/microsoft-tool.js';
 import { hostUser } from '../src/core/user-space.js';
 import { worldLabelFor } from '../src/core/worlds.js';
 import { compactMemoryHook } from '../src/core/compact-memory.js';
+import { ENVS_DIR, getEnvByChat, isEnvAlive } from '../src/modules/tolkien/env-store.js';
 
 // ---- argv ----
 const args = {};
@@ -58,6 +60,22 @@ for (let i = 2; i < process.argv.length - 1; i += 2) {
   const k = process.argv[i];
   if (k.startsWith('--')) args[k.slice(2)] = process.argv[i + 1];
 }
+
+// Convierte una ruta declarada en su destino REAL y exige que sea un hijo
+// estricto de la raíz de entornos. path.relative evita los falsos positivos de
+// prefijos como `tolkien-envs-escape`; realpath cierra escapes por symlink.
+export function validateTolkienExtraDir(candidate, root = ENVS_DIR) {
+  if (!path.isAbsolute(candidate || '')) throw new Error('el directorio adicional debe ser absoluto');
+  const realRoot = fs.realpathSync(root);
+  const realDir = fs.realpathSync(candidate);
+  const rel = path.relative(realRoot, realDir);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error('el directorio adicional debe quedar dentro de ~/.cwc-data/tolkien-envs/');
+  }
+  if (!fs.statSync(realDir).isDirectory()) throw new Error('el directorio adicional no es una carpeta');
+  return realDir;
+}
+
 const ID = args.id;
 const CWD = args.cwd;
 const SOCK = args.sock;
@@ -80,6 +98,13 @@ const EFFORT = EFFORT_LEVELS.has(args.effort) ? args.effort : null;
 const TANDEM = args.tandem === '1';
 // Entorno Tolkien efímero: hook instalado solo en spawns cuyo cwd es el Tolkien base.
 const TOLKIEN_ENV_AUTO = args['tolkien-env-auto'] === '1';
+let EXTRA_DIR = null;
+try {
+  if (args['extra-dir']) EXTRA_DIR = validateTolkienExtraDir(args['extra-dir']);
+} catch (err) {
+  console.error(`[runner] --extra-dir inválido: ${err?.message || err}`);
+  process.exit(2);
+}
 // PLAN-519 F2: ejecutor Codex de Tándem configurable (modelo+esfuerzo). Sin arg
 // = defaults de gama alta (createCodexToolServer valida contra su whitelist).
 const CODEX_MODEL = args['codex-model'] || null;
@@ -130,6 +155,19 @@ if (IS_TENANT) {
 }
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
+// Se evalúa de nuevo en cada delegación Codex: una sala puede recibir o perder
+// su preview mientras este runner sigue vivo. Nunca se guarda como tolkienEnv.
+function liveSalaEnv() {
+  if (worldLabelFor(CWD) !== 'Aduana') return null;
+  try {
+    const rec = getEnvByChat(path.basename(CWD));
+    if (!isEnvAlive(rec) || !rec?.worktree) return null;
+    return { ...rec, worktree: validateTolkienExtraDir(rec.worktree) };
+  } catch {
+    return null;
+  }
+}
+
 // cache_creation_input_tokens puede venir como número plano o como objeto
 // {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens} según el modelo — lo
 // normalizamos a un total (instrumentación de caché, PEND-391).
@@ -165,7 +203,9 @@ let exiting = false;
 const history = []; // eventos de UI de ESTA vida del motor (para replay al reconectar)
 const clients = new Set();
 const pendingPerms = new Map(); // permId -> { resolve, timer, input }
+const pendingSalaOps = new Map(); // reqId -> { resolve, timer }
 let permSeq = 0;
+let salaOpSeq = 0;
 let autonomyTurns = 0; // continuaciones desde el último mensaje humano
 
 function writeTo(c, obj) {
@@ -219,6 +259,20 @@ function emit(event, { record = true, broadcast = true } = {}) {
     if (history.length > HISTORY_MAX) history.splice(0, history.length - HISTORY_MAX);
   }
   if (broadcast) for (const c of clients) writeTo(c, { t: 'event', event });
+}
+
+function salaRequest(op, args) {
+  return new Promise((resolve) => {
+    salaOpSeq += 1;
+    const random = Math.random().toString(36).slice(2, 10);
+    const reqId = `so-${Date.now().toString(36)}-${salaOpSeq.toString(36)}-${random}`;
+    const timer = setTimeout(() => {
+      pendingSalaOps.delete(reqId);
+      resolve({ ok: false, error: 'el servidor no respondió; reintentá en un momento' });
+    }, 20 * 1000);
+    pendingSalaOps.set(reqId, { resolve, timer });
+    emit({ type: 'sala-op', reqId, op, args }, { record: false });
+  });
 }
 
 function bgList() { return [...bgWork.values()]; }
@@ -413,6 +467,12 @@ function startEngine() {
       effort: CODEX_EFFORT,
       chatDir: chatAttachDir(ID),
       chatId: ID,
+      altWorkdirs: isAduana
+        ? () => {
+          const rec = liveSalaEnv();
+          return rec ? { entorno: rec.worktree } : {};
+        }
+        : undefined,
       onBgStart: ({ id, kind, label }) => bgAdd({ id, kind, label }),
       onBgEnd: (id) => bgDone(id),
     });
@@ -441,6 +501,7 @@ function startEngine() {
   if (isAduana) {
     const padServer = aduanaPadMcpServer();
     if (padServer) mcpServers.pad = padServer;
+    mcpServers.sala = createSalaToolServer({ request: salaRequest });
   }
   const hookSets = [];
   if (TANDEM) hookSets.push(tandemPreToolUseHook());
@@ -471,22 +532,30 @@ function startEngine() {
     onWrite: ({ file, record }) => log(`memoria de compactación #${record.compaction_number} guardada en ${file}`),
   }));
   const mergedHooks = mergeHookSets(...hookSets);
+  const options = chatQueryOptions({
+    cwd: CWD,
+    model: resolveModelArg(MODEL),
+    resume: RESUME,
+    sessionId: SESSION_ID, // BUG-496: primer arranque de un chat nuevo (excluye resume)
+    mode,
+    effort: EFFORT,
+    chatId: ID, // regla de carpeta de trabajo del paquete-sesión (PLAN-447)
+    // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
+    tandem: TANDEM,
+    ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+    ...(mergedHooks ? { hooks: mergedHooks } : {}),
+    canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
+  });
+  if (EXTRA_DIR) options.additionalDirectories = [EXTRA_DIR];
+  const salaEnv = liveSalaEnv();
+  if (salaEnv) {
+    const line = `Entorno de preview de esta sala: worktree ${salaEnv.worktree} (rama ${salaEnv.branch}), preview en el puerto ${salaEnv.port}. Editá el código de Tolkien AHÍ; tu cwd sigue siendo la sala.`;
+    const append = [options.systemPrompt?.append, line].filter(Boolean).join('\n\n');
+    options.systemPrompt = { type: 'preset', preset: 'claude_code', append };
+  }
   q = query({
     prompt: input.gen(),
-    options: chatQueryOptions({
-      cwd: CWD,
-      model: resolveModelArg(MODEL),
-      resume: RESUME,
-      sessionId: SESSION_ID, // BUG-496: primer arranque de un chat nuevo (excluye resume)
-      mode,
-      effort: EFFORT,
-      chatId: ID, // regla de carpeta de trabajo del paquete-sesión (PLAN-447)
-      // Modelo TÁNDEM: instrucción + tool de Codex in-process (PLAN-507).
-      tandem: TANDEM,
-      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
-      ...(mergedHooks ? { hooks: mergedHooks } : {}),
-      canUseTool: (toolName, toolInput, ctx) => askPermission(toolName, toolInput, ctx),
-    }),
+    options,
   });
 }
 
@@ -702,6 +771,18 @@ function handleCommand(c, msg) {
   if (msg.t === 'hello') {
     // El runner es la fuente de verdad de su propio flag de spawn.
     writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, bgTasks: bgList(), events: history });
+    return;
+  }
+  if (msg.t === 'sala-op-result' && typeof msg.reqId === 'string') {
+    const pending = pendingSalaOps.get(msg.reqId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingSalaOps.delete(msg.reqId);
+    pending.resolve({
+      ok: msg.ok === true,
+      ...(msg.result && typeof msg.result === 'object' ? { result: msg.result } : {}),
+      ...(typeof msg.error === 'string' ? { error: msg.error } : {}),
+    });
     return;
   }
   if (msg.t === 'user' && typeof msg.text === 'string'

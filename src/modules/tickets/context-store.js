@@ -17,12 +17,13 @@
 // solo baja lo necesario para trabajar tickets/features/PR. Un verificador
 // (verifySync) avisa si el espejo quedó desincronizado en vez de fallar callado.
 import fss from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 import { findForeignRefsForTolkien, replaceForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 import { systemScopeFor } from '../../core/system-scope.js';
-import { hostUser, userWorkspace } from '../../core/user-space.js';
+import { hostUser } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
 
 export { findForeignRefsForTolkien } from '../../core/pad-world-refs.js';
@@ -55,21 +56,19 @@ export function contextPathsFor(scope = hostScope(), kind = 'work') {
 const MARK_START = '<!-- cwc:tickets-context:start -->';
 const MARK_END = '<!-- cwc:tickets-context:end -->';
 
-// PLAN-1938: presupuesto de peso del espejo (techo de CONVE-1942). Lo que baja a
-// CLAUDE.local.md AUTO-CARGA en CADA sesión de Tolkien: engordar acá es gratis para
-// quien escribe y caro para todos los que leen. No cambia comportamiento — avisa
-// (log al sincronizar + campos en verifySync) para que el engorde silencioso sea
-// imposible. `retro/promote-shared.js` reutiliza esta constante y mide el espejo
-// candidato ANTES de escribir `## 6.`; si no entra, rota texto viejo a referencias
-// o falla ruidosamente. 30 kB deja margen sobre los ~28 kB medidos tras la poda.
+// PLAN-1938 + PLAN-3237: CLAUDE.local.md se auto-carga en cada sesión. El render
+// garantiza este techo repartiendo las unidades de `## 6.` entre espejo, playbook
+// y archivo; adoptar feedback nunca falla por espacio. Solo puede excederse si la
+// parte fija (sin unidades de feedback) ya supera por sí sola el presupuesto.
 export const MIRROR_BUDGET = 30000;
+export const PLAYBOOK_FEEDBACK_BUDGET = 40000;
+export const CONTEXT_RANK_RE = /<!-- cwc:retro-rank:(\d+) -->/;
+export const CONTEXT_ARCHIVED_RE = /^<!-- cwc:retro-archived:([a-f0-9]{12}) rank=(\d+) -->$/;
 
-// Secciones que viajan SIEMPRE al espejo de Tolkien (REGLA: lo que una sesión
-// necesita desde el primer turno). El resto — procedimiento por fases,
-// checklists y lecciones — va al playbook que se lee a demanda.
+// Secciones de REGLA que viajan al espejo de Tolkien. `## 6.` figura para que
+// el fail-safe reconozca el heading, pero sus unidades las reparte el planificador
+// global de ventanas; nunca baja como sección monolítica.
 // PEND-1864: antes viajaba todo (~60k en CADA sesión de Tolkien).
-// PLAN-1938: las reglas se verificaron y quedan IGUAL — la clasificación por sección
-// ya era correcta; el peso salió del maestro (poda de `## 6.`), no de las reglas.
 const MIRROR_RULES = {
   // BUG-1927: el feedback adoptado debe llegar al archivo de auto-carga.
   work: [/gate pre-push/i, /^##\s*0\./, /^##\s*1\./, /^##\s*6\./],
@@ -97,6 +96,8 @@ const INTERNAL_REF_LABELS = {
   AR: 'registro interno',
 };
 const CONTEXT_LESSON_RE = /^### 🔄 Lección de Mejora Continua \((MC-\d+)\) — (.+)$/gm;
+const CONTEXT_MARKER_RE = /<!-- cwc:retro-context:([a-f0-9]{12}) -->/;
+const FEEDBACK_HEADING_RE = /^##\s*6\./;
 
 export const DEFAULT_CONTEXTS = {
   work: [
@@ -200,9 +201,107 @@ function sanitizeForTolkien(text, lessonTitles) {
   return { rendered, sanitizedRefs };
 }
 
-function splitContextForMirror(kind, text, scope = hostScope()) {
-  const source = text ?? getContext(kind, scope);
-  const split = splitTopSections(source);
+export function parseFeedbackSection(sectionText) {
+  const source = String(sectionText ?? '');
+  const firstNewline = source.indexOf('\n');
+  const headingEnd = firstNewline === -1 ? source.length : firstNewline + 1;
+  const heading = source.slice(0, firstNewline === -1 ? source.length : firstNewline).replace(/\r$/, '');
+  const starts = [];
+  let offset = headingEnd;
+  let inFence = false;
+
+  for (const line of source.slice(headingEnd).match(/[^\n]*\n|[^\n]+/g) || []) {
+    const bare = line.replace(/\r?\n$/, '');
+    if (!inFence) {
+      let kind = null;
+      let key = null;
+      let rank = Number(bare.match(CONTEXT_RANK_RE)?.[1] || 1);
+      if (bare.startsWith('### 🔄 Lección de Mejora Continua')) {
+        kind = 'full';
+        key = bare.match(CONTEXT_MARKER_RE)?.[1] || null;
+        const legacyId = bare.match(/\((MC-\d+)\)/)?.[1];
+        if (!key && legacyId) key = crypto.createHash('sha1').update(legacyId).digest('hex').slice(0, 12);
+      } else if (bare.startsWith('> ↩ **Referencia de Mejora Continua:**')) {
+        kind = 'ref';
+        key = bare.match(CONTEXT_MARKER_RE)?.[1] || null;
+      } else {
+        const archived = bare.match(CONTEXT_ARCHIVED_RE);
+        if (archived) {
+          kind = 'archived';
+          key = archived[1];
+          rank = Number(archived[2]);
+        }
+      }
+      if (kind) starts.push({ start: offset, lineEnd: offset + line.length, kind, key, rank });
+    }
+    if (bare.startsWith('```')) inFence = !inFence;
+    offset += line.length;
+  }
+
+  const units = starts.map((entry, order) => {
+    const nextStart = starts[order + 1]?.start ?? source.length;
+    const end = entry.kind === 'archived' ? entry.lineEnd : nextStart;
+    return {
+      key: entry.key,
+      kind: entry.kind,
+      rank: Number.isInteger(entry.rank) && entry.rank >= 1 ? entry.rank : 1,
+      order,
+      text: source.slice(entry.start, end),
+      start: entry.start,
+      end,
+    };
+  });
+  const prefaceEnd = starts[0]?.start ?? source.length;
+  return { heading, preface: source.slice(headingEnd, prefaceEnd), units };
+}
+
+function stripRankMarkers(text) {
+  return String(text ?? '').replace(/<!-- cwc:retro-rank:\d+ -->/g, '');
+}
+
+function compareFeedbackPriority(a, b) {
+  return b.unit.rank - a.unit.rank
+    || b.unit.order - a.unit.order
+    || a.serial - b.serial;
+}
+
+function prepareContexts(sources) {
+  const prepared = {};
+  for (const kind of Object.keys(CONTEXT_FILENAMES)) {
+    const split = splitTopSections(sources[kind]);
+    const feedbackSection = split.sections.find((section) => FEEDBACK_HEADING_RE.test(section.title)) || null;
+    prepared[kind] = {
+      split,
+      feedbackSection,
+      feedback: feedbackSection ? parseFeedbackSection(feedbackSection.text) : null,
+    };
+  }
+  return prepared;
+}
+
+function feedbackNotice(playbookCount, archivedCount) {
+  const details = [];
+  if (playbookCount) details.push(`${playbookCount} más en \`.cwc-ticket-playbook.md\` (§6)`);
+  if (archivedCount) {
+    details.push(`${archivedCount} archivada${archivedCount === 1 ? '' : 's'}, completas en el archivo de Mejora Continua de Mi Consola`);
+  }
+  return `> Lecciones adoptadas más relevantes (por recurrencia).${details.length ? ` Hay ${details.join(' y ')}.` : ''}`;
+}
+
+function renderFeedbackSection(parsed, records, mode, counts) {
+  const units = records.map((record) => record.unit.text.trim()).filter(Boolean);
+  if (mode === 'mirror') {
+    return [
+      parsed.heading,
+      feedbackNotice(counts.playbook, counts.archived),
+      ...units,
+    ].filter(Boolean).join('\n\n');
+  }
+  return [parsed.heading, parsed.preface.trim(), ...units].filter(Boolean).join('\n\n');
+}
+
+function splitContextForMirror(kind, source, preparedKind, selection) {
+  const split = preparedKind.split;
   const ruleSections = split.sections.filter((section) => sectionMatches(kind, section));
   if (!ruleSections.length && split.sections.length) {
     console.warn(`[tickets/context-store] PEND-1864: ninguna sección de regla matcheó para ${kind}; se espeja completo.`);
@@ -214,11 +313,36 @@ function splitContextForMirror(kind, text, scope = hostScope()) {
     };
   }
 
-  const referenceSections = split.sections.filter((section) => !sectionMatches(kind, section));
+  const mirrorSections = [];
+  const playbookSections = [];
+  for (const section of split.sections) {
+    if (section === preparedKind.feedbackSection) {
+      const counts = {
+        playbook: selection.playbook.filter((record) => record.kind === kind).length,
+        archived: selection.archived.filter((record) => record.kind === kind).length,
+      };
+      mirrorSections.push(`${renderFeedbackSection(
+        preparedKind.feedback,
+        selection.mirror.filter((record) => record.kind === kind),
+        'mirror',
+        counts,
+      )}\n`);
+      playbookSections.push(`${renderFeedbackSection(
+        preparedKind.feedback,
+        selection.playbook.filter((record) => record.kind === kind),
+        'playbook',
+        counts,
+      )}\n`);
+    } else if (sectionMatches(kind, section)) {
+      mirrorSections.push(section.text);
+    } else {
+      playbookSections.push(section.text);
+    }
+  }
   return {
     preamble: split.preamble,
-    mirror: [split.preamble, ...ruleSections.map((s) => s.text)].join('').trim(),
-    playbook: [split.preamble, ...referenceSections.map((s) => s.text)].join('').trim(),
+    mirror: [split.preamble, ...mirrorSections].join('').trim(),
+    playbook: [split.preamble, ...playbookSections].join('').trim(),
     failSafe: false,
   };
 }
@@ -233,17 +357,9 @@ function playbookPointer(contextName) {
   ].join('\n');
 }
 
-// Cuerpo de la sección gestionada (SIN marcadores). Incluye la NOTA-en-el-
-// documento para que un future-Niko que abra CLAUDE.local.md sepa qué es y no
-// lo confunda con un objeto raro. Se genera desde el master (work + pr), pero
-// baja solo REGLA; el procedimiento largo queda en .cwc-ticket-playbook.md.
-function renderManagedSectionResult(overrides = {}, scope = hostScope()) {
-  const sources = {
-    work: overrides.work ?? getContext('work', scope),
-    pr: overrides.pr ?? getContext('pr', scope),
-  };
-  const work = splitContextForMirror('work', sources.work, scope);
-  const pr = splitContextForMirror('pr', sources.pr, scope);
+function renderManagedForSelection(sources, prepared, selection, lessonTitles) {
+  const work = splitContextForMirror('work', sources.work, prepared.work, selection);
+  const pr = splitContextForMirror('pr', sources.pr, prepared.pr, selection);
   const raw = [
     '## ⚙️ Contexto de trabajo · Tickets / Features / PR — gestionado por Mi Consola',
     '',
@@ -267,21 +383,133 @@ function renderManagedSectionResult(overrides = {}, scope = hostScope()) {
     '',
     playbookPointer('un PR'),
   ].join('\n');
-  const { rendered, sanitizedRefs } = sanitizeForTolkien(
-    raw,
-    lessonTitlesFromContexts(Object.values(sources)),
-  );
+  const { rendered, sanitizedRefs } = sanitizeForTolkien(stripRankMarkers(raw), lessonTitles);
   return { rendered, sanitizedRefs };
+}
+
+function managedBlockForSelection(sources, prepared, selection, lessonTitles) {
+  const result = renderManagedForSelection(sources, prepared, selection, lessonTitles);
+  return { ...result, block: `${MARK_START}\n${result.rendered}\n${MARK_END}` };
+}
+
+function selectPlaybookWindow(records) {
+  const playbook = [];
+  let bytes = 0;
+  for (const record of records) {
+    if (bytes + record.bytes > PLAYBOOK_FEEDBACK_BUDGET) break;
+    playbook.push(record);
+    bytes += record.bytes;
+  }
+  return { playbook, archived: records.slice(playbook.length), bytes };
+}
+
+function createContextWindowPlan(overrides = {}, scope = hostScope(), warn = true) {
+  const sources = {
+    work: overrides.work ?? getContext('work', scope),
+    pr: overrides.pr ?? getContext('pr', scope),
+  };
+  const prepared = prepareContexts(sources);
+  const lessonTitles = lessonTitlesFromContexts(Object.values(sources));
+  let serial = 0;
+  const candidates = [];
+  const alreadyArchived = [];
+  for (const kind of Object.keys(CONTEXT_FILENAMES)) {
+    for (const unit of prepared[kind].feedback?.units || []) {
+      const record = { kind, unit, serial: serial++ };
+      if (unit.kind === 'archived') {
+        alreadyArchived.push(record);
+      } else {
+        const rendered = sanitizeForTolkien(stripRankMarkers(unit.text).trim(), lessonTitles).rendered;
+        candidates.push({ ...record, bytes: Buffer.byteLength(rendered, 'utf8') });
+      }
+    }
+  }
+  candidates.sort(compareFeedbackPriority);
+  alreadyArchived.sort(compareFeedbackPriority);
+
+  const selectionForMirror = (mirror) => {
+    const secondary = selectPlaybookWindow(candidates.slice(mirror.length));
+    return {
+      mirror,
+      playbook: secondary.playbook,
+      archived: [...secondary.archived, ...alreadyArchived].sort(compareFeedbackPriority),
+      playbookFeedbackBytes: secondary.bytes,
+    };
+  };
+
+  let selection = selectionForMirror([]);
+  const fixedResult = managedBlockForSelection(sources, prepared, selection, lessonTitles);
+  const fixedBytes = Buffer.byteLength(fixedResult.block, 'utf8');
+  const fixedOverBudget = fixedBytes > MIRROR_BUDGET;
+  const mirror = [];
+  let estimatedBytes = fixedBytes;
+  if (!fixedOverBudget) {
+    for (const record of candidates) {
+      const renderedCost = record.bytes + 2; // separador `\n\n` delante de cada unidad
+      if (estimatedBytes + renderedCost > MIRROR_BUDGET) break;
+      mirror.push(record);
+      estimatedBytes += renderedCost;
+    }
+  }
+
+  selection = selectionForMirror(mirror);
+  let managedResult = managedBlockForSelection(sources, prepared, selection, lessonTitles);
+  let mirrorBytes = Buffer.byteLength(managedResult.block, 'utf8');
+  while (mirrorBytes > MIRROR_BUDGET && mirror.length) {
+    mirror.pop();
+    selection = selectionForMirror(mirror);
+    managedResult = managedBlockForSelection(sources, prepared, selection, lessonTitles);
+    mirrorBytes = Buffer.byteLength(managedResult.block, 'utf8');
+  }
+  if (fixedOverBudget && warn) {
+    console.warn(`[tickets/context-store] PLAN-3237: la parte fija del espejo pesa ${fixedBytes} B y supera el presupuesto de ${MIRROR_BUDGET} B; ## 6 no aporta unidades.`);
+  }
+
+  return {
+    sources,
+    prepared,
+    lessonTitles,
+    selection,
+    managedResult,
+    mirrorBytes,
+    fixedOverBudget,
+    playbookFeedbackBytes: selection.playbookFeedbackBytes,
+  };
+}
+
+function publicWindowPlan(plan) {
+  const byKind = {};
+  for (const kind of Object.keys(CONTEXT_FILENAMES)) {
+    byKind[kind] = {
+      mirror: plan.selection.mirror.filter((record) => record.kind === kind).map((record) => record.unit.key),
+      playbook: plan.selection.playbook.filter((record) => record.kind === kind).map((record) => record.unit.key),
+      archived: plan.selection.archived.filter((record) => record.kind === kind).map((record) => record.unit.key),
+    };
+  }
+  return {
+    ...byKind,
+    mirrorBytes: plan.mirrorBytes,
+    playbookFeedbackBytes: plan.playbookFeedbackBytes,
+    fixedOverBudget: plan.fixedOverBudget,
+  };
+}
+
+export function planContextWindows(overrides = {}, scope = hostScope()) {
+  return publicWindowPlan(createContextWindowPlan(overrides, scope));
+}
+
+function renderManagedSectionResult(overrides = {}, scope = hostScope()) {
+  return createContextWindowPlan(overrides, scope).managedResult;
 }
 
 export function renderManagedSection(overrides = {}, scope = hostScope()) {
   return renderManagedSectionResult(overrides, scope).rendered;
 }
 
-export function renderPlaybook(scope = hostScope()) {
-  const work = splitContextForMirror('work', undefined, scope);
-  const pr = splitContextForMirror('pr', undefined, scope);
-  return [
+function renderPlaybookForPlan(plan) {
+  const work = splitContextForMirror('work', plan.sources.work, plan.prepared.work, plan.selection);
+  const pr = splitContextForMirror('pr', plan.sources.pr, plan.prepared.pr, plan.selection);
+  const raw = [
     '# Playbook local de tickets/features/PR — generado por Mi Consola',
     '',
     '> Archivo GENERADO automáticamente. NO lo edites a mano: se regenera al',
@@ -296,26 +524,22 @@ export function renderPlaybook(scope = hostScope()) {
     '',
     pr.playbook || pr.preamble.trim(),
   ].join('\n');
+  return sanitizeForTolkien(stripRankMarkers(raw), plan.lessonTitles).rendered;
+}
+
+export function renderPlaybook(scope = hostScope()) {
+  return renderPlaybookForPlan(createContextWindowPlan({}, scope));
 }
 
 // Bloque completo con marcadores (lo que buscamos/reemplazamos en el archivo).
 function managedBlockResult(overrides = {}, scope = hostScope()) {
-  const { rendered, sanitizedRefs } = renderManagedSectionResult(overrides, scope);
-  return {
-    block: `${MARK_START}\n${rendered}\n${MARK_END}`,
-    sanitizedRefs,
-  };
+  return createContextWindowPlan(overrides, scope).managedResult;
 }
 
-function managedBlock(overrides = {}, scope = hostScope()) {
-  return managedBlockResult(overrides, scope).block;
-}
-
-// El escritor de `## 6. Feedback adoptado` usa esta misma medición ANTES de
-// guardar. Así el presupuesto no depende de un warning posterior al sync ni
-// duplica el número en otro módulo.
+// PLAN-3237: el render por ventanas garantiza el presupuesto; adoptar feedback
+// nunca falla por espacio y el master conserva todas las unidades.
 export function measureMirrorBytes(overrides = {}, scope = hostScope()) {
-  return Buffer.byteLength(managedBlock(overrides, scope), 'utf8');
+  return createContextWindowPlan(overrides, scope).mirrorBytes;
 }
 
 function ensureGitExclude(projectDir) {
@@ -344,35 +568,64 @@ function writePlaybook(scope, playbookFile) {
   return { ok: true, changed: true };
 }
 
-// Una vez que el espejo del host quedó completo, replica ESE MISMO archivo a
-// cada clon provisionado. Cada usuario es best-effort e independiente: un clon
-// ausente se saltea y un fallo no cambia el resultado exitoso del espejo host.
-function syncHostMirrorToTenants(content) {
-  const summary = { reached: 0, failed: [] };
-  let users;
+// Clasifica sin escribir: un clon sin masters propios es semilla y puede
+// regenerarse desde el fallback de getContext(); uno con cualquier master es
+// dueño de su contexto y el fan-out del host no debe tocarlo.
+export function classifyTenantsForFanout() {
+  const host = hostUser();
+  return listUsers().filter((user) => user?.username && user.username !== host).map((user) => {
+    const id = user.username;
+    const scope = systemScopeFor({ type: 'session', username: id, admin: !!user.admin });
+    const projectDir = path.join(scope.workspace, 'tolkien');
+    let kind = 'seed';
+    if (!fss.existsSync(projectDir) || !fss.existsSync(path.join(projectDir, '.git'))) {
+      kind = 'no-clone';
+    } else if (
+      fss.existsSync(contextPathsFor(scope, 'work').storeFile)
+      || fss.existsSync(contextPathsFor(scope, 'pr').storeFile)
+    ) {
+      kind = 'own';
+    }
+    return { user, kind, scope };
+  });
+}
+
+// Después del espejo host, genera el espejo de cada inquilino semilla desde su
+// scope. Cada usuario es best-effort: clones ausentes y contextos propios no se
+// tocan, y ningún fallo cambia el resultado exitoso del espejo host.
+function syncSeedTenants() {
+  const summary = { reached: 0, skippedOwn: 0, failed: [] };
+  let tenants;
   try {
-    users = listUsers();
+    tenants = classifyTenantsForFanout();
   } catch (err) {
     const reason = err?.message || String(err);
     summary.failed.push({ user: '*', reason });
-    console.warn(`[tickets/context-store] No se pudieron enumerar los inquilinos para el espejo: ${reason}`);
+    console.warn(`[tickets/context-store] No se pudieron clasificar los inquilinos para el espejo: ${reason}`);
     return summary;
   }
 
-  const host = hostUser();
-  for (const user of users) {
-    const id = user?.username;
-    if (!id || id === host) continue;
+  for (const { user, kind, scope } of tenants) {
+    const id = user.username;
+    if (kind === 'no-clone') continue;
+    if (kind === 'own') {
+      summary.skippedOwn += 1;
+      continue;
+    }
     try {
-      const projectDir = path.join(userWorkspace(id), 'tolkien');
-      if (!fss.existsSync(projectDir) || !fss.existsSync(path.join(projectDir, '.git'))) continue;
-      const mirrorFile = path.join(projectDir, 'CLAUDE.local.md');
-      writeFileAtomic(mirrorFile, content, { mode: 0o644 });
+      const result = syncToTolkien(scope);
+      if (!result.ok) {
+        const reason = result.reason || 'sync-fallido';
+        summary.failed.push({ user: id, reason });
+        console.warn(`[tickets/context-store] No se pudo generar el espejo del inquilino ${id}: ${reason}`);
+        continue;
+      }
+      if (result.skipped) continue;
       summary.reached += 1;
     } catch (err) {
       const reason = err?.message || String(err);
       summary.failed.push({ user: id, reason });
-      console.warn(`[tickets/context-store] No se pudo espejar CLAUDE.local.md al inquilino ${id}: ${reason}`);
+      console.warn(`[tickets/context-store] No se pudo generar el espejo del inquilino ${id}: ${reason}`);
     }
   }
   return summary;
@@ -409,10 +662,6 @@ export function syncToTolkien(scope = hostScope()) {
     let fileExisted = false;
     try { existing = fss.readFileSync(mirrorFile, 'utf8'); fileExisted = true; } catch { /* no existe aún */ }
 
-    const mirrorBytes = Buffer.byteLength(block, 'utf8');
-    if (mirrorBytes > MIRROR_BUDGET) {
-      console.warn(`[tickets/context-store] PLAN-1938: el espejo a Tolkien pesa ${mirrorBytes} B y supera el presupuesto de ${MIRROR_BUDGET} B; podá el maestro (probablemente "## 6. Feedback adoptado").`);
-    }
     let next;
     const i = existing.indexOf(MARK_START);
     const j = existing.indexOf(MARK_END);
@@ -432,7 +681,7 @@ export function syncToTolkien(scope = hostScope()) {
     }
 
     if (next === existing) {
-      const tenantSync = scope.isHost ? syncHostMirrorToTenants(next) : null;
+      const tenantSync = scope.isHost ? syncSeedTenants() : null;
       return {
         ok: true,
         reason: 'sin-cambios',
@@ -443,7 +692,7 @@ export function syncToTolkien(scope = hostScope()) {
     }
     // 0o644: archivo de texto legible (el master en ~/.cwc-data queda 0o600).
     writeFileAtomic(mirrorFile, next, { mode: 0o644 });
-    const tenantSync = scope.isHost ? syncHostMirrorToTenants(next) : null;
+    const tenantSync = scope.isHost ? syncSeedTenants() : null;
     return {
       ok: true,
       created: !fileExisted,
@@ -478,7 +727,7 @@ export function verifySync(scope = hostScope()) {
     const present = extractManaged(text);
     if (present == null) return { status: 'missing', file: mirrorFile };
     const expected = renderManagedSection({}, scope).trim();
-    const mirrorBytes = Buffer.byteLength(expected, 'utf8');
+    const mirrorBytes = Buffer.byteLength(`${MARK_START}\n${expected}\n${MARK_END}`, 'utf8');
     if (present !== expected) {
       return {
         status: 'stale',
@@ -533,13 +782,8 @@ export function verifySync(scope = hostScope()) {
 export function saveContext(kind, text, scope = hostScope()) {
   const { storeFile } = contextPathsFor(scope, kind);
   // Atómico (tmp+rename): editar el contexto desde el panel no puede dejar el
-  // .md a medias si algo falla justo ahí (lo lee cada chat de trabajo).
-  // Cap generoso (2026-07-10): antes 20.000 — el manual `work` v3.0 (6 fases +
-  // lecciones L1/L2 + reglas de reunión) no entra en 20k y se truncaba silencioso
-  // (cortó la Lección L1 a mitad de palabra). 60k da margen para la metodología
-  // completa. OJO: PEND-1864 separa REGLA (CLAUDE.local.md) de REFERENCIA
-  // (.cwc-ticket-playbook.md) para no auto-cargar el procedimiento largo en
-  // cada sesión de Tolkien.
+  // .md a medias si algo falla justo ahí (lo lee cada chat de trabajo). El master
+  // conserva todo: PLAN-3237 limita las dos salidas renderizadas, no esta fuente.
   if (!scope.isHost) {
     // En el primer guardado se materializa también el hermano faltante desde el
     // host. Así work+pr quedan congelados como un par propio y cambios posteriores
@@ -552,7 +796,7 @@ export function saveContext(kind, text, scope = hostScope()) {
       }
     }
   }
-  writeFileAtomic(storeFile, String(text).slice(0, 60000));
+  writeFileAtomic(storeFile, String(text));
   // Espejar el subset a Tolkien (best-effort: si falla, el master ya quedó
   // guardado y el verificador lo marcará desincronizado).
   syncToTolkien(scope);

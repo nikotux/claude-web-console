@@ -376,6 +376,24 @@ export default {
           });
           row.append(top, detail);
 
+          if (state === 'ejecutada' && request.resultado) {
+            const result = document.createElement('div');
+            result.className = 'task-desc';
+            if (request.resultado.prUrl) {
+              const link = document.createElement('a');
+              link.href = String(request.resultado.prUrl);
+              link.target = '_blank';
+              link.rel = 'noopener';
+              link.textContent = t('visado.sidebar.prBorrador', 'PR borrador ↗');
+              result.appendChild(link);
+            } else if (request.resultado.port !== undefined && request.resultado.port !== null) {
+              result.textContent = t('visado.sidebar.puerto', 'puerto {port}', {
+                port: String(request.resultado.port),
+              });
+            }
+            if (result.hasChildNodes()) row.appendChild(result);
+          }
+
           if (state === 'pendiente') {
             row.setAttribute('role', 'button');
             row.tabIndex = 0;

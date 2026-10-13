@@ -4,14 +4,16 @@
 // El campo `gate` es la MISMA referencia de función que protege el endpoint HTTP
 // correspondiente: nunca una copia de la condición, porque dos copias divergen
 // (convención CONVE-2085 del repo).
+import fs from 'node:fs';
 import { isAdmin } from '../../core/auth.js';
 import { isHostAdmin } from '../tolkien/gates.js';
 import {
-  opRefreshData, opProvisionEnv, opTeardownEnv, opFetch, opUpdate, opRebaseBranch, status,
+  opRefreshData, opProvisionEnv, opTeardownEnv, opPushEnvBranch,
+  opFetch, opUpdate, opRebaseBranch, status,
 } from '../tolkien/index.js';
 import { listEnvs, isEnvAlive } from '../tolkien/env-store.js';
 
-export const CATALOG_CONTRACT_VERSION = 1;
+export const CATALOG_CONTRACT_VERSION = 2;
 
 // La rama actual es el ÚNICO valor válido para rebasar: el endpoint ya rechaza
 // cualquier otra (solo rebasa la rama en la que estás parado) y main no se
@@ -46,6 +48,26 @@ async function liveEnvOptions() {
     return listEnvs()
       .filter((rec) => rec && isEnvAlive(rec))
       .map((rec) => ({ value: rec.id, label: `${rec.id} · puerto ${rec.port ?? '?'} · ${rec.status ?? 'desconocido'}` }));
+  } catch {
+    return [];
+  }
+}
+
+// Solo ofrece entornos de ESTA sala cuyo worktree todavía existe. El id no
+// viene del cliente: resolveOptions/validateParams reconstruyen esta lista en
+// cada etapa del visado y guardan exactamente el valor elegido de acá.
+async function salaEnvOptions(ctx) {
+  const salaId = String(ctx?.salaId || '');
+  if (!salaId) return [];
+  try {
+    return listEnvs()
+      .filter((rec) => String(rec?.chatId || '') === salaId)
+      .filter((rec) => rec?.worktree && fs.existsSync(rec.worktree))
+      .map((rec) => ({
+        value: rec.id,
+        label: `${rec.id} · puerto ${rec.port ?? '?'} · ${rec.status ?? 'desconocido'}`,
+        warn: 'Hace git push a origin de Tolkien y abre un PR en borrador; no mergea.',
+      }));
   } catch {
     return [];
   }
@@ -128,6 +150,20 @@ export const CATALOG = Object.freeze({
       body: { chatId: p.chatId ?? '(lo fija el servidor)', base: p.base },
     }),
     run: (p, ctx) => opProvisionEnv({ chatId: ctx.salaId, base: p.base, packageRef: null }),
+  }),
+  'tolkien.env.push': Object.freeze({
+    label: 'Publicar los cambios del entorno (push + PR borrador)',
+    world: 'tolkien-host',
+    gate: isHostAdmin,
+    params: Object.freeze([
+      Object.freeze({ name: 'id', label: 'Entorno', options: salaEnvOptions }),
+    ]),
+    render: (p) => ({
+      method: 'POST',
+      path: `/api/tolkien/envs/${p.id}/push`,
+      body: {},
+    }),
+    run: (p) => opPushEnvBranch(p.id),
   }),
   'tolkien.env.teardown': Object.freeze({
     label: 'Destruir un entorno de prueba',

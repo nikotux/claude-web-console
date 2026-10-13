@@ -428,6 +428,27 @@ export async function setStatus(id, status, ctx = null) {
   return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState(ownerFor(ctx)));
 }
 
+export async function revertPromotion(id, prev, ctx = null) {
+  if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
+  const status = oneOf(prev?.status, STATUSES, null);
+  if (!status) throw Object.assign(new Error('Estado previo inválido.'), { badRequest: true });
+  const cur = await getItem(id, { ctx });
+  if (!cur.ok) throw notFoundOr500('revertPromotion', 'Lección', cur);
+  const f = parseFields(cur.data);
+  const fields = {
+    ...f,
+    status,
+    promotedTo: prev?.promotedTo || 'ninguno',
+    promotedAt: prev?.promotedAt ? String(prev.promotedAt) : '',
+    recurrenceAtPromotion: prev?.recurrenceAtPromotion ? String(prev.recurrenceAtPromotion) : '',
+  };
+  const r = await updateItem(id, { fields }, { ctx });
+  if (!r.ok) throw padError('revertPromotion', r);
+  appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: `${status} (revertida)` }, ctx);
+  const fresh = await getItem(id, { ctx });
+  return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields }, readVerifyState(ownerFor(ctx)));
+}
+
 // Cambia SOLO el destino sugerido. La promoción real es otra decisión humana.
 export async function setDestination(id, destination, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });

@@ -10,7 +10,11 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
 2. **Resiliencia:** ninguna operación en curso puede quedar atada al ciclo de
    vida del proceso Node. Terminales → tmux (socket `cwc`); vistas TUI de
    conversaciones → tmux oculta (`cwct-`); motores de chat → runner desacoplado
-   (`bin/cwc-chat-runner.js`); delegaciones Tándem a Codex → runner desacoplado
+   (`bin/cwc-chat-runner.js`). El runner de una sala de Aduana carga el MCP
+   in-process `sala` (4 tools; toda la autoridad queda en el server vía
+   `sala-op`/`sala-op-result`; topes de 12 hijas y 20 despertares/h;
+   `console:PLAN-3368`): no es una corrida headless nueva ni una excepción de
+   escritura, y no cambia la Regla 6. Delegaciones Tándem a Codex → runner desacoplado
    (`bin/cwc-codex-runner.js`); triage de bugs → runner desacoplado
    (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
@@ -28,6 +32,14 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    resolvió) → runner desacoplado (`bin/cwc-ticket-investigate-runner.js`);
    redacción de las Novedades tras un push → runner desacoplado
    (`bin/cwc-news-runner.js`);
+   refresh completo de fuentes del workboard Tolkien → runner desacoplado
+   (`bin/cwc-tolkien-sources-runner.js`, estado/log en
+   `~/.cwc-data/tolkien-sources.{json,log}`; el timer web solo decide y spawnea);
+   recompilación y restart del Tolkien local tras un pull que movió main →
+   runner desacoplado (`bin/cwc-tolkien-postpull-runner.js`, estado/log en
+   `~/.cwc-data/tolkien-postpull.{json,log}`; comparte el lock atómico
+   `~/.cwc-data/tolkien-build.lock` con refresh y plantilla, y el endpoint web
+   solo consulta el estado persistido);
    optimización IA de los motores (censo + análisis con propuestas) → runner
    desacoplado (`bin/cwc-optimize-runner.js`); ejecución de una operación del
    catálogo del visado ya aprobada → runner desacoplado
@@ -213,6 +225,15 @@ huérfanos del 2026-07-25). La LEY corta está en la Regla 11 del `CLAUDE.md`.
     mensaje llega al modelo atribuido a una persona, nunca como instrucción de
     sistema. La IA arranca muda: `say` conversa y persiste con 0 tokens; solo el
     botón de corte invoca al motor, usando la credencial y cuota del anfitrión.
+
+    **Excepción nominal · entorno de preview de la sala** (2026-10-09,
+    `console:PLAN-3236`): el runner de la sala puede escribir el worktree Tolkien
+    efímero mediante `additionalDirectories`, y Codex mediante
+    `workdir:'entorno'`, sin cambiar el cwd neutral de la sala. La ruta se
+    confina con `realpath` + `path.relative` bajo
+    `~/.cwc-data/tolkien-envs/`. La única salida es el visado
+    `tolkien.env.push` (push + PR borrador, nunca merge), aprobado por el dueño;
+    su gate es `isHostAdmin`.
 
     La raíz, la validación y el log viven en
     `src/modules/chat/aduana.js`; `worldLabelFor` reconoce Aduana en backend y

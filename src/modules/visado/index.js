@@ -8,7 +8,7 @@ import { hostUser, userDataDir } from '../../core/user-space.js';
 import { manager } from '../chat/index.js';
 import { status as tolkienStatus, opBranches } from '../tolkien/index.js';
 import { readRefreshJob, refreshStatus } from '../tolkien/refresh-shared.js';
-import { listEnvs, getEnv } from '../tolkien/env-store.js';
+import { listEnvs, getEnv, getEnvByChat, isEnvAlive } from '../tolkien/env-store.js';
 import {
   CATALOG_CONTRACT_VERSION, getOp, listOpIds, resolveOptions, validateParams,
 } from './catalog.js';
@@ -16,6 +16,7 @@ import {
   ESTADOS, crearPeticion, leerPeticion, listarPeticiones, transicionar,
   caducarVencidas, caducarEjecutandoVencidas,
 } from './store.js';
+import { salaChat, salaVisiblePara } from './sala-access.js';
 
 // Enriquece un expediente con lo que la UI necesita para MOSTRAR la operación
 // exacta, calculado SIEMPRE en el servidor desde el catálogo. El frontend nunca
@@ -102,19 +103,6 @@ function userOf(req) {
   return principalOf(req)?.username || hostUser();
 }
 
-// Encuentra la sala por su id y devuelve su chat, o null. Recorre el Map del
-// manager porque no hay índice por salaId: las salas son pocas y esto corre
-// por request, no en un bucle caliente.
-function salaChat(salaId) {
-  if (typeof salaId !== 'string' || !salaId) return null;
-  for (const chat of manager.chats.values()) {
-    try {
-      if (chat.isSala() && chat._salaId() === salaId) return chat;
-    } catch { /* un chat a medio construir no rompe la búsqueda */ }
-  }
-  return null;
-}
-
 // El expediente vive en el dataDir del DUEÑO de la sala, no en el del que
 // pregunta: la cola de aprobaciones es suya y debe seguir siendo suya aunque
 // la petición la emita un invitado.
@@ -139,16 +127,6 @@ function rutaAsync(handler) {
       }
     });
   };
-}
-
-function salaVisiblePara(salaId, user) {
-  const chat = salaChat(salaId);
-  if (!chat) return null;
-  try {
-    return chat.isParticipant(user) ? chat : null;
-  } catch {
-    return null;
-  }
 }
 
 function resumenEntorno(env) {
@@ -201,6 +179,26 @@ export default {
         return responderError(res, 404, 'Sala no encontrada.', 'sala_no_existe');
       }
       return res.json(refreshStatus(readRefreshJob()));
+    });
+
+    r.get('/lecturas/preview', (req, res) => {
+      const salaId = req.query.sala;
+      const user = userOf(req);
+      if (!salaVisiblePara(salaId, user)) {
+        return responderError(res, 404, 'Sala no encontrada.', 'sala_no_existe');
+      }
+      const rec = getEnvByChat(salaId);
+      if (!rec) return res.json({ env: null });
+      return res.json({
+        env: {
+          id: rec.id,
+          port: rec.port,
+          status: rec.status,
+          branch: rec.branch,
+          alive: isEnvAlive(rec),
+          enterUrl: `/api/tolkien/local-enter?port=${encodeURIComponent(rec.port)}`,
+        },
+      });
     });
 
     r.get('/lecturas/entornos', (req, res) => {

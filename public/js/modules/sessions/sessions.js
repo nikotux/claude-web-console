@@ -941,7 +941,12 @@ export default {
       ]);
       if (!tmuxRes.ok) throw new Error();
       const sessions = (await tmuxRes.json()).sessions;
-      const chats = chatRes.ok ? (await chatRes.json()).chats || [] : [];
+      const rawChats = chatRes.ok ? (await chatRes.json()).chats || [] : [];
+      const chats = rawChats.map((chat) => ({
+        ...chat,
+        isSala: !!chat.isSala,
+        parentSala: chat.parentSala ? String(chat.parentSala) : null,
+      }));
       const processes = Array.isArray(runnersRaw?.processes) ? runnersRaw.processes : [];
       const processCount = Number.isFinite(Number(runnersRaw?.processCount)) ? Number(runnersRaw.processCount) : processes.length;
       const runners = { processes, processCount, dominantModel: runnersRaw?.dominantModel || null };
@@ -1181,13 +1186,66 @@ export default {
       // Compartido ≠ ajeno: si figuro como participante explícito, la sala es
       // MÍA para el listado aunque el dueño (quien paga los turnos) sea otro.
       const isForMe = (c) => isMine(c.owner) || isChatParticipant(c);
-      const myChats = activeChats.filter((c) => isForMe(c));
+      const myChatsAll = activeChats.filter((c) => isForMe(c));
       const otherChats = activeChats.filter((c) => !isForMe(c));
-      const myArchivedChats = archivedChats.filter((c) => isForMe(c));
+      const myArchivedChatsAll = archivedChats.filter((c) => isForMe(c));
       const otherUserChats = [
         ...otherChats,
         ...archivedChats.filter((c) => !isForMe(c)),
       ];
+
+      // `parentSala` forma un árbol visual. Una hija sólo se separa del flujo
+      // normal cuando su madre está en ESTA misma lista visible; si falta, se
+      // conserva como raíz para que nunca desaparezca. Los ciclos corruptos
+      // también degradan a raíces en vez de tragarse tarjetas.
+      const buildChatTree = (items) => {
+        const byId = new Map(items.map((c) => [String(c.id), c]));
+        const childrenByParent = new Map();
+        const roots = [];
+        for (const c of items) {
+          const parentId = c.parentSala ? String(c.parentSala) : '';
+          let cursor = c;
+          const seen = new Set([String(c.id)]);
+          let validParent = !!parentId && byId.has(parentId) && parentId !== String(c.id);
+          while (validParent && cursor?.parentSala) {
+            const nextId = String(cursor.parentSala);
+            if (!byId.has(nextId)) break;
+            if (seen.has(nextId)) { validParent = false; break; }
+            seen.add(nextId);
+            cursor = byId.get(nextId);
+          }
+          if (!validParent) {
+            roots.push(c);
+            continue;
+          }
+          if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+          childrenByParent.get(parentId).push(c);
+        }
+        return { roots, childrenByParent };
+      };
+      const myChatTree = buildChatTree(myChatsAll);
+      const myArchivedTree = buildChatTree(myArchivedChatsAll);
+      const myChats = myChatTree.roots;
+      const myArchivedChats = myArchivedTree.roots;
+      const chatTreeSize = (chat, tree) => 1 + (tree.childrenByParent.get(String(chat.id)) || [])
+        .reduce((totalChildren, child) => totalChildren + chatTreeSize(child, tree), 0);
+      const appendChatTree = (host, chat, tmuxMap, container, tree, depth = 0) => {
+        const children = tree.childrenByParent.get(String(chat.id)) || [];
+        let childBox = null;
+        if (children.length) {
+          childBox = document.createElement('div');
+          childBox.className = 'sess-children';
+          childBox.hidden = !readGroupOpen(`cwc.sessions.subsalas.${chat.id}.open`, true);
+        }
+        host.appendChild(chatCard(chat, tmuxMap, container, {
+          isChild: depth > 0,
+          childCount: children.length,
+          childBox,
+        }));
+        if (!childBox) return;
+        for (const child of children) appendChatTree(childBox, child, tmuxMap, container, tree, depth + 1);
+        host.appendChild(childBox);
+      };
 
       listEl.innerHTML = '';
       if (!total && !archivedChats.length && !rootFolders.length) {
@@ -1249,7 +1307,8 @@ export default {
           grpEl.className = 'sess-world-grp';
           const summary = document.createElement('summary');
           summary.className = 'sess-world-h' + (key === '__limbo' ? ' sess-limbo-h' : '');
-          summary.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${escapeHtml(folderWorldLabel(key))}</span><span class="side-count">${grp.chats.length + folderTerminalCount}</span><button class="btn-ghost btn--sm btn--icon sess-world-add" title="${t('sessions.folder.newHere', 'Nueva carpeta en este mundo')}">${icon('plus', { size: 12 })}</button>`;
+          const worldChatCount = grp.chats.reduce((sum, item) => sum + chatTreeSize(item.chat, myChatTree), 0);
+          summary.innerHTML = `${icon(grp.place?.ico || 'folder', { size: 12 })}<span>${escapeHtml(folderWorldLabel(key))}</span><span class="side-count">${worldChatCount + folderTerminalCount}</span><button class="btn-ghost btn--sm btn--icon sess-world-add" title="${t('sessions.folder.newHere', 'Nueva carpeta en este mundo')}">${icon('plus', { size: 12 })}</button>`;
           summary.querySelector('.sess-world-add').addEventListener('click', (e) => {
             // Los controles dentro de <summary> heredan su gesto de toggle; sin
             // cortar ambos pasos, crear una carpeta también plegaría el mundo.
@@ -1270,7 +1329,8 @@ export default {
           bindGroupOpen(det, 'cwc.sessions.folder.' + f.id + '.open');
           const summary = document.createElement('summary');
           summary.className = 'sess-folder-h';
-          summary.innerHTML = `${icon('folder', { size: 12 })}<span class="sess-folder-name">${escapeHtml(f.name)}</span><span class="side-count">${members.chats.length + members.sessions.length}</span><button class="btn-ghost btn--sm btn--icon sess-folder-menu" title="${t('sessions.folder.options', 'Opciones de carpeta')}">${icon('more', { size: 13 })}</button>`;
+          const folderChatCount = members.chats.reduce((sum, chat) => sum + chatTreeSize(chat, myChatTree), 0);
+          summary.innerHTML = `${icon('folder', { size: 12 })}<span class="sess-folder-name">${escapeHtml(f.name)}</span><span class="side-count">${folderChatCount + members.sessions.length}</span><button class="btn-ghost btn--sm btn--icon sess-folder-menu" title="${t('sessions.folder.options', 'Opciones de carpeta')}">${icon('more', { size: 13 })}</button>`;
           summary.querySelector('.sess-folder-menu').addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1284,12 +1344,13 @@ export default {
             ...members.sessions.map((session) => ({ session })),
           ], (item) => item.chat ? chatItemKey(item.chat) : tmuxItemKey(item.session));
           for (const item of orderedMembers) {
-            det.appendChild(item.chat ? chatCard(item.chat, tmuxByName, container) : card(item.session, container));
+            if (item.chat) appendChatTree(det, item.chat, tmuxByName, container, myChatTree);
+            else det.appendChild(card(item.session, container));
           }
           host.appendChild(det);
         }
         if (key !== 'tolkien') {
-          for (const item of looseWorldChats) host.appendChild(chatCard(item.chat, tmuxByName, 'world:' + key));
+          for (const item of looseWorldChats) appendChatTree(host, item.chat, tmuxByName, 'world:' + key, myChatTree);
           continue;
         }
 
@@ -1297,7 +1358,7 @@ export default {
         // efímero vive debajo en su propio bloque de árbol, incluso cuando no hay
         // headers de mundo porque Tolkien es el único grupo presente.
         for (const item of looseWorldChats.filter((x) => !x.envId)) {
-          host.appendChild(chatCard(item.chat, tmuxByName, 'world:' + key));
+          appendChatTree(host, item.chat, tmuxByName, 'world:' + key, myChatTree);
         }
         const envGroups = new Map();
         for (const item of looseWorldChats.filter((x) => x.envId)) {
@@ -1324,7 +1385,7 @@ export default {
           det.appendChild(summary);
           // Se dibujan en la sección del entorno aislado, no en la raíz del mundo;
           // por eso no participan del orden manual del mundo.
-          for (const c of env.chats) det.appendChild(chatCard(c, tmuxByName, null));
+          for (const c of env.chats) appendChatTree(det, c, tmuxByName, null, myChatTree);
           host.appendChild(det);
         }
       }
@@ -1332,13 +1393,13 @@ export default {
 
       // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
       // sección colapsada. Tocar una la revive y la abre (ver chatCard).
-      if (myArchivedChats.length) {
+      if (myArchivedChatsAll.length) {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
-        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${myArchivedChats.length}</span></summary>`;
+        det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.archived', 'Archivados')} <span class="side-count">${myArchivedChatsAll.length}</span></summary>`;
         // Se dibujan en la sección Archivados, no en la raíz del mundo;
         // por eso no participan del orden manual del mundo.
-        for (const c of myArchivedChats) det.appendChild(chatCard(c, tmuxByName, null));
+        for (const c of myArchivedChats) appendChatTree(det, c, tmuxByName, null, myArchivedTree);
         listEl.appendChild(det);
       }
 
@@ -1368,13 +1429,14 @@ export default {
         bindGroupOpen(det, 'cwc.sessions.others.open', false);
         det.innerHTML = `<summary>${icon('folder', { size: 13 })} ${t('sessions.otherUsers', 'Otros usuarios')} <span class="side-count">${otherUserCount}</span></summary>`;
         for (const [owner, items] of [...byOwner.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)))) {
+          const ownerTree = buildChatTree(items.chats);
           const head = document.createElement('div');
           head.className = 'sess-owner-head';
           head.innerHTML = `<span>${escapeHtml(owner)}</span><span class="side-count">${items.chats.length + items.sessions.length}</span>`;
           det.appendChild(head);
           // Se dibujan en la sección Otros usuarios, no en la raíz del mundo;
           // por eso no participan del orden manual del mundo.
-          for (const c of items.chats) det.appendChild(chatCard(c, tmuxByName, null));
+          for (const c of ownerTree.roots) appendChatTree(det, c, tmuxByName, null, ownerTree);
           for (const s of items.sessions) det.appendChild(card(s, 'world:' + sessionWorldKey(s)));
         }
         listEl.appendChild(det);
@@ -1383,18 +1445,23 @@ export default {
     }
 
     // ===== Tarjeta de conversación (chat SDK) =====
-    function chatCard(c, tmuxByName, container) {
+    function chatCard(c, tmuxByName, container, { isChild = false, childCount = 0, childBox = null } = {}) {
       const elCard = document.createElement('div');
       const isEnv = resolvePlace(c.cwd)?.isolated;
-      elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '') + (isEnv ? ' sess-chat--env' : '');
+      elCard.className = 'sess-card sess-chat' + (c.archived ? ' sess-chat--archived' : '') + (isEnv ? ' sess-chat--env' : '') + (isChild ? ' sess-card--child' : '');
       elCard.dataset.key = chatItemKey(c);
-      if (container) {
+      elCard.dataset.parentSala = c.parentSala || '';
+      if (container && !isChild) {
         elCard.dataset.orderKey = chatItemKey(c);
         elCard.dataset.container = container;
       }
       elCard.title = `chat · ${c.cwd}${c.model ? ` · ${c.model}` : ''}`;
-      bindDraggableCard(elCard, chatItemKey(c), c);
-      if (container) bindCardDropZone(elCard);
+      if (!isChild) {
+        bindDraggableCard(elCard, chatItemKey(c), c);
+        if (container) bindCardDropZone(elCard);
+      } else {
+        elCard.draggable = false;
+      }
 
       const dot = chatDotInfo(c, tmuxByName);
       const isTui = c.viewMode === 'tui';
@@ -1425,6 +1492,37 @@ export default {
       }
       appendParticipantChip(main, c);
       syncSalaBadge(main, c);
+      if (childCount > 0 && childBox) {
+        const storageKey = `cwc.sessions.subsalas.${c.id}.open`;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.draggable = false;
+        toggle.className = 'sess-subsalas-toggle';
+        toggle.title = t('sessions.subsala.toggle', 'Plegar o desplegar {count} sub-sala(s)', { count: childCount });
+        toggle.setAttribute('aria-label', toggle.title);
+        const arrow = document.createElement('span');
+        arrow.className = 'sess-subsalas-arrow';
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.innerHTML = icon('chevronRight', { size: 10 });
+        const count = document.createElement('span');
+        count.className = 'sess-subsalas-count';
+        count.textContent = t('sessions.subsala.count', '🛃 {count}', { count: childCount });
+        toggle.append(arrow, count);
+        const syncToggle = () => {
+          const open = !childBox.hidden;
+          toggle.classList.toggle('is-open', open);
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        toggle.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          childBox.hidden = !childBox.hidden;
+          try { localStorage.setItem(storageKey, childBox.hidden ? '0' : '1'); } catch { /* localStorage puede estar bloqueado. */ }
+          syncToggle();
+        });
+        syncToggle();
+        main.querySelector('.sess-row1')?.appendChild(toggle);
+      }
       // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
       main.addEventListener('click', () => {
         if (cardOpenBlockedByDrag(elCard)) return;
@@ -2337,6 +2435,17 @@ export default {
         const tmuxByName = new Map(sessions.map((s) => [s.name, s]));
         const map = new Map(sessions.map((s) => [`${s.socket}\n${s.name}`, s]));
         const chatMap = new Map(chats.map((c) => [`chat:${c.id}`, c]));
+        const renderedChatCards = [...listEl.querySelectorAll('.sess-card[data-key^="chat:"]')];
+        const treeChanged = renderedChatCards.length !== chatMap.size || renderedChatCards.some((cardEl) => {
+          const chat = chatMap.get(cardEl.dataset.key);
+          return !chat || cardEl.dataset.parentSala !== String(chat.parentSala || '');
+        });
+        // El poll también descubre sub-salas recién nacidas. Los campos vivos
+        // se actualizan in-place; un cambio estructural reconstruye el árbol.
+        if (treeChanged) {
+          render(lastData);
+          return;
+        }
         for (const cardEl of listEl.querySelectorAll('.sess-card')) {
           const key = cardEl.dataset.key;
           if (chatMap.has(key)) {

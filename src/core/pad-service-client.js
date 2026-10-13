@@ -27,6 +27,13 @@ const DEFAULT_URL = PAD_DEFAULT_URL;
 const DEFAULT_WORKSPACE = process.env.CWC_PAD_WORKSPACE || 'console';
 const REQUEST_TIMEOUT_MS = 10_000;
 
+// Hook inyectable para que la capa de contexto pueda reaccionar a un 401 sin
+// acoplar este cliente HTTP a usuarios, provisioning ni credenciales guardadas.
+let unauthorizedHandler = null;
+export function setUnauthorizedHandler(fn) {
+  unauthorizedHandler = typeof fn === 'function' ? fn : null;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // TRANSPORTE PROTEGIDO (2026-07-12, RDA-347 / TDA-348 — optimización del Banco
 // de Conocimiento). Dos capas sobre el fetch crudo, porque TODOS los módulos
@@ -182,6 +189,11 @@ async function doFetch(method, urlPath, { body, url, token } = {}) {
       const text = await res.text();
       let data;
       try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (res.status === 401) {
+        try {
+          unauthorizedHandler?.({ url, token })?.catch?.(() => {});
+        } catch { /* best-effort: el manejo del 401 nunca altera la respuesta */ }
+      }
       if (res.status === 429 && attempt < MAX_RETRIES_429) {
         signal429(key); // pausa SOLO la cola de ESTE usuario y reintenta tras el back-off
         continue;

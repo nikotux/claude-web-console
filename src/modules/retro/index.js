@@ -44,7 +44,7 @@ import { systemScopeFor } from '../../core/system-scope.js';
 import { deleteItem as padDeleteItem } from '../../core/pad-service-client.js';
 import { hardRulesText } from '../health/shared.js';
 import {
-  listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted,
+  listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted, revertPromotion,
   mergeLessons, upsertLesson, setDestination, MC_ID_RE,
 } from './store.js';
 import { PROMOTE_TARGETS, promote, applicableTargetsFor, targetBlockReason } from './promote-shared.js';
@@ -152,7 +152,8 @@ export default {
 
     r.get('/', async (req, res) => {
       try {
-        const owner = systemScopeFor(req).user;
+        const scope = systemScopeFor(req);
+        const owner = scope.user;
         const ctx = reqPadContext(req);
         // La aplicabilidad la calcula el BACKEND: el tablero la duplicaba con un
         // NEED_DIR propio y quedaba ciego a cualquier destino con reglas nuevas.
@@ -161,9 +162,9 @@ export default {
           counts,
           lessons: lessons.map((l) => ({
             ...l,
-            targets: applicableTargetsFor(l),
+            targets: applicableTargetsFor(l, scope),
             targetReasons: Object.fromEntries(
-              PROMOTE_TARGETS.map((target) => [target, targetBlockReason(target, l)]).filter(([, reason]) => reason),
+              PROMOTE_TARGETS.map((target) => [target, targetBlockReason(target, l, null, scope)]).filter(([, reason]) => reason),
             ),
           })),
         });
@@ -593,6 +594,7 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Promover requiere administrador.' });
       try {
         const ctx = reqPadContext(req);
+        const scope = systemScopeFor(req);
         const l = await getLesson(req.params.id, ctx);
         const asked = String(req.body?.target || '').trim();
         if (asked && !PROMOTE_TARGETS.includes(asked)) {
@@ -607,17 +609,18 @@ export default {
         // el tablero no debería haber ofrecido, con el motivo exacto.
         // El glob explícito del body cuenta para el gate: sin esto una promoción
         // legítima con `match` a mano se rechazaba antes de llegar al destino.
-        const blocked = targetBlockReason(target, l, req.body?.match);
+        const blocked = targetBlockReason(target, l, req.body?.match, scope);
         if (blocked) return res.status(400).json({ error: `No se puede adoptar como ${target}: ${blocked}` });
         // Marcar primero (snapshot Fase 6) → así claude-md la incluye al render.
-        // Si escribir el destino falla DESPUÉS de marcar, revertimos el status
-        // para no dejarla 'promovida' sin haberla escrito (y que se pueda reintentar).
+        // Si escribir el destino falla DESPUÉS de marcar, revertimos el estado y
+        // todo el snapshot de promoción para que el reintento parta limpio.
         const marked = await markPromoted(l.id, target, ctx);
         try {
           await promote(marked.project, target, marked, {
             kind: String(req.body?.kind || 'work'),
             match: req.body?.match,
             contract: req.body?.contract,
+            scope,
             // `rule` es el predicado declarativo (fileExists|grepPresent|grepAbsent)
             // que hace que la obligación se verifique SOLA en cada corrida del
             // emisor. Sin regla la fila entra igual, pero como verificación
@@ -625,7 +628,14 @@ export default {
             rule: req.body?.rule,
           }, ctx);
         } catch (err) {
-          try { await setStatus(l.id, l.status, ctx); } catch { /* best-effort */ }
+          try {
+            await revertPromotion(l.id, {
+              status: l.status,
+              promotedTo: l.promotedTo,
+              promotedAt: l.promotedAt,
+              recurrenceAtPromotion: l.recurrenceAtPromotion,
+            }, ctx);
+          } catch { /* best-effort */ }
           throw err;
         }
         res.json({ lesson: marked });

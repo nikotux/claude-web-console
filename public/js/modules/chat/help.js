@@ -102,6 +102,16 @@ function salaSections() {
               name: t('chat.help.sala.legend.origin.name', 'Entrada a la sala'),
               desc: t('chat.help.sala.legend.origin.desc', 'la barra del hilo marca desde qué mundo llegó la conversación y quién la trajo'),
             },
+            {
+              emoji: t('chat.help.sala.legend.subsala.emoji', '🛃'),
+              name: t('chat.help.sala.legend.subsala.name', 'Sub-sala'),
+              desc: t('chat.help.sala.legend.subsala.desc', 'Cucho abrió una sala hija; tocá la línea para abrirla o enfocarla'),
+            },
+            {
+              emoji: t('chat.help.sala.legend.eco.emoji', '📨'),
+              name: t('chat.help.sala.legend.eco.name', 'Aviso entre salas'),
+              desc: t('chat.help.sala.legend.eco.desc', 'mensaje que una sala hija y su madre se enviaron; tocá el encabezado para ir a la otra sala'),
+            },
           ],
         },
         {

@@ -6,10 +6,13 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { config } from '../../core/config.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { ensureLocalUsers } from './local-users.js';
+import { ensurePackagesBuilt } from './build-shared.js';
 import {
   ROOT,
   DEV_DB_PASSWORD,
   IMPORTERS,
+  ensureZohoReachable,
   parseImporterOutput,
   readInfisicalWorkspaceId,
   readTolkienDbPort,
@@ -21,7 +24,7 @@ const ENV_DB_RE = /^tolkien_env_[A-Za-z0-9_]+$/;
 const JOB_FILE = path.join(config.home, '.cwc-data', 'tolkien-template.json');
 const LOG_FILE = path.join(config.home, '.cwc-data', 'tolkien-template.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-tolkien-template-build.js');
-export const TEMPLATE_STALE_MS = 15 * 60 * 1000;
+export const TEMPLATE_STALE_MS = 40 * 60 * 1000;
 
 export function templateDbName() {
   return process.env.CWC_TOLKIEN_TEMPLATE_DB?.trim() || 'tolkien_template';
@@ -82,6 +85,16 @@ export async function buildTemplate() {
   const tIdent = quoteIdentifier(t);
   const wsId = readInfisicalWorkspaceId();
 
+  // Igual que el refresh local: validar/compilar dist ANTES de tocar la DB
+  // plantilla, para conservar la última plantilla sana si el build falla.
+  const packages = await ensurePackagesBuilt();
+  steps.push({ step: 'build paquetes', ok: packages.ok, detail: packages.detail });
+  if (!packages.ok) return { ok: false, steps, durationMs: Date.now() - started };
+
+  const zoho = await ensureZohoReachable();
+  steps.push({ step: 'chequeo Zoho', ok: zoho.ok, detail: zoho.detail });
+  if (!zoho.ok) return { ok: false, steps, durationMs: Date.now() - started };
+
   const existsStep = await runBuildStep(steps, 'detect template database', () =>
     psqlAdmin(`SELECT 1 FROM pg_database WHERE datname=${quoteLiteral(t)};`));
   if (!existsStep.ok) return { ok: false, steps, durationMs: Date.now() - started };
@@ -128,6 +141,12 @@ export async function buildTemplate() {
     }
   }
   if (!steps.every((s) => s.ok)) return { ok: false, steps, durationMs: Date.now() - started };
+
+  await runBuildStep(steps, 'seed local users (dev-login)', async () => {
+    const result = await ensureLocalUsers(t);
+    if (!result.ok) throw new Error(result.detail);
+    return { code: 0, stdout: `upserted=${result.upserted}`, stderr: '' };
+  });
 
   await runBuildStep(steps, 'seal template database', () =>
     psqlAdmin(`ALTER DATABASE ${tIdent} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false;`));

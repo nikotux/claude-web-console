@@ -204,16 +204,20 @@ dónde aterriza, ARRIBA de los contextos editables; y un check rápido de Salud
 semáforo global. La inyección del tablero se CONSERVA como redundancia inofensiva
 (cinturón + tirantes).
 
-FAN-OUT A INQUILINOS (console:BUG-2343, 2026-07-29): después de completar el
-espejo del host, `syncToTolkien()` replica el MISMO `CLAUDE.local.md` a cada clon
-de Tolkien provisionado, enumerado con `listUsers()` y resuelto exclusivamente
-con `userWorkspace(id)`. Así una sesión de un inquilino abierta por launcher,
-TUI o reanudación recibe el mismo gate de push y la misma house style aunque no
-provenga del botón del tablero. El host siempre se escribe primero. El fan-out es
-best-effort POR USUARIO y atómico (`writeFileAtomic`): exige que existan tanto
-`<workspace>/tolkien` como su `.git`, saltea en silencio los clones ausentes y
-registra/devuelve cuántos alcanzó y qué usuarios fallaron; ningún fallo de un
-inquilino puede romper el espejo del host ni la request de `saveContext()`.
+FAN-OUT A INQUILINOS (console:BUG-2343; corregido por console:BUG-3241): después
+de completar el espejo del host, `syncToTolkien()` GENERA el espejo de cada
+inquilino semilla desde su propio scope; nunca copia el `CLAUDE.local.md` entero
+del host. Solo alcanza clones provisionados (existen `<workspace>/tolkien` y su
+`.git`) que todavía no tienen master `work` ni `pr` propio. Si existe cualquiera
+de esos masters, el contexto del inquilino es suyo y se conserva aunque quede
+desactualizado. Cada semilla recibe únicamente el bloque gestionado —preservando
+byte a byte lo manual fuera de los marcadores— y su propia
+`.cwc-ticket-playbook.md`; así obtiene el gate de push y la house style también
+desde launcher, TUI o reanudación. El fan-out sigue siendo best-effort POR
+USUARIO: devuelve `{ reached, skippedOwn, failed }` y ningún fallo puede romper
+el espejo del host ni la request de `saveContext()`. Una regla que deba llegar a
+TODOS los usuarios debe vivir en el maestro (`work`/`pr`), nunca en la parte
+manual del `CLAUDE.local.md` del host, porque esa parte no viaja.
 
 ## Gotchas de esta carpeta
 
@@ -297,14 +301,29 @@ quedaron LITERALES en un bloque de registro dentro de `## 6.` — es a propósit
 `retro/promote-shared.js` hace `cur.includes(lesson.id)` para no re-apendear una
 lección ya adoptada, así que borrar los ids las haría volver solas. Ese bloque de
 registro es markdown de cita (`> `) sin ningún `## ` ni fence, justamente para no
-romper el splitter. (2) `MIRROR_BUDGET = 30000` (context-store.js) NO cambia
-comportamiento: `syncToTolkien()` loguea un warning si el bloque supera el
-presupuesto, y `verifySync()` expone `mirrorBytes`/`mirrorBudget`/
-`mirrorOverBudget` para que el engorde silencioso sea imposible. El check de
-Salud `tolkien-context` solo lee `.status`, así que esos campos son aditivos y no
-lo afectan. Quien más empuja el peso hacia arriba es `## 6.`, que
-`retro/promote-shared.js` apendea SIN TOPE: cuando ese warning aparezca, la
-acción es podar el maestro, no subir el presupuesto.
+romper el splitter. (2) VENTANAS PERMANENTES DE FEEDBACK (origen
+console:BUG-3234 / console:PLAN-3235): el maestro conserva TODO, pero al renderizar
+`## 6. Feedback adoptado` sus unidades se ordenan globalmente entre `work` y `pr`
+por `rank` descendente y luego novedad. Las mejores entran al espejo hasta
+`MIRROR_BUDGET = 30000`; las siguientes van a `.cwc-ticket-playbook.md` hasta
+`PLAYBOOK_FEEDBACK_BUDGET = 40000`; el resto queda archivado y no se renderiza.
+Así ninguna capa crece sin límite y adoptar nunca falla por espacio. El render
+mide el bloque gestionado real con marcadores y garantiza el techo, salvo que la
+parte fija sin unidades ya lo exceda; en ese único caso no incorpora feedback y
+loguea el warning. `verifySync()` sigue exponiendo `mirrorBytes`/`mirrorBudget`/
+`mirrorOverBudget`, y Salud sigue leyendo solo `.status`.
+
+Contrato de `## 6.`: tras el heading hay un preface y unidades que empiezan fuera
+de fences. Una FULL empieza con `### 🔄 Lección de Mejora Continua`, una REF con
+`> ↩ **Referencia de Mejora Continua:**`, y ambas llevan en esa misma línea
+`<!-- cwc:retro-context:<hex12> -->` más el rank opcional
+`<!-- cwc:retro-rank:<N> -->` (default 1); el legacy `(MC-N)` deriva su key por
+SHA-1. Una ARCHIVED es exactamente
+`<!-- cwc:retro-archived:<hex12> rank=<N> -->`. FULL/REF terminan al comenzar la
+siguiente unidad o al final de la sección; ARCHIVED ocupa una sola línea. El
+espejo y el playbook quitan el comentario de rank, conservan el marcador de
+contexto y nunca muestran líneas ARCHIVED. Los ids retirados del bloque anterior
+siguen sirviendo para deduplicación y no deben borrarse.
 
 El procedimiento largo (fases, checklists y lecciones registradas) se genera junto
 al espejo, en `.cwc-ticket-playbook.md` del clon propio, archivo local no versionado

@@ -12,20 +12,24 @@
 // provisioning lazy que llena ese token.)
 import { readUserPadToken, userPadWorkspace, hostUser } from './user-space.js';
 import { principalOf } from './auth.js';
-import { provisionUserPad, SHARED_WORKSPACE, readHostPadToken } from './pad-provision.js';
+import { provisionUserPad, reloginUserPad, SHARED_WORKSPACE, readHostPadToken } from './pad-provision.js';
+import { setUnauthorizedHandler } from './pad-service-client.js';
 import { PAD_DEFAULT_URL } from './pad-url.js';
 
 // MISMA URL que usan pad-service-client.js y pad-provision.js.
 const PAD_URL = PAD_DEFAULT_URL;
+const tenantByToken = new Map(); // token -> userId; nunca contiene al host
 
 // Dado un userId (o null), devuelve el PadContext del inquilino, o null si es
 // el host (o no hay usuario → host). Lo usan los RUNNERS desacoplados, que
 // reciben el userId del owner por su job y reconstruyen el ctx acá.
 export function padContextForUser(userId) {
   if (!userId || userId === hostUser()) return null; // host → default (Niko/console)
+  const token = readUserPadToken(userId, PAD_URL);
+  if (token != null) tenantByToken.set(token, userId);
   return {
     url: PAD_URL,
-    token: readUserPadToken(userId, PAD_URL), // puede ser null si aún no provisionado (ver contrato)
+    token, // puede ser null si aún no provisionado (ver contrato)
     workspace: userPadWorkspace(userId),
   };
 }
@@ -40,9 +44,11 @@ export function sharedPadContextForUser(userId) {
   if (!userId || userId === hostUser()) {
     return { url: PAD_URL, token: readHostPadToken(), workspace: SHARED_WORKSPACE };
   }
+  const token = readUserPadToken(userId, PAD_URL);
+  if (token != null) tenantByToken.set(token, userId);
   return {
     url: PAD_URL,
-    token: readUserPadToken(userId, PAD_URL),
+    token,
     workspace: SHARED_WORKSPACE,
   };
 }
@@ -66,6 +72,36 @@ function maybeLazyProvision(userId) {
     .catch(() => { /* best-effort: si falla, el cooldown evita el martilleo y se reintenta luego */ })
     .finally(() => provisioning.delete(userId));
 }
+
+// Un 401 de un token tenant dispara un solo re-login en background por usuario.
+// El cooldown evita martillar Pad si el password falta o el servicio está caído.
+const relogging = new Set();
+const lastReloginAttempt = new Map();
+const RELOGIN_COOLDOWN_MS = 5 * 60_000;
+
+function maybeLazyRelogin(userId) {
+  if (relogging.has(userId)) return;
+  const last = lastReloginAttempt.get(userId) || 0;
+  if (Date.now() - last < RELOGIN_COOLDOWN_MS) return;
+  relogging.add(userId);
+  lastReloginAttempt.set(userId, Date.now());
+  reloginUserPad(userId)
+    .then((result) => {
+      if (!result?.ok) return;
+      // La próxima derivación registrará el token nuevo; los anteriores ya no
+      // deben volver a disparar re-logins por requests que quedaron en vuelo.
+      for (const [token, owner] of tenantByToken) {
+        if (owner === userId) tenantByToken.delete(token);
+      }
+    })
+    .catch(() => { /* best-effort: el request que vio el 401 ya degradó limpio */ })
+    .finally(() => relogging.delete(userId));
+}
+
+setUnauthorizedHandler(({ token }) => {
+  const userId = tenantByToken.get(token);
+  if (userId) maybeLazyRelogin(userId);
+});
 
 // Deriva el PadContext del principal de una request HTTP. host/token/null → null.
 export function reqPadContext(req) {

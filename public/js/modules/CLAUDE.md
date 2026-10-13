@@ -77,6 +77,18 @@ la sesión se autentica por token y ese username es nulo, contra `whoami.host`;
 del host. El estado abierto del grupo ajeno se persiste en `localStorage` bajo
 `cwc.sessions.others.open`.
 
+SUB-SALAS DE ADUANA (`console:PLAN-3368`): `/api/chat/list` expone
+`parentSala` (id de la conversación madre o `null`). `sessions.js` excluye una
+hija de `folderMembers`, `looseWorldChats` y del orden manual únicamente cuando
+su madre también está en la misma lista visible; entonces la pinta justo debajo
+de ella dentro de `.sess-children`, con tarjeta `.sess-card--child`, guía de
+árbol y toggle/contador persistido como
+`cwc.sessions.subsalas.<madre>.open` (abierto por defecto). La hija hereda el
+contenedor visual de la madre y no es draggable ni lleva `data-container`/
+`data-order-key`; si la madre falta, queda suelta en el flujo histórico para
+que nunca desaparezca. El poll de 8 s reconstruye la lista si cambian ids o
+`parentSala`, pero conserva la actualización in-place para el resto.
+
 COMPARTIDO ≠ AJENO EN EL LISTADO (`console:BUG-2586`, 2026-08-03, reporte de Niko: «si un user abre una sala y yo estoy en ella, no me aparece a mí»). El backend YA entregaba la sala: `ChatManager.list(principal)` incluye las conversaciones donde el principal figura en `chat.participants[]`. El bug era del agrupador de `render()`, que preguntaba únicamente por el dueño (`isMine(c.owner)`), de modo que una sala de Aduana donde el usuario era invitado explícito caía en el cajón «Otros usuarios → <dueño>» en lugar de subir a su propia lista y agruparse sola bajo 🛃 Aduana. Para un admin el efecto era peor de lo que parece: la sala aparecía mezclada con TODOS los chats ajenos que ve por gestión, así que en la práctica se leía como «no me aparece». Ahora las cuatro listas —`myChats`, `otherChats`, `myArchivedChats` y `otherUserChats`— derivan de un único criterio `isForMe(c) = isMine(c.owner) || isChatParticipant(c)`, y como `otherUserCount` se calcula de `otherUserChats`, el conteo del grupo ajeno se corrige solo. La tarjeta de una sala que es mía por participación, no por propiedad, lleva un chip tenue `.sess-mode.sess-guest` con el nombre del dueño, construido con `textContent` como `appendParticipantChip`, nunca por `innerHTML`. El menú ⋯ pasó a gatear con `canOwn = isMine(c.owner) || iAmAdmin` todas las acciones que el backend resuelve por `ownedChat` —renombrar, cambiar modelo, reabrir, pasar a TUI, mover de mundo, archivar, revivir y cerrar—, porque antes se le ofrecían al invitado y terminaban en un 404 mudo; le quedan Abrir, Abrir carpeta y Salir de la sala. GOTCHA: ese gate usa `isMine`, NO `isChatOwner`. Son criterios distintos y no intercambiables — `isMine(null)` es `true` por retrocompatibilidad con los chats legacy del host, mientras `isChatOwner` exige un `owner` no vacío, así que gatear el menú con el segundo le habría quitado sus acciones de dueño a un chat que el listado ya mostraba como propio. `'__aduana'` además se agregó explícito y PRIMERO en el array `order` de mundos: antes quedaba primero por accidente, porque `order.indexOf('__aduana')` devolvía -1. Verificado E2E a 1400×900: la sala `c3171882-18` (dueño `rarboleda`, participante `nmosquera`) aparece bajo 🛃 Aduana con el chip «de rarboleda», desaparece del cajón ajeno —que queda con el único chat de ese dueño donde no se participa— y, simulando un invitado sin admin, su menú se reduce a `open`, `leave-sala` y `folder`, con 0 errores JS.
 
 El launcher resuelve `ctx.whoami` antes de pintar sus destinos fijos: host/admin
@@ -605,6 +617,13 @@ Pad; `ui/help-index.js` lo carga de forma lazy bajo el id `cerebro`, igual que
 ### public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 `chat/help.js` documenta en “Gráficos y diagramas” los gráficos inline,
 micro-barras y diagramas Mermaid disponibles dentro de los mensajes.
+Las salas aceptan además los eventos persistidos/vivos `subsala` y `eco` por el
+mismo `_onEvent` que reproduce `history`: `_subsala` deduplica por `chatId` y
+pinta una línea navegable; `_eco` pinta el aviso madre↔hija, markdown seguro,
+la nota `wake:false` y suma uno a `_salaSayCount` para el próximo corte. Sus
+enlaces reutilizan el click de `.sess-main` (por tanto `openChatView`/foco); en
+la vista `?solo=` el fallback usa el deep-link existente `/?focus=<chatId>` en
+la ventana `cwc-main`.
 El modo solo `/?solo=<chatId>` monta UNA conversación sin sidebars ni rail
 (`body.cwc-solo`) y reusa a propósito el shell y la misma `ChatTab`, para no
 mantener dos vistas. No requiere cambios de backend: `Chat.clients` de

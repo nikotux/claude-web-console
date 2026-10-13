@@ -498,6 +498,13 @@ credencial válida y `null` falla cerrado, sin pedir prestado el token del host.
 y aplica el schema del destino, descartando en silencio los campos que ese
 schema no declara.
 
+**Sesiones vencidas de Pad (`console:BUG-3369`, 2026-10-13).** Las sesiones del
+Pad local pueden dejar de ser válidas. Para inquilinos, un 401 recorre el hook
+`setUnauthorizedHandler` → `maybeLazyRelogin` → `reloginUserPad`: usa el password
+guardado y deduplica los intentos con cooldown de 5 minutos. El host nunca entra
+en ese flujo y requiere `pad auth login --url …` manual, porque su login exige
+aprobación en el navegador.
+
 **Molde declarativo de Pad (`pad-mold.js`, v5).** Un workspace nuevo ya no
 recibe una fotocopia del schema EN VIVO de `console`: `MOLD` congela en el repo
 las nueve colecciones canónicas, en orden (`pendientes`, `planes`,

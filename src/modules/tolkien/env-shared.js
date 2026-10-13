@@ -40,6 +40,7 @@ export const ENV_CONTEXT_LINKS = [
 ];
 
 const EXEC_MAX_BUFFER = 64 * 1024 * 1024;
+const ENV_LIVENESS_GRACE_MS = 2 * 60 * 1000;
 
 // Dir de proyecto de Claude Code para un cwd: se deriva del PATH, reemplazando
 // `/` y `.` por `-`. Por eso un worktree estrena projectKey (y memorias vacías).
@@ -244,13 +245,7 @@ export function createWorktree(id, baseRef = 'main') {
   return { worktree, branch, reused: branchExists };
 }
 
-export function writeLaunchScript(id, wt, port, db) {
-  assertSafeId(id);
-  const ztIp = findZeroTierIp()?.ip;
-  if (!ztIp) {
-    throw new Error('No se detectó la IP ZeroTier: el entorno efímero no puede levantar su dev-server sin ella (Regla dura 1)');
-  }
-  const projectId = readInfisicalWorkspaceId();
+export function launchScriptText({ ztIp, projectId, wt, port, db }) {
   const consoleDir = path.join(wt, 'apps', 'console');
   const inner = [
     'set -e',
@@ -265,6 +260,10 @@ export function writeLaunchScript(id, wt, port, db) {
     'export NODE_ENV=development',
     'export PRISMA_QUERY_ENGINE_LIBRARY=""',
     `cd ${shQuote(wt)}`,
+    'pnpm install --frozen-lockfile --prefer-offline',
+    // Desde 2026-10 main consume los paquetes vía dist/ (console:BUG-3243);
+    // el caché de Turbo hace rápidos los reinicios posteriores.
+    'NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo run build --filter="./packages/*"',
     'pnpm --filter @tolkien/db exec prisma migrate deploy',
     `cd ${shQuote(consoleDir)}`,
     `exec pnpm exec next dev -p ${shQuote(port)} -H ${shQuote(ztIp)}`,
@@ -275,6 +274,17 @@ export function writeLaunchScript(id, wt, port, db) {
     `infisical run --projectId ${shQuote(projectId)} --env prod --silent -- bash -c ${shQuote(inner)}`,
     '',
   ].join('\n');
+  return script;
+}
+
+export function writeLaunchScript(id, wt, port, db) {
+  assertSafeId(id);
+  const ztIp = findZeroTierIp()?.ip;
+  if (!ztIp) {
+    throw new Error('No se detectó la IP ZeroTier: el entorno efímero no puede levantar su dev-server sin ella (Regla dura 1)');
+  }
+  const projectId = readInfisicalWorkspaceId();
+  const script = launchScriptText({ ztIp, projectId, wt, port, db });
   const file = path.join(ENVS_DIR, id, 'launch.sh');
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, script, { mode: 0o700 });
@@ -307,6 +317,40 @@ export async function stopDevServer(id) {
 export async function unitActive(id) {
   const res = await execFileResult('systemctl', ['--user', 'is-active', unitNameFor(id)], { env: process.env });
   return res.stdout.trim() || 'unknown';
+}
+
+export async function reconcileEnvLiveness() {
+  const now = Date.now();
+  let checked = 0;
+  const markedDown = [];
+
+  for (const rec of listEnvs()) {
+    // Los estados previos a `serving` todavía no tienen por qué haber creado la
+    // unit. Reconciliarlos acá podría pisar una provisión legítima en curso.
+    if (!rec?.id || rec.status !== 'serving') continue;
+    checked += 1;
+
+    if (await unitActive(rec.id) === 'active') continue;
+
+    // La consulta a systemd es async: releer evita bajar un record que recibió
+    // un heartbeat o cambió de estado mientras esperábamos la respuesta.
+    const current = getEnv(rec.id);
+    if (!current || current.status !== 'serving') continue;
+    const lastActivityAt = Math.max(
+      Number(current.heartbeatAt) || 0,
+      Number(current.updatedAt) || 0,
+    );
+    if (now - lastActivityAt <= ENV_LIVENESS_GRACE_MS) continue;
+
+    patchEnv(rec.id, {
+      status: 'down',
+      error: 'dev-server caído (unit inactiva); reconciliado',
+    });
+    markedDown.push(rec.id);
+    console.warn(`[tolkien] ${rec.id} marcado down: dev-server caído (unit inactiva); reconciliado`);
+  }
+
+  return { checked, markedDown };
 }
 
 export async function provisionEnv(id) {
@@ -400,14 +444,7 @@ export async function teardownEnv(id, { force = false } = {}) {
 }
 
 export async function reattachEnvs() {
-  for (const rec of listEnvs()) {
-    if (!rec?.id || rec.status !== 'serving') continue;
-    try {
-      if (await unitActive(rec.id) !== 'active') patchEnv(rec.id, { status: 'down' });
-    } catch {
-      patchEnv(rec.id, { status: 'down' });
-    }
-  }
+  await reconcileEnvLiveness();
   try { gitBase(['worktree', 'prune']); } catch { /* noop */ }
 }
 

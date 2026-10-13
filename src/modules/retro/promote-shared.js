@@ -10,8 +10,9 @@
 //               conjunto de lecciones promovidas (idempotente); NUNCA toca lo
 //               que está fuera de los marcadores (Reglas duras/Convenciones a
 //               mano). Patrón syncToTolkien de tickets/context-store.js.
-//   contexto  → Tolkien: bugfix-work/pr + espejo con presupuesto; console/otros:
-//               queda canónica en Pad y no cruza al mundo externo.
+//   contexto  → Tolkien: master bugfix-work/pr con rank y compactación; el
+//               render limita sus ventanas. Console/otros queda canónica en
+//               Pad y no cruza al mundo externo.
 //   convencion→ regla activa en la colección conventions de Pad.
 //   contrato  → fila de obligación en un contrato de Pad (CONVE-1969 por
 //               defecto) + su check en el registro que lee `emitTasks()`. Desde
@@ -33,12 +34,13 @@ import { writeFileAtomic } from '../../core/atomic-write.js';
 import { findForeignRefsForTolkien, replaceForeignRefsForTolkien } from '../../core/pad-world-refs.js';
 import { readNote, writeNote, readIndex, writeIndex, hashOf } from '../projects/memory.js';
 import {
+  CONTEXT_RANK_RE,
   getContext,
+  parseFeedbackSection,
+  planContextWindows,
   saveContext,
   splitTopSections,
-  measureMirrorBytes,
   renderManagedSection,
-  MIRROR_BUDGET,
 } from '../tickets/context-store.js';
 import { createItem, addLink, getItem, listItems, listLinks, updateItem } from '../../core/pad-service-client.js';
 import { appendLessonContract } from '../../core/pad-contracts.js';
@@ -67,10 +69,15 @@ export const LEGACY_PROMOTE_TARGETS = ['playbook', 'registro'];
 // repo). contexto decide por mundo y convencion escribe en Pad; ninguno necesita dir.
 export const TARGETS_NEED_DIR = ['memoria', 'claude-md'];
 
-// console → la raíz de este repo; tolkien → config.projectDir; otros → sin memoria.
-export function projectDirFor(project) {
-  if (project === 'console') return ROOT;
-  if (project === 'tolkien') return config.projectDir;
+// El host conserva las rutas históricas. Un inquilino resuelve Tolkien dentro
+// de su workspace y no puede apuntar a Mi Consola, que solo existe en el host.
+export function projectDirFor(project, scope = null) {
+  if (!scope || scope.isHost) {
+    if (project === 'console') return ROOT;
+    if (project === 'tolkien') return config.projectDir;
+    return null;
+  }
+  if (project === 'tolkien') return path.join(scope.workspace, 'tolkien');
   return null;
 }
 
@@ -78,25 +85,25 @@ export function projectDirFor(project) {
 // CLAUDE.local.md (NO versionado, igual que el espejo de tickets-context) para
 // no meter lecciones auto en el CLAUDE.md que ve el equipo. Para la consola es
 // su propio CLAUDE.md (repo de Nico, que él commitea revisando).
-function claudeFileFor(project) {
-  const dir = projectDirFor(project);
+export function claudeFileFor(project, scope = null) {
+  const dir = projectDirFor(project, scope);
   if (!dir) return null;
   return project === 'tolkien' ? path.join(dir, 'CLAUDE.local.md') : path.join(dir, 'CLAUDE.md');
 }
 
 // ===== Destino: MEMORIA (append a la nota + índice) =====
-function promoteToMemory(projectDir, l) {
+function promoteToMemory(projectDir, l, userId) {
   let cur = '';
-  try { cur = readNote(projectDir, MEMORY_NOTE); } catch { cur = ''; }
+  try { cur = readNote(projectDir, MEMORY_NOTE, userId); } catch { cur = ''; }
   if (cur.includes(`(${l.id})`)) return; // idempotente: ya promovida a esta nota (evita duplicar al escalar)
   const header = cur ? '' : '# Mejora Continua — lecciones de proceso promovidas\n\n> Promovidas desde el módulo Mejora Continua de Mi Consola (ROAD-256). Cada una cambió cómo trabajamos; la próxima sesión las lee acá.\n';
   const stamp = new Date().toISOString().slice(0, 10);
   const entry = `\n## ${l.title} (${l.id})\n_${l.category} · confianza ${l.confidence} · recurrencia x${l.recurrence} · ${stamp}_\n\n${l.body}\n`;
-  writeNote(projectDir, MEMORY_NOTE, `${cur || header}${entry}`, cur ? hashOf(cur) : undefined);
-  const idx = readIndex(projectDir);
+  writeNote(projectDir, MEMORY_NOTE, `${cur || header}${entry}`, cur ? hashOf(cur) : undefined, userId);
+  const idx = readIndex(projectDir, userId);
   if (!idx.includes(MEMORY_NOTE)) {
     const line = `- [Mejora Continua](${MEMORY_NOTE}) — lecciones de proceso promovidas por el módulo Mejora Continua (ROAD-256)`;
-    writeIndex(projectDir, idx ? `${idx}\n${line}` : `# Memorias\n\n${line}`, idx ? hashOf(idx) : undefined);
+    writeIndex(projectDir, idx ? `${idx}\n${line}` : `# Memorias\n\n${line}`, idx ? hashOf(idx) : undefined, userId);
   }
 }
 
@@ -167,12 +174,12 @@ export function renderManagedBlock(lessons, allLessons = lessons) {
   return `${MARK_START}\n## Mejora Continua (auto)\n<!-- Gestionado por el módulo Mejora Continua de Mi Consola. NO editar a mano DENTRO de los marcadores: se regenera al promover. Lo de AFUERA (Reglas duras, Convenciones, etc.) queda intacto. -->\n\n${body}\n${MARK_END}`;
 }
 
-async function promoteToClaudeMd(project, ctx = null) {
+async function promoteToClaudeMd(project, ctx = null, scope = null) {
   // En console ya no espejamos las lecciones al CLAUDE.md: la entrada
   // "Si vas a cerrar trabajo" del índice enrutador las trae desde Pad por tarea.
   // Tolkien conserva su espejo externo en CLAUDE.local.md.
   if (project === 'console') return;
-  const file = claudeFileFor(project);
+  const file = claudeFileFor(project, scope);
   if (!file) throw Object.assign(new Error(`El proyecto "${project}" no tiene CLAUDE.md promovible (solo console/tolkien).`), { badRequest: true });
   // Import diferido para que store.js pueda derivar sus enums de los destinos
   // exportados por este módulo sin crear un ciclo de inicialización ESM.
@@ -212,20 +219,14 @@ async function promoteToClaudeMd(project, ctx = null) {
 // ===== Destino: CONTEXTO de trabajo (Fase 3, + espejo Tolkien) =====
 // Apéndala al contexto 'work' o 'pr' (bugfix-work/pr), que se inyecta en los
 // chats de ticket/PR y se ESPEJA a la CLAUDE.local.md de Tolkien vía saveContext
-// (syncToTolkien adentro). Idempotente por id (no re-apendea la misma lección).
+// (syncToTolkien adentro). Idempotente por id; una reincidencia eleva su rank.
 const FEEDBACK_CONTEXT_HEADING = '## 6. Feedback adoptado';
 const CONTEXT_ENTRY_PREFIX = '### 🔄 Lección de Mejora Continua';
 const LEGACY_CONTEXT_ENTRY_RE = /^### 🔄 Lección de Mejora Continua \((MC-\d+)\) — (.+)$/gm;
-const CONTEXT_MARKER_RE = /<!-- cwc:retro-context:([a-f0-9]{12}) -->/;
 
-function contextMarkerFor(lessonId) {
+export function contextMarkerFor(lessonId) {
   const key = crypto.createHash('sha1').update(String(lessonId || '')).digest('hex').slice(0, 12);
   return `<!-- cwc:retro-context:${key} -->`;
-}
-
-function contextContainsLesson(text, lessonId) {
-  return String(text || '').includes(String(lessonId || ''))
-    || String(text || '').includes(contextMarkerFor(lessonId));
 }
 
 // El destino `contexto` cruza mundos solo para Tolkien. Console y `otros`
@@ -274,104 +275,128 @@ function sanitizeFeedbackRefs(text, lessonTitles) {
   });
 }
 
-function contextEntryFor(lesson, lessonTitles) {
+export function buildContextEntry(lesson, { rank = 1, lessonTitles = new Map() } = {}) {
   const safe = sanitizeContextEntry(lesson.title, lesson.body);
   const title = sanitizeLessonForTolkien(safe.title, lessonTitles);
   const body = sanitizeLessonForTolkien(safe.body, lessonTitles);
+  const normalizedRank = Math.max(1, Math.floor(Number(rank) || 1));
   // Confianza sigue en Pad, la fuente canónica. Se retira del espejo porque
   // muta sola e invalida el caché del preámbulo.
-  return `${CONTEXT_ENTRY_PREFIX} — ${title} ${contextMarkerFor(lesson.id)}\n_${lesson.category}_\n\n${body}`;
+  return `${CONTEXT_ENTRY_PREFIX} — ${title} ${contextMarkerFor(lesson.id)} <!-- cwc:retro-rank:${normalizedRank} -->\n_${lesson.category}_\n\n${body}`;
 }
 
-function contextEntryRanges(text) {
+function replaceUnitText(sectionText, unit, replacement) {
+  return `${sectionText.slice(0, unit.start)}${replacement}${sectionText.slice(unit.end)}`;
+}
+
+function archivedReplacement(unit) {
+  const trailing = unit.text.match(/(?:\r?\n[ \t]*)+$/)?.[0] || '\n';
+  return `<!-- cwc:retro-archived:${unit.key} rank=${unit.rank} -->${trailing}`;
+}
+
+export function compactContextMaster(kind, text, scope) {
+  const k = kind === 'pr' ? 'pr' : 'work';
   const source = String(text || '');
-  const lines = source.match(/[^\n]*\n|[^\n]+/g) || [];
-  const starts = [];
-  let offset = 0;
-  let inFence = false;
-  for (const line of lines) {
-    if (!inFence && line.startsWith(CONTEXT_ENTRY_PREFIX)) starts.push(offset);
-    if (line.startsWith('```')) inFence = !inFence;
-    offset += line.length;
+  const archived = new Set(planContextWindows({ [k]: source }, scope)?.[k]?.archived || []);
+  if (!archived.size) return { text: source, compacted: 0 };
+
+  const split = splitTopSections(source);
+  const section = split.sections.find((candidate) => candidate.title === FEEDBACK_CONTEXT_HEADING);
+  if (!section) return { text: source, compacted: 0 };
+
+  const units = parseFeedbackSection(section.text).units
+    .filter((unit) => archived.has(unit.key) && (unit.kind === 'full' || unit.kind === 'ref'));
+  if (!units.length) return { text: source, compacted: 0 };
+
+  for (const unit of [...units].sort((a, b) => b.start - a.start)) {
+    section.text = replaceUnitText(section.text, unit, archivedReplacement(unit));
   }
-  return starts.map((start, index) => ({
-    start,
-    end: starts[index + 1] ?? source.length,
-    text: source.slice(start, starts[index + 1] ?? source.length),
-  }));
+  return {
+    text: split.preamble + split.sections.map((candidate) => candidate.text).join(''),
+    compacted: units.length,
+  };
 }
 
-function rotateOldestContextEntry(sectionText, protectedMarker) {
-  const oldest = contextEntryRanges(sectionText)
-    .find((range) => !range.text.includes(protectedMarker));
-  if (!oldest) return null;
-  const heading = oldest.text.split(/\r?\n/, 1)[0];
-  const title = heading
-    .slice(CONTEXT_ENTRY_PREFIX.length)
-    .replace(/^\s*(?:\([^)]*\)\s*)?—\s*/, '')
-    .replace(/\s*<!-- cwc:retro-context:[a-f0-9]{12} -->\s*$/, '')
-    .trim();
-  const marker = oldest.text.match(CONTEXT_MARKER_RE)?.[0] || '';
-  const reference = `> ↩ **Referencia de Mejora Continua:** “${title}”. Texto canónico en Pad; contenido omitido por presupuesto.${marker ? ` ${marker}` : ''}\n\n`;
-  return `${sectionText.slice(0, oldest.start)}${reference}${sectionText.slice(oldest.end)}`;
+function withUnitRank(unit, rank) {
+  const lineEnd = unit.text.search(/\r?\n/);
+  const headingEnd = lineEnd === -1 ? unit.text.length : lineEnd;
+  const heading = unit.text.slice(0, headingEnd);
+  const rankedHeading = CONTEXT_RANK_RE.test(heading)
+    ? heading.replace(CONTEXT_RANK_RE, `<!-- cwc:retro-rank:${rank} -->`)
+    : `${heading} <!-- cwc:retro-rank:${rank} -->`;
+  return `${rankedHeading}${unit.text.slice(headingEnd)}`;
 }
 
-function promoteToContext(lesson, kind) {
+function idMentioned(text, id) {
+  const value = String(id || '');
+  if (!value) return false;
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(String(text || ''));
+}
+
+function promoteToContext(lesson, kind, scope) {
   const route = contextRouteForProject(lesson?.project);
-  if (route === 'internal-pad') return { route, rotated: 0 };
+  const rank = Math.max(1, Math.floor(Number(lesson?.recurrence) || 1));
+  if (route === 'internal-pad') return { route, rank, compacted: 0, action: 'noop' };
 
   const k = kind === 'pr' ? 'pr' : 'work';
-  const cur = getContext(k) || '';
-  if (contextContainsLesson(cur, lesson.id)) return { route, rotated: 0 }; // ya está
+  const cur = getContext(k, scope) || '';
 
   const split = splitTopSections(cur);
   let section = split.sections.find((s) => s.title === FEEDBACK_CONTEXT_HEADING);
   const oldSectionText = section?.text || '';
   const lessonTitles = lessonTitlesFromFeedback(oldSectionText);
   lessonTitles.set(lesson.id, String(lesson.title || '').replace(/[\r\n]+/g, ' ').trim());
-  const entry = contextEntryFor(lesson, lessonTitles);
-  const protectedMarker = contextMarkerFor(lesson.id);
+  let action = 'appended';
 
   if (section) {
+    const originalPreface = parseFeedbackSection(section.text).preface;
     section.text = sanitizeFeedbackRefs(section.text, lessonTitles);
-    const sep = section.text.endsWith('\n\n') ? '' : (section.text.endsWith('\n') ? '\n' : '\n\n');
-    section.text = `${section.text}${sep}${entry}\n`;
+    const parsed = parseFeedbackSection(section.text);
+    const key = contextMarkerFor(lesson.id).match(/[a-f0-9]{12}/)?.[0];
+    // Los límites evitan confundir ids con prefijos; el prefacio conserva ids retirados para no revivirlos.
+    const unit = parsed.units.find((candidate) => candidate.key === key)
+      || parsed.units.find((candidate) => idMentioned(candidate.text, lesson.id));
+    if (!unit && idMentioned(originalPreface, lesson.id)) {
+      return { route, rank, compacted: 0, action: 'retired' };
+    }
+    if (unit?.kind === 'full') {
+      const nextRank = Math.max(unit.rank, rank);
+      if (nextRank > unit.rank) {
+        section.text = replaceUnitText(section.text, unit, withUnitRank(unit, nextRank));
+        action = 'escalated';
+      } else {
+        action = 'noop';
+      }
+    } else if (unit) {
+      const nextRank = Math.max(unit.rank, rank);
+      const replacement = `${buildContextEntry(lesson, { rank: nextRank, lessonTitles })}${unit.text.match(/(?:\r?\n[ \t]*)+$/)?.[0] || '\n'}`;
+      section.text = replaceUnitText(section.text, unit, replacement);
+      action = 'restored';
+    } else {
+      const sep = section.text.endsWith('\n\n') ? '' : (section.text.endsWith('\n') ? '\n' : '\n\n');
+      section.text = `${section.text}${sep}${buildContextEntry(lesson, { rank, lessonTitles })}\n`;
+    }
   } else {
     // BUG-1927: sección propia y espejable. Usamos 6 porque el contexto PR ya
     // reserva "## 5." para su quick reference.
-    section = { title: FEEDBACK_CONTEXT_HEADING, text: `${FEEDBACK_CONTEXT_HEADING}\n\n${entry}\n` };
+    section = { title: FEEDBACK_CONTEXT_HEADING, text: `${FEEDBACK_CONTEXT_HEADING}\n\n${buildContextEntry(lesson, { rank, lessonTitles })}\n` };
     split.sections.push(section);
   }
 
   let next = split.preamble + split.sections.map((s) => s.text).join('');
-  let projectedBytes = measureMirrorBytes({ [k]: next });
-  let rotated = 0;
-  while (projectedBytes > MIRROR_BUDGET) {
-    const compacted = rotateOldestContextEntry(section.text, protectedMarker);
-    if (!compacted) {
-      throw Object.assign(
-        new Error(`No se puede adoptar ${lesson.id} como contexto: aun rotando todas las entradas anteriores, el espejo pesaría ${projectedBytes} B y supera el presupuesto de ${MIRROR_BUDGET} B. Acortá la lección o reducí el contexto fijo antes de reintentar.`),
-        { badRequest: true, reason: 'context-mirror-budget', mirrorBytes: projectedBytes, mirrorBudget: MIRROR_BUDGET },
-      );
-    }
-    section.text = compacted;
-    rotated += 1;
-    next = split.preamble + split.sections.map((s) => s.text).join('');
-    projectedBytes = measureMirrorBytes({ [k]: next });
-  }
+  const compacted = compactContextMaster(k, next, scope);
+  next = compacted.text;
 
-  const foreignRefs = findForeignRefsForTolkien(renderManagedSection({ [k]: next }));
+  const foreignRefs = findForeignRefsForTolkien(renderManagedSection({ [k]: next }, scope));
   if (foreignRefs.length) {
     throw Object.assign(
       new Error('No se puede adoptar como contexto: el espejo candidato todavía contiene referencias internas. Corregí el contexto base antes de reintentar.'),
       { badRequest: true, reason: 'foreign-refs', foreignRefs },
     );
   }
-  saveContext(k, next);
-  if (rotated) {
-    console.warn(`[retro/promote-shared] presupuesto de contexto: se rotaron ${rotated} entrada(s) antigua(s) a referencias; espejo candidato ${projectedBytes}/${MIRROR_BUDGET} B.`);
-  }
-  return { route, rotated, mirrorBytes: projectedBytes };
+  saveContext(k, next, scope);
+  return { route, rank, compacted: compacted.compacted, action };
 }
 
 // ===== Destino: CONVENCIÓN activa de Pad =====
@@ -551,7 +576,7 @@ function promoteToInvariant(lesson, opts = {}) {
   // El auditor de Salud solo audita Mi Consola: un invariante nacido de una
   // lección de otro mundo no se verificaría NUNCA, y un lazo que no cierra es
   // peor que no tener ninguno.
-  const blocked = targetBlockReason('invariante', lesson, opts.match);
+  const blocked = targetBlockReason('invariante', lesson, opts.match, opts.scope);
   if (blocked) throw Object.assign(new Error(`No se puede adoptar como invariante: ${blocked}`), { badRequest: true });
   const match = invariantMatchFor(lesson, opts.match);
   appendLearnedInvariant({ match, text: invariantTextFor(lesson) });
@@ -570,14 +595,20 @@ export const TARGETS_NEED_CONSOLE = ['invariante'];
 // que ve el tablero se calcula SOLO con lo declarado en el cuerpo (que es lo
 // correcto para OFRECER el destino), pero el gate de la promoción sí tiene que
 // contarlo — si no, el `match` que forwardea la ruta es código muerto.
-export function targetBlockReason(target, lesson, explicitMatch = null) {
+export function targetBlockReason(target, lesson, explicitMatch = null, scope = null) {
   if (!PROMOTE_TARGETS.includes(target)) return `el destino "${target}" no está disponible`;
   if (target === 'contexto') {
     try { contextRouteForProject(lesson?.project); }
     catch (err) { return err?.message || 'el project de la lección no permite decidir su mundo'; }
   }
-  if (TARGETS_NEED_DIR.includes(target) && !projectDirFor(lesson?.project)) {
+  if (TARGETS_NEED_DIR.includes(target) && !projectDirFor(lesson?.project, scope)) {
+    if (scope && !scope.isHost && lesson?.project === 'console') {
+      return 'Mi Consola solo existe para el host: un inquilino no puede promover a la consola';
+    }
     return `el proyecto "${lesson?.project}" no tiene carpeta propia (solo console/tolkien)`;
+  }
+  if (target === 'invariante' && scope && !scope.isHost) {
+    return 'los invariantes los audita Salud sobre el código del host; un inquilino no puede agregarlos';
   }
   if (TARGETS_NEED_CONSOLE.includes(target) && lesson?.project !== 'console') {
     return 'el auditor de Salud solo audita Mi Consola, así que fuera de `console` el invariante no se verificaría nunca';
@@ -588,22 +619,22 @@ export function targetBlockReason(target, lesson, explicitMatch = null) {
   return null;
 }
 
-export function applicableTargetsFor(lesson) {
-  return PROMOTE_TARGETS.filter((target) => !targetBlockReason(target, lesson));
+export function applicableTargetsFor(lesson, scope = null) {
+  return PROMOTE_TARGETS.filter((target) => !targetBlockReason(target, lesson, null, scope));
 }
 
 // Dispatcher. `lesson` ya debe estar marcada promovida (markPromoted corre
 // ANTES, así claude-md la incluye al renderizar desde el conjunto). `opts`
-// admite kind (contexto), match (invariante) y contract (ref CONVE explícito).
+// admite kind/scope (contexto), match (invariante) y contract (ref CONVE explícito).
 export async function promote(project, target, lesson, opts = {}, ctx = null) {
   if (target === 'memoria') {
-    const dir = projectDirFor(project);
+    const dir = projectDirFor(project, opts.scope);
     if (!dir) throw Object.assign(new Error(`El proyecto "${project}" no tiene memoria promovible (solo console/tolkien).`), { badRequest: true });
-    promoteToMemory(dir, lesson);
+    promoteToMemory(dir, lesson, opts.scope?.user);
   } else if (target === 'claude-md') {
-    await promoteToClaudeMd(project, ctx);
+    await promoteToClaudeMd(project, ctx, opts.scope);
   } else if (target === 'contexto') {
-    promoteToContext(lesson, opts.kind);
+    return promoteToContext(lesson, opts.kind, opts.scope);
   } else if (target === 'convencion') {
     await promoteToConvention(lesson, ctx);
   } else if (target === 'contrato') {

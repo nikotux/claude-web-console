@@ -143,6 +143,10 @@ export default function visadoHelp() {
                 v: t('visado.help.actions.cancel.v', 'Cierra el formulario o retira una petición, según dónde aparezca.'),
               },
               {
+                k: t('visado.help.actions.preview.k', '👁 Preview'),
+                v: t('visado.help.actions.preview.v', 'En una sala, abre el entorno Tolkien disponible con tu propia identidad. Mientras arranca, el botón queda deshabilitado.'),
+              },
+              {
                 k: t('visado.help.actions.help.k', '?'),
                 v: t('visado.help.actions.help.v', 'Abre esta ayuda.'),
               },

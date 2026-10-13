@@ -14,16 +14,17 @@ ocurre fuera de la sala en un runner desacoplado.
 
 ## Archivos y responsabilidades
 
-- `catalog.js` — enum CERRADO de seis operaciones (`tolkien.data.refresh`,
+- `catalog.js` — enum CERRADO de siete operaciones (`tolkien.data.refresh`,
   `tolkien.git.fetch`, `tolkien.git.update`, `tolkien.git.rebaseBranch`,
-  `tolkien.env.provision`, `tolkien.env.teardown`), más `getOp`, `listOpIds`,
-  `resolveOptions`, `validateParams` y `CATALOG_CONTRACT_VERSION`.
+  `tolkien.env.provision`, `tolkien.env.push`, `tolkien.env.teardown`), más
+  `getOp`, `listOpIds`, `resolveOptions`, `validateParams` y
+  `CATALOG_CONTRACT_VERSION`.
 - `store.js` — expedientes atómicos en `<dataDir>/visados/<id>.json`, máquina de
   ocho estados (`pendiente`, `aprobada`, `ejecutando`, `ejecutada`, `fallida`,
   `rechazada`, `caducada`, `cancelada`), huella sha256 y TTL.
 - `index.js` — endpoints HTTP, gates de participante/dueño/autoridad y spawn
-  desacoplado del runner. También sirve las cinco lecturas acotadas que necesita
-  el formulario (`estado`, `refresh`, lista/detalle de entornos y ramas).
+  desacoplado del runner. También sirve las seis lecturas acotadas que necesita
+  el formulario (`estado`, `refresh`, `preview`, lista/detalle de entornos y ramas).
 - `bin/cwc-visado-runner.js` — toma una petición aprobada, revalida y ejecuta la
   operación fuera del ciclo de vida de la web.
 - `public/js/modules/visado/` — cola de aprobaciones del dueño, modal de decisión
@@ -87,3 +88,6 @@ verbo, argumento u orden ejecutable por fuera de ellos.
   2026-07-31. El riesgo de `console:BUG-2525` —el dev-server del entorno bindea
   a `0.0.0.0`— fue comunicado y asumido; no sacar la operación del catálogo ni
   presentar ese riesgo como desconocido.
+- `tolkien.env.push` ofrece solo el entorno con worktree de la sala del `ctx`.
+  Commitea cambios pendientes, pushea únicamente `cwc-env/<id>` al origin de
+  Tolkien y crea/reutiliza un PR borrador; nunca hace force-push, ready ni merge.

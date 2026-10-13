@@ -21,6 +21,8 @@ export const MAX_REPLY_TO_LEN = 128;
 export const MAX_REPLY_TO_BY_LEN = 80;
 export const MAX_REPLY_TO_TEXT_LEN = 100;
 export const SALA_LOG_MAX_LINES = 5000;
+export const SALA_WAKE_LIMIT = 20;
+export const SALA_WAKE_WINDOW_MS = 60 * 60 * 1000;
 // [2026-08-03] Ya no se usa automáticamente desde init(); queda disponible
 // solo para una limpieza explícita futura.
 export const SALA_TTL_DAYS = 30;
@@ -113,6 +115,10 @@ export function salaLogPath(id) {
 
 export function readsPath(id) {
   return path.join(salaRoot(id), 'reads.json');
+}
+
+export function wakesPath(id) {
+  return path.join(salaRoot(id), 'wakes.json');
 }
 
 // [2026-08-03] Ya no se invoca automáticamente desde init(); queda disponible
@@ -346,6 +352,74 @@ export function appendOrquestado(id, { by, ts, world, chatId, snippet }) {
   };
   fs.appendFileSync(salaLogPath(id), JSON.stringify(rec) + '\n');
   return rec;
+}
+
+export function appendSubsala(id, { by, ts, chatId, title, ref }) {
+  ensureSala(id);
+  const rec = {
+    t: 'subsala',
+    by: String(by ?? '').trim().slice(0, 80),
+    ts: typeof ts === 'number' && Number.isFinite(ts) && ts > 0 ? ts : Date.now(),
+    chatId: String(chatId ?? '').trim().slice(0, 64),
+    title: String(title ?? '').trim().slice(0, 60),
+    ref: ref ? String(ref).trim().slice(0, 40) : null,
+  };
+  fs.appendFileSync(salaLogPath(id), JSON.stringify(rec) + '\n');
+  return rec;
+}
+
+export function appendEco(id, { id: ecoId, from, fromTitle, dir, text, ts, wake }) {
+  ensureSala(id);
+  const recTs = typeof ts === 'number' && Number.isFinite(ts) && ts > 0 ? ts : Date.now();
+  const rec = {
+    t: 'eco',
+    id: typeof ecoId === 'string' && ecoId
+      ? ecoId.slice(0, 128)
+      : `e${recTs.toString(36)}-${randomUUID().replaceAll('-', '').slice(0, 8)}`,
+    from: String(from ?? '').trim().slice(0, 64),
+    fromTitle: String(fromTitle ?? '').trim().slice(0, 60),
+    dir: dir === 'down' ? 'down' : 'up',
+    text: String(text ?? '').trim().slice(0, MAX_SAY_LEN),
+    ts: recTs,
+    wake: wake === true,
+  };
+  fs.appendFileSync(salaLogPath(id), JSON.stringify(rec) + '\n');
+  return rec;
+}
+
+// Reserva durable de un despertar automático. El archivo solo contiene los
+// timestamps de la última hora; corrupción o ausencia se tratan como un
+// historial vacío, pero una falla al escribir es fail-closed para no habilitar
+// consumo ilimitado cuando el presupuesto no puede persistirse.
+export function takeSalaWake(id, now = Date.now()) {
+  const current = typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : Date.now();
+  let timestamps = [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(wakesPath(id), 'utf8'));
+    if (Array.isArray(parsed)) timestamps = parsed;
+  } catch {
+    timestamps = [];
+  }
+  timestamps = timestamps
+    .filter((ts) => typeof ts === 'number' && Number.isFinite(ts) && ts > current - SALA_WAKE_WINDOW_MS && ts <= current)
+    .slice(-SALA_WAKE_LIMIT);
+  if (timestamps.length >= SALA_WAKE_LIMIT) return false;
+
+  timestamps.push(current);
+  let tempPath;
+  try {
+    ensureSala(id);
+    const target = wakesPath(id);
+    tempPath = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(timestamps) + '\n', { mode: 0o600 });
+    fs.renameSync(tempPath, target);
+    return true;
+  } catch {
+    if (tempPath) {
+      try { fs.unlinkSync(tempPath); } catch { /* limpieza best-effort */ }
+    }
+    return false;
+  }
 }
 
 export function appendOrigin(id, { by, ts, priorTurns, fromWorld }) {

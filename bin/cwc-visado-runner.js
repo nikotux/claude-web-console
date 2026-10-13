@@ -172,12 +172,19 @@ async function main() {
   const terminadoAt = Date.now();
   const status = resultado?.status;
   if (typeof status === 'number' && status < 400) {
+    // `resultado` del expediente es el cuerpo útil de la operación, no el
+    // envoltorio HTTP interno. Así provision conserva {id,status,port} y push
+    // conserva también {id,branch,pushed,prUrl} para mostrar/enlazar el PR.
+    const resultadoPersistido = resultado?.body && typeof resultado.body === 'object'
+      && !Array.isArray(resultado.body)
+      ? { ...resultado.body }
+      : resultado;
     const guardada = transicionar(
       dataDir,
       id,
       [ESTADOS.EJECUTANDO],
       ESTADOS.EJECUTADA,
-      { resultado, terminadoAt },
+      { resultado: resultadoPersistido, terminadoAt },
     );
     if (!guardada.ok) {
       throw new Error(`no se pudo guardar el resultado de ${id}: ${guardada.code}`);

@@ -104,17 +104,23 @@ escribe en ese master/espejo, mientras `console` y `otros` permanecen
 únicamente en su lección canónica de Pad interno. Un project vacío o
 desconocido falla cerrado con `reason=context-project-unknown`; no existe
 default hacia Tolkien. Por eso una promoción `contexto` interna aporta
-exactamente 0 lecciones al espejo. BUG-1972 cerró el crecimiento monótono:
-`MIRROR_BUDGET` se exporta desde `tickets/context-store.js` y
-`measureMirrorBytes({work|pr})` mide el espejo candidato completo ANTES
-de guardar. Si excede 30 kB, rota desde la entrada completa más vieja:
-quita su texto duplicado y deja una referencia por título al contenido
-canónico en Pad con un marcador hash opaco que conserva la idempotencia
-sin filtrar refs `MC-*`. Rota tantas entradas como hagan falta; si ni
-rotándolas todas entra la nueva, falla ruidosamente con
-`reason=context-mirror-budget` y no escribe. El render del contexto sanea
-refs internas antes del guard compartido; el guard sigue siendo la última
-barrera fail-closed. `promote-shared.js` exporta
+exactamente 0 lecciones al espejo. `console:BUG-3234` /
+`console:PLAN-3235` reemplazaron el viejo trinquete de presupuesto: adoptar a
+`contexto` SIEMPRE escribe en el master del usuario y el tamaño auto-cargado lo
+limita el render por ventanas de `tickets/context-store.js`. Cada FULL lleva
+un marcador hash y `retro-rank`, cuyo valor inicial es la recurrencia; volver a
+adoptar una FULL sube el rank, y volver a adoptar una REF o ARCHIVED la restaura
+completa desde Pad con el mayor rank. Después de cada adopción,
+`compactContextMaster` consulta `planContextWindows`: las FULL/REF fuera de las
+ventanas se sustituyen en el master por `retro-archived`, de modo que pueden
+restaurarse sin que referencias permanentes consuman el presupuesto. La ruta
+deriva `systemScopeFor(req)` y lo pasa a `getContext`, `saveContext`, el render
+del guard y la planificación; adoptar como otro usuario ya no toca el contexto
+del host. El render del contexto sanea refs internas antes del guard compartido;
+el guard sigue siendo la última barrera fail-closed. Si cualquier destino falla
+después de `markPromoted`, `revertPromotion` repone juntos `status`,
+`promotedTo`, `promotedAt` y `recurrenceAtPromotion`, sin metadatos rancios.
+`promote-shared.js` exporta
 `sanitizeContextEntry(title, body)` y `promoteToContext` lo aplica ANTES
 de armar la entrada: colapsa saltos de línea del título que vive en
 `### …`, degrada cada línea `## ` del cuerpo libre a `### ` y cierra el
@@ -140,8 +146,14 @@ ambos archivos casi no cambió. NO borrar los backups
 la categoría. Es idempotente por título exacto: si ya existe actualiza
 su contenido; el cuerpo termina con la procedencia MC y el link
 `implements` hacia la lección es best-effort. Solo memoria/claude-md
-exigen dir de proyecto (`TARGETS_NEED_DIR`); contexto/convencion no. Los
-dos destinos verificables de PLAN-1936 cierran el lazo
+exigen dir de proyecto (`TARGETS_NEED_DIR`); contexto/convencion no.
+`console:BUG-3241`: cada destino que escribe archivos lo hace en el espacio de
+quien adopta. El host conserva las rutas históricas; para un inquilino Tolkien
+resuelve `<workspace>/tolkien` y `memoria` usa además su `userId` para escribir
+en su propio `~/.claude`. Mi Consola solo existe para el host, por lo que para
+un inquilino los destinos de archivo sobre `console` y el destino `invariante`
+no aplican.
+Los dos destinos verificables de PLAN-1936 cierran el lazo
 sin tokens. `contrato` agrega una fila de obligación en `CONVE-1969`,
 el contrato-hogar con parent PLAN-1936, y registra su check para que
 `emitTasks()` abra un PEND automático cuando se incumple y lo cierre
@@ -158,8 +170,8 @@ invariante y el ref del contrato salen de CAMPOS DECLARADOS en el cuerpo
 (`**Archivos:** <glob>` / `**Contrato:** CONVE-n`) y NUNCA se infieren
 de la prosa: si falta el dato, falla cerrado con un mensaje accionable
 (trampa del trigger circular, PLAN-1955). La interfaz pública es
-`applicableTargetsFor(lesson)` /
-`targetBlockReason(target,lesson,explicitMatch?)` — el tercer parámetro
+`applicableTargetsFor(lesson,scope?)` /
+`targetBlockReason(target,lesson,explicitMatch?,scope?)` — el tercer parámetro
 es el glob explícito de quien promueve; sin él la aplicabilidad se
 calcula SOLO con lo declarado en el cuerpo (correcto para OFRECER el
 destino en el tablero), pero el gate de la ruta sí lo cuenta — si no, el

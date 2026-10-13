@@ -302,6 +302,16 @@ export default function sessionsHelp() {
                 desc: t('sessions.help.room.leave.desc', 'un participante abandona la sala y pierde acceso a la conversación'),
               },
               {
+                emoji: t('sessions.help.room.subsala.emoji', '🛃'),
+                name: t('sessions.help.room.subsala.name', 'Sub-sala'),
+                desc: t('sessions.help.room.subsala.desc', 'aparece anidada bajo su sala madre; el chip de la madre pliega o despliega todas sus hijas'),
+              },
+              {
+                emoji: t('sessions.help.room.eco.emoji', '📨'),
+                name: t('sessions.help.room.eco.name', 'Aviso entre salas'),
+                desc: t('sessions.help.room.eco.desc', 'conecta el hilo de una sala madre con el de una hija y cuenta como contenido pendiente para el próximo corte'),
+              },
+              {
                 icon: 'close',
                 name: t('sessions.help.room.dismiss.name', 'Archivar Interfono'),
                 desc: t('sessions.help.room.dismiss.desc', 'marca los mensajes pendientes como tomados; no despierta el chat ni consume tokens'),

@@ -86,7 +86,7 @@ function hostCredUsable() {
 // (sesión POSIX propia = setsid) + unref, con stdout/err a su log. Un crash
 // del server no lo toca. OJO systemd: además la unidad usa KillMode=process,
 // si no el cgroup entero (runners incluidos) moriría en cada restart.
-export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandle, effort, tandem, tolkienEnvAuto, codexModel, codexEffort, owner, oauthToken }) {
+export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandle, effort, tandem, tolkienEnvAuto, extraDir, codexModel, codexEffort, owner, oauthToken }) {
   fs.mkdirSync(CHATS_DIR, { recursive: true, mode: 0o700 });
   // Chequeo+escritura sincrónicos ANTES de spawnear (ver comentario arriba).
   if (spawnLockAlive(id)) {
@@ -109,6 +109,8 @@ export function spawnRunner({ id, cwd, model, mode, resume, sessionId, selfHandl
   if (tandem) args.push('--tandem', '1');
   // Entorno Tolkien efímero: el runner avisa al server cuando detecta intención de escritura.
   if (tolkienEnvAuto) args.push('--tolkien-env-auto', '1');
+  // PLAN-3236 E3: habilita el worktree Tolkien como directorio adicional del runner.
+  if (typeof extraDir === 'string' && extraDir.length > 0) args.push('--extra-dir', extraDir);
   // PLAN-519 F2: ejecutor Codex configurable (modelo+esfuerzo).
   if (tandem && codexModel) args.push('--codex-model', codexModel);
   if (tandem && codexEffort) args.push('--codex-effort', codexEffort);

@@ -437,23 +437,37 @@ export default {
       ? log.map((s) => `• ${s.step}: ${(s.out || '').split('\n')[0] || t('tolkien.common.ok', '(ok)')}`).join('\n')
       : '';
 
-    function fmtUpdateEnvResult(result) {
-      switch (result) {
+    function fmtUpdateEnvResult(env) {
+      switch (env?.result) {
         case 'rebased': return t('tolkien.updateAction.envResult.rebased', 'rebaseado');
-        case 'skipped-dirty': return t('tolkien.updateAction.envResult.skippedDirty', 'omitido: sucio');
+        case 'skipped-dirty': {
+          const paths = Array.isArray(env.paths) ? env.paths.filter(Boolean) : [];
+          if (!paths.length) return t('tolkien.updateAction.envResult.skippedDirty', 'omitido: sucio');
+          const more = Number(env.dirtyCount || 0) > 3
+            ? t('tolkien.updateAction.envResult.more', ', …')
+            : '';
+          return t('tolkien.updateAction.envResult.skippedDirtyPaths', 'omitido: sucio ({paths}{more})', { paths: paths.join(', '), more });
+        }
         case 'conflict': return t('tolkien.updateAction.envResult.conflict', 'conflicto');
         case 'status-failed': return t('tolkien.updateAction.envResult.statusFailed', 'status falló');
         case 'error': return t('tolkien.updateAction.envResult.error', 'error');
-        default: return String(result || '');
+        default: return String(env?.result || '');
       }
     }
 
     function fmtUpdateSummary(data) {
       const log = fmtLog(data.log);
       const envs = Array.isArray(data.envs) && data.envs.length
-        ? data.envs.map((env) => t('tolkien.updateAction.envLine', '• entorno {branch}: {result}', { branch: env.branch || env.id || '?', result: fmtUpdateEnvResult(env.result) })).join('\n')
+        ? data.envs.map((env) => t('tolkien.updateAction.envLine', '• entorno {branch}: {result}', { branch: env.branch || env.id || '?', result: fmtUpdateEnvResult(env) })).join('\n')
         : '';
-      return [log, envs].filter(Boolean).join('\n\n');
+      const postBuild = data.postBuild?.started
+        ? t('tolkien.updateAction.postBuildStarted', '• compilando paquetes y reiniciando el Tolkien local en segundo plano (1-3 min)')
+        : '';
+      const hasEnvWarnings = Array.isArray(data.envs) && data.envs.some((env) => env?.result !== 'rebased');
+      const envWarning = hasEnvWarnings
+        ? t('tolkien.updateAction.envsOutdated', 'Los entornos omitidos siguen con el código anterior: limpialos o cerralos y volvé a actualizar.')
+        : '';
+      return [log, envs, postBuild, envWarning].filter(Boolean).join('\n\n');
     }
 
     async function doUpdate() {
@@ -487,9 +501,12 @@ export default {
           // intacta; solo avisamos.
           const summary = fmtUpdateSummary(data);
           await dialog.alertDialog({ title: t('tolkien.updateAction.warnTitle', 'Actualizado (con aviso)'), message: `${data.warn}${summary ? `\n\n${summary}` : ''}` });
-        } else if (Array.isArray(data.envs) && data.envs.length) {
+        } else if ((Array.isArray(data.envs) && data.envs.length) || data.postBuild?.started) {
+          const hasEnvWarnings = Array.isArray(data.envs) && data.envs.some((env) => env?.result !== 'rebased');
           await dialog.alertDialog({
-            title: t('tolkien.updateAction.okTitle', 'Tolkien actualizado'),
+            title: hasEnvWarnings
+              ? t('tolkien.updateAction.warnTitle', 'Actualizado (con aviso)')
+              : t('tolkien.updateAction.okTitle', 'Tolkien actualizado'),
             message: fmtUpdateSummary(data),
           });
         }

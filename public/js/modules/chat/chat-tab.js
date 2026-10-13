@@ -18,6 +18,7 @@ import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
 import { avatarFor, avatarNodeFrom } from '../../ui/avatars.js';
 import { openPeticionDialog } from '../visado/peticion-dialog.js';
+import { fetchPreview } from '../visado/api.js';
 
 // Etiqueta de cada modelChoice (incluye "AutoTux" y "Opus plan" — fuente
 // única en ui/models.js, la misma que usa el menú "Cambiar modelo").
@@ -302,6 +303,11 @@ export class ChatTab {
     this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
     this.isSala = null;           // null hasta que llegue el primer history
     this.salaId = null;           // 🛃 id de la CARPETA de la sala; distinto del id de la conversación
+    this._previewEnv = null;
+    this._previewSalaId = null;
+    this._previewLoading = false;
+    this._previewTimer = null;
+    this._previewGeneration = 0;
     this.participants = [];
     this.salaOwner = null;   // 🛃 dueño de la sala: no viene en participants
     this.salaAiName = 'cucho';
@@ -327,6 +333,7 @@ export class ChatTab {
     this._lastCutAuthors = [];
     this._replyTo = null;
     this._orchestratedChatIds = new Set();
+    this._subsalaChatIds = new Set();
     this._pendingPromptActive = false;
     this._streamRaw = '';
     this._streamAddresseesResolved = false;
@@ -353,6 +360,11 @@ export class ChatTab {
           <button type="button" class="btn-ghost btn--icon chat-visado-btn" hidden
             title="${t('chat.sala.visadoTitle', 'Pedir una operación')}"
             aria-label="${t('chat.sala.visadoTitle', 'Pedir una operación')}">${icon('check', { size: 14 })}</button>
+          <button type="button" class="btn-ghost btn--sm chat-preview-btn" hidden disabled
+            title="${t('chat.sala.previewTitle', 'Abrir el preview de Tolkien de esta sala con tu propia identidad')}"
+            aria-label="${t('chat.sala.previewTitle', 'Abrir el preview de Tolkien de esta sala con tu propia identidad')}">
+            ${icon('eye', { size: 14 })}<span>${t('chat.sala.previewLabel', 'Preview')}</span>
+          </button>
           <span class="chat-flow" hidden></span>
           ${pacman({ state: 'waiting', cls: 'chat-alive', title: t('chat.pac.waitingTitle', 'Esperando tu mensaje') })}
           <span class="chat-model-pill" title="${t('chat.header.modelPillTitle', 'Router de modelo automático')}" hidden></span>
@@ -426,6 +438,13 @@ export class ChatTab {
     this.visadoBtn.addEventListener('click', () => {
       if (!this.salaId) return;
       openPeticionDialog({ salaId: this.salaId, onDone: () => {} });
+    });
+    this.previewBtn = container.querySelector('.chat-preview-btn');
+    this.previewLabelEl = this.previewBtn.querySelector('span');
+    this.previewBtn.addEventListener('click', () => {
+      const env = this._previewEnv;
+      if (!env?.alive || env.status !== 'serving' || !env.enterUrl) return;
+      window.open(env.enterUrl, '_blank', 'noopener');
     });
     this.actaEl = container.querySelector('.chat-acta');
     this.actaBodyEl = container.querySelector('.chat-acta-body');
@@ -1117,6 +1136,7 @@ export class ChatTab {
         this._cutPending = false;
         this._lastCutAuthors = [];
         this._orchestratedChatIds.clear();
+        this._subsalaChatIds.clear();
         this._streamRaw = '';
         this._streamAddresseesResolved = false;
         this._clearTyping();
@@ -1188,6 +1208,8 @@ export class ChatTab {
       case 'cut': this._cut(m); break;
       case 'acta': this._renderActa(m); break;
       case 'orquestado': this._orquestado(m); break;
+      case 'subsala': this._subsala(m); break;
+      case 'eco': this._eco(m); break;
       case 'origin': this._origin(m); break;
       case 'cut-pending':
         this._cutPending = true;
@@ -1734,6 +1756,78 @@ export class ChatTab {
     this._scroll();
   }
 
+  _openRelatedChat(chatId) {
+    const id = String(chatId || '').trim();
+    if (!id) return;
+    const key = `chat:${id}`;
+    const card = [...document.querySelectorAll('.sess-card[data-key]')]
+      .find((candidate) => candidate.dataset.key === key);
+    const main = card?.querySelector('.sess-main');
+    if (main) {
+      main.click(); // Camino normal de Sesiones: openChatView + foco si ya existe.
+      return;
+    }
+    // En una ventana `?solo=` no existe el panel de Sesiones. El shell ya
+    // soporta `?focus=<id>` y la ventana principal tiene nombre estable.
+    const href = `/?focus=${encodeURIComponent(id)}`;
+    if (this.soloMode) window.open(href, 'cwc-main')?.focus();
+    else window.location.assign(href);
+  }
+
+  _subsala(m) {
+    if (!this.isSala) return;
+    const chatId = String(m.chatId || '').trim();
+    if (chatId && this._subsalaChatIds.has(chatId)) return;
+    if (chatId) this._subsalaChatIds.add(chatId);
+    const by = String(m.by || '').trim() || t('chat.sala.subsalaUnknownPerson', 'alguien');
+    const title = String(m.title || '').trim() || t('chat.sala.subsalaUnknownTitle', 'Sin título');
+    const ref = String(m.ref || '').trim();
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'chat-subsala';
+    el.textContent = t('chat.sala.subsalaLine', '🛃 {name} abrió la sub-sala «{title}» · {time}', {
+      name: by,
+      title,
+      time: this._localTime(m.ts),
+    }) + (ref ? t('chat.sala.subsalaRefSuffix', ' · {ref}', { ref }) : '');
+    if (chatId) el.addEventListener('click', () => this._openRelatedChat(chatId));
+    else el.disabled = true;
+    this.msgsEl.appendChild(el);
+    this._scroll();
+  }
+
+  _eco(m) {
+    if (!this.isSala) return;
+    const from = String(m.from || '').trim();
+    const fromTitle = String(m.fromTitle || '').trim() || t('chat.sala.ecoUnknownRoom', 'Sala sin título');
+    const el = document.createElement('div');
+    el.className = 'chat-eco';
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'chat-eco-head';
+    head.textContent = m.dir === 'down'
+      ? t('chat.sala.ecoDownLine', '📨 La sala madre «{fromTitle}» escribió · {time}', { fromTitle, time: this._localTime(m.ts) })
+      : t('chat.sala.ecoUpLine', '📨 «{fromTitle}» avisó · {time}', { fromTitle, time: this._localTime(m.ts) });
+    if (from) head.addEventListener('click', () => this._openRelatedChat(from));
+    else head.disabled = true;
+
+    const body = document.createElement('div');
+    body.className = 'chat-eco-body';
+    if (m.text) body.appendChild(renderMarkdown(String(m.text)));
+    el.append(head, body);
+    if (m.wake === false) {
+      const note = document.createElement('div');
+      note.className = 'chat-eco-note';
+      note.textContent = t('chat.sala.ecoNoWake', 'No despertó a Cucho: se alcanzó el tope de despertares automáticos');
+      el.appendChild(note);
+    }
+    this.msgsEl.appendChild(el);
+    this._salaSayCount++;
+    this._renderCutButton();
+    this._scroll();
+  }
+
   _origin(m) {
     const world = String(m.fromWorld || '').trim() || t('chat.sala.originUnknownWorld', 'su mundo anterior');
     const by = String(m.by || '').trim() || t('chat.sala.originUnknownPerson', 'alguien');
@@ -1837,6 +1931,69 @@ export class ChatTab {
     }
     this.peersEl.hidden = !this.isSala || !this.peersEl.children.length;
     this.visadoBtn.hidden = !this.isSala || !this.salaId;
+    if (this.isSala && this.salaId) this._startPreviewPolling();
+    else this._stopPreviewPolling();
+  }
+
+  _previewVisible() {
+    return this.container.classList.contains('active') && !document.hidden;
+  }
+
+  _renderPreview(env) {
+    this._previewEnv = env || null;
+    if (!env) {
+      this.previewBtn.hidden = true;
+      this.previewBtn.disabled = true;
+      return;
+    }
+
+    const ready = env.alive && env.status === 'serving';
+    this.previewBtn.hidden = false;
+    this.previewBtn.disabled = !ready;
+    this.previewLabelEl.textContent = ready
+      ? t('chat.sala.previewLabel', 'Preview')
+      : t('chat.sala.previewStarting', 'Preview: preparando…');
+    const title = `${t('chat.sala.previewTitle', 'Abrir el preview de Tolkien de esta sala con tu propia identidad')} · ${t(
+      'chat.sala.previewMeta',
+      'rama {branch} · puerto {port}',
+      { branch: env.branch || '—', port: env.port ?? '—' },
+    )}`;
+    this.previewBtn.title = title;
+    this.previewBtn.setAttribute('aria-label', title);
+  }
+
+  async _refreshPreview() {
+    if (!this.salaId || !this._previewVisible() || this._previewLoading) return;
+    const salaId = this.salaId;
+    const generation = this._previewGeneration;
+    this._previewLoading = true;
+    try {
+      const data = await fetchPreview(salaId);
+      if (this.closedByUser || generation !== this._previewGeneration || salaId !== this.salaId) return;
+      this._renderPreview(data?.env || null);
+    } catch {
+      if (generation === this._previewGeneration) this._renderPreview(null);
+    } finally {
+      if (generation === this._previewGeneration) this._previewLoading = false;
+    }
+  }
+
+  _stopPreviewPolling() {
+    if (this._previewTimer !== null) window.clearInterval(this._previewTimer);
+    this._previewTimer = null;
+    this._previewSalaId = null;
+    this._previewLoading = false;
+    this._previewGeneration++;
+    this._renderPreview(null);
+  }
+
+  _startPreviewPolling() {
+    if (!this.salaId) return;
+    if (this._previewTimer !== null && this._previewSalaId === this.salaId) return;
+    this._stopPreviewPolling();
+    this._previewSalaId = this.salaId;
+    this._refreshPreview();
+    this._previewTimer = window.setInterval(() => this._refreshPreview(), 30_000);
   }
 
   _refreshSalaIdentity() {
@@ -2835,6 +2992,10 @@ export class ChatTab {
     // DESPUÉS de mostrar el panel, con el layout ya medible.
     this._scroll();
     this._autosize();
+    if (this.isSala && this.salaId) {
+      this._startPreviewPolling();
+      this._refreshPreview();
+    }
     // En táctil no auto-enfocamos: abriría el teclado sin que lo pidas.
     if (!window.matchMedia('(pointer: coarse)').matches) this.inputEl.focus();
   }
@@ -2844,6 +3005,7 @@ export class ChatTab {
     window.removeEventListener(DOC_MODE_EVENT, this._onDocMode);
     this._slashClose();
     this._clearTyping();
+    this._stopPreviewPolling();
     clearTimeout(this._markReadTimer);
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }

@@ -143,6 +143,8 @@
   verifica (a) que el Pad local RESPONDE —si no, warn: tasks/learning/retro/
   tickets-meta degradan EN SILENCIO— y (b) que existe el espejo de la Regla
   dura #12 en las Conventions (señal concreta de divergencia CLAUDE.md↔Pad).
+  Desde BUG-3369 distingue el 401 del host de una caída del servicio y, si el
+  host responde, sondea los tokens tenant para advertir cuáles deben re-loguear.
   OJO: el REST del Pad local devuelve `fields` como STRING JSON (no objeto como
   el MCP) — hay que `JSON.parse` antes de leer priority/status.
   Y **`pad-grafo`** (2026-09-08, F3 de PLAN-2851): verifica en la SQLite local

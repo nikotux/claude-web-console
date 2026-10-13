@@ -29,7 +29,15 @@ import { findZeroTierIp } from '../../core/zerotier.js';
 import { isHostAdmin, HOST_ONLY_MSG } from './gates.js';
 import {
   spawnRefreshRunner, readRefreshJob, writeRefreshJob, isRefreshRunning, refreshStatus,
+  readTolkienDbName,
 } from './refresh-shared.js';
+import {
+  maybeAutoRefresh,
+  readSourcesJob,
+  sourcesStatus,
+  spawnSourcesRunner,
+} from './sources-shared.js';
+import { ensureLocalUsers, resolveTolkienLoginEmail } from './local-users.js';
 import {
   listEnvs, getEnv, getEnvByChat, saveEnv, envIdForChat, dbNameFor, allocatePort, atCap, isEnvAlive, MAX_ENVS, PORT_RANGE,
 } from './env-store.js';
@@ -38,10 +46,18 @@ import {
   spawnTemplateBuild, readTemplateJob, writeTemplateJob, templateStatus, isTemplateBuilding,
 } from './template-shared.js';
 import {
+  isPostpullRunning,
+  postpullStatus,
+  readPostpullJob,
+  spawnPostpullRunner,
+  writePostpullJob,
+} from './build-shared.js';
+import {
   requestStackDown,
   requestStackUp,
   stackStatus,
 } from './stack.js';
+import { salaChat, salaVisiblePara } from '../visado/sala-access.js';
 
 // La infraestructura de refresh/envs sigue siendo exclusiva del host; las
 // operaciones git y local-enter resuelven el clon del principal por request.
@@ -117,7 +133,16 @@ async function fanoutUpdateEnvs() {
         continue;
       }
       if (dirty.stdout) {
-        results.push({ id: rec.id, branch: rec.branch, result: 'skipped-dirty' });
+        const dirtyPaths = dirty.stdout.split('\n').filter(Boolean)
+          .map((line) => line.slice(3).trim())
+          .filter(Boolean);
+        results.push({
+          id: rec.id,
+          branch: rec.branch,
+          result: 'skipped-dirty',
+          paths: dirtyPaths.slice(0, 3),
+          dirtyCount: dirtyPaths.length,
+        });
         continue;
       }
       const reb = await gitAt(rec.worktree, ['rebase', 'origin/main']);
@@ -132,6 +157,27 @@ async function fanoutUpdateEnvs() {
     }
   }
   return results;
+}
+
+function maybeStartPostpull(cwd, moved, popConflict = false) {
+  const postBuild = { started: false };
+  if (cwd !== config.projectDir || !moved || popConflict) return postBuild;
+  try {
+    if (!isPostpullRunning(readPostpullJob())) {
+      writePostpullJob({
+        running: true,
+        result: null,
+        error: null,
+        startedAt: Date.now(),
+        finishedAt: null,
+      });
+      spawnPostpullRunner();
+      postBuild.started = true;
+    }
+  } catch (err) {
+    console.error('[tolkien] No se pudo iniciar el post-pull:', err?.message || err);
+  }
+  return postBuild;
 }
 
 // Timestamp del último fetch/pull exitoso (freshness del "N detrás"). Se
@@ -307,6 +353,114 @@ export async function opTeardownEnv(id, force) {
   return { status: 200, body: r2 };
 }
 
+// Publica exclusivamente la rama nominal de un entorno en el origin de Tolkien
+// y deja la propuesta como borrador. Comparte `busy` con fetch/update/rebase:
+// todos operan sobre el mismo repositorio git y sus locks son comunes.
+export async function opPushEnvBranch(id) {
+  if (!isSafeEnvId(id)) return { status: 400, body: { error: 'Id de entorno inválido.' } };
+  const rec = getEnv(id);
+  if (!rec) return { status: 404, body: { error: 'Entorno no encontrado.' } };
+  const expectedBranch = `cwc-env/${id}`;
+  let worktreeExists = false;
+  try { worktreeExists = !!rec.worktree && fs.statSync(rec.worktree).isDirectory(); } catch { /* ausente */ }
+  if (!worktreeExists) {
+    return { status: 409, body: { error: 'El worktree del entorno no está disponible.' } };
+  }
+  if (rec.branch !== expectedBranch) {
+    return { status: 409, body: { error: `La rama registrada no es ${expectedBranch}.` } };
+  }
+  if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
+
+  busy = true;
+  const git = gitFor(rec.worktree);
+  try {
+    const current = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (current.code !== 0 || current.stdout !== expectedBranch) {
+      return { status: 409, body: { error: `El worktree no está parado en ${expectedBranch}.` } };
+    }
+
+    const origin = await git(['remote', 'get-url', 'origin']);
+    if (origin.code !== 0 || !origin.stdout.includes('Mordor-Staffing/tolkien')) {
+      return { status: 409, body: { error: 'El remote origin no pertenece a Mordor-Staffing/tolkien. Push bloqueado.' } };
+    }
+    const personal = await gitAt(config.projectDir, ['remote', 'get-url', 'personal']);
+    if (personal.code === 0 && personal.stdout && origin.stdout === personal.stdout) {
+      return { status: 409, body: { error: 'origin coincide con el remote personal de Mi Consola. Push bloqueado.' } };
+    }
+
+    const dirty = await git(['status', '--porcelain']);
+    if (dirty.code !== 0) {
+      return { status: 500, body: { error: dirty.stderr || 'No se pudo leer el estado del entorno.' } };
+    }
+    if (dirty.stdout) {
+      const add = await git(['add', '-A']);
+      if (add.code !== 0) {
+        return { status: 500, body: { error: add.stderr || 'No se pudieron preparar los cambios.' } };
+      }
+      const commit = await git([
+        'commit', '-m', `WIP: changes from Mi Consola preview env ${id}`,
+      ]);
+      if (commit.code !== 0) {
+        return { status: 500, body: { error: commit.stderr || commit.stdout || 'No se pudo crear el commit.' } };
+      }
+    }
+
+    const ahead = await git(['rev-list', '--count', `origin/main..${expectedBranch}`]);
+    if (ahead.code !== 0) {
+      return { status: 500, body: { error: ahead.stderr || 'No se pudo comparar la rama con origin/main.' } };
+    }
+    if ((Number.parseInt(ahead.stdout, 10) || 0) === 0) {
+      return { status: 409, body: { error: 'Nada para publicar.' } };
+    }
+
+    const push = await git(['push', '-u', 'origin', expectedBranch], { timeout: 120000 });
+    if (push.code !== 0) {
+      const detail = push.stderr || push.stdout || 'git push falló';
+      if (/non-fast-forward|fetch first/i.test(detail)) {
+        return { status: 409, body: { error: `El push fue rechazado por non-fast-forward: ${detail}` } };
+      }
+      return { status: 500, body: { error: detail } };
+    }
+
+    const listed = await runCmdAt(rec.worktree, 'gh', [
+      'pr', 'list', '--head', expectedBranch, '--json', 'url', '--limit', '1',
+    ], { timeout: 20000 });
+    if (listed.code !== 0) {
+      return { status: 500, body: { error: listed.stderr || 'No se pudo consultar el PR de la rama.' } };
+    }
+    let prs;
+    try { prs = JSON.parse(listed.stdout || '[]'); } catch { prs = null; }
+    if (!Array.isArray(prs)) {
+      return { status: 500, body: { error: 'gh devolvió una lista de PRs inválida.' } };
+    }
+
+    let prUrl = typeof prs[0]?.url === 'string' ? prs[0].url : '';
+    if (!prUrl) {
+      const created = await runCmdAt(rec.worktree, 'gh', [
+        'pr', 'create', '--draft', '--base', 'main', '--head', expectedBranch,
+        '--title', `WIP: preview env ${id}`,
+        '--body', `Draft opened from a Mi Consola preview environment (sala ${rec.chatId}). Description pending — do not merge as-is.`,
+      ], { timeout: 30000 });
+      if (created.code !== 0) {
+        return { status: 500, body: { error: created.stderr || 'No se pudo abrir el PR borrador.' } };
+      }
+      prUrl = created.stdout.trim();
+      if (!prUrl) {
+        return { status: 500, body: { error: 'gh creó el PR pero no devolvió su URL.' } };
+      }
+    }
+
+    return {
+      status: 200,
+      body: { id, branch: expectedBranch, pushed: true, prUrl },
+    };
+  } catch (err) {
+    return { status: 500, body: { error: String(err?.message || err) } };
+  } finally {
+    busy = false;
+  }
+}
+
 export async function opFetch(cwd = config.projectDir) {
   const git = gitFor(cwd);
   // Comparte el flag `busy` con /update: un fetch y un pull simultáneos
@@ -388,11 +542,20 @@ export async function opUpdate(cwd = config.projectDir) {
     // main:main` adelanta el ref local `main` SOLO si es fast-forward (git se
     // niega si main divergió — nunca lo forzamos). Tu trabajo queda intacto.
     if (branch !== 'main') {
+      // `mainUpdated` conserva su semántica histórica (el ff fue válido). Para
+      // el post-pull usamos el criterio más estricto y simple: SHA de main
+      // antes/después, así un fetch no-op no dispara un build innecesario.
+      const mainBefore = await git(['rev-parse', 'main']);
       const ff = await git(['fetch', 'origin', 'main:main']);
       log.push({ step: 'ff-main', code: ff.code, out: ff.stdout || ff.stderr || '(ya al día)' });
+      const mainAfter = await git(['rev-parse', 'main']);
       const st = await status(cwd);
       const mainUpdated = ff.code === 0;
+      const mainMoved = mainUpdated
+        && mainAfter.code === 0 && mainAfter.stdout
+        && mainBefore.stdout !== mainAfter.stdout;
       const envs = cwd === config.projectDir ? await fanoutUpdateEnvs() : [];
+      const postBuild = maybeStartPostpull(cwd, mainMoved);
       return {
         status: 200,
         body: {
@@ -402,6 +565,7 @@ export async function opUpdate(cwd = config.projectDir) {
           log,
           status: st,
           envs,
+          postBuild,
           warn: mainUpdated ? undefined
             : 'Tu main local no se pudo adelantar solo (puede tener commits propios o haber divergido de origin/main). Tu rama actual quedó intacta; revisá main a mano si hace falta.',
         },
@@ -498,7 +662,12 @@ export async function opUpdate(cwd = config.projectDir) {
     const st = await status(cwd);
     const ok = pull.code === 0 && !popConflict;
     const envs = cwd === config.projectDir ? await fanoutUpdateEnvs() : [];
-    return { status: 200, body: { ok, onMain: true, popConflict, stashed, log, status: st, envs } };
+    const headAfter = await git(['rev-parse', 'HEAD']);
+    const pullMovedHead = ok
+      && headBefore.code === 0 && headAfter.code === 0
+      && headBefore.stdout && headBefore.stdout !== headAfter.stdout;
+    const postBuild = maybeStartPostpull(cwd, pullMovedHead, popConflict);
+    return { status: 200, body: { ok, onMain: true, popConflict, stashed, log, status: st, envs, postBuild } };
   } catch {
     return { status: 500, body: { error: 'Falló la actualización.', log } };
   } finally {
@@ -624,6 +793,15 @@ export async function opRebaseBranch(branch, cwd = config.projectDir) {
 export default {
   name: 'tolkien',
 
+  init() {
+    if (process.env.CWC_TOLKIEN_SOURCES_AUTO === '0') return;
+    const decide = () => {
+      try { maybeAutoRefresh(); }
+      catch (error) { console.error('[tolkien] No se pudo decidir el refresh automático de fuentes:', error?.message || error); }
+    };
+    setInterval(decide, 5 * 60 * 1000).unref();
+  },
+
   registerHttp(router) {
     const r = express.Router();
 
@@ -695,6 +873,29 @@ export default {
       res.json(refreshStatus(readRefreshJob()));
     });
 
+    // Estado del build+restart post-pull; el trabajo corre en runner detached.
+    r.get('/postpull-status', (req, res) => {
+      if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
+      res.json(postpullStatus(readPostpullJob()));
+    });
+
+    // Refresh completo del workboard: el request solo reserva y lanza el runner
+    // desacoplado; el trabajo y su resultado viven en disco.
+    r.post('/sources-refresh', (req, res) => {
+      if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
+      try {
+        const started = spawnSourcesRunner();
+        res.json({ started, ...sourcesStatus(readSourcesJob()) });
+      } catch (error) {
+        res.status(500).json({ error: 'No se pudo iniciar el refresh de fuentes: ' + (error?.message || error) });
+      }
+    });
+
+    r.get('/sources-refresh/status', (req, res) => {
+      if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
+      res.json(sourcesStatus(readSourcesJob()));
+    });
+
     r.get('/envs', (req, res) => {
       if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
       const envs = listEnvs()
@@ -735,6 +936,12 @@ export default {
     r.post('/envs/:id/teardown', async (req, res) => {
       if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
       const r2 = await opTeardownEnv(String(req.params.id || ''), req.body?.force === true);
+      res.status(r2.status).json(r2.body);
+    });
+
+    r.post('/envs/:id/push', async (req, res) => {
+      if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
+      const r2 = await opPushEnvBranch(String(req.params.id || ''));
       res.status(r2.status).json(r2.body);
     });
 
@@ -784,28 +991,39 @@ export default {
     // tiene botón en la landing y sufriría el mismo problema de host.
     //
     // Solución (SIN tocar Tolkien, sobrevive a sus updates): la CONSOLA — ya
-    // autenticada y servida por ZeroTier — hace el dev-login CONTRA localhost
-    // (donde el host SÍ coincide con NEXTAUTH_URL, así Auth.js no rechaza),
+    // autenticada y servida por ZeroTier — hace el dev-login contra localhost
+    // para el server base y contra ZeroTier para las envs, que sólo escuchan allí.
+    // En el base el host coincide con NEXTAUTH_URL, así Auth.js no rechaza;
     // captura la cookie de sesión `tolkien.session` (un JWT auto-validable, no
     // atado a host) y redirige el navegador a la IP ZeroTier INSTALANDO esa
     // cookie. Como las cookies van por HOST y no por puerto, la que setea la
     // consola (:8092) vale para Tolkien (:3003) del mismo host. Un clic → adentro.
     //
-    // Seguridad: admin-only (entra con una identidad REAL de Tolkien). Sólo
-    // funciona mientras dev-login esté activo en Tolkien. Modelo de confianza de
-    // la consola: todos los usuarios son del dueño (ver CLAUDE.md).
+    // Seguridad: la base conserva el gate admin y el clon propio. Un entorno de
+    // sala admite además al host-admin o a un participante de ESA sala y usa el
+    // worktree del record. La identidad siempre se resuelve por principal.
     r.get('/local-enter', async (req, res) => {
-      if (!isAdmin(req)) {
+      const envs = listEnvs();
+      const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');
+      const envRec = envs
+        .filter(isEnvAlive)
+        .find((env) => String(env.port) === requestedPort);
+      const sala = envRec ? salaChat(envRec.chatId) : null;
+      const principal = principalOf(req);
+      const user = principal?.username || hostUser();
+      const puedeEntrarASala = !!principal && !!sala
+        && (isHostAdmin(req) || !!salaVisiblePara(envRec.chatId, user));
+
+      if (!puedeEntrarASala && !isAdmin(req)) {
         res.status(403).type('html').send(localEnterErrPage(
           'Acceso denegado',
           'Sólo un administrador puede entrar al Tolkien local desde la consola.',
         ));
         return;
       }
-      if (!tolkienRepoOr404(req, res, { html: true })) return;
-      const ALLOWED_LOCAL_PORTS = ['3010', ...listEnvs().filter(isEnvAlive).map((e) => String(e.port)).filter(Boolean)];
+      if (!puedeEntrarASala && !tolkienRepoOr404(req, res, { html: true })) return;
+      const ALLOWED_LOCAL_PORTS = ['3010', ...envs.filter(isEnvAlive).map((e) => String(e.port)).filter(Boolean)];
       const defaultPort = (process.env.CWC_TOLKIEN_LOCAL_PORT?.trim() || '3003');
-      const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');
       if (requestedPort && !ALLOWED_LOCAL_PORTS.includes(requestedPort)) {
         res.status(400).type('html').send(localEnterErrPage(
           'Puerto no permitido',
@@ -815,11 +1033,18 @@ export default {
       }
       const port = requestedPort || defaultPort;
 
-      const defaultEmail = (process.env.CWC_TOLKIEN_LOGIN_EMAIL?.trim() || config.instance.identity.email);
+      const ownEmail = resolveTolkienLoginEmail(systemScopeFor(req).user);
+      if (!ownEmail) {
+        res.status(400).type('html').send(localEnterErrPage(
+          'Sin identidad para Tolkien',
+          'No encontramos tu email de Mordor para entrar al Tolkien local. Cargalo en ⚙ Sistema → Identidad (email) y volvé a probar.',
+        ));
+        return;
+      }
       const requestedEmail = (typeof req.query.email === 'string' ? req.query.email.trim() : '');
       if (
         requestedEmail
-        && requestedEmail !== defaultEmail
+        && requestedEmail !== ownEmail
         && !/^[^@\s]+@phase3val\.test$/.test(requestedEmail)
       ) {
         res.status(400).type('html').send(localEnterErrPage(
@@ -829,49 +1054,74 @@ export default {
         ));
         return;
       }
-      const email = requestedEmail || defaultEmail;
-      const base = `http://localhost:${port}`;
-      // Acumula Set-Cookie en un "jar" dedupeando POR NOMBRE (última ocurrencia
-      // gana, como un browser/curl). Imprescindible: /api/auth/csrf devuelve DOS
-      // cookies `authjs.csrf-token` con valores distintos; re-enviar ambas hace
-      // que Auth.js rechace con MissingCSRF. El jar deja una sola.
-      const jar = {};
-      const addCookies = (setCookies) => {
-        for (const c of (setCookies || [])) {
-          const nv = c.split(';')[0];
-          const eq = nv.indexOf('=');
-          if (eq > 0) jar[nv.slice(0, eq)] = nv.slice(eq + 1);
-        }
-      };
-      const cookieHeaderOf = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
-      try {
-        // 1) CSRF: tomamos el token de la COOKIE (no del JSON) para garantizar
-        // que coincide con la cookie que enviamos — la cookie es "token|hash".
+      const email = requestedEmail || ownEmail;
+      const selectedEnv = envs.find((env) => String(env.port) === port);
+      const isEnvPort = Boolean(selectedEnv && port !== '3010');
+      const host = isEnvPort ? findZeroTierIp()?.ip : 'localhost';
+      if (!host) {
+        res.status(502).type('html').send(localEnterErrPage(
+          'No se pudo entrar al Tolkien local',
+          'No se detectó la IP ZeroTier',
+        ));
+        return;
+      }
+      const base = `http://${host}:${port}`;
+      const dbName = port === defaultPort || port === '3010'
+        ? readTolkienDbName()
+        : selectedEnv?.db;
+
+      const tryDevLogin = async () => {
+        // Cada intento usa un jar nuevo. Acumula Set-Cookie dedupeando POR NOMBRE
+        // (última ocurrencia gana, como browser/curl): /api/auth/csrf devuelve DOS
+        // cookies csrf y reenviar ambas provoca MissingCSRF.
+        const jar = {};
+        const addCookies = (setCookies) => {
+          for (const cookie of (setCookies || [])) {
+            const nameValue = cookie.split(';')[0];
+            const separator = nameValue.indexOf('=');
+            if (separator > 0) jar[nameValue.slice(0, separator)] = nameValue.slice(separator + 1);
+          }
+        };
+        const cookieHeader = () => Object.entries(jar).map(([key, value]) => `${key}=${value}`).join('; ');
+
+        // Tomamos el token de la COOKIE (no del JSON) para garantizar que
+        // coincide con la cookie enviada: su valor tiene forma "token|hash".
         const csrfRes = await fetch(`${base}/api/auth/csrf`, { headers: { accept: 'application/json' } });
         if (!csrfRes.ok) throw new Error(`csrf HTTP ${csrfRes.status}`);
         addCookies(csrfRes.headers.getSetCookie?.());
         const csrfToken = decodeURIComponent(jar['authjs.csrf-token'] || '').split('|')[0];
         if (!csrfToken) throw new Error('no se obtuvo el csrfToken de Tolkien');
 
-        // 2) dev-login callback: email de un usuario EXISTENTE activo de la DB.
         const body = new URLSearchParams({
           email, csrfToken, callbackUrl: `${base}/welcome`, json: 'true',
         });
         const loginRes = await fetch(`${base}/api/auth/callback/dev-login`, {
           method: 'POST',
           redirect: 'manual',
-          headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookieHeaderOf() },
+          headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookieHeader() },
           body,
         });
-        const sessionCookieRaw = (loginRes.headers.getSetCookie?.() || [])
-          .find((c) => /^tolkien\.session=/.test(c));
+        return (loginRes.headers.getSetCookie?.() || [])
+          .find((cookie) => /^tolkien\.session=/.test(cookie)) || null;
+      };
+
+      try {
+        let sessionCookieRaw = await tryDevLogin();
+        let repair = null;
+        if (!sessionCookieRaw && !email.endsWith('@phase3val.test') && dbName) {
+          repair = await ensureLocalUsers(dbName);
+          sessionCookieRaw = await tryDevLogin();
+        }
         if (!sessionCookieRaw) {
           // Sin cookie de sesión = el login no prosperó. Causas típicas:
           // dev-login apagado (DEV_AUTH_ENABLED≠1), email inexistente/inactivo.
           throw new Error(
             `el dev-login no devolvió sesión para "${email}". `
             + 'Verificá que DEV_AUTH_ENABLED=1 en el server de Tolkien y que ese '
-            + 'email exista como usuario activo (o cambiá CWC_TOLKIEN_LOGIN_EMAIL).',
+            + 'email exista como usuario activo (o cambiá CWC_TOLKIEN_LOGIN_EMAIL).'
+            + (repair
+              ? ` (auto-reparación de usuarios: ${repair.ok ? 'aplicada' : `falló: ${repair.detail}`})`
+              : ''),
           );
         }
 
@@ -889,7 +1139,7 @@ export default {
         res.status(isConn ? 502 : 500).type('html').send(localEnterErrPage(
           'No se pudo entrar al Tolkien local',
           isConn
-            ? `El server de Tolkien no responde en localhost:${port}. ¿Está corriendo? `
+            ? `El server de Tolkien no responde en ${host}:${port}. ¿Está corriendo? `
               + '(next dev). Si usa otro puerto, seteá CWC_TOLKIEN_LOCAL_PORT.'
             : (err?.message || 'Error desconocido en el flujo de login.'),
         ));
