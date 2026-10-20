@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-10-20 09:06 — main
+- Adaptar el scraper de Tolkien al nuevo workboard en tabla y actualizar dependencias
+
 ### 2026-10-13 13:04 — main
 - agregar sub-salas de Aduana con entorno de preview Tolkien compartido
 
@@ -343,21 +346,6 @@ since the previous push. Newest entry first.
 
 ### 2026-07-03 20:41 — main
 - Modified `public/js/modules/system/health-review-modal.js`
-
-### 2026-07-03 20:30 — main
-- Chat móvil: burbujas a ancho (casi) completo, sin columna muerta a la derecha
-- Sidebar: ☰ y Nueva sesión comparten fila (fuera el espacio muerto)
-- Centro Bugs & PRs: tablero unificado del ciclo del bug con GitHub en vivo y Desk
-- Bugfixes: GET /desk-live/:n — estado en vivo del ticket de Zoho Desk (read-only)
-- Sidebar: rename tickets->bugs, seccion "Bugs & Features" y Tolkien informativo
-- Bugs & PRs: resolución parcial/completo (merge ≠ resuelto) + sección Archivo
-- Sidebar visual: Tolkien y Bugs & Features iconicos + boton Buscar cambios
-- Modified `CLAUDE.md`
-- Added `bin/cwc-health-runner.js`
-- Modified `public/js/modules/system/health-panel.js`
-- Added `public/js/modules/system/health-review-modal.js`
-- Modified `src/modules/health/index.js`
-- Added `src/modules/health/shared.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
