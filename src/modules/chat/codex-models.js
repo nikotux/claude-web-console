@@ -10,8 +10,14 @@ export const TANDEM_CODEX_EFFORT = 'high';
 // SOLO modelos con `visibility: "list"`; los `hide` (`gpt-reserve` y
 // `codex-auto-review`) quedan deliberadamente afuera. sol/terra suman `ultra`
 // ("máximo razonamiento con delegación automática"), luna llega hasta `max`,
-// y los modelos legacy cortan en `xhigh`.
+// y los modelos legacy cortan en `xhigh`. Codex 0.162.1 (2026-10-13) suma la
+// familia GPT-6 (astra/sol suman `ultra`, luna hasta `max`) y pasa `gpt-5.5` a
+// `hide`; se conserva igual para no invalidar chats que lo tengan guardado. El
+// default de Tándem sigue en gpt-5.6-sol hasta probar GPT-6 a mano.
 export const CODEX_MODEL_EFFORTS = {
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],

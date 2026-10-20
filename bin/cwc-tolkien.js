@@ -58,6 +58,18 @@ const REASSIGN_NAVIGATION_RETRY_DELAY_MS = 2_000;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TERMINAL_EXECUTION_STATES = new Set(['completed', 'cancelled', 'closed']);
 const CLOSED_OK_EXECUTION_STATES = new Set(['completed', 'closed']);
+const NAMED_STATUS_EXECUTION_STATES = Object.freeze({
+  cancelled: 'cancelled',
+  closed: 'completed',
+  new: 'active',
+  open: 'active',
+  in_progress: 'active',
+  on_hold: 'active',
+});
+const NAMED_STATUS_TYPE_FALLBACKS = Object.freeze({
+  open: 'active',
+  on_hold: 'active',
+});
 const REASSIGN_SKIP_REASONS = [
   'alias_ambiguo',
   'sin_asignado_en_zoho',
@@ -952,39 +964,145 @@ async function deskListAgents(client) {
   return byId;
 }
 
+export function parseQueueSnapshot(snapshot, baseUrl) {
+  const found = new Map();
+  const ticketFromHref = (href) => {
+    if (!href) return null;
+    try {
+      const absolute = new URL(href, baseUrl);
+      const match = absolute.pathname.match(/^\/tickets\/([0-9a-f-]{36})$/i);
+      return match ? { absolute, ticketWorkflowId: match[1] } : null;
+    } catch {
+      return null;
+    }
+  };
+  const headers = Array.isArray(snapshot?.headers) ? snapshot.headers : [];
+  const assigneeIndex = headers.findIndex(
+    (header) => String(header ?? '').trim().toLowerCase().startsWith('assignee'),
+  );
+
+  // El workboard pasó a una tabla en 2026-10. La posición de Assignee se
+  // resuelve por encabezado para tolerar columnas nuevas o reordenadas.
+  for (const row of Array.isArray(snapshot?.rows) ? snapshot.rows : []) {
+    const ticket = ticketFromHref(row?.href);
+    if (!ticket) continue;
+    const cells = Array.isArray(row?.cells) ? row.cells : [];
+    const cellLabels = Array.isArray(row?.cellLabels) ? row.cellLabels : [];
+    const assigneeLabel = assigneeIndex >= 0
+      ? String(cellLabels[assigneeIndex] ?? '').trim()
+      : '';
+    const rawOwner = assigneeLabel || (
+      assigneeIndex >= 0 ? String(cells[assigneeIndex] ?? '').trim() : ''
+    );
+    const owner = rawOwner === '' || /^(?:—|-|unassigned)$/i.test(rawOwner)
+      ? null
+      : rawOwner;
+    found.set(ticket.ticketWorkflowId, {
+      ticketWorkflowId: ticket.ticketWorkflowId,
+      url: ticket.absolute.href,
+      listingText: String(row?.text ?? '').replace(/\s+/g, ' ').trim(),
+      owner,
+    });
+  }
+  if (found.size > 0) return [...found.values()];
+
+  // Respaldo para el layout anterior, donde cada ticket era un <li>.
+  for (const item of Array.isArray(snapshot?.legacy) ? snapshot.legacy : []) {
+    const ticket = ticketFromHref(item?.href);
+    if (!ticket) continue;
+    const rawOwner = typeof item?.owner === 'string' ? item.owner.trim() : '';
+    const owner = rawOwner === '' || /^(?:—|-|unassigned)$/i.test(rawOwner)
+      ? null
+      : rawOwner;
+    found.set(ticket.ticketWorkflowId, {
+      ticketWorkflowId: ticket.ticketWorkflowId,
+      url: ticket.absolute.href,
+      listingText: String(item?.text ?? '').replace(/\s+/g, ' ').trim(),
+      owner,
+    });
+  }
+  return [...found.values()];
+}
+
 async function listAssignedTickets(page, owners = []) {
   // Tolkien resuelve estos filtros en la URL y `focus=mine` compara el
   // assignedToUserId del workflow con el viewerUserId de la sesión.
-  const url = owners.length === 0
-    ? `${BASE_URL}/tickets?view=active&focus=mine#queue`
+  const ownMode = owners.length === 0;
+  const url = ownMode
+    ? `${BASE_URL}/tickets?view=active&focus=mine&iv=my_open#queue`
     : `${BASE_URL}/tickets?view=active#queue`;
   await gotoReadOnly(page, url);
   await page.waitForSelector('#queue', { timeout: NAVIGATION_TIMEOUT_MS });
-  return page.evaluate((baseUrl) => {
-    const found = new Map();
-    const anchors = document.querySelectorAll(
-      '#queue ul > li a[href^="/tickets/"], #queue ul > li a[href*="/tickets/"]',
-    );
-    for (const anchor of anchors) {
-      const href = anchor.getAttribute('href');
-      if (!href) continue;
-      const absolute = new URL(href, baseUrl);
-      const match = absolute.pathname.match(/^\/tickets\/([^/]+)$/);
-      if (!match) continue;
-      const ownerSpan = [...anchor.querySelectorAll('span')]
-        .find((span) => (span.textContent ?? '').trim().startsWith('Owner:'));
-      const owner = ownerSpan
-        ? (ownerSpan.textContent ?? '').trim().slice('Owner:'.length).trim()
-        : null;
-      found.set(match[1], {
-        ticketWorkflowId: match[1],
-        url: absolute.href,
-        listingText: (anchor.textContent ?? '').replace(/\s+/g, ' ').trim(),
-        owner,
+  try {
+    await page.waitForSelector('#queue table tbody tr', { timeout: NAVIGATION_TIMEOUT_MS });
+  } catch {
+    // El layout legado no tiene tabla; su lista se recoge como respaldo.
+  }
+  const snapshot = await page.evaluate(() => {
+    const collapsed = (value) => (value ?? '').replace(/\s+/g, ' ').trim();
+    const headers = [...document.querySelectorAll('#queue table thead th')]
+      .map((header) => collapsed(header.textContent));
+    const rows = [...document.querySelectorAll('#queue table tbody tr')].map((row) => {
+      const anchor = [...row.querySelectorAll('a[href]')].find((candidate) => {
+        try {
+          return /^\/tickets\/[0-9a-f-]{36}$/i.test(new URL(candidate.href, location.href).pathname);
+        } catch {
+          return false;
+        }
       });
-    }
-    return [...found.values()];
-  }, BASE_URL);
+      return {
+        href: anchor?.getAttribute('href') ?? null,
+        cells: [...row.querySelectorAll('td')].map((cell) => collapsed(cell.textContent)),
+        cellLabels: [...row.querySelectorAll('td')].map((cell) => {
+          const titled = [...cell.querySelectorAll('[title]')]
+            .map((element) => collapsed(element.getAttribute('title')))
+            .find(Boolean);
+          if (titled) return titled;
+          return [...cell.querySelectorAll('[aria-label]')]
+            .map((element) => collapsed(element.getAttribute('aria-label')))
+            .find(Boolean) ?? null;
+        }),
+        text: collapsed(row.textContent),
+      };
+    });
+    const legacy = [...document.querySelectorAll('#queue ul > li a[href*="/tickets/"]')]
+      .filter((anchor) => !anchor.closest('nav[aria-label="Ticket views"]'))
+      .map((anchor) => {
+        const ownerSpan = [...anchor.querySelectorAll('span')]
+          .find((span) => collapsed(span.textContent).startsWith('Owner:'));
+        return {
+          href: anchor.getAttribute('href'),
+          text: collapsed(anchor.textContent),
+          owner: ownerSpan
+            ? collapsed(ownerSpan.textContent).slice('Owner:'.length).trim()
+            : null,
+        };
+      });
+    const queue = document.querySelector('#queue');
+    const pagination = queue
+      ? [...queue.querySelectorAll('a, button')].some((control) => {
+        if (control.closest('nav[aria-label="Ticket views"]')) return false;
+        return /next|load more|›|»/i.test(collapsed(control.textContent))
+          || /next page/i.test(control.getAttribute('aria-label') ?? '');
+      })
+      : false;
+    const myOpenAnchor = document.querySelector(
+      '#queue nav[aria-label="Ticket views"] a[href*="iv=my_open"]',
+    );
+    const myOpenMatch = collapsed(myOpenAnchor?.textContent).match(/\b(\d[\d,.]*)\b/);
+    const myOpenCount = myOpenMatch
+      ? Number(myOpenMatch[1].replace(/[^\d]/g, ''))
+      : null;
+    return { headers, rows, legacy, pagination, myOpenCount };
+  });
+  const listed = parseQueueSnapshot(snapshot, BASE_URL);
+  if (snapshot.pagination) {
+    log('Aviso: la vista parece paginada; el censo podría estar incompleto.');
+  }
+  if (ownMode && Number.isFinite(snapshot.myOpenCount) && snapshot.myOpenCount !== listed.length) {
+    log(`Aviso: "My open" informa ${snapshot.myOpenCount} pero se leyeron ${listed.length} filas.`);
+  }
+  return listed;
 }
 
 function filterListedByOwners(listed, owners) {
@@ -1041,8 +1159,17 @@ function deskIdFromUrl(rawUrl) {
   }
 }
 
+export function executionStateFromNamedStatus(dataStatus, dataStatusType) {
+  const namedStatus = String(dataStatus ?? '').trim().toLowerCase();
+  if (Object.hasOwn(NAMED_STATUS_EXECUTION_STATES, namedStatus)) {
+    return NAMED_STATUS_EXECUTION_STATES[namedStatus];
+  }
+  const statusType = String(dataStatusType ?? '').trim().toLowerCase();
+  return NAMED_STATUS_TYPE_FALLBACKS[statusType] ?? null;
+}
+
 async function readOverview(page) {
-  return page.evaluate((terminalExecutionStates) => {
+  return page.evaluate(({ terminalExecutionStates, namedStatusStates, statusTypeFallbacks }) => {
     const clean = (value) => value?.replace(/\s+/g, ' ').trim() || null;
     // Durante la hidratación puede convivir el cascarón con el contenido real;
     // elegimos el main útil sin perder badges repartidos entre mains (console:BUG-2556).
@@ -1065,8 +1192,12 @@ async function readOverview(page) {
       ?? clean(main?.querySelector('h1')?.textContent);
     const progressHeading = document.querySelector('#current-progress-heading');
     const progressEyebrow = clean(progressHeading?.previousElementSibling?.textContent);
-    // El primer badge que sigue a WORK-n es el estado. Los estados conocidos se
-    // normalizan; ante uno nuevo conservamos el texto original para no perderlo.
+    const namedStatusChip = detailHeader?.querySelector('[data-status]') ?? null;
+    const namedStatus = clean(namedStatusChip?.getAttribute('data-status'))?.toLowerCase() ?? null;
+    const namedStatusType = clean(namedStatusChip?.getAttribute('data-status-type'))
+      ?.toLowerCase() ?? null;
+    // El primer badge que sigue a WORK-n era el estado en el layout legado. Sólo
+    // se consulta si el header no trae el chip nombrado del layout actual.
     const spansAfterWork = workSpan && detailHeader
       ? [...detailHeader.querySelectorAll('span')].slice(
           [...detailHeader.querySelectorAll('span')].indexOf(workSpan) + 1,
@@ -1075,11 +1206,25 @@ async function readOverview(page) {
     const badgeTexts = spansAfterWork.map((span) => clean(span.textContent)).filter(Boolean);
     const rawExecutionState = badgeTexts[0] ?? progressEyebrow;
     const normalizedState = rawExecutionState?.toLowerCase() ?? null;
-    const executionState = (
-      normalizedState === 'active' || terminalExecutionStates.includes(normalizedState)
+    const mappedNamedStatus = Object.prototype.hasOwnProperty.call(
+      namedStatusStates,
+      namedStatus,
     )
-      ? normalizedState
-      : rawExecutionState;
+      ? namedStatusStates[namedStatus]
+      : null;
+    const mappedStatusType = Object.prototype.hasOwnProperty.call(
+      statusTypeFallbacks,
+      namedStatusType,
+    )
+      ? statusTypeFallbacks[namedStatusType]
+      : null;
+    const executionState = namedStatusChip
+      ? (mappedNamedStatus ?? mappedStatusType)
+      : (
+          normalizedState === 'active' || terminalExecutionStates.includes(normalizedState)
+            ? normalizedState
+            : rawExecutionState
+        );
     const dlValue = (label) => {
       const dt = [...document.querySelectorAll('dt')]
         .find((candidate) => clean(candidate.textContent) === label);
@@ -1113,6 +1258,7 @@ async function readOverview(page) {
       workNumber,
       title,
       executionState,
+      namedStatus,
       assignee: dlValue('Owner'),
       desiredOutcome: dlValue('Desired outcome'),
       targetAt: dlValue('Target date'),
@@ -1122,7 +1268,11 @@ async function readOverview(page) {
       deskUrl: deskLink?.href ?? null,
       deskTicketNumber: mainText.match(/\b(?:Zoho\s+)?Desk\s*#\s*(\d+)\b/i)?.[1] ?? null,
     };
-  }, [...TERMINAL_EXECUTION_STATES]);
+  }, {
+    terminalExecutionStates: [...TERMINAL_EXECUTION_STATES],
+    namedStatusStates: NAMED_STATUS_EXECUTION_STATES,
+    statusTypeFallbacks: NAMED_STATUS_TYPE_FALLBACKS,
+  });
 }
 
 async function readManage(page) {
@@ -1249,11 +1399,12 @@ async function scrapeTicket(page, listed) {
     workKey,
     title: overview.title,
     executionState: overview.executionState,
+    namedStatus: overview.namedStatus,
     deskTicketNumber,
     deskTicketId,
     hasDesiredOutcome: Boolean(desiredOutcome),
     desiredOutcome,
-    isWaiting: Boolean(manage.isWaiting),
+    isWaiting: Boolean(manage.isWaiting || overview.namedStatus === 'on_hold'),
     assignee,
     priority: nullableVisible(manage.priority),
     bucketKey: nullableVisible(manage.bucketKey),
@@ -2327,7 +2478,7 @@ async function inspectTicketState(page, detailUrl) {
   });
   return {
     desiredOutcome: nullableVisible(manage.desiredOutcome ?? overview.desiredOutcome),
-    isWaiting: Boolean(manage.isWaiting),
+    isWaiting: Boolean(manage.isWaiting || overview.namedStatus === 'on_hold'),
     executionState: overview.executionState,
     ...forms,
   };

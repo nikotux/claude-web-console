@@ -116,6 +116,9 @@ export function effortLabel(effort, pinned) {
 // criterio que ROUTER_MANAGED_MODELS). Si cambia allá, cambiá acá.
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_MODEL_OPTIONS = [
+  ['gpt-6-astra', 'GPT-6 Astra'],
+  ['gpt-6-sol', 'GPT-6 Sol'],
+  ['gpt-6-luna', 'GPT-6 Luna'],
   ['gpt-5.6-sol', 'GPT-5.6 Sol'],
   ['gpt-5.6-terra', 'GPT-5.6 Terra'],
   ['gpt-5.6-luna', 'GPT-5.6 Luna'],
@@ -123,13 +126,16 @@ export const CODEX_MODEL_OPTIONS = [
   ['gpt-5.3-codex-spark', 'GPT-5.3 Spark'],
 ];
 const CODEX_EFFORTS_BY_MODEL = {
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.5': ['low', 'medium', 'high', 'xhigh'],
   'gpt-5.3-codex-spark': ['low', 'medium', 'high', 'xhigh'],
 };
-// Esfuerzos que acepta ESE modelo Codex; `ultra` solo existe en sol/terra.
+// Esfuerzos que acepta ESE modelo Codex; `ultra` solo existe en astra/sol/terra.
 export function codexEffortsFor(model) {
   return CODEX_EFFORTS_BY_MODEL[model] || CODEX_EFFORTS_BY_MODEL[DEFAULT_CODEX_MODEL];
 }
