@@ -28,6 +28,10 @@ const PATHS = {
   // consola. Identidad visual del proyecto (ver ui/places.js).
   console: `<rect x="2.5" y="4" width="19" height="13" rx="2"/><polyline points="6.5,7.8 9.5,10.5 6.5,13.2"/><line x1="11.5" y1="13.2" x2="15" y2="13.2"/><line x1="12" y1="17" x2="12" y2="20.5"/><line x1="8.5" y1="20.5" x2="15.5" y2="20.5"/>`,
   sparkle: `<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>`,
+  flame: `<path d="M13.7 2.8c.7 3.5-1.7 4.8-1.7 7.1 0 1.1.8 1.8 1.8 1.8 2 0 3.1-2.2 2.7-4.5 2.4 2.3 3.7 5 3.1 7.7-.8 3.6-3.8 6.1-7.6 6.1s-6.8-2.5-7.6-6.1c-.6-2.7.7-5.4 3.1-7.7-.3 2.6.5 4 1.7 4 .9 0 1.5-.8 1.5-1.8 0-2.1-1.2-3.7 3-6.6z"/>`,
+  trophy: `<path d="M8 4h8v4.5a4 4 0 0 1-8 0z"/><path d="M8 6H4v1.5A4.5 4.5 0 0 0 8.5 12M16 6h4v1.5a4.5 4.5 0 0 1-4.5 4.5M12 13v4M8.5 21h7M9.5 17h5v4h-5z"/>`,
+  swords: `<path d="m4 4 7.5 7.5M8 4H4v4M20 4l-7.5 7.5M16 4h4v4M9.5 13.5 5 18l-1 2 2-1 4.5-4.5M14.5 13.5 19 18l1 2-2-1-4.5-4.5"/>`,
+  lock: `<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>`,
   help: `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.6 2.6 0 1 1 3.8 2.3c-.8.4-1.2 1-1.2 1.9"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/>`,
   // Salvavidas: ayuda y asistencia.
   lifebuoy: `<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="5.6" y1="5.6" x2="9.2" y2="9.2"/><line x1="18.4" y1="5.6" x2="14.8" y2="9.2"/><line x1="5.6" y1="18.4" x2="9.2" y2="14.8"/><line x1="18.4" y1="18.4" x2="14.8" y2="14.8"/>`,

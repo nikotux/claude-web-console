@@ -93,6 +93,14 @@ export const HELP_INDEX = [
     load: () => import('./../modules/tasks/help.js'),
   },
   {
+    id: 'forja',
+    get title() { return t('forja.help.indexTitle', 'La Forja'); },
+    icon: 'flame',
+    group: 'paneles',
+    get blurb() { return t('forja.help.indexBlurb', 'Tu ficha, recorrido privado y arena mensual de PRs mergeados.'); },
+    load: () => import('./../modules/forja/help.js'),
+  },
+  {
     id: 'audio',
     get title() { return t('core.help.topic.audio.title', 'Analizar audio'); },
     icon: 'play',

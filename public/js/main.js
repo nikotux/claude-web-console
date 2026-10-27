@@ -26,10 +26,11 @@ import system from './modules/system/system.js';
 import retro from './modules/retro/retro.js';
 import lab from './modules/lab/lab.js';
 import visado from './modules/visado/visado.js';
+import forja from './modules/forja/forja.js';
 
 // `audio` ya no es una sección de sidebar: vive DENTRO de `tasks` (Pendientes),
 // que importa openAudioPanel directamente. Por eso no está en MODULES.
-const MODULES = [launcher, sessions, tolkien, tickets, tasks, visado, retro, lab, planLimits, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, tickets, forja, tasks, visado, retro, lab, planLimits, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');

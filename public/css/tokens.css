@@ -33,6 +33,18 @@
          segundo acento de marca — solo barra/detalles del hablante IA) ===== */
   --cwc-accent-cool: #5b8fc7;
 
+  /* ===== La Forja (paleta semántica del HUD, salón privado y arena) ===== */
+  --forja-obsidian: #090706;
+  --forja-coal: #17110e;
+  --forja-basalt: #251912;
+  --forja-metal: #9a6d50;
+  --forja-ember: #ff6a2b;
+  --forja-lava: #d9480f;
+  --forja-gold: #e2b552;
+  --forja-molten: #ffb347;
+  --forja-cream: #f5dfbd;
+  --forja-muted: #9b8e83;
+
   /* ===== Identidad de participantes (salas de Aduana) ===== */
   --cwc-peer-1: #78a6d8;
   --cwc-peer-1-bg: #162333;

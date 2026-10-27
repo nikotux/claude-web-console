@@ -26,6 +26,7 @@ const MODULES = [
   'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile', 'unifi',
   'files', 'rawview', 'seguimientos', 'onboard', 'news', 'projects', 'visado',
   'cerebro', 'cabina',
+  'forja',
 ];
 
 let LANG = 'es';
