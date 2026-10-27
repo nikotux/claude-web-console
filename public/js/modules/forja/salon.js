@@ -28,7 +28,7 @@ function renderHero(data, icon) {
     node('p', '', t('forja.salon.forgeCopy', 'Cada anillo guarda una mejora que dejaste en Tolkien.')),
   );
   const anvil = document.createElement('img');
-  anvil.src = '/img/forja/yunque.svg';
+  anvil.src = '/img/forja/forja.svg';
   anvil.alt = t('forja.salon.anvilAlt', 'Un martillo forja un anillo brillante sobre un yunque');
   anvil.className = 'fj-anvil';
   const sparks = node('span', 'fj-sparks');

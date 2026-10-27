@@ -20,16 +20,16 @@ export function percent(cur, max) {
 }
 
 export function levelName(level = {}) {
-  const fallback = level.title || level.code || `NV${Number(level.number) || 1}`;
   const translators = {
-    nv1: () => t('forja.level.nv1.name', fallback),
-    nv2: () => t('forja.level.nv2.name', fallback),
-    nv3: () => t('forja.level.nv3.name', fallback),
-    nv4: () => t('forja.level.nv4.name', fallback),
-    nv5: () => t('forja.level.nv5.name', fallback),
-    nv6: () => t('forja.level.nv6.name', fallback),
-    nv7: () => t('forja.level.nv7.name', fallback),
+    nv1: () => t('forja.level.nv1.name', level.title || 'Orco de la mina'),
+    nv2: () => t('forja.level.nv2.name', level.title || 'Uruk-hai'),
+    nv3: () => t('forja.level.nv3.name', level.title || 'Capitán de Minas Morgul'),
+    nv4: () => t('forja.level.nv4.name', level.title || 'Nazgûl'),
+    nv5: () => t('forja.level.nv5.name', level.title || 'Boca de Sauron'),
+    nv6: () => t('forja.level.nv6.name', level.title || 'Señor de Barad-dûr'),
+    nv7: () => t('forja.level.nv7.name', level.title || 'El Ojo que Todo lo Ve'),
   };
+  const fallback = level.title || level.code || `NV${Number(level.number) || 1}`;
   return (translators[level.id || `nv${Number(level.number) || 1}`] || (() => fallback))();
 }
 
