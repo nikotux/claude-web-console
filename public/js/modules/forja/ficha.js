@@ -68,7 +68,7 @@ function renderConfigured(el, data, onOpen) {
   enter.setAttribute('aria-label', t('forja.ficha.openAria', 'Abrir La Forja'));
   enter.addEventListener('click', onOpen);
   card.append(player, xp, enter);
-  if (data.stale) card.appendChild(node('div', 'fj-stale', staleLabel(data.generatedAt)));
+  if (data.stale) card.appendChild(node('div', 'fj-stale', staleLabel(data.dataAsOf ?? data.generatedAt)));
   el.appendChild(card);
 }
 

@@ -18,7 +18,7 @@ fail-closed del backend (`isAdmin` y ownership por usuario). Todo endpoint que
 requiera protección debe imponerla en el backend, aunque su módulo no sea
 visible para un perfil.
 
-### public/js/modules/          launcher · sessions (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
+### public/js/modules/          launcher · sessions · forja (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
 2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la
 fila 2 suma una LÍNEA VIVA (`.sess-live`, `liveText()`) con prioridad
 trabajo de fondo VIVO > resultado listo para recoger > delegando > turno
