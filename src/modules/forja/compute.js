@@ -207,7 +207,8 @@ function playerBase(player, prs, currentMonthKey, today, timeZone) {
 
 function buildMe(player, context) {
   const {
-    timeZone, currentMonthKey, monthLabel, today, generatedAt, fetchedAt, stale, error,
+    timeZone, currentMonthKey, monthLabel, today, generatedAt, fetchedAt, dataAsOf,
+    lastAttemptAt, stale, error,
   } = context;
   const first = player.prs[0] || null;
   const deskTickets = new Set(player.prs.flatMap((pr) => deskNumbers(pr.title))).size;
@@ -228,6 +229,8 @@ function buildMe(player, context) {
     configured: true,
     generatedAt,
     fetchedAt: fetchedAt || null,
+    dataAsOf: dataAsOf || null,
+    lastAttemptAt: lastAttemptAt || null,
     stale: Boolean(stale),
     ...(error ? { lastError: String(error).slice(0, 300) } : {}),
     timezone: timeZone,
@@ -261,6 +264,8 @@ export function computeForja(players, prsByUsername, {
   staleByUsername = new Map(),
   errorByUsername = new Map(),
   fetchedAtByUsername = new Map(),
+  dataAsOfByUsername = new Map(),
+  lastAttemptAtByUsername = new Map(),
 } = {}) {
   const instant = now instanceof Date ? now : new Date(now);
   const generatedAt = instant.toISOString();
@@ -280,6 +285,8 @@ export function computeForja(players, prsByUsername, {
   const snapshots = new Map(ranked.map((player) => [player.username, buildMe(player, {
     timeZone, currentMonthKey, monthLabel, today, generatedAt,
     fetchedAt: fetchedAtByUsername.get(player.username),
+    dataAsOf: dataAsOfByUsername.get(player.username),
+    lastAttemptAt: lastAttemptAtByUsername.get(player.username),
     stale: staleByUsername.get(player.username), error: errorByUsername.get(player.username),
   })]));
   const publicPlayers = ranked.map((player) => ({
@@ -298,6 +305,12 @@ export function computeForja(players, prsByUsername, {
     return next ? { fromRank: player.rank, toRank: next.rank, value: Math.max(0, player.seasonCount - next.seasonCount) } : null;
   }).filter(Boolean);
   const mvp = [...publicPlayers].sort((a, b) => b.todayCount - a.todayCount || a.rank - b.rank)[0];
+  const playerDataAsOf = ranked.map((player) => dataAsOfByUsername.get(player.username));
+  const arenaDataAsOf = ranked.length > 0 && playerDataAsOf.every((value) => (
+    typeof value === 'string' && !Number.isNaN(Date.parse(value))
+  ))
+    ? playerDataAsOf.reduce((oldest, value) => (Date.parse(value) < Date.parse(oldest) ? value : oldest))
+    : null;
   const missionsByOwner = Object.fromEntries(ranked.map((player) => {
     const leader = ranked[0];
     const runnerUp = ranked[1];
@@ -318,6 +331,7 @@ export function computeForja(players, prsByUsername, {
   }
   const arena = {
     generatedAt,
+    dataAsOf: arenaDataAsOf,
     stale: ranked.some((player) => Boolean(staleByUsername.get(player.username))),
     season: {
       key: currentMonthKey,

@@ -38,6 +38,7 @@ export default {
       const ownSnapshot = configuredPlayer(owner) ? getMeSnapshot(owner) : null;
       return res.json({
         generatedAt: arena.generatedAt,
+        dataAsOf: arena.dataAsOf || null,
         stale: Boolean(arena.stale),
         season: arena.season,
         gaps: arena.gaps,

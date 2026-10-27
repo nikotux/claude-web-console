@@ -561,9 +561,9 @@
   sintetiza `plano:'usuario'` (con la familia inferida) para darle el trato
   más restrictivo, en vez de dejar la unidad sin exigencias. La foto es JSON
   de datos versionado, con el mismo criterio que `invariants-learned.json`, y
-  contiene 209 entradas: 207 nodos de `arquitectura` del Pad + `unit:core` y
-  `unit:frontend-core`, declaradas a mano porque esas unidades compuestas no
-  tienen nodo propio. El auditor NO consulta Pad en tiempo de auditoría: corre
+  contiene 216 entradas: 213 nodos de `arquitectura` del Pad + `unit:core`,
+  `unit:frontend-core` y `unit:mod:forja`, declaradas a mano porque esas
+  unidades compuestas no tienen nodo propio. El auditor NO consulta Pad en tiempo de auditoría: corre
   dentro de runners con entorno limpio y no puede depender de red.
   `bin/cwc-facets-snapshot.js` abre `~/.pad/pad.db` en modo solo lectura y
   regenera esa foto local. GOTCHA OPERATIVO: después de reclasificar nodos con

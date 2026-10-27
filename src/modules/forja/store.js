@@ -69,6 +69,9 @@ export function saveBotPrs(prs) {
 }
 
 export function snapshotAgeMs(owner, now = Date.now()) {
-  const timestamp = Date.parse(getMeSnapshot(owner)?.fetchedAt || '');
-  return Number.isNaN(timestamp) ? Infinity : Math.max(0, now - timestamp);
+  const snapshot = getMeSnapshot(owner);
+  const timestamps = [snapshot?.fetchedAt, snapshot?.lastAttemptAt]
+    .map((value) => Date.parse(value || ''))
+    .filter((value) => !Number.isNaN(value));
+  return timestamps.length ? Math.max(0, now - Math.max(...timestamps)) : Infinity;
 }

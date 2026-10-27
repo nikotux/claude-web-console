@@ -5,7 +5,7 @@
 
 ## Qué es
 
-La Forja convierte los PRs mergeados de Tolkien en progresión personal, medallas, crónica de hitos y una arena mensual. Es determinística y no usa IA. Participar es opt-in: un usuario solo aparece cuando su `instance.json` propio declara un `identity.github` no vacío. Esa identidad es autodeclarada: si dos o más usuarios reclaman el mismo login sin distinguir mayúsculas, ninguno participa y el ciclo deja un warning con los usuarios en conflicto.
+La Forja convierte los PRs mergeados de Tolkien en progresión personal, medallas, crónica de hitos y una arena mensual. Es determinística y no usa IA. Participar es opt-in: un usuario solo aparece cuando su `instance.json` propio declara un `identity.github` no vacío. Esa identidad es autodeclarada: si dos o más usuarios reclaman el mismo login sin distinguir mayúsculas, ninguno participa y el ciclo deja un warning con los usuarios en conflicto. Cabina no tiene La Forja; los patrocinados (`sponsored` o `awaiting-sponsor`) no participan.
 
 ## Archivos
 
@@ -34,7 +34,9 @@ No se permite calcular rutas user-scoped al importar el módulo. `store.js` las 
 
 ## GitHub y atribución
 
-Toda lectura pasa por `listMergedPrsByAuthor()` de `comms/pr-read-shared.js`, que ejecuta `gh` con la autenticación del host, repo explícito `Mordor-Staffing/tolkien`, caché de 150 segundos y fallback stale al último bueno. La primera lectura de una identidad pide hasta 1000 PRs; las incrementales piden los 50 más recientes y se unen por número con el historial persistido, de modo que una respuesta vacía nunca borra anillos. Un cambio de login descarta el historial personal anterior y vuelve a hacer una lectura completa. Por ciclo se consulta una vez `app/tolkien-builder`; su historial también se acumula y sus PRs se atribuyen cuando el prefijo anterior a `/` coincide, sin distinguir mayúsculas, con el login GitHub o username de consola. No se consultan ni atribuyen `app/mordor-staffing-updates`, `app/renovate` o `app/dependabot`.
+Toda lectura pasa por `listMergedPrsByAuthor()` de `comms/pr-read-shared.js`, que ejecuta `gh` con la autenticación del host, repo explícito `Mordor-Staffing/tolkien`, caché de 150 segundos y fallback stale al último bueno. La primera lectura de una identidad pide hasta 1000 PRs; las incrementales piden los 50 más recientes y se unen por número con el historial persistido, de modo que una respuesta vacía nunca borra anillos. Un cambio de login descarta el historial personal anterior y vuelve a hacer una lectura completa. Por ciclo se consulta una vez `app/tolkien-builder`; su historial también se acumula y sus PRs se atribuyen cuando el prefijo anterior a `/` coincide, sin distinguir mayúsculas, con el login GitHub o username de consola. Las lecturas de `gh`, incluida la del bot, corren en un pool de hasta 3 solicitudes concurrentes. No se consultan ni atribuyen `app/mordor-staffing-updates`, `app/renovate` o `app/dependabot`.
+
+Cada snapshot personal conserva tres relojes distintos: `generatedAt` es cuándo se computó; `fetchedAt`, la última lectura directa fresca; y `dataAsOf`, la última vez que tanto la lectura directa como la del bot fueron exitosas y no stale. `dataAsOf` no avanza ante ningún fallo o fallback stale. `lastAttemptAt` avanza en cada intento del jugador, incluso fallido, y el refresh manual aplica su límite contra el más reciente entre `fetchedAt` y `lastAttemptAt`. La arena publica el `dataAsOf` más antiguo de todos los jugadores como watermark conjunto.
 
 ## Privacidad y reglas
 

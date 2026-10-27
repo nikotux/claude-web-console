@@ -12,6 +12,7 @@ const REFRESH_MS = Number(process.env.FORJA_REFRESH_MS) || 3 * 60 * 1000;
 const MANUAL_RATE_LIMIT_MS = 60 * 1000;
 const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
+const FETCH_CONCURRENCY = 3;
 
 let timer = null;
 let queueTail = Promise.resolve();
@@ -85,6 +86,31 @@ async function settledFetch(author, limit) {
   catch (error) { return { ok: false, error }; }
 }
 
+async function runFetchPool(tasks, concurrency = FETCH_CONCURRENCY) {
+  const results = new Array(tasks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const index = next;
+      next += 1;
+      results[index] = await tasks[index]();
+    }
+  };
+  const workerCount = Math.min(Math.max(1, concurrency), tasks.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
+export function __nextDataAsOfForTests(previous, direct, bot, attemptedAt) {
+  return direct.ok && !direct.value.stale && bot.ok && !bot.value.stale
+    ? attemptedAt
+    : previous;
+}
+
+export function __runFetchPoolForTests(tasks) {
+  return runFetchPool(tasks);
+}
+
 async function runCycle({ onlyOwner = null } = {}) {
   const players = resolvePlayers();
   loadFromDisk(players.map((player) => player.username));
@@ -106,9 +132,10 @@ async function runCycle({ onlyOwner = null } = {}) {
   });
   const previousBotPrs = unionBotPrs(getBotPrs(), snapshotBotPrs);
   const botLimit = previousBotPrs.length ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT;
-  const [bot, ...directResults] = await Promise.all([
-    settledFetch(ATTRIBUTED_BOT_AUTHOR, botLimit),
-    ...requested.map((player) => settledFetch(
+  const attemptedAt = new Date().toISOString();
+  const [bot, ...directResults] = await runFetchPool([
+    () => settledFetch(ATTRIBUTED_BOT_AUTHOR, botLimit),
+    ...requested.map((player) => () => settledFetch(
       player.login,
       states.get(player.username).hasAuthorHistory ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT,
     )),
@@ -121,7 +148,8 @@ async function runCycle({ onlyOwner = null } = {}) {
   const staleByUsername = new Map();
   const errorByUsername = new Map();
   const fetchedAtByUsername = new Map();
-  const fetchedAt = new Date().toISOString();
+  const dataAsOfByUsername = new Map();
+  const lastAttemptAtByUsername = new Map();
 
   for (const player of players) {
     const direct = directByOwner.get(player.username);
@@ -131,6 +159,8 @@ async function runCycle({ onlyOwner = null } = {}) {
       staleByUsername.set(player.username, Boolean(state.snapshot?.stale));
       if (state.snapshot?.lastError) errorByUsername.set(player.username, state.snapshot.lastError);
       if (state.snapshot?.fetchedAt) fetchedAtByUsername.set(player.username, state.snapshot.fetchedAt);
+      if (state.snapshot?.dataAsOf) dataAsOfByUsername.set(player.username, state.snapshot.dataAsOf);
+      if (state.snapshot?.lastAttemptAt) lastAttemptAtByUsername.set(player.username, state.snapshot.lastAttemptAt);
       continue;
     }
 
@@ -140,12 +170,17 @@ async function runCycle({ onlyOwner = null } = {}) {
     const error = !direct.ok ? direct.error : (!bot.ok ? bot.error : null);
     if (error) errorByUsername.set(player.username, error?.message || error);
     const previousFetchedAt = state.loginMatches ? state.snapshot?.fetchedAt : null;
-    const nextFetchedAt = direct.ok && !direct.value.stale ? fetchedAt : previousFetchedAt;
+    const nextFetchedAt = direct.ok && !direct.value.stale ? attemptedAt : previousFetchedAt;
     if (nextFetchedAt) fetchedAtByUsername.set(player.username, nextFetchedAt);
+    const previousDataAsOf = state.loginMatches ? state.snapshot?.dataAsOf : null;
+    const nextDataAsOf = __nextDataAsOfForTests(previousDataAsOf, direct, bot, attemptedAt);
+    if (nextDataAsOf) dataAsOfByUsername.set(player.username, nextDataAsOf);
+    lastAttemptAtByUsername.set(player.username, attemptedAt);
   }
 
   const computed = computeForja(players, prsByUsername, {
-    staleByUsername, errorByUsername, fetchedAtByUsername,
+    staleByUsername, errorByUsername, fetchedAtByUsername, dataAsOfByUsername,
+    lastAttemptAtByUsername,
   });
   for (const player of players) {
     const snapshot = computed.snapshots.get(player.username);

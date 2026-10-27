@@ -87,7 +87,8 @@
   jobs >24 h en cada escritura) + `news.log` de `bin/cwc-news-runner.js`,
   `forja/me.json` snapshot PRIVADO de progresión de cada dueño (vive bajo el
   `userDataDir(owner)` correspondiente) + `forja/arena.json` snapshot de la
-  arena pública en el `userDataDir(hostUser())`; ambos se escriben atómicamente,
+  arena pública + `forja/bot-prs.json` historial acumulado del bot, ambos en el
+  `userDataDir(hostUser())`; los tres se escriben atómicamente,
   se reconstruyen desde GitHub cada 3 minutos y conservan el último bueno ante
   fallos de red. Las cachés canónicas de esos listados viven en
   `comms/pr-author-cache/` con TTL corto,

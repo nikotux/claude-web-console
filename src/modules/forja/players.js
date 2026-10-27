@@ -29,9 +29,14 @@ export function excludeDuplicateLoginClaims(candidates, { warn = true } = {}) {
 }
 
 export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
-  const usernames = new Set([hostUser(), ...listUsers().map((user) => user.username)]);
+  const consoleUsers = listUsers();
+  const cabinaUsers = new Set(consoleUsers
+    .filter((user) => user.sponsorshipState !== 'none')
+    .map((user) => user.username));
+  const usernames = new Set([hostUser(), ...consoleUsers.map((user) => user.username)]);
   const candidates = [];
   for (const username of usernames) {
+    if (cabinaUsers.has(username)) continue;
     const identity = loadInstance({ dataDir: userDataDir(username) })?.identity || {};
     const login = typeof identity.github === 'string' ? identity.github.trim() : '';
     if (!login || EXCLUDED_BOT_AUTHORS.some((author) => author.toLowerCase() === login.toLowerCase())
