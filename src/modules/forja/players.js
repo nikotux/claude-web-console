@@ -5,10 +5,10 @@ import { hostUser, userDataDir } from '../../core/user-space.js';
 export const ATTRIBUTED_BOT_AUTHOR = 'app/tolkien-builder';
 export const EXCLUDED_BOT_AUTHORS = ['app/mordor-staffing-updates', 'app/renovate', 'app/dependabot'];
 
-function initialsFor(name) {
+function initialsFor(name, login) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return '?';
-  return (parts.length === 1 ? parts[0].slice(0, 2) : `${parts[0][0]}${parts.at(-1)[0]}`).toUpperCase();
+  return (parts.length === 1 ? String(login || parts[0]).slice(0, 2) : `${parts[0][0]}${parts.at(-1)[0]}`).toUpperCase();
 }
 
 export function resolvePlayers() {
@@ -20,7 +20,7 @@ export function resolvePlayers() {
     if (!login || EXCLUDED_BOT_AUTHORS.some((author) => author.toLowerCase() === login.toLowerCase())
       || login.toLowerCase() === ATTRIBUTED_BOT_AUTHOR.toLowerCase()) continue;
     const displayName = (typeof identity.name === 'string' && identity.name.trim()) || username;
-    players.push({ username, login, displayName, initials: initialsFor(displayName) });
+    players.push({ username, login, displayName, initials: initialsFor(displayName, login) });
   }
   return players.sort((a, b) => a.displayName.localeCompare(b.displayName, 'es'));
 }
