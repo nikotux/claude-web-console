@@ -857,6 +857,7 @@ class Chat {
     this.tandemCodex = { model: TANDEM_CODEX_MODEL, effort: TANDEM_CODEX_EFFORT };
     this.permissionMode = permissionMode || 'default';
     this.title = (title && String(title).slice(0, 60)) || path.basename(cwd) || '~';
+    this.titleLocked = false;
     this.ticket = ticket; // {number, url} si nació de un bug de Desk (registro al cerrar)
     this.learningId = learningId; // 'TDA-<n>' si nació de "Profundizar en chat" de un tema de Aprendizaje (write-back al cerrar)
     this.resume = resume;
@@ -2551,13 +2552,14 @@ class Chat {
     const t = String(text || '').trim();
     if (t.startsWith('/') || t.length < 15) return; // comandos y "ok, dale" no re-titulan
     if (this.ticket) return; // bugfixes: título curado ("PR en progreso · TKT #n"), no pisarlo
+    if (this.titleLocked) return; // nombre puesto a mano por la persona: no pisarlo
     if (this._titleBusy) return;
     if (Date.now() - (this._titleAt || 0) < AUTOTITLE_MIN_INTERVAL_MS) return;
     this._titleBusy = true;
     this._titleAt = Date.now();
     extractTitle({ cwd: this.cwd, current: this.title, text: t })
       .then((title) => {
-        if (!title || this.closed || title === this.title) return;
+        if (!title || this.closed || this.titleLocked || title === this.title) return;
         this.title = title;
         this.onUpdate?.(); // persiste vía el manager (mismo camino que el resto)
         void this.ensureSalaPadItem();
@@ -3062,6 +3064,7 @@ class Chat {
   info() {
     return {
       id: this.id, title: this.title, cwd: this.cwd, model: this.model, modelChoice: this.modelChoice,
+      titleLocked: !!this.titleLocked,
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
       tandemCodex: this.tandemCodex || null, // PLAN-519 F2: ejecutor Codex configurable
@@ -3169,7 +3172,7 @@ class ChatManager {
     }
   }
 
-  create({ cwd, model, permissionMode, resume = null, title = null, ticket = null, learningId = null, limbo = false, owner = null, pendingPrompt = null, startEngine = true }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, titleLocked = false, ticket = null, learningId = null, limbo = false, owner = null, pendingPrompt = null, startEngine = true }) {
     const id = `c${process.pid}-${++this._seq}`;
     // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
     // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
@@ -3182,6 +3185,7 @@ class ChatManager {
     // `new Chat` directo y respeta los títulos ya persistidos.
     const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
     const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
+    chat.titleLocked = !!titleLocked && !!(title && String(title).trim());
     chat.onUpdate = () => this.persist();
     chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(id);
     // El dueño debe fijarse antes de crear el paquete: nextPackageRef lo persiste.
@@ -3487,7 +3491,7 @@ class ChatManager {
       .filter((c) => !c.closed && c.sessionId)
       .map((c) => ({
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
-        sessionId: c.sessionId, title: c.title, lastActivity: c.lastActivity,
+        sessionId: c.sessionId, title: c.title, titleLocked: !!c.titleLocked, lastActivity: c.lastActivity,
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
         packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
         salaPadRef: c.salaPadRef || null,
@@ -3552,6 +3556,7 @@ class ChatManager {
       chat.onUpdate = () => this.persist();
       chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(chat.id);
       if (s.title) chat.title = String(s.title).slice(0, 60); // respeta renombres
+      chat.titleLocked = s.titleLocked === true;
       if (s.ticket?.number) chat.ticket = { number: String(s.ticket.number).slice(0, 40), url: s.ticket.url || null };
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.pendingPrompt = typeof s.pendingPrompt === 'string' && s.pendingPrompt ? s.pendingPrompt : null;
@@ -3896,7 +3901,7 @@ function consumeSalaRestore(sessionId, cwdAbs, owner) {
 // por las mismas validaciones, defaults por usuario, cupo y aislamiento de cwd.
 // Las opciones extra son internas: ningún body público puede evitar el arranque
 // normal del motor ni inyectar un pendingPrompt por su cuenta.
-function createChatForRequest(req, res, body = {}, { pendingPrompt = null, startEngine = true } = {}) {
+function createChatForRequest(req, res, body = {}, { pendingPrompt = null, startEngine = true, titleLocked = undefined } = {}) {
   const { cwd, model, permissionMode, resume, title, ticket, learningId, sala } = body || {};
   // AutoTux (2026-07-06): 'auto' es un sentinel PROPIO de la consola —
   // nunca se le manda al CLI/SDK real (VALID_MODELS son los alias que sí
@@ -3972,6 +3977,7 @@ function createChatForRequest(req, res, body = {}, { pendingPrompt = null, start
     permissionMode: modeChoice,
     resume: resume || null,
     title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : null,
+    titleLocked: typeof titleLocked === 'boolean' ? titleLocked : typeof title === 'string' && !!title.trim(),
     // Vínculo al bug de Desk: al cerrar la conversación deja el registro
     // del fix propuesto (módulo bugfixes).
     ticket: ticket?.number
@@ -4281,6 +4287,7 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
       }, {
         pendingPrompt,
         startEngine: false,
+        titleLocked: !!requestedTitle,
       });
       if (!chat) return;
 
@@ -4470,6 +4477,7 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
       const chat = ownedChat(req, req.body?.id);
       if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
       const title = String(req.body?.title ?? '').trim().slice(0, 60);
+      chat.titleLocked = !!title;
       chat.title = title || path.basename(chat.cwd) || '~';
       manager.persist();
       void chat.ensureSalaPadItem();

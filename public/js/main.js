@@ -708,17 +708,50 @@ whoami.then((me) => {
 // negro entre el chat y el teclado (reportado 2026-07-07). Fix: además de
 // ajustar la ALTURA de #app al viewport visible, lo REANCLAMOS con un
 // translateY(offsetTop) para que su tope siga al del viewport visible.
+// Fix 2026-10-26 (temblor tras el auto-zoom de iOS): con zoom (vv.scale > 1) no
+// perseguimos el viewport; los eventos se agrupan en un solo rAF y solo se
+// escribe si algo cambió; con el teclado cerrado se limpian los estilos inline
+// para que #app vuelva a su 100dvh de CSS; y el scrollTo ya no corre en el evento
+// scroll del viewport porque alimentaba el bucle.
 if (window.visualViewport) {
   const app = document.getElementById('app');
+  const vv = window.visualViewport;
+  let raf = 0;
+  let last = '';
+  const clearFit = () => { app.style.height = ''; app.style.transform = ''; };
   const fitViewport = () => {
-    const vv = window.visualViewport;
-    app.style.height = `${vv.height}px`;
-    app.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
-    // Por las dudas, deshacer cualquier scroll que el navegador haya forzado.
-    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+    raf = 0;
+    // Con zoom (pinch del usuario o auto-zoom de iOS) NO perseguimos el
+    // viewport: moverlo dispara otro scroll del viewport y entra en bucle.
+    if (vv.scale > 1.01) {
+      if (last !== 'zoom') { clearFit(); last = 'zoom'; }
+      return;
+    }
+    const h = Math.round(vv.height);
+    const top = Math.round(vv.offsetTop);
+    // Alto del viewport de LAYOUT: iOS no lo achica con el teclado (window.innerHeight
+    // sí, porque sigue al visual) — compararlo contra innerHeight daba "teclado
+    // cerrado" con el teclado abierto y el composer quedaba tapado.
+    const layoutH = document.documentElement.clientHeight;
+    const keyboardClosed = top === 0 && Math.abs(layoutH - h) < 2;
+    const key = keyboardClosed ? 'closed' : `${h}:${top}`;
+    if (key === last) return;
+    last = key;
+    if (keyboardClosed) { clearFit(); return; }
+    app.style.height = `${h}px`;
+    app.style.transform = top ? `translateY(${top}px)` : '';
   };
-  window.visualViewport.addEventListener('resize', fitViewport);
-  window.visualViewport.addEventListener('scroll', fitViewport);
+  const scheduleFit = () => { if (!raf) raf = requestAnimationFrame(fitViewport); };
+  vv.addEventListener('resize', () => {
+    // Por las dudas, deshacer cualquier scroll que el navegador haya forzado
+    // (solo en resize y sin zoom: en el evento scroll alimentaba el bucle).
+    if (vv.scale <= 1.01 && (window.scrollY || window.scrollX)) window.scrollTo(0, 0);
+    scheduleFit();
+  });
+  vv.addEventListener('scroll', scheduleFit);
+  // Último ajuste tras cerrar el teclado, por si el navegador no emite el
+  // resize final de su animación.
+  document.addEventListener('focusout', () => setTimeout(scheduleFit, 300));
   fitViewport();
 }
 if (isMobile()) {

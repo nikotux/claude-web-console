@@ -459,6 +459,21 @@ export class ChatTab {
     // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
     // criterio "siempre pinea al final" que usa _scroll() en todo el resto.
     this.msgsEl.addEventListener('cwc:mermaid-rendered', () => this._scroll());
+    // Teclado móvil: al abrirse, #app se achica al viewport visible (main.js) y
+    // esta lista pierde alto sin mover su scrollTop → los últimos mensajes
+    // quedaban tapados. Si ANTES del cambio de alto estábamos al final (medido
+    // con el alto previo, sin depender del orden de eventos), re-anclamos.
+    this._msgsH = this.msgsEl.clientHeight;
+    if (typeof ResizeObserver === 'function') {
+      this._msgsResizeObs = new ResizeObserver(() => {
+        const el = this.msgsEl;
+        if (!el) return;
+        const prevH = this._msgsH;
+        this._msgsH = el.clientHeight;
+        if (prevH && el.clientHeight !== prevH && el.scrollHeight - el.scrollTop - prevH < 80) this._scroll();
+      });
+      this._msgsResizeObs.observe(this.msgsEl);
+    }
     this.inputEl = container.querySelector('.chat-input');
     // BUG-498: el borrador NO debe perderse en una reconexión/rebuild del pane.
     // El value del textarea vive SOLO en el DOM; lo respaldamos en localStorage por
@@ -906,7 +921,11 @@ export class ChatTab {
     this.inputEl.style.height = 'auto';
     try { localStorage.removeItem(this._draftKey); } catch { /* noop */ } // BUG-498: enviado OK → sin borrador
     if (this._pendingPromptActive) this._clearPendingPrompt();
-    this.inputEl.focus();
+    // En táctil, enviar CIERRA el teclado (blur): dejarlo abierto tapaba media
+    // conversación justo cuando llega la respuesta. En desktop seguimos con el
+    // foco en el input para encadenar mensajes sin clic.
+    if (window.matchMedia('(pointer: coarse)').matches) this.inputEl.blur();
+    else this.inputEl.focus();
   }
 
   _applyPendingPrompt(prompt) {
@@ -3006,6 +3025,7 @@ export class ChatTab {
     this._slashClose();
     this._clearTyping();
     this._stopPreviewPolling();
+    this._msgsResizeObs?.disconnect();
     clearTimeout(this._markReadTimer);
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }

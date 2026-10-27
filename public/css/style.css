@@ -3309,6 +3309,17 @@ body.doc-mode .chat-assistant .chat-md .md-bar-num {
   padding: .4rem .6rem; line-height: 1.4;
 }
 .chat-input:focus { outline: none; border-color: var(--cwc-accent); }
+/* iOS hace ZOOM automático al enfocar cualquier campo con letra < 16px (el
+   .chat-input mide .85rem ≈ 13,6px) y, al cerrar el teclado, el zoom QUEDA:
+   fitViewport (main.js) perseguía ese viewport ampliado y la pantalla temblaba
+   hasta que el usuario hacía pinch-out (reportado 2026-10-26). En pantallas
+   táctiles todo campo de texto mide al menos 16px → no hay zoom. No usamos
+   maximum-scale=1 porque en Android bloquea el pinch-zoom (accesibilidad). */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="file"]):not([type="color"]):not([type="image"]),
+  textarea,
+  select { font-size: 16px !important; }
+}
 .chat-send, .chat-stop { min-height: 34px; min-width: 34px; }
 .chat-attach { min-height: 34px; min-width: 34px; color: var(--cwc-text-dim); }
 .chat-attach:hover { color: var(--cwc-accent); }
