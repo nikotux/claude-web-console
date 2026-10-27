@@ -85,10 +85,11 @@
   usuario (sin poda), `news/<jobId>.json` job de redacción con formato
   `{status,startedAt,commits,files,count,error,updatedAt?,rawTail?}` (poda de
   jobs >24 h en cada escritura) + `news.log` de `bin/cwc-news-runner.js`,
-  `forja/me.json` snapshot PRIVADO de progresión de cada dueño (vive bajo el
-  `userDataDir(owner)` correspondiente) + `forja/arena.json` snapshot de la
-  arena pública + `forja/bot-prs.json` historial acumulado del bot, ambos en el
-  `userDataDir(hostUser())`; los tres se escriben atómicamente,
+  `forja/me.json` snapshot PRIVADO de progresión + `forja/festejos.json` cola
+  PRIVADA de festejos de cada dueño (ambos bajo el `userDataDir(owner)`
+  correspondiente) + `forja/arena.json` snapshot de la arena pública +
+  `forja/bot-prs.json` historial acumulado del bot, estos dos últimos en el
+  `userDataDir(hostUser())`; los cuatro se escriben atómicamente,
   se reconstruyen desde GitHub cada 3 minutos y conservan el último bueno ante
   fallos de red. Las cachés canónicas de esos listados viven en
   `comms/pr-author-cache/` con TTL corto,
