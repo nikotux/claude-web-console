@@ -25,7 +25,7 @@ Los estilos están prefijados `.fj-` en `public/css/style.css`; la paleta semán
 
 | Método | Ruta | Contrato |
 |---|---|---|
-| GET | `/api/forja/me` | Snapshot privado del principal. Sin `identity.github`: `{configured:false,hint:'identity.github'}`. |
+| GET | `/api/forja/me` | Snapshot privado del principal más `pendingFestejos`. Sin `identity.github`: `{configured:false,hint:'identity.github',pendingFestejos:0}`. |
 | GET | `/api/forja/arena` | Temporada, brechas, MVP, misión propia y campos públicos de cada jugador; cada jugador lleva un `playerId` opaco estable y `isMe` se determina comparando ese identificador. |
 | GET | `/api/forja/festejos` | `{pending:[...]}` privado del principal. Nunca acepta owner por query o body. |
 | POST | `/api/forja/festejos/visto` | Body `{numbers:[enteros positivos]}`; elimina solo esos números de la cola pendiente del principal. |
