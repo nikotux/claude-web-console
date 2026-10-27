@@ -38,14 +38,17 @@ function addModalHelp(modal) {
   modal.card.querySelector('.dlg-head')?.appendChild(holder.firstElementChild);
 }
 
-function openForgeModal(ctx, me) {
+function openForgeModal(ctx, me, mountEl) {
   let arena = null;
   let arenaPromise = null;
   const opener = document.activeElement;
   const modal = ctx.dialog.openModal({
     title: t('forja.modal.title', 'La Forja'),
     width: 'min(1180px, 96vw)',
-    onClose: () => { if (opener?.isConnected) opener.focus(); },
+    onClose: () => {
+      const focusTarget = opener?.isConnected ? opener : mountEl.querySelector('[data-ref="forja-cta"]');
+      focusTarget?.focus();
+    },
   });
   modal.card.classList.add('fj-modal');
   addModalHelp(modal);
@@ -210,11 +213,15 @@ export default {
     let inFlight = null;
     let active = true;
 
-    const render = () => { if (active) renderFicha(el, state, {
-      onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data); },
-      onConfigure: () => { void openConfiguration(ctx, () => load()); },
-      onRetry: () => { void load(); },
-    }); };
+    const render = () => {
+      if (!active) return;
+      renderFicha(el, state, {
+        onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
+        onConfigure: () => { void openConfiguration(ctx, () => load()); },
+        onRetry: () => { void load(); },
+      });
+      el.querySelector('.fj-enter')?.setAttribute('data-ref', 'forja-cta');
+    };
 
     const load = ({ silent = false } = {}) => {
       if (inFlight) return inFlight;
