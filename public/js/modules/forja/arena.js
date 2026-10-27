@@ -34,6 +34,8 @@ function renderPodium(arena) {
   section.appendChild(eye);
   const grid = node('div', 'fj-podium-grid');
   const byRank = new Map((arena.players || []).map((player) => [Number(player.rank), player]));
+  const podiumSize = Math.min(3, byRank.size);
+  if (podiumSize) grid.classList.add(`fj-podium-grid--${podiumSize}`);
   for (const rank of [2, 1, 3]) {
     const player = byRank.get(rank);
     if (player) grid.appendChild(podiumPlayer(player, rank, arena));
@@ -109,9 +111,18 @@ function missionsPanel(arena) {
   const list = node('div', 'fj-missions');
   if (missions.throne) {
     const defend = missions.throne.id === 'defend-throne';
-    const title = defend
-      ? t('forja.arena.mission.defend', 'Defendé el trono: {name} está a {gap}', { name: missions.throne.targetDisplayName || t('forja.arena.rival', 'tu rival'), gap: missions.throne.gap || 0 })
-      : t('forja.arena.mission.reach', 'Alcanzá el trono: {name} está a {gap}', { name: missions.throne.targetDisplayName || t('forja.arena.rival', 'tu rival'), gap: missions.throne.gap || 0 });
+    const hasRival = Boolean(missions.throne.targetDisplayName || missions.throne.targetRank);
+    const gap = Number(missions.throne.gap) || 0;
+    let title;
+    if (!hasRival) {
+      title = t('forja.arena.mission.noChallengers', 'Defendé el trono: todavía no hay retadores');
+    } else if (gap === 0) {
+      title = t('forja.arena.mission.tiedThrone', 'Empate en el trono');
+    } else {
+      title = defend
+        ? t('forja.arena.mission.defend', 'Defendé el trono: {name} está a {gap}', { name: missions.throne.targetDisplayName || t('forja.arena.rival', 'tu rival'), gap })
+        : t('forja.arena.mission.reach', 'Alcanzá el trono: {name} está a {gap}', { name: missions.throne.targetDisplayName || t('forja.arena.rival', 'tu rival'), gap });
+    }
     list.appendChild(missionCard(title, defend ? t('forja.arena.mission.defendCopy', 'Que nadie arrebate el sitial de obsidiana.') : t('forja.arena.mission.reachCopy', 'Cada merge acorta la distancia.'), 'throne'));
   }
   if (arena.mvp) {

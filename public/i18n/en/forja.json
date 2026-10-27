@@ -104,6 +104,8 @@
   "forja.arena.missionsTitle": "Missions",
   "forja.arena.activeMissions": "Active",
   "forja.arena.rival": "your rival",
+  "forja.arena.mission.noChallengers": "Defend the throne: there are no challengers yet",
+  "forja.arena.mission.tiedThrone": "Tied for the throne",
   "forja.arena.mission.defend": "Defend the throne: {name} is {gap} away",
   "forja.arena.mission.defendCopy": "Let no one seize the obsidian seat.",
   "forja.arena.mission.reach": "Reach the throne: {name} is {gap} away",

@@ -45,11 +45,11 @@ function renderHero(data, icon) {
   ring.append(
     node('strong', '', data.total || 0),
     node('span', '', t('forja.salon.forgedRings', 'anillos forjados')),
-    node('small', '', progress.remaining
-      ? t('forja.salon.toMilestone', '{count} para el próximo hito', { count: progress.remaining })
-      : t('forja.salon.maxMilestone', 'Leyenda máxima')),
   );
-  vault.append(iconNode(icon, 'flame', 18), ring);
+  const nextMilestone = node('small', 'fj-ring-next', progress.remaining
+    ? t('forja.salon.toMilestone', '{count} para el próximo hito', { count: progress.remaining })
+    : t('forja.salon.maxMilestone', 'Leyenda máxima'));
+  vault.append(iconNode(icon, 'flame', 18), ring, nextMilestone);
   hero.append(scene, vault);
   return hero;
 }
@@ -69,14 +69,15 @@ function renderImpact(data) {
   return section;
 }
 
-function renderChronicle(data) {
+function renderChronicle(data, icon) {
   const section = node('section', 'fj-section');
   section.appendChild(heading(t('forja.salon.chronicleTitle', 'Tu crónica')));
   const path = node('div', 'fj-chronicle');
   for (const item of data.chronicle || []) {
     const milestone = node('article', `fj-milestone${item.achieved ? '' : ' fj-milestone--future'}`);
-    const rune = node('span', 'fj-rune', item.achieved ? '◇' : '⬖');
+    const rune = node('span', 'fj-rune');
     rune.setAttribute('aria-hidden', 'true');
+    rune.appendChild(iconNode(icon, item.achieved ? 'flame' : 'sparkle', 17));
     milestone.appendChild(rune);
     if (item.achieved) {
       milestone.append(
@@ -105,8 +106,19 @@ function renderChronicle(data) {
 function medalCard(medal, icon) {
   const card = node('article', `fj-medal${medal.unlocked ? '' : ' fj-medal--locked'}`);
   const head = node('div', 'fj-medal-head');
+  const medalIcon = iconNode(icon, {
+    'alas-nazgul': 'ghost',
+    erupcion: 'flame',
+    troll: 'trophy',
+    legion: 'swords',
+    trono: 'trophy',
+    centenario: 'flame',
+    vigilia: 'eye',
+    daga: 'swords',
+  }[medal.id] || 'trophy', 20);
+  medalIcon.classList.add('fj-medal-icon');
   head.append(
-    node('span', 'fj-medal-icon', medal.icon || '◆'),
+    medalIcon,
     node('strong', 'fj-medal-name', medalText(medal, 'name')),
   );
   if (!medal.unlocked) head.appendChild(iconNode(icon, 'lock', 13));
@@ -190,7 +202,7 @@ export function renderSalon(root, data, { icon }) {
   const privacy = node('span', 'fj-privacy');
   privacy.append(iconNode(icon, 'lock', 13), document.createTextNode(t('forja.salon.private', 'Solo vos ves esto')));
   intro.append(title, privacy);
-  panel.append(intro, renderHero(data, icon), renderImpact(data), renderChronicle(data), renderTrophies(data, icon), renderRecent(data));
+  panel.append(intro, renderHero(data, icon), renderImpact(data), renderChronicle(data, icon), renderTrophies(data, icon), renderRecent(data));
   if (data.stale) panel.appendChild(node('p', 'fj-panel-stale', staleLabel(data.generatedAt)));
   panel.appendChild(node('footer', 'fj-footer', t('forja.salon.footer', '1 PR mergeado = 1 anillo forjado · tu recorrido es privado')));
   root.appendChild(panel);

@@ -5,7 +5,7 @@ import { levelCode, levelName, node, percent, staleLabel } from './view.js';
 function header(el) {
   const head = node('header', 'sec-head fj-head');
   const brand = node('span', 'sec-title fj-head-title');
-  const ember = node('span', 'fj-head-ember', '◆');
+  const ember = node('span', 'fj-head-ember');
   ember.setAttribute('aria-hidden', 'true');
   brand.append(ember, document.createTextNode(t('forja.title', 'La Forja')));
   head.appendChild(brand);
