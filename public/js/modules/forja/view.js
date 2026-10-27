@@ -84,7 +84,8 @@ export function formatSeason(season = {}) {
   return season.label || '';
 }
 
-export function staleLabel(generatedAt) {
+export function staleLabel(snap) {
+  const generatedAt = Object.hasOwn(snap, 'dataAsOf') ? snap.dataAsOf : snap.generatedAt;
   const timestamp = Date.parse(generatedAt || '');
   if (!Number.isFinite(timestamp)) return t('forja.stale.unknown', 'Datos desactualizados');
   const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));

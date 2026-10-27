@@ -203,7 +203,7 @@ export function renderSalon(root, data, { icon }) {
   privacy.append(iconNode(icon, 'lock', 13), document.createTextNode(t('forja.salon.private', 'Solo vos ves esto')));
   intro.append(title, privacy);
   panel.append(intro, renderHero(data, icon), renderImpact(data), renderChronicle(data, icon), renderTrophies(data, icon), renderRecent(data));
-  if (data.stale) panel.appendChild(node('p', 'fj-panel-stale', staleLabel(data.dataAsOf ?? data.generatedAt)));
+  if (data.stale) panel.appendChild(node('p', 'fj-panel-stale', staleLabel(data)));
   panel.appendChild(node('footer', 'fj-footer', t('forja.salon.footer', '1 PR mergeado = 1 anillo forjado · tu recorrido es privado')));
   root.appendChild(panel);
 }

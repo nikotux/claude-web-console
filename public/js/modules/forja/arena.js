@@ -180,7 +180,7 @@ export function renderArena(root, arena, privateData) {
   const me = (arena.players || []).find((player) => player.isMe);
   below.append(characterPanel(me, privateData), missionsPanel(arena));
   panel.append(below, levelsLegend(privateData.level));
-  if (arena.stale) panel.appendChild(node('p', 'fj-panel-stale', staleLabel(arena.dataAsOf ?? arena.generatedAt)));
+  if (arena.stale) panel.appendChild(node('p', 'fj-panel-stale', staleLabel(arena)));
   panel.appendChild(node('footer', 'fj-footer', t('forja.arena.footer', 'Las brasas cuentan cuando el PR llega a merge.')));
   root.appendChild(panel);
 }
