@@ -131,3 +131,88 @@ export async function listPrs({ state = 'open', limit = 30, fields = PR_LIST_FIE
   writeListCache(key, prs);
   return prs;
 }
+
+// ===== HISTÓRICO por autor — insumo canónico de La Forja =================
+// Esta lectura usa el repo explícito porque `--author app/...` y los historiales
+// largos deben ser independientes del remote activo del cwd. La autenticación
+// sigue siendo la del gh del HOST: no se inyecta HOME ni credencial de un
+// principal. El cache conserva el último bueno aun vencido para que un hipo de
+// GitHub no vacíe la progresión de un jugador.
+const PR_AUTHOR_CACHE_DIR = path.join(COMMS_DIR, 'pr-author-cache');
+export const PR_AUTHOR_CACHE_TTL_MS = 150 * 1000;
+export const TOLKIEN_GITHUB_REPO = 'Mordor-Staffing/tolkien';
+export const PR_AUTHOR_FIELDS = [
+  'number', 'title', 'mergedAt', 'createdAt', 'additions', 'deletions', 'headRefName', 'url',
+].join(',');
+
+function authorCacheKey({ author, limit, repo }) {
+  return crypto.createHash('sha1').update(JSON.stringify({ author: author.toLowerCase(), limit, repo })).digest('hex').slice(0, 20);
+}
+
+function authorCachePath(key) { return path.join(PR_AUTHOR_CACHE_DIR, `${key}.json`); }
+
+function readAuthorCache(key, { allowStale = false } = {}) {
+  try {
+    const cached = JSON.parse(fss.readFileSync(authorCachePath(key), 'utf8'));
+    if (!cached || !cached.ts || !Array.isArray(cached.data)) return null;
+    if (!allowStale && Date.now() - cached.ts >= PR_AUTHOR_CACHE_TTL_MS) return null;
+    return cached.data;
+  } catch { return null; }
+}
+
+function writeAuthorCache(key, data) {
+  try {
+    ensureDir();
+    fss.mkdirSync(PR_AUTHOR_CACHE_DIR, { recursive: true, mode: 0o700 });
+    fss.writeFileSync(authorCachePath(key), JSON.stringify({ ts: Date.now(), data }), { mode: 0o600 });
+  } catch { /* cache best-effort */ }
+}
+
+function markListStale(prs, stale) {
+  const result = Array.isArray(prs) ? prs : [];
+  Object.defineProperty(result, '_stale', { value: stale, enumerable: false, configurable: true });
+  return result;
+}
+
+function ghMergedByAuthor({ author, limit, repo, cwd }) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      'pr', 'list', '--repo', repo, '--author', author, '--state', 'merged',
+      '--limit', String(limit), '--json', PR_AUTHOR_FIELDS,
+    ];
+    execFile('gh', args, { cwd, timeout: 90000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`gh pr list (${author}): ${String(stderr || err.message).trim().slice(0, 300)}`));
+      else resolve(String(stdout));
+    });
+  });
+}
+
+export async function listMergedPrsByAuthor(author, {
+  limit = 1000,
+  repo = TOLKIEN_GITHUB_REPO,
+  cwd = config.projectDir,
+  fresh = false,
+} = {}) {
+  const normalizedAuthor = String(author || '').trim();
+  if (!normalizedAuthor) throw new Error('Autor de GitHub vacío');
+  const normalizedLimit = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 1000));
+  const normalizedRepo = String(repo || TOLKIEN_GITHUB_REPO).trim() || TOLKIEN_GITHUB_REPO;
+  const key = authorCacheKey({ author: normalizedAuthor, limit: normalizedLimit, repo: normalizedRepo });
+  if (!fresh) {
+    const cached = readAuthorCache(key);
+    if (cached) return markListStale(cached, false);
+  }
+
+  try {
+    const prs = JSON.parse(await ghMergedByAuthor({
+      author: normalizedAuthor, limit: normalizedLimit, repo: normalizedRepo, cwd,
+    }));
+    if (!Array.isArray(prs)) throw new Error('gh devolvió un listado inválido');
+    writeAuthorCache(key, prs);
+    return markListStale(prs, false);
+  } catch (error) {
+    const lastGood = readAuthorCache(key, { allowStale: true });
+    if (lastGood) return markListStale(lastGood, true);
+    throw error;
+  }
+}

@@ -36,8 +36,9 @@ import visado from '../modules/visado/index.js';
 import folders from '../modules/folders/index.js';
 import cerebro from '../modules/cerebro/index.js';
 import lab from '../modules/lab/index.js';
+import forja from '../modules/forja/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, sponsorship, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders, cerebro, lab];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, sponsorship, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders, cerebro, lab, forja];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {
