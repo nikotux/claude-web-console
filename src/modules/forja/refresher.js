@@ -85,11 +85,7 @@ async function runCycle({ onlyOwner = null } = {}) {
   }
 
   const computed = computeForja(players, prsByUsername, { staleByUsername, errorByUsername });
-  if (target) {
-    saveMeSnapshot(target.username, computed.snapshots.get(target.username));
-  } else {
-    for (const player of players) saveMeSnapshot(player.username, computed.snapshots.get(player.username));
-  }
+  for (const player of players) saveMeSnapshot(player.username, computed.snapshots.get(player.username));
   saveArenaSnapshot(computed.arena);
   return target ? computed.snapshots.get(target.username) : computed;
 }

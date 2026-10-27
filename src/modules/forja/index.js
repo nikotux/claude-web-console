@@ -1,6 +1,7 @@
 import express from 'express';
 import { principalOf } from '../../core/auth.js';
 import { hostUser } from '../../core/user-space.js';
+import { playerIdFor } from './compute.js';
 import { playerForUsername, resolvePlayers } from './players.js';
 import { refreshOwner, startRefresher } from './refresher.js';
 import { getArenaSnapshot, getMeSnapshot } from './store.js';
@@ -44,7 +45,7 @@ export default {
         missions: ownSnapshot?.mission || null,
         players: (arena.players || []).map((player) => ({
           ...player,
-          isMe: player.rank === ownSnapshot?.rank,
+          isMe: player.playerId === playerIdFor(owner),
         })),
       });
     });

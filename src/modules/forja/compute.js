@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 // Cálculo puro de La Forja. No lee disco, red ni configuración del proceso.
 export const FORJA_TIMEZONE = 'America/Bogota';
 export const CHRONICLE_MILESTONES = [1, 10, 25, 50, 75, 100, 150, 200, 300, 500, 1000];
@@ -12,6 +14,10 @@ export const LEVELS = [
 ];
 
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+export function playerIdFor(username) {
+  return createHash('sha1').update(`forja:${username}`).digest('hex').slice(0, 12);
+}
 
 function zonedParts(date, timeZone = FORJA_TIMEZONE) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -272,6 +278,7 @@ export function computeForja(players, prsByUsername, {
     stale: staleByUsername.get(player.username), error: errorByUsername.get(player.username),
   })]));
   const publicPlayers = ranked.map((player) => ({
+    playerId: playerIdFor(player.username),
     displayName: player.displayName,
     initials: player.initials,
     seasonCount: player.seasonCount,
