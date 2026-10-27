@@ -15,6 +15,12 @@ La Forja convierte los PRs mergeados de Tolkien en progresión personal, medalla
 - `refresher.js`: carga disco, serializa en una sola cola los ciclos de arranque, periódicos y manuales, y conserva historial incremental.
 - `index.js`: endpoints HTTP y reglas de ownership.
 
+## Frontend
+
+La superficie vive en `public/js/modules/forja/`: `forja.js` orquesta polling cada 60 s (pausado con la pestaña oculta), opt-in y modal; `ficha.js`, `salon.js` y `arena.js` renderizan las tres vistas solo con nodos DOM para datos del servidor; `view.js` concentra traducciones por id y formatos; `help.js` documenta la superficie. Se monta cerca del inicio del sidebar mediante `[data-module="forja"]` y abre un modal ancho con «Mi salón» privado y «Arena» pública.
+
+Los estilos están prefijados `.fj-` en `public/css/style.css`; la paleta semántica `--forja-*` vive en `tokens.css`, el emblema aprobado es `public/img/forja/yunque.svg` y la escena amplia es `forja.svg`. Todo texto fijo usa `t('forja.…', fallbackEs)`, con inglés en `public/i18n/en/forja.json`; nivel y medalla se traducen por sus ids estables. El opt-in lee primero `GET /api/projects/me/identity`, preserva los cuatro campos y cambia solo `identity.github` por `POST`, antes de pedir `POST /api/forja/refresh`.
+
 ## Endpoints
 
 | Método | Ruta | Contrato |
