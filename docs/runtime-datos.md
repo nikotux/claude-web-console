@@ -85,6 +85,12 @@
   usuario (sin poda), `news/<jobId>.json` job de redacción con formato
   `{status,startedAt,commits,files,count,error,updatedAt?,rawTail?}` (poda de
   jobs >24 h en cada escritura) + `news.log` de `bin/cwc-news-runner.js`,
+  `forja/me.json` snapshot PRIVADO de progresión de cada dueño (vive bajo el
+  `userDataDir(owner)` correspondiente) + `forja/arena.json` snapshot de la
+  arena pública en el `userDataDir(hostUser())`; ambos se escriben atómicamente,
+  se reconstruyen desde GitHub cada 3 minutos y conservan el último bueno ante
+  fallos de red. Las cachés canónicas de esos listados viven en
+  `comms/pr-author-cache/` con TTL corto,
   `tolkien-refresh.json` job del refresh DESACOPLADO
   de la DB LOCAL de Tolkien (lo reserva POST /api/tolkien/refresh-data, lo completa
   `bin/cwc-tolkien-refresh-runner.js`; staleness 12 min) + `tolkien-refresh.log`,

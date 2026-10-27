@@ -20,6 +20,10 @@ export const UNIT_FACETS = {
   // `frontend-core` = public/js/main.js + public/js/ui/ + public/css/.
   // Shell del edificio + primitivos que usa todo el mundo.
   'unit:frontend-core': { plano: 'mixto', audiencia: 'todos', perfil: 'general', familia: 'frontend' },
+  // La Forja es user-scoped: guarda el detalle privado por dueño y publica una
+  // arena agregada para todos los autenticados. Declaración manual hasta que el
+  // catálogo arquitectura incorpore su nodo propio.
+  'unit:forja': { plano: 'usuario', audiencia: 'todos', perfil: 'general', familia: 'backend' },
 };
 
 const WORKSPACE = 'console';

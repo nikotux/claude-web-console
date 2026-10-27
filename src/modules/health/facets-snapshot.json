@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-08T20:05:13.788Z",
+  "generatedAt": "2026-10-27T19:34:46.910Z",
   "source": "pad:console/arquitectura + UNIT_FACETS (bin/cwc-facets-snapshot.js)",
   "counts": {
     "pad": 213,
-    "manual": 2
+    "manual": 3
   },
   "entries": {
     "fe:audio": {
@@ -1713,6 +1713,13 @@
     },
     "unit:core": {
       "plano": "mixto",
+      "audiencia": "todos",
+      "perfil": "general",
+      "familia": "backend",
+      "fuente": "manual"
+    },
+    "unit:forja": {
+      "plano": "usuario",
       "audiencia": "todos",
       "perfil": "general",
       "familia": "backend",
