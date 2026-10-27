@@ -17,7 +17,7 @@ La Forja convierte los PRs mergeados de Tolkien en progresión personal, medalla
 
 ## Frontend
 
-La superficie vive en `public/js/modules/forja/`: `forja.js` orquesta polling cada 60 s (pausado con la pestaña oculta), opt-in y modal; `ficha.js`, `salon.js` y `arena.js` renderizan las tres vistas solo con nodos DOM para datos del servidor; `view.js` concentra traducciones por id y formatos; `help.js` documenta la superficie. Se monta cerca del inicio del sidebar mediante `[data-module="forja"]` y abre un modal ancho con «Mi salón» privado y «Arena» pública.
+La superficie vive en `public/js/modules/forja/`: `forja.js` orquesta polling cada 60 s (pausado con la pestaña oculta), opt-in y modal; `ficha.js`, `salon.js` y `arena.js` renderizan las tres vistas solo con nodos DOM para datos del servidor; `festejo.js` administra la cola visible de celebraciones, el título intermitente y su acuse; `view.js` concentra traducciones por id y formatos; `help.js` documenta la superficie. Se monta cerca del inicio del sidebar mediante `[data-module="forja"]` y abre un modal ancho con «Mi salón» privado y «Arena» pública.
 
 Los estilos están prefijados `.fj-` en `public/css/style.css`; la paleta semántica `--forja-*` vive en `tokens.css`, el emblema aprobado es `public/img/forja/yunque.svg` y la escena amplia es `forja.svg`. Las ilustraciones `public/img/forja/*.svg` son una excepción explícita a los tokens: son assets de arte cargados con `<img>` y no pueden leer variables CSS, igual que `public/img/mordor-*.png`; los colores de UI siguen saliendo únicamente de `--forja-*`. Todo texto fijo usa `t('forja.…', fallbackEs)`, con inglés en `public/i18n/en/forja.json`; nivel y medalla se traducen por sus ids estables. El opt-in relee `GET /api/projects/me/identity` al enviar, preserva los cuatro campos y cambia solo `identity.github` por `POST`, antes de pedir `POST /api/forja/refresh`.
 
@@ -27,16 +27,23 @@ Los estilos están prefijados `.fj-` en `public/css/style.css`; la paleta semán
 |---|---|---|
 | GET | `/api/forja/me` | Snapshot privado del principal. Sin `identity.github`: `{configured:false,hint:'identity.github'}`. |
 | GET | `/api/forja/arena` | Temporada, brechas, MVP, misión propia y campos públicos de cada jugador; cada jugador lleva un `playerId` opaco estable y `isMe` se determina comparando ese identificador. |
+| GET | `/api/forja/festejos` | `{pending:[...]}` privado del principal. Nunca acepta owner por query o body. |
+| POST | `/api/forja/festejos/visto` | Body `{numbers:[enteros positivos]}`; elimina solo esos números de la cola pendiente del principal. |
 | POST | `/api/forja/refresh` | Refresca únicamente al dueño derivado del principal; ignora repeticiones dentro de 60 segundos. |
+
+`GET /api/forja/me` incluye `pendingFestejos`, incluso en el estado no configurado, para que el polling existente detecte la cola sin otra consulta. El frontend solo pide el detalle cuando el contador es positivo y espera a que la pestaña esté visible. Cada festejo lleva `number`, `title`, `url`, `deskTicket`, `durationMin`, `additions`, `deletions`, `ringOfMonth`, `monthLabel`, `throne` y `mergedAt`. `throne` es estructurado (`leader`, `leader-alone`, `challenger` o `unknown`) para traducirlo sin persistir texto de UI.
 
 ## Persistencia
 
 - Dueño: `userDataDir(owner)/forja/me.json`.
+- Festejos por dueño: `userDataDir(owner)/forja/festejos.json` con `{login, initializedAt, celebrated, pending}`.
 - Arena pública: `userDataDir(hostUser())/forja/arena.json`.
 - Historial acumulado del bot: `userDataDir(hostUser())/forja/bot-prs.json`.
 - Caché de GitHub: `~/.cwc-data/comms/pr-author-cache/`, administrada por el lector canónico host-global de `comms`.
 
 No se permite calcular rutas user-scoped al importar el módulo. `store.js` las resuelve dentro de cada llamada y escribe con `writeJsonAtomic`.
+
+El primer ciclo fresco, la ausencia del archivo o un cambio de login inicializan `celebrated` con todos los PR actuales y `pending` vacío: nunca festejan historia vieja. En ciclos frescos posteriores, cada número no celebrado se marca durablemente y genera un objeto pendiente. La cola conserva como máximo los diez más nuevos; los descartados por el límite siguen en `celebrated` y no reaparecen.
 
 ## GitHub y atribución
 
@@ -48,6 +55,7 @@ Cada snapshot personal conserva tres relojes distintos: `generatedAt` es cuándo
 
 - El owner siempre es `principalOf(req).username || hostUser()`. Query y body nunca deciden usuario.
 - `me.json` puede contener PRs, títulos, impacto y medallas: jamás se mezcla con otro dueño ni se sirve en arena.
+- `festejos.json` contiene títulos, URLs y métricas privadas. Tanto lectura como acuse derivan el owner de `principalOf(req).username || hostUser()`; un principal no puede leer ni marcar festejos ajenos.
 - Arena persiste y sirve solo `playerId` opaco, nombre visible, iniciales y métricas agregadas; no expone username, login GitHub, títulos ni URLs de PR. `isMe` se agrega al servir comparando `playerId`, nunca por ranking.
 - Que la arena muestre los nombres visibles de colegas es intencional; son parte del contrato público de la competencia, a diferencia del username y login GitHub.
 - Los defaults visibles en español viven como datos junto a sus ids estables en `compute.js`; un frontend futuro traduce por id.

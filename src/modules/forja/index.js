@@ -4,7 +4,9 @@ import { hostUser } from '../../core/user-space.js';
 import { playerIdFor } from './compute.js';
 import { playerForUsername, resolvePlayers } from './players.js';
 import { refreshOwner, startRefresher } from './refresher.js';
-import { getArenaSnapshot, getMeSnapshot } from './store.js';
+import {
+  getArenaSnapshot, getFestejos, getMeSnapshot, markFestejosSeen, pendingFestejos,
+} from './store.js';
 
 function ownerOf(req) {
   return principalOf(req)?.username || hostUser();
@@ -24,11 +26,31 @@ export default {
 
     r.get('/me', async (req, res) => {
       const owner = ownerOf(req);
-      if (!configuredPlayer(owner)) return res.json({ configured: false, hint: 'identity.github' });
+      if (!configuredPlayer(owner)) return res.json({ configured: false, hint: 'identity.github', pendingFestejos: 0 });
       let snapshot = getMeSnapshot(owner);
       if (!snapshot) snapshot = (await refreshOwner(owner, { rateLimitMs: 0 })).snapshot;
-      if (!snapshot) return res.status(503).json({ configured: true, stale: true, error: 'La Forja todavía no tiene un snapshot.' });
-      return res.json(snapshot);
+      if (!snapshot) return res.status(503).json({
+        configured: true,
+        stale: true,
+        pendingFestejos: pendingFestejos(owner),
+        error: 'La Forja todavía no tiene un snapshot.',
+      });
+      return res.json({ ...snapshot, pendingFestejos: pendingFestejos(owner) });
+    });
+
+    r.get('/festejos', (req, res) => {
+      const owner = ownerOf(req);
+      return res.json({ pending: getFestejos(owner)?.pending || [] });
+    });
+
+    r.post('/festejos/visto', (req, res) => {
+      const owner = ownerOf(req);
+      const numbers = req.body?.numbers;
+      if (!Array.isArray(numbers) || !numbers.every((number) => Number.isSafeInteger(number) && number > 0)) {
+        return res.status(400).json({ error: 'numbers debe ser un array de enteros positivos.' });
+      }
+      const state = markFestejosSeen(owner, numbers);
+      return res.json({ ok: true, pending: state.pending, pendingFestejos: state.pending.length });
     });
 
     r.get('/arena', (req, res) => {

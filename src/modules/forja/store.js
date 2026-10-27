@@ -10,6 +10,7 @@ let botPrs = null;
 // Las rutas se resuelven por llamada: nunca congelar un dataDir de usuario en
 // una constante de módulo (invariante multi-tenant BUG-2185).
 function meFile(owner) { return path.join(userDataDir(owner), 'forja', 'me.json'); }
+function festejosFile(owner) { return path.join(userDataDir(owner), 'forja', 'festejos.json'); }
 function arenaFile() { return path.join(userDataDir(hostUser()), 'forja', 'arena.json'); }
 function botPrsFile() { return path.join(userDataDir(hostUser()), 'forja', 'bot-prs.json'); }
 
@@ -40,6 +41,47 @@ export function saveMeSnapshot(owner, snapshot) {
   writeJsonAtomic(meFile(owner), snapshot, { space: 2 });
   snapshots.set(owner, snapshot);
   return snapshot;
+}
+
+export function getFestejos(owner) {
+  const saved = readJson(festejosFile(owner));
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  return {
+    login: typeof saved.login === 'string' ? saved.login : '',
+    initializedAt: typeof saved.initializedAt === 'string' ? saved.initializedAt : null,
+    celebrated: Array.isArray(saved.celebrated)
+      ? saved.celebrated.filter(Number.isSafeInteger)
+      : [],
+    pending: Array.isArray(saved.pending) ? saved.pending : [],
+  };
+}
+
+export function saveFestejos(owner, state) {
+  const next = {
+    login: String(state?.login || ''),
+    initializedAt: typeof state?.initializedAt === 'string'
+      ? state.initializedAt : new Date().toISOString(),
+    celebrated: Array.isArray(state?.celebrated)
+      ? [...new Set(state.celebrated.filter(Number.isSafeInteger))]
+      : [],
+    pending: Array.isArray(state?.pending) ? state.pending.slice(-10) : [],
+  };
+  writeJsonAtomic(festejosFile(owner), next, { space: 2 });
+  return next;
+}
+
+export function pendingFestejos(owner) {
+  return getFestejos(owner)?.pending.length || 0;
+}
+
+export function markFestejosSeen(owner, numbers) {
+  const state = getFestejos(owner);
+  if (!state) return { pending: [] };
+  const seen = new Set(numbers);
+  return saveFestejos(owner, {
+    ...state,
+    pending: state.pending.filter((festejo) => !seen.has(festejo?.number)),
+  });
 }
 
 export function getArenaSnapshot() {

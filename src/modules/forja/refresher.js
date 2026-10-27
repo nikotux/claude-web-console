@@ -1,10 +1,13 @@
 import { listMergedPrsByAuthor } from '../comms/pr-read-shared.js';
-import { computeForja, normalizePr } from './compute.js';
+import {
+  computeForja, deskNumbers, FORJA_TIMEZONE, monthKey, normalizePr, playerIdFor,
+} from './compute.js';
 import {
   ATTRIBUTED_BOT_AUTHOR, playerForBranch, playerForUsername, resolvePlayers,
 } from './players.js';
 import {
-  getBotPrs, getMeSnapshot, loadFromDisk, saveArenaSnapshot, saveBotPrs, saveMeSnapshot,
+  getBotPrs, getFestejos, getMeSnapshot, loadFromDisk, saveArenaSnapshot, saveBotPrs,
+  saveFestejos, saveMeSnapshot,
   snapshotAgeMs,
 } from './store.js';
 
@@ -13,6 +16,11 @@ const MANUAL_RATE_LIMIT_MS = 60 * 1000;
 const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
 const FETCH_CONCURRENCY = 3;
+const FESTEJOS_MAX_PENDING = 10;
+const MONTHS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
 
 let timer = null;
 let queueTail = Promise.resolve();
@@ -111,6 +119,77 @@ export function __runFetchPoolForTests(tasks) {
   return runFetchPool(tasks);
 }
 
+function throneFor(player, arena) {
+  const ranked = [...(arena?.players || [])].sort((a, b) => a.rank - b.rank);
+  const mine = ranked.find((item) => item.playerId === player.playerId);
+  const leader = ranked[0] || null;
+  if (!mine || !leader) return { status: 'unknown', gap: 0 };
+  if (mine.rank === 1) {
+    const rival = ranked[1] || null;
+    return rival
+      ? { status: 'leader', rivalDisplayName: rival.displayName, gap: Math.max(0, mine.seasonCount - rival.seasonCount) }
+      : { status: 'leader-alone', gap: 0 };
+  }
+  return {
+    status: 'challenger',
+    leaderDisplayName: leader.displayName,
+    gap: Math.max(0, leader.seasonCount - mine.seasonCount),
+  };
+}
+
+function ringOfMonth(pr, prs) {
+  const key = monthKey(new Date(pr.mergedAt), FORJA_TIMEZONE);
+  return prs.filter((candidate) => (
+    monthKey(new Date(candidate.mergedAt), FORJA_TIMEZONE) === key
+      && (new Date(candidate.mergedAt) < new Date(pr.mergedAt)
+        || (candidate.mergedAt === pr.mergedAt && candidate.number <= pr.number))
+  )).length;
+}
+
+function buildFestejo(player, pr, prs, arena) {
+  const month = monthKey(new Date(pr.mergedAt), FORJA_TIMEZONE);
+  const monthNumber = Number(month.slice(5));
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    deskTicket: deskNumbers(pr.title)[0] || null,
+    durationMin: Math.max(0, Math.round((new Date(pr.mergedAt) - new Date(pr.createdAt)) / 60000)),
+    additions: pr.additions,
+    deletions: pr.deletions,
+    ringOfMonth: ringOfMonth(pr, prs),
+    monthLabel: MONTHS[monthNumber - 1] || '',
+    throne: throneFor({ ...player, playerId: playerIdFor(player.username) }, arena),
+    mergedAt: pr.mergedAt,
+  };
+}
+
+function recordFestejos(player, prs, arena, now) {
+  const state = getFestejos(player.username);
+  const numbers = prs.map((pr) => pr.number);
+  if (!state || !sameLogin(state.login, player.login)) {
+    saveFestejos(player.username, {
+      login: player.login,
+      initializedAt: now,
+      celebrated: numbers,
+      pending: [],
+    });
+    return;
+  }
+
+  const celebrated = new Set(state.celebrated);
+  const unseen = prs.filter((pr) => !celebrated.has(pr.number));
+  for (const pr of unseen) celebrated.add(pr.number);
+  saveFestejos(player.username, {
+    ...state,
+    celebrated: [...celebrated],
+    pending: [
+      ...state.pending,
+      ...unseen.map((pr) => buildFestejo(player, pr, prs, arena)),
+    ].slice(-FESTEJOS_MAX_PENDING),
+  });
+}
+
 async function runCycle({ onlyOwner = null } = {}) {
   const players = resolvePlayers();
   loadFromDisk(players.map((player) => player.username));
@@ -182,6 +261,12 @@ async function runCycle({ onlyOwner = null } = {}) {
     staleByUsername, errorByUsername, fetchedAtByUsername, dataAsOfByUsername,
     lastAttemptAtByUsername,
   });
+  for (const player of requested) {
+    const direct = directByOwner.get(player.username);
+    if (!direct?.ok || direct.value.stale || !bot.ok || bot.value.stale) continue;
+    const prs = computed.snapshots.get(player.username)?.prs || [];
+    recordFestejos(player, prs, computed.arena, attemptedAt);
+  }
   for (const player of players) {
     const snapshot = computed.snapshots.get(player.username);
     const previousLogin = directByOwner.has(player.username) ? null : getMeSnapshot(player.username)?.login;
