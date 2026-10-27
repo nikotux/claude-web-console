@@ -25,7 +25,7 @@ export default function forjaHelp() {
           {
             type: 'note',
             tone: 'info',
-            text: t('forja.help.festejos.text', 'Cuando La Forja detecta un PR nuevo mergeado, muestra un festejo privado en una pestaña visible. Podés cerrarlo con un clic, Escape o el botón de cierre; si hay varios, aparecen en orden. El badge +N indica cuántos esperan ser vistos.'),
+            text: t('forja.help.festejos.text', 'Cuando La Forja detecta un PR nuevo mergeado, muestra un festejo privado en una pestaña visible. Se cierra solo a los 12 segundos, salvo mientras interactuás con él; también podés cerrarlo con un clic, Escape o el botón de cierre. Cualquier cierre lo marca como visto. Si hay varios, aparecen en orden y el badge +N indica cuántos esperan.'),
           },
         ],
       },

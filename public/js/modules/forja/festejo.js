@@ -1,8 +1,11 @@
 import { t } from '../../ui/i18n.js';
+import { escLayers, isTopEscLayer } from '../../ui/dialog.js';
+import { icon } from '../../ui/icons.js';
 import { node } from './view.js';
 
 const AUTO_DISMISS_MS = 12_000;
 const TITLE_FLASH_MS = 900;
+let dialogSequence = 0;
 
 function durationLabel(minutes) {
   const value = Math.max(0, Math.round(Number(minutes) || 0));
@@ -58,14 +61,14 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
   const overlay = node('div', 'fj-festejo-overlay');
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
-  overlay.setAttribute('aria-label', t('forja.festejo.dialogAria', 'Celebración de un nuevo anillo'));
   const card = node('article', 'fj-festejo-card');
   const embers = node('div', 'fj-festejo-embers');
   embers.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 6; index += 1) embers.appendChild(node('i', 'fj-festejo-ember'));
-  const close = node('button', 'fj-festejo-close', '×');
+  const close = node('button', 'btn-ghost btn--icon fj-festejo-close');
   close.type = 'button';
   close.setAttribute('aria-label', t('forja.festejo.close', 'Cerrar festejo'));
+  close.innerHTML = icon('close', { size: 15 });
   const counter = node('span', 'fj-festejo-position', t('forja.festejo.position', '{current} de {total}', { current: position, total }));
   const eye = document.createElement('img');
   eye.className = 'fj-festejo-eye';
@@ -75,6 +78,8 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
   const title = node('h1', 'fj-festejo-title', t('forja.festejo.title', '🔥 ¡UN NUEVO ANILLO FUE FORJADO, {name}!', {
     name: String(displayName || '').toLocaleUpperCase(),
   }));
+  title.id = `fj-festejo-title-${++dialogSequence}`;
+  overlay.setAttribute('aria-labelledby', title.id);
   const pr = node('p', 'fj-festejo-pr');
   pr.append(node('strong', 'fj-festejo-number', `#${festejo.number}`), document.createTextNode(` · ${festejo.title || ''}`));
   const chips = node('div', 'fj-festejo-chips');
@@ -89,17 +94,17 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
   const quote = node('p', 'fj-festejo-quote', t('forja.festejo.quote', 'El Ojo te observa… y aprueba. 👁'));
   const throne = node('div', 'fj-festejo-throne', throneLabel(festejo.throne));
   const actions = node('div', 'fj-festejo-actions');
-  const open = node('button', 'fj-festejo-open', t('forja.festejo.openSalon', '🔥 Ver en Mi salón'));
+  const open = node('button', 'btn fj-festejo-open', t('forja.festejo.openSalon', '🔥 Ver en Mi salón'));
   open.type = 'button';
   actions.appendChild(open);
   close.addEventListener('click', onDismiss);
-  open.addEventListener('click', () => { onOpen(); onDismiss(); });
+  open.addEventListener('click', () => { onDismiss(); onOpen(); });
   overlay.addEventListener('click', (event) => {
     if (!event.target.closest('button')) onDismiss();
   });
   card.append(embers, close, counter, eye, title, pr, chips, quote, throne, actions);
   overlay.appendChild(card);
-  return { overlay, close };
+  return { overlay, card, close };
 }
 
 export function createFestejoController({ api, onOpen, onPendingChange }) {
@@ -110,8 +115,13 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   let fetching = null;
   let autoTimer = null;
   let titleTimer = null;
+  let layerWaitTimer = null;
+  let autoRemaining = AUTO_DISMISS_MS;
+  let autoStartedAt = 0;
+  let autoDismiss = null;
   let batchTotal = 0;
   let batchPosition = 0;
+  let pendingOpener = null;
   let wanted = false;
   let destroyed = false;
   let acknowledgeTail = Promise.resolve();
@@ -121,22 +131,59 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     clearInterval(titleTimer);
     autoTimer = null;
     titleTimer = null;
+    autoRemaining = AUTO_DISMISS_MS;
+    autoStartedAt = 0;
+    autoDismiss = null;
     document.title = originalTitle;
   };
 
-  const startTimers = (dismiss) => {
+  const pauseAutoDismiss = () => {
+    if (!autoTimer) return;
+    clearTimeout(autoTimer);
+    autoTimer = null;
+    autoRemaining = Math.max(0, autoRemaining - (Date.now() - autoStartedAt));
+  };
+
+  const resumeAutoDismiss = () => {
+    if (!active || destroyed || document.hidden || autoTimer || !autoDismiss) return;
+    if (active.pointerInside || active.overlay.contains(document.activeElement)) return;
+    autoStartedAt = Date.now();
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      autoRemaining = 0;
+      autoDismiss({ auto: true });
+    }, autoRemaining);
+  };
+
+  const startTimers = (dismiss, count) => {
     stopTimers();
     if (destroyed || document.hidden) return;
-    let bright = true;
-    const flash = () => {
-      document.title = bright
-        ? t('forja.festejo.tabTitle', '🔥 +1 anillo · {title}', { title: originalTitle })
-        : originalTitle;
-      bright = !bright;
-    };
-    flash();
-    titleTimer = setInterval(flash, TITLE_FLASH_MS);
-    autoTimer = setTimeout(dismiss, AUTO_DISMISS_MS);
+    const festiveTitle = t('forja.festejo.tabTitle', '🔥 +{count} anillo · {title}', { count, title: originalTitle });
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.title = festiveTitle;
+    } else {
+      let bright = true;
+      const flash = () => {
+        document.title = bright ? festiveTitle : originalTitle;
+        bright = !bright;
+      };
+      flash();
+      titleTimer = setInterval(flash, TITLE_FLASH_MS);
+    }
+    autoDismiss = dismiss;
+    resumeAutoDismiss();
+  };
+
+  const removeEscLayer = (entry) => {
+    const index = escLayers.indexOf(entry);
+    if (index !== -1) escLayers.splice(index, 1);
+  };
+
+  const restoreFocus = (opener) => {
+    let target = opener?.isConnected ? opener : null;
+    const ref = opener?.dataset?.ref;
+    if (!target && ref) target = document.querySelector(`[data-ref="${ref}"]`);
+    target?.focus();
   };
 
   const acknowledge = (number) => {
@@ -153,29 +200,70 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
 
   const showNext = () => {
     if (destroyed || active || !queue.length || document.hidden) return;
+    if (escLayers.length) {
+      if (!layerWaitTimer) {
+        layerWaitTimer = setTimeout(() => {
+          layerWaitTimer = null;
+          showNext();
+        }, 100);
+      }
+      return;
+    }
     const festejo = queue.shift();
     batchPosition += 1;
     let dismissed = false;
-    const dismiss = () => {
+    const opener = pendingOpener || document.activeElement;
+    pendingOpener = null;
+    const dismiss = ({ auto = false } = {}) => {
       if (dismissed) return;
       dismissed = true;
+      const closing = active;
+      const focusWasInside = Boolean(closing?.overlay.contains(document.activeElement));
       stopTimers();
-      active?.overlay.remove();
+      closing?.overlay.remove();
+      removeEscLayer(closing?.escEntry);
       active = null;
-      void acknowledge(festejo.number);
+      const shouldRestoreFocus = !auto || focusWasInside;
+      const acknowledged = acknowledge(festejo.number);
+      if (shouldRestoreFocus) restoreFocus(opener);
+      void acknowledged.then(() => {
+        if (shouldRestoreFocus && !opener?.isConnected && document.activeElement === document.body) {
+          restoreFocus(opener);
+        }
+      });
       showNext();
     };
     active = celebrationCard(festejo, {
       displayName, position: batchPosition, total: batchTotal, onDismiss: dismiss, onOpen,
     });
     active.number = festejo.number;
+    active.opener = opener;
+    active.pointerInside = false;
+    active.escEntry = { close: dismiss };
+    escLayers.push(active.escEntry);
     document.body.appendChild(active.overlay);
-    active.close.focus();
-    startTimers(dismiss);
+    active.card.addEventListener('pointerenter', () => {
+      if (!active) return;
+      active.pointerInside = true;
+      pauseAutoDismiss();
+    });
+    active.card.addEventListener('pointerleave', () => {
+      if (!active) return;
+      active.pointerInside = false;
+      resumeAutoDismiss();
+    });
+    active.overlay.addEventListener('focusin', pauseAutoDismiss);
+    active.overlay.addEventListener('focusout', () => {
+      setTimeout(() => {
+        if (active && !active.overlay.contains(document.activeElement)) resumeAutoDismiss();
+      });
+    });
+    startTimers(dismiss, queue.length + 1);
   };
 
   const fetchPending = () => {
     if (destroyed || fetching || document.hidden) return fetching;
+    if (!active && !queue.length) pendingOpener = document.activeElement;
     fetching = api('/api/forja/festejos').then((data) => {
       if (destroyed) return;
       const existing = new Set([
@@ -192,14 +280,36 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       }
       queue.push(...incoming);
       wanted = Boolean(data.pending?.length);
+      if (!active && document.activeElement !== document.body) pendingOpener = document.activeElement;
       onPendingChange((active ? 1 : 0) + queue.length);
       showNext();
+      if (!active && !queue.length) pendingOpener = null;
     }).catch(() => {}).finally(() => { fetching = null; });
     return fetching;
   };
 
   const onKeydown = (event) => {
-    if (event.key === 'Escape' && active && !document.hidden) active.overlay.querySelector('.fj-festejo-close')?.click();
+    if (!active || document.hidden || !isTopEscLayer(active.escEntry)) return;
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      active.escEntry.close();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...active.overlay.querySelectorAll('button:not([disabled])')];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!active.overlay.contains(document.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
   };
   const onVisibilityChange = () => {
     if (document.hidden) {
@@ -209,11 +319,11 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     }
     if (active) {
       active.overlay.hidden = false;
-      startTimers(() => active?.overlay.querySelector('.fj-festejo-close')?.click());
+      startTimers(active.escEntry.close, queue.length + 1);
     } else if (queue.length) showNext();
     else if (wanted) void fetchPending();
   };
-  document.addEventListener('keydown', onKeydown);
+  document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('visibilitychange', onVisibilityChange);
 
   return {
@@ -226,11 +336,17 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      clearTimeout(layerWaitTimer);
       stopTimers();
-      active?.overlay.remove();
+      const closing = active;
+      const focusWasInside = Boolean(closing?.overlay.contains(document.activeElement));
+      closing?.overlay.remove();
+      removeEscLayer(closing?.escEntry);
       active = null;
       queue = [];
-      document.removeEventListener('keydown', onKeydown);
+      pendingOpener = null;
+      if (focusWasInside && closing?.opener?.isConnected) closing.opener.focus();
+      document.removeEventListener('keydown', onKeydown, true);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     },
   };
