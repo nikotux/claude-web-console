@@ -125,6 +125,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   let wanted = false;
   let destroyed = false;
   let acknowledgeTail = Promise.resolve();
+  const acking = new Set();
 
   const stopTimers = () => {
     clearTimeout(autoTimer);
@@ -179,14 +180,14 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     if (index !== -1) escLayers.splice(index, 1);
   };
 
-  const restoreFocus = (opener) => {
+  const restoreFocus = (opener, ref) => {
     let target = opener?.isConnected ? opener : null;
-    const ref = opener?.dataset?.ref;
     if (!target && ref) target = document.querySelector(`[data-ref="${ref}"]`);
     target?.focus();
   };
 
   const acknowledge = (number) => {
+    acking.add(number);
     acknowledgeTail = acknowledgeTail.then(() => api('/api/forja/festejos/visto', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numbers: [number] }),
     })).then((data) => {
@@ -194,7 +195,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       const count = data.pendingFestejos ?? data.pending?.length ?? 0;
       wanted = Number(count) > 0;
       onPendingChange(count);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => { acking.delete(number); });
     return acknowledgeTail;
   };
 
@@ -212,7 +213,9 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     const festejo = queue.shift();
     batchPosition += 1;
     let dismissed = false;
-    const opener = pendingOpener || document.activeElement;
+    const activeOpener = document.activeElement !== document.body ? document.activeElement : null;
+    const opener = pendingOpener?.isConnected && pendingOpener !== document.body ? pendingOpener : activeOpener;
+    const openerRef = opener?.dataset?.ref || 'forja-cta';
     pendingOpener = null;
     const dismiss = ({ auto = false } = {}) => {
       if (dismissed) return;
@@ -225,10 +228,10 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       active = null;
       const shouldRestoreFocus = !auto || focusWasInside;
       const acknowledged = acknowledge(festejo.number);
-      if (shouldRestoreFocus) restoreFocus(opener);
+      if (shouldRestoreFocus) restoreFocus(opener, openerRef);
       void acknowledged.then(() => {
         if (shouldRestoreFocus && !opener?.isConnected && document.activeElement === document.body) {
-          restoreFocus(opener);
+          restoreFocus(opener, openerRef);
         }
       });
       showNext();
@@ -238,6 +241,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     });
     active.number = festejo.number;
     active.opener = opener;
+    active.openerRef = openerRef;
     active.pointerInside = false;
     active.escEntry = { close: dismiss };
     escLayers.push(active.escEntry);
@@ -269,6 +273,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       const existing = new Set([
         ...(active ? [active.number] : []),
         ...queue.map((item) => item.number),
+        ...acking,
       ]);
       const incoming = (Array.isArray(data.pending) ? data.pending : [])
         .filter((item) => Number.isSafeInteger(item?.number) && !existing.has(item.number));
@@ -345,7 +350,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       active = null;
       queue = [];
       pendingOpener = null;
-      if (focusWasInside && closing?.opener?.isConnected) closing.opener.focus();
+      if (focusWasInside) restoreFocus(closing?.opener, closing?.openerRef);
       document.removeEventListener('keydown', onKeydown, true);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     },
