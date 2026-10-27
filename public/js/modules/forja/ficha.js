@@ -23,6 +23,12 @@ function renderLoading(el) {
 
 function renderConfigured(el, data, onOpen) {
   const card = node('div', 'fj-ficha');
+  const pending = Math.max(0, Number(data.pendingFestejos) || 0);
+  if (pending) {
+    const badge = node('span', 'fj-chip fj-festejo-badge', `+${pending}`);
+    badge.setAttribute('aria-label', t('forja.festejo.pendingBadge', '{count} festejos pendientes', { count: pending }));
+    card.appendChild(badge);
+  }
 
   const player = node('div', 'fj-ficha-player');
   const emblemWrap = node('div', 'fj-emblem-wrap');

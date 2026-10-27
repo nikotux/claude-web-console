@@ -20,6 +20,16 @@ export default function forjaHelp() {
         ],
       },
       {
+        title: t('forja.help.festejos.title', 'Festejos de merge'),
+        blocks: [
+          {
+            type: 'note',
+            tone: 'info',
+            text: t('forja.help.festejos.text', 'Cuando La Forja detecta un PR nuevo mergeado, muestra un festejo privado en una pestaña visible. Podés cerrarlo con un clic, Escape o el botón de cierre; si hay varios, aparecen en orden. El badge +N indica cuántos esperan ser vistos.'),
+          },
+        ],
+      },
+      {
         title: t('forja.help.legend.title', 'Leyenda'),
         blocks: [
           {

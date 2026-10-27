@@ -1,6 +1,7 @@
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { renderArena } from './arena.js';
+import { createFestejoController } from './festejo.js';
 import { renderFicha } from './ficha.js';
 import { renderSalon } from './salon.js';
 import { node } from './view.js';
@@ -213,6 +214,7 @@ export default {
     let inFlight = null;
     let active = true;
 
+    let festejos = null;
     const render = () => {
       if (!active) return;
       renderFicha(el, state, {
@@ -222,6 +224,15 @@ export default {
       });
       el.querySelector('.fj-enter')?.setAttribute('data-ref', 'forja-cta');
     };
+    festejos = createFestejoController({
+      api,
+      onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
+      onPendingChange: (count) => {
+        if (!active || !state.data?.configured) return;
+        state.data = { ...state.data, pendingFestejos: count };
+        render();
+      },
+    });
 
     const load = ({ silent = false } = {}) => {
       if (inFlight) return inFlight;
@@ -237,6 +248,7 @@ export default {
           state.loading = false;
           lastLoadedAt = Date.now();
           render();
+          festejos.sync(data.pendingFestejos, data.displayName);
           return data;
         })
         .catch((error) => {
