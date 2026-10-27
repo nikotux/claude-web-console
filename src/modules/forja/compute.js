@@ -206,7 +206,9 @@ function playerBase(player, prs, currentMonthKey, today, timeZone) {
 }
 
 function buildMe(player, context) {
-  const { timeZone, currentMonthKey, monthLabel, today, generatedAt, stale, error } = context;
+  const {
+    timeZone, currentMonthKey, monthLabel, today, generatedAt, fetchedAt, stale, error,
+  } = context;
   const first = player.prs[0] || null;
   const deskTickets = new Set(player.prs.flatMap((pr) => deskNumbers(pr.title))).size;
   const tasks = new Set(player.prs.flatMap((pr) => taskNumbers(pr.title))).size;
@@ -225,6 +227,7 @@ function buildMe(player, context) {
   return {
     configured: true,
     generatedAt,
+    fetchedAt: fetchedAt || null,
     stale: Boolean(stale),
     ...(error ? { lastError: String(error).slice(0, 300) } : {}),
     timezone: timeZone,
@@ -257,6 +260,7 @@ export function computeForja(players, prsByUsername, {
   timeZone = FORJA_TIMEZONE,
   staleByUsername = new Map(),
   errorByUsername = new Map(),
+  fetchedAtByUsername = new Map(),
 } = {}) {
   const instant = now instanceof Date ? now : new Date(now);
   const generatedAt = instant.toISOString();
@@ -275,6 +279,7 @@ export function computeForja(players, prsByUsername, {
 
   const snapshots = new Map(ranked.map((player) => [player.username, buildMe(player, {
     timeZone, currentMonthKey, monthLabel, today, generatedAt,
+    fetchedAt: fetchedAtByUsername.get(player.username),
     stale: staleByUsername.get(player.username), error: errorByUsername.get(player.username),
   })]));
   const publicPlayers = ranked.map((player) => ({

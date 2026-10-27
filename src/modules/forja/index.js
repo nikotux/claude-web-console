@@ -11,7 +11,7 @@ function ownerOf(req) {
 }
 
 function configuredPlayer(owner) {
-  return playerForUsername(owner, resolvePlayers());
+  return playerForUsername(owner, resolvePlayers({ warnDuplicateClaims: false }));
 }
 
 export default {

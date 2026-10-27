@@ -11,17 +11,36 @@ function initialsFor(name, login) {
   return (parts.length === 1 ? String(login || parts[0]).slice(0, 2) : `${parts[0][0]}${parts.at(-1)[0]}`).toUpperCase();
 }
 
-export function resolvePlayers() {
+export function excludeDuplicateLoginClaims(candidates, { warn = true } = {}) {
+  const claims = new Map();
+  for (const player of candidates) {
+    const key = player.login.toLowerCase();
+    if (!claims.has(key)) claims.set(key, []);
+    claims.get(key).push(player);
+  }
+  const duplicated = new Set([...claims].filter(([, players]) => players.length > 1).map(([login]) => login));
+  if (warn) {
+    for (const login of [...duplicated].sort()) {
+      const claimants = claims.get(login).map((player) => player.username).sort((a, b) => a.localeCompare(b));
+      console.warn(`[forja] login GitHub ${claims.get(login)[0].login} reclamado por varios usuarios: ${claimants.join(', ')} — ninguno participa`);
+    }
+  }
+  return candidates.filter((player) => !duplicated.has(player.login.toLowerCase()));
+}
+
+export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
   const usernames = new Set([hostUser(), ...listUsers().map((user) => user.username)]);
-  const players = [];
+  const candidates = [];
   for (const username of usernames) {
     const identity = loadInstance({ dataDir: userDataDir(username) })?.identity || {};
     const login = typeof identity.github === 'string' ? identity.github.trim() : '';
     if (!login || EXCLUDED_BOT_AUTHORS.some((author) => author.toLowerCase() === login.toLowerCase())
       || login.toLowerCase() === ATTRIBUTED_BOT_AUTHOR.toLowerCase()) continue;
     const displayName = (typeof identity.name === 'string' && identity.name.trim()) || username;
-    players.push({ username, login, displayName, initials: initialsFor(displayName, login) });
+    candidates.push({ username, login, displayName, initials: initialsFor(displayName, login) });
   }
+
+  const players = excludeDuplicateLoginClaims(candidates, { warn: warnDuplicateClaims });
   return players.sort((a, b) => a.displayName.localeCompare(b.displayName, 'es'));
 }
 

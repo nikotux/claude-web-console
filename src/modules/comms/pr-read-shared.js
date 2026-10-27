@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import fss from 'node:fs';
 import path from 'node:path';
 import { config } from '../../core/config.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { COMMS_DIR, ensureDir } from './shared.js';
 
 const PR_CACHE_DIR = path.join(COMMS_DIR, 'pr-cache');
@@ -164,7 +165,8 @@ function writeAuthorCache(key, data) {
   try {
     ensureDir();
     fss.mkdirSync(PR_AUTHOR_CACHE_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(authorCachePath(key), JSON.stringify({ ts: Date.now(), data }), { mode: 0o600 });
+    fss.chmodSync(PR_AUTHOR_CACHE_DIR, 0o700);
+    writeJsonAtomic(authorCachePath(key), { ts: Date.now(), data }, { mode: 0o600 });
   } catch { /* cache best-effort */ }
 }
 
