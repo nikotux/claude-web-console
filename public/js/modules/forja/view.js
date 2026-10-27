@@ -98,7 +98,11 @@ export function staleLabel(generatedAt) {
 
 export function safeExternalUrl(value) {
   try {
-    const url = new URL(String(value || ''), location.origin);
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:'
+      && url.hostname === 'github.com'
+      && /^\/Mordor-Staffing\/tolkien\/pull\/\d+$/.test(url.pathname)
+      ? url.href
+      : null;
   } catch { return null; }
 }

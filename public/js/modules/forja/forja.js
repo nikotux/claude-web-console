@@ -6,6 +6,8 @@ import { renderSalon } from './salon.js';
 import { node } from './view.js';
 
 const POLL_MS = 60_000;
+const mountCleanups = new WeakMap();
+let modalSequence = 0;
 
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -39,9 +41,11 @@ function addModalHelp(modal) {
 function openForgeModal(ctx, me) {
   let arena = null;
   let arenaPromise = null;
+  const opener = document.activeElement;
   const modal = ctx.dialog.openModal({
     title: t('forja.modal.title', 'La Forja'),
     width: 'min(1180px, 96vw)',
+    onClose: () => { if (opener?.isConnected) opener.focus(); },
   });
   modal.card.classList.add('fj-modal');
   addModalHelp(modal);
@@ -54,9 +58,19 @@ function openForgeModal(ctx, me) {
   arenaButton.type = 'button';
   salonButton.setAttribute('role', 'tab');
   arenaButton.setAttribute('role', 'tab');
+  const modalId = ++modalSequence;
+  salonButton.id = `fj-tab-salon-${modalId}`;
+  arenaButton.id = `fj-tab-arena-${modalId}`;
+  salonButton.setAttribute('aria-controls', `fj-tab-panel-${modalId}`);
+  arenaButton.setAttribute('aria-controls', `fj-tab-panel-${modalId}`);
   salonButton.setAttribute('aria-selected', 'true');
   arenaButton.setAttribute('aria-selected', 'false');
+  salonButton.tabIndex = 0;
+  arenaButton.tabIndex = -1;
   const panel = node('div', 'fj-tab-panel');
+  panel.id = `fj-tab-panel-${modalId}`;
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', salonButton.id);
   tabs.append(salonButton, arenaButton);
   modal.body.append(tabs, panel);
 
@@ -66,6 +80,9 @@ function openForgeModal(ctx, me) {
     arenaButton.classList.toggle('fj-tab--active', !isSalon);
     salonButton.setAttribute('aria-selected', String(isSalon));
     arenaButton.setAttribute('aria-selected', String(!isSalon));
+    salonButton.tabIndex = isSalon ? 0 : -1;
+    arenaButton.tabIndex = isSalon ? -1 : 0;
+    panel.setAttribute('aria-labelledby', isSalon ? salonButton.id : arenaButton.id);
     if (isSalon) {
       renderSalon(panel, me, ctx);
       return;
@@ -90,7 +107,22 @@ function openForgeModal(ctx, me) {
 
   salonButton.addEventListener('click', () => activate('salon'));
   arenaButton.addEventListener('click', () => activate('arena'));
+  tabs.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tabButtons = [salonButton, arenaButton];
+    const current = tabButtons.indexOf(document.activeElement);
+    let next = current;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabButtons.length - 1;
+    else if (event.key === 'ArrowLeft') next = (current - 1 + tabButtons.length) % tabButtons.length;
+    else next = (current + 1) % tabButtons.length;
+    const target = tabButtons[next];
+    activate(target === salonButton ? 'salon' : 'arena');
+    target.focus();
+  });
   activate('salon');
+  salonButton.focus();
 }
 
 async function openConfiguration(ctx, onSaved) {
@@ -148,7 +180,8 @@ async function openConfiguration(ctx, onSaved) {
     feedback.textContent = t('forja.configure.saving', 'Guardando identidad y encendiendo la fragua…');
     feedback.hidden = false;
     try {
-      const nextIdentity = { ...identity, github };
+      const freshData = await api('/api/projects/me/identity');
+      const nextIdentity = { ...(freshData.identity || {}), github };
       await api('/api/projects/me/identity', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity: nextIdentity }),
       });
@@ -171,15 +204,17 @@ export default {
   name: 'forja',
 
   mount(el, ctx) {
+    mountCleanups.get(el)?.();
     const state = { loading: true, data: null, error: null };
     let lastLoadedAt = 0;
     let inFlight = null;
+    let active = true;
 
-    const render = () => renderFicha(el, state, {
+    const render = () => { if (active) renderFicha(el, state, {
       onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data); },
       onConfigure: () => { void openConfiguration(ctx, () => load()); },
       onRetry: () => { void load(); },
-    });
+    }); };
 
     const load = ({ silent = false } = {}) => {
       if (inFlight) return inFlight;
@@ -209,9 +244,15 @@ export default {
 
     render();
     void load();
-    setInterval(() => { if (!document.hidden) void load({ silent: true }); }, POLL_MS);
-    document.addEventListener('visibilitychange', () => {
+    const interval = setInterval(() => { if (!document.hidden) void load({ silent: true }); }, POLL_MS);
+    const onVisibilityChange = () => {
       if (!document.hidden && Date.now() - lastLoadedAt >= POLL_MS) void load({ silent: true });
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    mountCleanups.set(el, () => {
+      active = false;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     });
   },
 };

@@ -23,9 +23,6 @@ function renderLoading(el) {
 
 function renderConfigured(el, data, onOpen) {
   const card = node('div', 'fj-ficha');
-  card.tabIndex = 0;
-  card.setAttribute('role', 'button');
-  card.setAttribute('aria-label', t('forja.ficha.openAria', 'Abrir La Forja'));
 
   const player = node('div', 'fj-ficha-player');
   const emblemWrap = node('div', 'fj-emblem-wrap');
@@ -68,13 +65,8 @@ function renderConfigured(el, data, onOpen) {
 
   const enter = node('button', 'btn fj-enter', t('forja.ficha.enter', 'Entrar a la Forja'));
   enter.type = 'button';
-  enter.addEventListener('click', (event) => { event.stopPropagation(); onOpen(); });
-  card.addEventListener('click', onOpen);
-  card.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    onOpen();
-  });
+  enter.setAttribute('aria-label', t('forja.ficha.openAria', 'Abrir La Forja'));
+  enter.addEventListener('click', onOpen);
   card.append(player, xp, enter);
   if (data.stale) card.appendChild(node('div', 'fj-stale', staleLabel(data.generatedAt)));
   el.appendChild(card);

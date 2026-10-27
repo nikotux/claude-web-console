@@ -101,7 +101,7 @@ el import en `MODULES`. Listo.
 
 ## Referencia completa: La Forja
 
-`public/js/modules/forja/` muestra el patrón para una superficie con tarjeta de sidebar, polling que respeta `document.hidden`, modal con pestañas, estado opt-in, ayuda e i18n. El orquestador (`forja.js`) conserva red y ciclo de vida; las vistas (`ficha.js`, `salon.js`, `arena.js`) reciben datos y construyen DOM sin interpolar strings del servidor en `innerHTML`. Sus estilos siguen viviendo en `public/css/style.css` bajo el prefijo `.fj-` y sus colores salen de tokens semánticos `--forja-*`.
+`public/js/modules/forja/` muestra el patrón para una superficie con tarjeta de sidebar, montaje idempotente y polling que respeta `document.hidden`, modal con pestañas, estado opt-in, ayuda e i18n. El orquestador (`forja.js`) conserva red y ciclo de vida: antes de remontar un elemento limpia su intervalo y su listener de visibilidad. Las vistas (`ficha.js`, `salon.js`, `arena.js`) reciben datos y construyen DOM sin interpolar strings del servidor en `innerHTML`. Sus estilos siguen viviendo en `public/css/style.css` bajo el prefijo `.fj-` y sus colores salen de tokens semánticos `--forja-*`.
 
 ## Si el módulo necesita backend
 
