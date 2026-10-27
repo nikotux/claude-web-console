@@ -248,7 +248,7 @@ export default {
           state.loading = false;
           lastLoadedAt = Date.now();
           render();
-          festejos.sync(data.pendingFestejos, data.displayName);
+          if (active) festejos.sync(data.pendingFestejos, data.displayName);
           return data;
         })
         .catch((error) => {
@@ -270,6 +270,7 @@ export default {
     document.addEventListener('visibilitychange', onVisibilityChange);
     mountCleanups.set(el, () => {
       active = false;
+      festejos.destroy();
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     });

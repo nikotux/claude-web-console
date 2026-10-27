@@ -3,28 +3,6 @@ import { node } from './view.js';
 
 const AUTO_DISMISS_MS = 12_000;
 const TITLE_FLASH_MS = 900;
-const STYLE_ID = 'fj-festejo-styles';
-
-const FESTEJO_CSS = `
-.fj-festejo-overlay{position:fixed;z-index:10000;inset:0;display:grid;place-items:center;padding:clamp(18px,5vw,64px);background:color-mix(in srgb,var(--forja-obsidian) 86%,transparent);font-family:var(--cwc-font-ui),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";font-variant-numeric:tabular-nums;backdrop-filter:blur(7px)}
-.fj-festejo-overlay[hidden]{display:none}.fj-festejo-card{position:relative;display:flex;width:min(1040px,94vw);min-height:min(520px,78vh);flex-direction:column;align-items:center;justify-content:center;overflow:hidden;padding:48px 54px 42px;border:1px solid var(--forja-lava);border-left:6px solid var(--forja-ember);border-radius:var(--cwc-radius-lg);background:radial-gradient(circle at 50% -12%,color-mix(in srgb,var(--forja-ember) 26%,transparent),transparent 34%),linear-gradient(145deg,var(--forja-basalt),var(--forja-obsidian) 69%);box-shadow:var(--cwc-shadow-lg),0 0 32px color-mix(in srgb,var(--forja-lava) 22%,transparent),inset 0 1px color-mix(in srgb,var(--forja-gold) 12%,transparent);color:var(--forja-cream);text-align:center}
-.fj-festejo-card::before,.fj-festejo-card::after{position:absolute;width:48px;height:48px;content:""}.fj-festejo-card::before{top:14px;left:14px;border-top:1px solid var(--forja-gold);border-left:1px solid var(--forja-gold)}.fj-festejo-card::after{right:14px;bottom:14px;border-right:1px solid var(--forja-ember);border-bottom:1px solid var(--forja-ember)}
-.fj-festejo-close{position:absolute;z-index:3;top:14px;right:14px;display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--forja-metal) 48%,transparent);border-radius:50%;background:var(--forja-coal);color:var(--forja-muted);font:800 var(--cwc-fs-lg)/1 var(--cwc-font-ui),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";cursor:pointer}.fj-festejo-close:hover,.fj-festejo-close:focus-visible{border-color:var(--forja-ember);color:var(--forja-cream);outline:none}
-.fj-festejo-position{position:absolute;top:20px;left:50%;color:var(--forja-muted);font:800 var(--cwc-fs-xs)/1 var(--cwc-font-mono),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";transform:translateX(-50%)}.fj-festejo-eye{display:block;width:112px;height:60px;filter:drop-shadow(0 0 17px var(--forja-lava));animation:fj-festejo-eye-pulse 1.7s ease-in-out infinite}.fj-festejo-title{max-width:900px;margin:15px 0 0;color:var(--forja-cream);font:900 calc(var(--cwc-fs-xl) * 1.45)/1.2 var(--cwc-font-serif),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";letter-spacing:.055em;text-shadow:0 0 14px var(--forja-lava);text-transform:uppercase}.fj-festejo-pr{max-width:900px;margin:17px auto 0;color:var(--forja-cream);font-size:var(--cwc-fs-lg);line-height:1.45}.fj-festejo-number{color:var(--forja-ember);font-family:var(--cwc-font-mono),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";font-weight:900}.fj-festejo-chips{display:flex;flex-wrap:wrap;justify-content:center;gap:9px;margin-top:22px}.fj-festejo-chip{padding:8px 11px;border:1px solid color-mix(in srgb,var(--forja-metal) 46%,var(--forja-coal));border-radius:var(--cwc-radius-sm);background:var(--forja-coal);color:var(--forja-cream);font-size:var(--cwc-fs-md)}
-.fj-festejo-quote{margin:22px 0 0;color:var(--forja-gold);font:italic var(--cwc-fs-xl)/1.3 var(--cwc-font-serif),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"}.fj-festejo-throne{margin:13px 0 0;padding:9px 16px;border:1px solid color-mix(in srgb,var(--forja-gold) 55%,var(--forja-coal));border-radius:999px;background:var(--forja-coal);color:var(--forja-gold);font:800 var(--cwc-fs-md)/1 var(--cwc-font-mono),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"}.fj-festejo-actions{z-index:2;display:flex;justify-content:center;margin-top:20px}.fj-festejo-open{min-height:35px;padding:0 15px;border:1px solid var(--forja-ember);border-radius:var(--cwc-radius-sm);background:linear-gradient(135deg,var(--forja-lava),var(--forja-ember));color:var(--forja-obsidian);font:900 var(--cwc-fs-sm)/1 var(--cwc-font-ui),"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji";cursor:pointer}
-.fj-festejo-embers{position:absolute;inset:0;pointer-events:none}.fj-festejo-ember{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--forja-gold);box-shadow:0 0 8px var(--forja-lava);animation:fj-festejo-ember-rise 3.8s linear infinite}.fj-festejo-ember:nth-child(1){top:76%;left:6%}.fj-festejo-ember:nth-child(2){top:20%;left:13%;animation-delay:-1.8s}.fj-festejo-ember:nth-child(3){top:88%;left:25%;animation-delay:-.8s}.fj-festejo-ember:nth-child(4){top:17%;left:72%;animation-delay:-2.2s}.fj-festejo-ember:nth-child(5){top:74%;left:86%;animation-delay:-1.2s}.fj-festejo-ember:nth-child(6){top:36%;left:94%;animation-delay:-2.8s}
-.fj-festejo-badge{position:absolute;z-index:4;top:7px;right:7px;border-color:var(--forja-ember);background:var(--forja-lava);color:var(--forja-cream);box-shadow:0 0 10px var(--forja-lava)}
-@keyframes fj-festejo-eye-pulse{0%,100%{filter:drop-shadow(0 0 8px var(--forja-lava));transform:scale(.96)}50%{filter:drop-shadow(0 0 18px var(--forja-ember));transform:scale(1.04)}}@keyframes fj-festejo-ember-rise{from{transform:translateY(55px);opacity:0}20%{opacity:1}to{transform:translate(18px,-280px);opacity:0}}
-@media(max-width:700px){.fj-festejo-card{min-height:70vh;padding:54px 22px 34px}.fj-festejo-title{font-size:var(--cwc-fs-xl)}.fj-festejo-pr{font-size:var(--cwc-fs-md)}.fj-festejo-chip{padding:6px 8px;font-size:var(--cwc-fs-sm)}}@media(prefers-reduced-motion:reduce){.fj-festejo-eye,.fj-festejo-ember{animation:none!important}}
-`;
-
-function installStyles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = FESTEJO_CSS;
-  document.head.appendChild(style);
-}
 
 function durationLabel(minutes) {
   const value = Math.max(0, Math.round(Number(minutes) || 0));
@@ -125,7 +103,6 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
 }
 
 export function createFestejoController({ api, onOpen, onPendingChange }) {
-  installStyles();
   const originalTitle = document.title;
   let displayName = '';
   let queue = [];
@@ -136,6 +113,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   let batchTotal = 0;
   let batchPosition = 0;
   let wanted = false;
+  let destroyed = false;
   let acknowledgeTail = Promise.resolve();
 
   const stopTimers = () => {
@@ -148,7 +126,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
 
   const startTimers = (dismiss) => {
     stopTimers();
-    if (document.hidden) return;
+    if (destroyed || document.hidden) return;
     let bright = true;
     const flash = () => {
       document.title = bright
@@ -165,6 +143,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     acknowledgeTail = acknowledgeTail.then(() => api('/api/forja/festejos/visto', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numbers: [number] }),
     })).then((data) => {
+      if (destroyed) return;
       const count = data.pendingFestejos ?? data.pending?.length ?? 0;
       wanted = Number(count) > 0;
       onPendingChange(count);
@@ -173,7 +152,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   };
 
   const showNext = () => {
-    if (active || !queue.length || document.hidden) return;
+    if (destroyed || active || !queue.length || document.hidden) return;
     const festejo = queue.shift();
     batchPosition += 1;
     let dismissed = false;
@@ -196,8 +175,9 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   };
 
   const fetchPending = () => {
-    if (fetching || document.hidden) return fetching;
+    if (destroyed || fetching || document.hidden) return fetching;
     fetching = api('/api/forja/festejos').then((data) => {
+      if (destroyed) return;
       const existing = new Set([
         ...(active ? [active.number] : []),
         ...queue.map((item) => item.number),
@@ -218,10 +198,10 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     return fetching;
   };
 
-  document.addEventListener('keydown', (event) => {
+  const onKeydown = (event) => {
     if (event.key === 'Escape' && active && !document.hidden) active.overlay.querySelector('.fj-festejo-close')?.click();
-  });
-  document.addEventListener('visibilitychange', () => {
+  };
+  const onVisibilityChange = () => {
     if (document.hidden) {
       stopTimers();
       if (active) active.overlay.hidden = true;
@@ -232,13 +212,26 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       startTimers(() => active?.overlay.querySelector('.fj-festejo-close')?.click());
     } else if (queue.length) showNext();
     else if (wanted) void fetchPending();
-  });
+  };
+  document.addEventListener('keydown', onKeydown);
+  document.addEventListener('visibilitychange', onVisibilityChange);
 
   return {
     sync(count, name) {
+      if (destroyed) return;
       displayName = name || displayName;
       wanted = Number(count) > 0;
       if (wanted) void fetchPending();
+    },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      stopTimers();
+      active?.overlay.remove();
+      active = null;
+      queue = [];
+      document.removeEventListener('keydown', onKeydown);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     },
   };
 }
