@@ -44,8 +44,7 @@ export function saveMeSnapshot(owner, snapshot) {
   return snapshot;
 }
 
-export function getFestejos(owner) {
-  const saved = readJson(festejosFile(owner));
+function normalizeFestejos(saved) {
   if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
   return {
     login: typeof saved.login === 'string' ? saved.login : '',
@@ -56,13 +55,19 @@ export function getFestejos(owner) {
     deployed: Array.isArray(saved.deployed)
       ? saved.deployed.filter(Number.isSafeInteger)
       : null,
-    deployCelebrated: Array.isArray(saved.deployCelebrated)
-      ? saved.deployCelebrated.filter((value) => typeof value === 'string')
-      : [],
-    lastDeployProcessed: typeof saved.lastDeployProcessed === 'string'
-      ? saved.lastDeployProcessed : null,
+    // Un archivo anterior al modelo por estado no tiene prodSha: el refresher
+    // lo reconoce como legacy y lo siembra sin festejar historia vieja.
+    prodSha: typeof saved.prodSha === 'string' ? saved.prodSha : null,
     pending: Array.isArray(saved.pending) ? saved.pending : [],
   };
+}
+
+export function getFestejos(owner) {
+  return normalizeFestejos(readJson(festejosFile(owner)));
+}
+
+export function __normalizeFestejosForTests(saved) {
+  return normalizeFestejos(saved);
 }
 
 export function saveFestejos(owner, state) {
@@ -73,11 +78,7 @@ export function saveFestejos(owner, state) {
     celebrated: Array.isArray(state?.celebrated)
       ? [...new Set(state.celebrated.filter(Number.isSafeInteger))]
       : [],
-    deployCelebrated: Array.isArray(state?.deployCelebrated)
-      ? [...new Set(state.deployCelebrated.filter((value) => typeof value === 'string'))]
-      : [],
-    lastDeployProcessed: typeof state?.lastDeployProcessed === 'string'
-      ? state.lastDeployProcessed : null,
+    prodSha: typeof state?.prodSha === 'string' ? state.prodSha : null,
     pending: Array.isArray(state?.pending) ? state.pending.slice(-10) : [],
   };
   // Ausente/null conserva el marcador de migración: el refresher debe sembrar

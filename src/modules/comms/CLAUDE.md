@@ -20,12 +20,18 @@ PRs y despliegues de GitHub — lo importan `tickets/sources.js` y `forja/refres
 `listMergedPrsByAuthor()` usa repo explícito Tolkien, incluye `mergeCommit` y `headRefOid`, caché
 por autor de 150 s y fallback `_stale` al último bueno; `githubUserExists()`
 resuelve existencia, login canónico y nombre con caché corta;
-`listProductionDeploys()` conserva runs exitosos `deploy-v2.yml` con
-`operation=deploy` y acepta el SHA solo desde el JSON estricto de
-`EXPECTED_ARTIFACT_JSON.sourceSha`; los deploys y no-deploys confirmados se
-cachean permanentemente, mientras un run inclasificable vence a los 10 min.
-`listCommitsBetween(base,head)` pagina compare, devuelve los SHAs del delta solo
-para estados `ahead`/`identical` y cachea permanentemente cada par inmutable),
+`getCurrentProductionSha()` recorre una página de runs exitosos `deploy-v2.yml`
+del más nuevo al más viejo hasta el primer `operation=deploy`, y acepta el SHA
+solo desde el JSON estricto de `EXPECTED_ARTIFACT_JSON.sourceSha`; limita cada
+lectura a cinco logs nuevos. Deploys, no-deploys y logs no disponibles se
+cachean permanentemente; un run inclasificable reciente vence a los 10 min y
+uno terminado hace más de una hora queda permanente. Errores de red/5xx no se
+cachean y hacen caer al último estado bueno marcado `_stale`. Los runs
+`OPERATION: rollback` se clasifican como no-deploy y se omiten: no representan
+el estado actual de producción en este modelo simplificado.
+`listCommitsBetween(base,head)` pagina compare, devuelve commits `ahead` y los
+exclusivos del head en `diverged`, deja `behind` vacío y cachea permanentemente
+cada par inmutable),
 `gateway-shared.js`
 (GATEWAY de envíos Desk/Teams/GitHub — lo importa el CLI
 `bin/cwc-comms.js`), `teams-shared.js` · `chatbot-shared.js` ·

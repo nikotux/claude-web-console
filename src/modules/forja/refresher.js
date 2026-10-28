@@ -1,5 +1,5 @@
 import {
-  githubUserExists, listCommitsBetween, listMergedPrsByAuthor, listProductionDeploys,
+  getCurrentProductionSha, githubUserExists, listCommitsBetween, listMergedPrsByAuthor,
 } from '../comms/pr-read-shared.js';
 import {
   computeForja, deskNumbers, FORJA_TIMEZONE, monthKey, normalizePr, playerIdFor,
@@ -19,7 +19,6 @@ const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
 const FETCH_CONCURRENCY = 3;
 const FESTEJOS_MAX_PENDING = 10;
-const DEPLOY_HISTORY_LIMIT = 20;
 const MONTHS = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -30,7 +29,7 @@ let queueTail = Promise.resolve();
 let fullCycle = null;
 const ownerCycles = new Map();
 let fetchMergedPrsByAuthor = listMergedPrsByAuthor;
-let fetchProductionDeploys = listProductionDeploys;
+let fetchCurrentProduction = getCurrentProductionSha;
 let fetchCommitsBetween = listCommitsBetween;
 let fetchGithubProfile = githubUserExists;
 
@@ -185,8 +184,7 @@ function nextMergeFestejoState(state, player, prs, arena, now) {
       initializedAt: now,
       celebrated: numbers,
       deployed: numbers,
-      deployCelebrated: [],
-      lastDeployProcessed: null,
+      prodSha: null,
       pending: [],
     };
   }
@@ -217,8 +215,8 @@ export function __nextMergeFestejoStateForTests(state, player, prs, arena, now) 
   return nextMergeFestejoState(state, player, prs, arena, now);
 }
 
-function buildDeployFestejo(player, prs, deploy) {
-  const completedAt = deploy.completedAt || new Date().toISOString();
+function buildDeployFestejo(player, prs, production) {
+  const completedAt = production.completedAt || new Date().toISOString();
   const items = prs.map((pr) => ({
     number: pr.number,
     title: pr.title,
@@ -227,9 +225,9 @@ function buildDeployFestejo(player, prs, deploy) {
     durationMin: Math.max(0, Math.round((new Date(completedAt) - new Date(pr.mergedAt)) / 60000)),
   }));
   return {
-    id: `deploy:${deploy.deployedSha}`,
+    id: `deploy:${production.sha}`,
     kind: 'deploy',
-    deploySha: deploy.deployedSha,
+    deploySha: production.sha,
     completedAt,
     celebrationName: player.celebrationName || null,
     numbers: items.map((item) => item.number),
@@ -241,82 +239,60 @@ async function detectDeployFestejos({
   players,
   prsByUsername,
   statesByUsername,
-  deploys,
+  production,
   commitsBetween = fetchCommitsBetween,
 }) {
-  const orderedDeploys = Array.isArray(deploys) ? deploys : [];
   const nextStates = new Map();
   const work = [];
-  const neededDeployIndexes = new Set();
-  const newestDeploy = orderedDeploys[0];
-  if (!newestDeploy) return { states: nextStates, compareCalls: 0 };
+  const currentSha = typeof production?.sha === 'string' ? production.sha : '';
+  if (!currentSha) return { states: nextStates, compareCalls: 0 };
 
   for (const player of players) {
     const state = statesByUsername.get(player.username);
-    if (!state || state.deployed === null) continue;
+    if (!state) continue;
     const prs = [...(prsByUsername.get(player.username) || [])];
-    const cursor = typeof state.lastDeployProcessed === 'string' ? state.lastDeployProcessed : '';
-    const cursorIndex = cursor
-      ? orderedDeploys.findIndex((deploy) => deploy.deployedSha === cursor)
-      : -1;
-    if (!cursor || cursorIndex === -1) {
+    const previousSha = typeof state.prodSha === 'string' ? state.prodSha : '';
+    if (!previousSha) {
       nextStates.set(player.username, {
         ...state,
         deployed: [...new Set(prs.map((pr) => pr.number).filter(Number.isSafeInteger))],
-        lastDeployProcessed: newestDeploy.deployedSha,
+        prodSha: currentSha,
       });
       continue;
     }
-    const deployIndexes = [];
-    for (let index = cursorIndex - 1; index >= 0; index -= 1) {
-      deployIndexes.push(index);
-      neededDeployIndexes.add(index);
-    }
-    if (deployIndexes.length) work.push({ player, state, prs, deployIndexes });
+    if (previousSha !== currentSha) work.push({ player, state, prs, previousSha });
   }
 
-  // Se resuelven todos los deltas antes de construir estados. Si un compare
-  // falla, la promesa rechaza y ningún cursor de jugador avanza.
-  const commitsByDeployIndex = new Map();
-  const chronologicalIndexes = [...neededDeployIndexes].sort((a, b) => b - a);
-  for (const index of chronologicalIndexes) {
-    const deploy = orderedDeploys[index];
-    const previousDeploy = orderedDeploys[index + 1];
-    if (!previousDeploy) throw new Error(`Falta el deploy previo a ${deploy.deployedSha}`);
-    const commits = await commitsBetween(previousDeploy.deployedSha, deploy.deployedSha);
-    commitsByDeployIndex.set(index, new Set(Array.isArray(commits) ? commits : []));
+  // Todos los jugadores normalmente comparten el mismo par. Se resuelven los
+  // compares antes de construir estados: cualquier fallo deja todo sin mutar.
+  const commitsByPair = new Map();
+  for (const { previousSha } of work) {
+    const pair = `${previousSha}:${currentSha}`;
+    if (commitsByPair.has(pair)) continue;
+    const commits = await commitsBetween(previousSha, currentSha);
+    commitsByPair.set(pair, new Set((Array.isArray(commits) ? commits : [])
+      .map((sha) => String(sha).toLowerCase())));
   }
 
-  for (const { player, state, prs, deployIndexes } of work) {
-    const deployed = new Set(state.deployed);
-    const celebratedDeploys = new Set(state.deployCelebrated || []);
+  for (const { player, state, prs, previousSha } of work) {
+    const deployed = new Set(Array.isArray(state.deployed) ? state.deployed : []);
+    const included = commitsByPair.get(`${previousSha}:${currentSha}`) || new Set();
+    const landed = prs.filter((pr) => {
+      if (deployed.has(pr.number)) return false;
+      return (typeof pr.mergeCommitOid === 'string' && included.has(pr.mergeCommitOid.toLowerCase()))
+        || (typeof pr.headRefOid === 'string' && included.has(pr.headRefOid.toLowerCase()));
+    });
+    for (const pr of landed) deployed.add(pr.number);
     const pending = [...state.pending];
-    let lastDeployProcessed = state.lastDeployProcessed;
-    for (const index of deployIndexes) {
-      const deploy = orderedDeploys[index];
-      const included = new Set([...(commitsByDeployIndex.get(index) || [])]
-        .map((sha) => String(sha).toLowerCase()));
-      const landed = prs.filter((pr) => {
-        if (deployed.has(pr.number)) return false;
-        return (typeof pr.mergeCommitOid === 'string' && included.has(pr.mergeCommitOid.toLowerCase()))
-          || (typeof pr.headRefOid === 'string' && included.has(pr.headRefOid.toLowerCase()));
-      });
-      for (const pr of landed) deployed.add(pr.number);
-      if (landed.length && !celebratedDeploys.has(deploy.deployedSha)) {
-        pending.push(buildDeployFestejo(player, landed, deploy));
-      }
-      celebratedDeploys.add(deploy.deployedSha);
-      lastDeployProcessed = deploy.deployedSha;
-    }
+    if (landed.length) pending.push(buildDeployFestejo(player, landed, production));
     nextStates.set(player.username, {
       ...state,
       deployed: [...deployed],
-      deployCelebrated: [...celebratedDeploys],
-      lastDeployProcessed,
+      prodSha: currentSha,
       pending: pending.slice(-FESTEJOS_MAX_PENDING),
     });
   }
-  return { states: nextStates, compareCalls: commitsByDeployIndex.size };
+  return { states: nextStates, compareCalls: commitsByPair.size };
 }
 
 export async function __detectDeployFestejosForTests(options) {
@@ -418,26 +394,26 @@ async function runCycle({ onlyOwner = null } = {}) {
   }
 
   // Producción es un segundo paso del mismo ciclo serializado. Solo corre con
-  // las lecturas directa+bot frescas y con un listado de deploys también fresco.
+  // las lecturas directa+bot frescas y con el estado de producción también fresco.
   const freshPlayers = requested.filter((player) => {
     const direct = directByOwner.get(player.username);
     return direct?.ok && !direct.value.stale && bot.ok && !bot.value.stale;
   });
   if (freshPlayers.length) {
     try {
-      const deploys = await fetchProductionDeploys({ limit: DEPLOY_HISTORY_LIMIT });
-      if (deploys[0] && deploys._stale !== true) {
+      const production = await fetchCurrentProduction();
+      if (production && production._stale !== true) {
         const statesByUsername = new Map(freshPlayers.map((player) => [player.username, getFestejos(player.username)]));
         const deployStep = await detectDeployFestejos({
           players: freshPlayers,
           prsByUsername,
           statesByUsername,
-          deploys,
+          production,
         });
         for (const [owner, state] of deployStep.states) saveFestejos(owner, state);
       }
     } catch (error) {
-      console.warn('[forja] no se pudieron leer los deploys de producción:', error?.message || error);
+      console.warn('[forja] no se pudo leer el estado de producción:', error?.message || error);
     }
   }
   for (const player of players) {
@@ -502,8 +478,8 @@ export function __setFetchForTests(fn) {
   fetchMergedPrsByAuthor = typeof fn === 'function' ? fn : listMergedPrsByAuthor;
 }
 
-export function __setProductionReadersForTests({ deploys, commits, profile } = {}) {
-  fetchProductionDeploys = typeof deploys === 'function' ? deploys : listProductionDeploys;
+export function __setProductionReadersForTests({ production, commits, profile } = {}) {
+  fetchCurrentProduction = typeof production === 'function' ? production : getCurrentProductionSha;
   fetchCommitsBetween = typeof commits === 'function' ? commits : listCommitsBetween;
   fetchGithubProfile = typeof profile === 'function' ? profile : githubUserExists;
 }

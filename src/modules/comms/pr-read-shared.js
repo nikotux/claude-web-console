@@ -225,30 +225,30 @@ const GITHUB_USER_CACHE_DIR = path.join(COMMS_DIR, 'github-user-cache');
 const PRODUCTION_CACHE_DIR = path.join(COMMS_DIR, 'production-deploy-cache');
 const COMMIT_COMPARE_CACHE_DIR = path.join(COMMS_DIR, 'commit-compare-cache');
 export const GITHUB_USER_CACHE_TTL_MS = 150 * 1000;
-export const PRODUCTION_DEPLOY_CACHE_TTL_MS = 150 * 1000;
 export const UNCLASSIFIED_DEPLOY_CACHE_TTL_MS = 10 * 60 * 1000;
+export const MAX_DEPLOY_LOG_READS = 5;
+const PERMANENT_UNCLASSIFIED_AFTER_MS = 60 * 60 * 1000;
 const DEPLOY_WORKFLOW = 'deploy-v2.yml';
-const SHA_RE = /^[0-9a-f]{40}$/i;
+const SHA_RE = /^[0-9a-f]{40}$/;
 
 function safeCacheName(value) {
   return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 24);
 }
 
-function readTimedCache(file, ttl, { allowStale = false } = {}) {
+function readTimedCache(file, ttl, { allowStale = false, now = Date.now() } = {}) {
   try {
     const cached = JSON.parse(fss.readFileSync(file, 'utf8'));
     if (!cached || !cached.ts || !Object.hasOwn(cached, 'data')) return null;
-    if (!allowStale && Date.now() - cached.ts >= ttl) return null;
+    if (!allowStale && now - cached.ts >= ttl) return null;
     return cached.data;
   } catch { return null; }
 }
 
-function writeTimedCache(dir, file, data) {
+function writeTimedCache(dir, file, data, { now = Date.now() } = {}) {
   try {
-    ensureDir();
     fss.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fss.chmodSync(dir, 0o700);
-    writeJsonAtomic(file, { ts: Date.now(), data }, { mode: 0o600 });
+    writeJsonAtomic(file, { ts: now, data }, { mode: 0o600 });
   } catch { /* cache best-effort */ }
 }
 
@@ -271,8 +271,14 @@ function ghJson(args, { cwd = config.projectDir, label = 'gh api' } = {}) {
 function ghText(args, { cwd = config.projectDir, label = 'gh' } = {}) {
   return new Promise((resolve, reject) => {
     execFile('gh', args, { cwd, timeout: 90000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`${label}: ${String(stderr || err.message).trim().slice(0, 500)}`));
-      else resolve(String(stdout));
+      if (!err) {
+        resolve(String(stdout));
+        return;
+      }
+      const detail = String(stderr || err.message).trim().slice(0, 500);
+      const error = new Error(`${label}: ${detail}`);
+      error.unavailable = /(?:HTTP\s+(?:404|410)|status(?: code)?\s+(?:404|410)|\bNot Found\b|\bGone\b|logs?\s+(?:have\s+)?expired)/i.test(detail);
+      reject(error);
     });
   });
 }
@@ -308,99 +314,164 @@ export async function githubUserExists(login, { cwd = config.projectDir, fresh =
   }
 }
 
-function classifyDeployLog(log) {
-  const operation = String(log || '').match(/(?:^|\s)OPERATION:\s*([^\s]+)/im)?.[1]?.trim().toLowerCase();
-  if (!operation) return { confirmed: false, operation: null, deployedSha: null };
-  if (operation !== 'deploy') return { confirmed: true, operation, deployedSha: null };
-
-  for (const line of String(log || '').split(/\r?\n/)) {
-    const marker = 'EXPECTED_ARTIFACT_JSON:';
-    const markerIndex = line.indexOf(marker);
-    if (markerIndex === -1) continue;
-    const payload = line.slice(markerIndex + marker.length).trim();
-    try {
-      const artifact = JSON.parse(payload);
-      const sourceSha = typeof artifact?.sourceSha === 'string'
-        ? artifact.sourceSha.trim().toLowerCase()
-        : '';
-      if (SHA_RE.test(sourceSha)) {
-        return { confirmed: true, operation, deployedSha: sourceSha };
-      }
-    } catch { /* una línea no JSON no clasifica el run */ }
-  }
-  return { confirmed: false, operation, deployedSha: null };
+function outputRecord(line) {
+  const parts = String(line || '').split('\t');
+  if (parts.length < 3) return parts[0].trim();
+  return parts.slice(2).join('\t')
+    .replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/, '')
+    .trim();
 }
 
-async function classifyDeployRun(run, { cwd, repo }) {
+function classifyDeployLog(log) {
+  const operations = [];
+  const artifactShas = [];
+  for (const line of String(log || '').split(/\r?\n/)) {
+    const record = outputRecord(line);
+    const operationMatch = record.match(/^OPERATION:\s*([^\s]+)\s*$/);
+    if (operationMatch) operations.push(operationMatch[1].toLowerCase());
+    const artifactMatch = record.match(/^EXPECTED_ARTIFACT_JSON:\s*(.+)$/);
+    if (!artifactMatch) continue;
+    try {
+      const artifact = JSON.parse(artifactMatch[1]);
+      const sourceSha = typeof artifact?.sourceSha === 'string' ? artifact.sourceSha.trim() : '';
+      if (SHA_RE.test(sourceSha)) artifactShas.push(sourceSha);
+    } catch { /* solo un registro con JSON estricto satisface el contrato */ }
+  }
+  if (operations.includes('deploy') && artifactShas.length) {
+    return {
+      kind: 'deploy', confirmed: true, operation: 'deploy', sha: artifactShas[0], deployedSha: artifactShas[0],
+    };
+  }
+  if (operations.includes('deploy') || !operations.length) {
+    return {
+      kind: 'unclassifiable', confirmed: false, operation: operations[0] || null, sha: null, deployedSha: null,
+    };
+  }
+  return {
+    kind: 'non-deploy', confirmed: true, operation: operations[0], sha: null, deployedSha: null,
+  };
+}
+
+function normalizeCachedRun(data) {
+  if (data?.kind === 'deploy' && SHA_RE.test(data.sha || '')) return data;
+  if (['non-deploy', 'unavailable'].includes(data?.kind)) return data;
+  if (data?.kind === 'unclassifiable') return data;
+  // Compatibilidad con clasificaciones confirmadas de la caché anterior.
+  if (data?.confirmed === true && SHA_RE.test(data.deployedSha || '')) {
+    return { kind: 'deploy', sha: data.deployedSha, operation: 'deploy', permanent: true };
+  }
+  if (data?.confirmed === true) {
+    return { kind: 'non-deploy', sha: null, operation: data.operation || 'other', permanent: true };
+  }
+  // Los `confirmed:false` legacy también podían ser fallos de red: no son confiables.
+  return null;
+}
+
+async function classifyDeployRun(run, {
+  cwd,
+  repo,
+  cacheDir,
+  now,
+  logBudget,
+  readLog,
+}) {
   const runId = Number(run?.id);
-  if (!Number.isSafeInteger(runId)) return null;
-  const detailFile = path.join(PRODUCTION_CACHE_DIR, `run-${runId}.json`);
-  const permanent = readTimedCache(detailFile, Number.MAX_SAFE_INTEGER, { allowStale: true });
-  if (permanent?.confirmed === true) return permanent.deployedSha || null;
-  const temporary = readTimedCache(detailFile, UNCLASSIFIED_DEPLOY_CACHE_TTL_MS);
-  if (temporary?.confirmed === false) return null;
+  if (!Number.isSafeInteger(runId)) return { classification: { kind: 'unavailable' }, logRead: false };
+  const detailFile = path.join(cacheDir, `run-${runId}.json`);
+  const cached = normalizeCachedRun(readTimedCache(detailFile, Number.MAX_SAFE_INTEGER, {
+    allowStale: true, now,
+  }));
+  if (cached?.permanent === true || ['deploy', 'non-deploy', 'unavailable'].includes(cached?.kind)) {
+    return { classification: cached, logRead: false };
+  }
+  const temporary = normalizeCachedRun(readTimedCache(detailFile, UNCLASSIFIED_DEPLOY_CACHE_TTL_MS, { now }));
+  if (temporary?.kind === 'unclassifiable') return { classification: temporary, logRead: false };
+  if (logBudget <= 0) return { classification: null, logRead: false, budgetExhausted: true };
+
   let log;
   try {
-    log = await ghText(['run', 'view', String(runId), '--repo', repo, '--log'], {
-      cwd, label: `gh run view ${runId} --log`,
-    });
-  } catch {
-    const unclassified = { confirmed: false, operation: null, deployedSha: null };
-    writeTimedCache(PRODUCTION_CACHE_DIR, detailFile, unclassified);
-    return null;
+    log = await readLog(runId);
+  } catch (error) {
+    if (!error?.unavailable) throw error;
+    const unavailable = { kind: 'unavailable', sha: null, operation: null, permanent: true };
+    writeTimedCache(cacheDir, detailFile, unavailable, { now });
+    return { classification: unavailable, logRead: true };
   }
   const classification = classifyDeployLog(log);
-  writeTimedCache(PRODUCTION_CACHE_DIR, detailFile, classification);
-  return classification.deployedSha;
+  const completedAt = Date.parse(run?.updated_at || run?.created_at || '');
+  const isOld = Number.isFinite(completedAt) && now - completedAt > PERMANENT_UNCLASSIFIED_AFTER_MS;
+  const cachedClassification = classification.kind === 'unclassifiable'
+    ? { ...classification, permanent: isOld }
+    : { ...classification, permanent: true };
+  writeTimedCache(cacheDir, detailFile, cachedClassification, { now });
+  return { classification: cachedClassification, logRead: true };
 }
 
 export function __classifyDeployLogForTests(log) {
   return classifyDeployLog(log);
 }
 
-function markDeployListStale(deploys, stale) {
-  const result = Array.isArray(deploys) ? deploys : [];
+function markProductionStale(production, stale) {
+  const result = production ? { ...production } : null;
+  if (!result) return null;
   Object.defineProperty(result, '_stale', { value: stale, enumerable: false, configurable: true });
   return result;
 }
 
-export async function listProductionDeploys({
-  limit = 5,
+export async function getCurrentProductionSha({
   repo = TOLKIEN_GITHUB_REPO,
   cwd = config.projectDir,
-  fresh = false,
+  cacheDir = PRODUCTION_CACHE_DIR,
+  now = Date.now(),
+  diagnostics = null,
+  readRuns = null,
+  readLog = null,
 } = {}) {
-  const normalizedLimit = Math.max(1, Math.min(20, Number(limit) || 5));
-  const listFile = path.join(PRODUCTION_CACHE_DIR, `deploys-v2-${safeCacheName(repo)}.json`);
-  if (!fresh) {
-    const cached = readTimedCache(listFile, PRODUCTION_DEPLOY_CACHE_TTL_MS);
-    if (cached) return markDeployListStale(cached.slice(0, normalizedLimit), false);
-  }
+  const currentFile = path.join(cacheDir, `current-v2-${safeCacheName(repo)}.json`);
+  const stats = diagnostics && typeof diagnostics === 'object' ? diagnostics : {};
+  stats.runsInspected = 0;
+  stats.logReads = 0;
+  const loadRuns = readRuns || (async () => ghJson([
+    'run', 'list', '--repo', repo, '--workflow', DEPLOY_WORKFLOW,
+    '--status', 'success', '--limit', '100',
+    '--json', 'databaseId,conclusion,createdAt,updatedAt',
+  ], { cwd, label: `gh run list ${DEPLOY_WORKFLOW}` }));
+  const loadLog = readLog || ((runId) => ghText([
+    'run', 'view', String(runId), '--repo', repo, '--log',
+  ], { cwd, label: `gh run view ${runId} --log` }));
   try {
-    const scanLimit = Math.min(100, Math.max(20, normalizedLimit * 5));
-    const response = await ghJson([
-      'api', `repos/${repo}/actions/workflows/${DEPLOY_WORKFLOW}/runs?status=success&per_page=${scanLimit}`,
-    ], { cwd, label: `gh api ${DEPLOY_WORKFLOW} runs` });
-    const candidates = (Array.isArray(response?.workflow_runs) ? response.workflow_runs : [])
-      .filter((run) => run?.event === 'workflow_dispatch' && run?.conclusion === 'success')
+    const response = await loadRuns();
+    const listedRuns = Array.isArray(response)
+      ? response.map((run) => ({
+        id: run?.databaseId,
+        conclusion: run?.conclusion,
+        created_at: run?.createdAt,
+        updated_at: run?.updatedAt,
+      }))
+      : (Array.isArray(response?.workflow_runs) ? response.workflow_runs : []);
+    const candidates = listedRuns
+      .filter((run) => run?.conclusion === 'success')
       .sort((a, b) => Date.parse(b.updated_at || '') - Date.parse(a.updated_at || ''));
-    const deploys = [];
     for (const run of candidates) {
-      const deployedSha = await classifyDeployRun(run, { cwd, repo });
-      if (!SHA_RE.test(deployedSha || '')) continue;
-      deploys.push({
-        runId: Number(run.id),
-        deployedSha,
-        completedAt: run.updated_at || run.created_at || null,
-        displayTitle: String(run.display_title || run.name || DEPLOY_WORKFLOW),
+      stats.runsInspected += 1;
+      const classified = await classifyDeployRun(run, {
+        cwd, repo, cacheDir, now, logBudget: MAX_DEPLOY_LOG_READS - stats.logReads, readLog: loadLog,
       });
-      if (deploys.length >= normalizedLimit) break;
+      if (classified.logRead) stats.logReads += 1;
+      if (classified.budgetExhausted) throw new Error('Escaneo de producción incompleto: límite de logs alcanzado');
+      if (classified.classification?.kind !== 'deploy') continue;
+      const production = {
+        sha: classified.classification.sha,
+        runId: Number(run.id),
+        completedAt: run.updated_at || run.created_at || null,
+      };
+      writeTimedCache(cacheDir, currentFile, production, { now });
+      return markProductionStale(production, false);
     }
-    writeTimedCache(PRODUCTION_CACHE_DIR, listFile, deploys);
-    return markDeployListStale(deploys, false);
+    return null;
   } catch (error) {
-    const lastGood = readTimedCache(listFile, PRODUCTION_DEPLOY_CACHE_TTL_MS, { allowStale: true });
-    if (lastGood) return markDeployListStale(lastGood.slice(0, normalizedLimit), true);
+    const lastGood = readTimedCache(currentFile, Number.MAX_SAFE_INTEGER, { allowStale: true, now });
+    if (lastGood && SHA_RE.test(lastGood.sha || '')) return markProductionStale(lastGood, true);
     throw error;
   }
 }
@@ -408,25 +479,28 @@ export async function listProductionDeploys({
 export async function listCommitsBetween(baseSha, headSha, {
   repo = TOLKIEN_GITHUB_REPO,
   cwd = config.projectDir,
+  cacheDir = COMMIT_COMPARE_CACHE_DIR,
+  readComparison = null,
 } = {}) {
   const base = String(baseSha || '').trim().toLowerCase();
   const head = String(headSha || '').trim().toLowerCase();
   if (!SHA_RE.test(base) || !SHA_RE.test(head)) throw new Error('SHA inválido para comparar');
-  const cacheFile = path.join(COMMIT_COMPARE_CACHE_DIR, `${safeCacheName(`${repo}:${base}:${head}`)}.json`);
+  const cacheFile = path.join(cacheDir, `v2-${safeCacheName(`${repo}:${base}:${head}`)}.json`);
   const cached = readTimedCache(cacheFile, Number.MAX_SAFE_INTEGER, { allowStale: true });
   if (cached && Array.isArray(cached.commits)) return cached.commits;
+  const loadComparison = readComparison || ((page) => ghJson([
+    'api', `repos/${repo}/compare/${base}...${head}?per_page=100&page=${page}`,
+  ], { cwd, label: `gh api compare ${base.slice(0, 8)}...${head.slice(0, 8)} page ${page}` }));
 
   const commits = [];
   let status = '';
   let page = 1;
   let totalCommits = Infinity;
   while (page <= 100 && commits.length < totalCommits) {
-    const comparison = await ghJson([
-      'api', `repos/${repo}/compare/${base}...${head}?per_page=100&page=${page}`,
-    ], { cwd, label: `gh api compare ${base.slice(0, 8)}...${head.slice(0, 8)} page ${page}` });
+    const comparison = await loadComparison(page);
     if (page === 1) {
       status = String(comparison?.status || '');
-      if (status !== 'ahead' && status !== 'identical') break;
+      if (status === 'behind') break;
       totalCommits = Math.max(0, Number(comparison?.total_commits) || 0);
       if (status === 'identical' || totalCommits === 0) break;
     }
@@ -438,9 +512,7 @@ export async function listCommitsBetween(baseSha, headSha, {
     if (pageCommits.length < 100) break;
     page += 1;
   }
-  const uniqueCommits = status === 'ahead' || status === 'identical'
-    ? [...new Set(commits)]
-    : [];
-  writeTimedCache(COMMIT_COMPARE_CACHE_DIR, cacheFile, { status, commits: uniqueCommits });
+  const uniqueCommits = status === 'behind' ? [] : [...new Set(commits)];
+  writeTimedCache(cacheDir, cacheFile, { status, commits: uniqueCommits });
   return uniqueCommits;
 }

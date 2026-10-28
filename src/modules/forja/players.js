@@ -20,7 +20,7 @@ function initialsFor(name, login) {
 }
 
 function firstGivenName(value) {
-  return String(value || '').trim().split(/\s+/).filter(Boolean)[0] || '';
+  return String(value || '').trim().split(/\s+/).find((token) => /\p{L}/u.test(token)) || null;
 }
 
 export function celebrationNameFrom(identityName, profileName) {
