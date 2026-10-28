@@ -64,3 +64,7 @@ Cada snapshot personal conserva tres relojes distintos: `generatedAt` es cuándo
 - Que la arena muestre los nombres visibles de colegas es intencional; son parte del contrato público de la competencia, a diferencia del username y login GitHub.
 - Los defaults visibles en español viven como datos junto a sus ids estables en `compute.js`; un frontend futuro traduce por id.
 - Un fallo de GitHub nunca reemplaza el snapshot bueno por un vacío: se conserva, se marca `stale` y se registra el error sin credenciales.
+
+## Rendimiento
+
+`compute.js` reutiliza un `Intl.DateTimeFormat` por zona horaria porque construirlo por cada fecha bloquea el event loop, y conserva en un memo acotado las claves de día y mes por zona + `mergedAt`. Los presupuestos del benchmark son 20 ms para 3×85 PRs, 50 ms para 3×300 y 150 ms para 10×300. Corré `node scripts/forja-bench.mjs` y exigí los tres escenarios en `OK` antes de cerrar cualquier cambio en `compute.js`.

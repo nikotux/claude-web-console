@@ -14,15 +14,30 @@ export const LEVELS = [
 ];
 
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const TEMPORAL_KEYS_CACHE_MAX = 20_000;
+const formattersByTimeZone = new Map();
+const temporalKeysCache = new Map();
+const decimalFormatters = [0, 1].map((minimumFractionDigits) => new Intl.NumberFormat('es-AR', {
+  maximumFractionDigits: 1, minimumFractionDigits,
+}));
+
+function formatterFor(timeZone) {
+  let formatter = formattersByTimeZone.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    formattersByTimeZone.set(timeZone, formatter);
+  }
+  return formatter;
+}
 
 export function playerIdFor(username) {
   return createHash('sha1').update(`forja:${username}`).digest('hex').slice(0, 12);
 }
 
 function zonedParts(date, timeZone = FORJA_TIMEZONE) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(date).reduce((out, part) => {
+  const parts = formatterFor(timeZone).formatToParts(date).reduce((out, part) => {
     if (part.type !== 'literal') out[part.type] = part.value;
     return out;
   }, {});
@@ -37,6 +52,28 @@ export function dateKey(date, timeZone = FORJA_TIMEZONE) {
 export function monthKey(date, timeZone = FORJA_TIMEZONE) {
   const { year, month } = zonedParts(date, timeZone);
   return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+function temporalKeysFor(pr, timeZone, keysByMergedAt) {
+  let keys = keysByMergedAt.get(pr.mergedAt);
+  if (!keys) {
+    const cacheKey = `${timeZone}\u0000${pr.mergedAt}`;
+    keys = temporalKeysCache.get(cacheKey);
+    if (!keys) {
+      const { year, month, day } = zonedParts(new Date(pr.mergedAt), timeZone);
+      const paddedMonth = String(month).padStart(2, '0');
+      keys = {
+        date: `${year}-${paddedMonth}-${String(day).padStart(2, '0')}`,
+        month: `${year}-${paddedMonth}`,
+      };
+      if (temporalKeysCache.size >= TEMPORAL_KEYS_CACHE_MAX) {
+        temporalKeysCache.delete(temporalKeysCache.keys().next().value);
+      }
+      temporalKeysCache.set(cacheKey, keys);
+    }
+    keysByMergedAt.set(pr.mergedAt, keys);
+  }
+  return keys;
 }
 
 function utcDayFromKey(key) {
@@ -123,8 +160,8 @@ function countsBy(prs, keyer) {
   return counts;
 }
 
-function bestBusinessStreak(prs, timeZone) {
-  const days = [...new Set(prs.map((pr) => dateKey(new Date(pr.mergedAt), timeZone)).filter(isBusinessDay))].sort();
+function bestBusinessStreak(prs, timeZone, keysByMergedAt) {
+  const days = [...new Set(prs.map((pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).date).filter(isBusinessDay))].sort();
   let best = 0;
   let run = 0;
   let previous = null;
@@ -136,8 +173,8 @@ function bestBusinessStreak(prs, timeZone) {
   return best;
 }
 
-function currentBusinessStreak(prs, timeZone, today) {
-  const days = new Set(prs.map((pr) => dateKey(new Date(pr.mergedAt), timeZone)));
+function currentBusinessStreak(prs, timeZone, today, keysByMergedAt) {
+  const days = new Set(prs.map((pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).date));
   let cursor = isBusinessDay(today) && days.has(today) ? today : previousBusinessDay(today);
   let streak = 0;
   while (days.has(cursor)) {
@@ -156,24 +193,24 @@ export function taskNumbers(title) {
 }
 
 function formatDecimal(value) {
-  return new Intl.NumberFormat('es-AR', {
-    maximumFractionDigits: 1, minimumFractionDigits: value % 1 ? 1 : 0,
-  }).format(value);
+  return decimalFormatters[value % 1 ? 1 : 0].format(value);
 }
 
-export function computeMedals(prs, { timeZone, currentMonthKey, rank, monthLabel }) {
-  const dayCounts = countsBy(prs, (pr) => dateKey(new Date(pr.mergedAt), timeZone));
-  const monthCounts = countsBy(prs, (pr) => monthKey(new Date(pr.mergedAt), timeZone));
+export function computeMedals(prs, {
+  timeZone, currentMonthKey, rank, monthLabel, keysByMergedAt = new Map(),
+}) {
+  const dayCounts = countsBy(prs, (pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).date);
+  const monthCounts = countsBy(prs, (pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).month);
   const fast = [...prs].map((pr) => ({
     pr, minutes: Math.max(0, (new Date(pr.mergedAt) - new Date(pr.createdAt)) / 60000),
   })).sort((a, b) => a.minutes - b.minutes)[0];
   const eruptionDays = [...dayCounts].filter(([, count]) => count >= 10).sort(([a], [b]) => a.localeCompare(b));
   const biggest = [...prs].sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions))[0];
   const bestMonth = [...monthCounts].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0] || [currentMonthKey, 0];
-  const smallMonthCounts = countsBy(prs.filter((pr) => pr.additions + pr.deletions < 50), (pr) => monthKey(new Date(pr.mergedAt), timeZone));
+  const smallMonthCounts = countsBy(prs.filter((pr) => pr.additions + pr.deletions < 50), (pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).month);
   const bestSmallMonth = [...smallMonthCounts].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0] || [currentMonthKey, 0];
   const bestDay = Math.max(0, ...dayCounts.values());
-  const bestStreak = bestBusinessStreak(prs, timeZone);
+  const bestStreak = bestBusinessStreak(prs, timeZone, keysByMergedAt);
   const specs = [
     { id: 'alas-nazgul', name: 'Alas del Nazgûl', desc: 'PR mergeado en menos de 10 minutos', icon: '🦇', unlocked: Boolean(fast && fast.minutes < 10), detail: fast ? `#${fast.pr.number} · ${formatDecimal(fast.minutes)} min` : 'Todavía sin anillos', progress: { cur: fast ? Math.max(0, Math.min(10, 10 - fast.minutes)) : 0, max: 10 } },
     { id: 'erupcion', name: 'Erupción de Orodruin', desc: '10 o más PRs mergeados en un día', icon: '🌋', unlocked: eruptionDays.length > 0, detail: eruptionDays.length ? `×${eruptionDays.length} · ${eruptionDays.map(([day]) => shortDate(day)).join(', ')}` : `${bestDay}/10 en el mejor día`, progress: { cur: Math.min(bestDay, 10), max: 10 } },
@@ -196,15 +233,15 @@ function daysLeftInMonth(parts) {
   return Math.max(0, new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate() - parts.day);
 }
 
-function playerBase(player, prs, currentMonthKey, today, timeZone) {
-  const seasonPrs = prs.filter((pr) => monthKey(new Date(pr.mergedAt), timeZone) === currentMonthKey);
+function playerBase(player, prs, currentMonthKey, today, timeZone, keysByMergedAt) {
+  const seasonPrs = prs.filter((pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).month === currentMonthKey);
   return {
     ...player,
     total: prs.length,
     level: levelFor(prs.length),
     seasonCount: seasonPrs.length,
-    todayCount: prs.filter((pr) => dateKey(new Date(pr.mergedAt), timeZone) === today).length,
-    currentStreak: currentBusinessStreak(prs, timeZone, today),
+    todayCount: prs.filter((pr) => temporalKeysFor(pr, timeZone, keysByMergedAt).date === today).length,
+    currentStreak: currentBusinessStreak(prs, timeZone, today, keysByMergedAt),
     prs,
   };
 }
@@ -212,12 +249,12 @@ function playerBase(player, prs, currentMonthKey, today, timeZone) {
 function buildMe(player, context) {
   const {
     timeZone, currentMonthKey, monthLabel, today, generatedAt, fetchedAt, dataAsOf,
-    lastAttemptAt, stale, error,
+    lastAttemptAt, stale, error, keysByMergedAt,
   } = context;
   const first = player.prs[0] || null;
   const deskTickets = new Set(player.prs.flatMap((pr) => deskNumbers(pr.title))).size;
   const tasks = new Set(player.prs.flatMap((pr) => taskNumbers(pr.title))).size;
-  const days = first ? daysForging(dateKey(new Date(first.mergedAt), timeZone), today) : 0;
+  const days = first ? daysForging(temporalKeysFor(first, timeZone, keysByMergedAt).date, today) : 0;
   const recent = [...player.prs].reverse().slice(0, 4).map((pr) => ({
     number: pr.number, title: pr.title, additions: pr.additions, deletions: pr.deletions,
     minutesOpen: Math.max(0, Math.round((new Date(pr.mergedAt) - new Date(pr.createdAt)) / 60000)),
@@ -225,7 +262,7 @@ function buildMe(player, context) {
   }));
   const chronicle = CHRONICLE_MILESTONES.filter((value) => value <= player.prs.length).map((value) => {
     const pr = player.prs[value - 1];
-    return { milestone: value, achieved: true, date: dateKey(new Date(pr.mergedAt), timeZone), number: pr.number, title: pr.title };
+    return { milestone: value, achieved: true, date: temporalKeysFor(pr, timeZone, keysByMergedAt).date, number: pr.number, title: pr.title };
   });
   const pending = CHRONICLE_MILESTONES.find((value) => value > player.prs.length);
   if (pending) chronicle.push({ milestone: pending, achieved: false, remaining: pending - player.prs.length, label: pending === 100 ? 'El Anillo Centenario' : `Anillo nº ${pending}` });
@@ -249,13 +286,15 @@ function buildMe(player, context) {
     deskTickets,
     tasks,
     daysForging: days,
-    firstMerge: first ? { date: dateKey(new Date(first.mergedAt), timeZone), number: first.number, title: first.title } : null,
+    firstMerge: first ? { date: temporalKeysFor(first, timeZone, keysByMergedAt).date, number: first.number, title: first.title } : null,
     season: { key: currentMonthKey, count: player.seasonCount },
     seasonCount: player.seasonCount,
     recent,
     level: player.level,
     chronicle,
-    medals: computeMedals(player.prs, { timeZone, currentMonthKey, rank: player.rank, monthLabel }),
+    medals: computeMedals(player.prs, {
+      timeZone, currentMonthKey, rank: player.rank, monthLabel, keysByMergedAt,
+    }),
     rank: player.rank,
     currentStreak: player.currentStreak,
     todayCount: player.todayCount,
@@ -278,17 +317,26 @@ export function computeForja(players, prsByUsername, {
   const parts = zonedParts(instant, timeZone);
   const currentMonthKey = `${parts.year}-${String(parts.month).padStart(2, '0')}`;
   const monthLabel = MONTHS[parts.month - 1];
+  const keysByMergedAt = new Map();
+  const timestampsByMergedAt = new Map();
   const ranked = players.map((player) => {
     const prs = [...(prsByUsername.get(player.username) || [])]
-      .filter((pr) => pr?.mergedAt && !Number.isNaN(Date.parse(pr.mergedAt)))
-      .sort((a, b) => new Date(a.mergedAt) - new Date(b.mergedAt) || a.number - b.number);
-    return playerBase(player, prs, currentMonthKey, today, timeZone);
+      .filter((pr) => {
+        if (!pr?.mergedAt) return false;
+        const timestamp = Date.parse(pr.mergedAt);
+        if (Number.isNaN(timestamp)) return false;
+        timestampsByMergedAt.set(pr.mergedAt, timestamp);
+        return true;
+      })
+      .sort((a, b) => timestampsByMergedAt.get(a.mergedAt) - timestampsByMergedAt.get(b.mergedAt)
+        || a.number - b.number);
+    return playerBase(player, prs, currentMonthKey, today, timeZone, keysByMergedAt);
   }).sort((a, b) => b.seasonCount - a.seasonCount || b.total - a.total
     || a.displayName.localeCompare(b.displayName, 'es'))
     .map((player, index) => ({ ...player, rank: index + 1 }));
 
   const snapshots = new Map(ranked.map((player) => [player.username, buildMe(player, {
-    timeZone, currentMonthKey, monthLabel, today, generatedAt,
+    timeZone, currentMonthKey, monthLabel, today, generatedAt, keysByMergedAt,
     fetchedAt: fetchedAtByUsername.get(player.username),
     dataAsOf: dataAsOfByUsername.get(player.username),
     lastAttemptAt: lastAttemptAtByUsername.get(player.username),
