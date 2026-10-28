@@ -3,10 +3,99 @@ import { t } from '../../ui/i18n.js';
 import { icon } from '../../ui/icons.js';
 import { levelCode, levelName, node, percent, staleLabel } from './view.js';
 
-const REFRESHING_POLL_MS = 5_000;
-const refreshingTimers = new WeakMap();
+const REFRESHING_POLL_BASE_MS = 5_000;
+const REFRESHING_POLL_CAP_MS = 60_000;
+const REFRESHING_POLL_MAX_ATTEMPTS = 10;
+let refreshingPoller = null;
+
+function refreshingPollDelay(attempt) {
+  if (!Number.isInteger(attempt) || attempt < 0 || attempt >= REFRESHING_POLL_MAX_ATTEMPTS) return null;
+  return Math.min(REFRESHING_POLL_CAP_MS, REFRESHING_POLL_BASE_MS * (2 ** attempt));
+}
+
+export function __refreshingPollDelayForTests(attempt) {
+  return refreshingPollDelay(attempt);
+}
+
+function clearRefreshingTimer(poller) {
+  if (poller?.timer) clearTimeout(poller.timer);
+  if (poller) poller.timer = null;
+}
+
+function stopRefreshingPoller(el = null) {
+  if (!refreshingPoller || (el && refreshingPoller.el !== el)) return;
+  clearRefreshingTimer(refreshingPoller);
+  document.removeEventListener('visibilitychange', refreshingPoller.onVisibilityChange);
+  refreshingPoller = null;
+}
+
+function scheduleRefreshingPoll(poller, delay = refreshingPollDelay(poller.attempts)) {
+  clearRefreshingTimer(poller);
+  if (delay === null || document.hidden || refreshingPoller !== poller) {
+    poller.remainingMs = delay;
+    return;
+  }
+  poller.remainingMs = delay;
+  poller.startedAt = Date.now();
+  poller.timer = setTimeout(() => {
+    poller.timer = null;
+    poller.remainingMs = null;
+    if (refreshingPoller !== poller) return;
+    if (!poller.el.isConnected) {
+      stopRefreshingPoller(poller.el);
+      return;
+    }
+    poller.attempts += 1;
+    poller.actions.onRetry();
+  }, delay);
+}
+
+function ensureRefreshingPoller(el, actions) {
+  if (refreshingPoller?.el !== el) {
+    stopRefreshingPoller();
+    const poller = {
+      el,
+      actions,
+      attempts: 0,
+      timer: null,
+      remainingMs: null,
+      startedAt: 0,
+      onVisibilityChange: null,
+    };
+    poller.onVisibilityChange = () => {
+      if (refreshingPoller !== poller) return;
+      if (document.hidden) {
+        if (!poller.timer) return;
+        poller.remainingMs = Math.max(0, poller.remainingMs - (Date.now() - poller.startedAt));
+        clearRefreshingTimer(poller);
+        return;
+      }
+      if (!poller.timer) scheduleRefreshingPoll(poller, poller.remainingMs);
+    };
+    document.addEventListener('visibilitychange', poller.onVisibilityChange);
+    refreshingPoller = poller;
+    scheduleRefreshingPoll(poller);
+  } else {
+    refreshingPoller.actions = actions;
+    if (!refreshingPoller.timer && refreshingPoller.remainingMs === null) {
+      scheduleRefreshingPoll(refreshingPoller);
+    }
+  }
+  return refreshingPoller;
+}
+
+function restartRefreshingPoller(el, actions) {
+  if (refreshingPoller?.el === el) {
+    refreshingPoller.attempts = 0;
+    refreshingPoller.remainingMs = null;
+    refreshingPoller.actions = actions;
+    scheduleRefreshingPoll(refreshingPoller);
+  }
+  actions.onRetry();
+}
 
 function throneTooltip(data) {
+  if (data?.refreshingTerminal) return t('forja.refreshing.terminal', 'No pudimos forjar tu ficha todavía. Reintentá.');
   if (data?.refreshing) return t('forja.refreshing.tooltip', 'Estamos forjando tu ficha con el nuevo usuario de GitHub');
   if (data?.configured === false) return t('forja.collapsed.tooltip.unconfigured', 'Forjá tu ficha y entrá a la arena');
   const throne = data?.mission?.throne || {};
@@ -31,6 +120,13 @@ function collapsedVisual(data) {
     };
   }
   const pending = Math.max(0, Number(data?.pendingFestejos) || 0);
+  if (data?.refreshingTerminal) {
+    return {
+      visual: node('span', 'fj-collapsed-lock', '!'),
+      mode: 'refreshing-terminal',
+      chip: t('forja.refreshing.terminalShort', 'No pudimos forjarla'),
+    };
+  }
   if (data?.refreshing) {
     return {
       visual: node('span', 'cwc-spinner fj-collapsed-loading'),
@@ -206,6 +302,19 @@ function renderRefreshing(el) {
   el.appendChild(box);
 }
 
+function renderRefreshingTerminal(el, onRetry) {
+  const box = node('div', 'fj-error');
+  box.appendChild(node('span', '', t(
+    'forja.refreshing.terminal',
+    'No pudimos forjar tu ficha todavía. Reintentá.',
+  )));
+  const retry = node('button', 'btn-ghost btn--sm', t('forja.refreshing.retry', 'Reintentar'));
+  retry.type = 'button';
+  retry.addEventListener('click', onRetry);
+  box.appendChild(retry);
+  el.appendChild(box);
+}
+
 function renderError(el, error, onRetry) {
   const box = node('div', 'fj-error');
   box.append(
@@ -220,30 +329,31 @@ function renderError(el, error, onRetry) {
 }
 
 export function renderFicha(el, state, actions) {
-  const previousTimer = refreshingTimers.get(el);
-  if (previousTimer) clearTimeout(previousTimer);
-  refreshingTimers.delete(el);
+  const poller = state.data?.refreshing ? ensureRefreshingPoller(el, actions) : null;
+  if (!state.data?.refreshing) stopRefreshingPoller(el);
+  const refreshingTerminal = Boolean(
+    poller && poller.attempts >= REFRESHING_POLL_MAX_ATTEMPTS,
+  );
+  const renderState = refreshingTerminal
+    ? { ...state, data: { ...state.data, refreshingTerminal: true } }
+    : state;
   el.textContent = '';
   const panelId = 'fj-sidebar-panel';
-  const context = header(el, state, actions, panelId);
+  const context = header(el, renderState, actions, panelId);
   const panel = node('div', 'fj-sidebar-panel');
   panel.id = panelId;
-  panel.hidden = !state.open;
+  panel.hidden = !renderState.open;
   el.appendChild(panel);
-  if (state.data?.refreshing) {
-    const timer = setTimeout(() => {
-      refreshingTimers.delete(el);
-      if (el.isConnected) actions.onRetry();
-    }, REFRESHING_POLL_MS);
-    refreshingTimers.set(el, timer);
-  }
-  if (!state.open) return;
+  if (!renderState.open) return;
   panel.appendChild(node('p', 'fj-expanded-context', context));
-  if (state.loading) renderLoading(panel);
-  else if (state.error) renderError(panel, state.error, actions.onRetry);
-  else if (state.data?.refreshing) {
+  if (renderState.loading) renderLoading(panel);
+  else if (renderState.error) renderError(panel, renderState.error, actions.onRetry);
+  else if (refreshingTerminal) {
+    renderRefreshingTerminal(panel, () => restartRefreshingPoller(el, actions));
+  }
+  else if (renderState.data?.refreshing) {
     renderRefreshing(panel);
   }
-  else if (state.data?.configured === false) renderUnconfigured(panel, state.data, actions.onConfigure);
-  else renderConfigured(panel, state.data || {}, actions.onOpen);
+  else if (renderState.data?.configured === false) renderUnconfigured(panel, renderState.data, actions.onConfigure);
+  else renderConfigured(panel, renderState.data || {}, actions.onOpen);
 }

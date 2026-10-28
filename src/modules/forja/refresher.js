@@ -19,6 +19,7 @@ const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
 const FETCH_CONCURRENCY = 3;
 const FESTEJOS_MAX_PENDING = 10;
+const STALE_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const MONTHS = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -28,6 +29,7 @@ let timer = null;
 let queueTail = Promise.resolve();
 let fullCycle = null;
 const ownerCycles = new Map();
+const profileRetryAfterByOwner = new Map();
 let fetchMergedPrsByAuthor = listMergedPrsByAuthor;
 let fetchCurrentProduction = getCurrentProductionSha;
 let fetchCommitsBetween = listCommitsBetween;
@@ -126,6 +128,22 @@ export function __nextDataAsOfForTests(previous, direct, bot, attemptedAt) {
 
 export function __runFetchPoolForTests(tasks) {
   return runFetchPool(tasks);
+}
+
+function githubProfileResultAction(profile, now = Date.now()) {
+  if (profile?._stale === true) {
+    return { save: false, retryAt: now + STALE_PROFILE_RETRY_MS };
+  }
+  return { save: Boolean(profile?.exists), retryAt: null };
+}
+
+export function __githubProfileResultActionForTests(profile, now) {
+  return githubProfileResultAction(profile, now);
+}
+
+function githubProfileRetryDue(player, now) {
+  const retry = profileRetryAfterByOwner.get(player.username);
+  return !retry || !sameLogin(retry.login, player.login) || now >= retry.at;
 }
 
 function throneFor(player, arena) {
@@ -359,14 +377,27 @@ export async function __refreshDeployPrsForTests(options) {
 
 async function runCycle({ onlyOwner = null } = {}) {
   let players = resolvePlayers();
-  const missingProfiles = players.filter((player) => player.needsGithubName);
+  const profileNow = Date.now();
+  const missingProfiles = players.filter((player) => (
+    player.needsGithubName && githubProfileRetryDue(player, profileNow)
+  ));
   if (missingProfiles.length) {
     const profiles = await runFetchPool(missingProfiles.map((player) => async () => {
       try { return { player, profile: await fetchGithubProfile(player.login) }; }
       catch { return null; }
     }));
     for (const result of profiles) {
-      if (result?.profile?.exists) {
+      if (!result) continue;
+      const action = githubProfileResultAction(result.profile);
+      if (action.retryAt) {
+        profileRetryAfterByOwner.set(result.player.username, {
+          login: result.player.login,
+          at: action.retryAt,
+        });
+        continue;
+      }
+      profileRetryAfterByOwner.delete(result.player.username);
+      if (action.save) {
         saveGithubProfile(result.player.username, {
           login: result.profile.canonicalLogin || result.player.login,
           name: result.profile.name || '',

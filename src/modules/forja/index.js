@@ -14,7 +14,9 @@ import {
 
 const VALIDATION_WINDOW_MS = 60 * 1000;
 const VALIDATION_MAX_PER_WINDOW = 8;
+const AUTOMATIC_REFRESH_COOLDOWN_MS = 30 * 1000;
 const validationBuckets = new Map();
+const automaticRefreshByOwner = new Map();
 
 function ownerOf(req) {
   return principalOf(req)?.username || hostUser();
@@ -28,9 +30,15 @@ function sameLogin(left, right) {
   return typeof left === 'string' && left.toLowerCase() === String(right || '').toLowerCase();
 }
 
-function refreshingSnapshotState({ owner, player, snapshot, pending, enqueue = refreshOwner }) {
+function refreshingSnapshotState({
+  owner, player, snapshot, pending, enqueue = refreshOwner, now = Date.now(),
+}) {
   if (!snapshot || sameLogin(snapshot.login, player.login)) return null;
-  void enqueue(owner, { rateLimitMs: 0 });
+  const previous = automaticRefreshByOwner.get(owner);
+  if (!Number.isFinite(previous) || now - previous >= AUTOMATIC_REFRESH_COOLDOWN_MS) {
+    automaticRefreshByOwner.set(owner, now);
+    void enqueue(owner, { rateLimitMs: 0 });
+  }
   return {
     configured: true,
     refreshing: true,
