@@ -51,6 +51,9 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-10-28 15:33 — main
+- Endurecer runners y stores: timeouts, reanudación y aislamiento por usuario
+
 ### 2026-10-28 14:50 — main
 - feat(forja): construye La Forja v2
 - docs(forja): documenta validación y festejos productivos
@@ -356,19 +359,6 @@ since the previous push. Newest entry first.
 - Modified `src/modules/health/index.js`
 - Modified `src/modules/health/invariants.js`
 - Modified `src/modules/health/shared.js`
-
-### 2026-07-03 23:17 — main
-- Salud: resolución de hallazgos de la revisión exhaustiva (19 fixes reales de 49)
-- Salud: resolución autónoma por runner (auto-fix) + registro durable de resueltos
-- Sistema nervioso F1: inventario determinístico del proyecto (censo vivo)
-- Sistema nervioso F2: auditoría de salud INCREMENTAL por fingerprint
-- Sistema nervioso F3: los chats de la consola consumen el inventario
-- Sistema nervioso F4: invariantes verificables + foco en la auditoría de salud
-- Modified `CLAUDE.md`
-- Modified `public/css/style.css`
-- Modified `public/js/modules/tolkien/bug-board.js`
-- Added `src/modules/bugfixes/engine.js`
-- Modified `src/modules/bugfixes/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
